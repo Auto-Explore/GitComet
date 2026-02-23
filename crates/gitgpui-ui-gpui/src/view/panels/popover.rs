@@ -38,6 +38,12 @@ mod worktree_open_picker;
 mod worktree_remove_confirm;
 mod worktree_remove_picker;
 
+#[derive(Clone, Debug)]
+enum PopoverAnchor {
+    Point(Point<Pixels>),
+    Bounds(Bounds<Pixels>),
+}
+
 pub(in super::super) struct PopoverHost {
     store: Arc<AppStore>,
     state: Arc<AppState>,
@@ -45,6 +51,8 @@ pub(in super::super) struct PopoverHost {
     date_time_format: DateTimeFormat,
     settings_date_format_open: bool,
     _ui_model_subscription: gpui::Subscription,
+    _create_branch_input_subscription: gpui::Subscription,
+    _stash_message_input_subscription: gpui::Subscription,
     notify_fingerprint: u64,
     root_view: WeakEntity<GitGpuiView>,
     toast_host: WeakEntity<ToastHost>,
@@ -52,7 +60,7 @@ pub(in super::super) struct PopoverHost {
     details_pane: Entity<DetailsPaneView>,
 
     popover: Option<PopoverKind>,
-    popover_anchor: Option<Point<Pixels>>,
+    popover_anchor: Option<PopoverAnchor>,
     context_menu_focus_handle: FocusHandle,
     context_menu_selected_ix: Option<usize>,
 
@@ -91,6 +99,15 @@ impl PopoverHost {
                 root.title_bar.update(cx, |title_bar, cx| {
                     title_bar.set_app_menu_open(app_menu_open, cx);
                 });
+            });
+        });
+    }
+
+    fn clear_active_context_menu_invoker(&self, cx: &mut gpui::Context<Self>) {
+        let root_view = self.root_view.clone();
+        cx.defer(move |cx| {
+            let _ = root_view.update(cx, |root, cx| {
+                root.set_active_context_menu_invoker(None, cx);
             });
         });
     }
@@ -238,7 +255,7 @@ impl PopoverHost {
         let stash_message_input = cx.new(|cx| {
             zed::TextInput::new(
                 zed::TextInputOptions {
-                    placeholder: "Optional stash message".into(),
+                    placeholder: "Stash message".into(),
                     multiline: false,
                     read_only: false,
                     chromeless: false,
@@ -247,6 +264,18 @@ impl PopoverHost {
                 window,
                 cx,
             )
+        });
+
+        let create_branch_input_subscription = cx.observe(&create_branch_input, |this, _, cx| {
+            if matches!(this.popover, Some(PopoverKind::CreateBranch)) {
+                cx.notify();
+            }
+        });
+
+        let stash_message_input_subscription = cx.observe(&stash_message_input, |this, _, cx| {
+            if matches!(this.popover, Some(PopoverKind::StashPrompt)) {
+                cx.notify();
+            }
         });
 
         let push_upstream_branch_input = cx.new(|cx| {
@@ -328,6 +357,8 @@ impl PopoverHost {
             date_time_format,
             settings_date_format_open: false,
             _ui_model_subscription: subscription,
+            _create_branch_input_subscription: create_branch_input_subscription,
+            _stash_message_input_subscription: stash_message_input_subscription,
             notify_fingerprint: 0,
             root_view,
             toast_host,
@@ -425,6 +456,7 @@ impl PopoverHost {
         self.context_menu_selected_ix = None;
         self.notify_fingerprint = 0;
         self.sync_titlebar_app_menu_state(cx);
+        self.clear_active_context_menu_invoker(cx);
         cx.notify();
     }
 
@@ -437,6 +469,26 @@ impl PopoverHost {
         &mut self,
         kind: PopoverKind,
         anchor: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.open_popover(kind, PopoverAnchor::Point(anchor), window, cx);
+    }
+
+    pub(in super::super) fn open_popover_for_bounds(
+        &mut self,
+        kind: PopoverKind,
+        anchor_bounds: Bounds<Pixels>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.open_popover(kind, PopoverAnchor::Bounds(anchor_bounds), window, cx);
+    }
+
+    fn open_popover(
+        &mut self,
+        kind: PopoverKind,
+        anchor: PopoverAnchor,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
@@ -460,6 +512,11 @@ impl PopoverHost {
                 | PopoverKind::CommitFileMenu { .. }
                 | PopoverKind::TagMenu { .. }
         );
+        let keep_active_invoker =
+            is_context_menu || matches!(&kind, PopoverKind::CreateBranch | PopoverKind::StashPrompt);
+        if !keep_active_invoker {
+            self.clear_active_context_menu_invoker(cx);
+        }
 
         self.popover_anchor = Some(anchor);
         self.context_menu_selected_ix = None;
@@ -793,9 +850,10 @@ impl PopoverHost {
         cx: &mut gpui::Context<Self>,
     ) -> impl IntoElement {
         let theme = self.theme;
-        let anchor = self
-            .popover_anchor
-            .unwrap_or_else(|| point(px(64.0), px(64.0)));
+        let anchor_source = self.popover_anchor.clone().unwrap_or_else(|| {
+            PopoverAnchor::Point(point(px(64.0), px(64.0)))
+        });
+        let anchor_is_bounds = matches!(&anchor_source, PopoverAnchor::Bounds(_));
         let window_bounds = window.window_bounds().get_bounds();
         let window_w = window_bounds.size.width;
         let window_h = window_bounds.size.height;
@@ -803,6 +861,8 @@ impl PopoverHost {
         let margin_y = px(16.0);
 
         let is_app_menu = matches!(&kind, PopoverKind::AppMenu);
+        let is_create_branch_or_stash_prompt =
+            matches!(&kind, PopoverKind::CreateBranch | PopoverKind::StashPrompt);
         let is_context_menu = matches!(
             &kind,
             PopoverKind::PullPicker
@@ -856,9 +916,20 @@ impl PopoverHost {
             _ => Corner::TopLeft,
         };
 
+        let anchor_for_corner = |corner: Corner| match &anchor_source {
+            PopoverAnchor::Point(point) => *point,
+            PopoverAnchor::Bounds(bounds) => match corner {
+                Corner::TopLeft => bounds.bottom_left(),
+                Corner::TopRight => bounds.bottom_right(),
+                Corner::BottomLeft => bounds.origin,
+                Corner::BottomRight => bounds.top_right(),
+            },
+        };
+
         // Some popovers have large minimum widths. If the anchor is close to the edge, the popover
         // can end up constrained to a very narrow width (making inputs unusably small). Prefer the
         // side with more horizontal space in those cases.
+        let mut anchor = anchor_for_corner(anchor_corner);
         let min_preferred_w = px(640.0);
         let space_left = (anchor.x - margin_x).max(px(0.0));
         let space_right = (window_w - margin_x - anchor.x).max(px(0.0));
@@ -877,6 +948,7 @@ impl PopoverHost {
             }
             _ => {}
         }
+        anchor = anchor_for_corner(anchor_corner);
 
         let panel = match kind {
             PopoverKind::RepoPicker => repo_picker::panel(self, cx),
@@ -1418,8 +1490,17 @@ impl PopoverHost {
         };
 
         let is_right = matches!(anchor_corner, Corner::TopRight | Corner::BottomRight);
+        let use_accent_border =
+            is_context_menu || is_app_menu || is_create_branch_or_stash_prompt;
+        let popover_border_color = if use_accent_border {
+            with_alpha(theme.colors.accent, 0.90)
+        } else {
+            gpui::rgba(crate::view::chrome::WINDOW_OUTLINE_RGBA)
+        };
         let gap_y = if is_app_menu {
             crate::view::chrome::TITLE_BAR_HEIGHT
+        } else if anchor_is_bounds {
+            px(1.0)
         } else if is_right {
             px(10.0)
         } else {
@@ -1428,14 +1509,21 @@ impl PopoverHost {
 
         let mut context_menu_max_panel_h: Option<Pixels> = None;
         if is_context_menu {
-            let below = (window_h - margin_y) - (anchor.y + gap_y);
-            let above = (anchor.y - gap_y) - margin_y;
+            let (below_anchor_y, above_anchor_y) = match &anchor_source {
+                PopoverAnchor::Point(_) => (anchor.y, anchor.y),
+                PopoverAnchor::Bounds(bounds) => (bounds.bottom_left().y, bounds.origin.y),
+            };
+            let below = (window_h - margin_y) - (below_anchor_y + gap_y);
+            let above = (above_anchor_y - gap_y) - margin_y;
             if below < px(240.0) && above > below {
                 anchor_corner = match anchor_corner {
                     Corner::TopLeft => Corner::BottomLeft,
                     Corner::TopRight => Corner::BottomRight,
                     corner => corner,
                 };
+            }
+            if anchor_is_bounds {
+                anchor = anchor_for_corner(anchor_corner);
             }
 
             let popover_edge_y = match anchor_corner {
@@ -1480,7 +1568,7 @@ impl PopoverHost {
                     .occlude()
                     .bg(theme.colors.surface_bg_elevated)
                     .border_1()
-                    .border_color(gpui::rgba(crate::view::chrome::WINDOW_OUTLINE_RGBA))
+                    .border_color(popover_border_color)
                     .rounded(px(theme.radii.panel))
                     .shadow_lg()
                     .overflow_hidden()

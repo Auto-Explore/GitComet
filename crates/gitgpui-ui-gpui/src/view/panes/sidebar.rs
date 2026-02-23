@@ -11,6 +11,7 @@ pub(in super::super) struct SidebarPaneView {
     root_view: WeakEntity<GitGpuiView>,
     tooltip_host: WeakEntity<TooltipHost>,
     notify_fingerprint: SidebarNotifyFingerprint,
+    pub(in super::super) active_context_menu_invoker: Option<SharedString>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -66,11 +67,24 @@ impl SidebarPaneView {
             root_view,
             tooltip_host,
             notify_fingerprint: initial_fingerprint,
+            active_context_menu_invoker: None,
         }
     }
 
     pub(in super::super) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
         self.theme = theme;
+        cx.notify();
+    }
+
+    pub(in super::super) fn set_active_context_menu_invoker(
+        &mut self,
+        next: Option<SharedString>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.active_context_menu_invoker == next {
+            return;
+        }
+        self.active_context_menu_invoker = next;
         cx.notify();
     }
 
@@ -201,6 +215,16 @@ impl SidebarPaneView {
     ) {
         let _ = self.root_view.update(cx, |root, cx| {
             root.open_popover_at(kind, anchor, window, cx);
+        });
+    }
+
+    pub(in super::super) fn activate_context_menu_invoker(
+        &mut self,
+        invoker: SharedString,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let _ = self.root_view.update(cx, move |root, cx| {
+            root.set_active_context_menu_invoker(Some(invoker), cx);
         });
     }
 

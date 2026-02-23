@@ -783,6 +783,7 @@ impl MainPaneView {
                 (0, None, 0, None, None)
             };
 
+        self.activate_context_menu_invoker("diff_editor_menu".into(), cx);
         self.open_popover_at(
             PopoverKind::DiffEditorMenu {
                 repo_id,

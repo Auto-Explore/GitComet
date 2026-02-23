@@ -2,6 +2,9 @@ use super::*;
 
 pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>) -> gpui::Div {
     let theme = this.theme;
+    let is_empty = this
+        .create_branch_input
+        .read_with(cx, |i, _| i.text().trim().is_empty());
 
     div()
         .flex()
@@ -43,6 +46,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                 .child(
                     zed::Button::new("create_branch_go", "Create")
                         .style(zed::ButtonStyle::Filled)
+                        .disabled(is_empty)
                         .on_click(theme, cx, |this, _e, _w, cx| {
                             let name = this
                                 .create_branch_input

@@ -1,4 +1,6 @@
 use super::*;
+use std::cell::RefCell;
+use std::rc::Rc;
 
 impl MainPaneView {
     pub(in crate::view) fn history_view(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
@@ -235,10 +237,38 @@ impl MainPaneView {
             .unwrap_or_else(|| "Current branch".to_string())
             .into();
         let scope_repo_id = self.active_repo_id();
-        let open_column_settings = cx.listener(|this, e: &ClickEvent, window, cx| {
-            this.open_popover_at(PopoverKind::HistoryColumnSettings, e.position(), window, cx);
-        });
-        let column_settings_btn = div()
+        let scope_invoker: SharedString = "history_scope_header".into();
+        let scope_anchor_bounds: Rc<RefCell<Option<Bounds<Pixels>>>> = Rc::new(RefCell::new(None));
+        let scope_anchor_bounds_for_prepaint = Rc::clone(&scope_anchor_bounds);
+        let scope_anchor_bounds_for_click = Rc::clone(&scope_anchor_bounds);
+        let scope_active = self
+            .active_context_menu_invoker
+            .as_ref()
+            .is_some_and(|id| id.as_ref() == scope_invoker.as_ref());
+        let column_settings_invoker: SharedString = "history_columns_settings_btn".into();
+        let column_settings_anchor_bounds: Rc<RefCell<Option<Bounds<Pixels>>>> =
+            Rc::new(RefCell::new(None));
+        let column_settings_anchor_bounds_for_prepaint = Rc::clone(&column_settings_anchor_bounds);
+        let column_settings_anchor_bounds_for_click = Rc::clone(&column_settings_anchor_bounds);
+        let column_settings_active = self.active_context_menu_invoker.as_ref()
+            == Some(&column_settings_invoker);
+        let open_column_settings = {
+            let column_settings_invoker = column_settings_invoker.clone();
+            cx.listener(move |this, e: &ClickEvent, window, cx| {
+                this.activate_context_menu_invoker(column_settings_invoker.clone(), cx);
+                if let Some(bounds) = column_settings_anchor_bounds_for_click.borrow().clone() {
+                    this.open_popover_for_bounds(PopoverKind::HistoryColumnSettings, bounds, window, cx);
+                } else {
+                    this.open_popover_at(
+                        PopoverKind::HistoryColumnSettings,
+                        e.position(),
+                        window,
+                        cx,
+                    );
+                }
+            })
+        };
+        let column_settings_btn_inner = div()
             .id("history_columns_settings_btn")
             .flex()
             .items_center()
@@ -246,7 +276,14 @@ impl MainPaneView {
             .w(px(18.0))
             .h(px(18.0))
             .rounded(px(theme.radii.row))
-            .hover(move |s| s.bg(with_alpha(theme.colors.hover, 0.55)))
+            .when(column_settings_active, |d| d.bg(theme.colors.active))
+            .hover(move |s| {
+                if column_settings_active {
+                    s.bg(theme.colors.active)
+                } else {
+                    s.bg(with_alpha(theme.colors.hover, 0.55))
+                }
+            })
             .active(move |s| s.bg(theme.colors.active))
             .cursor(CursorStyle::PointingHand)
             .child(
@@ -269,6 +306,13 @@ impl MainPaneView {
                     cx.notify();
                 }
             }));
+        let column_settings_btn = div()
+            .on_children_prepainted(move |children_bounds, _w, _cx| {
+                if let Some(bounds) = children_bounds.first() {
+                    *column_settings_anchor_bounds_for_prepaint.borrow_mut() = Some(bounds.clone());
+                }
+            })
+            .child(column_settings_btn_inner);
 
         let resize_handle = |id: &'static str, handle: HistoryColResizeHandle| {
             div()
@@ -378,60 +422,97 @@ impl MainPaneView {
                     .overflow_hidden()
                     .child(
                         div()
-                            .id("history_scope_header")
-                            .flex()
-                            .items_center()
-                            .gap_1()
-                            .px_1()
-                            .h(px(18.0))
-                            .line_height(px(18.0))
-                            .rounded(px(theme.radii.row))
-                            .hover(move |s| s.bg(with_alpha(theme.colors.hover, 0.55)))
-                            .cursor(CursorStyle::PointingHand)
+                            .on_children_prepainted(move |children_bounds, _w, _cx| {
+                                if let Some(bounds) = children_bounds.first() {
+                                    *scope_anchor_bounds_for_prepaint.borrow_mut() =
+                                        Some(bounds.clone());
+                                }
+                            })
                             .child(
                                 div()
-                                    .min_w(px(0.0))
-                                    .line_clamp(1)
-                                    .whitespace_nowrap()
-                                    .child(scope_label.clone()),
-                            )
-                            .child(
-                                gpui::svg()
-                                    .path("icons/chevron_down.svg")
-                                    .w(px(12.0))
-                                    .h(px(12.0))
-                                    .text_color(icon_muted)
-                                    .flex_shrink_0(),
-                            )
-                            .when_some(scope_repo_id, |this, repo_id| {
-                                this.on_click(cx.listener(
-                                    move |this, e: &ClickEvent, window, cx| {
-                                        this.open_popover_at(
-                                            PopoverKind::HistoryBranchFilter { repo_id },
-                                            e.position(),
-                                            window,
-                                            cx,
-                                        );
-                                    },
-                                ))
-                            })
-                            .when(scope_repo_id.is_none(), |this| {
-                                this.opacity(0.6).cursor(CursorStyle::Arrow)
-                            })
-                            .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
-                                let text: SharedString =
-                                    "History scope (Current branch / All branches)".into();
-                                let mut changed = false;
-                                if *hovering {
-                                    changed |=
-                                        this.set_tooltip_text_if_changed(Some(text.clone()), cx);
-                                } else {
-                                    changed |= this.clear_tooltip_if_matches(&text, cx);
-                                }
-                                if changed {
-                                    cx.notify();
-                                }
-                            })),
+                                    .id("history_scope_header")
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .px_1()
+                                    .h(px(18.0))
+                                    .line_height(px(18.0))
+                                    .rounded(px(theme.radii.row))
+                                    .when(scope_active, |d| d.bg(theme.colors.active))
+                                    .hover(move |s| {
+                                        if scope_active {
+                                            s.bg(theme.colors.active)
+                                        } else {
+                                            s.bg(with_alpha(theme.colors.hover, 0.55))
+                                        }
+                                    })
+                                    .active(move |s| s.bg(theme.colors.active))
+                                    .cursor(CursorStyle::PointingHand)
+                                    .child(
+                                        div()
+                                            .min_w(px(0.0))
+                                            .line_clamp(1)
+                                            .whitespace_nowrap()
+                                            .child(scope_label.clone()),
+                                    )
+                                    .child(
+                                        gpui::svg()
+                                            .path("icons/chevron_down.svg")
+                                            .w(px(12.0))
+                                            .h(px(12.0))
+                                            .text_color(icon_muted)
+                                            .flex_shrink_0(),
+                                    )
+                                    .when_some(scope_repo_id, |this, repo_id| {
+                                        let scope_invoker = scope_invoker.clone();
+                                        let scope_anchor_bounds_for_click =
+                                            Rc::clone(&scope_anchor_bounds_for_click);
+                                        this.on_click(cx.listener(
+                                            move |this, e: &ClickEvent, window, cx| {
+                                                this.activate_context_menu_invoker(
+                                                    scope_invoker.clone(),
+                                                    cx,
+                                                );
+                                                if let Some(bounds) =
+                                                    scope_anchor_bounds_for_click.borrow().clone()
+                                                {
+                                                    this.open_popover_for_bounds(
+                                                        PopoverKind::HistoryBranchFilter { repo_id },
+                                                        bounds,
+                                                        window,
+                                                        cx,
+                                                    );
+                                                } else {
+                                                    this.open_popover_at(
+                                                        PopoverKind::HistoryBranchFilter { repo_id },
+                                                        e.position(),
+                                                        window,
+                                                        cx,
+                                                    );
+                                                }
+                                            },
+                                        ))
+                                    })
+                                    .when(scope_repo_id.is_none(), |this| {
+                                        this.opacity(0.6).cursor(CursorStyle::Arrow)
+                                    })
+                                    .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
+                                        let text: SharedString =
+                                            "History scope (Current branch / All branches)".into();
+                                        let mut changed = false;
+                                        if *hovering {
+                                            changed |= this.set_tooltip_text_if_changed(
+                                                Some(text.clone()),
+                                                cx,
+                                            );
+                                        } else {
+                                            changed |= this.clear_tooltip_if_matches(&text, cx);
+                                        }
+                                        if changed {
+                                            cx.notify();
+                                        }
+                                    })),
+                            ),
                     ),
             )
             .child(

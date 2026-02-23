@@ -207,6 +207,10 @@ impl Render for TitleBarView {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let app_menu_open = self.app_menu_open;
+        let app_menu_open_bg =
+            with_alpha(theme.colors.accent, if theme.is_dark { 0.30 } else { 0.24 });
+        let app_menu_open_hover_bg =
+            with_alpha(theme.colors.accent, if theme.is_dark { 0.40 } else { 0.32 });
         let bar_bg = if window.is_window_active() {
             lighten(
                 theme.colors.surface_bg,
@@ -247,9 +251,21 @@ impl Render for TitleBarView {
                     .items_center()
                     .justify_center()
                     .rounded(px(theme.radii.pill))
-                    .when(app_menu_open, |s| s.bg(theme.colors.hover))
-                    .hover(move |s| s.bg(theme.colors.hover))
-                    .active(move |s| s.bg(theme.colors.active))
+                    .when(app_menu_open, move |s| s.bg(app_menu_open_bg))
+                    .hover(move |s| {
+                        if app_menu_open {
+                            s.bg(app_menu_open_hover_bg)
+                        } else {
+                            s.bg(theme.colors.hover)
+                        }
+                    })
+                    .active(move |s| {
+                        if app_menu_open {
+                            s.bg(app_menu_open_hover_bg)
+                        } else {
+                            s.bg(theme.colors.active)
+                        }
+                    })
                     .child(titlebar_control_icon("icons/menu.svg", theme.colors.accent)),
             )
             .on_click(cx.listener(|this, _e: &ClickEvent, window, cx| {

@@ -162,7 +162,7 @@ impl MainPaneView {
                 .child(label)
         };
 
-        let file_nav_controls = (|| {
+        let (prev_file_btn, next_file_btn) = (|| {
             let repo_id = repo_id?;
             let repo = self.active_repo()?;
             let DiffTarget::WorkingTree { path, area } = repo.diff_target.as_ref()? else {
@@ -229,17 +229,10 @@ impl MainPaneView {
                     }
                 }));
 
-            Some(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .flex_shrink_0()
-                    .child(prev_btn)
-                    .child(next_btn)
-                    .into_any_element(),
-            )
-        })();
+            Some((prev_btn, next_btn))
+        })()
+        .map(|(prev, next)| (Some(prev), Some(next)))
+        .unwrap_or((None, None));
 
         let mut controls = div().flex().items_center().gap_1();
         if is_conflict_resolver {
@@ -251,6 +244,7 @@ impl MainPaneView {
                 diff_navigation::diff_nav_next_target(&nav_entries, current_nav_ix).is_some();
 
             controls = controls
+                .when_some(prev_file_btn, |d, btn| d.child(btn))
                 .child(
                     zed::Button::new("conflict_prev", "Prev")
                         .end_slot(diff_nav_hotkey_hint("F2"))
@@ -270,7 +264,8 @@ impl MainPaneView {
                             this.conflict_jump_next();
                             cx.notify();
                         }),
-                );
+                )
+                .when_some(next_file_btn, |d, btn| d.child(btn));
 
             if let (Some(repo_id), Some(path)) = (repo_id, conflict_target_path.clone()) {
                 let save_path = path.clone();
@@ -308,33 +303,7 @@ impl MainPaneView {
                     });
             }
         } else if !is_file_preview {
-            if show_svg_view_toggle {
-                controls = controls
-                    .child(
-                        zed::Button::new("svg_diff_view_image", "Image")
-                            .style(if self.svg_diff_view_mode == SvgDiffViewMode::Image {
-                                zed::ButtonStyle::Filled
-                            } else {
-                                zed::ButtonStyle::Outlined
-                            })
-                            .on_click(theme, cx, |this, _e, _w, cx| {
-                                this.svg_diff_view_mode = SvgDiffViewMode::Image;
-                                cx.notify();
-                            }),
-                    )
-                    .child(
-                        zed::Button::new("svg_diff_view_code", "Code")
-                            .style(if self.svg_diff_view_mode == SvgDiffViewMode::Code {
-                                zed::ButtonStyle::Filled
-                            } else {
-                                zed::ButtonStyle::Outlined
-                            })
-                            .on_click(theme, cx, |this, _e, _w, cx| {
-                                this.svg_diff_view_mode = SvgDiffViewMode::Code;
-                                cx.notify();
-                            }),
-                    );
-            }
+            controls = controls.when_some(prev_file_btn, |d, btn| d.child(btn));
 
             if !is_image_diff_view {
                 let nav_entries = self.diff_nav_entries();
@@ -344,116 +313,129 @@ impl MainPaneView {
                 let can_nav_next =
                     diff_navigation::diff_nav_next_target(&nav_entries, current_nav_ix).is_some();
 
+                let prev_hunk_btn = zed::Button::new("diff_prev_hunk", "Prev")
+                    .end_slot(diff_nav_hotkey_hint("F2"))
+                    .style(zed::ButtonStyle::Outlined)
+                    .disabled(!can_nav_prev)
+                    .on_click(theme, cx, |this, _e, _w, cx| {
+                        this.diff_jump_prev();
+                        cx.notify();
+                    })
+                    .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
+                        let text: SharedString = "Previous change (F2 / Shift+F7 / Alt+Up)".into();
+                        let mut changed = false;
+                        if *hovering {
+                            changed |= this.set_tooltip_text_if_changed(Some(text.clone()), cx);
+                        } else {
+                            changed |= this.clear_tooltip_if_matches(&text, cx);
+                        }
+                        if changed {
+                            cx.notify();
+                        }
+                    }));
+
+                let next_hunk_btn = zed::Button::new("diff_next_hunk", "Next")
+                    .end_slot(diff_nav_hotkey_hint("F3"))
+                    .style(zed::ButtonStyle::Outlined)
+                    .disabled(!can_nav_next)
+                    .on_click(theme, cx, |this, _e, _w, cx| {
+                        this.diff_jump_next();
+                        cx.notify();
+                    })
+                    .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
+                        let text: SharedString = "Next change (F3 / F7 / Alt+Down)".into();
+                        let mut changed = false;
+                        if *hovering {
+                            changed |= this.set_tooltip_text_if_changed(Some(text.clone()), cx);
+                        } else {
+                            changed |= this.clear_tooltip_if_matches(&text, cx);
+                        }
+                        if changed {
+                            cx.notify();
+                        }
+                    }));
+
+                let view_toggle_selected_bg =
+                    with_alpha(theme.colors.accent, if theme.is_dark { 0.26 } else { 0.20 });
+                let view_toggle_border = with_alpha(
+                    theme.colors.text_muted,
+                    if theme.is_dark { 0.38 } else { 0.28 },
+                );
+                let view_toggle_divider = with_alpha(view_toggle_border, 0.90);
+                let diff_inline_btn = zed::Button::new("diff_inline", "Inline")
+                    .borderless()
+                    .style(zed::ButtonStyle::Subtle)
+                    .selected(self.diff_view == DiffViewMode::Inline)
+                    .selected_bg(view_toggle_selected_bg)
+                    .on_click(theme, cx, |this, _e, _w, cx| {
+                        this.diff_view = DiffViewMode::Inline;
+                        this.diff_text_segments_cache.clear();
+                        if this.diff_search_active && !this.diff_search_query.as_ref().trim().is_empty()
+                        {
+                            this.diff_search_recompute_matches();
+                        }
+                        cx.notify();
+                    })
+                    .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
+                        let text: SharedString = "Inline diff view (Alt+I)".into();
+                        let mut changed = false;
+                        if *hovering {
+                            changed |= this.set_tooltip_text_if_changed(Some(text.clone()), cx);
+                        } else {
+                            changed |= this.clear_tooltip_if_matches(&text, cx);
+                        }
+                        if changed {
+                            cx.notify();
+                        }
+                    }));
+
+                let diff_split_btn = zed::Button::new("diff_split", "Split")
+                    .borderless()
+                    .style(zed::ButtonStyle::Subtle)
+                    .selected(self.diff_view == DiffViewMode::Split)
+                    .selected_bg(view_toggle_selected_bg)
+                    .on_click(theme, cx, |this, _e, _w, cx| {
+                        this.diff_view = DiffViewMode::Split;
+                        this.diff_text_segments_cache.clear();
+                        if this.diff_search_active && !this.diff_search_query.as_ref().trim().is_empty()
+                        {
+                            this.diff_search_recompute_matches();
+                        }
+                        cx.notify();
+                    })
+                    .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
+                        let text: SharedString = "Split diff view (Alt+S)".into();
+                        let mut changed = false;
+                        if *hovering {
+                            changed |= this.set_tooltip_text_if_changed(Some(text.clone()), cx);
+                        } else {
+                            changed |= this.clear_tooltip_if_matches(&text, cx);
+                        }
+                        if changed {
+                            cx.notify();
+                        }
+                    }));
+
+                let view_toggle = div()
+                    .id("diff_view_toggle")
+                    .flex()
+                    .items_center()
+                    .h(px(zed::CONTROL_HEIGHT_PX))
+                    .rounded(px(theme.radii.row))
+                    .border_1()
+                    .border_color(view_toggle_border)
+                    .bg(gpui::rgba(0x00000000))
+                    .overflow_hidden()
+                    .p(px(1.0))
+                    .child(diff_inline_btn)
+                    .child(div().h_full().w(px(1.0)).bg(view_toggle_divider))
+                    .child(diff_split_btn);
+
                 controls = controls
-                    .child(
-                        zed::Button::new("diff_inline", "Inline")
-                            .style(if self.diff_view == DiffViewMode::Inline {
-                                zed::ButtonStyle::Filled
-                            } else {
-                                zed::ButtonStyle::Outlined
-                            })
-                            .on_click(theme, cx, |this, _e, _w, cx| {
-                                this.diff_view = DiffViewMode::Inline;
-                                this.diff_text_segments_cache.clear();
-                                if this.diff_search_active
-                                    && !this.diff_search_query.as_ref().trim().is_empty()
-                                {
-                                    this.diff_search_recompute_matches();
-                                }
-                                cx.notify();
-                            })
-                            .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
-                                let text: SharedString = "Inline diff view (Alt+I)".into();
-                                let mut changed = false;
-                                if *hovering {
-                                    changed |=
-                                        this.set_tooltip_text_if_changed(Some(text.clone()), cx);
-                                } else {
-                                    changed |= this.clear_tooltip_if_matches(&text, cx);
-                                }
-                                if changed {
-                                    cx.notify();
-                                }
-                            })),
-                    )
-                    .child(
-                        zed::Button::new("diff_split", "Split")
-                            .style(if self.diff_view == DiffViewMode::Split {
-                                zed::ButtonStyle::Filled
-                            } else {
-                                zed::ButtonStyle::Outlined
-                            })
-                            .on_click(theme, cx, |this, _e, _w, cx| {
-                                this.diff_view = DiffViewMode::Split;
-                                this.diff_text_segments_cache.clear();
-                                if this.diff_search_active
-                                    && !this.diff_search_query.as_ref().trim().is_empty()
-                                {
-                                    this.diff_search_recompute_matches();
-                                }
-                                cx.notify();
-                            })
-                            .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
-                                let text: SharedString = "Split diff view (Alt+S)".into();
-                                let mut changed = false;
-                                if *hovering {
-                                    changed |=
-                                        this.set_tooltip_text_if_changed(Some(text.clone()), cx);
-                                } else {
-                                    changed |= this.clear_tooltip_if_matches(&text, cx);
-                                }
-                                if changed {
-                                    cx.notify();
-                                }
-                            })),
-                    )
-                    .child(
-                        zed::Button::new("diff_prev_hunk", "Prev")
-                            .end_slot(diff_nav_hotkey_hint("F2"))
-                            .style(zed::ButtonStyle::Outlined)
-                            .disabled(!can_nav_prev)
-                            .on_click(theme, cx, |this, _e, _w, cx| {
-                                this.diff_jump_prev();
-                                cx.notify();
-                            })
-                            .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
-                                let text: SharedString =
-                                    "Previous change (F2 / Shift+F7 / Alt+Up)".into();
-                                let mut changed = false;
-                                if *hovering {
-                                    changed |=
-                                        this.set_tooltip_text_if_changed(Some(text.clone()), cx);
-                                } else {
-                                    changed |= this.clear_tooltip_if_matches(&text, cx);
-                                }
-                                if changed {
-                                    cx.notify();
-                                }
-                            })),
-                    )
-                    .child(
-                        zed::Button::new("diff_next_hunk", "Next")
-                            .end_slot(diff_nav_hotkey_hint("F3"))
-                            .style(zed::ButtonStyle::Outlined)
-                            .disabled(!can_nav_next)
-                            .on_click(theme, cx, |this, _e, _w, cx| {
-                                this.diff_jump_next();
-                                cx.notify();
-                            })
-                            .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
-                                let text: SharedString = "Next change (F3 / F7 / Alt+Down)".into();
-                                let mut changed = false;
-                                if *hovering {
-                                    changed |=
-                                        this.set_tooltip_text_if_changed(Some(text.clone()), cx);
-                                } else {
-                                    changed |= this.clear_tooltip_if_matches(&text, cx);
-                                }
-                                if changed {
-                                    cx.notify();
-                                }
-                            })),
-                    )
+                    .child(prev_hunk_btn)
+                    .child(next_hunk_btn)
+                    .when_some(next_file_btn, |d, btn| d.child(btn))
+                    .child(view_toggle)
                     .when(!wants_file_diff, |controls| {
                         controls.child(
                             zed::Button::new("diff_hunks", "Hunks")
@@ -482,7 +464,41 @@ impl MainPaneView {
                                 })),
                         )
                     });
+            } else {
+                controls = controls.when_some(next_file_btn, |d, btn| d.child(btn));
             }
+
+            if show_svg_view_toggle {
+                controls = controls
+                    .child(
+                        zed::Button::new("svg_diff_view_image", "Image")
+                            .style(if self.svg_diff_view_mode == SvgDiffViewMode::Image {
+                                zed::ButtonStyle::Filled
+                            } else {
+                                zed::ButtonStyle::Outlined
+                            })
+                            .on_click(theme, cx, |this, _e, _w, cx| {
+                                this.svg_diff_view_mode = SvgDiffViewMode::Image;
+                                cx.notify();
+                            }),
+                    )
+                    .child(
+                        zed::Button::new("svg_diff_view_code", "Code")
+                            .style(if self.svg_diff_view_mode == SvgDiffViewMode::Code {
+                                zed::ButtonStyle::Filled
+                            } else {
+                                zed::ButtonStyle::Outlined
+                            })
+                            .on_click(theme, cx, |this, _e, _w, cx| {
+                                this.svg_diff_view_mode = SvgDiffViewMode::Code;
+                                cx.notify();
+                            }),
+                    );
+            }
+        } else {
+            controls = controls
+                .when_some(prev_file_btn, |d, btn| d.child(btn))
+                .when_some(next_file_btn, |d, btn| d.child(btn));
         }
 
         if let Some(repo_id) = repo_id {
@@ -566,8 +582,7 @@ impl MainPaneView {
                     .gap_2()
                     .min_w(px(0.0))
                     .overflow_hidden()
-                    .child(div().flex_1().min_w(px(0.0)).overflow_hidden().child(title))
-                    .when_some(file_nav_controls, |d, controls| d.child(controls)),
+                    .child(div().flex_1().min_w(px(0.0)).overflow_hidden().child(title)),
             )
             .child(controls);
 
@@ -1710,6 +1725,10 @@ impl MainPaneView {
 
         self.diff_text_layout_cache_epoch = self.diff_text_layout_cache_epoch.wrapping_add(1);
         self.diff_text_hitboxes.clear();
+        let diff_editor_menu_active = self
+            .active_context_menu_invoker
+            .as_ref()
+            .is_some_and(|id| id.as_ref() == "diff_editor_menu");
 
         div()
             .flex()
@@ -1719,6 +1738,7 @@ impl MainPaneView {
             .h_full()
             .min_h(px(0.0))
             .bg(theme.colors.surface_bg_elevated)
+            .when(diff_editor_menu_active, |d| d.bg(theme.colors.active))
             .track_focus(&self.diff_panel_focus_handle)
             .on_mouse_down(
                 MouseButton::Left,

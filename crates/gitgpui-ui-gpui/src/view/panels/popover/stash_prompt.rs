@@ -2,6 +2,9 @@ use super::*;
 
 pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>) -> gpui::Div {
     let theme = this.theme;
+    let is_empty = this
+        .stash_message_input
+        .read_with(cx, |i, _| i.text().trim().is_empty());
 
     div()
         .flex()
@@ -43,15 +46,11 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                 .child(
                     zed::Button::new("stash_go", "Stash")
                         .style(zed::ButtonStyle::Filled)
+                        .disabled(is_empty)
                         .on_click(theme, cx, |this, _e, _w, cx| {
                             let message = this
                                 .stash_message_input
                                 .read_with(cx, |i, _| i.text().trim().to_string());
-                            let message = if message.is_empty() {
-                                "WIP".to_string()
-                            } else {
-                                message
-                            };
                             if let Some(repo_id) = this.active_repo_id() {
                                 this.store.dispatch(Msg::Stash {
                                     repo_id,

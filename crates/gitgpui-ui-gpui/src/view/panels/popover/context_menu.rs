@@ -482,6 +482,11 @@ impl PopoverHost {
             } => {
                 let anchor = self
                     .popover_anchor
+                    .as_ref()
+                    .map(|anchor| match anchor {
+                        PopoverAnchor::Point(point) => *point,
+                        PopoverAnchor::Bounds(bounds) => bounds.bottom_right(),
+                    })
                     .unwrap_or_else(|| point(px(64.0), px(64.0)));
                 self.open_popover_at(
                     PopoverKind::DiscardChangesConfirm {
@@ -565,6 +570,11 @@ impl PopoverHost {
             ContextMenuAction::OpenPopover { kind } => {
                 let anchor = self
                     .popover_anchor
+                    .as_ref()
+                    .map(|anchor| match anchor {
+                        PopoverAnchor::Point(point) => *point,
+                        PopoverAnchor::Bounds(bounds) => bounds.bottom_right(),
+                    })
                     .unwrap_or_else(|| point(px(64.0), px(64.0)));
                 self.open_popover_at(kind, anchor, window, cx);
                 return;

@@ -189,6 +189,7 @@ impl DetailsPaneView {
                     DiffArea::Unstaged,
                     repo.id,
                     is_selected,
+                    this.active_context_menu_invoker.as_ref(),
                     cx,
                 )
             })
@@ -234,6 +235,7 @@ impl DetailsPaneView {
                     DiffArea::Staged,
                     repo.id,
                     is_selected,
+                    this.active_context_menu_invoker.as_ref(),
                     cx,
                 )
             })
@@ -250,6 +252,7 @@ fn status_row(
     area: DiffArea,
     repo_id: RepoId,
     selected: bool,
+    active_context_menu_invoker: Option<&SharedString>,
     cx: &mut gpui::Context<DetailsPaneView>,
 ) -> AnyElement {
     let (icon, color) = match entry.kind {
@@ -284,6 +287,22 @@ fn status_row(
         "Resolve…" => "Resolve… file".into(),
         _ => format!("{stage_label} file").into(),
     };
+    let context_menu_invoker: SharedString = {
+        let area_label = match area {
+            DiffArea::Unstaged => "unstaged",
+            DiffArea::Staged => "staged",
+        };
+        format!(
+            "status_file_menu_{}_{}_{}",
+            repo_id.0,
+            area_label,
+            entry.path.display()
+        )
+        .into()
+    };
+    let context_menu_active = active_context_menu_invoker == Some(&context_menu_invoker);
+    let context_menu_invoker_for_stage = context_menu_invoker.clone();
+    let context_menu_invoker_for_row = context_menu_invoker.clone();
     let row_group: SharedString = {
         let area_label = match area {
             DiffArea::Unstaged => "unstaged",
@@ -299,6 +318,7 @@ fn status_row(
             this.focus_diff_panel(window, cx);
 
             if is_conflicted {
+                this.activate_context_menu_invoker(context_menu_invoker_for_stage.clone(), cx);
                 this.open_popover_at(
                     PopoverKind::StatusFileMenu {
                         repo_id,
@@ -352,7 +372,14 @@ fn status_row(
         .rounded(px(theme.radii.row))
         .cursor(CursorStyle::PointingHand)
         .when(selected, |s| s.bg(theme.colors.hover))
-        .hover(move |s| s.bg(theme.colors.hover))
+        .when(context_menu_active, |s| s.bg(theme.colors.active))
+        .hover(move |s| {
+            if context_menu_active {
+                s.bg(theme.colors.active)
+            } else {
+                s.bg(theme.colors.hover)
+            }
+        })
         .active(move |s| s.bg(theme.colors.active))
         .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
             let mut changed = false;
@@ -390,6 +417,7 @@ fn status_row(
                         area,
                     },
                 });
+                this.activate_context_menu_invoker(context_menu_invoker_for_row.clone(), cx);
                 this.open_popover_at(
                     PopoverKind::StatusFileMenu {
                         repo_id,

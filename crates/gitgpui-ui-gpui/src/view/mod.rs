@@ -633,6 +633,7 @@ pub struct GitGpuiView {
     pending_force_delete_branch_prompt: Option<(RepoId, String)>,
 
     error_banner_input: Entity<zed::TextInput>,
+    active_context_menu_invoker: Option<SharedString>,
 }
 
 struct DiffTextLayoutCacheEntry {
@@ -650,6 +651,49 @@ impl GitGpuiView {
     ) {
         self.popover_host.update(cx, |host, cx| {
             host.open_popover_at(kind, anchor, window, cx)
+        });
+    }
+
+    pub(in crate::view) fn open_popover_for_bounds(
+        &mut self,
+        kind: PopoverKind,
+        anchor_bounds: Bounds<Pixels>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.popover_host.update(cx, |host, cx| {
+            host.open_popover_for_bounds(kind, anchor_bounds, window, cx)
+        });
+    }
+
+    pub(in crate::view) fn set_active_context_menu_invoker(
+        &mut self,
+        next: Option<SharedString>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.active_context_menu_invoker == next {
+            return;
+        }
+        self.active_context_menu_invoker = next.clone();
+
+        let sidebar_pane = self.sidebar_pane.clone();
+        let main_pane = self.main_pane.clone();
+        let details_pane = self.details_pane.clone();
+        let action_bar = self.action_bar.clone();
+
+        cx.defer(move |cx| {
+            let _ = sidebar_pane.update(cx, |pane, cx| {
+                pane.set_active_context_menu_invoker(next.clone(), cx);
+            });
+            let _ = main_pane.update(cx, |pane, cx| {
+                pane.set_active_context_menu_invoker(next.clone(), cx);
+            });
+            let _ = details_pane.update(cx, |pane, cx| {
+                pane.set_active_context_menu_invoker(next.clone(), cx);
+            });
+            let _ = action_bar.update(cx, |bar, cx| {
+                bar.set_active_context_menu_invoker(next.clone(), cx);
+            });
         });
     }
 
@@ -901,6 +945,7 @@ impl GitGpuiView {
             pending_pull_reconcile_prompt: None,
             pending_force_delete_branch_prompt: None,
             error_banner_input,
+            active_context_menu_invoker: None,
         };
 
         view.set_theme(initial_theme, cx);

@@ -12,6 +12,7 @@ pub(in super::super) struct DetailsPaneView {
     root_view: WeakEntity<GitGpuiView>,
     tooltip_host: WeakEntity<TooltipHost>,
     notify_fingerprint: u64,
+    pub(in super::super) active_context_menu_invoker: Option<SharedString>,
 
     pub(in super::super) unstaged_scroll: UniformListScrollHandle,
     pub(in super::super) staged_scroll: UniformListScrollHandle,
@@ -129,6 +130,7 @@ impl DetailsPaneView {
             root_view,
             tooltip_host,
             notify_fingerprint: initial_fingerprint,
+            active_context_menu_invoker: None,
             unstaged_scroll: UniformListScrollHandle::default(),
             staged_scroll: UniformListScrollHandle::default(),
             commit_files_scroll: UniformListScrollHandle::default(),
@@ -154,6 +156,18 @@ impl DetailsPaneView {
             .update(cx, |input, cx| input.set_theme(theme, cx));
         self.commit_details_message_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
+        cx.notify();
+    }
+
+    pub(in super::super) fn set_active_context_menu_invoker(
+        &mut self,
+        next: Option<SharedString>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.active_context_menu_invoker == next {
+            return;
+        }
+        self.active_context_menu_invoker = next;
         cx.notify();
     }
 
@@ -356,6 +370,16 @@ impl DetailsPaneView {
                     root.open_popover_at(kind, anchor, window, cx);
                 });
             });
+        });
+    }
+
+    pub(in super::super) fn activate_context_menu_invoker(
+        &mut self,
+        invoker: SharedString,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let _ = self.root_view.update(cx, move |root, cx| {
+            root.set_active_context_menu_invoker(Some(invoker), cx);
         });
     }
 

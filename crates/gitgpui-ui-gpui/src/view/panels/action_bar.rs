@@ -9,6 +9,7 @@ pub(in super::super) struct ActionBarView {
     root_view: WeakEntity<GitGpuiView>,
     tooltip_host: WeakEntity<TooltipHost>,
     notify_fingerprint: u64,
+    active_context_menu_invoker: Option<SharedString>,
 }
 
 impl ActionBarView {
@@ -103,11 +104,24 @@ impl ActionBarView {
             root_view,
             tooltip_host,
             notify_fingerprint,
+            active_context_menu_invoker: None,
         }
     }
 
     pub(in super::super) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
         self.theme = theme;
+        cx.notify();
+    }
+
+    pub(in super::super) fn set_active_context_menu_invoker(
+        &mut self,
+        next: Option<SharedString>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.active_context_menu_invoker == next {
+            return;
+        }
+        self.active_context_menu_invoker = next;
         cx.notify();
     }
 
@@ -152,6 +166,28 @@ impl ActionBarView {
     ) {
         let _ = self.root_view.update(cx, |root, cx| {
             root.open_popover_at(kind, anchor, window, cx);
+        });
+    }
+
+    fn open_popover_for_bounds(
+        &mut self,
+        kind: PopoverKind,
+        anchor_bounds: Bounds<Pixels>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let _ = self.root_view.update(cx, |root, cx| {
+            root.open_popover_for_bounds(kind, anchor_bounds, window, cx);
+        });
+    }
+
+    fn activate_context_menu_invoker(
+        &mut self,
+        invoker: SharedString,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let _ = self.root_view.update(cx, move |root, cx| {
+            root.set_active_context_menu_invoker(Some(invoker), cx);
         });
     }
 
@@ -349,19 +385,37 @@ impl Render for ActionBarView {
         } else {
             icon_muted
         };
+        let menu_selected_bg =
+            with_alpha(theme.colors.accent, if theme.is_dark { 0.26 } else { 0.20 });
         let mut pull_main = zed::Button::new("pull_main", "Pull")
+            .borderless()
             .start_slot(if pull_loading {
                 spinner(("pull_spinner", active_repo_key), pull_color).into_any_element()
             } else {
                 icon("icons/arrow_down.svg", pull_color).into_any_element()
             })
-            .style(zed::ButtonStyle::Subtle);
+            .style(zed::ButtonStyle::Subtle)
+            .no_hover_border();
         if pull_count > 0 {
             pull_main = pull_main.end_slot(count_badge(pull_count, pull_color));
         }
+        let pull_picker_invoker: SharedString = "pull_picker".into();
+        let pull_picker_active = self
+            .active_context_menu_invoker
+            .as_ref()
+            .is_some_and(|id| id.as_ref() == pull_picker_invoker.as_ref());
+        let pull_menu_icon_color = if pull_picker_active {
+            theme.colors.accent
+        } else {
+            icon_muted
+        };
         let pull_menu = zed::Button::new("pull_menu", "")
-            .start_slot(icon("icons/chevron_down.svg", icon_muted))
-            .style(zed::ButtonStyle::Subtle);
+            .borderless()
+            .start_slot(icon("icons/chevron_down.svg", pull_menu_icon_color))
+            .style(zed::ButtonStyle::Subtle)
+            .no_hover_border()
+            .selected(pull_picker_active)
+            .selected_bg(menu_selected_bg);
 
         let pull = div()
             .id("pull")
@@ -375,8 +429,9 @@ impl Render for ActionBarView {
                             });
                         }
                     }),
-                    pull_menu.on_click(theme, cx, |this, e, window, cx| {
-                        this.open_popover_at(PopoverKind::PullPicker, e.position(), window, cx);
+                    pull_menu.on_click_with_bounds(theme, cx, move |this, _e, bounds, window, cx| {
+                        this.activate_context_menu_invoker(pull_picker_invoker.clone(), cx);
+                        this.open_popover_for_bounds(PopoverKind::PullPicker, bounds, window, cx);
                     }),
                 )
                 .style(zed::SplitButtonStyle::Outlined)
@@ -396,19 +451,35 @@ impl Render for ActionBarView {
         } else {
             icon_muted
         };
-        let mut push_main = zed::Button::new("push", "Push")
+        let mut push_main = zed::Button::new("push_main", "Push")
+            .borderless()
             .start_slot(if push_loading {
                 spinner(("push_spinner", active_repo_key), push_color).into_any_element()
             } else {
                 icon("icons/arrow_up.svg", push_color).into_any_element()
             })
-            .style(zed::ButtonStyle::Outlined);
+            .style(zed::ButtonStyle::Subtle)
+            .no_hover_border();
         if push_count > 0 {
             push_main = push_main.end_slot(count_badge(push_count, push_color));
         }
+        let push_picker_invoker: SharedString = "push_picker".into();
+        let push_picker_active = self
+            .active_context_menu_invoker
+            .as_ref()
+            .is_some_and(|id| id.as_ref() == push_picker_invoker.as_ref());
+        let push_menu_icon_color = if push_picker_active {
+            theme.colors.accent
+        } else {
+            icon_muted
+        };
         let push_menu = zed::Button::new("push_menu", "")
-            .start_slot(icon("icons/chevron_down.svg", icon_muted))
-            .style(zed::ButtonStyle::Subtle);
+            .borderless()
+            .start_slot(icon("icons/chevron_down.svg", push_menu_icon_color))
+            .style(zed::ButtonStyle::Subtle)
+            .no_hover_border()
+            .selected(push_picker_active)
+            .selected_bg(menu_selected_bg);
 
         let push = div()
             .id("push")
@@ -469,8 +540,9 @@ impl Render for ActionBarView {
 
                         this.store.dispatch(Msg::Push { repo_id });
                     }),
-                    push_menu.on_click(theme, cx, |this, e, window, cx| {
-                        this.open_popover_at(PopoverKind::PushPicker, e.position(), window, cx);
+                    push_menu.on_click_with_bounds(theme, cx, move |this, _e, bounds, window, cx| {
+                        this.activate_context_menu_invoker(push_picker_invoker.clone(), cx);
+                        this.open_popover_for_bounds(PopoverKind::PushPicker, bounds, window, cx);
                     }),
                 )
                 .style(zed::SplitButtonStyle::Outlined)
@@ -485,12 +557,20 @@ impl Render for ActionBarView {
                 }
             }));
 
+        let stash_prompt_invoker: SharedString = "stash_btn".into();
+        let stash_prompt_active = self
+            .active_context_menu_invoker
+            .as_ref()
+            .is_some_and(|id| id.as_ref() == stash_prompt_invoker.as_ref());
         let stash = zed::Button::new("stash", "Stash")
             .start_slot(icon("icons/box.svg", icon_primary))
             .style(zed::ButtonStyle::Outlined)
+            .selected(stash_prompt_active)
+            .selected_bg(menu_selected_bg)
             .disabled(!can_stash)
-            .on_click(theme, cx, |this, e, window, cx| {
-                this.open_popover_at(PopoverKind::StashPrompt, e.position(), window, cx);
+            .on_click_with_bounds(theme, cx, move |this, _e, bounds, window, cx| {
+                this.activate_context_menu_invoker(stash_prompt_invoker.clone(), cx);
+                this.open_popover_for_bounds(PopoverKind::StashPrompt, bounds, window, cx);
             })
             .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
                 let text: SharedString = if can_stash {
@@ -505,11 +585,19 @@ impl Render for ActionBarView {
                 }
             }));
 
+        let create_branch_invoker: SharedString = "create_branch_btn".into();
+        let create_branch_active = self
+            .active_context_menu_invoker
+            .as_ref()
+            .is_some_and(|id| id.as_ref() == create_branch_invoker.as_ref());
         let create_branch = zed::Button::new("create_branch", "Branch")
             .start_slot(icon("icons/git_branch.svg", icon_primary))
             .style(zed::ButtonStyle::Outlined)
-            .on_click(theme, cx, |this, e, window, cx| {
-                this.open_popover_at(PopoverKind::CreateBranch, e.position(), window, cx);
+            .selected(create_branch_active)
+            .selected_bg(menu_selected_bg)
+            .on_click_with_bounds(theme, cx, move |this, _e, bounds, window, cx| {
+                this.activate_context_menu_invoker(create_branch_invoker.clone(), cx);
+                this.open_popover_for_bounds(PopoverKind::CreateBranch, bounds, window, cx);
             })
             .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
                 let text: SharedString = "Create branch".into();

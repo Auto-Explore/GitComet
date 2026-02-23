@@ -114,6 +114,7 @@ impl MainPaneView {
                         None,
                         None,
                         Some(styled),
+                        false,
                         cx,
                     )
                 })
@@ -121,6 +122,8 @@ impl MainPaneView {
         }
 
         let theme = this.theme;
+        let repo_id_for_context_menu = this.active_repo_id();
+        let active_context_menu_invoker = this.active_context_menu_invoker.clone();
         let syntax_mode = if this.diff_cache.len() <= MAX_LINES_FOR_SYNTAX_HIGHLIGHTING {
             DiffSyntaxMode::Auto
         } else {
@@ -225,6 +228,12 @@ impl MainPaneView {
                 )
                 .then(|| this.diff_header_display_cache.get(&src_ix).cloned())
                 .flatten();
+                let context_menu_active = click_kind == DiffClickKind::HunkHeader
+                    && repo_id_for_context_menu.is_some_and(|repo_id| {
+                        let invoker: SharedString =
+                            format!("diff_hunk_menu_{}_{}", repo_id.0, src_ix).into();
+                        active_context_menu_invoker.as_ref() == Some(&invoker)
+                    });
                 diff_row(
                     theme,
                     visible_ix,
@@ -236,6 +245,7 @@ impl MainPaneView {
                     file_stat,
                     header_display,
                     styled,
+                    context_menu_active,
                     cx,
                 )
             })
@@ -507,6 +517,12 @@ impl MainPaneView {
                                 .child("")
                                 .into_any_element();
                         };
+                        let context_menu_active = click_kind == DiffClickKind::HunkHeader
+                            && this.active_repo_id().is_some_and(|repo_id| {
+                                let invoker: SharedString =
+                                    format!("diff_hunk_menu_{}_{}", repo_id.0, src_ix).into();
+                                this.active_context_menu_invoker.as_ref() == Some(&invoker)
+                            });
                         patch_split_header_row(
                             theme,
                             PatchSplitColumn::Left,
@@ -518,6 +534,7 @@ impl MainPaneView {
                             file_stat,
                             this.diff_header_display_cache.get(&src_ix).cloned(),
                             styled,
+                            context_menu_active,
                             cx,
                         )
                     }
@@ -791,6 +808,12 @@ impl MainPaneView {
                                 .child("")
                                 .into_any_element();
                         };
+                        let context_menu_active = click_kind == DiffClickKind::HunkHeader
+                            && this.active_repo_id().is_some_and(|repo_id| {
+                                let invoker: SharedString =
+                                    format!("diff_hunk_menu_{}_{}", repo_id.0, src_ix).into();
+                                this.active_context_menu_invoker.as_ref() == Some(&invoker)
+                            });
                         patch_split_header_row(
                             theme,
                             PatchSplitColumn::Right,
@@ -802,6 +825,7 @@ impl MainPaneView {
                             file_stat,
                             this.diff_header_display_cache.get(&src_ix).cloned(),
                             styled,
+                            context_menu_active,
                             cx,
                         )
                     }
@@ -823,6 +847,7 @@ fn diff_row(
     file_stat: Option<(usize, usize)>,
     header_display: Option<SharedString>,
     styled: Option<&CachedDiffStyledText>,
+    context_menu_active: bool,
     cx: &mut gpui::Context<MainPaneView>,
 ) -> AnyElement {
     let on_click = cx.listener(move |this, e: &ClickEvent, _w, cx| {
@@ -915,6 +940,9 @@ fn diff_row(
             let Some(&src_ix) = this.diff_visible_indices.get(visible_ix) else {
                 return;
             };
+            let context_menu_invoker: SharedString =
+                format!("diff_hunk_menu_{}_{}", repo_id.0, src_ix).into();
+            this.activate_context_menu_invoker(context_menu_invoker, cx);
             this.open_popover_at(
                 PopoverKind::DiffHunkMenu { repo_id, src_ix },
                 e.position,
@@ -929,6 +957,9 @@ fn diff_row(
                 theme.colors.accent,
                 if theme.is_dark { 0.14 } else { 0.10 },
             ));
+        }
+        if context_menu_active {
+            row = row.bg(theme.colors.active);
         }
 
         return row.into_any_element();
@@ -1072,6 +1103,7 @@ fn patch_split_header_row(
     file_stat: Option<(usize, usize)>,
     header_display: Option<SharedString>,
     styled: Option<&CachedDiffStyledText>,
+    context_menu_active: bool,
     cx: &mut gpui::Context<MainPaneView>,
 ) -> AnyElement {
     let on_click = cx.listener(move |this, e: &ClickEvent, _w, cx| {
@@ -1187,10 +1219,14 @@ fn patch_split_header_row(
                 else {
                     return;
                 };
+                let src_ix = *src_ix;
+                let context_menu_invoker: SharedString =
+                    format!("diff_hunk_menu_{}_{}", repo_id.0, src_ix).into();
+                this.activate_context_menu_invoker(context_menu_invoker, cx);
                 this.open_popover_at(
                     PopoverKind::DiffHunkMenu {
                         repo_id,
-                        src_ix: *src_ix,
+                        src_ix,
                     },
                     e.position,
                     window,
@@ -1204,6 +1240,9 @@ fn patch_split_header_row(
                     theme.colors.accent,
                     if theme.is_dark { 0.14 } else { 0.10 },
                 ));
+            }
+            if context_menu_active {
+                row = row.bg(theme.colors.active);
             }
 
             row.into_any_element()

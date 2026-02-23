@@ -187,6 +187,7 @@ impl MainPaneView {
                     selected,
                     row_vm.is_head,
                     is_stash_node,
+                    this.active_context_menu_invoker.as_ref(),
                     cx,
                 ))
             })
@@ -222,8 +223,16 @@ fn history_table_row(
     selected: bool,
     is_head: bool,
     is_stash_node: bool,
+    active_context_menu_invoker: Option<&SharedString>,
     cx: &mut gpui::Context<MainPaneView>,
 ) -> AnyElement {
+    let context_menu_invoker: SharedString = format!(
+        "history_commit_menu_{}_{}",
+        repo_id.0,
+        commit.id.0.as_str()
+    )
+    .into();
+    let context_menu_active = active_context_menu_invoker == Some(&context_menu_invoker);
     let commit_row = history_canvas::history_commit_row_canvas(
         theme,
         cx.entity(),
@@ -257,7 +266,13 @@ fn history_table_row(
         .h(px(HISTORY_ROW_HEIGHT_PX))
         .w_full()
         .cursor(CursorStyle::PointingHand)
-        .hover(move |s| s.bg(theme.colors.hover))
+        .hover(move |s| {
+            if context_menu_active {
+                s.bg(theme.colors.active)
+            } else {
+                s.bg(theme.colors.hover)
+            }
+        })
         .active(move |s| s.bg(theme.colors.active))
         .child(commit_row)
         .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
@@ -270,6 +285,9 @@ fn history_table_row(
 
     if selected {
         row = row.bg(with_alpha(theme.colors.accent, 0.15));
+    }
+    if context_menu_active {
+        row = row.bg(theme.colors.active);
     }
 
     if is_head {

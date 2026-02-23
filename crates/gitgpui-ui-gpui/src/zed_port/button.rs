@@ -1,8 +1,11 @@
 use crate::theme::AppTheme;
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, ClickEvent, CursorStyle, Div, IntoElement, SharedString, Stateful, Window, div, px,
+    AnyElement, Bounds, ClickEvent, CursorStyle, Div, IntoElement, Pixels, SharedString, Stateful,
+    Window, div, px,
 };
+use std::cell::RefCell;
+use std::rc::Rc;
 
 use super::{CONTROL_HEIGHT_PX, CONTROL_PAD_X_PX, CONTROL_PAD_Y_PX, ICON_PAD_X_PX};
 
@@ -22,6 +25,10 @@ pub struct Button {
     label: SharedString,
     style: ButtonStyle,
     disabled: bool,
+    selected: bool,
+    selected_bg: Option<gpui::Rgba>,
+    borderless: bool,
+    suppress_hover_border: bool,
     start_slot: Option<AnyElement>,
     end_slot: Option<AnyElement>,
 }
@@ -33,9 +40,33 @@ impl Button {
             label: label.into(),
             style: ButtonStyle::Subtle,
             disabled: false,
+            selected: false,
+            selected_bg: None,
+            borderless: false,
+            suppress_hover_border: false,
             start_slot: None,
             end_slot: None,
         }
+    }
+
+    pub fn selected(mut self, selected: bool) -> Self {
+        self.selected = selected;
+        self
+    }
+
+    pub fn selected_bg(mut self, bg: gpui::Rgba) -> Self {
+        self.selected_bg = Some(bg);
+        self
+    }
+
+    pub fn borderless(mut self) -> Self {
+        self.borderless = true;
+        self
+    }
+
+    pub fn no_hover_border(mut self) -> Self {
+        self.suppress_hover_border = true;
+        self
     }
 
     pub fn start_slot(mut self, slot: impl IntoElement) -> Self {
@@ -68,6 +99,47 @@ impl Button {
 
         self.render(theme)
             .when(!disabled, |this| this.on_click(cx.listener(f)))
+    }
+
+    pub fn on_click_with_bounds<V: 'static>(
+        self,
+        theme: AppTheme,
+        cx: &gpui::Context<V>,
+        f: impl Fn(
+                &mut V,
+                &ClickEvent,
+                Bounds<Pixels>,
+                &mut Window,
+                &mut gpui::Context<V>,
+            ) + 'static,
+    ) -> Stateful<Div> {
+        let disabled = self.disabled;
+
+        let last_bounds: Rc<RefCell<Option<Bounds<Pixels>>>> = Rc::new(RefCell::new(None));
+        let last_bounds_for_prepaint = Rc::clone(&last_bounds);
+        let last_bounds_for_click = Rc::clone(&last_bounds);
+        let wrapper_id: SharedString = format!("{}_bounds_wrapper", self.id).into();
+
+        let button = self
+            .render(theme)
+            .when(!disabled, |this| {
+                this.on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
+                    let bounds = last_bounds_for_click
+                        .borrow()
+                        .clone()
+                        .unwrap_or_else(|| Bounds::new(e.position(), gpui::size(px(0.0), px(0.0))));
+                    f(this, e, bounds, window, cx);
+                }))
+            });
+
+        div()
+            .on_children_prepainted(move |children_bounds, _window, _cx| {
+                if let Some(bounds) = children_bounds.first() {
+                    *last_bounds_for_prepaint.borrow_mut() = Some(bounds.clone());
+                }
+            })
+            .child(button)
+            .id(wrapper_id)
     }
 
     pub fn render(self, theme: AppTheme) -> Stateful<Div> {
@@ -197,6 +269,10 @@ impl Button {
 
         let label = self.label.to_string();
         let icon_only = looks_like_icon_button(&label);
+        let selected = self.selected;
+        let selected_bg_override = self.selected_bg;
+        let borderless = self.borderless;
+        let suppress_hover_border = self.suppress_hover_border || borderless;
 
         let mut inner = div().flex().items_center().gap_1();
         if let Some(start_slot) = self.start_slot {
@@ -224,19 +300,33 @@ impl Button {
             .justify_center()
             .rounded(px(theme.radii.row))
             .bg(bg)
-            .border_1()
-            .border_color(border)
-            .focus(move |s| {
-                s.border_color(theme.colors.focus_ring)
-                    .bg(theme.colors.focus_ring_bg)
-            })
             .text_sm()
             .text_color(text)
             .cursor(CursorStyle::PointingHand)
             .child(inner);
 
+        if !borderless {
+            base = base.border_1().border_color(border);
+        }
+        base = base.focus(move |s| {
+            if borderless {
+                s.bg(theme.colors.focus_ring_bg)
+            } else {
+                s.border_color(theme.colors.focus_ring)
+                    .bg(theme.colors.focus_ring_bg)
+            }
+        });
+
         if self.disabled {
             base = base.opacity(0.5).cursor(CursorStyle::Arrow);
+        } else if selected {
+            let selected_bg = selected_bg_override.unwrap_or(theme.colors.active);
+            base = base
+                .bg(selected_bg)
+                .hover(move |s| s.bg(selected_bg))
+                .active(move |s| s.bg(selected_bg));
+        } else if suppress_hover_border {
+            base = base.hover(move |s| s.bg(hover_bg)).active(move |s| s.bg(active_bg));
         } else {
             base = base
                 .hover(move |s| s.bg(hover_bg).border_color(hover_border))

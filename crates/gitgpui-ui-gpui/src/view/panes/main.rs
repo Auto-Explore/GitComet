@@ -17,6 +17,7 @@ pub(in super::super) struct MainPaneView {
     root_view: WeakEntity<GitGpuiView>,
     tooltip_host: WeakEntity<TooltipHost>,
     notify_fingerprint: u64,
+    pub(in super::super) active_context_menu_invoker: Option<SharedString>,
 
     pub(in super::super) last_window_size: Size<Pixels>,
 
@@ -321,6 +322,7 @@ impl MainPaneView {
             root_view,
             tooltip_host,
             notify_fingerprint: initial_fingerprint,
+            active_context_menu_invoker: None,
             last_window_size: size(px(0.0), px(0.0)),
             diff_view: DiffViewMode::Split,
             svg_diff_view_mode: SvgDiffViewMode::Image,
@@ -456,6 +458,18 @@ impl MainPaneView {
         cx.notify();
     }
 
+    pub(in super::super) fn set_active_context_menu_invoker(
+        &mut self,
+        next: Option<SharedString>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.active_context_menu_invoker == next {
+            return;
+        }
+        self.active_context_menu_invoker = next;
+        cx.notify();
+    }
+
     pub(in super::super) fn set_date_time_format(
         &mut self,
         next: DateTimeFormat,
@@ -502,6 +516,34 @@ impl MainPaneView {
                     root.open_popover_at(kind, anchor, window, cx);
                 });
             });
+        });
+    }
+
+    pub(in super::super) fn open_popover_for_bounds(
+        &mut self,
+        kind: PopoverKind,
+        anchor_bounds: Bounds<Pixels>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let root_view = self.root_view.clone();
+        let window_handle = window.window_handle();
+        cx.defer(move |cx| {
+            let _ = window_handle.update(cx, |_, window, cx| {
+                let _ = root_view.update(cx, |root, cx| {
+                    root.open_popover_for_bounds(kind, anchor_bounds, window, cx);
+                });
+            });
+        });
+    }
+
+    pub(in super::super) fn activate_context_menu_invoker(
+        &mut self,
+        invoker: SharedString,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let _ = self.root_view.update(cx, move |root, cx| {
+            root.set_active_context_menu_invoker(Some(invoker), cx);
         });
     }
 

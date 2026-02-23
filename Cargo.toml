@@ -38,3 +38,4 @@ debug = 2
 
 [patch.crates-io]
 gpui = { path = "crates/vendor/gpui" }
+resvg = { path = "crates/vendor/resvg" }

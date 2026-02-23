@@ -495,6 +495,7 @@ impl Render for RepoTabsBarView {
                 .h_full()
                 .flex()
                 .items_center()
+                .px_1()
                 .gap_1()
                 .child(open_repo)
                 .child(clone_repo),
