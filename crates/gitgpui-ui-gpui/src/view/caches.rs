@@ -17,6 +17,7 @@ pub(super) struct HistoryCacheRequest {
     pub(super) remote_branches_rev: u64,
     pub(super) tags_rev: u64,
     pub(super) date_time_format: DateTimeFormat,
+    pub(super) timezone: Timezone,
 }
 
 #[derive(Clone, Debug)]

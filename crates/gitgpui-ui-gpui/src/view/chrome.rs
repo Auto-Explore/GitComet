@@ -12,7 +12,7 @@ pub(super) struct TitleBarView {
     app_menu_open: bool,
 }
 
-fn window_top_left_corner(window: &Window) -> Point<Pixels> {
+pub(in crate::view) fn window_top_left_corner(window: &Window) -> Point<Pixels> {
     let inset = window.client_inset().unwrap_or(px(0.0));
     match window.window_decorations() {
         Decorations::Client { tiling } => point(

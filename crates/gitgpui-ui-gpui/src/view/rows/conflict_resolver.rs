@@ -1,4 +1,5 @@
 use super::diff_text::*;
+use super::super::conflict_resolver;
 use super::*;
 
 impl MainPaneView {
@@ -6,126 +7,252 @@ impl MainPaneView {
         this: &mut Self,
         range: Range<usize>,
         _window: &mut Window,
-        _cx: &mut gpui::Context<Self>,
+        cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
         let theme = this.theme;
+        let show_ws = this.show_whitespace;
+        let [col_a_w, col_b_w, col_c_w] = this.conflict_three_way_col_widths;
         let active_range = this
             .conflict_resolver
             .three_way_conflict_ranges
             .get(this.conflict_resolver.active_conflict)
             .cloned();
-        range
-            .map(|ix| {
-                let base_line = this.conflict_resolver.three_way_base_lines.get(ix);
-                let ours_line = this.conflict_resolver.three_way_ours_lines.get(ix);
-                let theirs_line = this.conflict_resolver.three_way_theirs_lines.get(ix);
-                let is_in_active_conflict =
-                    active_range.as_ref().map_or(false, |r| r.contains(&ix));
 
-                let base = div()
-                    .id(("conflict_three_way_base", ix))
-                    .flex_1()
-                    .min_w(px(0.0))
-                    .h(px(20.0))
-                    .px_2()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .text_xs()
-                    .text_color(if base_line.is_some() {
-                        theme.colors.text
-                    } else {
-                        theme.colors.text_muted
-                    })
-                    .whitespace_nowrap()
-                    .child(
-                        div().w(px(38.0)).text_color(theme.colors.text_muted).child(
-                            line_number_string(
-                                base_line
-                                    .is_some()
-                                    .then(|| u32::try_from(ix + 1).ok())
-                                    .flatten(),
-                            ),
+        // Build a lookup: for each line index, which conflict range_ix does it belong to?
+        let conflict_ranges = &this.conflict_resolver.three_way_conflict_ranges;
+        let conflict_range_for_ix = |ix: usize| -> Option<usize> {
+            conflict_ranges
+                .iter()
+                .position(|r| r.contains(&ix))
+        };
+
+        // Pre-build styled text cache entries for lines with word highlights.
+        for ix in range.clone() {
+            for (col, highlights_vec) in [
+                (
+                    ThreeWayColumn::Base,
+                    &this.conflict_resolver.three_way_word_highlights_base,
+                ),
+                (
+                    ThreeWayColumn::Ours,
+                    &this.conflict_resolver.three_way_word_highlights_ours,
+                ),
+                (
+                    ThreeWayColumn::Theirs,
+                    &this.conflict_resolver.three_way_word_highlights_theirs,
+                ),
+            ] {
+                if this
+                    .conflict_three_way_segments_cache
+                    .contains_key(&(ix, col))
+                {
+                    continue;
+                }
+                let word_ranges = highlights_vec
+                    .get(ix)
+                    .and_then(|o| o.as_ref())
+                    .map(|v| v.as_slice())
+                    .unwrap_or(&[]);
+                if word_ranges.is_empty() {
+                    continue;
+                }
+                let text = match col {
+                    ThreeWayColumn::Base => this
+                        .conflict_resolver
+                        .three_way_base_lines
+                        .get(ix)
+                        .map(|s| s.as_ref())
+                        .unwrap_or(""),
+                    ThreeWayColumn::Ours => this
+                        .conflict_resolver
+                        .three_way_ours_lines
+                        .get(ix)
+                        .map(|s| s.as_ref())
+                        .unwrap_or(""),
+                    ThreeWayColumn::Theirs => this
+                        .conflict_resolver
+                        .three_way_theirs_lines
+                        .get(ix)
+                        .map(|s| s.as_ref())
+                        .unwrap_or(""),
+                };
+                if text.is_empty() {
+                    continue;
+                }
+                let styled = build_cached_diff_styled_text(
+                    theme,
+                    text,
+                    word_ranges,
+                    "",
+                    None,
+                    DiffSyntaxMode::HeuristicOnly,
+                    None,
+                );
+                this.conflict_three_way_segments_cache
+                    .insert((ix, col), styled);
+            }
+        }
+
+        let mut elements = Vec::with_capacity(range.len());
+        for ix in range {
+            let base_line = this.conflict_resolver.three_way_base_lines.get(ix);
+            let ours_line = this.conflict_resolver.three_way_ours_lines.get(ix);
+            let theirs_line = this.conflict_resolver.three_way_theirs_lines.get(ix);
+            let is_in_active_conflict =
+                active_range.as_ref().map_or(false, |r| r.contains(&ix));
+            let range_ix = conflict_range_for_ix(ix);
+            let is_in_conflict = range_ix.is_some();
+
+            let base_styled = this
+                .conflict_three_way_segments_cache
+                .get(&(ix, ThreeWayColumn::Base));
+            let ours_styled = this
+                .conflict_three_way_segments_cache
+                .get(&(ix, ThreeWayColumn::Ours));
+            let theirs_styled = this
+                .conflict_three_way_segments_cache
+                .get(&(ix, ThreeWayColumn::Theirs));
+
+            let mut base = div()
+                .id(("conflict_three_way_base", ix))
+                .w(col_a_w)
+                .min_w(px(0.0))
+                .h(px(20.0))
+                .px_2()
+                .flex()
+                .items_center()
+                .gap_2()
+                .text_xs()
+                .text_color(if base_line.is_some() {
+                    theme.colors.text
+                } else {
+                    theme.colors.text_muted
+                })
+                .whitespace_nowrap()
+                .child(
+                    div().w(px(38.0)).text_color(theme.colors.text_muted).child(
+                        line_number_string(
+                            base_line
+                                .is_some()
+                                .then(|| u32::try_from(ix + 1).ok())
+                                .flatten(),
                         ),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(0.0))
-                            .overflow_hidden()
-                            .child(base_line.cloned().unwrap_or_default()),
-                    );
+                    ),
+                )
+                .child(conflict_diff_text_cell(
+                    base_line.cloned().unwrap_or_default(),
+                    base_styled,
+                    show_ws,
+                ));
+            if let Some(ri) = range_ix {
+                if base_line.is_some() {
+                    base = base
+                        .cursor(CursorStyle::PointingHand)
+                        .hover(move |s| s.bg(with_alpha(theme.colors.hover, 0.5)))
+                        .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+                            this.conflict_resolver_pick_at(
+                                ri,
+                                conflict_resolver::ConflictChoice::Base,
+                                cx,
+                            );
+                        }));
+                }
+            }
 
-                let ours = div()
-                    .id(("conflict_three_way_ours", ix))
-                    .flex_1()
-                    .min_w(px(0.0))
-                    .h(px(20.0))
-                    .px_2()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .text_xs()
-                    .text_color(if ours_line.is_some() {
-                        theme.colors.text
-                    } else {
-                        theme.colors.text_muted
-                    })
-                    .whitespace_nowrap()
-                    .child(
-                        div().w(px(38.0)).text_color(theme.colors.text_muted).child(
-                            line_number_string(
-                                ours_line
-                                    .is_some()
-                                    .then(|| u32::try_from(ix + 1).ok())
-                                    .flatten(),
-                            ),
+            let mut ours = div()
+                .id(("conflict_three_way_ours", ix))
+                .w(col_b_w)
+                .min_w(px(0.0))
+                .h(px(20.0))
+                .px_2()
+                .flex()
+                .items_center()
+                .gap_2()
+                .text_xs()
+                .text_color(if ours_line.is_some() {
+                    theme.colors.text
+                } else {
+                    theme.colors.text_muted
+                })
+                .whitespace_nowrap()
+                .child(
+                    div().w(px(38.0)).text_color(theme.colors.text_muted).child(
+                        line_number_string(
+                            ours_line
+                                .is_some()
+                                .then(|| u32::try_from(ix + 1).ok())
+                                .flatten(),
                         ),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(0.0))
-                            .overflow_hidden()
-                            .child(ours_line.cloned().unwrap_or_default()),
-                    );
+                    ),
+                )
+                .child(conflict_diff_text_cell(
+                    ours_line.cloned().unwrap_or_default(),
+                    ours_styled,
+                    show_ws,
+                ));
+            if let Some(ri) = range_ix {
+                ours = ours
+                    .cursor(CursorStyle::PointingHand)
+                    .hover(move |s| s.bg(with_alpha(theme.colors.hover, 0.5)))
+                    .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+                        this.conflict_resolver_pick_at(
+                            ri,
+                            conflict_resolver::ConflictChoice::Ours,
+                            cx,
+                        );
+                    }));
+            }
 
-                let theirs = div()
-                    .id(("conflict_three_way_theirs", ix))
-                    .flex_1()
-                    .min_w(px(0.0))
-                    .h(px(20.0))
-                    .px_2()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .text_xs()
-                    .text_color(if theirs_line.is_some() {
-                        theme.colors.text
-                    } else {
-                        theme.colors.text_muted
-                    })
-                    .whitespace_nowrap()
-                    .child(
-                        div().w(px(38.0)).text_color(theme.colors.text_muted).child(
-                            line_number_string(
-                                theirs_line
-                                    .is_some()
-                                    .then(|| u32::try_from(ix + 1).ok())
-                                    .flatten(),
-                            ),
+            let mut theirs = div()
+                .id(("conflict_three_way_theirs", ix))
+                .w(col_c_w)
+                .flex_grow()
+                .min_w(px(0.0))
+                .h(px(20.0))
+                .px_2()
+                .flex()
+                .items_center()
+                .gap_2()
+                .text_xs()
+                .text_color(if theirs_line.is_some() {
+                    theme.colors.text
+                } else {
+                    theme.colors.text_muted
+                })
+                .whitespace_nowrap()
+                .child(
+                    div().w(px(38.0)).text_color(theme.colors.text_muted).child(
+                        line_number_string(
+                            theirs_line
+                                .is_some()
+                                .then(|| u32::try_from(ix + 1).ok())
+                                .flatten(),
                         ),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(0.0))
-                            .overflow_hidden()
-                            .child(theirs_line.cloned().unwrap_or_default()),
-                    );
+                    ),
+                )
+                .child(conflict_diff_text_cell(
+                    theirs_line.cloned().unwrap_or_default(),
+                    theirs_styled,
+                    show_ws,
+                ));
+            if let Some(ri) = range_ix {
+                theirs = theirs
+                    .cursor(CursorStyle::PointingHand)
+                    .hover(move |s| s.bg(with_alpha(theme.colors.hover, 0.5)))
+                    .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+                        this.conflict_resolver_pick_at(
+                            ri,
+                            conflict_resolver::ConflictChoice::Theirs,
+                            cx,
+                        );
+                    }));
+            }
 
+            let handle_w = px(PANE_RESIZE_HANDLE_PX);
+            elements.push(
                 div()
                     .id(("conflict_three_way_row", ix))
+                    .w_full()
                     .flex()
                     .when(is_in_active_conflict, |d| {
                         d.bg(with_alpha(
@@ -133,14 +260,25 @@ impl MainPaneView {
                             if theme.is_dark { 0.08 } else { 0.06 },
                         ))
                     })
+                    .when(is_in_conflict && !is_in_active_conflict, |d| {
+                        d.bg(with_alpha(
+                            theme.colors.accent,
+                            if theme.is_dark { 0.03 } else { 0.02 },
+                        ))
+                    })
                     .child(base)
-                    .child(div().w(px(1.0)).h_full().bg(theme.colors.border))
+                    .child(div().w(handle_w).h_full().flex().items_center().justify_center().child(
+                        div().w(px(1.0)).h_full().bg(theme.colors.border),
+                    ))
                     .child(ours)
-                    .child(div().w(px(1.0)).h_full().bg(theme.colors.border))
+                    .child(div().w(handle_w).h_full().flex().items_center().justify_center().child(
+                        div().w(px(1.0)).h_full().bg(theme.colors.border),
+                    ))
                     .child(theirs)
-                    .into_any_element()
-            })
-            .collect()
+                    .into_any_element(),
+            );
+        }
+        elements
     }
 
     pub(in super::super) fn render_conflict_compare_diff_rows(
@@ -181,6 +319,7 @@ impl MainPaneView {
         _cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         let theme = self.theme;
+        let show_ws = self.show_whitespace;
         let Some(row) = self.conflict_resolver.diff_rows.get(row_ix) else {
             return div()
                 .id(("conflict_compare_split_oob", row_ix))
@@ -195,13 +334,21 @@ impl MainPaneView {
         let left_text: SharedString = row.old.clone().unwrap_or_default().into();
         let right_text: SharedString = row.new.clone().unwrap_or_default().into();
 
+        let word_hl = self
+            .conflict_resolver
+            .diff_word_highlights_split
+            .get(row_ix)
+            .and_then(|o| o.as_ref());
+        let old_word_ranges = word_hl.map(|(o, _)| o.as_slice()).unwrap_or(&[]);
+        let new_word_ranges = word_hl.map(|(_, n)| n.as_slice()).unwrap_or(&[]);
+
         let query = if self.diff_search_active {
             self.diff_search_query.clone()
         } else {
             SharedString::default()
         };
         let query = query.as_ref().trim();
-        let should_style = !query.is_empty();
+        let should_style = !query.is_empty() || !old_word_ranges.is_empty() || !new_word_ranges.is_empty();
         if should_style {
             if let Some(text) = row.old.as_deref() {
                 self.conflict_diff_segments_cache_split
@@ -210,7 +357,7 @@ impl MainPaneView {
                         build_cached_diff_styled_text(
                             theme,
                             text,
-                            &[],
+                            old_word_ranges,
                             query,
                             None,
                             DiffSyntaxMode::HeuristicOnly,
@@ -225,7 +372,7 @@ impl MainPaneView {
                         build_cached_diff_styled_text(
                             theme,
                             text,
-                            &[],
+                            new_word_ranges,
                             query,
                             None,
                             DiffSyntaxMode::HeuristicOnly,
@@ -250,9 +397,11 @@ impl MainPaneView {
         let left_bg = split_cell_bg(theme, row.kind, ConflictPickSide::Ours, false);
         let right_bg = split_cell_bg(theme, row.kind, ConflictPickSide::Theirs, false);
 
+        let [left_col_w, right_col_w] = self.conflict_diff_split_col_widths;
+
         let left = div()
             .id(("conflict_compare_split_ours", row_ix))
-            .flex_1()
+            .w(left_col_w)
             .min_w(px(0.0))
             .h(px(20.0))
             .px_2()
@@ -273,11 +422,12 @@ impl MainPaneView {
                     .text_color(theme.colors.text_muted)
                     .child(line_number_string(row.old_line)),
             )
-            .child(conflict_diff_text_cell(left_text.clone(), left_styled));
+            .child(conflict_diff_text_cell(left_text.clone(), left_styled, show_ws));
 
         let right = div()
             .id(("conflict_compare_split_theirs", row_ix))
-            .flex_1()
+            .w(right_col_w)
+            .flex_grow()
             .min_w(px(0.0))
             .h(px(20.0))
             .px_2()
@@ -298,13 +448,17 @@ impl MainPaneView {
                     .text_color(theme.colors.text_muted)
                     .child(line_number_string(row.new_line)),
             )
-            .child(conflict_diff_text_cell(right_text.clone(), right_styled));
+            .child(conflict_diff_text_cell(right_text.clone(), right_styled, show_ws));
 
+        let handle_w = px(PANE_RESIZE_HANDLE_PX);
         div()
             .id(("conflict_compare_split_row", row_ix))
+            .w_full()
             .flex()
             .child(left)
-            .child(div().w(px(1.0)).h_full().bg(theme.colors.border))
+            .child(div().w(handle_w).h_full().flex().items_center().justify_center().child(
+                div().w(px(1.0)).h_full().bg(theme.colors.border),
+            ))
             .child(right)
             .into_any_element()
     }
@@ -315,6 +469,7 @@ impl MainPaneView {
         _cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         let theme = self.theme;
+        let show_ws = self.show_whitespace;
         let Some(row) = self.conflict_resolver.inline_rows.get(ix) else {
             return div()
                 .id(("conflict_compare_inline_oob", ix))
@@ -390,7 +545,7 @@ impl MainPaneView {
                     .text_color(theme.colors.text_muted)
                     .child(prefix),
             )
-            .child(conflict_diff_text_cell(row.content.clone().into(), styled))
+            .child(conflict_diff_text_cell(row.content.clone().into(), styled, show_ws))
             .into_any_element()
     }
 
@@ -400,6 +555,7 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         let theme = self.theme;
+        let show_ws = self.show_whitespace;
         let Some(row) = self.conflict_resolver.diff_rows.get(row_ix) else {
             return div()
                 .id(("conflict_diff_split_oob", row_ix))
@@ -414,13 +570,21 @@ impl MainPaneView {
         let left_text: SharedString = row.old.clone().unwrap_or_default().into();
         let right_text: SharedString = row.new.clone().unwrap_or_default().into();
 
+        let word_hl = self
+            .conflict_resolver
+            .diff_word_highlights_split
+            .get(row_ix)
+            .and_then(|o| o.as_ref());
+        let old_word_ranges = word_hl.map(|(o, _)| o.as_slice()).unwrap_or(&[]);
+        let new_word_ranges = word_hl.map(|(_, n)| n.as_slice()).unwrap_or(&[]);
+
         let query = if self.diff_search_active {
             self.diff_search_query.clone()
         } else {
             SharedString::default()
         };
         let query = query.as_ref().trim();
-        let should_style = !query.is_empty();
+        let should_style = !query.is_empty() || !old_word_ranges.is_empty() || !new_word_ranges.is_empty();
         if should_style {
             if let Some(text) = row.old.as_deref() {
                 self.conflict_diff_segments_cache_split
@@ -429,7 +593,7 @@ impl MainPaneView {
                         build_cached_diff_styled_text(
                             theme,
                             text,
-                            &[],
+                            old_word_ranges,
                             query,
                             None,
                             DiffSyntaxMode::HeuristicOnly,
@@ -444,7 +608,7 @@ impl MainPaneView {
                         build_cached_diff_styled_text(
                             theme,
                             text,
-                            &[],
+                            new_word_ranges,
                             query,
                             None,
                             DiffSyntaxMode::HeuristicOnly,
@@ -485,9 +649,11 @@ impl MainPaneView {
             this.conflict_resolver_toggle_split_selected(row_ix, ConflictPickSide::Theirs, cx);
         });
 
+        let [left_col_w, right_col_w] = self.conflict_diff_split_col_widths;
+
         let mut left = div()
             .id(("conflict_diff_split_ours", row_ix))
-            .flex_1()
+            .w(left_col_w)
             .min_w(px(0.0))
             .h(px(20.0))
             .px_2()
@@ -504,7 +670,7 @@ impl MainPaneView {
                     .text_color(theme.colors.text_muted)
                     .child(line_number_string(row.old_line)),
             )
-            .child(conflict_diff_text_cell(left_text.clone(), left_styled));
+            .child(conflict_diff_text_cell(left_text.clone(), left_styled, show_ws));
         if row.old.is_some() {
             left = left
                 .cursor(CursorStyle::PointingHand)
@@ -517,7 +683,8 @@ impl MainPaneView {
 
         let mut right = div()
             .id(("conflict_diff_split_theirs", row_ix))
-            .flex_1()
+            .w(right_col_w)
+            .flex_grow()
             .min_w(px(0.0))
             .h(px(20.0))
             .px_2()
@@ -534,7 +701,7 @@ impl MainPaneView {
                     .text_color(theme.colors.text_muted)
                     .child(line_number_string(row.new_line)),
             )
-            .child(conflict_diff_text_cell(right_text.clone(), right_styled));
+            .child(conflict_diff_text_cell(right_text.clone(), right_styled, show_ws));
         if row.new.is_some() {
             right = right
                 .cursor(CursorStyle::PointingHand)
@@ -545,11 +712,15 @@ impl MainPaneView {
             right = right.text_color(theme.colors.text_muted);
         }
 
+        let handle_w = px(PANE_RESIZE_HANDLE_PX);
         div()
             .id(("conflict_diff_split_row", row_ix))
+            .w_full()
             .flex()
             .child(left)
-            .child(div().w(px(1.0)).h_full().bg(theme.colors.border))
+            .child(div().w(handle_w).h_full().flex().items_center().justify_center().child(
+                div().w(px(1.0)).h_full().bg(theme.colors.border),
+            ))
             .child(right)
             .into_any_element()
     }
@@ -560,6 +731,7 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         let theme = self.theme;
+        let show_ws = self.show_whitespace;
         let Some(row) = self.conflict_resolver.inline_rows.get(ix) else {
             return div()
                 .id(("conflict_diff_inline_oob", ix))
@@ -636,7 +808,7 @@ impl MainPaneView {
                     .text_color(theme.colors.text_muted)
                     .child(prefix),
             )
-            .child(conflict_diff_text_cell(row.content.clone().into(), styled));
+            .child(conflict_diff_text_cell(row.content.clone().into(), styled, show_ws));
 
         if !row.content.is_empty() {
             base = base
@@ -655,25 +827,37 @@ impl MainPaneView {
 fn conflict_diff_text_cell(
     text: SharedString,
     styled: Option<&CachedDiffStyledText>,
+    show_whitespace: bool,
 ) -> AnyElement {
     let Some(styled) = styled else {
+        let display = if show_whitespace {
+            whitespace_visible_text(text.as_ref())
+        } else {
+            text
+        };
         return div()
             .flex_1()
             .min_w(px(0.0))
             .overflow_hidden()
-            .child(text)
+            .child(display)
             .into_any_element();
     };
 
     if styled.highlights.is_empty() {
+        let display = if show_whitespace {
+            whitespace_visible_text(styled.text.as_ref())
+        } else {
+            styled.text.clone()
+        };
         return div()
             .flex_1()
             .min_w(px(0.0))
             .overflow_hidden()
-            .child(styled.text.clone())
+            .child(display)
             .into_any_element();
     }
 
+    // When highlights exist, don't transform (would break byte ranges).
     div()
         .flex_1()
         .min_w(px(0.0))
@@ -683,6 +867,18 @@ fn conflict_diff_text_cell(
                 .with_highlights(styled.highlights.iter().cloned()),
         )
         .into_any_element()
+}
+
+fn whitespace_visible_text(text: &str) -> SharedString {
+    let mut out = String::with_capacity(text.len());
+    for ch in text.chars() {
+        match ch {
+            ' ' => out.push('\u{00B7}'),  // middle dot
+            '\t' => out.push('\u{2192}'), // rightwards arrow
+            _ => out.push(ch),
+        }
+    }
+    out.into()
 }
 
 fn split_cell_bg(

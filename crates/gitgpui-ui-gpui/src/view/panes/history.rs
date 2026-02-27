@@ -8,6 +8,7 @@ pub(in super::super) struct HistoryView {
     state: Arc<AppState>,
     pub(in super::super) theme: AppTheme,
     pub(in super::super) date_time_format: DateTimeFormat,
+    pub(in super::super) timezone: Timezone,
     _ui_model_subscription: gpui::Subscription,
     root_view: WeakEntity<GitGpuiView>,
     tooltip_host: WeakEntity<TooltipHost>,
@@ -60,6 +61,7 @@ impl HistoryView {
         ui_model: Entity<AppUiModel>,
         theme: AppTheme,
         date_time_format: DateTimeFormat,
+        timezone: Timezone,
         history_show_author: bool,
         history_show_date: bool,
         history_show_sha: bool,
@@ -91,6 +93,7 @@ impl HistoryView {
             state,
             theme,
             date_time_format,
+            timezone,
             _ui_model_subscription: subscription,
             root_view,
             tooltip_host,
@@ -220,6 +223,20 @@ impl HistoryView {
             return;
         }
         self.date_time_format = next;
+        self.history_cache = None;
+        self.history_cache_inflight = None;
+        cx.notify();
+    }
+
+    pub(in super::super) fn set_timezone(
+        &mut self,
+        next: Timezone,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.timezone == next {
+            return;
+        }
+        self.timezone = next;
         self.history_cache = None;
         self.history_cache_inflight = None;
         cx.notify();
@@ -484,6 +501,7 @@ impl HistoryView {
                     remote_branches_rev: repo.remote_branches_rev,
                     tags_rev: repo.tags_rev,
                     date_time_format: self.date_time_format,
+                    timezone: self.timezone,
                 };
 
                 let cache_ok = self
@@ -676,9 +694,10 @@ impl HistoryView {
                             let author: SharedString = commit.author.clone().into();
                             let summary: SharedString = commit.summary.clone().into();
 
-                            let when: SharedString = format_datetime_utc(
+                            let when: SharedString = format_datetime(
                                 commit.time,
                                 request_for_build.date_time_format,
+                                request_for_build.timezone,
                             )
                             .into();
 

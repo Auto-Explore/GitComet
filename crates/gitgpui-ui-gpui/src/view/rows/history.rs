@@ -516,28 +516,28 @@ fn working_tree_summary_history_row(
 
 #[cfg(test)]
 mod tests {
-    use crate::view::{DateTimeFormat, format_datetime_utc};
+    use crate::view::{DateTimeFormat, Timezone, format_datetime, format_datetime_utc};
     use std::time::{Duration, UNIX_EPOCH};
 
     #[test]
     fn commit_date_formats_as_yyyy_mm_dd_utc() {
         assert_eq!(
             format_datetime_utc(UNIX_EPOCH, DateTimeFormat::YmdHm),
-            "1970-01-01 00:00"
+            "1970-01-01 00:00 UTC"
         );
         assert_eq!(
             format_datetime_utc(
                 UNIX_EPOCH + Duration::from_secs(86_400),
                 DateTimeFormat::YmdHm
             ),
-            "1970-01-02 00:00"
+            "1970-01-02 00:00 UTC"
         );
         assert_eq!(
             format_datetime_utc(
                 UNIX_EPOCH - Duration::from_secs(86_400),
                 DateTimeFormat::YmdHm
             ),
-            "1969-12-31 00:00"
+            "1969-12-31 00:00 UTC"
         );
 
         // 2000-02-29 12:34:56 UTC
@@ -546,7 +546,41 @@ mod tests {
                 UNIX_EPOCH + Duration::from_secs(951_782_400 + 12 * 3600 + 34 * 60 + 56),
                 DateTimeFormat::YmdHms
             ),
-            "2000-02-29 12:34:56"
+            "2000-02-29 12:34:56 UTC"
         );
+    }
+
+    #[test]
+    fn format_datetime_with_timezone_offset() {
+        // UTC+5:30 (19800 seconds)
+        let tz = Timezone::Fixed(19800);
+        assert_eq!(
+            format_datetime(
+                UNIX_EPOCH,
+                DateTimeFormat::YmdHm,
+                tz,
+            ),
+            "1970-01-01 05:30 UTC+5:30"
+        );
+
+        // UTC-5
+        let tz_neg = Timezone::Fixed(-18000);
+        assert_eq!(
+            format_datetime(
+                UNIX_EPOCH + Duration::from_secs(86_400),
+                DateTimeFormat::YmdHm,
+                tz_neg,
+            ),
+            "1970-01-01 19:00 UTC\u{2212}5"
+        );
+    }
+
+    #[test]
+    fn timezone_key_round_trips() {
+        for tz in Timezone::all() {
+            let key = tz.key();
+            let parsed = Timezone::from_key(&key);
+            assert_eq!(parsed, Some(*tz), "round-trip failed for {key}");
+        }
     }
 }

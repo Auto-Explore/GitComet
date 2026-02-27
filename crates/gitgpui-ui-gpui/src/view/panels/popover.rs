@@ -50,7 +50,9 @@ pub(in super::super) struct PopoverHost {
     state: Arc<AppState>,
     theme: AppTheme,
     date_time_format: DateTimeFormat,
+    timezone: Timezone,
     settings_date_format_open: bool,
+    settings_timezone_open: bool,
     _ui_model_subscription: gpui::Subscription,
     _create_branch_input_subscription: gpui::Subscription,
     _stash_message_input_subscription: gpui::Subscription,
@@ -119,6 +121,7 @@ impl PopoverHost {
         ui_model: Entity<AppUiModel>,
         theme: AppTheme,
         date_time_format: DateTimeFormat,
+        timezone: Timezone,
         root_view: WeakEntity<GitGpuiView>,
         toast_host: WeakEntity<ToastHost>,
         main_pane: Entity<MainPaneView>,
@@ -356,7 +359,9 @@ impl PopoverHost {
             state,
             theme,
             date_time_format,
+            timezone,
             settings_date_format_open: false,
+            settings_timezone_open: false,
             _ui_model_subscription: subscription,
             _create_branch_input_subscription: create_branch_input_subscription,
             _stash_message_input_subscription: stash_message_input_subscription,
@@ -790,10 +795,26 @@ impl PopoverHost {
         self.schedule_ui_settings_persist(cx);
     }
 
+    pub(super) fn set_timezone(
+        &mut self,
+        next: Timezone,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.timezone == next {
+            return;
+        }
+        self.timezone = next;
+        self.main_pane
+            .update(cx, |pane, cx| pane.set_timezone(next, cx));
+        self.schedule_ui_settings_persist(cx);
+    }
+
     fn schedule_ui_settings_persist(&mut self, cx: &mut gpui::Context<Self>) {
         let fmt = self.date_time_format;
+        let tz = self.timezone;
         let _ = self.root_view.update(cx, |root, cx| {
             root.date_time_format = fmt;
+            root.timezone = tz;
             root.schedule_ui_settings_persist(cx);
         });
     }
@@ -862,6 +883,7 @@ impl PopoverHost {
         let margin_y = px(16.0);
 
         let is_app_menu = matches!(&kind, PopoverKind::AppMenu);
+        let is_settings = matches!(&kind, PopoverKind::Settings);
         let is_create_branch_or_stash_prompt =
             matches!(&kind, PopoverKind::CreateBranch | PopoverKind::StashPrompt);
         let is_context_menu = matches!(
@@ -887,7 +909,6 @@ impl PopoverHost {
 
         let mut anchor_corner = match &kind {
             PopoverKind::PullPicker
-            | PopoverKind::Settings
             | PopoverKind::PushPicker
             | PopoverKind::CreateBranch
             | PopoverKind::StashPrompt
@@ -1496,13 +1517,13 @@ impl PopoverHost {
 
         let is_right = matches!(anchor_corner, Corner::TopRight | Corner::BottomRight);
         let use_accent_border =
-            is_context_menu || is_app_menu || is_create_branch_or_stash_prompt;
+            is_context_menu || is_app_menu || is_create_branch_or_stash_prompt || is_settings;
         let popover_border_color = if use_accent_border {
             with_alpha(theme.colors.accent, 0.90)
         } else {
             gpui::rgba(crate::view::chrome::WINDOW_OUTLINE_RGBA)
         };
-        let gap_y = if is_app_menu {
+        let gap_y = if is_app_menu || is_settings {
             crate::view::chrome::TITLE_BAR_HEIGHT
         } else if anchor_is_bounds {
             px(1.0)
@@ -1513,7 +1534,7 @@ impl PopoverHost {
         };
 
         let mut context_menu_max_panel_h: Option<Pixels> = None;
-        if is_context_menu {
+        if is_context_menu || is_settings {
             let (below_anchor_y, above_anchor_y) = match &anchor_source {
                 PopoverAnchor::Point(_) => (anchor.y, anchor.y),
                 PopoverAnchor::Bounds(bounds) => (bounds.bottom_left().y, bounds.origin.y),

@@ -501,6 +501,44 @@ impl MainPaneView {
                 .when_some(next_file_btn, |d, btn| d.child(btn));
         }
 
+        // Show-whitespace toggle (Alt+W).
+        {
+            let ws_label = if self.show_whitespace {
+                "WS"
+            } else {
+                "WS"
+            };
+            let ws_style = if self.show_whitespace {
+                zed::ButtonStyle::Filled
+            } else {
+                zed::ButtonStyle::Outlined
+            };
+            controls = controls.child(
+                zed::Button::new("show_whitespace", ws_label)
+                    .style(ws_style)
+                    .on_click(theme, cx, |this, _e, _w, cx| {
+                        this.show_whitespace = !this.show_whitespace;
+                        this.diff_text_segments_cache.clear();
+                        this.conflict_diff_segments_cache_split.clear();
+                        this.conflict_diff_segments_cache_inline.clear();
+                        this.conflict_three_way_segments_cache.clear();
+                        cx.notify();
+                    })
+                    .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
+                        let text: SharedString = "Show whitespace (Alt+W)".into();
+                        let mut changed = false;
+                        if *hovering {
+                            changed |= this.set_tooltip_text_if_changed(Some(text.clone()), cx);
+                        } else {
+                            changed |= this.clear_tooltip_if_matches(&text, cx);
+                        }
+                        if changed {
+                            cx.notify();
+                        }
+                    })),
+            );
+        }
+
         if let Some(repo_id) = repo_id {
             controls = controls.child(
                 zed::Button::new("diff_close", "✕")
@@ -816,28 +854,46 @@ impl MainPaneView {
                                     );
                                 };
 
+                            let view_toggle_selected_bg = with_alpha(
+                                theme.colors.accent,
+                                if theme.is_dark { 0.26 } else { 0.20 },
+                            );
+                            let view_toggle_border = with_alpha(
+                                theme.colors.text_muted,
+                                if theme.is_dark { 0.38 } else { 0.28 },
+                            );
+                            let view_toggle_divider = with_alpha(view_toggle_border, 0.90);
+
                             let view_mode_controls = div()
+                                .id("conflict_view_mode_toggle")
                                 .flex()
                                 .items_center()
-                                .gap_1()
+                                .h(px(zed::CONTROL_HEIGHT_PX))
+                                .rounded(px(theme.radii.row))
+                                .border_1()
+                                .border_color(view_toggle_border)
+                                .bg(gpui::rgba(0x00000000))
+                                .overflow_hidden()
+                                .p(px(1.0))
                                 .child(
                                     zed::Button::new("conflict_view_three_way", "3-way")
-                                        .style(if view_mode == ConflictResolverViewMode::ThreeWay {
-                                            zed::ButtonStyle::Filled
-                                        } else {
-                                            zed::ButtonStyle::Outlined
-                                        })
+                                        .borderless()
+                                        .style(zed::ButtonStyle::Subtle)
+                                        .selected(view_mode == ConflictResolverViewMode::ThreeWay)
+                                        .selected_bg(view_toggle_selected_bg)
                                         .on_click(theme, cx, set_view_three_way),
                                 )
                                 .child(
+                                    div().h_full().w(px(1.0)).bg(view_toggle_divider),
+                                )
+                                .child(
                                     zed::Button::new("conflict_view_two_way", "2-way")
-                                        .style(
-                                            if view_mode == ConflictResolverViewMode::TwoWayDiff {
-                                                zed::ButtonStyle::Filled
-                                            } else {
-                                                zed::ButtonStyle::Outlined
-                                            },
+                                        .borderless()
+                                        .style(zed::ButtonStyle::Subtle)
+                                        .selected(
+                                            view_mode == ConflictResolverViewMode::TwoWayDiff,
                                         )
+                                        .selected_bg(view_toggle_selected_bg)
                                         .on_click(theme, cx, set_view_two_way),
                                 );
 
@@ -859,25 +915,33 @@ impl MainPaneView {
                                 || self.conflict_resolver_selection_is_empty();
 
                             let mode_controls = div()
+                                .id("conflict_mode_toggle")
                                 .flex()
                                 .items_center()
-                                .gap_1()
+                                .h(px(zed::CONTROL_HEIGHT_PX))
+                                .rounded(px(theme.radii.row))
+                                .border_1()
+                                .border_color(view_toggle_border)
+                                .bg(gpui::rgba(0x00000000))
+                                .overflow_hidden()
+                                .p(px(1.0))
                                 .child(
                                     zed::Button::new("conflict_mode_split", "Split")
-                                        .style(if mode == ConflictDiffMode::Split {
-                                            zed::ButtonStyle::Filled
-                                        } else {
-                                            zed::ButtonStyle::Outlined
-                                        })
+                                        .borderless()
+                                        .style(zed::ButtonStyle::Subtle)
+                                        .selected(mode == ConflictDiffMode::Split)
+                                        .selected_bg(view_toggle_selected_bg)
                                         .on_click(theme, cx, toggle_mode_split),
                                 )
                                 .child(
+                                    div().h_full().w(px(1.0)).bg(view_toggle_divider),
+                                )
+                                .child(
                                     zed::Button::new("conflict_mode_inline", "Inline")
-                                        .style(if mode == ConflictDiffMode::Inline {
-                                            zed::ButtonStyle::Filled
-                                        } else {
-                                            zed::ButtonStyle::Outlined
-                                        })
+                                        .borderless()
+                                        .style(zed::ButtonStyle::Subtle)
+                                        .selected(mode == ConflictDiffMode::Inline)
+                                        .selected_bg(view_toggle_selected_bg)
                                         .on_click(theme, cx, toggle_mode_inline),
                                 );
 
@@ -1072,14 +1136,148 @@ impl MainPaneView {
                                         ),
                                 );
 
+                            // Compute three-way column widths
+                            let handle_w = px(PANE_RESIZE_HANDLE_PX);
+                            let min_col_w = px(DIFF_SPLIT_COL_MIN_PX);
+                            let main_w = self.main_pane_content_width(cx);
+                            let available = (main_w - handle_w * 2.0).max(px(0.0));
+                            let ratios = self.conflict_three_way_col_ratios;
+                            let col_a_w = if available <= min_col_w * 3.0 {
+                                available / 3.0
+                            } else {
+                                (available * ratios[0]).max(min_col_w).min(available - min_col_w * 2.0)
+                            };
+                            let col_b_w = if available <= min_col_w * 3.0 {
+                                available / 3.0
+                            } else {
+                                (available * (ratios[1] - ratios[0])).max(min_col_w).min(available - col_a_w - min_col_w)
+                            };
+                            let col_c_w = (available - col_a_w - col_b_w).max(px(0.0));
+                            self.conflict_three_way_col_widths = [col_a_w, col_b_w, col_c_w];
+
+                            // Compute two-way diff split column widths
+                            {
+                                let two_available = (main_w - handle_w).max(px(0.0));
+                                let two_ratio = self.conflict_diff_split_ratio;
+                                let left_w = (two_available * two_ratio)
+                                    .max(min_col_w)
+                                    .min(two_available - min_col_w);
+                                let right_w = two_available - left_w;
+                                self.conflict_diff_split_col_widths = [left_w, right_w];
+                            }
+
+                            let conflict_hsplit_resize_handle = |id: &'static str, which: ConflictHSplitResizeHandle| {
+                                div()
+                                    .id(id)
+                                    .w(handle_w)
+                                    .h_full()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .cursor(CursorStyle::ResizeLeftRight)
+                                    .hover(move |s| {
+                                        s.bg(with_alpha(theme.colors.hover, 0.65))
+                                    })
+                                    .active(move |s| s.bg(theme.colors.active))
+                                    .child(
+                                        div()
+                                            .w(px(1.0))
+                                            .h_full()
+                                            .bg(theme.colors.border),
+                                    )
+                                    .on_drag(
+                                        which,
+                                        |_handle, _offset, _window, cx| {
+                                            cx.new(|_cx| ConflictHSplitResizeDragGhost)
+                                        },
+                                    )
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(
+                                            move |this, e: &MouseDownEvent, _w, cx| {
+                                                cx.stop_propagation();
+                                                this.conflict_hsplit_resize = Some(
+                                                    ConflictHSplitResizeState {
+                                                        handle: which,
+                                                        start_x: e.position.x,
+                                                        start_ratios: this.conflict_three_way_col_ratios,
+                                                    },
+                                                );
+                                                cx.notify();
+                                            },
+                                        ),
+                                    )
+                                    .on_drag_move(cx.listener(
+                                        move |this,
+                                              e: &gpui::DragMoveEvent<ConflictHSplitResizeHandle>,
+                                              _w,
+                                              cx| {
+                                            let Some(state) = this.conflict_hsplit_resize else {
+                                                return;
+                                            };
+                                            if state.handle != *e.drag(cx) {
+                                                return;
+                                            }
+
+                                            let main_w = this.main_pane_content_width(cx);
+                                            let avail = (main_w - handle_w * 2.0).max(px(0.0));
+                                            if avail <= min_col_w * 3.0 {
+                                                this.conflict_three_way_col_ratios = [1.0 / 3.0, 2.0 / 3.0];
+                                                cx.notify();
+                                                return;
+                                            }
+
+                                            let dx = e.event.position.x - state.start_x;
+                                            let mut r = state.start_ratios;
+                                            match state.handle {
+                                                ConflictHSplitResizeHandle::First => {
+                                                    let new_pos = (avail * r[0] + dx).max(min_col_w).min(avail - min_col_w * 2.0 - handle_w);
+                                                    r[0] = (new_pos / avail).clamp(0.0, 1.0);
+                                                    // Ensure second divider stays valid
+                                                    let min_r1 = r[0] + (min_col_w / avail);
+                                                    if r[1] < min_r1 {
+                                                        r[1] = min_r1.min(1.0 - min_col_w / avail);
+                                                    }
+                                                }
+                                                ConflictHSplitResizeHandle::Second => {
+                                                    let new_pos = (avail * r[1] + dx).max(min_col_w * 2.0 + handle_w).min(avail - min_col_w);
+                                                    r[1] = (new_pos / avail).clamp(0.0, 1.0);
+                                                    // Ensure first divider stays valid
+                                                    let max_r0 = r[1] - (min_col_w / avail);
+                                                    if r[0] > max_r0 {
+                                                        r[0] = max_r0.max(min_col_w / avail);
+                                                    }
+                                                }
+                                            }
+                                            this.conflict_three_way_col_ratios = r;
+                                            cx.notify();
+                                        },
+                                    ))
+                                    .on_mouse_up(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _e, _w, cx| {
+                                            this.conflict_hsplit_resize = None;
+                                            cx.notify();
+                                        }),
+                                    )
+                                    .on_mouse_up_out(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _e, _w, cx| {
+                                            this.conflict_hsplit_resize = None;
+                                            cx.notify();
+                                        }),
+                                    )
+                            };
+
                             let top_title_row = div()
                                 .h(px(22.0))
+                                .w_full()
                                 .flex()
                                 .items_center()
                                 .when(view_mode == ConflictResolverViewMode::ThreeWay, |d| {
                                     d.child(
                                         div()
-                                            .flex_1()
+                                            .w(col_a_w)
                                             .min_w(px(0.0))
                                             .px_2()
                                             .flex()
@@ -1091,10 +1289,13 @@ impl MainPaneView {
                                             .child(div().w(px(38.0)).flex_shrink_0())
                                             .child("Base (A, index :1)"),
                                     )
-                                    .child(div().w(px(1.0)).h_full().bg(theme.colors.border))
+                                    .child(conflict_hsplit_resize_handle(
+                                        "conflict_hsplit_handle_first",
+                                        ConflictHSplitResizeHandle::First,
+                                    ))
                                     .child(
                                         div()
-                                            .flex_1()
+                                            .w(col_b_w)
                                             .min_w(px(0.0))
                                             .px_2()
                                             .flex()
@@ -1106,10 +1307,14 @@ impl MainPaneView {
                                             .child(div().w(px(38.0)).flex_shrink_0())
                                             .child("Local (B, index :2)"),
                                     )
-                                    .child(div().w(px(1.0)).h_full().bg(theme.colors.border))
+                                    .child(conflict_hsplit_resize_handle(
+                                        "conflict_hsplit_handle_second",
+                                        ConflictHSplitResizeHandle::Second,
+                                    ))
                                     .child(
                                         div()
-                                            .flex_1()
+                                            .w(col_c_w)
+                                            .flex_grow()
                                             .min_w(px(0.0))
                                             .px_2()
                                             .flex()
@@ -1124,9 +1329,10 @@ impl MainPaneView {
                                 })
                                 .when(view_mode == ConflictResolverViewMode::TwoWayDiff, |d| {
                                     d.when(mode == ConflictDiffMode::Split, |d| {
+                                        let [left_w, right_w] = self.conflict_diff_split_col_widths;
                                         d.child(
                                             div()
-                                                .flex_1()
+                                                .w(left_w)
                                                 .min_w(px(0.0))
                                                 .px_2()
                                                 .flex()
@@ -1138,10 +1344,101 @@ impl MainPaneView {
                                                 .child(div().w(px(38.0)).flex_shrink_0())
                                                 .child("Local (index :2)"),
                                         )
-                                        .child(div().w(px(1.0)).h_full().bg(theme.colors.border))
                                         .child(
                                             div()
-                                                .flex_1()
+                                                .id("conflict_diff_split_resize_handle")
+                                                .w(handle_w)
+                                                .h_full()
+                                                .flex()
+                                                .items_center()
+                                                .justify_center()
+                                                .cursor(CursorStyle::ResizeLeftRight)
+                                                .hover(move |s| {
+                                                    s.bg(with_alpha(theme.colors.hover, 0.65))
+                                                })
+                                                .active(move |s| s.bg(theme.colors.active))
+                                                .child(
+                                                    div()
+                                                        .w(px(1.0))
+                                                        .h_full()
+                                                        .bg(theme.colors.border),
+                                                )
+                                                .on_drag(
+                                                    ConflictDiffSplitResizeHandle::Divider,
+                                                    |_, _, _, cx| {
+                                                        cx.new(|_| {
+                                                            ConflictDiffSplitResizeDragGhost
+                                                        })
+                                                    },
+                                                )
+                                                .on_mouse_down(
+                                                    MouseButton::Left,
+                                                    cx.listener(
+                                                        |this, e: &MouseDownEvent, _w, cx| {
+                                                            cx.stop_propagation();
+                                                            this.conflict_diff_split_resize = Some(
+                                                                ConflictDiffSplitResizeState {
+                                                                    start_x: e.position.x,
+                                                                    start_ratio: this
+                                                                        .conflict_diff_split_ratio,
+                                                                },
+                                                            );
+                                                            cx.notify();
+                                                        },
+                                                    ),
+                                                )
+                                                .on_drag_move(cx.listener(
+                                                    |this,
+                                                     e: &gpui::DragMoveEvent<
+                                                        ConflictDiffSplitResizeHandle,
+                                                    >,
+                                                     _w,
+                                                     cx| {
+                                                        let Some(state) =
+                                                            this.conflict_diff_split_resize
+                                                        else {
+                                                            return;
+                                                        };
+                                                        let main_w_val =
+                                                            this.conflict_diff_split_col_widths[0]
+                                                                + this
+                                                                    .conflict_diff_split_col_widths
+                                                                    [1]
+                                                                + px(PANE_RESIZE_HANDLE_PX);
+                                                        if main_w_val <= px(0.0) {
+                                                            return;
+                                                        }
+                                                        let dx =
+                                                            e.event.position.x - state.start_x;
+                                                        let delta = dx / main_w_val;
+                                                        let new_ratio = (state.start_ratio
+                                                            + delta)
+                                                            .clamp(0.1, 0.9);
+                                                        this.conflict_diff_split_ratio = new_ratio;
+                                                        this.conflict_diff_segments_cache_split
+                                                            .clear();
+                                                        cx.notify();
+                                                    },
+                                                ))
+                                                .on_mouse_up(
+                                                    MouseButton::Left,
+                                                    cx.listener(|this, _e, _w, cx| {
+                                                        this.conflict_diff_split_resize = None;
+                                                        cx.notify();
+                                                    }),
+                                                )
+                                                .on_mouse_up_out(
+                                                    MouseButton::Left,
+                                                    cx.listener(|this, _e, _w, cx| {
+                                                        this.conflict_diff_split_resize = None;
+                                                        cx.notify();
+                                                    }),
+                                                ),
+                                        )
+                                        .child(
+                                            div()
+                                                .w(right_w)
+                                                .flex_grow()
                                                 .min_w(px(0.0))
                                                 .px_2()
                                                 .flex()
@@ -1190,7 +1487,7 @@ impl MainPaneView {
                                 div()
                                     .id("conflict_resolver_diff_scroll")
                                     .relative()
-                                    .h_full()
+                                    .flex_1()
                                     .min_h(px(0.0))
                                     .bg(theme.colors.window_bg)
                                     .child(list)
@@ -1290,22 +1587,16 @@ impl MainPaneView {
                         .id("conflict_resolver_panel")
                         .flex()
                         .flex_col()
-                        .flex_1()
+                        .w_full()
+                        .h_full()
                         .min_h(px(0.0))
+                        .overflow_hidden()
                         .px_2()
                         .py_2()
                         .gap_1()
-                        .child(
-                            div()
-                                .text_sm()
-                                .font_weight(FontWeight::BOLD)
-                                .child(title.clone()),
-                        )
-                        .child(div().border_t_1().border_color(theme.colors.border))
                         .child(top_header)
-                        .child(
-                            div()
-                                .flex_basis(relative(vsplit_ratio))
+                        .child({
+                            let mut top_section = div()
                                 .min_h(min_section_h)
                                 .border_1()
                                 .border_color(theme.colors.border)
@@ -1315,24 +1606,29 @@ impl MainPaneView {
                                 .flex_col()
                                 .child(top_title_row)
                                 .child(div().border_t_1().border_color(theme.colors.border))
-                                .child(top_body),
-                        )
+                                .child(top_body);
+                            top_section.style().flex_grow = Some(vsplit_ratio);
+                            top_section.style().flex_shrink = Some(1.0);
+                            top_section.style().flex_basis = Some(relative(0.).into());
+                            top_section
+                        })
                         .child(vsplit_handle)
                         .child(output_header)
-                        .child(
-                            div()
+                        .child({
+                            let mut bottom_section = div()
                                 .id("conflict_resolver_output")
-                                .flex_basis(relative(1.0 - vsplit_ratio))
                                 .min_h(min_section_h)
                                 .border_1()
                                 .border_color(theme.colors.border)
                                 .rounded(px(theme.radii.row))
                                 .overflow_hidden()
+                                .flex()
+                                .flex_col()
                                 .bg(theme.colors.window_bg)
                                 .child(
                                     div()
                                         .id("conflict_resolver_output_scroll")
-                                        .h_full()
+                                        .flex_1()
                                         .min_h(px(0.0))
                                         .overflow_y_scroll()
                                         .child(
@@ -1342,8 +1638,12 @@ impl MainPaneView {
                                                     self.conflict_resolver_input.clone(),
                                                 ),
                                         ),
-                                ),
-                        )
+                                );
+                            bottom_section.style().flex_grow = Some(1.0 - vsplit_ratio);
+                            bottom_section.style().flex_shrink = Some(1.0);
+                            bottom_section.style().flex_basis = Some(relative(0.).into());
+                            bottom_section
+                        })
                         .into_any_element()
                         }
                     }
@@ -2078,6 +2378,15 @@ impl MainPaneView {
                                 handled = true;
                             }
                         }
+                        "w" => {
+                            this.show_whitespace = !this.show_whitespace;
+                            // Clear styled text caches so they rebuild with new whitespace setting.
+                            this.diff_text_segments_cache.clear();
+                            this.conflict_diff_segments_cache_split.clear();
+                            this.conflict_diff_segments_cache_inline.clear();
+                            this.conflict_three_way_segments_cache.clear();
+                            handled = true;
+                        }
                         "up" => {
                             this.diff_jump_prev();
                             handled = true;
@@ -2141,6 +2450,47 @@ impl MainPaneView {
                         this.diff_jump_next();
                     }
                     handled = true;
+                }
+
+                // A/B/C quick-pick for conflict resolver (kdiff3-style)
+                if !handled
+                    && conflict_resolver_active
+                    && !mods.control
+                    && !mods.alt
+                    && !mods.platform
+                    && !mods.function
+                    && !copy_target_is_focused
+                    && !this
+                        .conflict_resolver_input
+                        .read(cx)
+                        .focus_handle()
+                        .is_focused(window)
+                    && this.conflict_resolver_conflict_count() > 0
+                {
+                    match key {
+                        "a" => {
+                            this.conflict_resolver_pick_active_conflict(
+                                conflict_resolver::ConflictChoice::Base,
+                                cx,
+                            );
+                            handled = true;
+                        }
+                        "b" => {
+                            this.conflict_resolver_pick_active_conflict(
+                                conflict_resolver::ConflictChoice::Ours,
+                                cx,
+                            );
+                            handled = true;
+                        }
+                        "c" => {
+                            this.conflict_resolver_pick_active_conflict(
+                                conflict_resolver::ConflictChoice::Theirs,
+                                cx,
+                            );
+                            handled = true;
+                        }
+                        _ => {}
+                    }
                 }
 
                 if !handled

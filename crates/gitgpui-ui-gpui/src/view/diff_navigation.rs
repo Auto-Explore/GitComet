@@ -41,6 +41,10 @@ pub(super) fn change_block_entries(
     out
 }
 
+pub(super) fn conflict_nav_entries_for_three_way(ranges: &[Range<usize>]) -> Vec<usize> {
+    ranges.iter().map(|r| r.start).collect()
+}
+
 pub(super) fn conflict_nav_entries_for_split(rows: &[FileDiffRow]) -> Vec<usize> {
     conflict_nav_entries(rows, |row| {
         row.kind != gitgpui_core::file_diff::FileDiffRowKind::Context

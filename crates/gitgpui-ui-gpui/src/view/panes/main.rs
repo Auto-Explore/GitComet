@@ -20,6 +20,7 @@ pub(in super::super) struct MainPaneView {
 
     pub(in super::super) last_window_size: Size<Pixels>,
 
+    pub(in super::super) show_whitespace: bool,
     pub(in super::super) diff_view: DiffViewMode,
     pub(in super::super) svg_diff_view_mode: SvgDiffViewMode,
     pub(in super::super) diff_word_wrap: bool,
@@ -103,9 +104,17 @@ pub(in super::super) struct MainPaneView {
     pub(in super::super) conflict_resolver: ConflictResolverUiState,
     pub(in super::super) conflict_resolver_vsplit_ratio: f32,
     pub(in super::super) conflict_resolver_vsplit_resize: Option<ConflictVSplitResizeState>,
+    pub(in super::super) conflict_three_way_col_ratios: [f32; 2],
+    pub(in super::super) conflict_three_way_col_widths: [Pixels; 3],
+    pub(in super::super) conflict_hsplit_resize: Option<ConflictHSplitResizeState>,
+    pub(in super::super) conflict_diff_split_ratio: f32,
+    pub(in super::super) conflict_diff_split_resize: Option<ConflictDiffSplitResizeState>,
+    pub(in super::super) conflict_diff_split_col_widths: [Pixels; 2],
     pub(in super::super) conflict_diff_segments_cache_split:
         HashMap<(usize, ConflictPickSide), CachedDiffStyledText>,
     pub(in super::super) conflict_diff_segments_cache_inline: HashMap<usize, CachedDiffStyledText>,
+    pub(in super::super) conflict_three_way_segments_cache:
+        HashMap<(usize, ThreeWayColumn), CachedDiffStyledText>,
     pub(in super::super) conflict_resolved_preview_path: Option<std::path::PathBuf>,
     pub(in super::super) conflict_resolved_preview_source_hash: Option<u64>,
     pub(in super::super) conflict_resolved_preview_syntax_language:
@@ -161,6 +170,7 @@ impl MainPaneView {
         ui_model: Entity<AppUiModel>,
         theme: AppTheme,
         date_time_format: DateTimeFormat,
+        timezone: Timezone,
         history_show_author: bool,
         history_show_date: bool,
         history_show_sha: bool,
@@ -276,6 +286,7 @@ impl MainPaneView {
                 ui_model.clone(),
                 theme,
                 date_time_format,
+                timezone,
                 history_show_author,
                 history_show_date,
                 history_show_sha,
@@ -298,6 +309,7 @@ impl MainPaneView {
             notify_fingerprint: initial_fingerprint,
             active_context_menu_invoker: None,
             last_window_size: size(px(0.0), px(0.0)),
+            show_whitespace: false,
             diff_view: DiffViewMode::Split,
             svg_diff_view_mode: SvgDiffViewMode::Image,
             diff_word_wrap: false,
@@ -377,8 +389,15 @@ impl MainPaneView {
             conflict_resolver: ConflictResolverUiState::default(),
             conflict_resolver_vsplit_ratio: 0.5,
             conflict_resolver_vsplit_resize: None,
+            conflict_three_way_col_ratios: [1.0 / 3.0, 2.0 / 3.0],
+            conflict_three_way_col_widths: [px(0.0); 3],
+            conflict_hsplit_resize: None,
+            conflict_diff_split_ratio: 0.5,
+            conflict_diff_split_resize: None,
+            conflict_diff_split_col_widths: [px(0.0); 2],
             conflict_diff_segments_cache_split: HashMap::default(),
             conflict_diff_segments_cache_inline: HashMap::default(),
+            conflict_three_way_segments_cache: HashMap::default(),
             conflict_resolved_preview_path: None,
             conflict_resolved_preview_source_hash: None,
             conflict_resolved_preview_syntax_language: None,
@@ -445,6 +464,16 @@ impl MainPaneView {
         self.date_time_format = next;
         self.history_view
             .update(cx, |view, cx| view.set_date_time_format(next, cx));
+        cx.notify();
+    }
+
+    pub(in super::super) fn set_timezone(
+        &mut self,
+        next: Timezone,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.history_view
+            .update(cx, |view, cx| view.set_timezone(next, cx));
         cx.notify();
     }
 
@@ -1239,13 +1268,20 @@ impl MainPaneView {
     }
 
     pub(in super::super) fn conflict_nav_entries(&self) -> Vec<usize> {
-        match self.conflict_resolver.diff_mode {
-            ConflictDiffMode::Split => {
-                diff_navigation::conflict_nav_entries_for_split(&self.conflict_resolver.diff_rows)
+        match self.conflict_resolver.view_mode {
+            ConflictResolverViewMode::ThreeWay => {
+                diff_navigation::conflict_nav_entries_for_three_way(
+                    &self.conflict_resolver.three_way_conflict_ranges,
+                )
             }
-            ConflictDiffMode::Inline => diff_navigation::conflict_nav_entries_for_inline(
-                &self.conflict_resolver.inline_rows,
-            ),
+            ConflictResolverViewMode::TwoWayDiff => match self.conflict_resolver.diff_mode {
+                ConflictDiffMode::Split => diff_navigation::conflict_nav_entries_for_split(
+                    &self.conflict_resolver.diff_rows,
+                ),
+                ConflictDiffMode::Inline => diff_navigation::conflict_nav_entries_for_inline(
+                    &self.conflict_resolver.inline_rows,
+                ),
+            },
         }
     }
 
@@ -1261,29 +1297,23 @@ impl MainPaneView {
         };
 
         match self.conflict_resolver.view_mode {
+            ConflictResolverViewMode::ThreeWay => {
+                // In ThreeWay mode, entries are line indices directly from conflict ranges.
+                self.conflict_resolver_diff_scroll
+                    .scroll_to_item_strict(target, gpui::ScrollStrategy::Center);
+                // Update active_conflict to the range index that starts at this target.
+                if let Some(range_ix) = self
+                    .conflict_resolver
+                    .three_way_conflict_ranges
+                    .iter()
+                    .position(|r| r.start == target)
+                {
+                    self.conflict_resolver.active_conflict = range_ix;
+                }
+            }
             ConflictResolverViewMode::TwoWayDiff => self
                 .conflict_resolver_diff_scroll
                 .scroll_to_item_strict(target, gpui::ScrollStrategy::Center),
-            ConflictResolverViewMode::ThreeWay => {
-                let line_ix = match self.conflict_resolver.diff_mode {
-                    ConflictDiffMode::Split => self
-                        .conflict_resolver
-                        .diff_rows
-                        .get(target)
-                        .and_then(|r| r.old_line.or(r.new_line))
-                        .and_then(|n| usize::try_from(n.saturating_sub(1)).ok())
-                        .unwrap_or(0),
-                    ConflictDiffMode::Inline => self
-                        .conflict_resolver
-                        .inline_rows
-                        .get(target)
-                        .and_then(|r| r.old_line.or(r.new_line))
-                        .and_then(|n| usize::try_from(n.saturating_sub(1)).ok())
-                        .unwrap_or(0),
-                };
-                self.conflict_resolver_diff_scroll
-                    .scroll_to_item_strict(line_ix, gpui::ScrollStrategy::Center);
-            }
         }
         self.conflict_resolver.nav_anchor = Some(target);
     }
@@ -1300,29 +1330,23 @@ impl MainPaneView {
         };
 
         match self.conflict_resolver.view_mode {
+            ConflictResolverViewMode::ThreeWay => {
+                // In ThreeWay mode, entries are line indices directly from conflict ranges.
+                self.conflict_resolver_diff_scroll
+                    .scroll_to_item_strict(target, gpui::ScrollStrategy::Center);
+                // Update active_conflict to the range index that starts at this target.
+                if let Some(range_ix) = self
+                    .conflict_resolver
+                    .three_way_conflict_ranges
+                    .iter()
+                    .position(|r| r.start == target)
+                {
+                    self.conflict_resolver.active_conflict = range_ix;
+                }
+            }
             ConflictResolverViewMode::TwoWayDiff => self
                 .conflict_resolver_diff_scroll
                 .scroll_to_item_strict(target, gpui::ScrollStrategy::Center),
-            ConflictResolverViewMode::ThreeWay => {
-                let line_ix = match self.conflict_resolver.diff_mode {
-                    ConflictDiffMode::Split => self
-                        .conflict_resolver
-                        .diff_rows
-                        .get(target)
-                        .and_then(|r| r.old_line.or(r.new_line))
-                        .and_then(|n| usize::try_from(n.saturating_sub(1)).ok())
-                        .unwrap_or(0),
-                    ConflictDiffMode::Inline => self
-                        .conflict_resolver
-                        .inline_rows
-                        .get(target)
-                        .and_then(|r| r.old_line.or(r.new_line))
-                        .and_then(|n| usize::try_from(n.saturating_sub(1)).ok())
-                        .unwrap_or(0),
-                };
-                self.conflict_resolver_diff_scroll
-                    .scroll_to_item_strict(line_ix, gpui::ScrollStrategy::Center);
-            }
         }
         self.conflict_resolver.nav_anchor = Some(target);
     }
@@ -1573,6 +1597,18 @@ impl MainPaneView {
             0
         };
 
+        let (three_way_word_highlights_base, three_way_word_highlights_ours, three_way_word_highlights_theirs) =
+            conflict_resolver::compute_three_way_word_highlights(
+                &three_way_base_lines,
+                &three_way_ours_lines,
+                &three_way_theirs_lines,
+                &three_way_conflict_ranges,
+            );
+        let diff_word_highlights_split =
+            conflict_resolver::compute_two_way_word_highlights(&diff_rows);
+
+        self.conflict_three_way_segments_cache.clear();
+
         self.conflict_resolver = ConflictResolverUiState {
             repo_id: Some(repo_id),
             path: Some(path),
@@ -1588,6 +1624,10 @@ impl MainPaneView {
             three_way_theirs_lines,
             three_way_len,
             three_way_conflict_ranges,
+            three_way_word_highlights_base,
+            three_way_word_highlights_ours,
+            three_way_word_highlights_theirs,
+            diff_word_highlights_split,
             diff_mode,
             nav_anchor,
             split_selected: std::collections::BTreeSet::new(),
@@ -1795,6 +1835,16 @@ impl MainPaneView {
         cx.notify();
     }
 
+    pub(in super::super) fn conflict_resolver_pick_at(
+        &mut self,
+        range_ix: usize,
+        choice: conflict_resolver::ConflictChoice,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.conflict_resolver.active_conflict = range_ix;
+        self.conflict_resolver_pick_active_conflict(choice, cx);
+    }
+
     pub(in super::super) fn conflict_resolver_pick_active_conflict(
         &mut self,
         choice: conflict_resolver::ConflictChoice,
@@ -1813,6 +1863,23 @@ impl MainPaneView {
         let resolved =
             conflict_resolver::generate_resolved_text(&self.conflict_resolver.marker_segments);
         self.conflict_resolver_set_output(resolved, cx);
+
+        // Auto-advance to the next conflict (kdiff3-style).
+        let total = self.conflict_resolver_conflict_count();
+        if total > 0 && self.conflict_resolver.active_conflict + 1 < total {
+            self.conflict_resolver.active_conflict += 1;
+            // Scroll the 3-way view to the new active conflict's range.
+            if let Some(range) = self
+                .conflict_resolver
+                .three_way_conflict_ranges
+                .get(self.conflict_resolver.active_conflict)
+                .cloned()
+            {
+                self.conflict_resolver_diff_scroll
+                    .scroll_to_item_strict(range.start, gpui::ScrollStrategy::Center);
+            }
+            cx.notify();
+        }
     }
 
     pub(in super::super) fn conflict_resolver_pick_all_conflicts(

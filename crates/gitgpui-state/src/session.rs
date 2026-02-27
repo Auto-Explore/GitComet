@@ -16,6 +16,7 @@ pub struct UiSession {
     pub sidebar_width: Option<u32>,
     pub details_width: Option<u32>,
     pub date_time_format: Option<String>,
+    pub timezone: Option<String>,
     pub history_show_author: Option<bool>,
     pub history_show_date: Option<bool>,
     pub history_show_sha: Option<bool>,
@@ -63,6 +64,7 @@ struct UiSessionFileV2 {
     sidebar_width: Option<u32>,
     details_width: Option<u32>,
     date_time_format: Option<String>,
+    timezone: Option<String>,
     history_show_author: Option<bool>,
     history_show_date: Option<bool>,
     history_show_sha: Option<bool>,
@@ -99,6 +101,7 @@ pub fn load_from_path(path: &Path) -> UiSession {
         sidebar_width: file.sidebar_width,
         details_width: file.details_width,
         date_time_format: file.date_time_format,
+        timezone: file.timezone,
         history_show_author: file.history_show_author,
         history_show_date: file.history_show_date,
         history_show_sha: file.history_show_sha,
@@ -143,6 +146,7 @@ pub struct UiSettings {
     pub sidebar_width: Option<u32>,
     pub details_width: Option<u32>,
     pub date_time_format: Option<String>,
+    pub timezone: Option<String>,
     pub history_show_author: Option<bool>,
     pub history_show_date: Option<bool>,
     pub history_show_sha: Option<bool>,
@@ -170,6 +174,9 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
     }
     if let Some(fmt) = settings.date_time_format {
         file.date_time_format = Some(fmt);
+    }
+    if let Some(tz) = settings.timezone {
+        file.timezone = Some(tz);
     }
     if let Some(value) = settings.history_show_author {
         file.history_show_author = Some(value);
@@ -633,6 +640,7 @@ mod tests {
                 sidebar_width: None,
                 details_width: None,
                 date_time_format: Some("ymd_hm_utc".to_string()),
+                timezone: None,
                 history_show_author: None,
                 history_show_date: None,
                 history_show_sha: None,

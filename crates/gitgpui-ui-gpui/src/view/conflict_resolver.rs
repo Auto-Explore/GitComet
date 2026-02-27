@@ -263,6 +263,101 @@ pub fn collect_inline_selection(
     out
 }
 
+pub fn compute_three_way_word_highlights(
+    base_lines: &[gpui::SharedString],
+    ours_lines: &[gpui::SharedString],
+    theirs_lines: &[gpui::SharedString],
+    conflict_ranges: &[std::ops::Range<usize>],
+) -> (
+    Vec<Option<Vec<std::ops::Range<usize>>>>,
+    Vec<Option<Vec<std::ops::Range<usize>>>>,
+    Vec<Option<Vec<std::ops::Range<usize>>>>,
+) {
+    let len = base_lines.len().max(ours_lines.len()).max(theirs_lines.len());
+    let mut wh_base: Vec<Option<Vec<std::ops::Range<usize>>>> = vec![None; len];
+    let mut wh_ours: Vec<Option<Vec<std::ops::Range<usize>>>> = vec![None; len];
+    let mut wh_theirs: Vec<Option<Vec<std::ops::Range<usize>>>> = vec![None; len];
+
+    for range in conflict_ranges {
+        for i in range.clone() {
+            if i >= len {
+                break;
+            }
+            let base = base_lines.get(i).map(|s| s.as_ref()).unwrap_or("");
+            let ours = ours_lines.get(i).map(|s| s.as_ref()).unwrap_or("");
+            let theirs = theirs_lines.get(i).map(|s| s.as_ref()).unwrap_or("");
+
+            let (base_vs_ours_base, ours_ranges) =
+                super::word_diff::capped_word_diff_ranges(base, ours);
+            let (base_vs_theirs_base, theirs_ranges) =
+                super::word_diff::capped_word_diff_ranges(base, theirs);
+
+            // Merge base ranges from both comparisons (union).
+            let merged_base = merge_ranges(&base_vs_ours_base, &base_vs_theirs_base);
+
+            if !merged_base.is_empty() {
+                wh_base[i] = Some(merged_base);
+            }
+            if !ours_ranges.is_empty() {
+                wh_ours[i] = Some(ours_ranges);
+            }
+            if !theirs_ranges.is_empty() {
+                wh_theirs[i] = Some(theirs_ranges);
+            }
+        }
+    }
+
+    (wh_base, wh_ours, wh_theirs)
+}
+
+fn merge_ranges(
+    a: &[std::ops::Range<usize>],
+    b: &[std::ops::Range<usize>],
+) -> Vec<std::ops::Range<usize>> {
+    if a.is_empty() {
+        return b.to_vec();
+    }
+    if b.is_empty() {
+        return a.to_vec();
+    }
+    let mut combined: Vec<std::ops::Range<usize>> = Vec::with_capacity(a.len() + b.len());
+    combined.extend_from_slice(a);
+    combined.extend_from_slice(b);
+    combined.sort_by_key(|r| (r.start, r.end));
+    let mut out: Vec<std::ops::Range<usize>> = Vec::with_capacity(combined.len());
+    for r in combined {
+        if let Some(last) = out.last_mut() {
+            if r.start <= last.end {
+                last.end = last.end.max(r.end);
+                continue;
+            }
+        }
+        out.push(r);
+    }
+    out
+}
+
+pub fn compute_two_way_word_highlights(
+    diff_rows: &[gitgpui_core::file_diff::FileDiffRow],
+) -> Vec<Option<(Vec<std::ops::Range<usize>>, Vec<std::ops::Range<usize>>)>> {
+    diff_rows
+        .iter()
+        .map(|row| {
+            if row.kind != gitgpui_core::file_diff::FileDiffRowKind::Modify {
+                return None;
+            }
+            let old = row.old.as_deref().unwrap_or("");
+            let new = row.new.as_deref().unwrap_or("");
+            let (old_ranges, new_ranges) = super::word_diff::capped_word_diff_ranges(old, new);
+            if old_ranges.is_empty() && new_ranges.is_empty() {
+                None
+            } else {
+                Some((old_ranges, new_ranges))
+            }
+        })
+        .collect()
+}
+
 pub fn append_lines_to_output(output: &str, lines: &[String]) -> String {
     if lines.is_empty() {
         return output.to_string();

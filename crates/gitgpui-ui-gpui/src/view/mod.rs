@@ -70,7 +70,9 @@ use chrome::{
 use conflict_resolver::{
     ConflictDiffMode, ConflictInlineRow, ConflictPickSide, ConflictResolverViewMode,
 };
-use date_time::{DateTimeFormat, format_datetime_utc};
+use date_time::{DateTimeFormat, Timezone, format_datetime};
+#[cfg(test)]
+use date_time::format_datetime_utc;
 use diff_preview::{build_deleted_file_preview_from_diff, build_new_file_preview_from_diff};
 use patch_split::build_patch_split_rows;
 use poller::Poller;
@@ -277,6 +279,46 @@ impl Render for ConflictVSplitResizeDragGhost {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ConflictHSplitResizeHandle {
+    First,
+    Second,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ConflictHSplitResizeState {
+    handle: ConflictHSplitResizeHandle,
+    start_x: Pixels,
+    start_ratios: [f32; 2],
+}
+
+struct ConflictHSplitResizeDragGhost;
+
+impl Render for ConflictHSplitResizeDragGhost {
+    fn render(&mut self, _window: &mut Window, _cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        div().w(px(0.0)).h(px(0.0))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ConflictDiffSplitResizeHandle {
+    Divider,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ConflictDiffSplitResizeState {
+    start_x: Pixels,
+    start_ratio: f32,
+}
+
+struct ConflictDiffSplitResizeDragGhost;
+
+impl Render for ConflictDiffSplitResizeDragGhost {
+    fn render(&mut self, _window: &mut Window, _cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        div().w(px(0.0)).h(px(0.0))
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 enum DiffTextRegion {
     Inline,
@@ -372,6 +414,13 @@ fn reconcile_status_multi_selection(selection: &mut StatusMultiSelection, status
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum ThreeWayColumn {
+    Base,
+    Ours,
+    Theirs,
+}
+
 #[derive(Clone, Debug)]
 struct ConflictResolverUiState {
     repo_id: Option<RepoId>,
@@ -388,6 +437,10 @@ struct ConflictResolverUiState {
     three_way_theirs_lines: Vec<SharedString>,
     three_way_len: usize,
     three_way_conflict_ranges: Vec<Range<usize>>,
+    three_way_word_highlights_base: Vec<Option<Vec<Range<usize>>>>,
+    three_way_word_highlights_ours: Vec<Option<Vec<Range<usize>>>>,
+    three_way_word_highlights_theirs: Vec<Option<Vec<Range<usize>>>>,
+    diff_word_highlights_split: Vec<Option<(Vec<Range<usize>>, Vec<Range<usize>>)>>,
     diff_mode: ConflictDiffMode,
     nav_anchor: Option<usize>,
     split_selected: std::collections::BTreeSet<(usize, ConflictPickSide)>,
@@ -411,6 +464,10 @@ impl Default for ConflictResolverUiState {
             three_way_theirs_lines: Vec::new(),
             three_way_len: 0,
             three_way_conflict_ranges: Vec::new(),
+            three_way_word_highlights_base: Vec::new(),
+            three_way_word_highlights_ours: Vec::new(),
+            three_way_word_highlights_theirs: Vec::new(),
+            diff_word_highlights_split: Vec::new(),
             diff_mode: ConflictDiffMode::Split,
             nav_anchor: None,
             split_selected: std::collections::BTreeSet::new(),
@@ -652,6 +709,7 @@ pub struct GitGpuiView {
     ui_settings_persist_seq: u64,
 
     date_time_format: DateTimeFormat,
+    timezone: Timezone,
 
     open_repo_panel: bool,
     open_repo_input: Entity<zed::TextInput>,
@@ -756,6 +814,11 @@ impl GitGpuiView {
             .as_deref()
             .and_then(DateTimeFormat::from_key)
             .unwrap_or(DateTimeFormat::YmdHm);
+        let timezone = ui_session
+            .timezone
+            .as_deref()
+            .and_then(Timezone::from_key)
+            .unwrap_or_default();
 
         let history_show_author = ui_session.history_show_author.unwrap_or(true);
         let history_show_date = ui_session.history_show_date.unwrap_or(true);
@@ -847,6 +910,7 @@ impl GitGpuiView {
                 ui_model.clone(),
                 initial_theme,
                 date_time_format,
+                timezone,
                 history_show_author,
                 history_show_date,
                 history_show_sha,
@@ -874,6 +938,7 @@ impl GitGpuiView {
                 ui_model.clone(),
                 initial_theme,
                 date_time_format,
+                timezone,
                 weak_view.clone(),
                 toast_host.downgrade(),
                 main_pane.clone(),
@@ -963,6 +1028,7 @@ impl GitGpuiView {
             ui_window_size_last_seen: size(px(0.0), px(0.0)),
             ui_settings_persist_seq: 0,
             date_time_format,
+            timezone,
             open_repo_panel: false,
             open_repo_input,
             hover_resize_edge: None,
