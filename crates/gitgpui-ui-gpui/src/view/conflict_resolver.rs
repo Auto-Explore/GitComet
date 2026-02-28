@@ -769,6 +769,7 @@ pub fn append_lines_to_output(output: &str, lines: &[String]) -> String {
 }
 
 #[cfg(test)]
+#[allow(clippy::single_range_in_vec_init)]
 mod tests {
     use super::*;
     use gitgpui_core::file_diff::FileDiffRow;
@@ -1240,7 +1241,7 @@ mod tests {
             }),
             ConflictSegment::Text("d\ne\n".into()),
         ];
-        let ranges = vec![1..3];
+        let ranges = [1..3];
         let map = build_three_way_visible_map(5, &ranges, &segments, false);
         assert_eq!(map.len(), 5);
         for (i, item) in map.iter().enumerate() {
@@ -1261,7 +1262,7 @@ mod tests {
             }),
             ConflictSegment::Text("d\ne\n".into()),
         ];
-        let ranges = vec![1..3];
+        let ranges = [1..3];
         let map = build_three_way_visible_map(5, &ranges, &segments, true);
         // Should be: Line(0), CollapsedBlock(0), Line(3), Line(4)
         assert_eq!(map.len(), 4);
@@ -1315,7 +1316,7 @@ mod tests {
             }),
             ConflictSegment::Text("d\n".into()),
         ];
-        let ranges = vec![1..3];
+        let ranges = [1..3];
         let map = build_three_way_visible_map(4, &ranges, &segments, true);
         // map: Line(0), CollapsedBlock(0), Line(3)
         let vi = visible_index_for_conflict(&map, &ranges, 0);
@@ -1334,7 +1335,7 @@ mod tests {
                 resolved: false,
             }),
         ];
-        let ranges = vec![1..3];
+        let ranges = [1..3];
         let map = build_three_way_visible_map(3, &ranges, &segments, false);
         // map: Line(0), Line(1), Line(2)
         let vi = visible_index_for_conflict(&map, &ranges, 0);

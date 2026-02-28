@@ -84,6 +84,14 @@
 - ✅ Suppressed toast popups for telemetry log entries to keep instrumentation non-intrusive while preserving command-log visibility — `crates/gitgpui-ui-gpui/src/view/state_apply.rs`
 - ✅ Added reducer test coverage for telemetry logging path and summary content — `crates/gitgpui-state/src/store/tests/conflict_telemetry.rs`, `crates/gitgpui-state/src/store/tests.rs`
 
+### 11) State-Layer ConflictSession Integration (Iteration 12)
+- ✅ Added `conflict_session: Option<ConflictSession>` field to `RepoState` — the core domain model is now stored in the state layer alongside the raw `ConflictFile`, fulfilling the design requirement "Store ConflictSession-like state instead of ad-hoc text-only shape" — `crates/gitgpui-state/src/model.rs`
+- ✅ `build_conflict_session()` in reducer: constructs a `ConflictSession` from the loaded `ConflictFile` by looking up the `FileConflictKind` from the repo's status entries, creating typed `ConflictPayload` values (Text/Binary/Absent), and parsing conflict regions from merged marker text via `ConflictSession::from_merged_text()` — `crates/gitgpui-state/src/store/reducer/effects.rs`
+- ✅ Session lifecycle management: `conflict_session` is populated on `ConflictFileLoaded` success, cleared on `LoadConflictFile` (new file load), and set to `None` on load error — `crates/gitgpui-state/src/store/reducer/effects.rs`
+- ✅ UI reads strategy and binary detection from `ConflictSession` in state (with fallback to local computation for robustness) — `crates/gitgpui-ui-gpui/src/view/panes/main.rs`
+- ✅ Fixed remaining clippy warnings in conflict test code: replaced `vec![range]` with `[range]` for single-element range arrays and suppressed `clippy::single_range_in_vec_init` for intentional test data — `crates/gitgpui-ui-gpui/src/view/conflict_resolver.rs`
+- ✅ 5 new reducer tests: session built with regions from markers (BothModified), session for delete conflicts (TwoWayKeepDelete strategy), binary session detection (BinarySidePick), session cleared on load error, session cleared on new file load — `crates/gitgpui-state/src/store/tests/conflict_session.rs`
+
 ---
 
 *Design reference: `tmp/conflict_resolution.md`*

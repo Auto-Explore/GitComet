@@ -126,6 +126,7 @@ fn run_git(repo: &Path, args: &[&str]) {
 }
 
 mod actions_emit_effects;
+mod conflict_session;
 mod conflict_telemetry;
 mod diff_selection;
 mod effects;

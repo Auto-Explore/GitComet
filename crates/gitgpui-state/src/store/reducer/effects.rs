@@ -1,9 +1,10 @@
 use super::util::push_diagnostic;
 use crate::model::{AppState, DiagnosticKind, Loadable, RepoId, RepoLoadsInFlight};
 use crate::msg::Effect;
+use gitgpui_core::conflict_session::{ConflictPayload, ConflictSession};
 use gitgpui_core::domain::{
-    Branch, CommitDetails, CommitId, LogPage, ReflogEntry, Remote, RemoteBranch, RepoStatus,
-    StashEntry, Submodule, Tag, UpstreamDivergence, Worktree,
+    Branch, CommitDetails, CommitId, FileStatusKind, LogPage, ReflogEntry, Remote, RemoteBranch,
+    RepoStatus, StashEntry, Submodule, Tag, UpstreamDivergence, Worktree,
 };
 use gitgpui_core::error::Error;
 use std::path::PathBuf;
@@ -60,6 +61,10 @@ pub(super) fn conflict_file_loaded(
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
         && repo_state.conflict_file_path.as_ref() == Some(&path)
     {
+        let session = match &result {
+            Ok(Some(file)) => build_conflict_session(repo_state, file),
+            _ => None,
+        };
         let value = match result {
             Ok(v) => Loadable::Ready(v),
             Err(e) => {
@@ -68,8 +73,62 @@ pub(super) fn conflict_file_loaded(
             }
         };
         repo_state.set_conflict_file(value);
+        repo_state.set_conflict_session(session);
     }
     Vec::new()
+}
+
+/// Build a `ConflictSession` from a loaded `ConflictFile` and the current repo status.
+///
+/// Looks up the `FileConflictKind` from the status entries and constructs
+/// a session with parsed conflict regions (for marker-based text conflicts).
+fn build_conflict_session(
+    repo_state: &crate::model::RepoState,
+    file: &crate::model::ConflictFile,
+) -> Option<ConflictSession> {
+    // Look up the conflict kind from the repo's status entries.
+    let conflict_kind = match &repo_state.status {
+        Loadable::Ready(status) => status
+            .unstaged
+            .iter()
+            .find(|e| e.path == file.path && e.kind == FileStatusKind::Conflicted)
+            .and_then(|e| e.conflict),
+        _ => None,
+    }?;
+
+    let payload_from = |bytes: &Option<Vec<u8>>, text: &Option<String>| -> ConflictPayload {
+        if let Some(t) = text {
+            ConflictPayload::Text(t.clone())
+        } else if let Some(b) = bytes {
+            ConflictPayload::from_bytes(b.clone())
+        } else {
+            ConflictPayload::Absent
+        }
+    };
+
+    let base = payload_from(&file.base_bytes, &file.base);
+    let ours = payload_from(&file.ours_bytes, &file.ours);
+    let theirs = payload_from(&file.theirs_bytes, &file.theirs);
+
+    // If we have merged text with markers, parse regions from it.
+    if let Some(current) = file.current.as_deref() {
+        Some(ConflictSession::from_merged_text(
+            file.path.clone(),
+            conflict_kind,
+            base,
+            ours,
+            theirs,
+            current,
+        ))
+    } else {
+        Some(ConflictSession::new(
+            file.path.clone(),
+            conflict_kind,
+            base,
+            ours,
+            theirs,
+        ))
+    }
 }
 
 pub(super) fn worktrees_loaded(
@@ -189,6 +248,7 @@ pub(super) fn load_conflict_file(
     };
     repo_state.set_conflict_file_path(Some(path.clone()));
     repo_state.set_conflict_file(Loadable::Loading);
+    repo_state.set_conflict_session(None);
     vec![Effect::LoadConflictFile { repo_id, path }]
 }
 

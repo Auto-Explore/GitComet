@@ -1,3 +1,4 @@
+use gitgpui_core::conflict_session::ConflictSession;
 use gitgpui_core::domain::*;
 use gitgpui_core::services::BlameLine;
 use std::path::PathBuf;
@@ -233,6 +234,7 @@ pub struct RepoState {
 
     pub conflict_file_path: Option<PathBuf>,
     pub conflict_file: Loadable<Option<ConflictFile>>,
+    pub conflict_session: Option<ConflictSession>,
     pub conflict_rev: u64,
 
     pub open_rev: u64,
@@ -303,6 +305,7 @@ impl RepoState {
             diff_file_image: Loadable::NotLoaded,
             conflict_file_path: None,
             conflict_file: Loadable::NotLoaded,
+            conflict_session: None,
             conflict_rev: 0,
             open_rev: 0,
             ops_rev: 0,
@@ -440,6 +443,11 @@ impl RepoState {
 
     pub(crate) fn set_conflict_file(&mut self, v: Loadable<Option<ConflictFile>>) {
         self.conflict_file = v;
+        self.conflict_rev = self.conflict_rev.wrapping_add(1);
+    }
+
+    pub(crate) fn set_conflict_session(&mut self, v: Option<ConflictSession>) {
+        self.conflict_session = v;
         self.conflict_rev = self.conflict_rev.wrapping_add(1);
     }
 

@@ -1540,13 +1540,23 @@ impl MainPaneView {
         self.conflict_diff_segments_cache_split.clear();
         self.conflict_diff_segments_cache_inline.clear();
 
-        // Detect binary conflict: has bytes but no text for any side.
-        let has_non_text =
-            |bytes: &Option<Vec<u8>>, text: &Option<String>| bytes.is_some() && text.is_none();
-        let is_binary = has_non_text(&file.base_bytes, &file.base)
-            || has_non_text(&file.ours_bytes, &file.ours)
-            || has_non_text(&file.theirs_bytes, &file.theirs);
-        let conflict_strategy = Self::conflict_resolver_strategy(conflict_kind, is_binary);
+        // Use the ConflictSession from state for strategy if available,
+        // otherwise fall back to local computation.
+        let (conflict_strategy, is_binary) =
+            if let Some(session) = &repo.conflict_session {
+                let binary = session.base.is_binary()
+                    || session.ours.is_binary()
+                    || session.theirs.is_binary();
+                (Some(session.strategy), binary)
+            } else {
+                let has_non_text = |bytes: &Option<Vec<u8>>, text: &Option<String>| {
+                    bytes.is_some() && text.is_none()
+                };
+                let binary = has_non_text(&file.base_bytes, &file.base)
+                    || has_non_text(&file.ours_bytes, &file.ours)
+                    || has_non_text(&file.theirs_bytes, &file.theirs);
+                (Self::conflict_resolver_strategy(conflict_kind, binary), binary)
+            };
 
         // For binary conflicts, populate minimal state and return early.
         if is_binary {
