@@ -459,6 +459,10 @@ struct ConflictResolverUiState {
     conflict_kind: Option<gitgpui_core::domain::FileConflictKind>,
     /// Last autosolve trace summary shown in resolver UI.
     last_autosolve_summary: Option<SharedString>,
+    /// Tracks the last-seen `conflict_rev` from state so we can detect
+    /// state-side session changes (e.g. hide-resolved, bulk picks, autosolve)
+    /// that don't change the underlying file content.
+    conflict_rev: u64,
 }
 
 impl Default for ConflictResolverUiState {
@@ -495,6 +499,7 @@ impl Default for ConflictResolverUiState {
             strategy: None,
             conflict_kind: None,
             last_autosolve_summary: None,
+            conflict_rev: 0,
         }
     }
 }

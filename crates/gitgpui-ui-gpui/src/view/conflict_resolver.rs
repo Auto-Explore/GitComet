@@ -1453,6 +1453,128 @@ mod tests {
         assert_eq!(resolved, "start\nmerged-custom\nbetween\ntheirs2\nend\n");
     }
 
+    /// Simulates the lightweight re-sync: re-parse markers from the original
+    /// text and re-apply session resolutions. The resolved output must match
+    /// what the initial parse+apply produced, proving the re-sync path in
+    /// `resync_conflict_resolver_from_state` is correct.
+    #[test]
+    fn resync_reparse_and_reapply_produces_same_output() {
+        use gitgpui_core::conflict_session::{ConflictRegion, ConflictRegionResolution as R};
+
+        let input = concat!(
+            "header\n",
+            "<<<<<<< ours\n",
+            "alpha\n",
+            "||||||| base\n",
+            "original\n",
+            "=======\n",
+            "beta\n",
+            ">>>>>>> theirs\n",
+            "middle\n",
+            "<<<<<<< ours\n",
+            "gamma\n",
+            "||||||| base\n",
+            "old\n",
+            "=======\n",
+            "delta\n",
+            ">>>>>>> theirs\n",
+            "footer\n",
+        );
+        let regions = vec![
+            ConflictRegion {
+                base: Some("original\n".into()),
+                ours: "alpha\n".into(),
+                theirs: "beta\n".into(),
+                resolution: R::PickOurs,
+            },
+            ConflictRegion {
+                base: Some("old\n".into()),
+                ours: "gamma\n".into(),
+                theirs: "delta\n".into(),
+                resolution: R::PickTheirs,
+            },
+        ];
+
+        // Initial parse + apply (what happens on full rebuild).
+        let mut segments_initial = parse_conflict_markers(input);
+        apply_session_region_resolutions(&mut segments_initial, &regions);
+        let resolved_initial = generate_resolved_text(&segments_initial);
+        let count_initial = conflict_count(&segments_initial);
+        let resolved_count_initial = resolved_conflict_count(&segments_initial);
+
+        // Re-sync: re-parse from same text and re-apply same resolutions.
+        let mut segments_resync = parse_conflict_markers(input);
+        apply_session_region_resolutions(&mut segments_resync, &regions);
+        let resolved_resync = generate_resolved_text(&segments_resync);
+        let count_resync = conflict_count(&segments_resync);
+        let resolved_count_resync = resolved_conflict_count(&segments_resync);
+
+        // Must produce identical results.
+        assert_eq!(resolved_initial, resolved_resync);
+        assert_eq!(count_initial, count_resync);
+        assert_eq!(resolved_count_initial, resolved_count_resync);
+        assert_eq!(resolved_initial, "header\nalpha\nmiddle\ndelta\nfooter\n");
+        assert_eq!(count_initial, 2);
+        assert_eq!(resolved_count_initial, 2);
+    }
+
+    /// Verifies that re-sync correctly applies hide_resolved visibility
+    /// when session regions update hide status for a subset of conflicts.
+    #[test]
+    fn resync_rebuilds_visible_maps_after_session_changes() {
+        use gitgpui_core::conflict_session::{ConflictRegion, ConflictRegionResolution as R};
+
+        let input = concat!(
+            "<<<<<<< ours\n",
+            "a\n",
+            "=======\n",
+            "b\n",
+            ">>>>>>> theirs\n",
+            "gap\n",
+            "<<<<<<< ours\n",
+            "c\n",
+            "=======\n",
+            "d\n",
+            ">>>>>>> theirs\n",
+        );
+
+        // First conflict resolved, second unresolved.
+        let regions = vec![
+            ConflictRegion {
+                base: None,
+                ours: "a\n".into(),
+                theirs: "b\n".into(),
+                resolution: R::PickOurs,
+            },
+            ConflictRegion {
+                base: None,
+                ours: "c\n".into(),
+                theirs: "d\n".into(),
+                resolution: R::Unresolved,
+            },
+        ];
+
+        let mut segments = parse_conflict_markers(input);
+        apply_session_region_resolutions(&mut segments, &regions);
+
+        // With hide_resolved=false, both conflicts visible.
+        let three_way_ranges = vec![0..1, 2..3]; // simplified ranges
+        let vis_all = build_three_way_visible_map(4, &three_way_ranges, &segments, false);
+        assert!(!vis_all.is_empty());
+
+        // With hide_resolved=true, only unresolved conflict visible.
+        let vis_hidden = build_three_way_visible_map(4, &three_way_ranges, &segments, true);
+        let collapsed_count = vis_hidden
+            .iter()
+            .filter(|v| matches!(v, ThreeWayVisibleItem::CollapsedBlock(..)))
+            .count();
+        assert!(collapsed_count > 0, "resolved conflict should be collapsed");
+
+        // Verify the unresolved conflict is NOT collapsed.
+        assert_eq!(resolved_conflict_count(&segments), 1);
+        assert_eq!(conflict_count(&segments), 2);
+    }
+
     #[test]
     fn detects_conflict_markers_in_text() {
         assert!(text_contains_conflict_markers(

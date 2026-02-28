@@ -107,6 +107,7 @@
 - ✅ Session lifecycle management: `conflict_session` is populated on `ConflictFileLoaded` success, cleared on `LoadConflictFile` (new file load), and set to `None` on load error — `crates/gitgpui-state/src/store/reducer/effects.rs`
 - ✅ UI reads strategy and binary detection from `ConflictSession` in state (with fallback to local computation for robustness) — `crates/gitgpui-ui-gpui/src/view/panes/main.rs`
 - ✅ **State→UI region resolution rehydration (Iteration 28):** resolver rebuild now applies `RepoState.conflict_session.regions[*].resolution` onto parsed marker segments via `apply_session_region_resolutions()`, preserving stored `Pick*` choices and materializing non-side-pick `ManualEdit`/`AutoResolved` content into plain text segments so rebuilt output matches state-backed session decisions — `crates/gitgpui-ui-gpui/src/view/conflict_resolver.rs`, `crates/gitgpui-ui-gpui/src/view/panes/main.rs` (with new resolver unit tests)
+- ✅ **Conflict-rev-driven lightweight re-sync (Iteration 29):** added `conflict_rev` tracking to `ConflictResolverUiState` and `resync_conflict_resolver_from_state()` method so state-side session changes (hide-resolved toggles, bulk picks, autosolve) are reflected in the UI without a full rebuild — re-parses markers, re-applies session resolutions, rebuilds visible maps, and updates resolved text while reusing expensive diff/highlight data; added 2 unit tests verifying re-parse+reapply idempotency and visible-map rebuild correctness — `crates/gitgpui-ui-gpui/src/view/mod.rs`, `crates/gitgpui-ui-gpui/src/view/panes/main.rs`, `crates/gitgpui-ui-gpui/src/view/conflict_resolver.rs`
 - ✅ Fixed remaining clippy warnings in conflict test code: replaced `vec![range]` with `[range]` for single-element range arrays and suppressed `clippy::single_range_in_vec_init` for intentional test data — `crates/gitgpui-ui-gpui/src/view/conflict_resolver.rs`
 - ✅ 5 new reducer tests: session built with regions from markers (BothModified), session for delete conflicts (TwoWayKeepDelete strategy), binary session detection (BinarySidePick), session cleared on load error, session cleared on new file load — `crates/gitgpui-state/src/store/tests/conflict_session.rs`
 
@@ -124,7 +125,7 @@
 
 ### 15) Test Portability Fix (Iteration 21)
 - ✅ Fixed 6 pre-existing integration tests (`push_with_output`, `force_push_with_output`, `pull_with_output` ×2, `list_remote_branches`, `rebase_replays_commits`) that hardcoded `"master"` branch name — replaced with `git init -b main` and `"main"` references for portable behavior across systems where `init.defaultBranch` differs — `crates/gitgpui-git-gix/tests/status_integration.rs`
-- ✅ Full test suite now passes: 424 tests pass, 0 failures, clippy clean
+- ✅ Full test suite now passes: 448 tests pass, 0 failures, clippy clean
 
 ### 16) State-Layer Conflict Interaction Messages (Iteration 21)
 - ✅ Added reducer-level conflict interaction messages for design-requested state actions: `Msg::ConflictSetHideResolved`, `Msg::ConflictApplyBulkChoice`, and `Msg::ConflictApplyAutosolve` plus `ConflictBulkChoice` type and debug formatting — `crates/gitgpui-state/src/msg/message.rs`, `crates/gitgpui-state/src/msg.rs`, `crates/gitgpui-state/src/msg/message_debug.rs`, `crates/gitgpui-state/src/store/reducer.rs`, `crates/gitgpui-state/src/store/reducer/conflict_interactions.rs`

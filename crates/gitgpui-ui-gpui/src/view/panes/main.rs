@@ -1597,7 +1597,15 @@ impl MainPaneView {
             || self.conflict_resolver.path.as_ref() != Some(&path)
             || self.conflict_resolver.source_hash != Some(source_hash);
 
+        // When the file content hasn't changed but state-side conflict data has
+        // been updated (e.g. hide_resolved toggled externally, bulk picks, or
+        // autosolve applied from state), do a lightweight re-sync that re-applies
+        // session resolutions and rebuilds visible maps without recomputing the
+        // expensive diff/highlight data.
         if !needs_rebuild {
+            if self.conflict_resolver.conflict_rev != repo.conflict_rev {
+                self.resync_conflict_resolver_from_state(cx);
+            }
             return;
         }
 
@@ -1638,6 +1646,7 @@ impl MainPaneView {
                 strategy: conflict_strategy,
                 conflict_kind,
                 last_autosolve_summary: None,
+                conflict_rev: repo.conflict_rev,
                 ..ConflictResolverUiState::default()
             };
             return;
@@ -1845,8 +1854,156 @@ impl MainPaneView {
             strategy: conflict_strategy,
             conflict_kind,
             last_autosolve_summary: None,
+            conflict_rev: repo.conflict_rev,
         };
 
+        let line_ending = crate::kit::TextInput::detect_line_ending(&resolved);
+        let theme = self.theme;
+        self.conflict_resolver_input.update(cx, |input, cx| {
+            input.set_theme(theme, cx);
+            input.set_line_ending(line_ending);
+            input.set_text(resolved, cx);
+        });
+
+        if self.diff_search_active && !self.diff_search_query.as_ref().trim().is_empty() {
+            self.diff_search_recompute_matches();
+        }
+    }
+
+    /// Lightweight re-sync when `conflict_rev` changed but file content is the
+    /// same. Re-parses markers, re-applies session resolutions, reads
+    /// `hide_resolved` from state, and rebuilds visible maps — without
+    /// recomputing the expensive diff rows and word highlights.
+    fn resync_conflict_resolver_from_state(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(repo_id) = self.active_repo_id() else {
+            return;
+        };
+        let Some(repo) = self.state.repos.iter().find(|r| r.id == repo_id) else {
+            return;
+        };
+        let Loadable::Ready(Some(file)) = &repo.conflict_file else {
+            return;
+        };
+
+        // Re-parse marker segments from original current text.
+        let mut marker_segments = if let Some(cur) = file.current.as_deref() {
+            let segments = conflict_resolver::parse_conflict_markers(cur);
+            if conflict_resolver::conflict_count(&segments) > 0 {
+                segments
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
+        };
+        let base_text = file.base.as_deref().unwrap_or("");
+
+        // Re-populate bases from ancestor (needed for 2-way markers).
+        if !base_text.is_empty() {
+            conflict_resolver::populate_block_bases_from_ancestor(&mut marker_segments, base_text);
+        }
+
+        // Re-apply session region resolutions from state.
+        if let Some(session) = &repo.conflict_session {
+            conflict_resolver::apply_session_region_resolutions(
+                &mut marker_segments,
+                &session.regions,
+            );
+        }
+
+        // Regenerate resolved text.
+        let resolved = if marker_segments.is_empty() {
+            if let Some(cur) = file.current.as_deref() {
+                cur.to_string()
+            } else if let Some(ours) = file.ours.as_deref() {
+                ours.to_string()
+            } else if let Some(theirs) = file.theirs.as_deref() {
+                theirs.to_string()
+            } else {
+                String::new()
+            }
+        } else {
+            conflict_resolver::generate_resolved_text(&marker_segments)
+        };
+
+        // Read hide_resolved from state (authoritative source).
+        let hide_resolved = repo.conflict_hide_resolved;
+
+        // Recompute three-way conflict ranges from updated marker segments.
+        let three_way_conflict_ranges = {
+            let mut ranges = Vec::new();
+            let mut line_offset = 0usize;
+            for seg in &marker_segments {
+                match seg {
+                    conflict_resolver::ConflictSegment::Text(text) => {
+                        line_offset += text.lines().count();
+                    }
+                    conflict_resolver::ConflictSegment::Block(block) => {
+                        let count = if block.ours.is_empty() {
+                            0
+                        } else {
+                            block.ours.lines().count()
+                        };
+                        ranges.push(line_offset..line_offset + count);
+                        line_offset += count;
+                    }
+                }
+            }
+            ranges
+        };
+
+        // Recompute row→conflict maps using existing diff/inline rows.
+        let (diff_row_conflict_map, inline_row_conflict_map) =
+            conflict_resolver::map_two_way_rows_to_conflicts(
+                &marker_segments,
+                &self.conflict_resolver.diff_rows,
+                &self.conflict_resolver.inline_rows,
+            );
+
+        // Rebuild visible maps.
+        let three_way_visible_map = conflict_resolver::build_three_way_visible_map(
+            self.conflict_resolver.three_way_len,
+            &three_way_conflict_ranges,
+            &marker_segments,
+            hide_resolved,
+        );
+        let diff_visible_row_indices = conflict_resolver::build_two_way_visible_indices(
+            &diff_row_conflict_map,
+            &marker_segments,
+            hide_resolved,
+        );
+        let inline_visible_row_indices = conflict_resolver::build_two_way_visible_indices(
+            &inline_row_conflict_map,
+            &marker_segments,
+            hide_resolved,
+        );
+
+        // Clamp active_conflict to new conflict count.
+        let total = conflict_resolver::conflict_count(&marker_segments);
+        let active_conflict = if total == 0 {
+            0
+        } else {
+            self.conflict_resolver.active_conflict.min(total - 1)
+        };
+
+        let new_rev = repo.conflict_rev;
+
+        // Update only the fields that change during a state re-sync.
+        self.conflict_resolver.marker_segments = marker_segments;
+        self.conflict_resolver.hide_resolved = hide_resolved;
+        self.conflict_resolver.three_way_conflict_ranges = three_way_conflict_ranges;
+        self.conflict_resolver.three_way_visible_map = three_way_visible_map;
+        self.conflict_resolver.diff_visible_row_indices = diff_visible_row_indices;
+        self.conflict_resolver.inline_visible_row_indices = inline_visible_row_indices;
+        self.conflict_resolver.active_conflict = active_conflict;
+        self.conflict_resolver.conflict_rev = new_rev;
+
+        // Clear segment caches since marker_segments changed.
+        self.conflict_diff_segments_cache_split.clear();
+        self.conflict_diff_segments_cache_inline.clear();
+        self.conflict_three_way_segments_cache.clear();
+
+        // Update the resolved text input.
         let line_ending = crate::kit::TextInput::detect_line_ending(&resolved);
         let theme = self.theme;
         self.conflict_resolver_input.update(cx, |input, cx| {
