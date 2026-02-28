@@ -219,6 +219,10 @@ fn conflict_file_loaded_builds_binary_session() {
         .as_ref()
         .expect("session should exist");
     assert_eq!(session.strategy, ConflictResolverStrategy::BinarySidePick);
+    assert_eq!(session.total_regions(), 1);
+    assert_eq!(session.unsolved_count(), 1);
+    assert!(!session.is_fully_resolved());
+    assert!(session.regions.is_empty());
     assert!(session.base.is_binary());
     assert!(session.ours.is_binary());
     assert!(session.theirs.is_binary());

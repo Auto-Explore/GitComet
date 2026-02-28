@@ -322,6 +322,10 @@ pub struct ConflictSession {
 }
 
 impl ConflictSession {
+    fn has_implicit_binary_conflict(&self) -> bool {
+        self.strategy == ConflictResolverStrategy::BinarySidePick && self.regions.is_empty()
+    }
+
     fn payload_as_side_text(payload: &ConflictPayload) -> Option<String> {
         match payload {
             ConflictPayload::Text(text) => Some(text.clone()),
@@ -345,8 +349,7 @@ impl ConflictSession {
         theirs: &ConflictPayload,
     ) -> Option<ConflictRegion> {
         match strategy {
-            ConflictResolverStrategy::TwoWayKeepDelete
-            | ConflictResolverStrategy::DecisionOnly => {
+            ConflictResolverStrategy::TwoWayKeepDelete | ConflictResolverStrategy::DecisionOnly => {
                 let base = Self::payload_as_base_text(base)?;
                 let ours = Self::payload_as_side_text(ours)?;
                 let theirs = Self::payload_as_side_text(theirs)?;
@@ -357,9 +360,8 @@ impl ConflictSession {
                     resolution: ConflictRegionResolution::Unresolved,
                 })
             }
-            ConflictResolverStrategy::FullTextResolver | ConflictResolverStrategy::BinarySidePick => {
-                None
-            }
+            ConflictResolverStrategy::FullTextResolver
+            | ConflictResolverStrategy::BinarySidePick => None,
         }
     }
 
@@ -428,15 +430,23 @@ impl ConflictSession {
 
     /// Total number of conflict regions.
     pub fn total_regions(&self) -> usize {
-        self.regions.len()
+        if self.has_implicit_binary_conflict() {
+            1
+        } else {
+            self.regions.len()
+        }
     }
 
     /// Number of resolved conflict regions.
     pub fn solved_count(&self) -> usize {
-        self.regions
-            .iter()
-            .filter(|r| r.resolution.is_resolved())
-            .count()
+        if self.has_implicit_binary_conflict() {
+            0
+        } else {
+            self.regions
+                .iter()
+                .filter(|r| r.resolution.is_resolved())
+                .count()
+        }
     }
 
     /// Number of unresolved conflict regions.
@@ -446,7 +456,8 @@ impl ConflictSession {
 
     /// Returns `true` when all regions are resolved.
     pub fn is_fully_resolved(&self) -> bool {
-        self.regions.iter().all(|r| r.resolution.is_resolved())
+        !self.has_implicit_binary_conflict()
+            && self.regions.iter().all(|r| r.resolution.is_resolved())
     }
 
     /// Find the index of the next unresolved region after `current`.
@@ -1895,7 +1906,11 @@ theirs content
         // Start + ours + separator found, but no end marker (EOF)
         let merged = "<<<<<<< ours\nours line\n=======\ntheirs line\n";
         let regions = parse_conflict_regions_from_markers(merged);
-        assert_eq!(regions.len(), 0, "missing end marker should yield no regions");
+        assert_eq!(
+            regions.len(),
+            0,
+            "missing end marker should yield no regions"
+        );
     }
 
     #[test]
@@ -1903,7 +1918,11 @@ theirs content
         // diff3 base section started but no separator before EOF
         let merged = "<<<<<<< ours\nours line\n||||||| base\nbase line\n";
         let regions = parse_conflict_regions_from_markers(merged);
-        assert_eq!(regions.len(), 0, "missing separator after base should yield no regions");
+        assert_eq!(
+            regions.len(),
+            0,
+            "missing separator after base should yield no regions"
+        );
     }
 
     #[test]
@@ -1974,7 +1993,11 @@ ok theirs
 unterminated content with no separator
 ";
         let regions = parse_conflict_regions_from_markers(merged);
-        assert_eq!(regions.len(), 1, "only the first valid conflict should be parsed");
+        assert_eq!(
+            regions.len(),
+            1,
+            "only the first valid conflict should be parsed"
+        );
         assert_eq!(regions[0].ours, "ok ours\n");
         assert_eq!(regions[0].theirs, "ok theirs\n");
     }
@@ -2342,7 +2365,11 @@ unterminated content with no separator
             ConflictPayload::Text("theirs".into()),
         );
         assert_eq!(session.strategy, ConflictResolverStrategy::BinarySidePick);
-        assert_eq!(session.total_regions(), 0);
+        assert_eq!(session.total_regions(), 1);
+        assert_eq!(session.solved_count(), 0);
+        assert_eq!(session.unsolved_count(), 1);
+        assert!(!session.is_fully_resolved());
+        assert!(session.regions.is_empty());
     }
 
     #[test]

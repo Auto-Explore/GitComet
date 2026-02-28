@@ -1207,7 +1207,9 @@ fn conflict_file_stages_preserve_non_utf8_bytes() {
         .expect("conflict session");
     assert_eq!(session.path, PathBuf::from("bin.dat"));
     assert_eq!(session.strategy, ConflictResolverStrategy::BinarySidePick);
-    assert_eq!(session.total_regions(), 0);
+    assert_eq!(session.total_regions(), 1);
+    assert_eq!(session.unsolved_count(), 1);
+    assert!(!session.is_fully_resolved());
     assert!(matches!(session.base, ConflictPayload::Binary(_)));
     assert!(matches!(session.ours, ConflictPayload::Binary(_)));
     assert!(matches!(session.theirs, ConflictPayload::Binary(_)));
