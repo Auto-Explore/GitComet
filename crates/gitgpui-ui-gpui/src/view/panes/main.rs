@@ -2189,14 +2189,44 @@ impl MainPaneView {
         if self.conflict_resolver_conflict_count() == 0 {
             return;
         }
-        let Some(block) = self.conflict_resolver_active_block_mut() else {
-            return;
-        };
-        if matches!(choice, conflict_resolver::ConflictChoice::Base) && block.base.is_none() {
-            return;
+        let picked_conflict_index = self.conflict_resolver.active_conflict;
+        {
+            let Some(block) = self.conflict_resolver_active_block_mut() else {
+                return;
+            };
+            if matches!(choice, conflict_resolver::ConflictChoice::Base) && block.base.is_none() {
+                return;
+            }
+            block.choice = choice;
+            block.resolved = true;
         }
-        block.choice = choice;
-        block.resolved = true;
+        if let (Some(repo_id), Some(path)) = (
+            self.conflict_resolver
+                .repo_id
+                .or_else(|| self.active_repo_id()),
+            self.conflict_resolver.path.clone(),
+        ) {
+            let region_choice = match choice {
+                conflict_resolver::ConflictChoice::Base => {
+                    gitgpui_state::msg::ConflictRegionChoice::Base
+                }
+                conflict_resolver::ConflictChoice::Ours => {
+                    gitgpui_state::msg::ConflictRegionChoice::Ours
+                }
+                conflict_resolver::ConflictChoice::Theirs => {
+                    gitgpui_state::msg::ConflictRegionChoice::Theirs
+                }
+                conflict_resolver::ConflictChoice::Both => {
+                    gitgpui_state::msg::ConflictRegionChoice::Both
+                }
+            };
+            self.store.dispatch(Msg::ConflictSetRegionChoice {
+                repo_id,
+                path,
+                region_index: picked_conflict_index,
+                choice: region_choice,
+            });
+        }
         let resolved =
             conflict_resolver::generate_resolved_text(&self.conflict_resolver.marker_segments);
         self.conflict_resolver_set_output(resolved, cx);

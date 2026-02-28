@@ -333,6 +333,12 @@ pub(super) fn reduce(
             path,
             choice,
         } => conflict_interactions::apply_bulk_choice(state, repo_id, path, choice),
+        Msg::ConflictSetRegionChoice {
+            repo_id,
+            path,
+            region_index,
+            choice,
+        } => conflict_interactions::set_region_choice(state, repo_id, path, region_index, choice),
         Msg::ConflictApplyAutosolve {
             repo_id,
             path,

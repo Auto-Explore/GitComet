@@ -35,6 +35,14 @@ pub enum ConflictBulkChoice {
     Both,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ConflictRegionChoice {
+    Base,
+    Ours,
+    Theirs,
+    Both,
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ConflictAutosolveStats {
     pub pass1: usize,
@@ -368,6 +376,12 @@ pub enum Msg {
         repo_id: RepoId,
         path: PathBuf,
         choice: ConflictBulkChoice,
+    },
+    ConflictSetRegionChoice {
+        repo_id: RepoId,
+        path: PathBuf,
+        region_index: usize,
+        choice: ConflictRegionChoice,
     },
     ConflictApplyAutosolve {
         repo_id: RepoId,

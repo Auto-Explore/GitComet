@@ -6,7 +6,9 @@ mod repo_external_change;
 mod store_event;
 
 pub use effect::Effect;
-pub use message::{ConflictAutosolveMode, ConflictAutosolveStats, ConflictBulkChoice, Msg};
+pub use message::{
+    ConflictAutosolveMode, ConflictAutosolveStats, ConflictBulkChoice, ConflictRegionChoice, Msg,
+};
 pub use repo_command_kind::RepoCommandKind;
 pub use repo_external_change::RepoExternalChange;
 pub use store_event::StoreEvent;

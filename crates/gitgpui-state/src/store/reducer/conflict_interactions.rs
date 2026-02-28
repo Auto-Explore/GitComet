@@ -1,5 +1,5 @@
 use crate::model::{AppState, RepoId};
-use crate::msg::{ConflictAutosolveMode, ConflictBulkChoice, Effect};
+use crate::msg::{ConflictAutosolveMode, ConflictBulkChoice, ConflictRegionChoice, Effect};
 use gitgpui_core::conflict_session::{
     ConflictRegionResolution, HistoryAutosolveOptions, RegexAutosolveOptions,
 };
@@ -43,6 +43,48 @@ pub(super) fn apply_bulk_choice(
 
     let applied = apply_bulk_choice_to_session(session, choice);
     if applied > 0 {
+        repo_state.bump_conflict_rev();
+    }
+    Vec::new()
+}
+
+pub(super) fn set_region_choice(
+    state: &mut AppState,
+    repo_id: RepoId,
+    path: PathBuf,
+    region_index: usize,
+    choice: ConflictRegionChoice,
+) -> Vec<Effect> {
+    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+    if !matches_current_conflict_path(repo_state, &path) {
+        return Vec::new();
+    }
+    let Some(session) = repo_state.conflict_session.as_mut() else {
+        return Vec::new();
+    };
+    if session.path != path {
+        return Vec::new();
+    }
+
+    let Some(region) = session.regions.get_mut(region_index) else {
+        return Vec::new();
+    };
+    let Some(next_resolution) = (match choice {
+        ConflictRegionChoice::Base => region
+            .base
+            .as_ref()
+            .map(|_| ConflictRegionResolution::PickBase),
+        ConflictRegionChoice::Ours => Some(ConflictRegionResolution::PickOurs),
+        ConflictRegionChoice::Theirs => Some(ConflictRegionResolution::PickTheirs),
+        ConflictRegionChoice::Both => Some(ConflictRegionResolution::PickBoth),
+    }) else {
+        return Vec::new();
+    };
+
+    if region.resolution != next_resolution {
+        region.resolution = next_resolution;
         repo_state.bump_conflict_rev();
     }
     Vec::new()

@@ -473,6 +473,18 @@ impl std::fmt::Debug for Msg {
                 .field("path", path)
                 .field("choice", choice)
                 .finish(),
+            Msg::ConflictSetRegionChoice {
+                repo_id,
+                path,
+                region_index,
+                choice,
+            } => f
+                .debug_struct("ConflictSetRegionChoice")
+                .field("repo_id", repo_id)
+                .field("path", path)
+                .field("region_index", region_index)
+                .field("choice", choice)
+                .finish(),
             Msg::ConflictApplyAutosolve {
                 repo_id,
                 path,
