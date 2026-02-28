@@ -15,6 +15,7 @@
 - ✅ `ConflictResolverStrategy` enum (FullTextResolver, TwoWayKeepDelete, DecisionOnly, BinarySidePick) — `crates/gitgpui-core/src/conflict_session.rs`
 - ✅ `ConflictResolverStrategy::for_conflict()` maps every `FileConflictKind` + binary flag to strategy — `crates/gitgpui-core/src/conflict_session.rs`
 - ✅ Wired strategy dispatch into UI: removed `conflict_requires_resolver` gating, switched activation/search/preview hotpaths to `conflict_resolver_strategy()`, defaulted non-full-text kinds to 2-way resolver mode, and threaded `is_binary` flag through for binary detection — `crates/gitgpui-ui-gpui/src/view/panels/main/diff.rs`, `crates/gitgpui-ui-gpui/src/view/panels/main.rs`, `crates/gitgpui-ui-gpui/src/view/panes/main.rs`
+- ✅ Added integration fixture matrix covering all seven `FileConflictKind` values (`DD/AU/UD/UA/DU/AA/UU`) plus sparse stage-shape validation via `conflict_file_stages()` — `crates/gitgpui-git-gix/tests/status_integration.rs`
 
 ### 3) Resolver UX Model
 - ✅ Existing: A/B/C picks, next/prev conflict navigation, split/inline modes

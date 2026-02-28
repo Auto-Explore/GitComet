@@ -3,8 +3,9 @@ use gitgpui_core::services::ConflictSide;
 use gitgpui_core::services::GitBackend;
 use gitgpui_git_gix::GixBackend;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 fn run_git(repo: &Path, args: &[&str]) {
     let status = Command::new("git")
@@ -42,6 +43,86 @@ fn write_bytes(repo: &Path, rel: &str, contents: &[u8]) -> PathBuf {
     }
     fs::write(&path, contents).unwrap();
     path
+}
+
+fn hash_blob(repo: &Path, contents: &[u8]) -> String {
+    let mut child = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["hash-object", "-w", "--stdin"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("git hash-object to run");
+
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin pipe")
+        .write_all(contents)
+        .expect("write blob contents");
+
+    let output = child.wait_with_output().expect("wait for hash-object");
+    assert!(
+        output.status.success(),
+        "git hash-object failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    String::from_utf8(output.stdout)
+        .expect("hash-object stdout utf8")
+        .trim()
+        .to_owned()
+}
+
+fn set_unmerged_stages(
+    repo: &Path,
+    path: &str,
+    base_blob: Option<&str>,
+    ours_blob: Option<&str>,
+    theirs_blob: Option<&str>,
+) {
+    run_git(repo, &["update-index", "--force-remove", "--", path]);
+    let _ = fs::remove_file(repo.join(path));
+
+    let mut index_info = String::new();
+    if let Some(blob) = base_blob {
+        index_info.push_str(&format!("100644 {blob} 1\t{path}\n"));
+    }
+    if let Some(blob) = ours_blob {
+        index_info.push_str(&format!("100644 {blob} 2\t{path}\n"));
+    }
+    if let Some(blob) = theirs_blob {
+        index_info.push_str(&format!("100644 {blob} 3\t{path}\n"));
+    }
+
+    if index_info.is_empty() {
+        return;
+    }
+
+    let mut child = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["update-index", "--index-info"])
+        .stdin(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("git update-index --index-info to run");
+
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin pipe")
+        .write_all(index_info.as_bytes())
+        .expect("write index-info");
+
+    let output = child.wait_with_output().expect("wait for update-index");
+    assert!(
+        output.status.success(),
+        "git update-index --index-info failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 fn png_1x1_rgba(r: u8, g: u8, b: u8, a: u8) -> Vec<u8> {
@@ -111,6 +192,15 @@ fn png_1x1_rgba(r: u8, g: u8, b: u8, a: u8) -> Vec<u8> {
     push_be_u32(&mut out, crc32(b"IEND"));
 
     out
+}
+
+#[derive(Clone, Copy)]
+struct ConflictStageFixture {
+    path: &'static str,
+    kind: FileConflictKind,
+    has_base: bool,
+    has_ours: bool,
+    has_theirs: bool,
 }
 
 #[test]
@@ -503,6 +593,144 @@ fn diff_file_text_uses_ours_and_theirs_for_conflicted_paths() {
         .expect("file diff for conflicted changes");
     assert_eq!(diff.old.as_deref(), Some("ours\n"));
     assert_eq!(diff.new.as_deref(), Some("theirs\n"));
+}
+
+#[test]
+fn status_and_conflict_stages_cover_all_conflict_kinds() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    write(repo, "seed.txt", "seed\n");
+    run_git(repo, &["add", "seed.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "seed"],
+    );
+
+    let base_blob = hash_blob(repo, b"base\n");
+    let ours_blob = hash_blob(repo, b"ours\n");
+    let theirs_blob = hash_blob(repo, b"theirs\n");
+
+    let fixtures = [
+        ConflictStageFixture {
+            path: "dd.txt",
+            kind: FileConflictKind::BothDeleted,
+            has_base: true,
+            has_ours: false,
+            has_theirs: false,
+        },
+        ConflictStageFixture {
+            path: "au.txt",
+            kind: FileConflictKind::AddedByUs,
+            has_base: false,
+            has_ours: true,
+            has_theirs: false,
+        },
+        ConflictStageFixture {
+            path: "ud.txt",
+            kind: FileConflictKind::DeletedByThem,
+            has_base: true,
+            has_ours: true,
+            has_theirs: false,
+        },
+        ConflictStageFixture {
+            path: "ua.txt",
+            kind: FileConflictKind::AddedByThem,
+            has_base: false,
+            has_ours: false,
+            has_theirs: true,
+        },
+        ConflictStageFixture {
+            path: "du.txt",
+            kind: FileConflictKind::DeletedByUs,
+            has_base: true,
+            has_ours: false,
+            has_theirs: true,
+        },
+        ConflictStageFixture {
+            path: "aa.txt",
+            kind: FileConflictKind::BothAdded,
+            has_base: false,
+            has_ours: true,
+            has_theirs: true,
+        },
+        ConflictStageFixture {
+            path: "uu.txt",
+            kind: FileConflictKind::BothModified,
+            has_base: true,
+            has_ours: true,
+            has_theirs: true,
+        },
+    ];
+
+    for fixture in &fixtures {
+        set_unmerged_stages(
+            repo,
+            fixture.path,
+            fixture.has_base.then_some(base_blob.as_str()),
+            fixture.has_ours.then_some(ours_blob.as_str()),
+            fixture.has_theirs.then_some(theirs_blob.as_str()),
+        );
+    }
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    let status = opened.status().unwrap();
+
+    for fixture in &fixtures {
+        let path = Path::new(fixture.path);
+        let status_entry = status
+            .unstaged
+            .iter()
+            .find(|e| e.path == path)
+            .unwrap_or_else(|| panic!("missing status entry for {}", fixture.path));
+        assert_eq!(
+            status_entry.kind,
+            FileStatusKind::Conflicted,
+            "expected conflicted kind for {}",
+            fixture.path
+        );
+        assert_eq!(
+            status_entry.conflict,
+            Some(fixture.kind),
+            "wrong conflict kind for {}",
+            fixture.path
+        );
+
+        assert!(
+            !status.staged.iter().any(|e| e.path == path),
+            "conflicted path {} should not appear in staged status",
+            fixture.path
+        );
+
+        let stages = opened
+            .conflict_file_stages(path)
+            .unwrap()
+            .expect("conflict stages");
+        assert_eq!(
+            stages.base.is_some(),
+            fixture.has_base,
+            "base stage mismatch for {}",
+            fixture.path
+        );
+        assert_eq!(
+            stages.ours.is_some(),
+            fixture.has_ours,
+            "ours stage mismatch for {}",
+            fixture.path
+        );
+        assert_eq!(
+            stages.theirs.is_some(),
+            fixture.has_theirs,
+            "theirs stage mismatch for {}",
+            fixture.path
+        );
+    }
 }
 
 #[test]
