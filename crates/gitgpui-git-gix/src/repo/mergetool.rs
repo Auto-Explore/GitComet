@@ -75,16 +75,15 @@ impl GixRepo {
 
         // Build and invoke the mergetool command
         let output = if let Some(ref custom_cmd) = tool_cmd {
-            // Custom command template — substitute variables
-            let expanded = custom_cmd
-                .replace("$BASE", &base_path.to_string_lossy())
-                .replace("$LOCAL", &local_path.to_string_lossy())
-                .replace("$REMOTE", &remote_path.to_string_lossy())
-                .replace("$MERGED", &merged_path.to_string_lossy());
-
+            // Match git-mergetool behavior by providing variables as shell env.
+            // This supports both "$VAR" and "${VAR}" templates in config.
             Command::new("sh")
                 .arg("-c")
-                .arg(&expanded)
+                .arg(custom_cmd)
+                .env("BASE", &base_path)
+                .env("LOCAL", &local_path)
+                .env("REMOTE", &remote_path)
+                .env("MERGED", &merged_path)
                 .current_dir(workdir)
                 .output()
                 .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?
