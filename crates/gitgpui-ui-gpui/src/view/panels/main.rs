@@ -929,6 +929,27 @@ impl MainPaneView {
                                         );
                                     }
                                 };
+                            let local_for_both_btn = local.clone();
+                            let remote_for_both_btn = remote.clone();
+                            let set_output_both =
+                                move |this: &mut Self,
+                                      _e: &ClickEvent,
+                                      _w: &mut Window,
+                                      cx: &mut gpui::Context<Self>| {
+                                    if this.conflict_resolver_conflict_count() > 0 {
+                                        this.conflict_resolver_pick_active_conflict(
+                                            conflict_resolver::ConflictChoice::Both,
+                                            cx,
+                                        );
+                                    } else {
+                                        let mut both = String::with_capacity(
+                                            local_for_both_btn.len() + remote_for_both_btn.len(),
+                                        );
+                                        both.push_str(&local_for_both_btn);
+                                        both.push_str(&remote_for_both_btn);
+                                        this.conflict_resolver_set_output(both, cx);
+                                    }
+                                };
                             let reset_from_markers =
                                 |this: &mut Self,
                                  _e: &ClickEvent,
@@ -964,6 +985,16 @@ impl MainPaneView {
                                  cx: &mut gpui::Context<Self>| {
                                     this.conflict_resolver_pick_all_conflicts(
                                         conflict_resolver::ConflictChoice::Theirs,
+                                        cx,
+                                    );
+                                };
+                            let pick_all_both =
+                                |this: &mut Self,
+                                 _e: &ClickEvent,
+                                 _w: &mut Window,
+                                 cx: &mut gpui::Context<Self>| {
+                                    this.conflict_resolver_pick_all_conflicts(
+                                        conflict_resolver::ConflictChoice::Both,
                                         cx,
                                     );
                                 };
@@ -1223,6 +1254,13 @@ impl MainPaneView {
                                         .disabled(!has_conflicts && file.theirs.is_none())
                                         .on_click(theme, cx, set_output_remote),
                                 )
+                                .when(has_conflicts, |d| {
+                                    d.child(
+                                        zed::Button::new("conflict_use_both", "BC (both)")
+                                            .style(zed::ButtonStyle::Transparent)
+                                            .on_click(theme, cx, set_output_both),
+                                    )
+                                })
                                 .when(has_conflicts && conflict_count > 1, |d| {
                                     d.child(div().w(px(1.0)).h(px(12.0)).bg(theme.colors.border))
                                         .child(
@@ -1254,6 +1292,15 @@ impl MainPaneView {
                                                 .style(zed::ButtonStyle::Transparent)
                                                 .disabled(unresolved_count == 0)
                                                 .on_click(theme, cx, pick_all_remote),
+                                        )
+                                        .child(
+                                            zed::Button::new(
+                                                "conflict_all_both",
+                                                "Unresolved → BC",
+                                            )
+                                                .style(zed::ButtonStyle::Transparent)
+                                                .disabled(unresolved_count == 0)
+                                                .on_click(theme, cx, pick_all_both),
                                         )
                                 })
                                 .child(
@@ -2686,7 +2733,7 @@ impl MainPaneView {
                     handled = true;
                 }
 
-                // A/B/C quick-pick for conflict resolver (kdiff3-style)
+                // A/B/C/D quick-pick for conflict resolver.
                 if !handled
                     && conflict_resolver_active
                     && !mods.control
@@ -2719,6 +2766,13 @@ impl MainPaneView {
                         "c" => {
                             this.conflict_resolver_pick_active_conflict(
                                 conflict_resolver::ConflictChoice::Theirs,
+                                cx,
+                            );
+                            handled = true;
+                        }
+                        "d" => {
+                            this.conflict_resolver_pick_active_conflict(
+                                conflict_resolver::ConflictChoice::Both,
                                 cx,
                             );
                             handled = true;

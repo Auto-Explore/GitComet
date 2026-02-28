@@ -3,6 +3,7 @@ pub enum ConflictChoice {
     Base,
     Ours,
     Theirs,
+    Both,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -74,11 +75,20 @@ pub fn format_autosolve_trace_summary(
     match mode {
         AutosolveTraceMode::Safe => format!(
             "Last autosolve (safe): resolved {resolved} {blocks_word}, unresolved {} -> {} (pass1 {}, split {}, pass1-after-split {}).",
-            unresolved_before, unresolved_after, stats.pass1, stats.pass2_split, stats.pass1_after_split
+            unresolved_before,
+            unresolved_after,
+            stats.pass1,
+            stats.pass2_split,
+            stats.pass1_after_split
         ),
         AutosolveTraceMode::Regex => format!(
             "Last autosolve (regex): resolved {resolved} {blocks_word}, unresolved {} -> {} (pass1 {}, split {}, pass1-after-split {}, regex {}).",
-            unresolved_before, unresolved_after, stats.pass1, stats.pass2_split, stats.pass1_after_split, stats.regex
+            unresolved_before,
+            unresolved_after,
+            stats.pass1,
+            stats.pass2_split,
+            stats.pass1_after_split,
+            stats.regex
         ),
         AutosolveTraceMode::History => format!(
             "Last autosolve (history): resolved {resolved} {blocks_word}, unresolved {} -> {} (history {}).",
@@ -477,6 +487,7 @@ pub fn generate_resolved_text(segments: &[ConflictSegment]) -> String {
                 ConflictChoice::Base => block.base.as_ref().map_or(0, |b| b.len()),
                 ConflictChoice::Ours => block.ours.len(),
                 ConflictChoice::Theirs => block.theirs.len(),
+                ConflictChoice::Both => block.ours.len() + block.theirs.len(),
             },
         })
         .sum();
@@ -492,6 +503,10 @@ pub fn generate_resolved_text(segments: &[ConflictSegment]) -> String {
                 }
                 ConflictChoice::Ours => out.push_str(&block.ours),
                 ConflictChoice::Theirs => out.push_str(&block.theirs),
+                ConflictChoice::Both => {
+                    out.push_str(&block.ours);
+                    out.push_str(&block.theirs);
+                }
             },
         }
     }
@@ -947,17 +962,32 @@ mod tests {
         let ours = generate_resolved_text(&segments);
         assert_eq!(ours, "a\none\ntwo\nb\n");
 
-        let ConflictSegment::Block(block) = segments
-            .iter_mut()
-            .find(|s| matches!(s, ConflictSegment::Block(_)))
-            .unwrap()
-        else {
-            panic!("expected a conflict block");
-        };
-        block.choice = ConflictChoice::Theirs;
+        {
+            let ConflictSegment::Block(block) = segments
+                .iter_mut()
+                .find(|s| matches!(s, ConflictSegment::Block(_)))
+                .unwrap()
+            else {
+                panic!("expected a conflict block");
+            };
+            block.choice = ConflictChoice::Theirs;
+        }
 
         let theirs = generate_resolved_text(&segments);
         assert_eq!(theirs, "a\nuno\ndos\nb\n");
+
+        {
+            let ConflictSegment::Block(block) = segments
+                .iter_mut()
+                .find(|s| matches!(s, ConflictSegment::Block(_)))
+                .unwrap()
+            else {
+                panic!("expected a conflict block");
+            };
+            block.choice = ConflictChoice::Both;
+        }
+        let both = generate_resolved_text(&segments);
+        assert_eq!(both, "a\none\ntwo\nuno\ndos\nb\n");
     }
 
     #[test]
@@ -1146,7 +1176,11 @@ mod tests {
     #[test]
     fn autosolve_trace_summary_safe_mode() {
         let stats = gitgpui_state::msg::ConflictAutosolveStats {
-            pass1: 2, pass2_split: 1, pass1_after_split: 0, regex: 0, history: 0,
+            pass1: 2,
+            pass2_split: 1,
+            pass1_after_split: 0,
+            regex: 0,
+            history: 0,
         };
         let summary = format_autosolve_trace_summary(AutosolveTraceMode::Safe, 5, 2, &stats);
         assert!(summary.contains("Last autosolve (safe)"));
@@ -1159,7 +1193,11 @@ mod tests {
     #[test]
     fn autosolve_trace_summary_history_mode_uses_history_stat() {
         let stats = gitgpui_state::msg::ConflictAutosolveStats {
-            pass1: 0, pass2_split: 0, pass1_after_split: 0, regex: 0, history: 3,
+            pass1: 0,
+            pass2_split: 0,
+            pass1_after_split: 0,
+            regex: 0,
+            history: 3,
         };
         let summary = format_autosolve_trace_summary(AutosolveTraceMode::History, 4, 1, &stats);
         assert!(summary.contains("Last autosolve (history)"));
@@ -1293,6 +1331,20 @@ mod tests {
         assert!(first.resolved);
         assert_eq!(second.choice, ConflictChoice::Ours);
         assert!(second.resolved);
+    }
+
+    #[test]
+    fn bulk_pick_both_concatenates_for_unresolved_blocks() {
+        let input = concat!(
+            "<<<<<<< HEAD\none\n=======\nuno\n>>>>>>> other\n",
+            "<<<<<<< HEAD\ntwo\n=======\ndos\n>>>>>>> other\n",
+        );
+        let mut segments = parse_conflict_markers(input);
+        let updated = apply_choice_to_unresolved_segments(&mut segments, ConflictChoice::Both);
+        assert_eq!(updated, 2);
+        assert_eq!(resolved_conflict_count(&segments), 2);
+        let resolved = generate_resolved_text(&segments);
+        assert_eq!(resolved, "one\nuno\ntwo\ndos\n");
     }
 
     #[test]

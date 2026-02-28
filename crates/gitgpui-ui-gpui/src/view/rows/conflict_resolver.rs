@@ -132,6 +132,7 @@ impl MainPaneView {
                             conflict_resolver::ConflictChoice::Base => "Base (A)",
                             conflict_resolver::ConflictChoice::Ours => "Local (B)",
                             conflict_resolver::ConflictChoice::Theirs => "Remote (C)",
+                            conflict_resolver::ConflictChoice::Both => "Local+Remote (B+C)",
                         })
                         .unwrap_or("?");
                     let label: SharedString = format!("  Resolved: picked {choice_label}").into();
@@ -195,10 +196,16 @@ impl MainPaneView {
                     let choice_for_row = range_ix.and_then(|ri| conflict_choices.get(ri).copied());
                     let base_is_chosen =
                         choice_for_row == Some(conflict_resolver::ConflictChoice::Base);
-                    let ours_is_chosen =
-                        choice_for_row == Some(conflict_resolver::ConflictChoice::Ours);
-                    let theirs_is_chosen =
-                        choice_for_row == Some(conflict_resolver::ConflictChoice::Theirs);
+                    let ours_is_chosen = matches!(
+                        choice_for_row,
+                        Some(conflict_resolver::ConflictChoice::Ours)
+                            | Some(conflict_resolver::ConflictChoice::Both)
+                    );
+                    let theirs_is_chosen = matches!(
+                        choice_for_row,
+                        Some(conflict_resolver::ConflictChoice::Theirs)
+                            | Some(conflict_resolver::ConflictChoice::Both)
+                    );
 
                     let base_styled = this
                         .conflict_three_way_segments_cache
