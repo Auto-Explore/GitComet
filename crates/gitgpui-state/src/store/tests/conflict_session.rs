@@ -167,8 +167,11 @@ fn conflict_file_loaded_builds_session_for_delete_conflict() {
     assert_eq!(session.conflict_kind, FileConflictKind::DeletedByThem);
     assert_eq!(session.strategy, ConflictResolverStrategy::TwoWayKeepDelete);
     assert!(session.theirs.is_absent());
-    // No conflict markers in the current text, so no regions.
-    assert_eq!(session.total_regions(), 0);
+    // Non-marker two-way conflicts synthesize a single decision region.
+    assert_eq!(session.total_regions(), 1);
+    assert_eq!(session.regions[0].base.as_deref(), Some("original\n"));
+    assert_eq!(session.regions[0].ours, "modified\n");
+    assert_eq!(session.regions[0].theirs, "");
 }
 
 #[test]

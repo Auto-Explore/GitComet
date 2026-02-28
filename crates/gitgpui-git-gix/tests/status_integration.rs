@@ -3517,6 +3517,13 @@ fn conflict_session_modify_delete_keep_resolves_conflict() {
         session.theirs.as_text().is_some(),
         "theirs (modify side) should have text"
     );
+    assert_eq!(
+        session.unsolved_count(),
+        1,
+        "two-way non-marker conflict sessions should expose one unresolved decision region"
+    );
+    assert_eq!(session.regions[0].ours, "");
+    assert_eq!(session.regions[0].theirs, "modified by feature\n");
 
     // Resolve by keeping theirs (the modified version)
     opened

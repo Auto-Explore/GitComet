@@ -322,6 +322,47 @@ pub struct ConflictSession {
 }
 
 impl ConflictSession {
+    fn payload_as_side_text(payload: &ConflictPayload) -> Option<String> {
+        match payload {
+            ConflictPayload::Text(text) => Some(text.clone()),
+            ConflictPayload::Absent => Some(String::new()),
+            ConflictPayload::Binary(_) => None,
+        }
+    }
+
+    fn payload_as_base_text(payload: &ConflictPayload) -> Option<Option<String>> {
+        match payload {
+            ConflictPayload::Text(text) => Some(Some(text.clone())),
+            ConflictPayload::Absent => Some(None),
+            ConflictPayload::Binary(_) => None,
+        }
+    }
+
+    fn synthetic_region_for_strategy(
+        strategy: ConflictResolverStrategy,
+        base: &ConflictPayload,
+        ours: &ConflictPayload,
+        theirs: &ConflictPayload,
+    ) -> Option<ConflictRegion> {
+        match strategy {
+            ConflictResolverStrategy::TwoWayKeepDelete
+            | ConflictResolverStrategy::DecisionOnly => {
+                let base = Self::payload_as_base_text(base)?;
+                let ours = Self::payload_as_side_text(ours)?;
+                let theirs = Self::payload_as_side_text(theirs)?;
+                Some(ConflictRegion {
+                    base,
+                    ours,
+                    theirs,
+                    resolution: ConflictRegionResolution::Unresolved,
+                })
+            }
+            ConflictResolverStrategy::FullTextResolver | ConflictResolverStrategy::BinarySidePick => {
+                None
+            }
+        }
+    }
+
     /// Create a new session from the three file-level payloads.
     pub fn new(
         path: PathBuf,
@@ -332,6 +373,9 @@ impl ConflictSession {
     ) -> Self {
         let is_binary = base.is_binary() || ours.is_binary() || theirs.is_binary();
         let strategy = ConflictResolverStrategy::for_conflict(conflict_kind, is_binary);
+        let regions = Self::synthetic_region_for_strategy(strategy, &base, &ours, &theirs)
+            .into_iter()
+            .collect();
         Self {
             path,
             conflict_kind,
@@ -339,7 +383,7 @@ impl ConflictSession {
             base,
             ours,
             theirs,
-            regions: Vec::new(),
+            regions,
         }
     }
 
@@ -369,6 +413,16 @@ impl ConflictSession {
     /// Returns the number of parsed regions.
     pub fn parse_regions_from_merged_text(&mut self, merged_text: &str) -> usize {
         self.regions = parse_conflict_regions_from_markers(merged_text);
+        if self.regions.is_empty()
+            && let Some(region) = Self::synthetic_region_for_strategy(
+                self.strategy,
+                &self.base,
+                &self.ours,
+                &self.theirs,
+            )
+        {
+            self.regions.push(region);
+        }
         self.regions.len()
     }
 
@@ -2288,6 +2342,7 @@ unterminated content with no separator
             ConflictPayload::Text("theirs".into()),
         );
         assert_eq!(session.strategy, ConflictResolverStrategy::BinarySidePick);
+        assert_eq!(session.total_regions(), 0);
     }
 
     #[test]
@@ -2300,6 +2355,14 @@ unterminated content with no separator
             ConflictPayload::Text("theirs".into()),
         );
         assert_eq!(session.strategy, ConflictResolverStrategy::TwoWayKeepDelete);
+        assert_eq!(session.total_regions(), 1);
+        assert_eq!(session.regions[0].base.as_deref(), Some("base"));
+        assert_eq!(session.regions[0].ours, "");
+        assert_eq!(session.regions[0].theirs, "theirs");
+        assert!(matches!(
+            session.regions[0].resolution,
+            ConflictRegionResolution::Unresolved
+        ));
     }
 
     #[test]
@@ -2312,6 +2375,27 @@ unterminated content with no separator
             ConflictPayload::Absent,
         );
         assert_eq!(session.strategy, ConflictResolverStrategy::DecisionOnly);
+        assert_eq!(session.total_regions(), 1);
+        assert_eq!(session.regions[0].base.as_deref(), Some("base"));
+        assert_eq!(session.regions[0].ours, "");
+        assert_eq!(session.regions[0].theirs, "");
+    }
+
+    #[test]
+    fn from_merged_text_without_markers_keeps_synthetic_two_way_region() {
+        let session = ConflictSession::from_merged_text(
+            PathBuf::from("file.txt"),
+            FileConflictKind::AddedByUs,
+            ConflictPayload::Absent,
+            ConflictPayload::Text("ours\n".into()),
+            ConflictPayload::Absent,
+            "ours\n",
+        );
+        assert_eq!(session.strategy, ConflictResolverStrategy::TwoWayKeepDelete);
+        assert_eq!(session.total_regions(), 1);
+        assert_eq!(session.regions[0].base, None);
+        assert_eq!(session.regions[0].ours, "ours\n");
+        assert_eq!(session.regions[0].theirs, "");
     }
 
     #[test]

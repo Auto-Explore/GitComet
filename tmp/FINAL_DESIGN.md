@@ -12,6 +12,7 @@
 - ✅ Solved/unsolved counters (`solved_count`, `unsolved_count`, `is_fully_resolved`) — `crates/gitgpui-core/src/conflict_session.rs`
 - ✅ Next/previous unresolved navigation with wrap-around — `crates/gitgpui-core/src/conflict_session.rs`
 - ✅ Expanded unit-test coverage for conflict-session domain behavior (payload typing, strategy mapping, counters/navigation, autosolve, and marker parsing) — `crates/gitgpui-core/src/conflict_session.rs`
+- ✅ **Unified non-marker region modeling (Iteration 39):** `ConflictSession::new()` now synthesizes a single unresolved region for `TwoWayKeepDelete` and `DecisionOnly` strategies (with absent sides mapped to empty text), and `parse_regions_from_merged_text()` falls back to this synthetic region when marker parsing yields zero blocks. This closes a unified-model gap for non-marker conflicts (`DeletedBy*`, `AddedBy*`, `BothDeleted`) so they participate in per-region unresolved accounting; added core/state/backend tests for session shape and unsolved counters — `crates/gitgpui-core/src/conflict_session.rs`, `crates/gitgpui-state/src/store/tests/conflict_session.rs`, `crates/gitgpui-git-gix/tests/status_integration.rs`
 
 ### 2) Conflict Strategy by Kind
 - ✅ `ConflictResolverStrategy` enum (FullTextResolver, TwoWayKeepDelete, DecisionOnly, BinarySidePick) — `crates/gitgpui-core/src/conflict_session.rs`
