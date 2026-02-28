@@ -1993,7 +1993,7 @@ fn rebase_replays_commits_onto_target_branch() {
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
-    run_git(repo, &["init"]);
+    run_git(repo, &["init", "-b", "main"]);
     run_git(repo, &["config", "user.email", "you@example.com"]);
     run_git(repo, &["config", "user.name", "You"]);
     run_git(repo, &["config", "commit.gpgsign", "false"]);
@@ -2037,7 +2037,7 @@ fn rebase_replays_commits_onto_target_branch() {
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
 
-    opened.rebase_with_output("master").unwrap();
+    opened.rebase_with_output("main").unwrap();
 
     let parent = Command::new("git")
         .arg("-C")
@@ -2142,7 +2142,7 @@ fn list_remote_branches_includes_fetched_remote_tracking_refs() {
     let origin = dir.path().join("origin.git");
     fs::create_dir_all(&repo).unwrap();
 
-    run_git(&repo, &["init"]);
+    run_git(&repo, &["init", "-b", "main"]);
     run_git(&repo, &["config", "user.email", "you@example.com"]);
     run_git(&repo, &["config", "user.name", "You"]);
     run_git(&repo, &["config", "commit.gpgsign", "false"]);
@@ -2155,12 +2155,12 @@ fn list_remote_branches_includes_fetched_remote_tracking_refs() {
     );
 
     fs::create_dir_all(&origin).unwrap();
-    run_git(&origin, &["init", "--bare"]);
+    run_git(&origin, &["init", "--bare", "-b", "main"]);
     run_git(
         &repo,
         &["remote", "add", "origin", origin.to_string_lossy().as_ref()],
     );
-    run_git(&repo, &["push", "-u", "origin", "master"]);
+    run_git(&repo, &["push", "-u", "origin", "main"]);
 
     run_git(&repo, &["checkout", "-b", "feature"]);
     write(&repo, "b.txt", "feature\n");
@@ -2179,7 +2179,7 @@ fn list_remote_branches_includes_fetched_remote_tracking_refs() {
     assert!(
         branches
             .iter()
-            .any(|b| b.remote == "origin" && b.name == "master")
+            .any(|b| b.remote == "origin" && b.name == "main")
     );
     assert!(
         branches
@@ -2197,7 +2197,7 @@ fn push_with_output_updates_remote_head() {
     fs::create_dir_all(&repo).unwrap();
     fs::create_dir_all(&origin).unwrap();
 
-    run_git(&repo, &["init"]);
+    run_git(&repo, &["init", "-b", "main"]);
     run_git(&repo, &["config", "user.email", "you@example.com"]);
     run_git(&repo, &["config", "user.name", "You"]);
     run_git(&repo, &["config", "commit.gpgsign", "false"]);
@@ -2209,12 +2209,12 @@ fn push_with_output_updates_remote_head() {
         &["-c", "commit.gpgsign=false", "commit", "-m", "init"],
     );
 
-    run_git(&origin, &["init", "--bare"]);
+    run_git(&origin, &["init", "--bare", "-b", "main"]);
     run_git(
         &repo,
         &["remote", "add", "origin", origin.to_string_lossy().as_ref()],
     );
-    run_git(&repo, &["push", "-u", "origin", "master"]);
+    run_git(&repo, &["push", "-u", "origin", "main"]);
 
     write(&repo, "a.txt", "one\ntwo\n");
     run_git(&repo, &["add", "a.txt"]);
@@ -2241,9 +2241,9 @@ fn push_with_output_updates_remote_head() {
     let head_remote = Command::new("git")
         .arg("-C")
         .arg(&origin)
-        .args(["rev-parse", "refs/heads/master"])
+        .args(["rev-parse", "refs/heads/main"])
         .output()
-        .expect("rev-parse origin/master");
+        .expect("rev-parse origin/main");
     assert!(head_remote.status.success());
     let head_remote = String::from_utf8(head_remote.stdout)
         .unwrap()
@@ -2260,7 +2260,7 @@ fn force_push_with_output_updates_remote_head_after_rewrite() {
     fs::create_dir_all(&repo).unwrap();
     fs::create_dir_all(&origin).unwrap();
 
-    run_git(&repo, &["init"]);
+    run_git(&repo, &["init", "-b", "main"]);
     run_git(&repo, &["config", "user.email", "you@example.com"]);
     run_git(&repo, &["config", "user.name", "You"]);
     run_git(&repo, &["config", "commit.gpgsign", "false"]);
@@ -2272,12 +2272,12 @@ fn force_push_with_output_updates_remote_head_after_rewrite() {
         &["-c", "commit.gpgsign=false", "commit", "-m", "init"],
     );
 
-    run_git(&origin, &["init", "--bare"]);
+    run_git(&origin, &["init", "--bare", "-b", "main"]);
     run_git(
         &repo,
         &["remote", "add", "origin", origin.to_string_lossy().as_ref()],
     );
-    run_git(&repo, &["push", "-u", "origin", "master"]);
+    run_git(&repo, &["push", "-u", "origin", "main"]);
 
     write(&repo, "a.txt", "one\ntwo\n");
     run_git(&repo, &["add", "a.txt"]);
@@ -2321,9 +2321,9 @@ fn force_push_with_output_updates_remote_head_after_rewrite() {
     let head_remote = Command::new("git")
         .arg("-C")
         .arg(&origin)
-        .args(["rev-parse", "refs/heads/master"])
+        .args(["rev-parse", "refs/heads/main"])
         .output()
-        .expect("rev-parse refs/heads/master");
+        .expect("rev-parse refs/heads/main");
     assert!(head_remote.status.success());
     let head_remote = String::from_utf8(head_remote.stdout)
         .unwrap()
@@ -2341,9 +2341,9 @@ fn pull_with_output_fast_forwards_from_remote() {
     fs::create_dir_all(&origin).unwrap();
     fs::create_dir_all(&repo_a).unwrap();
 
-    run_git(&origin, &["init", "--bare"]);
+    run_git(&origin, &["init", "--bare", "-b", "main"]);
 
-    run_git(&repo_a, &["init"]);
+    run_git(&repo_a, &["init", "-b", "main"]);
     run_git(&repo_a, &["config", "user.email", "you@example.com"]);
     run_git(&repo_a, &["config", "user.name", "You"]);
     run_git(&repo_a, &["config", "commit.gpgsign", "false"]);
@@ -2357,7 +2357,7 @@ fn pull_with_output_fast_forwards_from_remote() {
         &repo_a,
         &["remote", "add", "origin", origin.to_string_lossy().as_ref()],
     );
-    run_git(&repo_a, &["push", "-u", "origin", "master"]);
+    run_git(&repo_a, &["push", "-u", "origin", "main"]);
 
     run_git(
         dir.path(),
@@ -2379,7 +2379,7 @@ fn pull_with_output_fast_forwards_from_remote() {
     let head_origin = Command::new("git")
         .arg("-C")
         .arg(&origin)
-        .args(["rev-parse", "refs/heads/master"])
+        .args(["rev-parse", "refs/heads/main"])
         .output()
         .expect("rev-parse origin");
     assert!(head_origin.status.success());
@@ -2414,9 +2414,9 @@ fn pull_with_output_fast_forwards_when_possible_even_if_pull_ff_is_disabled() {
     fs::create_dir_all(&origin).unwrap();
     fs::create_dir_all(&repo_a).unwrap();
 
-    run_git(&origin, &["init", "--bare"]);
+    run_git(&origin, &["init", "--bare", "-b", "main"]);
 
-    run_git(&repo_a, &["init"]);
+    run_git(&repo_a, &["init", "-b", "main"]);
     run_git(&repo_a, &["config", "user.email", "you@example.com"]);
     run_git(&repo_a, &["config", "user.name", "You"]);
     run_git(&repo_a, &["config", "commit.gpgsign", "false"]);
@@ -2430,7 +2430,7 @@ fn pull_with_output_fast_forwards_when_possible_even_if_pull_ff_is_disabled() {
         &repo_a,
         &["remote", "add", "origin", origin.to_string_lossy().as_ref()],
     );
-    run_git(&repo_a, &["push", "-u", "origin", "master"]);
+    run_git(&repo_a, &["push", "-u", "origin", "main"]);
 
     run_git(
         dir.path(),
@@ -2457,7 +2457,7 @@ fn pull_with_output_fast_forwards_when_possible_even_if_pull_ff_is_disabled() {
     let head_origin = Command::new("git")
         .arg("-C")
         .arg(&origin)
-        .args(["rev-parse", "refs/heads/master"])
+        .args(["rev-parse", "refs/heads/main"])
         .output()
         .expect("rev-parse origin");
     assert!(head_origin.status.success());
