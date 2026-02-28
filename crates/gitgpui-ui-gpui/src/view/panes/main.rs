@@ -2012,8 +2012,25 @@ impl MainPaneView {
         if self.conflict_resolver_conflict_count() == 0 {
             return;
         }
-        let count =
+        // Pass 1: safe whole-block auto-resolve.
+        let pass1 =
             conflict_resolver::auto_resolve_segments(&mut self.conflict_resolver.marker_segments);
+        // Pass 2: heuristic subchunk splitting — split remaining unresolved
+        // blocks into finer line-level subchunks where possible.
+        let pass2 = conflict_resolver::auto_resolve_segments_pass2(
+            &mut self.conflict_resolver.marker_segments,
+        );
+        let count = pass1
+            + pass2
+            + if pass2 > 0 {
+                // Re-run Pass 1 on newly created sub-blocks (they may now
+                // satisfy whole-block rules after splitting).
+                conflict_resolver::auto_resolve_segments(
+                    &mut self.conflict_resolver.marker_segments,
+                )
+            } else {
+                0
+            };
         if count > 0 {
             let resolved = conflict_resolver::generate_resolved_text(
                 &self.conflict_resolver.marker_segments,

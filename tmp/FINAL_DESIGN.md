@@ -22,7 +22,7 @@
 - ✅ Per-block resolved tracking (`ConflictBlock.resolved` field) — set on A/B/C picks, all-pick, and auto-resolve — `crates/gitgpui-ui-gpui/src/view/conflict_resolver.rs`, `crates/gitgpui-ui-gpui/src/view/panes/main.rs`
 - ✅ Next/previous *unresolved* navigation in UI (wrap-around) — added unresolved index helpers + tests and wired toolbar/auto-advance to unresolved-only navigation — `crates/gitgpui-ui-gpui/src/view/conflict_resolver.rs`, `crates/gitgpui-ui-gpui/src/view/panes/main.rs`, `crates/gitgpui-ui-gpui/src/view/panels/main.rs`
 - ✅ Hide-resolved toggle — `ThreeWayVisibleItem` enum and `build_three_way_visible_map()` for collapsing resolved conflicts in three-way view, toggle button in toolbar ("Hide resolved" / "Show resolved"), collapsed rows render with green summary banner — `crates/gitgpui-ui-gpui/src/view/conflict_resolver.rs`, `crates/gitgpui-ui-gpui/src/view/mod.rs`, `crates/gitgpui-ui-gpui/src/view/panes/main.rs`, `crates/gitgpui-ui-gpui/src/view/panels/main.rs`, `crates/gitgpui-ui-gpui/src/view/rows/conflict_resolver.rs` — 4 unit tests
-- 🔧 Bulk actions: "All → A/B/C" exists; auto-resolve safe conflicts now wired (see §4)
+- ✅ Bulk actions: "All → A/B/C" exists; auto-resolve safe conflicts wired with Pass 1 + Pass 2 subchunk splitting (see §4)
 
 ### 4) Auto-Resolution Engine (Safe-First)
 - ✅ Pass 1 safe auto-resolve rules: identical sides, only-ours-changed, only-theirs-changed — `crates/gitgpui-core/src/conflict_session.rs`
@@ -32,7 +32,7 @@
 - ✅ "Auto-resolve safe" button in conflict resolver toolbar (shown when unresolved blocks remain) — `crates/gitgpui-ui-gpui/src/view/panels/main.rs`
 - ✅ `conflict_resolver_auto_resolve()` method wires button to auto-resolve + text regeneration — `crates/gitgpui-ui-gpui/src/view/panes/main.rs`
 - ✅ 10 unit tests for auto-resolve segments and resolved counting — `crates/gitgpui-ui-gpui/src/view/conflict_resolver.rs`
-- ⬜ Pass 2: heuristic subchunk splitting (meld-inspired)
+- ✅ Pass 2: heuristic subchunk splitting (meld-inspired) — `split_conflict_into_subchunks()` performs 3-way line-level merge using two strategies: per-line comparison (same line count) and diff-based hunk merge with per-line decomposition of overlapping regions (different line counts); `Subchunk` enum (Resolved/Conflict) in core, `auto_resolve_segments_pass2()` splits UI blocks into finer segments, wired into "Auto-resolve safe" button (Pass 1 → Pass 2 → Pass 1 re-run on sub-blocks); 15 unit tests for core splitting + 4 UI-layer tests — `crates/gitgpui-core/src/conflict_session.rs`, `crates/gitgpui-ui-gpui/src/view/conflict_resolver.rs`, `crates/gitgpui-ui-gpui/src/view/panes/main.rs`
 - ⬜ Pass 3: history/regex modes (opt-in)
 
 ### 5) Diff and Text Fidelity Upgrades

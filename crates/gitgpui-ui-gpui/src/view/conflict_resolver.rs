@@ -251,6 +251,74 @@ pub fn auto_resolve_segments(segments: &mut [ConflictSegment]) -> usize {
     count
 }
 
+/// Apply Pass 2 (heuristic subchunk splitting) to unresolved conflict blocks.
+///
+/// For each unresolved block that has a base, attempts to split it into
+/// line-level subchunks via 3-way diff/merge. Non-conflicting subchunks
+/// become `Text` segments; remaining conflicts become smaller `Block` segments.
+///
+/// Returns the number of original blocks that were split.
+pub fn auto_resolve_segments_pass2(segments: &mut Vec<ConflictSegment>) -> usize {
+    use gitgpui_core::conflict_session::{split_conflict_into_subchunks, Subchunk};
+
+    let mut new_segments = Vec::with_capacity(segments.len());
+    let mut split_count = 0;
+
+    for seg in segments.drain(..) {
+        match seg {
+            ConflictSegment::Block(ref block) if !block.resolved && block.base.is_some() => {
+                let base = block.base.as_deref().unwrap();
+                if let Some(subchunks) =
+                    split_conflict_into_subchunks(base, &block.ours, &block.theirs)
+                {
+                    let all_resolved =
+                        subchunks.iter().all(|c| matches!(c, Subchunk::Resolved(_)));
+                    split_count += 1;
+                    for subchunk in subchunks {
+                        match subchunk {
+                            Subchunk::Resolved(text) => {
+                                // Merge adjacent Text segments for cleanliness.
+                                if let Some(ConflictSegment::Text(prev)) = new_segments.last_mut()
+                                {
+                                    prev.push_str(&text);
+                                } else {
+                                    new_segments.push(ConflictSegment::Text(text));
+                                }
+                            }
+                            Subchunk::Conflict {
+                                base,
+                                ours,
+                                theirs,
+                            } => {
+                                new_segments.push(ConflictSegment::Block(ConflictBlock {
+                                    base: Some(base),
+                                    ours,
+                                    theirs,
+                                    choice: ConflictChoice::Ours,
+                                    resolved: false,
+                                }));
+                            }
+                        }
+                    }
+                    // If the split produced only resolved subchunks and the
+                    // original block was the only conflict, there are no more
+                    // Block segments from this split. Mark as fully merged by
+                    // not adding any Block (all became Text above).
+                    if all_resolved {
+                        // All subchunks resolved — nothing more to do.
+                    }
+                } else {
+                    new_segments.push(seg);
+                }
+            }
+            other => new_segments.push(other),
+        }
+    }
+
+    *segments = new_segments;
+    split_count
+}
+
 pub fn generate_resolved_text(segments: &[ConflictSegment]) -> String {
     let approx_len: usize = segments
         .iter()
@@ -1146,5 +1214,142 @@ mod tests {
         // map: Line(0), Line(1), Line(2)
         let vi = visible_index_for_conflict(&map, &ranges, 0);
         assert_eq!(vi, Some(1)); // First line of conflict at visible index 1
+    }
+
+    // -- Pass 2 subchunk splitting tests --
+
+    #[test]
+    fn pass2_splits_block_with_nonoverlapping_changes() {
+        // 3-way conflict: ours changes line 1, theirs changes line 3.
+        // Line 2 is context. Should split into resolved parts.
+        let input = concat!(
+            "ctx\n",
+            "<<<<<<< HEAD\n",
+            "AAA\nbbb\nccc\n",
+            "||||||| base\n",
+            "aaa\nbbb\nccc\n",
+            "=======\n",
+            "aaa\nbbb\nCCC\n",
+            ">>>>>>> other\n",
+            "end\n",
+        );
+        let mut segments = parse_conflict_markers(input);
+        assert_eq!(conflict_count(&segments), 1);
+
+        // Pass 1 can't resolve (both sides changed differently).
+        assert_eq!(auto_resolve_segments(&mut segments), 0);
+
+        // Pass 2 should split the block.
+        let split = auto_resolve_segments_pass2(&mut segments);
+        assert_eq!(split, 1);
+
+        // Original 1-block conflict is now gone (split into text + smaller blocks or all text).
+        // Since ours changes line 1 and theirs changes line 3, non-overlapping →
+        // all subchunks resolved → no more Block segments.
+        assert_eq!(conflict_count(&segments), 0);
+
+        // Resolved text should be the merged result.
+        let text = generate_resolved_text(&segments);
+        assert_eq!(text, "ctx\nAAA\nbbb\nCCC\nend\n");
+    }
+
+    #[test]
+    fn pass2_splits_block_with_partial_conflict() {
+        // Both sides change line 2, but line 1 and 3 are only changed by one side.
+        let input = concat!(
+            "<<<<<<< HEAD\n",
+            "AAA\nBBB\nccc\n",
+            "||||||| base\n",
+            "aaa\nbbb\nccc\n",
+            "=======\n",
+            "aaa\nYYY\nCCC\n",
+            ">>>>>>> other\n",
+        );
+        let mut segments = parse_conflict_markers(input);
+        assert_eq!(conflict_count(&segments), 1);
+
+        let split = auto_resolve_segments_pass2(&mut segments);
+        assert_eq!(split, 1);
+
+        // Should now have 1 smaller conflict block (line 2: BBB vs YYY)
+        // and resolved text for lines 1 and 3.
+        let blocks: Vec<_> = segments
+            .iter()
+            .filter_map(|s| match s {
+                ConflictSegment::Block(b) => Some(b),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(blocks.len(), 1, "should have 1 remaining conflict");
+        assert_eq!(blocks[0].ours, "BBB\n");
+        assert_eq!(blocks[0].theirs, "YYY\n");
+        assert_eq!(blocks[0].base.as_deref(), Some("bbb\n"));
+    }
+
+    #[test]
+    fn pass2_no_base_skips_block() {
+        // 2-way markers (no base) — Pass 2 can't split without a base.
+        let input = "<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> other\n";
+        let mut segments = parse_conflict_markers(input);
+        let split = auto_resolve_segments_pass2(&mut segments);
+        assert_eq!(split, 0);
+        assert_eq!(conflict_count(&segments), 1);
+    }
+
+    #[test]
+    fn pass2_skips_already_resolved() {
+        let input = concat!(
+            "<<<<<<< HEAD\n",
+            "AAA\nbbb\nccc\n",
+            "||||||| base\n",
+            "aaa\nbbb\nccc\n",
+            "=======\n",
+            "aaa\nbbb\nCCC\n",
+            ">>>>>>> other\n",
+        );
+        let mut segments = parse_conflict_markers(input);
+
+        // Resolve manually first.
+        if let Some(ConflictSegment::Block(block)) = segments
+            .iter_mut()
+            .find(|s| matches!(s, ConflictSegment::Block(_)))
+        {
+            block.resolved = true;
+        }
+
+        // Pass 2 should skip resolved blocks.
+        let split = auto_resolve_segments_pass2(&mut segments);
+        assert_eq!(split, 0);
+    }
+
+    #[test]
+    fn pass2_merges_adjacent_text_segments() {
+        // After splitting, resolved subchunks adjacent to existing Text segments
+        // should be merged for cleanliness.
+        let input = concat!(
+            "before\n",
+            "<<<<<<< HEAD\n",
+            "AAA\nbbb\n",
+            "||||||| base\n",
+            "aaa\nbbb\n",
+            "=======\n",
+            "aaa\nBBB\n",
+            ">>>>>>> other\n",
+            "after\n",
+        );
+        let mut segments = parse_conflict_markers(input);
+        auto_resolve_segments_pass2(&mut segments);
+
+        // Non-overlapping changes → fully merged → no blocks remain.
+        assert_eq!(conflict_count(&segments), 0);
+
+        // All text should be merged into as few Text segments as possible.
+        let text_count = segments
+            .iter()
+            .filter(|s| matches!(s, ConflictSegment::Text(_)))
+            .count();
+        // "before\n" + merged subchunks + "after\n" — exact count depends on
+        // merging, but should be compact.
+        assert!(text_count <= 3, "should have at most 3 text segments");
     }
 }

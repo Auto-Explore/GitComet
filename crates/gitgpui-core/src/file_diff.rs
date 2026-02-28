@@ -30,17 +30,17 @@ pub struct FileDiffRow {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum EditKind {
+pub(crate) enum EditKind {
     Equal,
     Insert,
     Delete,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct Edit<'a> {
-    kind: EditKind,
-    old: Option<&'a str>,
-    new: Option<&'a str>,
+pub(crate) struct Edit<'a> {
+    pub(crate) kind: EditKind,
+    pub(crate) old: Option<&'a str>,
+    pub(crate) new: Option<&'a str>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -342,7 +342,7 @@ fn levenshtein_distance(a: &str, b: &str) -> usize {
     prev[b_chars.len()]
 }
 
-fn split_lines(text: &str) -> Vec<&str> {
+pub(crate) fn split_lines(text: &str) -> Vec<&str> {
     if text.is_empty() {
         return Vec::new();
     }
@@ -391,7 +391,7 @@ fn eof_newline_delta(old_text: &str, new_text: &str) -> Option<FileDiffEofNewlin
     }
 }
 
-fn myers_edits<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<Edit<'a>> {
+pub(crate) fn myers_edits<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<Edit<'a>> {
     let n = old.len() as isize;
     let m = new.len() as isize;
     let max = (n + m) as usize;

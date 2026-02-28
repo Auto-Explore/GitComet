@@ -1,4 +1,5 @@
 use crate::domain::FileConflictKind;
+use crate::file_diff::{myers_edits, split_lines, Edit, EditKind};
 use std::path::PathBuf;
 
 /// The payload content for one side of a conflict.
@@ -82,6 +83,8 @@ pub enum AutosolveRule {
     OnlyOursChanged,
     /// Only "theirs" changed from base; "ours" equals base.
     OnlyTheirsChanged,
+    /// Pass 2: block was split into line-level subchunks and all could be merged.
+    SubchunkFullyMerged,
 }
 
 impl AutosolveRule {
@@ -90,6 +93,7 @@ impl AutosolveRule {
             AutosolveRule::IdenticalSides => "both sides identical",
             AutosolveRule::OnlyOursChanged => "only ours changed from base",
             AutosolveRule::OnlyTheirsChanged => "only theirs changed from base",
+            AutosolveRule::SubchunkFullyMerged => "line-level subchunk merge",
         }
     }
 }
@@ -307,6 +311,43 @@ impl ConflictSession {
         count
     }
 
+    /// Apply auto-resolve Pass 2 (heuristic subchunk splitting) to unresolved regions.
+    ///
+    /// For each unresolved region that has a base, splits the conflict into
+    /// line-level subchunks. If ALL subchunks can be auto-merged (no remaining
+    /// conflicts), the region is fully resolved with the merged text.
+    ///
+    /// Returns the number of regions auto-resolved.
+    pub fn auto_resolve_pass2(&mut self) -> usize {
+        let mut count = 0;
+        for region in &mut self.regions {
+            if region.resolution.is_resolved() {
+                continue;
+            }
+            let Some(base) = region.base.as_deref() else {
+                continue;
+            };
+            if let Some(subchunks) = split_conflict_into_subchunks(base, &region.ours, &region.theirs)
+            {
+                if subchunks.iter().all(|c| matches!(c, Subchunk::Resolved(_))) {
+                    let merged: String = subchunks
+                        .iter()
+                        .map(|c| match c {
+                            Subchunk::Resolved(text) => text.as_str(),
+                            _ => unreachable!(),
+                        })
+                        .collect();
+                    region.resolution = ConflictRegionResolution::AutoResolved {
+                        rule: AutosolveRule::SubchunkFullyMerged,
+                        content: merged,
+                    };
+                    count += 1;
+                }
+            }
+        }
+        count
+    }
+
     /// Check whether the resolved output still contains unresolved conflict markers.
     /// This is the safety gate before staging.
     pub fn has_unresolved_markers(&self) -> bool {
@@ -337,6 +378,399 @@ fn safe_auto_resolve(region: &ConflictRegion) -> Option<(AutosolveRule, String)>
     }
 
     None
+}
+
+// ---------------------------------------------------------------------------
+// Pass 2: heuristic subchunk splitting (meld-inspired)
+// ---------------------------------------------------------------------------
+
+/// A subchunk produced by splitting a conflict block into line-level pieces.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Subchunk {
+    /// Lines that could be auto-resolved (identical across sides, or only one
+    /// side changed from base).
+    Resolved(String),
+    /// Lines where both sides changed differently — still needs resolution.
+    Conflict {
+        base: String,
+        ours: String,
+        theirs: String,
+    },
+}
+
+/// A contiguous range of base lines that were changed (deleted/replaced/inserted)
+/// on one side of a 2-way diff.
+struct LineHunk {
+    /// Start index in base lines (inclusive).
+    base_start: usize,
+    /// End index in base lines (exclusive). Equals `base_start` for pure insertions.
+    base_end: usize,
+    /// The replacement lines on this side.
+    new_lines: Vec<String>,
+}
+
+/// Maximum number of lines per side before we skip subchunk splitting.
+const SUBCHUNK_MAX_LINES: usize = 500;
+
+/// Split a conflict region into line-level subchunks using 3-way diff/merge.
+///
+/// Returns `Some(subchunks)` if the block can be meaningfully decomposed into
+/// a mix of resolved and conflicting pieces. Returns `None` if:
+/// - Pass 1 would handle this (identical sides, only one side changed)
+/// - Input is too large
+/// - Splitting doesn't improve over the original block (all conflict, no context)
+pub fn split_conflict_into_subchunks(
+    base: &str,
+    ours: &str,
+    theirs: &str,
+) -> Option<Vec<Subchunk>> {
+    // Pass 1 would handle these — don't split.
+    if ours == theirs || ours == base || theirs == base {
+        return None;
+    }
+
+    let base_lines = split_lines(base);
+    let ours_lines = split_lines(ours);
+    let theirs_lines = split_lines(theirs);
+
+    if base_lines.len() > SUBCHUNK_MAX_LINES
+        || ours_lines.len() > SUBCHUNK_MAX_LINES
+        || theirs_lines.len() > SUBCHUNK_MAX_LINES
+    {
+        return None;
+    }
+
+    let subchunks = if base_lines.len() == ours_lines.len()
+        && base_lines.len() == theirs_lines.len()
+    {
+        // Same number of lines: simple per-line 3-way comparison.
+        per_line_merge(&base_lines, &ours_lines, &theirs_lines)
+    } else {
+        // Different line counts: use diff-based hunk merge.
+        let edits_ours = myers_edits(&base_lines, &ours_lines);
+        let edits_theirs = myers_edits(&base_lines, &theirs_lines);
+        let hunks_ours = edits_to_line_hunks(&edits_ours);
+        let hunks_theirs = edits_to_line_hunks(&edits_theirs);
+        merge_line_hunks(&base_lines, &hunks_ours, &hunks_theirs)
+    };
+
+    // Only worth returning if at least some content is resolved.
+    let has_resolved = subchunks.iter().any(|c| matches!(c, Subchunk::Resolved(_)));
+    if has_resolved {
+        Some(subchunks)
+    } else {
+        None
+    }
+}
+
+/// Convert a Myers edit script into line-level hunks relative to the base.
+fn edits_to_line_hunks(edits: &[Edit<'_>]) -> Vec<LineHunk> {
+    let mut hunks = Vec::new();
+    let mut base_ix = 0usize;
+    let mut i = 0;
+
+    while i < edits.len() {
+        if edits[i].kind == EditKind::Equal {
+            base_ix += 1;
+            i += 1;
+            continue;
+        }
+
+        let hunk_base_start = base_ix;
+        let mut new_lines = Vec::new();
+
+        while i < edits.len() && edits[i].kind != EditKind::Equal {
+            match edits[i].kind {
+                EditKind::Delete => {
+                    base_ix += 1;
+                }
+                EditKind::Insert => {
+                    new_lines.push(edits[i].new.unwrap_or("").to_string());
+                }
+                EditKind::Equal => unreachable!(),
+            }
+            i += 1;
+        }
+
+        hunks.push(LineHunk {
+            base_start: hunk_base_start,
+            base_end: base_ix,
+            new_lines,
+        });
+    }
+
+    hunks
+}
+
+/// Per-line 3-way merge for three sequences of equal length.
+///
+/// Walks line-by-line, classifying each line:
+/// - all three equal → context (resolved)
+/// - only ours changed → resolved (pick ours)
+/// - only theirs changed → resolved (pick theirs)
+/// - both changed same way → resolved (pick either)
+/// - both changed differently → conflict
+///
+/// Groups consecutive lines with the same classification into subchunks.
+fn per_line_merge(
+    base_lines: &[&str],
+    ours_lines: &[&str],
+    theirs_lines: &[&str],
+) -> Vec<Subchunk> {
+    debug_assert_eq!(base_lines.len(), ours_lines.len());
+    debug_assert_eq!(base_lines.len(), theirs_lines.len());
+
+    let len = base_lines.len();
+    let mut subchunks = Vec::new();
+    let mut i = 0;
+
+    while i < len {
+        let same_bo = base_lines[i] == ours_lines[i];
+        let same_bt = base_lines[i] == theirs_lines[i];
+        let same_ot = ours_lines[i] == theirs_lines[i];
+
+        if same_bo && same_bt {
+            // All three equal → context.
+            let start = i;
+            while i < len && base_lines[i] == ours_lines[i] && base_lines[i] == theirs_lines[i] {
+                i += 1;
+            }
+            subchunks.push(Subchunk::Resolved(lines_to_text(&base_lines[start..i])));
+        } else if !same_bo && same_bt {
+            // Only ours changed from base.
+            let start = i;
+            while i < len && base_lines[i] != ours_lines[i] && base_lines[i] == theirs_lines[i] {
+                i += 1;
+            }
+            subchunks.push(Subchunk::Resolved(lines_to_text(&ours_lines[start..i])));
+        } else if same_bo && !same_bt {
+            // Only theirs changed from base.
+            let start = i;
+            while i < len && base_lines[i] == ours_lines[i] && base_lines[i] != theirs_lines[i] {
+                i += 1;
+            }
+            subchunks.push(Subchunk::Resolved(lines_to_text(&theirs_lines[start..i])));
+        } else if same_ot {
+            // Both changed, same way.
+            let start = i;
+            while i < len && base_lines[i] != ours_lines[i] && ours_lines[i] == theirs_lines[i] {
+                i += 1;
+            }
+            subchunks.push(Subchunk::Resolved(lines_to_text(&ours_lines[start..i])));
+        } else {
+            // Both changed differently → conflict.
+            let start = i;
+            while i < len
+                && base_lines[i] != ours_lines[i]
+                && base_lines[i] != theirs_lines[i]
+                && ours_lines[i] != theirs_lines[i]
+            {
+                i += 1;
+            }
+            subchunks.push(Subchunk::Conflict {
+                base: lines_to_text(&base_lines[start..i]),
+                ours: lines_to_text(&ours_lines[start..i]),
+                theirs: lines_to_text(&theirs_lines[start..i]),
+            });
+        }
+    }
+
+    subchunks
+}
+
+/// Merge two sets of line hunks (from base→ours and base→theirs diffs)
+/// into a list of subchunks.
+///
+/// Non-overlapping single-side changes become `Resolved`. Overlapping changes
+/// from both sides become `Conflict` (unless the replacement is identical or
+/// the region can be further decomposed via per-line comparison).
+/// Unchanged base regions become `Resolved` context.
+fn merge_line_hunks(
+    base_lines: &[&str],
+    ours_hunks: &[LineHunk],
+    theirs_hunks: &[LineHunk],
+) -> Vec<Subchunk> {
+    let mut result = Vec::new();
+    let mut base_pos = 0usize;
+    let mut oi = 0usize;
+    let mut ti = 0usize;
+
+    loop {
+        let oh_start = ours_hunks.get(oi).map(|h| h.base_start).unwrap_or(usize::MAX);
+        let th_start = theirs_hunks
+            .get(ti)
+            .map(|h| h.base_start)
+            .unwrap_or(usize::MAX);
+
+        if oh_start == usize::MAX && th_start == usize::MAX {
+            // No more hunks — emit remaining base as context.
+            if base_pos < base_lines.len() {
+                result.push(Subchunk::Resolved(lines_to_text(
+                    &base_lines[base_pos..],
+                )));
+            }
+            break;
+        }
+
+        let change_start = oh_start.min(th_start);
+
+        // Emit context (unchanged base lines) before the next change.
+        if change_start > base_pos && base_pos < base_lines.len() {
+            let ctx_end = change_start.min(base_lines.len());
+            result.push(Subchunk::Resolved(lines_to_text(
+                &base_lines[base_pos..ctx_end],
+            )));
+            base_pos = ctx_end;
+        }
+
+        // Expand the change region to include all overlapping hunks from both sides.
+        // First consume hunks that start exactly at change_start (the trigger),
+        // then expand with strictly overlapping hunks (base_start < region_end).
+        // This prevents adjacent but non-overlapping hunks from being merged.
+        let mut region_end = base_pos;
+        let oi_start = oi;
+        let ti_start = ti;
+
+        // Consume initial hunks at change_start.
+        while let Some(oh) = ours_hunks.get(oi) {
+            if oh.base_start == change_start {
+                region_end = region_end.max(oh.base_end);
+                oi += 1;
+            } else {
+                break;
+            }
+        }
+        while let Some(th) = theirs_hunks.get(ti) {
+            if th.base_start == change_start {
+                region_end = region_end.max(th.base_end);
+                ti += 1;
+            } else {
+                break;
+            }
+        }
+
+        // Expand with hunks that strictly overlap (start before region_end).
+        loop {
+            let mut extended = false;
+
+            while let Some(oh) = ours_hunks.get(oi) {
+                if oh.base_start < region_end {
+                    region_end = region_end.max(oh.base_end);
+                    oi += 1;
+                    extended = true;
+                } else {
+                    break;
+                }
+            }
+
+            while let Some(th) = theirs_hunks.get(ti) {
+                if th.base_start < region_end {
+                    region_end = region_end.max(th.base_end);
+                    ti += 1;
+                    extended = true;
+                } else {
+                    break;
+                }
+            }
+
+            if !extended {
+                break;
+            }
+        }
+
+        let oi_end = oi;
+        let ti_end = ti;
+        let ours_involved = oi_end > oi_start;
+        let theirs_involved = ti_end > ti_start;
+        let region_base_end = region_end.min(base_lines.len());
+
+        if ours_involved && theirs_involved {
+            let base_text = lines_to_text(&base_lines[base_pos..region_base_end]);
+            let ours_text = side_content(base_lines, base_pos, region_end, &ours_hunks[oi_start..oi_end]);
+            let theirs_text =
+                side_content(base_lines, base_pos, region_end, &theirs_hunks[ti_start..ti_end]);
+
+            if ours_text == theirs_text {
+                result.push(Subchunk::Resolved(ours_text));
+            } else {
+                // Try per-line decomposition of the overlapping region.
+                let sub_base = split_lines(&base_text);
+                let sub_ours = split_lines(&ours_text);
+                let sub_theirs = split_lines(&theirs_text);
+
+                if sub_base.len() == sub_ours.len() && sub_base.len() == sub_theirs.len() {
+                    result.extend(per_line_merge(&sub_base, &sub_ours, &sub_theirs));
+                } else {
+                    result.push(Subchunk::Conflict {
+                        base: base_text,
+                        ours: ours_text,
+                        theirs: theirs_text,
+                    });
+                }
+            }
+        } else if ours_involved {
+            let ours_text = side_content(base_lines, base_pos, region_end, &ours_hunks[oi_start..oi_end]);
+            result.push(Subchunk::Resolved(ours_text));
+        } else if theirs_involved {
+            let theirs_text =
+                side_content(base_lines, base_pos, region_end, &theirs_hunks[ti_start..ti_end]);
+            result.push(Subchunk::Resolved(theirs_text));
+        }
+
+        base_pos = region_end;
+    }
+
+    result
+}
+
+/// Reconstruct one side's content for a base line range, applying the given hunks.
+///
+/// Between hunks, base lines are kept unchanged. Hunk ranges provide
+/// replacement content.
+fn side_content(
+    base_lines: &[&str],
+    range_start: usize,
+    range_end: usize,
+    hunks: &[LineHunk],
+) -> String {
+    let mut lines: Vec<&str> = Vec::new();
+    let mut pos = range_start;
+
+    for hunk in hunks {
+        // Unchanged base lines before this hunk.
+        let base_limit = hunk.base_start.min(range_end).min(base_lines.len());
+        for p in pos..base_limit {
+            lines.push(base_lines[p]);
+        }
+        // Hunk replacement content.
+        for line in &hunk.new_lines {
+            lines.push(line.as_str());
+        }
+        pos = hunk.base_end;
+    }
+
+    // Remaining base lines after last hunk.
+    let tail_limit = range_end.min(base_lines.len());
+    for p in pos..tail_limit {
+        lines.push(base_lines[p]);
+    }
+
+    lines_to_text(&lines)
+}
+
+/// Join a slice of line strings into text with newline separators.
+/// Each line gets a trailing newline (matching conflict block content convention).
+fn lines_to_text(lines: &[&str]) -> String {
+    if lines.is_empty() {
+        return String::new();
+    }
+    let total: usize = lines.iter().map(|l| l.len() + 1).sum();
+    let mut s = String::with_capacity(total);
+    for line in lines {
+        s.push_str(line);
+        s.push('\n');
+    }
+    s
 }
 
 #[cfg(test)]
@@ -776,5 +1210,227 @@ mod tests {
         assert!(!AutosolveRule::IdenticalSides.description().is_empty());
         assert!(!AutosolveRule::OnlyOursChanged.description().is_empty());
         assert!(!AutosolveRule::OnlyTheirsChanged.description().is_empty());
+        assert!(!AutosolveRule::SubchunkFullyMerged.description().is_empty());
+    }
+
+    // -- Pass 2: subchunk splitting tests --
+
+    #[test]
+    fn subchunk_split_identical_sides_returns_none() {
+        // Pass 1 handles this — don't split.
+        assert!(split_conflict_into_subchunks("base\n", "same\n", "same\n").is_none());
+    }
+
+    #[test]
+    fn subchunk_split_ours_equals_base_returns_none() {
+        // Pass 1 handles this.
+        assert!(split_conflict_into_subchunks("base\n", "base\n", "changed\n").is_none());
+    }
+
+    #[test]
+    fn subchunk_split_theirs_equals_base_returns_none() {
+        // Pass 1 handles this.
+        assert!(split_conflict_into_subchunks("base\n", "changed\n", "base\n").is_none());
+    }
+
+    #[test]
+    fn subchunk_split_single_line_conflict_returns_none() {
+        // Both sides changed the only line — no way to split meaningfully.
+        assert!(split_conflict_into_subchunks("original\n", "ours\n", "theirs\n").is_none());
+    }
+
+    #[test]
+    fn subchunk_split_mixed_lines() {
+        // Base has 3 lines. Ours changes line 1, theirs changes line 3.
+        // Line 2 is the same across all three → context.
+        let base = "aaa\nbbb\nccc\n";
+        let ours = "AAA\nbbb\nccc\n";
+        let theirs = "aaa\nbbb\nCCC\n";
+
+        let subchunks = split_conflict_into_subchunks(base, ours, theirs);
+        assert!(subchunks.is_some(), "should split into subchunks");
+        let subchunks = subchunks.unwrap();
+
+        // All subchunks should be resolved because changes don't overlap.
+        assert!(
+            subchunks.iter().all(|c| matches!(c, Subchunk::Resolved(_))),
+            "non-overlapping changes should all auto-merge"
+        );
+
+        // Concatenated resolved text should be the merged result.
+        let merged: String = subchunks
+            .iter()
+            .map(|c| match c {
+                Subchunk::Resolved(t) => t.as_str(),
+                _ => panic!("unexpected conflict"),
+            })
+            .collect();
+        assert_eq!(merged, "AAA\nbbb\nCCC\n");
+    }
+
+    #[test]
+    fn subchunk_split_with_remaining_conflict() {
+        // Both sides change the same line (line 2), different changes on line 1.
+        let base = "aaa\nbbb\nccc\n";
+        let ours = "AAA\nBBB\nccc\n";
+        let theirs = "XXX\nYYY\nccc\n";
+
+        let subchunks = split_conflict_into_subchunks(base, ours, theirs);
+        assert!(subchunks.is_some(), "should split");
+        let subchunks = subchunks.unwrap();
+
+        let has_resolved = subchunks.iter().any(|c| matches!(c, Subchunk::Resolved(_)));
+        let has_conflict = subchunks
+            .iter()
+            .any(|c| matches!(c, Subchunk::Conflict { .. }));
+        assert!(has_resolved, "should have resolved parts (line 3)");
+        assert!(has_conflict, "should have conflicting parts (lines 1-2)");
+    }
+
+    #[test]
+    fn subchunk_split_only_one_side_adds_lines() {
+        // Ours adds a line, theirs doesn't change anything.
+        // But theirs != base overall, so this is a genuine 3-way conflict.
+        let base = "aaa\nccc\n";
+        let ours = "aaa\nbbb\nccc\n";
+        let theirs = "aaa\nCCC\n";
+
+        let subchunks = split_conflict_into_subchunks(base, ours, theirs);
+        assert!(subchunks.is_some());
+        let subchunks = subchunks.unwrap();
+
+        // Should have context "aaa\n" resolved, then a conflict for the rest.
+        let first = &subchunks[0];
+        assert!(
+            matches!(first, Subchunk::Resolved(t) if t == "aaa\n"),
+            "first subchunk should be resolved context"
+        );
+    }
+
+    #[test]
+    fn subchunk_split_both_change_same_line_identically() {
+        // Both sides change line 2 the same way.
+        let base = "aaa\nbbb\nccc\n";
+        let ours = "aaa\nBBB\nccc\n";
+        let theirs = "aaa\nBBB\nccc\n";
+
+        // This would be caught by Pass 1 (ours == theirs), returns None.
+        assert!(split_conflict_into_subchunks(base, ours, theirs).is_none());
+    }
+
+    #[test]
+    fn subchunk_split_nonoverlapping_changes_fully_merge() {
+        // Ours changes line 1, theirs changes line 3. Line 2 is context.
+        let base = "line1\nline2\nline3\n";
+        let ours = "LINE1\nline2\nline3\n";
+        let theirs = "line1\nline2\nLINE3\n";
+
+        let subchunks = split_conflict_into_subchunks(base, ours, theirs).unwrap();
+
+        // Should be fully resolved.
+        assert!(subchunks.iter().all(|c| matches!(c, Subchunk::Resolved(_))));
+
+        let merged: String = subchunks
+            .iter()
+            .map(|c| match c {
+                Subchunk::Resolved(t) => t.as_str(),
+                _ => unreachable!(),
+            })
+            .collect();
+        assert_eq!(merged, "LINE1\nline2\nLINE3\n");
+    }
+
+    #[test]
+    fn subchunk_split_overlapping_different_changes_conflict() {
+        // Both sides change the same line differently.
+        let base = "ctx\noriginal\nctx2\n";
+        let ours = "ctx\nours_version\nctx2\n";
+        let theirs = "ctx\ntheirs_version\nctx2\n";
+
+        let subchunks = split_conflict_into_subchunks(base, ours, theirs).unwrap();
+
+        // Should have context + conflict + context.
+        assert_eq!(subchunks.len(), 3);
+        assert!(matches!(&subchunks[0], Subchunk::Resolved(t) if t == "ctx\n"));
+        assert!(matches!(&subchunks[1], Subchunk::Conflict { base, ours, theirs }
+            if base == "original\n" && ours == "ours_version\n" && theirs == "theirs_version\n"
+        ));
+        assert!(matches!(&subchunks[2], Subchunk::Resolved(t) if t == "ctx2\n"));
+    }
+
+    #[test]
+    fn subchunk_session_pass2_fully_merges() {
+        let mut session = make_session(vec![ConflictRegion {
+            base: Some("line1\nline2\nline3\n".into()),
+            ours: "LINE1\nline2\nline3\n".into(),
+            theirs: "line1\nline2\nLINE3\n".into(),
+            resolution: ConflictRegionResolution::Unresolved,
+        }]);
+
+        // Pass 1 can't resolve this (both sides changed differently from base).
+        assert_eq!(session.auto_resolve_safe(), 0);
+
+        // Pass 2 should fully merge it (non-overlapping changes).
+        assert_eq!(session.auto_resolve_pass2(), 1);
+        assert!(session.is_fully_resolved());
+
+        match &session.regions[0].resolution {
+            ConflictRegionResolution::AutoResolved { rule, content } => {
+                assert_eq!(*rule, AutosolveRule::SubchunkFullyMerged);
+                assert_eq!(content, "LINE1\nline2\nLINE3\n");
+            }
+            other => panic!("expected AutoResolved, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn subchunk_session_pass2_skips_partial_conflicts() {
+        let mut session = make_session(vec![ConflictRegion {
+            base: Some("ctx\noriginal\nctx2\n".into()),
+            ours: "ctx\nours_version\nctx2\n".into(),
+            theirs: "ctx\ntheirs_version\nctx2\n".into(),
+            resolution: ConflictRegionResolution::Unresolved,
+        }]);
+
+        // Pass 2 can't fully merge (overlap on line 2), so region stays unresolved.
+        assert_eq!(session.auto_resolve_pass2(), 0);
+        assert!(!session.is_fully_resolved());
+    }
+
+    #[test]
+    fn subchunk_split_empty_base() {
+        // Empty base, both sides have content.
+        let base = "";
+        let ours = "aaa\n";
+        let theirs = "bbb\n";
+
+        // Both sides differ from base and from each other.
+        let result = split_conflict_into_subchunks(base, ours, theirs);
+        // Can't meaningfully split an empty base with different insertions.
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn subchunk_split_with_deletions() {
+        // Ours deletes line 2, theirs changes line 3.
+        let base = "aaa\nbbb\nccc\n";
+        let ours = "aaa\nccc\n";
+        let theirs = "aaa\nbbb\nCCC\n";
+
+        let subchunks = split_conflict_into_subchunks(base, ours, theirs);
+        assert!(subchunks.is_some());
+        let subchunks = subchunks.unwrap();
+
+        // Should be fully resolved: non-overlapping changes.
+        assert!(subchunks.iter().all(|c| matches!(c, Subchunk::Resolved(_))));
+
+        let merged: String = subchunks
+            .iter()
+            .map(|c| match c {
+                Subchunk::Resolved(t) => t.as_str(),
+                _ => unreachable!(),
+            })
+            .collect();
+        assert_eq!(merged, "aaa\nCCC\n");
     }
 }
