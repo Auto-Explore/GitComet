@@ -71,6 +71,11 @@
 - ✅ "Mergetool" button in text conflict resolver toolbar (next to Save/Save & stage) and "External Mergetool" button in binary conflict resolver panel — `crates/gitgpui-ui-gpui/src/view/panels/main.rs`, `crates/gitgpui-ui-gpui/src/view/panels/main/binary_conflict.rs`
 - ✅ 3 unit tests for git config reading and stage byte extraction — `crates/gitgpui-git-gix/src/repo/mergetool.rs`
 
+### 14) Clippy Cleanup Pass (Iteration 19)
+- ✅ Fixed `large_enum_variant` clippy error: boxed `result` field in `Msg::ConflictFileLoaded` to reduce variant size (~400→~170 bytes), updated all construction/destructure sites — `crates/gitgpui-state/src/msg/message.rs`, `crates/gitgpui-state/src/store/effects/repo_load.rs`, `crates/gitgpui-state/src/store/reducer.rs`, `crates/gitgpui-state/src/store/tests/conflict_session.rs`, `crates/gitgpui-state/src/store/tests/effects.rs`
+- ✅ Fixed 15 pre-existing clippy warnings in `gitgpui-ui-gpui`: `if_same_then_else` in text_input line ending detection, `derivable_impls` for `Timezone`, `neg_multiply`/`identity_op` in timezone offsets, `clone_on_copy` for `Bounds<Pixels>` (5 sites), `too_many_arguments` in `HistoryPaneView::new()`, `let_unit_value` for entity updates (4 sites) — across `kit/text_input.rs`, `view/date_time.rs`, `view/panes/history/history_panel.rs`, `view/panes/history.rs`, `view/mod.rs`, `zed_port/button.rs`
+- ✅ Full project now passes `cargo clippy -- -D warnings` clean, all 262 tests pass
+
 ### 8) Quality Pass (Iteration 9)
 - ✅ Fixed mergetool `trustExitCode=false` bug: was checking only `.exists()` which always passes; now compares file mtime and length before/after tool invocation — `crates/gitgpui-git-gix/src/repo/mergetool.rs`
 - ✅ Fixed WS toggle button label clippy warning (identical `if`/`else` branches) — `crates/gitgpui-ui-gpui/src/view/panels/main.rs`

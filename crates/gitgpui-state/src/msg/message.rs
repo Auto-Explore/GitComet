@@ -440,7 +440,7 @@ pub enum Msg {
     ConflictFileLoaded {
         repo_id: RepoId,
         path: PathBuf,
-        result: Result<Option<crate::model::ConflictFile>, Error>,
+        result: Box<Result<Option<crate::model::ConflictFile>, Error>>,
         conflict_session: Option<ConflictSession>,
     },
     WorktreesLoaded {

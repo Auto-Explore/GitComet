@@ -269,9 +269,7 @@ impl TextInput {
     /// Detect line ending from file content. Returns `\r\n` if CRLF is found,
     /// otherwise falls back to the OS default (`\n` on Unix, `\r\n` on Windows).
     pub fn detect_line_ending(content: &str) -> &'static str {
-        if content.contains("\r\n") {
-            "\r\n"
-        } else if cfg!(windows) {
+        if content.contains("\r\n") || cfg!(windows) {
             "\r\n"
         } else {
             "\n"

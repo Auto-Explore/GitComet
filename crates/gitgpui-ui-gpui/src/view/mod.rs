@@ -801,16 +801,16 @@ impl GitGpuiView {
         let action_bar = self.action_bar.clone();
 
         cx.defer(move |cx| {
-            let _ = sidebar_pane.update(cx, |pane, cx| {
+            sidebar_pane.update(cx, |pane, cx| {
                 pane.set_active_context_menu_invoker(next.clone(), cx);
             });
-            let _ = main_pane.update(cx, |pane, cx| {
+            main_pane.update(cx, |pane, cx| {
                 pane.set_active_context_menu_invoker(next.clone(), cx);
             });
-            let _ = details_pane.update(cx, |pane, cx| {
+            details_pane.update(cx, |pane, cx| {
                 pane.set_active_context_menu_invoker(next.clone(), cx);
             });
-            let _ = action_bar.update(cx, |bar, cx| {
+            action_bar.update(cx, |bar, cx| {
                 bar.set_active_context_menu_invoker(next.clone(), cx);
             });
         });

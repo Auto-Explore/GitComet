@@ -392,7 +392,7 @@ pub(super) fn reduce(
             path,
             result,
             conflict_session,
-        } => effects::conflict_file_loaded(state, repo_id, path, result, conflict_session),
+        } => effects::conflict_file_loaded(state, repo_id, path, *result, conflict_session),
         Msg::WorktreesLoaded { repo_id, result } => {
             effects::worktrees_loaded(state, repo_id, result)
         }

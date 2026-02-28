@@ -124,9 +124,7 @@ impl Button {
             .render(theme)
             .when(!disabled, |this| {
                 this.on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
-                    let bounds = last_bounds_for_click
-                        .borrow()
-                        .clone()
+                    let bounds = (*last_bounds_for_click.borrow())
                         .unwrap_or_else(|| Bounds::new(e.position(), gpui::size(px(0.0), px(0.0))));
                     f(this, e, bounds, window, cx);
                 }))
@@ -135,7 +133,7 @@ impl Button {
         div()
             .on_children_prepainted(move |children_bounds, _window, _cx| {
                 if let Some(bounds) = children_bounds.first() {
-                    *last_bounds_for_prepaint.borrow_mut() = Some(bounds.clone());
+                    *last_bounds_for_prepaint.borrow_mut() = Some(*bounds);
                 }
             })
             .child(button)

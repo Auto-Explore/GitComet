@@ -265,7 +265,7 @@ impl HistoryView {
             let column_settings_invoker = column_settings_invoker.clone();
             cx.listener(move |this, e: &ClickEvent, window, cx| {
                 this.activate_context_menu_invoker(column_settings_invoker.clone(), cx);
-                if let Some(bounds) = column_settings_anchor_bounds_for_click.borrow().clone() {
+                if let Some(bounds) = *column_settings_anchor_bounds_for_click.borrow() {
                     this.open_popover_for_bounds(PopoverKind::HistoryColumnSettings, bounds, window, cx);
                 } else {
                     this.open_popover_at(
@@ -312,7 +312,7 @@ impl HistoryView {
         let column_settings_btn = div()
             .on_children_prepainted(move |children_bounds, _w, _cx| {
                 if let Some(bounds) = children_bounds.first() {
-                    *column_settings_anchor_bounds_for_prepaint.borrow_mut() = Some(bounds.clone());
+                    *column_settings_anchor_bounds_for_prepaint.borrow_mut() = Some(*bounds);
                 }
             })
             .child(column_settings_btn_inner);
@@ -428,7 +428,7 @@ impl HistoryView {
                             .on_children_prepainted(move |children_bounds, _w, _cx| {
                                 if let Some(bounds) = children_bounds.first() {
                                     *scope_anchor_bounds_for_prepaint.borrow_mut() =
-                                        Some(bounds.clone());
+                                        Some(*bounds);
                                 }
                             })
                             .child(
@@ -470,7 +470,7 @@ impl HistoryView {
                                                     cx,
                                                 );
                                                 if let Some(bounds) =
-                                                    scope_anchor_bounds_for_click.borrow().clone()
+                                                    *scope_anchor_bounds_for_click.borrow()
                                                 {
                                                     this.open_popover_for_bounds(
                                                         PopoverKind::HistoryBranchFilter { repo_id },

@@ -45,17 +45,12 @@ impl DateTimeFormat {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(super) enum Timezone {
+    #[default]
     Utc,
     /// Fixed offset from UTC in seconds (positive = east of UTC).
     Fixed(i32),
-}
-
-impl Default for Timezone {
-    fn default() -> Self {
-        Timezone::Utc
-    }
 }
 
 impl Timezone {
@@ -76,8 +71,8 @@ impl Timezone {
             Fixed(-3 * 3600 - 30 * 60),
             Fixed(-3 * 3600),
             Fixed(-2 * 3600),
-            Fixed(-1 * 3600),
-            Fixed(1 * 3600),
+            Fixed(-3600),
+            Fixed(3600),
             Fixed(2 * 3600),
             Fixed(3 * 3600),
             Fixed(3 * 3600 + 30 * 60),

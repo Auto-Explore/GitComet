@@ -82,7 +82,7 @@ fn conflict_file_loaded_builds_session_with_regions() {
         Msg::ConflictFileLoaded {
             repo_id,
             path: PathBuf::from("file.txt"),
-            result: Ok(Some(file)),
+            result: Box::new(Ok(Some(file))),
             conflict_session: None,
         },
     );
@@ -138,7 +138,7 @@ fn conflict_file_loaded_builds_session_for_delete_conflict() {
         Msg::ConflictFileLoaded {
             repo_id,
             path: PathBuf::from("deleted.txt"),
-            result: Ok(Some(file)),
+            result: Box::new(Ok(Some(file))),
             conflict_session: None,
         },
     );
@@ -189,7 +189,7 @@ fn conflict_file_loaded_builds_binary_session() {
         Msg::ConflictFileLoaded {
             repo_id,
             path: PathBuf::from("image.png"),
-            result: Ok(Some(file)),
+            result: Box::new(Ok(Some(file))),
             conflict_session: None,
         },
     );
@@ -226,7 +226,7 @@ fn conflict_file_loaded_clears_session_on_error() {
         Msg::ConflictFileLoaded {
             repo_id,
             path: PathBuf::from("file.txt"),
-            result: Err(Error::new(ErrorKind::Backend("test error".into()))),
+            result: Box::new(Err(Error::new(ErrorKind::Backend("test error".into())))),
             conflict_session: None,
         },
     );
@@ -269,7 +269,7 @@ fn load_conflict_file_clears_previous_session() {
         Msg::ConflictFileLoaded {
             repo_id,
             path: PathBuf::from("file.txt"),
-            result: Ok(Some(file)),
+            result: Box::new(Ok(Some(file))),
             conflict_session: None,
         },
     );
@@ -349,7 +349,7 @@ fn conflict_file_loaded_prefers_backend_session_when_provided() {
         Msg::ConflictFileLoaded {
             repo_id,
             path: PathBuf::from("file.txt"),
-            result: Ok(Some(file)),
+            result: Box::new(Ok(Some(file))),
             conflict_session: Some(provided_session.clone()),
         },
     );

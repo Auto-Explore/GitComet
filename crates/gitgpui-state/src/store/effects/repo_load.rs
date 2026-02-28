@@ -218,7 +218,7 @@ pub(super) fn schedule_load_conflict_file(
         let _ = msg_tx.send(Msg::ConflictFileLoaded {
             repo_id,
             path,
-            result,
+            result: Box::new(result),
             conflict_session,
         });
     });
