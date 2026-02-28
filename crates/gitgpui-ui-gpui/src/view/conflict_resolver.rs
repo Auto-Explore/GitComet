@@ -189,6 +189,131 @@ pub fn parse_conflict_markers(text: &str) -> Vec<ConflictSegment> {
     segments
 }
 
+fn append_text_segment(segments: &mut Vec<ConflictSegment>, text: String) {
+    if text.is_empty() {
+        return;
+    }
+    if let Some(ConflictSegment::Text(prev)) = segments.last_mut() {
+        prev.push_str(&text);
+        return;
+    }
+    segments.push(ConflictSegment::Text(text));
+}
+
+fn choice_for_resolved_content(block: &ConflictBlock, content: &str) -> Option<ConflictChoice> {
+    if content == block.ours {
+        return Some(ConflictChoice::Ours);
+    }
+    if content == block.theirs {
+        return Some(ConflictChoice::Theirs);
+    }
+    if block.base.as_deref().is_some_and(|base| content == base) {
+        return Some(ConflictChoice::Base);
+    }
+    content
+        .strip_prefix(block.ours.as_str())
+        .is_some_and(|rest| rest == block.theirs)
+        .then_some(ConflictChoice::Both)
+}
+
+fn apply_region_resolution_to_block(
+    block: &mut ConflictBlock,
+    resolution: &gitgpui_core::conflict_session::ConflictRegionResolution,
+) -> Option<String> {
+    use gitgpui_core::conflict_session::ConflictRegionResolution as R;
+
+    match resolution {
+        R::Unresolved => {
+            block.resolved = false;
+            None
+        }
+        R::PickBase => {
+            if block.base.is_some() {
+                block.choice = ConflictChoice::Base;
+                block.resolved = true;
+            } else {
+                block.resolved = false;
+            }
+            None
+        }
+        R::PickOurs => {
+            block.choice = ConflictChoice::Ours;
+            block.resolved = true;
+            None
+        }
+        R::PickTheirs => {
+            block.choice = ConflictChoice::Theirs;
+            block.resolved = true;
+            None
+        }
+        R::PickBoth => {
+            block.choice = ConflictChoice::Both;
+            block.resolved = true;
+            None
+        }
+        R::ManualEdit(text) => {
+            if let Some(choice) = choice_for_resolved_content(block, text) {
+                block.choice = choice;
+                block.resolved = true;
+                return None;
+            }
+            Some(text.clone())
+        }
+        R::AutoResolved { content, .. } => {
+            if let Some(choice) = choice_for_resolved_content(block, content) {
+                block.choice = choice;
+                block.resolved = true;
+                return None;
+            }
+            Some(content.clone())
+        }
+    }
+}
+
+/// Apply state-layer region resolutions to parsed UI marker segments.
+///
+/// This allows resolver rebuilds to preserve choices tracked in
+/// `RepoState.conflict_session`, and materializes manual/auto-resolved
+/// non-side-pick text into plain `Text` segments when needed.
+///
+/// Returns how many conflict regions were applied.
+pub fn apply_session_region_resolutions(
+    segments: &mut Vec<ConflictSegment>,
+    regions: &[gitgpui_core::conflict_session::ConflictRegion],
+) -> usize {
+    if segments.is_empty() || regions.is_empty() {
+        return 0;
+    }
+
+    let mut applied = 0usize;
+    let mut conflict_ix = 0usize;
+    let mut synced: Vec<ConflictSegment> = Vec::with_capacity(segments.len());
+
+    for seg in segments.drain(..) {
+        match seg {
+            ConflictSegment::Text(text) => append_text_segment(&mut synced, text),
+            ConflictSegment::Block(mut block) => {
+                if let Some(region) = regions.get(conflict_ix) {
+                    if let Some(materialized_text) =
+                        apply_region_resolution_to_block(&mut block, &region.resolution)
+                    {
+                        append_text_segment(&mut synced, materialized_text);
+                    } else {
+                        synced.push(ConflictSegment::Block(block));
+                    }
+                    applied += 1;
+                } else {
+                    synced.push(ConflictSegment::Block(block));
+                }
+                conflict_ix += 1;
+            }
+        }
+    }
+
+    *segments = synced;
+    applied
+}
+
 pub fn conflict_count(segments: &[ConflictSegment]) -> usize {
     segments
         .iter()
@@ -1199,6 +1324,133 @@ mod tests {
         }
         let resolved = generate_resolved_text(&segments);
         assert_eq!(resolved, "a\norig\nb\n");
+    }
+
+    #[test]
+    fn apply_session_region_resolutions_applies_pick_states() {
+        use gitgpui_core::conflict_session::{ConflictRegion, ConflictRegionResolution as R};
+
+        let input = concat!(
+            "pre\n",
+            "<<<<<<< ours\n",
+            "ours1\n",
+            "||||||| base\n",
+            "base1\n",
+            "=======\n",
+            "theirs1\n",
+            ">>>>>>> theirs\n",
+            "mid\n",
+            "<<<<<<< ours\n",
+            "ours2\n",
+            "||||||| base\n",
+            "base2\n",
+            "=======\n",
+            "theirs2\n",
+            ">>>>>>> theirs\n",
+            "tail\n",
+        );
+        let mut segments = parse_conflict_markers(input);
+        let regions = vec![
+            ConflictRegion {
+                base: Some("base1\n".into()),
+                ours: "ours1\n".into(),
+                theirs: "theirs1\n".into(),
+                resolution: R::PickTheirs,
+            },
+            ConflictRegion {
+                base: Some("base2\n".into()),
+                ours: "ours2\n".into(),
+                theirs: "theirs2\n".into(),
+                resolution: R::PickBoth,
+            },
+        ];
+
+        let applied = apply_session_region_resolutions(&mut segments, &regions);
+        assert_eq!(applied, 2);
+        assert_eq!(conflict_count(&segments), 2);
+        assert_eq!(resolved_conflict_count(&segments), 2);
+
+        let blocks: Vec<_> = segments
+            .iter()
+            .filter_map(|s| match s {
+                ConflictSegment::Block(block) => Some(block),
+                ConflictSegment::Text(_) => None,
+            })
+            .collect();
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0].choice, ConflictChoice::Theirs);
+        assert!(blocks[0].resolved);
+        assert_eq!(blocks[1].choice, ConflictChoice::Both);
+        assert!(blocks[1].resolved);
+
+        let resolved = generate_resolved_text(&segments);
+        assert_eq!(resolved, "pre\ntheirs1\nmid\nours2\ntheirs2\ntail\n");
+    }
+
+    #[test]
+    fn apply_session_region_resolutions_materializes_custom_resolved_text() {
+        use gitgpui_core::conflict_session::{
+            AutosolveConfidence, AutosolveRule, ConflictRegion, ConflictRegionResolution as R,
+        };
+
+        let input = concat!(
+            "start\n",
+            "<<<<<<< ours\n",
+            "ours1\n",
+            "||||||| base\n",
+            "base1\n",
+            "=======\n",
+            "theirs1\n",
+            ">>>>>>> theirs\n",
+            "between\n",
+            "<<<<<<< ours\n",
+            "ours2\n",
+            "||||||| base\n",
+            "base2\n",
+            "=======\n",
+            "theirs2\n",
+            ">>>>>>> theirs\n",
+            "end\n",
+        );
+        let mut segments = parse_conflict_markers(input);
+        let regions = vec![
+            ConflictRegion {
+                base: Some("base1\n".into()),
+                ours: "ours1\n".into(),
+                theirs: "theirs1\n".into(),
+                resolution: R::ManualEdit("merged-custom\n".into()),
+            },
+            ConflictRegion {
+                base: Some("base2\n".into()),
+                ours: "ours2\n".into(),
+                theirs: "theirs2\n".into(),
+                resolution: R::AutoResolved {
+                    rule: AutosolveRule::SubchunkFullyMerged,
+                    confidence: AutosolveConfidence::Medium,
+                    content: "theirs2\n".into(),
+                },
+            },
+        ];
+
+        let applied = apply_session_region_resolutions(&mut segments, &regions);
+        assert_eq!(applied, 2);
+        assert_eq!(conflict_count(&segments), 1);
+        assert_eq!(resolved_conflict_count(&segments), 1);
+
+        let blocks: Vec<_> = segments
+            .iter()
+            .filter_map(|s| match s {
+                ConflictSegment::Block(block) => Some(block),
+                ConflictSegment::Text(_) => None,
+            })
+            .collect();
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].ours, "ours2\n");
+        assert_eq!(blocks[0].choice, ConflictChoice::Theirs);
+        assert!(blocks[0].resolved);
+
+        let resolved = generate_resolved_text(&segments);
+        assert_eq!(resolved, "start\nmerged-custom\nbetween\ntheirs2\nend\n");
     }
 
     #[test]

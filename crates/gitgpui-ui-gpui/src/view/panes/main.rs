@@ -1643,20 +1643,24 @@ impl MainPaneView {
             return;
         }
 
-        let (mut marker_segments, resolved) = if let Some(cur) = file.current.as_deref() {
+        let fallback_resolved = if let Some(cur) = file.current.as_deref() {
+            cur.to_string()
+        } else if let Some(ours) = file.ours.as_deref() {
+            ours.to_string()
+        } else if let Some(theirs) = file.theirs.as_deref() {
+            theirs.to_string()
+        } else {
+            String::new()
+        };
+        let mut marker_segments = if let Some(cur) = file.current.as_deref() {
             let segments = conflict_resolver::parse_conflict_markers(cur);
             if conflict_resolver::conflict_count(&segments) > 0 {
-                let resolved = conflict_resolver::generate_resolved_text(&segments);
-                (segments, resolved)
+                segments
             } else {
-                (Vec::new(), cur.to_string())
+                Vec::new()
             }
-        } else if let Some(ours) = file.ours.as_deref() {
-            (Vec::new(), ours.to_string())
-        } else if let Some(theirs) = file.theirs.as_deref() {
-            (Vec::new(), theirs.to_string())
         } else {
-            (Vec::new(), String::new())
+            Vec::new()
         };
         let ours_text = file.ours.as_deref().unwrap_or("");
         let theirs_text = file.theirs.as_deref().unwrap_or("");
@@ -1667,6 +1671,18 @@ impl MainPaneView {
         if !base_text.is_empty() {
             conflict_resolver::populate_block_bases_from_ancestor(&mut marker_segments, base_text);
         }
+        if let Some(session) = &repo.conflict_session {
+            conflict_resolver::apply_session_region_resolutions(
+                &mut marker_segments,
+                &session.regions,
+            );
+        }
+
+        let resolved = if marker_segments.is_empty() {
+            fallback_resolved
+        } else {
+            conflict_resolver::generate_resolved_text(&marker_segments)
+        };
 
         let diff_rows = gitgpui_core::file_diff::side_by_side_rows(ours_text, theirs_text);
         let inline_rows = conflict_resolver::build_inline_rows(&diff_rows);
