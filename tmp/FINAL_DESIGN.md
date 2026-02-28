@@ -21,7 +21,7 @@
 - ✅ Added integration fixture matrix covering all seven `FileConflictKind` values (`DD/AU/UD/UA/DU/AA/UU`) plus sparse stage-shape validation via `conflict_file_stages()` — `crates/gitgpui-git-gix/tests/status_integration.rs`
 - ✅ **Strategy-specific UI panels** (Iteration 11): Each `ConflictResolverStrategy` now renders its own dedicated panel instead of falling through to the generic text resolver:
   - `TwoWayKeepDelete`: dedicated keep/delete panel for modify/delete conflicts (`DeletedByUs`, `DeletedByThem`, `AddedByUs`, `AddedByThem`) with context-sensitive labels, file content preview, and explicit "Keep File" / "Accept Deletion" actions — `crates/gitgpui-ui-gpui/src/view/panels/main/keep_delete_conflict.rs`
-  - `DecisionOnly`: decision panel for `BothDeleted` conflicts with "Accept Deletion" and optional "Restore from Base" action — `crates/gitgpui-ui-gpui/src/view/panels/main/decision_conflict.rs`
+  - `DecisionOnly`: decision panel for `BothDeleted` conflicts with "Accept Deletion" and optional restore actions for any available source (`base`, `ours`, `theirs`) plus restore-source summary text; includes unit coverage for source-availability detection/summary — `crates/gitgpui-ui-gpui/src/view/panels/main/decision_conflict.rs`
   - `ConflictResolverUiState` now tracks `strategy` and `conflict_kind` fields for rendering dispatch — `crates/gitgpui-ui-gpui/src/view/mod.rs`, `crates/gitgpui-ui-gpui/src/view/panes/main.rs`
   - Toolbar controls correctly show file-only navigation for simple strategy panels (binary, keep/delete, decision-only) — `crates/gitgpui-ui-gpui/src/view/panels/main.rs`
 
