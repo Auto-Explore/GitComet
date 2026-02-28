@@ -289,6 +289,9 @@ pub(super) fn schedule_effect(
         } => repo_commands::schedule_checkout_conflict_side(
             executor, repos, msg_tx, repo_id, path, side,
         ),
+        Effect::AcceptConflictDeletion { repo_id, path } => {
+            repo_commands::schedule_accept_conflict_deletion(executor, repos, msg_tx, repo_id, path)
+        }
         Effect::CheckoutConflictBase { repo_id, path } => {
             repo_commands::schedule_checkout_conflict_base(executor, repos, msg_tx, repo_id, path)
         }

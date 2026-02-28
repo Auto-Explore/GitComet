@@ -402,6 +402,7 @@ fn summarize_command(
                 ConflictSide::Ours => "Checkout ours",
                 ConflictSide::Theirs => "Checkout theirs",
             },
+            RepoCommandKind::AcceptConflictDeletion { .. } => "Accept deletion",
             RepoCommandKind::CheckoutConflictBase { .. } => "Checkout base",
             RepoCommandKind::LaunchMergetool { .. } => "Mergetool",
             RepoCommandKind::SaveWorktreeFile { .. } => "Save file",
@@ -511,6 +512,9 @@ fn summarize_command(
             ConflictSide::Ours => "Resolved using ours".to_string(),
             ConflictSide::Theirs => "Resolved using theirs".to_string(),
         },
+        RepoCommandKind::AcceptConflictDeletion { path } => {
+            format!("Resolved by accepting deletion → {}", path.display())
+        }
         RepoCommandKind::CheckoutConflictBase { path } => {
             format!("Resolved using base → {}", path.display())
         }

@@ -306,6 +306,10 @@ impl GitRepository for GixRepo {
         self.checkout_conflict_side_impl(path, side)
     }
 
+    fn accept_conflict_deletion(&self, path: &Path) -> Result<CommandOutput> {
+        self.accept_conflict_deletion_impl(path)
+    }
+
     fn checkout_conflict_base(&self, path: &Path) -> Result<CommandOutput> {
         self.checkout_conflict_base_impl(path)
     }

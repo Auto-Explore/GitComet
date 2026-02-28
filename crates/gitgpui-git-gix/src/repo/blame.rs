@@ -82,6 +82,16 @@ impl GixRepo {
         })
     }
 
+    pub(super) fn accept_conflict_deletion_impl(&self, path: &Path) -> Result<CommandOutput> {
+        let mut rm = Command::new("git");
+        rm.arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("rm")
+            .arg("--")
+            .arg(path);
+        run_git_with_output(rm, "git rm --")
+    }
+
     pub(super) fn checkout_conflict_base_impl(&self, path: &Path) -> Result<CommandOutput> {
         if !unmerged_stage_exists(&self.spec.workdir, path, 1)? {
             return Err(Error::new(ErrorKind::Backend(format!(

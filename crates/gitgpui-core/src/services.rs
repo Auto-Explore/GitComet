@@ -371,6 +371,16 @@ pub trait GitRepository: Send + Sync {
         )))
     }
 
+    /// Accept a conflict by explicitly deleting the path and staging removal.
+    ///
+    /// Used by decision/keep-delete resolvers when the chosen outcome is
+    /// "accept deletion" rather than selecting a side's content.
+    fn accept_conflict_deletion(&self, _path: &Path) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "conflict deletion is not implemented for this backend",
+        )))
+    }
+
     /// Restore a conflicted file from stage-1 (base) contents and stage it.
     ///
     /// Useful for decision-style conflicts where users want to explicitly

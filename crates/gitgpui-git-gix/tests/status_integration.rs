@@ -942,6 +942,109 @@ fn checkout_conflict_side_resolves_all_conflict_stage_shapes() {
 }
 
 #[test]
+fn accept_conflict_deletion_resolves_delete_outcome_conflicts() {
+    #[derive(Clone, Copy)]
+    struct ConflictDeleteFixture {
+        kind: FileConflictKind,
+        has_base: bool,
+        has_ours: bool,
+        has_theirs: bool,
+    }
+
+    let fixtures = [
+        ConflictDeleteFixture {
+            kind: FileConflictKind::BothDeleted,
+            has_base: true,
+            has_ours: false,
+            has_theirs: false,
+        },
+        ConflictDeleteFixture {
+            kind: FileConflictKind::AddedByUs,
+            has_base: false,
+            has_ours: true,
+            has_theirs: false,
+        },
+        ConflictDeleteFixture {
+            kind: FileConflictKind::AddedByThem,
+            has_base: false,
+            has_ours: false,
+            has_theirs: true,
+        },
+        ConflictDeleteFixture {
+            kind: FileConflictKind::DeletedByUs,
+            has_base: true,
+            has_ours: false,
+            has_theirs: true,
+        },
+        ConflictDeleteFixture {
+            kind: FileConflictKind::DeletedByThem,
+            has_base: true,
+            has_ours: true,
+            has_theirs: false,
+        },
+    ];
+
+    for fixture in fixtures {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+
+        run_git(repo, &["init"]);
+        run_git(repo, &["config", "user.email", "you@example.com"]);
+        run_git(repo, &["config", "user.name", "You"]);
+        run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+        write(repo, "seed.txt", "seed\n");
+        run_git(repo, &["add", "seed.txt"]);
+        run_git(
+            repo,
+            &["-c", "commit.gpgsign=false", "commit", "-m", "seed"],
+        );
+
+        let base_blob = hash_blob(repo, b"base\n");
+        let ours_blob = hash_blob(repo, b"ours\n");
+        let theirs_blob = hash_blob(repo, b"theirs\n");
+
+        set_unmerged_stages(
+            repo,
+            "a.txt",
+            fixture.has_base.then_some(base_blob.as_str()),
+            fixture.has_ours.then_some(ours_blob.as_str()),
+            fixture.has_theirs.then_some(theirs_blob.as_str()),
+        );
+
+        let backend = GixBackend;
+        let opened = backend.open(repo).unwrap();
+
+        let before = opened.status().unwrap();
+        let conflict_entry = before
+            .unstaged
+            .iter()
+            .find(|e| e.path == Path::new("a.txt"))
+            .expect("expected fixture path to appear as conflict");
+        assert_eq!(conflict_entry.kind, FileStatusKind::Conflicted);
+        assert_eq!(conflict_entry.conflict, Some(fixture.kind));
+
+        opened.accept_conflict_deletion(Path::new("a.txt")).unwrap();
+
+        let after = opened.status().unwrap();
+        assert!(
+            !repo.join("a.txt").exists(),
+            "expected path to be removed after accepting deletion for {:?}",
+            fixture.kind
+        );
+        assert!(
+            after
+                .staged
+                .iter()
+                .chain(after.unstaged.iter())
+                .all(|e| e.path != Path::new("a.txt")),
+            "expected no status entry for deleted path after resolving {:?}; status={after:?}",
+            fixture.kind
+        );
+    }
+}
+
+#[test]
 fn status_reports_single_conflict_for_modify_delete() {
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();

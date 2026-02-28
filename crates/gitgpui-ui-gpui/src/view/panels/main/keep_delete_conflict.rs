@@ -100,15 +100,9 @@ impl MainPaneView {
                 zed::Button::new("keep_delete_delete", delete_label)
                     .style(zed::ButtonStyle::Outlined)
                     .on_click(theme, cx, move |this, _e, _w, _cx| {
-                        // Accept the deletion by checking out the deleting side.
-                        let delete_side = match keep_side {
-                            ConflictSide::Ours => ConflictSide::Theirs,
-                            ConflictSide::Theirs => ConflictSide::Ours,
-                        };
-                        this.store.dispatch(Msg::CheckoutConflictSide {
+                        this.store.dispatch(Msg::AcceptConflictDeletion {
                             repo_id,
                             path: delete_path.clone(),
-                            side: delete_side,
                         });
                     }),
             )

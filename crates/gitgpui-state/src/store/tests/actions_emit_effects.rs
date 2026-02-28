@@ -234,6 +234,36 @@ fn checkout_conflict_base_emits_effect() {
 }
 
 #[test]
+fn accept_conflict_deletion_emits_effect() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    state.repos.push(RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(RepoId(1));
+
+    let path = PathBuf::from("conflicted.bin");
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::AcceptConflictDeletion {
+            repo_id: RepoId(1),
+            path: path.clone(),
+        },
+    );
+
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::AcceptConflictDeletion { repo_id: RepoId(1), path: effect_path }] if effect_path == &path
+    ));
+}
+
+#[test]
 fn reset_emits_effect() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);

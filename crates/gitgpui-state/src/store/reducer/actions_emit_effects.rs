@@ -354,6 +354,10 @@ pub(super) fn checkout_conflict_side(
     }]
 }
 
+pub(super) fn accept_conflict_deletion(repo_id: RepoId, path: PathBuf) -> Vec<Effect> {
+    vec![Effect::AcceptConflictDeletion { repo_id, path }]
+}
+
 pub(super) fn checkout_conflict_base(repo_id: RepoId, path: PathBuf) -> Vec<Effect> {
     vec![Effect::CheckoutConflictBase { repo_id, path }]
 }

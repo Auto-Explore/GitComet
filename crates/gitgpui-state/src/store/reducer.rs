@@ -288,6 +288,9 @@ pub(super) fn reduce(
             path,
             side,
         } => actions_emit_effects::checkout_conflict_side(repo_id, path, side),
+        Msg::AcceptConflictDeletion { repo_id, path } => {
+            actions_emit_effects::accept_conflict_deletion(repo_id, path)
+        }
         Msg::CheckoutConflictBase { repo_id, path } => {
             actions_emit_effects::checkout_conflict_base(repo_id, path)
         }

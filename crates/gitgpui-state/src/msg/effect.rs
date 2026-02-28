@@ -290,6 +290,10 @@ pub enum Effect {
         path: PathBuf,
         side: ConflictSide,
     },
+    AcceptConflictDeletion {
+        repo_id: RepoId,
+        path: PathBuf,
+    },
     CheckoutConflictBase {
         repo_id: RepoId,
         path: PathBuf,

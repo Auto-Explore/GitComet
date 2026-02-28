@@ -423,6 +423,11 @@ impl std::fmt::Debug for Msg {
                 .field("path", path)
                 .field("side", side)
                 .finish(),
+            Msg::AcceptConflictDeletion { repo_id, path } => f
+                .debug_struct("AcceptConflictDeletion")
+                .field("repo_id", repo_id)
+                .field("path", path)
+                .finish(),
             Msg::CheckoutConflictBase { repo_id, path } => f
                 .debug_struct("CheckoutConflictBase")
                 .field("repo_id", repo_id)

@@ -575,6 +575,23 @@ pub(super) fn schedule_checkout_conflict_base(
     });
 }
 
+pub(super) fn schedule_accept_conflict_deletion(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: mpsc::Sender<Msg>,
+    repo_id: RepoId,
+    path: PathBuf,
+) {
+    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
+        let result = repo.accept_conflict_deletion(&path);
+        let _ = msg_tx.send(Msg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::AcceptConflictDeletion { path: path.clone() },
+            result,
+        });
+    });
+}
+
 pub(super) fn schedule_launch_mergetool(
     executor: &TaskExecutor,
     repos: &RepoMap,

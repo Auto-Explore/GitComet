@@ -72,12 +72,9 @@ impl MainPaneView {
                 zed::Button::new("decision_accept_delete", "Accept Deletion")
                     .style(zed::ButtonStyle::Filled)
                     .on_click(theme, cx, move |this, _e, _w, _cx| {
-                        // Accepting the deletion: checkout --ours resolves the
-                        // conflict by accepting the deletion (both sides agree).
-                        this.store.dispatch(Msg::CheckoutConflictSide {
+                        this.store.dispatch(Msg::AcceptConflictDeletion {
                             repo_id,
                             path: accept_path.clone(),
-                            side: ConflictSide::Ours,
                         });
                     }),
             )
@@ -204,7 +201,8 @@ impl MainPaneView {
 #[cfg(test)]
 mod tests {
     use super::{
-        decision_restore_availability, decision_restore_sources_summary, DecisionRestoreAvailability,
+        DecisionRestoreAvailability, decision_restore_availability,
+        decision_restore_sources_summary,
     };
     use gitgpui_state::model::ConflictFile;
     use std::path::PathBuf;
