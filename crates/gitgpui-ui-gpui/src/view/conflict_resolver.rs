@@ -1462,8 +1462,16 @@ mod tests {
         // Start + separator found but no end marker
         let input = "a\n<<<<<<< HEAD\nfoo\n=======\nbar\n";
         let segments = parse_conflict_markers(input);
-        assert_eq!(conflict_count(&segments), 0, "malformed block should not produce a conflict");
-        assert_eq!(generate_resolved_text(&segments), input, "malformed content must be preserved");
+        assert_eq!(
+            conflict_count(&segments),
+            0,
+            "malformed block should not produce a conflict"
+        );
+        assert_eq!(
+            generate_resolved_text(&segments),
+            input,
+            "malformed content must be preserved"
+        );
     }
 
     #[test]
@@ -1583,8 +1591,14 @@ dangling
         assert_eq!(block.theirs, "ok theirs\n");
         // The malformed part should be preserved as trailing text
         let resolved = generate_resolved_text(&segments);
-        assert!(resolved.contains("ok ours"), "resolved should contain the valid conflict's choice");
-        assert!(resolved.contains("missing end"), "malformed content should be preserved as text");
+        assert!(
+            resolved.contains("ok ours"),
+            "resolved should contain the valid conflict's choice"
+        );
+        assert!(
+            resolved.contains("missing end"),
+            "malformed content should be preserved as text"
+        );
     }
 
     #[test]
@@ -1623,8 +1637,7 @@ theirs only line
     #[test]
     fn two_way_blocks_have_no_base_three_way_have_base() {
         let two_way = "<<<<<<< ours\na\n=======\nb\n>>>>>>> theirs\n";
-        let three_way =
-            "<<<<<<< ours\na\n||||||| base\norig\n=======\nb\n>>>>>>> theirs\n";
+        let three_way = "<<<<<<< ours\na\n||||||| base\norig\n=======\nb\n>>>>>>> theirs\n";
 
         let two_way_segments = parse_conflict_markers(two_way);
         let three_way_segments = parse_conflict_markers(three_way);
@@ -1645,8 +1658,14 @@ theirs only line
             .unwrap();
 
         // 2-way has no base, 3-way has base
-        assert!(two_way_block.base.is_none(), "2-way conflict should have no base");
-        assert!(three_way_block.base.is_some(), "3-way conflict should have base");
+        assert!(
+            two_way_block.base.is_none(),
+            "2-way conflict should have no base"
+        );
+        assert!(
+            three_way_block.base.is_some(),
+            "3-way conflict should have base"
+        );
 
         // Both have same ours/theirs content
         assert_eq!(two_way_block.ours, three_way_block.ours);
@@ -1677,7 +1696,10 @@ theirs only line
                 _ => None,
             })
             .unwrap();
-        assert!(block.base.is_some(), "after populate, block should have base for 3-way display");
+        assert!(
+            block.base.is_some(),
+            "after populate, block should have base for 3-way display"
+        );
 
         // Pick Base should now produce ancestor content
         if let Some(ConflictSegment::Block(b)) = segments
@@ -1729,14 +1751,10 @@ theirs only line
             "inline should have at least as many rows as split"
         );
         // Both should cover the same line range
-        let split_lines: std::collections::HashSet<_> = rows
-            .iter()
-            .filter_map(|r| r.new_line)
-            .collect();
-        let inline_lines: std::collections::HashSet<_> = inline
-            .iter()
-            .filter_map(|r| r.new_line)
-            .collect();
+        let split_lines: std::collections::HashSet<_> =
+            rows.iter().filter_map(|r| r.new_line).collect();
+        let inline_lines: std::collections::HashSet<_> =
+            inline.iter().filter_map(|r| r.new_line).collect();
         assert!(
             split_lines.is_subset(&inline_lines),
             "inline should cover all new lines that split covers"

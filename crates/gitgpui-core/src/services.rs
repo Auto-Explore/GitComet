@@ -597,10 +597,7 @@ mod tests {
     #[test]
     fn decode_utf8_empty_bytes_returns_empty_string() {
         let bytes: &[u8] = b"";
-        assert_eq!(
-            decode_utf8_optional(Some(bytes)),
-            Some(String::new())
-        );
+        assert_eq!(decode_utf8_optional(Some(bytes)), Some(String::new()));
     }
 
     #[test]

@@ -17,8 +17,7 @@ fn keep_delete_conflict_spec(conflict_kind: FileConflictKind) -> KeepDeleteConfl
     match conflict_kind {
         FileConflictKind::DeletedByUs => KeepDeleteConflictSpec {
             header_label: "Modify / Delete conflict",
-            description:
-                "This file was modified on the remote branch but deleted on your local branch.",
+            description: "This file was modified on the remote branch but deleted on your local branch.",
             keep_label: "Keep File (theirs)",
             delete_label: "Accept Deletion (ours)",
             keep_side: ConflictSide::Theirs,
@@ -27,8 +26,7 @@ fn keep_delete_conflict_spec(conflict_kind: FileConflictKind) -> KeepDeleteConfl
         },
         FileConflictKind::DeletedByThem => KeepDeleteConflictSpec {
             header_label: "Modify / Delete conflict",
-            description:
-                "This file was modified on your local branch but deleted on the remote branch.",
+            description: "This file was modified on your local branch but deleted on the remote branch.",
             keep_label: "Keep File (ours)",
             delete_label: "Accept Deletion (theirs)",
             keep_side: ConflictSide::Ours,
@@ -37,8 +35,7 @@ fn keep_delete_conflict_spec(conflict_kind: FileConflictKind) -> KeepDeleteConfl
         },
         FileConflictKind::AddedByUs => KeepDeleteConflictSpec {
             header_label: "Add / Delete conflict",
-            description:
-                "This file was added on your local branch and deleted on the remote branch.",
+            description: "This file was added on your local branch and deleted on the remote branch.",
             keep_label: "Keep File (ours)",
             delete_label: "Accept Deletion (theirs)",
             keep_side: ConflictSide::Ours,
@@ -47,8 +44,7 @@ fn keep_delete_conflict_spec(conflict_kind: FileConflictKind) -> KeepDeleteConfl
         },
         FileConflictKind::AddedByThem => KeepDeleteConflictSpec {
             header_label: "Add / Delete conflict",
-            description:
-                "This file was added on the remote branch and deleted on your local branch.",
+            description: "This file was added on the remote branch and deleted on your local branch.",
             keep_label: "Keep File (theirs)",
             delete_label: "Accept Deletion (ours)",
             keep_side: ConflictSide::Theirs,
