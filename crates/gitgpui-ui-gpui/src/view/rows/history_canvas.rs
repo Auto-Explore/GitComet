@@ -518,12 +518,9 @@ pub(super) fn history_commit_row_canvas(
                             repo_id,
                             commit_id: commit_id.clone(),
                         });
-                        let context_menu_invoker: SharedString = format!(
-                            "history_commit_menu_{}_{}",
-                            repo_id.0,
-                            commit_id.0.as_str()
-                        )
-                        .into();
+                        let context_menu_invoker: SharedString =
+                            format!("history_commit_menu_{}_{}", repo_id.0, commit_id.0.as_str())
+                                .into();
                         this.activate_context_menu_invoker(context_menu_invoker, cx);
                         let kind = if is_tag {
                             PopoverKind::TagMenu {

@@ -233,8 +233,7 @@ impl Render for RepoTabsBarView {
         let active = self.active_repo_id();
         let repos_len = self.state.repos.len();
         let active_ix = active.and_then(|id| self.state.repos.iter().position(|r| r.id == id));
-        let spinner =
-            |id: (&'static str, u64), color: gpui::Rgba| svg_spinner(id, color, px(12.0));
+        let spinner = |id: (&'static str, u64), color: gpui::Rgba| svg_spinner(id, color, px(12.0));
 
         let mut bar = zed::TabBar::new("repo_tab_bar");
         for (ix, repo) in self.state.repos.iter().enumerate() {
@@ -284,9 +283,11 @@ impl Render for RepoTabsBarView {
                 .cursor_pointer()
                 .hover(move |s| s.bg(with_alpha(theme.colors.danger, 0.18)))
                 .active(move |s| s.bg(with_alpha(theme.colors.danger, 0.26)))
-                .child(
-                    svg_icon("icons/repo_tab_close.svg", theme.colors.danger, px(12.0)),
-                )
+                .child(svg_icon(
+                    "icons/repo_tab_close.svg",
+                    theme.colors.danger,
+                    px(12.0),
+                ))
                 .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
                     cx.stop_propagation();
                     this.hovered_repo_tab = None;

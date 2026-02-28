@@ -105,13 +105,7 @@ impl Button {
         self,
         theme: AppTheme,
         cx: &gpui::Context<V>,
-        f: impl Fn(
-                &mut V,
-                &ClickEvent,
-                Bounds<Pixels>,
-                &mut Window,
-                &mut gpui::Context<V>,
-            ) + 'static,
+        f: impl Fn(&mut V, &ClickEvent, Bounds<Pixels>, &mut Window, &mut gpui::Context<V>) + 'static,
     ) -> Stateful<Div> {
         let disabled = self.disabled;
 
@@ -120,15 +114,13 @@ impl Button {
         let last_bounds_for_click = Rc::clone(&last_bounds);
         let wrapper_id: SharedString = format!("{}_bounds_wrapper", self.id).into();
 
-        let button = self
-            .render(theme)
-            .when(!disabled, |this| {
-                this.on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
-                    let bounds = (*last_bounds_for_click.borrow())
-                        .unwrap_or_else(|| Bounds::new(e.position(), gpui::size(px(0.0), px(0.0))));
-                    f(this, e, bounds, window, cx);
-                }))
-            });
+        let button = self.render(theme).when(!disabled, |this| {
+            this.on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
+                let bounds = (*last_bounds_for_click.borrow())
+                    .unwrap_or_else(|| Bounds::new(e.position(), gpui::size(px(0.0), px(0.0))));
+                f(this, e, bounds, window, cx);
+            }))
+        });
 
         div()
             .on_children_prepainted(move |children_bounds, _window, _cx| {
@@ -324,7 +316,9 @@ impl Button {
                 .hover(move |s| s.bg(selected_bg))
                 .active(move |s| s.bg(selected_bg));
         } else if suppress_hover_border {
-            base = base.hover(move |s| s.bg(hover_bg)).active(move |s| s.bg(active_bg));
+            base = base
+                .hover(move |s| s.bg(hover_bg))
+                .active(move |s| s.bg(active_bg));
         } else {
             base = base
                 .hover(move |s| s.bg(hover_bg).border_color(hover_border))

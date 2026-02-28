@@ -109,7 +109,13 @@ pub(super) fn schedule_effect(
             branch,
             local_branch,
         } => repo_actions::schedule_checkout_remote_branch(
-            executor, repos, msg_tx, repo_id, remote, branch, local_branch,
+            executor,
+            repos,
+            msg_tx,
+            repo_id,
+            remote,
+            branch,
+            local_branch,
         ),
         Effect::CheckoutCommit { repo_id, commit_id } => {
             repo_actions::schedule_checkout_commit(executor, repos, msg_tx, repo_id, commit_id);

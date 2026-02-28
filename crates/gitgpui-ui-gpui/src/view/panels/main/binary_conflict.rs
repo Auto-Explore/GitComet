@@ -25,10 +25,7 @@ impl MainPaneView {
             }
         };
 
-        let side_row = |label: &'static str,
-                        size: Option<usize>,
-                        has_text: bool|
-         -> gpui::Div {
+        let side_row = |label: &'static str, size: Option<usize>, has_text: bool| -> gpui::Div {
             let size_label = format_size(size);
             let kind_label: SharedString = if has_text {
                 "text (valid UTF-8)".into()
@@ -61,15 +58,13 @@ impl MainPaneView {
                 .child(
                     div()
                         .text_xs()
-                        .text_color(
-                            if has_text {
-                                theme.colors.text_muted
-                            } else if size.is_some() {
-                                theme.colors.warning
-                            } else {
-                                theme.colors.text_muted
-                            },
-                        )
+                        .text_color(if has_text {
+                            theme.colors.text_muted
+                        } else if size.is_some() {
+                            theme.colors.warning
+                        } else {
+                            theme.colors.text_muted
+                        })
                         .child(kind_label),
                 )
         };
@@ -119,12 +114,7 @@ impl MainPaneView {
                         });
                     }),
             )
-            .child(
-                div()
-                    .w(px(1.0))
-                    .h(px(16.0))
-                    .bg(theme.colors.border),
-            )
+            .child(div().w(px(1.0)).h(px(16.0)).bg(theme.colors.border))
             .child(
                 zed::Button::new("binary_launch_mergetool", "External Mergetool")
                     .style(zed::ButtonStyle::Outlined)
@@ -152,17 +142,13 @@ impl MainPaneView {
             .gap_2()
             // Header
             .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(theme.colors.text)
-                            .child(title),
-                    ),
+                div().flex().items_center().gap_2().child(
+                    div()
+                        .text_sm()
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(theme.colors.text)
+                        .child(title),
+                ),
             )
             // Content panel
             .child(
@@ -187,14 +173,9 @@ impl MainPaneView {
                             .text_color(theme.colors.warning)
                             .child("Binary file conflict"),
                     )
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(theme.colors.text_muted)
-                            .child(
-                                "This file contains binary or non-UTF8 data and cannot be merged as text.",
-                            ),
-                    )
+                    .child(div().text_sm().text_color(theme.colors.text_muted).child(
+                        "This file contains binary or non-UTF8 data and cannot be merged as text.",
+                    ))
                     // Side info
                     .child(
                         div()

@@ -228,12 +228,8 @@ fn history_table_row(
     active_context_menu_invoker: Option<&SharedString>,
     cx: &mut gpui::Context<HistoryView>,
 ) -> AnyElement {
-    let context_menu_invoker: SharedString = format!(
-        "history_commit_menu_{}_{}",
-        repo_id.0,
-        commit.id.0.as_str()
-    )
-    .into();
+    let context_menu_invoker: SharedString =
+        format!("history_commit_menu_{}_{}", repo_id.0, commit.id.0.as_str()).into();
     let context_menu_active = active_context_menu_invoker == Some(&context_menu_invoker);
     let commit_row = history_canvas::history_commit_row_canvas(
         theme,
@@ -555,11 +551,7 @@ mod tests {
         // UTC+5:30 (19800 seconds)
         let tz = Timezone::Fixed(19800);
         assert_eq!(
-            format_datetime(
-                UNIX_EPOCH,
-                DateTimeFormat::YmdHm,
-                tz,
-            ),
+            format_datetime(UNIX_EPOCH, DateTimeFormat::YmdHm, tz,),
             "1970-01-01 05:30 UTC+5:30"
         );
 

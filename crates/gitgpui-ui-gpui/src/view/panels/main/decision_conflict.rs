@@ -40,30 +40,22 @@ impl MainPaneView {
                         });
                     }),
             )
-            .when_some(
-                file.base.clone().filter(|_| has_base),
-                |d, base_text| {
-                    let p = restore_path.clone();
-                    d.child(
-                        zed::Button::new("decision_restore_base", "Restore from Base")
-                            .style(zed::ButtonStyle::Outlined)
-                            .on_click(theme, cx, move |this, _e, _w, _cx| {
-                                this.store.dispatch(Msg::SaveWorktreeFile {
-                                    repo_id,
-                                    path: p.clone(),
-                                    contents: base_text.clone(),
-                                    stage: true,
-                                });
-                            }),
-                    )
-                },
-            )
-            .child(
-                div()
-                    .w(px(1.0))
-                    .h(px(16.0))
-                    .bg(theme.colors.border),
-            )
+            .when_some(file.base.clone().filter(|_| has_base), |d, base_text| {
+                let p = restore_path.clone();
+                d.child(
+                    zed::Button::new("decision_restore_base", "Restore from Base")
+                        .style(zed::ButtonStyle::Outlined)
+                        .on_click(theme, cx, move |this, _e, _w, _cx| {
+                            this.store.dispatch(Msg::SaveWorktreeFile {
+                                repo_id,
+                                path: p.clone(),
+                                contents: base_text.clone(),
+                                stage: true,
+                            });
+                        }),
+                )
+            })
+            .child(div().w(px(1.0)).h(px(16.0)).bg(theme.colors.border))
             .child(
                 zed::Button::new("decision_mergetool", "External Mergetool")
                     .style(zed::ButtonStyle::Outlined)
@@ -88,17 +80,13 @@ impl MainPaneView {
             .gap_2()
             // Header
             .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(theme.colors.text)
-                            .child(title),
-                    ),
+                div().flex().items_center().gap_2().child(
+                    div()
+                        .text_sm()
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(theme.colors.text)
+                        .child(title),
+                ),
             )
             // Content panel
             .child(

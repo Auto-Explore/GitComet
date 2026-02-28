@@ -229,11 +229,7 @@ impl HistoryView {
         cx.notify();
     }
 
-    pub(in super::super) fn set_timezone(
-        &mut self,
-        next: Timezone,
-        cx: &mut gpui::Context<Self>,
-    ) {
+    pub(in super::super) fn set_timezone(&mut self, next: Timezone, cx: &mut gpui::Context<Self>) {
         if self.timezone == next {
             return;
         }

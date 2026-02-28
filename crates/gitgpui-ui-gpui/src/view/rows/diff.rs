@@ -162,8 +162,7 @@ impl MainPaneView {
 
                 let language = this.diff_language_for_src_ix.get(src_ix).copied().flatten();
 
-                let should_style =
-                    matches!(click_kind, DiffClickKind::Line) || !query.is_empty();
+                let should_style = matches!(click_kind, DiffClickKind::Line) || !query.is_empty();
                 if should_style && this.diff_text_segments_cache_get(src_ix).is_none() {
                     let Some(line) = this.diff_cache.get(src_ix) else {
                         return div()
@@ -1227,10 +1226,7 @@ fn patch_split_header_row(
                     format!("diff_hunk_menu_{}_{}", repo_id.0, src_ix).into();
                 this.activate_context_menu_invoker(context_menu_invoker, cx);
                 this.open_popover_at(
-                    PopoverKind::DiffHunkMenu {
-                        repo_id,
-                        src_ix,
-                    },
+                    PopoverKind::DiffHunkMenu { repo_id, src_ix },
                     e.position,
                     window,
                     cx,

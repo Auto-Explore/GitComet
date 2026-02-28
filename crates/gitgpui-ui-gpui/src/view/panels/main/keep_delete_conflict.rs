@@ -65,9 +65,10 @@ impl MainPaneView {
         };
 
         let preview_lines: Vec<SharedString> = match surviving_text {
-            Some(text) if !text.is_empty() => {
-                text.lines().map(|l| SharedString::from(l.to_string())).collect()
-            }
+            Some(text) if !text.is_empty() => text
+                .lines()
+                .map(|l| SharedString::from(l.to_string()))
+                .collect(),
             _ => vec!["(empty file)".into()],
         };
         let preview_line_count = preview_lines.len();
@@ -111,12 +112,7 @@ impl MainPaneView {
                         });
                     }),
             )
-            .child(
-                div()
-                    .w(px(1.0))
-                    .h(px(16.0))
-                    .bg(theme.colors.border),
-            )
+            .child(div().w(px(1.0)).h(px(16.0)).bg(theme.colors.border))
             .child(
                 zed::Button::new("keep_delete_mergetool", "External Mergetool")
                     .style(zed::ButtonStyle::Outlined)
@@ -141,17 +137,13 @@ impl MainPaneView {
             .gap_2()
             // Header
             .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(theme.colors.text)
-                            .child(title),
-                    ),
+                div().flex().items_center().gap_2().child(
+                    div()
+                        .text_sm()
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(theme.colors.text)
+                        .child(title),
+                ),
             )
             // Content panel
             .child(
@@ -206,18 +198,13 @@ impl MainPaneView {
                             .overflow_y_scroll()
                             .px_3()
                             .py_2()
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(theme.colors.text_muted)
-                                    .child(
-                                        format!(
-                                            "File content ({} line{}):",
-                                            preview_line_count,
-                                            if preview_line_count == 1 { "" } else { "s" }
-                                        ),
-                                    ),
-                            )
+                            .child(div().text_sm().text_color(theme.colors.text_muted).child(
+                                format!(
+                                    "File content ({} line{}):",
+                                    preview_line_count,
+                                    if preview_line_count == 1 { "" } else { "s" }
+                                ),
+                            ))
                             .child(
                                 div()
                                     .mt_1()

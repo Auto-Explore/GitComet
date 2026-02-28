@@ -13,8 +13,8 @@ const _: () = {
 
 #[test]
 fn conflict_resolver_strategy_maps_conflict_kinds() {
-    use gitgpui_core::domain::FileConflictKind as K;
     use gitgpui_core::conflict_session::ConflictResolverStrategy as S;
+    use gitgpui_core::domain::FileConflictKind as K;
 
     assert_eq!(
         MainPaneView::conflict_resolver_strategy(Some(K::BothModified), false),

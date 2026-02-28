@@ -289,9 +289,6 @@ pub(super) fn format_datetime(
 
 /// Backward-compatible wrapper that formats in UTC.
 #[cfg(test)]
-pub(super) fn format_datetime_utc(
-    time: std::time::SystemTime,
-    format: DateTimeFormat,
-) -> String {
+pub(super) fn format_datetime_utc(time: std::time::SystemTime, format: DateTimeFormat) -> String {
     format_datetime(time, format, Timezone::Utc)
 }

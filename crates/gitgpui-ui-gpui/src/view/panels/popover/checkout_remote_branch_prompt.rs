@@ -121,4 +121,3 @@ pub(super) fn panel(
                 ),
         )
 }
-

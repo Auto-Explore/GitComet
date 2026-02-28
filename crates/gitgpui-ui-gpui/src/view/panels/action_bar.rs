@@ -163,8 +163,7 @@ impl Render for ActionBarView {
         let icon_primary = theme.colors.accent;
         let icon_muted = with_alpha(theme.colors.accent, if theme.is_dark { 0.72 } else { 0.82 });
         let icon = |path: &'static str, color: gpui::Rgba| svg_icon(path, color, px(14.0));
-        let spinner =
-            |id: (&'static str, u64), color: gpui::Rgba| svg_spinner(id, color, px(14.0));
+        let spinner = |id: (&'static str, u64), color: gpui::Rgba| svg_spinner(id, color, px(14.0));
         let count_badge = |count: usize, color: gpui::Rgba| {
             div()
                 .text_xs()
@@ -370,10 +369,19 @@ impl Render for ActionBarView {
                             });
                         }
                     }),
-                    pull_menu.on_click_with_bounds(theme, cx, move |this, _e, bounds, window, cx| {
-                        this.activate_context_menu_invoker(pull_picker_invoker.clone(), cx);
-                        this.open_popover_for_bounds(PopoverKind::PullPicker, bounds, window, cx);
-                    }),
+                    pull_menu.on_click_with_bounds(
+                        theme,
+                        cx,
+                        move |this, _e, bounds, window, cx| {
+                            this.activate_context_menu_invoker(pull_picker_invoker.clone(), cx);
+                            this.open_popover_for_bounds(
+                                PopoverKind::PullPicker,
+                                bounds,
+                                window,
+                                cx,
+                            );
+                        },
+                    ),
                 )
                 .style(zed::SplitButtonStyle::Outlined)
                 .render(theme),
@@ -481,10 +489,19 @@ impl Render for ActionBarView {
 
                         this.store.dispatch(Msg::Push { repo_id });
                     }),
-                    push_menu.on_click_with_bounds(theme, cx, move |this, _e, bounds, window, cx| {
-                        this.activate_context_menu_invoker(push_picker_invoker.clone(), cx);
-                        this.open_popover_for_bounds(PopoverKind::PushPicker, bounds, window, cx);
-                    }),
+                    push_menu.on_click_with_bounds(
+                        theme,
+                        cx,
+                        move |this, _e, bounds, window, cx| {
+                            this.activate_context_menu_invoker(push_picker_invoker.clone(), cx);
+                            this.open_popover_for_bounds(
+                                PopoverKind::PushPicker,
+                                bounds,
+                                window,
+                                cx,
+                            );
+                        },
+                    ),
                 )
                 .style(zed::SplitButtonStyle::Outlined)
                 .render(theme),

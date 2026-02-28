@@ -383,9 +383,7 @@ fn clear_diff_selection_bumps_diff_state_rev() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::ClearDiffSelection {
-            repo_id: RepoId(1),
-        },
+        Msg::ClearDiffSelection { repo_id: RepoId(1) },
     );
 
     assert!(

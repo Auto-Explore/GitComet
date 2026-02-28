@@ -421,8 +421,7 @@ impl DetailsPaneView {
             })
             .unwrap_or(0);
 
-        let spinner =
-            |id: (&'static str, u64), color: gpui::Rgba| svg_spinner(id, color, px(14.0));
+        let spinner = |id: (&'static str, u64), color: gpui::Rgba| svg_spinner(id, color, px(14.0));
         let repo_key = repo_id.map(|id| id.0).unwrap_or(0);
 
         let stage_all = zed::Button::new("stage_all", "Stage all changes")

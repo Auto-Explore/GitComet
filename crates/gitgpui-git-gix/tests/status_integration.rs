@@ -1168,12 +1168,14 @@ fn checkout_conflict_side_resolves_non_utf8_binary_conflict() {
         !status_after
             .unstaged
             .iter()
-            .any(|e| e.path == Path::new("bin.dat")
-                && e.kind == FileStatusKind::Conflicted),
+            .any(|e| e.path == Path::new("bin.dat") && e.kind == FileStatusKind::Conflicted),
         "binary conflict should be cleared after choosing theirs"
     );
     assert!(
-        status_after.staged.iter().any(|e| e.path == Path::new("bin.dat")),
+        status_after
+            .staged
+            .iter()
+            .any(|e| e.path == Path::new("bin.dat")),
         "chosen binary side should be staged"
     );
 }
@@ -3132,8 +3134,7 @@ fn resolve_conflict_write_and_stage_clears_conflict() {
 
     // 3. Verify worktree file contains conflict markers
     let worktree_content = fs::read_to_string(repo.join("doc.txt")).unwrap();
-    let validation =
-        gitgpui_core::services::validate_conflict_resolution_text(&worktree_content);
+    let validation = gitgpui_core::services::validate_conflict_resolution_text(&worktree_content);
     assert!(
         validation.has_conflict_markers,
         "worktree file should contain conflict markers"
@@ -3158,8 +3159,7 @@ fn resolve_conflict_write_and_stage_clears_conflict() {
         !status_after
             .unstaged
             .iter()
-            .any(|e| e.path == Path::new("doc.txt")
-                && e.kind == FileStatusKind::Conflicted),
+            .any(|e| e.path == Path::new("doc.txt") && e.kind == FileStatusKind::Conflicted),
         "doc.txt should no longer be conflicted after staging resolved content"
     );
 }
@@ -3234,9 +3234,7 @@ fn autosolve_safe_resolves_trivial_conflict_regions_end_to_end() {
     let opened = backend.open(repo).unwrap();
 
     // Build a ConflictSession from the backend
-    let session_opt = opened
-        .conflict_session(Path::new("multi.txt"))
-        .unwrap();
+    let session_opt = opened.conflict_session(Path::new("multi.txt")).unwrap();
     // The backend may or may not build the session (depending on status
     // detection of the synthetic stages). Build one manually if needed.
     let mut session = session_opt.unwrap_or_else(|| {
@@ -3252,12 +3250,23 @@ fn autosolve_safe_resolves_trivial_conflict_regions_end_to_end() {
 
     assert_eq!(session.strategy, ConflictResolverStrategy::FullTextResolver);
     assert_eq!(session.total_regions(), 3);
-    assert_eq!(session.unsolved_count(), 3, "all regions should start unresolved");
+    assert_eq!(
+        session.unsolved_count(),
+        3,
+        "all regions should start unresolved"
+    );
 
     // Apply auto-resolve Pass 1
     let auto_resolved = session.auto_resolve_safe();
-    assert_eq!(auto_resolved, 2, "expected 2 trivial regions to be auto-resolved");
-    assert_eq!(session.unsolved_count(), 1, "1 genuine conflict should remain");
+    assert_eq!(
+        auto_resolved, 2,
+        "expected 2 trivial regions to be auto-resolved"
+    );
+    assert_eq!(
+        session.unsolved_count(),
+        1,
+        "1 genuine conflict should remain"
+    );
 
     // Verify specific rules
     match &session.regions[0].resolution {
@@ -3369,8 +3378,7 @@ fn conflict_session_modify_delete_keep_resolves_conflict() {
         !status
             .unstaged
             .iter()
-            .any(|e| e.path == Path::new("a.txt")
-                && e.kind == FileStatusKind::Conflicted),
+            .any(|e| e.path == Path::new("a.txt") && e.kind == FileStatusKind::Conflicted),
         "a.txt should no longer be conflicted after keeping theirs"
     );
 }

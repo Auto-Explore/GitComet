@@ -1,8 +1,10 @@
 use super::*;
 
 pub(super) fn model(host: &PopoverHost, cx: &gpui::Context<PopoverHost>) -> ContextMenuModel {
-    let (show_author, show_date, show_sha) =
-        host.main_pane.read(cx).history_visible_column_preferences(cx);
+    let (show_author, show_date, show_sha) = host
+        .main_pane
+        .read(cx)
+        .history_visible_column_preferences(cx);
 
     let check = |enabled: bool| enabled.then_some("✓".into());
 

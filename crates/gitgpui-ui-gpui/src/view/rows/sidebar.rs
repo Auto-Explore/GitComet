@@ -51,11 +51,8 @@ impl SidebarPaneView {
                         BranchSection::Local => "local",
                         BranchSection::Remote => "remote",
                     };
-                    let context_menu_invoker: SharedString = format!(
-                        "branch_section_menu_{}_{}",
-                        repo_id.0, section_key
-                    )
-                    .into();
+                    let context_menu_invoker: SharedString =
+                        format!("branch_section_menu_{}_{}", repo_id.0, section_key).into();
                     let context_menu_active =
                         this.active_context_menu_invoker.as_ref() == Some(&context_menu_invoker);
                     let context_menu_invoker_for_click = context_menu_invoker.clone();
