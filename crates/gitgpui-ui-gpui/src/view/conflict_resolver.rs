@@ -174,6 +174,34 @@ fn unresolved_conflict_indices(segments: &[ConflictSegment]) -> Vec<usize> {
     out
 }
 
+/// Apply a choice to all unresolved conflict blocks.
+///
+/// Already-resolved blocks are preserved. Choosing `Base` skips unresolved
+/// 2-way blocks that don't have an ancestor section.
+///
+/// Returns the number of blocks updated.
+pub fn apply_choice_to_unresolved_segments(
+    segments: &mut [ConflictSegment],
+    choice: ConflictChoice,
+) -> usize {
+    let mut updated = 0usize;
+    for seg in segments {
+        let ConflictSegment::Block(block) = seg else {
+            continue;
+        };
+        if block.resolved {
+            continue;
+        }
+        if matches!(choice, ConflictChoice::Base) && block.base.is_none() {
+            continue;
+        }
+        block.choice = choice;
+        block.resolved = true;
+        updated += 1;
+    }
+    updated
+}
+
 /// Find the next unresolved conflict index after `current`.
 /// Wraps around to the first unresolved conflict.
 pub fn next_unresolved_conflict_index(
@@ -1044,6 +1072,62 @@ mod tests {
 
         assert_eq!(next_unresolved_conflict_index(&segments, 0), Some(1));
         assert_eq!(prev_unresolved_conflict_index(&segments, 0), Some(1));
+    }
+
+    #[test]
+    fn bulk_pick_updates_only_unresolved_blocks() {
+        let input = concat!(
+            "<<<<<<< HEAD\none\n=======\nuno\n>>>>>>> other\n",
+            "<<<<<<< HEAD\ntwo\n=======\ndos\n>>>>>>> other\n",
+        );
+        let mut segments = parse_conflict_markers(input);
+
+        if let Some(ConflictSegment::Block(block)) = segments
+            .iter_mut()
+            .find(|s| matches!(s, ConflictSegment::Block(_)))
+        {
+            block.choice = ConflictChoice::Theirs;
+            block.resolved = true;
+        }
+
+        let updated = apply_choice_to_unresolved_segments(&mut segments, ConflictChoice::Ours);
+        assert_eq!(updated, 1);
+        assert_eq!(resolved_conflict_count(&segments), 2);
+
+        let mut blocks = segments.iter().filter_map(|s| match s {
+            ConflictSegment::Block(block) => Some(block),
+            ConflictSegment::Text(_) => None,
+        });
+        let first = blocks.next().expect("missing first block");
+        let second = blocks.next().expect("missing second block");
+        assert_eq!(first.choice, ConflictChoice::Theirs);
+        assert!(first.resolved);
+        assert_eq!(second.choice, ConflictChoice::Ours);
+        assert!(second.resolved);
+    }
+
+    #[test]
+    fn bulk_pick_base_skips_unresolved_blocks_without_base() {
+        let input = concat!(
+            "<<<<<<< HEAD\none\n=======\nuno\n>>>>>>> other\n",
+            "<<<<<<< HEAD\ntwo\n||||||| base\ntwo\n=======\ndos\n>>>>>>> other\n",
+        );
+        let mut segments = parse_conflict_markers(input);
+        let updated = apply_choice_to_unresolved_segments(&mut segments, ConflictChoice::Base);
+        assert_eq!(updated, 1);
+        assert_eq!(resolved_conflict_count(&segments), 1);
+
+        let mut blocks = segments.iter().filter_map(|s| match s {
+            ConflictSegment::Block(block) => Some(block),
+            ConflictSegment::Text(_) => None,
+        });
+        let first = blocks.next().expect("missing first block");
+        let second = blocks.next().expect("missing second block");
+
+        assert_eq!(first.choice, ConflictChoice::Ours);
+        assert!(!first.resolved);
+        assert_eq!(second.choice, ConflictChoice::Base);
+        assert!(second.resolved);
     }
 
     // -- auto_resolve_segments tests --

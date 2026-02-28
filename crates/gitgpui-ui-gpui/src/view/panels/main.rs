@@ -1083,12 +1083,12 @@ impl MainPaneView {
                             let resolved_count = self.conflict_resolver_resolved_count();
                             let unresolved_count = conflict_count - resolved_count;
 
-                            let any_block_missing_base = has_conflicts
+                            let any_unresolved_block_missing_base = has_conflicts
                                 && self.conflict_resolver.marker_segments.iter().any(|seg| {
                                     matches!(
                                         seg,
                                         conflict_resolver::ConflictSegment::Block(b)
-                                            if b.base.is_none()
+                                            if !b.resolved && b.base.is_none()
                                     )
                                 });
 
@@ -1226,19 +1226,33 @@ impl MainPaneView {
                                 .when(has_conflicts && conflict_count > 1, |d| {
                                     d.child(div().w(px(1.0)).h(px(12.0)).bg(theme.colors.border))
                                         .child(
-                                            zed::Button::new("conflict_all_base", "All → A")
+                                            zed::Button::new(
+                                                "conflict_all_base",
+                                                "Unresolved → A",
+                                            )
                                                 .style(zed::ButtonStyle::Transparent)
-                                                .disabled(any_block_missing_base)
+                                                .disabled(
+                                                    unresolved_count == 0
+                                                        || any_unresolved_block_missing_base,
+                                                )
                                                 .on_click(theme, cx, pick_all_base),
                                         )
                                         .child(
-                                            zed::Button::new("conflict_all_local", "All → B")
+                                            zed::Button::new(
+                                                "conflict_all_local",
+                                                "Unresolved → B",
+                                            )
                                                 .style(zed::ButtonStyle::Transparent)
+                                                .disabled(unresolved_count == 0)
                                                 .on_click(theme, cx, pick_all_local),
                                         )
                                         .child(
-                                            zed::Button::new("conflict_all_remote", "All → C")
+                                            zed::Button::new(
+                                                "conflict_all_remote",
+                                                "Unresolved → C",
+                                            )
                                                 .style(zed::ButtonStyle::Transparent)
+                                                .disabled(unresolved_count == 0)
                                                 .on_click(theme, cx, pick_all_remote),
                                         )
                                 })

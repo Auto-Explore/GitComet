@@ -2223,20 +2223,23 @@ impl MainPaneView {
         if self.conflict_resolver_conflict_count() == 0 {
             return;
         }
-        for seg in &mut self.conflict_resolver.marker_segments {
-            if let conflict_resolver::ConflictSegment::Block(block) = seg {
-                if matches!(choice, conflict_resolver::ConflictChoice::Base) && block.base.is_none()
-                {
-                    continue;
-                }
-                block.choice = choice;
-                block.resolved = true;
-            }
+        if conflict_resolver::apply_choice_to_unresolved_segments(
+            &mut self.conflict_resolver.marker_segments,
+            choice,
+        ) == 0
+        {
+            return;
         }
         let resolved =
             conflict_resolver::generate_resolved_text(&self.conflict_resolver.marker_segments);
         self.conflict_resolver_set_output(resolved, cx);
         self.conflict_resolver_rebuild_visible_map();
+        if let Some(next_unresolved) = conflict_resolver::next_unresolved_conflict_index(
+            &self.conflict_resolver.marker_segments,
+            self.conflict_resolver.active_conflict,
+        ) {
+            self.conflict_resolver.active_conflict = next_unresolved;
+        }
         cx.notify();
     }
 }
