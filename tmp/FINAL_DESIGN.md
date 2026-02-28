@@ -105,6 +105,11 @@
 - ✅ State effect pipeline now carries backend-provided sessions in `Msg::ConflictFileLoaded { conflict_session }`; reducer prefers backend session and falls back to local reconstruction for compatibility — `crates/gitgpui-state/src/store/effects/repo_load.rs`, `crates/gitgpui-state/src/msg/message.rs`, `crates/gitgpui-state/src/msg/message_debug.rs`, `crates/gitgpui-state/src/store/reducer.rs`, `crates/gitgpui-state/src/store/reducer/effects.rs`
 - ✅ Added coverage for new APIs: core validation unit tests, state reducer test for backend-session precedence, and git-gix integration assertions that `conflict_session()` works for all `FileConflictKind` values and non-UTF8/binary conflicts — `crates/gitgpui-core/src/services.rs`, `crates/gitgpui-state/src/store/tests/conflict_session.rs`, `crates/gitgpui-state/src/store/tests/effects.rs`, `crates/gitgpui-git-gix/tests/status_integration.rs`
 
+### 13) Testing Coverage Gaps (Iteration 18)
+- ✅ **Bulk-pick + hide-resolved interaction tests:** verified that after bulk-pick all conflicts become resolved and three-way visible map collapses all blocks correctly; verified two-way visible indices hide all conflict rows after bulk-pick; verified autosolve + hide-resolved interaction collapses only auto-resolved blocks — `crates/gitgpui-ui-gpui/src/view/conflict_resolver.rs` (3 tests)
+- ✅ **Counter/navigation correctness after sequential picks:** verified resolved counters track incremental picks correctly in both core domain model (4-region session) and UI-layer (visible map stays in sync with resolved state); verified navigation skips resolved regions in 5-region interleaved pattern; verified autosolve updates counters and navigation together — `crates/gitgpui-core/src/conflict_session.rs` (3 tests), `crates/gitgpui-ui-gpui/src/view/conflict_resolver.rs` (2 tests)
+- ✅ **Split vs inline row consistency:** verified both split and inline views produce the same set of distinct conflict indices for asymmetric multi-line conflicts; verified hide-resolved filtering hides the same conflict's rows in both views while preserving unresolved conflict visibility — `crates/gitgpui-ui-gpui/src/view/conflict_resolver.rs` (2 tests)
+
 ---
 
 *Design reference: `tmp/conflict_resolution.md`*

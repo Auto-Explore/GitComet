@@ -2610,4 +2610,106 @@ end
     fn history_autosolve_rule_description() {
         assert!(!AutosolveRule::HistoryMerged.description().is_empty());
     }
+
+    // -- counter/navigation correctness after sequential region picks --
+
+    #[test]
+    fn counters_track_sequential_region_resolution() {
+        // Resolve 4 regions one at a time, verify counters at each step.
+        let regions = vec![
+            make_region(Some("b1"), "o1", "t1"),
+            make_region(Some("b2"), "o2", "t2"),
+            make_region(Some("b3"), "o3", "t3"),
+            make_region(None, "o4", "t4"),
+        ];
+        let mut session = make_session(regions);
+        assert_eq!(session.total_regions(), 4);
+        assert_eq!(session.solved_count(), 0);
+        assert_eq!(session.unsolved_count(), 4);
+        assert!(!session.is_fully_resolved());
+
+        // Resolve region 0
+        session.regions[0].resolution = ConflictRegionResolution::PickOurs;
+        assert_eq!(session.solved_count(), 1);
+        assert_eq!(session.unsolved_count(), 3);
+
+        // Resolve region 2 (skip 1)
+        session.regions[2].resolution = ConflictRegionResolution::PickTheirs;
+        assert_eq!(session.solved_count(), 2);
+        assert_eq!(session.unsolved_count(), 2);
+
+        // Resolve region 1
+        session.regions[1].resolution = ConflictRegionResolution::PickBase;
+        assert_eq!(session.solved_count(), 3);
+        assert_eq!(session.unsolved_count(), 1);
+
+        // Resolve region 3
+        session.regions[3].resolution = ConflictRegionResolution::PickBoth;
+        assert_eq!(session.solved_count(), 4);
+        assert_eq!(session.unsolved_count(), 0);
+        assert!(session.is_fully_resolved());
+    }
+
+    #[test]
+    fn navigation_skips_resolved_regions_correctly() {
+        // 5 regions, resolve 0, 2, 4 → only 1 and 3 remain unresolved.
+        let regions = vec![
+            make_region(Some("b"), "o1", "t1"),
+            make_region(Some("b"), "o2", "t2"),
+            make_region(Some("b"), "o3", "t3"),
+            make_region(Some("b"), "o4", "t4"),
+            make_region(Some("b"), "o5", "t5"),
+        ];
+        let mut session = make_session(regions);
+
+        session.regions[0].resolution = ConflictRegionResolution::PickOurs;
+        session.regions[2].resolution = ConflictRegionResolution::PickTheirs;
+        session.regions[4].resolution = ConflictRegionResolution::PickBase;
+
+        // Next from 0 → 1 (first unresolved)
+        assert_eq!(session.next_unresolved_after(0), Some(1));
+        // Next from 1 → 3 (skips resolved 2)
+        assert_eq!(session.next_unresolved_after(1), Some(3));
+        // Next from 3 → wraps to 1 (skips resolved 4, 0)
+        assert_eq!(session.next_unresolved_after(3), Some(1));
+
+        // Prev from 3 → 1 (skips resolved 2)
+        assert_eq!(session.prev_unresolved_before(3), Some(1));
+        // Prev from 1 → wraps to 3 (skips resolved 0, 4)
+        assert_eq!(session.prev_unresolved_before(1), Some(3));
+
+        // Resolve remaining
+        session.regions[1].resolution = ConflictRegionResolution::PickOurs;
+        session.regions[3].resolution = ConflictRegionResolution::PickTheirs;
+        assert!(session.is_fully_resolved());
+        assert_eq!(session.next_unresolved_after(0), None);
+        assert_eq!(session.prev_unresolved_before(0), None);
+    }
+
+    #[test]
+    fn autosolve_updates_counters_and_navigation() {
+        // Verify counters are correct after auto_resolve_safe runs.
+        let regions = vec![
+            // Region 0: identical sides → auto-resolve
+            make_region(Some("base"), "same", "same"),
+            // Region 1: both changed differently → stays unresolved
+            make_region(Some("base"), "ours_change", "theirs_change"),
+            // Region 2: only ours changed → auto-resolve
+            make_region(Some("base"), "changed", "base"),
+        ];
+        let mut session = make_session(regions);
+        assert_eq!(session.unsolved_count(), 3);
+
+        let resolved_count = session.auto_resolve_safe();
+        assert_eq!(resolved_count, 2); // regions 0 and 2
+
+        assert_eq!(session.solved_count(), 2);
+        assert_eq!(session.unsolved_count(), 1);
+        assert!(!session.is_fully_resolved());
+
+        // Navigation should only find region 1
+        assert_eq!(session.next_unresolved_after(0), Some(1));
+        assert_eq!(session.next_unresolved_after(1), Some(1));
+        assert_eq!(session.prev_unresolved_before(2), Some(1));
+    }
 }

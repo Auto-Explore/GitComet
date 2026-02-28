@@ -1972,4 +1972,320 @@ mod tests {
         let resolved = auto_resolve_segments_history(&mut segments, &options);
         assert_eq!(resolved, 0);
     }
+
+    // -- bulk-pick + hide-resolved interaction tests --
+
+    #[test]
+    fn bulk_pick_then_three_way_visible_map_collapses_all_resolved() {
+        // Scenario: 3 conflicts with context. Resolve block 0 manually, then bulk-pick
+        // remaining. The three-way visible map should collapse all 3 blocks.
+        let input = concat!(
+            "ctx\n",                                       // line 0
+            "<<<<<<< HEAD\nA\n=======\na\n>>>>>>> o\n",   // conflict 0, lines 1..2
+            "mid\n",                                       // line 3 (after conflict)
+            "<<<<<<< HEAD\nB\n=======\nb\n>>>>>>> o\n",   // conflict 1, lines 4..5
+            "mid2\n",                                      // line 6
+            "<<<<<<< HEAD\nC\n=======\nc\n>>>>>>> o\n",   // conflict 2, lines 7..8
+            "end\n",                                       // line 9
+        );
+        let mut segments = parse_conflict_markers(input);
+        assert_eq!(conflict_count(&segments), 3);
+
+        // Manually resolve block 0
+        mark_block_resolved(&mut segments, 0);
+
+        // Bulk-pick remaining → blocks 1 and 2 become resolved
+        let updated = apply_choice_to_unresolved_segments(&mut segments, ConflictChoice::Ours);
+        assert_eq!(updated, 2);
+        assert_eq!(resolved_conflict_count(&segments), 3);
+
+        // Now rebuild the three-way visible map with hide_resolved=true.
+        // Each conflict block is 2 lines (ours side), ranges are:
+        //   block 0: 1..3, block 1: 4..6, block 2: 7..9
+        // Total lines in the three-way view: 10
+        let conflict_ranges = [1..3, 4..6, 7..9];
+        let map = build_three_way_visible_map(10, &conflict_ranges, &segments, true);
+
+        // Expect: Line(0), Collapsed(0), Line(3), Collapsed(1), Line(6), Collapsed(2), Line(9)
+        assert_eq!(map.len(), 7);
+        assert_eq!(map[0], ThreeWayVisibleItem::Line(0));
+        assert_eq!(map[1], ThreeWayVisibleItem::CollapsedBlock(0));
+        assert_eq!(map[2], ThreeWayVisibleItem::Line(3));
+        assert_eq!(map[3], ThreeWayVisibleItem::CollapsedBlock(1));
+        assert_eq!(map[4], ThreeWayVisibleItem::Line(6));
+        assert_eq!(map[5], ThreeWayVisibleItem::CollapsedBlock(2));
+        assert_eq!(map[6], ThreeWayVisibleItem::Line(9));
+    }
+
+    #[test]
+    fn bulk_pick_then_two_way_visible_indices_hides_all_resolved() {
+        // Two-way variant: after bulk pick, all conflict rows should be hidden.
+        let mut segments = vec![
+            ConflictSegment::Text("ctx\n".into()),
+            ConflictSegment::Block(ConflictBlock {
+                base: None,
+                ours: "A\n".into(),
+                theirs: "a\n".into(),
+                choice: ConflictChoice::Ours,
+                resolved: false,
+            }),
+            ConflictSegment::Text("mid\n".into()),
+            ConflictSegment::Block(ConflictBlock {
+                base: None,
+                ours: "B\n".into(),
+                theirs: "b\n".into(),
+                choice: ConflictChoice::Ours,
+                resolved: false,
+            }),
+            ConflictSegment::Text("end\n".into()),
+        ];
+        // row indices: 0=ctx, 1,2=block0(ours+theirs), 3=mid, 4,5=block1, 6=end
+        let row_conflict_map: Vec<Option<usize>> =
+            vec![None, Some(0), Some(0), None, Some(1), Some(1), None];
+
+        // Before bulk pick: all rows visible
+        assert_eq!(
+            build_two_way_visible_indices(&row_conflict_map, &segments, true).len(),
+            7
+        );
+
+        // Bulk pick resolves both blocks
+        let updated = apply_choice_to_unresolved_segments(&mut segments, ConflictChoice::Theirs);
+        assert_eq!(updated, 2);
+
+        // After bulk pick with hide_resolved=true: conflict rows hidden
+        let visible = build_two_way_visible_indices(&row_conflict_map, &segments, true);
+        assert_eq!(visible, vec![0, 3, 6]); // only context rows
+    }
+
+    #[test]
+    fn autosolve_then_three_way_visible_map_collapses_autoresolved() {
+        // Auto-resolve should cause the same collapse behavior as manual picks
+        // when hide_resolved is active.
+        let input = concat!(
+            "ctx\n",
+            "<<<<<<< HEAD\nsame\n||||||| base\norig\n=======\nsame\n>>>>>>> o\n",
+            "mid\n",
+            "<<<<<<< HEAD\nX\n||||||| base\norig2\n=======\nY\n>>>>>>> o\n",
+            "end\n",
+        );
+        let mut segments = parse_conflict_markers(input);
+        assert_eq!(conflict_count(&segments), 2);
+
+        // Block 0: ours==theirs → autosolve resolves it
+        // Block 1: both changed differently → stays unresolved
+        let resolved = auto_resolve_segments(&mut segments);
+        assert_eq!(resolved, 1);
+        assert_eq!(resolved_conflict_count(&segments), 1);
+
+        // Three-way: ctx(0), block0(1), mid(2), block1(3), end(4) → total 5
+        let conflict_ranges = [1..2, 3..4];
+        let map = build_three_way_visible_map(5, &conflict_ranges, &segments, true);
+        assert_eq!(map[0], ThreeWayVisibleItem::Line(0));
+        assert_eq!(map[1], ThreeWayVisibleItem::CollapsedBlock(0)); // autoresolved
+        assert_eq!(map[2], ThreeWayVisibleItem::Line(2)); // mid
+        assert_eq!(map[3], ThreeWayVisibleItem::Line(3)); // unresolved block stays expanded
+        assert_eq!(map[4], ThreeWayVisibleItem::Line(4)); // end
+    }
+
+    // -- counter/navigation correctness after sequential picks --
+
+    #[test]
+    fn navigation_updates_correctly_after_sequential_picks() {
+        // Start with 3 unresolved blocks, resolve them one-by-one,
+        // verify navigation at each step.
+        let input = concat!(
+            "<<<<<<< HEAD\nA\n=======\na\n>>>>>>> o\n",
+            "<<<<<<< HEAD\nB\n=======\nb\n>>>>>>> o\n",
+            "<<<<<<< HEAD\nC\n=======\nc\n>>>>>>> o\n",
+        );
+        let mut segments = parse_conflict_markers(input);
+        assert_eq!(conflict_count(&segments), 3);
+
+        // All unresolved: next from 0 → 1, prev from 0 → 2 (wrap)
+        assert_eq!(next_unresolved_conflict_index(&segments, 0), Some(1));
+        assert_eq!(prev_unresolved_conflict_index(&segments, 0), Some(2));
+
+        // Resolve block 1 (middle)
+        mark_block_resolved(&mut segments, 1);
+        assert_eq!(resolved_conflict_count(&segments), 1);
+        // Next from 0 should skip block 1, go to 2
+        assert_eq!(next_unresolved_conflict_index(&segments, 0), Some(2));
+        // Prev from 2 should skip block 1, go to 0
+        assert_eq!(prev_unresolved_conflict_index(&segments, 2), Some(0));
+
+        // Resolve block 0 (first)
+        mark_block_resolved(&mut segments, 0);
+        assert_eq!(resolved_conflict_count(&segments), 2);
+        // Only block 2 is unresolved
+        assert_eq!(next_unresolved_conflict_index(&segments, 0), Some(2));
+        assert_eq!(next_unresolved_conflict_index(&segments, 1), Some(2));
+        assert_eq!(next_unresolved_conflict_index(&segments, 2), Some(2));
+        assert_eq!(prev_unresolved_conflict_index(&segments, 0), Some(2));
+
+        // Resolve last block
+        mark_block_resolved(&mut segments, 2);
+        assert_eq!(resolved_conflict_count(&segments), 3);
+        assert_eq!(next_unresolved_conflict_index(&segments, 0), None);
+        assert_eq!(prev_unresolved_conflict_index(&segments, 0), None);
+    }
+
+    #[test]
+    fn resolved_counter_consistent_with_visible_map_after_incremental_picks() {
+        // Ensure the resolved count and visible map stay in sync as
+        // conflicts are resolved one by one. Uses multi-line conflicts so
+        // collapsing them visibly reduces the visible row count.
+        let mut segments = vec![
+            ConflictSegment::Text("pre\n".into()),
+            ConflictSegment::Block(ConflictBlock {
+                base: Some("orig1\norig1b\n".into()),
+                ours: "A\nA2\n".into(),
+                theirs: "a\na2\n".into(),
+                choice: ConflictChoice::Ours,
+                resolved: false,
+            }),
+            ConflictSegment::Text("mid\n".into()),
+            ConflictSegment::Block(ConflictBlock {
+                base: Some("orig2\norig2b\norig2c\n".into()),
+                ours: "B\nB2\nB3\n".into(),
+                theirs: "b\nb2\nb3\n".into(),
+                choice: ConflictChoice::Ours,
+                resolved: false,
+            }),
+            ConflictSegment::Text("post\n".into()),
+        ];
+        // Layout: pre(0), block0(1..3), mid(3), block1(4..7), post(7) → total 8
+        let conflict_ranges = [1..3, 4..7];
+        let total_lines = 8;
+
+        // Step 0: nothing resolved — all lines visible
+        assert_eq!(resolved_conflict_count(&segments), 0);
+        let map = build_three_way_visible_map(total_lines, &conflict_ranges, &segments, true);
+        assert_eq!(map.len(), 8);
+        assert!(map.iter().all(|item| matches!(item, ThreeWayVisibleItem::Line(_))));
+
+        // Step 1: resolve block 0 (2 lines → 1 collapsed row)
+        mark_block_resolved(&mut segments, 0);
+        assert_eq!(resolved_conflict_count(&segments), 1);
+        let map = build_three_way_visible_map(total_lines, &conflict_ranges, &segments, true);
+        // pre(0), [collapsed0], mid(3), block1-lines(4,5,6), post(7) = 7 items
+        assert_eq!(map.len(), 7);
+        assert_eq!(map[0], ThreeWayVisibleItem::Line(0));
+        assert_eq!(map[1], ThreeWayVisibleItem::CollapsedBlock(0));
+        assert_eq!(map[2], ThreeWayVisibleItem::Line(3));
+
+        // Step 2: resolve block 1 (3 lines → 1 collapsed row)
+        mark_block_resolved(&mut segments, 1);
+        assert_eq!(resolved_conflict_count(&segments), 2);
+        let map = build_three_way_visible_map(total_lines, &conflict_ranges, &segments, true);
+        // pre(0), [collapsed0], mid(3), [collapsed1], post(7) = 5 items
+        assert_eq!(map.len(), 5);
+        assert_eq!(map[1], ThreeWayVisibleItem::CollapsedBlock(0));
+        assert_eq!(map[3], ThreeWayVisibleItem::CollapsedBlock(1));
+    }
+
+    // -- split vs inline row list consistency --
+
+    #[test]
+    fn split_and_inline_views_have_consistent_conflict_counts() {
+        // Verify that both split and inline row conflict maps produce the
+        // same set of conflict indices (the same number of distinct conflicts).
+        let markers = concat!(
+            "ctx\n",
+            "<<<<<<< HEAD\n",
+            "alpha\nbeta\n",
+            "=======\n",
+            "ALPHA\nBETA\n",
+            ">>>>>>> other\n",
+            "mid\n",
+            "<<<<<<< HEAD\n",
+            "gamma\n",
+            "=======\n",
+            "GAMMA\nDELTA\n",
+            ">>>>>>> other\n",
+            "end\n",
+        );
+        let segments = parse_conflict_markers(markers);
+        assert_eq!(conflict_count(&segments), 2);
+
+        let ours_text = "ctx\nalpha\nbeta\nmid\ngamma\nend\n";
+        let theirs_text = "ctx\nALPHA\nBETA\nmid\nGAMMA\nDELTA\nend\n";
+        let diff_rows = gitgpui_core::file_diff::side_by_side_rows(ours_text, theirs_text);
+        let inline_rows = build_inline_rows(&diff_rows);
+
+        let (split_map, inline_map) =
+            map_two_way_rows_to_conflicts(&segments, &diff_rows, &inline_rows);
+
+        // Both maps should contain the same set of distinct conflict indices
+        let split_indices: std::collections::BTreeSet<usize> =
+            split_map.iter().flatten().copied().collect();
+        let inline_indices: std::collections::BTreeSet<usize> =
+            inline_map.iter().flatten().copied().collect();
+        assert_eq!(split_indices, inline_indices);
+
+        // And that set should match the actual conflict count
+        assert_eq!(split_indices.len(), 2);
+        assert!(split_indices.contains(&0));
+        assert!(split_indices.contains(&1));
+    }
+
+    #[test]
+    fn split_and_inline_hide_resolved_filter_same_conflicts() {
+        // After resolving one conflict, both split and inline visible indices
+        // should filter out the same conflict's rows.
+        let segments = vec![
+            ConflictSegment::Text("ctx\n".into()),
+            ConflictSegment::Block(ConflictBlock {
+                base: None,
+                ours: "A\nB\n".into(),
+                theirs: "a\nb\n".into(),
+                choice: ConflictChoice::Ours,
+                resolved: true, // resolved
+            }),
+            ConflictSegment::Text("mid\n".into()),
+            ConflictSegment::Block(ConflictBlock {
+                base: None,
+                ours: "C\n".into(),
+                theirs: "c\n".into(),
+                choice: ConflictChoice::Ours,
+                resolved: false, // unresolved
+            }),
+            ConflictSegment::Text("end\n".into()),
+        ];
+
+        // Build split and inline maps
+        let ours_text = "ctx\nA\nB\nmid\nC\nend\n";
+        let theirs_text = "ctx\na\nb\nmid\nc\nend\n";
+        let diff_rows = gitgpui_core::file_diff::side_by_side_rows(ours_text, theirs_text);
+        let inline_rows = build_inline_rows(&diff_rows);
+        let (split_map, inline_map) =
+            map_two_way_rows_to_conflicts(&segments, &diff_rows, &inline_rows);
+
+        // With hide_resolved=true, both views should hide block 0 rows
+        let split_visible = build_two_way_visible_indices(&split_map, &segments, true);
+        let inline_visible = build_two_way_visible_indices(&inline_map, &segments, true);
+
+        // Split visible should not contain any rows mapped to conflict 0
+        for &ix in &split_visible {
+            if let Some(ci) = split_map[ix] {
+                assert_ne!(ci, 0, "split view should hide resolved conflict 0 rows");
+            }
+        }
+        // Inline visible should not contain any rows mapped to conflict 0
+        for &ix in &inline_visible {
+            if let Some(ci) = inline_map[ix] {
+                assert_ne!(ci, 0, "inline view should hide resolved conflict 0 rows");
+            }
+        }
+
+        // Both should still show the unresolved conflict 1 rows
+        let split_has_conflict_1 = split_visible
+            .iter()
+            .any(|&ix| split_map[ix] == Some(1));
+        let inline_has_conflict_1 = inline_visible
+            .iter()
+            .any(|&ix| inline_map[ix] == Some(1));
+        assert!(split_has_conflict_1, "split should show unresolved conflict 1");
+        assert!(inline_has_conflict_1, "inline should show unresolved conflict 1");
+    }
 }
