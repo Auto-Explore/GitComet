@@ -2009,6 +2009,22 @@ impl MainPaneView {
         &mut self,
         cx: &mut gpui::Context<Self>,
     ) {
+        self.conflict_resolver_auto_resolve_inner(false, cx);
+    }
+
+    /// Apply safe + regex-assisted auto-resolve rules (explicit opt-in).
+    pub(in super::super) fn conflict_resolver_auto_resolve_regex(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.conflict_resolver_auto_resolve_inner(true, cx);
+    }
+
+    fn conflict_resolver_auto_resolve_inner(
+        &mut self,
+        include_regex_pass: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
         if self.conflict_resolver_conflict_count() == 0 {
             return;
         }
@@ -2027,6 +2043,17 @@ impl MainPaneView {
                 // satisfy whole-block rules after splitting).
                 conflict_resolver::auto_resolve_segments(
                     &mut self.conflict_resolver.marker_segments,
+                )
+            } else {
+                0
+            }
+            + if include_regex_pass {
+                let options =
+                    gitgpui_core::conflict_session::RegexAutosolveOptions::whitespace_insensitive(
+                    );
+                conflict_resolver::auto_resolve_segments_regex(
+                    &mut self.conflict_resolver.marker_segments,
+                    &options,
                 )
             } else {
                 0

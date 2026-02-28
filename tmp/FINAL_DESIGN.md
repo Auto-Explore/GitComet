@@ -33,7 +33,7 @@
 - ✅ `conflict_resolver_auto_resolve()` method wires button to auto-resolve + text regeneration — `crates/gitgpui-ui-gpui/src/view/panes/main.rs`
 - ✅ 10 unit tests for auto-resolve segments and resolved counting — `crates/gitgpui-ui-gpui/src/view/conflict_resolver.rs`
 - ✅ Pass 2: heuristic subchunk splitting (meld-inspired) — `split_conflict_into_subchunks()` performs 3-way line-level merge using two strategies: per-line comparison (same line count) and diff-based hunk merge with per-line decomposition of overlapping regions (different line counts); `Subchunk` enum (Resolved/Conflict) in core, `auto_resolve_segments_pass2()` splits UI blocks into finer segments, wired into "Auto-resolve safe" button (Pass 1 → Pass 2 → Pass 1 re-run on sub-blocks); 15 unit tests for core splitting + 4 UI-layer tests — `crates/gitgpui-core/src/conflict_session.rs`, `crates/gitgpui-ui-gpui/src/view/conflict_resolver.rs`, `crates/gitgpui-ui-gpui/src/view/panes/main.rs`
-- ⬜ Pass 3: history/regex modes (opt-in)
+- 🔧 Pass 3 (partial): regex-assisted opt-in mode implemented with `RegexAutosolveOptions`, `regex_assisted_auto_resolve_pick()`, and `ConflictSession::auto_resolve_regex()` in core plus explicit "Auto-resolve regex" toolbar action and UI wiring; history-aware mode remains unimplemented — `crates/gitgpui-core/src/conflict_session.rs`, `crates/gitgpui-ui-gpui/src/view/conflict_resolver.rs`, `crates/gitgpui-ui-gpui/src/view/panes/main.rs`, `crates/gitgpui-ui-gpui/src/view/panels/main.rs`
 
 ### 5) Diff and Text Fidelity Upgrades
 - ✅ Modeled missing trailing newline states in `file_diff.rs` via `FileDiffEofNewline` row metadata and EOF delta annotation (including newline-only diffs promoted to `Modify`) with dedicated tests — `crates/gitgpui-core/src/file_diff.rs`

@@ -251,6 +251,44 @@ pub fn auto_resolve_segments(segments: &mut [ConflictSegment]) -> usize {
     count
 }
 
+/// Apply Pass 3 regex-assisted auto-resolve rules (opt-in) to unresolved blocks.
+///
+/// This mode uses regex normalization rules from core and only performs
+/// side-picks (`Ours` / `Theirs`), never synthetic text rewrites.
+pub fn auto_resolve_segments_regex(
+    segments: &mut [ConflictSegment],
+    options: &gitgpui_core::conflict_session::RegexAutosolveOptions,
+) -> usize {
+    use gitgpui_core::conflict_session::{regex_assisted_auto_resolve_pick, AutosolvePickSide};
+
+    let mut count = 0;
+    for seg in segments.iter_mut() {
+        let ConflictSegment::Block(block) = seg else {
+            continue;
+        };
+        if block.resolved {
+            continue;
+        }
+
+        let Some((_, pick)) = regex_assisted_auto_resolve_pick(
+            block.base.as_deref(),
+            &block.ours,
+            &block.theirs,
+            options,
+        ) else {
+            continue;
+        };
+
+        block.choice = match pick {
+            AutosolvePickSide::Ours => ConflictChoice::Ours,
+            AutosolvePickSide::Theirs => ConflictChoice::Theirs,
+        };
+        block.resolved = true;
+        count += 1;
+    }
+    count
+}
+
 /// Apply Pass 2 (heuristic subchunk splitting) to unresolved conflict blocks.
 ///
 /// For each unresolved block that has a base, attempts to split it into
@@ -1096,6 +1134,58 @@ mod tests {
         auto_resolve_segments(&mut segments);
         let text = generate_resolved_text(&segments);
         assert_eq!(text, "a\nchanged\nb\n");
+    }
+
+    #[test]
+    fn auto_resolve_regex_equivalent_sides() {
+        use gitgpui_core::conflict_session::RegexAutosolveOptions;
+
+        let input = "a\n<<<<<<< HEAD\nlet  answer = 42;\n||||||| base\nlet answer = 42;\n=======\nlet answer\t=\t42;\n>>>>>>> other\nb\n";
+        let mut segments = parse_conflict_markers(input);
+        let options = RegexAutosolveOptions::whitespace_insensitive();
+
+        assert_eq!(auto_resolve_segments_regex(&mut segments, &options), 1);
+        let block = segments
+            .iter()
+            .find_map(|s| match s {
+                ConflictSegment::Block(b) => Some(b),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(block.choice, ConflictChoice::Ours);
+        assert!(block.resolved);
+    }
+
+    #[test]
+    fn auto_resolve_regex_only_theirs_changed_from_normalized_base() {
+        use gitgpui_core::conflict_session::RegexAutosolveOptions;
+
+        let input = "a\n<<<<<<< HEAD\nlet answer=42;\n||||||| base\nlet answer = 42;\n=======\nlet answer = 43;\n>>>>>>> other\nb\n";
+        let mut segments = parse_conflict_markers(input);
+        let options = RegexAutosolveOptions::whitespace_insensitive();
+
+        assert_eq!(auto_resolve_segments_regex(&mut segments, &options), 1);
+        let block = segments
+            .iter()
+            .find_map(|s| match s {
+                ConflictSegment::Block(b) => Some(b),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(block.choice, ConflictChoice::Theirs);
+        assert!(block.resolved);
+    }
+
+    #[test]
+    fn auto_resolve_regex_invalid_pattern_noops() {
+        use gitgpui_core::conflict_session::RegexAutosolveOptions;
+
+        let input = "a\n<<<<<<< HEAD\nlet answer=42;\n||||||| base\nlet answer = 42;\n=======\nlet answer = 43;\n>>>>>>> other\nb\n";
+        let mut segments = parse_conflict_markers(input);
+        let options = RegexAutosolveOptions::default().with_pattern("(", "");
+
+        assert_eq!(auto_resolve_segments_regex(&mut segments, &options), 0);
+        assert_eq!(resolved_conflict_count(&segments), 0);
     }
 
     // -- hide-resolved visible map tests --

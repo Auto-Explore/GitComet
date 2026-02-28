@@ -1119,6 +1119,13 @@ impl MainPaneView {
                                  cx: &mut gpui::Context<Self>| {
                                     this.conflict_resolver_auto_resolve(cx);
                                 };
+                            let auto_resolve_regex =
+                                |this: &mut Self,
+                                 _e: &ClickEvent,
+                                 _w: &mut Window,
+                                 cx: &mut gpui::Context<Self>| {
+                                    this.conflict_resolver_auto_resolve_regex(cx);
+                                };
                             let toggle_hide_resolved =
                                 |this: &mut Self,
                                  _e: &ClickEvent,
@@ -1247,6 +1254,14 @@ impl MainPaneView {
                                         )
                                         .style(zed::ButtonStyle::Outlined)
                                         .on_click(theme, cx, auto_resolve),
+                                    )
+                                    .child(
+                                        zed::Button::new(
+                                            "conflict_auto_resolve_regex",
+                                            "Auto-resolve regex",
+                                        )
+                                        .style(zed::ButtonStyle::Transparent)
+                                        .on_click(theme, cx, auto_resolve_regex),
                                     )
                                 })
                                 .when(has_conflicts && resolved_count > 0, |d| {

@@ -1,5 +1,6 @@
 use crate::domain::FileConflictKind;
-use crate::file_diff::{myers_edits, split_lines, Edit, EditKind};
+use crate::file_diff::{Edit, EditKind, myers_edits, split_lines};
+use regex::Regex;
 use std::path::PathBuf;
 
 /// The payload content for one side of a conflict.
@@ -83,6 +84,12 @@ pub enum AutosolveRule {
     OnlyOursChanged,
     /// Only "theirs" changed from base; "ours" equals base.
     OnlyTheirsChanged,
+    /// Regex-assisted mode: sides differ textually but normalize to equal.
+    RegexEquivalentSides,
+    /// Regex-assisted mode: ours normalizes to base; theirs differs.
+    RegexOnlyTheirsChanged,
+    /// Regex-assisted mode: theirs normalizes to base; ours differs.
+    RegexOnlyOursChanged,
     /// Pass 2: block was split into line-level subchunks and all could be merged.
     SubchunkFullyMerged,
 }
@@ -93,9 +100,75 @@ impl AutosolveRule {
             AutosolveRule::IdenticalSides => "both sides identical",
             AutosolveRule::OnlyOursChanged => "only ours changed from base",
             AutosolveRule::OnlyTheirsChanged => "only theirs changed from base",
+            AutosolveRule::RegexEquivalentSides => "regex-normalized sides equivalent",
+            AutosolveRule::RegexOnlyTheirsChanged => {
+                "regex-normalized: only theirs changed from base"
+            }
+            AutosolveRule::RegexOnlyOursChanged => "regex-normalized: only ours changed from base",
             AutosolveRule::SubchunkFullyMerged => "line-level subchunk merge",
         }
     }
+}
+
+/// Side chosen by an auto-resolve decision.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AutosolvePickSide {
+    Ours,
+    Theirs,
+}
+
+/// One regex replacement rule used by advanced autosolve mode.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RegexAutosolvePattern {
+    pub pattern: String,
+    pub replacement: String,
+}
+
+impl RegexAutosolvePattern {
+    pub fn new(pattern: impl Into<String>, replacement: impl Into<String>) -> Self {
+        Self {
+            pattern: pattern.into(),
+            replacement: replacement.into(),
+        }
+    }
+}
+
+/// Options for Pass 3 regex-assisted autosolve.
+///
+/// This mode is explicitly opt-in and intended for conservative normalization
+/// patterns (for example, whitespace-insensitive matching).
+#[derive(Clone, Debug, Eq, PartialEq, Default)]
+pub struct RegexAutosolveOptions {
+    pub patterns: Vec<RegexAutosolvePattern>,
+}
+
+impl RegexAutosolveOptions {
+    /// A conservative preset that ignores all whitespace differences.
+    pub fn whitespace_insensitive() -> Self {
+        Self {
+            patterns: vec![RegexAutosolvePattern::new(r"\s+", "")],
+        }
+    }
+
+    pub fn with_pattern(
+        mut self,
+        pattern: impl Into<String>,
+        replacement: impl Into<String>,
+    ) -> Self {
+        self.patterns
+            .push(RegexAutosolvePattern::new(pattern, replacement));
+        self
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.patterns.is_empty()
+    }
+}
+
+#[derive(Clone)]
+struct CompiledRegexAutosolvePattern {
+    regex: Regex,
+    replacement: String,
 }
 
 /// A single conflict region within a file — represents one conflict block
@@ -118,9 +191,7 @@ impl ConflictRegion {
     pub fn resolved_text(&self) -> Option<&str> {
         match &self.resolution {
             ConflictRegionResolution::Unresolved => None,
-            ConflictRegionResolution::PickBase => {
-                self.base.as_deref().or(Some(""))
-            }
+            ConflictRegionResolution::PickBase => self.base.as_deref().or(Some("")),
             ConflictRegionResolution::PickOurs => Some(&self.ours),
             ConflictRegionResolution::PickTheirs => Some(&self.theirs),
             ConflictRegionResolution::PickBoth => None, // caller must concat ours+theirs
@@ -215,8 +286,7 @@ impl ConflictSession {
         ours: ConflictPayload,
         theirs: ConflictPayload,
     ) -> Self {
-        let is_binary =
-            base.is_binary() || ours.is_binary() || theirs.is_binary();
+        let is_binary = base.is_binary() || ours.is_binary() || theirs.is_binary();
         let strategy = ConflictResolverStrategy::for_conflict(conflict_kind, is_binary);
         Self {
             path,
@@ -301,10 +371,41 @@ impl ConflictSession {
                 continue;
             }
             if let Some((rule, content)) = safe_auto_resolve(region) {
-                region.resolution = ConflictRegionResolution::AutoResolved {
-                    rule,
-                    content,
+                region.resolution = ConflictRegionResolution::AutoResolved { rule, content };
+                count += 1;
+            }
+        }
+        count
+    }
+
+    /// Apply auto-resolve Pass 3 (regex-assisted, opt-in) to unresolved regions.
+    ///
+    /// This mode allows conservative normalization rules to treat text as
+    /// equivalent even when byte-for-byte content differs (for example,
+    /// whitespace-only differences).
+    ///
+    /// Returns the number of regions auto-resolved.
+    pub fn auto_resolve_regex(&mut self, options: &RegexAutosolveOptions) -> usize {
+        let Some(compiled) = compile_regex_patterns(options) else {
+            return 0;
+        };
+
+        let mut count = 0;
+        for region in &mut self.regions {
+            if region.resolution.is_resolved() {
+                continue;
+            }
+            if let Some((rule, pick)) = regex_assisted_auto_resolve_pick_with_compiled(
+                region.base.as_deref(),
+                &region.ours,
+                &region.theirs,
+                &compiled,
+            ) {
+                let content = match pick {
+                    AutosolvePickSide::Ours => region.ours.clone(),
+                    AutosolvePickSide::Theirs => region.theirs.clone(),
                 };
+                region.resolution = ConflictRegionResolution::AutoResolved { rule, content };
                 count += 1;
             }
         }
@@ -327,7 +428,8 @@ impl ConflictSession {
             let Some(base) = region.base.as_deref() else {
                 continue;
             };
-            if let Some(subchunks) = split_conflict_into_subchunks(base, &region.ours, &region.theirs)
+            if let Some(subchunks) =
+                split_conflict_into_subchunks(base, &region.ours, &region.theirs)
             {
                 if subchunks.iter().all(|c| matches!(c, Subchunk::Resolved(_))) {
                     let merged: String = subchunks
@@ -375,6 +477,87 @@ fn safe_auto_resolve(region: &ConflictRegion) -> Option<(AutosolveRule, String)>
     // Rule 3: only ours changed (theirs == base).
     if region.theirs == base && region.ours != base {
         return Some((AutosolveRule::OnlyOursChanged, region.ours.clone()));
+    }
+
+    None
+}
+
+fn compile_regex_patterns(
+    options: &RegexAutosolveOptions,
+) -> Option<Vec<CompiledRegexAutosolvePattern>> {
+    if options.is_empty() {
+        return None;
+    }
+    let mut compiled = Vec::with_capacity(options.patterns.len());
+    for pattern in &options.patterns {
+        let regex = Regex::new(&pattern.pattern).ok()?;
+        compiled.push(CompiledRegexAutosolvePattern {
+            regex,
+            replacement: pattern.replacement.clone(),
+        });
+    }
+    Some(compiled)
+}
+
+fn normalize_with_patterns(text: &str, patterns: &[CompiledRegexAutosolvePattern]) -> String {
+    let mut out = text.to_string();
+    for rule in patterns {
+        out = rule
+            .regex
+            .replace_all(&out, rule.replacement.as_str())
+            .into_owned();
+    }
+    out
+}
+
+/// Pass 3 regex-assisted decision helper.
+///
+/// Returns which side to pick when regex-normalized comparison indicates a
+/// conservative auto-resolution opportunity.
+pub fn regex_assisted_auto_resolve_pick(
+    base: Option<&str>,
+    ours: &str,
+    theirs: &str,
+    options: &RegexAutosolveOptions,
+) -> Option<(AutosolveRule, AutosolvePickSide)> {
+    let compiled = compile_regex_patterns(options)?;
+    regex_assisted_auto_resolve_pick_with_compiled(base, ours, theirs, &compiled)
+}
+
+fn regex_assisted_auto_resolve_pick_with_compiled(
+    base: Option<&str>,
+    ours: &str,
+    theirs: &str,
+    compiled: &[CompiledRegexAutosolvePattern],
+) -> Option<(AutosolveRule, AutosolvePickSide)> {
+    // Skip cases already covered by Pass 1 safe rules.
+    if ours == theirs {
+        return None;
+    }
+    if let Some(base_raw) = base
+        && ((ours == base_raw && theirs != base_raw) || (theirs == base_raw && ours != base_raw))
+    {
+        return None;
+    }
+
+    let norm_ours = normalize_with_patterns(ours, compiled);
+    let norm_theirs = normalize_with_patterns(theirs, compiled);
+
+    if norm_ours == norm_theirs {
+        return Some((AutosolveRule::RegexEquivalentSides, AutosolvePickSide::Ours));
+    }
+
+    let base = base?;
+    let norm_base = normalize_with_patterns(base, compiled);
+
+    if norm_ours == norm_base && norm_theirs != norm_base {
+        return Some((
+            AutosolveRule::RegexOnlyTheirsChanged,
+            AutosolvePickSide::Theirs,
+        ));
+    }
+    if norm_theirs == norm_base && norm_ours != norm_base {
+        return Some((AutosolveRule::RegexOnlyOursChanged, AutosolvePickSide::Ours));
     }
 
     None
@@ -440,27 +623,22 @@ pub fn split_conflict_into_subchunks(
         return None;
     }
 
-    let subchunks = if base_lines.len() == ours_lines.len()
-        && base_lines.len() == theirs_lines.len()
-    {
-        // Same number of lines: simple per-line 3-way comparison.
-        per_line_merge(&base_lines, &ours_lines, &theirs_lines)
-    } else {
-        // Different line counts: use diff-based hunk merge.
-        let edits_ours = myers_edits(&base_lines, &ours_lines);
-        let edits_theirs = myers_edits(&base_lines, &theirs_lines);
-        let hunks_ours = edits_to_line_hunks(&edits_ours);
-        let hunks_theirs = edits_to_line_hunks(&edits_theirs);
-        merge_line_hunks(&base_lines, &hunks_ours, &hunks_theirs)
-    };
+    let subchunks =
+        if base_lines.len() == ours_lines.len() && base_lines.len() == theirs_lines.len() {
+            // Same number of lines: simple per-line 3-way comparison.
+            per_line_merge(&base_lines, &ours_lines, &theirs_lines)
+        } else {
+            // Different line counts: use diff-based hunk merge.
+            let edits_ours = myers_edits(&base_lines, &ours_lines);
+            let edits_theirs = myers_edits(&base_lines, &theirs_lines);
+            let hunks_ours = edits_to_line_hunks(&edits_ours);
+            let hunks_theirs = edits_to_line_hunks(&edits_theirs);
+            merge_line_hunks(&base_lines, &hunks_ours, &hunks_theirs)
+        };
 
     // Only worth returning if at least some content is resolved.
     let has_resolved = subchunks.iter().any(|c| matches!(c, Subchunk::Resolved(_)));
-    if has_resolved {
-        Some(subchunks)
-    } else {
-        None
-    }
+    if has_resolved { Some(subchunks) } else { None }
 }
 
 /// Convert a Myers edit script into line-level hunks relative to the base.
@@ -596,7 +774,10 @@ fn merge_line_hunks(
     let mut ti = 0usize;
 
     loop {
-        let oh_start = ours_hunks.get(oi).map(|h| h.base_start).unwrap_or(usize::MAX);
+        let oh_start = ours_hunks
+            .get(oi)
+            .map(|h| h.base_start)
+            .unwrap_or(usize::MAX);
         let th_start = theirs_hunks
             .get(ti)
             .map(|h| h.base_start)
@@ -605,9 +786,7 @@ fn merge_line_hunks(
         if oh_start == usize::MAX && th_start == usize::MAX {
             // No more hunks — emit remaining base as context.
             if base_pos < base_lines.len() {
-                result.push(Subchunk::Resolved(lines_to_text(
-                    &base_lines[base_pos..],
-                )));
+                result.push(Subchunk::Resolved(lines_to_text(&base_lines[base_pos..])));
             }
             break;
         }
@@ -686,9 +865,18 @@ fn merge_line_hunks(
 
         if ours_involved && theirs_involved {
             let base_text = lines_to_text(&base_lines[base_pos..region_base_end]);
-            let ours_text = side_content(base_lines, base_pos, region_end, &ours_hunks[oi_start..oi_end]);
-            let theirs_text =
-                side_content(base_lines, base_pos, region_end, &theirs_hunks[ti_start..ti_end]);
+            let ours_text = side_content(
+                base_lines,
+                base_pos,
+                region_end,
+                &ours_hunks[oi_start..oi_end],
+            );
+            let theirs_text = side_content(
+                base_lines,
+                base_pos,
+                region_end,
+                &theirs_hunks[ti_start..ti_end],
+            );
 
             if ours_text == theirs_text {
                 result.push(Subchunk::Resolved(ours_text));
@@ -709,11 +897,20 @@ fn merge_line_hunks(
                 }
             }
         } else if ours_involved {
-            let ours_text = side_content(base_lines, base_pos, region_end, &ours_hunks[oi_start..oi_end]);
+            let ours_text = side_content(
+                base_lines,
+                base_pos,
+                region_end,
+                &ours_hunks[oi_start..oi_end],
+            );
             result.push(Subchunk::Resolved(ours_text));
         } else if theirs_involved {
-            let theirs_text =
-                side_content(base_lines, base_pos, region_end, &theirs_hunks[ti_start..ti_end]);
+            let theirs_text = side_content(
+                base_lines,
+                base_pos,
+                region_end,
+                &theirs_hunks[ti_start..ti_end],
+            );
             result.push(Subchunk::Resolved(theirs_text));
         }
 
@@ -837,11 +1034,13 @@ mod tests {
         assert!(ConflictRegionResolution::PickTheirs.is_resolved());
         assert!(ConflictRegionResolution::PickBoth.is_resolved());
         assert!(ConflictRegionResolution::ManualEdit("x".into()).is_resolved());
-        assert!(ConflictRegionResolution::AutoResolved {
-            rule: AutosolveRule::IdenticalSides,
-            content: "x".into(),
-        }
-        .is_resolved());
+        assert!(
+            ConflictRegionResolution::AutoResolved {
+                rule: AutosolveRule::IdenticalSides,
+                content: "x".into(),
+            }
+            .is_resolved()
+        );
     }
 
     // -- ConflictRegion tests --
@@ -1098,9 +1297,9 @@ mod tests {
     #[test]
     fn auto_resolve_session_multiple_regions() {
         let mut session = make_session(vec![
-            make_region(Some("base\n"), "same\n", "same\n"),      // identical → auto
-            make_region(Some("base\n"), "ours\n", "theirs\n"),    // both changed → no auto
-            make_region(Some("base\n"), "changed\n", "base\n"),   // only ours → auto
+            make_region(Some("base\n"), "same\n", "same\n"), // identical → auto
+            make_region(Some("base\n"), "ours\n", "theirs\n"), // both changed → no auto
+            make_region(Some("base\n"), "changed\n", "base\n"), // only ours → auto
         ]);
         let resolved = session.auto_resolve_safe();
         assert_eq!(resolved, 2);
@@ -1111,7 +1310,10 @@ mod tests {
         // Region 0: auto-resolved
         assert!(matches!(
             session.regions[0].resolution,
-            ConflictRegionResolution::AutoResolved { rule: AutosolveRule::IdenticalSides, .. }
+            ConflictRegionResolution::AutoResolved {
+                rule: AutosolveRule::IdenticalSides,
+                ..
+            }
         ));
         // Region 1: still unresolved
         assert!(matches!(
@@ -1121,15 +1323,16 @@ mod tests {
         // Region 2: auto-resolved
         assert!(matches!(
             session.regions[2].resolution,
-            ConflictRegionResolution::AutoResolved { rule: AutosolveRule::OnlyOursChanged, .. }
+            ConflictRegionResolution::AutoResolved {
+                rule: AutosolveRule::OnlyOursChanged,
+                ..
+            }
         ));
     }
 
     #[test]
     fn auto_resolve_skips_already_resolved() {
-        let mut session = make_session(vec![
-            make_region(Some("base\n"), "same\n", "same\n"),
-        ]);
+        let mut session = make_session(vec![make_region(Some("base\n"), "same\n", "same\n")]);
         // Manually resolve first.
         session.regions[0].resolution = ConflictRegionResolution::PickOurs;
         // Auto-resolve should skip it.
@@ -1139,6 +1342,90 @@ mod tests {
         assert!(matches!(
             session.regions[0].resolution,
             ConflictRegionResolution::PickOurs
+        ));
+    }
+
+    #[test]
+    fn regex_auto_resolve_equivalent_sides() {
+        let options = RegexAutosolveOptions::whitespace_insensitive();
+        let decision = regex_assisted_auto_resolve_pick(
+            Some("let answer = 42;\n"),
+            "let  answer = 42;\n",
+            "let answer\t=\t42;\n",
+            &options,
+        );
+        assert_eq!(
+            decision,
+            Some((AutosolveRule::RegexEquivalentSides, AutosolvePickSide::Ours))
+        );
+    }
+
+    #[test]
+    fn regex_auto_resolve_only_theirs_changed_from_normalized_base() {
+        let options = RegexAutosolveOptions::whitespace_insensitive();
+        let decision = regex_assisted_auto_resolve_pick(
+            Some("let answer = 42;\n"),
+            "let answer=42;\n",
+            "let answer = 43;\n",
+            &options,
+        );
+        assert_eq!(
+            decision,
+            Some((
+                AutosolveRule::RegexOnlyTheirsChanged,
+                AutosolvePickSide::Theirs
+            ))
+        );
+    }
+
+    #[test]
+    fn regex_auto_resolve_only_ours_changed_from_normalized_base() {
+        let options = RegexAutosolveOptions::whitespace_insensitive();
+        let decision = regex_assisted_auto_resolve_pick(
+            Some("let answer = 42;\n"),
+            "let answer = 43;\n",
+            "let\tanswer=42;\n",
+            &options,
+        );
+        assert_eq!(
+            decision,
+            Some((AutosolveRule::RegexOnlyOursChanged, AutosolvePickSide::Ours))
+        );
+    }
+
+    #[test]
+    fn regex_auto_resolve_invalid_pattern_is_ignored() {
+        let options = RegexAutosolveOptions::default().with_pattern("(", "");
+        let decision =
+            regex_assisted_auto_resolve_pick(Some("base\n"), "ours\n", "theirs\n", &options);
+        assert!(decision.is_none());
+    }
+
+    #[test]
+    fn session_auto_resolve_regex_applies_to_unresolved_regions() {
+        let mut session = make_session(vec![
+            make_region(
+                Some("let answer = 42;\n"),
+                "let  answer = 42;\n",
+                "let answer\t=\t42;\n",
+            ),
+            make_region(Some("base\n"), "ours\n", "theirs\n"),
+        ]);
+        let options = RegexAutosolveOptions::whitespace_insensitive();
+
+        assert_eq!(session.auto_resolve_regex(&options), 1);
+        assert_eq!(session.solved_count(), 1);
+        assert_eq!(session.unsolved_count(), 1);
+        match &session.regions[0].resolution {
+            ConflictRegionResolution::AutoResolved { rule, content } => {
+                assert_eq!(*rule, AutosolveRule::RegexEquivalentSides);
+                assert_eq!(content, "let  answer = 42;\n");
+            }
+            other => panic!("expected regex auto-resolved region, got {:?}", other),
+        }
+        assert!(matches!(
+            session.regions[1].resolution,
+            ConflictRegionResolution::Unresolved
         ));
     }
 
@@ -1195,9 +1482,7 @@ mod tests {
 
     #[test]
     fn has_unresolved_markers_reflects_unsolved() {
-        let mut session = make_session(vec![
-            make_region(Some("b"), "a", "c"),
-        ]);
+        let mut session = make_session(vec![make_region(Some("b"), "a", "c")]);
         assert!(session.has_unresolved_markers());
         session.regions[0].resolution = ConflictRegionResolution::PickOurs;
         assert!(!session.has_unresolved_markers());
@@ -1210,6 +1495,13 @@ mod tests {
         assert!(!AutosolveRule::IdenticalSides.description().is_empty());
         assert!(!AutosolveRule::OnlyOursChanged.description().is_empty());
         assert!(!AutosolveRule::OnlyTheirsChanged.description().is_empty());
+        assert!(!AutosolveRule::RegexEquivalentSides.description().is_empty());
+        assert!(
+            !AutosolveRule::RegexOnlyTheirsChanged
+                .description()
+                .is_empty()
+        );
+        assert!(!AutosolveRule::RegexOnlyOursChanged.description().is_empty());
         assert!(!AutosolveRule::SubchunkFullyMerged.description().is_empty());
     }
 
@@ -1352,9 +1644,11 @@ mod tests {
         // Should have context + conflict + context.
         assert_eq!(subchunks.len(), 3);
         assert!(matches!(&subchunks[0], Subchunk::Resolved(t) if t == "ctx\n"));
-        assert!(matches!(&subchunks[1], Subchunk::Conflict { base, ours, theirs }
-            if base == "original\n" && ours == "ours_version\n" && theirs == "theirs_version\n"
-        ));
+        assert!(
+            matches!(&subchunks[1], Subchunk::Conflict { base, ours, theirs }
+                if base == "original\n" && ours == "ours_version\n" && theirs == "theirs_version\n"
+            )
+        );
         assert!(matches!(&subchunks[2], Subchunk::Resolved(t) if t == "ctx2\n"));
     }
 

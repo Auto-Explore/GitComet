@@ -8,5 +8,8 @@ repository.workspace = true
 [lints]
 workspace = true
 
+[dependencies]
+regex = "1"
+
 [dev-dependencies]
 rustc-hash = { workspace = true }
