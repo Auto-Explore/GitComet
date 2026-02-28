@@ -17,13 +17,12 @@ impl GixRepo {
         let workdir = &self.spec.workdir;
 
         // 1. Determine which mergetool to use
-        let tool_name = git_config_get(workdir, "merge.tool")?
-            .ok_or_else(|| {
-                Error::new(ErrorKind::Backend(
-                    "No merge.tool configured. Set it with: git config merge.tool <toolname>"
-                        .to_string(),
-                ))
-            })?;
+        let tool_name = git_config_get(workdir, "merge.tool")?.ok_or_else(|| {
+            Error::new(ErrorKind::Backend(
+                "No merge.tool configured. Set it with: git config merge.tool <toolname>"
+                    .to_string(),
+            ))
+        })?;
 
         // 2. Read the tool command template (or fall back to built-in tool name)
         let tool_cmd = git_config_get(workdir, &format!("mergetool.{tool_name}.cmd"))?;
@@ -64,11 +63,13 @@ impl GixRepo {
         std::fs::write(&remote_path, remote_bytes.as_deref().unwrap_or(b""))
             .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
 
-        // 4. Snapshot the merged file before invoking the tool so we can
-        //    detect modifications when trustExitCode is false.
-        let pre_metadata = std::fs::metadata(&merged_path).ok();
-        let pre_mtime = pre_metadata.as_ref().and_then(|m| m.modified().ok());
-        let pre_len = pre_metadata.as_ref().map(|m| m.len());
+        // 4. Snapshot merged contents before tool invocation so we can
+        //    detect actual content changes when trustExitCode is false.
+        let pre_merged_contents = if trust_exit_code {
+            None
+        } else {
+            std::fs::read(&merged_path).ok()
+        };
 
         // Build and invoke the mergetool command
         let output = if let Some(ref custom_cmd) = tool_cmd {
@@ -114,21 +115,21 @@ impl GixRepo {
         };
 
         // 5. Determine success
+        let mut post_merged_contents = None;
         let tool_success = if trust_exit_code {
             output.status.success()
         } else {
-            // When trustExitCode is false (default), check if the merged
-            // file was modified compared to its state before the tool ran.
-            // This mirrors git-mergetool behavior: the user is expected to
-            // save changes into MERGED.
-            match std::fs::metadata(&merged_path).ok() {
-                Some(post) => {
-                    let post_mtime = post.modified().ok();
-                    let post_len = post.len();
-                    // File was modified if mtime changed or length changed.
-                    post_mtime != pre_mtime || Some(post_len) != pre_len
+            // When trustExitCode is false (default), require actual content
+            // changes in MERGED (not just metadata changes).
+            match std::fs::read(&merged_path) {
+                Ok(post) => {
+                    let changed = pre_merged_contents.as_ref() != Some(&post);
+                    if changed {
+                        post_merged_contents = Some(post);
+                    }
+                    changed
                 }
-                None => false, // file doesn't exist
+                Err(_) => false, // file doesn't exist or is unreadable
             }
         };
 
@@ -142,8 +143,10 @@ impl GixRepo {
         }
 
         // 6. Read back merged contents and stage
-        let merged_contents = std::fs::read(&merged_path)
-            .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+        let merged_contents = match post_merged_contents {
+            Some(bytes) => bytes,
+            None => std::fs::read(&merged_path).map_err(|e| Error::new(ErrorKind::Io(e.kind())))?,
+        };
 
         // Stage the file
         let path_ref: &Path = path;

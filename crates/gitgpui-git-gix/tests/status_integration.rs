@@ -126,6 +126,38 @@ fn set_unmerged_stages(
     );
 }
 
+fn setup_both_modified_text_conflict(repo: &Path, path: &str, ours: &str, theirs: &str) {
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    write(repo, path, "base\n");
+    run_git(repo, &["add", path]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "base"],
+    );
+
+    run_git(repo, &["checkout", "-b", "feature"]);
+    write(repo, path, theirs);
+    run_git(repo, &["add", path]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "theirs"],
+    );
+
+    run_git(repo, &["checkout", "-"]);
+    write(repo, path, ours);
+    run_git(repo, &["add", path]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "ours"],
+    );
+
+    run_git_expect_failure(repo, &["merge", "feature"]);
+}
+
 fn png_1x1_rgba(r: u8, g: u8, b: u8, a: u8) -> Vec<u8> {
     fn push_be_u32(out: &mut Vec<u8>, v: u32) {
         out.extend_from_slice(&v.to_be_bytes());
@@ -1336,6 +1368,88 @@ fn checkout_conflict_side_stages_resolution() {
 
     let on_disk = fs::read_to_string(repo.join("a.txt")).unwrap();
     assert_eq!(on_disk, "theirs\n");
+}
+
+#[test]
+fn launch_mergetool_trust_exit_false_detects_same_size_content_change() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    setup_both_modified_text_conflict(repo, "a.txt", "ours\n", "theirs\n");
+
+    // Normalize pre-tool mtime to a fixed timestamp so metadata-only checks
+    // cannot detect the edit when the command restores mtime.
+    let touch_status = Command::new("touch")
+        .arg("-d")
+        .arg("@1700000000")
+        .arg(repo.join("a.txt"))
+        .status()
+        .expect("touch to run");
+    assert!(touch_status.success());
+
+    run_git(repo, &["config", "merge.tool", "fake"]);
+    let cmd = "printf Z | dd of=\"$MERGED\" bs=1 count=1 conv=notrunc >/dev/null 2>&1; touch -d '@1700000000' \"$MERGED\"; exit 1";
+    run_git(repo, &["config", "mergetool.fake.cmd", cmd]);
+    run_git(repo, &["config", "mergetool.fake.trustExitCode", "false"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    let result = opened.launch_mergetool(Path::new("a.txt")).unwrap();
+    assert!(result.success);
+    assert_eq!(result.tool_name, "fake");
+    assert_eq!(result.output.exit_code, Some(1));
+
+    let on_disk = fs::read(repo.join("a.txt")).unwrap();
+    assert!(!on_disk.is_empty());
+    assert_eq!(on_disk[0], b'Z');
+    assert_eq!(result.merged_contents.as_deref(), Some(on_disk.as_slice()));
+
+    let status = opened.status().unwrap();
+    assert!(status.unstaged.iter().all(|e| e.path != Path::new("a.txt")));
+    assert!(
+        status
+            .staged
+            .iter()
+            .any(|e| e.path == Path::new("a.txt") && e.kind == FileStatusKind::Modified),
+        "expected staged resolution after content-changing mergetool run, got {status:?}"
+    );
+}
+
+#[test]
+fn launch_mergetool_trust_exit_false_requires_content_change() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    setup_both_modified_text_conflict(repo, "a.txt", "ours\n", "theirs\n");
+
+    run_git(repo, &["config", "merge.tool", "fake"]);
+    run_git(repo, &["config", "mergetool.fake.cmd", "exit 0"]);
+    run_git(repo, &["config", "mergetool.fake.trustExitCode", "false"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    let result = opened.launch_mergetool(Path::new("a.txt")).unwrap();
+    assert!(!result.success);
+    assert_eq!(result.tool_name, "fake");
+    assert_eq!(result.output.exit_code, Some(0));
+    assert!(result.merged_contents.is_none());
+
+    let status = opened.status().unwrap();
+    assert!(
+        status
+            .staged
+            .iter()
+            .all(|entry| entry.path != Path::new("a.txt")),
+        "unexpected staged resolution when mergetool did not change output: {status:?}"
+    );
+    let conflict_entry = status
+        .unstaged
+        .iter()
+        .find(|entry| entry.path == Path::new("a.txt"))
+        .expect("conflict should remain unresolved");
+    assert_eq!(conflict_entry.kind, FileStatusKind::Conflicted);
+    assert_eq!(
+        conflict_entry.conflict,
+        Some(FileConflictKind::BothModified)
+    );
 }
 
 #[test]
