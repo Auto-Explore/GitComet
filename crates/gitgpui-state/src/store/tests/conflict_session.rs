@@ -1617,3 +1617,80 @@ fn repo_command_finished_checkout_conflict_side_clears_binary_conflict_context()
     assert!(!repo_state.conflict_hide_resolved);
     assert!(repo_state.conflict_rev > before_rev);
 }
+
+#[test]
+fn repo_command_finished_checkout_conflict_base_clears_binary_conflict_context() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    let repo_id = setup_repo_with_conflict(
+        &mut state,
+        &mut repos,
+        &id_alloc,
+        "image.png",
+        FileConflictKind::BothModified,
+    );
+
+    let file = ConflictFile {
+        path: PathBuf::from("image.png"),
+        base_bytes: Some(vec![0x89, 0x50, 0x4E, 0x47]),
+        ours_bytes: Some(vec![0x89, 0x50, 0x4E, 0x48]),
+        theirs_bytes: Some(vec![0x89, 0x50, 0x4E, 0x49]),
+        current_bytes: Some(vec![0x89, 0x50, 0x4E, 0x48]),
+        base: None,
+        ours: None,
+        theirs: None,
+        current: None,
+    };
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ConflictFileLoaded {
+            repo_id,
+            path: PathBuf::from("image.png"),
+            result: Box::new(Ok(Some(file))),
+            conflict_session: None,
+        },
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ConflictSetHideResolved {
+            repo_id,
+            path: PathBuf::from("image.png"),
+            hide_resolved: true,
+        },
+    );
+
+    let before_rev = state
+        .repos
+        .iter()
+        .find(|r| r.id == repo_id)
+        .unwrap()
+        .conflict_rev;
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::CheckoutConflictBase {
+                path: PathBuf::from("image.png"),
+            },
+            result: Ok(CommandOutput::empty_success(
+                "git checkout :1:image.png -- image.png",
+            )),
+        },
+    );
+
+    let repo_state = state.repos.iter().find(|r| r.id == repo_id).unwrap();
+    assert_eq!(repo_state.conflict_file_path, None);
+    assert!(matches!(repo_state.conflict_file, Loadable::NotLoaded));
+    assert!(repo_state.conflict_session.is_none());
+    assert!(!repo_state.conflict_hide_resolved);
+    assert!(repo_state.conflict_rev > before_rev);
+}

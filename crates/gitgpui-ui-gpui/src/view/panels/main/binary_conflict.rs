@@ -4,8 +4,8 @@ use gitgpui_core::services::ConflictSide;
 impl MainPaneView {
     /// Render the binary/non-UTF8 conflict resolver panel.
     ///
-    /// Shows file size info for each conflict side and provides "Use Ours" /
-    /// "Use Theirs" buttons that dispatch `Msg::CheckoutConflictSide`.
+    /// Shows file size info for each conflict side and provides "Use Base" /
+    /// "Use Ours" / "Use Theirs" actions for binary-safe side checkout.
     pub(super) fn render_binary_conflict_resolver(
         &mut self,
         theme: AppTheme,
@@ -78,10 +78,12 @@ impl MainPaneView {
             .child(side_row("Ours", ours_size, file.ours.is_some()))
             .child(side_row("Theirs", theirs_size, file.theirs.is_some()));
 
+        let base_path = path.clone();
         let ours_path = path.clone();
         let theirs_path = path.clone();
         let mergetool_path = path.clone();
 
+        let has_base = file.base_bytes.is_some();
         let has_ours = file.ours_bytes.is_some();
         let has_theirs = file.theirs_bytes.is_some();
 
@@ -90,6 +92,17 @@ impl MainPaneView {
             .items_center()
             .gap_2()
             .p_3()
+            .child(
+                zed::Button::new("binary_use_base", "Use Base (ancestor)")
+                    .style(zed::ButtonStyle::Outlined)
+                    .disabled(!has_base)
+                    .on_click(theme, cx, move |this, _e, _w, _cx| {
+                        this.store.dispatch(Msg::CheckoutConflictBase {
+                            repo_id,
+                            path: base_path.clone(),
+                        });
+                    }),
+            )
             .child(
                 zed::Button::new("binary_use_ours", "Use Ours (local)")
                     .style(zed::ButtonStyle::Outlined)
