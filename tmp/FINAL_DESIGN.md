@@ -15,21 +15,25 @@
 - ✅ Wired strategy dispatch into UI: removed `conflict_requires_resolver` gating, switched activation/search/preview hotpaths to `conflict_resolver_strategy()`, and defaulted non-full-text kinds to 2-way resolver mode — `crates/gitgpui-ui-gpui/src/view/panels/main/diff.rs`, `crates/gitgpui-ui-gpui/src/view/panels/main.rs`, `crates/gitgpui-ui-gpui/src/view/panes/main.rs`
 
 ### 3) Resolver UX Model
-- 🔧 Existing: A/B/C picks, next/prev conflict navigation, split/inline modes
+- ✅ Existing: A/B/C picks, next/prev conflict navigation, split/inline modes
 - ✅ Solved/unsolved counters in domain model (ready for UI binding)
 - ✅ Safety gate: detect unresolved markers before "Save & stage" — `text_contains_conflict_markers()` in `conflict_resolver.rs`, `ConflictSaveStageConfirm` popover with cancel/stage-anyway actions, warning indicator in header when markers remain
-- 🔧 Marker-based conflict counter (Conflict N/M) already in panel UI; full solved/unsolved counters need `ConflictSession` integration
+- ✅ Resolved/total counter display in conflict resolver toolbar — shows "Resolved X/Y" with green color when fully resolved — `crates/gitgpui-ui-gpui/src/view/panels/main.rs`
+- ✅ Per-block resolved tracking (`ConflictBlock.resolved` field) — set on A/B/C picks, all-pick, and auto-resolve — `crates/gitgpui-ui-gpui/src/view/conflict_resolver.rs`, `crates/gitgpui-ui-gpui/src/view/panes/main.rs`
 - ⬜ Next/previous *unresolved* navigation in UI (wrap-around)
 - ⬜ Hide-resolved toggle
-- ⬜ Bulk actions: apply pick to all unresolved, autosolve safe conflicts
+- 🔧 Bulk actions: "All → A/B/C" exists; auto-resolve safe conflicts now wired (see §4)
 
 ### 4) Auto-Resolution Engine (Safe-First)
 - ✅ Pass 1 safe auto-resolve rules: identical sides, only-ours-changed, only-theirs-changed — `crates/gitgpui-core/src/conflict_session.rs`
 - ✅ `AutosolveRule` enum with traceability (rule ID + description) — `crates/gitgpui-core/src/conflict_session.rs`
 - ✅ `ConflictSession::auto_resolve_safe()` applies Pass 1 to all unresolved regions — `crates/gitgpui-core/src/conflict_session.rs`
+- ✅ `auto_resolve_segments()` applies Pass 1 safe rules directly to UI marker segments — `crates/gitgpui-ui-gpui/src/view/conflict_resolver.rs`
+- ✅ "Auto-resolve safe" button in conflict resolver toolbar (shown when unresolved blocks remain) — `crates/gitgpui-ui-gpui/src/view/panels/main.rs`
+- ✅ `conflict_resolver_auto_resolve()` method wires button to auto-resolve + text regeneration — `crates/gitgpui-ui-gpui/src/view/panes/main.rs`
+- ✅ 10 unit tests for auto-resolve segments and resolved counting — `crates/gitgpui-ui-gpui/src/view/conflict_resolver.rs`
 - ⬜ Pass 2: heuristic subchunk splitting (meld-inspired)
 - ⬜ Pass 3: history/regex modes (opt-in)
-- ⬜ Wire autosolve into UI and state layer
 
 ### 5) Diff and Text Fidelity Upgrades
 - ⬜ Model missing trailing newline states in `file_diff.rs`

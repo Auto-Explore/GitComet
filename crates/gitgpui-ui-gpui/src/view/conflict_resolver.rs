@@ -30,6 +30,9 @@ pub struct ConflictBlock {
     pub ours: String,
     pub theirs: String,
     pub choice: ConflictChoice,
+    /// Whether this block has been explicitly resolved (by user pick or auto-resolve).
+    /// Blocks start unresolved; becomes `true` when the user picks a side or auto-resolve runs.
+    pub resolved: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -128,6 +131,7 @@ pub fn parse_conflict_markers(text: &str) -> Vec<ConflictSegment> {
             ours,
             theirs,
             choice: ConflictChoice::Ours,
+            resolved: false,
         }));
     }
 
@@ -143,6 +147,64 @@ pub fn conflict_count(segments: &[ConflictSegment]) -> usize {
         .iter()
         .filter(|s| matches!(s, ConflictSegment::Block(_)))
         .count()
+}
+
+/// Count how many conflict blocks have been explicitly resolved.
+pub fn resolved_conflict_count(segments: &[ConflictSegment]) -> usize {
+    segments
+        .iter()
+        .filter(|s| matches!(s, ConflictSegment::Block(b) if b.resolved))
+        .count()
+}
+
+/// Apply safe auto-resolve rules (Pass 1) to all unresolved conflict blocks.
+///
+/// Safe rules:
+/// 1. `ours == theirs` — both sides made the same change → pick ours.
+/// 2. `ours == base` and `theirs != base` — only theirs changed → pick theirs.
+/// 3. `theirs == base` and `ours != base` — only ours changed → pick ours.
+///
+/// Returns the number of blocks auto-resolved.
+pub fn auto_resolve_segments(segments: &mut [ConflictSegment]) -> usize {
+    let mut count = 0;
+    for seg in segments.iter_mut() {
+        let ConflictSegment::Block(block) = seg else {
+            continue;
+        };
+        if block.resolved {
+            continue;
+        }
+
+        // Rule 1: both sides identical.
+        if block.ours == block.theirs {
+            block.choice = ConflictChoice::Ours;
+            block.resolved = true;
+            count += 1;
+            continue;
+        }
+
+        // Rules 2 & 3 require a base.
+        let Some(base) = block.base.as_deref() else {
+            continue;
+        };
+
+        // Rule 2: only theirs changed (ours == base).
+        if block.ours == base && block.theirs != base {
+            block.choice = ConflictChoice::Theirs;
+            block.resolved = true;
+            count += 1;
+            continue;
+        }
+
+        // Rule 3: only ours changed (theirs == base).
+        if block.theirs == base && block.ours != base {
+            block.choice = ConflictChoice::Ours;
+            block.resolved = true;
+            count += 1;
+            continue;
+        }
+    }
+    count
 }
 
 pub fn generate_resolved_text(segments: &[ConflictSegment]) -> String {
@@ -642,5 +704,147 @@ mod tests {
         assert!(!text_contains_conflict_markers(""));
         assert!(!text_contains_conflict_markers("some text with < and > arrows"));
         assert!(!text_contains_conflict_markers("====== not quite seven"));
+    }
+
+    // -- resolved_conflict_count tests --
+
+    #[test]
+    fn resolved_count_starts_at_zero() {
+        let input = "a\n<<<<<<< HEAD\none\n=======\nuno\n>>>>>>> other\nb\n";
+        let segments = parse_conflict_markers(input);
+        assert_eq!(conflict_count(&segments), 1);
+        assert_eq!(resolved_conflict_count(&segments), 0);
+    }
+
+    #[test]
+    fn resolved_count_tracks_picks() {
+        let input = "<<<<<<< HEAD\none\n=======\nuno\n>>>>>>> other\n<<<<<<< HEAD\ntwo\n=======\ndos\n>>>>>>> other\n";
+        let mut segments = parse_conflict_markers(input);
+        assert_eq!(conflict_count(&segments), 2);
+        assert_eq!(resolved_conflict_count(&segments), 0);
+
+        // Resolve first block.
+        if let ConflictSegment::Block(block) = &mut segments[0] {
+            block.choice = ConflictChoice::Theirs;
+            block.resolved = true;
+        }
+        assert_eq!(resolved_conflict_count(&segments), 1);
+    }
+
+    // -- auto_resolve_segments tests --
+
+    #[test]
+    fn auto_resolve_identical_sides() {
+        let input = "a\n<<<<<<< HEAD\nsame\n||||||| base\norig\n=======\nsame\n>>>>>>> other\nb\n";
+        let mut segments = parse_conflict_markers(input);
+        assert_eq!(auto_resolve_segments(&mut segments), 1);
+        assert_eq!(resolved_conflict_count(&segments), 1);
+
+        let block = segments.iter().find_map(|s| match s {
+            ConflictSegment::Block(b) => Some(b),
+            _ => None,
+        }).unwrap();
+        assert_eq!(block.choice, ConflictChoice::Ours);
+        assert!(block.resolved);
+    }
+
+    #[test]
+    fn auto_resolve_only_theirs_changed() {
+        let input = "a\n<<<<<<< HEAD\norig\n||||||| base\norig\n=======\nchanged\n>>>>>>> other\nb\n";
+        let mut segments = parse_conflict_markers(input);
+        assert_eq!(auto_resolve_segments(&mut segments), 1);
+
+        let block = segments.iter().find_map(|s| match s {
+            ConflictSegment::Block(b) => Some(b),
+            _ => None,
+        }).unwrap();
+        assert_eq!(block.choice, ConflictChoice::Theirs);
+        assert!(block.resolved);
+    }
+
+    #[test]
+    fn auto_resolve_only_ours_changed() {
+        let input = "a\n<<<<<<< HEAD\nchanged\n||||||| base\norig\n=======\norig\n>>>>>>> other\nb\n";
+        let mut segments = parse_conflict_markers(input);
+        assert_eq!(auto_resolve_segments(&mut segments), 1);
+
+        let block = segments.iter().find_map(|s| match s {
+            ConflictSegment::Block(b) => Some(b),
+            _ => None,
+        }).unwrap();
+        assert_eq!(block.choice, ConflictChoice::Ours);
+        assert!(block.resolved);
+    }
+
+    #[test]
+    fn auto_resolve_both_changed_differently_not_resolved() {
+        let input = "a\n<<<<<<< HEAD\nours\n||||||| base\norig\n=======\ntheirs\n>>>>>>> other\nb\n";
+        let mut segments = parse_conflict_markers(input);
+        assert_eq!(auto_resolve_segments(&mut segments), 0);
+        assert_eq!(resolved_conflict_count(&segments), 0);
+    }
+
+    #[test]
+    fn auto_resolve_no_base_identical_sides() {
+        // 2-way markers (no base section) — identical sides should still resolve.
+        let input = "a\n<<<<<<< HEAD\nsame\n=======\nsame\n>>>>>>> other\nb\n";
+        let mut segments = parse_conflict_markers(input);
+        assert_eq!(auto_resolve_segments(&mut segments), 1);
+        assert_eq!(resolved_conflict_count(&segments), 1);
+    }
+
+    #[test]
+    fn auto_resolve_no_base_different_sides_not_resolved() {
+        let input = "a\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> other\nb\n";
+        let mut segments = parse_conflict_markers(input);
+        assert_eq!(auto_resolve_segments(&mut segments), 0);
+    }
+
+    #[test]
+    fn auto_resolve_skips_already_resolved() {
+        let input = "a\n<<<<<<< HEAD\nsame\n||||||| base\norig\n=======\nsame\n>>>>>>> other\nb\n";
+        let mut segments = parse_conflict_markers(input);
+
+        // Manually resolve first.
+        if let Some(ConflictSegment::Block(block)) = segments
+            .iter_mut()
+            .find(|s| matches!(s, ConflictSegment::Block(_)))
+        {
+            block.choice = ConflictChoice::Theirs;
+            block.resolved = true;
+        }
+
+        // Auto-resolve should skip it.
+        assert_eq!(auto_resolve_segments(&mut segments), 0);
+        // Choice should remain Theirs (not overwritten).
+        let block = segments.iter().find_map(|s| match s {
+            ConflictSegment::Block(b) => Some(b),
+            _ => None,
+        }).unwrap();
+        assert_eq!(block.choice, ConflictChoice::Theirs);
+    }
+
+    #[test]
+    fn auto_resolve_multiple_blocks_mixed() {
+        let input = concat!(
+            "<<<<<<< HEAD\nsame\n||||||| base\norig\n=======\nsame\n>>>>>>> other\n",
+            "<<<<<<< HEAD\nours\n||||||| base\norig\n=======\ntheirs\n>>>>>>> other\n",
+            "<<<<<<< HEAD\norig\n||||||| base\norig\n=======\nchanged\n>>>>>>> other\n",
+        );
+        let mut segments = parse_conflict_markers(input);
+        assert_eq!(conflict_count(&segments), 3);
+
+        let resolved = auto_resolve_segments(&mut segments);
+        assert_eq!(resolved, 2); // blocks 0 (identical) and 2 (only theirs changed)
+        assert_eq!(resolved_conflict_count(&segments), 2);
+    }
+
+    #[test]
+    fn auto_resolve_generates_correct_text() {
+        let input = "a\n<<<<<<< HEAD\norig\n||||||| base\norig\n=======\nchanged\n>>>>>>> other\nb\n";
+        let mut segments = parse_conflict_markers(input);
+        auto_resolve_segments(&mut segments);
+        let text = generate_resolved_text(&segments);
+        assert_eq!(text, "a\nchanged\nb\n");
     }
 }

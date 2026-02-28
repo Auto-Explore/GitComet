@@ -1004,6 +1004,8 @@ impl MainPaneView {
                             let conflict_count = self.conflict_resolver_conflict_count();
                             let active_conflict = self.conflict_resolver.active_conflict;
                             let has_conflicts = conflict_count > 0;
+                            let resolved_count = self.conflict_resolver_resolved_count();
+                            let unresolved_count = conflict_count - resolved_count;
 
                             let any_block_missing_base = has_conflicts
                                 && self
@@ -1052,14 +1054,28 @@ impl MainPaneView {
                                     this.conflict_resolver_next_conflict(cx);
                                 };
 
+                            let auto_resolve =
+                                |this: &mut Self,
+                                 _e: &ClickEvent,
+                                 _w: &mut Window,
+                                 cx: &mut gpui::Context<Self>| {
+                                    this.conflict_resolver_auto_resolve(cx);
+                                };
+
                             let start_controls = div()
                                 .flex()
                                 .items_center()
                                 .gap_1()
                                 .when(has_conflicts, |d| {
-                                    let label: SharedString = format!(
+                                    let nav_label: SharedString = format!(
                                         "Conflict {}/{}",
                                         active_conflict + 1,
+                                        conflict_count
+                                    )
+                                    .into();
+                                    let resolved_label: SharedString = format!(
+                                        "Resolved {}/{}",
+                                        resolved_count,
                                         conflict_count
                                     )
                                     .into();
@@ -1067,7 +1083,17 @@ impl MainPaneView {
                                         div()
                                             .text_xs()
                                             .text_color(theme.colors.text_muted)
-                                            .child(label),
+                                            .child(nav_label),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(if unresolved_count == 0 {
+                                                theme.colors.success
+                                            } else {
+                                                theme.colors.text_muted
+                                            })
+                                            .child(resolved_label),
                                     )
                                     .child(
                                         zed::Button::new("conflict_pick_prev", "Prev")
@@ -1140,7 +1166,23 @@ impl MainPaneView {
                                         cx,
                                         reset_from_markers,
                                     ),
-                                );
+                                )
+                                .when(has_conflicts && unresolved_count > 0, |d| {
+                                    d.child(
+                                        div()
+                                            .w(px(1.0))
+                                            .h(px(12.0))
+                                            .bg(theme.colors.border),
+                                    )
+                                    .child(
+                                        zed::Button::new(
+                                            "conflict_auto_resolve",
+                                            "Auto-resolve safe",
+                                        )
+                                        .style(zed::ButtonStyle::Outlined)
+                                        .on_click(theme, cx, auto_resolve),
+                                    )
+                                });
 
                             let top_header = div()
                                 .flex()

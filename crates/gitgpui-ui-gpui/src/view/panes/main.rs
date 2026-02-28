@@ -1879,6 +1879,7 @@ impl MainPaneView {
             return;
         }
         block.choice = choice;
+        block.resolved = true;
         let resolved =
             conflict_resolver::generate_resolved_text(&self.conflict_resolver.marker_segments);
         self.conflict_resolver_set_output(resolved, cx);
@@ -1901,6 +1902,30 @@ impl MainPaneView {
         cx.notify();
     }
 
+    pub(in super::super) fn conflict_resolver_resolved_count(&self) -> usize {
+        conflict_resolver::resolved_conflict_count(&self.conflict_resolver.marker_segments)
+    }
+
+    /// Apply safe auto-resolve rules to all unresolved conflict blocks.
+    /// Updates the resolved output text and notifies the UI.
+    pub(in super::super) fn conflict_resolver_auto_resolve(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.conflict_resolver_conflict_count() == 0 {
+            return;
+        }
+        let count =
+            conflict_resolver::auto_resolve_segments(&mut self.conflict_resolver.marker_segments);
+        if count > 0 {
+            let resolved = conflict_resolver::generate_resolved_text(
+                &self.conflict_resolver.marker_segments,
+            );
+            self.conflict_resolver_set_output(resolved, cx);
+        }
+        cx.notify();
+    }
+
     pub(in super::super) fn conflict_resolver_pick_all_conflicts(
         &mut self,
         choice: conflict_resolver::ConflictChoice,
@@ -1917,6 +1942,7 @@ impl MainPaneView {
                     continue;
                 }
                 block.choice = choice;
+                block.resolved = true;
             }
         }
         let resolved =
