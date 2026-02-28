@@ -36,7 +36,7 @@
 - ⬜ Pass 3: history/regex modes (opt-in)
 
 ### 5) Diff and Text Fidelity Upgrades
-- ⬜ Model missing trailing newline states in `file_diff.rs`
+- ✅ Modeled missing trailing newline states in `file_diff.rs` via `FileDiffEofNewline` row metadata and EOF delta annotation (including newline-only diffs promoted to `Modify`) with dedicated tests — `crates/gitgpui-core/src/file_diff.rs`
 - ⬜ Stronger pairing semantics for asymmetric modify/delete blocks
 - ⬜ Stable row/region anchors for conflict-region mapping
 

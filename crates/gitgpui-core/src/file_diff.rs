@@ -6,6 +6,12 @@ pub enum FileDiffRowKind {
     Modify,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FileDiffEofNewline {
+    MissingInOld,
+    MissingInNew,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FileDiffRow {
     pub kind: FileDiffRowKind,
@@ -13,6 +19,7 @@ pub struct FileDiffRow {
     pub new_line: Option<u32>,
     pub old: Option<String>,
     pub new: Option<String>,
+    pub eof_newline: Option<FileDiffEofNewline>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -49,6 +56,7 @@ pub fn side_by_side_rows(old: &str, new: &str) -> Vec<FileDiffRow> {
                     new_line: Some(new_ln),
                     old: Some(text.to_string()),
                     new: Some(text.to_string()),
+                    eof_newline: None,
                 });
                 old_ln = old_ln.saturating_add(1);
                 new_ln = new_ln.saturating_add(1);
@@ -60,6 +68,7 @@ pub fn side_by_side_rows(old: &str, new: &str) -> Vec<FileDiffRow> {
                     new_line: None,
                     old: Some(e.old.unwrap_or_default().to_string()),
                     new: None,
+                    eof_newline: None,
                 });
                 old_ln = old_ln.saturating_add(1);
             }
@@ -70,13 +79,14 @@ pub fn side_by_side_rows(old: &str, new: &str) -> Vec<FileDiffRow> {
                     new_line: Some(new_ln),
                     old: None,
                     new: Some(e.new.unwrap_or_default().to_string()),
+                    eof_newline: None,
                 });
                 new_ln = new_ln.saturating_add(1);
             }
         }
     }
 
-    pair_replacements(raw)
+    annotate_eof_newline(pair_replacements(raw), old, new)
 }
 
 fn pair_replacements(rows: Vec<FileDiffRow>) -> Vec<FileDiffRow> {
@@ -120,6 +130,7 @@ fn pair_replacements(rows: Vec<FileDiffRow>) -> Vec<FileDiffRow> {
                 new_line: a.new_line,
                 old: d.old.clone(),
                 new: a.new.clone(),
+                eof_newline: None,
             });
         }
 
@@ -141,6 +152,46 @@ fn split_lines(text: &str) -> Vec<&str> {
 
     // Keep this simple: we render by rows and don't currently model "missing trailing newline".
     text.lines().collect()
+}
+
+fn annotate_eof_newline(
+    mut rows: Vec<FileDiffRow>,
+    old_text: &str,
+    new_text: &str,
+) -> Vec<FileDiffRow> {
+    let Some(marker) = eof_newline_delta(old_text, new_text) else {
+        return rows;
+    };
+
+    if let Some(last) = rows.last_mut() {
+        // EOF newline changes are semantic file changes, even when the text on the
+        // final line is otherwise equal.
+        if last.kind == FileDiffRowKind::Context {
+            last.kind = FileDiffRowKind::Modify;
+        }
+        last.eof_newline = Some(marker);
+        return rows;
+    }
+
+    rows.push(FileDiffRow {
+        kind: FileDiffRowKind::Modify,
+        old_line: None,
+        new_line: None,
+        old: None,
+        new: None,
+        eof_newline: Some(marker),
+    });
+    rows
+}
+
+fn eof_newline_delta(old_text: &str, new_text: &str) -> Option<FileDiffEofNewline> {
+    let old_has_newline = old_text.ends_with('\n');
+    let new_has_newline = new_text.ends_with('\n');
+    match (old_has_newline, new_has_newline) {
+        (false, true) => Some(FileDiffEofNewline::MissingInOld),
+        (true, false) => Some(FileDiffEofNewline::MissingInNew),
+        _ => None,
+    }
 }
 
 fn myers_edits<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<Edit<'a>> {
@@ -318,6 +369,7 @@ mod tests {
         assert_eq!(mid.new.as_deref(), Some("b2"));
         assert_eq!(mid.old_line, Some(2));
         assert_eq!(mid.new_line, Some(2));
+        assert_eq!(mid.eof_newline, None);
     }
 
     #[test]
@@ -331,5 +383,46 @@ mod tests {
         let new = "a\nc\n";
         let rows = side_by_side_rows(old, new);
         assert!(rows.iter().any(|r| r.kind == FileDiffRowKind::Remove));
+    }
+
+    #[test]
+    fn marks_missing_newline_in_new_file() {
+        let old = "a\n";
+        let new = "a";
+
+        let rows = side_by_side_rows(old, new);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].kind, FileDiffRowKind::Modify);
+        assert_eq!(rows[0].old.as_deref(), Some("a"));
+        assert_eq!(rows[0].new.as_deref(), Some("a"));
+        assert_eq!(rows[0].eof_newline, Some(FileDiffEofNewline::MissingInNew));
+    }
+
+    #[test]
+    fn marks_missing_newline_in_old_file() {
+        let old = "a";
+        let new = "a\n";
+
+        let rows = side_by_side_rows(old, new);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].kind, FileDiffRowKind::Modify);
+        assert_eq!(rows[0].old.as_deref(), Some("a"));
+        assert_eq!(rows[0].new.as_deref(), Some("a"));
+        assert_eq!(rows[0].eof_newline, Some(FileDiffEofNewline::MissingInOld));
+    }
+
+    #[test]
+    fn preserves_existing_modify_rows_when_eof_newline_differs() {
+        let old = "a\nb\n";
+        let new = "a\nc";
+
+        let rows = side_by_side_rows(old, new);
+        assert_eq!(
+            rows.iter().map(|r| r.kind).collect::<Vec<_>>(),
+            vec![FileDiffRowKind::Context, FileDiffRowKind::Modify]
+        );
+        assert_eq!(rows[1].old.as_deref(), Some("b"));
+        assert_eq!(rows[1].new.as_deref(), Some("c"));
+        assert_eq!(rows[1].eof_newline, Some(FileDiffEofNewline::MissingInNew));
     }
 }

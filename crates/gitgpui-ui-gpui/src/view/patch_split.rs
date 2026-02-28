@@ -35,6 +35,7 @@ pub(super) fn build_patch_split_rows(diff: &[AnnotatedDiffLine]) -> Vec<PatchSpl
                 new_line: right.and_then(|l| l.new_line),
                 old: left.map(|l| diff_content_text(l).to_string()),
                 new: right.map(|l| diff_content_text(l).to_string()),
+                eof_newline: None,
             };
             out.push(PatchSplitRow::Aligned {
                 row,
@@ -88,6 +89,7 @@ pub(super) fn build_patch_split_rows(diff: &[AnnotatedDiffLine]) -> Vec<PatchSpl
                                 new_line: line.new_line,
                                 old: Some(text.clone()),
                                 new: Some(text),
+                                eof_newline: None,
                             },
                             old_src_ix: Some(ix),
                             new_src_ix: Some(ix),

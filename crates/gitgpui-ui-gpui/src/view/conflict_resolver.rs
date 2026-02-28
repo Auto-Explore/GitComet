@@ -691,6 +691,7 @@ mod tests {
                 new_line: Some(1),
                 old: Some("a".into()),
                 new: Some("a".into()),
+                eof_newline: None,
             },
             FileDiffRow {
                 kind: RK::Modify,
@@ -698,6 +699,7 @@ mod tests {
                 new_line: Some(2),
                 old: Some("b".into()),
                 new: Some("b2".into()),
+                eof_newline: None,
             },
         ];
         let inline = build_inline_rows(&rows);

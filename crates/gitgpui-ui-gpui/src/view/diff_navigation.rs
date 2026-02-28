@@ -82,6 +82,7 @@ mod tests {
                 new_line: Some(1),
                 old: Some("a".into()),
                 new: Some("a".into()),
+                eof_newline: None,
             },
             FileDiffRow {
                 kind: K::Remove,
@@ -89,6 +90,7 @@ mod tests {
                 new_line: None,
                 old: Some("b".into()),
                 new: None,
+                eof_newline: None,
             },
             FileDiffRow {
                 kind: K::Add,
@@ -96,6 +98,7 @@ mod tests {
                 new_line: Some(2),
                 old: None,
                 new: Some("b2".into()),
+                eof_newline: None,
             },
             FileDiffRow {
                 kind: K::Context,
@@ -103,6 +106,7 @@ mod tests {
                 new_line: Some(3),
                 old: Some("c".into()),
                 new: Some("c".into()),
+                eof_newline: None,
             },
             FileDiffRow {
                 kind: K::Modify,
@@ -110,6 +114,7 @@ mod tests {
                 new_line: Some(4),
                 old: Some("d".into()),
                 new: Some("d2".into()),
+                eof_newline: None,
             },
             FileDiffRow {
                 kind: K::Context,
@@ -117,6 +122,7 @@ mod tests {
                 new_line: Some(5),
                 old: Some("e".into()),
                 new: Some("e".into()),
+                eof_newline: None,
             },
         ];
         assert_eq!(conflict_nav_entries_for_split(&split_rows), vec![1, 4]);
