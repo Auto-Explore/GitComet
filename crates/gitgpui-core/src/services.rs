@@ -502,7 +502,9 @@ pub trait GitBackend: Send + Sync {
 
 #[cfg(test)]
 mod tests {
-    use super::validate_conflict_resolution_text;
+    use super::{CommandOutput, decode_utf8_optional, validate_conflict_resolution_text};
+
+    // ── validate_conflict_resolution_text ────────────────────────────
 
     #[test]
     fn validate_conflict_resolution_text_reports_no_markers() {
@@ -517,5 +519,169 @@ mod tests {
         let validation = validate_conflict_resolution_text(text);
         assert!(validation.has_conflict_markers);
         assert_eq!(validation.marker_lines, 3);
+    }
+
+    #[test]
+    fn validate_empty_text_reports_no_markers() {
+        let validation = validate_conflict_resolution_text("");
+        assert!(!validation.has_conflict_markers);
+        assert_eq!(validation.marker_lines, 0);
+    }
+
+    #[test]
+    fn validate_diff3_markers_detected() {
+        let text = "<<<<<<< ours\na\n||||||| base\nb\n=======\nc\n>>>>>>> theirs\n";
+        let validation = validate_conflict_resolution_text(text);
+        assert!(validation.has_conflict_markers);
+        assert_eq!(validation.marker_lines, 4);
+    }
+
+    #[test]
+    fn validate_markers_with_branch_annotations_detected() {
+        let text = "<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> feature/my-branch\n";
+        let validation = validate_conflict_resolution_text(text);
+        assert!(validation.has_conflict_markers);
+        assert_eq!(validation.marker_lines, 3);
+    }
+
+    #[test]
+    fn validate_partial_marker_set_detected() {
+        // Only start marker — still detects it
+        let text = "some code\n<<<<<<< HEAD\nmore code\n";
+        let validation = validate_conflict_resolution_text(text);
+        assert!(validation.has_conflict_markers);
+        assert_eq!(validation.marker_lines, 1);
+    }
+
+    #[test]
+    fn validate_markers_not_at_start_of_line_ignored() {
+        // Markers must be at line start to count
+        let text = "  <<<<<<< not a marker\n  ======= not a marker\n";
+        let validation = validate_conflict_resolution_text(text);
+        assert!(!validation.has_conflict_markers);
+        assert_eq!(validation.marker_lines, 0);
+    }
+
+    #[test]
+    fn validate_multiple_conflicts_counts_all_markers() {
+        let text = "\
+<<<<<<< HEAD\na\n=======\nb\n>>>>>>> branch1\n\
+<<<<<<< HEAD\nc\n=======\nd\n>>>>>>> branch2\n";
+        let validation = validate_conflict_resolution_text(text);
+        assert!(validation.has_conflict_markers);
+        assert_eq!(validation.marker_lines, 6);
+    }
+
+    // ── decode_utf8_optional ─────────────────────────────────────────
+
+    #[test]
+    fn decode_utf8_none_returns_none() {
+        assert_eq!(decode_utf8_optional(None), None);
+    }
+
+    #[test]
+    fn decode_utf8_valid_returns_string() {
+        let bytes = b"hello world";
+        assert_eq!(
+            decode_utf8_optional(Some(bytes.as_slice())),
+            Some("hello world".to_string())
+        );
+    }
+
+    #[test]
+    fn decode_utf8_invalid_returns_none() {
+        let bytes = &[0xff, 0xfe, 0x00, 0x01];
+        assert_eq!(decode_utf8_optional(Some(bytes.as_slice())), None);
+    }
+
+    #[test]
+    fn decode_utf8_empty_bytes_returns_empty_string() {
+        let bytes: &[u8] = b"";
+        assert_eq!(
+            decode_utf8_optional(Some(bytes)),
+            Some(String::new())
+        );
+    }
+
+    #[test]
+    fn decode_utf8_multibyte_chars_preserved() {
+        let text = "héllo wörld 日本語";
+        assert_eq!(
+            decode_utf8_optional(Some(text.as_bytes())),
+            Some(text.to_string())
+        );
+    }
+
+    // ── CommandOutput ────────────────────────────────────────────────
+
+    #[test]
+    fn command_output_empty_success_has_zero_exit_code() {
+        let out = CommandOutput::empty_success("git status");
+        assert_eq!(out.command, "git status");
+        assert_eq!(out.stdout, "");
+        assert_eq!(out.stderr, "");
+        assert_eq!(out.exit_code, Some(0));
+    }
+
+    #[test]
+    fn command_output_combined_stdout_only() {
+        let out = CommandOutput {
+            command: "test".into(),
+            stdout: "output line\n".into(),
+            stderr: String::new(),
+            exit_code: Some(0),
+        };
+        assert_eq!(out.combined(), "output line");
+    }
+
+    #[test]
+    fn command_output_combined_stderr_only() {
+        let out = CommandOutput {
+            command: "test".into(),
+            stdout: String::new(),
+            stderr: "error message\n".into(),
+            exit_code: Some(1),
+        };
+        assert_eq!(out.combined(), "error message");
+    }
+
+    #[test]
+    fn command_output_combined_both_streams() {
+        let out = CommandOutput {
+            command: "test".into(),
+            stdout: "output\n".into(),
+            stderr: "warning\n".into(),
+            exit_code: Some(0),
+        };
+        assert_eq!(out.combined(), "output\nwarning");
+    }
+
+    #[test]
+    fn command_output_combined_empty_when_both_blank() {
+        let out = CommandOutput {
+            command: "test".into(),
+            stdout: "   \n".into(),
+            stderr: "  \n".into(),
+            exit_code: Some(0),
+        };
+        assert_eq!(out.combined(), "");
+    }
+
+    #[test]
+    fn command_output_combined_trims_trailing_whitespace() {
+        let out = CommandOutput {
+            command: "test".into(),
+            stdout: "line1\nline2\n\n".into(),
+            stderr: "err\n\n".into(),
+            exit_code: Some(0),
+        };
+        assert_eq!(out.combined(), "line1\nline2\nerr");
+    }
+
+    #[test]
+    fn command_output_default_has_no_exit_code() {
+        let out = CommandOutput::default();
+        assert_eq!(out.command, "");
+        assert_eq!(out.exit_code, None);
     }
 }
