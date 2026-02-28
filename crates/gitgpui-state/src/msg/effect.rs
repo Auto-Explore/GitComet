@@ -290,6 +290,10 @@ pub enum Effect {
         path: PathBuf,
         side: ConflictSide,
     },
+    CheckoutConflictBase {
+        repo_id: RepoId,
+        path: PathBuf,
+    },
     LaunchMergetool {
         repo_id: RepoId,
         path: PathBuf,

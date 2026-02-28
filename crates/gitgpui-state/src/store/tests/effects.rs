@@ -436,6 +436,167 @@ fn save_worktree_file_effect_writes_and_can_stage() {
 }
 
 #[test]
+fn checkout_conflict_base_effect_calls_repo_and_emits_finished() {
+    struct Backend;
+    impl GitBackend for Backend {
+        fn open(&self, _path: &Path) -> std::result::Result<Arc<dyn GitRepository>, Error> {
+            Err(Error::new(ErrorKind::Unsupported("test backend")))
+        }
+    }
+
+    struct Repo {
+        spec: RepoSpec,
+        checkout_base_calls: std::sync::Mutex<Vec<PathBuf>>,
+    }
+
+    impl GitRepository for Repo {
+        fn spec(&self) -> &RepoSpec {
+            &self.spec
+        }
+        fn log_head_page(&self, _limit: usize, _cursor: Option<&LogCursor>) -> Result<LogPage> {
+            unimplemented!()
+        }
+        fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
+            unimplemented!()
+        }
+        fn reflog_head(&self, _limit: usize) -> Result<Vec<ReflogEntry>> {
+            unimplemented!()
+        }
+        fn current_branch(&self) -> Result<String> {
+            unimplemented!()
+        }
+        fn list_branches(&self) -> Result<Vec<Branch>> {
+            unimplemented!()
+        }
+        fn list_remotes(&self) -> Result<Vec<Remote>> {
+            unimplemented!()
+        }
+        fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
+            unimplemented!()
+        }
+        fn status(&self) -> Result<RepoStatus> {
+            unimplemented!()
+        }
+        fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
+            unimplemented!()
+        }
+        fn create_branch(&self, _name: &str, _target: &CommitId) -> Result<()> {
+            unimplemented!()
+        }
+        fn delete_branch(&self, _name: &str) -> Result<()> {
+            unimplemented!()
+        }
+        fn checkout_branch(&self, _name: &str) -> Result<()> {
+            unimplemented!()
+        }
+        fn checkout_commit(&self, _id: &CommitId) -> Result<()> {
+            unimplemented!()
+        }
+        fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
+            unimplemented!()
+        }
+        fn revert(&self, _id: &CommitId) -> Result<()> {
+            unimplemented!()
+        }
+        fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
+            unimplemented!()
+        }
+        fn stash_list(&self) -> Result<Vec<StashEntry>> {
+            unimplemented!()
+        }
+        fn stash_apply(&self, _index: usize) -> Result<()> {
+            unimplemented!()
+        }
+        fn stash_drop(&self, _index: usize) -> Result<()> {
+            unimplemented!()
+        }
+        fn stage(&self, _paths: &[&Path]) -> Result<()> {
+            unimplemented!()
+        }
+        fn unstage(&self, _paths: &[&Path]) -> Result<()> {
+            unimplemented!()
+        }
+        fn commit(&self, _message: &str) -> Result<()> {
+            unimplemented!()
+        }
+        fn fetch_all(&self) -> Result<()> {
+            unimplemented!()
+        }
+        fn pull(&self, _mode: PullMode) -> Result<()> {
+            unimplemented!()
+        }
+        fn push(&self) -> Result<()> {
+            unimplemented!()
+        }
+        fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {
+            unimplemented!()
+        }
+
+        fn checkout_conflict_base(&self, path: &Path) -> Result<CommandOutput> {
+            self.checkout_base_calls
+                .lock()
+                .unwrap()
+                .push(path.to_path_buf());
+            Ok(CommandOutput::empty_success(format!(
+                "git checkout :1:{}",
+                path.display()
+            )))
+        }
+    }
+
+    let repo_id = RepoId(1);
+    let rel = PathBuf::from("conflicted.txt");
+    let repo: Arc<Repo> = Arc::new(Repo {
+        spec: RepoSpec {
+            workdir: std::env::temp_dir(),
+        },
+        checkout_base_calls: std::sync::Mutex::new(Vec::new()),
+    });
+    let repo_trait: Arc<dyn GitRepository> = repo.clone();
+    let repos: HashMap<RepoId, Arc<dyn GitRepository>> = {
+        let mut repos = HashMap::default();
+        repos.insert(repo_id, repo_trait);
+        repos
+    };
+
+    let executor = super::executor::TaskExecutor::new(1);
+    let backend: Arc<dyn GitBackend> = Arc::new(Backend);
+    let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
+
+    super::effects::schedule_effect(
+        &executor,
+        &backend,
+        &repos,
+        msg_tx,
+        Effect::CheckoutConflictBase {
+            repo_id,
+            path: rel.clone(),
+        },
+    );
+
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_secs(5) {
+        if let Ok(msg) = msg_rx.recv_timeout(Duration::from_millis(50))
+            && let Msg::RepoCommandFinished {
+                repo_id: rid,
+                command,
+                result,
+            } = msg
+        {
+            assert_eq!(rid, repo_id);
+            assert!(matches!(
+                command,
+                crate::msg::RepoCommandKind::CheckoutConflictBase { path } if path == rel
+            ));
+            assert!(result.is_ok());
+            assert_eq!(repo.checkout_base_calls.lock().unwrap().as_slice(), [rel]);
+            return;
+        };
+    }
+    panic!("timed out waiting for RepoCommandFinished");
+}
+
+#[test]
 fn load_stashes_effect_truncates_results_to_limit() {
     struct Backend;
     impl GitBackend for Backend {

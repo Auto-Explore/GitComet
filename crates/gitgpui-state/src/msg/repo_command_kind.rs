@@ -58,6 +58,9 @@ pub enum RepoCommandKind {
         path: PathBuf,
         side: ConflictSide,
     },
+    CheckoutConflictBase {
+        path: PathBuf,
+    },
     LaunchMergetool {
         path: PathBuf,
     },

@@ -354,6 +354,10 @@ pub(super) fn checkout_conflict_side(
     }]
 }
 
+pub(super) fn checkout_conflict_base(repo_id: RepoId, path: PathBuf) -> Vec<Effect> {
+    vec![Effect::CheckoutConflictBase { repo_id, path }]
+}
+
 pub(super) fn launch_mergetool(repo_id: RepoId, path: PathBuf) -> Vec<Effect> {
     vec![Effect::LaunchMergetool { repo_id, path }]
 }

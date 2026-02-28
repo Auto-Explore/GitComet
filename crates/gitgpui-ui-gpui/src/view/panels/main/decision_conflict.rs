@@ -40,17 +40,15 @@ impl MainPaneView {
                         });
                     }),
             )
-            .when_some(file.base.clone().filter(|_| has_base), |d, base_text| {
+            .when(has_base, |d| {
                 let p = restore_path.clone();
                 d.child(
                     zed::Button::new("decision_restore_base", "Restore from Base")
                         .style(zed::ButtonStyle::Outlined)
                         .on_click(theme, cx, move |this, _e, _w, _cx| {
-                            this.store.dispatch(Msg::SaveWorktreeFile {
+                            this.store.dispatch(Msg::CheckoutConflictBase {
                                 repo_id,
                                 path: p.clone(),
-                                contents: base_text.clone(),
-                                stage: true,
                             });
                         }),
                 )

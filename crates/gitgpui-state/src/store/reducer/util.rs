@@ -402,6 +402,7 @@ fn summarize_command(
                 ConflictSide::Ours => "Checkout ours",
                 ConflictSide::Theirs => "Checkout theirs",
             },
+            RepoCommandKind::CheckoutConflictBase { .. } => "Checkout base",
             RepoCommandKind::LaunchMergetool { .. } => "Mergetool",
             RepoCommandKind::SaveWorktreeFile { .. } => "Save file",
             RepoCommandKind::ExportPatch { .. } | RepoCommandKind::ApplyPatch { .. } => "Patch",
@@ -510,6 +511,9 @@ fn summarize_command(
             ConflictSide::Ours => "Resolved using ours".to_string(),
             ConflictSide::Theirs => "Resolved using theirs".to_string(),
         },
+        RepoCommandKind::CheckoutConflictBase { path } => {
+            format!("Resolved using base → {}", path.display())
+        }
         RepoCommandKind::LaunchMergetool { path } => {
             format!("Mergetool: Resolved {}", path.display())
         }
