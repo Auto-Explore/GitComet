@@ -118,6 +118,10 @@
 - ✅ **Split vs inline row consistency:** verified both split and inline views produce the same set of distinct conflict indices for asymmetric multi-line conflicts; verified hide-resolved filtering hides the same conflict's rows in both views while preserving unresolved conflict visibility — `crates/gitgpui-ui-gpui/src/view/conflict_resolver.rs` (2 tests)
 - ✅ **Cross-kind conflict-side checkout matrix:** added backend integration coverage for `checkout_conflict_side()` across all seven `FileConflictKind` stage-shapes (`DD/AU/UD/UA/DU/AA/UU`) and both side choices (`--ours/--theirs` semantics), asserting resolved status transitions and selected-side content staging when the target stage exists — `crates/gitgpui-git-gix/tests/status_integration.rs` (1 test)
 
+### 15) Test Portability Fix (Iteration 21)
+- ✅ Fixed 6 pre-existing integration tests (`push_with_output`, `force_push_with_output`, `pull_with_output` ×2, `list_remote_branches`, `rebase_replays_commits`) that hardcoded `"master"` branch name — replaced with `git init -b main` and `"main"` references for portable behavior across systems where `init.defaultBranch` differs — `crates/gitgpui-git-gix/tests/status_integration.rs`
+- ✅ Full test suite now passes: 424 tests pass, 0 failures, clippy clean
+
 ---
 
 *Design reference: `tmp/conflict_resolution.md`*
