@@ -1078,6 +1078,49 @@ fn conflict_file_stages_preserve_non_utf8_bytes() {
 }
 
 #[test]
+fn conflict_session_both_deleted_binary_prefers_decision_strategy() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    write(repo, "seed.txt", "seed\n");
+    run_git(repo, &["add", "seed.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "seed"],
+    );
+
+    let base_blob = hash_blob(repo, b"\x00base\xff\n");
+    set_unmerged_stages(repo, "gone.bin", Some(base_blob.as_str()), None, None);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+
+    let status = opened.status().unwrap();
+    let entry = status
+        .unstaged
+        .iter()
+        .find(|e| e.path == Path::new("gone.bin"))
+        .expect("expected conflict status entry");
+    assert_eq!(entry.kind, FileStatusKind::Conflicted);
+    assert_eq!(entry.conflict, Some(FileConflictKind::BothDeleted));
+
+    let session = opened
+        .conflict_session(Path::new("gone.bin"))
+        .unwrap()
+        .expect("conflict session");
+    assert_eq!(session.conflict_kind, FileConflictKind::BothDeleted);
+    assert_eq!(session.strategy, ConflictResolverStrategy::DecisionOnly);
+    assert!(matches!(session.base, ConflictPayload::Binary(_)));
+    assert!(session.ours.is_absent());
+    assert!(session.theirs.is_absent());
+}
+
+#[test]
 fn diff_file_text_handles_modify_delete_conflicts() {
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();

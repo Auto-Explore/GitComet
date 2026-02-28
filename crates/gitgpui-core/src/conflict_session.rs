@@ -272,10 +272,11 @@ pub enum ConflictResolverStrategy {
 impl ConflictResolverStrategy {
     /// Determine the resolver strategy for a given conflict kind and payload state.
     pub fn for_conflict(kind: FileConflictKind, is_binary: bool) -> Self {
-        if is_binary {
-            return ConflictResolverStrategy::BinarySidePick;
-        }
         match kind {
+            // Both-deleted conflicts are decision-only regardless of payload encoding.
+            // There is no side content to pick, so binary side-pick would dead-end.
+            FileConflictKind::BothDeleted => ConflictResolverStrategy::DecisionOnly,
+            _ if is_binary => ConflictResolverStrategy::BinarySidePick,
             FileConflictKind::BothModified | FileConflictKind::BothAdded => {
                 ConflictResolverStrategy::FullTextResolver
             }
@@ -283,7 +284,6 @@ impl ConflictResolverStrategy {
             | FileConflictKind::DeletedByThem
             | FileConflictKind::AddedByUs
             | FileConflictKind::AddedByThem => ConflictResolverStrategy::TwoWayKeepDelete,
-            FileConflictKind::BothDeleted => ConflictResolverStrategy::DecisionOnly,
         }
     }
 
@@ -1635,6 +1635,14 @@ mod tests {
         assert_eq!(
             ConflictResolverStrategy::for_conflict(FileConflictKind::DeletedByUs, true),
             ConflictResolverStrategy::BinarySidePick,
+        );
+    }
+
+    #[test]
+    fn strategy_for_both_deleted_stays_decision_only_when_binary() {
+        assert_eq!(
+            ConflictResolverStrategy::for_conflict(FileConflictKind::BothDeleted, true),
+            ConflictResolverStrategy::DecisionOnly,
         );
     }
 

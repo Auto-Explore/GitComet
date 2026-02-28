@@ -16,6 +16,7 @@
 ### 2) Conflict Strategy by Kind
 - ✅ `ConflictResolverStrategy` enum (FullTextResolver, TwoWayKeepDelete, DecisionOnly, BinarySidePick) — `crates/gitgpui-core/src/conflict_session.rs`
 - ✅ `ConflictResolverStrategy::for_conflict()` maps every `FileConflictKind` + binary flag to strategy — `crates/gitgpui-core/src/conflict_session.rs`
+- ✅ **Decision-only precedence fix (Iteration 19):** `BothDeleted` now always maps to `DecisionOnly` even when payload decode marks the file as binary/non-UTF8, preventing dead-end binary side-pick UI for delete/delete conflicts; added unit and integration coverage for this edge case — `crates/gitgpui-core/src/conflict_session.rs`, `crates/gitgpui-git-gix/tests/status_integration.rs`
 - ✅ Wired strategy dispatch into UI: removed `conflict_requires_resolver` gating, switched activation/search/preview hotpaths to `conflict_resolver_strategy()`, defaulted non-full-text kinds to 2-way resolver mode, and threaded `is_binary` flag through for binary detection — `crates/gitgpui-ui-gpui/src/view/panels/main/diff.rs`, `crates/gitgpui-ui-gpui/src/view/panels/main.rs`, `crates/gitgpui-ui-gpui/src/view/panes/main.rs`
 - ✅ Added integration fixture matrix covering all seven `FileConflictKind` values (`DD/AU/UD/UA/DU/AA/UU`) plus sparse stage-shape validation via `conflict_file_stages()` — `crates/gitgpui-git-gix/tests/status_integration.rs`
 - ✅ **Strategy-specific UI panels** (Iteration 11): Each `ConflictResolverStrategy` now renders its own dedicated panel instead of falling through to the generic text resolver:
