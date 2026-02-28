@@ -137,8 +137,9 @@ impl MainPaneView {
         let (conflict_target_path, conflict_kind) = conflict_target
             .map(|(path, kind)| (Some(path), kind))
             .unwrap_or((None, None));
-        let is_conflict_resolver = Self::conflict_requires_resolver(conflict_kind);
-        let is_conflict_compare = conflict_target_path.is_some() && !is_conflict_resolver;
+        let conflict_strategy = Self::conflict_resolver_strategy(conflict_kind);
+        let is_conflict_resolver = conflict_strategy.is_some();
+        let is_conflict_compare = conflict_target_path.is_some() && conflict_strategy.is_none();
 
         let diff_target_path = repo.and_then(|repo| match repo.diff_target.as_ref()? {
             DiffTarget::WorkingTree { path, .. } => Some(path.as_path()),
@@ -2342,7 +2343,9 @@ impl MainPaneView {
                         e.path == *path
                             && e.kind == gitgpui_core::domain::FileStatusKind::Conflicted
                     });
-                    conflict.is_some_and(|e| Self::conflict_requires_resolver(e.conflict))
+                    conflict
+                        .and_then(|e| Self::conflict_resolver_strategy(e.conflict))
+                        .is_some()
                 });
 
                 if mods.alt && !mods.control && !mods.platform && !mods.function {

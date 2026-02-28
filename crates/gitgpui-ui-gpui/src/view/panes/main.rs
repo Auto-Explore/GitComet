@@ -1448,16 +1448,21 @@ impl MainPaneView {
             return;
         }
 
-        let is_conflicted = match &repo.status {
-            Loadable::Ready(status) => status.unstaged.iter().any(|e| {
-                e.path == *path && e.kind == gitgpui_core::domain::FileStatusKind::Conflicted
-            }),
-            _ => false,
+        let conflict_entry = match &repo.status {
+            Loadable::Ready(status) => status
+                .unstaged
+                .iter()
+                .find(|e| {
+                    e.path == *path && e.kind == gitgpui_core::domain::FileStatusKind::Conflicted
+                }),
+            _ => None,
         };
-        if !is_conflicted {
+        let Some(conflict_entry) = conflict_entry else {
             self.conflict_resolver = ConflictResolverUiState::default();
             return;
-        }
+        };
+        let conflict_kind = conflict_entry.conflict;
+        let conflict_strategy = Self::conflict_resolver_strategy(conflict_kind);
 
         let path = path.clone();
 
@@ -1574,7 +1579,11 @@ impl MainPaneView {
             && self.conflict_resolver.path.as_ref() == Some(&path)
         {
             self.conflict_resolver.view_mode
-        } else if file.base.is_some() {
+        } else if matches!(
+            conflict_strategy,
+            Some(gitgpui_core::conflict_session::ConflictResolverStrategy::FullTextResolver)
+        ) && file.base.is_some()
+        {
             ConflictResolverViewMode::ThreeWay
         } else {
             ConflictResolverViewMode::TwoWayDiff

@@ -58,7 +58,8 @@ impl MainPaneView {
                 }
             }
         } else if let Some((_path, conflict_kind)) = self.active_conflict_target() {
-            let is_conflict_resolver = Self::conflict_requires_resolver(conflict_kind);
+            let is_conflict_resolver =
+                Self::conflict_resolver_strategy(conflict_kind).is_some();
 
             match (is_conflict_resolver, self.diff_view) {
                 (true, _) => match self.conflict_resolver.diff_mode {
@@ -195,7 +196,7 @@ impl MainPaneView {
         }
 
         if let Some((_path, conflict_kind)) = self.active_conflict_target() {
-            if Self::conflict_requires_resolver(conflict_kind) {
+            if Self::conflict_resolver_strategy(conflict_kind).is_some() {
                 self.conflict_resolver_diff_scroll
                     .scroll_to_item_strict(visible_ix, gpui::ScrollStrategy::Center);
             } else {

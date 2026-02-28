@@ -12,31 +12,39 @@ const _: () = {
 };
 
 #[test]
-fn conflict_requires_resolver_only_for_both_modified() {
+fn conflict_resolver_strategy_maps_conflict_kinds() {
     use gitgpui_core::domain::FileConflictKind as K;
+    use gitgpui_core::conflict_session::ConflictResolverStrategy as S;
 
-    assert!(MainPaneView::conflict_requires_resolver(Some(
-        K::BothModified
-    )));
-    assert!(MainPaneView::conflict_requires_resolver(Some(
-        K::BothAdded
-    )));
-    assert!(!MainPaneView::conflict_requires_resolver(Some(
-        K::AddedByUs
-    )));
-    assert!(!MainPaneView::conflict_requires_resolver(Some(
-        K::AddedByThem
-    )));
-    assert!(!MainPaneView::conflict_requires_resolver(Some(
-        K::DeletedByUs
-    )));
-    assert!(!MainPaneView::conflict_requires_resolver(Some(
-        K::DeletedByThem
-    )));
-    assert!(!MainPaneView::conflict_requires_resolver(Some(
-        K::BothDeleted
-    )));
-    assert!(!MainPaneView::conflict_requires_resolver(None));
+    assert_eq!(
+        MainPaneView::conflict_resolver_strategy(Some(K::BothModified)),
+        Some(S::FullTextResolver),
+    );
+    assert_eq!(
+        MainPaneView::conflict_resolver_strategy(Some(K::BothAdded)),
+        Some(S::FullTextResolver),
+    );
+    assert_eq!(
+        MainPaneView::conflict_resolver_strategy(Some(K::AddedByUs)),
+        Some(S::TwoWayKeepDelete),
+    );
+    assert_eq!(
+        MainPaneView::conflict_resolver_strategy(Some(K::AddedByThem)),
+        Some(S::TwoWayKeepDelete),
+    );
+    assert_eq!(
+        MainPaneView::conflict_resolver_strategy(Some(K::DeletedByUs)),
+        Some(S::TwoWayKeepDelete),
+    );
+    assert_eq!(
+        MainPaneView::conflict_resolver_strategy(Some(K::DeletedByThem)),
+        Some(S::TwoWayKeepDelete),
+    );
+    assert_eq!(
+        MainPaneView::conflict_resolver_strategy(Some(K::BothDeleted)),
+        Some(S::DecisionOnly),
+    );
+    assert_eq!(MainPaneView::conflict_resolver_strategy(None), None);
 }
 
 struct TestBackend;
