@@ -1,3 +1,4 @@
+pub mod conflict_session;
 pub mod diff;
 pub mod domain;
 pub mod error;
