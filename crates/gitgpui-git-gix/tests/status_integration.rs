@@ -760,6 +760,155 @@ fn status_and_conflict_stages_cover_all_conflict_kinds() {
 }
 
 #[test]
+fn checkout_conflict_side_resolves_all_conflict_stage_shapes() {
+    #[derive(Clone, Copy)]
+    struct ConflictCheckoutFixture {
+        kind: FileConflictKind,
+        has_base: bool,
+        has_ours: bool,
+        has_theirs: bool,
+    }
+
+    let fixtures = [
+        ConflictCheckoutFixture {
+            kind: FileConflictKind::BothDeleted,
+            has_base: true,
+            has_ours: false,
+            has_theirs: false,
+        },
+        ConflictCheckoutFixture {
+            kind: FileConflictKind::AddedByUs,
+            has_base: false,
+            has_ours: true,
+            has_theirs: false,
+        },
+        ConflictCheckoutFixture {
+            kind: FileConflictKind::DeletedByThem,
+            has_base: true,
+            has_ours: true,
+            has_theirs: false,
+        },
+        ConflictCheckoutFixture {
+            kind: FileConflictKind::AddedByThem,
+            has_base: false,
+            has_ours: false,
+            has_theirs: true,
+        },
+        ConflictCheckoutFixture {
+            kind: FileConflictKind::DeletedByUs,
+            has_base: true,
+            has_ours: false,
+            has_theirs: true,
+        },
+        ConflictCheckoutFixture {
+            kind: FileConflictKind::BothAdded,
+            has_base: false,
+            has_ours: true,
+            has_theirs: true,
+        },
+        ConflictCheckoutFixture {
+            kind: FileConflictKind::BothModified,
+            has_base: true,
+            has_ours: true,
+            has_theirs: true,
+        },
+    ];
+
+    for fixture in fixtures {
+        for side in [ConflictSide::Ours, ConflictSide::Theirs] {
+            let dir = tempfile::tempdir().unwrap();
+            let repo = dir.path();
+
+            run_git(repo, &["init"]);
+            run_git(repo, &["config", "user.email", "you@example.com"]);
+            run_git(repo, &["config", "user.name", "You"]);
+            run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+            write(repo, "seed.txt", "seed\n");
+            run_git(repo, &["add", "seed.txt"]);
+            run_git(
+                repo,
+                &["-c", "commit.gpgsign=false", "commit", "-m", "seed"],
+            );
+
+            let base_blob = hash_blob(repo, b"base\n");
+            let ours_blob = hash_blob(repo, b"ours\n");
+            let theirs_blob = hash_blob(repo, b"theirs\n");
+
+            set_unmerged_stages(
+                repo,
+                "a.txt",
+                fixture.has_base.then_some(base_blob.as_str()),
+                fixture.has_ours.then_some(ours_blob.as_str()),
+                fixture.has_theirs.then_some(theirs_blob.as_str()),
+            );
+
+            let backend = GixBackend;
+            let opened = backend.open(repo).unwrap();
+
+            let before = opened.status().unwrap();
+            let conflict_entry = before
+                .unstaged
+                .iter()
+                .find(|e| e.path == Path::new("a.txt"))
+                .expect("expected staged-shape fixture to appear as conflict");
+            assert_eq!(conflict_entry.kind, FileStatusKind::Conflicted);
+            assert_eq!(conflict_entry.conflict, Some(fixture.kind));
+
+            opened
+                .checkout_conflict_side(Path::new("a.txt"), side)
+                .unwrap();
+
+            let after = opened.status().unwrap();
+            let selected_stage_exists = match side {
+                ConflictSide::Ours => fixture.has_ours,
+                ConflictSide::Theirs => fixture.has_theirs,
+            };
+
+            if selected_stage_exists {
+                let expected_bytes: &[u8] = match side {
+                    ConflictSide::Ours => b"ours\n",
+                    ConflictSide::Theirs => b"theirs\n",
+                };
+                assert_eq!(fs::read(repo.join("a.txt")).unwrap(), expected_bytes);
+                assert!(
+                    after
+                        .staged
+                        .iter()
+                        .any(|e| e.path == Path::new("a.txt") && e.kind == FileStatusKind::Added),
+                    "expected selected side to stage added file for {:?} with {:?}; status={after:?}",
+                    fixture.kind,
+                    side
+                );
+                assert!(
+                    after.unstaged.iter().all(|e| e.path != Path::new("a.txt")),
+                    "expected conflict path to disappear from unstaged after resolving {:?} with {:?}; status={after:?}",
+                    fixture.kind,
+                    side
+                );
+            } else {
+                assert!(
+                    !repo.join("a.txt").exists(),
+                    "expected path to be removed when chosen stage is missing for {:?} with {:?}",
+                    fixture.kind,
+                    side
+                );
+                assert!(
+                    after
+                        .staged
+                        .iter()
+                        .chain(after.unstaged.iter())
+                        .all(|e| e.path != Path::new("a.txt")),
+                    "expected no status entry for removed path after resolving {:?} with {:?}; status={after:?}",
+                    fixture.kind,
+                    side
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn status_reports_single_conflict_for_modify_delete() {
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
