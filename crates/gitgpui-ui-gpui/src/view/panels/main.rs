@@ -2757,17 +2757,27 @@ impl MainPaneView {
                     && !mods.platform
                     && !mods.function
                 {
-                    if mods.shift {
+                    if let Some(direction) =
+                        conflict_resolver::conflict_nav_direction_for_key(key, mods.shift)
+                    {
                         if conflict_resolver_active {
-                            this.conflict_jump_prev();
+                            match direction {
+                                conflict_resolver::ConflictNavDirection::Prev => {
+                                    this.conflict_jump_prev();
+                                }
+                                conflict_resolver::ConflictNavDirection::Next => {
+                                    this.conflict_jump_next();
+                                }
+                            }
                         } else {
-                            this.diff_jump_prev();
-                        }
-                    } else {
-                        if conflict_resolver_active {
-                            this.conflict_jump_next();
-                        } else {
-                            this.diff_jump_next();
+                            match direction {
+                                conflict_resolver::ConflictNavDirection::Prev => {
+                                    this.diff_jump_prev()
+                                }
+                                conflict_resolver::ConflictNavDirection::Next => {
+                                    this.diff_jump_next()
+                                }
+                            }
                         }
                     }
                     handled = true;
@@ -2780,10 +2790,28 @@ impl MainPaneView {
                     && !mods.platform
                     && !mods.function
                 {
-                    if conflict_resolver_active {
-                        this.conflict_jump_prev();
-                    } else {
-                        this.diff_jump_prev();
+                    if let Some(direction) =
+                        conflict_resolver::conflict_nav_direction_for_key(key, mods.shift)
+                    {
+                        if conflict_resolver_active {
+                            match direction {
+                                conflict_resolver::ConflictNavDirection::Prev => {
+                                    this.conflict_jump_prev();
+                                }
+                                conflict_resolver::ConflictNavDirection::Next => {
+                                    this.conflict_jump_next();
+                                }
+                            }
+                        } else {
+                            match direction {
+                                conflict_resolver::ConflictNavDirection::Prev => {
+                                    this.diff_jump_prev()
+                                }
+                                conflict_resolver::ConflictNavDirection::Next => {
+                                    this.diff_jump_next()
+                                }
+                            }
+                        }
                     }
                     handled = true;
                 }
@@ -2795,10 +2823,28 @@ impl MainPaneView {
                     && !mods.platform
                     && !mods.function
                 {
-                    if conflict_resolver_active {
-                        this.conflict_jump_next();
-                    } else {
-                        this.diff_jump_next();
+                    if let Some(direction) =
+                        conflict_resolver::conflict_nav_direction_for_key(key, mods.shift)
+                    {
+                        if conflict_resolver_active {
+                            match direction {
+                                conflict_resolver::ConflictNavDirection::Prev => {
+                                    this.conflict_jump_prev();
+                                }
+                                conflict_resolver::ConflictNavDirection::Next => {
+                                    this.conflict_jump_next();
+                                }
+                            }
+                        } else {
+                            match direction {
+                                conflict_resolver::ConflictNavDirection::Prev => {
+                                    this.diff_jump_prev()
+                                }
+                                conflict_resolver::ConflictNavDirection::Next => {
+                                    this.diff_jump_next()
+                                }
+                            }
+                        }
                     }
                     handled = true;
                 }
@@ -2818,36 +2864,10 @@ impl MainPaneView {
                         .is_focused(window)
                     && this.conflict_resolver_conflict_count() > 0
                 {
-                    match key {
-                        "a" => {
-                            this.conflict_resolver_pick_active_conflict(
-                                conflict_resolver::ConflictChoice::Base,
-                                cx,
-                            );
-                            handled = true;
-                        }
-                        "b" => {
-                            this.conflict_resolver_pick_active_conflict(
-                                conflict_resolver::ConflictChoice::Ours,
-                                cx,
-                            );
-                            handled = true;
-                        }
-                        "c" => {
-                            this.conflict_resolver_pick_active_conflict(
-                                conflict_resolver::ConflictChoice::Theirs,
-                                cx,
-                            );
-                            handled = true;
-                        }
-                        "d" => {
-                            this.conflict_resolver_pick_active_conflict(
-                                conflict_resolver::ConflictChoice::Both,
-                                cx,
-                            );
-                            handled = true;
-                        }
-                        _ => {}
+                    if let Some(choice) = conflict_resolver::conflict_quick_pick_choice_for_key(key)
+                    {
+                        this.conflict_resolver_pick_active_conflict(choice, cx);
+                        handled = true;
                     }
                 }
 

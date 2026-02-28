@@ -31,6 +31,12 @@ pub enum AutosolveTraceMode {
     History,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ConflictNavDirection {
+    Prev,
+    Next,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ConflictBlock {
     pub base: Option<String>,
@@ -59,6 +65,28 @@ pub struct ConflictInlineRow {
 
 /// Per-line word-highlight ranges. `None` means no highlights for that line.
 pub type WordHighlights = Vec<Option<Vec<std::ops::Range<usize>>>>;
+
+/// Resolve conflict quick-pick keyboard shortcuts to a concrete choice.
+pub fn conflict_quick_pick_choice_for_key(key: &str) -> Option<ConflictChoice> {
+    match key {
+        "a" => Some(ConflictChoice::Base),
+        "b" => Some(ConflictChoice::Ours),
+        "c" => Some(ConflictChoice::Theirs),
+        "d" => Some(ConflictChoice::Both),
+        _ => None,
+    }
+}
+
+/// Resolve conflict navigation shortcuts (`F2`, `F3`, `F7`) to a direction.
+pub fn conflict_nav_direction_for_key(key: &str, shift: bool) -> Option<ConflictNavDirection> {
+    match key {
+        "f2" => Some(ConflictNavDirection::Prev),
+        "f3" => Some(ConflictNavDirection::Next),
+        "f7" if shift => Some(ConflictNavDirection::Prev),
+        "f7" => Some(ConflictNavDirection::Next),
+        _ => None,
+    }
+}
 
 /// Build a user-facing summary for the most recent autosolve run.
 ///
@@ -1666,6 +1694,48 @@ mod tests {
         assert!(summary.contains("resolved 3 blocks"));
         assert!(summary.contains("history 3"));
         assert!(!summary.contains("pass1"));
+    }
+
+    #[test]
+    fn quick_pick_key_mapping_matches_a_b_c_d_shortcuts() {
+        assert_eq!(
+            conflict_quick_pick_choice_for_key("a"),
+            Some(ConflictChoice::Base)
+        );
+        assert_eq!(
+            conflict_quick_pick_choice_for_key("b"),
+            Some(ConflictChoice::Ours)
+        );
+        assert_eq!(
+            conflict_quick_pick_choice_for_key("c"),
+            Some(ConflictChoice::Theirs)
+        );
+        assert_eq!(
+            conflict_quick_pick_choice_for_key("d"),
+            Some(ConflictChoice::Both)
+        );
+        assert_eq!(conflict_quick_pick_choice_for_key("x"), None);
+    }
+
+    #[test]
+    fn nav_key_mapping_matches_f2_f3_f7_shortcuts() {
+        assert_eq!(
+            conflict_nav_direction_for_key("f2", false),
+            Some(ConflictNavDirection::Prev)
+        );
+        assert_eq!(
+            conflict_nav_direction_for_key("f3", false),
+            Some(ConflictNavDirection::Next)
+        );
+        assert_eq!(
+            conflict_nav_direction_for_key("f7", true),
+            Some(ConflictNavDirection::Prev)
+        );
+        assert_eq!(
+            conflict_nav_direction_for_key("f7", false),
+            Some(ConflictNavDirection::Next)
+        );
+        assert_eq!(conflict_nav_direction_for_key("home", false), None);
     }
 
     // -- resolved_conflict_count tests --
