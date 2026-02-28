@@ -1218,7 +1218,17 @@ impl MainPaneView {
                                     let resolved_label: SharedString =
                                         format!("Resolved {}/{}", resolved_count, conflict_count)
                                             .into();
-                                    d.child(
+                                    let unresolved_indices =
+                                        conflict_resolver::unresolved_conflict_indices(
+                                            &self.conflict_resolver.marker_segments,
+                                        );
+                                    let unresolved_preview_limit = 6usize;
+                                    let unresolved_overflow =
+                                        unresolved_indices.len().saturating_sub(
+                                            unresolved_preview_limit,
+                                        );
+
+                                    let mut d = d.child(
                                         div()
                                             .text_xs()
                                             .text_color(theme.colors.text_muted)
@@ -1233,8 +1243,53 @@ impl MainPaneView {
                                                 theme.colors.text_muted
                                             })
                                             .child(resolved_label),
-                                    )
-                                    .child(
+                                    );
+
+                                    if !unresolved_indices.is_empty() {
+                                        d = d.child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(theme.colors.text_muted)
+                                                .child("Queue"),
+                                        );
+                                        for conflict_ix in unresolved_indices
+                                            .iter()
+                                            .copied()
+                                            .take(unresolved_preview_limit)
+                                        {
+                                            let label: SharedString =
+                                                format!("#{}", conflict_ix + 1).into();
+                                            d = d.child(
+                                                zed::Button::new(
+                                                    format!("conflict_queue_{conflict_ix}"),
+                                                    label,
+                                                )
+                                                .style(
+                                                    if conflict_ix == active_conflict {
+                                                        zed::ButtonStyle::Outlined
+                                                    } else {
+                                                        zed::ButtonStyle::Transparent
+                                                    },
+                                                )
+                                                .on_click(theme, cx, move |this, _e, _w, cx| {
+                                                    this.conflict_resolver_focus_conflict(
+                                                        conflict_ix,
+                                                        cx,
+                                                    );
+                                                }),
+                                            );
+                                        }
+                                        if unresolved_overflow > 0 {
+                                            d = d.child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(theme.colors.text_muted)
+                                                    .child(format!("+{}", unresolved_overflow)),
+                                            );
+                                        }
+                                    }
+
+                                    d.child(
                                         zed::Button::new("conflict_pick_prev", "Prev")
                                             .style(zed::ButtonStyle::Transparent)
                                             .disabled(unresolved_count == 0)

@@ -204,7 +204,8 @@ pub fn resolved_conflict_count(segments: &[ConflictSegment]) -> usize {
         .count()
 }
 
-fn unresolved_conflict_indices(segments: &[ConflictSegment]) -> Vec<usize> {
+/// Return conflict indices for currently unresolved blocks in queue order.
+pub fn unresolved_conflict_indices(segments: &[ConflictSegment]) -> Vec<usize> {
     let mut out = Vec::new();
     let mut conflict_ix = 0usize;
     for seg in segments {
@@ -660,6 +661,25 @@ pub fn build_two_way_visible_indices(
             _ => Some(ix),
         })
         .collect()
+}
+
+/// Find the visible list index for the first row that belongs to `conflict_ix`.
+///
+/// `visible_row_indices` maps visible list rows to source row indices. This helper
+/// resolves conflict index -> visible row index so callers can scroll/focus a
+/// specific conflict in two-way resolver modes.
+pub fn visible_index_for_two_way_conflict(
+    row_conflict_map: &[Option<usize>],
+    visible_row_indices: &[usize],
+    conflict_ix: usize,
+) -> Option<usize> {
+    visible_row_indices.iter().position(|&row_ix| {
+        row_conflict_map
+            .get(row_ix)
+            .copied()
+            .flatten()
+            .is_some_and(|ix| ix == conflict_ix)
+    })
 }
 
 pub fn collect_split_selection(
@@ -2359,6 +2379,86 @@ mod tests {
         assert!(
             inline_has_conflict_1,
             "inline should show unresolved conflict 1"
+        );
+    }
+
+    #[test]
+    fn unresolved_conflict_indices_match_queue_order() {
+        let segments = vec![
+            ConflictSegment::Text("ctx\n".into()),
+            ConflictSegment::Block(ConflictBlock {
+                base: None,
+                ours: "A\n".into(),
+                theirs: "a\n".into(),
+                choice: ConflictChoice::Ours,
+                resolved: false,
+            }),
+            ConflictSegment::Block(ConflictBlock {
+                base: None,
+                ours: "B\n".into(),
+                theirs: "b\n".into(),
+                choice: ConflictChoice::Theirs,
+                resolved: true,
+            }),
+            ConflictSegment::Text("mid\n".into()),
+            ConflictSegment::Block(ConflictBlock {
+                base: None,
+                ours: "C\n".into(),
+                theirs: "c\n".into(),
+                choice: ConflictChoice::Ours,
+                resolved: false,
+            }),
+        ];
+
+        assert_eq!(unresolved_conflict_indices(&segments), vec![0, 2]);
+    }
+
+    #[test]
+    fn visible_index_for_two_way_conflict_respects_hide_resolved_filter() {
+        let segments = vec![
+            ConflictSegment::Text("ctx\n".into()),
+            ConflictSegment::Block(ConflictBlock {
+                base: None,
+                ours: "A\n".into(),
+                theirs: "a\n".into(),
+                choice: ConflictChoice::Ours,
+                resolved: true,
+            }),
+            ConflictSegment::Text("mid\n".into()),
+            ConflictSegment::Block(ConflictBlock {
+                base: None,
+                ours: "B\n".into(),
+                theirs: "b\n".into(),
+                choice: ConflictChoice::Ours,
+                resolved: false,
+            }),
+            ConflictSegment::Text("end\n".into()),
+        ];
+        let ours_text = "ctx\nA\nmid\nB\nend\n";
+        let theirs_text = "ctx\na\nmid\nb\nend\n";
+        let diff_rows = gitgpui_core::file_diff::side_by_side_rows(ours_text, theirs_text);
+        let inline_rows = build_inline_rows(&diff_rows);
+        let (split_map, inline_map) =
+            map_two_way_rows_to_conflicts(&segments, &diff_rows, &inline_rows);
+
+        let split_visible = build_two_way_visible_indices(&split_map, &segments, true);
+        let inline_visible = build_two_way_visible_indices(&inline_map, &segments, true);
+
+        assert_eq!(
+            visible_index_for_two_way_conflict(&split_map, &split_visible, 0),
+            None
+        );
+        assert_eq!(
+            visible_index_for_two_way_conflict(&inline_map, &inline_visible, 0),
+            None
+        );
+        assert!(
+            visible_index_for_two_way_conflict(&split_map, &split_visible, 1).is_some(),
+            "unresolved conflict should remain visible in split mode"
+        );
+        assert!(
+            visible_index_for_two_way_conflict(&inline_map, &inline_visible, 1).is_some(),
+            "unresolved conflict should remain visible in inline mode"
         );
     }
 }

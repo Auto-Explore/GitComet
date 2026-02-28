@@ -2067,6 +2067,57 @@ impl MainPaneView {
         conflict_resolver::conflict_count(&self.conflict_resolver.marker_segments)
     }
 
+    pub(in super::super) fn conflict_resolver_focus_conflict(
+        &mut self,
+        conflict_ix: usize,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if conflict_ix >= self.conflict_resolver_conflict_count() {
+            return;
+        }
+
+        self.conflict_resolver.active_conflict = conflict_ix;
+
+        let target_visible_ix = match self.conflict_resolver.view_mode {
+            ConflictResolverViewMode::ThreeWay => conflict_resolver::visible_index_for_conflict(
+                &self.conflict_resolver.three_way_visible_map,
+                &self.conflict_resolver.three_way_conflict_ranges,
+                conflict_ix,
+            ),
+            ConflictResolverViewMode::TwoWayDiff => {
+                let (split_map, inline_map) = conflict_resolver::map_two_way_rows_to_conflicts(
+                    &self.conflict_resolver.marker_segments,
+                    &self.conflict_resolver.diff_rows,
+                    &self.conflict_resolver.inline_rows,
+                );
+                match self.conflict_resolver.diff_mode {
+                    ConflictDiffMode::Split => {
+                        conflict_resolver::visible_index_for_two_way_conflict(
+                            &split_map,
+                            &self.conflict_resolver.diff_visible_row_indices,
+                            conflict_ix,
+                        )
+                    }
+                    ConflictDiffMode::Inline => {
+                        conflict_resolver::visible_index_for_two_way_conflict(
+                            &inline_map,
+                            &self.conflict_resolver.inline_visible_row_indices,
+                            conflict_ix,
+                        )
+                    }
+                }
+            }
+        };
+
+        if let Some(visible_ix) = target_visible_ix {
+            self.conflict_resolver_diff_scroll
+                .scroll_to_item_strict(visible_ix, gpui::ScrollStrategy::Center);
+            self.conflict_resolver.nav_anchor = Some(visible_ix);
+        }
+
+        cx.notify();
+    }
+
     fn conflict_resolver_active_block_mut(
         &mut self,
     ) -> Option<&mut conflict_resolver::ConflictBlock> {
