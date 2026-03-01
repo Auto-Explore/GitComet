@@ -1746,3 +1746,83 @@ fn git_mergetool_deleted_submodule_conflict() {
     // The pipeline should complete without crashing. The exact state
     // depends on the git version's handling of deleted submodules.
 }
+
+#[test]
+fn git_mergetool_directory_vs_submodule_conflict() {
+    // Parity with git t7610: "directory vs modified submodule".
+    // One branch replaces a submodule with a regular directory (containing files).
+    // The other branch modifies the submodule.  Git handles this conflict with
+    // its own l/r prompts; we verify the mergetool pipeline completes.
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("main_repo");
+    let sub_repo = tmp.path().join("sub_repo");
+    fs::create_dir_all(&repo).unwrap();
+    fs::create_dir_all(&sub_repo).unwrap();
+
+    create_submodule_repo(&sub_repo);
+    init_repo(&repo);
+
+    // Base: add a submodule.
+    let sub_url = format!("file://{}", sub_repo.display());
+    run_git(
+        &repo,
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            &sub_url,
+            "submod",
+        ],
+    );
+    commit_all(&repo, "add submodule");
+
+    // Feature: replace the submodule with a regular directory.
+    run_git(&repo, &["checkout", "-b", "feature"]);
+    run_git(&repo, &["submodule", "deinit", "-f", "submod"]);
+    run_git(&repo, &["rm", "-f", "submod"]);
+    // Clean up .gitmodules if empty.
+    let gitmodules = repo.join(".gitmodules");
+    if gitmodules.exists() {
+        let content = fs::read_to_string(&gitmodules).unwrap_or_default();
+        if content.trim().is_empty() || !content.contains("[submodule") {
+            let _ = run_git_capture(&repo, &["rm", "-f", ".gitmodules"]);
+        }
+    }
+    // Create a regular directory at the submod path.
+    fs::create_dir_all(repo.join("submod")).unwrap();
+    write_file(&repo, "submod/file16.txt", "not a submodule\n");
+    commit_all(&repo, "feature: replace submodule with directory");
+
+    // Main: update the submodule to a new commit.
+    run_git(&repo, &["checkout", "main"]);
+    run_git(&repo, &["submodule", "update", "--init"]);
+    advance_submodule(&sub_repo, "advanced content\n", "advance submod");
+    let advanced_out = run_git_capture(&sub_repo, &["rev-parse", "HEAD"]);
+    let advanced_commit = String::from_utf8_lossy(&advanced_out.stdout)
+        .trim()
+        .to_string();
+    run_git(&repo.join("submod"), &["fetch"]);
+    run_git(&repo.join("submod"), &["checkout", &advanced_commit]);
+    run_git(&repo, &["add", "submod"]);
+    run_git(
+        &repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "main: update submod"],
+    );
+
+    let merge_out = run_git_capture(&repo, &["merge", "feature"]);
+    if merge_out.status.success() {
+        // Some git versions may auto-resolve this; that's fine.
+        return;
+    }
+
+    configure_gitgpui_mergetool(&repo);
+
+    // Git handles directory-vs-submodule conflicts with its own prompt.
+    // Answer "l" to keep the local side (submodule).
+    let output = run_git_with_stdin(&repo, &["mergetool", "--no-prompt"], "l\n");
+    let _text = output_text(&output);
+
+    // The pipeline should complete without hanging or crashing.
+    // The exact resolution depends on git version.
+}

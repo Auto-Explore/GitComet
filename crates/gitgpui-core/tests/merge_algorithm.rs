@@ -251,6 +251,84 @@ fn t6403_merge_union() {
 // ── Trailing newline / EOF edge cases ──
 
 #[test]
+fn t6403_merge_missing_lf_at_eof() {
+    // Git t6403: test_expect_failure "merge without conflict (missing LF at EOF)"
+    //
+    // remote (theirs) lacks trailing LF while the head-of-file change is
+    // non-overlapping with ours' tail-of-file change.  Git's merge-file
+    // currently fails on this case; our implementation does better.
+    //
+    // base: full psalm (trailing LF)
+    // ours: psalm + 3 appended lines at end (trailing LF)
+    // theirs: collapsed first line, same body, NO trailing LF
+    let theirs_no_lf = PSALM_NEW2.trim_end_matches('\n');
+    let result = merge_file(PSALM_BASE, PSALM_NEW1, theirs_no_lf, &default_opts());
+
+    // Non-overlapping changes: ours adds lines at end, theirs changes first
+    // line. The merge should succeed (improvement over git's expected-failure).
+    assert!(
+        result.is_clean(),
+        "missing-LF-at-EOF merge should succeed (git expected-failure, we do better).\nOutput:\n{}",
+        result.output
+    );
+
+    // Merged output should contain both sides' changes.
+    assert!(
+        result.output.contains("Dominus regit me, et nihil mihi deerit."),
+        "should contain theirs' collapsed first line"
+    );
+    assert!(
+        result.output.contains("Nam et si ambulavero"),
+        "should contain ours' appended lines"
+    );
+
+    // The missing trailing LF from theirs should be preserved if the merge
+    // algorithm respects the theirs-side EOF behavior. However, since ours
+    // appends lines WITH trailing LF, the merged output will end with LF
+    // (ours' appended lines end with newline).
+    assert!(
+        result.output.ends_with('\n'),
+        "merged output should end with LF from ours' appended lines"
+    );
+}
+
+#[test]
+fn t6403_merge_missing_lf_at_eof_away_from_change() {
+    // Git t6403: "merge without conflict (missing LF at EOF, away from change)"
+    //
+    // ours lacks trailing LF, theirs changes first word (at head, far from EOF).
+    // Merged output should preserve the missing trailing LF.
+    //
+    // base: collapsed first line (PSALM_NEW2) with trailing LF
+    // ours: same as base but WITHOUT trailing LF (PSALM_NEW4-like, no appended lines)
+    // theirs: DOMINUS uppercased (PSALM_NEW3) with trailing LF
+    let base_collapsed = PSALM_NEW2;
+    let ours_no_lf = PSALM_NEW2.trim_end_matches('\n');
+
+    // theirs changes first word relative to base_collapsed:
+    // base: "Dominus regit me, et nihil mihi deerit."
+    // theirs needs first word uppercased. Since base is collapsed form,
+    // create theirs manually.
+    let theirs = base_collapsed.replacen("Dominus", "DOMINUS", 1);
+
+    let result = merge_file(base_collapsed, ours_no_lf, &theirs, &default_opts());
+
+    assert!(
+        result.is_clean(),
+        "missing-LF away from change should merge cleanly.\nOutput:\n{}",
+        result.output
+    );
+    assert!(
+        result.output.contains("DOMINUS"),
+        "should contain theirs' uppercased word"
+    );
+    assert!(
+        !result.output.ends_with('\n'),
+        "should preserve ours' missing trailing LF"
+    );
+}
+
+#[test]
 fn t6403_merge_preserves_missing_lf() {
     // When ours lacks trailing LF and theirs changes are far from EOF,
     // output should preserve absence of trailing LF.

@@ -552,14 +552,51 @@ fn render_merged(
         line_ending,
     );
 
-    // Preserve original trailing-newline behavior: if neither ours nor theirs
-    // had a trailing newline, strip our trailing newline too.
+    // Trailing-newline handling: determine whether the output should end with
+    // a newline by checking which input(s) contributed the output's last line,
+    // then applying 3-way merge logic to the trailing-LF "bit".
     let ours_has_trailing = ours_text.is_empty() || ours_text.ends_with('\n');
     let theirs_has_trailing = theirs_text.is_empty() || theirs_text.ends_with('\n');
     let base_has_trailing = base_text.is_empty() || base_text.ends_with('\n');
 
-    if !ours_has_trailing && !theirs_has_trailing && !base_has_trailing {
-        // None of the inputs had a trailing newline — strip ours.
+    let ours_lines_all = split_lines(ours_text);
+    let theirs_lines_all = split_lines(theirs_text);
+
+    // Find the output's last line content (stripped of trailing newline).
+    let output_last = output
+        .trim_end_matches('\n')
+        .trim_end_matches('\r')
+        .rsplit('\n')
+        .next()
+        .unwrap_or("");
+
+    let ours_last_matches = ours_lines_all.last().is_some_and(|l| *l == output_last);
+    let theirs_last_matches = theirs_lines_all.last().is_some_and(|l| *l == output_last);
+    let base_last_matches = base_lines.last().is_some_and(|l| *l == output_last);
+
+    let want_trailing = if ours_last_matches && theirs_last_matches {
+        // Both ours and theirs share the output's last line content.
+        // Apply 3-way merge logic to the trailing-LF bit.
+        if ours_has_trailing == theirs_has_trailing {
+            ours_has_trailing
+        } else if base_last_matches && base_has_trailing == theirs_has_trailing {
+            ours_has_trailing // only ours changed
+        } else if base_last_matches && base_has_trailing == ours_has_trailing {
+            theirs_has_trailing // only theirs changed
+        } else {
+            ours_has_trailing // both changed; prefer ours
+        }
+    } else if ours_last_matches {
+        ours_has_trailing
+    } else if theirs_last_matches {
+        theirs_has_trailing
+    } else if base_last_matches {
+        base_has_trailing
+    } else {
+        true // conflict marker or union content — keep trailing LF
+    };
+
+    if !want_trailing {
         if output.ends_with("\r\n") {
             output.truncate(output.len() - 2);
         } else if output.ends_with('\n') {
