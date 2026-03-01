@@ -433,6 +433,39 @@ fn git_mergetool_resolves_overlapping_conflict() {
 }
 
 #[test]
+fn git_mergetool_custom_cmd_copies_remote_to_merged() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+
+    setup_overlapping_conflict(repo);
+
+    let tool = "customcopy";
+    configure_mergetool_selection(repo, tool, None, None);
+    configure_mergetool_command(repo, tool, "cat \"$REMOTE\" > \"$MERGED\"");
+    configure_mergetool_trust_exit_code(repo, tool, true);
+
+    let output = run_git_capture(repo, &["mergetool", "--no-prompt"]);
+    let text = output_text(&output);
+    assert!(
+        output.status.success(),
+        "expected custom mergetool command to resolve conflict\n{text}"
+    );
+
+    let merged = fs::read_to_string(repo.join("file.txt")).unwrap();
+    assert_eq!(
+        merged, "aaa\nREMOTE\nccc\n",
+        "expected custom command to copy REMOTE into MERGED\n{text}"
+    );
+
+    let unmerged = run_git_capture(repo, &["ls-files", "-u"]);
+    assert!(
+        unmerged.stdout.is_empty(),
+        "expected no unmerged index entries after custom command\n{}",
+        output_text(&unmerged)
+    );
+}
+
+#[test]
 fn git_mergetool_accepts_kdiff3_alias_flags_in_cmd() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
