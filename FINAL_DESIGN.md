@@ -43,7 +43,14 @@
   - Default run executes deterministic sampled corpus (`r=3`, `seed=0`) for 243 cases.
   - Includes ignored exhaustive corpus test for all 161,051 cases.
   - Validates generated outputs with marker well-formedness, content integrity, context preservation, and reported conflict-count parity.
-- ⬜ Phase 3C (real-world merge extraction harness): not implemented yet.
+- ✅ Phase 3C (real-world merge extraction harness): implemented in `crates/gitgpui-core/tests/merge_git_extraction.rs`.
+  - Ports KDiff3's `generate_testdata_from_git_merges.py` concept to Rust.
+  - Walks merge commits via `git rev-list --merges --parents`, finds merge-base, extracts base/contrib1/contrib2 file contents.
+  - Skips trivial merges (base == either contrib, or contribs identical) and binary files (non-UTF-8).
+  - Validates algorithm-independent invariants (marker well-formedness, content integrity) on each extracted case.
+  - Default test runs against gitgpui's own repo; ignored test supports arbitrary external repos via `GITGPUI_MERGE_EXTRACTION_REPO` env var.
+  - Includes fixture file generation (`write_fixtures`) compatible with the existing Phase 2 fixture harness format.
+  - 8 tests (+ 2 ignored): discovery, trivial skip, nontrivial conflict, clean merge, binary skip, fixture writing, multifile merge, self-repo regression.
 - 🔧 Phase 4A (critical `t7610-mergetool` E2E): partially implemented in `gitgpui-git-gix` tests:
   - ✅ trust-exit behavior and content-change semantics
   - ✅ custom command invocation and braced env variables
@@ -58,7 +65,20 @@
   - 5B: Interval merging (`merge_intervals`) with 8 tests (6 ported from Meld's `test_misc.py` + 2 edge cases).
   - 5C: Newline-aware text operations (`delete_last_line`) with 12 tests (7 ported from Meld's `test_chunk_actions.py` + 5 edge cases).
 
-### Latest Component Delivered (Iteration 5)
+### Latest Component Delivered (Iteration 6)
+
+- Implemented Phase 3C real-world merge extraction harness:
+  - Added `crates/gitgpui-core/tests/merge_git_extraction.rs` porting KDiff3's `generate_testdata_from_git_merges.py` concept to Rust.
+  - **Merge commit discovery**: walks `git rev-list --merges --parents HEAD` to find standard 2-parent merge commits (skips octopus merges).
+  - **File extraction**: for each merge, finds merge-base via `git merge-base`, identifies files changed in both parents, extracts file contents at base/contrib1/contrib2 via `git show`.
+  - **Trivial skip**: filters out cases where base == either contrib or contribs are identical.
+  - **Binary skip**: filters out non-UTF-8 files that the text merge algorithm cannot process.
+  - **Invariant validation**: runs `merge_file()` on each extracted case and validates marker well-formedness + content integrity.
+  - **Fixture generation**: `write_fixtures()` writes extracted cases to disk in the Phase 2 fixture harness format (`{sha}_{path}_{base,contrib1,contrib2,expected_result}.txt`).
+  - **Self-repo regression**: default test runs against gitgpui's own repo; ignored tests support external repos via `GITGPUI_MERGE_EXTRACTION_REPO` env var (e.g., linux kernel).
+  - 8 tests passing + 2 ignored: `extraction_discovers_merge_commits`, `extraction_skips_trivial_merges`, `extraction_finds_nontrivial_conflict`, `extraction_handles_clean_merge`, `extraction_skips_binary_files`, `extraction_writes_fixture_files`, `extraction_handles_multifile_merge`, `extraction_regression_on_gitgpui_repo`.
+
+### Iteration 5 Component Delivered
 
 - Implemented Phase 5A/5B/5C Meld-derived algorithm tests and utilities:
   - Added `crates/gitgpui-core/src/text_utils.rs` with three utility groups:

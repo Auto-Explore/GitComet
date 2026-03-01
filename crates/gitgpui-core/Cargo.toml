@@ -13,3 +13,4 @@ regex = "1"
 
 [dev-dependencies]
 rustc-hash = { workspace = true }
+tempfile = "3"
