@@ -123,6 +123,20 @@ fn configure_gitgpui_mergetool(repo: &Path) {
     run_git(repo, &["config", "mergetool.keepBackup", "false"]);
 }
 
+fn configure_gitgpui_mergetool_with_alias_flags(repo: &Path) {
+    let bin = gitgpui_bin();
+    let bin_q = shell_quote(&bin.to_string_lossy());
+    let cmd = format!(
+        "{bin_q} mergetool -o \"$MERGED\" --base \"$BASE\" --local \"$LOCAL\" --remote \"$REMOTE\" --L1 \"BASE_ALIAS\" --L2 \"LOCAL_ALIAS\" --L3 \"REMOTE_ALIAS\""
+    );
+
+    run_git(repo, &["config", "merge.tool", "gitgpui"]);
+    run_git(repo, &["config", "mergetool.gitgpui.cmd", &cmd]);
+    run_git(repo, &["config", "mergetool.gitgpui.trustExitCode", "true"]);
+    run_git(repo, &["config", "mergetool.prompt", "false"]);
+    run_git(repo, &["config", "mergetool.keepBackup", "false"]);
+}
+
 /// Create a mergetool command that echoes a marker to stderr and resolves
 /// the conflict by copying $REMOTE to $MERGED. This simulates a successful
 /// merge tool and allows tests to detect which tool was selected by checking
@@ -397,6 +411,35 @@ fn git_mergetool_resolves_overlapping_conflict() {
     assert!(
         merged.contains("<<<<<<<") || merged.contains("LOCAL") || merged.contains("REMOTE"),
         "expected mergetool to have processed file.txt\nmerged:\n{merged}\ngit output:\n{text}"
+    );
+}
+
+#[test]
+fn git_mergetool_accepts_kdiff3_alias_flags_in_cmd() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+
+    setup_overlapping_conflict(repo);
+    configure_gitgpui_mergetool_with_alias_flags(repo);
+
+    let output = run_git_capture(repo, &["mergetool", "--no-prompt"]);
+    let text = output_text(&output);
+    let merged = fs::read_to_string(repo.join("file.txt")).unwrap();
+
+    assert!(
+        !text.contains("unexpected argument '-o'")
+            && !text.contains("unexpected argument '--L1'")
+            && !text.contains("unexpected argument '--L2'")
+            && !text.contains("unexpected argument '--L3'"),
+        "expected alias flags to be accepted by gitgpui-app mergetool\noutput:\n{text}"
+    );
+    assert!(
+        text.contains("Auto-merging file.txt"),
+        "expected gitgpui-app mergetool to run\noutput:\n{text}"
+    );
+    assert!(
+        merged.contains("LOCAL") || merged.contains("REMOTE") || merged.contains("<<<<<<<"),
+        "expected merged file to be processed\nmerged:\n{merged}\noutput:\n{text}"
     );
 }
 

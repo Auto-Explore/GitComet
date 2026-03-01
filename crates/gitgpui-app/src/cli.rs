@@ -63,7 +63,12 @@ pub struct DifftoolArgs {
 #[derive(clap::Args, Debug)]
 pub struct MergetoolArgs {
     /// Path to the merged output file (required).
-    #[arg(long)]
+    ///
+    /// Compatibility aliases:
+    /// - `-o`
+    /// - `--output`
+    /// - `--out`
+    #[arg(long, short = 'o', visible_aliases = ["output", "out"])]
     pub merged: Option<PathBuf>,
     /// Path to the local (ours) file (required).
     #[arg(long)]
@@ -75,13 +80,19 @@ pub struct MergetoolArgs {
     #[arg(long)]
     pub base: Option<PathBuf>,
     /// Label for the base pane.
-    #[arg(long)]
+    ///
+    /// Compatibility alias: `--L1` (KDiff3-style).
+    #[arg(long, visible_alias = "L1")]
     pub label_base: Option<String>,
     /// Label for the local pane.
-    #[arg(long)]
+    ///
+    /// Compatibility alias: `--L2` (KDiff3-style).
+    #[arg(long, visible_alias = "L2")]
     pub label_local: Option<String>,
     /// Label for the remote pane.
-    #[arg(long)]
+    ///
+    /// Compatibility alias: `--L3` (KDiff3-style).
+    #[arg(long, visible_alias = "L3")]
     pub label_remote: Option<String>,
     /// Conflict marker style: merge (default), diff3, or zdiff3.
     #[arg(long, value_name = "STYLE")]
@@ -969,6 +980,62 @@ mod tests {
                 assert_eq!(args.local.as_deref(), Some(std::path::Path::new("/tmp/l")));
                 assert_eq!(args.remote.as_deref(), Some(std::path::Path::new("/tmp/r")));
                 assert_eq!(args.base.as_deref(), Some(std::path::Path::new("/tmp/b")));
+                assert_eq!(args.label_base.as_deref(), Some("Base"));
+                assert_eq!(args.label_local.as_deref(), Some("Ours"));
+                assert_eq!(args.label_remote.as_deref(), Some("Theirs"));
+            }
+            _ => panic!("expected Mergetool command"),
+        }
+    }
+
+    #[test]
+    fn clap_parses_mergetool_output_aliases() {
+        for merged_flag in ["-o", "--output", "--out"] {
+            let cli = Cli::try_parse_from([
+                "gitgpui-app",
+                "mergetool",
+                merged_flag,
+                "/tmp/m",
+                "--local",
+                "/tmp/l",
+                "--remote",
+                "/tmp/r",
+            ])
+            .unwrap();
+
+            match cli.command {
+                Some(Command::Mergetool(args)) => {
+                    assert_eq!(args.merged.as_deref(), Some(std::path::Path::new("/tmp/m")));
+                    assert_eq!(args.local.as_deref(), Some(std::path::Path::new("/tmp/l")));
+                    assert_eq!(args.remote.as_deref(), Some(std::path::Path::new("/tmp/r")));
+                }
+                _ => panic!("expected Mergetool command"),
+            }
+        }
+    }
+
+    #[test]
+    fn clap_parses_mergetool_kdiff3_label_aliases() {
+        let cli = Cli::try_parse_from([
+            "gitgpui-app",
+            "mergetool",
+            "--merged",
+            "/tmp/m",
+            "--local",
+            "/tmp/l",
+            "--remote",
+            "/tmp/r",
+            "--L1",
+            "Base",
+            "--L2",
+            "Ours",
+            "--L3",
+            "Theirs",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Some(Command::Mergetool(args)) => {
                 assert_eq!(args.label_base.as_deref(), Some("Base"));
                 assert_eq!(args.label_local.as_deref(), Some("Ours"));
                 assert_eq!(args.label_remote.as_deref(), Some("Theirs"));

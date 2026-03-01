@@ -1,6 +1,6 @@
 ## STATUS: COMPLETE
 
-All components from both design documents are fully implemented. Iteration 19 adds automatic git config fallback for `merge.conflictstyle` and `diff.algorithm`, so users' git preferences are respected without modifying the mergetool command string.
+All components from both design documents are fully implemented. Iteration 19 adds automatic git config fallback for `merge.conflictstyle` and `diff.algorithm` and KDiff3/Meld-style mergetool CLI aliases (`-o/--output/--out`, `--L1/--L2/--L3`) for stronger external-tool command compatibility.
 
 ## Implementation Progress
 
@@ -8,6 +8,7 @@ All components from both design documents are fully implemented. Iteration 19 ad
 
 External Diff/Merge Usage Design (`external_usage.md`)
 - ✅ Dedicated CLI modes (`difftool`, `mergetool`) and arg/env validation are implemented.
+- ✅ Mergetool CLI compatibility aliases are implemented: `-o`/`--output`/`--out` for output path and `--L1`/`--L2`/`--L3` for labels (KDiff3/Meld-style command compatibility).
 - ✅ Focused difftool/mergetool runtimes are implemented with Git-compatible exit semantics.
 - ✅ Git-invoked E2E coverage exists for `git difftool` and `git mergetool` parity scenarios (GUI selection, trust-exit handling, spaced/unicode paths, subdir invocation, `--tool-help`, symlink/submodule/delete-modify edge cases, order-file behavior, and explicit `mergetool.writeToTemp` path-shape parity).
 - ✅ Automatic git config fallback: mergetool reads `merge.conflictstyle` and `diff.algorithm` from git config when no CLI flag is provided, mirroring `git merge-file` behavior. CLI flags take priority over git config, and git config takes priority over defaults. Unknown config values are gracefully ignored.
@@ -31,6 +32,10 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
 
 - ✅ CLI subcommands and argument model (`gitgpui-app difftool`, `gitgpui-app mergetool`) implemented in `crates/gitgpui-app/src/cli.rs`.
 - ✅ Arg/env resolution + validation implemented for `LOCAL`, `REMOTE`, `MERGED`, `BASE`, labels, missing-input and missing-path errors.
+- ✅ Mergetool compatibility aliases implemented in `crates/gitgpui-app/src/cli.rs`:
+  - `-o`/`--output`/`--out` as aliases for `--merged`
+  - `--L1`/`--L2`/`--L3` as aliases for `--label-base`/`--label-local`/`--label-remote`
+  - coverage: parser unit tests + git-invoked integration test (`git_mergetool_accepts_kdiff3_alias_flags_in_cmd`)
 - ✅ Exit code constants aligned to design (`0`, `1`, `>=2`) defined in app CLI module.
 - ✅ Foundational conflict-marker label formatter implemented in `crates/gitgpui-core/src/conflict_labels.rs` (`empty tree`, `<short-sha>:<path>`, merged-ancestors, rebase-parent shapes), ready for focused merge-mode integration.
 - ✅ Focused command-mode execution paths fully implemented:
@@ -139,7 +144,21 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
   - ✅ Dedicated trust-exit interaction matrix assertions (`difftool.trustExitCode`, `--trust-exit-code`, `--no-trust-exit-code`).
   - ✅ `git difftool --tool-help` discoverability assertion for configured `gitgpui` tool.
 
-### Latest Component Delivered (Iteration 19) — Git Config Fallback for Merge Preferences
+### Latest Component Delivered (Iteration 19) — Mergetool CLI Alias Compatibility
+
+- Added KDiff3/Meld-style mergetool argument aliases in `crates/gitgpui-app/src/cli.rs`:
+  - output path aliases: `-o`, `--output`, `--out` -> `--merged`
+  - label aliases: `--L1`, `--L2`, `--L3` -> `--label-base`, `--label-local`, `--label-remote`
+- Added parser-level coverage in `crates/gitgpui-app/src/cli.rs`:
+  - `clap_parses_mergetool_output_aliases`
+  - `clap_parses_mergetool_kdiff3_label_aliases`
+- Added git-invoked integration coverage in `crates/gitgpui-app/tests/mergetool_git_integration.rs`:
+  - `git_mergetool_accepts_kdiff3_alias_flags_in_cmd`
+- Verification:
+  - `cargo test -p gitgpui-app --bin gitgpui-app`
+  - `cargo test -p gitgpui-app --test mergetool_git_integration git_mergetool_accepts_kdiff3_alias_flags_in_cmd -- --nocapture`
+
+### Iteration 19 (Earlier Pass) — Git Config Fallback for Merge Preferences
 
 - Added automatic git config fallback to `resolve_mergetool()` in `crates/gitgpui-app/src/cli.rs`:
   - When `--conflict-style` is not provided via CLI, reads `merge.conflictstyle` from git config (`merge`, `diff3`, `zdiff3`).
