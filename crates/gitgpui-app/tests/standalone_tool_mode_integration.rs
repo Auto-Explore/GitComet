@@ -541,6 +541,30 @@ fn standalone_compat_mergetool_meld_label_order_maps_to_local_base_remote() {
 }
 
 #[test]
+fn standalone_difftool_file_directory_mismatch_exits_two() {
+    let dir = tempfile::tempdir().unwrap();
+    let local = dir.path().join("left.txt");
+    let remote_dir = dir.path().join("right");
+    write_file(&local, "left\n");
+    fs::create_dir_all(&remote_dir).expect("create remote dir");
+
+    let output = run_gitgpui([
+        OsString::from("difftool"),
+        OsString::from("--local"),
+        local.as_os_str().to_owned(),
+        OsString::from("--remote"),
+        remote_dir.as_os_str().to_owned(),
+    ]);
+
+    let text = output_text(&output);
+    assert_eq!(output.status.code(), Some(2), "expected exit 2\n{text}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("input kind mismatch"),
+        "expected actionable kind-mismatch validation\n{text}"
+    );
+}
+
+#[test]
 fn standalone_difftool_missing_input_exits_two() {
     let dir = tempfile::tempdir().unwrap();
     let local = dir.path().join("left.txt");

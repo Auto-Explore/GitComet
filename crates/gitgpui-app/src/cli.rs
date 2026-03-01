@@ -246,6 +246,13 @@ fn resolve_difftool_with_env(
     if !remote.exists() {
         return Err(format!("Remote path does not exist: {}", remote.display()));
     }
+    if local.is_dir() != remote.is_dir() {
+        let local_kind = if local.is_dir() { "directory" } else { "file" };
+        let remote_kind = if remote.is_dir() { "directory" } else { "file" };
+        return Err(format!(
+            "Difftool input kind mismatch: local is a {local_kind} and remote is a {remote_kind}. Use two files or two directories."
+        ));
+    }
 
     // Display path: flag > MERGED env > BASE env (git difftool compat) > None.
     // Git custom difftool contracts historically pass MERGED and/or BASE as
@@ -1177,6 +1184,33 @@ mod tests {
         let config = resolve_difftool_with_env(args, &env).unwrap();
         assert_eq!(config.local, left_dir);
         assert_eq!(config.remote, right_dir);
+    }
+
+    #[test]
+    fn difftool_rejects_file_vs_directory_mismatch() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = tmp_file(&dir, "left.txt", "left");
+        let right_dir = dir.path().join("right");
+        std::fs::create_dir(&right_dir).unwrap();
+
+        let args = DifftoolArgs {
+            local: Some(file_path),
+            remote: Some(right_dir),
+            path: None,
+            label_left: None,
+            label_right: None,
+            gui: false,
+        };
+
+        let err = resolve_difftool_with_env(args, &TestEnv::new()).unwrap_err();
+        assert!(
+            err.contains("input kind mismatch"),
+            "error should mention kind mismatch: {err}"
+        );
+        assert!(
+            err.contains("two files or two directories"),
+            "error should explain valid combinations: {err}"
+        );
     }
 
     // ── MergetoolArgs resolution ─────────────────────────────────────

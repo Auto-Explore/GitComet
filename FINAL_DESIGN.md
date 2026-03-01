@@ -1,10 +1,10 @@
 ## STATUS: COMPLETE
 
-All components from both design documents are fully implemented. Latest update adds `gitgpui-state` (134 conflict-session/reducer/effect tests) to CI workflow for clippy, build, and test coverage — closing the last gap where headless-capable tests were not gated in CI.
+All components from both design documents are fully implemented. Latest update hardens dedicated `difftool` input validation to reject mixed file/directory pairs at parse time with actionable errors, with CLI-unit and standalone E2E regression coverage.
 
 ## Implementation Progress
 
-### Progress Snapshot (Iteration 61)
+### Progress Snapshot (Iteration 62)
 
 External Diff/Merge Usage Design (`external_usage.md`)
 - ✅ Dedicated CLI modes (`difftool`, `mergetool`) and arg/env validation are implemented.
@@ -15,6 +15,7 @@ External Diff/Merge Usage Design (`external_usage.md`)
 - ✅ Strict compatibility validation is implemented for no-subcommand invocation: invalid combinations now fail fast with actionable errors (`--auto` requires output path, merge mode positional count validation, merge-mode `--L3`-without-`BASE` rejection in 2-path mode, `--base` ambiguity guards, diff-mode `--L3`/`--base` rejection, and too-many-positional guards).
 - ✅ CLI empty-path hardening is implemented: required `LOCAL`/`REMOTE`/`MERGED` inputs now reject empty path values with actionable parse-time errors, optional display-path env vars ignore empty strings, and empty `BASE` from env is normalized to no-base while explicit empty `--base` is rejected.
 - ✅ Mergetool path-kind validation is hardened: `LOCAL`, `REMOTE`, and explicit `BASE` now reject directories (must be files), and existing-directory `MERGED` targets fail fast with actionable parse-time errors.
+- ✅ Difftool path-kind validation is hardened: mixed file-vs-directory `LOCAL`/`REMOTE` inputs now fail fast with actionable parse-time errors (must be two files or two directories), with CLI unit + standalone E2E regression tests.
 - ✅ Difftool env compatibility is complete: display-path resolution now honors optional `MERGED` and `BASE` compatibility vars with explicit precedence (`--path` > `MERGED` > `BASE`).
 - ✅ Mergetool CLI compatibility aliases are implemented: `-o`/`--output`/`--out` for output path and `--L1`/`--L2`/`--L3` for labels (KDiff3/Meld-style command compatibility).
 - ✅ Dedicated mergetool marker-width control is now exposed end-to-end via `--marker-size <N>` with strict validation (`N > 0`), runtime propagation into merge options, and standalone/CLI regression coverage.
@@ -72,6 +73,7 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
 - ✅ Arg/env resolution + validation implemented for `LOCAL`, `REMOTE`, `MERGED`, `BASE`, labels, missing-input and missing-path errors. `MERGED` is treated as an output target and can be non-existent at parse time. Difftool display-path fallback now follows `--path` > `MERGED` > `BASE`.
 - ✅ Arg/env validation hardening for empty values implemented in `crates/gitgpui-app/src/cli.rs`: required paths reject empty inputs early, optional display-path env vars ignore empty strings, env-provided empty `BASE` is treated as no-base (add/add-compatible), and explicit empty `--base` errors with actionable text.
 - ✅ Mergetool file-path kind validation hardening implemented in `crates/gitgpui-app/src/cli.rs`: `LOCAL`/`REMOTE`/explicit `BASE` must resolve to files (not directories), and existing directory `MERGED` targets are rejected up front with actionable errors.
+- ✅ Difftool path-kind validation hardening implemented in `crates/gitgpui-app/src/cli.rs`: mixed file-vs-directory inputs are rejected early with actionable errors (must be two files or two directories), covered by `cli.rs` unit test `difftool_rejects_file_vs_directory_mismatch` and standalone E2E `standalone_difftool_file_directory_mismatch_exits_two`.
 - ✅ Mergetool compatibility aliases implemented in `crates/gitgpui-app/src/cli.rs`:
   - `-o`/`--output`/`--out` as aliases for `--merged`
   - `--L1`/`--L2`/`--L3` as aliases for `--label-base`/`--label-local`/`--label-remote`
@@ -217,7 +219,22 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
   - ✅ Dedicated trust-exit interaction matrix assertions (`difftool.trustExitCode`, `--trust-exit-code`, `--no-trust-exit-code`).
 - ✅ `git difftool --tool-help` discoverability assertion for configured `gitgpui` tool.
 
-### Latest Component Delivered (Iteration 61) — State Crate CI Coverage
+### Latest Component Delivered (Iteration 62) — Difftool Input-Kind Validation Hardening
+
+- Hardened dedicated `difftool` argument validation in [`crates/gitgpui-app/src/cli.rs`](crates/gitgpui-app/src/cli.rs):
+  - `resolve_difftool_with_env` now rejects mixed file-vs-directory inputs at parse time
+  - error text is actionable and explicit: "Use two files or two directories."
+- Added parser regression coverage in [`crates/gitgpui-app/src/cli.rs`](crates/gitgpui-app/src/cli.rs):
+  - `difftool_rejects_file_vs_directory_mismatch`
+- Added standalone command-mode E2E regression coverage in [`crates/gitgpui-app/tests/standalone_tool_mode_integration.rs`](crates/gitgpui-app/tests/standalone_tool_mode_integration.rs):
+  - `standalone_difftool_file_directory_mismatch_exits_two` asserts exit code `2` and actionable stderr.
+- Verification:
+  - `cargo test -p gitgpui-app --no-default-features --features gix difftool_rejects_file_vs_directory_mismatch -- --nocapture`
+  - `cargo test -p gitgpui-app --no-default-features --features gix standalone_difftool_file_directory_mismatch_exits_two -- --nocapture`
+  - `cargo test -p gitgpui-app --no-default-features --features gix --test standalone_tool_mode_integration -- --nocapture`
+  - `cargo test -p gitgpui-app --no-default-features --features gix --test difftool_git_integration -- --nocapture`
+
+### Previous Component Delivered (Iteration 61) — State Crate CI Coverage
 
 - Added `gitgpui-state` to CI workflow in `.github/workflows/rust.yml`:
   - Clippy step now includes `gitgpui-state` alongside `gitgpui-core` and `gitgpui-git-gix`
