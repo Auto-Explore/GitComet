@@ -1,6 +1,6 @@
 ## STATUS: COMPLETE
 
-All components from both design documents are fully implemented. Iteration 29 adds the `setup` subcommand for automated git config setup, closing the last design-document gap (Git Global Config Setup section in `external_usage.md`).
+All components from both design documents are fully implemented. Iteration 29 hardens mergetool portability with explicit abort-path `keepTemporaries=true` coverage for both `writeToTemp=false` and `writeToTemp=true` stage-file modes.
 
 ## Implementation Progress
 
@@ -22,6 +22,7 @@ External Diff/Merge Usage Design (`external_usage.md`)
 - ✅ Delete/delete conflict choice matrix parity is now explicit in git-invoked tests (`d` delete, `m` modified destination, `a` abort non-zero) for path-targeted mergetool flows.
 - ✅ Parity-focused CI regression gates implemented in `.github/workflows/rust.yml` (Phase 3, rollout item #2): separate CI jobs for clippy, merge algorithm parity, fixture/corpus regression, git mergetool/difftool E2E, and backend integration.
 - ✅ Mergetool backend parity features are implemented (`mergetool.<tool>.path`, `writeToTemp`, `keepTemporaries`, unresolved-marker rejection, deleted-output staging).
+- ✅ `keepTemporaries=true` abort-path parity is now explicit in backend integration coverage (external tool exit non-zero keeps stage files in both workdir and temp modes).
 - ✅ Git built-in `kdiff3` path-override E2E coverage added for both `git difftool` and `git mergetool` to validate direct executable invocation compatibility.
 
 Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
@@ -69,6 +70,9 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
   - keeps stage files when enabled for both `writeToTemp=true` and `writeToTemp=false`
   - preserves default cleanup behavior when disabled
   - covered by unit tests in `repo/mergetool.rs` and integration tests in `tests/status_integration.rs`
+  - abort-path retention is now explicitly tested with non-zero external tool exits:
+    - `launch_mergetool_write_to_temp_false_keep_temporaries_preserves_stage_files_on_abort`
+    - `launch_mergetool_write_to_temp_true_keep_temporaries_preserves_stage_files_on_abort`
 - ✅ `mergetool.keepBackup` delete/delete parity scenario covered by dedicated git-invoked E2E assertion (`git_mergetool_keep_backup_delete_delete_no_errors`).
 - ✅ Git behavior parity matrix coverage is complete. All items covered: spaced and Unicode paths, no-base handling for stage extraction (including empty `BASE` file for add/add), binary/non-UTF8 content handling in both difftool and mergetool flows, trust-exit semantics, deleted output handling, writeToTemp path semantics, difftool `--dir-diff`, difftool `guiDefault` selection (`auto` + `DISPLAY`, `--gui`, `--no-gui`), difftool `--tool-help` discoverability, mergetool `guiDefault` selection (`auto` + `DISPLAY`, `--gui`, `--no-gui`), mergetool `--tool-help` discoverability, mergetool GUI fallback (no guitool → merge.tool), nonexistent tool error handling, delete/delete conflict handling, modify/delete conflict handling, symlink conflict resolution (l/r/a prompts, coexistence with normal file conflicts, difftool target diff), and submodule conflict handling (l/r resolution, coexistence with normal file conflicts, file-vs-submodule, directory-vs-submodule, deleted-vs-modified submodule, submodule in subdirectory).
 - ✅ Git-like scenario porting is complete. All listed t7610/t7800 parity items are covered: `trustExitCode`, custom cmd with braced env, gui preference, writeToTemp/keepTemporaries, keepBackup delete/delete, no-base stage-file contract, difftool gui-default/trust/tool-help parity, mergetool gui-default/trust/tool-help parity, GUI fallback, nonexistent tool error, delete/delete, modify/delete, order-file invocation ordering (`diff.orderFile` and `-O` override), symlink conflicts (l/r resolution, coexistence with normal files), and submodule conflicts (l/r resolution, deleted-vs-modified, file-vs-submodule, directory-vs-submodule, subdirectory submodule, coexistence with normal files).
