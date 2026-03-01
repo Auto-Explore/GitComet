@@ -2,6 +2,8 @@
 
 ## Implementation Progress
 
+- ✅ **Iteration 1 verification audit (2026-03-01):** compared implementation against `tmp/conflict_resolution.md` and confirmed all design components are already implemented in the current codebase. Re-validated with focused conflict test suites and clippy (`gitgpui-core`, `gitgpui-state`, `gitgpui-ui-gpui`, `gitgpui-git-gix`) — all passing.
+
 ### 1) Unified Conflict Session Model
 - ✅ `ConflictPayload` enum (Text, Binary, Absent) with `from_bytes` conversion — `crates/gitgpui-core/src/conflict_session.rs`
 - ✅ **Bytes-first payload accessors (Iteration 48):** added `ConflictPayload::as_bytes()` and `byte_len()` plus `ConflictSession::{base_bytes, ours_bytes, theirs_bytes}` so unified sessions expose raw stage payload bytes directly for text, binary, and absent sides; added unit coverage for payload/session byte accessors — `crates/gitgpui-core/src/conflict_session.rs`
