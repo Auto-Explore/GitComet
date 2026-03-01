@@ -16,7 +16,8 @@
 - 🔧 Git-like scenario porting is partial. Existing and new tests cover a subset of t7610-style behavior (`trustExitCode`, custom cmd with braced env, gui preference); `--tool-help`, full gui-default parity flow, order-file, delete/delete interaction prompts, and submodule-specific flows remain.
 - ⬜ Dedicated difftool mode integration tests are not implemented yet.
 - ⬜ End-to-end tests that invoke `git difftool`/`git mergetool` with global-like config and `gitgpui-app` as the tool are not implemented yet.
-- ✅ KDiff3-style fixture harness implemented in `crates/gitgpui-core/tests/merge_fixture_harness.rs` with fixture data in `crates/gitgpui-core/tests/fixtures/merge/`. Auto-discovers `*_base.*` fixtures, runs merge algorithm, validates invariants (marker well-formedness, content integrity, context preservation), and compares against expected results. 7 seed fixtures + harness discovery test = 8 tests. Generated corpus integration (Phase 3) still pending.
+- ✅ KDiff3-style fixture harness implemented in `crates/gitgpui-core/tests/merge_fixture_harness.rs` with fixture data in `crates/gitgpui-core/tests/fixtures/merge/`. Auto-discovers `*_base.*` fixtures, runs merge algorithm, validates invariants (marker well-formedness, content integrity, context preservation), and compares against expected results. 7 seed fixtures + harness discovery test = 8 tests.
+- ✅ Generated permutation corpus integration (Phase 3A) added in `crates/gitgpui-core/tests/merge_permutation_corpus.rs`: ports KDiff3’s 11-option line-state table, runs deterministic sampled corpus (`r=3`, `seed=0`, 243 cases) in default test runs, and includes an ignored exhaustive run (11^5 = 161,051 cases).
 
 ### Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
 
@@ -32,7 +33,12 @@
   - 2A: Fixture format adopted — `tests/fixtures/merge/{prefix}_{base,contrib1,contrib2,expected_result}.txt`
   - 2B: Test runner in `tests/merge_fixture_harness.rs` — auto-discovers `*_base.*`, loads triplets, runs `merge_file`, validates 3 algorithm-independent invariants (marker well-formedness, content integrity, context preservation), compares against expected output, writes `*_actual_result.*` on mismatch
   - 2C: 7 seed test cases ported: simpletest (KDiff3), prefer-identical (KDiff3), nonoverlapping changes, overlapping conflict, identical changes, delete-vs-modify, add/add conflict
-- ⬜ Phase 3A (permutation corpus generation): not implemented yet.
+- ✅ Phase 3A (permutation corpus generation): implemented in `crates/gitgpui-core/tests/merge_permutation_corpus.rs`.
+  - Ports KDiff3 permutation option table from `generate_testdata_from_permutations.py`.
+  - Generates corpus at test time (no fixture file bloat).
+  - Default run executes deterministic sampled corpus (`r=3`, `seed=0`) for 243 cases.
+  - Includes ignored exhaustive corpus test for all 161,051 cases.
+  - Validates generated outputs with marker well-formedness, content integrity, context preservation, and reported conflict-count parity.
 - ⬜ Phase 3C (real-world merge extraction harness): not implemented yet.
 - 🔧 Phase 4A (critical `t7610-mergetool` E2E): partially implemented in `gitgpui-git-gix` tests:
   - ✅ trust-exit behavior and content-change semantics
@@ -43,7 +49,20 @@
 - ⬜ Phase 4B (critical `t7800-difftool` E2E): not implemented yet.
 - ⬜ Phase 5A/5B/5C (Meld-derived matcher/interval/newline test ports): not implemented yet.
 
-### Latest Component Delivered (Iteration 3)
+### Latest Component Delivered (Iteration 4)
+
+- Implemented Phase 3A generated permutation corpus regression coverage:
+  - Added `crates/gitgpui-core/tests/merge_permutation_corpus.rs`.
+  - Ported the KDiff3 11-option line-state permutation model used by `generate_testdata_from_permutations.py`.
+  - Added deterministic sampled corpus execution (`r=3`, `seed=0`) and validation across 243 generated cases.
+  - Added ignored exhaustive run for full 11^5 coverage (161,051 generated cases) to support deep local/CI sweeps when desired.
+  - Added algorithm-independent validation checks per generated case:
+    1. Conflict marker well-formedness (balanced and ordered markers; no nesting)
+    2. Content integrity (every non-marker output line comes from base/local/remote inputs)
+    3. Context preservation (lines common to all three inputs remain present)
+    4. `conflict_count` parity with emitted `<<<<<<<` marker blocks
+
+### Iteration 3 Component Delivered
 
 - Implemented Phase 2 KDiff3-style fixture harness for merge algorithm regression testing:
   - Created `crates/gitgpui-core/tests/fixtures/merge/` directory with KDiff3 naming convention (`{prefix}_base.txt`, `{prefix}_contrib1.txt`, `{prefix}_contrib2.txt`, `{prefix}_expected_result.txt`).
