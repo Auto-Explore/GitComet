@@ -1,10 +1,10 @@
 ## STATUS: COMPLETE
 
-All components from both design documents are fully implemented. Iteration 50 maintains completeness; the last full-suite verification (Iteration 48) passed 453+ tests, Iteration 49 added one difftool E2E case (22 difftool git-invoked E2E tests total), and Iteration 50 adds standalone behavior-matrix hardening for no-base mergetool and directory difftool direct-invocation paths.
+All components from both design documents are fully implemented. Iteration 51 maintains completeness; the last full-suite verification (Iteration 48) passed 453+ tests, Iteration 49 added one difftool E2E case (22 difftool git-invoked E2E tests total), Iteration 50 added standalone behavior-matrix hardening for no-base mergetool and directory difftool direct-invocation paths, and Iteration 51 hardens the CI parity gate command for the bin-only `gitgpui-app` target.
 
 ## Implementation Progress
 
-### Progress Snapshot (Iteration 50)
+### Progress Snapshot (Iteration 51)
 
 External Diff/Merge Usage Design (`external_usage.md`)
 - ✅ Dedicated CLI modes (`difftool`, `mergetool`) and arg/env validation are implemented.
@@ -33,7 +33,7 @@ External Diff/Merge Usage Design (`external_usage.md`)
 - ✅ Delete/delete conflict choice matrix parity is now explicit in git-invoked tests (`d` delete, `m` modified destination, `a` abort non-zero) for path-targeted mergetool flows.
 - ✅ Deleted-vs-modified submodule choice parity is now explicit in git-invoked tests: path-targeted `git mergetool submod` assertions now verify `r` keeps the modified submodule gitlink commit and `l` keeps deletion (no gitlink/path), matching the t7610 contract.
 - ✅ Submodule abort/cancel parity is now explicit in git-invoked tests: path-targeted `git mergetool` submodule conflicts now assert `a` aborts with non-zero exit and leaves the conflict unresolved.
-- ✅ Parity-focused CI regression gates implemented in `.github/workflows/rust.yml` (Phase 3, rollout item #2): separate CI jobs for clippy, merge algorithm parity, fixture/corpus regression, git mergetool/difftool E2E (including standalone tool-mode exit-code tests), and backend integration.
+- ✅ Parity-focused CI regression gates implemented in `.github/workflows/rust.yml` (Phase 3, rollout item #2): separate CI jobs for clippy, merge algorithm parity, fixture/corpus regression, git mergetool/difftool E2E (including standalone tool-mode exit-code tests), and backend integration. Iteration 51 fixes the app runtime-unit gate to run `cargo test -p gitgpui-app --bin gitgpui-app` (the package is bin-only, so `--lib` is invalid).
 - ✅ Mergetool backend parity features are implemented (`mergetool.<tool>.path`, `writeToTemp`, `keepTemporaries`, unresolved-marker rejection, deleted-output staging).
 - ✅ `keepTemporaries=true` abort-path parity is now explicit in backend integration coverage (external tool exit non-zero keeps stage files in both workdir and temp modes).
 - ✅ Git built-in path-override E2E coverage added for `kdiff3` and `meld` mergetool flows plus both `kdiff3` and `meld` difftool flows to validate direct executable invocation compatibility.

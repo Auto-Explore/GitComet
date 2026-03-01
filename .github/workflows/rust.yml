@@ -71,8 +71,8 @@ jobs:
       run: cargo test -p gitgpui-app --test difftool_git_integration --verbose
     - name: Standalone tool-mode E2E (exit codes + validation)
       run: cargo test -p gitgpui-app --test standalone_tool_mode_integration --verbose
-    - name: Mergetool/difftool runtime unit tests
-      run: cargo test -p gitgpui-app --lib --verbose
+    - name: Mergetool/difftool runtime unit tests (bin target)
+      run: cargo test -p gitgpui-app --bin gitgpui-app --verbose
 
   # Backend integration — mergetool launcher, status, conflict checkout
   backend-integration:
