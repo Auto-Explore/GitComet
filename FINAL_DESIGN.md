@@ -1,6 +1,6 @@
 ## STATUS: COMPLETE
 
-All components from both design documents are fully implemented. Iteration 17 adds parity-focused CI regression gates (Phase 3 rollout item #2).
+All components from both design documents are fully implemented. Iteration 17 adds Phase 3B permutation-corpus alignment invariants (sequence monotonicity + consistency) to close the remaining portability-plan gap.
 
 ## Implementation Progress
 
@@ -19,6 +19,7 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
 - ✅ Phase 1C implemented: conflict marker label formatting portability cases.
 - ✅ Phase 2 implemented: fixture harness supports both merged-output goldens and KDiff3-style alignment index triples, with auto-discovery, expected-result comparison, and invariants for both formats (merge-output marker/content/context checks + alignment monotonicity/consistency checks).
 - ✅ Phase 3A implemented: generated permutation corpus test runner (sampled + ignored exhaustive mode).
+- ✅ Phase 3B implemented: generated permutation corpus now enforces KDiff3-style alignment invariants (sequence monotonicity + content consistency) for every generated case.
 - ✅ Phase 3C implemented: real-world merge extraction harness from Git history.
 - ✅ Phase 4A implemented: critical `t7610` mergetool E2E scenarios, including `trustExitCode=false` unchanged-output and changed-output behavior.
 - ✅ Phase 4B implemented: critical `t7800` difftool E2E scenarios.
@@ -60,7 +61,7 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
   - merged-output expected files: marker well-formedness, content integrity, context preservation
   - alignment-triple expected files: sequence monotonicity + equality consistency across aligned line indices
   - seed fixtures: 7 merged-output fixtures + 2 KDiff3-style alignment fixtures
-- ✅ Generated permutation corpus integration (Phase 3A) added in `crates/gitgpui-core/tests/merge_permutation_corpus.rs`: ports KDiff3’s 11-option line-state table, runs deterministic sampled corpus (`r=3`, `seed=0`, 243 cases) in default test runs, and includes an ignored exhaustive run (11^5 = 161,051 cases).
+- ✅ Generated permutation corpus integration (Phase 3A + 3B) added in `crates/gitgpui-core/tests/merge_permutation_corpus.rs`: ports KDiff3’s 11-option line-state table, runs deterministic sampled corpus (`r=3`, `seed=0`, 243 cases) in default test runs, includes an ignored exhaustive run (11^5 = 161,051 cases), and now validates alignment monotonicity + cross-side content consistency invariants for each generated case.
 - ✅ Iteration 12 hardening: dedicated mergetool runtime now routes through `merge_file_bytes` so binary detection matches the core portability contract (including embedded NUL-byte data), with regression coverage in `crates/gitgpui-app/src/mergetool_mode.rs`.
 
 ### Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
@@ -93,6 +94,10 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
   - Default run executes deterministic sampled corpus (`r=3`, `seed=0`) for 243 cases.
   - Includes ignored exhaustive corpus test for all 161,051 cases.
   - Validates generated outputs with marker well-formedness, content integrity, context preservation, and reported conflict-count parity.
+- ✅ Phase 3B (permutation invariants): implemented in `crates/gitgpui-core/tests/merge_permutation_corpus.rs`.
+  - Builds deterministic three-way alignments for each generated `(base, contrib1, contrib2)` case.
+  - Enforces sequence monotonicity in each alignment column (`base`, `contrib1`, `contrib2`).
+  - Enforces equality consistency for aligned base/contrib1, base/contrib2, and contrib1/contrib2 rows.
 - ✅ Phase 3C (real-world merge extraction harness): implemented in `crates/gitgpui-core/tests/merge_git_extraction.rs`.
   - Ports KDiff3's `generate_testdata_from_git_merges.py` concept to Rust.
   - Walks merge commits via `git rev-list --merges --parents`, finds merge-base, extracts base/contrib1/contrib2 file contents.
@@ -131,7 +136,19 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
   - ✅ Dedicated trust-exit interaction matrix assertions (`difftool.trustExitCode`, `--trust-exit-code`, `--no-trust-exit-code`).
   - ✅ `git difftool --tool-help` discoverability assertion for configured `gitgpui` tool.
 
-### Latest Component Delivered (Iteration 17) — Parity-Focused CI Regression Gates
+### Latest Component Delivered (Iteration 17) — Phase 3B Permutation Alignment Invariants
+
+- Implemented the remaining Phase 3B portability invariant checks in `crates/gitgpui-core/tests/merge_permutation_corpus.rs`.
+- Added deterministic three-way alignment construction for each generated corpus case.
+- Added two algorithm-independent alignment assertions for every case:
+  1. sequence monotonicity for `base`, `contrib1`, and `contrib2` index columns
+  2. content consistency whenever two concrete indices align on a row
+- Existing Phase 3A checks (marker well-formedness, content integrity, context preservation, conflict-count parity) remain intact and now run alongside the new alignment checks.
+- Verification:
+  - `cargo test -p gitgpui-core --test merge_permutation_corpus`
+  - `cargo test -p gitgpui-core --test merge_fixture_harness`
+
+### Iteration 17 (Earlier Pass) — Parity-Focused CI Regression Gates
 
 - Replaced monolithic `cargo test` CI workflow with 5 focused jobs in `.github/workflows/rust.yml`:
   1. **Clippy**: lint gate for core crates (`-D warnings`)

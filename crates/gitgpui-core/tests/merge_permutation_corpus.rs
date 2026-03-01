@@ -53,6 +53,26 @@ struct CorpusSummary {
     conflicts: usize,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct AlignmentRow {
+    base: Option<usize>,
+    contrib1: Option<usize>,
+    contrib2: Option<usize>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DiffOp {
+    Equal,
+    Delete,
+    Insert,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct SideProjection {
+    base_to_side: Vec<Option<usize>>,
+    inserts_before: Vec<Vec<usize>>,
+}
+
 #[test]
 fn kdiff3_permutation_corpus_sampled_r3_seed0() {
     let summary = run_corpus(CorpusKind::Sampled {
@@ -105,6 +125,14 @@ fn run_corpus(kind: CorpusKind) -> CorpusSummary {
             &case.contrib1,
             &case.contrib2,
             &result.output,
+            &case.id,
+        );
+        let alignment_rows = build_three_way_alignment(&case.base, &case.contrib1, &case.contrib2);
+        validate_alignment_invariants(
+            &case.base,
+            &case.contrib1,
+            &case.contrib2,
+            &alignment_rows,
             &case.id,
         );
 
@@ -346,6 +374,275 @@ fn validate_context_preservation(
             );
         }
     }
+}
+
+fn split_visual_lines(text: &str) -> Vec<&str> {
+    if text.is_empty() {
+        Vec::new()
+    } else {
+        text.split('\n').collect()
+    }
+}
+
+fn lcs_diff_ops(a: &[&str], b: &[&str]) -> Vec<DiffOp> {
+    let n = a.len();
+    let m = b.len();
+    let mut dp = vec![vec![0usize; m + 1]; n + 1];
+
+    for i in (0..n).rev() {
+        for j in (0..m).rev() {
+            dp[i][j] = if a[i] == b[j] {
+                dp[i + 1][j + 1] + 1
+            } else {
+                dp[i + 1][j].max(dp[i][j + 1])
+            };
+        }
+    }
+
+    let mut ops = Vec::with_capacity(n + m);
+    let mut i = 0usize;
+    let mut j = 0usize;
+    while i < n && j < m {
+        if a[i] == b[j] {
+            ops.push(DiffOp::Equal);
+            i += 1;
+            j += 1;
+        } else if dp[i + 1][j] >= dp[i][j + 1] {
+            ops.push(DiffOp::Delete);
+            i += 1;
+        } else {
+            ops.push(DiffOp::Insert);
+            j += 1;
+        }
+    }
+    while i < n {
+        ops.push(DiffOp::Delete);
+        i += 1;
+    }
+    while j < m {
+        ops.push(DiffOp::Insert);
+        j += 1;
+    }
+    ops
+}
+
+fn project_side(base_lines: &[&str], side_lines: &[&str]) -> SideProjection {
+    let ops = lcs_diff_ops(base_lines, side_lines);
+    let mut base_to_side = vec![None; base_lines.len()];
+    let mut inserts_before = vec![Vec::new(); base_lines.len() + 1];
+    let mut base_idx = 0usize;
+    let mut side_idx = 0usize;
+
+    for op in ops {
+        match op {
+            DiffOp::Equal => {
+                base_to_side[base_idx] = Some(side_idx);
+                base_idx += 1;
+                side_idx += 1;
+            }
+            DiffOp::Delete => {
+                base_to_side[base_idx] = None;
+                base_idx += 1;
+            }
+            DiffOp::Insert => {
+                inserts_before[base_idx].push(side_idx);
+                side_idx += 1;
+            }
+        }
+    }
+
+    assert_eq!(base_idx, base_lines.len());
+    assert_eq!(side_idx, side_lines.len());
+
+    SideProjection {
+        base_to_side,
+        inserts_before,
+    }
+}
+
+fn align_insertions(
+    contrib1_indices: &[usize],
+    contrib2_indices: &[usize],
+    contrib1_lines: &[&str],
+    contrib2_lines: &[&str],
+) -> Vec<(Option<usize>, Option<usize>)> {
+    let seq1: Vec<&str> = contrib1_indices
+        .iter()
+        .map(|&idx| contrib1_lines[idx])
+        .collect();
+    let seq2: Vec<&str> = contrib2_indices
+        .iter()
+        .map(|&idx| contrib2_lines[idx])
+        .collect();
+    let ops = lcs_diff_ops(&seq1, &seq2);
+
+    let mut out = Vec::new();
+    let mut i = 0usize;
+    let mut j = 0usize;
+
+    for op in ops {
+        match op {
+            DiffOp::Equal => {
+                out.push((Some(contrib1_indices[i]), Some(contrib2_indices[j])));
+                i += 1;
+                j += 1;
+            }
+            DiffOp::Delete => {
+                out.push((Some(contrib1_indices[i]), None));
+                i += 1;
+            }
+            DiffOp::Insert => {
+                out.push((None, Some(contrib2_indices[j])));
+                j += 1;
+            }
+        }
+    }
+
+    out
+}
+
+fn build_three_way_alignment(base: &str, contrib1: &str, contrib2: &str) -> Vec<AlignmentRow> {
+    let base_lines = split_visual_lines(base);
+    let contrib1_lines = split_visual_lines(contrib1);
+    let contrib2_lines = split_visual_lines(contrib2);
+
+    let p1 = project_side(&base_lines, &contrib1_lines);
+    let p2 = project_side(&base_lines, &contrib2_lines);
+
+    let mut rows = Vec::new();
+
+    for slot in 0..=base_lines.len() {
+        let inserted_rows = align_insertions(
+            &p1.inserts_before[slot],
+            &p2.inserts_before[slot],
+            &contrib1_lines,
+            &contrib2_lines,
+        );
+        for (c1, c2) in inserted_rows {
+            rows.push(AlignmentRow {
+                base: None,
+                contrib1: c1,
+                contrib2: c2,
+            });
+        }
+
+        if slot < base_lines.len() {
+            rows.push(AlignmentRow {
+                base: Some(slot),
+                contrib1: p1.base_to_side[slot],
+                contrib2: p2.base_to_side[slot],
+            });
+        }
+    }
+
+    rows
+}
+
+fn validate_alignment_invariants(
+    base: &str,
+    contrib1: &str,
+    contrib2: &str,
+    rows: &[AlignmentRow],
+    case_id: &str,
+) {
+    let base_lines = split_visual_lines(base);
+    let contrib1_lines = split_visual_lines(contrib1);
+    let contrib2_lines = split_visual_lines(contrib2);
+
+    validate_alignment_monotonicity(rows, case_id);
+
+    for (row_ix, row) in rows.iter().enumerate() {
+        if let Some(ix) = row.base {
+            assert!(
+                ix < base_lines.len(),
+                "[{}] alignment row {}: base index {} out of bounds ({})",
+                case_id,
+                row_ix + 1,
+                ix,
+                base_lines.len()
+            );
+        }
+        if let Some(ix) = row.contrib1 {
+            assert!(
+                ix < contrib1_lines.len(),
+                "[{}] alignment row {}: contrib1 index {} out of bounds ({})",
+                case_id,
+                row_ix + 1,
+                ix,
+                contrib1_lines.len()
+            );
+        }
+        if let Some(ix) = row.contrib2 {
+            assert!(
+                ix < contrib2_lines.len(),
+                "[{}] alignment row {}: contrib2 index {} out of bounds ({})",
+                case_id,
+                row_ix + 1,
+                ix,
+                contrib2_lines.len()
+            );
+        }
+
+        if let (Some(b), Some(c1)) = (row.base, row.contrib1) {
+            assert_eq!(
+                base_lines[b],
+                contrib1_lines[c1],
+                "[{}] alignment row {}: base/contrib1 content mismatch",
+                case_id,
+                row_ix + 1
+            );
+        }
+        if let (Some(b), Some(c2)) = (row.base, row.contrib2) {
+            assert_eq!(
+                base_lines[b],
+                contrib2_lines[c2],
+                "[{}] alignment row {}: base/contrib2 content mismatch",
+                case_id,
+                row_ix + 1
+            );
+        }
+        if let (Some(c1), Some(c2)) = (row.contrib1, row.contrib2) {
+            assert_eq!(
+                contrib1_lines[c1],
+                contrib2_lines[c2],
+                "[{}] alignment row {}: contrib1/contrib2 content mismatch",
+                case_id,
+                row_ix + 1
+            );
+        }
+    }
+}
+
+fn validate_alignment_monotonicity(rows: &[AlignmentRow], case_id: &str) {
+    fn check_column(
+        rows: &[AlignmentRow],
+        case_id: &str,
+        column_name: &str,
+        value: impl Fn(&AlignmentRow) -> Option<usize>,
+    ) {
+        let mut prev: Option<usize> = None;
+        for (row_ix, row) in rows.iter().enumerate() {
+            let Some(curr) = value(row) else {
+                continue;
+            };
+            if let Some(prev_ix) = prev {
+                assert!(
+                    curr > prev_ix,
+                    "[{}] alignment row {}: {} index {} is not strictly increasing after {}",
+                    case_id,
+                    row_ix + 1,
+                    column_name,
+                    curr,
+                    prev_ix
+                );
+            }
+            prev = Some(curr);
+        }
+    }
+
+    check_column(rows, case_id, "base", |row| row.base);
+    check_column(rows, case_id, "contrib1", |row| row.contrib1);
+    check_column(rows, case_id, "contrib2", |row| row.contrib2);
 }
 
 fn count_open_markers(output: &str) -> usize {
