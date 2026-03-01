@@ -1,10 +1,10 @@
 ## STATUS: COMPLETE
 
-All components from both design documents are fully implemented. Iteration 22 verification (March 2, 2026) re-ran the full headless suite (`cargo test --workspace --no-default-features --features gix`) and clippy (`cargo clippy --workspace --no-default-features --features gix -- -D warnings`) with zero failures and zero lint warnings (1077 passed, 0 failed, 5 ignored). Comprehensive audit of both design documents (`external_usage.md` and `docs/REFERENCE_TEST_PORTABILITY.md`) against the codebase confirms no remaining `⬜`/`🔧` items — all phases, rollout plan items, acceptance criteria, and behavior matrix entries are implemented with test coverage exceeding design requirements (63 mergetool E2E vs ~20 required, 25 difftool E2E vs ~6 required, 161,294 permutation corpus cases, 32 Meld algorithm parity tests vs ~19 required).
+All components from both design documents are fully implemented. Iteration 22 verification (March 1, 2026) re-ran the full headless suite (`cargo test --workspace --no-default-features --features gix`) and clippy (`cargo clippy --workspace --no-default-features --features gix -- -D warnings`) with zero failures and zero lint warnings (1077 passed, 0 failed, 5 ignored). Comprehensive audit of both design documents (`external_usage.md` and `docs/REFERENCE_TEST_PORTABILITY.md`) against the codebase confirms no remaining `⬜`/`🔧` items — all phases, rollout plan items, acceptance criteria, and behavior matrix entries are implemented with test coverage exceeding design requirements (63 mergetool E2E vs ~20 required, 25 difftool E2E vs ~6 required, 161,294 permutation corpus cases, 32 Meld algorithm parity tests vs ~19 required).
 
 ## Implementation Progress
 
-### Progress Snapshot (Iteration 21)
+### Progress Snapshot (Iteration 22)
 
 External Diff/Merge Usage Design (`external_usage.md`)
 - ✅ Dedicated CLI modes (`difftool`, `mergetool`) and arg/env validation are implemented.
