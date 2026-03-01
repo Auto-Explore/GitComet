@@ -3,7 +3,7 @@ use gitgpui_core::error::{Error, ErrorKind};
 use gitgpui_core::services::{
     CommandOutput, MergetoolResult, Result, validate_conflict_resolution_text,
 };
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 impl GixRepo {
@@ -17,41 +17,19 @@ impl GixRepo {
     /// 5. Reads back the merged file and stages it on success.
     pub(super) fn launch_mergetool_impl(&self, path: &Path) -> Result<MergetoolResult> {
         let workdir = &self.spec.workdir;
-        let tool = resolve_mergetool_config(workdir, env_has_display())?;
-        let tool_name = tool.tool_name;
-        let trust_exit_code = tool.trust_exit_code;
+        let MergetoolConfig {
+            tool_name,
+            tool_cmd,
+            tool_path,
+            trust_exit_code,
+            write_to_temp,
+        } = resolve_mergetool_config(workdir, env_has_display())?;
+        let stage_paths = materialize_mergetool_stage_files(workdir, path, write_to_temp)?;
 
-        // 3. Materialize temp files for BASE, LOCAL, REMOTE
-        let tmp_dir = tempfile::Builder::new()
-            .prefix("gitgpui-mergetool-")
-            .tempdir()
-            .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
-
-        let file_name = path
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_string();
-
-        let base_path = tmp_dir.path().join(format!("{file_name}.BASE"));
-        let local_path = tmp_dir.path().join(format!("{file_name}.LOCAL"));
-        let remote_path = tmp_dir.path().join(format!("{file_name}.REMOTE"));
+        let base_path = &stage_paths.base;
+        let local_path = &stage_paths.local;
+        let remote_path = &stage_paths.remote;
         let merged_path = workdir.join(path);
-
-        // Extract stage :1: (base)
-        let base_bytes = git_show_stage_bytes(workdir, 1, path)?;
-        std::fs::write(&base_path, base_bytes.as_deref().unwrap_or(b""))
-            .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
-
-        // Extract stage :2: (ours/local)
-        let local_bytes = git_show_stage_bytes(workdir, 2, path)?;
-        std::fs::write(&local_path, local_bytes.as_deref().unwrap_or(b""))
-            .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
-
-        // Extract stage :3: (theirs/remote)
-        let remote_bytes = git_show_stage_bytes(workdir, 3, path)?;
-        std::fs::write(&remote_path, remote_bytes.as_deref().unwrap_or(b""))
-            .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
 
         // 4. Snapshot merged contents before tool invocation so we can
         //    detect actual content changes when trustExitCode is false.
@@ -62,15 +40,15 @@ impl GixRepo {
         };
 
         // Build and invoke the mergetool command
-        let output = if let Some(ref custom_cmd) = tool.tool_cmd {
+        let output = if let Some(ref custom_cmd) = tool_cmd {
             // Match git-mergetool behavior by providing variables as shell env.
             // This supports both "$VAR" and "${VAR}" templates in config.
             Command::new("sh")
                 .arg("-c")
                 .arg(custom_cmd)
-                .env("BASE", &base_path)
-                .env("LOCAL", &local_path)
-                .env("REMOTE", &remote_path)
+                .env("BASE", base_path)
+                .env("LOCAL", local_path)
+                .env("REMOTE", remote_path)
                 .env("MERGED", &merged_path)
                 .current_dir(workdir)
                 .output()
@@ -78,11 +56,11 @@ impl GixRepo {
         } else {
             // No custom command — try invoking the tool name directly with
             // the standard argument convention used by many merge tools.
-            let tool_executable = tool.tool_path.as_deref().unwrap_or(&tool_name);
+            let tool_executable = tool_path.as_deref().unwrap_or(&tool_name);
             Command::new(tool_executable)
-                .arg(&local_path)
-                .arg(&base_path)
-                .arg(&remote_path)
+                .arg(local_path)
+                .arg(base_path)
+                .arg(remote_path)
                 .arg(&merged_path)
                 .current_dir(workdir)
                 .output()
@@ -201,6 +179,7 @@ struct MergetoolConfig {
     tool_cmd: Option<String>,
     tool_path: Option<String>,
     trust_exit_code: bool,
+    write_to_temp: bool,
 }
 
 fn env_has_display() -> bool {
@@ -272,13 +251,160 @@ fn resolve_mergetool_config(workdir: &Path, has_display: bool) -> Result<Mergeto
     let trust_exit_code =
         git_config_get_bool(workdir, &format!("mergetool.{tool_name}.trustExitCode"))?
             .unwrap_or(false);
+    let write_to_temp = git_config_get_bool(workdir, "mergetool.writeToTemp")?.unwrap_or(false);
 
     Ok(MergetoolConfig {
         tool_name,
         tool_cmd,
         tool_path,
         trust_exit_code,
+        write_to_temp,
     })
+}
+
+#[derive(Debug)]
+struct StagePaths {
+    workdir: PathBuf,
+    base: PathBuf,
+    local: PathBuf,
+    remote: PathBuf,
+    _temp_dir: Option<tempfile::TempDir>,
+    cleanup_files: bool,
+}
+
+impl Drop for StagePaths {
+    fn drop(&mut self) {
+        if !self.cleanup_files {
+            return;
+        }
+        for path in [&self.base, &self.local, &self.remote] {
+            let path = stage_path_to_fs_path(&self.workdir, path);
+            match std::fs::remove_file(path) {
+                Ok(()) => {}
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(_) => {}
+            }
+        }
+    }
+}
+
+fn materialize_mergetool_stage_files(
+    workdir: &Path,
+    conflict_path: &Path,
+    write_to_temp: bool,
+) -> Result<StagePaths> {
+    let stage_paths = build_stage_paths(workdir, conflict_path, write_to_temp)?;
+    write_stage_bytes(
+        workdir,
+        &stage_paths.base,
+        git_show_stage_bytes(workdir, 1, conflict_path)?
+            .as_deref()
+            .unwrap_or(b""),
+    )?;
+    write_stage_bytes(
+        workdir,
+        &stage_paths.local,
+        git_show_stage_bytes(workdir, 2, conflict_path)?
+            .as_deref()
+            .unwrap_or(b""),
+    )?;
+    write_stage_bytes(
+        workdir,
+        &stage_paths.remote,
+        git_show_stage_bytes(workdir, 3, conflict_path)?
+            .as_deref()
+            .unwrap_or(b""),
+    )?;
+    Ok(stage_paths)
+}
+
+fn build_stage_paths(
+    workdir: &Path,
+    conflict_path: &Path,
+    write_to_temp: bool,
+) -> Result<StagePaths> {
+    let (mut merge_base, ext) = split_merged_path_and_extension(conflict_path);
+    let pid = std::process::id();
+
+    if write_to_temp {
+        let tmp_dir = tempfile::Builder::new()
+            .prefix("gitgpui-mergetool-")
+            .tempdir()
+            .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+        merge_base = PathBuf::from(
+            merge_base
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string(),
+        );
+
+        let merge_base_name = merge_base.to_string_lossy();
+        let base = tmp_dir
+            .path()
+            .join(format!("{merge_base_name}_BASE_{pid}{ext}"));
+        let local = tmp_dir
+            .path()
+            .join(format!("{merge_base_name}_LOCAL_{pid}{ext}"));
+        let remote = tmp_dir
+            .path()
+            .join(format!("{merge_base_name}_REMOTE_{pid}{ext}"));
+
+        return Ok(StagePaths {
+            workdir: workdir.to_path_buf(),
+            base,
+            local,
+            remote,
+            _temp_dir: Some(tmp_dir),
+            cleanup_files: false,
+        });
+    }
+
+    let merge_base = PathBuf::from(".").join(merge_base);
+    let parent = merge_base.parent().unwrap_or(Path::new("."));
+    let merge_base_name = merge_base
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+    let base = parent.join(format!("{merge_base_name}_BASE_{pid}{ext}"));
+    let local = parent.join(format!("{merge_base_name}_LOCAL_{pid}{ext}"));
+    let remote = parent.join(format!("{merge_base_name}_REMOTE_{pid}{ext}"));
+
+    Ok(StagePaths {
+        workdir: workdir.to_path_buf(),
+        base,
+        local,
+        remote,
+        _temp_dir: None,
+        cleanup_files: true,
+    })
+}
+
+fn split_merged_path_and_extension(path: &Path) -> (PathBuf, String) {
+    let mut merge_base = path.to_path_buf();
+    let Some(ext) = path.extension() else {
+        return (merge_base, String::new());
+    };
+    let ext = format!(".{}", ext.to_string_lossy());
+    merge_base.set_extension("");
+    (merge_base, ext)
+}
+
+fn stage_path_to_fs_path(workdir: &Path, stage_path: &Path) -> PathBuf {
+    if stage_path.is_absolute() {
+        stage_path.to_path_buf()
+    } else {
+        workdir.join(stage_path)
+    }
+}
+
+fn write_stage_bytes(workdir: &Path, stage_path: &Path, bytes: &[u8]) -> Result<()> {
+    let path = stage_path_to_fs_path(workdir, stage_path);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+    }
+    std::fs::write(path, bytes).map_err(|e| Error::new(ErrorKind::Io(e.kind())))
 }
 
 /// Read a git config value. Returns `Ok(None)` if the key is not set.
@@ -470,6 +596,78 @@ mod tests {
         // No conflict stages exist
         let result = git_show_stage_bytes(workdir, 1, Path::new("nonexistent.txt")).unwrap();
         assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_build_stage_paths_write_to_temp_false_uses_workdir_prefix() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = build_stage_paths(tmp.path(), Path::new("dir/a.txt"), false).unwrap();
+
+        assert!(paths._temp_dir.is_none());
+        assert!(paths.cleanup_files);
+        assert_eq!(paths.base.parent(), Some(Path::new("./dir")));
+        assert_eq!(paths.local.parent(), Some(Path::new("./dir")));
+        assert_eq!(paths.remote.parent(), Some(Path::new("./dir")));
+
+        let base_name = paths
+            .base
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        let local_name = paths
+            .local
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        let remote_name = paths
+            .remote
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        assert!(base_name.starts_with("a_BASE_"), "{base_name}");
+        assert!(local_name.starts_with("a_LOCAL_"), "{local_name}");
+        assert!(remote_name.starts_with("a_REMOTE_"), "{remote_name}");
+        assert!(base_name.ends_with(".txt"));
+        assert!(local_name.ends_with(".txt"));
+        assert!(remote_name.ends_with(".txt"));
+    }
+
+    #[test]
+    fn test_build_stage_paths_write_to_temp_true_uses_tempdir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = build_stage_paths(tmp.path(), Path::new("nested/a.txt"), true).unwrap();
+
+        assert!(paths._temp_dir.is_some());
+        assert!(!paths.cleanup_files);
+        assert!(paths.base.is_absolute());
+        assert!(paths.local.is_absolute());
+        assert!(paths.remote.is_absolute());
+
+        let base_name = paths
+            .base
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        let local_name = paths
+            .local
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        let remote_name = paths
+            .remote
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        assert!(base_name.starts_with("a_BASE_"), "{base_name}");
+        assert!(local_name.starts_with("a_LOCAL_"), "{local_name}");
+        assert!(remote_name.starts_with("a_REMOTE_"), "{remote_name}");
+        assert!(base_name.ends_with(".txt"));
     }
 
     #[test]
@@ -705,6 +903,7 @@ mod tests {
         assert_eq!(cfg.tool_cmd, None);
         assert_eq!(cfg.tool_path.as_deref(), Some("/opt/fake-gui-tool"));
         assert!(cfg.trust_exit_code);
+        assert!(!cfg.write_to_temp);
     }
 
     #[test]
@@ -746,5 +945,40 @@ mod tests {
         let cfg = resolve_mergetool_config(workdir, false).unwrap();
         assert_eq!(cfg.tool_name, "cli");
         assert_eq!(cfg.tool_cmd.as_deref(), Some("exit 0"));
+        assert!(!cfg.write_to_temp);
+    }
+
+    #[test]
+    fn test_resolve_mergetool_config_reads_write_to_temp() {
+        let tmp = tempfile::tempdir().unwrap();
+        let workdir = tmp.path();
+        Command::new("git")
+            .arg("-C")
+            .arg(workdir)
+            .arg("init")
+            .output()
+            .unwrap();
+
+        Command::new("git")
+            .arg("-C")
+            .arg(workdir)
+            .args(["config", "merge.tool", "cli"])
+            .output()
+            .unwrap();
+        Command::new("git")
+            .arg("-C")
+            .arg(workdir)
+            .args(["config", "mergetool.cli.cmd", "exit 0"])
+            .output()
+            .unwrap();
+        Command::new("git")
+            .arg("-C")
+            .arg(workdir)
+            .args(["config", "mergetool.writeToTemp", "true"])
+            .output()
+            .unwrap();
+
+        let cfg = resolve_mergetool_config(workdir, false).unwrap();
+        assert!(cfg.write_to_temp);
     }
 }

@@ -1887,6 +1887,119 @@ fn launch_mergetool_uses_tool_path_override_without_custom_cmd() {
 }
 
 #[test]
+fn launch_mergetool_write_to_temp_true_uses_temp_stage_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    setup_both_modified_text_conflict(repo, "a.txt", "ours\n", "theirs\n");
+
+    run_git(repo, &["config", "merge.tool", "fake"]);
+    run_git(
+        repo,
+        &[
+            "config",
+            "mergetool.fake.cmd",
+            "printf '%s\\n%s\\n%s\\n' \"$BASE\" \"$LOCAL\" \"$REMOTE\" > \"$MERGED.env\"; cat \"$REMOTE\" > \"$MERGED\"",
+        ],
+    );
+    run_git(repo, &["config", "mergetool.fake.trustExitCode", "true"]);
+    run_git(repo, &["config", "mergetool.writeToTemp", "true"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    let result = opened.launch_mergetool(Path::new("a.txt")).unwrap();
+    assert!(result.success);
+
+    let env_dump = fs::read_to_string(repo.join("a.txt.env")).unwrap();
+    let vars: Vec<&str> = env_dump.lines().collect();
+    assert_eq!(vars.len(), 3, "expected BASE/LOCAL/REMOTE dump");
+    for var in vars {
+        let var_path = Path::new(var);
+        assert!(
+            var_path.is_absolute(),
+            "writeToTemp=true should pass absolute temp paths, got {var}"
+        );
+        assert!(
+            var.contains("gitgpui-mergetool-"),
+            "expected temporary mergetool prefix in path, got {var}"
+        );
+        assert!(
+            !var.starts_with("./"),
+            "writeToTemp=true should not use workdir-prefixed paths: {var}"
+        );
+    }
+}
+
+#[test]
+fn launch_mergetool_write_to_temp_false_uses_workdir_prefixed_stage_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    setup_both_modified_text_conflict(repo, "docs/note.txt", "ours\n", "theirs\n");
+
+    run_git(repo, &["config", "merge.tool", "fake"]);
+    run_git(
+        repo,
+        &[
+            "config",
+            "mergetool.fake.cmd",
+            "printf '%s\\n%s\\n%s\\n' \"$BASE\" \"$LOCAL\" \"$REMOTE\" > \"$MERGED.env\"; cat \"$REMOTE\" > \"$MERGED\"",
+        ],
+    );
+    run_git(repo, &["config", "mergetool.fake.trustExitCode", "true"]);
+    run_git(repo, &["config", "mergetool.writeToTemp", "false"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    let result = opened.launch_mergetool(Path::new("docs/note.txt")).unwrap();
+    assert!(result.success, "{result:?}");
+
+    let env_dump = fs::read_to_string(repo.join("docs/note.txt.env")).unwrap();
+    let vars: Vec<&str> = env_dump.lines().collect();
+    assert_eq!(vars.len(), 3, "expected BASE/LOCAL/REMOTE dump");
+    for var in vars {
+        assert!(
+            var.starts_with("./docs/note_"),
+            "writeToTemp=false should use './' prefixed workdir paths, got {var}"
+        );
+        assert!(
+            var.contains("_BASE_") || var.contains("_LOCAL_") || var.contains("_REMOTE_"),
+            "unexpected stage-file naming: {var}"
+        );
+    }
+}
+
+#[test]
+fn launch_mergetool_no_base_conflict_passes_empty_base_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    setup_both_added_text_conflict(repo, "new.txt", "ours added\n", "theirs added\n");
+
+    run_git(repo, &["config", "merge.tool", "fake"]);
+    run_git(
+        repo,
+        &[
+            "config",
+            "mergetool.fake.cmd",
+            "printf '%s' \"$(wc -c < \"$BASE\" | tr -d '[:space:]')\" > \"$MERGED.base-size\"; cat \"$REMOTE\" > \"$MERGED\"",
+        ],
+    );
+    run_git(repo, &["config", "mergetool.fake.trustExitCode", "true"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    let result = opened.launch_mergetool(Path::new("new.txt")).unwrap();
+    assert!(result.success, "{result:?}");
+    assert_eq!(
+        fs::read_to_string(repo.join("new.txt.base-size")).unwrap(),
+        "0",
+        "BASE should be an empty file for both-added/no-base conflicts"
+    );
+    assert_eq!(
+        fs::read_to_string(repo.join("new.txt")).unwrap(),
+        "theirs added\n"
+    );
+}
+
+#[test]
 fn stage_and_unstage_paths_update_status() {
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();

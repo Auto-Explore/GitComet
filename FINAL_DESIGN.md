@@ -12,8 +12,12 @@
   - `merge.guitool` + `mergetool.guiDefault` precedence logic
   - `mergetool.<tool>.path` executable override (when `.cmd` is not set)
   - unit + integration test coverage added
-- 🔧 Git behavior parity matrix coverage is partial. Implemented/covered: spaced paths, no-base handling for stage extraction, trust-exit semantics, deleted output handling. Remaining explicit coverage: symlink, submodule conflict invocation paths, CRLF preservation assertions, dir-diff mode, cancel/close exit semantics.
-- 🔧 Git-like scenario porting is partial. Existing and new tests cover a subset of t7610-style behavior (`trustExitCode`, custom cmd with braced env, gui preference); `--tool-help`, full gui-default parity flow, order-file, delete/delete interaction prompts, and submodule-specific flows remain.
+- ✅ `mergetool.writeToTemp` parity implemented in `crates/gitgpui-git-gix/src/repo/mergetool.rs` with Git-like stage-file naming for both modes:
+  - `writeToTemp=true`: absolute temp files under `gitgpui-mergetool-*`
+  - `writeToTemp=false`: workdir-prefixed paths (`./...`) with `<base>_{BASE,LOCAL,REMOTE}_<pid><ext>` naming
+  - stage file cleanup for workdir mode and unit/integration coverage
+- 🔧 Git behavior parity matrix coverage is partial. Implemented/covered: spaced paths, no-base handling for stage extraction (including empty `BASE` file for add/add), trust-exit semantics, deleted output handling, and writeToTemp path semantics. Remaining explicit coverage: symlink, submodule conflict invocation paths, CRLF preservation assertions, dir-diff mode, cancel/close exit semantics.
+- 🔧 Git-like scenario porting is partial. Existing and new tests cover a subset of t7610-style behavior (`trustExitCode`, custom cmd with braced env, gui preference, writeToTemp, no-base stage-file contract); `--tool-help`, full gui-default parity flow, order-file, delete/delete interaction prompts, and submodule-specific flows remain.
 - ⬜ Dedicated difftool mode integration tests are not implemented yet.
 - ⬜ End-to-end tests that invoke `git difftool`/`git mergetool` with global-like config and `gitgpui-app` as the tool are not implemented yet.
 - ✅ KDiff3-style fixture harness implemented in `crates/gitgpui-core/tests/merge_fixture_harness.rs` with fixture data in `crates/gitgpui-core/tests/fixtures/merge/`. Auto-discovers `*_base.*` fixtures, runs merge algorithm, validates invariants (marker well-formedness, content integrity, context preservation), and compares against expected results. 7 seed fixtures + harness discovery test = 8 tests.
@@ -45,7 +49,9 @@
   - ✅ custom command invocation and braced env variables
   - ✅ gui tool preference path via `merge.guitool` + `mergetool.guiDefault=true`
   - ✅ tool path override via `mergetool.<tool>.path`
-  - ⬜ remaining cases (tool-help, nonexistent tool messaging parity, writeToTemp/orderFile/delete-delete prompt flow/submodule matrix/no-base file E2E via `git mergetool` command) still pending
+  - ✅ writeToTemp stage-file path behavior (`true` temp paths, `false` `./`-prefixed workdir paths)
+  - ✅ no-base file contract in add/add conflicts (tool receives an empty `BASE` file)
+  - ⬜ remaining cases (tool-help, nonexistent tool messaging parity, orderFile/delete-delete prompt flow/submodule matrix, and full E2E via `git mergetool` command) still pending
 - ⬜ Phase 4B (critical `t7800-difftool` E2E): not implemented yet.
 - ✅ Phase 5A/5B/5C (Meld-derived matcher/interval/newline test ports): implemented in `crates/gitgpui-core/src/text_utils.rs` with tests in `crates/gitgpui-core/tests/meld_algorithm_tests.rs`:
   - 5A: Myers matching blocks extraction (`matching_blocks_chars`, `matching_blocks_lines`) with 8 tests (4 ported from Meld's `test_matchers.py` inputs + 4 line-level tests). Sync point tests noted as Meld-specific (not applicable to our standard Myers engine).
