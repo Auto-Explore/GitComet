@@ -172,6 +172,7 @@ fn matching_blocks_with_sync_points(
     Ok(blocks)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn append_segment_blocks(
     a: &[String],
     b: &[String],
@@ -296,8 +297,8 @@ fn index_matching_kmers(a: &[String], b: &[String]) -> (Vec<String>, Vec<usize>)
             continue;
         }
 
-        for j in next_poss_match.max(i - 2)..=i {
-            matches.push(b[j].clone());
+        for (j, item) in b.iter().enumerate().take(i + 1).skip(next_poss_match.max(i - 2)) {
+            matches.push(item.clone());
             index.push(j);
         }
         next_poss_match = i + 1;
@@ -433,19 +434,19 @@ fn postprocess_blocks(blocks: &mut Vec<MatchingBlock>, a: &[String], b: &[String
 
         while i >= 0 {
             let prev = blocks[i as usize];
-            if prev.b_start + prev.length == current.b_start
-                || prev.a_start + prev.length == current.a_start
+            if (prev.b_start + prev.length == current.b_start
+                || prev.a_start + prev.length == current.a_start)
+                && current.a_start >= prev.length
+                && current.b_start >= prev.length
             {
-                if current.a_start >= prev.length && current.b_start >= prev.length {
-                    let prev_slice_a = &a[current.a_start - prev.length..current.a_start];
-                    let prev_slice_b = &b[current.b_start - prev.length..current.b_start];
-                    if prev_slice_a == prev_slice_b {
-                        current.a_start -= prev.length;
-                        current.b_start -= prev.length;
-                        current.length += prev.length;
-                        i -= 1;
-                        continue;
-                    }
+                let prev_slice_a = &a[current.a_start - prev.length..current.a_start];
+                let prev_slice_b = &b[current.b_start - prev.length..current.b_start];
+                if prev_slice_a == prev_slice_b {
+                    current.a_start -= prev.length;
+                    current.b_start -= prev.length;
+                    current.length += prev.length;
+                    i -= 1;
+                    continue;
                 }
             }
             break;
