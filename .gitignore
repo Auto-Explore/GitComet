@@ -10,3 +10,4 @@ callgrind.out*
 gitgpui-agent*
 local_*.sh
 tmp/*
+feat/*
