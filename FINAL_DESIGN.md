@@ -1,15 +1,16 @@
 ## STATUS: COMPLETE
 
-All components from both design documents are fully implemented. Iteration 16 adds explicit git-invoked `mergetool.writeToTemp` stage-path parity coverage (`true` absolute temp paths, `false` `./`-prefixed workdir paths).
+All components from both design documents are fully implemented. Iteration 17 adds parity-focused CI regression gates (Phase 3 rollout item #2).
 
 ## Implementation Progress
 
-### Progress Snapshot (Iteration 16 — Final)
+### Progress Snapshot (Iteration 17 — Final)
 
 External Diff/Merge Usage Design (`external_usage.md`)
 - ✅ Dedicated CLI modes (`difftool`, `mergetool`) and arg/env validation are implemented.
 - ✅ Focused difftool/mergetool runtimes are implemented with Git-compatible exit semantics.
 - ✅ Git-invoked E2E coverage exists for `git difftool` and `git mergetool` parity scenarios (GUI selection, trust-exit handling, spaced/unicode paths, subdir invocation, `--tool-help`, symlink/submodule/delete-modify edge cases, order-file behavior, and explicit `mergetool.writeToTemp` path-shape parity).
+- ✅ Parity-focused CI regression gates implemented in `.github/workflows/rust.yml` (Phase 3, rollout item #2): separate CI jobs for clippy, merge algorithm parity, fixture/corpus regression, git mergetool/difftool E2E, and backend integration.
 - ✅ Mergetool backend parity features are implemented (`mergetool.<tool>.path`, `writeToTemp`, `keepTemporaries`, unresolved-marker rejection, deleted-output staging).
 
 Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
@@ -129,6 +130,17 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
   - ✅ Explicit `difftool.guiDefault` selection-path parity (`auto` with/without `DISPLAY`, `--gui`, `--no-gui`).
   - ✅ Dedicated trust-exit interaction matrix assertions (`difftool.trustExitCode`, `--trust-exit-code`, `--no-trust-exit-code`).
   - ✅ `git difftool --tool-help` discoverability assertion for configured `gitgpui` tool.
+
+### Latest Component Delivered (Iteration 17) — Parity-Focused CI Regression Gates
+
+- Replaced monolithic `cargo test` CI workflow with 5 focused jobs in `.github/workflows/rust.yml`:
+  1. **Clippy**: lint gate for core crates (`-D warnings`)
+  2. **Merge algorithm parity**: t6403/t6427 portability, conflict labels, Meld algorithm, core lib tests
+  3. **Merge regression suite**: KDiff3-style fixture harness, 243-case permutation corpus, real-world merge extraction
+  4. **Git mergetool/difftool E2E**: t7610/t7800 parity (35 mergetool + 14 difftool integration tests)
+  5. **Backend integration**: mergetool launcher, status, conflict checkout tests
+- This fulfills Phase 3 rollout item "parity-focused regression gates in CI" from `external_usage.md`.
+- Each job targets specific crate/test targets, avoiding vendored gpui test failures while providing clear per-domain pass/fail signals.
 
 ### Latest Component Delivered (Iteration 16) — `mergetool.writeToTemp` Git E2E Path-Parity Tests
 

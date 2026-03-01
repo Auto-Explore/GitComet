@@ -10,13 +10,74 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
-
+  clippy:
+    name: Clippy
     runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Clippy (core crates)
+      run: cargo clippy -p gitgpui-core -p gitgpui-app -p gitgpui-git-gix -- -D warnings
 
+  build:
+    name: Build
+    runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
     - name: Build
-      run: cargo build --verbose
-    - name: Run tests
-      run: cargo test --verbose
+      run: cargo build -p gitgpui-core -p gitgpui-app -p gitgpui-git-gix --verbose
+
+  # Core merge algorithm correctness — Phase 1A/1B/1C portability tests
+  merge-algorithm:
+    name: Merge algorithm parity (t6403/t6427)
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+    - uses: actions/checkout@v4
+    - name: t6403/t6427 merge algorithm portability
+      run: cargo test -p gitgpui-core --test merge_algorithm --verbose
+    - name: Conflict label formatting (Phase 1C)
+      run: cargo test -p gitgpui-core --test conflict_label_formatting --verbose
+    - name: Meld algorithm parity (Phase 5)
+      run: cargo test -p gitgpui-core --test meld_algorithm_tests --verbose
+    - name: Core library unit tests
+      run: cargo test -p gitgpui-core --lib --verbose
+
+  # Fixture harness and corpus — Phase 2/3A regression gates
+  merge-regression:
+    name: Merge regression suite (fixtures + corpus)
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+    - uses: actions/checkout@v4
+    - name: KDiff3-style fixture harness (Phase 2)
+      run: cargo test -p gitgpui-core --test merge_fixture_harness --verbose
+    - name: Permutation corpus (Phase 3A — 243 sampled cases)
+      run: cargo test -p gitgpui-core --test merge_permutation_corpus --verbose
+    - name: Real-world merge extraction (Phase 3C)
+      run: cargo test -p gitgpui-core --test merge_git_extraction --verbose
+
+  # E2E integration with git mergetool/difftool — Phase 4A/4B
+  tool-integration:
+    name: Git mergetool/difftool E2E parity
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+    - uses: actions/checkout@v4
+    - name: Build gitgpui-app binary
+      run: cargo build -p gitgpui-app
+    - name: Git mergetool E2E (Phase 4A — t7610 parity)
+      run: cargo test -p gitgpui-app --test mergetool_git_integration --verbose
+    - name: Git difftool E2E (Phase 4B — t7800 parity)
+      run: cargo test -p gitgpui-app --test difftool_git_integration --verbose
+    - name: Mergetool/difftool runtime unit tests
+      run: cargo test -p gitgpui-app --lib --verbose
+
+  # Backend integration — mergetool launcher, status, conflict checkout
+  backend-integration:
+    name: Git backend integration
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+    - uses: actions/checkout@v4
+    - name: Status and mergetool backend integration
+      run: cargo test -p gitgpui-git-gix --verbose
