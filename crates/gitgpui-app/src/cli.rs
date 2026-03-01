@@ -338,24 +338,178 @@ fn resolve_mergetool_with_config(
     Ok(config)
 }
 
-/// Public resolve wrappers that use the real process environment.
-pub fn resolve_difftool(args: DifftoolArgs) -> Result<DifftoolConfig, String> {
-    resolve_difftool_with_env(args, &ProcessEnv)
+fn parse_compat_external_mode(
+    raw_args: &[OsString],
+    env: &dyn EnvLookup,
+) -> Result<Option<AppMode>, String> {
+    let mut label_l1: Option<String> = None;
+    let mut label_l2: Option<String> = None;
+    let mut label_l3: Option<String> = None;
+    let mut merged_output: Option<PathBuf> = None;
+    let mut positionals: Vec<PathBuf> = Vec::new();
+
+    let mut idx = 0usize;
+    while idx < raw_args.len() {
+        let arg = &raw_args[idx];
+        let token = arg.to_string_lossy();
+
+        if token == "--auto" {
+            idx += 1;
+            continue;
+        }
+
+        if token == "--L1" || token == "--L2" || token == "--L3" {
+            let next_idx = idx + 1;
+            let value = raw_args.get(next_idx).ok_or_else(|| {
+                format!("Missing value for compatibility flag {token} in external tool mode")
+            })?;
+            let value = value.to_string_lossy().into_owned();
+            match token.as_ref() {
+                "--L1" => label_l1 = Some(value),
+                "--L2" => label_l2 = Some(value),
+                "--L3" => label_l3 = Some(value),
+                _ => unreachable!(),
+            }
+            idx += 2;
+            continue;
+        }
+
+        if let Some(value) = token.strip_prefix("--L1=") {
+            label_l1 = Some(value.to_string());
+            idx += 1;
+            continue;
+        }
+        if let Some(value) = token.strip_prefix("--L2=") {
+            label_l2 = Some(value.to_string());
+            idx += 1;
+            continue;
+        }
+        if let Some(value) = token.strip_prefix("--L3=") {
+            label_l3 = Some(value.to_string());
+            idx += 1;
+            continue;
+        }
+
+        if token == "-o" || token == "--output" || token == "--out" {
+            let next_idx = idx + 1;
+            let value = raw_args.get(next_idx).ok_or_else(|| {
+                format!("Missing value for compatibility flag {token} in external tool mode")
+            })?;
+            merged_output = Some(PathBuf::from(value));
+            idx += 2;
+            continue;
+        }
+
+        if let Some(value) = token.strip_prefix("--output=") {
+            merged_output = Some(PathBuf::from(value));
+            idx += 1;
+            continue;
+        }
+        if let Some(value) = token.strip_prefix("--out=") {
+            merged_output = Some(PathBuf::from(value));
+            idx += 1;
+            continue;
+        }
+        if token.starts_with("-o") && token.len() > 2 {
+            merged_output = Some(PathBuf::from(token[2..].to_string()));
+            idx += 1;
+            continue;
+        }
+
+        if token == "--" {
+            positionals.extend(raw_args[idx + 1..].iter().map(PathBuf::from));
+            idx = raw_args.len();
+            continue;
+        }
+
+        if token.starts_with('-') {
+            return Ok(None);
+        }
+
+        positionals.push(PathBuf::from(arg));
+        idx += 1;
+    }
+
+    if let Some(merged) = merged_output {
+        let (base, local, remote, label_base, label_local, label_remote) = match positionals.len() {
+            3 => (
+                Some(positionals[0].clone()),
+                positionals[1].clone(),
+                positionals[2].clone(),
+                label_l1,
+                label_l2,
+                label_l3,
+            ),
+            2 => (
+                None,
+                positionals[0].clone(),
+                positionals[1].clone(),
+                None,
+                label_l1,
+                label_l2,
+            ),
+            _ => return Ok(None),
+        };
+
+        let args = MergetoolArgs {
+            merged: Some(merged),
+            local: Some(local),
+            remote: Some(remote),
+            base,
+            label_base,
+            label_local,
+            label_remote,
+            conflict_style: None,
+            diff_algorithm: None,
+        };
+        return resolve_mergetool_with_env(args, env)
+            .map(AppMode::Mergetool)
+            .map(Some);
+    }
+
+    if positionals.len() == 2 {
+        let args = DifftoolArgs {
+            local: Some(positionals[0].clone()),
+            remote: Some(positionals[1].clone()),
+            path: None,
+            label_left: label_l1,
+            label_right: label_l2,
+        };
+        return resolve_difftool_with_env(args, env)
+            .map(AppMode::Difftool)
+            .map(Some);
+    }
+
+    Ok(None)
 }
 
-pub fn resolve_mergetool(args: MergetoolArgs) -> Result<MergetoolConfig, String> {
-    resolve_mergetool_with_config(args, &ProcessEnv, &read_git_config)
+fn parse_app_mode_from_args_and_env(
+    args: Vec<OsString>,
+    env: &dyn EnvLookup,
+) -> Result<AppMode, String> {
+    match Cli::try_parse_from(args.clone()) {
+        Ok(cli) => match cli.command {
+            None => Ok(AppMode::Browser { path: cli.path }),
+            Some(Command::Difftool(args)) => {
+                resolve_difftool_with_env(args, env).map(AppMode::Difftool)
+            }
+            Some(Command::Mergetool(args)) => {
+                resolve_mergetool_with_config(args, env, &read_git_config).map(AppMode::Mergetool)
+            }
+        },
+        Err(clap_err) => {
+            let compat_args = if args.len() > 1 { &args[1..] } else { &[][..] };
+            if let Some(mode) = parse_compat_external_mode(compat_args, env)? {
+                return Ok(mode);
+            }
+            Err(clap_err.to_string())
+        }
+    }
 }
 
 /// Parse CLI arguments and resolve into a validated `AppMode`.
 pub fn parse_app_mode() -> Result<AppMode, String> {
-    let cli = Cli::try_parse().map_err(|e| e.to_string())?;
-
-    match cli.command {
-        None => Ok(AppMode::Browser { path: cli.path }),
-        Some(Command::Difftool(args)) => resolve_difftool(args).map(AppMode::Difftool),
-        Some(Command::Mergetool(args)) => resolve_mergetool(args).map(AppMode::Mergetool),
-    }
+    parse_app_mode_from_args_and_env(std::env::args_os().collect(), &ProcessEnv)
 }
 
 #[cfg(test)]
@@ -394,6 +548,10 @@ mod tests {
         let mut f = std::fs::File::create(&path).unwrap();
         f.write_all(content.as_bytes()).unwrap();
         path
+    }
+
+    fn parse_mode_for_test(args: Vec<OsString>, env: &dyn EnvLookup) -> Result<AppMode, String> {
+        parse_app_mode_from_args_and_env(args, env)
     }
 
     // ── DifftoolArgs resolution ──────────────────────────────────────
@@ -1127,6 +1285,146 @@ mod tests {
             cli.path.as_deref(),
             Some(std::path::Path::new("/some/repo"))
         );
+    }
+
+    #[test]
+    fn compat_parses_positional_difftool_invocation() {
+        let dir = tempfile::tempdir().unwrap();
+        let local = tmp_file(&dir, "left.txt", "left\n");
+        let remote = tmp_file(&dir, "right.txt", "right\n");
+        let env = TestEnv::new();
+
+        let mode = parse_mode_for_test(
+            vec![
+                OsString::from("gitgpui-app"),
+                local.into_os_string(),
+                remote.into_os_string(),
+            ],
+            &env,
+        )
+        .unwrap();
+
+        match mode {
+            AppMode::Difftool(config) => {
+                assert!(config.local.ends_with("left.txt"));
+                assert!(config.remote.ends_with("right.txt"));
+                assert_eq!(config.label_left, None);
+                assert_eq!(config.label_right, None);
+            }
+            _ => panic!("expected Difftool mode"),
+        }
+    }
+
+    #[test]
+    fn compat_parses_kdiff3_style_difftool_labels() {
+        let dir = tempfile::tempdir().unwrap();
+        let local = tmp_file(&dir, "left.txt", "left\n");
+        let remote = tmp_file(&dir, "right.txt", "right\n");
+        let env = TestEnv::new();
+
+        let mode = parse_mode_for_test(
+            vec![
+                OsString::from("gitgpui-app"),
+                OsString::from("--L1"),
+                OsString::from("LEFT_LABEL"),
+                OsString::from("--L2"),
+                OsString::from("RIGHT_LABEL"),
+                local.into_os_string(),
+                remote.into_os_string(),
+            ],
+            &env,
+        )
+        .unwrap();
+
+        match mode {
+            AppMode::Difftool(config) => {
+                assert_eq!(config.label_left.as_deref(), Some("LEFT_LABEL"));
+                assert_eq!(config.label_right.as_deref(), Some("RIGHT_LABEL"));
+            }
+            _ => panic!("expected Difftool mode"),
+        }
+    }
+
+    #[test]
+    fn compat_parses_kdiff3_style_mergetool_with_base() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = tmp_file(&dir, "base.txt", "base\n");
+        let local = tmp_file(&dir, "local.txt", "local\n");
+        let remote = tmp_file(&dir, "remote.txt", "remote\n");
+        let merged = dir.path().join("nested/out/merged.txt");
+        let env = TestEnv::new();
+
+        let mode = parse_mode_for_test(
+            vec![
+                OsString::from("gitgpui-app"),
+                OsString::from("--auto"),
+                OsString::from("--L1"),
+                OsString::from("BASE_LABEL"),
+                OsString::from("--L2"),
+                OsString::from("LOCAL_LABEL"),
+                OsString::from("--L3"),
+                OsString::from("REMOTE_LABEL"),
+                OsString::from("-o"),
+                merged.clone().into_os_string(),
+                base.clone().into_os_string(),
+                local.clone().into_os_string(),
+                remote.clone().into_os_string(),
+            ],
+            &env,
+        )
+        .unwrap();
+
+        match mode {
+            AppMode::Mergetool(config) => {
+                assert_eq!(config.merged, merged);
+                assert_eq!(config.base.as_ref(), Some(&base));
+                assert_eq!(config.local, local);
+                assert_eq!(config.remote, remote);
+                assert_eq!(config.label_base.as_deref(), Some("BASE_LABEL"));
+                assert_eq!(config.label_local.as_deref(), Some("LOCAL_LABEL"));
+                assert_eq!(config.label_remote.as_deref(), Some("REMOTE_LABEL"));
+            }
+            _ => panic!("expected Mergetool mode"),
+        }
+    }
+
+    #[test]
+    fn compat_parses_kdiff3_style_mergetool_without_base() {
+        let dir = tempfile::tempdir().unwrap();
+        let local = tmp_file(&dir, "local.txt", "local\n");
+        let remote = tmp_file(&dir, "remote.txt", "remote\n");
+        let merged = dir.path().join("merged.txt");
+        let env = TestEnv::new();
+
+        let mode = parse_mode_for_test(
+            vec![
+                OsString::from("gitgpui-app"),
+                OsString::from("--auto"),
+                OsString::from("--L1"),
+                OsString::from("LOCAL_LABEL"),
+                OsString::from("--L2"),
+                OsString::from("REMOTE_LABEL"),
+                OsString::from("--out"),
+                merged.clone().into_os_string(),
+                local.clone().into_os_string(),
+                remote.clone().into_os_string(),
+            ],
+            &env,
+        )
+        .unwrap();
+
+        match mode {
+            AppMode::Mergetool(config) => {
+                assert_eq!(config.merged, merged);
+                assert!(config.base.is_none());
+                assert_eq!(config.local, local);
+                assert_eq!(config.remote, remote);
+                assert_eq!(config.label_base, None);
+                assert_eq!(config.label_local.as_deref(), Some("LOCAL_LABEL"));
+                assert_eq!(config.label_remote.as_deref(), Some("REMOTE_LABEL"));
+            }
+            _ => panic!("expected Mergetool mode"),
+        }
     }
 
     // ── Conflict style and diff algorithm ─────────────────────────────

@@ -137,6 +137,24 @@ fn configure_gitgpui_mergetool_with_alias_flags(repo: &Path) {
     run_git(repo, &["config", "mergetool.keepBackup", "false"]);
 }
 
+fn configure_kdiff3_path_override_to_gitgpui(repo: &Path, trust_exit_code: bool) {
+    let bin = gitgpui_bin();
+    let bin_path = bin.to_string_lossy().to_string();
+
+    run_git(repo, &["config", "merge.tool", "kdiff3"]);
+    run_git(repo, &["config", "mergetool.kdiff3.path", &bin_path]);
+    run_git(
+        repo,
+        &[
+            "config",
+            "mergetool.kdiff3.trustExitCode",
+            if trust_exit_code { "true" } else { "false" },
+        ],
+    );
+    run_git(repo, &["config", "mergetool.prompt", "false"]);
+    run_git(repo, &["config", "mergetool.keepBackup", "false"]);
+}
+
 /// Create a mergetool command that echoes a marker to stderr and resolves
 /// the conflict by copying $REMOTE to $MERGED. This simulates a successful
 /// merge tool and allows tests to detect which tool was selected by checking
@@ -440,6 +458,31 @@ fn git_mergetool_accepts_kdiff3_alias_flags_in_cmd() {
     assert!(
         merged.contains("LOCAL") || merged.contains("REMOTE") || merged.contains("<<<<<<<"),
         "expected merged file to be processed\nmerged:\n{merged}\noutput:\n{text}"
+    );
+}
+
+#[test]
+fn git_mergetool_kdiff3_path_override_invokes_compat_mode() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+
+    setup_overlapping_conflict(repo);
+    // Built-in kdiff3 invocation uses --auto/--L1/--L2/--L3/-o positional form.
+    // trustExitCode=false keeps git from failing on unresolved conflicts so we
+    // can verify marker label mapping from compatibility parsing.
+    configure_kdiff3_path_override_to_gitgpui(repo, false);
+
+    let output = run_git_capture(repo, &["mergetool", "--no-prompt"]);
+    let text = output_text(&output);
+    assert!(
+        output.status.success(),
+        "expected kdiff3 path-override invocation to succeed with gitgpui compatibility parsing\n{text}"
+    );
+
+    let merged = fs::read_to_string(repo.join("file.txt")).unwrap();
+    assert!(
+        merged.contains("(Local)") || merged.contains("(Remote)"),
+        "expected kdiff3-style labels to propagate into gitgpui conflict markers\nmerged:\n{merged}\noutput:\n{text}"
     );
 }
 
@@ -2541,7 +2584,9 @@ fn git_mergetool_binary_conflict_alongside_text_conflict() {
     // Since both sides changed the same line differently, it will have markers.
     let text_merged = fs::read_to_string(repo.join("text.txt")).unwrap();
     assert!(
-        text_merged.contains("<<<<<<<") || text_merged.contains("LOCAL") || text_merged.contains("REMOTE"),
+        text_merged.contains("<<<<<<<")
+            || text_merged.contains("LOCAL")
+            || text_merged.contains("REMOTE"),
         "text conflict should be processed, got:\n{text_merged}"
     );
 

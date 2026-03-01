@@ -129,6 +129,15 @@ fn configure_gitgpui_difftool(repo: &Path) {
     configure_difftool_selection(repo, "gitgpui", None, None);
 }
 
+fn configure_kdiff3_path_override_to_gitgpui(repo: &Path) {
+    let bin = gitgpui_bin();
+    let bin_path = bin.to_string_lossy().to_string();
+    run_git(repo, &["config", "diff.tool", "kdiff3"]);
+    run_git(repo, &["config", "difftool.kdiff3.path", &bin_path]);
+    run_git(repo, &["config", "difftool.trustExitCode", "true"]);
+    run_git(repo, &["config", "difftool.prompt", "false"]);
+}
+
 fn output_text(output: &Output) -> String {
     format!(
         "{}{}",
@@ -159,6 +168,26 @@ fn git_difftool_invokes_gitgpui_app_for_basic_diff() {
     assert!(
         text.contains("+after"),
         "missing added line in output\n{text}"
+    );
+}
+
+#[test]
+fn git_difftool_kdiff3_path_override_invokes_compat_mode() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+
+    init_repo(repo);
+    write_file(repo, "a.txt", "before\n");
+    commit_all(repo, "base");
+    write_file(repo, "a.txt", "after\n");
+
+    configure_kdiff3_path_override_to_gitgpui(repo);
+
+    let output = run_git_capture(repo, &["difftool", "--no-prompt", "--", "a.txt"]);
+    let text = output_text(&output);
+    assert!(
+        output.status.success(),
+        "expected kdiff3 path-override invocation to succeed with gitgpui compatibility parsing\n{text}"
     );
 }
 
