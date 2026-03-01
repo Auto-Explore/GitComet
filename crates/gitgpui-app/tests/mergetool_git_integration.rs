@@ -1324,6 +1324,50 @@ fn git_mergetool_gui_default_auto_prefers_cli_tool_without_display() {
 }
 
 #[test]
+fn git_mergetool_gui_default_true_prefers_gui_tool_without_display() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+
+    setup_overlapping_conflict(repo);
+
+    configure_mergetool_command(repo, "cli", &mergetool_marker_cmd("cli"));
+    configure_mergetool_trust_exit_code(repo, "cli", true);
+    configure_mergetool_command(repo, "gui", &mergetool_marker_cmd("gui"));
+    configure_mergetool_trust_exit_code(repo, "gui", true);
+    configure_mergetool_selection(repo, "cli", Some("gui"), Some("true"));
+
+    let output = run_git_capture_with_display(repo, &["mergetool", "--no-prompt"], None);
+    let text = output_text(&output);
+    assert!(output.status.success(), "git mergetool failed\n{text}");
+    assert!(
+        text.contains("TOOL=gui"),
+        "expected gui tool selection when guiDefault=true\n{text}"
+    );
+}
+
+#[test]
+fn git_mergetool_gui_default_false_prefers_cli_tool_with_display() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+
+    setup_overlapping_conflict(repo);
+
+    configure_mergetool_command(repo, "cli", &mergetool_marker_cmd("cli"));
+    configure_mergetool_trust_exit_code(repo, "cli", true);
+    configure_mergetool_command(repo, "gui", &mergetool_marker_cmd("gui"));
+    configure_mergetool_trust_exit_code(repo, "gui", true);
+    configure_mergetool_selection(repo, "cli", Some("gui"), Some("false"));
+
+    let output = run_git_capture_with_display(repo, &["mergetool", "--no-prompt"], Some(":99"));
+    let text = output_text(&output);
+    assert!(output.status.success(), "git mergetool failed\n{text}");
+    assert!(
+        text.contains("TOOL=cli"),
+        "expected regular tool selection when guiDefault=false\n{text}"
+    );
+}
+
+#[test]
 fn git_mergetool_gui_flag_overrides_selection() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
