@@ -1453,6 +1453,24 @@ struct LineHunk {
 /// Maximum number of lines per side before we skip subchunk splitting.
 const SUBCHUNK_MAX_LINES: usize = 500;
 
+/// Detect the dominant line ending in a block of text.
+///
+/// Returns `"\r\n"` if CRLF endings outnumber LF-only endings, `"\n"` otherwise.
+fn detect_subchunk_line_ending(texts: &[&str]) -> &'static str {
+    let mut crlf = 0usize;
+    let mut lf_only = 0usize;
+    for text in texts {
+        for line in text.split_inclusive('\n') {
+            if line.ends_with("\r\n") {
+                crlf += 1;
+            } else if line.ends_with('\n') {
+                lf_only += 1;
+            }
+        }
+    }
+    if crlf > lf_only { "\r\n" } else { "\n" }
+}
+
 /// Split a conflict region into line-level subchunks using 3-way diff/merge.
 ///
 /// Returns `Some(subchunks)` if the block can be meaningfully decomposed into
@@ -1481,17 +1499,21 @@ pub fn split_conflict_into_subchunks(
         return None;
     }
 
+    // Detect dominant line ending from the input texts so that
+    // reconstructed subchunk text preserves CRLF when appropriate.
+    let line_ending = detect_subchunk_line_ending(&[base, ours, theirs]);
+
     let subchunks =
         if base_lines.len() == ours_lines.len() && base_lines.len() == theirs_lines.len() {
             // Same number of lines: simple per-line 3-way comparison.
-            per_line_merge(&base_lines, &ours_lines, &theirs_lines)
+            per_line_merge(&base_lines, &ours_lines, &theirs_lines, line_ending)
         } else {
             // Different line counts: use diff-based hunk merge.
             let edits_ours = myers_edits(&base_lines, &ours_lines);
             let edits_theirs = myers_edits(&base_lines, &theirs_lines);
             let hunks_ours = edits_to_line_hunks(&edits_ours);
             let hunks_theirs = edits_to_line_hunks(&edits_theirs);
-            merge_line_hunks(&base_lines, &hunks_ours, &hunks_theirs)
+            merge_line_hunks(&base_lines, &hunks_ours, &hunks_theirs, line_ending)
         };
 
     // Only worth returning if at least some content is resolved.
@@ -1552,6 +1574,7 @@ fn per_line_merge(
     base_lines: &[&str],
     ours_lines: &[&str],
     theirs_lines: &[&str],
+    line_ending: &str,
 ) -> Vec<Subchunk> {
     debug_assert_eq!(base_lines.len(), ours_lines.len());
     debug_assert_eq!(base_lines.len(), theirs_lines.len());
@@ -1571,28 +1594,40 @@ fn per_line_merge(
             while i < len && base_lines[i] == ours_lines[i] && base_lines[i] == theirs_lines[i] {
                 i += 1;
             }
-            subchunks.push(Subchunk::Resolved(lines_to_text(&base_lines[start..i])));
+            subchunks.push(Subchunk::Resolved(lines_to_text(
+                &base_lines[start..i],
+                line_ending,
+            )));
         } else if !same_bo && same_bt {
             // Only ours changed from base.
             let start = i;
             while i < len && base_lines[i] != ours_lines[i] && base_lines[i] == theirs_lines[i] {
                 i += 1;
             }
-            subchunks.push(Subchunk::Resolved(lines_to_text(&ours_lines[start..i])));
+            subchunks.push(Subchunk::Resolved(lines_to_text(
+                &ours_lines[start..i],
+                line_ending,
+            )));
         } else if same_bo && !same_bt {
             // Only theirs changed from base.
             let start = i;
             while i < len && base_lines[i] == ours_lines[i] && base_lines[i] != theirs_lines[i] {
                 i += 1;
             }
-            subchunks.push(Subchunk::Resolved(lines_to_text(&theirs_lines[start..i])));
+            subchunks.push(Subchunk::Resolved(lines_to_text(
+                &theirs_lines[start..i],
+                line_ending,
+            )));
         } else if same_ot {
             // Both changed, same way.
             let start = i;
             while i < len && base_lines[i] != ours_lines[i] && ours_lines[i] == theirs_lines[i] {
                 i += 1;
             }
-            subchunks.push(Subchunk::Resolved(lines_to_text(&ours_lines[start..i])));
+            subchunks.push(Subchunk::Resolved(lines_to_text(
+                &ours_lines[start..i],
+                line_ending,
+            )));
         } else {
             // Both changed differently → conflict.
             let start = i;
@@ -1604,9 +1639,9 @@ fn per_line_merge(
                 i += 1;
             }
             subchunks.push(Subchunk::Conflict {
-                base: lines_to_text(&base_lines[start..i]),
-                ours: lines_to_text(&ours_lines[start..i]),
-                theirs: lines_to_text(&theirs_lines[start..i]),
+                base: lines_to_text(&base_lines[start..i], line_ending),
+                ours: lines_to_text(&ours_lines[start..i], line_ending),
+                theirs: lines_to_text(&theirs_lines[start..i], line_ending),
             });
         }
     }
@@ -1625,6 +1660,7 @@ fn merge_line_hunks(
     base_lines: &[&str],
     ours_hunks: &[LineHunk],
     theirs_hunks: &[LineHunk],
+    line_ending: &str,
 ) -> Vec<Subchunk> {
     let mut result = Vec::new();
     let mut base_pos = 0usize;
@@ -1644,7 +1680,10 @@ fn merge_line_hunks(
         if oh_start == usize::MAX && th_start == usize::MAX {
             // No more hunks — emit remaining base as context.
             if base_pos < base_lines.len() {
-                result.push(Subchunk::Resolved(lines_to_text(&base_lines[base_pos..])));
+                result.push(Subchunk::Resolved(lines_to_text(
+                    &base_lines[base_pos..],
+                    line_ending,
+                )));
             }
             break;
         }
@@ -1656,6 +1695,7 @@ fn merge_line_hunks(
             let ctx_end = change_start.min(base_lines.len());
             result.push(Subchunk::Resolved(lines_to_text(
                 &base_lines[base_pos..ctx_end],
+                line_ending,
             )));
             base_pos = ctx_end;
         }
@@ -1722,18 +1762,20 @@ fn merge_line_hunks(
         let region_base_end = region_end.min(base_lines.len());
 
         if ours_involved && theirs_involved {
-            let base_text = lines_to_text(&base_lines[base_pos..region_base_end]);
+            let base_text = lines_to_text(&base_lines[base_pos..region_base_end], line_ending);
             let ours_text = side_content(
                 base_lines,
                 base_pos,
                 region_end,
                 &ours_hunks[oi_start..oi_end],
+                line_ending,
             );
             let theirs_text = side_content(
                 base_lines,
                 base_pos,
                 region_end,
                 &theirs_hunks[ti_start..ti_end],
+                line_ending,
             );
 
             if ours_text == theirs_text {
@@ -1745,7 +1787,12 @@ fn merge_line_hunks(
                 let sub_theirs = split_lines(&theirs_text);
 
                 if sub_base.len() == sub_ours.len() && sub_base.len() == sub_theirs.len() {
-                    result.extend(per_line_merge(&sub_base, &sub_ours, &sub_theirs));
+                    result.extend(per_line_merge(
+                        &sub_base,
+                        &sub_ours,
+                        &sub_theirs,
+                        line_ending,
+                    ));
                 } else {
                     result.push(Subchunk::Conflict {
                         base: base_text,
@@ -1760,6 +1807,7 @@ fn merge_line_hunks(
                 base_pos,
                 region_end,
                 &ours_hunks[oi_start..oi_end],
+                line_ending,
             );
             result.push(Subchunk::Resolved(ours_text));
         } else if theirs_involved {
@@ -1768,6 +1816,7 @@ fn merge_line_hunks(
                 base_pos,
                 region_end,
                 &theirs_hunks[ti_start..ti_end],
+                line_ending,
             );
             result.push(Subchunk::Resolved(theirs_text));
         }
@@ -1787,6 +1836,7 @@ fn side_content(
     range_start: usize,
     range_end: usize,
     hunks: &[LineHunk],
+    line_ending: &str,
 ) -> String {
     let mut lines: Vec<&str> = Vec::new();
     let mut pos = range_start;
@@ -1806,20 +1856,21 @@ fn side_content(
     let tail_limit = range_end.min(base_lines.len());
     lines.extend_from_slice(&base_lines[pos..tail_limit]);
 
-    lines_to_text(&lines)
+    lines_to_text(&lines, line_ending)
 }
 
-/// Join a slice of line strings into text with newline separators.
-/// Each line gets a trailing newline (matching conflict block content convention).
-fn lines_to_text(lines: &[&str]) -> String {
+/// Join a slice of line strings into text with the given line ending.
+/// Each line gets a trailing line ending (matching conflict block content convention).
+fn lines_to_text(lines: &[&str], line_ending: &str) -> String {
     if lines.is_empty() {
         return String::new();
     }
-    let total: usize = lines.iter().map(|l| l.len() + 1).sum();
+    let le_len = line_ending.len();
+    let total: usize = lines.iter().map(|l| l.len() + le_len).sum();
     let mut s = String::with_capacity(total);
     for line in lines {
         s.push_str(line);
-        s.push('\n');
+        s.push_str(line_ending);
     }
     s
 }
@@ -3608,5 +3659,181 @@ unterminated content with no separator
             result,
             Some("line1\nline2\nsame\nline3\nline4\nline5\n".to_string())
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // CRLF preservation through subchunk splitting path
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn subchunk_split_preserves_crlf_per_line_merge() {
+        // CRLF content going through per_line_merge must preserve \r\n endings.
+        let base = "aaa\r\nbbb\r\nccc\r\n";
+        let ours = "aaa\r\nBBB\r\nccc\r\n";
+        let theirs = "AAA\r\nbbb\r\nccc\r\n";
+        let subchunks = split_conflict_into_subchunks(base, ours, theirs).unwrap();
+
+        // Both changes are non-overlapping: ours changed line 2, theirs changed line 1.
+        // Should fully resolve.
+        assert!(
+            subchunks.iter().all(|c| matches!(c, Subchunk::Resolved(_))),
+            "expected all resolved subchunks, got: {subchunks:?}"
+        );
+
+        let merged: String = subchunks
+            .iter()
+            .map(|c| match c {
+                Subchunk::Resolved(t) => t.as_str(),
+                _ => unreachable!(),
+            })
+            .collect();
+
+        // The reconstructed text must preserve CRLF endings.
+        assert_eq!(merged, "AAA\r\nBBB\r\nccc\r\n");
+        assert!(
+            !merged.contains("\r\n")
+                || merged.matches("\r\n").count() == merged.matches('\n').count(),
+            "line endings should be consistently CRLF"
+        );
+    }
+
+    #[test]
+    fn subchunk_split_preserves_crlf_diff_based_merge() {
+        // CRLF content with different line counts goes through merge_line_hunks.
+        let base = "aaa\r\nbbb\r\nccc\r\n";
+        let ours = "aaa\r\nBBB\r\nXXX\r\nccc\r\n"; // inserted line
+        let theirs = "AAA\r\nbbb\r\nccc\r\n"; // changed first line
+        let subchunks = split_conflict_into_subchunks(base, ours, theirs);
+
+        // Should produce some resolved content.
+        assert!(subchunks.is_some(), "expected subchunks from diff-based merge");
+        let subchunks = subchunks.unwrap();
+
+        // Collect all text from resolved subchunks.
+        for chunk in &subchunks {
+            match chunk {
+                Subchunk::Resolved(text) => {
+                    // Every line in resolved subchunks must end with \r\n.
+                    for line in text.split_inclusive('\n') {
+                        if !line.is_empty() {
+                            assert!(
+                                line.ends_with("\r\n"),
+                                "resolved line should end with CRLF, got: {line:?}"
+                            );
+                        }
+                    }
+                }
+                Subchunk::Conflict { base, ours, theirs } => {
+                    // Conflict subchunk content should also preserve CRLF.
+                    for (label, text) in [("base", base), ("ours", ours), ("theirs", theirs)] {
+                        for line in text.split_inclusive('\n') {
+                            if !line.is_empty() {
+                                assert!(
+                                    line.ends_with("\r\n"),
+                                    "{label} conflict line should end with CRLF, got: {line:?}"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn autosolve_diff3_subchunk_split_preserves_crlf() {
+        // Full autosolve pipeline with CRLF content and diff3 markers.
+        let text = "ctx\r\n\
+            <<<<<<< ours\r\n\
+            aaa\r\n\
+            BBB\r\n\
+            ccc\r\n\
+            ||||||| base\r\n\
+            aaa\r\n\
+            bbb\r\n\
+            ccc\r\n\
+            =======\r\n\
+            AAA\r\n\
+            bbb\r\n\
+            ccc\r\n\
+            >>>>>>> theirs\r\n\
+            end\r\n";
+        let result = try_autosolve_merged_text(text);
+        // Ours changed line 2, theirs changed line 1 → subchunk merge.
+        // Result must preserve CRLF line endings.
+        assert_eq!(
+            result,
+            Some("ctx\r\nAAA\r\nBBB\r\nccc\r\nend\r\n".to_string())
+        );
+    }
+
+    #[test]
+    fn autosolve_crlf_identical_sides_preserves_endings() {
+        // Identical sides with CRLF — simplest auto-resolve path.
+        let text = "before\r\n\
+            <<<<<<< ours\r\n\
+            same\r\n\
+            =======\r\n\
+            same\r\n\
+            >>>>>>> theirs\r\n\
+            after\r\n";
+        let result = try_autosolve_merged_text(text);
+        assert_eq!(
+            result,
+            Some("before\r\nsame\r\nafter\r\n".to_string())
+        );
+    }
+
+    #[test]
+    fn autosolve_crlf_whitespace_only_diff_preserves_endings() {
+        // Whitespace-only difference with CRLF — picks ours.
+        let text = "start\r\n\
+            <<<<<<< ours\r\n\
+            foo  bar\r\n\
+            =======\r\n\
+            foo bar\r\n\
+            >>>>>>> theirs\r\n\
+            end\r\n";
+        let result = try_autosolve_merged_text(text);
+        assert_eq!(
+            result,
+            Some("start\r\nfoo  bar\r\nend\r\n".to_string())
+        );
+    }
+
+    #[test]
+    fn detect_subchunk_line_ending_crlf_dominant() {
+        assert_eq!(
+            detect_subchunk_line_ending(&["a\r\nb\r\n", "c\r\n"]),
+            "\r\n"
+        );
+    }
+
+    #[test]
+    fn detect_subchunk_line_ending_lf_dominant() {
+        assert_eq!(
+            detect_subchunk_line_ending(&["a\nb\n", "c\n"]),
+            "\n"
+        );
+    }
+
+    #[test]
+    fn detect_subchunk_line_ending_mixed_prefers_majority() {
+        // 2 CRLF vs 1 LF → CRLF wins.
+        assert_eq!(
+            detect_subchunk_line_ending(&["a\r\nb\r\nc\n"]),
+            "\r\n"
+        );
+        // 1 CRLF vs 2 LF → LF wins.
+        assert_eq!(
+            detect_subchunk_line_ending(&["a\r\nb\nc\n"]),
+            "\n"
+        );
+    }
+
+    #[test]
+    fn detect_subchunk_line_ending_empty_defaults_to_lf() {
+        assert_eq!(detect_subchunk_line_ending(&[""]), "\n");
+        assert_eq!(detect_subchunk_line_ending(&[]), "\n");
     }
 }

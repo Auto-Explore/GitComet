@@ -1,10 +1,10 @@
 ## STATUS: COMPLETE
 
-All components from both design documents are fully implemented. Latest update hardens standalone command-mode behavior-matrix parity by adding explicit E2E coverage for CRLF conflict-marker preservation in `mergetool` and binary/non-UTF8 byte-content diffs in `difftool`.
+All components from both design documents are fully implemented. Latest update fixes a CRLF line-ending preservation bug in the autosolve subchunk splitting path: `lines_to_text` now uses the detected dominant line ending instead of always appending `\n`, preventing silent CRLF→LF conversion when `--auto` resolves non-overlapping changes in Windows-style files.
 
 ## Implementation Progress
 
-### Progress Snapshot (Iteration 66)
+### Progress Snapshot (Iteration 67)
 
 External Diff/Merge Usage Design (`external_usage.md`)
 - ✅ Dedicated CLI modes (`difftool`, `mergetool`) and arg/env validation are implemented.
@@ -227,7 +227,27 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
   - ✅ Dedicated trust-exit interaction matrix assertions (`difftool.trustExitCode`, `--trust-exit-code`, `--no-trust-exit-code`).
 - ✅ `git difftool --tool-help` discoverability assertion for configured `gitgpui` tool.
 
-### Latest Component Delivered (Iteration 66) — Standalone Behavior-Matrix Parity (CRLF/Binary/Non-UTF8)
+### Latest Component Delivered (Iteration 67) — Fix CRLF Preservation in Autosolve Subchunk Splitting
+
+- **Bug fix** in [`crates/gitgpui-core/src/conflict_session.rs`](crates/gitgpui-core/src/conflict_session.rs):
+  - `lines_to_text` previously always appended `\n` when reconstructing text from split lines, silently converting CRLF files to LF when content went through the subchunk splitting autosolve path (`split_conflict_into_subchunks` → `per_line_merge` / `merge_line_hunks`).
+  - Added `detect_subchunk_line_ending()` helper that detects the dominant line ending from input texts.
+  - `lines_to_text` now takes a `line_ending` parameter, propagated from `split_conflict_into_subchunks` through `per_line_merge`, `merge_line_hunks`, and `side_content`.
+- Added 9 unit tests in `conflict_session.rs`:
+  - `subchunk_split_preserves_crlf_per_line_merge` — per-line merge path with CRLF content
+  - `subchunk_split_preserves_crlf_diff_based_merge` — diff-based merge path with CRLF content
+  - `autosolve_diff3_subchunk_split_preserves_crlf` — full autosolve pipeline with CRLF diff3 markers
+  - `autosolve_crlf_identical_sides_preserves_endings` — identical-sides CRLF path
+  - `autosolve_crlf_whitespace_only_diff_preserves_endings` — whitespace-only CRLF path
+  - `detect_subchunk_line_ending_crlf_dominant` / `lf_dominant` / `mixed_prefers_majority` / `empty_defaults_to_lf`
+- Added 1 standalone E2E test in [`crates/gitgpui-app/tests/standalone_tool_mode_integration.rs`](crates/gitgpui-app/tests/standalone_tool_mode_integration.rs):
+  - `standalone_mergetool_auto_crlf_subchunk_preserves_line_endings` — full `gitgpui-app mergetool --auto --conflict-style diff3` with CRLF files, verifying byte-level CRLF preservation in output.
+- Verification:
+  - `cargo test -p gitgpui-core --lib` — 181 passed, 0 failed
+  - `cargo test -p gitgpui-app --no-default-features --features gix --test standalone_tool_mode_integration` — 30 passed, 0 failed
+  - `cargo test --workspace --no-default-features --features gix` — all passed
+
+### Previous Component Delivered (Iteration 66) — Standalone Behavior-Matrix Parity (CRLF/Binary/Non-UTF8)
 
 - Added standalone mergetool CRLF regression coverage in [`crates/gitgpui-app/tests/standalone_tool_mode_integration.rs`](crates/gitgpui-app/tests/standalone_tool_mode_integration.rs):
   - `standalone_mergetool_conflict_markers_preserve_crlf_line_endings` verifies direct `gitgpui-app mergetool` conflict output preserves `\r\n` line endings in conflict markers.

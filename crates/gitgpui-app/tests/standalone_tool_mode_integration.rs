@@ -1241,3 +1241,53 @@ fn standalone_mergetool_without_auto_does_not_autosolve() {
         "without --auto, output should contain conflict markers"
     );
 }
+
+#[test]
+fn standalone_mergetool_auto_crlf_subchunk_preserves_line_endings() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = dir.path().join("base.txt");
+    let local = dir.path().join("local.txt");
+    let remote = dir.path().join("remote.txt");
+    let merged = dir.path().join("merged.txt");
+
+    // CRLF files with non-overlapping changes — auto mode should resolve
+    // via subchunk splitting and preserve CRLF endings.
+    write_file(&base, "aaa\r\nbbb\r\nccc\r\n");
+    write_file(&local, "aaa\r\nBBB\r\nccc\r\n"); // changed line 2
+    write_file(&remote, "AAA\r\nbbb\r\nccc\r\n"); // changed line 1
+    write_file(&merged, "");
+
+    let output = run_gitgpui([
+        "mergetool",
+        "--base",
+        &base.to_string_lossy(),
+        "--local",
+        &local.to_string_lossy(),
+        "--remote",
+        &remote.to_string_lossy(),
+        "--merged",
+        &merged.to_string_lossy(),
+        "--conflict-style",
+        "diff3",
+        "--auto",
+    ]);
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "auto mode should resolve non-overlapping CRLF conflict, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let result = fs::read(&merged).unwrap();
+    let result_str = String::from_utf8(result).unwrap();
+    assert_eq!(
+        result_str, "AAA\r\nBBB\r\nccc\r\n",
+        "auto-resolved output must preserve CRLF line endings"
+    );
+    // Verify no stray LF-only endings.
+    assert_eq!(
+        result_str.matches("\r\n").count(),
+        result_str.matches('\n').count(),
+        "all line endings should be CRLF"
+    );
+}
