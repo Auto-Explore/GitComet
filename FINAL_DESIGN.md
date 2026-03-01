@@ -1,10 +1,10 @@
 ## STATUS: COMPLETE
 
-All components from both design documents are fully implemented. Latest update hardens dedicated `difftool` input validation to reject mixed file/directory pairs at parse time with actionable errors, with CLI-unit and standalone E2E regression coverage.
+All components from both design documents are fully implemented. Latest update hardens dedicated `mergetool` CLI compatibility by accepting Meld-style `--auto-merge` as an alias of `--auto` in subcommand mode, with parser and standalone E2E regression coverage.
 
 ## Implementation Progress
 
-### Progress Snapshot (Iteration 62)
+### Progress Snapshot (Iteration 63)
 
 External Diff/Merge Usage Design (`external_usage.md`)
 - ✅ Dedicated CLI modes (`difftool`, `mergetool`) and arg/env validation are implemented.
@@ -36,6 +36,7 @@ External Diff/Merge Usage Design (`external_usage.md`)
 - ✅ Focused merge malformed-marker preservation is hardened in `crates/gitgpui-ui-gpui/src/view/conflict_resolver.rs`: parser fallback now preserves consumed base/separator marker text exactly (including CRLF endings) instead of synthesizing `=======\n`, preventing line-ending drift and content loss in malformed-block round trips. Covered by new regression tests `malformed_missing_end_marker_crlf_preserved_as_text` and `malformed_diff3_missing_end_marker_preserved_as_text`.
 - ✅ Focused merge exit-policy parity is hardened in `crates/gitgpui-ui-gpui/src/focused_merge.rs`: Save now returns `0` only when all conflicts are resolved, returns `1` when unresolved conflicts are saved, and returns `2` on merged-output write failures. Added 3 unit tests for saved-exit mapping (`saved_exit_code_*`).
 - ✅ Mergetool `--auto` heuristic auto-resolve mode is now implemented: when `--auto` is passed to `gitgpui-app mergetool` (or `--auto`/`--auto-merge` via KDiff3/Meld compatibility mode), the mergetool applies heuristic passes on remaining conflict blocks after the initial 3-way merge: identical-side detection, single-side-change detection (requires diff3/zdiff3 base), whitespace-only normalization, and subchunk splitting (line-level re-merge within blocks). If ALL conflicts are resolved, writes clean output and exits 0. If any remain, writes markers and exits 1. Core function `try_autosolve_merged_text()` is public in `conflict_session.rs` with 8 unit tests. 5 mergetool runtime tests + 4 standalone E2E tests + 4 CLI parser tests cover the full pipeline.
+- ✅ Dedicated mergetool subcommand now accepts Meld-style `--auto-merge` as an alias for `--auto`, so explicit `gitgpui-app mergetool ... --auto-merge` invocations match compatibility-mode behavior. Covered by CLI parser unit test and standalone E2E test.
 - ✅ Dedicated mergetool conflict-marker labels now have Git-style runtime fallback semantics: missing labels default to input filenames, and no-base diff3/zdiff3 base labels default to `empty tree` (with focused unit coverage).
 - ✅ Automatic git config fallback: mergetool reads `merge.conflictstyle` and `diff.algorithm` from git config when no CLI flag is provided, mirroring `git merge-file` behavior. CLI flags take priority over git config, and git config takes priority over defaults. Unknown config values are gracefully ignored. Iteration 37 extends this parity to no-subcommand compatibility invocations (`kdiff3`-style `--auto/-o/--L*`), which previously bypassed fallback.
 - ✅ Delete/delete conflict choice matrix parity is now explicit in git-invoked tests (`d` delete, `m` modified destination, `a` abort non-zero) for path-targeted mergetool flows.
@@ -77,6 +78,7 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
 - ✅ Mergetool compatibility aliases implemented in `crates/gitgpui-app/src/cli.rs`:
   - `-o`/`--output`/`--out` as aliases for `--merged`
   - `--L1`/`--L2`/`--L3` as aliases for `--label-base`/`--label-local`/`--label-remote`
+  - `--auto-merge` as an alias for `--auto` in dedicated `mergetool` subcommand mode (Meld-style parity for direct invocation)
   - coverage: parser unit tests + git-invoked integration test (`git_mergetool_accepts_kdiff3_alias_flags_in_cmd`)
 - ✅ KDiff3/Meld-style no-subcommand compatibility parser implemented in `crates/gitgpui-app/src/cli.rs`:
   - accepts direct external-tool invocation with positional paths and compatibility flags (`--auto`, `--auto-merge`, `--L1/--L2/--L3`, Meld-style `-L/--label`, `--base`, `-o/--output/--out`)
@@ -219,7 +221,20 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
   - ✅ Dedicated trust-exit interaction matrix assertions (`difftool.trustExitCode`, `--trust-exit-code`, `--no-trust-exit-code`).
 - ✅ `git difftool --tool-help` discoverability assertion for configured `gitgpui` tool.
 
-### Latest Component Delivered (Iteration 62) — Difftool Input-Kind Validation Hardening
+### Latest Component Delivered (Iteration 63) — Mergetool `--auto-merge` Subcommand Alias Parity
+
+- Hardened dedicated `mergetool` CLI parsing in [`crates/gitgpui-app/src/cli.rs`](crates/gitgpui-app/src/cli.rs):
+  - `--auto-merge` is now accepted as a direct alias for `--auto` on the `mergetool` subcommand (Meld-style compatibility for explicit subcommand invocation).
+- Added parser regression coverage in [`crates/gitgpui-app/src/cli.rs`](crates/gitgpui-app/src/cli.rs):
+  - `clap_parses_mergetool_auto_merge_alias_flag` verifies `--auto-merge` maps to `MergetoolArgs.auto = true`.
+- Added standalone command-mode E2E regression coverage in [`crates/gitgpui-app/tests/standalone_tool_mode_integration.rs`](crates/gitgpui-app/tests/standalone_tool_mode_integration.rs):
+  - `standalone_mergetool_auto_merge_alias_resolves_whitespace_conflict_exits_zero` verifies alias behavior end-to-end (`exit 0`, clean output).
+- Verification:
+  - `cargo test -p gitgpui-app --no-default-features --features gix clap_parses_mergetool_auto_merge_alias_flag -- --nocapture`
+  - `cargo test -p gitgpui-app --no-default-features --features gix standalone_mergetool_auto_merge_alias_resolves_whitespace_conflict_exits_zero -- --nocapture`
+  - `cargo test -p gitgpui-app --no-default-features --features gix --test standalone_tool_mode_integration -- --nocapture`
+
+### Previous Component Delivered (Iteration 62) — Difftool Input-Kind Validation Hardening
 
 - Hardened dedicated `difftool` argument validation in [`crates/gitgpui-app/src/cli.rs`](crates/gitgpui-app/src/cli.rs):
   - `resolve_difftool_with_env` now rejects mixed file-vs-directory inputs at parse time

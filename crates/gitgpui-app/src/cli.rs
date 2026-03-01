@@ -118,7 +118,9 @@ pub struct MergetoolArgs {
     ///
     /// For best results, combine with `--conflict-style diff3` or `zdiff3`
     /// to provide base content for heuristic resolution.
-    #[arg(long)]
+    ///
+    /// Compatibility alias: `--auto-merge` (Meld-style).
+    #[arg(long, visible_alias = "auto-merge")]
     pub auto: bool,
     /// Open an interactive GPUI merge window for conflict resolution.
     #[arg(long)]
@@ -3026,6 +3028,29 @@ mod tests {
         match cli.command {
             Some(Command::Mergetool(args)) => {
                 assert!(args.auto, "expected --auto to be true");
+            }
+            _ => panic!("expected Mergetool command"),
+        }
+    }
+
+    #[test]
+    fn clap_parses_mergetool_auto_merge_alias_flag() {
+        let cli = Cli::try_parse_from([
+            "gitgpui-app",
+            "mergetool",
+            "--merged",
+            "/tmp/m",
+            "--local",
+            "/tmp/l",
+            "--remote",
+            "/tmp/r",
+            "--auto-merge",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Some(Command::Mergetool(args)) => {
+                assert!(args.auto, "expected --auto-merge alias to set auto=true");
             }
             _ => panic!("expected Mergetool command"),
         }

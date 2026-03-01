@@ -954,6 +954,44 @@ fn standalone_mergetool_auto_resolves_whitespace_conflict_exits_zero() {
 }
 
 #[test]
+fn standalone_mergetool_auto_merge_alias_resolves_whitespace_conflict_exits_zero() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = dir.path().join("base.txt");
+    let local = dir.path().join("local.txt");
+    let remote = dir.path().join("remote.txt");
+    let merged = dir.path().join("merged.txt");
+
+    write_file(&base, "aaa\nbbb\nccc\n");
+    write_file(&local, "aaa\nbbb  \nccc\n");
+    write_file(&remote, "aaa\nbbb\t\nccc\n");
+    write_file(&merged, "");
+
+    let output = run_gitgpui([
+        "mergetool",
+        "--auto-merge",
+        "--base",
+        &base.to_string_lossy(),
+        "--local",
+        &local.to_string_lossy(),
+        "--remote",
+        &remote.to_string_lossy(),
+        "--merged",
+        &merged.to_string_lossy(),
+    ]);
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "--auto-merge alias should behave like --auto for whitespace-only conflicts\nstderr: {stderr}"
+    );
+    let result = fs::read_to_string(&merged).unwrap();
+    assert!(
+        !result.contains("<<<<<<<"),
+        "output should not contain conflict markers\n{result}"
+    );
+}
+
+#[test]
 fn standalone_mergetool_auto_with_diff3_resolves_subchunk_exits_zero() {
     let dir = tempfile::tempdir().unwrap();
     let base = dir.path().join("base.txt");
