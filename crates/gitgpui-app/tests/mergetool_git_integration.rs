@@ -155,6 +155,26 @@ fn configure_kdiff3_path_override_to_gitgpui(repo: &Path, trust_exit_code: bool)
     run_git(repo, &["config", "mergetool.keepBackup", "false"]);
 }
 
+fn configure_meld_path_override_to_gitgpui(repo: &Path, trust_exit_code: bool) {
+    let bin = gitgpui_bin();
+    let bin_path = bin.to_string_lossy().to_string();
+
+    run_git(repo, &["config", "merge.tool", "meld"]);
+    run_git(repo, &["config", "mergetool.meld.path", &bin_path]);
+    run_git(repo, &["config", "mergetool.meld.hasOutput", "true"]);
+    run_git(repo, &["config", "mergetool.meld.useAutoMerge", "true"]);
+    run_git(
+        repo,
+        &[
+            "config",
+            "mergetool.meld.trustExitCode",
+            if trust_exit_code { "true" } else { "false" },
+        ],
+    );
+    run_git(repo, &["config", "mergetool.prompt", "false"]);
+    run_git(repo, &["config", "mergetool.keepBackup", "false"]);
+}
+
 /// Create a mergetool command that echoes a marker to stderr and resolves
 /// the conflict by copying $REMOTE to $MERGED. This simulates a successful
 /// merge tool and allows tests to detect which tool was selected by checking
@@ -516,6 +536,36 @@ fn git_mergetool_kdiff3_path_override_invokes_compat_mode() {
     assert!(
         merged.contains("(Local)") || merged.contains("(Remote)"),
         "expected kdiff3-style labels to propagate into gitgpui conflict markers\nmerged:\n{merged}\noutput:\n{text}"
+    );
+}
+
+#[test]
+fn git_mergetool_meld_path_override_invokes_compat_mode() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+
+    setup_overlapping_conflict(repo);
+    // Built-in meld invocation with hasOutput+useAutoMerge uses:
+    // --auto-merge --output <MERGED> <LOCAL> <BASE> <REMOTE>.
+    // trustExitCode=false lets us verify parsing succeeds even when
+    // unresolved conflicts remain after auto-merge.
+    configure_meld_path_override_to_gitgpui(repo, false);
+
+    let output = run_git_capture(repo, &["mergetool", "--no-prompt"]);
+    let text = output_text(&output);
+    assert!(
+        output.status.success(),
+        "expected meld path-override invocation to succeed with gitgpui compatibility parsing\n{text}"
+    );
+    assert!(
+        !text.contains("unexpected argument '--auto-merge'"),
+        "expected --auto-merge compatibility flag to be accepted\n{text}"
+    );
+
+    let merged = fs::read_to_string(repo.join("file.txt")).unwrap();
+    assert!(
+        merged.contains("<<<<<<<"),
+        "expected merged output to be processed by gitgpui mergetool mode\nmerged:\n{merged}\noutput:\n{text}"
     );
 }
 

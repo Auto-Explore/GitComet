@@ -404,6 +404,7 @@ fn parse_compat_external_mode_with_config(
     let mut merged_output: Option<PathBuf> = None;
     let mut positionals: Vec<PathBuf> = Vec::new();
     let mut has_auto = false;
+    let mut has_auto_merge = false;
 
     let mut idx = 0usize;
     while idx < raw_args.len() {
@@ -412,6 +413,12 @@ fn parse_compat_external_mode_with_config(
 
         if token == "--auto" {
             has_auto = true;
+            idx += 1;
+            continue;
+        }
+
+        if token == "--auto-merge" {
+            has_auto_merge = true;
             idx += 1;
             continue;
         }
@@ -510,6 +517,13 @@ fn parse_compat_external_mode_with_config(
         );
     }
 
+    if has_auto_merge && merged_output.is_none() {
+        return Err(
+            "Invalid external merge invocation: --auto-merge requires -o/--output/--out <MERGED>."
+                .to_string(),
+        );
+    }
+
     if let Some(merged) = merged_output {
         let (base, local, remote, label_base, label_local, label_remote) = if let Some(
             explicit_base,
@@ -533,14 +547,35 @@ fn parse_compat_external_mode_with_config(
             }
         } else {
             match positionals.len() {
-                3 => (
-                    Some(positionals[0].clone()),
-                    positionals[1].clone(),
-                    positionals[2].clone(),
-                    label_l1,
-                    label_l2,
-                    label_l3,
-                ),
+                3 => {
+                    // Ambiguous 3-path merge-mode compatibility input:
+                    // - KDiff3 style: BASE LOCAL REMOTE
+                    // - Meld style:   LOCAL BASE REMOTE
+                    //
+                    // Prefer KDiff3 order when KDiff3-specific hints are
+                    // present (`--auto`/`--L*`). Otherwise default to Meld's
+                    // LOCAL BASE REMOTE ordering for broad path-override
+                    // compatibility.
+                    if has_auto || label_l1.is_some() || label_l2.is_some() || label_l3.is_some() {
+                        (
+                            Some(positionals[0].clone()),
+                            positionals[1].clone(),
+                            positionals[2].clone(),
+                            label_l1,
+                            label_l2,
+                            label_l3,
+                        )
+                    } else {
+                        (
+                            Some(positionals[1].clone()),
+                            positionals[0].clone(),
+                            positionals[2].clone(),
+                            label_l2,
+                            label_l1,
+                            label_l3,
+                        )
+                    }
+                }
                 2 => {
                     if label_l3.is_some() {
                         return Err("Invalid external merge invocation: --L3 requires BASE input. Provide --base <BASE> or 3 positional paths (BASE LOCAL REMOTE).".to_string());
@@ -1815,6 +1850,102 @@ mod tests {
             }
             _ => panic!("expected Mergetool mode"),
         }
+    }
+
+    #[test]
+    fn compat_parses_meld_style_mergetool_with_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let local = tmp_file(&dir, "local.txt", "local\n");
+        let base = tmp_file(&dir, "base.txt", "base\n");
+        let remote = tmp_file(&dir, "remote.txt", "remote\n");
+        let merged = dir.path().join("merged.txt");
+        let env = TestEnv::new();
+
+        let mode = parse_mode_for_test(
+            vec![
+                OsString::from("gitgpui-app"),
+                OsString::from("--output"),
+                merged.clone().into_os_string(),
+                local.clone().into_os_string(),
+                base.clone().into_os_string(),
+                remote.clone().into_os_string(),
+            ],
+            &env,
+        )
+        .unwrap();
+
+        match mode {
+            AppMode::Mergetool(config) => {
+                assert_eq!(config.merged, merged);
+                assert_eq!(config.base.as_ref(), Some(&base));
+                assert_eq!(config.local, local);
+                assert_eq!(config.remote, remote);
+                assert_eq!(config.label_base, None);
+                assert_eq!(config.label_local, None);
+                assert_eq!(config.label_remote, None);
+            }
+            _ => panic!("expected Mergetool mode"),
+        }
+    }
+
+    #[test]
+    fn compat_parses_meld_style_mergetool_with_auto_merge_flag() {
+        let dir = tempfile::tempdir().unwrap();
+        let local = tmp_file(&dir, "local.txt", "local\n");
+        let base = tmp_file(&dir, "base.txt", "base\n");
+        let remote = tmp_file(&dir, "remote.txt", "remote\n");
+        let merged = dir.path().join("merged.txt");
+        let env = TestEnv::new();
+
+        let mode = parse_mode_for_test(
+            vec![
+                OsString::from("gitgpui-app"),
+                OsString::from("--auto-merge"),
+                OsString::from("--output"),
+                merged.clone().into_os_string(),
+                local.clone().into_os_string(),
+                base.clone().into_os_string(),
+                remote.clone().into_os_string(),
+            ],
+            &env,
+        )
+        .unwrap();
+
+        match mode {
+            AppMode::Mergetool(config) => {
+                assert_eq!(config.merged, merged);
+                assert_eq!(config.base.as_ref(), Some(&base));
+                assert_eq!(config.local, local);
+                assert_eq!(config.remote, remote);
+            }
+            _ => panic!("expected Mergetool mode"),
+        }
+    }
+
+    #[test]
+    fn compat_auto_merge_requires_output_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let local = tmp_file(&dir, "local.txt", "local\n");
+        let base = tmp_file(&dir, "base.txt", "base\n");
+        let remote = tmp_file(&dir, "remote.txt", "remote\n");
+        let env = TestEnv::new();
+
+        let err = parse_mode_for_test(
+            vec![
+                OsString::from("gitgpui-app"),
+                OsString::from("--auto-merge"),
+                local.into_os_string(),
+                base.into_os_string(),
+                remote.into_os_string(),
+            ],
+            &env,
+        )
+        .unwrap_err();
+
+        assert!(
+            err.contains("--auto-merge requires -o/--output/--out"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
