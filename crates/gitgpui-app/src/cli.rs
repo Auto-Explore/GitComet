@@ -22,11 +22,7 @@ pub mod exit_code {
 // ── Raw CLI argument structs (clap) ──────────────────────────────────
 
 #[derive(Parser, Debug)]
-#[command(
-    name = "gitgpui-app",
-    about = "Git GUI built with GPUI",
-    version
-)]
+#[command(name = "gitgpui-app", about = "Git GUI built with GPUI", version)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Command>,
@@ -131,8 +127,7 @@ pub enum AppMode {
 trait EnvLookup {
     fn var_os(&self, key: &str) -> Option<OsString>;
     fn var(&self, key: &str) -> Option<String> {
-        self.var_os(key)
-            .and_then(|v| v.into_string().ok())
+        self.var_os(key).and_then(|v| v.into_string().ok())
     }
 }
 
@@ -168,16 +163,10 @@ fn resolve_difftool_with_env(
         .ok_or("Missing required input: --remote flag or REMOTE environment variable")?;
 
     if !local.exists() {
-        return Err(format!(
-            "Local path does not exist: {}",
-            local.display()
-        ));
+        return Err(format!("Local path does not exist: {}", local.display()));
     }
     if !remote.exists() {
-        return Err(format!(
-            "Remote path does not exist: {}",
-            remote.display()
-        ));
+        return Err(format!("Remote path does not exist: {}", remote.display()));
     }
 
     // Display path: flag > MERGED env (git difftool compat) > None
@@ -218,26 +207,17 @@ fn resolve_mergetool_with_env(
         ));
     }
     if !local.exists() {
-        return Err(format!(
-            "Local path does not exist: {}",
-            local.display()
-        ));
+        return Err(format!("Local path does not exist: {}", local.display()));
     }
     if !remote.exists() {
-        return Err(format!(
-            "Remote path does not exist: {}",
-            remote.display()
-        ));
+        return Err(format!("Remote path does not exist: {}", remote.display()));
     }
 
     // Base is allowed to be missing (add/add conflicts have no base).
     // But if explicitly provided, it should exist.
     if let Some(ref base_path) = base {
         if !base_path.exists() {
-            return Err(format!(
-                "Base path does not exist: {}",
-                base_path.display()
-            ));
+            return Err(format!("Base path does not exist: {}", base_path.display()));
         }
     }
 
@@ -707,10 +687,7 @@ mod tests {
         let config = resolve_difftool_with_env(args, &env).unwrap();
         assert_eq!(config.local, local);
         assert_eq!(config.remote, remote);
-        assert_eq!(
-            config.display_path.as_deref(),
-            Some("path with spaces.txt")
-        );
+        assert_eq!(config.display_path.as_deref(), Some("path with spaces.txt"));
     }
 
     #[test]
