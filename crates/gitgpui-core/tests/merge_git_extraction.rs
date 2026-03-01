@@ -973,6 +973,10 @@ fn generate_fixtures_from_repo() {
 
 fn run_git(repo: &Path, args: &[&str]) {
     let output = Command::new("git")
+        // Keep fixture-driven tests portable even when the host has
+        // `commit.gpgsign=true` globally.
+        .arg("-c")
+        .arg("commit.gpgsign=false")
         .args(args)
         .current_dir(repo)
         .output()

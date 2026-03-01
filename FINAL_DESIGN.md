@@ -1,10 +1,10 @@
 ## STATUS: COMPLETE
 
-All components from both design documents are fully implemented. Iteration 26 closes the remaining strict-compat validation gap by rejecting KDiff3-style merge invocations that pass `--L3` without providing a base side, preventing silent label loss in 2-path (`LOCAL REMOTE`) merge mode.
+All components from both design documents are fully implemented. Iteration 27 closes the remaining portability-hardening gap by making the Phase 3C merge-extraction test harness independent of host GPG signing defaults.
 
 ## Implementation Progress
 
-### Progress Snapshot (Iteration 26 — Final)
+### Progress Snapshot (Iteration 27 — Final)
 
 External Diff/Merge Usage Design (`external_usage.md`)
 - ✅ Dedicated CLI modes (`difftool`, `mergetool`) and arg/env validation are implemented.
@@ -30,6 +30,7 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
 - ✅ Phase 3A implemented: generated permutation corpus test runner (sampled + ignored exhaustive mode).
 - ✅ Phase 3B implemented: generated permutation corpus now enforces KDiff3-style alignment invariants (sequence monotonicity + content consistency) for every generated case.
 - ✅ Phase 3C implemented: real-world merge extraction harness from Git history.
+- ✅ Phase 3C portability hardening implemented: extraction fixture tests now run with `commit.gpgsign=false` in helper git invocations, so the suite is stable on hosts with global commit-signing enabled.
 - ✅ Phase 4A implemented: critical `t7610` mergetool E2E scenarios, including `trustExitCode=false` unchanged-output and changed-output behavior.
 - ✅ Phase 4B implemented: critical `t7800` difftool E2E scenarios.
 - ✅ Phase 5 implemented: Meld-derived matcher/interval/newline portability suites.
@@ -129,6 +130,7 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
   - Validates algorithm-independent invariants (marker well-formedness, content integrity) on each extracted case.
   - Default test runs against gitgpui's own repo; ignored test supports arbitrary external repos via `GITGPUI_MERGE_EXTRACTION_REPO` env var.
   - Includes fixture file generation (`write_fixtures`) compatible with the existing Phase 2 fixture harness format.
+  - Portability hardening: test helper git invocations force `-c commit.gpgsign=false`, avoiding environment-dependent failures when global git config enables signed commits.
   - 8 tests (+ 2 ignored): discovery, trivial skip, nontrivial conflict, clean merge, binary skip, fixture writing, multifile merge, self-repo regression.
 - ✅ Phase 4A (critical `t7610-mergetool` E2E): fully implemented across `gitgpui-git-gix` tests and `gitgpui-app` E2E:
   - ✅ trust-exit behavior and content-change semantics
@@ -160,6 +162,14 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
   - ✅ Explicit `difftool.guiDefault` selection-path parity (`auto` with/without `DISPLAY`, `--gui`, `--no-gui`).
   - ✅ Dedicated trust-exit interaction matrix assertions (`difftool.trustExitCode`, `--trust-exit-code`, `--no-trust-exit-code`).
   - ✅ `git difftool --tool-help` discoverability assertion for configured `gitgpui` tool.
+
+### Latest Component Delivered (Iteration 27) — Phase 3C Portability Hardening
+
+- Hardened `merge_git_extraction` test helpers in `crates/gitgpui-core/tests/merge_git_extraction.rs` to force `commit.gpgsign=false` for helper-run git commands.
+- This removes host-environment coupling where global `commit.gpgsign=true` previously caused temporary test-repo commits to fail.
+- Verification:
+  - `cargo test -p gitgpui-core --test merge_git_extraction`
+  - `cargo test -p gitgpui-core`
 
 ### Latest Component Delivered (Iteration 26) — Strict Merge `--L3` Arity Validation in Compat Mode
 
