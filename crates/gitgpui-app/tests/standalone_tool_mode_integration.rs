@@ -198,6 +198,78 @@ fn standalone_difftool_changed_files_exits_zero_and_prints_diff() {
 }
 
 #[test]
+fn standalone_compat_difftool_accepts_meld_style_label_flags() {
+    let dir = tempfile::tempdir().unwrap();
+    let local = dir.path().join("left.txt");
+    let remote = dir.path().join("right.txt");
+
+    write_file(&local, "left\n");
+    write_file(&remote, "right\n");
+
+    let output = run_gitgpui([
+        OsString::from("-L"),
+        OsString::from("LEFT_LABEL"),
+        OsString::from("--label"),
+        OsString::from("RIGHT_LABEL"),
+        local.as_os_str().to_owned(),
+        remote.as_os_str().to_owned(),
+    ]);
+
+    let text = output_text(&output);
+    assert_eq!(output.status.code(), Some(0), "expected exit 0\n{text}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("--- LEFT_LABEL"), "expected left label\n{text}");
+    assert!(
+        stdout.contains("+++ RIGHT_LABEL"),
+        "expected right label\n{text}"
+    );
+}
+
+#[test]
+fn standalone_compat_mergetool_meld_label_order_maps_to_local_base_remote() {
+    let dir = tempfile::tempdir().unwrap();
+    let local = dir.path().join("local.txt");
+    let base = dir.path().join("base.txt");
+    let remote = dir.path().join("remote.txt");
+    let merged = dir.path().join("merged.txt");
+
+    write_file(&base, "line\n");
+    write_file(&local, "local change\n");
+    write_file(&remote, "remote change\n");
+
+    let output = run_gitgpui([
+        OsString::from("--output"),
+        merged.as_os_str().to_owned(),
+        OsString::from("--label"),
+        OsString::from("LOCAL_LABEL"),
+        OsString::from("--label"),
+        OsString::from("BASE_LABEL"),
+        OsString::from("--label"),
+        OsString::from("REMOTE_LABEL"),
+        local.as_os_str().to_owned(),
+        base.as_os_str().to_owned(),
+        remote.as_os_str().to_owned(),
+    ]);
+
+    let text = output_text(&output);
+    assert_eq!(output.status.code(), Some(1), "expected exit 1\n{text}");
+
+    let merged_text = fs::read_to_string(&merged).expect("merged output to exist");
+    assert!(
+        merged_text.contains("<<<<<<< LOCAL_LABEL"),
+        "expected local label on ours marker\nmerged:\n{merged_text}\n{text}"
+    );
+    assert!(
+        merged_text.contains(">>>>>>> REMOTE_LABEL"),
+        "expected remote label on theirs marker\nmerged:\n{merged_text}\n{text}"
+    );
+    assert!(
+        !merged_text.contains("<<<<<<< BASE_LABEL"),
+        "base label should not map to ours marker in meld ordering\nmerged:\n{merged_text}\n{text}"
+    );
+}
+
+#[test]
 fn standalone_difftool_missing_input_exits_two() {
     let dir = tempfile::tempdir().unwrap();
     let local = dir.path().join("left.txt");

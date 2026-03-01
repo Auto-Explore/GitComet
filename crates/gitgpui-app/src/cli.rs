@@ -392,6 +392,27 @@ fn resolve_mergetool_with_config(
     Ok(config)
 }
 
+fn assign_next_compat_label(
+    label_l1: &mut Option<String>,
+    label_l2: &mut Option<String>,
+    label_l3: &mut Option<String>,
+    value: String,
+) -> Result<(), String> {
+    if label_l1.is_none() {
+        *label_l1 = Some(value);
+        return Ok(());
+    }
+    if label_l2.is_none() {
+        *label_l2 = Some(value);
+        return Ok(());
+    }
+    if label_l3.is_none() {
+        *label_l3 = Some(value);
+        return Ok(());
+    }
+    Err("Invalid external invocation: too many label flags; expected at most 3 labels across --L1/--L2/--L3 and -L/--label.".to_string())
+}
+
 fn parse_compat_external_mode_with_config(
     raw_args: &[OsString],
     env: &dyn EnvLookup,
@@ -405,6 +426,7 @@ fn parse_compat_external_mode_with_config(
     let mut positionals: Vec<PathBuf> = Vec::new();
     let mut has_auto = false;
     let mut has_auto_merge = false;
+    let mut has_kdiff3_label_flags = false;
 
     let mut idx = 0usize;
     while idx < raw_args.len() {
@@ -435,22 +457,51 @@ fn parse_compat_external_mode_with_config(
                 "--L3" => label_l3 = Some(value),
                 _ => unreachable!(),
             }
+            has_kdiff3_label_flags = true;
+            idx += 2;
+            continue;
+        }
+
+        if token == "-L" || token == "--label" {
+            let next_idx = idx + 1;
+            let value = raw_args.get(next_idx).ok_or_else(|| {
+                format!("Missing value for compatibility flag {token} in external tool mode")
+            })?;
+            assign_next_compat_label(
+                &mut label_l1,
+                &mut label_l2,
+                &mut label_l3,
+                value.to_string_lossy().into_owned(),
+            )?;
             idx += 2;
             continue;
         }
 
         if let Some(value) = token.strip_prefix("--L1=") {
             label_l1 = Some(value.to_string());
+            has_kdiff3_label_flags = true;
             idx += 1;
             continue;
         }
         if let Some(value) = token.strip_prefix("--L2=") {
             label_l2 = Some(value.to_string());
+            has_kdiff3_label_flags = true;
             idx += 1;
             continue;
         }
         if let Some(value) = token.strip_prefix("--L3=") {
             label_l3 = Some(value.to_string());
+            has_kdiff3_label_flags = true;
+            idx += 1;
+            continue;
+        }
+        if let Some(value) = token.strip_prefix("--label=") {
+            assign_next_compat_label(
+                &mut label_l1,
+                &mut label_l2,
+                &mut label_l3,
+                value.to_string(),
+            )?;
             idx += 1;
             continue;
         }
@@ -492,6 +543,16 @@ fn parse_compat_external_mode_with_config(
         }
         if token.starts_with("-o") && token.len() > 2 {
             merged_output = Some(PathBuf::from(token[2..].to_string()));
+            idx += 1;
+            continue;
+        }
+        if token.starts_with("-L") && token.len() > 2 {
+            assign_next_compat_label(
+                &mut label_l1,
+                &mut label_l2,
+                &mut label_l3,
+                token[2..].to_string(),
+            )?;
             idx += 1;
             continue;
         }
@@ -556,7 +617,7 @@ fn parse_compat_external_mode_with_config(
                     // present (`--auto`/`--L*`). Otherwise default to Meld's
                     // LOCAL BASE REMOTE ordering for broad path-override
                     // compatibility.
-                    if has_auto || label_l1.is_some() || label_l2.is_some() || label_l3.is_some() {
+                    if has_auto || has_kdiff3_label_flags {
                         (
                             Some(positionals[0].clone()),
                             positionals[1].clone(),
@@ -1658,6 +1719,36 @@ mod tests {
     }
 
     #[test]
+    fn compat_parses_meld_style_difftool_short_labels() {
+        let dir = tempfile::tempdir().unwrap();
+        let local = tmp_file(&dir, "left.txt", "left\n");
+        let remote = tmp_file(&dir, "right.txt", "right\n");
+        let env = TestEnv::new();
+
+        let mode = parse_mode_for_test(
+            vec![
+                OsString::from("gitgpui-app"),
+                OsString::from("-L"),
+                OsString::from("LEFT_LABEL"),
+                OsString::from("--label"),
+                OsString::from("RIGHT_LABEL"),
+                local.into_os_string(),
+                remote.into_os_string(),
+            ],
+            &env,
+        )
+        .unwrap();
+
+        match mode {
+            AppMode::Difftool(config) => {
+                assert_eq!(config.label_left.as_deref(), Some("LEFT_LABEL"));
+                assert_eq!(config.label_right.as_deref(), Some("RIGHT_LABEL"));
+            }
+            _ => panic!("expected Difftool mode"),
+        }
+    }
+
+    #[test]
     fn compat_parses_kdiff3_style_mergetool_with_base() {
         let dir = tempfile::tempdir().unwrap();
         let base = tmp_file(&dir, "base.txt", "base\n");
@@ -1889,6 +1980,46 @@ mod tests {
     }
 
     #[test]
+    fn compat_parses_meld_style_mergetool_labels() {
+        let dir = tempfile::tempdir().unwrap();
+        let local = tmp_file(&dir, "local.txt", "local\n");
+        let base = tmp_file(&dir, "base.txt", "base\n");
+        let remote = tmp_file(&dir, "remote.txt", "remote\n");
+        let merged = dir.path().join("merged.txt");
+        let env = TestEnv::new();
+
+        let mode = parse_mode_for_test(
+            vec![
+                OsString::from("gitgpui-app"),
+                OsString::from("--output"),
+                merged.clone().into_os_string(),
+                OsString::from("--label=LOCAL_LABEL"),
+                OsString::from("--label"),
+                OsString::from("BASE_LABEL"),
+                OsString::from("-LREMOTE_LABEL"),
+                local.clone().into_os_string(),
+                base.clone().into_os_string(),
+                remote.clone().into_os_string(),
+            ],
+            &env,
+        )
+        .unwrap();
+
+        match mode {
+            AppMode::Mergetool(config) => {
+                assert_eq!(config.merged, merged);
+                assert_eq!(config.base.as_ref(), Some(&base));
+                assert_eq!(config.local, local);
+                assert_eq!(config.remote, remote);
+                assert_eq!(config.label_local.as_deref(), Some("LOCAL_LABEL"));
+                assert_eq!(config.label_base.as_deref(), Some("BASE_LABEL"));
+                assert_eq!(config.label_remote.as_deref(), Some("REMOTE_LABEL"));
+            }
+            _ => panic!("expected Mergetool mode"),
+        }
+    }
+
+    #[test]
     fn compat_parses_meld_style_mergetool_with_auto_merge_flag() {
         let dir = tempfile::tempdir().unwrap();
         let local = tmp_file(&dir, "local.txt", "local\n");
@@ -1944,6 +2075,42 @@ mod tests {
 
         assert!(
             err.contains("--auto-merge requires -o/--output/--out"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn compat_rejects_too_many_label_flags() {
+        let dir = tempfile::tempdir().unwrap();
+        let local = tmp_file(&dir, "local.txt", "local\n");
+        let base = tmp_file(&dir, "base.txt", "base\n");
+        let remote = tmp_file(&dir, "remote.txt", "remote\n");
+        let merged = dir.path().join("merged.txt");
+        let env = TestEnv::new();
+
+        let err = parse_mode_for_test(
+            vec![
+                OsString::from("gitgpui-app"),
+                OsString::from("--output"),
+                merged.into_os_string(),
+                OsString::from("--label"),
+                OsString::from("L1"),
+                OsString::from("--label"),
+                OsString::from("L2"),
+                OsString::from("--label"),
+                OsString::from("L3"),
+                OsString::from("--label"),
+                OsString::from("L4"),
+                local.into_os_string(),
+                base.into_os_string(),
+                remote.into_os_string(),
+            ],
+            &env,
+        )
+        .unwrap_err();
+
+        assert!(
+            err.contains("too many label flags"),
             "unexpected error: {err}"
         );
     }

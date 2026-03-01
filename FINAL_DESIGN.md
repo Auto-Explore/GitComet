@@ -1,15 +1,16 @@
 ## STATUS: COMPLETE
 
-All components from both design documents are fully implemented. Iteration 39 extends path-override parity coverage by adding a dedicated `git difftool` E2E for Git's built-in `meld` tool path override (`difftool.meld.path`) invoking GitGpui in no-subcommand compatibility mode.
+All components from both design documents are fully implemented. Iteration 40 extends no-subcommand external-tool compatibility by adding Meld-style pane-label flag support (`-L` / `--label`) with parser and standalone E2E coverage.
 
 ## Implementation Progress
 
-### Progress Snapshot (Iteration 39)
+### Progress Snapshot (Iteration 40)
 
 External Diff/Merge Usage Design (`external_usage.md`)
 - ✅ Dedicated CLI modes (`difftool`, `mergetool`) and arg/env validation are implemented.
 - ✅ KDiff3-style compatibility fallback is implemented for no-subcommand invocations (positional args + `--L1/--L2/--L3` + `--base` + `-o/--output/--out` + optional `--auto`), enabling Git built-in tool flows that invoke the binary directly via `*.path`.
 - ✅ Meld-style compatibility fallback is implemented for no-subcommand invocations (`--output`/`-o` + optional `--auto-merge` with `LOCAL BASE REMOTE` positional ordering), enabling Git built-in `meld` path-override flows (`mergetool.meld.path`) to invoke GitGpui directly.
+- ✅ Meld-style pane labels are now supported in no-subcommand compatibility invocations via `-L` / `--label` (including attached-value forms like `-LLEFT` / `--label=LEFT`) for both diff and merge flows.
 - ✅ Strict compatibility validation is implemented for no-subcommand invocation: invalid combinations now fail fast with actionable errors (`--auto` requires output path, merge mode positional count validation, merge-mode `--L3`-without-`BASE` rejection in 2-path mode, `--base` ambiguity guards, diff-mode `--L3`/`--base` rejection, and too-many-positional guards).
 - ✅ CLI empty-path hardening is implemented: required `LOCAL`/`REMOTE`/`MERGED` inputs now reject empty path values with actionable parse-time errors, optional display-path env vars ignore empty strings, and empty `BASE` from env is normalized to no-base while explicit empty `--base` is rejected.
 - ✅ Difftool env compatibility is complete: display-path resolution now honors optional `MERGED` and `BASE` compatibility vars with explicit precedence (`--path` > `MERGED` > `BASE`).
@@ -56,10 +57,10 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
   - `--L1`/`--L2`/`--L3` as aliases for `--label-base`/`--label-local`/`--label-remote`
   - coverage: parser unit tests + git-invoked integration test (`git_mergetool_accepts_kdiff3_alias_flags_in_cmd`)
 - ✅ KDiff3/Meld-style no-subcommand compatibility parser implemented in `crates/gitgpui-app/src/cli.rs`:
-  - accepts direct external-tool invocation with positional paths and compatibility flags (`--auto`, `--auto-merge`, `--L1/--L2/--L3`, `--base`, `-o/--output/--out`)
+  - accepts direct external-tool invocation with positional paths and compatibility flags (`--auto`, `--auto-merge`, `--L1/--L2/--L3`, Meld-style `-L/--label`, `--base`, `-o/--output/--out`)
   - maps to validated `difftool`/`mergetool` app modes
-  - enforces strict compatibility validation with actionable errors (`--auto`/`--auto-merge` output-path requirements, merge positional count checks, merge-mode `--L3` requires `BASE` in compatibility mode, `--base` conflict guards, diff-mode `--L3`/`--base` rejection, too-many-positional checks)
-  - coverage: 18 CLI parser tests (7 happy-path + 9 invalid-combination checks + 2 git-config fallback compatibility tests) + git-invoked `kdiff3`/`meld` path-override integration tests
+  - enforces strict compatibility validation with actionable errors (`--auto`/`--auto-merge` output-path requirements, merge positional count checks, merge-mode `--L3` requires `BASE` in compatibility mode, `--base` conflict guards, diff-mode `--L3`/`--base` rejection, too-many-positional checks, and label-arity overflow rejection)
+  - coverage: CLI parser tests (including Meld `-L/--label` diff+merge cases and over-arity rejection) + git-invoked `kdiff3`/`meld` path-override integration tests
 - ✅ Exit code constants aligned to design (`0`, `1`, `>=2`) defined in app CLI module.
 - ✅ Conflict-marker label formatter and runtime integration implemented: `crates/gitgpui-core/src/conflict_labels.rs` provides `empty tree`/`<short-sha>:<path>`/merged-ancestors/rebase-parent formatting, and `crates/gitgpui-app/src/mergetool_mode.rs` now applies filename/`empty tree` fallback labels in dedicated mergetool flows.
 - ✅ Focused command-mode execution paths fully implemented:
@@ -98,6 +99,7 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
   - ✅ `mergetool` invalid input exits `2` with actionable validation error text
   - ✅ `difftool` changed-file invocation exits `0` and emits unified diff output
   - ✅ `difftool` invalid input exits `2` with actionable validation error text
+  - ✅ no-subcommand compatibility E2E for Meld-style `-L/--label` diff and merge invocations
 - ✅ KDiff3-style fixture harness implemented in `crates/gitgpui-core/tests/merge_fixture_harness.rs` with fixture data in `crates/gitgpui-core/tests/fixtures/merge/`. Auto-discovers `*_base.*` fixtures, runs merge algorithm, validates invariants, and compares against expected results in two formats:
   - merged-output expected files: marker well-formedness, content integrity, context preservation
   - alignment-triple expected files: sequence monotonicity + equality consistency across aligned line indices
@@ -180,6 +182,24 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
   - ✅ Explicit `difftool.guiDefault` selection-path parity (`auto` with/without `DISPLAY`, `--gui`, `--no-gui`).
   - ✅ Dedicated trust-exit interaction matrix assertions (`difftool.trustExitCode`, `--trust-exit-code`, `--no-trust-exit-code`).
   - ✅ `git difftool --tool-help` discoverability assertion for configured `gitgpui` tool.
+
+### Latest Component Delivered (Iteration 40) — Meld `-L/--label` Compatibility Flags
+
+- Implemented Meld-style pane-label parsing in no-subcommand external compatibility mode in `crates/gitgpui-app/src/cli.rs`:
+  - supports `-L <label>`, `-L<label>`, `--label <label>`, and `--label=<label>`
+  - maps labels in-order into existing compatibility slots while preserving KDiff3-vs-Meld positional disambiguation
+  - adds explicit overflow validation (`>3` labels) with actionable error text
+- Added parser regression coverage in `crates/gitgpui-app/src/cli.rs`:
+  - `compat_parses_meld_style_difftool_short_labels`
+  - `compat_parses_meld_style_mergetool_labels`
+  - `compat_rejects_too_many_label_flags`
+- Added standalone end-to-end coverage in `crates/gitgpui-app/tests/standalone_tool_mode_integration.rs`:
+  - `standalone_compat_difftool_accepts_meld_style_label_flags`
+  - `standalone_compat_mergetool_meld_label_order_maps_to_local_base_remote`
+- Verification:
+  - `cargo test -p gitgpui-app --bin gitgpui-app cli::tests::compat_ -- --nocapture`
+  - `cargo test -p gitgpui-app --test standalone_tool_mode_integration standalone_compat_ -- --nocapture`
+  - `cargo test -p gitgpui-app --tests`
 
 ### Latest Component Delivered (Iteration 39) — Meld Difftool Path-Override E2E Parity
 
