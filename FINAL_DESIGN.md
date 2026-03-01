@@ -1,4 +1,4 @@
-## STATUS: COMPLETE
+## STATUS: IN PROGRESS
 
 ## Implementation Progress
 
@@ -39,7 +39,12 @@
 
 ### Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
 
-- ✅ Phase 1A (git `t6403` algorithm-focused cases): 3-way merge algorithm implemented in `crates/gitgpui-core/src/merge.rs` with 22 unit tests. Integration test suite `crates/gitgpui-core/tests/merge_algorithm.rs` ports 18 t6403-style test cases covering: identity merge, non-overlapping clean merge, overlapping conflict detection, conflict marker format with labels, delete-vs-modify, ours/theirs/union strategies, EOF trailing newline preservation, CRLF marker handling, configurable marker width, diff3 output, Myers C-code merge, binary content, identical-change dedup, and single-side-only changes.
+- 🔧 Phase 1A (git `t6403` algorithm-focused cases): 3-way merge algorithm implemented in `crates/gitgpui-core/src/merge.rs` with focused portability coverage in `crates/gitgpui-core/tests/merge_algorithm.rs`.
+  - ✅ Added zealous conflict coalescing in core merge flow (`coalesce_zealous_conflicts`) for adjacent conflicts and blank-only separators.
+  - ✅ Added portability tests: `t6403_merge_zealous_coalesces_adjacent_conflict_lines`, `t6403_merge_zealous_alnum_coalesces_across_blank_separator`, and non-blank separator guard.
+  - ✅ Existing t6403-style coverage remains for identity/non-overlap/conflicts, conflict markers + labels, delete-vs-modify, ours/theirs/union, EOF/trailing-newline behavior, CRLF markers, marker width, diff3 output, Myers C-code case, identical changes, and single-side-only changes.
+  - ⬜ `merge_histogram_clean` parity remains unimplemented (core merge still uses Myers only).
+  - ⬜ Strict `merge_binary_rejected` contract remains unimplemented in `merge_file` (binary handling is currently caller-side).
 - ✅ Phase 1B (git `t6427` `zdiff3` 4-case portability set): all 4 zdiff3 test cases ported (`zdiff3_basic`, `zdiff3_middle_common`, `zdiff3_interesting`, `zdiff3_evil`). Tests verify common prefix/suffix extraction outside conflict markers and correct inner conflict content.
 - ✅ Phase 1C (conflict marker label formatting cases): implemented in `crates/gitgpui-core/src/conflict_labels.rs` with portability tests in `crates/gitgpui-core/tests/conflict_label_formatting.rs`:
   - `label_no_base` -> `empty tree`
@@ -95,15 +100,14 @@
   - ✅ Dedicated trust-exit interaction matrix assertions (`difftool.trustExitCode`, `--trust-exit-code`, `--no-trust-exit-code`).
   - ✅ `git difftool --tool-help` discoverability assertion for configured `gitgpui` tool.
 
-### Latest Component Delivered (Iteration 11 — Final)
+### Latest Component Delivered (Iteration 11)
 
-- Implemented the last remaining E2E parity test: `git_mergetool_keep_backup_delete_delete_no_errors` in `crates/gitgpui-app/tests/mergetool_git_integration.rs`.
-  - Mirrors git t7610 test "mergetool produces no errors when keepBackup is used".
-  - Creates a rename/rename conflict (file moved to different destinations by two branches), producing a delete/delete conflict at the original path.
-  - Configures `mergetool.keepBackup=true` and resolves via "d" (delete).
-  - Asserts no error output on stderr and proper cleanup of the original file/directory.
-  - Mergetool E2E suite expanded from 29 to 30 tests.
-- All design document items are now fully implemented. STATUS: COMPLETE.
+- Implemented zealous conflict coalescing in `crates/gitgpui-core/src/merge.rs`:
+  - adjacent conflict hunks are coalesced
+  - conflict hunks separated only by blank base context are coalesced
+  - non-blank separators are intentionally preserved as separate conflicts
+- Added portability tests in `crates/gitgpui-core/tests/merge_algorithm.rs` covering both zealous scenarios and a non-blank regression guard.
+- Verified with `cargo test -p gitgpui-core --test merge_algorithm` (33/33 passing).
 
 ### Iteration 9
 

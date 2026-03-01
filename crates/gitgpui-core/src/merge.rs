@@ -6,7 +6,7 @@
 //!
 //! Compatible with `git merge-file` marker format.
 
-use crate::file_diff::{myers_edits, split_lines, Edit, EditKind};
+use crate::file_diff::{Edit, EditKind, myers_edits, split_lines};
 
 /// Default conflict marker width (matches git's default).
 pub const DEFAULT_MARKER_SIZE: usize = 7;
@@ -99,6 +99,7 @@ pub fn merge_file(base: &str, ours: &str, theirs: &str, options: &MergeOptions) 
     let hunks_theirs = edits_to_hunks(&edits_theirs);
 
     let merged_hunks = merge_hunks(&base_lines, &hunks_ours, &hunks_theirs);
+    let merged_hunks = coalesce_zealous_conflicts(&base_lines, merged_hunks);
     render_merged(&base_lines, &merged_hunks, base, ours, theirs, options)
 }
 
@@ -203,10 +204,7 @@ fn merge_hunks(base_lines: &[&str], ours: &[Hunk], theirs: &[Hunk]) -> Vec<Merge
 
     loop {
         let oh_start = ours.get(oi).map(|h| h.base_start).unwrap_or(usize::MAX);
-        let th_start = theirs
-            .get(ti)
-            .map(|h| h.base_start)
-            .unwrap_or(usize::MAX);
+        let th_start = theirs.get(ti).map(|h| h.base_start).unwrap_or(usize::MAX);
 
         if oh_start == usize::MAX && th_start == usize::MAX {
             break;
@@ -309,6 +307,70 @@ fn merge_hunks(base_lines: &[&str], ours: &[Hunk], theirs: &[Hunk]) -> Vec<Merge
     }
 
     result
+}
+
+/// Coalesce consecutive conflict hunks when the unchanged base context between
+/// them is adjacent or blank-only. This mirrors git's "zealous" behavior for
+/// reducing noisy back-to-back conflict markers.
+fn coalesce_zealous_conflicts(base_lines: &[&str], hunks: Vec<MergedHunk>) -> Vec<MergedHunk> {
+    let mut out = Vec::with_capacity(hunks.len());
+
+    for hunk in hunks {
+        let mut merged_into_previous = false;
+
+        if let Some(last) = out.last_mut() {
+            if let (
+                MergedHunk::Conflict {
+                    base_end: last_base_end,
+                    ours_lines: last_ours,
+                    theirs_lines: last_theirs,
+                    ..
+                },
+                MergedHunk::Conflict {
+                    base_start: next_base_start,
+                    base_end: next_base_end,
+                    ours_lines: next_ours,
+                    theirs_lines: next_theirs,
+                    ..
+                },
+            ) = (last, &hunk)
+            {
+                if blank_only_or_adjacent_separator(base_lines, *last_base_end, *next_base_start) {
+                    let start = (*last_base_end).min(base_lines.len());
+                    let end = (*next_base_start).min(base_lines.len());
+                    let separator_lines: Vec<String> = base_lines[start..end]
+                        .iter()
+                        .map(|line| (*line).to_string())
+                        .collect();
+
+                    last_ours.extend(separator_lines.iter().cloned());
+                    last_ours.extend(next_ours.iter().cloned());
+                    last_theirs.extend(separator_lines);
+                    last_theirs.extend(next_theirs.iter().cloned());
+                    *last_base_end = *next_base_end;
+                    merged_into_previous = true;
+                }
+            }
+        }
+
+        if !merged_into_previous {
+            out.push(hunk);
+        }
+    }
+
+    out
+}
+
+fn blank_only_or_adjacent_separator(base_lines: &[&str], from: usize, to: usize) -> bool {
+    if to < from {
+        return false;
+    }
+
+    let start = from.min(base_lines.len());
+    let end = to.min(base_lines.len());
+    base_lines[start..end]
+        .iter()
+        .all(|line| line.trim().is_empty())
 }
 
 /// Reconstruct the content of one side for a base line range, applying hunks.
@@ -421,7 +483,13 @@ fn render_merged(
     }
 
     // Remaining base lines after all hunks.
-    emit_context_lines(&mut output, base_lines, base_pos, base_lines.len(), line_ending);
+    emit_context_lines(
+        &mut output,
+        base_lines,
+        base_pos,
+        base_lines.len(),
+        line_ending,
+    );
 
     // Preserve original trailing-newline behavior: if neither ours nor theirs
     // had a trailing newline, strip our trailing newline too.
@@ -470,8 +538,7 @@ fn emit_conflict_markers(
     match options.style {
         ConflictStyle::Zdiff3 => {
             // Strip common prefix and suffix lines from the conflict.
-            let (prefix_len, suffix_len) =
-                common_prefix_suffix_lines(ours_lines, theirs_lines);
+            let (prefix_len, suffix_len) = common_prefix_suffix_lines(ours_lines, theirs_lines);
 
             // Emit common prefix as resolved.
             for line in &ours_lines[..prefix_len] {
@@ -595,9 +662,9 @@ fn detect_line_ending(ours: &str, theirs: &str, base: &str) -> &'static str {
     let crlf_count = ours.matches("\r\n").count()
         + theirs.matches("\r\n").count()
         + base.matches("\r\n").count();
-    let lf_only_count = ours.matches('\n').count() + theirs.matches('\n').count()
-        + base.matches('\n').count()
-        - crlf_count;
+    let lf_only_count =
+        ours.matches('\n').count() + theirs.matches('\n').count() + base.matches('\n').count()
+            - crlf_count;
 
     if crlf_count > lf_only_count {
         "\r\n"

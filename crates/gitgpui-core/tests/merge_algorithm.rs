@@ -3,9 +3,7 @@
 //! These verify the core 3-way merge algorithm against git's merge-file
 //! behavior as specified in the Reference Test Portability Plan.
 
-use gitgpui_core::merge::{
-    ConflictStyle, MergeLabels, MergeOptions, MergeStrategy, merge_file,
-};
+use gitgpui_core::merge::{ConflictStyle, MergeLabels, MergeOptions, MergeStrategy, merge_file};
 
 fn default_opts() -> MergeOptions {
     MergeOptions::default()
@@ -46,6 +44,13 @@ fn opts_zdiff3_with_labels(ours: &str, base: &str, theirs: &str) -> MergeOptions
         },
         ..Default::default()
     }
+}
+
+fn marker_count(output: &str, marker: &str) -> usize {
+    output
+        .lines()
+        .filter(|line| line.starts_with(marker))
+        .count()
 }
 
 // ===========================================================================
@@ -132,7 +137,11 @@ fn t6403_merge_nonoverlapping_clean() {
         "non-overlapping changes should merge cleanly"
     );
     // The merged result should have new2's collapsed first line and new1's appended lines.
-    assert!(result.output.contains("Dominus regit me, et nihil mihi deerit."));
+    assert!(
+        result
+            .output
+            .contains("Dominus regit me, et nihil mihi deerit.")
+    );
     assert!(result.output.contains("Nam et si ambulavero"));
     assert!(result.output.contains("virga tua et baculus tuus"));
 }
@@ -148,7 +157,11 @@ fn t6403_merge_overlapping_conflict() {
     assert!(result.output.contains("======="));
     assert!(result.output.contains(">>>>>>>"));
     // Local (new2) section should have the collapsed line.
-    assert!(result.output.contains("Dominus regit me, et nihil mihi deerit."));
+    assert!(
+        result
+            .output
+            .contains("Dominus regit me, et nihil mihi deerit.")
+    );
     // Remote (new3) section should have the uppercased word.
     assert!(result.output.contains("DOMINUS regit me,"));
 }
@@ -189,7 +202,11 @@ fn t6403_merge_ours() {
         &opts_strategy(MergeStrategy::Ours),
     );
     assert!(result.is_clean());
-    assert!(result.output.contains("Dominus regit me, et nihil mihi deerit."));
+    assert!(
+        result
+            .output
+            .contains("Dominus regit me, et nihil mihi deerit.")
+    );
     assert!(!result.output.contains("DOMINUS"));
 }
 
@@ -220,7 +237,11 @@ fn t6403_merge_union() {
     );
     assert!(result.is_clean());
     // Both sides should be present.
-    assert!(result.output.contains("Dominus regit me, et nihil mihi deerit."));
+    assert!(
+        result
+            .output
+            .contains("Dominus regit me, et nihil mihi deerit.")
+    );
     assert!(result.output.contains("DOMINUS regit me,"));
 }
 
@@ -275,6 +296,59 @@ fn t6403_merge_lf_conflict_markers() {
     assert!(!result.is_clean());
     assert!(result.output.contains("<<<<<<<\n"));
     assert!(!result.output.contains("\r\n"));
+}
+
+// ── Zealous conflict coalescing ──
+
+#[test]
+fn t6403_merge_zealous_coalesces_adjacent_conflict_lines() {
+    // Consecutive conflicting edits should render as one conflict hunk.
+    let base = "a\nb\nc\n";
+    let ours = "A\nB\nc\n";
+    let theirs = "X\nY\nc\n";
+    let result = merge_file(base, ours, theirs, &default_opts());
+
+    assert!(!result.is_clean());
+    assert_eq!(
+        marker_count(&result.output, "======="),
+        1,
+        "adjacent conflicting lines should coalesce into one conflict block:\n{}",
+        result.output
+    );
+}
+
+#[test]
+fn t6403_merge_zealous_alnum_coalesces_across_blank_separator() {
+    // Two conflict regions separated only by blank context are coalesced.
+    let base = "alpha\n\nbeta\ngamma\n";
+    let ours = "ALPHA\n\nBETA_OURS\ngamma\n";
+    let theirs = "ALPHA_THEIRS\n\nBETA_THEIRS\ngamma\n";
+    let result = merge_file(base, ours, theirs, &default_opts());
+
+    assert!(!result.is_clean());
+    assert_eq!(
+        marker_count(&result.output, "======="),
+        1,
+        "blank-only context should be absorbed into a single zealous conflict block:\n{}",
+        result.output
+    );
+}
+
+#[test]
+fn t6403_merge_zealous_keeps_nonblank_separated_conflicts_split() {
+    // Non-blank context between conflicts should keep them as separate hunks.
+    let base = "alpha\ncontext\nbeta\ngamma\n";
+    let ours = "ALPHA\ncontext\nBETA_OURS\ngamma\n";
+    let theirs = "ALPHA_THEIRS\ncontext\nBETA_THEIRS\ngamma\n";
+    let result = merge_file(base, ours, theirs, &default_opts());
+
+    assert!(!result.is_clean());
+    assert_eq!(
+        marker_count(&result.output, "======="),
+        2,
+        "non-blank context should keep conflict blocks distinct:\n{}",
+        result.output
+    );
 }
 
 // ── Configurable marker width ──
