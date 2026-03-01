@@ -40,9 +40,17 @@ fn current_exe_path() -> Result<PathBuf, String> {
         .map_err(|e| format!("Cannot determine gitgpui-app binary path: {e}"))
 }
 
+fn quoted_env_var(name: &str) -> String {
+    format!("\"${name}\"")
+}
+
 /// Build the list of git config entries for difftool/mergetool setup.
 fn build_config_entries(bin_path: &str) -> Vec<ConfigEntry> {
     let quoted_bin_path = shell_single_quote(bin_path);
+    let base = quoted_env_var("BASE");
+    let local = quoted_env_var("LOCAL");
+    let remote = quoted_env_var("REMOTE");
+    let merged = quoted_env_var("MERGED");
 
     vec![
         // Mergetool (headless — for CI, scripts, and no-display environments)
@@ -53,7 +61,7 @@ fn build_config_entries(bin_path: &str) -> Vec<ConfigEntry> {
         ConfigEntry {
             key: "mergetool.gitgpui.cmd",
             value: format!(
-                "{quoted_bin_path} mergetool --base \"$BASE\" --local \"$LOCAL\" --remote \"$REMOTE\" --merged \"$MERGED\""
+                "{quoted_bin_path} mergetool --base {base} --local {local} --remote {remote} --merged {merged}"
             ),
         },
         // Keep both generic and tool-specific trust keys:
@@ -81,7 +89,7 @@ fn build_config_entries(bin_path: &str) -> Vec<ConfigEntry> {
         ConfigEntry {
             key: "difftool.gitgpui.cmd",
             value: format!(
-                "{quoted_bin_path} difftool --local \"$LOCAL\" --remote \"$REMOTE\" --path \"$MERGED\""
+                "{quoted_bin_path} difftool --local {local} --remote {remote} --path {merged}"
             ),
         },
         // Keep both generic and tool-specific trust keys:
@@ -112,7 +120,7 @@ fn build_config_entries(bin_path: &str) -> Vec<ConfigEntry> {
         ConfigEntry {
             key: "mergetool.gitgpui-gui.cmd",
             value: format!(
-                "{quoted_bin_path} mergetool --gui --base \"$BASE\" --local \"$LOCAL\" --remote \"$REMOTE\" --merged \"$MERGED\""
+                "{quoted_bin_path} mergetool --gui --base {base} --local {local} --remote {remote} --merged {merged}"
             ),
         },
         ConfigEntry {
@@ -126,7 +134,7 @@ fn build_config_entries(bin_path: &str) -> Vec<ConfigEntry> {
         ConfigEntry {
             key: "difftool.gitgpui-gui.cmd",
             value: format!(
-                "{quoted_bin_path} difftool --gui --local \"$LOCAL\" --remote \"$REMOTE\" --path \"$MERGED\""
+                "{quoted_bin_path} difftool --gui --local {local} --remote {remote} --path {merged}"
             ),
         },
         ConfigEntry {
@@ -225,6 +233,27 @@ pub fn run_setup(dry_run: bool, local: bool) -> Result<SetupResult, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn count_occurrences(haystack: &str, needle: &str) -> usize {
+        haystack.match_indices(needle).count()
+    }
+
+    fn assert_placeholder_is_quoted(cmd: &str, var: &str) {
+        let raw = format!("${var}");
+        let quoted = format!("\"{raw}\"");
+
+        let raw_count = count_occurrences(cmd, &raw);
+        let quoted_count = count_occurrences(cmd, &quoted);
+
+        assert!(
+            quoted_count > 0,
+            "expected quoted placeholder {quoted} in command: {cmd}"
+        );
+        assert_eq!(
+            raw_count, quoted_count,
+            "found unquoted placeholder ${var} in command: {cmd}"
+        );
+    }
 
     #[test]
     fn shell_single_quote_wraps_plain_text() {
@@ -331,10 +360,10 @@ mod tests {
             .find(|e| e.key == "mergetool.gitgpui.cmd")
             .unwrap();
 
-        assert!(cmd.value.contains("$BASE"), "missing $BASE");
-        assert!(cmd.value.contains("$LOCAL"), "missing $LOCAL");
-        assert!(cmd.value.contains("$REMOTE"), "missing $REMOTE");
-        assert!(cmd.value.contains("$MERGED"), "missing $MERGED");
+        assert_placeholder_is_quoted(&cmd.value, "BASE");
+        assert_placeholder_is_quoted(&cmd.value, "LOCAL");
+        assert_placeholder_is_quoted(&cmd.value, "REMOTE");
+        assert_placeholder_is_quoted(&cmd.value, "MERGED");
         assert!(cmd.value.starts_with("'/path/to/bin'"));
     }
 
@@ -361,9 +390,36 @@ mod tests {
             .find(|e| e.key == "difftool.gitgpui.cmd")
             .unwrap();
 
-        assert!(cmd.value.contains("$LOCAL"), "missing $LOCAL");
-        assert!(cmd.value.contains("$REMOTE"), "missing $REMOTE");
-        assert!(cmd.value.contains("$MERGED"), "missing $MERGED path");
+        assert_placeholder_is_quoted(&cmd.value, "LOCAL");
+        assert_placeholder_is_quoted(&cmd.value, "REMOTE");
+        assert_placeholder_is_quoted(&cmd.value, "MERGED");
+    }
+
+    #[test]
+    fn gui_mergetool_cmd_quotes_all_stage_vars() {
+        let entries = build_config_entries("/path/to/bin");
+        let cmd = entries
+            .iter()
+            .find(|e| e.key == "mergetool.gitgpui-gui.cmd")
+            .unwrap();
+
+        assert_placeholder_is_quoted(&cmd.value, "BASE");
+        assert_placeholder_is_quoted(&cmd.value, "LOCAL");
+        assert_placeholder_is_quoted(&cmd.value, "REMOTE");
+        assert_placeholder_is_quoted(&cmd.value, "MERGED");
+    }
+
+    #[test]
+    fn gui_difftool_cmd_quotes_all_stage_vars() {
+        let entries = build_config_entries("/path/to/bin");
+        let cmd = entries
+            .iter()
+            .find(|e| e.key == "difftool.gitgpui-gui.cmd")
+            .unwrap();
+
+        assert_placeholder_is_quoted(&cmd.value, "LOCAL");
+        assert_placeholder_is_quoted(&cmd.value, "REMOTE");
+        assert_placeholder_is_quoted(&cmd.value, "MERGED");
     }
 
     #[test]

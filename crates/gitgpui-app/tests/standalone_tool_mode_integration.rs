@@ -69,6 +69,26 @@ fn output_text(output: &Output) -> String {
     )
 }
 
+fn count_occurrences(haystack: &str, needle: &str) -> usize {
+    haystack.match_indices(needle).count()
+}
+
+fn assert_placeholder_is_quoted(cmd: &str, var: &str) {
+    let raw = format!("${var}");
+    let quoted = format!("\"{raw}\"");
+    let raw_count = count_occurrences(cmd, &raw);
+    let quoted_count = count_occurrences(cmd, &quoted);
+
+    assert!(
+        quoted_count > 0,
+        "expected quoted placeholder {quoted} in cmd: {cmd}"
+    );
+    assert_eq!(
+        raw_count, quoted_count,
+        "found unquoted placeholder ${var} in cmd: {cmd}"
+    );
+}
+
 #[test]
 fn standalone_mergetool_clean_merge_exits_zero_and_writes_output() {
     let dir = tempfile::tempdir().unwrap();
@@ -857,34 +877,16 @@ fn setup_dry_run_commands_execute_verbatim_in_shell() {
 
     let merge_cmd = git_config_get(dir.path(), "mergetool.gitgpui.cmd")
         .expect("mergetool cmd should be configured by dry-run commands");
-    assert!(merge_cmd.contains("$BASE"), "expected literal $BASE in cmd");
-    assert!(
-        merge_cmd.contains("$LOCAL"),
-        "expected literal $LOCAL in cmd"
-    );
-    assert!(
-        merge_cmd.contains("$REMOTE"),
-        "expected literal $REMOTE in cmd"
-    );
-    assert!(
-        merge_cmd.contains("$MERGED"),
-        "expected literal $MERGED in cmd"
-    );
+    assert_placeholder_is_quoted(&merge_cmd, "BASE");
+    assert_placeholder_is_quoted(&merge_cmd, "LOCAL");
+    assert_placeholder_is_quoted(&merge_cmd, "REMOTE");
+    assert_placeholder_is_quoted(&merge_cmd, "MERGED");
 
     let diff_cmd = git_config_get(dir.path(), "difftool.gitgpui.cmd")
         .expect("difftool cmd should be configured by dry-run commands");
-    assert!(
-        diff_cmd.contains("$LOCAL"),
-        "expected literal $LOCAL in cmd"
-    );
-    assert!(
-        diff_cmd.contains("$REMOTE"),
-        "expected literal $REMOTE in cmd"
-    );
-    assert!(
-        diff_cmd.contains("$MERGED"),
-        "expected literal $MERGED in cmd"
-    );
+    assert_placeholder_is_quoted(&diff_cmd, "LOCAL");
+    assert_placeholder_is_quoted(&diff_cmd, "REMOTE");
+    assert_placeholder_is_quoted(&diff_cmd, "MERGED");
 
     // GUI tool commands should also be configured and shell-valid.
     let gui_merge_cmd = git_config_get(dir.path(), "mergetool.gitgpui-gui.cmd")
@@ -893,10 +895,10 @@ fn setup_dry_run_commands_execute_verbatim_in_shell() {
         gui_merge_cmd.contains("--gui"),
         "GUI merge cmd should contain --gui"
     );
-    assert!(
-        gui_merge_cmd.contains("$MERGED"),
-        "GUI merge cmd should contain $MERGED"
-    );
+    assert_placeholder_is_quoted(&gui_merge_cmd, "BASE");
+    assert_placeholder_is_quoted(&gui_merge_cmd, "LOCAL");
+    assert_placeholder_is_quoted(&gui_merge_cmd, "REMOTE");
+    assert_placeholder_is_quoted(&gui_merge_cmd, "MERGED");
 
     let gui_diff_cmd = git_config_get(dir.path(), "difftool.gitgpui-gui.cmd")
         .expect("GUI difftool cmd should be configured by dry-run commands");
@@ -904,6 +906,9 @@ fn setup_dry_run_commands_execute_verbatim_in_shell() {
         gui_diff_cmd.contains("--gui"),
         "GUI diff cmd should contain --gui"
     );
+    assert_placeholder_is_quoted(&gui_diff_cmd, "LOCAL");
+    assert_placeholder_is_quoted(&gui_diff_cmd, "REMOTE");
+    assert_placeholder_is_quoted(&gui_diff_cmd, "MERGED");
 
     assert_eq!(
         git_config_get(dir.path(), "merge.guitool").as_deref(),
@@ -1002,10 +1007,10 @@ fn setup_local_writes_config_to_repo() {
     // Verify headless cmd contains the binary path and proper variable quoting.
     let merge_cmd =
         git_config_get(dir.path(), "mergetool.gitgpui.cmd").expect("mergetool cmd should be set");
-    assert!(merge_cmd.contains("$BASE"), "merge cmd missing $BASE");
-    assert!(merge_cmd.contains("$LOCAL"), "merge cmd missing $LOCAL");
-    assert!(merge_cmd.contains("$REMOTE"), "merge cmd missing $REMOTE");
-    assert!(merge_cmd.contains("$MERGED"), "merge cmd missing $MERGED");
+    assert_placeholder_is_quoted(&merge_cmd, "BASE");
+    assert_placeholder_is_quoted(&merge_cmd, "LOCAL");
+    assert_placeholder_is_quoted(&merge_cmd, "REMOTE");
+    assert_placeholder_is_quoted(&merge_cmd, "MERGED");
     assert!(
         !merge_cmd.contains("--gui"),
         "headless merge cmd should not contain --gui"
@@ -1013,8 +1018,9 @@ fn setup_local_writes_config_to_repo() {
 
     let diff_cmd =
         git_config_get(dir.path(), "difftool.gitgpui.cmd").expect("difftool cmd should be set");
-    assert!(diff_cmd.contains("$LOCAL"), "diff cmd missing $LOCAL");
-    assert!(diff_cmd.contains("$REMOTE"), "diff cmd missing $REMOTE");
+    assert_placeholder_is_quoted(&diff_cmd, "LOCAL");
+    assert_placeholder_is_quoted(&diff_cmd, "REMOTE");
+    assert_placeholder_is_quoted(&diff_cmd, "MERGED");
     assert!(
         !diff_cmd.contains("--gui"),
         "headless diff cmd should not contain --gui"
@@ -1027,10 +1033,10 @@ fn setup_local_writes_config_to_repo() {
         gui_merge_cmd.contains("--gui"),
         "GUI merge cmd missing --gui"
     );
-    assert!(
-        gui_merge_cmd.contains("$MERGED"),
-        "GUI merge cmd missing $MERGED"
-    );
+    assert_placeholder_is_quoted(&gui_merge_cmd, "BASE");
+    assert_placeholder_is_quoted(&gui_merge_cmd, "LOCAL");
+    assert_placeholder_is_quoted(&gui_merge_cmd, "REMOTE");
+    assert_placeholder_is_quoted(&gui_merge_cmd, "MERGED");
     assert_eq!(
         git_config_get(dir.path(), "mergetool.gitgpui-gui.trustExitCode").as_deref(),
         Some("true"),
@@ -1043,6 +1049,9 @@ fn setup_local_writes_config_to_repo() {
         gui_diff_cmd.contains("--gui"),
         "GUI diff cmd missing --gui"
     );
+    assert_placeholder_is_quoted(&gui_diff_cmd, "LOCAL");
+    assert_placeholder_is_quoted(&gui_diff_cmd, "REMOTE");
+    assert_placeholder_is_quoted(&gui_diff_cmd, "MERGED");
     assert_eq!(
         git_config_get(dir.path(), "difftool.gitgpui-gui.trustExitCode").as_deref(),
         Some("true"),
