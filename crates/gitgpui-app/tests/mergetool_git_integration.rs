@@ -2539,6 +2539,36 @@ fn git_mergetool_respects_merge_conflictstyle_diff3_from_git_config() {
 }
 
 #[test]
+fn git_mergetool_kdiff3_path_override_respects_merge_conflictstyle_diff3_from_git_config() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().to_path_buf();
+    init_repo(&repo);
+    setup_simple_overlapping_conflict(&repo);
+
+    // Configure built-in kdiff3 path override so git invokes gitgpui-app via
+    // compatibility mode (no subcommand).
+    configure_kdiff3_path_override_to_gitgpui(&repo, false);
+    run_git(&repo, &["config", "merge.conflictstyle", "diff3"]);
+
+    let output = run_git_capture(&repo, &["mergetool", "--no-prompt"]);
+    let text = output_text(&output);
+    assert!(
+        output.status.success(),
+        "expected kdiff3 compatibility invocation to succeed\n{text}"
+    );
+
+    let merged = fs::read_to_string(repo.join("file.txt")).unwrap();
+    assert!(
+        merged.contains("|||||||"),
+        "compat mergetool should honor diff3 conflictstyle from git config, got:\n{merged}\noutput:\n{text}"
+    );
+    assert!(
+        merged.contains("original"),
+        "compat diff3 base section should contain original content, got:\n{merged}"
+    );
+}
+
+#[test]
 fn git_mergetool_respects_diff_algorithm_histogram_from_git_config() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path().to_path_buf();

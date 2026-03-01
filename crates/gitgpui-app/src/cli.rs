@@ -392,9 +392,10 @@ fn resolve_mergetool_with_config(
     Ok(config)
 }
 
-fn parse_compat_external_mode(
+fn parse_compat_external_mode_with_config(
     raw_args: &[OsString],
     env: &dyn EnvLookup,
+    git_config: &dyn Fn(&str) -> Option<String>,
 ) -> Result<Option<AppMode>, String> {
     let mut label_l1: Option<String> = None;
     let mut label_l2: Option<String> = None;
@@ -573,7 +574,7 @@ fn parse_compat_external_mode(
             conflict_style: None,
             diff_algorithm: None,
         };
-        return resolve_mergetool_with_env(args, env)
+        return resolve_mergetool_with_config(args, env, git_config)
             .map(AppMode::Mergetool)
             .map(Some);
     }
@@ -619,9 +620,10 @@ fn parse_compat_external_mode(
     Ok(None)
 }
 
-fn parse_app_mode_from_args_and_env(
+fn parse_app_mode_from_args_env_and_config(
     args: Vec<OsString>,
     env: &dyn EnvLookup,
+    git_config: &dyn Fn(&str) -> Option<String>,
 ) -> Result<AppMode, String> {
     match Cli::try_parse_from(args.clone()) {
         Ok(cli) => match cli.command {
@@ -630,7 +632,7 @@ fn parse_app_mode_from_args_and_env(
                 resolve_difftool_with_env(args, env).map(AppMode::Difftool)
             }
             Some(Command::Mergetool(args)) => {
-                resolve_mergetool_with_config(args, env, &read_git_config).map(AppMode::Mergetool)
+                resolve_mergetool_with_config(args, env, git_config).map(AppMode::Mergetool)
             }
             Some(Command::Setup(args)) => Ok(AppMode::Setup {
                 dry_run: args.dry_run,
@@ -639,12 +641,21 @@ fn parse_app_mode_from_args_and_env(
         },
         Err(clap_err) => {
             let compat_args = if args.len() > 1 { &args[1..] } else { &[][..] };
-            if let Some(mode) = parse_compat_external_mode(compat_args, env)? {
+            if let Some(mode) =
+                parse_compat_external_mode_with_config(compat_args, env, git_config)?
+            {
                 return Ok(mode);
             }
             Err(clap_err.to_string())
         }
     }
+}
+
+fn parse_app_mode_from_args_and_env(
+    args: Vec<OsString>,
+    env: &dyn EnvLookup,
+) -> Result<AppMode, String> {
+    parse_app_mode_from_args_env_and_config(args, env, &read_git_config)
 }
 
 /// Parse CLI arguments and resolve into a validated `AppMode`.
@@ -690,8 +701,16 @@ mod tests {
         path
     }
 
+    fn parse_mode_for_test_with_config(
+        args: Vec<OsString>,
+        env: &dyn EnvLookup,
+        git_config: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<AppMode, String> {
+        parse_app_mode_from_args_env_and_config(args, env, git_config)
+    }
+
     fn parse_mode_for_test(args: Vec<OsString>, env: &dyn EnvLookup) -> Result<AppMode, String> {
-        parse_app_mode_from_args_and_env(args, env)
+        parse_mode_for_test_with_config(args, env, &|_| None)
     }
 
     // ── DifftoolArgs resolution ──────────────────────────────────────
@@ -1721,6 +1740,78 @@ mod tests {
                 assert_eq!(config.label_base, None);
                 assert_eq!(config.label_local.as_deref(), Some("LOCAL_LABEL"));
                 assert_eq!(config.label_remote.as_deref(), Some("REMOTE_LABEL"));
+            }
+            _ => panic!("expected Mergetool mode"),
+        }
+    }
+
+    #[test]
+    fn compat_mergetool_applies_merge_conflictstyle_from_git_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = tmp_file(&dir, "base.txt", "base\n");
+        let local = tmp_file(&dir, "local.txt", "local\n");
+        let remote = tmp_file(&dir, "remote.txt", "remote\n");
+        let merged = dir.path().join("merged.txt");
+        let env = TestEnv::new();
+
+        let mode = parse_mode_for_test_with_config(
+            vec![
+                OsString::from("gitgpui-app"),
+                OsString::from("--auto"),
+                OsString::from("-o"),
+                merged.into_os_string(),
+                base.into_os_string(),
+                local.into_os_string(),
+                remote.into_os_string(),
+            ],
+            &env,
+            &|key| match key {
+                "merge.conflictstyle" => Some("diff3".to_string()),
+                _ => None,
+            },
+        )
+        .unwrap();
+
+        match mode {
+            AppMode::Mergetool(config) => {
+                assert_eq!(config.conflict_style, ConflictStyle::Diff3);
+                assert_eq!(config.diff_algorithm, DiffAlgorithm::Myers);
+            }
+            _ => panic!("expected Mergetool mode"),
+        }
+    }
+
+    #[test]
+    fn compat_mergetool_applies_diff_algorithm_from_git_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = tmp_file(&dir, "base.txt", "base\n");
+        let local = tmp_file(&dir, "local.txt", "local\n");
+        let remote = tmp_file(&dir, "remote.txt", "remote\n");
+        let merged = dir.path().join("merged.txt");
+        let env = TestEnv::new();
+
+        let mode = parse_mode_for_test_with_config(
+            vec![
+                OsString::from("gitgpui-app"),
+                OsString::from("--auto"),
+                OsString::from("-o"),
+                merged.into_os_string(),
+                base.into_os_string(),
+                local.into_os_string(),
+                remote.into_os_string(),
+            ],
+            &env,
+            &|key| match key {
+                "diff.algorithm" => Some("histogram".to_string()),
+                _ => None,
+            },
+        )
+        .unwrap();
+
+        match mode {
+            AppMode::Mergetool(config) => {
+                assert_eq!(config.conflict_style, ConflictStyle::Merge);
+                assert_eq!(config.diff_algorithm, DiffAlgorithm::Histogram);
             }
             _ => panic!("expected Mergetool mode"),
         }
