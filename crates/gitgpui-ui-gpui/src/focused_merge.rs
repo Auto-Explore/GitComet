@@ -211,8 +211,12 @@ impl FocusedMergeView {
             match seg {
                 ConflictSegment::Text(text) => out.push_str(text),
                 ConflictSegment::Block(block) => {
-                    let chosen = chosen_block_text(block);
-                    out.push_str(&chosen);
+                    out.push_str(&block_output_text(
+                        block,
+                        &self.label_local,
+                        &self.label_remote,
+                        &self.label_base,
+                    ));
                 }
             }
         }
@@ -249,6 +253,60 @@ fn chosen_block_text(block: &ConflictBlock) -> String {
             s.push_str(&block.theirs);
             s
         }
+    }
+}
+
+fn block_output_text(
+    block: &ConflictBlock,
+    label_local: &str,
+    label_remote: &str,
+    label_base: &str,
+) -> String {
+    if block.resolved {
+        return chosen_block_text(block);
+    }
+
+    render_unresolved_marker_block(block, label_local, label_remote, label_base)
+}
+
+fn render_unresolved_marker_block(
+    block: &ConflictBlock,
+    label_local: &str,
+    label_remote: &str,
+    label_base: &str,
+) -> String {
+    let newline = detect_line_ending(block);
+    let mut out = String::new();
+    out.push_str("<<<<<<< ");
+    out.push_str(label_local);
+    out.push_str(newline);
+    out.push_str(&block.ours);
+    if let Some(base) = block.base.as_deref() {
+        out.push_str("||||||| ");
+        out.push_str(label_base);
+        out.push_str(newline);
+        out.push_str(base);
+    }
+    out.push_str("=======");
+    out.push_str(newline);
+    out.push_str(&block.theirs);
+    out.push_str(">>>>>>> ");
+    out.push_str(label_remote);
+    out.push_str(newline);
+    out
+}
+
+fn detect_line_ending(block: &ConflictBlock) -> &'static str {
+    let uses_crlf = block.ours.contains("\r\n")
+        || block.theirs.contains("\r\n")
+        || block
+            .base
+            .as_deref()
+            .is_some_and(|base| base.contains("\r\n"));
+    if uses_crlf {
+        "\r\n"
+    } else {
+        "\n"
     }
 }
 
@@ -842,6 +900,55 @@ mod tests {
     }
 
     #[test]
+    fn build_output_unresolved_keeps_conflict_markers_two_way() {
+        let segments = vec![ConflictSegment::Block(ConflictBlock {
+            base: None,
+            ours: "ours line\n".to_string(),
+            theirs: "theirs line\n".to_string(),
+            choice: ConflictChoice::Ours,
+            resolved: false,
+        })];
+        let output = build_output_from_segments_with_labels(&segments, "LOCAL", "REMOTE", "BASE");
+        assert!(output.contains("<<<<<<< LOCAL\n"), "output: {output}");
+        assert!(output.contains("=======\n"), "output: {output}");
+        assert!(output.contains(">>>>>>> REMOTE\n"), "output: {output}");
+        assert!(output.contains("ours line\n"), "output: {output}");
+        assert!(output.contains("theirs line\n"), "output: {output}");
+    }
+
+    #[test]
+    fn build_output_unresolved_keeps_conflict_markers_diff3() {
+        let segments = vec![ConflictSegment::Block(ConflictBlock {
+            base: Some("base line\n".to_string()),
+            ours: "ours line\n".to_string(),
+            theirs: "theirs line\n".to_string(),
+            choice: ConflictChoice::Ours,
+            resolved: false,
+        })];
+        let output = build_output_from_segments_with_labels(&segments, "LOCAL", "REMOTE", "BASE");
+        assert!(output.contains("<<<<<<< LOCAL\n"), "output: {output}");
+        assert!(output.contains("||||||| BASE\n"), "output: {output}");
+        assert!(output.contains("=======\n"), "output: {output}");
+        assert!(output.contains(">>>>>>> REMOTE\n"), "output: {output}");
+    }
+
+    #[test]
+    fn build_output_unresolved_uses_crlf_when_block_uses_crlf() {
+        let segments = vec![ConflictSegment::Block(ConflictBlock {
+            base: Some("base line\r\n".to_string()),
+            ours: "ours line\r\n".to_string(),
+            theirs: "theirs line\r\n".to_string(),
+            choice: ConflictChoice::Ours,
+            resolved: false,
+        })];
+        let output = build_output_from_segments_with_labels(&segments, "LOCAL", "REMOTE", "BASE");
+        assert!(output.contains("<<<<<<< LOCAL\r\n"), "output: {output:?}");
+        assert!(output.contains("||||||| BASE\r\n"), "output: {output:?}");
+        assert!(output.contains("=======\r\n"), "output: {output:?}");
+        assert!(output.contains(">>>>>>> REMOTE\r\n"), "output: {output:?}");
+    }
+
+    #[test]
     fn truncate_lines_short() {
         assert_eq!(truncate_lines("a\nb\nc", 5), "a\nb\nc");
     }
@@ -895,11 +1002,25 @@ mod tests {
 
     /// Helper to build output without needing a full view.
     fn build_output_from_segments(segments: &[ConflictSegment]) -> String {
+        build_output_from_segments_with_labels(segments, "LOCAL", "REMOTE", "BASE")
+    }
+
+    fn build_output_from_segments_with_labels(
+        segments: &[ConflictSegment],
+        label_local: &str,
+        label_remote: &str,
+        label_base: &str,
+    ) -> String {
         let mut out = String::new();
         for seg in segments {
             match seg {
                 ConflictSegment::Text(text) => out.push_str(text),
-                ConflictSegment::Block(block) => out.push_str(&chosen_block_text(block)),
+                ConflictSegment::Block(block) => out.push_str(&block_output_text(
+                    block,
+                    label_local,
+                    label_remote,
+                    label_base,
+                )),
             }
         }
         out
