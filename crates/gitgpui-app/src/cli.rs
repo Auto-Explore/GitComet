@@ -6,7 +6,7 @@
 //! - `mergetool`: focused merge view, compatible with `git mergetool`
 
 use clap::{Parser, Subcommand};
-use gitgpui_core::merge::{ConflictStyle, DiffAlgorithm};
+use gitgpui_core::merge::{ConflictStyle, DEFAULT_MARKER_SIZE, DiffAlgorithm};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
@@ -102,6 +102,9 @@ pub struct MergetoolArgs {
     /// Diff algorithm: myers (default) or histogram.
     #[arg(long, value_name = "ALGORITHM")]
     pub diff_algorithm: Option<String>,
+    /// Conflict marker width (must be > 0). Default: 7.
+    #[arg(long, value_name = "N")]
+    pub marker_size: Option<usize>,
 }
 
 // ── Validated configuration types ────────────────────────────────────
@@ -128,6 +131,7 @@ pub struct MergetoolConfig {
     pub label_remote: Option<String>,
     pub conflict_style: ConflictStyle,
     pub diff_algorithm: DiffAlgorithm,
+    pub marker_size: usize,
 }
 
 #[derive(clap::Args, Debug)]
@@ -240,6 +244,14 @@ fn resolve_difftool_with_env(
     })
 }
 
+fn parse_marker_size(marker_size: Option<usize>) -> Result<usize, String> {
+    match marker_size {
+        None => Ok(DEFAULT_MARKER_SIZE),
+        Some(0) => Err("Invalid marker size '0': expected a positive integer.".to_string()),
+        Some(value) => Ok(value),
+    }
+}
+
 /// Resolve and validate mergetool arguments.
 ///
 /// Priority: explicit flags, then env vars (MERGED, LOCAL, REMOTE, BASE).
@@ -248,6 +260,7 @@ fn resolve_mergetool_with_env(
     args: MergetoolArgs,
     env: &dyn EnvLookup,
 ) -> Result<MergetoolConfig, String> {
+    let marker_size = parse_marker_size(args.marker_size)?;
     let base_from_flag = args.base.is_some();
 
     let merged = require_non_empty_path(
@@ -326,6 +339,7 @@ fn resolve_mergetool_with_env(
         label_remote: args.label_remote,
         conflict_style,
         diff_algorithm,
+        marker_size,
     })
 }
 
@@ -669,6 +683,7 @@ fn parse_compat_external_mode_with_config(
             label_remote,
             conflict_style: None,
             diff_algorithm: None,
+            marker_size: None,
         };
         return resolve_mergetool_with_config(args, env, git_config)
             .map(AppMode::Mergetool)
@@ -1117,6 +1132,7 @@ mod tests {
             label_remote: Some("Theirs".into()),
             conflict_style: None,
             diff_algorithm: None,
+            marker_size: None,
         };
 
         let config = resolve_mergetool_with_env(args, &env).unwrap();
@@ -1153,6 +1169,7 @@ mod tests {
             label_remote: None,
             conflict_style: None,
             diff_algorithm: None,
+            marker_size: None,
         };
 
         let config = resolve_mergetool_with_env(args, &env).unwrap();
@@ -1180,6 +1197,7 @@ mod tests {
             label_remote: None,
             conflict_style: None,
             diff_algorithm: None,
+            marker_size: None,
         };
 
         let config = resolve_mergetool_with_env(args, &env).unwrap();
@@ -1212,6 +1230,7 @@ mod tests {
             label_remote: None,
             conflict_style: None,
             diff_algorithm: None,
+            marker_size: None,
         };
 
         let config = resolve_mergetool_with_env(args, &env).unwrap();
@@ -1238,6 +1257,7 @@ mod tests {
             label_remote: None,
             conflict_style: None,
             diff_algorithm: None,
+            marker_size: None,
         };
 
         let err = resolve_mergetool_with_env(args, &TestEnv::new()).unwrap_err();
@@ -1260,6 +1280,7 @@ mod tests {
             label_remote: None,
             conflict_style: None,
             diff_algorithm: None,
+            marker_size: None,
         };
 
         let err = resolve_mergetool_with_env(args, &TestEnv::new()).unwrap_err();
@@ -1283,6 +1304,7 @@ mod tests {
             label_remote: None,
             conflict_style: None,
             diff_algorithm: None,
+            marker_size: None,
         };
 
         let err = resolve_mergetool_with_env(args, &env).unwrap_err();
@@ -1306,6 +1328,7 @@ mod tests {
             label_remote: None,
             conflict_style: None,
             diff_algorithm: None,
+            marker_size: None,
         };
 
         let err = resolve_mergetool_with_env(args, &env).unwrap_err();
@@ -1329,6 +1352,7 @@ mod tests {
             label_remote: None,
             conflict_style: None,
             diff_algorithm: None,
+            marker_size: None,
         };
 
         let err = resolve_mergetool_with_env(args, &env).unwrap_err();
@@ -1353,6 +1377,7 @@ mod tests {
             label_remote: None,
             conflict_style: None,
             diff_algorithm: None,
+            marker_size: None,
         };
 
         let config = resolve_mergetool_with_env(args, &env).unwrap();
@@ -1377,6 +1402,7 @@ mod tests {
             label_remote: None,
             conflict_style: None,
             diff_algorithm: None,
+            marker_size: None,
         };
 
         let err = resolve_mergetool_with_env(args, &env).unwrap_err();
@@ -1433,6 +1459,7 @@ mod tests {
             label_remote: None,
             conflict_style: None,
             diff_algorithm: None,
+            marker_size: None,
         };
 
         let config = resolve_mergetool_with_env(args, &env).unwrap();
@@ -1489,6 +1516,7 @@ mod tests {
             label_remote: None,
             conflict_style: None,
             diff_algorithm: None,
+            marker_size: None,
         };
 
         let config = resolve_mergetool_with_env(args, &env).unwrap();
@@ -1519,6 +1547,7 @@ mod tests {
             label_remote: None,
             conflict_style: None,
             diff_algorithm: None,
+            marker_size: None,
         };
 
         let config = resolve_mergetool_with_env(args, &env).unwrap();
@@ -2348,11 +2377,13 @@ mod tests {
             label_remote: None,
             conflict_style: None,
             diff_algorithm: None,
+            marker_size: None,
         };
 
         let config = resolve_mergetool_with_env(args, &env).unwrap();
         assert_eq!(config.conflict_style, ConflictStyle::Merge);
         assert_eq!(config.diff_algorithm, DiffAlgorithm::Myers);
+        assert_eq!(config.marker_size, DEFAULT_MARKER_SIZE);
     }
 
     #[test]
@@ -2373,6 +2404,7 @@ mod tests {
             label_remote: None,
             conflict_style: Some("diff3".into()),
             diff_algorithm: None,
+            marker_size: None,
         };
 
         let config = resolve_mergetool_with_env(args, &env).unwrap();
@@ -2397,6 +2429,7 @@ mod tests {
             label_remote: None,
             conflict_style: Some("zdiff3".into()),
             diff_algorithm: None,
+            marker_size: None,
         };
 
         let config = resolve_mergetool_with_env(args, &env).unwrap();
@@ -2421,6 +2454,7 @@ mod tests {
             label_remote: None,
             conflict_style: Some("bad".into()),
             diff_algorithm: None,
+            marker_size: None,
         };
 
         let err = resolve_mergetool_with_env(args, &env).unwrap_err();
@@ -2445,6 +2479,7 @@ mod tests {
             label_remote: None,
             conflict_style: None,
             diff_algorithm: Some("histogram".into()),
+            marker_size: None,
         };
 
         let config = resolve_mergetool_with_env(args, &env).unwrap();
@@ -2469,10 +2504,61 @@ mod tests {
             label_remote: None,
             conflict_style: None,
             diff_algorithm: Some("patience".into()),
+            marker_size: None,
         };
 
         let err = resolve_mergetool_with_env(args, &env).unwrap_err();
         assert!(err.contains("Unknown diff algorithm"), "error: {err}");
+    }
+
+    #[test]
+    fn mergetool_marker_size_custom_value() {
+        let dir = tempfile::tempdir().unwrap();
+        let merged = tmp_file(&dir, "m.txt", "x");
+        let local = tmp_file(&dir, "l.txt", "a");
+        let remote = tmp_file(&dir, "r.txt", "b");
+        let env = TestEnv::new();
+
+        let args = MergetoolArgs {
+            merged: Some(merged),
+            local: Some(local),
+            remote: Some(remote),
+            base: None,
+            label_base: None,
+            label_local: None,
+            label_remote: None,
+            conflict_style: None,
+            diff_algorithm: None,
+            marker_size: Some(10),
+        };
+
+        let config = resolve_mergetool_with_env(args, &env).unwrap();
+        assert_eq!(config.marker_size, 10);
+    }
+
+    #[test]
+    fn mergetool_marker_size_zero_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let merged = tmp_file(&dir, "m.txt", "x");
+        let local = tmp_file(&dir, "l.txt", "a");
+        let remote = tmp_file(&dir, "r.txt", "b");
+        let env = TestEnv::new();
+
+        let args = MergetoolArgs {
+            merged: Some(merged),
+            local: Some(local),
+            remote: Some(remote),
+            base: None,
+            label_base: None,
+            label_local: None,
+            label_remote: None,
+            conflict_style: None,
+            diff_algorithm: None,
+            marker_size: Some(0),
+        };
+
+        let err = resolve_mergetool_with_env(args, &env).unwrap_err();
+        assert!(err.contains("Invalid marker size"), "error: {err}");
     }
 
     #[test]
@@ -2490,6 +2576,8 @@ mod tests {
             "zdiff3",
             "--diff-algorithm",
             "histogram",
+            "--marker-size",
+            "10",
         ])
         .unwrap();
 
@@ -2497,6 +2585,7 @@ mod tests {
             Some(Command::Mergetool(args)) => {
                 assert_eq!(args.conflict_style.as_deref(), Some("zdiff3"));
                 assert_eq!(args.diff_algorithm.as_deref(), Some("histogram"));
+                assert_eq!(args.marker_size, Some(10));
             }
             _ => panic!("expected Mergetool command"),
         }
@@ -2516,6 +2605,7 @@ mod tests {
             label_remote: None,
             conflict_style: None,
             diff_algorithm: None,
+            marker_size: None,
         }
     }
 

@@ -47,6 +47,7 @@ pub fn run_mergetool(config: &MergetoolConfig) -> Result<MergetoolRunResult, Str
     let options = MergeOptions {
         style: config.conflict_style,
         diff_algorithm: config.diff_algorithm,
+        marker_size: config.marker_size,
         labels: derive_effective_labels(config),
         ..MergeOptions::default()
     };
@@ -214,6 +215,7 @@ mod tests {
             label_remote: None,
             conflict_style: gitgpui_core::merge::ConflictStyle::default(),
             diff_algorithm: gitgpui_core::merge::DiffAlgorithm::default(),
+            marker_size: gitgpui_core::merge::DEFAULT_MARKER_SIZE,
         }
     }
 
@@ -396,6 +398,7 @@ mod tests {
             label_remote: None,
             conflict_style: gitgpui_core::merge::ConflictStyle::default(),
             diff_algorithm: gitgpui_core::merge::DiffAlgorithm::default(),
+            marker_size: gitgpui_core::merge::DEFAULT_MARKER_SIZE,
         };
 
         let result = run_mergetool(&config).expect("mergetool run");
@@ -434,6 +437,7 @@ mod tests {
             label_remote: None,
             conflict_style: gitgpui_core::merge::ConflictStyle::default(),
             diff_algorithm: gitgpui_core::merge::DiffAlgorithm::default(),
+            marker_size: gitgpui_core::merge::DEFAULT_MARKER_SIZE,
         };
 
         let result = run_mergetool(&config).expect("mergetool run");
@@ -467,6 +471,7 @@ mod tests {
             label_remote: None,
             conflict_style: gitgpui_core::merge::ConflictStyle::default(),
             diff_algorithm: gitgpui_core::merge::DiffAlgorithm::default(),
+            marker_size: gitgpui_core::merge::DEFAULT_MARKER_SIZE,
         };
 
         let result = run_mergetool(&config).expect("mergetool run");
@@ -501,6 +506,7 @@ mod tests {
             label_remote: None,
             conflict_style: gitgpui_core::merge::ConflictStyle::default(),
             diff_algorithm: gitgpui_core::merge::DiffAlgorithm::default(),
+            marker_size: gitgpui_core::merge::DEFAULT_MARKER_SIZE,
         };
 
         let err = run_mergetool(&config).expect_err("expected error");
@@ -525,6 +531,7 @@ mod tests {
             label_remote: None,
             conflict_style: gitgpui_core::merge::ConflictStyle::default(),
             diff_algorithm: gitgpui_core::merge::DiffAlgorithm::default(),
+            marker_size: gitgpui_core::merge::DEFAULT_MARKER_SIZE,
         };
 
         let err = run_mergetool(&config).expect_err("expected error");
@@ -551,6 +558,7 @@ mod tests {
             label_remote: None,
             conflict_style: gitgpui_core::merge::ConflictStyle::default(),
             diff_algorithm: gitgpui_core::merge::DiffAlgorithm::default(),
+            marker_size: gitgpui_core::merge::DEFAULT_MARKER_SIZE,
         };
 
         let err = run_mergetool(&config).expect_err("expected error");
@@ -579,6 +587,7 @@ mod tests {
             label_remote: None,
             conflict_style: gitgpui_core::merge::ConflictStyle::default(),
             diff_algorithm: gitgpui_core::merge::DiffAlgorithm::default(),
+            marker_size: gitgpui_core::merge::DEFAULT_MARKER_SIZE,
         };
 
         let result = run_mergetool(&config).expect("mergetool run");
@@ -612,6 +621,7 @@ mod tests {
             label_remote: None,
             conflict_style: gitgpui_core::merge::ConflictStyle::default(),
             diff_algorithm: gitgpui_core::merge::DiffAlgorithm::default(),
+            marker_size: gitgpui_core::merge::DEFAULT_MARKER_SIZE,
         };
 
         let result = run_mergetool(&config).expect("mergetool run");
@@ -731,6 +741,7 @@ mod tests {
             label_remote: None,
             conflict_style: gitgpui_core::merge::ConflictStyle::default(),
             diff_algorithm: gitgpui_core::merge::DiffAlgorithm::default(),
+            marker_size: gitgpui_core::merge::DEFAULT_MARKER_SIZE,
         };
 
         let result = run_mergetool(&config).expect("mergetool run");
@@ -842,13 +853,7 @@ mod tests {
     #[test]
     fn diff3_style_no_base_uses_empty_tree_label() {
         let tmp = tempfile::tempdir().unwrap();
-        let mut config = make_config(
-            tmp.path(),
-            None,
-            "local change\n",
-            "remote change\n",
-            "",
-        );
+        let mut config = make_config(tmp.path(), None, "local change\n", "remote change\n", "");
         config.conflict_style = gitgpui_core::merge::ConflictStyle::Diff3;
 
         let result = run_mergetool(&config).expect("mergetool run");
@@ -877,11 +882,43 @@ mod tests {
             merged.contains("A\n<<<<<<<"),
             "common prefix A should be outside markers: {merged}"
         );
-        let close_idx = merged.find(">>>>>>>").expect("missing conflict close marker");
+        let close_idx = merged
+            .find(">>>>>>>")
+            .expect("missing conflict close marker");
         let suffix_after_close = merged[close_idx..].contains("\nE\n");
         assert!(
             suffix_after_close,
             "common suffix E should be outside markers: {merged}"
+        );
+    }
+
+    #[test]
+    fn marker_size_from_config_controls_conflict_marker_width() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = make_config(
+            tmp.path(),
+            Some("line\n"),
+            "local change\n",
+            "remote change\n",
+            "",
+        );
+        config.marker_size = 10;
+
+        let result = run_mergetool(&config).expect("mergetool run");
+        assert_eq!(result.exit_code, exit_code::CANCELED);
+
+        let merged = fs::read_to_string(&config.merged).unwrap();
+        assert!(
+            merged.contains("<<<<<<<<<< local.txt"),
+            "expected 10-char opening marker\noutput: {merged}"
+        );
+        assert!(
+            merged.contains("\n==========\n"),
+            "expected 10-char separator marker\noutput: {merged}"
+        );
+        assert!(
+            merged.contains(">>>>>>>>>> remote.txt"),
+            "expected 10-char closing marker\noutput: {merged}"
         );
     }
 

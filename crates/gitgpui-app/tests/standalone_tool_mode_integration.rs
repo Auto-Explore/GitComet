@@ -134,6 +134,50 @@ fn standalone_mergetool_conflict_exits_one_and_writes_markers() {
 }
 
 #[test]
+fn standalone_mergetool_marker_size_flag_controls_marker_width() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = dir.path().join("base.txt");
+    let local = dir.path().join("local.txt");
+    let remote = dir.path().join("remote.txt");
+    let merged = dir.path().join("merged.txt");
+
+    write_file(&base, "line\n");
+    write_file(&local, "ours\n");
+    write_file(&remote, "theirs\n");
+
+    let output = run_gitgpui([
+        OsString::from("mergetool"),
+        OsString::from("--base"),
+        base.as_os_str().to_owned(),
+        OsString::from("--local"),
+        local.as_os_str().to_owned(),
+        OsString::from("--remote"),
+        remote.as_os_str().to_owned(),
+        OsString::from("--merged"),
+        merged.as_os_str().to_owned(),
+        OsString::from("--marker-size"),
+        OsString::from("10"),
+    ]);
+
+    let text = output_text(&output);
+    assert_eq!(output.status.code(), Some(1), "expected exit 1\n{text}");
+
+    let merged_text = fs::read_to_string(&merged).expect("merged output to exist");
+    assert!(
+        merged_text.contains("<<<<<<<<<<"),
+        "expected 10-char opening marker\n{text}\nmerged:\n{merged_text}"
+    );
+    assert!(
+        merged_text.contains("\n==========\n"),
+        "expected 10-char separator marker\n{text}\nmerged:\n{merged_text}"
+    );
+    assert!(
+        merged_text.contains(">>>>>>>>>>"),
+        "expected 10-char closing marker\n{text}\nmerged:\n{merged_text}"
+    );
+}
+
+#[test]
 fn standalone_mergetool_invalid_path_exits_two() {
     let dir = tempfile::tempdir().unwrap();
     let base = dir.path().join("base.txt");
@@ -218,7 +262,10 @@ fn standalone_compat_difftool_accepts_meld_style_label_flags() {
     let text = output_text(&output);
     assert_eq!(output.status.code(), Some(0), "expected exit 0\n{text}");
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("--- LEFT_LABEL"), "expected left label\n{text}");
+    assert!(
+        stdout.contains("--- LEFT_LABEL"),
+        "expected left label\n{text}"
+    );
     assert!(
         stdout.contains("+++ RIGHT_LABEL"),
         "expected right label\n{text}"

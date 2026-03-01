@@ -1,10 +1,10 @@
 ## STATUS: COMPLETE
 
-All components from both design documents are fully implemented. Iteration 41 closes the remaining no-base E2E parity gap by asserting git-invoked add/add flows pass an existing empty `BASE` stage file to the configured mergetool.
+All components from both design documents are fully implemented. Iteration 42 adds end-to-end marker-width parity for dedicated mergetool mode by exposing `--marker-size` in CLI parsing/runtime and covering it with unit + standalone integration tests.
 
 ## Implementation Progress
 
-### Progress Snapshot (Iteration 41)
+### Progress Snapshot (Iteration 42)
 
 External Diff/Merge Usage Design (`external_usage.md`)
 - ✅ Dedicated CLI modes (`difftool`, `mergetool`) and arg/env validation are implemented.
@@ -15,6 +15,7 @@ External Diff/Merge Usage Design (`external_usage.md`)
 - ✅ CLI empty-path hardening is implemented: required `LOCAL`/`REMOTE`/`MERGED` inputs now reject empty path values with actionable parse-time errors, optional display-path env vars ignore empty strings, and empty `BASE` from env is normalized to no-base while explicit empty `--base` is rejected.
 - ✅ Difftool env compatibility is complete: display-path resolution now honors optional `MERGED` and `BASE` compatibility vars with explicit precedence (`--path` > `MERGED` > `BASE`).
 - ✅ Mergetool CLI compatibility aliases are implemented: `-o`/`--output`/`--out` for output path and `--L1`/`--L2`/`--L3` for labels (KDiff3/Meld-style command compatibility).
+- ✅ Dedicated mergetool marker-width control is now exposed end-to-end via `--marker-size <N>` with strict validation (`N > 0`), runtime propagation into merge options, and standalone/CLI regression coverage.
 - ✅ Standalone mergetool output-target behavior is implemented: `MERGED` may be a new path, and runtime creates parent directories before writing.
 - ✅ Focused difftool/mergetool runtimes are implemented with Git-compatible exit semantics.
 - ✅ Standalone binary-level exit contract is now explicitly covered by direct `gitgpui-app` E2E tests (`difftool`/`mergetool` success, unresolved conflict, and invalid-input paths mapped to exit codes `0/1/2`).
@@ -45,6 +46,7 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
 - ✅ Phase 4A implemented: critical `t7610` mergetool E2E scenarios, including `trustExitCode=false` unchanged-output and changed-output behavior, plus explicit no-base add/add stage-file assertions in git-invoked coverage.
 - ✅ Phase 4B implemented: critical `t7800` difftool E2E scenarios.
 - ✅ Phase 5 implemented: Meld-derived matcher/interval/newline portability suites.
+- ✅ Phase 1A marker-size portability is now wired through dedicated mergetool command mode (`--marker-size`), not only the core merge API tests.
 - 🔧 Partially implemented components: none.
 - ⬜ Not-yet-started components: none.
 
@@ -66,7 +68,7 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
 - ✅ Conflict-marker label formatter and runtime integration implemented: `crates/gitgpui-core/src/conflict_labels.rs` provides `empty tree`/`<short-sha>:<path>`/merged-ancestors/rebase-parent formatting, and `crates/gitgpui-app/src/mergetool_mode.rs` now applies filename/`empty tree` fallback labels in dedicated mergetool flows.
 - ✅ Focused command-mode execution paths fully implemented:
   - ✅ `difftool` mode executes a dedicated runtime path in `crates/gitgpui-app/src/difftool_mode.rs` (delegates to `git diff --no-index --no-ext-diff`, strips recursive `GIT_EXTERNAL_DIFF` env, supports labels/display-path headers, and maps git exit `1`/diff-present to app success exit `0`).
-  - ✅ `mergetool` mode executes a dedicated runtime path in `crates/gitgpui-app/src/mergetool_mode.rs` using the built-in 3-way merge algorithm (`merge_file_bytes`). Reads base/local/remote files, performs automatic merge, writes result to MERGED path (creating parent directories as needed). Exits 0 on clean merge, 1 on unresolved conflicts. Supports labels (including default filename fallbacks and `empty tree` no-base diff3/zdiff3 base label fallback), no-base (add/add) scenarios, byte-level binary file detection (null-byte and non-UTF-8 detection; copies local side), CRLF preservation, paths with spaces, configurable conflict style (`--conflict-style merge|diff3|zdiff3`), and diff algorithm selection (`--diff-algorithm myers|histogram`). 29 unit tests.
+  - ✅ `mergetool` mode executes a dedicated runtime path in `crates/gitgpui-app/src/mergetool_mode.rs` using the built-in 3-way merge algorithm (`merge_file_bytes`). Reads base/local/remote files, performs automatic merge, writes result to MERGED path (creating parent directories as needed). Exits 0 on clean merge, 1 on unresolved conflicts. Supports labels (including default filename fallbacks and `empty tree` no-base diff3/zdiff3 base label fallback), no-base (add/add) scenarios, byte-level binary file detection (null-byte and non-UTF-8 detection; copies local side), CRLF preservation, paths with spaces, configurable conflict style (`--conflict-style merge|diff3|zdiff3`), diff algorithm selection (`--diff-algorithm myers|histogram`), and marker width control (`--marker-size <N>`). 30 unit tests.
 - ✅ External mergetool backend launch exists (`launch_mergetool`) with stage materialization (`BASE/LOCAL/REMOTE`), trust-exit behavior, unresolved-marker rejection, and staging semantics.
 - ✅ Mergetool GUI selection and path override support implemented:
   - `merge.guitool` + `mergetool.guiDefault` precedence logic
@@ -182,7 +184,22 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
   - ✅ Git-invoked E2E coverage for basic invocation, subdirectory execution, pathspec filtering, spaced path handling, `--dir-diff`, binary content, and non-UTF8 content.
   - ✅ Explicit `difftool.guiDefault` selection-path parity (`auto` with/without `DISPLAY`, `--gui`, `--no-gui`).
   - ✅ Dedicated trust-exit interaction matrix assertions (`difftool.trustExitCode`, `--trust-exit-code`, `--no-trust-exit-code`).
-  - ✅ `git difftool --tool-help` discoverability assertion for configured `gitgpui` tool.
+- ✅ `git difftool --tool-help` discoverability assertion for configured `gitgpui` tool.
+
+### Latest Component Delivered (Iteration 42) — End-to-End Mergetool Marker-Width Parity
+
+- Implemented dedicated mergetool marker-size support in `crates/gitgpui-app/src/cli.rs`:
+  - added `--marker-size <N>` CLI flag for `gitgpui-app mergetool`
+  - added strict validation (`N > 0`) with actionable parse error on `0`
+  - wired validated value into `MergetoolConfig` as `marker_size`
+- Wired runtime propagation in `crates/gitgpui-app/src/mergetool_mode.rs`:
+  - mergetool mode now forwards `marker_size` into `MergeOptions`
+  - added unit coverage asserting 10-character conflict markers are emitted when configured
+- Added standalone E2E coverage in `crates/gitgpui-app/tests/standalone_tool_mode_integration.rs`:
+  - `standalone_mergetool_marker_size_flag_controls_marker_width`
+- Verification:
+  - `cargo test -p gitgpui-app --bin gitgpui-app -- --nocapture`
+  - `cargo test -p gitgpui-app --test standalone_tool_mode_integration -- --nocapture`
 
 ### Latest Component Delivered (Iteration 41) — No-Base Add/Add Git E2E Stage-File Parity
 
