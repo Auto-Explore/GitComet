@@ -1,10 +1,10 @@
 ## STATUS: COMPLETE
 
-All components from both design documents are fully implemented. Latest update wires GUI tool variant into `setup` command so `guiDefault=auto` correctly selects interactive GPUI windows.
+All components from both design documents are fully implemented. Latest update hardens focused merge malformed-marker parsing to preserve exact source text and CRLF line endings in interactive conflict flows.
 
 ## Implementation Progress
 
-### Progress Snapshot (Iteration 56)
+### Progress Snapshot (Iteration 57)
 
 External Diff/Merge Usage Design (`external_usage.md`)
 - ✅ Dedicated CLI modes (`difftool`, `mergetool`) and arg/env validation are implemented.
@@ -31,6 +31,7 @@ External Diff/Merge Usage Design (`external_usage.md`)
 - ✅ Difftool submodule behavior-matrix coverage is now explicit in git-invoked E2E tests: submodule gitlink-only changes are diffed via temporary `Subproject commit <sha>` files, and output includes both old/new commit pointers.
 - ✅ Automated git config setup: `gitgpui-app setup` subcommand writes all recommended git config entries (merge.tool, diff.tool, mergetool.gitgpui.cmd, difftool.gitgpui.cmd, `mergetool.trustExitCode`, `mergetool.gitgpui.trustExitCode`, `difftool.trustExitCode`, `difftool.gitgpui.trustExitCode`, prompt suppression, guiDefault=auto). Both mergetool and difftool sides now have symmetric generic + per-tool trust keys. Supports `--dry-run` (print commands without executing) and `--local` (repo-scoped instead of global). Dry-run output is shell-runnable with robust quoting for nested command values and literal `$BASE/$LOCAL/$REMOTE/$MERGED` placeholders. Covered by unit tests and standalone setup integration tests.
 - ✅ GUI tool variant in setup: `merge.guitool` and `diff.guitool` now reference a separate `gitgpui-gui` tool name whose commands include `--gui`, so `guiDefault=auto` correctly selects the interactive GPUI window when DISPLAY is available and the headless algorithm-only backend when it is not. Config entries: `mergetool.gitgpui-gui.cmd` (with `--gui`), `mergetool.gitgpui-gui.trustExitCode`, `difftool.gitgpui-gui.cmd` (with `--gui`), `difftool.gitgpui-gui.trustExitCode`. Covered by 4 new unit tests (`gui_tool_uses_separate_tool_name`, `gui_tool_cmd_includes_gui_flag`, `headless_tool_cmd_omits_gui_flag`) and updated standalone E2E assertions.
+- ✅ Focused merge malformed-marker preservation is hardened in `crates/gitgpui-ui-gpui/src/view/conflict_resolver.rs`: parser fallback now preserves consumed base/separator marker text exactly (including CRLF endings) instead of synthesizing `=======\n`, preventing line-ending drift and content loss in malformed-block round trips. Covered by new regression tests `malformed_missing_end_marker_crlf_preserved_as_text` and `malformed_diff3_missing_end_marker_preserved_as_text`.
 - ✅ Mergetool `--auto` heuristic auto-resolve mode is now implemented: when `--auto` is passed to `gitgpui-app mergetool` (or `--auto`/`--auto-merge` via KDiff3/Meld compatibility mode), the mergetool applies heuristic passes on remaining conflict blocks after the initial 3-way merge: identical-side detection, single-side-change detection (requires diff3/zdiff3 base), whitespace-only normalization, and subchunk splitting (line-level re-merge within blocks). If ALL conflicts are resolved, writes clean output and exits 0. If any remain, writes markers and exits 1. Core function `try_autosolve_merged_text()` is public in `conflict_session.rs` with 8 unit tests. 5 mergetool runtime tests + 4 standalone E2E tests + 4 CLI parser tests cover the full pipeline.
 - ✅ Dedicated mergetool conflict-marker labels now have Git-style runtime fallback semantics: missing labels default to input filenames, and no-base diff3/zdiff3 base labels default to `empty tree` (with focused unit coverage).
 - ✅ Automatic git config fallback: mergetool reads `merge.conflictstyle` and `diff.algorithm` from git config when no CLI flag is provided, mirroring `git merge-file` behavior. CLI flags take priority over git config, and git config takes priority over defaults. Unknown config values are gracefully ignored. Iteration 37 extends this parity to no-subcommand compatibility invocations (`kdiff3`-style `--auto/-o/--L*`), which previously bypassed fallback.
@@ -59,6 +60,7 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
 - ✅ Phase 5 implemented: Meld-derived matcher/interval/newline portability suites.
 - ✅ Phase 5A exact portability parity is now implemented for Meld matching blocks: `myers_basic`, `myers_postprocess`, and `myers_inline_trigram` now assert exact tuple outputs via a Meld-style matcher pipeline in `crates/gitgpui-core/src/text_utils.rs` (prefix/suffix trimming, optional discard preprocessing, postprocess cleanup, and inline trigram mode).
 - ✅ Phase 1A marker-size portability is now wired through dedicated mergetool command mode (`--marker-size`), not only the core merge API tests.
+- ✅ Phase 4A/behavior-matrix hardening in interactive resolver path: malformed marker round-trip handling now preserves CRLF and diff3 marker sections in focused GPUI merge parser fallback (`conflict_resolver.rs`), with dedicated regression coverage for malformed no-end-marker cases.
 - 🔧 Partially implemented components: none.
 - ⬜ Not-yet-started components: none.
 
@@ -213,7 +215,20 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
   - ✅ Dedicated trust-exit interaction matrix assertions (`difftool.trustExitCode`, `--trust-exit-code`, `--no-trust-exit-code`).
 - ✅ `git difftool --tool-help` discoverability assertion for configured `gitgpui` tool.
 
-### Latest Component Delivered (Iteration 56) — GUI Tool Variant in Setup Config
+### Latest Component Delivered (Iteration 57) — Focused Merge Malformed-Marker CRLF Preservation
+
+- Hardened malformed-marker fallback in `crates/gitgpui-ui-gpui/src/view/conflict_resolver.rs`:
+  - parser now preserves consumed marker text exactly in no-end-marker scenarios, including `|||||||` base sections and the original `=======` separator line text
+  - removes synthetic `=======\n` insertion that could normalize CRLF and drop diff3 base-marker content
+- Added focused regression coverage:
+  - `malformed_missing_end_marker_crlf_preserved_as_text`
+  - `malformed_diff3_missing_end_marker_preserved_as_text`
+- This closes a remaining interactive-path gap for external behavior-matrix line-ending preservation in malformed conflict round trips.
+- Verification:
+  - `cargo test -p gitgpui-ui-gpui` — 207 passed, 0 failed, 2 ignored
+  - `cargo test -p gitgpui-app --test standalone_tool_mode_integration` — 22 passed, 0 failed
+
+### Previous Component Delivered (Iteration 56) — GUI Tool Variant in Setup Config
 
 - Fixed `gitgpui-app setup` to register a separate `gitgpui-gui` tool variant whose commands include `--gui`:
   - `mergetool.gitgpui-gui.cmd` = mergetool command with `--gui` flag

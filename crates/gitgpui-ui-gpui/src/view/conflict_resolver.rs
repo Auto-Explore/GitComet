@@ -171,6 +171,7 @@ pub fn parse_conflict_markers(text: &str) -> Vec<ConflictSegment> {
         let start_marker = line;
 
         let mut base_marker_line: Option<&str> = None;
+        let mut separator_line: Option<String> = None;
         let mut base: Option<String> = None;
         let mut ours = String::new();
         let mut found_sep = false;
@@ -178,6 +179,7 @@ pub fn parse_conflict_markers(text: &str) -> Vec<ConflictSegment> {
         while let Some(l) = it.next() {
             if l.starts_with("=======") {
                 found_sep = true;
+                separator_line = Some(l.to_string());
                 break;
             }
             if l.starts_with("|||||||") {
@@ -186,6 +188,7 @@ pub fn parse_conflict_markers(text: &str) -> Vec<ConflictSegment> {
                 for l in it.by_ref() {
                     if l.starts_with("=======") {
                         found_sep = true;
+                        separator_line = Some(l.to_string());
                         break;
                     }
                     base_buf.push_str(l);
@@ -223,7 +226,15 @@ pub fn parse_conflict_markers(text: &str) -> Vec<ConflictSegment> {
             // Malformed marker; preserve as plain text.
             buf.push_str(start_marker);
             buf.push_str(&ours);
-            buf.push_str("=======\n");
+            if let Some(base_marker_line) = base_marker_line {
+                buf.push_str(base_marker_line);
+            }
+            if let Some(base) = base.as_deref() {
+                buf.push_str(base);
+            }
+            if let Some(separator_line) = separator_line.as_deref() {
+                buf.push_str(separator_line);
+            }
             buf.push_str(&theirs);
             break;
         }
@@ -1534,6 +1545,27 @@ mod tests {
             input,
             "malformed content must be preserved"
         );
+    }
+
+    #[test]
+    fn malformed_missing_end_marker_crlf_preserved_as_text() {
+        // Same malformed structure as above, but with CRLF endings.
+        // The parser should preserve line endings exactly.
+        let input = "a\r\n<<<<<<< HEAD\r\nfoo\r\n=======\r\nbar\r\n";
+        let segments = parse_conflict_markers(input);
+        assert_eq!(conflict_count(&segments), 0);
+        assert_eq!(generate_resolved_text(&segments), input);
+    }
+
+    #[test]
+    fn malformed_diff3_missing_end_marker_preserved_as_text() {
+        // Diff3 malformed block (no >>>>>>> end marker). Ensure the base marker
+        // section and separator are preserved exactly.
+        let input =
+            "a\r\n<<<<<<< ours\r\none\r\n||||||| base\r\norig\r\n=======\r\nuno\r\n";
+        let segments = parse_conflict_markers(input);
+        assert_eq!(conflict_count(&segments), 0);
+        assert_eq!(generate_resolved_text(&segments), input);
     }
 
     #[test]
