@@ -1002,6 +1002,10 @@ pub fn history_merge_region(
 
 /// Parse text into history entries. Returns entries found after the section
 /// start marker (or from the beginning if the entire text is a history block).
+///
+/// Trailing non-entry content (detected by a blank-line break followed by
+/// non-entry lines) is excluded from the last entry so it can be preserved
+/// separately by `history_section_suffix`.
 fn parse_history_entries(text: &str, section_re: &Regex, entry_re: &Regex) -> Vec<HistoryEntry> {
     let mut entries = Vec::new();
     let lines: Vec<&str> = text.lines().collect();
@@ -1020,9 +1024,19 @@ fn parse_history_entries(text: &str, section_re: &Regex, entry_re: &Regex) -> Ve
         section_start + 1
     };
 
+    // Find the last entry-start line and determine where trailing content
+    // begins so we don't include it in the last entry's text.
+    let last_entry_start = lines[scan_start..]
+        .iter()
+        .rposition(|l| entry_re.is_match(l))
+        .map(|rel| rel + scan_start);
+    let scan_end = last_entry_start
+        .and_then(|last| find_trailing_content_start(&lines, last, entry_re))
+        .unwrap_or(lines.len());
+
     let mut current_entry_text = String::new();
 
-    for &line in lines.iter().skip(scan_start) {
+    for &line in &lines[scan_start..scan_end] {
         if entry_re.is_match(line) && !current_entry_text.is_empty() {
             // Finish previous entry.
             entries.push(make_history_entry(std::mem::take(&mut current_entry_text)));
@@ -1141,21 +1155,67 @@ fn history_section_prefix(text: &str, section_re: &Regex, entry_re: &Regex) -> S
 }
 
 /// Extract text after the last history entry (trailing content).
+///
+/// Uses a blank-line heuristic: after the last `entry_re` match, the first
+/// blank line followed by a non-blank, non-entry-start line marks the
+/// boundary between entry content and trailing content. Trailing blank
+/// lines at end-of-text are also captured so file formatting is preserved.
 fn history_section_suffix(text: &str, entry_re: &Regex) -> String {
     let lines: Vec<&str> = text.lines().collect();
-    // Find the last entry start.
     let last_entry_start = lines.iter().rposition(|l| entry_re.is_match(l));
     let Some(last_start) = last_entry_start else {
         return String::new();
     };
 
-    // Find where this last entry ends — at the next blank line followed by
-    // non-entry content, or at end of text. For simplicity, we consider
-    // everything after the last entry's block as suffix only if there are
-    // blank-line-separated trailing lines that don't match entry_re.
-    // For now, return empty — entries typically go to end of section.
-    let _ = last_start;
-    String::new()
+    if let Some(suffix_start) = find_trailing_content_start(&lines, last_start, entry_re) {
+        let mut suffix = String::new();
+        for &line in &lines[suffix_start..] {
+            suffix.push_str(line);
+            suffix.push('\n');
+        }
+        suffix
+    } else {
+        String::new()
+    }
+}
+
+/// Find the line index where trailing non-entry content begins after the
+/// last history entry. Returns `None` if entries extend to end of text
+/// without a blank-line-separated non-entry section.
+///
+/// Heuristic: scan forward from the last `entry_re` match. When we hit
+/// one or more blank lines followed by a non-blank line that doesn't match
+/// `entry_re`, everything from the first blank line onward is trailing
+/// content. Trailing blank lines at end-of-text are also treated as
+/// trailing content to preserve file formatting.
+fn find_trailing_content_start(
+    lines: &[&str],
+    last_entry_start: usize,
+    entry_re: &Regex,
+) -> Option<usize> {
+    let mut i = last_entry_start + 1;
+
+    while i < lines.len() {
+        if lines[i].trim().is_empty() {
+            let blank_start = i;
+            // Skip past consecutive blank lines.
+            while i < lines.len() && lines[i].trim().is_empty() {
+                i += 1;
+            }
+            if i >= lines.len() {
+                // Only blank lines remain — treat as trailing content.
+                return Some(blank_start);
+            }
+            if !entry_re.is_match(lines[i]) {
+                // Non-blank, non-entry line after blank gap → trailing content.
+                return Some(blank_start);
+            }
+            // Blank line between entries — continue scanning.
+        }
+        i += 1;
+    }
+
+    None
 }
 
 // ---------------------------------------------------------------------------
@@ -2768,6 +2828,33 @@ unterminated content with no separator
         assert_eq!(merged, "aaa\nCCC\n");
     }
 
+    #[test]
+    fn subchunk_split_skips_large_inputs() {
+        // Inputs exceeding SUBCHUNK_MAX_LINES (500) should return None.
+        let large = (0..501).map(|i| format!("line {i}\n")).collect::<String>();
+        let base = &large;
+        let ours = &large.replace("line 0", "LINE 0");
+        let theirs = &large.replace("line 1", "LINE 1");
+
+        let result = split_conflict_into_subchunks(base, ours, theirs);
+        assert!(
+            result.is_none(),
+            "inputs exceeding SUBCHUNK_MAX_LINES should return None"
+        );
+
+        // Just under the limit should still work.
+        let medium = (0..500).map(|i| format!("line {i}\n")).collect::<String>();
+        let base = &medium;
+        let ours = &medium.replace("line 0", "LINE 0");
+        let theirs = &medium.replace("line 1", "LINE 1");
+
+        let result = split_conflict_into_subchunks(base, ours, theirs);
+        assert!(
+            result.is_some(),
+            "inputs at SUBCHUNK_MAX_LINES boundary should still split"
+        );
+    }
+
     // -- History-aware auto-resolve tests --
 
     #[test]
@@ -2975,6 +3062,90 @@ unterminated content with no separator
     #[test]
     fn history_autosolve_rule_description() {
         assert!(!AutosolveRule::HistoryMerged.description().is_empty());
+    }
+
+    // -- history merge trailing content --
+
+    #[test]
+    fn history_merge_preserves_trailing_content() {
+        let options = HistoryAutosolveOptions::bullet_list();
+        let base = "# Changelog\n- Entry 1\n\n## License\nMIT\n";
+        let ours = "# Changelog\n- Entry 1\n- Entry 2\n\n## License\nMIT\n";
+        let theirs = "# Changelog\n- Entry 1\n- Entry 3\n\n## License\nMIT\n";
+
+        let result = history_merge_region(Some(base), ours, theirs, &options);
+        assert!(result.is_some(), "should merge changelog with trailing content");
+        let merged = result.unwrap();
+
+        assert!(merged.contains("- Entry 2"), "should have ours entry");
+        assert!(merged.contains("- Entry 3"), "should have theirs entry");
+        assert!(merged.contains("## License\nMIT\n"), "should preserve trailing content");
+        // Trailing content should appear exactly once.
+        assert_eq!(
+            merged.matches("## License").count(),
+            1,
+            "trailing content should not be duplicated"
+        );
+    }
+
+    #[test]
+    fn history_merge_preserves_trailing_blank_lines() {
+        let options = HistoryAutosolveOptions::bullet_list();
+        let ours = "# Changes\n- Entry A\n\n";
+        let theirs = "# Changes\n- Entry B\n\n";
+
+        let result = history_merge_region(None, ours, theirs, &options);
+        assert!(result.is_some());
+        let merged = result.unwrap();
+        assert!(merged.contains("- Entry A"));
+        assert!(merged.contains("- Entry B"));
+        // Should preserve trailing blank line.
+        assert!(merged.ends_with("\n\n"), "should preserve trailing blank lines");
+    }
+
+    #[test]
+    fn history_merge_no_trailing_content_still_works() {
+        // Entries go to end of text, no trailing section.
+        let options = HistoryAutosolveOptions::bullet_list();
+        let base = "# Changelog\n- Old entry\n";
+        let ours = "# Changelog\n- Old entry\n- New ours\n";
+        let theirs = "# Changelog\n- Old entry\n- New theirs\n";
+
+        let result = history_merge_region(Some(base), ours, theirs, &options);
+        assert!(result.is_some());
+        let merged = result.unwrap();
+        assert!(merged.contains("- New ours"));
+        assert!(merged.contains("- New theirs"));
+        // No trailing content should be present.
+        let last_line = merged.trim_end().lines().last().unwrap_or("");
+        assert!(last_line.starts_with("- "), "should end with an entry line");
+    }
+
+    #[test]
+    fn history_section_suffix_extracts_trailing_section() {
+        let entry_re = Regex::new(r"^[-*]\s+").unwrap();
+        let text = "- Entry 1\n- Entry 2\n\n## Footer\nSome text\n";
+
+        let suffix = history_section_suffix(text, &entry_re);
+        assert_eq!(suffix, "\n## Footer\nSome text\n");
+    }
+
+    #[test]
+    fn history_section_suffix_returns_empty_when_no_trailing() {
+        let entry_re = Regex::new(r"^[-*]\s+").unwrap();
+        let text = "- Entry 1\n- Entry 2\n";
+
+        let suffix = history_section_suffix(text, &entry_re);
+        assert!(suffix.is_empty());
+    }
+
+    #[test]
+    fn history_section_suffix_captures_trailing_blank_lines() {
+        let entry_re = Regex::new(r"^[-*]\s+").unwrap();
+        let text = "- Entry 1\n\n";
+
+        let suffix = history_section_suffix(text, &entry_re);
+        assert_eq!(suffix, "\n", "trailing blank line should be the suffix");
     }
 
     // -- counter/navigation correctness after sequential region picks --
