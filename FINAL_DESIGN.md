@@ -1,15 +1,16 @@
 ## STATUS: COMPLETE
 
-All components from both design documents are fully implemented. Iteration 17 adds Phase 3B permutation-corpus alignment invariants (sequence monotonicity + consistency) to close the remaining portability-plan gap.
+All components from both design documents are fully implemented. Iteration 18 extends Phase 4A delete/delete parity with explicit git-invoked `d` / `m` / `a` choice coverage from `t7610`.
 
 ## Implementation Progress
 
-### Progress Snapshot (Iteration 17 — Final)
+### Progress Snapshot (Iteration 18 — Final)
 
 External Diff/Merge Usage Design (`external_usage.md`)
 - ✅ Dedicated CLI modes (`difftool`, `mergetool`) and arg/env validation are implemented.
 - ✅ Focused difftool/mergetool runtimes are implemented with Git-compatible exit semantics.
 - ✅ Git-invoked E2E coverage exists for `git difftool` and `git mergetool` parity scenarios (GUI selection, trust-exit handling, spaced/unicode paths, subdir invocation, `--tool-help`, symlink/submodule/delete-modify edge cases, order-file behavior, and explicit `mergetool.writeToTemp` path-shape parity).
+- ✅ Delete/delete conflict choice matrix parity is now explicit in git-invoked tests (`d` delete, `m` modified destination, `a` abort non-zero) for path-targeted mergetool flows.
 - ✅ Parity-focused CI regression gates implemented in `.github/workflows/rust.yml` (Phase 3, rollout item #2): separate CI jobs for clippy, merge algorithm parity, fixture/corpus regression, git mergetool/difftool E2E, and backend integration.
 - ✅ Mergetool backend parity features are implemented (`mergetool.<tool>.path`, `writeToTemp`, `keepTemporaries`, unresolved-marker rejection, deleted-output staging).
 
@@ -120,6 +121,7 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
   - ✅ GUI fallback: `--gui` with no `merge.guitool` falls back to `merge.tool`
   - ✅ nonexistent tool error: tool with invalid command reports failure
   - ✅ delete/delete conflict handling: both-deleted files resolved correctly
+  - ✅ delete/delete path-targeted choice parity (`git mergetool a/a/file.txt`): `d` removes original path, `m` keeps modified destination (`b/b/file.txt`), `a` aborts with non-zero
   - ✅ modify/delete conflict handling: pipeline completes without crash
   - ✅ orderFile invocation order parity (`diff.orderFile` and CLI `-O...`) in `crates/gitgpui-app/tests/mergetool_git_integration.rs`
   - ✅ symlink conflict resolution: l/r prompt handling, coexistence with normal file conflicts
@@ -135,6 +137,21 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
   - ✅ Explicit `difftool.guiDefault` selection-path parity (`auto` with/without `DISPLAY`, `--gui`, `--no-gui`).
   - ✅ Dedicated trust-exit interaction matrix assertions (`difftool.trustExitCode`, `--trust-exit-code`, `--no-trust-exit-code`).
   - ✅ `git difftool --tool-help` discoverability assertion for configured `gitgpui` tool.
+
+### Latest Component Delivered (Iteration 18) — Delete/Delete `d` / `m` / `a` Mergetool Parity
+
+- Added a dedicated rename/rename conflict setup helper in `crates/gitgpui-app/tests/mergetool_git_integration.rs` that reproduces t7610's delete/delete-at-original-path scenario (`a/a/file.txt` while branches rename to `b/b/file.txt` and `c/c/file.txt`).
+- Added 3 new git-invoked mergetool E2E tests:
+  - `git_mergetool_delete_delete_choice_d_deletes_original_path`
+  - `git_mergetool_delete_delete_choice_m_keeps_modified_destination`
+  - `git_mergetool_delete_delete_choice_a_aborts_with_nonzero`
+- Coverage now explicitly verifies the path-targeted `git mergetool a/a/file.txt` choice matrix from `t7610-mergetool.sh`:
+  - `d` choice deletes original path
+  - `m` choice keeps modified destination (`b/b/file.txt`)
+  - `a` choice aborts and returns non-zero
+- Verification:
+  - `cargo test -p gitgpui-app --test mergetool_git_integration delete_delete -- --nocapture`
+  - `cargo test -p gitgpui-app --test mergetool_git_integration`
 
 ### Latest Component Delivered (Iteration 17) — Phase 3B Permutation Alignment Invariants
 

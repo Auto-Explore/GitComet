@@ -206,6 +206,38 @@ fn setup_order_file_conflict(repo: &Path) {
     run_git_expect_failure(repo, &["merge", "side1"]);
 }
 
+/// Create the t7610-style rename/rename setup that presents as a delete/delete
+/// conflict at `a/a/file.txt` when merging `move-to-b` into `move-to-c`.
+///
+/// Returns `true` when a merge conflict is present and mergetool scenarios
+/// should run. Some git versions may auto-resolve; callers can skip on `false`.
+fn setup_delete_delete_rename_conflict(repo: &Path) -> bool {
+    init_repo(repo);
+
+    // Base file at a/a/file.txt
+    fs::create_dir_all(repo.join("a/a")).unwrap();
+    write_file(repo, "a/a/file.txt", "one\ntwo\n3\n4\n");
+    commit_all(repo, "base file");
+
+    // move-to-b branch: rename + edit.
+    run_git(repo, &["checkout", "-b", "move-to-b"]);
+    fs::create_dir_all(repo.join("b/b")).unwrap();
+    run_git(repo, &["mv", "a/a/file.txt", "b/b/file.txt"]);
+    write_file(repo, "b/b/file.txt", "one\ntwo\n4\n");
+    commit_all(repo, "move to b");
+
+    // move-to-c branch: rename + edit.
+    run_git(repo, &["checkout", "main"]);
+    run_git(repo, &["checkout", "-b", "move-to-c"]);
+    fs::create_dir_all(repo.join("c/c")).unwrap();
+    run_git(repo, &["mv", "a/a/file.txt", "c/c/file.txt"]);
+    write_file(repo, "c/c/file.txt", "one\ntwo\n3\n");
+    commit_all(repo, "move to c");
+
+    let merge_output = run_git_capture(repo, &["merge", "move-to-b"]);
+    !merge_output.status.success()
+}
+
 fn read_recorded_merge_order(log_path: &Path) -> Vec<String> {
     let raw = fs::read_to_string(log_path).expect("read merge-order log");
     raw.lines()
@@ -1192,6 +1224,83 @@ fn git_mergetool_delete_delete_conflict_handling() {
     assert!(
         !repo.join("to_delete.txt").exists(),
         "expected both-deleted file to be removed after mergetool"
+    );
+}
+
+#[test]
+fn git_mergetool_delete_delete_choice_d_deletes_original_path() {
+    // Port of t7610 delete/delete "d" choice.
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+
+    if !setup_delete_delete_rename_conflict(repo) {
+        // Auto-resolved by git version under test.
+        return;
+    }
+
+    configure_gitgpui_mergetool(repo);
+
+    let output = run_git_with_stdin(repo, &["mergetool", "a/a/file.txt"], "d\n");
+    let text = output_text(&output);
+    assert!(
+        output.status.success(),
+        "expected delete/delete resolution with 'd' to succeed\n{text}"
+    );
+    assert!(
+        !repo.join("a/a/file.txt").exists(),
+        "expected original path to be deleted after 'd' choice\n{text}"
+    );
+}
+
+#[test]
+fn git_mergetool_delete_delete_choice_m_keeps_modified_destination() {
+    // Port of t7610 delete/delete "m" choice.
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+
+    if !setup_delete_delete_rename_conflict(repo) {
+        return;
+    }
+
+    configure_gitgpui_mergetool(repo);
+
+    let output = run_git_with_stdin(repo, &["mergetool", "a/a/file.txt"], "m\n");
+    let text = output_text(&output);
+    assert!(
+        output.status.success(),
+        "expected delete/delete resolution with 'm' to succeed\n{text}"
+    );
+    assert!(
+        repo.join("b/b/file.txt").exists(),
+        "expected modified destination file b/b/file.txt after 'm' choice\n{text}"
+    );
+    assert!(
+        !repo.join("a/a/file.txt").exists(),
+        "expected original path to remain deleted after 'm' choice\n{text}"
+    );
+}
+
+#[test]
+fn git_mergetool_delete_delete_choice_a_aborts_with_nonzero() {
+    // Port of t7610 delete/delete "a" (abort) behavior.
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+
+    if !setup_delete_delete_rename_conflict(repo) {
+        return;
+    }
+
+    configure_gitgpui_mergetool(repo);
+
+    let output = run_git_with_stdin(repo, &["mergetool", "a/a/file.txt"], "a\n");
+    let text = output_text(&output);
+    assert!(
+        !output.status.success(),
+        "expected delete/delete 'a' abort to return non-zero\n{text}"
+    );
+    assert!(
+        !repo.join("a/a/file.txt").exists(),
+        "expected original path to remain absent after abort\n{text}"
     );
 }
 
