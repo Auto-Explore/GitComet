@@ -2,14 +2,14 @@
 
 ## Implementation Progress
 
-### Progress Snapshot (Iteration 24 — March 1, 2026)
+### Progress Snapshot (Iteration 25 — March 2, 2026)
 
 External Diff/Merge Usage Design (`external_usage.md`)
 - ✅ Dedicated CLI modes, robust arg/env validation, and no-subcommand KDiff3/Meld compatibility parsing are implemented.
 - ✅ Git integration parity is implemented and covered for trust-exit semantics, GUI selection (`guiDefault` + `--gui/--no-gui`), `--tool-help`, path overrides (`*.path`), subdir/pathspec flows, spaced+Unicode paths, `--dir-diff`, and edge cases (no-base, delete/delete, symlink, submodule, deleted output).
 - ✅ Focused runtime modes are implemented: `difftool` (`git diff --no-index --no-ext-diff` wrapper) and `mergetool` (built-in 3-way merge, conflict-style/diff-algorithm/marker-size controls, binary/non-UTF8 handling, CRLF preservation, autosolve heuristics).
 - ✅ Setup automation is implemented (`gitgpui-app setup`), including headless+GUI tool entries, trust keys, prompt defaults, and shell-safe dry-run quoting.
-- ✅ Iteration 24 component implemented: focused GUI merge now preserves unresolved conflicts as marker blocks when saved unresolved (instead of silently flattening to one side), keeps `0/1/2` exit policy, and includes new unit tests for two-way, diff3, and CRLF marker serialization.
+- ✅ Iteration 25 component implemented: hardened `render_unresolved_marker_block()` to defensively insert newlines before marker lines when content lacks trailing newline, preventing malformed markers; added 7 new edge-case tests (content without trailing newline in 2-way/diff3/CRLF modes, empty ours/theirs/base sections, mixed resolved+unresolved output, and multiple consecutive unresolved blocks).
 - 🔧 Partially implemented components: none.
 - ⬜ Not-yet-started components: none.
 
@@ -181,7 +181,28 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
   - ✅ Dedicated trust-exit interaction matrix assertions (`difftool.trustExitCode`, `--trust-exit-code`, `--no-trust-exit-code`).
 - ✅ `git difftool --tool-help` discoverability assertion for configured `gitgpui` tool.
 
-### Latest Component Delivered (Iteration 67) — Fix CRLF Preservation in Autosolve Subchunk Splitting
+### Latest Component Delivered (Iteration 25) — Defensive Marker Serialization Hardening
+
+- **Defensive fix** in [`crates/gitgpui-ui-gpui/src/focused_merge.rs`](crates/gitgpui-ui-gpui/src/focused_merge.rs):
+  - `render_unresolved_marker_block()` now inserts a newline before each marker line (`=======`, `|||||||`, `>>>>>>>`) when the preceding content section doesn't end with a newline character.
+  - This prevents malformed conflict markers (e.g., `content=======\n`) when block content lacks trailing newlines.
+  - Handles all three content sections independently: ours, base (diff3), and theirs.
+  - CRLF-aware: uses the detected line ending (`\r\n` or `\n`) for inserted guards.
+  - Empty content sections correctly skip the guard (no double-newline).
+- Added 7 new edge-case unit tests in `focused_merge.rs` (21 total, up from 14):
+  - `build_output_unresolved_content_without_trailing_newline` — 2-way markers remain well-formed
+  - `build_output_unresolved_diff3_content_without_trailing_newline` — diff3 base section guard
+  - `build_output_unresolved_crlf_content_without_trailing_newline` — CRLF detection + newline guard
+  - `build_output_unresolved_empty_ours_and_theirs` — empty content sections
+  - `build_output_unresolved_empty_base_section` — empty diff3 base section
+  - `build_output_mixed_resolved_and_unresolved_blocks` — mixed resolution state output
+  - `build_output_multiple_consecutive_unresolved_blocks` — adjacent unresolved blocks
+- Verification:
+  - `cargo test -p gitgpui-ui-gpui focused_merge` — 21 passed, 0 failed
+  - `cargo clippy --workspace --no-default-features --features gix -- -D warnings` — clean
+  - `cargo test --workspace --no-default-features --features gix` — 1087 passed, 0 failed, 5 ignored
+
+### Previous Component Delivered (Iteration 67) — Fix CRLF Preservation in Autosolve Subchunk Splitting
 
 - **Bug fix** in [`crates/gitgpui-core/src/conflict_session.rs`](crates/gitgpui-core/src/conflict_session.rs):
   - `lines_to_text` previously always appended `\n` when reconstructing text from split lines, silently converting CRLF files to LF when content went through the subchunk splitting autosolve path (`split_conflict_into_subchunks` → `per_line_merge` / `merge_line_hunks`).

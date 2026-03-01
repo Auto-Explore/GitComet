@@ -281,15 +281,25 @@ fn render_unresolved_marker_block(
     out.push_str(label_local);
     out.push_str(newline);
     out.push_str(&block.ours);
+    // Guard: ensure content ends with a newline so marker starts on its own line.
+    if !block.ours.is_empty() && !block.ours.ends_with('\n') {
+        out.push_str(newline);
+    }
     if let Some(base) = block.base.as_deref() {
         out.push_str("||||||| ");
         out.push_str(label_base);
         out.push_str(newline);
         out.push_str(base);
+        if !base.is_empty() && !base.ends_with('\n') {
+            out.push_str(newline);
+        }
     }
     out.push_str("=======");
     out.push_str(newline);
     out.push_str(&block.theirs);
+    if !block.theirs.is_empty() && !block.theirs.ends_with('\n') {
+        out.push_str(newline);
+    }
     out.push_str(">>>>>>> ");
     out.push_str(label_remote);
     out.push_str(newline);
@@ -998,6 +1008,153 @@ mod tests {
             resolved: false,
         })];
         assert_eq!(saved_exit_code(&segments), EXIT_CANCELED);
+    }
+
+    #[test]
+    fn build_output_unresolved_content_without_trailing_newline() {
+        // Content missing trailing newline should still produce well-formed markers.
+        let segments = vec![ConflictSegment::Block(ConflictBlock {
+            base: None,
+            ours: "ours no newline".to_string(),
+            theirs: "theirs no newline".to_string(),
+            choice: ConflictChoice::Ours,
+            resolved: false,
+        })];
+        let output = build_output_from_segments_with_labels(&segments, "L", "R", "B");
+        // Each marker must start at the beginning of its own line.
+        assert!(
+            output.contains("<<<<<<< L\nours no newline\n=======\n"),
+            "output: {output:?}"
+        );
+        assert!(
+            output.contains("theirs no newline\n>>>>>>> R\n"),
+            "output: {output:?}"
+        );
+    }
+
+    #[test]
+    fn build_output_unresolved_diff3_content_without_trailing_newline() {
+        let segments = vec![ConflictSegment::Block(ConflictBlock {
+            base: Some("base no newline".to_string()),
+            ours: "ours".to_string(),
+            theirs: "theirs".to_string(),
+            choice: ConflictChoice::Ours,
+            resolved: false,
+        })];
+        let output = build_output_from_segments_with_labels(&segments, "L", "R", "B");
+        assert!(
+            output.contains("||||||| B\nbase no newline\n=======\n"),
+            "output: {output:?}"
+        );
+    }
+
+    #[test]
+    fn build_output_unresolved_crlf_content_without_trailing_newline() {
+        // CRLF detection should still work and marker newlines should use CRLF.
+        let segments = vec![ConflictSegment::Block(ConflictBlock {
+            base: None,
+            ours: "ours\r\nmore".to_string(), // CRLF in middle, no trailing newline
+            theirs: "theirs".to_string(),
+            choice: ConflictChoice::Ours,
+            resolved: false,
+        })];
+        let output = build_output_from_segments_with_labels(&segments, "L", "R", "B");
+        // Detected CRLF from ours content, so guard should insert \r\n.
+        assert!(
+            output.contains("<<<<<<< L\r\n"),
+            "start marker: {output:?}"
+        );
+        assert!(output.contains("more\r\n=======\r\n"), "separator: {output:?}");
+        assert!(
+            output.contains("theirs\r\n>>>>>>> R\r\n"),
+            "end marker: {output:?}"
+        );
+    }
+
+    #[test]
+    fn build_output_unresolved_empty_ours_and_theirs() {
+        // Empty content sections should produce well-formed markers with no content.
+        let segments = vec![ConflictSegment::Block(ConflictBlock {
+            base: None,
+            ours: String::new(),
+            theirs: String::new(),
+            choice: ConflictChoice::Ours,
+            resolved: false,
+        })];
+        let output = build_output_from_segments_with_labels(&segments, "L", "R", "B");
+        assert_eq!(output, "<<<<<<< L\n=======\n>>>>>>> R\n");
+    }
+
+    #[test]
+    fn build_output_unresolved_empty_base_section() {
+        let segments = vec![ConflictSegment::Block(ConflictBlock {
+            base: Some(String::new()),
+            ours: "ours\n".to_string(),
+            theirs: "theirs\n".to_string(),
+            choice: ConflictChoice::Ours,
+            resolved: false,
+        })];
+        let output = build_output_from_segments_with_labels(&segments, "L", "R", "B");
+        assert!(
+            output.contains("||||||| B\n=======\n"),
+            "empty base: {output:?}"
+        );
+    }
+
+    #[test]
+    fn build_output_mixed_resolved_and_unresolved_blocks() {
+        let segments = vec![
+            ConflictSegment::Text("header\n".to_string()),
+            ConflictSegment::Block(ConflictBlock {
+                base: None,
+                ours: "A\n".to_string(),
+                theirs: "B\n".to_string(),
+                choice: ConflictChoice::Ours,
+                resolved: true,
+            }),
+            ConflictSegment::Text("middle\n".to_string()),
+            ConflictSegment::Block(ConflictBlock {
+                base: None,
+                ours: "C\n".to_string(),
+                theirs: "D\n".to_string(),
+                choice: ConflictChoice::Theirs,
+                resolved: false, // Unresolved
+            }),
+            ConflictSegment::Text("footer\n".to_string()),
+        ];
+        let output = build_output_from_segments_with_labels(&segments, "L", "R", "B");
+        // First block resolved to ours: "A\n"
+        assert!(output.starts_with("header\nA\nmiddle\n"), "output: {output:?}");
+        // Second block unresolved: markers around C/D
+        assert!(
+            output.contains("<<<<<<< L\nC\n=======\nD\n>>>>>>> R\n"),
+            "output: {output:?}"
+        );
+        assert!(output.ends_with("footer\n"), "output: {output:?}");
+    }
+
+    #[test]
+    fn build_output_multiple_consecutive_unresolved_blocks() {
+        let segments = vec![
+            ConflictSegment::Block(ConflictBlock {
+                base: None,
+                ours: "a1\n".to_string(),
+                theirs: "b1\n".to_string(),
+                choice: ConflictChoice::Ours,
+                resolved: false,
+            }),
+            ConflictSegment::Block(ConflictBlock {
+                base: None,
+                ours: "a2\n".to_string(),
+                theirs: "b2\n".to_string(),
+                choice: ConflictChoice::Theirs,
+                resolved: false,
+            }),
+        ];
+        let output = build_output_from_segments_with_labels(&segments, "L", "R", "B");
+        let expected = "<<<<<<< L\na1\n=======\nb1\n>>>>>>> R\n\
+                        <<<<<<< L\na2\n=======\nb2\n>>>>>>> R\n";
+        assert_eq!(output, expected);
     }
 
     /// Helper to build output without needing a full view.
