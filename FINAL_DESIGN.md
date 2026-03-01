@@ -1,10 +1,10 @@
 ## STATUS: COMPLETE
 
-All components from both design documents are fully implemented. Iteration 49 maintains completeness; the last full-suite verification (Iteration 48) passed 453+ tests, and Iteration 49 adds one difftool E2E case (22 difftool git-invoked E2E tests total).
+All components from both design documents are fully implemented. Iteration 50 maintains completeness; the last full-suite verification (Iteration 48) passed 453+ tests, Iteration 49 added one difftool E2E case (22 difftool git-invoked E2E tests total), and Iteration 50 adds standalone behavior-matrix hardening for no-base mergetool and directory difftool direct-invocation paths.
 
 ## Implementation Progress
 
-### Progress Snapshot (Iteration 49)
+### Progress Snapshot (Iteration 50)
 
 External Diff/Merge Usage Design (`external_usage.md`)
 - ✅ Dedicated CLI modes (`difftool`, `mergetool`) and arg/env validation are implemented.
@@ -113,6 +113,10 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
   - ✅ `difftool` changed-file invocation exits `0` and emits unified diff output
   - ✅ `difftool` invalid input exits `2` with actionable validation error text
   - ✅ no-subcommand compatibility E2E for Meld-style `-L/--label` diff and merge invocations
+- ✅ Standalone behavior-matrix hardening is explicit for direct command-mode invocation:
+  - ✅ no-base mergetool clean add/add path (identical additions) exits `0` and writes clean output
+  - ✅ no-base mergetool conflict path with `--conflict-style zdiff3` exits `1` and uses `||||||| empty tree` base label fallback
+  - ✅ standalone `difftool` supports direct directory-diff invocation (directory inputs, exit `0`, file-level diff output)
 - ✅ KDiff3-style fixture harness implemented in `crates/gitgpui-core/tests/merge_fixture_harness.rs` with fixture data in `crates/gitgpui-core/tests/fixtures/merge/`. Auto-discovers `*_base.*` fixtures, runs merge algorithm, validates invariants, and compares against expected results in two formats:
   - merged-output expected files: marker well-formedness, content integrity, context preservation
   - alignment-triple expected files: sequence monotonicity + equality consistency across aligned line indices

@@ -134,6 +134,77 @@ fn standalone_mergetool_conflict_exits_one_and_writes_markers() {
 }
 
 #[test]
+fn standalone_mergetool_no_base_identical_additions_exits_zero() {
+    let dir = tempfile::tempdir().unwrap();
+    let local = dir.path().join("local.txt");
+    let remote = dir.path().join("remote.txt");
+    let merged = dir.path().join("merged.txt");
+
+    write_file(&local, "added in both sides\n");
+    write_file(&remote, "added in both sides\n");
+
+    let output = run_gitgpui([
+        OsString::from("mergetool"),
+        OsString::from("--local"),
+        local.as_os_str().to_owned(),
+        OsString::from("--remote"),
+        remote.as_os_str().to_owned(),
+        OsString::from("--merged"),
+        merged.as_os_str().to_owned(),
+    ]);
+
+    let text = output_text(&output);
+    assert_eq!(output.status.code(), Some(0), "expected exit 0\n{text}");
+
+    let merged_text = fs::read_to_string(&merged).expect("merged output to exist");
+    assert_eq!(merged_text, "added in both sides\n");
+    assert!(
+        !merged_text.contains("<<<<<<<"),
+        "expected clean merge output\n{text}"
+    );
+}
+
+#[test]
+fn standalone_mergetool_no_base_zdiff3_uses_empty_tree_label() {
+    let dir = tempfile::tempdir().unwrap();
+    let local = dir.path().join("local.txt");
+    let remote = dir.path().join("remote.txt");
+    let merged = dir.path().join("merged.txt");
+
+    write_file(&local, "ours change\n");
+    write_file(&remote, "theirs change\n");
+
+    let output = run_gitgpui([
+        OsString::from("mergetool"),
+        OsString::from("--local"),
+        local.as_os_str().to_owned(),
+        OsString::from("--remote"),
+        remote.as_os_str().to_owned(),
+        OsString::from("--merged"),
+        merged.as_os_str().to_owned(),
+        OsString::from("--conflict-style"),
+        OsString::from("zdiff3"),
+    ]);
+
+    let text = output_text(&output);
+    assert_eq!(output.status.code(), Some(1), "expected exit 1\n{text}");
+
+    let merged_text = fs::read_to_string(&merged).expect("merged output to exist");
+    assert!(
+        merged_text.contains("<<<<<<< local.txt"),
+        "expected local filename fallback label\n{text}\nmerged:\n{merged_text}"
+    );
+    assert!(
+        merged_text.contains("||||||| empty tree"),
+        "expected no-base zdiff3 marker label\n{text}\nmerged:\n{merged_text}"
+    );
+    assert!(
+        merged_text.contains(">>>>>>> remote.txt"),
+        "expected remote filename fallback label\n{text}\nmerged:\n{merged_text}"
+    );
+}
+
+#[test]
 fn standalone_mergetool_marker_size_flag_controls_marker_width() {
     let dir = tempfile::tempdir().unwrap();
     let base = dir.path().join("base.txt");
@@ -271,6 +342,34 @@ fn standalone_difftool_changed_files_exits_zero_and_prints_diff() {
     assert!(
         stdout.contains("+++ b/src/file.txt"),
         "expected right label\n{text}"
+    );
+}
+
+#[test]
+fn standalone_difftool_directory_diff_exits_zero() {
+    let dir = tempfile::tempdir().unwrap();
+    let local_dir = dir.path().join("left");
+    let remote_dir = dir.path().join("right");
+
+    fs::create_dir_all(&local_dir).expect("create local dir");
+    fs::create_dir_all(&remote_dir).expect("create remote dir");
+    write_file(&local_dir.join("a.txt"), "left\n");
+    write_file(&remote_dir.join("a.txt"), "right\n");
+
+    let output = run_gitgpui([
+        OsString::from("difftool"),
+        OsString::from("--local"),
+        local_dir.as_os_str().to_owned(),
+        OsString::from("--remote"),
+        remote_dir.as_os_str().to_owned(),
+    ]);
+
+    let text = output_text(&output);
+    assert_eq!(output.status.code(), Some(0), "expected exit 0\n{text}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("a.txt"),
+        "expected filename in directory diff output\n{text}"
     );
 }
 
