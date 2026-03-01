@@ -209,6 +209,39 @@ fn standalone_mergetool_invalid_path_exits_two() {
 }
 
 #[test]
+fn standalone_mergetool_rejects_directory_merged_target_with_exit_two() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = dir.path().join("base.txt");
+    let local = dir.path().join("local.txt");
+    let remote = dir.path().join("remote.txt");
+    let merged_dir = dir.path().join("merged-dir");
+    fs::create_dir_all(&merged_dir).expect("create merged directory");
+
+    write_file(&base, "line\n");
+    write_file(&local, "line\n");
+    write_file(&remote, "line\n");
+
+    let output = run_gitgpui([
+        OsString::from("mergetool"),
+        OsString::from("--base"),
+        base.as_os_str().to_owned(),
+        OsString::from("--local"),
+        local.as_os_str().to_owned(),
+        OsString::from("--remote"),
+        remote.as_os_str().to_owned(),
+        OsString::from("--merged"),
+        merged_dir.as_os_str().to_owned(),
+    ]);
+
+    let text = output_text(&output);
+    assert_eq!(output.status.code(), Some(2), "expected exit 2\n{text}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("Merged path must be a file path"),
+        "expected merged-path validation error\n{text}"
+    );
+}
+
+#[test]
 fn standalone_difftool_changed_files_exits_zero_and_prints_diff() {
     let dir = tempfile::tempdir().unwrap();
     let local = dir.path().join("left.txt");

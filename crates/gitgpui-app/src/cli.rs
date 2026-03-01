@@ -293,11 +293,31 @@ fn resolve_mergetool_with_env(
 
     // MERGED is an output target and may not exist yet (e.g. standalone
     // --output/--out usage). Runtime creates parent directories as needed.
+    if merged.exists() && merged.is_dir() {
+        return Err(format!(
+            "Merged path must be a file path, not a directory: {}",
+            merged.display()
+        ));
+    }
+
     if !local.exists() {
         return Err(format!("Local path does not exist: {}", local.display()));
     }
+    if local.is_dir() {
+        return Err(format!(
+            "Local path must be a file, not a directory: {}",
+            local.display()
+        ));
+    }
+
     if !remote.exists() {
         return Err(format!("Remote path does not exist: {}", remote.display()));
+    }
+    if remote.is_dir() {
+        return Err(format!(
+            "Remote path must be a file, not a directory: {}",
+            remote.display()
+        ));
     }
 
     // Base is allowed to be missing (add/add conflicts have no base).
@@ -306,6 +326,14 @@ fn resolve_mergetool_with_env(
         && !base_path.exists()
     {
         return Err(format!("Base path does not exist: {}", base_path.display()));
+    }
+    if let Some(ref base_path) = base
+        && base_path.is_dir()
+    {
+        return Err(format!(
+            "Base path must be a file, not a directory: {}",
+            base_path.display()
+        ));
     }
 
     let conflict_style = match args.conflict_style.as_deref() {
@@ -1407,6 +1435,107 @@ mod tests {
 
         let err = resolve_mergetool_with_env(args, &env).unwrap_err();
         assert!(err.contains("Base path does not exist"), "error: {err}");
+    }
+
+    #[test]
+    fn mergetool_existing_merged_directory_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let merged_dir = dir.path().join("merged-dir");
+        std::fs::create_dir_all(&merged_dir).unwrap();
+        let local = tmp_file(&dir, "local.txt", "a");
+        let remote = tmp_file(&dir, "remote.txt", "b");
+
+        let args = MergetoolArgs {
+            merged: Some(merged_dir),
+            local: Some(local),
+            remote: Some(remote),
+            base: None,
+            label_base: None,
+            label_local: None,
+            label_remote: None,
+            conflict_style: None,
+            diff_algorithm: None,
+            marker_size: None,
+        };
+
+        let err = resolve_mergetool_with_env(args, &TestEnv::new()).unwrap_err();
+        assert!(err.contains("Merged path must be a file path"), "error: {err}");
+    }
+
+    #[test]
+    fn mergetool_local_directory_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let merged = dir.path().join("merged.txt");
+        let local_dir = dir.path().join("local-dir");
+        std::fs::create_dir_all(&local_dir).unwrap();
+        let remote = tmp_file(&dir, "remote.txt", "b");
+
+        let args = MergetoolArgs {
+            merged: Some(merged),
+            local: Some(local_dir),
+            remote: Some(remote),
+            base: None,
+            label_base: None,
+            label_local: None,
+            label_remote: None,
+            conflict_style: None,
+            diff_algorithm: None,
+            marker_size: None,
+        };
+
+        let err = resolve_mergetool_with_env(args, &TestEnv::new()).unwrap_err();
+        assert!(err.contains("Local path must be a file"), "error: {err}");
+    }
+
+    #[test]
+    fn mergetool_remote_directory_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let merged = dir.path().join("merged.txt");
+        let local = tmp_file(&dir, "local.txt", "a");
+        let remote_dir = dir.path().join("remote-dir");
+        std::fs::create_dir_all(&remote_dir).unwrap();
+
+        let args = MergetoolArgs {
+            merged: Some(merged),
+            local: Some(local),
+            remote: Some(remote_dir),
+            base: None,
+            label_base: None,
+            label_local: None,
+            label_remote: None,
+            conflict_style: None,
+            diff_algorithm: None,
+            marker_size: None,
+        };
+
+        let err = resolve_mergetool_with_env(args, &TestEnv::new()).unwrap_err();
+        assert!(err.contains("Remote path must be a file"), "error: {err}");
+    }
+
+    #[test]
+    fn mergetool_base_directory_errors_when_explicitly_provided() {
+        let dir = tempfile::tempdir().unwrap();
+        let merged = dir.path().join("merged.txt");
+        let local = tmp_file(&dir, "local.txt", "a");
+        let remote = tmp_file(&dir, "remote.txt", "b");
+        let base_dir = dir.path().join("base-dir");
+        std::fs::create_dir_all(&base_dir).unwrap();
+
+        let args = MergetoolArgs {
+            merged: Some(merged),
+            local: Some(local),
+            remote: Some(remote),
+            base: Some(base_dir),
+            label_base: None,
+            label_local: None,
+            label_remote: None,
+            conflict_style: None,
+            diff_algorithm: None,
+            marker_size: None,
+        };
+
+        let err = resolve_mergetool_with_env(args, &TestEnv::new()).unwrap_err();
+        assert!(err.contains("Base path must be a file"), "error: {err}");
     }
 
     // ── Exit code constants ──────────────────────────────────────────
