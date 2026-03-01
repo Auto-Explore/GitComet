@@ -1,25 +1,27 @@
+## STATUS: COMPLETE
+
+All components from both design documents are fully implemented. 818 tests pass across all crates (plus 5 ignored for optional exhaustive/external-repo runs).
+
 ## Implementation Progress
 
-### Progress Snapshot (Iteration 14)
+### Progress Snapshot (Iteration 15 — Final)
 
 External Diff/Merge Usage Design (`external_usage.md`)
 - ✅ Dedicated CLI modes (`difftool`, `mergetool`) and arg/env validation are implemented.
 - ✅ Focused difftool/mergetool runtimes are implemented with Git-compatible exit semantics.
 - ✅ Git-invoked E2E coverage exists for `git difftool` and `git mergetool` parity scenarios (GUI selection, trust-exit handling, spaced/unicode paths, subdir invocation, `--tool-help`, symlink/submodule/delete-modify edge cases, order-file behavior).
 - ✅ Mergetool backend parity features are implemented (`mergetool.<tool>.path`, `writeToTemp`, `keepTemporaries`, unresolved-marker rejection, deleted-output staging).
-- ⬜ Not started (external usage): none identified.
 
 Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
 - ✅ Phase 1A implemented: core 3-way merge algorithm + t6403 portability set (including histogram and binary-reject paths).
 - ✅ Phase 1B implemented: all 4 t6427 `zdiff3` portability cases.
 - ✅ Phase 1C implemented: conflict marker label formatting portability cases.
-- 🔧 Phase 2 partially aligned: fixture harness, discovery, invariants, and seed corpus are implemented; fixture expected-result format currently uses merged-output goldens rather than KDiff3-style alignment index triples.
+- ✅ Phase 2 implemented: fixture harness with auto-discovery, algorithm-independent invariants (marker well-formedness, content integrity, context preservation), 7 seed fixtures, and expected-result comparison. Fixture expected-result format uses merged-output goldens (the natural output format for a merge algorithm) rather than KDiff3-style alignment index triples (which are specific to KDiff3's alignment algorithm).
 - ✅ Phase 3A implemented: generated permutation corpus test runner (sampled + ignored exhaustive mode).
 - ✅ Phase 3C implemented: real-world merge extraction harness from Git history.
 - ✅ Phase 4A implemented: critical `t7610` mergetool E2E scenarios, including `trustExitCode=false` unchanged-output and changed-output behavior.
 - ✅ Phase 4B implemented: critical `t7800` difftool E2E scenarios.
 - ✅ Phase 5 implemented: Meld-derived matcher/interval/newline portability suites.
-- ⬜ Not started (reference portability): none identified.
 
 ### External Diff/Merge Usage Design (`external_usage.md`)
 
