@@ -345,6 +345,7 @@ fn parse_compat_external_mode(
     let mut label_l1: Option<String> = None;
     let mut label_l2: Option<String> = None;
     let mut label_l3: Option<String> = None;
+    let mut base_flag: Option<PathBuf> = None;
     let mut merged_output: Option<PathBuf> = None;
     let mut positionals: Vec<PathBuf> = Vec::new();
     let mut has_auto = false;
@@ -402,6 +403,16 @@ fn parse_compat_external_mode(
             continue;
         }
 
+        if token == "--base" {
+            let next_idx = idx + 1;
+            let value = raw_args.get(next_idx).ok_or_else(|| {
+                "Missing value for compatibility flag --base in external tool mode".to_string()
+            })?;
+            base_flag = Some(PathBuf::from(value));
+            idx += 2;
+            continue;
+        }
+
         if let Some(value) = token.strip_prefix("--output=") {
             merged_output = Some(PathBuf::from(value));
             idx += 1;
@@ -409,6 +420,11 @@ fn parse_compat_external_mode(
         }
         if let Some(value) = token.strip_prefix("--out=") {
             merged_output = Some(PathBuf::from(value));
+            idx += 1;
+            continue;
+        }
+        if let Some(value) = token.strip_prefix("--base=") {
+            base_flag = Some(PathBuf::from(value));
             idx += 1;
             continue;
         }
@@ -440,30 +456,50 @@ fn parse_compat_external_mode(
     }
 
     if let Some(merged) = merged_output {
-        let (base, local, remote, label_base, label_local, label_remote) = match positionals.len() {
-            3 => (
-                Some(positionals[0].clone()),
-                positionals[1].clone(),
-                positionals[2].clone(),
-                label_l1,
-                label_l2,
-                label_l3,
-            ),
-            2 => (
-                None,
-                positionals[0].clone(),
-                positionals[1].clone(),
-                None,
-                label_l1,
-                label_l2,
-            ),
-            0 | 1 => {
-                return Err("Invalid external merge invocation: expected 2 positional paths (LOCAL REMOTE) or 3 (BASE LOCAL REMOTE) after -o/--output/--out.".to_string());
-            }
-            _ => {
-                return Err("Invalid external merge invocation: too many positional paths; expected 2 (LOCAL REMOTE) or 3 (BASE LOCAL REMOTE).".to_string());
-            }
-        };
+        let (base, local, remote, label_base, label_local, label_remote) =
+            if let Some(explicit_base) = base_flag {
+                match positionals.len() {
+                    2 => (
+                        Some(explicit_base),
+                        positionals[0].clone(),
+                        positionals[1].clone(),
+                        label_l1,
+                        label_l2,
+                        label_l3,
+                    ),
+                    0 | 1 => {
+                        return Err("Invalid external merge invocation: expected exactly 2 positional paths (LOCAL REMOTE) when --base is provided.".to_string());
+                    }
+                    _ => {
+                        return Err("Invalid external merge invocation: --base already supplies BASE; expected exactly 2 positional paths (LOCAL REMOTE).".to_string());
+                    }
+                }
+            } else {
+                match positionals.len() {
+                    3 => (
+                        Some(positionals[0].clone()),
+                        positionals[1].clone(),
+                        positionals[2].clone(),
+                        label_l1,
+                        label_l2,
+                        label_l3,
+                    ),
+                    2 => (
+                        None,
+                        positionals[0].clone(),
+                        positionals[1].clone(),
+                        None,
+                        label_l1,
+                        label_l2,
+                    ),
+                    0 | 1 => {
+                        return Err("Invalid external merge invocation: expected 2 positional paths (LOCAL REMOTE) or 3 (BASE LOCAL REMOTE) after -o/--output/--out.".to_string());
+                    }
+                    _ => {
+                        return Err("Invalid external merge invocation: too many positional paths; expected 2 (LOCAL REMOTE) or 3 (BASE LOCAL REMOTE).".to_string());
+                    }
+                }
+            };
 
         let args = MergetoolArgs {
             merged: Some(merged),
@@ -479,6 +515,13 @@ fn parse_compat_external_mode(
         return resolve_mergetool_with_env(args, env)
             .map(AppMode::Mergetool)
             .map(Some);
+    }
+
+    if base_flag.is_some() {
+        return Err(
+            "Invalid external diff invocation: --base is only valid for merge mode with -o/--output/--out."
+                .to_string(),
+        );
     }
 
     if label_l3.is_some() {
@@ -1421,6 +1464,47 @@ mod tests {
     }
 
     #[test]
+    fn compat_parses_kdiff3_style_mergetool_with_base_flag() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = tmp_file(&dir, "base.txt", "base\n");
+        let local = tmp_file(&dir, "local.txt", "local\n");
+        let remote = tmp_file(&dir, "remote.txt", "remote\n");
+        let merged = dir.path().join("merged.txt");
+        let env = TestEnv::new();
+
+        let mode = parse_mode_for_test(
+            vec![
+                OsString::from("gitgpui-app"),
+                OsString::from("--auto"),
+                OsString::from("--L1=BASE_LABEL"),
+                OsString::from("--L2=LOCAL_LABEL"),
+                OsString::from("--L3=REMOTE_LABEL"),
+                OsString::from("--base"),
+                base.clone().into_os_string(),
+                OsString::from("--output"),
+                merged.clone().into_os_string(),
+                local.clone().into_os_string(),
+                remote.clone().into_os_string(),
+            ],
+            &env,
+        )
+        .unwrap();
+
+        match mode {
+            AppMode::Mergetool(config) => {
+                assert_eq!(config.merged, merged);
+                assert_eq!(config.base.as_ref(), Some(&base));
+                assert_eq!(config.local, local);
+                assert_eq!(config.remote, remote);
+                assert_eq!(config.label_base.as_deref(), Some("BASE_LABEL"));
+                assert_eq!(config.label_local.as_deref(), Some("LOCAL_LABEL"));
+                assert_eq!(config.label_remote.as_deref(), Some("REMOTE_LABEL"));
+            }
+            _ => panic!("expected Mergetool mode"),
+        }
+    }
+
+    #[test]
     fn compat_parses_kdiff3_style_mergetool_without_base() {
         let dir = tempfile::tempdir().unwrap();
         let local = tmp_file(&dir, "local.txt", "local\n");
@@ -1538,6 +1622,37 @@ mod tests {
     }
 
     #[test]
+    fn compat_merge_rejects_base_flag_with_extra_positionals() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = tmp_file(&dir, "base.txt", "base\n");
+        let local = tmp_file(&dir, "local.txt", "local\n");
+        let remote = tmp_file(&dir, "remote.txt", "remote\n");
+        let merged = dir.path().join("merged.txt");
+        let env = TestEnv::new();
+
+        let err = parse_mode_for_test(
+            vec![
+                OsString::from("gitgpui-app"),
+                OsString::from("--base"),
+                base.into_os_string(),
+                OsString::from("--out"),
+                merged.into_os_string(),
+                // Invalid: base is passed both via --base and positional arg.
+                tmp_file(&dir, "base-positional.txt", "base\n").into_os_string(),
+                local.into_os_string(),
+                remote.into_os_string(),
+            ],
+            &env,
+        )
+        .unwrap_err();
+
+        assert!(
+            err.contains("--base already supplies BASE"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn compat_diff_rejects_l3_without_output_path() {
         let dir = tempfile::tempdir().unwrap();
         let local = tmp_file(&dir, "left.txt", "left\n");
@@ -1558,6 +1673,32 @@ mod tests {
 
         assert!(
             err.contains("--L3 is only valid for merge mode"),
+            "error: {err}"
+        );
+    }
+
+    #[test]
+    fn compat_diff_rejects_base_without_output_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = tmp_file(&dir, "base.txt", "base\n");
+        let local = tmp_file(&dir, "left.txt", "left\n");
+        let remote = tmp_file(&dir, "right.txt", "right\n");
+        let env = TestEnv::new();
+
+        let err = parse_mode_for_test(
+            vec![
+                OsString::from("gitgpui-app"),
+                OsString::from("--base"),
+                base.into_os_string(),
+                local.into_os_string(),
+                remote.into_os_string(),
+            ],
+            &env,
+        )
+        .unwrap_err();
+
+        assert!(
+            err.contains("--base is only valid for merge mode"),
             "error: {err}"
         );
     }
