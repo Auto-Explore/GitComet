@@ -3074,12 +3074,18 @@ unterminated content with no separator
         let theirs = "# Changelog\n- Entry 1\n- Entry 3\n\n## License\nMIT\n";
 
         let result = history_merge_region(Some(base), ours, theirs, &options);
-        assert!(result.is_some(), "should merge changelog with trailing content");
+        assert!(
+            result.is_some(),
+            "should merge changelog with trailing content"
+        );
         let merged = result.unwrap();
 
         assert!(merged.contains("- Entry 2"), "should have ours entry");
         assert!(merged.contains("- Entry 3"), "should have theirs entry");
-        assert!(merged.contains("## License\nMIT\n"), "should preserve trailing content");
+        assert!(
+            merged.contains("## License\nMIT\n"),
+            "should preserve trailing content"
+        );
         // Trailing content should appear exactly once.
         assert_eq!(
             merged.matches("## License").count(),
@@ -3100,7 +3106,10 @@ unterminated content with no separator
         assert!(merged.contains("- Entry A"));
         assert!(merged.contains("- Entry B"));
         // Should preserve trailing blank line.
-        assert!(merged.ends_with("\n\n"), "should preserve trailing blank lines");
+        assert!(
+            merged.ends_with("\n\n"),
+            "should preserve trailing blank lines"
+        );
     }
 
     #[test]

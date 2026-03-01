@@ -6,7 +6,7 @@
 //! unchanged / modified / deleted / added lines without violating basic
 //! invariants.
 
-use gitgpui_core::merge::{merge_file, MergeOptions};
+use gitgpui_core::merge::{MergeOptions, merge_file};
 use std::collections::HashSet;
 
 const DEFAULT_LINES: [&str; 5] = ["aaa\n", "bbb\n", "ccc\n", "ddd\n", "eee\n"];

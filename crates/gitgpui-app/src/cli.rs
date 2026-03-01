@@ -6,6 +6,7 @@
 //! - `mergetool`: focused merge view, compatible with `git mergetool`
 
 use clap::{Parser, Subcommand};
+use gitgpui_core::merge::{ConflictStyle, DiffAlgorithm};
 use std::ffi::OsString;
 use std::path::PathBuf;
 
@@ -82,6 +83,12 @@ pub struct MergetoolArgs {
     /// Label for the remote pane.
     #[arg(long)]
     pub label_remote: Option<String>,
+    /// Conflict marker style: merge (default), diff3, or zdiff3.
+    #[arg(long, value_name = "STYLE")]
+    pub conflict_style: Option<String>,
+    /// Diff algorithm: myers (default) or histogram.
+    #[arg(long, value_name = "ALGORITHM")]
+    pub diff_algorithm: Option<String>,
 }
 
 // ── Validated configuration types ────────────────────────────────────
@@ -106,6 +113,8 @@ pub struct MergetoolConfig {
     pub label_base: Option<String>,
     pub label_local: Option<String>,
     pub label_remote: Option<String>,
+    pub conflict_style: ConflictStyle,
+    pub diff_algorithm: DiffAlgorithm,
 }
 
 /// Which mode the application was launched in.
@@ -221,6 +230,27 @@ fn resolve_mergetool_with_env(
         }
     }
 
+    let conflict_style = match args.conflict_style.as_deref() {
+        None | Some("merge") => ConflictStyle::Merge,
+        Some("diff3") => ConflictStyle::Diff3,
+        Some("zdiff3") => ConflictStyle::Zdiff3,
+        Some(other) => {
+            return Err(format!(
+                "Unknown conflict style '{other}': expected merge, diff3, or zdiff3"
+            ))
+        }
+    };
+
+    let diff_algorithm = match args.diff_algorithm.as_deref() {
+        None | Some("myers") => DiffAlgorithm::Myers,
+        Some("histogram") => DiffAlgorithm::Histogram,
+        Some(other) => {
+            return Err(format!(
+                "Unknown diff algorithm '{other}': expected myers or histogram"
+            ))
+        }
+    };
+
     Ok(MergetoolConfig {
         merged,
         local,
@@ -229,6 +259,8 @@ fn resolve_mergetool_with_env(
         label_base: args.label_base,
         label_local: args.label_local,
         label_remote: args.label_remote,
+        conflict_style,
+        diff_algorithm,
     })
 }
 
@@ -484,6 +516,8 @@ mod tests {
             label_base: Some("Base".into()),
             label_local: Some("Ours".into()),
             label_remote: Some("Theirs".into()),
+            conflict_style: None,
+            diff_algorithm: None,
         };
 
         let config = resolve_mergetool_with_env(args, &env).unwrap();
@@ -518,6 +552,8 @@ mod tests {
             label_base: None,
             label_local: None,
             label_remote: None,
+            conflict_style: None,
+            diff_algorithm: None,
         };
 
         let config = resolve_mergetool_with_env(args, &env).unwrap();
@@ -543,6 +579,8 @@ mod tests {
             label_base: None,
             label_local: None,
             label_remote: None,
+            conflict_style: None,
+            diff_algorithm: None,
         };
 
         let config = resolve_mergetool_with_env(args, &env).unwrap();
@@ -567,6 +605,8 @@ mod tests {
             label_base: None,
             label_local: None,
             label_remote: None,
+            conflict_style: None,
+            diff_algorithm: None,
         };
 
         let err = resolve_mergetool_with_env(args, &env).unwrap_err();
@@ -588,6 +628,8 @@ mod tests {
             label_base: None,
             label_local: None,
             label_remote: None,
+            conflict_style: None,
+            diff_algorithm: None,
         };
 
         let err = resolve_mergetool_with_env(args, &env).unwrap_err();
@@ -609,6 +651,8 @@ mod tests {
             label_base: None,
             label_local: None,
             label_remote: None,
+            conflict_style: None,
+            diff_algorithm: None,
         };
 
         let err = resolve_mergetool_with_env(args, &env).unwrap_err();
@@ -630,6 +674,8 @@ mod tests {
             label_base: None,
             label_local: None,
             label_remote: None,
+            conflict_style: None,
+            diff_algorithm: None,
         };
 
         let err = resolve_mergetool_with_env(args, &env).unwrap_err();
@@ -652,6 +698,8 @@ mod tests {
             label_base: None,
             label_local: None,
             label_remote: None,
+            conflict_style: None,
+            diff_algorithm: None,
         };
 
         let err = resolve_mergetool_with_env(args, &env).unwrap_err();
@@ -706,6 +754,8 @@ mod tests {
             label_base: None,
             label_local: None,
             label_remote: None,
+            conflict_style: None,
+            diff_algorithm: None,
         };
 
         let config = resolve_mergetool_with_env(args, &env).unwrap();
@@ -760,6 +810,8 @@ mod tests {
             label_base: None,
             label_local: None,
             label_remote: None,
+            conflict_style: None,
+            diff_algorithm: None,
         };
 
         let config = resolve_mergetool_with_env(args, &env).unwrap();
@@ -788,6 +840,8 @@ mod tests {
             label_base: None,
             label_local: None,
             label_remote: None,
+            conflict_style: None,
+            diff_algorithm: None,
         };
 
         let config = resolve_mergetool_with_env(args, &env).unwrap();
@@ -871,5 +925,179 @@ mod tests {
             cli.path.as_deref(),
             Some(std::path::Path::new("/some/repo"))
         );
+    }
+
+    // ── Conflict style and diff algorithm ─────────────────────────────
+
+    #[test]
+    fn mergetool_conflict_style_defaults_to_merge() {
+        let dir = tempfile::tempdir().unwrap();
+        let merged = tmp_file(&dir, "m.txt", "x");
+        let local = tmp_file(&dir, "l.txt", "a");
+        let remote = tmp_file(&dir, "r.txt", "b");
+        let env = TestEnv::new();
+
+        let args = MergetoolArgs {
+            merged: Some(merged),
+            local: Some(local),
+            remote: Some(remote),
+            base: None,
+            label_base: None,
+            label_local: None,
+            label_remote: None,
+            conflict_style: None,
+            diff_algorithm: None,
+        };
+
+        let config = resolve_mergetool_with_env(args, &env).unwrap();
+        assert_eq!(config.conflict_style, ConflictStyle::Merge);
+        assert_eq!(config.diff_algorithm, DiffAlgorithm::Myers);
+    }
+
+    #[test]
+    fn mergetool_conflict_style_diff3() {
+        let dir = tempfile::tempdir().unwrap();
+        let merged = tmp_file(&dir, "m.txt", "x");
+        let local = tmp_file(&dir, "l.txt", "a");
+        let remote = tmp_file(&dir, "r.txt", "b");
+        let env = TestEnv::new();
+
+        let args = MergetoolArgs {
+            merged: Some(merged),
+            local: Some(local),
+            remote: Some(remote),
+            base: None,
+            label_base: None,
+            label_local: None,
+            label_remote: None,
+            conflict_style: Some("diff3".into()),
+            diff_algorithm: None,
+        };
+
+        let config = resolve_mergetool_with_env(args, &env).unwrap();
+        assert_eq!(config.conflict_style, ConflictStyle::Diff3);
+    }
+
+    #[test]
+    fn mergetool_conflict_style_zdiff3() {
+        let dir = tempfile::tempdir().unwrap();
+        let merged = tmp_file(&dir, "m.txt", "x");
+        let local = tmp_file(&dir, "l.txt", "a");
+        let remote = tmp_file(&dir, "r.txt", "b");
+        let env = TestEnv::new();
+
+        let args = MergetoolArgs {
+            merged: Some(merged),
+            local: Some(local),
+            remote: Some(remote),
+            base: None,
+            label_base: None,
+            label_local: None,
+            label_remote: None,
+            conflict_style: Some("zdiff3".into()),
+            diff_algorithm: None,
+        };
+
+        let config = resolve_mergetool_with_env(args, &env).unwrap();
+        assert_eq!(config.conflict_style, ConflictStyle::Zdiff3);
+    }
+
+    #[test]
+    fn mergetool_conflict_style_invalid_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let merged = tmp_file(&dir, "m.txt", "x");
+        let local = tmp_file(&dir, "l.txt", "a");
+        let remote = tmp_file(&dir, "r.txt", "b");
+        let env = TestEnv::new();
+
+        let args = MergetoolArgs {
+            merged: Some(merged),
+            local: Some(local),
+            remote: Some(remote),
+            base: None,
+            label_base: None,
+            label_local: None,
+            label_remote: None,
+            conflict_style: Some("bad".into()),
+            diff_algorithm: None,
+        };
+
+        let err = resolve_mergetool_with_env(args, &env).unwrap_err();
+        assert!(err.contains("Unknown conflict style"), "error: {err}");
+    }
+
+    #[test]
+    fn mergetool_diff_algorithm_histogram() {
+        let dir = tempfile::tempdir().unwrap();
+        let merged = tmp_file(&dir, "m.txt", "x");
+        let local = tmp_file(&dir, "l.txt", "a");
+        let remote = tmp_file(&dir, "r.txt", "b");
+        let env = TestEnv::new();
+
+        let args = MergetoolArgs {
+            merged: Some(merged),
+            local: Some(local),
+            remote: Some(remote),
+            base: None,
+            label_base: None,
+            label_local: None,
+            label_remote: None,
+            conflict_style: None,
+            diff_algorithm: Some("histogram".into()),
+        };
+
+        let config = resolve_mergetool_with_env(args, &env).unwrap();
+        assert_eq!(config.diff_algorithm, DiffAlgorithm::Histogram);
+    }
+
+    #[test]
+    fn mergetool_diff_algorithm_invalid_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let merged = tmp_file(&dir, "m.txt", "x");
+        let local = tmp_file(&dir, "l.txt", "a");
+        let remote = tmp_file(&dir, "r.txt", "b");
+        let env = TestEnv::new();
+
+        let args = MergetoolArgs {
+            merged: Some(merged),
+            local: Some(local),
+            remote: Some(remote),
+            base: None,
+            label_base: None,
+            label_local: None,
+            label_remote: None,
+            conflict_style: None,
+            diff_algorithm: Some("patience".into()),
+        };
+
+        let err = resolve_mergetool_with_env(args, &env).unwrap_err();
+        assert!(err.contains("Unknown diff algorithm"), "error: {err}");
+    }
+
+    #[test]
+    fn clap_parses_conflict_style_and_diff_algorithm() {
+        let cli = Cli::try_parse_from([
+            "gitgpui-app",
+            "mergetool",
+            "--merged",
+            "/tmp/m",
+            "--local",
+            "/tmp/l",
+            "--remote",
+            "/tmp/r",
+            "--conflict-style",
+            "zdiff3",
+            "--diff-algorithm",
+            "histogram",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Some(Command::Mergetool(args)) => {
+                assert_eq!(args.conflict_style.as_deref(), Some("zdiff3"));
+                assert_eq!(args.diff_algorithm.as_deref(), Some("histogram"));
+            }
+            _ => panic!("expected Mergetool command"),
+        }
     }
 }

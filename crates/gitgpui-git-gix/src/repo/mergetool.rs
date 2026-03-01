@@ -1,7 +1,7 @@
 use super::GixRepo;
 use gitgpui_core::error::{Error, ErrorKind};
 use gitgpui_core::services::{
-    validate_conflict_resolution_text, CommandOutput, MergetoolResult, Result,
+    CommandOutput, MergetoolResult, Result, validate_conflict_resolution_text,
 };
 use std::path::{Path, PathBuf};
 use std::process::Command;

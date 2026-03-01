@@ -14,7 +14,7 @@
 //! 4. Compares actual output against expected result (when non-empty).
 //! 5. On mismatch, writes `{prefix}_actual_result.{ext}` for manual diff.
 
-use gitgpui_core::merge::{merge_file, MergeOptions};
+use gitgpui_core::merge::{MergeOptions, merge_file};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -108,9 +108,9 @@ fn validate_marker_wellformedness(output: &str, fixture_name: &str) {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum State {
         Outside,
-        InOurs,    // after <<<<<<< before =======
-        InBase,    // after ||||||| before ======= (diff3/zdiff3)
-        InTheirs,  // after ======= before >>>>>>>
+        InOurs,   // after <<<<<<< before =======
+        InBase,   // after ||||||| before ======= (diff3/zdiff3)
+        InTheirs, // after ======= before >>>>>>>
     }
 
     let mut state = State::Outside;
@@ -233,11 +233,31 @@ fn validate_context_preservation(
 // ---------------------------------------------------------------------------
 
 fn is_open_marker(line: &str) -> bool {
-    line.starts_with("<<<<<<<") && line[7..].chars().all(|c| c == '<' || c == ' ' || c.is_alphanumeric() || c == '/' || c == '.' || c == ':' || c == '-' || c == '_')
+    line.starts_with("<<<<<<<")
+        && line[7..].chars().all(|c| {
+            c == '<'
+                || c == ' '
+                || c.is_alphanumeric()
+                || c == '/'
+                || c == '.'
+                || c == ':'
+                || c == '-'
+                || c == '_'
+        })
 }
 
 fn is_close_marker(line: &str) -> bool {
-    line.starts_with(">>>>>>>") && line[7..].chars().all(|c| c == '>' || c == ' ' || c.is_alphanumeric() || c == '/' || c == '.' || c == ':' || c == '-' || c == '_')
+    line.starts_with(">>>>>>>")
+        && line[7..].chars().all(|c| {
+            c == '>'
+                || c == ' '
+                || c.is_alphanumeric()
+                || c == '/'
+                || c == '.'
+                || c == ':'
+                || c == '-'
+                || c == '_'
+        })
 }
 
 fn is_separator_marker(line: &str) -> bool {
@@ -245,7 +265,17 @@ fn is_separator_marker(line: &str) -> bool {
 }
 
 fn is_base_marker(line: &str) -> bool {
-    line.starts_with("|||||||") && line[7..].chars().all(|c| c == '|' || c == ' ' || c.is_alphanumeric() || c == '/' || c == '.' || c == ':' || c == '-' || c == '_')
+    line.starts_with("|||||||")
+        && line[7..].chars().all(|c| {
+            c == '|'
+                || c == ' '
+                || c.is_alphanumeric()
+                || c == '/'
+                || c == '.'
+                || c == ':'
+                || c == '-'
+                || c == '_'
+        })
 }
 
 // ---------------------------------------------------------------------------

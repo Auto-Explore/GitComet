@@ -10,7 +10,7 @@
 - ✅ Foundational conflict-marker label formatter implemented in `crates/gitgpui-core/src/conflict_labels.rs` (`empty tree`, `<short-sha>:<path>`, merged-ancestors, rebase-parent shapes), ready for focused merge-mode integration.
 - ✅ Focused command-mode execution paths fully implemented:
   - ✅ `difftool` mode executes a dedicated runtime path in `crates/gitgpui-app/src/difftool_mode.rs` (delegates to `git diff --no-index --no-ext-diff`, strips recursive `GIT_EXTERNAL_DIFF` env, supports labels/display-path headers, and maps git exit `1`/diff-present to app success exit `0`).
-  - ✅ `mergetool` mode executes a dedicated runtime path in `crates/gitgpui-app/src/mergetool_mode.rs` using the built-in 3-way merge algorithm (`merge_file_bytes`). Reads base/local/remote files, performs automatic merge, writes result to MERGED path. Exits 0 on clean merge, 1 on unresolved conflicts. Supports labels, no-base (add/add) scenarios, byte-level binary file detection (null-byte and non-UTF-8 detection; copies local side), CRLF preservation, and paths with spaces. 20 unit tests.
+  - ✅ `mergetool` mode executes a dedicated runtime path in `crates/gitgpui-app/src/mergetool_mode.rs` using the built-in 3-way merge algorithm (`merge_file_bytes`). Reads base/local/remote files, performs automatic merge, writes result to MERGED path. Exits 0 on clean merge, 1 on unresolved conflicts. Supports labels, no-base (add/add) scenarios, byte-level binary file detection (null-byte and non-UTF-8 detection; copies local side), CRLF preservation, paths with spaces, configurable conflict style (`--conflict-style merge|diff3|zdiff3`), and diff algorithm selection (`--diff-algorithm myers|histogram`). 23 unit tests.
 - ✅ External mergetool backend launch exists (`launch_mergetool`) with stage materialization (`BASE/LOCAL/REMOTE`), trust-exit behavior, unresolved-marker rejection, and staging semantics.
 - ✅ Mergetool GUI selection and path override support implemented:
   - `merge.guitool` + `mergetool.guiDefault` precedence logic
@@ -102,7 +102,19 @@
   - ✅ Dedicated trust-exit interaction matrix assertions (`difftool.trustExitCode`, `--trust-exit-code`, `--no-trust-exit-code`).
   - ✅ `git difftool --tool-help` discoverability assertion for configured `gitgpui` tool.
 
-### Latest Component Delivered (Iteration 13) — Meld Sync-Point Matcher Portability
+### Latest Component Delivered (Iteration 14) — Mergetool Conflict Style & Diff Algorithm CLI Options
+
+- Added `--conflict-style` CLI flag to `gitgpui-app mergetool` (values: `merge`, `diff3`, `zdiff3`; defaults to `merge`).
+- Added `--diff-algorithm` CLI flag to `gitgpui-app mergetool` (values: `myers`, `histogram`; defaults to `myers`).
+- Wired both options through `MergetoolConfig` → `MergeOptions` so the mergetool runtime uses the user's preferred conflict marker format and diff algorithm.
+- CLI validation produces actionable error messages for invalid values.
+- Added 10 new tests:
+  - 7 CLI validation tests: default values, diff3/zdiff3/invalid conflict style, histogram/invalid diff algorithm, clap parsing
+  - 3 functional tests: diff3 base-section inclusion, zdiff3 common prefix/suffix extraction, histogram clean merge on structural code
+- Applied pending `rustfmt` formatting across all modified files.
+- All tests pass: 63 binary tests, 14 difftool E2E, 31 mergetool E2E, 262+ core tests.
+
+### Iteration 13 — Meld Sync-Point Matcher Portability
 
 - Implemented sync-point-aware matching in `crates/gitgpui-core/src/text_utils.rs`:
   - Added `matching_blocks_chars_with_sync_points` and `matching_blocks_lines_with_sync_points`.

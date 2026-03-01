@@ -128,9 +128,7 @@ fn configure_gitgpui_mergetool(repo: &Path) {
 /// merge tool and allows tests to detect which tool was selected by checking
 /// for the marker in the combined output.
 fn mergetool_marker_cmd(marker: &str) -> String {
-    format!(
-        "echo TOOL={marker} >&2; cat \"$REMOTE\" > \"$MERGED\""
-    )
+    format!("echo TOOL={marker} >&2; cat \"$REMOTE\" > \"$MERGED\"")
 }
 
 fn configure_mergetool_command(repo: &Path, tool: &str, cmd: &str) {
@@ -167,17 +165,10 @@ fn configure_recording_mergetool(repo: &Path, tool: &str, log_path: &Path) {
     let log_q = shell_quote(&log_path.to_string_lossy());
     let cmd = format!("printf '%s\\n' \"$MERGED\" >> {log_q}; cat \"$REMOTE\" > \"$MERGED\"");
     run_git(repo, &["config", "merge.tool", tool]);
+    run_git(repo, &["config", &format!("mergetool.{tool}.cmd"), &cmd]);
     run_git(
         repo,
-        &["config", &format!("mergetool.{tool}.cmd"), &cmd],
-    );
-    run_git(
-        repo,
-        &[
-            "config",
-            &format!("mergetool.{tool}.trustExitCode"),
-            "true",
-        ],
+        &["config", &format!("mergetool.{tool}.trustExitCode"), "true"],
     );
     run_git(repo, &["config", "mergetool.prompt", "false"]);
     run_git(repo, &["config", "mergetool.keepBackup", "false"]);
@@ -419,7 +410,9 @@ fn git_mergetool_handles_path_with_spaces() {
     let merged = fs::read_to_string(repo.join("docs/spaced name.txt")).unwrap();
     // Tool should have processed the file despite spaces in path.
     assert!(
-        merged.contains("local change") || merged.contains("remote change") || merged.contains("<<<<<<<"),
+        merged.contains("local change")
+            || merged.contains("remote change")
+            || merged.contains("<<<<<<<"),
         "expected mergetool to process spaced-path file\nmerged:\n{merged}\ngit output:\n{text}"
     );
 }
@@ -494,7 +487,9 @@ fn git_mergetool_works_from_subdirectory() {
 
     let merged = fs::read_to_string(repo.join("sub/dir/nested.txt")).unwrap();
     assert!(
-        merged.contains("local content") || merged.contains("remote content") || merged.contains("<<<<<<<"),
+        merged.contains("local content")
+            || merged.contains("remote content")
+            || merged.contains("<<<<<<<"),
         "expected mergetool to process file from subdirectory\nmerged:\n{merged}\ngit output:\n{text}"
     );
 }
@@ -518,10 +513,7 @@ fn git_mergetool_handles_add_add_conflict() {
     commit_all(repo, "main: add new_file");
 
     let output = run_git_capture(repo, &["merge", "feature"]);
-    assert!(
-        !output.status.success(),
-        "expected add/add merge conflict"
-    );
+    assert!(!output.status.success(), "expected add/add merge conflict");
 
     configure_gitgpui_mergetool(repo);
 
@@ -532,7 +524,9 @@ fn git_mergetool_handles_add_add_conflict() {
     // For add/add, BASE is empty. Our tool treats this as empty base,
     // resulting in a conflict (both sides added different content).
     assert!(
-        merged.contains("added by local") || merged.contains("added by remote") || merged.contains("<<<<<<<"),
+        merged.contains("added by local")
+            || merged.contains("added by remote")
+            || merged.contains("<<<<<<<"),
         "expected mergetool to handle add/add conflict\nmerged:\n{merged}\ngit output:\n{text}"
     );
 }
@@ -616,7 +610,9 @@ fn git_mergetool_multiple_conflicted_files() {
     let beta = fs::read_to_string(repo.join("beta.txt")).unwrap();
 
     assert!(
-        alpha.contains("<<<<<<<") || alpha.contains("local alpha") || alpha.contains("remote alpha"),
+        alpha.contains("<<<<<<<")
+            || alpha.contains("local alpha")
+            || alpha.contains("remote alpha"),
         "expected alpha.txt to be processed\nalpha:\n{alpha}\ngit output:\n{text}"
     );
     assert!(
@@ -678,15 +674,9 @@ fn git_mergetool_honors_diff_order_file_configuration() {
     let order_log = repo.join(".mergetool-order.log");
     configure_recording_mergetool(repo, "ordercheck", &order_log);
 
-    let output = run_git_capture(
-        repo,
-        &["mergetool", "--no-prompt", "--tool", "ordercheck"],
-    );
+    let output = run_git_capture(repo, &["mergetool", "--no-prompt", "--tool", "ordercheck"]);
     let text = output_text(&output);
-    assert!(
-        output.status.success(),
-        "git mergetool failed\n{text}"
-    );
+    assert!(output.status.success(), "git mergetool failed\n{text}");
 
     let order = read_recorded_merge_order(&order_log);
     assert_eq!(order, vec!["b", "a"], "unexpected merge order\n{text}");
@@ -777,11 +767,7 @@ fn git_mergetool_gui_default_auto_prefers_gui_tool_when_display_set() {
     configure_mergetool_selection(repo, "cli", Some("gui"), Some("auto"));
 
     // With DISPLAY set, guiDefault=auto should select the GUI tool.
-    let output = run_git_capture_with_display(
-        repo,
-        &["mergetool", "--no-prompt"],
-        Some(":99"),
-    );
+    let output = run_git_capture_with_display(repo, &["mergetool", "--no-prompt"], Some(":99"));
     let text = output_text(&output);
     assert!(
         text.contains("TOOL=gui"),
@@ -816,11 +802,7 @@ fn git_mergetool_gui_default_auto_prefers_cli_tool_without_display() {
     configure_mergetool_selection(repo, "cli", Some("gui"), Some("auto"));
 
     // Without DISPLAY, guiDefault=auto should select the CLI tool.
-    let output = run_git_capture_with_display(
-        repo,
-        &["mergetool", "--no-prompt"],
-        None,
-    );
+    let output = run_git_capture_with_display(repo, &["mergetool", "--no-prompt"], None);
     let text = output_text(&output);
     assert!(
         text.contains("TOOL=cli"),
@@ -855,11 +837,7 @@ fn git_mergetool_gui_flag_overrides_selection() {
     // guiDefault=false, but --gui flag should override.
     configure_mergetool_selection(repo, "cli", Some("gui"), Some("false"));
 
-    let output = run_git_capture_with_display(
-        repo,
-        &["mergetool", "--gui", "--no-prompt"],
-        None,
-    );
+    let output = run_git_capture_with_display(repo, &["mergetool", "--gui", "--no-prompt"], None);
     let text = output_text(&output);
     assert!(
         text.contains("TOOL=gui"),
@@ -894,11 +872,8 @@ fn git_mergetool_no_gui_flag_overrides_gui_default_true() {
     // guiDefault=true, but --no-gui flag should override.
     configure_mergetool_selection(repo, "cli", Some("gui"), Some("true"));
 
-    let output = run_git_capture_with_display(
-        repo,
-        &["mergetool", "--no-gui", "--no-prompt"],
-        Some(":99"),
-    );
+    let output =
+        run_git_capture_with_display(repo, &["mergetool", "--no-gui", "--no-prompt"], Some(":99"));
     let text = output_text(&output);
     assert!(
         text.contains("TOOL=cli"),
@@ -933,11 +908,8 @@ fn git_mergetool_gui_fallback_when_no_guitool_configured() {
     // Only merge.tool set, no merge.guitool.
     configure_mergetool_selection(repo, "cli", None, None);
 
-    let output = run_git_capture_with_display(
-        repo,
-        &["mergetool", "--gui", "--no-prompt"],
-        Some(":99"),
-    );
+    let output =
+        run_git_capture_with_display(repo, &["mergetool", "--gui", "--no-prompt"], Some(":99"));
     let text = output_text(&output);
     // Git falls back to merge.tool when no guitool is configured.
     assert!(
@@ -1103,11 +1075,7 @@ fn git_mergetool_keep_backup_delete_delete_no_errors() {
     // Resolve with "d" (delete) for the delete/delete conflict at the
     // original path, and "d" again for any rename/rename prompts git may
     // present. Pipe enough answers for all prompts git may ask.
-    let output = run_git_with_stdin(
-        repo,
-        &["mergetool", "--no-prompt"],
-        "d\nd\nd\nd\n",
-    );
+    let output = run_git_with_stdin(repo, &["mergetool", "--no-prompt"], "d\nd\nd\nd\n");
 
     // Key assertion: stderr must be empty (no errors from keepBackup
     // interacting with delete/delete cleanup).
@@ -1224,11 +1192,7 @@ fn git_mergetool_symlink_conflict_resolved_via_local() {
     configure_gitgpui_mergetool(repo);
 
     // Pipe "l\n" to stdin to answer the symlink resolution prompt.
-    let output = run_git_with_stdin(
-        repo,
-        &["mergetool", "--no-prompt"],
-        "l\n",
-    );
+    let output = run_git_with_stdin(repo, &["mergetool", "--no-prompt"], "l\n");
     let text = output_text(&output);
 
     // After answering "l" (local), the symlink should point to local_target.
@@ -1272,11 +1236,7 @@ fn git_mergetool_symlink_conflict_resolved_via_remote() {
 
     configure_gitgpui_mergetool(repo);
 
-    let output = run_git_with_stdin(
-        repo,
-        &["mergetool", "--no-prompt"],
-        "r\n",
-    );
+    let output = run_git_with_stdin(repo, &["mergetool", "--no-prompt"], "r\n");
     let text = output_text(&output);
 
     let target = fs::read_link(repo.join("link"));
@@ -1326,17 +1286,15 @@ fn git_mergetool_symlink_alongside_normal_file_conflict() {
 
     // Pipe "l\n" for the symlink prompt. The normal file conflict
     // will be processed by our external tool automatically.
-    let output = run_git_with_stdin(
-        repo,
-        &["mergetool", "--no-prompt"],
-        "l\n",
-    );
+    let output = run_git_with_stdin(repo, &["mergetool", "--no-prompt"], "l\n");
     let text = output_text(&output);
 
     // Verify the normal file was processed by our mergetool.
     let normal_content = fs::read_to_string(repo.join("normal.txt")).unwrap();
     assert!(
-        normal_content.contains("local") || normal_content.contains("remote") || normal_content.contains("<<<<<<<"),
+        normal_content.contains("local")
+            || normal_content.contains("remote")
+            || normal_content.contains("<<<<<<<"),
         "expected external tool to process normal file conflict\nnormal.txt:\n{normal_content}\ngit output:\n{text}"
     );
 
@@ -1362,13 +1320,25 @@ fn create_submodule_repo(path: &Path) {
     run_git(path, &["config", "commit.gpgsign", "false"]);
     write_file(path, "sub_file.txt", "submodule content\n");
     run_git(path, &["add", "-A"]);
-    run_git(path, &["-c", "commit.gpgsign=false", "commit", "-m", "initial submodule"]);
+    run_git(
+        path,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-m",
+            "initial submodule",
+        ],
+    );
 }
 
 fn advance_submodule(path: &Path, content: &str, message: &str) {
     write_file(path, "sub_file.txt", content);
     run_git(path, &["add", "-A"]);
-    run_git(path, &["-c", "commit.gpgsign=false", "commit", "-m", message]);
+    run_git(
+        path,
+        &["-c", "commit.gpgsign=false", "commit", "-m", message],
+    );
 }
 
 #[test]
@@ -1394,18 +1364,31 @@ fn git_mergetool_submodule_conflict_resolved_via_local() {
     // Create two diverging submodule commits.
     advance_submodule(&sub_repo, "commit A\n", "advance A");
     let commit_a_out = run_git_capture(&sub_repo, &["rev-parse", "HEAD"]);
-    let commit_a = String::from_utf8_lossy(&commit_a_out.stdout).trim().to_string();
+    let commit_a = String::from_utf8_lossy(&commit_a_out.stdout)
+        .trim()
+        .to_string();
 
     advance_submodule(&sub_repo, "commit B\n", "advance B");
     let commit_b_out = run_git_capture(&sub_repo, &["rev-parse", "HEAD"]);
-    let commit_b = String::from_utf8_lossy(&commit_b_out.stdout).trim().to_string();
+    let commit_b = String::from_utf8_lossy(&commit_b_out.stdout)
+        .trim()
+        .to_string();
 
     // Branch feature: update submodule to commit_a.
     run_git(&repo, &["checkout", "-b", "feature"]);
     run_git(&repo.join("submod"), &["fetch"]);
     run_git(&repo.join("submod"), &["checkout", &commit_a]);
     run_git(&repo, &["add", "submod"]);
-    run_git(&repo, &["-c", "commit.gpgsign=false", "commit", "-m", "feature: update submod"]);
+    run_git(
+        &repo,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-m",
+            "feature: update submod",
+        ],
+    );
 
     // Branch main: update submodule to commit_b.
     run_git(&repo, &["checkout", "main"]);
@@ -1413,7 +1396,16 @@ fn git_mergetool_submodule_conflict_resolved_via_local() {
     run_git(&repo.join("submod"), &["fetch"]);
     run_git(&repo.join("submod"), &["checkout", &commit_b]);
     run_git(&repo, &["add", "submod"]);
-    run_git(&repo, &["-c", "commit.gpgsign=false", "commit", "-m", "main: update submod"]);
+    run_git(
+        &repo,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-m",
+            "main: update submod",
+        ],
+    );
 
     // Merge.
     let merge_out = run_git_capture(&repo, &["merge", "feature"]);
@@ -1425,16 +1417,14 @@ fn git_mergetool_submodule_conflict_resolved_via_local() {
     configure_gitgpui_mergetool(&repo);
 
     // Answer "l" for the submodule prompt.
-    let output = run_git_with_stdin(
-        &repo,
-        &["mergetool", "--no-prompt"],
-        "l\n",
-    );
+    let output = run_git_with_stdin(&repo, &["mergetool", "--no-prompt"], "l\n");
     let text = output_text(&output);
 
     // The submodule should be resolved to the local (main) commit.
     let submod_head = run_git_capture(&repo.join("submod"), &["rev-parse", "HEAD"]);
-    let resolved_commit = String::from_utf8_lossy(&submod_head.stdout).trim().to_string();
+    let resolved_commit = String::from_utf8_lossy(&submod_head.stdout)
+        .trim()
+        .to_string();
     assert_eq!(
         resolved_commit, commit_b,
         "expected local submodule commit after answering 'l'\ngit output:\n{text}"
@@ -1458,24 +1448,46 @@ fn git_mergetool_submodule_conflict_resolved_via_remote() {
 
     advance_submodule(&sub_repo, "commit A\n", "advance A");
     let commit_a_out = run_git_capture(&sub_repo, &["rev-parse", "HEAD"]);
-    let commit_a = String::from_utf8_lossy(&commit_a_out.stdout).trim().to_string();
+    let commit_a = String::from_utf8_lossy(&commit_a_out.stdout)
+        .trim()
+        .to_string();
 
     advance_submodule(&sub_repo, "commit B\n", "advance B");
     let commit_b_out = run_git_capture(&sub_repo, &["rev-parse", "HEAD"]);
-    let _commit_b = String::from_utf8_lossy(&commit_b_out.stdout).trim().to_string();
+    let _commit_b = String::from_utf8_lossy(&commit_b_out.stdout)
+        .trim()
+        .to_string();
 
     run_git(&repo, &["checkout", "-b", "feature"]);
     run_git(&repo.join("submod"), &["fetch"]);
     run_git(&repo.join("submod"), &["checkout", &commit_a]);
     run_git(&repo, &["add", "submod"]);
-    run_git(&repo, &["-c", "commit.gpgsign=false", "commit", "-m", "feature: update submod"]);
+    run_git(
+        &repo,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-m",
+            "feature: update submod",
+        ],
+    );
 
     run_git(&repo, &["checkout", "main"]);
     run_git(&repo, &["submodule", "update", "--init"]);
     run_git(&repo.join("submod"), &["fetch"]);
     run_git(&repo.join("submod"), &["checkout", &_commit_b]);
     run_git(&repo, &["add", "submod"]);
-    run_git(&repo, &["-c", "commit.gpgsign=false", "commit", "-m", "main: update submod"]);
+    run_git(
+        &repo,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-m",
+            "main: update submod",
+        ],
+    );
 
     let merge_out = run_git_capture(&repo, &["merge", "feature"]);
     if merge_out.status.success() {
@@ -1484,16 +1496,14 @@ fn git_mergetool_submodule_conflict_resolved_via_remote() {
 
     configure_gitgpui_mergetool(&repo);
 
-    let output = run_git_with_stdin(
-        &repo,
-        &["mergetool", "--no-prompt"],
-        "r\n",
-    );
+    let output = run_git_with_stdin(&repo, &["mergetool", "--no-prompt"], "r\n");
     let text = output_text(&output);
 
     // The submodule should be resolved to the remote (feature) commit.
     let submod_head = run_git_capture(&repo.join("submod"), &["rev-parse", "HEAD"]);
-    let resolved_commit = String::from_utf8_lossy(&submod_head.stdout).trim().to_string();
+    let resolved_commit = String::from_utf8_lossy(&submod_head.stdout)
+        .trim()
+        .to_string();
     assert_eq!(
         resolved_commit, commit_a,
         "expected remote submodule commit after answering 'r'\ngit output:\n{text}"
@@ -1520,11 +1530,15 @@ fn git_mergetool_submodule_alongside_normal_file_conflict() {
 
     advance_submodule(&sub_repo, "commit A\n", "advance A");
     let commit_a_out = run_git_capture(&sub_repo, &["rev-parse", "HEAD"]);
-    let commit_a = String::from_utf8_lossy(&commit_a_out.stdout).trim().to_string();
+    let commit_a = String::from_utf8_lossy(&commit_a_out.stdout)
+        .trim()
+        .to_string();
 
     advance_submodule(&sub_repo, "commit B\n", "advance B");
     let commit_b_out = run_git_capture(&sub_repo, &["rev-parse", "HEAD"]);
-    let commit_b = String::from_utf8_lossy(&commit_b_out.stdout).trim().to_string();
+    let commit_b = String::from_utf8_lossy(&commit_b_out.stdout)
+        .trim()
+        .to_string();
 
     // Feature branch: update submod to commit A and change normal.txt.
     run_git(&repo, &["checkout", "-b", "feature"]);
@@ -1532,7 +1546,16 @@ fn git_mergetool_submodule_alongside_normal_file_conflict() {
     run_git(&repo.join("submod"), &["checkout", &commit_a]);
     write_file(&repo, "normal.txt", "remote change\n");
     run_git(&repo, &["add", "submod", "normal.txt"]);
-    run_git(&repo, &["-c", "commit.gpgsign=false", "commit", "-m", "feature changes"]);
+    run_git(
+        &repo,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-m",
+            "feature changes",
+        ],
+    );
 
     // Main branch: update submod to commit B and change normal.txt differently.
     run_git(&repo, &["checkout", "main"]);
@@ -1541,7 +1564,10 @@ fn git_mergetool_submodule_alongside_normal_file_conflict() {
     run_git(&repo.join("submod"), &["checkout", &commit_b]);
     write_file(&repo, "normal.txt", "local change\n");
     run_git(&repo, &["add", "submod", "normal.txt"]);
-    run_git(&repo, &["-c", "commit.gpgsign=false", "commit", "-m", "main changes"]);
+    run_git(
+        &repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "main changes"],
+    );
 
     let merge_out = run_git_capture(&repo, &["merge", "feature"]);
     if merge_out.status.success() {
@@ -1552,23 +1578,23 @@ fn git_mergetool_submodule_alongside_normal_file_conflict() {
 
     // Answer "l" for the submodule prompt. The normal file conflict
     // will be handled by our external tool.
-    let output = run_git_with_stdin(
-        &repo,
-        &["mergetool", "--no-prompt"],
-        "l\n",
-    );
+    let output = run_git_with_stdin(&repo, &["mergetool", "--no-prompt"], "l\n");
     let text = output_text(&output);
 
     // Verify the normal file was processed by our mergetool.
     let normal_content = fs::read_to_string(repo.join("normal.txt")).unwrap();
     assert!(
-        normal_content.contains("local") || normal_content.contains("remote") || normal_content.contains("<<<<<<<"),
+        normal_content.contains("local")
+            || normal_content.contains("remote")
+            || normal_content.contains("<<<<<<<"),
         "expected external tool to process normal file conflict\nnormal.txt:\n{normal_content}\ngit output:\n{text}"
     );
 
     // Verify the submodule was resolved.
     let submod_head = run_git_capture(&repo.join("submod"), &["rev-parse", "HEAD"]);
-    let resolved_commit = String::from_utf8_lossy(&submod_head.stdout).trim().to_string();
+    let resolved_commit = String::from_utf8_lossy(&submod_head.stdout)
+        .trim()
+        .to_string();
     assert_eq!(
         resolved_commit, commit_b,
         "expected local submodule commit\ngit output:\n{text}"
@@ -1596,7 +1622,17 @@ fn git_mergetool_file_replaced_by_submodule_conflict() {
     run_git(&repo, &["checkout", "-b", "feature"]);
     run_git(&repo, &["rm", "submod"]);
     let sub_url = format!("file://{}", sub_repo.display());
-    run_git(&repo, &["-c", "protocol.file.allow=always", "submodule", "add", &sub_url, "submod"]);
+    run_git(
+        &repo,
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            &sub_url,
+            "submod",
+        ],
+    );
     commit_all(&repo, "feature: replace file with submodule");
 
     // Main: modify the regular file.
@@ -1613,11 +1649,7 @@ fn git_mergetool_file_replaced_by_submodule_conflict() {
 
     // Git handles file-vs-submodule conflicts with its own prompt.
     // Pipe "l" to keep the local (file) side.
-    let output = run_git_with_stdin(
-        &repo,
-        &["mergetool", "--no-prompt"],
-        "l\n",
-    );
+    let output = run_git_with_stdin(&repo, &["mergetool", "--no-prompt"], "l\n");
     let _text = output_text(&output);
 
     // The pipeline should complete without hanging or crashing.
@@ -1638,29 +1670,61 @@ fn git_mergetool_submodule_in_subdirectory_conflict() {
     init_repo(&repo);
     fs::create_dir_all(repo.join("subdir")).unwrap();
     let sub_url = format!("file://{}", sub_repo.display());
-    run_git(&repo, &["-c", "protocol.file.allow=always", "submodule", "add", &sub_url, "subdir/submod"]);
+    run_git(
+        &repo,
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            &sub_url,
+            "subdir/submod",
+        ],
+    );
     commit_all(&repo, "add submodule in subdirectory");
 
     advance_submodule(&sub_repo, "commit A\n", "advance A");
     let commit_a_out = run_git_capture(&sub_repo, &["rev-parse", "HEAD"]);
-    let commit_a = String::from_utf8_lossy(&commit_a_out.stdout).trim().to_string();
+    let commit_a = String::from_utf8_lossy(&commit_a_out.stdout)
+        .trim()
+        .to_string();
 
     advance_submodule(&sub_repo, "commit B\n", "advance B");
     let commit_b_out = run_git_capture(&sub_repo, &["rev-parse", "HEAD"]);
-    let commit_b = String::from_utf8_lossy(&commit_b_out.stdout).trim().to_string();
+    let commit_b = String::from_utf8_lossy(&commit_b_out.stdout)
+        .trim()
+        .to_string();
 
     run_git(&repo, &["checkout", "-b", "feature"]);
     run_git(&repo.join("subdir/submod"), &["fetch"]);
     run_git(&repo.join("subdir/submod"), &["checkout", &commit_a]);
     run_git(&repo, &["add", "subdir/submod"]);
-    run_git(&repo, &["-c", "commit.gpgsign=false", "commit", "-m", "feature: update submod"]);
+    run_git(
+        &repo,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-m",
+            "feature: update submod",
+        ],
+    );
 
     run_git(&repo, &["checkout", "main"]);
     run_git(&repo, &["submodule", "update", "--init"]);
     run_git(&repo.join("subdir/submod"), &["fetch"]);
     run_git(&repo.join("subdir/submod"), &["checkout", &commit_b]);
     run_git(&repo, &["add", "subdir/submod"]);
-    run_git(&repo, &["-c", "commit.gpgsign=false", "commit", "-m", "main: update submod"]);
+    run_git(
+        &repo,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-m",
+            "main: update submod",
+        ],
+    );
 
     let merge_out = run_git_capture(&repo, &["merge", "feature"]);
     if merge_out.status.success() {
@@ -1669,16 +1733,14 @@ fn git_mergetool_submodule_in_subdirectory_conflict() {
 
     configure_gitgpui_mergetool(&repo);
 
-    let output = run_git_with_stdin(
-        &repo,
-        &["mergetool", "--no-prompt"],
-        "l\n",
-    );
+    let output = run_git_with_stdin(&repo, &["mergetool", "--no-prompt"], "l\n");
     let text = output_text(&output);
 
     // Verify the submodule in the subdirectory was resolved.
     let submod_head = run_git_capture(&repo.join("subdir/submod"), &["rev-parse", "HEAD"]);
-    let resolved_commit = String::from_utf8_lossy(&submod_head.stdout).trim().to_string();
+    let resolved_commit = String::from_utf8_lossy(&submod_head.stdout)
+        .trim()
+        .to_string();
     assert_eq!(
         resolved_commit, commit_b,
         "expected local submodule commit in subdirectory\ngit output:\n{text}"
@@ -1697,19 +1759,40 @@ fn git_mergetool_deleted_submodule_conflict() {
     create_submodule_repo(&sub_repo);
     init_repo(&repo);
     let sub_url = format!("file://{}", sub_repo.display());
-    run_git(&repo, &["-c", "protocol.file.allow=always", "submodule", "add", &sub_url, "submod"]);
+    run_git(
+        &repo,
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            &sub_url,
+            "submod",
+        ],
+    );
     commit_all(&repo, "add submodule");
 
     advance_submodule(&sub_repo, "advanced\n", "advance");
     let advanced_out = run_git_capture(&sub_repo, &["rev-parse", "HEAD"]);
-    let _advanced_commit = String::from_utf8_lossy(&advanced_out.stdout).trim().to_string();
+    let _advanced_commit = String::from_utf8_lossy(&advanced_out.stdout)
+        .trim()
+        .to_string();
 
     // Feature: update submodule to new commit.
     run_git(&repo, &["checkout", "-b", "feature"]);
     run_git(&repo.join("submod"), &["fetch"]);
     run_git(&repo.join("submod"), &["checkout", &_advanced_commit]);
     run_git(&repo, &["add", "submod"]);
-    run_git(&repo, &["-c", "commit.gpgsign=false", "commit", "-m", "feature: update submod"]);
+    run_git(
+        &repo,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-m",
+            "feature: update submod",
+        ],
+    );
 
     // Main: remove the submodule.
     run_git(&repo, &["checkout", "main"]);
@@ -1725,7 +1808,16 @@ fn git_mergetool_deleted_submodule_conflict() {
         }
     }
     run_git(&repo, &["add", "-A"]);
-    run_git(&repo, &["-c", "commit.gpgsign=false", "commit", "-m", "main: remove submod"]);
+    run_git(
+        &repo,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-m",
+            "main: remove submod",
+        ],
+    );
 
     let merge_out = run_git_capture(&repo, &["merge", "feature"]);
     if merge_out.status.success() {
@@ -1736,11 +1828,7 @@ fn git_mergetool_deleted_submodule_conflict() {
 
     // Git handles deleted-vs-modified submodule with its own prompt.
     // Answer "d" (delete) to keep our side's deletion.
-    let output = run_git_with_stdin(
-        &repo,
-        &["mergetool", "--no-prompt"],
-        "d\n",
-    );
+    let output = run_git_with_stdin(&repo, &["mergetool", "--no-prompt"], "d\n");
     let _text = output_text(&output);
 
     // The pipeline should complete without crashing. The exact state
@@ -1807,7 +1895,13 @@ fn git_mergetool_directory_vs_submodule_conflict() {
     run_git(&repo, &["add", "submod"]);
     run_git(
         &repo,
-        &["-c", "commit.gpgsign=false", "commit", "-m", "main: update submod"],
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-m",
+            "main: update submod",
+        ],
     );
 
     let merge_out = run_git_capture(&repo, &["merge", "feature"]);

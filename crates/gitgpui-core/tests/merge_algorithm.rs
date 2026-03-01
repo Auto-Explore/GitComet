@@ -274,7 +274,9 @@ fn t6403_merge_missing_lf_at_eof() {
 
     // Merged output should contain both sides' changes.
     assert!(
-        result.output.contains("Dominus regit me, et nihil mihi deerit."),
+        result
+            .output
+            .contains("Dominus regit me, et nihil mihi deerit."),
         "should contain theirs' collapsed first line"
     );
     assert!(

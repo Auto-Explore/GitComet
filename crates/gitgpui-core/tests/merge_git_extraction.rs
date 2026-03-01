@@ -12,7 +12,7 @@
 //! These tests generate fixtures at test time — no file system bloat from
 //! pre-committed merge data.
 
-use gitgpui_core::merge::{merge_file, MergeOptions};
+use gitgpui_core::merge::{MergeOptions, merge_file};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -161,16 +161,16 @@ fn extract_merge_cases(
             Some(b) => b,
             None => continue,
         };
-        let contrib1_bytes =
-            match git_bytes(repo, &["show", &format!("{}:{}", parent1, file_path)]) {
-                Some(b) => b,
-                None => continue,
-            };
-        let contrib2_bytes =
-            match git_bytes(repo, &["show", &format!("{}:{}", parent2, file_path)]) {
-                Some(b) => b,
-                None => continue,
-            };
+        let contrib1_bytes = match git_bytes(repo, &["show", &format!("{}:{}", parent1, file_path)])
+        {
+            Some(b) => b,
+            None => continue,
+        };
+        let contrib2_bytes = match git_bytes(repo, &["show", &format!("{}:{}", parent2, file_path)])
+        {
+            Some(b) => b,
+            None => continue,
+        };
 
         // Skip trivial merges: base == either contrib, or contribs identical.
         if base_bytes == contrib1_bytes
@@ -404,7 +404,10 @@ fn find_gitgpui_repo() -> PathBuf {
         }
         dir = match dir.parent() {
             Some(p) => p,
-            None => panic!("Could not find git repository root from {}", manifest_dir.display()),
+            None => panic!(
+                "Could not find git repository root from {}",
+                manifest_dir.display()
+            ),
         };
     }
 }
@@ -627,12 +630,23 @@ fn extraction_finds_nontrivial_conflict() {
     assert!(case.contrib2.contains("modified by A")); // parent2 is branch-a (merged)
 
     // Run merge algorithm and validate invariants
-    let result = merge_file(&case.base, &case.contrib1, &case.contrib2, &MergeOptions::default());
+    let result = merge_file(
+        &case.base,
+        &case.contrib1,
+        &case.contrib2,
+        &MergeOptions::default(),
+    );
     assert!(
         result.conflict_count > 0,
         "Expected conflict in merge output"
     );
-    validate_merge_invariants(&case.base, &case.contrib1, &case.contrib2, &result.output, "nontrivial_conflict");
+    validate_merge_invariants(
+        &case.base,
+        &case.contrib1,
+        &case.contrib2,
+        &result.output,
+        "nontrivial_conflict",
+    );
 }
 
 #[test]
@@ -684,12 +698,23 @@ fn extraction_handles_clean_merge() {
     assert_eq!(cases.len(), 1, "Expected one non-trivial merge case");
 
     let case = &cases[0];
-    let result = merge_file(&case.base, &case.contrib1, &case.contrib2, &MergeOptions::default());
+    let result = merge_file(
+        &case.base,
+        &case.contrib1,
+        &case.contrib2,
+        &MergeOptions::default(),
+    );
     assert!(
         result.is_clean(),
         "Expected clean merge for non-overlapping changes"
     );
-    validate_merge_invariants(&case.base, &case.contrib1, &case.contrib2, &result.output, "clean_merge");
+    validate_merge_invariants(
+        &case.base,
+        &case.contrib1,
+        &case.contrib2,
+        &result.output,
+        "clean_merge",
+    );
 
     // Verify both changes are present in output
     assert!(result.output.contains("MODIFIED LINE 5"));
@@ -762,7 +787,10 @@ fn extraction_writes_fixture_files() {
     assert!(dest.join("abc12345_src_main_rs_base.txt").exists());
     assert!(dest.join("abc12345_src_main_rs_contrib1.txt").exists());
     assert!(dest.join("abc12345_src_main_rs_contrib2.txt").exists());
-    assert!(dest.join("abc12345_src_main_rs_expected_result.txt").exists());
+    assert!(
+        dest.join("abc12345_src_main_rs_expected_result.txt")
+            .exists()
+    );
 
     // Verify content
     let base = std::fs::read_to_string(dest.join("abc12345_src_main_rs_base.txt")).unwrap();
@@ -826,8 +854,12 @@ fn extraction_handles_multifile_merge() {
 
     // Both should produce valid merge output
     for case in &cases {
-        let result =
-            merge_file(&case.base, &case.contrib1, &case.contrib2, &MergeOptions::default());
+        let result = merge_file(
+            &case.base,
+            &case.contrib1,
+            &case.contrib2,
+            &MergeOptions::default(),
+        );
         validate_merge_invariants(
             &case.base,
             &case.contrib1,
@@ -907,12 +939,10 @@ fn extraction_regression_on_external_repo() {
 #[test]
 #[ignore]
 fn generate_fixtures_from_repo() {
-    let repo_path = std::env::var("GITGPUI_MERGE_EXTRACTION_REPO").unwrap_or_else(|_| {
-        panic!("Set GITGPUI_MERGE_EXTRACTION_REPO to a git repo path")
-    });
-    let dest_path = std::env::var("GITGPUI_MERGE_EXTRACTION_DEST").unwrap_or_else(|_| {
-        panic!("Set GITGPUI_MERGE_EXTRACTION_DEST to an output directory")
-    });
+    let repo_path = std::env::var("GITGPUI_MERGE_EXTRACTION_REPO")
+        .unwrap_or_else(|_| panic!("Set GITGPUI_MERGE_EXTRACTION_REPO to a git repo path"));
+    let dest_path = std::env::var("GITGPUI_MERGE_EXTRACTION_DEST")
+        .unwrap_or_else(|_| panic!("Set GITGPUI_MERGE_EXTRACTION_DEST to an output directory"));
 
     let repo = Path::new(&repo_path);
     let dest = Path::new(&dest_path);

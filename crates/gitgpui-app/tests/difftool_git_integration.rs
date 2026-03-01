@@ -478,14 +478,12 @@ fn git_difftool_shows_symlink_target_change() {
     let repo = tmp.path();
 
     init_repo(repo);
-    std::os::unix::fs::symlink("original_target", repo.join("link"))
-        .expect("create symlink");
+    std::os::unix::fs::symlink("original_target", repo.join("link")).expect("create symlink");
     commit_all(repo, "base: add symlink");
 
     // Change the symlink target.
     fs::remove_file(repo.join("link")).unwrap();
-    std::os::unix::fs::symlink("new_target", repo.join("link"))
-        .expect("create symlink");
+    std::os::unix::fs::symlink("new_target", repo.join("link")).expect("create symlink");
 
     configure_gitgpui_difftool(repo);
 

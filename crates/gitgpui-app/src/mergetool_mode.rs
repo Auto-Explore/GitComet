@@ -1,7 +1,5 @@
 use crate::cli::{MergetoolConfig, exit_code};
-use gitgpui_core::merge::{
-    ConflictStyle, MergeError, MergeLabels, MergeOptions, MergeResult, merge_file_bytes,
-};
+use gitgpui_core::merge::{MergeError, MergeLabels, MergeOptions, MergeResult, merge_file_bytes};
 use std::fs;
 
 /// Result of running the dedicated mergetool mode.
@@ -28,8 +26,12 @@ pub fn run_mergetool(config: &MergetoolConfig) -> Result<MergetoolRunResult, Str
     // Read the three input sides.
     let local_bytes = fs::read(&config.local)
         .map_err(|e| format!("Failed to read local file {}: {e}", config.local.display()))?;
-    let remote_bytes = fs::read(&config.remote)
-        .map_err(|e| format!("Failed to read remote file {}: {e}", config.remote.display()))?;
+    let remote_bytes = fs::read(&config.remote).map_err(|e| {
+        format!(
+            "Failed to read remote file {}: {e}",
+            config.remote.display()
+        )
+    })?;
 
     let base_bytes = match &config.base {
         Some(base_path) => fs::read(base_path)
@@ -38,9 +40,10 @@ pub fn run_mergetool(config: &MergetoolConfig) -> Result<MergetoolRunResult, Str
         None => Vec::new(),
     };
 
-    // Build merge options from config labels.
+    // Build merge options from config labels and algorithm preferences.
     let options = MergeOptions {
-        style: ConflictStyle::Merge,
+        style: config.conflict_style,
+        diff_algorithm: config.diff_algorithm,
         labels: MergeLabels {
             ours: config.label_local.clone(),
             base: config.label_base.clone(),
@@ -70,7 +73,9 @@ pub fn run_mergetool(config: &MergetoolConfig) -> Result<MergetoolRunResult, Str
             stdout: String::new(),
             stderr: format!(
                 "Auto-merged {}\n",
-                config.merged.file_name()
+                config
+                    .merged
+                    .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_else(|| config.merged.display().to_string())
             ),
@@ -83,10 +88,14 @@ pub fn run_mergetool(config: &MergetoolConfig) -> Result<MergetoolRunResult, Str
             stderr: format!(
                 "Auto-merging {}\nCONFLICT (content): Merge conflict in {}\n\
                  Automatic merge failed; {} conflict(s) remain.\n",
-                config.merged.file_name()
+                config
+                    .merged
+                    .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_else(|| config.merged.display().to_string()),
-                config.merged.file_name()
+                config
+                    .merged
+                    .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_else(|| config.merged.display().to_string()),
                 conflict_count,
@@ -168,6 +177,8 @@ mod tests {
             label_base: None,
             label_local: None,
             label_remote: None,
+            conflict_style: gitgpui_core::merge::ConflictStyle::default(),
+            diff_algorithm: gitgpui_core::merge::DiffAlgorithm::default(),
         }
     }
 
@@ -179,9 +190,9 @@ mod tests {
         let config = make_config(
             tmp.path(),
             Some("line1\nline2\nline3\n"),
-            "LINE1\nline2\nline3\n",  // local changes line 1
-            "line1\nline2\nLINE3\n",  // remote changes line 3
-            "",                        // MERGED placeholder
+            "LINE1\nline2\nline3\n", // local changes line 1
+            "line1\nline2\nLINE3\n", // remote changes line 3
+            "",                      // MERGED placeholder
         );
 
         let result = run_mergetool(&config).expect("mergetool run");
@@ -239,13 +250,7 @@ mod tests {
     #[test]
     fn conflict_with_labels() {
         let tmp = tempfile::tempdir().unwrap();
-        let mut config = make_config(
-            tmp.path(),
-            Some("original\n"),
-            "ours\n",
-            "theirs\n",
-            "",
-        );
+        let mut config = make_config(tmp.path(), Some("original\n"), "ours\n", "theirs\n", "");
         config.label_local = Some("HEAD".to_string());
         config.label_remote = Some("feature-branch".to_string());
 
@@ -254,7 +259,10 @@ mod tests {
 
         let merged = fs::read_to_string(&config.merged).unwrap();
         assert!(merged.contains("<<<<<<< HEAD"), "output: {merged}");
-        assert!(merged.contains(">>>>>>> feature-branch"), "output: {merged}");
+        assert!(
+            merged.contains(">>>>>>> feature-branch"),
+            "output: {merged}"
+        );
     }
 
     // ── No base (add/add conflict) ───────────────────────────────────
@@ -264,7 +272,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let config = make_config(
             tmp.path(),
-            None,       // no base
+            None, // no base
             "added by local\n",
             "added by remote\n",
             "",
@@ -285,7 +293,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let config = make_config(
             tmp.path(),
-            None,       // no base
+            None, // no base
             "same content\n",
             "same content\n",
             "",
@@ -322,11 +330,16 @@ mod tests {
             label_base: None,
             label_local: None,
             label_remote: None,
+            conflict_style: gitgpui_core::merge::ConflictStyle::default(),
+            diff_algorithm: gitgpui_core::merge::DiffAlgorithm::default(),
         };
 
         let result = run_mergetool(&config).expect("mergetool run");
         assert_eq!(result.exit_code, exit_code::CANCELED);
-        assert!(result.merge_result.is_none(), "binary files skip text merge");
+        assert!(
+            result.merge_result.is_none(),
+            "binary files skip text merge"
+        );
         assert!(result.stderr.contains("binary"));
 
         // MERGED should contain the local bytes.
@@ -355,6 +368,8 @@ mod tests {
             label_base: None,
             label_local: None,
             label_remote: None,
+            conflict_style: gitgpui_core::merge::ConflictStyle::default(),
+            diff_algorithm: gitgpui_core::merge::DiffAlgorithm::default(),
         };
 
         let result = run_mergetool(&config).expect("mergetool run");
@@ -386,11 +401,16 @@ mod tests {
             label_base: None,
             label_local: None,
             label_remote: None,
+            conflict_style: gitgpui_core::merge::ConflictStyle::default(),
+            diff_algorithm: gitgpui_core::merge::DiffAlgorithm::default(),
         };
 
         let result = run_mergetool(&config).expect("mergetool run");
         assert_eq!(result.exit_code, exit_code::CANCELED);
-        assert!(result.merge_result.is_none(), "binary files skip text merge");
+        assert!(
+            result.merge_result.is_none(),
+            "binary files skip text merge"
+        );
         assert!(result.stderr.contains("binary"));
 
         let output = fs::read(&merged_path).unwrap();
@@ -415,6 +435,8 @@ mod tests {
             label_base: None,
             label_local: None,
             label_remote: None,
+            conflict_style: gitgpui_core::merge::ConflictStyle::default(),
+            diff_algorithm: gitgpui_core::merge::DiffAlgorithm::default(),
         };
 
         let err = run_mergetool(&config).expect_err("expected error");
@@ -437,6 +459,8 @@ mod tests {
             label_base: None,
             label_local: None,
             label_remote: None,
+            conflict_style: gitgpui_core::merge::ConflictStyle::default(),
+            diff_algorithm: gitgpui_core::merge::DiffAlgorithm::default(),
         };
 
         let err = run_mergetool(&config).expect_err("expected error");
@@ -461,6 +485,8 @@ mod tests {
             label_base: None,
             label_local: None,
             label_remote: None,
+            conflict_style: gitgpui_core::merge::ConflictStyle::default(),
+            diff_algorithm: gitgpui_core::merge::DiffAlgorithm::default(),
         };
 
         let err = run_mergetool(&config).expect_err("expected error");
@@ -517,7 +543,7 @@ mod tests {
             tmp.path(),
             Some("base\n"),
             "local change\n",
-            "local change\n",  // same as local = clean merge
+            "local change\n", // same as local = clean merge
             "<<<<<<< this was the old conflict content\nold stuff\n>>>>>>>",
         );
 
@@ -526,7 +552,10 @@ mod tests {
 
         let merged = fs::read_to_string(&config.merged).unwrap();
         assert_eq!(merged, "local change\n");
-        assert!(!merged.contains("<<<<<<<"), "old conflict markers should be gone");
+        assert!(
+            !merged.contains("<<<<<<<"),
+            "old conflict markers should be gone"
+        );
     }
 
     // ── Multi-region conflicts ───────────────────────────────────────
@@ -537,8 +566,8 @@ mod tests {
         let config = make_config(
             tmp.path(),
             Some("a\nb\nc\nd\ne\n"),
-            "A\nb\nC\nd\nE\n",  // changes a, c, e
-            "X\nb\nY\nd\nZ\n",  // changes a, c, e differently
+            "A\nb\nC\nd\nE\n", // changes a, c, e
+            "X\nb\nY\nd\nZ\n", // changes a, c, e differently
             "",
         );
 
@@ -572,6 +601,8 @@ mod tests {
             label_base: None,
             label_local: None,
             label_remote: None,
+            conflict_style: gitgpui_core::merge::ConflictStyle::default(),
+            diff_algorithm: gitgpui_core::merge::DiffAlgorithm::default(),
         };
 
         let result = run_mergetool(&config).expect("mergetool run");
@@ -597,13 +628,7 @@ mod tests {
     #[test]
     fn empty_base_with_identical_additions_is_clean() {
         let tmp = tempfile::tempdir().unwrap();
-        let config = make_config(
-            tmp.path(),
-            Some(""),
-            "new content\n",
-            "new content\n",
-            "",
-        );
+        let config = make_config(tmp.path(), Some(""), "new content\n", "new content\n", "");
 
         let result = run_mergetool(&config).expect("mergetool run");
         assert_eq!(result.exit_code, exit_code::SUCCESS);
@@ -619,9 +644,9 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let config = make_config(
             tmp.path(),
-            Some("line1\nline2"),   // no trailing LF
-            "LINE1\nline2",         // changed line1, no trailing LF
-            "line1\nline2",         // unchanged, no trailing LF
+            Some("line1\nline2"), // no trailing LF
+            "LINE1\nline2",       // changed line1, no trailing LF
+            "line1\nline2",       // unchanged, no trailing LF
             "",
         );
 
@@ -629,7 +654,80 @@ mod tests {
         assert_eq!(result.exit_code, exit_code::SUCCESS);
 
         let merged = fs::read_to_string(&config.merged).unwrap();
-        assert!(!merged.ends_with('\n'), "should preserve missing trailing LF");
+        assert!(
+            !merged.ends_with('\n'),
+            "should preserve missing trailing LF"
+        );
         assert!(merged.contains("LINE1"));
+    }
+
+    // ── Conflict style selection ──────────────────────────────────────
+
+    #[test]
+    fn diff3_style_includes_base_section() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = make_config(
+            tmp.path(),
+            Some("original\n"),
+            "local change\n",
+            "remote change\n",
+            "",
+        );
+        config.conflict_style = gitgpui_core::merge::ConflictStyle::Diff3;
+
+        let result = run_mergetool(&config).expect("mergetool run");
+        assert_eq!(result.exit_code, exit_code::CANCELED);
+
+        let merged = fs::read_to_string(&config.merged).unwrap();
+        assert!(merged.contains("<<<<<<<"), "output: {merged}");
+        assert!(merged.contains("|||||||"), "diff3 should include base section: {merged}");
+        assert!(merged.contains("original"), "base content should appear: {merged}");
+        assert!(merged.contains("======="), "output: {merged}");
+        assert!(merged.contains(">>>>>>>"), "output: {merged}");
+    }
+
+    #[test]
+    fn zdiff3_style_extracts_common_prefix_suffix() {
+        let tmp = tempfile::tempdir().unwrap();
+        // base=1..9, local=1..4+ABCDE+7..9, remote=1..4+AXCYE+7..9
+        let base = "1\n2\n3\n4\n5\n6\n7\n8\n9\n";
+        let local = "1\n2\n3\n4\nA\nB\nC\nD\nE\n7\n8\n9\n";
+        let remote = "1\n2\n3\n4\nA\nX\nC\nY\nE\n7\n8\n9\n";
+        let mut config = make_config(tmp.path(), Some(base), local, remote, "");
+        config.conflict_style = gitgpui_core::merge::ConflictStyle::Zdiff3;
+
+        let result = run_mergetool(&config).expect("mergetool run");
+        assert_eq!(result.exit_code, exit_code::CANCELED);
+
+        let merged = fs::read_to_string(&config.merged).unwrap();
+        // zdiff3 should extract common prefix "A" and suffix "E" outside markers.
+        assert!(merged.contains("A\n<<<<<<<"), "common prefix A should be outside markers: {merged}");
+        assert!(merged.contains(">>>>>>>\nE\n"), "common suffix E should be outside markers: {merged}");
+    }
+
+    // ── Diff algorithm selection ──────────────────────────────────────
+
+    #[test]
+    fn histogram_algorithm_produces_clean_merge_on_structural_code() {
+        let tmp = tempfile::tempdir().unwrap();
+        // C code case where Myers produces spurious conflicts but histogram doesn't.
+        let base = "void f() {\n    x = 1;\n}\nvoid g() {\n    y = 1;\n}\n";
+        let ours = "void h() {\n    z = 1;\n}\nvoid g() {\n    y = 1;\n}\n";
+        let theirs = "void f() {\n    x = 1;\n}\nvoid g() {\n    y = 2;\n}\n";
+
+        let mut config = make_config(tmp.path(), Some(base), ours, theirs, "");
+        config.diff_algorithm = gitgpui_core::merge::DiffAlgorithm::Histogram;
+
+        let result = run_mergetool(&config).expect("mergetool run");
+        // Histogram should produce a clean merge for this case.
+        assert_eq!(
+            result.exit_code,
+            exit_code::SUCCESS,
+            "histogram should cleanly merge structural code changes"
+        );
+
+        let merged = fs::read_to_string(&config.merged).unwrap();
+        assert!(merged.contains("void h()"), "should have ours' h()");
+        assert!(merged.contains("y = 2"), "should have theirs' y = 2");
     }
 }

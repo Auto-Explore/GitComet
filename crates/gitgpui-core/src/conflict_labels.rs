@@ -14,23 +14,16 @@ pub enum BaseLabelScenario {
     /// No merge base exists (for example, add/add).
     NoBase,
     /// A unique merge base commit and path are known.
-    UniqueBase {
-        commit_id: String,
-        path: PathBuf,
-    },
+    UniqueBase { commit_id: String, path: PathBuf },
     /// A unique merge base is known, but the path was renamed.
     UniqueBaseRename {
         commit_id: String,
         original_path: PathBuf,
     },
     /// Multiple merge bases were merged into a virtual ancestor.
-    MergedCommonAncestors {
-        path: PathBuf,
-    },
+    MergedCommonAncestors { path: PathBuf },
     /// Rebase-style marker label that points at parent context.
-    RebaseParent {
-        description: String,
-    },
+    RebaseParent { description: String },
 }
 
 impl BaseLabelScenario {
