@@ -249,6 +249,36 @@ fn standalone_mergetool_marker_size_flag_controls_marker_width() {
 }
 
 #[test]
+fn standalone_mergetool_handles_unicode_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = dir.path().join("ベース.txt");
+    let local = dir.path().join("ローカル.txt");
+    let remote = dir.path().join("リモート.txt");
+    let merged = dir.path().join("出力/マージ済み.txt");
+
+    write_file(&base, "line1\nline2\nline3\n");
+    write_file(&local, "LINE1\nline2\nline3\n");
+    write_file(&remote, "line1\nline2\nLINE3\n");
+
+    let output = run_gitgpui([
+        OsString::from("mergetool"),
+        OsString::from("--base"),
+        base.as_os_str().to_owned(),
+        OsString::from("--local"),
+        local.as_os_str().to_owned(),
+        OsString::from("--remote"),
+        remote.as_os_str().to_owned(),
+        OsString::from("--merged"),
+        merged.as_os_str().to_owned(),
+    ]);
+
+    let text = output_text(&output);
+    assert_eq!(output.status.code(), Some(0), "expected exit 0\n{text}");
+    let merged_text = fs::read_to_string(&merged).expect("merged output to exist");
+    assert_eq!(merged_text, "LINE1\nline2\nLINE3\n");
+}
+
+#[test]
 fn standalone_mergetool_invalid_path_exits_two() {
     let dir = tempfile::tempdir().unwrap();
     let base = dir.path().join("base.txt");
@@ -370,6 +400,39 @@ fn standalone_difftool_directory_diff_exits_zero() {
     assert!(
         stdout.contains("a.txt"),
         "expected filename in directory diff output\n{text}"
+    );
+}
+
+#[test]
+fn standalone_difftool_handles_unicode_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let local = dir.path().join("左側.txt");
+    let remote = dir.path().join("右側.txt");
+
+    write_file(&local, "left\n");
+    write_file(&remote, "right\n");
+
+    let output = run_gitgpui([
+        OsString::from("difftool"),
+        OsString::from("--local"),
+        local.as_os_str().to_owned(),
+        OsString::from("--remote"),
+        remote.as_os_str().to_owned(),
+        OsString::from("--path"),
+        OsString::from("src/日本語.txt"),
+    ]);
+
+    let text = output_text(&output);
+    assert_eq!(output.status.code(), Some(0), "expected exit 0\n{text}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("@@"), "expected unified diff hunk\n{text}");
+    assert!(
+        stdout.contains("--- a/src/日本語.txt"),
+        "expected unicode left label\n{text}"
+    );
+    assert!(
+        stdout.contains("+++ b/src/日本語.txt"),
+        "expected unicode right label\n{text}"
     );
 }
 

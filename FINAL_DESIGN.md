@@ -1,10 +1,10 @@
 ## STATUS: COMPLETE
 
-All components from both design documents are fully implemented. Latest update adds focused GPUI tool windows for interactive diff viewing and merge conflict resolution, launched via `--gui` flag from difftool/mergetool modes.
+All components from both design documents are fully implemented. Latest update adds explicit standalone command-mode Unicode path parity coverage for both `difftool` and `mergetool`.
 
 ## Implementation Progress
 
-### Progress Snapshot (Iteration 54)
+### Progress Snapshot (Iteration 55)
 
 External Diff/Merge Usage Design (`external_usage.md`)
 - ✅ Dedicated CLI modes (`difftool`, `mergetool`) and arg/env validation are implemented.
@@ -20,6 +20,7 @@ External Diff/Merge Usage Design (`external_usage.md`)
 - ✅ Standalone mergetool output-target behavior is implemented: `MERGED` may be a new path, and runtime creates parent directories before writing.
 - ✅ Focused difftool/mergetool runtimes are implemented with Git-compatible exit semantics.
 - ✅ Standalone binary-level exit contract is now explicitly covered by direct `gitgpui-app` E2E tests (`difftool`/`mergetool` success, unresolved conflict, and invalid-input paths mapped to exit codes `0/1/2`).
+- ✅ Standalone command-mode Unicode path parity is now explicit: direct `gitgpui-app difftool` and `gitgpui-app mergetool` E2E tests cover non-ASCII filenames and display paths.
 - ✅ Git-invoked E2E coverage exists for `git difftool` and `git mergetool` parity scenarios (GUI selection, trust-exit handling, spaced/unicode paths, subdir invocation, `--tool-help`, symlink/submodule/delete-modify edge cases, order-file behavior, explicit `mergetool.writeToTemp` path-shape parity, and binary file conflict handling).
 - ✅ GUI-default parity matrix is now explicit for both Git entry points: `difftool.guiDefault` and `mergetool.guiDefault` are covered for `auto`, `true`, and `false`, plus `--gui` / `--no-gui` overrides.
 - ✅ Pathspec flow parity is now explicit in git-invoked E2E tests: pathspec-targeted `git difftool` only diffs selected paths, and pathspec-targeted `git mergetool` resolves only selected conflicts while leaving non-selected conflicts unresolved.
@@ -118,7 +119,9 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
   - ✅ `mergetool` unresolved conflict exits `1` and writes conflict markers
   - ✅ `mergetool` invalid input exits `2` with actionable validation error text
   - ✅ `mergetool` rejects existing directory `MERGED` targets with exit `2` and actionable error text
+  - ✅ `mergetool` direct invocation handles Unicode file paths end-to-end
   - ✅ `difftool` changed-file invocation exits `0` and emits unified diff output
+  - ✅ `difftool` direct invocation handles Unicode file names and display paths
   - ✅ `difftool` invalid input exits `2` with actionable validation error text
   - ✅ no-subcommand compatibility E2E for Meld-style `-L/--label` diff and merge invocations
 - ✅ Standalone behavior-matrix hardening is explicit for direct command-mode invocation:
