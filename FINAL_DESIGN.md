@@ -1,4 +1,4 @@
-## STATUS: IN PROGRESS
+## STATUS: COMPLETE
 
 ## Implementation Progress
 
@@ -43,8 +43,8 @@
   - ✅ Added zealous conflict coalescing in core merge flow (`coalesce_zealous_conflicts`) for adjacent conflicts and blank-only separators.
   - ✅ Added portability tests: `t6403_merge_zealous_coalesces_adjacent_conflict_lines`, `t6403_merge_zealous_alnum_coalesces_across_blank_separator`, and non-blank separator guard.
   - ✅ Existing t6403-style coverage remains for identity/non-overlap/conflicts, conflict markers + labels, delete-vs-modify, ours/theirs/union, EOF/trailing-newline behavior, CRLF markers, marker width, diff3 output, Myers C-code case, identical changes, and single-side-only changes.
-  - ⬜ `merge_histogram_clean` parity remains unimplemented (core merge still uses Myers only).
-  - ⬜ Strict `merge_binary_rejected` contract remains unimplemented in `merge_file` (binary handling is currently caller-side).
+  - ✅ `merge_histogram_clean` parity implemented: patience/histogram diff algorithm in `file_diff.rs` (`histogram_edits`), `DiffAlgorithm` enum in `MergeOptions`, and 4 portability tests demonstrating clean merge on C code that produces spurious conflicts with Myers.
+  - ✅ Strict `merge_binary_rejected` contract implemented: `MergeError::BinaryContent` error type and `merge_file_bytes(&[u8], &[u8], &[u8], &MergeOptions) -> Result<MergeResult, MergeError>` entry point with null-byte and non-UTF-8 detection. 3 portability tests covering PNG rejection, null-byte-in-UTF-8 rejection, and text-API backward compatibility.
 - ✅ Phase 1B (git `t6427` `zdiff3` 4-case portability set): all 4 zdiff3 test cases ported (`zdiff3_basic`, `zdiff3_middle_common`, `zdiff3_interesting`, `zdiff3_evil`). Tests verify common prefix/suffix extraction outside conflict markers and correct inner conflict content.
 - ✅ Phase 1C (conflict marker label formatting cases): implemented in `crates/gitgpui-core/src/conflict_labels.rs` with portability tests in `crates/gitgpui-core/tests/conflict_label_formatting.rs`:
   - `label_no_base` -> `empty tree`
@@ -100,7 +100,30 @@
   - ✅ Dedicated trust-exit interaction matrix assertions (`difftool.trustExitCode`, `--trust-exit-code`, `--no-trust-exit-code`).
   - ✅ `git difftool --tool-help` discoverability assertion for configured `gitgpui` tool.
 
-### Latest Component Delivered (Iteration 11)
+### Latest Component Delivered (Iteration 12) — Phase 1A completion
+
+- Implemented patience/histogram diff algorithm in `crates/gitgpui-core/src/file_diff.rs`:
+  - `histogram_edits`: patience diff that anchors on unique lines via longest increasing subsequence, with Myers fallback for regions with no unique lines
+  - `patience_recurse`: recursive diff with common prefix/suffix stripping
+  - `find_patience_anchors`: unique-line matching between two ranges
+  - `patience_lis`: longest increasing subsequence for anchor ordering
+- Added `DiffAlgorithm` enum (`Myers`, `Histogram`) in `crates/gitgpui-core/src/merge.rs`:
+  - New field `diff_algorithm` on `MergeOptions` (defaults to `Myers` for backward compatibility)
+  - `merge_file` dispatches to the selected algorithm
+- Added `MergeError` and `merge_file_bytes` for binary detection:
+  - `MergeError::BinaryContent` with `Display` and `Error` impls
+  - `merge_file_bytes(base: &[u8], ours: &[u8], theirs: &[u8], options) -> Result<MergeResult, MergeError>` — checks for null bytes and non-UTF-8 before delegating to `merge_file`
+- Added 7 new tests in `crates/gitgpui-core/tests/merge_algorithm.rs`:
+  - `t6403_merge_histogram_clean`: C code test case that produces clean merge with histogram vs spurious conflicts with Myers
+  - `t6403_merge_histogram_identity`: identity merge with histogram
+  - `t6403_merge_histogram_nonoverlapping`: non-overlapping changes with histogram
+  - `t6403_merge_histogram_conflict`: true conflict detection with histogram
+  - `t6403_merge_binary_rejected`: PNG/null-byte binary rejection via `merge_file_bytes`
+  - `t6403_merge_binary_null_byte_in_utf8`: null-byte-in-UTF-8 rejection
+  - `t6403_merge_binary_content_text_api_no_panic`: backward-compatible text API
+- Verified with `cargo test -p gitgpui-core` (255 tests passing, all suites green).
+
+### Iteration 11
 
 - Implemented zealous conflict coalescing in `crates/gitgpui-core/src/merge.rs`:
   - adjacent conflict hunks are coalesced

@@ -3,7 +3,10 @@
 //! These verify the core 3-way merge algorithm against git's merge-file
 //! behavior as specified in the Reference Test Portability Plan.
 
-use gitgpui_core::merge::{ConflictStyle, MergeLabels, MergeOptions, MergeStrategy, merge_file};
+use gitgpui_core::merge::{
+    ConflictStyle, DiffAlgorithm, MergeError, MergeLabels, MergeOptions, MergeStrategy, merge_file,
+    merge_file_bytes,
+};
 
 fn default_opts() -> MergeOptions {
     MergeOptions::default()
@@ -447,31 +450,76 @@ int g(size_t u)
 ";
 
 #[test]
-fn t6403_merge_myers_c_code() {
-    // With Myers diff, this may produce spurious conflicts in h() body
-    // due to how Myers aligns the hunks. The important thing is that
-    // the merge correctly detects the g() body change as a conflict.
+fn t6403_merge_myers_c_code_has_spurious_conflicts() {
+    // With Myers diff, this produces spurious conflicts because Myers
+    // greedily matches common structural tokens (braces, returns) across
+    // different functions. The merge detects the g() body change as a
+    // conflict but also drags in unrelated hunks.
     let result = merge_file(BASE_C, OURS_C, THEIRS_C, &default_opts());
     assert!(
         !result.is_clean(),
-        "both sides change g() body — must conflict"
+        "Myers diff should produce conflicts on this C code"
     );
     // The g() body modifications should be in the conflict.
     assert!(result.output.contains("u < 30") || result.output.contains("u > 34"));
 }
 
-// ── Binary detection (simple heuristic) ──
+// ── Binary detection ──
 
 #[test]
-fn t6403_merge_binary_content() {
-    // Our merge algorithm works on text. Binary files would be handled
-    // by the caller. This test verifies the algorithm doesn't panic on
-    // content containing null bytes (treated as lines by split_lines).
+fn t6403_merge_binary_rejected() {
+    // merge_file_bytes rejects inputs containing null bytes.
+    let png_header: &[u8] = &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+    let text = b"text content\n";
+
+    // Binary base.
+    assert_eq!(
+        merge_file_bytes(png_header, text, text, &default_opts()),
+        Err(MergeError::BinaryContent),
+        "binary base should be rejected"
+    );
+
+    // Binary ours.
+    assert_eq!(
+        merge_file_bytes(text, png_header, text, &default_opts()),
+        Err(MergeError::BinaryContent),
+        "binary ours should be rejected"
+    );
+
+    // Binary theirs.
+    assert_eq!(
+        merge_file_bytes(text, text, png_header, &default_opts()),
+        Err(MergeError::BinaryContent),
+        "binary theirs should be rejected"
+    );
+
+    // All text should succeed.
+    let result = merge_file_bytes(text, text, text, &default_opts());
+    assert!(result.is_ok(), "all-text inputs should succeed");
+    assert!(result.unwrap().is_clean());
+}
+
+#[test]
+fn t6403_merge_binary_null_byte_in_utf8() {
+    // Even valid UTF-8 strings with null bytes should be rejected by
+    // merge_file_bytes, matching git's binary detection heuristic.
+    let with_null = b"text\x00more\n";
+    let clean = b"clean text\n";
+
+    assert_eq!(
+        merge_file_bytes(with_null, clean, clean, &default_opts()),
+        Err(MergeError::BinaryContent),
+    );
+}
+
+#[test]
+fn t6403_merge_binary_content_text_api_no_panic() {
+    // The text-based merge_file API doesn't reject null bytes (they're
+    // valid UTF-8) but should not panic.
     let base = "text\0binary\n";
     let ours = "text\0binary\n";
     let theirs = "text\0CHANGED\n";
     let result = merge_file(base, ours, theirs, &default_opts());
-    // Should handle it without panic.
     assert!(result.is_clean() || !result.is_clean());
 }
 
@@ -719,4 +767,87 @@ fn merge_union_strategy_at_eof() {
     assert!(result.is_clean());
     assert!(result.output.contains("OURS"));
     assert!(result.output.contains("THEIRS"));
+}
+
+// ===========================================================================
+// Diff algorithm impact: Myers vs Histogram
+// ===========================================================================
+
+fn opts_histogram() -> MergeOptions {
+    MergeOptions {
+        diff_algorithm: DiffAlgorithm::Histogram,
+        ..Default::default()
+    }
+}
+
+#[test]
+fn t6403_merge_histogram_clean() {
+    // The histogram/patience algorithm anchors on unique function signatures
+    // rather than common structural tokens (braces, returns). This produces
+    // a clean merge for the C code test case where Myers creates spurious
+    // conflicts.
+    //
+    // base: f() then g()
+    // ours: deletes f(), keeps g(), adds h()
+    // theirs: keeps f(), modifies g() body
+    //
+    // With histogram: f() deletion and h() addition don't overlap with
+    // the g() body modification, so merge is clean.
+    let result = merge_file(BASE_C, OURS_C, THEIRS_C, &opts_histogram());
+    assert!(
+        result.is_clean(),
+        "histogram diff should produce a clean merge for the C code test case.\n\
+         Output:\n{}",
+        result.output
+    );
+    // The merged result should contain the modified g() body from theirs.
+    assert!(
+        result.output.contains("u > 34"),
+        "merged output should contain theirs' g() body change"
+    );
+    assert!(
+        result.output.contains("u--"),
+        "merged output should contain theirs' g() body decrement"
+    );
+    // The merged result should contain h() from ours.
+    assert!(
+        result.output.contains("int h(int x, int y, int z)"),
+        "merged output should contain ours' h() function"
+    );
+    // f() should be deleted (not present in ours).
+    assert!(
+        !result.output.contains("int f(int x, int y)"),
+        "f() should be deleted in merged output"
+    );
+}
+
+#[test]
+fn t6403_merge_histogram_identity() {
+    // Histogram algorithm should still handle identity merges.
+    let text = "line1\nline2\nline3\n";
+    let result = merge_file(text, text, text, &opts_histogram());
+    assert!(result.is_clean());
+    assert_eq!(result.output, text);
+}
+
+#[test]
+fn t6403_merge_histogram_nonoverlapping() {
+    // Histogram should handle non-overlapping changes cleanly.
+    let base = "aaa\nbbb\nccc\n";
+    let ours = "AAA\nbbb\nccc\n";
+    let theirs = "aaa\nbbb\nCCC\n";
+    let result = merge_file(base, ours, theirs, &opts_histogram());
+    assert!(result.is_clean());
+    assert_eq!(result.output, "AAA\nbbb\nCCC\n");
+}
+
+#[test]
+fn t6403_merge_histogram_conflict() {
+    // Histogram should still detect true conflicts.
+    let base = "aaa\nbbb\nccc\n";
+    let ours = "aaa\nOURS\nccc\n";
+    let theirs = "aaa\nTHEIRS\nccc\n";
+    let result = merge_file(base, ours, theirs, &opts_histogram());
+    assert!(!result.is_clean());
+    assert_eq!(result.conflict_count, 1);
 }

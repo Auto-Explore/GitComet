@@ -493,6 +493,228 @@ fn levenshtein_distance(a: &str, b: &str) -> usize {
     prev[b_chars.len()]
 }
 
+/// Patience/histogram diff algorithm.
+///
+/// Uses unique lines as anchors via the longest increasing subsequence,
+/// then recursively diffs the regions between anchors. Falls back to
+/// Myers for regions with no unique lines. This produces cleaner diffs
+/// for code with repetitive structural tokens (braces, returns, etc.)
+/// by preferring semantically unique lines (function signatures) as
+/// alignment points.
+pub(crate) fn histogram_edits<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<Edit<'a>> {
+    patience_recurse(old, new, 0, old.len(), 0, new.len())
+}
+
+fn patience_recurse<'a>(
+    old: &[&'a str],
+    new: &[&'a str],
+    old_start: usize,
+    old_end: usize,
+    new_start: usize,
+    new_end: usize,
+) -> Vec<Edit<'a>> {
+    // Strip common prefix.
+    let mut prefix = 0;
+    while old_start + prefix < old_end
+        && new_start + prefix < new_end
+        && old[old_start + prefix] == new[new_start + prefix]
+    {
+        prefix += 1;
+    }
+
+    // Strip common suffix.
+    let mut suffix = 0;
+    while old_start + prefix + suffix < old_end
+        && new_start + prefix + suffix < new_end
+        && old[old_end - 1 - suffix] == new[new_end - 1 - suffix]
+    {
+        suffix += 1;
+    }
+
+    let inner_old_start = old_start + prefix;
+    let inner_old_end = old_end - suffix;
+    let inner_new_start = new_start + prefix;
+    let inner_new_end = new_end - suffix;
+
+    let mut edits = Vec::new();
+
+    // Emit prefix equals.
+    for i in 0..prefix {
+        edits.push(Edit {
+            kind: EditKind::Equal,
+            old: Some(old[old_start + i]),
+            new: Some(new[new_start + i]),
+        });
+    }
+
+    if inner_old_start == inner_old_end && inner_new_start == inner_new_end {
+        // Nothing between prefix and suffix.
+    } else if inner_old_start == inner_old_end {
+        // Pure insertions.
+        for j in inner_new_start..inner_new_end {
+            edits.push(Edit {
+                kind: EditKind::Insert,
+                old: None,
+                new: Some(new[j]),
+            });
+        }
+    } else if inner_new_start == inner_new_end {
+        // Pure deletions.
+        for i in inner_old_start..inner_old_end {
+            edits.push(Edit {
+                kind: EditKind::Delete,
+                old: Some(old[i]),
+                new: None,
+            });
+        }
+    } else {
+        // Find unique-line anchors via patience matching.
+        let anchors = find_patience_anchors(
+            old,
+            new,
+            inner_old_start,
+            inner_old_end,
+            inner_new_start,
+            inner_new_end,
+        );
+
+        if anchors.is_empty() {
+            // No unique anchors — fall back to Myers for this region.
+            let old_slice: Vec<&str> = old[inner_old_start..inner_old_end].to_vec();
+            let new_slice: Vec<&str> = new[inner_new_start..inner_new_end].to_vec();
+            edits.extend(myers_edits(&old_slice, &new_slice));
+        } else {
+            // Recursively diff between anchors.
+            let mut oi = inner_old_start;
+            let mut ni = inner_new_start;
+
+            for &(old_idx, new_idx) in &anchors {
+                if oi < old_idx || ni < new_idx {
+                    edits.extend(patience_recurse(old, new, oi, old_idx, ni, new_idx));
+                }
+                edits.push(Edit {
+                    kind: EditKind::Equal,
+                    old: Some(old[old_idx]),
+                    new: Some(new[new_idx]),
+                });
+                oi = old_idx + 1;
+                ni = new_idx + 1;
+            }
+
+            // Region after the last anchor.
+            if oi < inner_old_end || ni < inner_new_end {
+                edits.extend(patience_recurse(
+                    old,
+                    new,
+                    oi,
+                    inner_old_end,
+                    ni,
+                    inner_new_end,
+                ));
+            }
+        }
+    }
+
+    // Emit suffix equals.
+    for i in 0..suffix {
+        edits.push(Edit {
+            kind: EditKind::Equal,
+            old: Some(old[inner_old_end + i]),
+            new: Some(new[inner_new_end + i]),
+        });
+    }
+
+    edits
+}
+
+/// Find lines that are unique in both old and new within the given ranges,
+/// then compute the longest increasing subsequence of their positions to
+/// produce patience anchors.
+fn find_patience_anchors(
+    old: &[&str],
+    new: &[&str],
+    old_start: usize,
+    old_end: usize,
+    new_start: usize,
+    new_end: usize,
+) -> Vec<(usize, usize)> {
+    use std::collections::HashMap;
+
+    // Count occurrences and record position for old lines.
+    let mut old_info: HashMap<&str, (usize, usize)> = HashMap::new();
+    for i in old_start..old_end {
+        let entry = old_info.entry(old[i]).or_insert((0, i));
+        entry.0 += 1;
+        entry.1 = i;
+    }
+
+    // Count occurrences and record position for new lines.
+    let mut new_info: HashMap<&str, (usize, usize)> = HashMap::new();
+    for j in new_start..new_end {
+        let entry = new_info.entry(new[j]).or_insert((0, j));
+        entry.0 += 1;
+        entry.1 = j;
+    }
+
+    // Collect lines that appear exactly once in both old and new.
+    let mut unique_pairs: Vec<(usize, usize)> = Vec::new();
+    for (line, &(old_count, old_idx)) in &old_info {
+        if old_count != 1 {
+            continue;
+        }
+        if let Some(&(new_count, new_idx)) = new_info.get(line) {
+            if new_count == 1 {
+                unique_pairs.push((old_idx, new_idx));
+            }
+        }
+    }
+
+    // Sort by position in old.
+    unique_pairs.sort_by_key(|&(oi, _)| oi);
+
+    // Find longest increasing subsequence by new-index.
+    patience_lis(&unique_pairs)
+}
+
+/// Longest increasing subsequence by the second element (new-index).
+fn patience_lis(pairs: &[(usize, usize)]) -> Vec<(usize, usize)> {
+    if pairs.is_empty() {
+        return Vec::new();
+    }
+
+    let n = pairs.len();
+    // `tails[i]` stores the index in `pairs` of the smallest tail element
+    // for an increasing subsequence of length `i+1`.
+    let mut tails: Vec<usize> = Vec::new();
+    let mut prev: Vec<Option<usize>> = vec![None; n];
+
+    for i in 0..n {
+        let new_idx = pairs[i].1;
+        let pos = tails.partition_point(|&t| pairs[t].1 < new_idx);
+        if pos == tails.len() {
+            tails.push(i);
+        } else {
+            tails[pos] = i;
+        }
+        if pos > 0 {
+            prev[i] = Some(tails[pos - 1]);
+        }
+    }
+
+    // Reconstruct.
+    let mut result = Vec::with_capacity(tails.len());
+    let mut idx = *tails.last().unwrap();
+    loop {
+        result.push(pairs[idx]);
+        match prev[idx] {
+            Some(p) => idx = p,
+            None => break,
+        }
+    }
+    result.reverse();
+    result
+}
+
 pub(crate) fn split_lines(text: &str) -> Vec<&str> {
     if text.is_empty() {
         return Vec::new();

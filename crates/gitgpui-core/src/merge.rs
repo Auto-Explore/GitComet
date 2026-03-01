@@ -6,7 +6,8 @@
 //!
 //! Compatible with `git merge-file` marker format.
 
-use crate::file_diff::{Edit, EditKind, myers_edits, split_lines};
+use crate::file_diff::{Edit, EditKind, histogram_edits, myers_edits, split_lines};
+use std::fmt;
 
 /// Default conflict marker width (matches git's default).
 pub const DEFAULT_MARKER_SIZE: usize = 7;
@@ -37,6 +38,19 @@ pub enum MergeStrategy {
     Union,
 }
 
+/// Which diff algorithm to use for computing edit scripts.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Default)]
+pub enum DiffAlgorithm {
+    /// Classic Myers O(ND) algorithm. Fast and minimal edit distance.
+    #[default]
+    Myers,
+    /// Patience/histogram algorithm. Anchors on unique lines to produce
+    /// semantically cleaner diffs, especially for code with repetitive
+    /// structural tokens (braces, returns). Falls back to Myers for
+    /// regions with no unique lines.
+    Histogram,
+}
+
 /// Labels for the three merge sides.
 #[derive(Clone, Debug, Default)]
 pub struct MergeLabels {
@@ -52,6 +66,7 @@ pub struct MergeOptions {
     pub strategy: MergeStrategy,
     pub labels: MergeLabels,
     pub marker_size: usize,
+    pub diff_algorithm: DiffAlgorithm,
 }
 
 impl Default for MergeOptions {
@@ -61,6 +76,7 @@ impl Default for MergeOptions {
             strategy: MergeStrategy::default(),
             labels: MergeLabels::default(),
             marker_size: DEFAULT_MARKER_SIZE,
+            diff_algorithm: DiffAlgorithm::default(),
         }
     }
 }
@@ -81,6 +97,47 @@ impl MergeResult {
     }
 }
 
+/// Error from a three-way merge operation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum MergeError {
+    /// One or more inputs contain binary content (null bytes or non-UTF-8).
+    BinaryContent,
+}
+
+impl fmt::Display for MergeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            MergeError::BinaryContent => write!(f, "cannot merge binary files"),
+        }
+    }
+}
+
+impl std::error::Error for MergeError {}
+
+/// Perform a three-way merge on raw byte inputs with binary detection.
+///
+/// Returns `Err(MergeError::BinaryContent)` if any input contains null bytes
+/// or is not valid UTF-8. Otherwise delegates to [`merge_file`].
+pub fn merge_file_bytes(
+    base: &[u8],
+    ours: &[u8],
+    theirs: &[u8],
+    options: &MergeOptions,
+) -> Result<MergeResult, MergeError> {
+    fn check_binary(data: &[u8]) -> Result<&str, MergeError> {
+        if data.contains(&0) {
+            return Err(MergeError::BinaryContent);
+        }
+        std::str::from_utf8(data).map_err(|_| MergeError::BinaryContent)
+    }
+
+    let base_str = check_binary(base)?;
+    let ours_str = check_binary(ours)?;
+    let theirs_str = check_binary(theirs)?;
+
+    Ok(merge_file(base_str, ours_str, theirs_str, options))
+}
+
 /// Perform a three-way merge of text files.
 ///
 /// Diffs `base` against both `ours` and `theirs`, then walks the two edit
@@ -92,8 +149,12 @@ pub fn merge_file(base: &str, ours: &str, theirs: &str, options: &MergeOptions) 
     let ours_lines = split_lines(ours);
     let theirs_lines = split_lines(theirs);
 
-    let edits_ours = myers_edits(&base_lines, &ours_lines);
-    let edits_theirs = myers_edits(&base_lines, &theirs_lines);
+    let diff_fn = match options.diff_algorithm {
+        DiffAlgorithm::Myers => myers_edits,
+        DiffAlgorithm::Histogram => histogram_edits,
+    };
+    let edits_ours = diff_fn(&base_lines, &ours_lines);
+    let edits_theirs = diff_fn(&base_lines, &theirs_lines);
 
     let hunks_ours = edits_to_hunks(&edits_ours);
     let hunks_theirs = edits_to_hunks(&edits_theirs);
