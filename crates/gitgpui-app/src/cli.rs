@@ -456,50 +456,57 @@ fn parse_compat_external_mode(
     }
 
     if let Some(merged) = merged_output {
-        let (base, local, remote, label_base, label_local, label_remote) =
-            if let Some(explicit_base) = base_flag {
-                match positionals.len() {
-                    2 => (
-                        Some(explicit_base),
-                        positionals[0].clone(),
-                        positionals[1].clone(),
-                        label_l1,
-                        label_l2,
-                        label_l3,
-                    ),
-                    0 | 1 => {
-                        return Err("Invalid external merge invocation: expected exactly 2 positional paths (LOCAL REMOTE) when --base is provided.".to_string());
-                    }
-                    _ => {
-                        return Err("Invalid external merge invocation: --base already supplies BASE; expected exactly 2 positional paths (LOCAL REMOTE).".to_string());
-                    }
+        let (base, local, remote, label_base, label_local, label_remote) = if let Some(
+            explicit_base,
+        ) = base_flag
+        {
+            match positionals.len() {
+                2 => (
+                    Some(explicit_base),
+                    positionals[0].clone(),
+                    positionals[1].clone(),
+                    label_l1,
+                    label_l2,
+                    label_l3,
+                ),
+                0 | 1 => {
+                    return Err("Invalid external merge invocation: expected exactly 2 positional paths (LOCAL REMOTE) when --base is provided.".to_string());
                 }
-            } else {
-                match positionals.len() {
-                    3 => (
-                        Some(positionals[0].clone()),
-                        positionals[1].clone(),
-                        positionals[2].clone(),
-                        label_l1,
-                        label_l2,
-                        label_l3,
-                    ),
-                    2 => (
+                _ => {
+                    return Err("Invalid external merge invocation: --base already supplies BASE; expected exactly 2 positional paths (LOCAL REMOTE).".to_string());
+                }
+            }
+        } else {
+            match positionals.len() {
+                3 => (
+                    Some(positionals[0].clone()),
+                    positionals[1].clone(),
+                    positionals[2].clone(),
+                    label_l1,
+                    label_l2,
+                    label_l3,
+                ),
+                2 => {
+                    if label_l3.is_some() {
+                        return Err("Invalid external merge invocation: --L3 requires BASE input. Provide --base <BASE> or 3 positional paths (BASE LOCAL REMOTE).".to_string());
+                    }
+                    (
                         None,
                         positionals[0].clone(),
                         positionals[1].clone(),
                         None,
                         label_l1,
                         label_l2,
-                    ),
-                    0 | 1 => {
-                        return Err("Invalid external merge invocation: expected 2 positional paths (LOCAL REMOTE) or 3 (BASE LOCAL REMOTE) after -o/--output/--out.".to_string());
-                    }
-                    _ => {
-                        return Err("Invalid external merge invocation: too many positional paths; expected 2 (LOCAL REMOTE) or 3 (BASE LOCAL REMOTE).".to_string());
-                    }
+                    )
                 }
-            };
+                0 | 1 => {
+                    return Err("Invalid external merge invocation: expected 2 positional paths (LOCAL REMOTE) or 3 (BASE LOCAL REMOTE) after -o/--output/--out.".to_string());
+                }
+                _ => {
+                    return Err("Invalid external merge invocation: too many positional paths; expected 2 (LOCAL REMOTE) or 3 (BASE LOCAL REMOTE).".to_string());
+                }
+            }
+        };
 
         let args = MergetoolArgs {
             merged: Some(merged),
@@ -1648,6 +1655,34 @@ mod tests {
 
         assert!(
             err.contains("--base already supplies BASE"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn compat_merge_without_base_rejects_l3_label() {
+        let dir = tempfile::tempdir().unwrap();
+        let local = tmp_file(&dir, "local.txt", "local\n");
+        let remote = tmp_file(&dir, "remote.txt", "remote\n");
+        let merged = dir.path().join("merged.txt");
+        let env = TestEnv::new();
+
+        let err = parse_mode_for_test(
+            vec![
+                OsString::from("gitgpui-app"),
+                OsString::from("--out"),
+                merged.into_os_string(),
+                OsString::from("--L3"),
+                OsString::from("REMOTE_LABEL"),
+                local.into_os_string(),
+                remote.into_os_string(),
+            ],
+            &env,
+        )
+        .unwrap_err();
+
+        assert!(
+            err.contains("--L3 requires BASE input"),
             "unexpected error: {err}"
         );
     }

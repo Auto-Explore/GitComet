@@ -1,15 +1,15 @@
 ## STATUS: COMPLETE
 
-All components from both design documents are fully implemented. Iteration 25 adds direct standalone command-mode E2E coverage for the external-tool exit contract (`0/1/2`) so the dedicated `difftool`/`mergetool` invocation path is now regression-protected both through `git *tool` and direct binary execution.
+All components from both design documents are fully implemented. Iteration 26 closes the remaining strict-compat validation gap by rejecting KDiff3-style merge invocations that pass `--L3` without providing a base side, preventing silent label loss in 2-path (`LOCAL REMOTE`) merge mode.
 
 ## Implementation Progress
 
-### Progress Snapshot (Iteration 25 — Final)
+### Progress Snapshot (Iteration 26 — Final)
 
 External Diff/Merge Usage Design (`external_usage.md`)
 - ✅ Dedicated CLI modes (`difftool`, `mergetool`) and arg/env validation are implemented.
 - ✅ KDiff3-style compatibility fallback is implemented for no-subcommand invocations (positional args + `--L1/--L2/--L3` + `--base` + `-o/--output/--out` + optional `--auto`), enabling Git built-in tool flows that invoke the binary directly via `*.path`.
-- ✅ Strict compatibility validation is implemented for no-subcommand invocation: invalid combinations now fail fast with actionable errors (`--auto` requires output path, merge mode positional count validation, `--base` ambiguity guards, diff-mode `--L3`/`--base` rejection, and too-many-positional guards).
+- ✅ Strict compatibility validation is implemented for no-subcommand invocation: invalid combinations now fail fast with actionable errors (`--auto` requires output path, merge mode positional count validation, merge-mode `--L3`-without-`BASE` rejection in 2-path mode, `--base` ambiguity guards, diff-mode `--L3`/`--base` rejection, and too-many-positional guards).
 - ✅ Difftool env compatibility is complete: display-path resolution now honors optional `MERGED` and `BASE` compatibility vars with explicit precedence (`--path` > `MERGED` > `BASE`).
 - ✅ Mergetool CLI compatibility aliases are implemented: `-o`/`--output`/`--out` for output path and `--L1`/`--L2`/`--L3` for labels (KDiff3/Meld-style command compatibility).
 - ✅ Standalone mergetool output-target behavior is implemented: `MERGED` may be a new path, and runtime creates parent directories before writing.
@@ -45,8 +45,8 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
 - ✅ KDiff3-style no-subcommand compatibility parser implemented in `crates/gitgpui-app/src/cli.rs`:
   - accepts direct external-tool invocation with positional paths and compatibility flags (`--auto`, `--L1/--L2/--L3`, `--base`, `-o/--output/--out`)
   - maps to validated `difftool`/`mergetool` app modes
-  - enforces strict compatibility validation with actionable errors (`--auto` requires output path, merge positional count checks, `--base` conflict guards, diff-mode `--L3`/`--base` rejection, too-many-positional checks)
-  - coverage: 12 CLI parser tests (5 happy-path + 7 invalid-combination checks) + git-invoked `kdiff3` path-override integration tests
+  - enforces strict compatibility validation with actionable errors (`--auto` requires output path, merge positional count checks, merge-mode `--L3` requires `BASE` in compatibility mode, `--base` conflict guards, diff-mode `--L3`/`--base` rejection, too-many-positional checks)
+  - coverage: 13 CLI parser tests (5 happy-path + 8 invalid-combination checks) + git-invoked `kdiff3` path-override integration tests
 - ✅ Exit code constants aligned to design (`0`, `1`, `>=2`) defined in app CLI module.
 - ✅ Foundational conflict-marker label formatter implemented in `crates/gitgpui-core/src/conflict_labels.rs` (`empty tree`, `<short-sha>:<path>`, merged-ancestors, rebase-parent shapes), ready for focused merge-mode integration.
 - ✅ Focused command-mode execution paths fully implemented:
@@ -159,7 +159,18 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
   - ✅ Git-invoked E2E coverage for basic invocation, subdirectory execution, spaced path handling, and `--dir-diff`.
   - ✅ Explicit `difftool.guiDefault` selection-path parity (`auto` with/without `DISPLAY`, `--gui`, `--no-gui`).
   - ✅ Dedicated trust-exit interaction matrix assertions (`difftool.trustExitCode`, `--trust-exit-code`, `--no-trust-exit-code`).
-  - ✅ `git difftool --tool-help` discoverability assertion for configured `gitgpui` tool.
+- ✅ `git difftool --tool-help` discoverability assertion for configured `gitgpui` tool.
+
+### Latest Component Delivered (Iteration 26) — Strict Merge `--L3` Arity Validation in Compat Mode
+
+- Hardened no-subcommand KDiff3-compat merge parsing in `crates/gitgpui-app/src/cli.rs`:
+  - merge-mode compatibility invocation with 2 positional paths (`LOCAL REMOTE`) now rejects `--L3` unless a base side is provided (`--base <BASE>` or 3 positional paths `BASE LOCAL REMOTE`)
+  - prevents silent dropping of `--L3` labels in no-base merge mode
+- Added parser regression test:
+  - `compat_merge_without_base_rejects_l3_label`
+- Verification:
+  - `cargo test -p gitgpui-app --bin gitgpui-app compat_ -- --nocapture`
+  - `cargo test -p gitgpui-app --bin gitgpui-app`
 
 ### Latest Component Delivered (Iteration 25) — Standalone Command-Mode Exit Contract E2E
 
