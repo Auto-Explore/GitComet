@@ -548,6 +548,7 @@ fn setup_dry_run_prints_commands_without_writing() {
         stdout.contains("Dry run"),
         "expected dry-run header\n{text}"
     );
+    // Headless tool entries
     assert!(
         stdout.contains("git config --global merge.tool"),
         "expected merge.tool\n{text}"
@@ -575,6 +576,23 @@ fn setup_dry_run_prints_commands_without_writing() {
     assert!(
         stdout.contains("difftool.trustExitCode"),
         "expected difftool.trustExitCode\n{text}"
+    );
+    // GUI tool entries
+    assert!(
+        stdout.contains("mergetool.gitgpui-gui.cmd"),
+        "expected GUI mergetool cmd\n{text}"
+    );
+    assert!(
+        stdout.contains("difftool.gitgpui-gui.cmd"),
+        "expected GUI difftool cmd\n{text}"
+    );
+    assert!(
+        stdout.contains("mergetool.gitgpui-gui.trustExitCode"),
+        "expected GUI mergetool trustExitCode\n{text}"
+    );
+    assert!(
+        stdout.contains("difftool.gitgpui-gui.trustExitCode"),
+        "expected GUI difftool trustExitCode\n{text}"
     );
 }
 
@@ -677,6 +695,36 @@ fn setup_dry_run_commands_execute_verbatim_in_shell() {
         diff_cmd.contains("$MERGED"),
         "expected literal $MERGED in cmd"
     );
+
+    // GUI tool commands should also be configured and shell-valid.
+    let gui_merge_cmd = git_config_get(dir.path(), "mergetool.gitgpui-gui.cmd")
+        .expect("GUI mergetool cmd should be configured by dry-run commands");
+    assert!(
+        gui_merge_cmd.contains("--gui"),
+        "GUI merge cmd should contain --gui"
+    );
+    assert!(
+        gui_merge_cmd.contains("$MERGED"),
+        "GUI merge cmd should contain $MERGED"
+    );
+
+    let gui_diff_cmd = git_config_get(dir.path(), "difftool.gitgpui-gui.cmd")
+        .expect("GUI difftool cmd should be configured by dry-run commands");
+    assert!(
+        gui_diff_cmd.contains("--gui"),
+        "GUI diff cmd should contain --gui"
+    );
+
+    assert_eq!(
+        git_config_get(dir.path(), "merge.guitool").as_deref(),
+        Some("gitgpui-gui"),
+        "merge.guitool should reference gitgpui-gui"
+    );
+    assert_eq!(
+        git_config_get(dir.path(), "diff.guitool").as_deref(),
+        Some("gitgpui-gui"),
+        "diff.guitool should reference gitgpui-gui"
+    );
 }
 
 #[test]
@@ -742,27 +790,74 @@ fn setup_local_writes_config_to_repo() {
     );
     assert_eq!(
         git_config_get(dir.path(), "merge.guitool").as_deref(),
-        Some("gitgpui"),
-        "merge.guitool not set"
+        Some("gitgpui-gui"),
+        "merge.guitool not set to gitgpui-gui"
+    );
+    assert_eq!(
+        git_config_get(dir.path(), "diff.guitool").as_deref(),
+        Some("gitgpui-gui"),
+        "diff.guitool not set to gitgpui-gui"
     );
     assert_eq!(
         git_config_get(dir.path(), "mergetool.guiDefault").as_deref(),
         Some("auto"),
         "mergetool.guiDefault not set"
     );
+    assert_eq!(
+        git_config_get(dir.path(), "difftool.guiDefault").as_deref(),
+        Some("auto"),
+        "difftool.guiDefault not set"
+    );
 
-    // Verify the cmd contains the binary path and proper variable quoting.
+    // Verify headless cmd contains the binary path and proper variable quoting.
     let merge_cmd =
         git_config_get(dir.path(), "mergetool.gitgpui.cmd").expect("mergetool cmd should be set");
     assert!(merge_cmd.contains("$BASE"), "merge cmd missing $BASE");
     assert!(merge_cmd.contains("$LOCAL"), "merge cmd missing $LOCAL");
     assert!(merge_cmd.contains("$REMOTE"), "merge cmd missing $REMOTE");
     assert!(merge_cmd.contains("$MERGED"), "merge cmd missing $MERGED");
+    assert!(
+        !merge_cmd.contains("--gui"),
+        "headless merge cmd should not contain --gui"
+    );
 
     let diff_cmd =
         git_config_get(dir.path(), "difftool.gitgpui.cmd").expect("difftool cmd should be set");
     assert!(diff_cmd.contains("$LOCAL"), "diff cmd missing $LOCAL");
     assert!(diff_cmd.contains("$REMOTE"), "diff cmd missing $REMOTE");
+    assert!(
+        !diff_cmd.contains("--gui"),
+        "headless diff cmd should not contain --gui"
+    );
+
+    // Verify GUI cmd includes --gui flag.
+    let gui_merge_cmd = git_config_get(dir.path(), "mergetool.gitgpui-gui.cmd")
+        .expect("GUI mergetool cmd should be set");
+    assert!(
+        gui_merge_cmd.contains("--gui"),
+        "GUI merge cmd missing --gui"
+    );
+    assert!(
+        gui_merge_cmd.contains("$MERGED"),
+        "GUI merge cmd missing $MERGED"
+    );
+    assert_eq!(
+        git_config_get(dir.path(), "mergetool.gitgpui-gui.trustExitCode").as_deref(),
+        Some("true"),
+        "GUI mergetool.trustExitCode not set"
+    );
+
+    let gui_diff_cmd = git_config_get(dir.path(), "difftool.gitgpui-gui.cmd")
+        .expect("GUI difftool cmd should be set");
+    assert!(
+        gui_diff_cmd.contains("--gui"),
+        "GUI diff cmd missing --gui"
+    );
+    assert_eq!(
+        git_config_get(dir.path(), "difftool.gitgpui-gui.trustExitCode").as_deref(),
+        Some("true"),
+        "GUI difftool.trustExitCode not set"
+    );
 }
 
 // ── Auto-resolve mode E2E ───────────────────────────────────────────

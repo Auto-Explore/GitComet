@@ -45,7 +45,7 @@ fn build_config_entries(bin_path: &str) -> Vec<ConfigEntry> {
     let quoted_bin_path = shell_single_quote(bin_path);
 
     vec![
-        // Mergetool
+        // Mergetool (headless — for CI, scripts, and no-display environments)
         ConfigEntry {
             key: "merge.tool",
             value: "gitgpui".into(),
@@ -73,7 +73,7 @@ fn build_config_entries(bin_path: &str) -> Vec<ConfigEntry> {
             key: "mergetool.prompt",
             value: "false".into(),
         },
-        // Difftool
+        // Difftool (headless)
         ConfigEntry {
             key: "diff.tool",
             value: "gitgpui".into(),
@@ -101,14 +101,37 @@ fn build_config_entries(bin_path: &str) -> Vec<ConfigEntry> {
             key: "difftool.prompt",
             value: "false".into(),
         },
-        // GUI tool aliases
+        // GUI tool variant — opens focused GPUI windows for interactive use.
+        // Registered as a separate tool name so guiDefault=auto selects the
+        // interactive UI when DISPLAY is available and the headless backend
+        // when it is not.
         ConfigEntry {
             key: "merge.guitool",
-            value: "gitgpui".into(),
+            value: "gitgpui-gui".into(),
+        },
+        ConfigEntry {
+            key: "mergetool.gitgpui-gui.cmd",
+            value: format!(
+                "{quoted_bin_path} mergetool --gui --base \"$BASE\" --local \"$LOCAL\" --remote \"$REMOTE\" --merged \"$MERGED\""
+            ),
+        },
+        ConfigEntry {
+            key: "mergetool.gitgpui-gui.trustExitCode",
+            value: "true".into(),
         },
         ConfigEntry {
             key: "diff.guitool",
-            value: "gitgpui".into(),
+            value: "gitgpui-gui".into(),
+        },
+        ConfigEntry {
+            key: "difftool.gitgpui-gui.cmd",
+            value: format!(
+                "{quoted_bin_path} difftool --gui --local \"$LOCAL\" --remote \"$REMOTE\" --path \"$MERGED\""
+            ),
+        },
+        ConfigEntry {
+            key: "difftool.gitgpui-gui.trustExitCode",
+            value: "true".into(),
         },
         ConfigEntry {
             key: "mergetool.guiDefault",
@@ -219,6 +242,7 @@ mod tests {
         let entries = build_config_entries("/usr/bin/gitgpui-app");
         let keys: Vec<&str> = entries.iter().map(|e| e.key).collect();
 
+        // Headless tool
         assert!(keys.contains(&"merge.tool"));
         assert!(keys.contains(&"mergetool.gitgpui.cmd"));
         assert!(keys.contains(&"mergetool.trustExitCode"));
@@ -229,10 +253,74 @@ mod tests {
         assert!(keys.contains(&"difftool.trustExitCode"));
         assert!(keys.contains(&"difftool.gitgpui.trustExitCode"));
         assert!(keys.contains(&"difftool.prompt"));
+
+        // GUI tool variant
         assert!(keys.contains(&"merge.guitool"));
         assert!(keys.contains(&"diff.guitool"));
+        assert!(keys.contains(&"mergetool.gitgpui-gui.cmd"));
+        assert!(keys.contains(&"mergetool.gitgpui-gui.trustExitCode"));
+        assert!(keys.contains(&"difftool.gitgpui-gui.cmd"));
+        assert!(keys.contains(&"difftool.gitgpui-gui.trustExitCode"));
         assert!(keys.contains(&"mergetool.guiDefault"));
         assert!(keys.contains(&"difftool.guiDefault"));
+    }
+
+    #[test]
+    fn gui_tool_uses_separate_tool_name() {
+        let entries = build_config_entries("/usr/bin/gitgpui-app");
+        let merge_guitool = entries.iter().find(|e| e.key == "merge.guitool").unwrap();
+        let diff_guitool = entries.iter().find(|e| e.key == "diff.guitool").unwrap();
+
+        assert_eq!(merge_guitool.value, "gitgpui-gui");
+        assert_eq!(diff_guitool.value, "gitgpui-gui");
+    }
+
+    #[test]
+    fn gui_tool_cmd_includes_gui_flag() {
+        let entries = build_config_entries("/path/to/bin");
+        let merge_gui_cmd = entries
+            .iter()
+            .find(|e| e.key == "mergetool.gitgpui-gui.cmd")
+            .unwrap();
+        let diff_gui_cmd = entries
+            .iter()
+            .find(|e| e.key == "difftool.gitgpui-gui.cmd")
+            .unwrap();
+
+        assert!(
+            merge_gui_cmd.value.contains("--gui"),
+            "GUI mergetool cmd missing --gui flag: {}",
+            merge_gui_cmd.value
+        );
+        assert!(
+            diff_gui_cmd.value.contains("--gui"),
+            "GUI difftool cmd missing --gui flag: {}",
+            diff_gui_cmd.value
+        );
+    }
+
+    #[test]
+    fn headless_tool_cmd_omits_gui_flag() {
+        let entries = build_config_entries("/path/to/bin");
+        let merge_cmd = entries
+            .iter()
+            .find(|e| e.key == "mergetool.gitgpui.cmd")
+            .unwrap();
+        let diff_cmd = entries
+            .iter()
+            .find(|e| e.key == "difftool.gitgpui.cmd")
+            .unwrap();
+
+        assert!(
+            !merge_cmd.value.contains("--gui"),
+            "headless mergetool cmd should not contain --gui: {}",
+            merge_cmd.value
+        );
+        assert!(
+            !diff_cmd.value.contains("--gui"),
+            "headless difftool cmd should not contain --gui: {}",
+            diff_cmd.value
+        );
     }
 
     #[test]
@@ -287,6 +375,8 @@ mod tests {
         assert!(output.contains("git config --global diff.tool"));
         assert!(output.contains("git config --global mergetool.trustExitCode"));
         assert!(output.contains("git config --global mergetool.gitgpui.trustExitCode"));
+        assert!(output.contains("git config --global mergetool.gitgpui-gui.cmd"));
+        assert!(output.contains("git config --global difftool.gitgpui-gui.cmd"));
         assert!(
             !output.contains("''/bin/gitgpui-app'"),
             "dry-run output should not contain broken nested quoting:\n{output}"

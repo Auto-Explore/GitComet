@@ -172,20 +172,33 @@ Recommended global config:
 ```bash
 GITGPUI_BIN="/absolute/path/to/gitgpui-app"
 
+# Headless tool — algorithm-only merge/diff for CI, scripts, and no-display environments
 git config --global merge.tool gitgpui
 git config --global mergetool.gitgpui.cmd \
   "'$GITGPUI_BIN' mergetool --base \"\$BASE\" --local \"\$LOCAL\" --remote \"\$REMOTE\" --merged \"\$MERGED\""
 git config --global mergetool.gitgpui.trustExitCode true
+git config --global mergetool.trustExitCode true
 git config --global mergetool.prompt false
 
 git config --global diff.tool gitgpui
 git config --global difftool.gitgpui.cmd \
   "'$GITGPUI_BIN' difftool --local \"\$LOCAL\" --remote \"\$REMOTE\" --path \"\$MERGED\""
+git config --global difftool.gitgpui.trustExitCode true
 git config --global difftool.trustExitCode true
 git config --global difftool.prompt false
 
-git config --global merge.guitool gitgpui
-git config --global diff.guitool gitgpui
+# GUI tool — opens focused GPUI windows for interactive diff/merge
+git config --global merge.guitool gitgpui-gui
+git config --global mergetool.gitgpui-gui.cmd \
+  "'$GITGPUI_BIN' mergetool --gui --base \"\$BASE\" --local \"\$LOCAL\" --remote \"\$REMOTE\" --merged \"\$MERGED\""
+git config --global mergetool.gitgpui-gui.trustExitCode true
+
+git config --global diff.guitool gitgpui-gui
+git config --global difftool.gitgpui-gui.cmd \
+  "'$GITGPUI_BIN' difftool --gui --local \"\$LOCAL\" --remote \"\$REMOTE\" --path \"\$MERGED\""
+git config --global difftool.gitgpui-gui.trustExitCode true
+
+# Auto-select GUI tool when DISPLAY is available, headless otherwise
 git config --global mergetool.guiDefault auto
 git config --global difftool.guiDefault auto
 ```

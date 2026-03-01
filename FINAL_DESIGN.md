@@ -1,10 +1,10 @@
 ## STATUS: COMPLETE
 
-All components from both design documents are fully implemented. Latest update adds explicit standalone command-mode Unicode path parity coverage for both `difftool` and `mergetool`.
+All components from both design documents are fully implemented. Latest update wires GUI tool variant into `setup` command so `guiDefault=auto` correctly selects interactive GPUI windows.
 
 ## Implementation Progress
 
-### Progress Snapshot (Iteration 55)
+### Progress Snapshot (Iteration 56)
 
 External Diff/Merge Usage Design (`external_usage.md`)
 - ✅ Dedicated CLI modes (`difftool`, `mergetool`) and arg/env validation are implemented.
@@ -29,7 +29,8 @@ External Diff/Merge Usage Design (`external_usage.md`)
 - ✅ Git-invoked add/add no-base parity is now explicit: dedicated mergetool E2E coverage asserts `$BASE` is passed as an existing empty stage file for no-base conflicts.
 - ✅ Difftool binary/non-UTF8 behavior-matrix coverage is now explicit in both dedicated runtime tests and `git difftool` E2E tests.
 - ✅ Difftool submodule behavior-matrix coverage is now explicit in git-invoked E2E tests: submodule gitlink-only changes are diffed via temporary `Subproject commit <sha>` files, and output includes both old/new commit pointers.
-- ✅ Automated git config setup: `gitgpui-app setup` subcommand writes all recommended git config entries (merge.tool, diff.tool, mergetool.gitgpui.cmd, difftool.gitgpui.cmd, `mergetool.trustExitCode`, `mergetool.gitgpui.trustExitCode`, `difftool.trustExitCode`, `difftool.gitgpui.trustExitCode`, prompt suppression, GUI tool aliases, guiDefault=auto). Both mergetool and difftool sides now have symmetric generic + per-tool trust keys. Supports `--dry-run` (print commands without executing) and `--local` (repo-scoped instead of global). Dry-run output is shell-runnable with robust quoting for nested command values and literal `$BASE/$LOCAL/$REMOTE/$MERGED` placeholders. Covered by unit tests and standalone setup integration tests.
+- ✅ Automated git config setup: `gitgpui-app setup` subcommand writes all recommended git config entries (merge.tool, diff.tool, mergetool.gitgpui.cmd, difftool.gitgpui.cmd, `mergetool.trustExitCode`, `mergetool.gitgpui.trustExitCode`, `difftool.trustExitCode`, `difftool.gitgpui.trustExitCode`, prompt suppression, guiDefault=auto). Both mergetool and difftool sides now have symmetric generic + per-tool trust keys. Supports `--dry-run` (print commands without executing) and `--local` (repo-scoped instead of global). Dry-run output is shell-runnable with robust quoting for nested command values and literal `$BASE/$LOCAL/$REMOTE/$MERGED` placeholders. Covered by unit tests and standalone setup integration tests.
+- ✅ GUI tool variant in setup: `merge.guitool` and `diff.guitool` now reference a separate `gitgpui-gui` tool name whose commands include `--gui`, so `guiDefault=auto` correctly selects the interactive GPUI window when DISPLAY is available and the headless algorithm-only backend when it is not. Config entries: `mergetool.gitgpui-gui.cmd` (with `--gui`), `mergetool.gitgpui-gui.trustExitCode`, `difftool.gitgpui-gui.cmd` (with `--gui`), `difftool.gitgpui-gui.trustExitCode`. Covered by 4 new unit tests (`gui_tool_uses_separate_tool_name`, `gui_tool_cmd_includes_gui_flag`, `headless_tool_cmd_omits_gui_flag`) and updated standalone E2E assertions.
 - ✅ Mergetool `--auto` heuristic auto-resolve mode is now implemented: when `--auto` is passed to `gitgpui-app mergetool` (or `--auto`/`--auto-merge` via KDiff3/Meld compatibility mode), the mergetool applies heuristic passes on remaining conflict blocks after the initial 3-way merge: identical-side detection, single-side-change detection (requires diff3/zdiff3 base), whitespace-only normalization, and subchunk splitting (line-level re-merge within blocks). If ALL conflicts are resolved, writes clean output and exits 0. If any remain, writes markers and exits 1. Core function `try_autosolve_merged_text()` is public in `conflict_session.rs` with 8 unit tests. 5 mergetool runtime tests + 4 standalone E2E tests + 4 CLI parser tests cover the full pipeline.
 - ✅ Dedicated mergetool conflict-marker labels now have Git-style runtime fallback semantics: missing labels default to input filenames, and no-base diff3/zdiff3 base labels default to `empty tree` (with focused unit coverage).
 - ✅ Automatic git config fallback: mergetool reads `merge.conflictstyle` and `diff.algorithm` from git config when no CLI flag is provided, mirroring `git merge-file` behavior. CLI flags take priority over git config, and git config takes priority over defaults. Unknown config values are gracefully ignored. Iteration 37 extends this parity to no-subcommand compatibility invocations (`kdiff3`-style `--auto/-o/--L*`), which previously bypassed fallback.
@@ -212,7 +213,31 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
   - ✅ Dedicated trust-exit interaction matrix assertions (`difftool.trustExitCode`, `--trust-exit-code`, `--no-trust-exit-code`).
 - ✅ `git difftool --tool-help` discoverability assertion for configured `gitgpui` tool.
 
-### Latest Component Delivered (Iteration 54) — Focused GPUI Tool Windows
+### Latest Component Delivered (Iteration 56) — GUI Tool Variant in Setup Config
+
+- Fixed `gitgpui-app setup` to register a separate `gitgpui-gui` tool variant whose commands include `--gui`:
+  - `mergetool.gitgpui-gui.cmd` = mergetool command with `--gui` flag
+  - `mergetool.gitgpui-gui.trustExitCode = true`
+  - `difftool.gitgpui-gui.cmd` = difftool command with `--gui` flag
+  - `difftool.gitgpui-gui.trustExitCode = true`
+- Changed `merge.guitool` from `gitgpui` to `gitgpui-gui` and `diff.guitool` from `gitgpui` to `gitgpui-gui`.
+- This closes the gap where `guiDefault=auto` + DISPLAY would previously select the same headless tool as no-display mode. Now:
+  - With DISPLAY: git selects `gitgpui-gui` → opens focused GPUI window (interactive merge/diff)
+  - Without DISPLAY: git selects `gitgpui` → runs headless algorithm-only merge/diff
+- Updated `external_usage.md` recommended config to document separate headless and GUI tool entries.
+- Added 4 new unit tests in `setup_mode.rs`:
+  - `gui_tool_uses_separate_tool_name`
+  - `gui_tool_cmd_includes_gui_flag`
+  - `headless_tool_cmd_omits_gui_flag`
+- Updated standalone E2E tests:
+  - `setup_dry_run_prints_commands_without_writing`: now asserts GUI tool cmd/trust entries
+  - `setup_dry_run_commands_execute_verbatim_in_shell`: now verifies GUI tool commands are shell-valid and `merge.guitool` = `gitgpui-gui`
+  - `setup_local_writes_config_to_repo`: now verifies `gitgpui-gui` guitool name, GUI cmd with `--gui`, headless cmd without `--gui`, and GUI trust keys
+- Verification:
+  - `cargo test --workspace` — 1,036 passed, 0 failed, 5 ignored
+  - `cargo clippy --workspace` — clean
+
+### Previous Component Delivered (Iteration 54) — Focused GPUI Tool Windows
 
 - Implemented `focused_diff.rs` in `crates/gitgpui-ui-gpui/src/`:
   - `FocusedDiffView` GPUI view with color-coded unified diff rendering
