@@ -37,6 +37,17 @@ fn run_git_capture(repo: &Path, args: &[&str]) -> Output {
         .expect("git command to run")
 }
 
+fn run_git_capture_with_display(repo: &Path, args: &[&str], display: Option<&str>) -> Output {
+    let mut cmd = Command::new("git");
+    cmd.arg("-C").arg(repo).args(args);
+    if let Some(display) = display {
+        cmd.env("DISPLAY", display);
+    } else {
+        cmd.env_remove("DISPLAY");
+    }
+    cmd.output().expect("git command to run")
+}
+
 fn run_git_capture_in(cwd: &Path, args: &[&str]) -> Output {
     Command::new("git")
         .current_dir(cwd)
@@ -68,17 +79,54 @@ fn commit_all(repo: &Path, message: &str) {
     );
 }
 
-fn configure_gitgpui_difftool(repo: &Path) {
+fn gitgpui_difftool_cmd(marker: &str, force_exit: Option<i32>) -> String {
     let bin = gitgpui_bin();
     let bin_q = shell_quote(&bin.to_string_lossy());
-    let cmd = format!(
-        "if [ -n \"$MERGED\" ]; then {bin_q} difftool --local \"$LOCAL\" --remote \"$REMOTE\" --path \"$MERGED\"; else {bin_q} difftool --local \"$LOCAL\" --remote \"$REMOTE\"; fi"
+    let mut cmd = format!(
+        "echo TOOL={marker} >&2; if [ -n \"$MERGED\" ]; then {bin_q} difftool --local \"$LOCAL\" --remote \"$REMOTE\" --path \"$MERGED\"; else {bin_q} difftool --local \"$LOCAL\" --remote \"$REMOTE\"; fi"
     );
+    if let Some(code) = force_exit {
+        cmd.push_str(&format!("; exit {code}"));
+    }
+    cmd
+}
 
-    run_git(repo, &["config", "diff.tool", "gitgpui"]);
-    run_git(repo, &["config", "difftool.gitgpui.cmd", &cmd]);
-    run_git(repo, &["config", "difftool.gitgpui.trustExitCode", "true"]);
+fn configure_difftool_command(repo: &Path, tool: &str, cmd: &str) {
+    let cmd_key = format!("difftool.{tool}.cmd");
+    run_git(repo, &["config", &cmd_key, cmd]);
+}
+
+fn configure_difftool_trust_exit_code(repo: &Path, trust_exit_code: bool) {
+    run_git(
+        repo,
+        &[
+            "config",
+            "difftool.trustExitCode",
+            if trust_exit_code { "true" } else { "false" },
+        ],
+    );
+}
+
+fn configure_difftool_selection(
+    repo: &Path,
+    diff_tool: &str,
+    diff_guitool: Option<&str>,
+    gui_default: Option<&str>,
+) {
+    run_git(repo, &["config", "diff.tool", diff_tool]);
+    if let Some(gui_tool) = diff_guitool {
+        run_git(repo, &["config", "diff.guitool", gui_tool]);
+    }
+    if let Some(gui_default) = gui_default {
+        run_git(repo, &["config", "difftool.guiDefault", gui_default]);
+    }
     run_git(repo, &["config", "difftool.prompt", "false"]);
+}
+
+fn configure_gitgpui_difftool(repo: &Path) {
+    configure_difftool_command(repo, "gitgpui", &gitgpui_difftool_cmd("gitgpui", None));
+    configure_difftool_trust_exit_code(repo, true);
+    configure_difftool_selection(repo, "gitgpui", None, None);
 }
 
 fn output_text(output: &Output) -> String {
@@ -191,5 +239,226 @@ fn git_difftool_dir_diff_mode_works() {
     assert!(
         text.contains("tracked.txt"),
         "expected tracked filename in dir-diff output\n{text}"
+    );
+}
+
+#[test]
+fn git_difftool_gui_default_auto_prefers_gui_tool_when_display_set() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+
+    init_repo(repo);
+    write_file(repo, "a.txt", "before\n");
+    commit_all(repo, "base");
+    write_file(repo, "a.txt", "after\n");
+
+    configure_difftool_command(repo, "cli", &gitgpui_difftool_cmd("cli", None));
+    configure_difftool_command(repo, "gui", &gitgpui_difftool_cmd("gui", None));
+    configure_difftool_trust_exit_code(repo, true);
+    configure_difftool_selection(repo, "cli", Some("gui"), Some("auto"));
+
+    let output = run_git_capture_with_display(
+        repo,
+        &["difftool", "--no-prompt", "--", "a.txt"],
+        Some(":99"),
+    );
+    let text = output_text(&output);
+    assert!(output.status.success(), "git difftool failed\n{text}");
+    assert!(
+        text.contains("TOOL=gui"),
+        "expected gui tool selection with DISPLAY set\n{text}"
+    );
+}
+
+#[test]
+fn git_difftool_gui_default_auto_prefers_cli_tool_without_display() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+
+    init_repo(repo);
+    write_file(repo, "a.txt", "before\n");
+    commit_all(repo, "base");
+    write_file(repo, "a.txt", "after\n");
+
+    configure_difftool_command(repo, "cli", &gitgpui_difftool_cmd("cli", None));
+    configure_difftool_command(repo, "gui", &gitgpui_difftool_cmd("gui", None));
+    configure_difftool_trust_exit_code(repo, true);
+    configure_difftool_selection(repo, "cli", Some("gui"), Some("Auto"));
+
+    let output =
+        run_git_capture_with_display(repo, &["difftool", "--no-prompt", "--", "a.txt"], None);
+    let text = output_text(&output);
+    assert!(output.status.success(), "git difftool failed\n{text}");
+    assert!(
+        text.contains("TOOL=cli"),
+        "expected cli tool selection without DISPLAY\n{text}"
+    );
+}
+
+#[test]
+fn git_difftool_gui_flag_overrides_selection() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+
+    init_repo(repo);
+    write_file(repo, "a.txt", "before\n");
+    commit_all(repo, "base");
+    write_file(repo, "a.txt", "after\n");
+
+    configure_difftool_command(repo, "cli", &gitgpui_difftool_cmd("cli", None));
+    configure_difftool_command(repo, "gui", &gitgpui_difftool_cmd("gui", None));
+    configure_difftool_trust_exit_code(repo, true);
+    configure_difftool_selection(repo, "cli", Some("gui"), Some("false"));
+
+    let output = run_git_capture_with_display(
+        repo,
+        &["difftool", "--gui", "--no-prompt", "--", "a.txt"],
+        None,
+    );
+    let text = output_text(&output);
+    assert!(output.status.success(), "git difftool failed\n{text}");
+    assert!(
+        text.contains("TOOL=gui"),
+        "expected --gui to force gui tool selection\n{text}"
+    );
+}
+
+#[test]
+fn git_difftool_no_gui_flag_overrides_gui_default_true() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+
+    init_repo(repo);
+    write_file(repo, "a.txt", "before\n");
+    commit_all(repo, "base");
+    write_file(repo, "a.txt", "after\n");
+
+    configure_difftool_command(repo, "cli", &gitgpui_difftool_cmd("cli", None));
+    configure_difftool_command(repo, "gui", &gitgpui_difftool_cmd("gui", None));
+    configure_difftool_trust_exit_code(repo, true);
+    configure_difftool_selection(repo, "cli", Some("gui"), Some("true"));
+
+    let output = run_git_capture_with_display(
+        repo,
+        &["difftool", "--no-gui", "--no-prompt", "--", "a.txt"],
+        Some(":99"),
+    );
+    let text = output_text(&output);
+    assert!(output.status.success(), "git difftool failed\n{text}");
+    assert!(
+        text.contains("TOOL=cli"),
+        "expected --no-gui to force regular tool selection\n{text}"
+    );
+}
+
+#[test]
+fn git_difftool_honors_tool_trust_exit_code_false() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+
+    init_repo(repo);
+    write_file(repo, "a.txt", "before\n");
+    commit_all(repo, "base");
+    write_file(repo, "a.txt", "after\n");
+
+    configure_difftool_command(repo, "failer", "echo TOOL=failer >&2; exit 7");
+    configure_difftool_trust_exit_code(repo, false);
+    configure_difftool_selection(repo, "failer", None, None);
+
+    let output = run_git_capture(repo, &["difftool", "--no-prompt", "--", "a.txt"]);
+    let text = output_text(&output);
+    assert!(
+        output.status.success(),
+        "expected trustExitCode=false to ignore tool failure\n{text}"
+    );
+}
+
+#[test]
+fn git_difftool_honors_tool_trust_exit_code_true() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+
+    init_repo(repo);
+    write_file(repo, "a.txt", "before\n");
+    commit_all(repo, "base");
+    write_file(repo, "a.txt", "after\n");
+
+    configure_difftool_command(repo, "failer", "echo TOOL=failer >&2; exit 7");
+    configure_difftool_trust_exit_code(repo, true);
+    configure_difftool_selection(repo, "failer", None, None);
+
+    let output = run_git_capture(repo, &["difftool", "--no-prompt", "--", "a.txt"]);
+    let text = output_text(&output);
+    assert!(
+        !output.status.success(),
+        "expected trustExitCode=true to propagate tool failure\n{text}"
+    );
+}
+
+#[test]
+fn git_difftool_trust_exit_code_flag_overrides_config() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+
+    init_repo(repo);
+    write_file(repo, "a.txt", "before\n");
+    commit_all(repo, "base");
+    write_file(repo, "a.txt", "after\n");
+
+    configure_difftool_command(repo, "failer", "echo TOOL=failer >&2; exit 7");
+    configure_difftool_trust_exit_code(repo, false);
+    configure_difftool_selection(repo, "failer", None, None);
+
+    let forced_trust = run_git_capture(
+        repo,
+        &[
+            "difftool",
+            "--no-prompt",
+            "--trust-exit-code",
+            "--",
+            "a.txt",
+        ],
+    );
+    let forced_trust_text = output_text(&forced_trust);
+    assert!(
+        !forced_trust.status.success(),
+        "expected --trust-exit-code to force failure propagation\n{forced_trust_text}"
+    );
+
+    configure_difftool_trust_exit_code(repo, true);
+    let forced_no_trust = run_git_capture(
+        repo,
+        &[
+            "difftool",
+            "--no-prompt",
+            "--no-trust-exit-code",
+            "--",
+            "a.txt",
+        ],
+    );
+    let forced_no_trust_text = output_text(&forced_no_trust);
+    assert!(
+        forced_no_trust.status.success(),
+        "expected --no-trust-exit-code to ignore failure\n{forced_no_trust_text}"
+    );
+}
+
+#[test]
+fn git_difftool_tool_help_lists_gitgpui_tool() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+
+    init_repo(repo);
+    configure_gitgpui_difftool(repo);
+
+    let output = run_git_capture(repo, &["difftool", "--tool-help"]);
+    let text = output_text(&output);
+    assert!(
+        output.status.success(),
+        "git difftool --tool-help failed\n{text}"
+    );
+    assert!(
+        text.contains("gitgpui"),
+        "expected gitgpui tool name in --tool-help output\n{text}"
     );
 }

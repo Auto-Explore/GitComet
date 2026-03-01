@@ -18,13 +18,13 @@
   - `writeToTemp=true`: absolute temp files under `gitgpui-mergetool-*`
   - `writeToTemp=false`: workdir-prefixed paths (`./...`) with `<base>_{BASE,LOCAL,REMOTE}_<pid><ext>` naming
   - stage file cleanup for workdir mode and unit/integration coverage
-- 🔧 Git behavior parity matrix coverage is partial. Implemented/covered: spaced paths, no-base handling for stage extraction (including empty `BASE` file for add/add), trust-exit semantics, deleted output handling, writeToTemp path semantics, and difftool `--dir-diff` invocation. Remaining explicit coverage: symlink, submodule conflict invocation paths, CRLF preservation assertions, and cancel/close exit semantics.
-- 🔧 Git-like scenario porting is partial. Existing and new tests cover a subset of t7610-style behavior (`trustExitCode`, custom cmd with braced env, gui preference, writeToTemp, no-base stage-file contract); `--tool-help`, full gui-default parity flow, order-file, delete/delete interaction prompts, and submodule-specific flows remain.
-- 🔧 Dedicated difftool mode tests are partially implemented:
-  - ✅ Runtime/unit coverage added in `crates/gitgpui-app/src/difftool_mode.rs` (identical files, changed files with exit normalization, display-path and explicit labels, missing-input error handling, directory diff).
-  - ✅ Full git-invoked integration tests added in `crates/gitgpui-app/tests/difftool_git_integration.rs` (basic `git difftool` execution, spaced path handling, subdirectory invocation, `--dir-diff` mode, and global-like difftool config wiring).
+- 🔧 Git behavior parity matrix coverage is partial. Implemented/covered: spaced paths, no-base handling for stage extraction (including empty `BASE` file for add/add), trust-exit semantics, deleted output handling, writeToTemp path semantics, difftool `--dir-diff`, difftool `guiDefault` selection (`auto` + `DISPLAY`, `--gui`, `--no-gui`), and difftool `--tool-help` discoverability checks. Remaining explicit coverage: symlink and submodule conflict invocation paths, and cancel/close exit semantics.
+- 🔧 Git-like scenario porting is partial. Existing and new tests cover a broad subset of t7610/t7800 behavior (`trustExitCode`, custom cmd with braced env, gui preference, writeToTemp, no-base stage-file contract, difftool gui-default/trust/tool-help parity); remaining gaps are primarily mergetool-focused (`--tool-help`, order-file, delete/delete interaction prompts, and submodule-specific flows).
+- ✅ Dedicated difftool mode tests are implemented with parity-focused coverage:
+  - ✅ Runtime/unit coverage in `crates/gitgpui-app/src/difftool_mode.rs` (identical files, changed files with exit normalization, display-path and explicit labels, missing-input error handling, directory diff).
+  - ✅ Full git-invoked integration coverage in `crates/gitgpui-app/tests/difftool_git_integration.rs` (basic invocation, spaced paths, subdirectory invocation, `--dir-diff`, `guiDefault`/`--gui`/`--no-gui` selection precedence, trust-exit-code matrix, and `--tool-help` discoverability).
 - ✅ End-to-end tests that invoke `git difftool`/`git mergetool` with global-like config and `gitgpui-app` as the tool are fully implemented:
-  - ✅ `git difftool` E2E in `crates/gitgpui-app/tests/difftool_git_integration.rs` (4 tests).
+  - ✅ `git difftool` E2E in `crates/gitgpui-app/tests/difftool_git_integration.rs` (12 tests).
   - ✅ `git mergetool` E2E in `crates/gitgpui-app/tests/mergetool_git_integration.rs` (8 tests): overlapping conflict processing, trust-exit-code semantics (clean merge resolved / conflict preserved), spaced path handling, subdirectory invocation, add/add (no-base) conflict, multiple conflicted files, and CRLF preservation.
 - ✅ KDiff3-style fixture harness implemented in `crates/gitgpui-core/tests/merge_fixture_harness.rs` with fixture data in `crates/gitgpui-core/tests/fixtures/merge/`. Auto-discovers `*_base.*` fixtures, runs merge algorithm, validates invariants (marker well-formedness, content integrity, context preservation), and compares against expected results. 7 seed fixtures + harness discovery test = 8 tests.
 - ✅ Generated permutation corpus integration (Phase 3A) added in `crates/gitgpui-core/tests/merge_permutation_corpus.rs`: ports KDiff3’s 11-option line-state table, runs deterministic sampled corpus (`r=3`, `seed=0`, 243 cases) in default test runs, and includes an ignored exhaustive run (11^5 = 161,051 cases).
@@ -66,11 +66,12 @@
   - ✅ no-base file contract in add/add conflicts (tool receives an empty `BASE` file)
   - ✅ full E2E via `git mergetool` command in `crates/gitgpui-app/tests/mergetool_git_integration.rs` (8 tests): overlapping conflict, trust-exit-code for clean/conflict, spaced paths, subdirectory, add/add, multiple files, CRLF
   - ⬜ remaining cases (tool-help, nonexistent tool messaging parity, orderFile/delete-delete prompt flow/submodule matrix) still pending
-- 🔧 Phase 4B (critical `t7800-difftool` E2E): partially implemented.
-  - ✅ Foundational difftool runtime added in `gitgpui-app` (`difftool_mode.rs`) with Git-compatible exit semantics and label/display-path handling.
-  - ✅ Targeted difftool runtime tests added (unit-level behavior parity for changed/unchanged files, label handling, directory diff, and error path).
-  - ✅ Git-invoked E2E coverage added in `crates/gitgpui-app/tests/difftool_git_integration.rs` for basic invocation, subdirectory execution, spaced path handling, and `--dir-diff` mode with repo-local/global-like config.
-  - 🔧 Remaining: explicit `difftool.guiDefault` selection-path parity and dedicated trust-exit interaction matrix assertions.
+- ✅ Phase 4B (critical `t7800-difftool` E2E): implemented in `crates/gitgpui-app/tests/difftool_git_integration.rs`.
+  - ✅ Foundational difftool runtime with Git-compatible exit semantics and label/display-path handling.
+  - ✅ Git-invoked E2E coverage for basic invocation, subdirectory execution, spaced path handling, and `--dir-diff`.
+  - ✅ Explicit `difftool.guiDefault` selection-path parity (`auto` with/without `DISPLAY`, `--gui`, `--no-gui`).
+  - ✅ Dedicated trust-exit interaction matrix assertions (`difftool.trustExitCode`, `--trust-exit-code`, `--no-trust-exit-code`).
+  - ✅ `git difftool --tool-help` discoverability assertion for configured `gitgpui` tool.
 
 ### Latest Component Delivered (Iteration 9 — Current)
 
