@@ -1,5 +1,3 @@
-## STATUS: COMPLETE
-
 ## Implementation Progress
 
 ### External Diff/Merge Usage Design (`external_usage.md`)
@@ -20,8 +18,14 @@
   - `writeToTemp=true`: absolute temp files under `gitgpui-mergetool-*`
   - `writeToTemp=false`: workdir-prefixed paths (`./...`) with `<base>_{BASE,LOCAL,REMOTE}_<pid><ext>` naming
   - stage file cleanup for workdir mode and unit/integration coverage
+- ✅ `mergetool.keepTemporaries` parity implemented in `crates/gitgpui-git-gix/src/repo/mergetool.rs`:
+  - reads `mergetool.keepTemporaries` from git config
+  - keeps stage files when enabled for both `writeToTemp=true` and `writeToTemp=false`
+  - preserves default cleanup behavior when disabled
+  - covered by unit tests in `repo/mergetool.rs` and integration tests in `tests/status_integration.rs`
+- 🔧 `mergetool.keepBackup` delete/delete parity scenario from the portability checklist is not yet covered by a dedicated git-invoked E2E assertion.
 - ✅ Git behavior parity matrix coverage is complete. All items covered: spaced and Unicode paths, no-base handling for stage extraction (including empty `BASE` file for add/add), trust-exit semantics, deleted output handling, writeToTemp path semantics, difftool `--dir-diff`, difftool `guiDefault` selection (`auto` + `DISPLAY`, `--gui`, `--no-gui`), difftool `--tool-help` discoverability, mergetool `guiDefault` selection (`auto` + `DISPLAY`, `--gui`, `--no-gui`), mergetool `--tool-help` discoverability, mergetool GUI fallback (no guitool → merge.tool), nonexistent tool error handling, delete/delete conflict handling, modify/delete conflict handling, symlink conflict resolution (l/r/a prompts, coexistence with normal file conflicts, difftool target diff), and submodule conflict handling (l/r resolution, coexistence with normal file conflicts, file-vs-submodule, deleted-vs-modified submodule, submodule in subdirectory).
-- ✅ Git-like scenario porting is complete. Tests cover the full t7610/t7800 behavior matrix: `trustExitCode`, custom cmd with braced env, gui preference, writeToTemp, no-base stage-file contract, difftool gui-default/trust/tool-help parity, mergetool gui-default/trust/tool-help parity, GUI fallback, nonexistent tool error, delete/delete, modify/delete, order-file invocation ordering (`diff.orderFile` and `-O` override), symlink conflicts (l/r resolution, coexistence with normal files), and submodule conflicts (l/r resolution, deleted-vs-modified, file-vs-submodule, subdirectory submodule, coexistence with normal files).
+- 🔧 Git-like scenario porting is near-complete. Tests cover all listed t7610/t7800 parity items except an explicit `mergetool.keepBackup=true` delete/delete assertion. Covered items include: `trustExitCode`, custom cmd with braced env, gui preference, writeToTemp/keepTemporaries, no-base stage-file contract, difftool gui-default/trust/tool-help parity, mergetool gui-default/trust/tool-help parity, GUI fallback, nonexistent tool error, delete/delete, modify/delete, order-file invocation ordering (`diff.orderFile` and `-O` override), symlink conflicts (l/r resolution, coexistence with normal files), and submodule conflicts (l/r resolution, deleted-vs-modified, file-vs-submodule, subdirectory submodule, coexistence with normal files).
 - ✅ Dedicated difftool mode tests are implemented with parity-focused coverage:
   - ✅ Runtime/unit coverage in `crates/gitgpui-app/src/difftool_mode.rs` (identical files, changed files with exit normalization, display-path and explicit labels, missing-input error handling, directory diff).
   - ✅ Full git-invoked integration coverage in `crates/gitgpui-app/tests/difftool_git_integration.rs` (basic invocation, spaced and Unicode paths, subdirectory invocation, `--dir-diff`, `guiDefault`/`--gui`/`--no-gui` selection precedence, trust-exit-code matrix, `--tool-help` discoverability, and symlink target diff).
@@ -59,7 +63,7 @@
   - Default test runs against gitgpui's own repo; ignored test supports arbitrary external repos via `GITGPUI_MERGE_EXTRACTION_REPO` env var.
   - Includes fixture file generation (`write_fixtures`) compatible with the existing Phase 2 fixture harness format.
   - 8 tests (+ 2 ignored): discovery, trivial skip, nontrivial conflict, clean merge, binary skip, fixture writing, multifile merge, self-repo regression.
-- ✅ Phase 4A (critical `t7610-mergetool` E2E): comprehensively implemented across `gitgpui-git-gix` tests and `gitgpui-app` E2E:
+- 🔧 Phase 4A (critical `t7610-mergetool` E2E): mostly implemented across `gitgpui-git-gix` tests and `gitgpui-app` E2E:
   - ✅ trust-exit behavior and content-change semantics
   - ✅ custom command invocation and braced env variables
   - ✅ gui tool preference path via `merge.guitool` + `mergetool.guiDefault=true`
@@ -77,6 +81,8 @@
   - ✅ orderFile invocation order parity (`diff.orderFile` and CLI `-O...`) in `crates/gitgpui-app/tests/mergetool_git_integration.rs`
   - ✅ symlink conflict resolution: l/r prompt handling, coexistence with normal file conflicts
   - ✅ submodule conflict resolution: l/r prompt, deleted-vs-modified, file-vs-submodule, subdirectory submodule, coexistence with normal files
+  - ✅ `mergetool.keepTemporaries` stage-file retention semantics (`true` retains, default `false` cleans up) in backend launch path
+  - ⬜ dedicated `mergetool.keepBackup=true` delete/delete E2E assertion in the git-invoked mergetool suite
   - ✅ difftool symlink target diff: `git difftool` shows diff between symlink targets
   - ✅ full E2E via `git mergetool` command in `crates/gitgpui-app/tests/mergetool_git_integration.rs` (29 tests)
   - ✅ full E2E via `git difftool` command in `crates/gitgpui-app/tests/difftool_git_integration.rs` (14 tests)
@@ -114,19 +120,16 @@
 
 ### Latest Component Delivered (Iteration 10 — Current)
 
-- Expanded mergetool E2E integration tests from 8 to 17 in `crates/gitgpui-app/tests/mergetool_git_integration.rs`:
-  - Added 9 new tests covering remaining Phase 4A parity gaps:
-    1. `git_mergetool_tool_help_lists_gitgpui_tool` — `--tool-help` discoverability parity with difftool
-    2. `git_mergetool_gui_default_auto_prefers_gui_tool_when_display_set` — `guiDefault=auto` + DISPLAY selects GUI tool
-    3. `git_mergetool_gui_default_auto_prefers_cli_tool_without_display` — `guiDefault=auto` without DISPLAY selects CLI tool
-    4. `git_mergetool_gui_flag_overrides_selection` — `--gui` flag overrides `guiDefault=false`
-    5. `git_mergetool_no_gui_flag_overrides_gui_default_true` — `--no-gui` flag overrides `guiDefault=true`
-    6. `git_mergetool_gui_fallback_when_no_guitool_configured` — `--gui` with no `merge.guitool` falls back to `merge.tool`
-    7. `git_mergetool_nonexistent_tool_reports_error` — tool with invalid command reports failure
-    8. `git_mergetool_delete_delete_conflict_handling` — both-deleted conflict resolved correctly
-    9. `git_mergetool_modify_delete_conflict` — modify/delete conflict pipeline completes
-  - Added helper functions for marker-based tool selection detection: `mergetool_marker_cmd`, `configure_mergetool_command`, `configure_mergetool_trust_exit_code`, `configure_mergetool_selection`, and `run_git_capture_with_display`.
-  - Tests use marker-based detection pattern (echo TOOL=xxx to stderr) to verify which tool was selected by git's GUI precedence logic.
+- Implemented `mergetool.keepTemporaries` support in the backend external-tool launcher:
+  - Added config parsing in `crates/gitgpui-git-gix/src/repo/mergetool.rs` (`mergetool.keepTemporaries`, default `false`).
+  - Wired stage-file lifecycle so temporary stage files are retained when enabled and cleaned by default when disabled.
+  - Extended write-to-temp path handling so retained temp stage files persist after tool execution in `writeToTemp=true` mode.
+  - Added backend unit coverage for config resolution (`test_resolve_mergetool_config_reads_keep_temporaries`).
+  - Added integration coverage in `crates/gitgpui-git-gix/tests/status_integration.rs`:
+    - `launch_mergetool_write_to_temp_false_keep_temporaries_preserves_stage_files`
+    - `launch_mergetool_write_to_temp_true_keep_temporaries_preserves_stage_files`
+    - strengthened existing `writeToTemp` tests to assert default cleanup behavior.
+  - Verified with `cargo test -p gitgpui-git-gix` (all tests passing).
 
 ### Iteration 9 Component Delivered
 

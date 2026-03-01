@@ -1926,6 +1926,10 @@ fn launch_mergetool_write_to_temp_true_uses_temp_stage_paths() {
             !var.starts_with("./"),
             "writeToTemp=true should not use workdir-prefixed paths: {var}"
         );
+        assert!(
+            !var_path.exists(),
+            "writeToTemp=true with default keepTemporaries=false should cleanup stage files: {var}"
+        );
     }
 }
 
@@ -1964,6 +1968,107 @@ fn launch_mergetool_write_to_temp_false_uses_workdir_prefixed_stage_paths() {
             var.contains("_BASE_") || var.contains("_LOCAL_") || var.contains("_REMOTE_"),
             "unexpected stage-file naming: {var}"
         );
+        let fs_path = repo.join(var.trim_start_matches("./"));
+        assert!(
+            !fs_path.exists(),
+            "writeToTemp=false with default keepTemporaries=false should cleanup stage files: {var}"
+        );
+    }
+}
+
+#[test]
+fn launch_mergetool_write_to_temp_false_keep_temporaries_preserves_stage_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    setup_both_modified_text_conflict(repo, "docs/note.txt", "ours\n", "theirs\n");
+
+    run_git(repo, &["config", "merge.tool", "fake"]);
+    run_git(
+        repo,
+        &[
+            "config",
+            "mergetool.fake.cmd",
+            "printf '%s\\n%s\\n%s\\n' \"$BASE\" \"$LOCAL\" \"$REMOTE\" > \"$MERGED.env\"; cat \"$REMOTE\" > \"$MERGED\"",
+        ],
+    );
+    run_git(repo, &["config", "mergetool.fake.trustExitCode", "true"]);
+    run_git(repo, &["config", "mergetool.writeToTemp", "false"]);
+    run_git(repo, &["config", "mergetool.keepTemporaries", "true"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    let result = opened.launch_mergetool(Path::new("docs/note.txt")).unwrap();
+    assert!(result.success, "{result:?}");
+
+    let env_dump = fs::read_to_string(repo.join("docs/note.txt.env")).unwrap();
+    let vars: Vec<&str> = env_dump.lines().collect();
+    assert_eq!(vars.len(), 3, "expected BASE/LOCAL/REMOTE dump");
+    for var in vars {
+        assert!(
+            var.starts_with("./docs/note_"),
+            "writeToTemp=false should use './' prefixed workdir paths, got {var}"
+        );
+        let fs_path = repo.join(var.trim_start_matches("./"));
+        assert!(
+            fs_path.exists(),
+            "keepTemporaries=true should keep stage file in workdir mode: {var}"
+        );
+    }
+}
+
+#[test]
+fn launch_mergetool_write_to_temp_true_keep_temporaries_preserves_stage_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    setup_both_modified_text_conflict(repo, "a.txt", "ours\n", "theirs\n");
+
+    run_git(repo, &["config", "merge.tool", "fake"]);
+    run_git(
+        repo,
+        &[
+            "config",
+            "mergetool.fake.cmd",
+            "printf '%s\\n%s\\n%s\\n' \"$BASE\" \"$LOCAL\" \"$REMOTE\" > \"$MERGED.env\"; cat \"$REMOTE\" > \"$MERGED\"",
+        ],
+    );
+    run_git(repo, &["config", "mergetool.fake.trustExitCode", "true"]);
+    run_git(repo, &["config", "mergetool.writeToTemp", "true"]);
+    run_git(repo, &["config", "mergetool.keepTemporaries", "true"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    let result = opened.launch_mergetool(Path::new("a.txt")).unwrap();
+    assert!(result.success, "{result:?}");
+
+    let env_dump = fs::read_to_string(repo.join("a.txt.env")).unwrap();
+    let vars: Vec<&str> = env_dump.lines().collect();
+    assert_eq!(vars.len(), 3, "expected BASE/LOCAL/REMOTE dump");
+
+    let mut temp_dirs: Vec<PathBuf> = Vec::new();
+    for var in vars {
+        let var_path = Path::new(var);
+        assert!(
+            var_path.is_absolute(),
+            "writeToTemp=true should pass absolute temp paths, got {var}"
+        );
+        assert!(
+            var.contains("gitgpui-mergetool-"),
+            "expected temporary mergetool prefix in path, got {var}"
+        );
+        assert!(
+            var_path.exists(),
+            "keepTemporaries=true should keep stage file in temp mode: {var}"
+        );
+        if let Some(parent) = var_path.parent() {
+            if !temp_dirs.iter().any(|dir| dir == parent) {
+                temp_dirs.push(parent.to_path_buf());
+            }
+        }
+    }
+
+    // Keep test environment clean even though behavior keeps temp files.
+    for dir in temp_dirs {
+        let _ = fs::remove_dir_all(dir);
     }
 }
 

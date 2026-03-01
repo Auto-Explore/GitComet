@@ -1,7 +1,7 @@
 use super::GixRepo;
 use gitgpui_core::error::{Error, ErrorKind};
 use gitgpui_core::services::{
-    CommandOutput, MergetoolResult, Result, validate_conflict_resolution_text,
+    validate_conflict_resolution_text, CommandOutput, MergetoolResult, Result,
 };
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -23,8 +23,10 @@ impl GixRepo {
             tool_path,
             trust_exit_code,
             write_to_temp,
+            keep_temporaries,
         } = resolve_mergetool_config(workdir, env_has_display())?;
-        let stage_paths = materialize_mergetool_stage_files(workdir, path, write_to_temp)?;
+        let stage_paths =
+            materialize_mergetool_stage_files(workdir, path, write_to_temp, keep_temporaries)?;
 
         let base_path = &stage_paths.base;
         let local_path = &stage_paths.local;
@@ -180,6 +182,7 @@ struct MergetoolConfig {
     tool_path: Option<String>,
     trust_exit_code: bool,
     write_to_temp: bool,
+    keep_temporaries: bool,
 }
 
 fn env_has_display() -> bool {
@@ -252,6 +255,8 @@ fn resolve_mergetool_config(workdir: &Path, has_display: bool) -> Result<Mergeto
         git_config_get_bool(workdir, &format!("mergetool.{tool_name}.trustExitCode"))?
             .unwrap_or(false);
     let write_to_temp = git_config_get_bool(workdir, "mergetool.writeToTemp")?.unwrap_or(false);
+    let keep_temporaries =
+        git_config_get_bool(workdir, "mergetool.keepTemporaries")?.unwrap_or(false);
 
     Ok(MergetoolConfig {
         tool_name,
@@ -259,6 +264,7 @@ fn resolve_mergetool_config(workdir: &Path, has_display: bool) -> Result<Mergeto
         tool_path,
         trust_exit_code,
         write_to_temp,
+        keep_temporaries,
     })
 }
 
@@ -292,8 +298,9 @@ fn materialize_mergetool_stage_files(
     workdir: &Path,
     conflict_path: &Path,
     write_to_temp: bool,
+    keep_temporaries: bool,
 ) -> Result<StagePaths> {
-    let stage_paths = build_stage_paths(workdir, conflict_path, write_to_temp)?;
+    let stage_paths = build_stage_paths(workdir, conflict_path, write_to_temp, keep_temporaries)?;
     write_stage_bytes(
         workdir,
         &stage_paths.base,
@@ -322,6 +329,7 @@ fn build_stage_paths(
     workdir: &Path,
     conflict_path: &Path,
     write_to_temp: bool,
+    keep_temporaries: bool,
 ) -> Result<StagePaths> {
     let (mut merge_base, ext) = split_merged_path_and_extension(conflict_path);
     let pid = std::process::id();
@@ -331,6 +339,11 @@ fn build_stage_paths(
             .prefix("gitgpui-mergetool-")
             .tempdir()
             .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+        let (tmp_dir_path, temp_dir_guard) = if keep_temporaries {
+            (tmp_dir.keep(), None)
+        } else {
+            (tmp_dir.path().to_path_buf(), Some(tmp_dir))
+        };
         merge_base = PathBuf::from(
             merge_base
                 .file_name()
@@ -340,22 +353,16 @@ fn build_stage_paths(
         );
 
         let merge_base_name = merge_base.to_string_lossy();
-        let base = tmp_dir
-            .path()
-            .join(format!("{merge_base_name}_BASE_{pid}{ext}"));
-        let local = tmp_dir
-            .path()
-            .join(format!("{merge_base_name}_LOCAL_{pid}{ext}"));
-        let remote = tmp_dir
-            .path()
-            .join(format!("{merge_base_name}_REMOTE_{pid}{ext}"));
+        let base = tmp_dir_path.join(format!("{merge_base_name}_BASE_{pid}{ext}"));
+        let local = tmp_dir_path.join(format!("{merge_base_name}_LOCAL_{pid}{ext}"));
+        let remote = tmp_dir_path.join(format!("{merge_base_name}_REMOTE_{pid}{ext}"));
 
         return Ok(StagePaths {
             workdir: workdir.to_path_buf(),
             base,
             local,
             remote,
-            _temp_dir: Some(tmp_dir),
+            _temp_dir: temp_dir_guard,
             cleanup_files: false,
         });
     }
@@ -377,7 +384,7 @@ fn build_stage_paths(
         local,
         remote,
         _temp_dir: None,
-        cleanup_files: true,
+        cleanup_files: !keep_temporaries,
     })
 }
 
@@ -601,7 +608,7 @@ mod tests {
     #[test]
     fn test_build_stage_paths_write_to_temp_false_uses_workdir_prefix() {
         let tmp = tempfile::tempdir().unwrap();
-        let paths = build_stage_paths(tmp.path(), Path::new("dir/a.txt"), false).unwrap();
+        let paths = build_stage_paths(tmp.path(), Path::new("dir/a.txt"), false, false).unwrap();
 
         assert!(paths._temp_dir.is_none());
         assert!(paths.cleanup_files);
@@ -638,7 +645,7 @@ mod tests {
     #[test]
     fn test_build_stage_paths_write_to_temp_true_uses_tempdir() {
         let tmp = tempfile::tempdir().unwrap();
-        let paths = build_stage_paths(tmp.path(), Path::new("nested/a.txt"), true).unwrap();
+        let paths = build_stage_paths(tmp.path(), Path::new("nested/a.txt"), true, false).unwrap();
 
         assert!(paths._temp_dir.is_some());
         assert!(!paths.cleanup_files);
@@ -904,6 +911,7 @@ mod tests {
         assert_eq!(cfg.tool_path.as_deref(), Some("/opt/fake-gui-tool"));
         assert!(cfg.trust_exit_code);
         assert!(!cfg.write_to_temp);
+        assert!(!cfg.keep_temporaries);
     }
 
     #[test]
@@ -946,6 +954,7 @@ mod tests {
         assert_eq!(cfg.tool_name, "cli");
         assert_eq!(cfg.tool_cmd.as_deref(), Some("exit 0"));
         assert!(!cfg.write_to_temp);
+        assert!(!cfg.keep_temporaries);
     }
 
     #[test]
@@ -980,5 +989,41 @@ mod tests {
 
         let cfg = resolve_mergetool_config(workdir, false).unwrap();
         assert!(cfg.write_to_temp);
+        assert!(!cfg.keep_temporaries);
+    }
+
+    #[test]
+    fn test_resolve_mergetool_config_reads_keep_temporaries() {
+        let tmp = tempfile::tempdir().unwrap();
+        let workdir = tmp.path();
+        Command::new("git")
+            .arg("-C")
+            .arg(workdir)
+            .arg("init")
+            .output()
+            .unwrap();
+
+        Command::new("git")
+            .arg("-C")
+            .arg(workdir)
+            .args(["config", "merge.tool", "cli"])
+            .output()
+            .unwrap();
+        Command::new("git")
+            .arg("-C")
+            .arg(workdir)
+            .args(["config", "mergetool.cli.cmd", "exit 0"])
+            .output()
+            .unwrap();
+        Command::new("git")
+            .arg("-C")
+            .arg(workdir)
+            .args(["config", "mergetool.keepTemporaries", "true"])
+            .output()
+            .unwrap();
+
+        let cfg = resolve_mergetool_config(workdir, false).unwrap();
+        assert!(!cfg.write_to_temp);
+        assert!(cfg.keep_temporaries);
     }
 }
