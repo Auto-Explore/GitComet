@@ -1599,6 +1599,45 @@ fn git_mergetool_nonexistent_tool_reports_error() {
     );
 }
 
+#[test]
+fn git_mergetool_absent_tool_reports_cmd_not_set_error() {
+    // Portability parity with git t7610: explicit --tool=<name> without a
+    // configured mergetool.<name>.cmd should fail with actionable text.
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+
+    init_repo(repo);
+    write_file(repo, "file.txt", "base\n");
+    commit_all(repo, "base");
+
+    run_git(repo, &["checkout", "-b", "feature"]);
+    write_file(repo, "file.txt", "remote\n");
+    commit_all(repo, "feature change");
+
+    run_git(repo, &["checkout", "main"]);
+    write_file(repo, "file.txt", "local\n");
+    commit_all(repo, "main change");
+
+    let merge_output = run_git_capture(repo, &["merge", "feature"]);
+    assert!(
+        !merge_output.status.success(),
+        "expected merge conflict before mergetool"
+    );
+
+    run_git(repo, &["config", "mergetool.prompt", "false"]);
+    let output = run_git_capture(repo, &["mergetool", "--no-prompt", "--tool", "absent"]);
+    let text = output_text(&output);
+
+    assert!(
+        !output.status.success(),
+        "expected git mergetool --tool absent to fail\n{text}"
+    );
+    assert!(
+        text.contains("cmd not set for tool 'absent'"),
+        "expected missing-tool command error text\n{text}"
+    );
+}
+
 // ── Delete/delete conflict behavior ──────────────────────────────────
 
 #[test]

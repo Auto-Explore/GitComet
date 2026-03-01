@@ -802,3 +802,30 @@ fn git_difftool_tool_help_lists_gitgpui_tool() {
         "expected gitgpui tool name in --tool-help output\n{text}"
     );
 }
+
+#[test]
+fn git_difftool_absent_tool_reports_cmd_not_set_error() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+
+    init_repo(repo);
+    write_file(repo, "a.txt", "before\n");
+    commit_all(repo, "base");
+
+    write_file(repo, "a.txt", "after\n");
+    run_git(repo, &["config", "difftool.prompt", "false"]);
+
+    let output = run_git_capture(
+        repo,
+        &["difftool", "--no-prompt", "--tool", "absent", "--", "a.txt"],
+    );
+    let text = output_text(&output);
+    assert!(
+        !output.status.success(),
+        "expected git difftool --tool absent to fail\n{text}"
+    );
+    assert!(
+        text.contains("cmd not set for tool 'absent'"),
+        "expected missing-tool command error text\n{text}"
+    );
+}
