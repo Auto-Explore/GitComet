@@ -14,8 +14,11 @@ Scope: `gitgpui` merge/diff/conflict resolver flows
 - ✅ `view/panes/main.rs` — provenance recompute wired into debounced outline lifecycle; two-way source lines extracted from `diff_rows` via `collect_two_way_source_lines`; three-way uses existing `three_way_{base,ours,theirs}_lines`; invalidation path clears `resolved_line_meta` and `resolved_output_line_sources_index`.
 
 ### Phase 2: Input Picking UX
-- ⬜ `view/rows/conflict_resolver.rs` — hover chunk outline, row hover plus icon, right-click menu, immediate pick actions
-- ⬜ `view/panes/main.rs` — remove append/clear selection controls, remove old selection state
+- ✅ `view/rows/conflict_resolver.rs` — green chunk hover/active affordance for three-way chunks; two-way split and inline rows now use immediate line pick (click appends line to output) instead of selection toggle; green hover/active style applied consistently; plus icon shown on row hover when line is pickable and not already in resolved output (dedupe gated via `is_source_line_in_output`); `split_cell_bg` and `inline_row_bg` simplified (removed `selected` parameter).
+- ✅ `view/panes/main.rs` — added 3 immediate-pick methods: `conflict_resolver_append_split_line_to_output`, `conflict_resolver_append_inline_line_to_output`, `conflict_resolver_append_three_way_line_to_output`; removed selection state fields (`split_selected`, `inline_selected`), toggle methods, `conflict_resolver_selection_is_empty`, `conflict_resolver_clear_selection`, `conflict_resolver_append_selection_to_output`; removed selection retention in visible map rebuild; removed selection clear from mode/view switching.
+- ✅ `view/panels/main.rs` + `view/panels/popover.rs` — removed "Append selection" and "Clear selection" buttons and their closures from both main panel and popover layouts.
+- ✅ `view/conflict_resolver.rs` — removed unused `collect_split_selection` and `collect_inline_selection` helpers.
+- 🔧 Remaining: right-click row context menu for "Select line (N)" / "Select chunk (Ln X-Y)" actions; three-way row plus icon (method exists but not yet wired to UI).
 
 ### Phase 3: Resolved Output Context Menu + Bar Cleanup
 - ⬜ `view/panels/main.rs` — remove duplicate nav controls from resolved output bar

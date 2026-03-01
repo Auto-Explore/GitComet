@@ -1176,44 +1176,6 @@ pub fn two_way_conflict_index_for_visible_row(
     row_conflict_map.get(row_ix).copied().flatten()
 }
 
-pub fn collect_split_selection(
-    rows: &[gitgpui_core::file_diff::FileDiffRow],
-    selected: &std::collections::BTreeSet<(usize, ConflictPickSide)>,
-) -> Vec<String> {
-    let mut out: Vec<String> = Vec::with_capacity(selected.len());
-    for &(row_ix, side) in selected {
-        let Some(row) = rows.get(row_ix) else {
-            continue;
-        };
-        match side {
-            ConflictPickSide::Ours => {
-                if let Some(t) = row.old.as_deref() {
-                    out.push(t.to_string());
-                }
-            }
-            ConflictPickSide::Theirs => {
-                if let Some(t) = row.new.as_deref() {
-                    out.push(t.to_string());
-                }
-            }
-        }
-    }
-    out
-}
-
-pub fn collect_inline_selection(
-    rows: &[ConflictInlineRow],
-    selected: &std::collections::BTreeSet<usize>,
-) -> Vec<String> {
-    let mut out: Vec<String> = Vec::with_capacity(selected.len());
-    for &ix in selected {
-        if let Some(row) = rows.get(ix) {
-            out.push(row.content.clone());
-        }
-    }
-    out
-}
-
 /// Represents a visible row in the three-way view when hide-resolved is active.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ThreeWayVisibleItem {

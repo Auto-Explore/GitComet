@@ -880,22 +880,6 @@ impl MainPaneView {
                                     this.conflict_resolver_set_mode(ConflictDiffMode::Inline, cx);
                                 };
 
-                            let clear_selection =
-                                |this: &mut Self,
-                                 _e: &ClickEvent,
-                                 _w: &mut Window,
-                                 cx: &mut gpui::Context<Self>| {
-                                    this.conflict_resolver_clear_selection(cx)
-                                };
-
-                            let append_selection =
-                                |this: &mut Self,
-                                 _e: &ClickEvent,
-                                 _w: &mut Window,
-                                 cx: &mut gpui::Context<Self>| {
-                                    this.conflict_resolver_append_selection_to_output(cx);
-                                };
-
                             let set_view_three_way =
                                 |this: &mut Self,
                                  _e: &ClickEvent,
@@ -1094,9 +1078,6 @@ impl MainPaneView {
                                 },
                             };
 
-                            let selection_empty = view_mode == ConflictResolverViewMode::ThreeWay
-                                || self.conflict_resolver_selection_is_empty();
-
                             let mode_controls = div()
                                 .id("conflict_mode_toggle")
                                 .flex()
@@ -1124,30 +1105,6 @@ impl MainPaneView {
                                         .selected(mode == ConflictDiffMode::Inline)
                                         .selected_bg(view_toggle_selected_bg)
                                         .on_click(theme, cx, toggle_mode_inline),
-                                );
-
-                            let selection_controls = div()
-                                .flex()
-                                .items_center()
-                                .gap_1()
-                                .child(
-                                    zed::Button::new(
-                                        "conflict_append_selected",
-                                        "Append selection",
-                                    )
-                                    .style(zed::ButtonStyle::Outlined)
-                                    .disabled(selection_empty)
-                                    .on_click(
-                                        theme,
-                                        cx,
-                                        append_selection,
-                                    ),
-                                )
-                                .child(
-                                    zed::Button::new("conflict_clear_selected", "Clear selection")
-                                        .style(zed::ButtonStyle::Transparent)
-                                        .disabled(selection_empty)
-                                        .on_click(theme, cx, clear_selection),
                                 );
 
                             let conflict_count = self.conflict_resolver_conflict_count();
@@ -1512,7 +1469,7 @@ impl MainPaneView {
                                         .child(view_mode_controls)
                                         .when(
                                             view_mode == ConflictResolverViewMode::TwoWayDiff,
-                                            |d| d.child(mode_controls).child(selection_controls),
+                                            |d| d.child(mode_controls),
                                         ),
                                 );
 

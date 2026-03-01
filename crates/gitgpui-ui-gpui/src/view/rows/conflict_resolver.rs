@@ -234,6 +234,8 @@ impl MainPaneView {
                         .items_center()
                         .gap_2()
                         .text_xs()
+                        .border_1()
+                        .border_color(with_alpha(theme.colors.success, 0.0))
                         .text_color(if base_line.is_some() {
                             theme.colors.text
                         } else {
@@ -259,7 +261,26 @@ impl MainPaneView {
                     if let Some(ri) = range_ix.filter(|_| base_line.is_some()) {
                         base = base
                             .cursor(CursorStyle::PointingHand)
-                            .hover(move |s| s.bg(with_alpha(theme.colors.hover, 0.5)))
+                            .hover(move |s| {
+                                s.bg(with_alpha(
+                                    theme.colors.success,
+                                    if theme.is_dark { 0.14 } else { 0.10 },
+                                ))
+                                .border_color(with_alpha(
+                                    theme.colors.success,
+                                    if theme.is_dark { 0.78 } else { 0.64 },
+                                ))
+                            })
+                            .active(move |s| {
+                                s.bg(with_alpha(
+                                    theme.colors.success,
+                                    if theme.is_dark { 0.20 } else { 0.16 },
+                                ))
+                                .border_color(with_alpha(
+                                    theme.colors.success,
+                                    if theme.is_dark { 0.94 } else { 0.82 },
+                                ))
+                            })
                             .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
                                 this.conflict_resolver_pick_at(
                                     ri,
@@ -279,6 +300,8 @@ impl MainPaneView {
                         .items_center()
                         .gap_2()
                         .text_xs()
+                        .border_1()
+                        .border_color(with_alpha(theme.colors.success, 0.0))
                         .text_color(if ours_line.is_some() {
                             theme.colors.text
                         } else {
@@ -304,7 +327,26 @@ impl MainPaneView {
                     if let Some(ri) = range_ix {
                         ours = ours
                             .cursor(CursorStyle::PointingHand)
-                            .hover(move |s| s.bg(with_alpha(theme.colors.hover, 0.5)))
+                            .hover(move |s| {
+                                s.bg(with_alpha(
+                                    theme.colors.success,
+                                    if theme.is_dark { 0.14 } else { 0.10 },
+                                ))
+                                .border_color(with_alpha(
+                                    theme.colors.success,
+                                    if theme.is_dark { 0.78 } else { 0.64 },
+                                ))
+                            })
+                            .active(move |s| {
+                                s.bg(with_alpha(
+                                    theme.colors.success,
+                                    if theme.is_dark { 0.20 } else { 0.16 },
+                                ))
+                                .border_color(with_alpha(
+                                    theme.colors.success,
+                                    if theme.is_dark { 0.94 } else { 0.82 },
+                                ))
+                            })
                             .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
                                 this.conflict_resolver_pick_at(
                                     ri,
@@ -325,6 +367,8 @@ impl MainPaneView {
                         .items_center()
                         .gap_2()
                         .text_xs()
+                        .border_1()
+                        .border_color(with_alpha(theme.colors.success, 0.0))
                         .text_color(if theirs_line.is_some() {
                             theme.colors.text
                         } else {
@@ -350,7 +394,26 @@ impl MainPaneView {
                     if let Some(ri) = range_ix {
                         theirs = theirs
                             .cursor(CursorStyle::PointingHand)
-                            .hover(move |s| s.bg(with_alpha(theme.colors.hover, 0.5)))
+                            .hover(move |s| {
+                                s.bg(with_alpha(
+                                    theme.colors.success,
+                                    if theme.is_dark { 0.14 } else { 0.10 },
+                                ))
+                                .border_color(with_alpha(
+                                    theme.colors.success,
+                                    if theme.is_dark { 0.78 } else { 0.64 },
+                                ))
+                            })
+                            .active(move |s| {
+                                s.bg(with_alpha(
+                                    theme.colors.success,
+                                    if theme.is_dark { 0.20 } else { 0.16 },
+                                ))
+                                .border_color(with_alpha(
+                                    theme.colors.success,
+                                    if theme.is_dark { 0.94 } else { 0.82 },
+                                ))
+                            })
                             .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
                                 this.conflict_resolver_pick_at(
                                     ri,
@@ -561,8 +624,8 @@ impl MainPaneView {
             })
             .flatten();
 
-        let left_bg = split_cell_bg(theme, row.kind, ConflictPickSide::Ours, false);
-        let right_bg = split_cell_bg(theme, row.kind, ConflictPickSide::Theirs, false);
+        let left_bg = split_cell_bg(theme, row.kind, ConflictPickSide::Ours);
+        let right_bg = split_cell_bg(theme, row.kind, ConflictPickSide::Theirs);
 
         let [left_col_w, right_col_w] = self.conflict_diff_split_col_widths;
 
@@ -694,7 +757,7 @@ impl MainPaneView {
             .then(|| self.conflict_diff_segments_cache_inline.get(&ix))
             .flatten();
 
-        let bg = inline_row_bg(theme, row.kind, row.side, false);
+        let bg = inline_row_bg(theme, row.kind, row.side);
         let prefix = match row.kind {
             gitgpui_core::domain::DiffLineKind::Add => "+",
             gitgpui_core::domain::DiffLineKind::Remove => "-",
@@ -742,7 +805,7 @@ impl MainPaneView {
 
     fn render_conflict_resolver_split_row(
         &mut self,
-        visible_row_ix: usize,
+        _visible_row_ix: usize,
         row_ix: usize,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
@@ -831,29 +894,34 @@ impl MainPaneView {
             })
             .flatten();
 
-        let left_selected = self
-            .conflict_resolver
-            .split_selected
-            .contains(&(row_ix, ConflictPickSide::Ours));
-        let right_selected = self
-            .conflict_resolver
-            .split_selected
-            .contains(&(row_ix, ConflictPickSide::Theirs));
+        let left_bg = split_cell_bg(theme, row.kind, ConflictPickSide::Ours);
+        let right_bg = split_cell_bg(theme, row.kind, ConflictPickSide::Theirs);
 
-        let left_bg = split_cell_bg(theme, row.kind, ConflictPickSide::Ours, left_selected);
-        let right_bg = split_cell_bg(theme, row.kind, ConflictPickSide::Theirs, right_selected);
+        // Check dedupe: whether each side's line is already in the resolved output.
+        let left_in_output = row.old.as_ref().map_or(false, |text| {
+            conflict_resolver::is_source_line_in_output(
+                &self.conflict_resolver.resolved_output_line_sources_index,
+                ConflictResolverViewMode::TwoWayDiff,
+                conflict_resolver::ResolvedLineSource::A,
+                row.old_line.unwrap_or(0),
+                text,
+            )
+        });
+        let right_in_output = row.new.as_ref().map_or(false, |text| {
+            conflict_resolver::is_source_line_in_output(
+                &self.conflict_resolver.resolved_output_line_sources_index,
+                ConflictResolverViewMode::TwoWayDiff,
+                conflict_resolver::ResolvedLineSource::B,
+                row.new_line.unwrap_or(0),
+                text,
+            )
+        });
 
         let left_click = cx.listener(move |this, _e: &ClickEvent, _w, cx| {
-            this.conflict_resolver_toggle_split_selected(
-                visible_row_ix,
-                row_ix,
-                ConflictPickSide::Ours,
-                cx,
-            );
+            this.conflict_resolver_append_split_line_to_output(row_ix, ConflictPickSide::Ours, cx);
         });
         let right_click = cx.listener(move |this, _e: &ClickEvent, _w, cx| {
-            this.conflict_resolver_toggle_split_selected(
-                visible_row_ix,
+            this.conflict_resolver_append_split_line_to_output(
                 row_ix,
                 ConflictPickSide::Theirs,
                 cx,
@@ -861,6 +929,10 @@ impl MainPaneView {
         });
 
         let [left_col_w, right_col_w] = self.conflict_diff_split_col_widths;
+
+        // Plus icon: shown on hover when line is pickable and not already in output.
+        let left_plus = row.old.is_some() && !left_in_output;
+        let right_plus = row.new.is_some() && !right_in_output;
 
         let mut left = div()
             .id(("conflict_diff_split_ours", row_ix))
@@ -876,6 +948,24 @@ impl MainPaneView {
             .text_color(theme.colors.text)
             .whitespace_nowrap()
             .child(
+                // Plus icon gutter (visible on group hover when pickable).
+                div()
+                    .w(px(16.0))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .when(left_plus, |d| {
+                        d.child(
+                            div()
+                                .text_color(theme.colors.success)
+                                .text_xs()
+                                .invisible()
+                                .group_hover("split_left_row", |s| s.visible())
+                                .child("+"),
+                        )
+                    }),
+            )
+            .child(
                 div()
                     .w(px(38.0))
                     .text_color(theme.colors.text_muted)
@@ -888,9 +978,20 @@ impl MainPaneView {
             ));
         if row.old.is_some() {
             left = left
+                .group("split_left_row")
                 .cursor(CursorStyle::PointingHand)
-                .hover(move |s| s.bg(with_alpha(theme.colors.hover, 0.7)))
-                .active(move |s| s.bg(with_alpha(theme.colors.active, 0.7)))
+                .hover(move |s| {
+                    s.bg(with_alpha(
+                        theme.colors.success,
+                        if theme.is_dark { 0.14 } else { 0.10 },
+                    ))
+                })
+                .active(move |s| {
+                    s.bg(with_alpha(
+                        theme.colors.success,
+                        if theme.is_dark { 0.20 } else { 0.16 },
+                    ))
+                })
                 .on_click(left_click);
         } else {
             left = left.text_color(theme.colors.text_muted);
@@ -911,6 +1012,24 @@ impl MainPaneView {
             .text_color(theme.colors.text)
             .whitespace_nowrap()
             .child(
+                // Plus icon gutter (visible on group hover when pickable).
+                div()
+                    .w(px(16.0))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .when(right_plus, |d| {
+                        d.child(
+                            div()
+                                .text_color(theme.colors.success)
+                                .text_xs()
+                                .invisible()
+                                .group_hover("split_right_row", |s| s.visible())
+                                .child("+"),
+                        )
+                    }),
+            )
+            .child(
                 div()
                     .w(px(38.0))
                     .text_color(theme.colors.text_muted)
@@ -923,9 +1042,20 @@ impl MainPaneView {
             ));
         if row.new.is_some() {
             right = right
+                .group("split_right_row")
                 .cursor(CursorStyle::PointingHand)
-                .hover(move |s| s.bg(with_alpha(theme.colors.hover, 0.7)))
-                .active(move |s| s.bg(with_alpha(theme.colors.active, 0.7)))
+                .hover(move |s| {
+                    s.bg(with_alpha(
+                        theme.colors.success,
+                        if theme.is_dark { 0.14 } else { 0.10 },
+                    ))
+                })
+                .active(move |s| {
+                    s.bg(with_alpha(
+                        theme.colors.success,
+                        if theme.is_dark { 0.20 } else { 0.16 },
+                    ))
+                })
                 .on_click(right_click);
         } else {
             right = right.text_color(theme.colors.text_muted);
@@ -952,7 +1082,7 @@ impl MainPaneView {
 
     fn render_conflict_resolver_inline_row(
         &mut self,
-        visible_ix: usize,
+        _visible_ix: usize,
         ix: usize,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
@@ -1001,8 +1131,7 @@ impl MainPaneView {
             .then(|| self.conflict_diff_segments_cache_inline.get(&ix))
             .flatten();
 
-        let selected = self.conflict_resolver.inline_selected.contains(&ix);
-        let bg = inline_row_bg(theme, row.kind, row.side, selected);
+        let bg = inline_row_bg(theme, row.kind, row.side);
         let prefix = match row.kind {
             gitgpui_core::domain::DiffLineKind::Add => "+",
             gitgpui_core::domain::DiffLineKind::Remove => "-",
@@ -1010,6 +1139,22 @@ impl MainPaneView {
             gitgpui_core::domain::DiffLineKind::Header => " ",
             gitgpui_core::domain::DiffLineKind::Hunk => " ",
         };
+
+        // Dedupe check for plus icon visibility.
+        let inline_source = match row.side {
+            ConflictPickSide::Ours => conflict_resolver::ResolvedLineSource::A,
+            ConflictPickSide::Theirs => conflict_resolver::ResolvedLineSource::B,
+        };
+        let line_no = row.new_line.or(row.old_line).unwrap_or(0);
+        let in_output = !row.content.is_empty()
+            && conflict_resolver::is_source_line_in_output(
+                &self.conflict_resolver.resolved_output_line_sources_index,
+                ConflictResolverViewMode::TwoWayDiff,
+                inline_source,
+                line_no,
+                &row.content,
+            );
+        let show_plus = !row.content.is_empty() && !in_output;
 
         let mut base = div()
             .id(("conflict_diff_inline", ix))
@@ -1022,6 +1167,24 @@ impl MainPaneView {
             .bg(bg)
             .text_color(theme.colors.text)
             .whitespace_nowrap()
+            .child(
+                // Plus icon gutter (visible on group hover when pickable).
+                div()
+                    .w(px(16.0))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .when(show_plus, |d| {
+                        d.child(
+                            div()
+                                .text_color(theme.colors.success)
+                                .text_xs()
+                                .invisible()
+                                .group_hover("inline_row", |s| s.visible())
+                                .child("+"),
+                        )
+                    }),
+            )
             .child(
                 div()
                     .w(px(38.0))
@@ -1048,11 +1211,22 @@ impl MainPaneView {
 
         if !row.content.is_empty() {
             base = base
+                .group("inline_row")
                 .cursor(CursorStyle::PointingHand)
-                .hover(move |s| s.bg(with_alpha(theme.colors.hover, 0.7)))
-                .active(move |s| s.bg(with_alpha(theme.colors.active, 0.7)))
+                .hover(move |s| {
+                    s.bg(with_alpha(
+                        theme.colors.success,
+                        if theme.is_dark { 0.14 } else { 0.10 },
+                    ))
+                })
+                .active(move |s| {
+                    s.bg(with_alpha(
+                        theme.colors.success,
+                        if theme.is_dark { 0.20 } else { 0.16 },
+                    ))
+                })
                 .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
-                    this.conflict_resolver_toggle_inline_selected(visible_ix, ix, cx);
+                    this.conflict_resolver_append_inline_line_to_output(ix, cx);
                 }));
         }
 
@@ -1121,9 +1295,8 @@ fn split_cell_bg(
     theme: AppTheme,
     kind: gitgpui_core::file_diff::FileDiffRowKind,
     side: ConflictPickSide,
-    selected: bool,
 ) -> gpui::Rgba {
-    let base = match (kind, side) {
+    match (kind, side) {
         (gitgpui_core::file_diff::FileDiffRowKind::Add, ConflictPickSide::Theirs)
         | (gitgpui_core::file_diff::FileDiffRowKind::Modify, ConflictPickSide::Theirs) => {
             with_alpha(
@@ -1136,11 +1309,6 @@ fn split_cell_bg(
             with_alpha(theme.colors.danger, if theme.is_dark { 0.10 } else { 0.08 })
         }
         _ => with_alpha(theme.colors.surface_bg_elevated, 0.0),
-    };
-    if selected {
-        with_alpha(theme.colors.accent, if theme.is_dark { 0.14 } else { 0.10 })
-    } else {
-        base
     }
 }
 
@@ -1148,9 +1316,8 @@ fn inline_row_bg(
     theme: AppTheme,
     kind: gitgpui_core::domain::DiffLineKind,
     side: ConflictPickSide,
-    selected: bool,
 ) -> gpui::Rgba {
-    let base = match (kind, side) {
+    match (kind, side) {
         (gitgpui_core::domain::DiffLineKind::Add, _) => with_alpha(
             theme.colors.success,
             if theme.is_dark { 0.10 } else { 0.08 },
@@ -1159,10 +1326,5 @@ fn inline_row_bg(
             with_alpha(theme.colors.danger, if theme.is_dark { 0.10 } else { 0.08 })
         }
         _ => with_alpha(theme.colors.surface_bg_elevated, 0.0),
-    };
-    if selected {
-        with_alpha(theme.colors.accent, if theme.is_dark { 0.14 } else { 0.10 })
-    } else {
-        base
     }
 }

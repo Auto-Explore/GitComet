@@ -1993,8 +1993,6 @@ impl MainPaneView {
             diff_word_highlights_split,
             diff_mode,
             nav_anchor,
-            split_selected: std::collections::BTreeSet::new(),
-            inline_selected: std::collections::BTreeSet::new(),
             hide_resolved,
             three_way_visible_map,
             diff_visible_row_indices,
@@ -2199,8 +2197,6 @@ impl MainPaneView {
         }
         self.conflict_resolver.diff_mode = mode;
         self.conflict_resolver.nav_anchor = None;
-        self.conflict_resolver.split_selected.clear();
-        self.conflict_resolver.inline_selected.clear();
         if self.diff_search_active && !self.diff_search_query.as_ref().trim().is_empty() {
             self.diff_search_recompute_matches();
         }
@@ -2217,8 +2213,6 @@ impl MainPaneView {
         }
         self.conflict_resolver.view_mode = view_mode;
         self.conflict_resolver.nav_anchor = None;
-        self.conflict_resolver.split_selected.clear();
-        self.conflict_resolver.inline_selected.clear();
         if self.diff_search_active && !self.diff_search_query.as_ref().trim().is_empty() {
             self.diff_search_recompute_matches();
         }
@@ -2282,96 +2276,89 @@ impl MainPaneView {
                 self.conflict_resolver.hide_resolved,
             );
 
-        let visible_split_rows: std::collections::BTreeSet<usize> = self
-            .conflict_resolver
-            .diff_visible_row_indices
-            .iter()
-            .copied()
-            .collect();
-        self.conflict_resolver
-            .split_selected
-            .retain(|(row_ix, _)| visible_split_rows.contains(row_ix));
-        let visible_inline_rows: std::collections::BTreeSet<usize> = self
-            .conflict_resolver
-            .inline_visible_row_indices
-            .iter()
-            .copied()
-            .collect();
-        self.conflict_resolver
-            .inline_selected
-            .retain(|row_ix| visible_inline_rows.contains(row_ix));
     }
 
-    pub(in super::super) fn conflict_resolver_selection_is_empty(&self) -> bool {
-        match self.conflict_resolver.diff_mode {
-            ConflictDiffMode::Split => self.conflict_resolver.split_selected.is_empty(),
-            ConflictDiffMode::Inline => self.conflict_resolver.inline_selected.is_empty(),
-        }
-    }
-
-    pub(in super::super) fn conflict_resolver_clear_selection(
+    /// Immediately append a single line from the two-way split view to resolved output.
+    pub(in super::super) fn conflict_resolver_append_split_line_to_output(
         &mut self,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        self.conflict_resolver.split_selected.clear();
-        self.conflict_resolver.inline_selected.clear();
-        cx.notify();
-    }
-
-    pub(in super::super) fn conflict_resolver_toggle_split_selected(
-        &mut self,
-        visible_row_ix: usize,
         row_ix: usize,
         side: ConflictPickSide,
         cx: &mut gpui::Context<Self>,
     ) {
-        self.conflict_resolver.nav_anchor = Some(visible_row_ix);
-        let key = (row_ix, side);
-        if self.conflict_resolver.split_selected.contains(&key) {
-            self.conflict_resolver.split_selected.remove(&key);
-        } else {
-            self.conflict_resolver.split_selected.insert(key);
-        }
-        cx.notify();
-    }
-
-    pub(in super::super) fn conflict_resolver_toggle_inline_selected(
-        &mut self,
-        visible_ix: usize,
-        ix: usize,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        self.conflict_resolver.nav_anchor = Some(visible_ix);
-        if self.conflict_resolver.inline_selected.contains(&ix) {
-            self.conflict_resolver.inline_selected.remove(&ix);
-        } else {
-            self.conflict_resolver.inline_selected.insert(ix);
-        }
-        cx.notify();
-    }
-
-    pub(in super::super) fn conflict_resolver_append_selection_to_output(
-        &mut self,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        let lines = match self.conflict_resolver.diff_mode {
-            ConflictDiffMode::Split => conflict_resolver::collect_split_selection(
-                &self.conflict_resolver.diff_rows,
-                &self.conflict_resolver.split_selected,
-            ),
-            ConflictDiffMode::Inline => conflict_resolver::collect_inline_selection(
-                &self.conflict_resolver.inline_rows,
-                &self.conflict_resolver.inline_selected,
-            ),
-        };
-        if lines.is_empty() {
+        let Some(row) = self.conflict_resolver.diff_rows.get(row_ix) else {
             return;
-        }
-
+        };
+        let text = match side {
+            ConflictPickSide::Ours => row.old.as_deref(),
+            ConflictPickSide::Theirs => row.new.as_deref(),
+        };
+        let Some(line) = text else {
+            return;
+        };
         let current = self
             .conflict_resolver_input
             .read_with(cx, |i, _| i.text().to_string());
-        let next = conflict_resolver::append_lines_to_output(&current, &lines);
+        let next = conflict_resolver::append_lines_to_output(&current, &[line.to_string()]);
+        let theme = self.theme;
+        self.conflict_resolver_input.update(cx, |input, cx| {
+            input.set_theme(theme, cx);
+            input.set_text(next, cx);
+        });
+    }
+
+    /// Immediately append a single line from the two-way inline view to resolved output.
+    pub(in super::super) fn conflict_resolver_append_inline_line_to_output(
+        &mut self,
+        ix: usize,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let Some(row) = self.conflict_resolver.inline_rows.get(ix) else {
+            return;
+        };
+        if row.content.is_empty() {
+            return;
+        }
+        let current = self
+            .conflict_resolver_input
+            .read_with(cx, |i, _| i.text().to_string());
+        let next = conflict_resolver::append_lines_to_output(&current, &[row.content.clone()]);
+        let theme = self.theme;
+        self.conflict_resolver_input.update(cx, |input, cx| {
+            input.set_theme(theme, cx);
+            input.set_text(next, cx);
+        });
+    }
+
+    /// Immediately append a single line from the three-way view to resolved output.
+    pub(in super::super) fn conflict_resolver_append_three_way_line_to_output(
+        &mut self,
+        line_ix: usize,
+        choice: conflict_resolver::ConflictChoice,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let line = match choice {
+            conflict_resolver::ConflictChoice::Base => {
+                self.conflict_resolver.three_way_base_lines.get(line_ix)
+            }
+            conflict_resolver::ConflictChoice::Ours => {
+                self.conflict_resolver.three_way_ours_lines.get(line_ix)
+            }
+            conflict_resolver::ConflictChoice::Theirs => {
+                self.conflict_resolver.three_way_theirs_lines.get(line_ix)
+            }
+            conflict_resolver::ConflictChoice::Both => {
+                // Both is chunk-level only, not line-level.
+                return;
+            }
+        };
+        let Some(content) = line.filter(|l| !l.is_empty()) else {
+            return;
+        };
+        let current = self
+            .conflict_resolver_input
+            .read_with(cx, |i, _| i.text().to_string());
+        let next =
+            conflict_resolver::append_lines_to_output(&current, &[content.to_string()]);
         let theme = self.theme;
         self.conflict_resolver_input.update(cx, |input, cx| {
             input.set_theme(theme, cx);
