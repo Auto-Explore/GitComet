@@ -61,12 +61,7 @@ pub fn run_mergetool(config: &MergetoolConfig) -> Result<MergetoolRunResult, Str
     let conflict_count = result.conflict_count;
 
     // Write merged output to MERGED path.
-    fs::write(&config.merged, &result.output).map_err(|e| {
-        format!(
-            "Failed to write merged output to {}: {e}",
-            config.merged.display()
-        )
-    })?;
+    write_merged_output(config, result.output.as_bytes())?;
 
     if is_clean {
         Ok(MergetoolRunResult {
@@ -112,12 +107,7 @@ fn handle_binary_conflict(
     local_bytes: &[u8],
 ) -> Result<MergetoolRunResult, String> {
     // Write LOCAL side to MERGED (user can pick sides manually).
-    fs::write(&config.merged, local_bytes).map_err(|e| {
-        format!(
-            "Failed to write merged output to {}: {e}",
-            config.merged.display()
-        )
-    })?;
+    write_merged_output(config, local_bytes)?;
 
     let filename = config
         .merged
@@ -133,6 +123,24 @@ fn handle_binary_conflict(
         ),
         exit_code: exit_code::CANCELED,
         merge_result: None,
+    })
+}
+
+fn write_merged_output(config: &MergetoolConfig, bytes: &[u8]) -> Result<(), String> {
+    if let Some(parent) = config.merged.parent().filter(|p| !p.as_os_str().is_empty()) {
+        fs::create_dir_all(parent).map_err(|e| {
+            format!(
+                "Failed to create merged output directory {}: {e}",
+                parent.display()
+            )
+        })?;
+    }
+
+    fs::write(&config.merged, bytes).map_err(|e| {
+        format!(
+            "Failed to write merged output to {}: {e}",
+            config.merged.display()
+        )
     })
 }
 
@@ -491,6 +499,70 @@ mod tests {
 
         let err = run_mergetool(&config).expect_err("expected error");
         assert!(err.contains("Failed to read base file"), "error: {err}");
+    }
+
+    #[test]
+    fn merged_output_path_can_be_created_when_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let merged_path = tmp.path().join("nested/out/merged.txt");
+        let local_path = tmp.path().join("local.txt");
+        let remote_path = tmp.path().join("remote.txt");
+        let base_path = tmp.path().join("base.txt");
+
+        write_file(&local_path, "LOCAL\nline2\nline3\n");
+        write_file(&remote_path, "line1\nline2\nREMOTE\n");
+        write_file(&base_path, "line1\nline2\nline3\n");
+
+        let config = MergetoolConfig {
+            merged: merged_path.clone(),
+            local: local_path,
+            remote: remote_path,
+            base: Some(base_path),
+            label_base: None,
+            label_local: None,
+            label_remote: None,
+            conflict_style: gitgpui_core::merge::ConflictStyle::default(),
+            diff_algorithm: gitgpui_core::merge::DiffAlgorithm::default(),
+        };
+
+        let result = run_mergetool(&config).expect("mergetool run");
+        assert_eq!(result.exit_code, exit_code::SUCCESS);
+        assert!(merged_path.exists(), "expected output file to be created");
+        assert_eq!(
+            fs::read_to_string(&merged_path).unwrap(),
+            "LOCAL\nline2\nREMOTE\n"
+        );
+    }
+
+    #[test]
+    fn merged_output_parent_dirs_created_for_binary_conflict() {
+        let tmp = tempfile::tempdir().unwrap();
+        let merged_path = tmp.path().join("nested/bin/merged.bin");
+        let local_path = tmp.path().join("local.bin");
+        let remote_path = tmp.path().join("remote.bin");
+
+        let local_bytes: Vec<u8> = vec![0x89, 0x50, 0x4E, 0x47];
+        let remote_bytes: Vec<u8> = vec![0xFF, 0xD8, 0xFF, 0xE0];
+        write_bytes(&local_path, &local_bytes);
+        write_bytes(&remote_path, &remote_bytes);
+
+        let config = MergetoolConfig {
+            merged: merged_path.clone(),
+            local: local_path,
+            remote: remote_path,
+            base: None,
+            label_base: None,
+            label_local: None,
+            label_remote: None,
+            conflict_style: gitgpui_core::merge::ConflictStyle::default(),
+            diff_algorithm: gitgpui_core::merge::DiffAlgorithm::default(),
+        };
+
+        let result = run_mergetool(&config).expect("mergetool run");
+        assert_eq!(result.exit_code, exit_code::CANCELED);
+        assert!(result.stderr.contains("binary"));
+        assert!(merged_path.exists(), "expected output file to be created");
+        assert_eq!(fs::read(&merged_path).unwrap(), local_bytes);
     }
 
     // ── CRLF preservation ────────────────────────────────────────────

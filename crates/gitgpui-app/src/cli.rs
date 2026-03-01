@@ -220,12 +220,8 @@ fn resolve_mergetool_with_env(
 
     let base = resolve_path(args.base, "BASE", env);
 
-    if !merged.exists() {
-        return Err(format!(
-            "Merged output path does not exist: {}",
-            merged.display()
-        ));
-    }
+    // MERGED is an output target and may not exist yet (e.g. standalone
+    // --output/--out usage). Runtime creates parent directories as needed.
     if !local.exists() {
         return Err(format!("Local path does not exist: {}", local.display()));
     }
@@ -738,14 +734,15 @@ mod tests {
     }
 
     #[test]
-    fn mergetool_nonexistent_merged_errors() {
+    fn mergetool_nonexistent_merged_is_allowed() {
         let dir = tempfile::tempdir().unwrap();
         let local = tmp_file(&dir, "local.txt", "a");
         let remote = tmp_file(&dir, "remote.txt", "b");
         let env = TestEnv::new();
+        let merged = dir.path().join("no_such_merged.txt");
 
         let args = MergetoolArgs {
-            merged: Some(dir.path().join("no_such_merged.txt")),
+            merged: Some(merged.clone()),
             local: Some(local),
             remote: Some(remote),
             base: None,
@@ -756,8 +753,8 @@ mod tests {
             diff_algorithm: None,
         };
 
-        let err = resolve_mergetool_with_env(args, &env).unwrap_err();
-        assert!(err.contains("does not exist"), "error: {err}");
+        let config = resolve_mergetool_with_env(args, &env).unwrap();
+        assert_eq!(config.merged, merged);
     }
 
     #[test]

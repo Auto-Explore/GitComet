@@ -1,6 +1,6 @@
 ## STATUS: COMPLETE
 
-All components from both design documents are fully implemented. Iteration 20 adds E2E binary file conflict coverage through `git mergetool`, closing the last behavior matrix gap.
+All components from both design documents are fully implemented. Iteration 20 now includes standalone mergetool output-target parity (`--output`/`--out` to a non-existent `MERGED` path) plus E2E binary conflict coverage through `git mergetool`.
 
 ## Implementation Progress
 
@@ -9,6 +9,7 @@ All components from both design documents are fully implemented. Iteration 20 ad
 External Diff/Merge Usage Design (`external_usage.md`)
 - ✅ Dedicated CLI modes (`difftool`, `mergetool`) and arg/env validation are implemented.
 - ✅ Mergetool CLI compatibility aliases are implemented: `-o`/`--output`/`--out` for output path and `--L1`/`--L2`/`--L3` for labels (KDiff3/Meld-style command compatibility).
+- ✅ Standalone mergetool output-target behavior is implemented: `MERGED` may be a new path, and runtime creates parent directories before writing.
 - ✅ Focused difftool/mergetool runtimes are implemented with Git-compatible exit semantics.
 - ✅ Git-invoked E2E coverage exists for `git difftool` and `git mergetool` parity scenarios (GUI selection, trust-exit handling, spaced/unicode paths, subdir invocation, `--tool-help`, symlink/submodule/delete-modify edge cases, order-file behavior, explicit `mergetool.writeToTemp` path-shape parity, and binary file conflict handling).
 - ✅ Automatic git config fallback: mergetool reads `merge.conflictstyle` and `diff.algorithm` from git config when no CLI flag is provided, mirroring `git merge-file` behavior. CLI flags take priority over git config, and git config takes priority over defaults. Unknown config values are gracefully ignored.
@@ -31,7 +32,7 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
 ### External Diff/Merge Usage Design (`external_usage.md`)
 
 - ✅ CLI subcommands and argument model (`gitgpui-app difftool`, `gitgpui-app mergetool`) implemented in `crates/gitgpui-app/src/cli.rs`.
-- ✅ Arg/env resolution + validation implemented for `LOCAL`, `REMOTE`, `MERGED`, `BASE`, labels, missing-input and missing-path errors.
+- ✅ Arg/env resolution + validation implemented for `LOCAL`, `REMOTE`, `MERGED`, `BASE`, labels, missing-input and missing-path errors. `MERGED` is treated as an output target and can be non-existent at parse time.
 - ✅ Mergetool compatibility aliases implemented in `crates/gitgpui-app/src/cli.rs`:
   - `-o`/`--output`/`--out` as aliases for `--merged`
   - `--L1`/`--L2`/`--L3` as aliases for `--label-base`/`--label-local`/`--label-remote`
@@ -40,7 +41,7 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
 - ✅ Foundational conflict-marker label formatter implemented in `crates/gitgpui-core/src/conflict_labels.rs` (`empty tree`, `<short-sha>:<path>`, merged-ancestors, rebase-parent shapes), ready for focused merge-mode integration.
 - ✅ Focused command-mode execution paths fully implemented:
   - ✅ `difftool` mode executes a dedicated runtime path in `crates/gitgpui-app/src/difftool_mode.rs` (delegates to `git diff --no-index --no-ext-diff`, strips recursive `GIT_EXTERNAL_DIFF` env, supports labels/display-path headers, and maps git exit `1`/diff-present to app success exit `0`).
-  - ✅ `mergetool` mode executes a dedicated runtime path in `crates/gitgpui-app/src/mergetool_mode.rs` using the built-in 3-way merge algorithm (`merge_file_bytes`). Reads base/local/remote files, performs automatic merge, writes result to MERGED path. Exits 0 on clean merge, 1 on unresolved conflicts. Supports labels, no-base (add/add) scenarios, byte-level binary file detection (null-byte and non-UTF-8 detection; copies local side), CRLF preservation, paths with spaces, configurable conflict style (`--conflict-style merge|diff3|zdiff3`), and diff algorithm selection (`--diff-algorithm myers|histogram`). 23 unit tests.
+  - ✅ `mergetool` mode executes a dedicated runtime path in `crates/gitgpui-app/src/mergetool_mode.rs` using the built-in 3-way merge algorithm (`merge_file_bytes`). Reads base/local/remote files, performs automatic merge, writes result to MERGED path (creating parent directories as needed). Exits 0 on clean merge, 1 on unresolved conflicts. Supports labels, no-base (add/add) scenarios, byte-level binary file detection (null-byte and non-UTF-8 detection; copies local side), CRLF preservation, paths with spaces, configurable conflict style (`--conflict-style merge|diff3|zdiff3`), and diff algorithm selection (`--diff-algorithm myers|histogram`). 25 unit tests.
 - ✅ External mergetool backend launch exists (`launch_mergetool`) with stage materialization (`BASE/LOCAL/REMOTE`), trust-exit behavior, unresolved-marker rejection, and staging semantics.
 - ✅ Mergetool GUI selection and path override support implemented:
   - `merge.guitool` + `mergetool.guiDefault` precedence logic
@@ -144,7 +145,23 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
   - ✅ Dedicated trust-exit interaction matrix assertions (`difftool.trustExitCode`, `--trust-exit-code`, `--no-trust-exit-code`).
   - ✅ `git difftool --tool-help` discoverability assertion for configured `gitgpui` tool.
 
-### Latest Component Delivered (Iteration 20) — Binary File Conflict E2E Coverage
+### Latest Component Delivered (Iteration 20) — Standalone `MERGED` Output-Target Support
+
+- Implemented standalone output-target parity for `gitgpui-app mergetool`:
+  - `resolve_mergetool_with_env` no longer requires `MERGED` to pre-exist.
+  - `MERGED` is treated as an output path (aligned with `-o`/`--output`/`--out` semantics).
+- Hardened output writes in `crates/gitgpui-app/src/mergetool_mode.rs`:
+  - added shared `write_merged_output` helper
+  - creates parent directories for `MERGED` before writing (clean merges and binary conflict fallback paths)
+- Added regression tests:
+  - `cli::tests::mergetool_nonexistent_merged_is_allowed`
+  - `mergetool_mode::tests::merged_output_path_can_be_created_when_missing`
+  - `mergetool_mode::tests::merged_output_parent_dirs_created_for_binary_conflict`
+- Verification:
+  - `cargo test -p gitgpui-app --bin gitgpui-app` (75 tests, all passing)
+  - `cargo test -p gitgpui-app --test mergetool_git_integration git_mergetool_resolves_overlapping_conflict -- --nocapture`
+
+### Earlier Iteration 20 Pass — Binary File Conflict E2E Coverage
 
 - Added 2 git-invoked mergetool E2E tests in `crates/gitgpui-app/tests/mergetool_git_integration.rs`:
   - `git_mergetool_binary_conflict_keeps_local_version`: creates a binary file conflict (null-byte content) across branches, runs `git mergetool` with gitgpui, and verifies that the binary conflict is detected, the local version is kept in MERGED, and the tool reports the binary conflict.
