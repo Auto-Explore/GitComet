@@ -877,6 +877,71 @@ fn git_mergetool_multiple_conflicted_files() {
 }
 
 #[test]
+fn git_mergetool_pathspec_resolves_only_selected_conflict() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+
+    init_repo(repo);
+    write_file(repo, "alpha.txt", "base alpha\n");
+    write_file(repo, "beta.txt", "base beta\n");
+    commit_all(repo, "base");
+
+    run_git(repo, &["checkout", "-b", "feature"]);
+    write_file(repo, "alpha.txt", "remote alpha\n");
+    write_file(repo, "beta.txt", "remote beta\n");
+    commit_all(repo, "feature: change both");
+
+    run_git(repo, &["checkout", "main"]);
+    write_file(repo, "alpha.txt", "local alpha\n");
+    write_file(repo, "beta.txt", "local beta\n");
+    commit_all(repo, "main: change both");
+
+    let output = run_git_capture(repo, &["merge", "feature"]);
+    assert!(!output.status.success(), "expected merge conflict");
+
+    configure_mergetool_selection(repo, "fake", None, None);
+    configure_mergetool_command(
+        repo,
+        "fake",
+        "echo TOOL=fake >&2; cat \"$REMOTE\" > \"$MERGED\"",
+    );
+    configure_mergetool_trust_exit_code(repo, "fake", true);
+
+    let output = run_git_capture(repo, &["mergetool", "--no-prompt", "--", "alpha.txt"]);
+    let text = output_text(&output);
+    assert!(
+        output.status.success(),
+        "expected pathspec-targeted mergetool run to succeed\n{text}"
+    );
+    assert!(
+        text.contains("TOOL=fake"),
+        "expected fake tool invocation marker\n{text}"
+    );
+
+    let alpha = fs::read_to_string(repo.join("alpha.txt")).unwrap();
+    let beta = fs::read_to_string(repo.join("beta.txt")).unwrap();
+    assert_eq!(
+        alpha, "remote alpha\n",
+        "expected selected path to be resolved using fake tool"
+    );
+    assert!(
+        beta.contains("<<<<<<<") && beta.contains("local beta") && beta.contains("remote beta"),
+        "expected non-selected conflicted path to remain unresolved\nbeta:\n{beta}\n{text}"
+    );
+
+    let unmerged = run_git_capture(repo, &["ls-files", "-u"]);
+    let unmerged_text = String::from_utf8_lossy(&unmerged.stdout);
+    assert!(
+        !unmerged_text.contains("alpha.txt"),
+        "expected selected path to be resolved in index\n{unmerged_text}"
+    );
+    assert!(
+        unmerged_text.contains("beta.txt"),
+        "expected non-selected path to remain unmerged\n{unmerged_text}"
+    );
+}
+
+#[test]
 fn git_mergetool_crlf_content_preserved() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();

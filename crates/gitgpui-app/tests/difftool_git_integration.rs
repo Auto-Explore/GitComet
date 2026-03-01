@@ -305,6 +305,40 @@ fn git_difftool_dir_diff_mode_works() {
 }
 
 #[test]
+fn git_difftool_pathspec_limits_invocation_to_selected_path() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+
+    init_repo(repo);
+    write_file(repo, "docs/selected.txt", "selected old\n");
+    write_file(repo, "docs/other.txt", "other old\n");
+    commit_all(repo, "base");
+
+    write_file(repo, "docs/selected.txt", "selected new\n");
+    write_file(repo, "docs/other.txt", "other new\n");
+    configure_gitgpui_difftool(repo);
+
+    let output = run_git_capture(
+        repo,
+        &["difftool", "--no-prompt", "--", "docs/selected.txt"],
+    );
+    let text = output_text(&output);
+    assert!(output.status.success(), "git difftool failed\n{text}");
+    assert!(
+        text.contains("selected.txt"),
+        "expected selected path to be diffed\n{text}"
+    );
+    assert!(
+        text.contains("-selected old") && text.contains("+selected new"),
+        "expected selected path line delta in output\n{text}"
+    );
+    assert!(
+        !text.contains("other.txt") && !text.contains("other old") && !text.contains("other new"),
+        "expected pathspec to exclude non-selected path\n{text}"
+    );
+}
+
+#[test]
 fn git_difftool_handles_binary_content_change() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
