@@ -1,6 +1,6 @@
 ## STATUS: COMPLETE
 
-All components from both design documents are fully implemented. 818 tests pass across all crates (plus 5 ignored for optional exhaustive/external-repo runs).
+All components from both design documents are fully implemented. Iteration 15 adds full KDiff3-style alignment-triple fixture support while preserving backward compatibility with merged-output fixture goldens.
 
 ## Implementation Progress
 
@@ -16,7 +16,7 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
 - ✅ Phase 1A implemented: core 3-way merge algorithm + t6403 portability set (including histogram and binary-reject paths).
 - ✅ Phase 1B implemented: all 4 t6427 `zdiff3` portability cases.
 - ✅ Phase 1C implemented: conflict marker label formatting portability cases.
-- ✅ Phase 2 implemented: fixture harness with auto-discovery, algorithm-independent invariants (marker well-formedness, content integrity, context preservation), 7 seed fixtures, and expected-result comparison. Fixture expected-result format uses merged-output goldens (the natural output format for a merge algorithm) rather than KDiff3-style alignment index triples (which are specific to KDiff3's alignment algorithm).
+- ✅ Phase 2 implemented: fixture harness supports both merged-output goldens and KDiff3-style alignment index triples, with auto-discovery, expected-result comparison, and invariants for both formats (merge-output marker/content/context checks + alignment monotonicity/consistency checks).
 - ✅ Phase 3A implemented: generated permutation corpus test runner (sampled + ignored exhaustive mode).
 - ✅ Phase 3C implemented: real-world merge extraction harness from Git history.
 - ✅ Phase 4A implemented: critical `t7610` mergetool E2E scenarios, including `trustExitCode=false` unchanged-output and changed-output behavior.
@@ -55,7 +55,10 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
 - ✅ End-to-end tests that invoke `git difftool`/`git mergetool` with global-like config and `gitgpui-app` as the tool are fully implemented:
   - ✅ `git difftool` E2E in `crates/gitgpui-app/tests/difftool_git_integration.rs` (14 tests).
   - ✅ `git mergetool` E2E in `crates/gitgpui-app/tests/mergetool_git_integration.rs` (33 tests): overlapping conflict processing, trust-exit-code semantics (clean merge resolved / conflict preserved), no-trust exit behavior (unchanged output stays unresolved, changed output resolves), spaced and Unicode path handling, subdirectory invocation, add/add (no-base) conflict, multiple conflicted files, CRLF preservation, `--tool-help` discoverability, `guiDefault=auto` selection (with/without DISPLAY), `--gui` and `--no-gui` flag overrides, GUI fallback when no guitool configured, nonexistent tool error handling, delete/delete conflict, delete/delete with keepBackup=true (no-error parity), modify/delete conflict, invocation ordering parity (`diff.orderFile` and `-O` override), symlink conflicts (l/r resolution, coexistence with normal files), submodule conflicts (l/r resolution, deleted-vs-modified, file-vs-submodule, directory-vs-submodule, subdirectory submodule, coexistence with normal files).
-- ✅ KDiff3-style fixture harness implemented in `crates/gitgpui-core/tests/merge_fixture_harness.rs` with fixture data in `crates/gitgpui-core/tests/fixtures/merge/`. Auto-discovers `*_base.*` fixtures, runs merge algorithm, validates invariants (marker well-formedness, content integrity, context preservation), and compares against expected results. 7 seed fixtures + harness discovery test = 8 tests.
+- ✅ KDiff3-style fixture harness implemented in `crates/gitgpui-core/tests/merge_fixture_harness.rs` with fixture data in `crates/gitgpui-core/tests/fixtures/merge/`. Auto-discovers `*_base.*` fixtures, runs merge algorithm, validates invariants, and compares against expected results in two formats:
+  - merged-output expected files: marker well-formedness, content integrity, context preservation
+  - alignment-triple expected files: sequence monotonicity + equality consistency across aligned line indices
+  - seed fixtures: 7 merged-output fixtures + 2 KDiff3-style alignment fixtures
 - ✅ Generated permutation corpus integration (Phase 3A) added in `crates/gitgpui-core/tests/merge_permutation_corpus.rs`: ports KDiff3’s 11-option line-state table, runs deterministic sampled corpus (`r=3`, `seed=0`, 243 cases) in default test runs, and includes an ignored exhaustive run (11^5 = 161,051 cases).
 - ✅ Iteration 12 hardening: dedicated mergetool runtime now routes through `merge_file_bytes` so binary detection matches the core portability contract (including embedded NUL-byte data), with regression coverage in `crates/gitgpui-app/src/mergetool_mode.rs`.
 
@@ -77,8 +80,12 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
   - `label_rebase_parent` -> `parent of <desc>`
 - ✅ Phase 2 (KDiff3 fixture harness with `*_base/*_contrib/*_expected_result` discovery + invariants):
   - 2A: Fixture format adopted — `tests/fixtures/merge/{prefix}_{base,contrib1,contrib2,expected_result}.txt`
-  - 2B: Test runner in `tests/merge_fixture_harness.rs` — auto-discovers `*_base.*`, loads triplets, runs `merge_file`, validates 3 algorithm-independent invariants (marker well-formedness, content integrity, context preservation), compares against expected output, writes `*_actual_result.*` on mismatch
-  - 2C: 7 seed test cases ported: simpletest (KDiff3), prefer-identical (KDiff3), nonoverlapping changes, overlapping conflict, identical changes, delete-vs-modify, add/add conflict
+  - 2B: Test runner in `tests/merge_fixture_harness.rs` — auto-discovers `*_base.*`, loads triplets, runs `merge_file`, supports dual expected-result modes, and writes `*_actual_result.*` on mismatch:
+    - merged-output mode validates marker well-formedness, content integrity, and context preservation
+    - alignment-triple mode validates sequence monotonicity and aligned-content consistency
+  - 2C: 9 seed test cases ported:
+    - merged-output fixtures: simpletest (KDiff3), prefer-identical (KDiff3), nonoverlapping changes, overlapping conflict, identical changes, delete-vs-modify, add/add conflict
+    - alignment fixtures: kdiff3_simple_alignment, kdiff3_prefer_identical_alignment
 - ✅ Phase 3A (permutation corpus generation): implemented in `crates/gitgpui-core/tests/merge_permutation_corpus.rs`.
   - Ports KDiff3 permutation option table from `generate_testdata_from_permutations.py`.
   - Generates corpus at test time (no fixture file bloat).
@@ -122,6 +129,25 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
   - ✅ Explicit `difftool.guiDefault` selection-path parity (`auto` with/without `DISPLAY`, `--gui`, `--no-gui`).
   - ✅ Dedicated trust-exit interaction matrix assertions (`difftool.trustExitCode`, `--trust-exit-code`, `--no-trust-exit-code`).
   - ✅ `git difftool --tool-help` discoverability assertion for configured `gitgpui` tool.
+
+### Latest Component Delivered (Iteration 15) — KDiff3 Alignment Triple Fixture Support
+
+- Extended `crates/gitgpui-core/tests/merge_fixture_harness.rs` to support dual expected-result formats:
+  - merged-output goldens (existing behavior)
+  - KDiff3-style alignment triples (`base_idx contrib1_idx contrib2_idx`, `-1` gaps)
+- Implemented a deterministic three-way alignment builder for fixture validation:
+  - pairwise LCS projection from base -> contrib1/contrib2
+  - insertion alignment via LCS between contrib insertion runs
+- Added alignment-specific algorithm-independent invariant checks:
+  - sequence monotonicity per column (strictly increasing indices)
+  - equality consistency for rows that align two/three concrete lines
+- Added 2 new KDiff3-style alignment fixtures:
+  - `8_kdiff3_simple_alignment`
+  - `9_kdiff3_prefer_identical_alignment`
+- Kept backward compatibility with existing merged-output fixtures and mismatch artifact writing (`*_actual_result.*`).
+- Verification:
+  - `cargo test -p gitgpui-core --test merge_fixture_harness`
+  - `cargo test -p gitgpui-core --test merge_algorithm --test meld_algorithm_tests --test merge_fixture_harness`
 
 ### Latest Component Delivered (Iteration 14) — Mergetool `trustExitCode=false` E2E Parity
 

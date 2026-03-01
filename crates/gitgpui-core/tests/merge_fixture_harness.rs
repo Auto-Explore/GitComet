@@ -5,17 +5,24 @@
 //!   - `{prefix}_base.{ext}`
 //!   - `{prefix}_contrib1.{ext}` (ours / local)
 //!   - `{prefix}_contrib2.{ext}` (theirs / remote)
-//!   - `{prefix}_expected_result.{ext}` (expected merged output)
+//!   - `{prefix}_expected_result.{ext}`
+//!
+//! Expected result files support two formats:
+//! 1. **Merged output golden** (plain text): compare directly to `merge_file`.
+//! 2. **Alignment triples** (KDiff3-style): one row per visual line with
+//!    `base_idx contrib1_idx contrib2_idx` and `-1` for gaps.
 //!
 //! For each discovered fixture the runner:
 //! 1. Loads all three input files.
 //! 2. Runs `merge_file(base, contrib1, contrib2, &default_options)`.
-//! 3. Applies algorithm-independent invariant checks.
-//! 4. Compares actual output against expected result (when non-empty).
-//! 5. On mismatch, writes `{prefix}_actual_result.{ext}` for manual diff.
+//! 3. Applies algorithm-independent merge-output invariants.
+//! 4. If fixture uses alignment triples, builds a three-way line alignment and
+//!    validates sequence monotonicity + equality consistency invariants.
+//! 5. Compares actual output/alignment against expected result.
+//! 6. On mismatch, writes `{prefix}_actual_result.{ext}` for manual diff.
 
-use gitgpui_core::merge::{MergeOptions, merge_file};
-use std::collections::BTreeMap;
+use gitgpui_core::merge::{merge_file, MergeOptions};
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
 /// A single discovered merge fixture.
@@ -26,6 +33,33 @@ struct MergeFixture {
     contrib1_path: PathBuf,
     contrib2_path: PathBuf,
     expected_path: PathBuf,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct AlignmentRow {
+    base: Option<usize>,
+    contrib1: Option<usize>,
+    contrib2: Option<usize>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum ExpectedFixture {
+    Empty,
+    MergeOutput(String),
+    Alignment(Vec<AlignmentRow>),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DiffOp {
+    Equal,
+    Delete,
+    Insert,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct SideProjection {
+    base_to_side: Vec<Option<usize>>,
+    inserts_before: Vec<Vec<usize>>,
 }
 
 /// Discover all merge fixtures in the given directory.
@@ -79,6 +113,366 @@ fn discover_fixtures(dir: &Path) -> Vec<MergeFixture> {
     fixtures_by_name.into_values().collect()
 }
 
+fn actual_result_path(fixture: &MergeFixture) -> PathBuf {
+    fixture.expected_path.with_file_name(format!(
+        "{}_actual_result{}",
+        fixture.name,
+        fixture
+            .base_path
+            .extension()
+            .map(|e| format!(".{}", e.to_string_lossy()))
+            .unwrap_or_default()
+    ))
+}
+
+fn parse_expected_fixture(raw: &str) -> ExpectedFixture {
+    let has_data_line = raw
+        .lines()
+        .map(str::trim)
+        .any(|line| !line.is_empty() && !line.starts_with('#'));
+
+    if !has_data_line {
+        return ExpectedFixture::Empty;
+    }
+
+    if let Some(rows) = parse_alignment_rows(raw) {
+        return ExpectedFixture::Alignment(rows);
+    }
+
+    ExpectedFixture::MergeOutput(raw.to_string())
+}
+
+fn parse_alignment_rows(raw: &str) -> Option<Vec<AlignmentRow>> {
+    fn parse_cell(token: &str) -> Option<Option<usize>> {
+        let value: i64 = token.parse().ok()?;
+        if value == -1 {
+            Some(None)
+        } else if value >= 0 {
+            Some(Some(value as usize))
+        } else {
+            None
+        }
+    }
+
+    let mut rows = Vec::new();
+    let mut saw_row = false;
+
+    for line in raw.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+
+        let mut parts = trimmed.split_whitespace();
+        let p0 = parts.next()?;
+        let p1 = parts.next()?;
+        let p2 = parts.next()?;
+        if parts.next().is_some() {
+            return None;
+        }
+
+        rows.push(AlignmentRow {
+            base: parse_cell(p0)?,
+            contrib1: parse_cell(p1)?,
+            contrib2: parse_cell(p2)?,
+        });
+        saw_row = true;
+    }
+
+    if saw_row {
+        Some(rows)
+    } else {
+        None
+    }
+}
+
+fn serialize_alignment_rows(rows: &[AlignmentRow]) -> String {
+    fn cell_text(cell: Option<usize>) -> String {
+        cell.map(|v| v.to_string())
+            .unwrap_or_else(|| "-1".to_string())
+    }
+
+    let mut out = String::new();
+    for row in rows {
+        out.push_str(&cell_text(row.base));
+        out.push(' ');
+        out.push_str(&cell_text(row.contrib1));
+        out.push(' ');
+        out.push_str(&cell_text(row.contrib2));
+        out.push('\n');
+    }
+    out
+}
+
+fn split_visual_lines(text: &str) -> Vec<&str> {
+    if text.is_empty() {
+        Vec::new()
+    } else {
+        text.split('\n').collect()
+    }
+}
+
+fn lcs_diff_ops(a: &[&str], b: &[&str]) -> Vec<DiffOp> {
+    let n = a.len();
+    let m = b.len();
+    let mut dp = vec![vec![0usize; m + 1]; n + 1];
+
+    for i in (0..n).rev() {
+        for j in (0..m).rev() {
+            dp[i][j] = if a[i] == b[j] {
+                dp[i + 1][j + 1] + 1
+            } else {
+                dp[i + 1][j].max(dp[i][j + 1])
+            };
+        }
+    }
+
+    let mut ops = Vec::with_capacity(n + m);
+    let mut i = 0usize;
+    let mut j = 0usize;
+    while i < n && j < m {
+        if a[i] == b[j] {
+            ops.push(DiffOp::Equal);
+            i += 1;
+            j += 1;
+        } else if dp[i + 1][j] >= dp[i][j + 1] {
+            ops.push(DiffOp::Delete);
+            i += 1;
+        } else {
+            ops.push(DiffOp::Insert);
+            j += 1;
+        }
+    }
+    while i < n {
+        ops.push(DiffOp::Delete);
+        i += 1;
+    }
+    while j < m {
+        ops.push(DiffOp::Insert);
+        j += 1;
+    }
+    ops
+}
+
+fn project_side(base_lines: &[&str], side_lines: &[&str]) -> SideProjection {
+    let ops = lcs_diff_ops(base_lines, side_lines);
+    let mut base_to_side = vec![None; base_lines.len()];
+    let mut inserts_before = vec![Vec::new(); base_lines.len() + 1];
+    let mut base_idx = 0usize;
+    let mut side_idx = 0usize;
+
+    for op in ops {
+        match op {
+            DiffOp::Equal => {
+                base_to_side[base_idx] = Some(side_idx);
+                base_idx += 1;
+                side_idx += 1;
+            }
+            DiffOp::Delete => {
+                base_to_side[base_idx] = None;
+                base_idx += 1;
+            }
+            DiffOp::Insert => {
+                inserts_before[base_idx].push(side_idx);
+                side_idx += 1;
+            }
+        }
+    }
+
+    assert_eq!(base_idx, base_lines.len());
+    assert_eq!(side_idx, side_lines.len());
+
+    SideProjection {
+        base_to_side,
+        inserts_before,
+    }
+}
+
+fn align_insertions(
+    contrib1_indices: &[usize],
+    contrib2_indices: &[usize],
+    contrib1_lines: &[&str],
+    contrib2_lines: &[&str],
+) -> Vec<(Option<usize>, Option<usize>)> {
+    let seq1: Vec<&str> = contrib1_indices
+        .iter()
+        .map(|&idx| contrib1_lines[idx])
+        .collect();
+    let seq2: Vec<&str> = contrib2_indices
+        .iter()
+        .map(|&idx| contrib2_lines[idx])
+        .collect();
+    let ops = lcs_diff_ops(&seq1, &seq2);
+
+    let mut out = Vec::new();
+    let mut i = 0usize;
+    let mut j = 0usize;
+
+    for op in ops {
+        match op {
+            DiffOp::Equal => {
+                out.push((Some(contrib1_indices[i]), Some(contrib2_indices[j])));
+                i += 1;
+                j += 1;
+            }
+            DiffOp::Delete => {
+                out.push((Some(contrib1_indices[i]), None));
+                i += 1;
+            }
+            DiffOp::Insert => {
+                out.push((None, Some(contrib2_indices[j])));
+                j += 1;
+            }
+        }
+    }
+
+    out
+}
+
+fn build_three_way_alignment(base: &str, contrib1: &str, contrib2: &str) -> Vec<AlignmentRow> {
+    let base_lines = split_visual_lines(base);
+    let contrib1_lines = split_visual_lines(contrib1);
+    let contrib2_lines = split_visual_lines(contrib2);
+
+    let p1 = project_side(&base_lines, &contrib1_lines);
+    let p2 = project_side(&base_lines, &contrib2_lines);
+
+    let mut rows = Vec::new();
+
+    for slot in 0..=base_lines.len() {
+        let inserted_rows = align_insertions(
+            &p1.inserts_before[slot],
+            &p2.inserts_before[slot],
+            &contrib1_lines,
+            &contrib2_lines,
+        );
+        for (c1, c2) in inserted_rows {
+            rows.push(AlignmentRow {
+                base: None,
+                contrib1: c1,
+                contrib2: c2,
+            });
+        }
+
+        if slot < base_lines.len() {
+            rows.push(AlignmentRow {
+                base: Some(slot),
+                contrib1: p1.base_to_side[slot],
+                contrib2: p2.base_to_side[slot],
+            });
+        }
+    }
+
+    rows
+}
+
+fn validate_alignment_invariants(
+    base: &str,
+    contrib1: &str,
+    contrib2: &str,
+    rows: &[AlignmentRow],
+    fixture_name: &str,
+) {
+    let base_lines = split_visual_lines(base);
+    let contrib1_lines = split_visual_lines(contrib1);
+    let contrib2_lines = split_visual_lines(contrib2);
+
+    validate_alignment_monotonicity(rows, fixture_name);
+
+    for (row_ix, row) in rows.iter().enumerate() {
+        if let Some(ix) = row.base {
+            assert!(
+                ix < base_lines.len(),
+                "[{}] alignment row {}: base index {} out of bounds ({})",
+                fixture_name,
+                row_ix + 1,
+                ix,
+                base_lines.len()
+            );
+        }
+        if let Some(ix) = row.contrib1 {
+            assert!(
+                ix < contrib1_lines.len(),
+                "[{}] alignment row {}: contrib1 index {} out of bounds ({})",
+                fixture_name,
+                row_ix + 1,
+                ix,
+                contrib1_lines.len()
+            );
+        }
+        if let Some(ix) = row.contrib2 {
+            assert!(
+                ix < contrib2_lines.len(),
+                "[{}] alignment row {}: contrib2 index {} out of bounds ({})",
+                fixture_name,
+                row_ix + 1,
+                ix,
+                contrib2_lines.len()
+            );
+        }
+
+        if let (Some(b), Some(c1)) = (row.base, row.contrib1) {
+            assert_eq!(
+                base_lines[b],
+                contrib1_lines[c1],
+                "[{}] alignment row {}: base/contrib1 content mismatch",
+                fixture_name,
+                row_ix + 1
+            );
+        }
+        if let (Some(b), Some(c2)) = (row.base, row.contrib2) {
+            assert_eq!(
+                base_lines[b],
+                contrib2_lines[c2],
+                "[{}] alignment row {}: base/contrib2 content mismatch",
+                fixture_name,
+                row_ix + 1
+            );
+        }
+        if let (Some(c1), Some(c2)) = (row.contrib1, row.contrib2) {
+            assert_eq!(
+                contrib1_lines[c1],
+                contrib2_lines[c2],
+                "[{}] alignment row {}: contrib1/contrib2 content mismatch",
+                fixture_name,
+                row_ix + 1
+            );
+        }
+    }
+}
+
+fn validate_alignment_monotonicity(rows: &[AlignmentRow], fixture_name: &str) {
+    fn check_column(
+        rows: &[AlignmentRow],
+        fixture_name: &str,
+        column_name: &str,
+        value: impl Fn(&AlignmentRow) -> Option<usize>,
+    ) {
+        let mut prev: Option<usize> = None;
+        for (row_ix, row) in rows.iter().enumerate() {
+            let Some(curr) = value(row) else {
+                continue;
+            };
+            if let Some(prev_ix) = prev {
+                assert!(
+                    curr > prev_ix,
+                    "[{}] alignment row {}: {} index {} is not strictly increasing after {}",
+                    fixture_name,
+                    row_ix + 1,
+                    column_name,
+                    curr,
+                    prev_ix
+                );
+            }
+            prev = Some(curr);
+        }
+    }
+
+    check_column(rows, fixture_name, "base", |row| row.base);
+    check_column(rows, fixture_name, "contrib1", |row| row.contrib1);
+    check_column(rows, fixture_name, "contrib2", |row| row.contrib2);
+}
+
 /// Validate algorithm-independent invariants on the merge output.
 ///
 /// These checks apply regardless of the specific merge algorithm:
@@ -91,7 +485,7 @@ fn discover_fixtures(dir: &Path) -> Vec<MergeFixture> {
 ///
 /// 3. **Context preservation**: Lines that are identical in base, contrib1, and
 ///    contrib2 all appear in the output.
-fn validate_invariants(
+fn validate_merge_output_invariants(
     base: &str,
     contrib1: &str,
     contrib2: &str,
@@ -176,13 +570,12 @@ fn validate_content_integrity(
     output: &str,
     fixture_name: &str,
 ) {
-    let base_lines: std::collections::HashSet<&str> = base.lines().collect();
-    let contrib1_lines: std::collections::HashSet<&str> = contrib1.lines().collect();
-    let contrib2_lines: std::collections::HashSet<&str> = contrib2.lines().collect();
+    let base_lines: HashSet<&str> = base.lines().collect();
+    let contrib1_lines: HashSet<&str> = contrib1.lines().collect();
+    let contrib2_lines: HashSet<&str> = contrib2.lines().collect();
 
     for (line_num, line) in output.lines().enumerate() {
         let trimmed = line.trim_end();
-        // Skip conflict markers
         if is_open_marker(trimmed)
             || is_close_marker(trimmed)
             || is_separator_marker(trimmed)
@@ -191,15 +584,14 @@ fn validate_content_integrity(
             continue;
         }
 
-        let line_content = line;
         assert!(
-            base_lines.contains(line_content)
-                || contrib1_lines.contains(line_content)
-                || contrib2_lines.contains(line_content),
+            base_lines.contains(line)
+                || contrib1_lines.contains(line)
+                || contrib2_lines.contains(line),
             "[{}] line {}: output line {:?} not found in any input",
             fixture_name,
             line_num + 1,
-            line_content
+            line
         );
     }
 }
@@ -212,9 +604,9 @@ fn validate_context_preservation(
     output: &str,
     fixture_name: &str,
 ) {
-    let contrib1_lines: std::collections::HashSet<&str> = contrib1.lines().collect();
-    let contrib2_lines: std::collections::HashSet<&str> = contrib2.lines().collect();
-    let output_lines: std::collections::HashSet<&str> = output.lines().collect();
+    let contrib1_lines: HashSet<&str> = contrib1.lines().collect();
+    let contrib2_lines: HashSet<&str> = contrib2.lines().collect();
+    let output_lines: HashSet<&str> = output.lines().collect();
 
     for line in base.lines() {
         if contrib1_lines.contains(line) && contrib2_lines.contains(line) {
@@ -278,6 +670,60 @@ fn is_base_marker(line: &str) -> bool {
         })
 }
 
+fn run_fixture(fixture: &MergeFixture) -> Result<(), String> {
+    let base = std::fs::read_to_string(&fixture.base_path)
+        .map_err(|e| format!("[{}] failed to read base: {}", fixture.name, e))?;
+    let contrib1 = std::fs::read_to_string(&fixture.contrib1_path)
+        .map_err(|e| format!("[{}] failed to read contrib1: {}", fixture.name, e))?;
+    let contrib2 = std::fs::read_to_string(&fixture.contrib2_path)
+        .map_err(|e| format!("[{}] failed to read contrib2: {}", fixture.name, e))?;
+    let expected_raw = std::fs::read_to_string(&fixture.expected_path)
+        .map_err(|e| format!("[{}] failed to read expected_result: {}", fixture.name, e))?;
+
+    let result = merge_file(&base, &contrib1, &contrib2, &MergeOptions::default());
+    validate_merge_output_invariants(&base, &contrib1, &contrib2, &result.output, &fixture.name);
+
+    let expected = parse_expected_fixture(&expected_raw);
+    match expected {
+        ExpectedFixture::Empty => Ok(()),
+        ExpectedFixture::MergeOutput(expected_output) => {
+            if result.output == expected_output {
+                Ok(())
+            } else {
+                let actual_path = actual_result_path(fixture);
+                let _ = std::fs::write(&actual_path, &result.output);
+                Err(format!(
+                    "[{}] merge output mismatch (actual written to {})\n  expected:\n{}\n  actual:\n{}",
+                    fixture.name,
+                    actual_path.display(),
+                    indent_text(&expected_output),
+                    indent_text(&result.output),
+                ))
+            }
+        }
+        ExpectedFixture::Alignment(expected_rows) => {
+            let actual_rows = build_three_way_alignment(&base, &contrib1, &contrib2);
+            validate_alignment_invariants(&base, &contrib1, &contrib2, &actual_rows, &fixture.name);
+
+            if actual_rows == expected_rows {
+                Ok(())
+            } else {
+                let actual_path = actual_result_path(fixture);
+                let actual_text = serialize_alignment_rows(&actual_rows);
+                let expected_text = serialize_alignment_rows(&expected_rows);
+                let _ = std::fs::write(&actual_path, &actual_text);
+                Err(format!(
+                    "[{}] alignment mismatch (actual written to {})\n  expected:\n{}\n  actual:\n{}",
+                    fixture.name,
+                    actual_path.display(),
+                    indent_text(&expected_text),
+                    indent_text(&actual_text),
+                ))
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Main fixture test
 // ---------------------------------------------------------------------------
@@ -298,51 +744,12 @@ fn fixture_harness_discovers_and_runs_all_fixtures() {
     let mut failures: Vec<String> = Vec::new();
 
     for fixture in &fixtures {
-        let base = std::fs::read_to_string(&fixture.base_path)
-            .unwrap_or_else(|e| panic!("[{}] failed to read base: {}", fixture.name, e));
-        let contrib1 = std::fs::read_to_string(&fixture.contrib1_path)
-            .unwrap_or_else(|e| panic!("[{}] failed to read contrib1: {}", fixture.name, e));
-        let contrib2 = std::fs::read_to_string(&fixture.contrib2_path)
-            .unwrap_or_else(|e| panic!("[{}] failed to read contrib2: {}", fixture.name, e));
-        let expected = std::fs::read_to_string(&fixture.expected_path)
-            .unwrap_or_else(|e| panic!("[{}] failed to read expected_result: {}", fixture.name, e));
-
-        let options = MergeOptions::default();
-        let result = merge_file(&base, &contrib1, &contrib2, &options);
-
-        // Run invariant checks (these panic on failure).
-        validate_invariants(&base, &contrib1, &contrib2, &result.output, &fixture.name);
-
-        // Compare against expected result if the expected file is non-empty.
-        if !expected.is_empty() {
-            if result.output == expected {
-                pass_count += 1;
-            } else {
+        match run_fixture(fixture) {
+            Ok(()) => pass_count += 1,
+            Err(err) => {
                 fail_count += 1;
-
-                // Write actual result for manual comparison.
-                let actual_path = fixture.expected_path.with_file_name(format!(
-                    "{}_actual_result{}",
-                    fixture.name,
-                    fixture
-                        .base_path
-                        .extension()
-                        .map(|e| format!(".{}", e.to_string_lossy()))
-                        .unwrap_or_default()
-                ));
-                let _ = std::fs::write(&actual_path, &result.output);
-
-                failures.push(format!(
-                    "[{}] output mismatch (actual written to {})\n  expected:\n{}\n  actual:\n{}",
-                    fixture.name,
-                    actual_path.display(),
-                    indent_text(&expected),
-                    indent_text(&result.output),
-                ));
+                failures.push(err);
             }
-        } else {
-            // Empty expected file — only invariant checks were run.
-            pass_count += 1;
         }
     }
 
@@ -398,6 +805,27 @@ fn fixture_7_add_add_conflict() {
     run_single_fixture("7_add_add_conflict");
 }
 
+#[test]
+fn fixture_8_kdiff3_simple_alignment() {
+    run_single_fixture("8_kdiff3_simple_alignment");
+}
+
+#[test]
+fn fixture_9_kdiff3_prefer_identical_alignment() {
+    run_single_fixture("9_kdiff3_prefer_identical_alignment");
+}
+
+#[test]
+fn parses_alignment_expected_rows() {
+    let parsed = parse_expected_fixture(
+        "# alignment format\n\
+         0 0 0\n\
+         -1 1 -1\n\
+         1 2 1\n",
+    );
+    assert!(matches!(parsed, ExpectedFixture::Alignment(_)));
+}
+
 fn run_single_fixture(name: &str) {
     let fixtures_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/merge");
     let fixtures = discover_fixtures(&fixtures_dir);
@@ -406,21 +834,8 @@ fn run_single_fixture(name: &str) {
         .find(|f| f.name == name)
         .unwrap_or_else(|| panic!("Fixture {:?} not found", name));
 
-    let base = std::fs::read_to_string(&fixture.base_path).unwrap();
-    let contrib1 = std::fs::read_to_string(&fixture.contrib1_path).unwrap();
-    let contrib2 = std::fs::read_to_string(&fixture.contrib2_path).unwrap();
-    let expected = std::fs::read_to_string(&fixture.expected_path).unwrap();
-
-    let result = merge_file(&base, &contrib1, &contrib2, &MergeOptions::default());
-
-    validate_invariants(&base, &contrib1, &contrib2, &result.output, name);
-
-    if !expected.is_empty() {
-        assert_eq!(
-            result.output, expected,
-            "[{}] merge output does not match expected result",
-            name
-        );
+    if let Err(err) = run_fixture(fixture) {
+        panic!("{err}");
     }
 }
 
