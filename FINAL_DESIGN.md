@@ -1,10 +1,10 @@
 ## STATUS: COMPLETE
 
-All components from both design documents are fully implemented. Iteration 15 verification (March 1, 2026) re-ran the full headless suite (`cargo test --workspace --no-default-features --features gix`) and all tests passed with zero failures. Comprehensive audit of both design documents (`external_usage.md` and `docs/REFERENCE_TEST_PORTABILITY.md`) against the codebase confirms no remaining `⬜`/`🔧` items — all phases, rollout plan items, acceptance criteria, and behavior matrix entries are implemented with test coverage.
+All components from both design documents are fully implemented. Iteration 16 verification (March 1, 2026) re-ran the full headless suite (`cargo test --workspace --no-default-features --features gix`) — 1070 tests passed, 0 failures, 5 ignored, clippy clean. Comprehensive audit of both design documents (`external_usage.md` and `docs/REFERENCE_TEST_PORTABILITY.md`) against the codebase confirms no remaining `⬜`/`🔧` items — all phases, rollout plan items, acceptance criteria, and behavior matrix entries are implemented with test coverage. Zero TODO/FIXME/HACK markers remain in the codebase.
 
 ## Implementation Progress
 
-### Progress Snapshot (Iteration 15)
+### Progress Snapshot (Iteration 16)
 
 External Diff/Merge Usage Design (`external_usage.md`)
 - ✅ Dedicated CLI modes (`difftool`, `mergetool`) and arg/env validation are implemented.
