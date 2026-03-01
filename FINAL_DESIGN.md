@@ -1,10 +1,10 @@
 ## STATUS: COMPLETE
 
-All components from both design documents are fully implemented. Latest update fixes a CRLF line-ending preservation bug in the autosolve subchunk splitting path: `lines_to_text` now uses the detected dominant line ending instead of always appending `\n`, preventing silent CRLF→LF conversion when `--auto` resolves non-overlapping changes in Windows-style files.
+All components from both design documents are fully implemented. Latest update fixes a CRLF line-ending preservation bug in the autosolve subchunk splitting path: `lines_to_text` now uses the detected dominant line ending instead of always appending `\n`, preventing silent CRLF→LF conversion when `--auto` resolves non-overlapping changes in Windows-style files. Iteration 68 verification (March 1, 2026) re-ran the full headless suite (`cargo test --workspace --no-default-features --features gix`) with all tests passing and no remaining `⬜`/`🔧` items.
 
 ## Implementation Progress
 
-### Progress Snapshot (Iteration 67)
+### Progress Snapshot (Iteration 68)
 
 External Diff/Merge Usage Design (`external_usage.md`)
 - ✅ Dedicated CLI modes (`difftool`, `mergetool`) and arg/env validation are implemented.
