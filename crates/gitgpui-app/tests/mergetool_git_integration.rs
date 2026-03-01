@@ -1505,6 +1505,63 @@ fn git_mergetool_keep_backup_delete_delete_no_errors() {
     );
 }
 
+#[test]
+fn git_mergetool_keep_temporaries_delete_delete_abort_keeps_stage_files() {
+    // Parity with git t7610: "mergetool keeps tempfiles when aborting delete/delete"
+    // for a path-targeted delete/delete conflict flow.
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+
+    if !setup_delete_delete_rename_conflict(repo) {
+        // Some git versions may auto-resolve this rename/rename setup.
+        return;
+    }
+
+    configure_gitgpui_mergetool(repo);
+    run_git(repo, &["config", "mergetool.keepTemporaries", "true"]);
+    run_git(repo, &["config", "mergetool.writeToTemp", "false"]);
+
+    let output = run_git_with_stdin(repo, &["mergetool", "a/a/file.txt"], "a\n");
+    let text = output_text(&output);
+    assert!(
+        !output.status.success(),
+        "expected abort to return non-zero for delete/delete conflict\n{text}"
+    );
+
+    let temp_dir = repo.join("a/a");
+    assert!(
+        temp_dir.is_dir(),
+        "expected delete/delete temp directory to exist after abort with keepTemporaries=true"
+    );
+
+    let mut entries: Vec<String> = fs::read_dir(&temp_dir)
+        .expect("read preserved temp directory")
+        .map(|entry| {
+            entry
+                .expect("read temp directory entry")
+                .file_name()
+                .to_string_lossy()
+                .to_string()
+        })
+        .collect();
+    entries.sort();
+
+    let has_base = entries
+        .iter()
+        .any(|name| name.starts_with("file_BASE_") && name.ends_with(".txt"));
+    let has_local = entries
+        .iter()
+        .any(|name| name.starts_with("file_LOCAL_") && name.ends_with(".txt"));
+    let has_remote = entries
+        .iter()
+        .any(|name| name.starts_with("file_REMOTE_") && name.ends_with(".txt"));
+
+    assert!(
+        has_base && has_local && has_remote,
+        "expected preserved BASE/LOCAL/REMOTE stage files, got {entries:?}\n{text}"
+    );
+}
+
 // ── Modify/delete conflict ───────────────────────────────────────────
 
 #[test]
