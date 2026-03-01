@@ -1985,6 +1985,34 @@ mod tests {
     }
 
     #[test]
+    fn compat_parses_meld_style_difftool_attached_labels() {
+        let dir = tempfile::tempdir().unwrap();
+        let local = tmp_file(&dir, "left.txt", "left\n");
+        let remote = tmp_file(&dir, "right.txt", "right\n");
+        let env = TestEnv::new();
+
+        let mode = parse_mode_for_test(
+            vec![
+                OsString::from("gitgpui-app"),
+                OsString::from("-LLEFT_LABEL"),
+                OsString::from("--label=RIGHT_LABEL"),
+                local.into_os_string(),
+                remote.into_os_string(),
+            ],
+            &env,
+        )
+        .unwrap();
+
+        match mode {
+            AppMode::Difftool(config) => {
+                assert_eq!(config.label_left.as_deref(), Some("LEFT_LABEL"));
+                assert_eq!(config.label_right.as_deref(), Some("RIGHT_LABEL"));
+            }
+            _ => panic!("expected Difftool mode"),
+        }
+    }
+
+    #[test]
     fn compat_parses_kdiff3_style_mergetool_with_base() {
         let dir = tempfile::tempdir().unwrap();
         let base = tmp_file(&dir, "base.txt", "base\n");

@@ -468,6 +468,35 @@ fn standalone_compat_difftool_accepts_meld_style_label_flags() {
 }
 
 #[test]
+fn standalone_compat_difftool_accepts_attached_label_forms() {
+    let dir = tempfile::tempdir().unwrap();
+    let local = dir.path().join("left.txt");
+    let remote = dir.path().join("right.txt");
+
+    write_file(&local, "left\n");
+    write_file(&remote, "right\n");
+
+    let output = run_gitgpui([
+        OsString::from("-LLEFT_LABEL"),
+        OsString::from("--label=RIGHT_LABEL"),
+        local.as_os_str().to_owned(),
+        remote.as_os_str().to_owned(),
+    ]);
+
+    let text = output_text(&output);
+    assert_eq!(output.status.code(), Some(0), "expected exit 0\n{text}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("--- LEFT_LABEL"),
+        "expected left label\n{text}"
+    );
+    assert!(
+        stdout.contains("+++ RIGHT_LABEL"),
+        "expected right label\n{text}"
+    );
+}
+
+#[test]
 fn standalone_compat_mergetool_meld_label_order_maps_to_local_base_remote() {
     let dir = tempfile::tempdir().unwrap();
     let local = dir.path().join("local.txt");

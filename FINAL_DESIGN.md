@@ -1,16 +1,17 @@
 ## STATUS: COMPLETE
 
-All components from both design documents are fully implemented. Latest update hardens CI workflow portability so all gates run on ubuntu-latest without GPUI system dependencies.
+All components from both design documents are fully implemented. Latest update hardens no-subcommand difftool compatibility parity by adding explicit attached-label regression coverage (`-L<label>` and `--label=<label>`) in both parser-unit and standalone E2E tests.
 
 ## Implementation Progress
 
-### Progress Snapshot (Iteration 59)
+### Progress Snapshot (Iteration 60)
 
 External Diff/Merge Usage Design (`external_usage.md`)
 - ✅ Dedicated CLI modes (`difftool`, `mergetool`) and arg/env validation are implemented.
 - ✅ KDiff3-style compatibility fallback is implemented for no-subcommand invocations (positional args + `--L1/--L2/--L3` + `--base` + `-o/--output/--out` + optional `--auto`), enabling Git built-in tool flows that invoke the binary directly via `*.path`.
 - ✅ Meld-style compatibility fallback is implemented for no-subcommand invocations (`--output`/`-o` + optional `--auto-merge` with `LOCAL BASE REMOTE` positional ordering), enabling Git built-in `meld` path-override flows (`mergetool.meld.path`) to invoke GitGpui directly.
 - ✅ Meld-style pane labels are now supported in no-subcommand compatibility invocations via `-L` / `--label` (including attached-value forms like `-LLEFT` / `--label=LEFT`) for both diff and merge flows.
+- ✅ Attached-form difftool label compatibility now has explicit regression coverage: CLI parser unit test + standalone no-subcommand E2E test validate `-L<label>` and `--label=<label>` on direct diff invocations.
 - ✅ Strict compatibility validation is implemented for no-subcommand invocation: invalid combinations now fail fast with actionable errors (`--auto` requires output path, merge mode positional count validation, merge-mode `--L3`-without-`BASE` rejection in 2-path mode, `--base` ambiguity guards, diff-mode `--L3`/`--base` rejection, and too-many-positional guards).
 - ✅ CLI empty-path hardening is implemented: required `LOCAL`/`REMOTE`/`MERGED` inputs now reject empty path values with actionable parse-time errors, optional display-path env vars ignore empty strings, and empty `BASE` from env is normalized to no-base while explicit empty `--base` is rejected.
 - ✅ Mergetool path-kind validation is hardened: `LOCAL`, `REMOTE`, and explicit `BASE` now reject directories (must be files), and existing-directory `MERGED` targets fail fast with actionable parse-time errors.
@@ -79,7 +80,7 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
   - accepts direct external-tool invocation with positional paths and compatibility flags (`--auto`, `--auto-merge`, `--L1/--L2/--L3`, Meld-style `-L/--label`, `--base`, `-o/--output/--out`)
   - maps to validated `difftool`/`mergetool` app modes
   - enforces strict compatibility validation with actionable errors (`--auto`/`--auto-merge` output-path requirements, merge positional count checks, merge-mode `--L3` requires `BASE` in compatibility mode, `--base` conflict guards, diff-mode `--L3`/`--base` rejection, too-many-positional checks, and label-arity overflow rejection)
-  - coverage: CLI parser tests (including Meld `-L/--label` diff+merge cases and over-arity rejection) + git-invoked `kdiff3`/`meld` path-override integration tests
+  - coverage: CLI parser tests (including Meld `-L/--label` diff+merge cases, attached-form `-L<label>` / `--label=<label>` difftool parsing, and over-arity rejection) + git-invoked `kdiff3`/`meld` path-override integration tests + standalone no-subcommand attached-label difftool E2E coverage
 - ✅ Exit code constants aligned to design (`0`, `1`, `>=2`) defined in app CLI module.
 - ✅ Conflict-marker label formatter and runtime integration implemented: `crates/gitgpui-core/src/conflict_labels.rs` provides `empty tree`/`<short-sha>:<path>`/merged-ancestors/rebase-parent formatting, and `crates/gitgpui-app/src/mergetool_mode.rs` now applies filename/`empty tree` fallback labels in dedicated mergetool flows.
 - ✅ Focused GPUI tool windows for interactive diff/merge (`--gui` flag):
@@ -216,7 +217,17 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
   - ✅ Dedicated trust-exit interaction matrix assertions (`difftool.trustExitCode`, `--trust-exit-code`, `--no-trust-exit-code`).
 - ✅ `git difftool --tool-help` discoverability assertion for configured `gitgpui` tool.
 
-### Latest Component Delivered (Iteration 59) — CI Workflow Portability Hardening
+### Latest Component Delivered (Iteration 60) — Attached-Label Difftool Compatibility Regression Hardening
+
+- Added explicit parser coverage for no-subcommand difftool attached label forms in [`crates/gitgpui-app/src/cli.rs`](crates/gitgpui-app/src/cli.rs):
+  - `compat_parses_meld_style_difftool_attached_labels` validates `-LLEFT_LABEL` and `--label=RIGHT_LABEL` are correctly mapped to left/right pane labels.
+- Added standalone end-to-end coverage in [`crates/gitgpui-app/tests/standalone_tool_mode_integration.rs`](crates/gitgpui-app/tests/standalone_tool_mode_integration.rs):
+  - `standalone_compat_difftool_accepts_attached_label_forms` invokes `gitgpui-app` in no-subcommand mode and asserts attached labels are rendered in diff headers.
+- Verification:
+  - `cargo test -p gitgpui-app compat_parses_meld_style_difftool_attached_labels`
+  - `cargo test -p gitgpui-app --test standalone_tool_mode_integration standalone_compat_difftool_accepts_attached_label_forms`
+
+### Previous Component Delivered (Iteration 59) — CI Workflow Portability Hardening
 
 - Fixed CI workflow (`.github/workflows/rust.yml`) to work on ubuntu-latest without GPUI system dependencies:
   - All `gitgpui-app` jobs now build/test with `--no-default-features --features gix` (headless mode)
