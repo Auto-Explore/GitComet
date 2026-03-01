@@ -235,16 +235,40 @@ fn git_config_get(workdir: &Path, key: &str) -> Result<Option<String>> {
 ///
 /// Supports git-style boolean literals: true/false, yes/no, on/off, 1/0.
 fn git_config_get_bool(workdir: &Path, key: &str) -> Result<Option<bool>> {
-    git_config_get(workdir, key)?
-        .map(|value| {
-            parse_git_bool(&value).ok_or_else(|| {
-                Error::new(ErrorKind::Backend(format!(
-                    "Invalid boolean value for git config {key}: {:?}. Expected true/false, yes/no, on/off, or 1/0.",
-                    value
-                )))
-            })
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(workdir)
+        .arg("config")
+        .arg("--get")
+        .arg(key)
+        .output()
+        .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+
+    if output.status.success() {
+        // In git config files, a bare boolean key (no explicit value) is
+        // treated as `true`; `git config --get` returns an empty line for it.
+        let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if value.is_empty() {
+            return Ok(Some(true));
+        }
+        parse_git_bool(&value).map(Some).ok_or_else(|| {
+            Error::new(ErrorKind::Backend(format!(
+                "Invalid boolean value for git config {key}: {:?}. Expected true/false, yes/no, on/off, or 1/0.",
+                value
+            )))
         })
-        .transpose()
+    } else {
+        let code = output.status.code().unwrap_or(-1);
+        if code == 1 {
+            Ok(None)
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            Err(Error::new(ErrorKind::Backend(format!(
+                "git config --get {key} failed: {}",
+                stderr.trim()
+            ))))
+        }
+    }
 }
 
 fn parse_git_bool(value: &str) -> Option<bool> {
@@ -457,5 +481,27 @@ mod tests {
             err.kind(),
             ErrorKind::Backend(message) if message.contains("Invalid boolean value")
         ));
+    }
+
+    #[test]
+    fn test_git_config_get_bool_bare_key_is_true() {
+        let tmp = tempfile::tempdir().unwrap();
+        let workdir = tmp.path();
+        Command::new("git")
+            .arg("-C")
+            .arg(workdir)
+            .arg("init")
+            .output()
+            .unwrap();
+
+        let config_path = workdir.join(".git").join("config");
+        let mut config = std::fs::read_to_string(&config_path).unwrap();
+        config.push_str("\n[mergetool \"test\"]\n\ttrustExitCode\n");
+        std::fs::write(config_path, config).unwrap();
+
+        assert_eq!(
+            git_config_get_bool(workdir, "mergetool.test.trustExitCode").unwrap(),
+            Some(true)
+        );
     }
 }
