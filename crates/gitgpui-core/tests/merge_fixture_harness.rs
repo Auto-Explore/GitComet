@@ -21,7 +21,7 @@
 //! 5. Compares actual output/alignment against expected result when present.
 //! 6. On mismatch, writes `{prefix}_actual_result.{ext}` for manual diff.
 
-use gitgpui_core::merge::{MergeOptions, merge_file};
+use gitgpui_core::merge::{merge_file, MergeOptions};
 use std::collections::{BTreeMap, HashSet};
 use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
@@ -87,14 +87,11 @@ fn discover_fixtures(dir: &Path) -> Vec<MergeFixture> {
             None => continue,
         };
 
-        // Look for files matching *_base.*
-        if let Some(prefix_end) = file_name.find("_base.") {
-            let prefix = &file_name[..prefix_end];
-            let ext = &file_name[prefix_end + "_base".len()..]; // includes the dot + extension
-
-            let contrib1_path = dir.join(format!("{}_contrib1{}", prefix, ext));
-            let contrib2_path = dir.join(format!("{}_contrib2{}", prefix, ext));
-            let expected_path = dir.join(format!("{}_expected_result{}", prefix, ext));
+        // Look for files matching *_base.*.
+        if let Some((prefix, extension_suffix)) = parse_base_fixture_filename(&file_name) {
+            let contrib1_path = dir.join(format!("{}_contrib1{}", prefix, extension_suffix));
+            let contrib2_path = dir.join(format!("{}_contrib2{}", prefix, extension_suffix));
+            let expected_path = dir.join(format!("{}_expected_result{}", prefix, extension_suffix));
 
             if contrib1_path.exists() && contrib2_path.exists() {
                 fixtures_by_name.insert(
@@ -114,16 +111,38 @@ fn discover_fixtures(dir: &Path) -> Vec<MergeFixture> {
     fixtures_by_name.into_values().collect()
 }
 
+fn parse_base_fixture_filename(file_name: &str) -> Option<(&str, &str)> {
+    let marker = "_base.";
+    let marker_start = file_name.rfind(marker)?;
+    let prefix = &file_name[..marker_start];
+    let extension_suffix = &file_name[marker_start + "_base".len()..];
+
+    if prefix.is_empty() || extension_suffix.len() <= 1 {
+        return None;
+    }
+
+    Some((prefix, extension_suffix))
+}
+
 fn actual_result_path(fixture: &MergeFixture) -> PathBuf {
-    let file_name = format!(
-        "{}_actual_result{}",
-        fixture.name,
-        fixture
-            .base_path
-            .extension()
-            .map(|e| format!(".{}", e.to_string_lossy()))
-            .unwrap_or_default()
-    );
+    let extension_suffix = fixture
+        .base_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .and_then(|file_name| {
+            parse_base_fixture_filename(file_name)
+                .filter(|(prefix, _)| *prefix == fixture.name)
+                .map(|(_, ext)| ext.to_string())
+        })
+        .or_else(|| {
+            fixture
+                .base_path
+                .extension()
+                .map(|ext| format!(".{}", ext.to_string_lossy()))
+        })
+        .unwrap_or_default();
+
+    let file_name = format!("{}_actual_result{}", fixture.name, extension_suffix);
 
     if let Some(expected_path) = &fixture.expected_path {
         expected_path.with_file_name(file_name)
@@ -186,7 +205,11 @@ fn parse_alignment_rows(raw: &str) -> Option<Vec<AlignmentRow>> {
         saw_row = true;
     }
 
-    if saw_row { Some(rows) } else { None }
+    if saw_row {
+        Some(rows)
+    } else {
+        None
+    }
 }
 
 fn serialize_alignment_rows(rows: &[AlignmentRow]) -> String {
@@ -926,6 +949,47 @@ fn discover_fixtures_includes_cases_without_expected_result() {
 }
 
 #[test]
+fn discover_fixtures_uses_last_base_marker_in_filename() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let fixtures_dir = dir.path();
+
+    std::fs::write(
+        fixtures_dir.join("13_nested_base_token_base.fixture.txt"),
+        "base\n",
+    )
+    .expect("write base");
+    std::fs::write(
+        fixtures_dir.join("13_nested_base_token_contrib1.fixture.txt"),
+        "base\n",
+    )
+    .expect("write c1");
+    std::fs::write(
+        fixtures_dir.join("13_nested_base_token_contrib2.fixture.txt"),
+        "base\n",
+    )
+    .expect("write c2");
+
+    let fixtures = discover_fixtures(fixtures_dir);
+    let fixture = fixtures
+        .iter()
+        .find(|f| f.name == "13_nested_base_token")
+        .expect("fixture should be discovered");
+
+    assert_eq!(
+        fixture.base_path.file_name().and_then(|n| n.to_str()),
+        Some("13_nested_base_token_base.fixture.txt")
+    );
+    assert_eq!(
+        fixture.contrib1_path.file_name().and_then(|n| n.to_str()),
+        Some("13_nested_base_token_contrib1.fixture.txt")
+    );
+    assert_eq!(
+        fixture.contrib2_path.file_name().and_then(|n| n.to_str()),
+        Some("13_nested_base_token_contrib2.fixture.txt")
+    );
+}
+
+#[test]
 fn run_fixture_without_expected_result_succeeds() {
     let dir = tempfile::tempdir().expect("tempdir");
     let fixtures_dir = dir.path();
@@ -957,6 +1021,27 @@ fn actual_result_path_without_expected_uses_base_directory() {
     assert_eq!(
         actual_result_path(&fixture),
         dir.path().join("12_path_fallback_actual_result.txt")
+    );
+}
+
+#[test]
+fn actual_result_path_preserves_multi_dot_extension_suffix() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let fixture = MergeFixture {
+        name: "14_multi_ext".to_string(),
+        base_path: dir.path().join("14_multi_ext_base.merge.fixture.txt"),
+        contrib1_path: dir.path().join("14_multi_ext_contrib1.merge.fixture.txt"),
+        contrib2_path: dir.path().join("14_multi_ext_contrib2.merge.fixture.txt"),
+        expected_path: Some(
+            dir.path()
+                .join("14_multi_ext_expected_result.merge.fixture.txt"),
+        ),
+    };
+
+    assert_eq!(
+        actual_result_path(&fixture),
+        dir.path()
+            .join("14_multi_ext_actual_result.merge.fixture.txt")
     );
 }
 

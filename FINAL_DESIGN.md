@@ -2,6 +2,50 @@
 
 ## Implementation Progress
 
+### Progress Snapshot (Iteration 36, Fixture Harness Filename-Suffix Hardening — March 2, 2026)
+
+Performed this iteration:
+- ✅ Read both design documents in full (`external_usage.md`, `docs/REFERENCE_TEST_PORTABILITY.md`).
+- ✅ Identified a remaining Phase 2 fixture-harness parsing gap in `crates/gitgpui-core/tests/merge_fixture_harness.rs`:
+  - fixture discovery matched the first `"_base."` token in filenames, which could mis-parse valid `*_base.*` fixtures when the prefix itself contained `"_base"`.
+  - `*_actual_result.*` artifact naming only preserved the last extension segment (e.g. `.txt`), not full multi-dot suffixes from `*_base.*`.
+- ✅ Hardened fixture parsing and artifact naming:
+  - added `parse_base_fixture_filename()` using suffix-oriented parsing (`rfind("_base.")`) for correct `*_base.*` handling.
+  - `discover_fixtures()` now derives companion paths (`_contrib1`, `_contrib2`, `_expected_result`) from the parsed suffix tuple.
+  - `actual_result_path()` now preserves the full extension suffix from the base fixture name (e.g. `.merge.fixture.txt`).
+- ✅ Added regression tests:
+  - `discover_fixtures_uses_last_base_marker_in_filename`
+  - `actual_result_path_preserves_multi_dot_extension_suffix`
+- ✅ Validation: `cargo test -p gitgpui-core --test merge_fixture_harness -- --nocapture` (**18 passed, 0 failed**).
+
+External Diff/Merge Usage Design (`external_usage.md`):
+- ✅ CLI modes: `difftool`, `mergetool`, and `setup` implemented with all documented flags and env fallback.
+- ✅ Exit policy: dedicated modes return `0`/`1`/`>=2` per design contract.
+- ✅ Git integration: setup/config emits full headless+GUI tool config with `guiDefault=auto`.
+- ✅ Compatibility: KDiff3/Meld invocation forms supported (`--L1/--L2/--L3`, `-o/--output/--out`, `--base`, positional forms).
+- ✅ Behavior matrix: all 10 required scenarios covered by automated tests.
+- ✅ Test strategy: all three sections (A: Git scenarios, B: existing test extensions, C: fixture harness) complete.
+  - Hardening this iteration: fixture harness `*_base.*` discovery is now suffix-correct for embedded `"_base"` prefixes and multi-dot fixture extensions.
+- ✅ Rollout plan: all three phases (MVP, compat parity hardening, regression suite) complete.
+- ✅ Acceptance criteria: all 5 criteria met.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
+Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`):
+- ✅ Phase 1A: t6403 core merge algorithm — 41 tests.
+- ✅ Phase 1B: t6427 zdiff3 — 4 tests.
+- ✅ Phase 1C: Conflict label formatting — 5 tests.
+- ✅ Phase 2A–2C: KDiff3-style fixture harness — 18 tests + 9 seed fixtures.
+  - Hardening this iteration: fixture auto-discovery now correctly handles prefixes containing `"_base"` and preserves full `*_base.*` extension suffixes when writing `*_actual_result.*` artifacts.
+- ✅ Phase 3A–3C: Permutation corpus (243 sampled + 161K on-demand) + real-world merge extraction.
+- ✅ Phase 4A: Mergetool E2E — 65 tests.
+- ✅ Phase 4B: Difftool E2E — 32 tests.
+- ✅ Phase 5A–5C: Meld-derived algorithm tests — 32 tests.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
+Conclusion: All components from both design documents remain fully implemented. This iteration hardened Phase 2 fixture filename handling so `*_base.*` discovery and `*_actual_result.*` artifact naming remain correct for embedded `"_base"` prefixes and multi-dot extensions.
+
 ### Progress Snapshot (Iteration 36, Behavior Matrix Subdirectory Invocation Tests — March 2, 2026)
 
 Performed this iteration:
