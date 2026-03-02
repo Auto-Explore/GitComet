@@ -2,6 +2,46 @@
 
 ## Implementation Progress
 
+### Progress Snapshot (Iteration 35, Merge Extraction Fixture-Collision Hardening — March 2, 2026)
+
+Performed this iteration:
+- ✅ Read both design documents in full (`external_usage.md`, `docs/REFERENCE_TEST_PORTABILITY.md`).
+- ✅ Implemented Phase 3C fixture-generation robustness hardening in `crates/gitgpui-core/src/merge_extraction.rs`:
+  - `write_fixture_files()` now reserves existing fixture prefixes from on-disk `*_base.txt`, `*_contrib1.txt`, and `*_contrib2.txt` files before allocating names for new extracted cases.
+  - Repeated extraction runs into the same destination now append with suffixes (`_1`, `_2`, …) instead of overwriting existing fixture sets.
+  - Expected-only fixture files (`*_expected_result.txt` without base/contrib counterparts) remain intentionally reusable so later extraction can fill in missing sides.
+- ✅ Added regression coverage in `merge_extraction.rs`:
+  - `write_fixture_files_avoids_overwriting_existing_fixture_sets`
+  - `discover_existing_fixture_prefixes_ignores_expected_only_files`
+- ✅ Validation: `cargo test -p gitgpui-core merge_extraction -- --nocapture` (**10 passed, 0 failed**).
+
+External Diff/Merge Usage Design (`external_usage.md`):
+- ✅ CLI modes: `difftool`, `mergetool`, and `setup` implemented with all documented flags and env fallback.
+- ✅ Exit policy: dedicated modes return `0`/`1`/`>=2` per design contract.
+- ✅ Git integration: setup/config emits full headless+GUI tool config with `guiDefault=auto`.
+- ✅ Compatibility: KDiff3/Meld invocation forms supported (`--L1/--L2/--L3`, `-o/--output/--out`, `--base`, positional forms).
+- ✅ Behavior matrix: all 10 required scenarios covered by automated tests.
+- ✅ Test strategy: all three sections (A: Git scenarios, B: existing test extensions, C: fixture harness) complete.
+- ✅ Rollout plan: all three phases (MVP, compat parity hardening, regression suite) complete.
+- ✅ Acceptance criteria: all 5 criteria met.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
+Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`):
+- ✅ Phase 1A: t6403 core merge algorithm — 41 tests.
+- ✅ Phase 1B: t6427 zdiff3 — 4 tests.
+- ✅ Phase 1C: Conflict label formatting — 5 tests.
+- ✅ Phase 2A–2C: KDiff3-style fixture harness — 16 tests + 9 seed fixtures.
+- ✅ Phase 3A–3C: Permutation corpus (243 sampled + 161K on-demand) + real-world merge extraction.
+  - Hardening this iteration: fixture writer now avoids clobbering previously generated fixture sets when extraction is rerun into an existing destination.
+- ✅ Phase 4A: Mergetool E2E — 65 tests.
+- ✅ Phase 4B: Difftool E2E — 32 tests.
+- ✅ Phase 5A–5C: Meld-derived algorithm tests — 32 tests.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
+Conclusion: All components from both design documents remain fully implemented. This iteration hardened Phase 3C incremental fixture generation by preventing on-disk fixture prefix collisions from overwriting existing extracted cases.
+
 ### Progress Snapshot (Iteration 35, Test Quality Hardening — March 2, 2026)
 
 Performed this iteration:

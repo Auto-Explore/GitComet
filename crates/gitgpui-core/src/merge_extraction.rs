@@ -296,7 +296,12 @@ pub fn write_fixture_files(
         source,
     })?;
 
-    let mut used_prefixes: HashSet<String> = HashSet::with_capacity(cases.len());
+    // Reserve prefixes already present on disk so repeated extraction runs
+    // append new fixture sets instead of clobbering existing ones.
+    let existing_prefixes = discover_existing_fixture_prefixes(dest_dir)?;
+    let mut used_prefixes: HashSet<String> =
+        HashSet::with_capacity(existing_prefixes.len() + cases.len());
+    used_prefixes.extend(existing_prefixes);
 
     for case in cases {
         let simplified = sanitize_fixture_component(&case.file_path);
@@ -318,6 +323,41 @@ pub fn write_fixture_files(
     }
 
     Ok(())
+}
+
+fn discover_existing_fixture_prefixes(
+    dest_dir: &Path,
+) -> Result<HashSet<String>, MergeExtractionError> {
+    let mut prefixes = HashSet::new();
+    let entries = std::fs::read_dir(dest_dir).map_err(|source| MergeExtractionError::Io {
+        action: "read fixture directory",
+        path: dest_dir.to_path_buf(),
+        source,
+    })?;
+
+    for entry in entries {
+        let entry = entry.map_err(|source| MergeExtractionError::Io {
+            action: "read fixture directory entry in",
+            path: dest_dir.to_path_buf(),
+            source,
+        })?;
+        let Some(file_name) = entry.file_name().to_str().map(ToOwned::to_owned) else {
+            continue;
+        };
+
+        // Reserve only base/contrib fixture prefixes so an expected-only file
+        // can still be completed by a later extraction run.
+        for suffix in ["_base.txt", "_contrib1.txt", "_contrib2.txt"] {
+            if let Some(prefix) = file_name.strip_suffix(suffix) {
+                if !prefix.is_empty() {
+                    prefixes.insert(prefix.to_string());
+                }
+                break;
+            }
+        }
+    }
+
+    Ok(prefixes)
 }
 
 fn allocate_unique_prefix(base_prefix: &str, used_prefixes: &mut HashSet<String>) -> String {
@@ -759,5 +799,88 @@ mod tests {
         assert!(dest
             .join(format!("{second_prefix}_expected_result.txt"))
             .exists());
+    }
+
+    #[test]
+    fn write_fixture_files_avoids_overwriting_existing_fixture_sets() {
+        let tmp = tempfile::tempdir().expect("create temp dir");
+        let dest = tmp.path().join("fixtures");
+        std::fs::create_dir_all(&dest).expect("create fixture dir");
+
+        let existing_prefix = "abc12345_src_main_rs";
+        std::fs::write(
+            dest.join(format!("{existing_prefix}_base.txt")),
+            "existing base\n",
+        )
+        .expect("write existing base");
+        std::fs::write(
+            dest.join(format!("{existing_prefix}_contrib1.txt")),
+            "existing contrib1\n",
+        )
+        .expect("write existing contrib1");
+        std::fs::write(
+            dest.join(format!("{existing_prefix}_contrib2.txt")),
+            "existing contrib2\n",
+        )
+        .expect("write existing contrib2");
+        std::fs::write(
+            dest.join(format!("{existing_prefix}_expected_result.txt")),
+            "existing expected\n",
+        )
+        .expect("write existing expected");
+
+        let case = ExtractedMergeCase {
+            merge_commit: "abc12345".to_string(),
+            file_path: "src/main.rs".to_string(),
+            base: "new base\n".to_string(),
+            contrib1: "new contrib1\n".to_string(),
+            contrib2: "new contrib2\n".to_string(),
+        };
+
+        write_fixture_files(&[case], &dest).expect("write fixtures");
+
+        // Existing fixture files remain unchanged.
+        let existing_base =
+            std::fs::read_to_string(dest.join(format!("{existing_prefix}_base.txt")))
+                .expect("read existing base");
+        assert_eq!(existing_base, "existing base\n");
+        let existing_expected =
+            std::fs::read_to_string(dest.join(format!("{existing_prefix}_expected_result.txt")))
+                .expect("read existing expected");
+        assert_eq!(existing_expected, "existing expected\n");
+
+        // New extraction output is appended under the next available suffix.
+        let appended_prefix = "abc12345_src_main_rs_1";
+        let appended_base =
+            std::fs::read_to_string(dest.join(format!("{appended_prefix}_base.txt")))
+                .expect("read appended base");
+        let appended_contrib1 =
+            std::fs::read_to_string(dest.join(format!("{appended_prefix}_contrib1.txt")))
+                .expect("read appended contrib1");
+        let appended_contrib2 =
+            std::fs::read_to_string(dest.join(format!("{appended_prefix}_contrib2.txt")))
+                .expect("read appended contrib2");
+        assert_eq!(appended_base, "new base\n");
+        assert_eq!(appended_contrib1, "new contrib1\n");
+        assert_eq!(appended_contrib2, "new contrib2\n");
+        assert!(dest
+            .join(format!("{appended_prefix}_expected_result.txt"))
+            .exists());
+    }
+
+    #[test]
+    fn discover_existing_fixture_prefixes_ignores_expected_only_files() {
+        let tmp = tempfile::tempdir().expect("create temp dir");
+        let dest = tmp.path().join("fixtures");
+        std::fs::create_dir_all(&dest).expect("create fixture dir");
+
+        std::fs::write(dest.join("abc_expected_result.txt"), "expected only\n")
+            .expect("write expected-only fixture");
+
+        let prefixes = discover_existing_fixture_prefixes(&dest).expect("discover prefixes");
+        assert!(
+            !prefixes.contains("abc"),
+            "expected-only fixtures should not reserve prefixes"
+        );
     }
 }
