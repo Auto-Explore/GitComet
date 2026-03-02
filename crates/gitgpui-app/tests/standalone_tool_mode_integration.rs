@@ -431,6 +431,36 @@ fn standalone_mergetool_handles_unicode_paths() {
 }
 
 #[test]
+fn standalone_mergetool_handles_paths_with_spaces() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = dir.path().join("base side.txt");
+    let local = dir.path().join("local side.txt");
+    let remote = dir.path().join("remote side.txt");
+    let merged = dir.path().join("merged output/final merge.txt");
+
+    write_file(&base, "line1\nline2\nline3\n");
+    write_file(&local, "LINE1\nline2\nline3\n");
+    write_file(&remote, "line1\nline2\nLINE3\n");
+
+    let output = run_gitgpui([
+        OsString::from("mergetool"),
+        OsString::from("--base"),
+        base.as_os_str().to_owned(),
+        OsString::from("--local"),
+        local.as_os_str().to_owned(),
+        OsString::from("--remote"),
+        remote.as_os_str().to_owned(),
+        OsString::from("--merged"),
+        merged.as_os_str().to_owned(),
+    ]);
+
+    let text = output_text(&output);
+    assert_eq!(output.status.code(), Some(0), "expected exit 0\n{text}");
+    let merged_text = fs::read_to_string(&merged).expect("merged output to exist");
+    assert_eq!(merged_text, "LINE1\nline2\nLINE3\n");
+}
+
+#[test]
 fn standalone_mergetool_invalid_path_exits_two() {
     let dir = tempfile::tempdir().unwrap();
     let base = dir.path().join("base.txt");
@@ -860,6 +890,39 @@ fn standalone_difftool_handles_unicode_paths() {
     assert!(
         stdout.contains("+++ b/src/日本語.txt"),
         "expected unicode right label\n{text}"
+    );
+}
+
+#[test]
+fn standalone_difftool_handles_paths_with_spaces() {
+    let dir = tempfile::tempdir().unwrap();
+    let local = dir.path().join("left side.txt");
+    let remote = dir.path().join("right side.txt");
+
+    write_file(&local, "left\n");
+    write_file(&remote, "right\n");
+
+    let output = run_gitgpui([
+        OsString::from("difftool"),
+        OsString::from("--local"),
+        local.as_os_str().to_owned(),
+        OsString::from("--remote"),
+        remote.as_os_str().to_owned(),
+        OsString::from("--path"),
+        OsString::from("docs/spaced name.txt"),
+    ]);
+
+    let text = output_text(&output);
+    assert_eq!(output.status.code(), Some(0), "expected exit 0\n{text}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("@@"), "expected unified diff hunk\n{text}");
+    assert!(
+        stdout.contains("--- a/docs/spaced name.txt"),
+        "expected spaced left label\n{text}"
+    );
+    assert!(
+        stdout.contains("+++ b/docs/spaced name.txt"),
+        "expected spaced right label\n{text}"
     );
 }
 
