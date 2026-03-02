@@ -2,6 +2,33 @@
 
 ## Implementation Progress
 
+### Progress Snapshot (Iteration 8, TrustExitCode Fallback Hardening — March 2, 2026)
+
+Implemented this iteration:
+- ✅ External mergetool trust-exit-code parity hardening in `crates/gitgpui-git-gix/src/repo/mergetool.rs`: `resolve_mergetool_config` now resolves trust semantics in precedence order `mergetool.<tool>.trustExitCode` → `mergetool.trustExitCode` → default `false`.
+- ✅ Added targeted regression tests for precedence and fallback:
+  - `test_resolve_mergetool_config_trust_exit_code_falls_back_to_global_setting`
+  - `test_resolve_mergetool_config_tool_specific_trust_exit_overrides_global`
+
+Verification scope (this iteration):
+- ✅ `cargo test -p gitgpui-git-gix`
+- ✅ `cargo test --workspace --no-default-features --features gix`
+- ✅ `cargo clippy --workspace --no-default-features --features gix -- -D warnings`
+
+External Diff/Merge Usage Design (`external_usage.md`)
+- ✅ All components implemented and verified, including trust-exit-code fallback handling for internal mergetool backend configuration parity.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
+Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
+- ✅ Phase 1A–1C complete (t6403 core merge, t6427 zdiff3, label formatting).
+- ✅ Phase 2 complete (KDiff3-style fixture harness + invariants + seed fixtures + optional expected-result support).
+- ✅ Phase 3A–3C complete (permutation corpus + real-world merge extraction).
+- ✅ Phase 4 complete (t7610/t7800 mergetool+difftool E2E parity).
+- ✅ Phase 5 complete (Meld-derived algorithm tests).
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
 ### Progress Snapshot (Iteration 8 — March 2, 2026)
 
 Independent verification audit by a fresh agent confirms all design document components remain fully implemented. No new components to add, no gaps found.

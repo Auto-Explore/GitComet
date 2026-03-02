@@ -1,7 +1,7 @@
 use super::GixRepo;
 use gitgpui_core::error::{Error, ErrorKind};
 use gitgpui_core::services::{
-    CommandOutput, MergetoolResult, Result, validate_conflict_resolution_text,
+    validate_conflict_resolution_text, CommandOutput, MergetoolResult, Result,
 };
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -13,7 +13,8 @@ impl GixRepo {
     /// 1. Reads `merge.tool` from git config to determine the tool name.
     /// 2. Extracts conflict stages (`:1:`, `:2:`, `:3:`) into temp files.
     /// 3. Invokes the tool with BASE, LOCAL, REMOTE, MERGED file paths.
-    /// 4. Reads `mergetool.<tool>.trustExitCode` to decide success semantics.
+    /// 4. Reads trust-exit config to decide success semantics:
+    ///    `mergetool.<tool>.trustExitCode`, then `mergetool.trustExitCode`.
     /// 5. Reads back the merged file and stages it on success.
     pub(super) fn launch_mergetool_impl(&self, path: &Path) -> Result<MergetoolResult> {
         let workdir = &self.spec.workdir;
@@ -252,8 +253,10 @@ fn resolve_mergetool_config(workdir: &Path, has_display: bool) -> Result<Mergeto
     let tool_cmd = git_config_get(workdir, &format!("mergetool.{tool_name}.cmd"))?;
     let tool_path = git_config_get(workdir, &format!("mergetool.{tool_name}.path"))?;
     let trust_exit_code =
-        git_config_get_bool(workdir, &format!("mergetool.{tool_name}.trustExitCode"))?
-            .unwrap_or(false);
+        match git_config_get_bool(workdir, &format!("mergetool.{tool_name}.trustExitCode"))? {
+            Some(value) => value,
+            None => git_config_get_bool(workdir, "mergetool.trustExitCode")?.unwrap_or(false),
+        };
     let write_to_temp = git_config_get_bool(workdir, "mergetool.writeToTemp")?.unwrap_or(false);
     let keep_temporaries =
         git_config_get_bool(workdir, "mergetool.keepTemporaries")?.unwrap_or(false);
@@ -955,6 +958,80 @@ mod tests {
         assert_eq!(cfg.tool_cmd.as_deref(), Some("exit 0"));
         assert!(!cfg.write_to_temp);
         assert!(!cfg.keep_temporaries);
+    }
+
+    #[test]
+    fn test_resolve_mergetool_config_trust_exit_code_falls_back_to_global_setting() {
+        let tmp = tempfile::tempdir().unwrap();
+        let workdir = tmp.path();
+        Command::new("git")
+            .arg("-C")
+            .arg(workdir)
+            .arg("init")
+            .output()
+            .unwrap();
+
+        Command::new("git")
+            .arg("-C")
+            .arg(workdir)
+            .args(["config", "merge.tool", "cli"])
+            .output()
+            .unwrap();
+        Command::new("git")
+            .arg("-C")
+            .arg(workdir)
+            .args(["config", "mergetool.cli.cmd", "exit 0"])
+            .output()
+            .unwrap();
+        Command::new("git")
+            .arg("-C")
+            .arg(workdir)
+            .args(["config", "mergetool.trustExitCode", "true"])
+            .output()
+            .unwrap();
+
+        let cfg = resolve_mergetool_config(workdir, false).unwrap();
+        assert!(cfg.trust_exit_code);
+    }
+
+    #[test]
+    fn test_resolve_mergetool_config_tool_specific_trust_exit_overrides_global() {
+        let tmp = tempfile::tempdir().unwrap();
+        let workdir = tmp.path();
+        Command::new("git")
+            .arg("-C")
+            .arg(workdir)
+            .arg("init")
+            .output()
+            .unwrap();
+
+        Command::new("git")
+            .arg("-C")
+            .arg(workdir)
+            .args(["config", "merge.tool", "cli"])
+            .output()
+            .unwrap();
+        Command::new("git")
+            .arg("-C")
+            .arg(workdir)
+            .args(["config", "mergetool.cli.cmd", "exit 0"])
+            .output()
+            .unwrap();
+        Command::new("git")
+            .arg("-C")
+            .arg(workdir)
+            .args(["config", "mergetool.trustExitCode", "true"])
+            .output()
+            .unwrap();
+        Command::new("git")
+            .arg("-C")
+            .arg(workdir)
+            .args(["config", "mergetool.cli.trustExitCode", "false"])
+            .output()
+            .unwrap();
+
+        let cfg = resolve_mergetool_config(workdir, false).unwrap();
+        assert!(!cfg.trust_exit_code);
     }
 
     #[test]
