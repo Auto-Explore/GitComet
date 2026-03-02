@@ -2,6 +2,30 @@
 
 ## Implementation Progress
 
+### Progress Snapshot (Iteration 2 — March 2, 2026)
+
+Full independent verification audit confirms all design document components are implemented.
+
+- **Test suite**: 1091 passed, 0 failed, 5 ignored (3 intentionally deferred: exhaustive 161K permutation corpus, external repo extraction, fixture generation utility; 2 in vendor gpui crate)
+- **Clippy**: clean (zero warnings in CI mode)
+- **Audit scope**: cross-referenced every Phase (1A–5C) from `REFERENCE_TEST_PORTABILITY.md` and every section from `external_usage.md` against actual test names and source files
+- **Verified test files and counts**:
+  - `merge_algorithm.rs`: 41 tests (t6403 core + zdiff3 + histogram + extras)
+  - `meld_algorithm_tests.rs`: 32 tests (Phase 5A/5B/5C + extras)
+  - `mergetool_git_integration.rs`: 63 tests (Phase 4A E2E)
+  - `difftool_git_integration.rs`: 25 tests (Phase 4B E2E)
+  - `standalone_tool_mode_integration.rs`: 37 tests (standalone CLI E2E)
+  - `merge_fixture_harness.rs`: 11 tests (Phase 2 harness + seed cases)
+  - `merge_permutation_corpus.rs`: 1+1 tests (Phase 3A/3B, 243 sampled cases)
+  - `merge_git_extraction.rs`: 8+2 tests (Phase 3C real-world extraction)
+  - `conflict_label_formatting.rs`: 5 tests (Phase 1C labels)
+  - `focused_merge.rs`: 20 unit tests (GUI merge window)
+  - `focused_diff.rs`: 3 unit tests (GUI diff window)
+  - `cli.rs`: 152 unit tests (arg parsing, validation, compat)
+  - `mergetool_mode.rs`: 35 unit tests (runtime merge logic)
+  - State management: 134 tests (reducers, conflict session, effects)
+- **No remaining gaps**: all ✅, no 🔧 or ⬜ items
+
 ### Progress Snapshot (Iteration 1 — March 2, 2026)
 
 External Diff/Merge Usage Design (`external_usage.md`)
