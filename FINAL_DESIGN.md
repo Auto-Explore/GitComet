@@ -2,6 +2,35 @@
 
 ## Implementation Progress
 
+### Progress Snapshot (Iteration 4 — March 2, 2026)
+
+Independent verification audit: all design document components remain fully implemented.
+
+Implemented this iteration:
+- ✅ Refactored `crates/gitgpui-core/tests/merge_git_extraction.rs` to use the production `merge_extraction` module API instead of duplicate local implementations. This eliminates ~240 lines of duplicated extraction/git helper code (`discover_merge_commits`, `extract_merge_cases`, `write_fixtures`, `ExtractedMerge` struct, `git_output`, `git_bytes`), fixes a sanitization inconsistency between the test file and the module, and ensures the public API is integration-tested alongside merge algorithm invariant checks.
+- ✅ All 8 extraction tests now exercise the production `merge_extraction::discover_merge_commits`, `extract_merge_cases`, `extract_merge_cases_from_repo`, and `write_fixture_files` APIs, confirming real integration coverage.
+- ✅ The `generate_fixtures_from_repo` utility test now uses `extract_merge_cases_from_repo` + `write_fixture_files` for consistent fixture naming.
+
+Verification run:
+- ✅ `cargo test --workspace --no-default-features --features gix`: **1096 passed, 0 failed, 5 ignored**
+- ✅ `cargo clippy --workspace --no-default-features --features gix -- -D warnings`: **0 warnings**
+- ✅ Cross-referenced every Phase (1A–5C) from `REFERENCE_TEST_PORTABILITY.md` and every section from `external_usage.md` against actual test names and source files — no gaps found.
+
+External Diff/Merge Usage Design (`external_usage.md`)
+- ✅ All components implemented and verified. No remaining gaps.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
+Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
+- ✅ Phase 1A–1C complete (t6403 core merge, t6427 zdiff3, label formatting).
+- ✅ Phase 2 complete (KDiff3-style fixture harness + seed fixtures + invariants).
+- ✅ Phase 3A–3B complete (permutation corpus generation + invariants).
+- ✅ Phase 3C complete (production extraction module + integration tests using public API).
+- ✅ Phase 4 complete (t7610/t7800 mergetool/difftool E2E parity suites).
+- ✅ Phase 5 complete (Meld-derived matcher/interval/newline behavior tests).
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
 ### Progress Snapshot (Iteration 3 — March 2, 2026)
 
 Implemented this iteration:

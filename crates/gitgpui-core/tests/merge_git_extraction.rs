@@ -11,235 +11,22 @@
 //!
 //! These tests generate fixtures at test time — no file system bloat from
 //! pre-committed merge data.
+//!
+//! Uses the production `merge_extraction` module API for extraction and fixture
+//! writing, ensuring that the public API is integration-tested alongside the
+//! merge algorithm invariants.
 
-use gitgpui_core::merge::{MergeOptions, merge_file};
+use gitgpui_core::merge::{merge_file, MergeOptions};
+use gitgpui_core::merge_extraction::{
+    discover_merge_commits, extract_merge_cases, extract_merge_cases_from_repo,
+    write_fixture_files, ExtractedMergeCase, MergeExtractionOptions,
+};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 // ---------------------------------------------------------------------------
-// Git helper functions
-// ---------------------------------------------------------------------------
-
-/// Run a git command in the given repo directory, returning stdout as a string.
-/// Returns `None` if the command fails.
-fn git_output(repo: &Path, args: &[&str]) -> Option<String> {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(repo)
-        .output()
-        .ok()?;
-    if output.status.success() {
-        Some(String::from_utf8_lossy(&output.stdout).into_owned())
-    } else {
-        None
-    }
-}
-
-/// Run a git command that produces raw bytes (for `git show`).
-/// Returns `None` if the command fails.
-fn git_bytes(repo: &Path, args: &[&str]) -> Option<Vec<u8>> {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(repo)
-        .output()
-        .ok()?;
-    if output.status.success() {
-        Some(output.stdout)
-    } else {
-        None
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Merge commit extraction
-// ---------------------------------------------------------------------------
-
-/// A single extracted merge case: three file versions ready for merge testing.
-#[derive(Debug)]
-struct ExtractedMerge {
-    /// Merge commit hash (abbreviated).
-    merge_commit: String,
-    /// File path within the repository.
-    file_path: String,
-    /// File content at the merge-base.
-    base: String,
-    /// File content in the first parent (contrib1 / local).
-    contrib1: String,
-    /// File content in the second parent (contrib2 / remote).
-    contrib2: String,
-}
-
-/// Discover merge commits in a repository, limited to `max_merges`.
-///
-/// Returns a list of `(merge_sha, parent1_sha, parent2_sha)` tuples.
-/// Only considers merges with exactly 2 parents.
-fn discover_merge_commits(repo: &Path, max_merges: usize) -> Vec<(String, String, String)> {
-    // Use the default branch (HEAD) to find merge commits
-    let output = git_output(
-        repo,
-        &[
-            "rev-list",
-            "--merges",
-            "--parents",
-            &format!("--max-count={}", max_merges * 2), // over-fetch to filter octopus merges
-            "HEAD",
-        ],
-    )
-    .unwrap_or_default();
-
-    let mut merges = Vec::new();
-    for line in output.lines() {
-        let fields: Vec<&str> = line.split_whitespace().collect();
-        if fields.len() == 3 {
-            // Exactly 2 parents — standard merge
-            merges.push((
-                fields[0].to_string(),
-                fields[1].to_string(),
-                fields[2].to_string(),
-            ));
-        }
-        // Skip octopus merges (>2 parents)
-        if merges.len() >= max_merges {
-            break;
-        }
-    }
-    merges
-}
-
-/// Extract non-trivial merge cases from a single merge commit.
-///
-/// For each file changed in both parents relative to the merge-base:
-/// 1. Finds the merge-base of the two parents.
-/// 2. Gets the list of files changed in both parent branches.
-/// 3. Extracts file contents at base/contrib1/contrib2.
-/// 4. Skips trivial cases (base == either contrib, or contribs identical).
-/// 5. Skips binary files (non-UTF-8 content).
-///
-/// Returns extracted merge cases, limited to `max_files_per_merge`.
-fn extract_merge_cases(
-    repo: &Path,
-    merge_sha: &str,
-    parent1: &str,
-    parent2: &str,
-    max_files_per_merge: usize,
-) -> Vec<ExtractedMerge> {
-    // Find the merge-base of the two parents.
-    let base_sha = match git_output(repo, &["merge-base", parent1, parent2]) {
-        Some(s) => s.trim().to_string(),
-        None => return Vec::new(),
-    };
-
-    // Find files changed in both parents relative to the merge-base.
-    let files1 = git_output(repo, &["diff", "--name-only", &base_sha, parent1])
-        .unwrap_or_default()
-        .lines()
-        .map(|s| s.to_string())
-        .collect::<HashSet<_>>();
-
-    let files2 = git_output(repo, &["diff", "--name-only", &base_sha, parent2])
-        .unwrap_or_default()
-        .lines()
-        .map(|s| s.to_string())
-        .collect::<HashSet<_>>();
-
-    let overlapping: Vec<&String> = files1.intersection(&files2).collect();
-    if overlapping.is_empty() {
-        return Vec::new();
-    }
-
-    let short_merge = &merge_sha[..merge_sha.len().min(8)];
-    let mut results = Vec::new();
-
-    for file_path in overlapping {
-        if file_path.is_empty() {
-            continue;
-        }
-
-        // Extract file contents at each revision.
-        let base_bytes = match git_bytes(repo, &["show", &format!("{}:{}", base_sha, file_path)]) {
-            Some(b) => b,
-            None => continue,
-        };
-        let contrib1_bytes = match git_bytes(repo, &["show", &format!("{}:{}", parent1, file_path)])
-        {
-            Some(b) => b,
-            None => continue,
-        };
-        let contrib2_bytes = match git_bytes(repo, &["show", &format!("{}:{}", parent2, file_path)])
-        {
-            Some(b) => b,
-            None => continue,
-        };
-
-        // Skip trivial merges: base == either contrib, or contribs identical.
-        if base_bytes == contrib1_bytes
-            || base_bytes == contrib2_bytes
-            || contrib1_bytes == contrib2_bytes
-        {
-            continue;
-        }
-
-        // Skip binary files — merge algorithm works on text.
-        let base_str = match std::str::from_utf8(&base_bytes) {
-            Ok(s) => s.to_string(),
-            Err(_) => continue,
-        };
-        let contrib1_str = match std::str::from_utf8(&contrib1_bytes) {
-            Ok(s) => s.to_string(),
-            Err(_) => continue,
-        };
-        let contrib2_str = match std::str::from_utf8(&contrib2_bytes) {
-            Ok(s) => s.to_string(),
-            Err(_) => continue,
-        };
-
-        results.push(ExtractedMerge {
-            merge_commit: short_merge.to_string(),
-            file_path: file_path.clone(),
-            base: base_str,
-            contrib1: contrib1_str,
-            contrib2: contrib2_str,
-        });
-
-        if results.len() >= max_files_per_merge {
-            break;
-        }
-    }
-
-    results
-}
-
-/// Write extracted merge cases to disk as fixture files compatible with the
-/// existing fixture harness.
-///
-/// Files are written to `dest_dir` following the naming convention:
-///   `{merge_sha}_{simplified_path}_{base,contrib1,contrib2,expected_result}.txt`
-fn write_fixtures(cases: &[ExtractedMerge], dest_dir: &Path) {
-    std::fs::create_dir_all(dest_dir).expect("Failed to create fixture output directory");
-
-    for case in cases {
-        let simplified = case.file_path.replace(['/', '.', ' '], "_");
-        let prefix = format!("{}_{}", case.merge_commit, simplified);
-
-        let base_path = dest_dir.join(format!("{}_base.txt", prefix));
-        let contrib1_path = dest_dir.join(format!("{}_contrib1.txt", prefix));
-        let contrib2_path = dest_dir.join(format!("{}_contrib2.txt", prefix));
-        let expected_path = dest_dir.join(format!("{}_expected_result.txt", prefix));
-
-        std::fs::write(&base_path, &case.base).expect("Failed to write base fixture");
-        std::fs::write(&contrib1_path, &case.contrib1).expect("Failed to write contrib1 fixture");
-        std::fs::write(&contrib2_path, &case.contrib2).expect("Failed to write contrib2 fixture");
-        // Write empty expected_result — invariant checks still run; expected results
-        // can be populated later from a reference tool run.
-        if !expected_path.exists() {
-            std::fs::write(&expected_path, "").expect("Failed to write expected_result fixture");
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Invariant validation (shared with fixture harness)
+// Invariant validation
 // ---------------------------------------------------------------------------
 
 /// Validate algorithm-independent invariants on merge output.
@@ -386,7 +173,7 @@ fn is_base_marker(line: &str) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// Test: extract merges from gitgpui's own repository
+// Pipeline: extract from repo + validate merge invariants
 // ---------------------------------------------------------------------------
 
 /// Find the root of the gitgpui repository (the repo we're building from).
@@ -410,8 +197,10 @@ fn find_gitgpui_repo() -> PathBuf {
 
 /// Check if the repo has enough merge commits for meaningful testing.
 fn repo_has_merges(repo: &Path, minimum: usize) -> bool {
-    let merges = discover_merge_commits(repo, minimum);
-    merges.len() >= minimum
+    match discover_merge_commits(repo, minimum) {
+        Ok(merges) => merges.len() >= minimum,
+        Err(_) => false,
+    }
 }
 
 /// Run the extraction pipeline on a repository and validate all extracted cases.
@@ -422,67 +211,62 @@ fn run_extraction_and_validate(
     max_merges: usize,
     max_files_per_merge: usize,
 ) -> (usize, usize, usize) {
-    let merges = discover_merge_commits(repo, max_merges);
+    let options = MergeExtractionOptions {
+        max_merges,
+        max_files_per_merge,
+    };
+    let cases = extract_merge_cases_from_repo(repo, options).expect("merge extraction failed");
 
-    let mut total_cases = 0usize;
     let mut clean_count = 0usize;
     let mut conflict_count = 0usize;
     let mut failures: Vec<String> = Vec::new();
 
-    for (merge_sha, parent1, parent2) in &merges {
-        let cases = extract_merge_cases(repo, merge_sha, parent1, parent2, max_files_per_merge);
+    for case in &cases {
+        let case_name = format!(
+            "{}:{}",
+            case.merge_commit,
+            case.file_path.chars().take(40).collect::<String>()
+        );
 
-        for case in &cases {
-            total_cases += 1;
-            let case_name = format!(
-                "{}:{}",
-                case.merge_commit,
-                case.file_path.chars().take(40).collect::<String>()
+        let merge_opts = MergeOptions::default();
+        let result = merge_file(&case.base, &case.contrib1, &case.contrib2, &merge_opts);
+
+        // Catch invariant panics for better error reporting.
+        let invariant_result = std::panic::catch_unwind(|| {
+            validate_merge_invariants(
+                &case.base,
+                &case.contrib1,
+                &case.contrib2,
+                &result.output,
+                &case_name,
             );
+        });
 
-            let options = MergeOptions::default();
-            let result = merge_file(&case.base, &case.contrib1, &case.contrib2, &options);
-
-            // Catch invariant panics for better error reporting.
-            let invariant_result = std::panic::catch_unwind(|| {
-                validate_merge_invariants(
-                    &case.base,
-                    &case.contrib1,
-                    &case.contrib2,
-                    &result.output,
-                    &case_name,
-                );
-            });
-
-            match invariant_result {
-                Ok(()) => {
-                    if result.is_clean() {
-                        clean_count += 1;
-                    } else {
-                        conflict_count += 1;
-                    }
+        match invariant_result {
+            Ok(()) => {
+                if result.is_clean() {
+                    clean_count += 1;
+                } else {
+                    conflict_count += 1;
                 }
-                Err(e) => {
-                    let msg = if let Some(s) = e.downcast_ref::<String>() {
-                        s.clone()
-                    } else if let Some(s) = e.downcast_ref::<&str>() {
-                        s.to_string()
-                    } else {
-                        "unknown panic".to_string()
-                    };
-                    failures.push(format!("[{}] invariant violation: {}", case_name, msg));
-                }
+            }
+            Err(e) => {
+                let msg = if let Some(s) = e.downcast_ref::<String>() {
+                    s.clone()
+                } else if let Some(s) = e.downcast_ref::<&str>() {
+                    s.to_string()
+                } else {
+                    "unknown panic".to_string()
+                };
+                failures.push(format!("[{}] invariant violation: {}", case_name, msg));
             }
         }
     }
 
+    let total_cases = cases.len();
     eprintln!(
-        "\nMerge extraction: {} merges scanned, {} cases extracted ({} clean, {} conflicts), {} invariant failures",
-        merges.len(),
-        total_cases,
-        clean_count,
-        conflict_count,
-        failures.len()
+        "\nMerge extraction: {} cases extracted ({} clean, {} conflicts), {} invariant failures",
+        total_cases, clean_count, conflict_count, failures.len()
     );
 
     if !failures.is_empty() {
@@ -503,7 +287,7 @@ fn run_extraction_and_validate(
 #[test]
 fn extraction_discovers_merge_commits() {
     let repo = find_gitgpui_repo();
-    let merges = discover_merge_commits(&repo, 10);
+    let merges = discover_merge_commits(&repo, 10).expect("discover merges");
     // The gitgpui repo may or may not have merges depending on branch strategy.
     // This test verifies the discovery mechanism works without panicking.
     eprintln!(
@@ -511,15 +295,15 @@ fn extraction_discovers_merge_commits() {
         merges.len(),
         repo.display()
     );
-    for (merge, p1, p2) in &merges {
-        assert!(!merge.is_empty());
-        assert!(!p1.is_empty());
-        assert!(!p2.is_empty());
+    for merge in &merges {
+        assert!(!merge.merge_sha.is_empty());
+        assert!(!merge.parent1_sha.is_empty());
+        assert!(!merge.parent2_sha.is_empty());
         // All should be hex SHA strings
         assert!(
-            merge.chars().all(|c| c.is_ascii_hexdigit()),
+            merge.merge_sha.chars().all(|c| c.is_ascii_hexdigit()),
             "Invalid merge SHA: {}",
-            merge
+            merge.merge_sha
         );
     }
 }
@@ -554,11 +338,10 @@ fn extraction_skips_trivial_merges() {
     // Merge branch-a into branch-b (no conflict — trivial overlap)
     run_git(repo, &["merge", "branch-a", "--no-edit"]);
 
-    let merges = discover_merge_commits(repo, 10);
+    let merges = discover_merge_commits(repo, 10).expect("discover merges");
     assert_eq!(merges.len(), 1, "Expected exactly one merge commit");
 
-    let (merge, p1, p2) = &merges[0];
-    let cases = extract_merge_cases(repo, merge, p1, p2, 10);
+    let cases = extract_merge_cases(repo, &merges[0], 10).expect("extract cases");
     // file.txt was only changed in one parent, so there's no overlapping file.
     // other.txt was only changed in one parent as well. No non-trivial cases.
     assert!(
@@ -612,11 +395,10 @@ fn extraction_finds_nontrivial_conflict() {
     run_git(repo, &["commit", "-m", "merge with conflict"]);
 
     // Now extract
-    let merges = discover_merge_commits(repo, 10);
+    let merges = discover_merge_commits(repo, 10).expect("discover merges");
     assert_eq!(merges.len(), 1);
 
-    let (merge, p1, p2) = &merges[0];
-    let cases = extract_merge_cases(repo, merge, p1, p2, 10);
+    let cases = extract_merge_cases(repo, &merges[0], 10).expect("extract cases");
     assert_eq!(cases.len(), 1, "Expected one non-trivial merge case");
 
     let case = &cases[0];
@@ -686,11 +468,10 @@ fn extraction_handles_clean_merge() {
     // Merge — should succeed (no overlapping changes)
     run_git(repo, &["merge", "branch-a", "--no-edit"]);
 
-    let merges = discover_merge_commits(repo, 10);
+    let merges = discover_merge_commits(repo, 10).expect("discover merges");
     assert_eq!(merges.len(), 1);
 
-    let (merge, p1, p2) = &merges[0];
-    let cases = extract_merge_cases(repo, merge, p1, p2, 10);
+    let cases = extract_merge_cases(repo, &merges[0], 10).expect("extract cases");
     assert_eq!(cases.len(), 1, "Expected one non-trivial merge case");
 
     let case = &cases[0];
@@ -752,11 +533,10 @@ fn extraction_skips_binary_files() {
     run_git(repo, &["add", "image.bin"]);
     run_git(repo, &["commit", "-m", "merge"]);
 
-    let merges = discover_merge_commits(repo, 10);
+    let merges = discover_merge_commits(repo, 10).expect("discover merges");
     assert_eq!(merges.len(), 1);
 
-    let (merge, p1, p2) = &merges[0];
-    let cases = extract_merge_cases(repo, merge, p1, p2, 10);
+    let cases = extract_merge_cases(repo, &merges[0], 10).expect("extract cases");
     assert!(
         cases.is_empty(),
         "Binary files should be skipped, got {} cases",
@@ -769,7 +549,7 @@ fn extraction_writes_fixture_files() {
     let tmp = tempfile::tempdir().expect("create temp dir");
     let dest = tmp.path().join("fixtures");
 
-    let cases = vec![ExtractedMerge {
+    let cases = vec![ExtractedMergeCase {
         merge_commit: "abc12345".to_string(),
         file_path: "src/main.rs".to_string(),
         base: "fn main() {}\n".to_string(),
@@ -777,9 +557,9 @@ fn extraction_writes_fixture_files() {
         contrib2: "fn main() { println!(\"B\"); }\n".to_string(),
     }];
 
-    write_fixtures(&cases, &dest);
+    write_fixture_files(&cases, &dest).expect("write fixtures");
 
-    // Verify all four files exist
+    // Module sanitizes "src/main.rs" -> "src_main_rs"
     assert!(dest.join("abc12345_src_main_rs_base.txt").exists());
     assert!(dest.join("abc12345_src_main_rs_contrib1.txt").exists());
     assert!(dest.join("abc12345_src_main_rs_contrib2.txt").exists());
@@ -837,11 +617,10 @@ fn extraction_handles_multifile_merge() {
     run_git(repo, &["add", "a.txt", "b.txt"]);
     run_git(repo, &["commit", "-m", "merge"]);
 
-    let merges = discover_merge_commits(repo, 10);
+    let merges = discover_merge_commits(repo, 10).expect("discover merges");
     assert_eq!(merges.len(), 1);
 
-    let (merge, p1, p2) = &merges[0];
-    let cases = extract_merge_cases(repo, merge, p1, p2, 10);
+    let cases = extract_merge_cases(repo, &merges[0], 10).expect("extract cases");
     assert_eq!(
         cases.len(),
         2,
@@ -949,21 +728,15 @@ fn generate_fixtures_from_repo() {
         repo.display()
     );
 
-    let merges = discover_merge_commits(repo, 50);
-    let mut all_cases = Vec::new();
+    let options = MergeExtractionOptions {
+        max_merges: 50,
+        max_files_per_merge: 10,
+    };
+    let cases = extract_merge_cases_from_repo(repo, options).expect("merge extraction failed");
 
-    for (merge_sha, p1, p2) in &merges {
-        let cases = extract_merge_cases(repo, merge_sha, p1, p2, 10);
-        all_cases.extend(cases);
-    }
+    eprintln!("Extracted {} non-trivial merge cases", cases.len());
 
-    eprintln!(
-        "Extracted {} non-trivial merge cases from {} merges",
-        all_cases.len(),
-        merges.len()
-    );
-
-    write_fixtures(&all_cases, dest);
+    write_fixture_files(&cases, dest).expect("write fixture files");
     eprintln!("Fixtures written to {}", dest.display());
 }
 
