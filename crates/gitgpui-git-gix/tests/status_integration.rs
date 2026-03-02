@@ -1936,6 +1936,54 @@ fn launch_mergetool_uses_tool_path_override_without_custom_cmd() {
     assert_eq!(fs::read_to_string(repo.join("a.txt")).unwrap(), "theirs\n");
 }
 
+#[cfg(unix)]
+#[test]
+fn launch_mergetool_prefers_custom_cmd_over_tool_path_override() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    setup_both_modified_text_conflict(repo, "a.txt", "ours\n", "theirs\n");
+
+    let script_path = repo.join("fake-merge-tool.sh");
+    fs::write(
+        &script_path,
+        "#!/bin/sh\nprintf 'path\\n' > \"$4\"\ntouch \"$PWD/path_invoked\"\n",
+    )
+    .unwrap();
+    make_executable(&script_path);
+
+    run_git(repo, &["config", "merge.tool", "fake"]);
+    run_git(
+        repo,
+        &[
+            "config",
+            "mergetool.fake.path",
+            script_path.to_string_lossy().as_ref(),
+        ],
+    );
+    run_git(
+        repo,
+        &[
+            "config",
+            "mergetool.fake.cmd",
+            "printf 'cmd\\n' > \"$MERGED\"; exit 0",
+        ],
+    );
+    run_git(repo, &["config", "mergetool.fake.trustExitCode", "true"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    let result = opened.launch_mergetool(Path::new("a.txt")).unwrap();
+    assert!(result.success);
+    assert_eq!(result.tool_name, "fake");
+    assert_eq!(result.output.exit_code, Some(0));
+    assert_eq!(result.merged_contents.as_deref(), Some("cmd\n".as_bytes()));
+    assert_eq!(fs::read_to_string(repo.join("a.txt")).unwrap(), "cmd\n");
+    assert!(
+        !repo.join("path_invoked").exists(),
+        "tool path executable should not run when mergetool.<tool>.cmd is configured"
+    );
+}
+
 #[test]
 fn launch_mergetool_write_to_temp_true_uses_temp_stage_paths() {
     let dir = tempfile::tempdir().unwrap();
