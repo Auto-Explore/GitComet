@@ -28,6 +28,19 @@ fn collect_two_way_source_lines(
     (old_lines, new_lines)
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ClearDiffSelectionAction {
+    ClearSelection,
+    ExitFocusedMergetool,
+}
+
+fn clear_diff_selection_action(view_mode: GitGpuiViewMode) -> ClearDiffSelectionAction {
+    match view_mode {
+        GitGpuiViewMode::Normal => ClearDiffSelectionAction::ClearSelection,
+        GitGpuiViewMode::FocusedMergetool => ClearDiffSelectionAction::ExitFocusedMergetool,
+    }
+}
+
 pub(in super::super) struct MainPaneView {
     pub(in super::super) store: Arc<AppStore>,
     state: Arc<AppState>,
@@ -187,6 +200,19 @@ impl MainPaneView {
         }
 
         hasher.finish()
+    }
+
+    pub(in super::super) fn clear_diff_selection_or_exit(
+        &mut self,
+        repo_id: RepoId,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        match clear_diff_selection_action(self.view_mode) {
+            ClearDiffSelectionAction::ClearSelection => {
+                self.store.dispatch(Msg::ClearDiffSelection { repo_id });
+            }
+            ClearDiffSelectionAction::ExitFocusedMergetool => cx.quit(),
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2501,9 +2527,9 @@ impl MainPaneView {
         &mut self,
         cx: &mut gpui::Context<Self>,
     ) {
-        let (content, sel_range) = self.conflict_resolver_input.read_with(cx, |i, _| {
-            (i.text().to_string(), i.selected_range())
-        });
+        let (content, sel_range) = self
+            .conflict_resolver_input
+            .read_with(cx, |i, _| (i.text().to_string(), i.selected_range()));
         if sel_range.is_empty() {
             return;
         }
@@ -2524,9 +2550,9 @@ impl MainPaneView {
         paste_text: &str,
         cx: &mut gpui::Context<Self>,
     ) {
-        let (content, cursor_offset) = self.conflict_resolver_input.read_with(cx, |i, _| {
-            (i.text().to_string(), i.cursor_offset())
-        });
+        let (content, cursor_offset) = self
+            .conflict_resolver_input
+            .read_with(cx, |i, _| (i.text().to_string(), i.cursor_offset()));
         let pos = cursor_offset.min(content.len());
         let mut next = content[..pos].to_string();
         next.push_str(paste_text);
@@ -2609,8 +2635,7 @@ impl MainPaneView {
                 input.set_text(next, cx);
             });
         } else {
-            let next =
-                conflict_resolver::append_lines_to_output(&current, &[replacement]);
+            let next = conflict_resolver::append_lines_to_output(&current, &[replacement]);
             let theme = self.theme;
             self.conflict_resolver_input.update(cx, |input, cx| {
                 input.set_theme(theme, cx);
@@ -3147,5 +3172,27 @@ impl Render for MainPaneView {
         } else {
             div().size_full().child(self.history_view.clone())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ClearDiffSelectionAction, clear_diff_selection_action};
+    use crate::view::GitGpuiViewMode;
+
+    #[test]
+    fn clear_diff_selection_action_is_clear_for_normal_mode() {
+        assert_eq!(
+            clear_diff_selection_action(GitGpuiViewMode::Normal),
+            ClearDiffSelectionAction::ClearSelection
+        );
+    }
+
+    #[test]
+    fn clear_diff_selection_action_exits_focused_mergetool_mode() {
+        assert_eq!(
+            clear_diff_selection_action(GitGpuiViewMode::FocusedMergetool),
+            ClearDiffSelectionAction::ExitFocusedMergetool
+        );
     }
 }

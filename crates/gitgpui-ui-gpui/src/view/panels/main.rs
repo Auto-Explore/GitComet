@@ -657,7 +657,7 @@ impl MainPaneView {
                 zed::Button::new("diff_close", "✕")
                     .style(zed::ButtonStyle::Transparent)
                     .on_click(theme, cx, move |this, _e, _w, cx| {
-                        this.store.dispatch(Msg::ClearDiffSelection { repo_id });
+                        this.clear_diff_selection_or_exit(repo_id, cx);
                         cx.notify();
                     })
                     .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
@@ -2602,7 +2602,7 @@ impl MainPaneView {
                     }
                     if !handled && let Some(repo_id) = this.active_repo_id() {
                         this.clear_status_multi_selection(repo_id, cx);
-                        this.store.dispatch(Msg::ClearDiffSelection { repo_id });
+                        this.clear_diff_selection_or_exit(repo_id, cx);
                         handled = true;
                     }
                 }
@@ -2691,7 +2691,7 @@ impl MainPaneView {
                                     },
                                 });
                             } else {
-                                this.store.dispatch(Msg::ClearDiffSelection { repo_id });
+                                this.clear_diff_selection_or_exit(repo_id, cx);
                             }
                         }
                         (Loadable::Ready(status), DiffArea::Staged) => {
@@ -2708,7 +2708,7 @@ impl MainPaneView {
                                     },
                                 });
                             } else {
-                                this.store.dispatch(Msg::ClearDiffSelection { repo_id });
+                                this.clear_diff_selection_or_exit(repo_id, cx);
                             }
                         }
                         (_, DiffArea::Unstaged) => {
