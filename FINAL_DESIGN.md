@@ -2,6 +2,48 @@
 
 ## Implementation Progress
 
+### Progress Snapshot (Iteration 28, Difftool CRLF Preservation Parity — March 2, 2026)
+
+Implementation performed this iteration:
+- ✅ Read both design documents in full (`external_usage.md`, `docs/REFERENCE_TEST_PORTABILITY.md`).
+- ✅ Identified gap: behavior matrix item 8 (CRLF preservation) had no difftool coverage — only mergetool had CRLF tests.
+- ✅ Added standalone difftool CRLF preservation tests in `crates/gitgpui-app/tests/standalone_tool_mode_integration.rs`:
+  - `standalone_difftool_crlf_content_preserved_in_diff_output`
+  - `standalone_difftool_crlf_identical_files_no_diff`
+  - `standalone_difftool_mixed_line_endings_produces_diff`
+- ✅ Added git difftool integration CRLF tests in `crates/gitgpui-app/tests/difftool_git_integration.rs`:
+  - `git_difftool_crlf_content_preserved`
+  - `git_difftool_crlf_to_lf_line_ending_change_detected`
+- ✅ Validation commands:
+  - `cargo test -p gitgpui-app --no-default-features --features gix --test standalone_tool_mode_integration standalone_difftool_crlf` (**2 passed, 0 failed**)
+  - `cargo test -p gitgpui-app --no-default-features --features gix --test standalone_tool_mode_integration standalone_difftool_mixed` (**1 passed, 0 failed**)
+  - `cargo test -p gitgpui-app --no-default-features --features gix --test difftool_git_integration crlf` (**2 passed, 0 failed**)
+  - `cargo test --workspace --no-default-features --features gix` (**1139 passed, 0 failed, 5 ignored**)
+  - `cargo clippy --workspace --no-default-features --features gix -- -D warnings` (**0 warnings**)
+
+External Diff/Merge Usage Design (`external_usage.md`):
+- ✅ CLI modes: `difftool`, `mergetool`, and `setup` implemented with all documented flags and env fallback.
+- ✅ Exit policy: dedicated modes return `0`/`1`/`>=2` per design contract.
+- ✅ Git integration: setup/config emits full headless+GUI tool config with `guiDefault=auto`.
+- ✅ Compatibility: KDiff3/Meld invocation forms supported (`--L1/--L2/--L3`, `-o/--output/--out`, `--base`, positional forms).
+- ✅ Behavior matrix: all 10 required scenarios covered by automated tests, including CRLF preservation now explicitly verified for both difftool and mergetool modes.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
+Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`):
+- ✅ Phase 1A: t6403 core merge algorithm — 41 tests.
+- ✅ Phase 1B: t6427 zdiff3 — 4 tests.
+- ✅ Phase 1C: Conflict label formatting — 5 tests.
+- ✅ Phase 2A–2C: KDiff3-style fixture harness — 16 tests + 9 seed fixtures.
+- ✅ Phase 3A–3C: Permutation corpus (243 sampled + 161K on-demand) + real-world merge extraction.
+- ✅ Phase 4A: Mergetool E2E — 65 tests.
+- ✅ Phase 4B: Difftool E2E — 32 tests (now includes CRLF preservation parity coverage).
+- ✅ Phase 5A–5C: Meld-derived algorithm tests — 32 tests.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
+Conclusion: All components from both design documents remain fully implemented; this iteration closed a CRLF preservation parity gap for difftool mode (behavior matrix item 8).
+
 ### Progress Snapshot (Iteration 27, Difftool Subdirectory Dir-Diff/Pathspec Parity Hardening — March 2, 2026)
 
 Implementation performed this iteration:

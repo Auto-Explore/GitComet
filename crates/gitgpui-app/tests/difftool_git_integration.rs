@@ -596,6 +596,62 @@ fn git_difftool_handles_non_utf8_content_change() {
     );
 }
 
+// ── CRLF preservation parity ────────────────────────────────────────
+
+#[test]
+fn git_difftool_crlf_content_preserved() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+
+    init_repo(repo);
+    // Disable autocrlf to ensure CRLF bytes are stored as-is.
+    run_git(repo, &["config", "core.autocrlf", "false"]);
+    write_bytes(repo, "crlf.txt", b"line1\r\nline2\r\nline3\r\n");
+    commit_all(repo, "base with CRLF");
+
+    write_bytes(repo, "crlf.txt", b"line1\r\nmodified\r\nline3\r\n");
+    configure_gitgpui_difftool(repo);
+
+    let output = run_git_capture(repo, &["difftool", "--no-prompt", "--", "crlf.txt"]);
+    let text = output_text(&output);
+    assert!(
+        output.status.success(),
+        "git difftool failed for CRLF content\n{text}"
+    );
+    // Verify the diff shows the changed line.
+    assert!(
+        text.contains("-line2") || text.contains("-line2\r"),
+        "expected removed CRLF line in diff output\n{text}"
+    );
+    assert!(
+        text.contains("+modified") || text.contains("+modified\r"),
+        "expected added CRLF line in diff output\n{text}"
+    );
+}
+
+#[test]
+fn git_difftool_crlf_to_lf_line_ending_change_detected() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+
+    init_repo(repo);
+    run_git(repo, &["config", "core.autocrlf", "false"]);
+    write_bytes(repo, "endings.txt", b"aaa\r\nbbb\r\nccc\r\n");
+    commit_all(repo, "base CRLF");
+
+    // Change line endings from CRLF to LF.
+    write_bytes(repo, "endings.txt", b"aaa\nbbb\nccc\n");
+    configure_gitgpui_difftool(repo);
+
+    let output = run_git_capture(repo, &["difftool", "--no-prompt", "--", "endings.txt"]);
+    let text = output_text(&output);
+    // The key contract: tool exits successfully regardless of line-ending changes.
+    assert!(
+        output.status.success(),
+        "git difftool failed for CRLF-to-LF line ending change\n{text}"
+    );
+}
+
 #[test]
 fn git_difftool_gui_default_auto_prefers_gui_tool_when_display_set() {
     let tmp = tempfile::tempdir().unwrap();

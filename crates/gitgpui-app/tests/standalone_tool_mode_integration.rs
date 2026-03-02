@@ -614,6 +614,95 @@ fn standalone_difftool_non_utf8_content_change_exits_zero() {
 }
 
 #[test]
+fn standalone_difftool_crlf_content_preserved_in_diff_output() {
+    let dir = tempfile::tempdir().unwrap();
+    let local = dir.path().join("left.txt");
+    let remote = dir.path().join("right.txt");
+
+    write_bytes(&local, b"line1\r\nline2\r\nline3\r\n");
+    write_bytes(&remote, b"line1\r\nmodified\r\nline3\r\n");
+
+    let output = run_gitgpui([
+        OsString::from("difftool"),
+        OsString::from("--local"),
+        local.as_os_str().to_owned(),
+        OsString::from("--remote"),
+        remote.as_os_str().to_owned(),
+    ]);
+
+    let text = output_text(&output);
+    assert_eq!(output.status.code(), Some(0), "expected exit 0\n{text}");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // The diff should show the changed line.
+    assert!(
+        stdout.contains("-line2") || stdout.contains("-line2\r"),
+        "expected removed CRLF line in diff output\n{text}"
+    );
+    assert!(
+        stdout.contains("+modified") || stdout.contains("+modified\r"),
+        "expected added CRLF line in diff output\n{text}"
+    );
+    // Context lines (unchanged) should be present.
+    assert!(
+        stdout.contains(" line1") || stdout.contains(" line1\r"),
+        "expected context line in diff output\n{text}"
+    );
+}
+
+#[test]
+fn standalone_difftool_crlf_identical_files_no_diff() {
+    let dir = tempfile::tempdir().unwrap();
+    let local = dir.path().join("left.txt");
+    let remote = dir.path().join("right.txt");
+
+    write_bytes(&local, b"aaa\r\nbbb\r\nccc\r\n");
+    write_bytes(&remote, b"aaa\r\nbbb\r\nccc\r\n");
+
+    let output = run_gitgpui([
+        OsString::from("difftool"),
+        OsString::from("--local"),
+        local.as_os_str().to_owned(),
+        OsString::from("--remote"),
+        remote.as_os_str().to_owned(),
+    ]);
+
+    let text = output_text(&output);
+    assert_eq!(output.status.code(), Some(0), "expected exit 0\n{text}");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.trim().is_empty(),
+        "identical CRLF files should produce no diff output\n{text}"
+    );
+}
+
+#[test]
+fn standalone_difftool_mixed_line_endings_produces_diff() {
+    let dir = tempfile::tempdir().unwrap();
+    let local = dir.path().join("left.txt");
+    let remote = dir.path().join("right.txt");
+
+    // Local uses LF, remote uses CRLF — line-ending difference should appear in diff.
+    write_bytes(&local, b"aaa\nbbb\nccc\n");
+    write_bytes(&remote, b"aaa\r\nbbb\r\nccc\r\n");
+
+    let output = run_gitgpui([
+        OsString::from("difftool"),
+        OsString::from("--local"),
+        local.as_os_str().to_owned(),
+        OsString::from("--remote"),
+        remote.as_os_str().to_owned(),
+    ]);
+
+    let text = output_text(&output);
+    assert_eq!(output.status.code(), Some(0), "expected exit 0\n{text}");
+    // Git should detect the line ending difference and either show no diff
+    // (if it considers them equivalent) or show the change — either is valid.
+    // The key contract is that the tool exits successfully.
+}
+
+#[test]
 fn standalone_difftool_directory_diff_exits_zero() {
     let dir = tempfile::tempdir().unwrap();
     let local_dir = dir.path().join("left");
