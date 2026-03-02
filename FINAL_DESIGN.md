@@ -2,26 +2,21 @@
 
 ## Implementation Progress
 
-### Progress Snapshot (Iteration 10, Independent Verification & Dead Code Cleanup — March 2, 2026)
-
-Independent verification audit by a fresh agent across three parallel investigations (production code quality, behavior matrix test coverage, edge-case handling) confirms all design document components remain fully implemented and robust.
+### Progress Snapshot (Iteration 10, Standalone Dir-Diff Symlink-Cycle E2E Coverage — March 2, 2026)
 
 Implemented this iteration:
-- ✅ Removed unnecessary `#[allow(dead_code)]` annotation on `label_base` field in `crates/gitgpui-ui-gpui/src/focused_merge.rs` — the field IS actively used in `build_output()` for conflict marker label rendering; the annotation was a leftover.
-- ✅ Removed truly dead `validate_repo_path()` function and its unused imports (`Error`, `ErrorKind`, `Path`, `PathBuf`) from `crates/gitgpui-state/src/store/executor.rs`.
+- ✅ Added standalone external difftool regression coverage for directory symlink cycles in `crates/gitgpui-app/tests/standalone_tool_mode_integration.rs`:
+  - `standalone_difftool_directory_diff_rejects_symlink_cycle_exits_two`
+- ✅ Verified the dedicated CLI `difftool` mode returns exit code `2` and actionable error text for recursive symlink inputs in directory-diff staging.
 
 Verification scope (this iteration):
-- ✅ `cargo test --workspace --no-default-features --features gix`: **1106 passed, 0 failed, 5 ignored**.
-- ✅ `cargo clippy --workspace --no-default-features --features gix -- -D warnings`: **0 warnings** (headless CI mode).
-- ✅ `cargo clippy --workspace -- -D warnings`: **0 warnings** (full-UI mode with all features).
-- ✅ Conducted parallel deep audit via three independent exploration agents:
-  - **Production code quality audit**: No TODO/FIXME/HACK/unimplemented markers in production code. Two `unreachable!()` usages are logically sound (guarded by prior conditions). All `.unwrap()` calls in production code are properly guarded by prior checks. No `unsafe` blocks (workspace-level `unsafe_code = "forbid"`). No panicking patterns.
-  - **Behavior matrix test coverage audit**: All 10 behavior matrix items from `external_usage.md` have EXCELLENT test coverage with specific, named tests. Total: 127+ integration tests across mergetool/difftool/standalone modes, plus core algorithm and fixture harness tests.
-  - **Edge-case handling audit**: Read-only output files, broken symlinks, empty directories, symlink cycles, unknown CLI arguments, file existence validation, env var fallback, and setup mode config generation are all properly handled. No critical gaps found.
-- ✅ 5 ignored tests are all intentional: 2 require external repo env var, 1 is exhaustive 161K-case corpus, 2 are performance benchmarks.
+- ✅ `cargo test -p gitgpui-app --no-default-features --features gix --test standalone_tool_mode_integration standalone_difftool_directory_diff_rejects_symlink_cycle_exits_two`
+- ✅ `cargo test -p gitgpui-app --no-default-features --features gix --test difftool_git_integration git_difftool_dir_diff_mode_works`
 
 External Diff/Merge Usage Design (`external_usage.md`)
-- ✅ All components implemented and verified. No remaining gaps.
+- ✅ CLI modes (`difftool`, `mergetool`, `setup`) implemented.
+- ✅ Git tool contract coverage implemented (`LOCAL`/`REMOTE`/`BASE`/`MERGED`, labels, path overrides, `guiDefault`, `trustExitCode`, `--tool-help` parity).
+- ✅ Behavior matrix coverage complete, including standalone directory-diff symlink-cycle rejection.
 - 🔧 Partially implemented components: none.
 - ⬜ Not-yet-started components: none.
 
@@ -29,8 +24,8 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
 - ✅ Phase 1A–1C complete (t6403 core merge, t6427 zdiff3, label formatting).
 - ✅ Phase 2 complete (KDiff3-style fixture harness + invariants + seed fixtures + optional expected-result support).
 - ✅ Phase 3A–3C complete (permutation corpus + real-world merge extraction).
-- ✅ Phase 4 complete (t7610/t7800 mergetool+difftool E2E parity).
-- ✅ Phase 5 complete (Meld-derived algorithm tests).
+- ✅ Phase 4A–4B complete (t7610/t7800 mergetool+difftool E2E parity).
+- ✅ Phase 5A–5C complete (Meld-derived algorithm tests).
 - 🔧 Partially implemented components: none.
 - ⬜ Not-yet-started components: none.
 

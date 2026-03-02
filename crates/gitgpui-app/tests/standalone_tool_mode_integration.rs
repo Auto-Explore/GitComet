@@ -624,6 +624,37 @@ fn standalone_difftool_directory_diff_exits_zero() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn standalone_difftool_directory_diff_rejects_symlink_cycle_exits_two() {
+    use std::os::unix::fs as unix_fs;
+
+    let dir = tempfile::tempdir().unwrap();
+    let local_dir = dir.path().join("left");
+    let remote_dir = dir.path().join("right");
+
+    fs::create_dir_all(&local_dir).expect("create local dir");
+    fs::create_dir_all(&remote_dir).expect("create remote dir");
+    write_file(&local_dir.join("a.txt"), "left\n");
+    write_file(&remote_dir.join("a.txt"), "right\n");
+    unix_fs::symlink(".", remote_dir.join("loop")).expect("create self-referential symlink");
+
+    let output = run_gitgpui([
+        OsString::from("difftool"),
+        OsString::from("--local"),
+        local_dir.as_os_str().to_owned(),
+        OsString::from("--remote"),
+        remote_dir.as_os_str().to_owned(),
+    ]);
+
+    let text = output_text(&output);
+    assert_eq!(output.status.code(), Some(2), "expected exit 2\n{text}");
+    assert!(
+        text.contains("symlink cycle"),
+        "expected symlink cycle error\n{text}"
+    );
+}
+
 #[test]
 fn standalone_difftool_handles_unicode_paths() {
     let dir = tempfile::tempdir().unwrap();
