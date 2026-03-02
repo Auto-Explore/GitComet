@@ -222,6 +222,62 @@ fn require_non_empty_path(path: PathBuf, label: &str) -> Result<PathBuf, String>
     Ok(path)
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DifftoolInputKind {
+    Directory,
+    FileLike,
+}
+
+impl DifftoolInputKind {
+    fn display_name(self) -> &'static str {
+        match self {
+            DifftoolInputKind::Directory => "directory",
+            DifftoolInputKind::FileLike => "file",
+        }
+    }
+}
+
+/// Classify a difftool path as directory or file-like.
+///
+/// Symlink handling rules:
+/// - symlink to directory => directory
+/// - symlink to file => file-like
+/// - broken symlink => file-like (for symlink conflict diffs)
+pub(crate) fn classify_difftool_input(
+    path: &Path,
+    role_name: &str,
+) -> Result<DifftoolInputKind, String> {
+    let metadata = std::fs::symlink_metadata(path).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            format!("{role_name} path does not exist: {}", path.display())
+        } else {
+            format!("Failed to read metadata for {role_name} path {}: {e}", path.display())
+        }
+    })?;
+
+    if metadata.is_dir() {
+        return Ok(DifftoolInputKind::Directory);
+    }
+
+    if metadata.file_type().is_symlink() {
+        match std::fs::metadata(path) {
+            Ok(target_meta) if target_meta.is_dir() => return Ok(DifftoolInputKind::Directory),
+            Ok(_) => return Ok(DifftoolInputKind::FileLike),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(DifftoolInputKind::FileLike);
+            }
+            Err(e) => {
+                return Err(format!(
+                    "Failed to resolve {role_name} path {}: {e}",
+                    path.display()
+                ));
+            }
+        }
+    }
+
+    Ok(DifftoolInputKind::FileLike)
+}
+
 /// Resolve and validate difftool arguments.
 ///
 /// Priority: explicit `--local`/`--remote` flags, then `LOCAL`/`REMOTE` env vars.
@@ -242,31 +298,13 @@ fn resolve_difftool_with_env(
         "remote",
     )?;
 
-    let local_meta = std::fs::symlink_metadata(&local).map_err(|e| {
-        if e.kind() == std::io::ErrorKind::NotFound {
-            format!("Local path does not exist: {}", local.display())
-        } else {
-            format!("Failed to read metadata for local path {}: {e}", local.display())
-        }
-    })?;
-    let remote_meta = std::fs::symlink_metadata(&remote).map_err(|e| {
-        if e.kind() == std::io::ErrorKind::NotFound {
-            format!("Remote path does not exist: {}", remote.display())
-        } else {
-            format!(
-                "Failed to read metadata for remote path {}: {e}",
-                remote.display()
-            )
-        }
-    })?;
-
-    let local_is_dir = local_meta.file_type().is_dir();
-    let remote_is_dir = remote_meta.file_type().is_dir();
-    if local_is_dir != remote_is_dir {
-        let local_kind = if local_is_dir { "directory" } else { "file" };
-        let remote_kind = if remote_is_dir { "directory" } else { "file" };
+    let local_kind = classify_difftool_input(&local, "Local")?;
+    let remote_kind = classify_difftool_input(&remote, "Remote")?;
+    if local_kind != remote_kind {
         return Err(format!(
-            "Difftool input kind mismatch: local is a {local_kind} and remote is a {remote_kind}. Use two files or two directories."
+            "Difftool input kind mismatch: local is a {} and remote is a {}. Use two files or two directories.",
+            local_kind.display_name(),
+            remote_kind.display_name(),
         ));
     }
 
@@ -1357,6 +1395,36 @@ mod tests {
         let config = resolve_difftool_with_env(args, &TestEnv::new()).unwrap();
         assert_eq!(config.local, local);
         assert_eq!(config.remote, remote);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn difftool_accepts_symlinked_directory_inputs() {
+        use std::os::unix::fs as unix_fs;
+
+        let dir = tempfile::tempdir().unwrap();
+        let left_dir = dir.path().join("left");
+        let right_dir = dir.path().join("right");
+        let left_link = dir.path().join("left-link");
+        let right_link = dir.path().join("right-link");
+
+        std::fs::create_dir_all(&left_dir).unwrap();
+        std::fs::create_dir_all(&right_dir).unwrap();
+        unix_fs::symlink(&left_dir, &left_link).unwrap();
+        unix_fs::symlink(&right_dir, &right_link).unwrap();
+
+        let args = DifftoolArgs {
+            local: Some(left_link.clone()),
+            remote: Some(right_link.clone()),
+            path: None,
+            label_left: None,
+            label_right: None,
+            gui: false,
+        };
+
+        let config = resolve_difftool_with_env(args, &TestEnv::new()).unwrap();
+        assert_eq!(config.local, left_link);
+        assert_eq!(config.remote, right_link);
     }
 
     // ── MergetoolArgs resolution ─────────────────────────────────────

@@ -625,6 +625,45 @@ fn standalone_difftool_directory_diff_exits_zero() {
 
 #[cfg(unix)]
 #[test]
+fn standalone_difftool_directory_symlink_inputs_compare_directory_contents() {
+    use std::os::unix::fs as unix_fs;
+
+    let dir = tempfile::tempdir().unwrap();
+    let local_dir = dir.path().join("left");
+    let remote_dir = dir.path().join("right");
+    let local_link = dir.path().join("left-link");
+    let remote_link = dir.path().join("right-link");
+
+    fs::create_dir_all(&local_dir).expect("create local dir");
+    fs::create_dir_all(&remote_dir).expect("create remote dir");
+    write_file(&local_dir.join("a.txt"), "left\n");
+    write_file(&remote_dir.join("a.txt"), "right\n");
+    unix_fs::symlink(&local_dir, &local_link).expect("create local dir symlink");
+    unix_fs::symlink(&remote_dir, &remote_link).expect("create remote dir symlink");
+
+    let output = run_gitgpui([
+        OsString::from("difftool"),
+        OsString::from("--local"),
+        local_link.as_os_str().to_owned(),
+        OsString::from("--remote"),
+        remote_link.as_os_str().to_owned(),
+    ]);
+
+    let text = output_text(&output);
+    assert_eq!(output.status.code(), Some(0), "expected exit 0\n{text}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("-left") && stdout.contains("+right"),
+        "expected file-content diff for symlinked directories\n{text}"
+    );
+    assert!(
+        !stdout.contains("new file mode 120000"),
+        "did not expect symlink-mode-only diff\n{text}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn standalone_difftool_directory_diff_rejects_symlink_cycle_exits_two() {
     use std::os::unix::fs as unix_fs;
 

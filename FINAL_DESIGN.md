@@ -2,6 +2,35 @@
 
 ## Implementation Progress
 
+### Progress Snapshot (Iteration 16, Difftool Symlinked-Directory Parity Hardening — March 2, 2026)
+
+Implemented this iteration:
+- ✅ Hardened dedicated difftool input-kind resolution for symlinked directory paths in `crates/gitgpui-app/src/cli.rs`:
+  - Added shared symlink-aware classifier (`DifftoolInputKind`) that follows symlinks for directory-vs-file-like detection while preserving broken-symlink file compatibility.
+  - `resolve_difftool_with_env` now classifies local/remote inputs consistently and rejects only true kind mismatches.
+- ✅ Hardened runtime directory-diff staging in `crates/gitgpui-app/src/difftool_mode.rs`:
+  - `prepare_diff_inputs` now uses the same classifier, so top-level symlinked directory inputs are treated as directory diffs (staged content diff) rather than symlink-target (`120000`) diffs.
+- ✅ Added regression coverage:
+  - `cli::tests::difftool_accepts_symlinked_directory_inputs`
+  - `difftool_mode::tests::run_difftool_directory_symlink_inputs_use_directory_content_diff`
+  - `standalone_difftool_directory_symlink_inputs_compare_directory_contents` in `crates/gitgpui-app/tests/standalone_tool_mode_integration.rs`
+
+Verification scope (this iteration):
+- ✅ `cargo test -p gitgpui-app --no-default-features --features gix` (**all passing**: 162 unit + 28 difftool integration + 64 mergetool integration + 43 standalone integration).
+
+External Diff/Merge Usage Design (`external_usage.md`)
+- ✅ Behavior matrix item 9 (directory diff mode) hardened for symlinked top-level directory inputs.
+- ✅ Symlink edge-case handling now includes directory-symlink entrypoints in dedicated and standalone difftool flows.
+- ✅ All other components remain implemented.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
+Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
+- ✅ Phase 4B (`git difftool` parity) coverage strengthened with explicit directory-symlink input behavior regression.
+- ✅ Phases 1A–1C, 2A–2C, 3A–3C, 4A, 5A–5C remain complete.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
 ### Progress Snapshot (Iteration 16, Independent Completion Verification — March 2, 2026)
 
 Verification scope (this iteration):

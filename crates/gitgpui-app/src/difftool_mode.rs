@@ -1,4 +1,4 @@
-use crate::cli::{DifftoolConfig, exit_code};
+use crate::cli::{DifftoolConfig, DifftoolInputKind, classify_difftool_input, exit_code};
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -78,20 +78,18 @@ struct PreparedDiffInputs {
 }
 
 fn prepare_diff_inputs(config: &DifftoolConfig) -> Result<PreparedDiffInputs, String> {
-    let local_meta = fs::symlink_metadata(&config.local).map_err(|e| {
-        format!(
-            "Failed to read metadata for local path {}: {e}",
-            config.local.display()
-        )
-    })?;
-    let remote_meta = fs::symlink_metadata(&config.remote).map_err(|e| {
-        format!(
-            "Failed to read metadata for remote path {}: {e}",
-            config.remote.display()
-        )
-    })?;
+    let local_kind = classify_difftool_input(&config.local, "Local")?;
+    let remote_kind = classify_difftool_input(&config.remote, "Remote")?;
 
-    if !(local_meta.is_dir() && remote_meta.is_dir()) {
+    if local_kind != remote_kind {
+        return Err(format!(
+            "Difftool input kind mismatch: local is a {} and remote is a {}. Use two files or two directories.",
+            display_input_kind(local_kind),
+            display_input_kind(remote_kind)
+        ));
+    }
+
+    if local_kind != DifftoolInputKind::Directory {
         return Ok(PreparedDiffInputs {
             local: config.local.clone(),
             remote: config.remote.clone(),
@@ -114,6 +112,13 @@ fn prepare_diff_inputs(config: &DifftoolConfig) -> Result<PreparedDiffInputs, St
         remote: staged_remote,
         _tempdir: Some(tempdir),
     })
+}
+
+fn display_input_kind(kind: DifftoolInputKind) -> &'static str {
+    match kind {
+        DifftoolInputKind::Directory => "directory",
+        DifftoolInputKind::FileLike => "file",
+    }
 }
 
 fn copy_tree_dereferencing_symlinks(src: &Path, dst: &Path) -> Result<(), String> {
@@ -396,7 +401,8 @@ mod tests {
 
         let err = run_difftool(&config(left, right)).expect_err("expected error");
         assert!(
-            err.contains("Failed to read metadata for local path")
+            err.contains("Local path does not exist")
+                || err.contains("Failed to read metadata for local path")
                 || err.contains("failed with exit code"),
             "unexpected error message: {err}"
         );
@@ -447,6 +453,38 @@ mod tests {
         assert!(
             !result.stdout.contains("new file mode 120000"),
             "did not expect symlink mode-only diff, got: {}",
+            result.stdout
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_difftool_directory_symlink_inputs_use_directory_content_diff() {
+        use std::os::unix::fs as unix_fs;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let left_dir = tmp.path().join("left");
+        let right_dir = tmp.path().join("right");
+        let left_link = tmp.path().join("left-link");
+        let right_link = tmp.path().join("right-link");
+
+        std::fs::create_dir_all(&left_dir).unwrap();
+        std::fs::create_dir_all(&right_dir).unwrap();
+        write_file(&left_dir.join("a.txt"), "before\n");
+        write_file(&right_dir.join("a.txt"), "after\n");
+        unix_fs::symlink(&left_dir, &left_link).expect("create symlink to left directory");
+        unix_fs::symlink(&right_dir, &right_link).expect("create symlink to right directory");
+
+        let result = run_difftool(&config(left_link, right_link)).expect("difftool run");
+        assert_eq!(result.exit_code, exit_code::SUCCESS);
+        assert!(
+            result.stdout.contains("-before") && result.stdout.contains("+after"),
+            "expected staged directory content diff, got: {}",
+            result.stdout
+        );
+        assert!(
+            !result.stdout.contains("new file mode 120000"),
+            "did not expect top-level symlink-mode-only diff, got: {}",
             result.stdout
         );
     }
