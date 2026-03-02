@@ -2,6 +2,45 @@
 
 ## Implementation Progress
 
+### Progress Snapshot (Iteration 26, Independent Completion Verification — March 2, 2026)
+
+Verification performed this iteration:
+- ✅ Read both design documents in full (`external_usage.md`, `docs/REFERENCE_TEST_PORTABILITY.md`).
+- ✅ `cargo test --workspace --no-default-features --features gix`: **1132 passed, 0 failed, 5 ignored**.
+- ✅ `cargo clippy --workspace --no-default-features --features gix -- -D warnings`: **0 warnings**.
+- ✅ Deep agent-driven audit verified all design document components against implementation:
+  - CLI modes (difftool, mergetool, setup) all present with documented flags and env fallback.
+  - Exit code policy (0/1/≥2) confirmed and tested across all modes.
+  - All 10 behavior matrix items verified with specific test functions.
+  - KDiff3/Meld compatibility (--L1/--L2/--L3, -o/--output/--out, --base, positional forms) confirmed.
+  - Setup config emits all entries (headless+GUI tools, guiDefault=auto, trustExitCode, prompt).
+  - Focused GPUI diff and merge windows implemented and wired to CLI `--gui` flag.
+  - No TODO/FIXME/HACK comments found in codebase.
+
+External Diff/Merge Usage Design (`external_usage.md`):
+- ✅ CLI modes: `difftool`, `mergetool`, and `setup` implemented with all documented flags and env fallback.
+- ✅ Exit policy: dedicated modes return `0`/`1`/`>=2` per design contract.
+- ✅ Git integration: setup/config emits full headless+GUI tool config with `guiDefault=auto`.
+- ✅ Compatibility: KDiff3/Meld invocation forms supported (`--L1/--L2/--L3`, `-o/--output/--out`, `--base`, positional forms).
+- ✅ Behavior matrix: all 10 required scenarios covered by automated tests.
+- ✅ Focused GPUI windows: interactive diff and merge windows wired to `--gui` flag.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
+Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`):
+- ✅ Phase 1A: t6403 core merge algorithm — 41 tests.
+- ✅ Phase 1B: t6427 zdiff3 — 4 tests.
+- ✅ Phase 1C: Conflict label formatting — 5 tests.
+- ✅ Phase 2A–2C: KDiff3-style fixture harness — 16 tests + 9 seed fixtures.
+- ✅ Phase 3A–3C: Permutation corpus (243 sampled + 161K on-demand) + real-world merge extraction.
+- ✅ Phase 4A: Mergetool E2E — 65 tests.
+- ✅ Phase 4B: Difftool E2E — 28 tests.
+- ✅ Phase 5A–5C: Meld-derived algorithm tests — 32 tests.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
+Conclusion: All components from both design documents are fully implemented and verified. This is the tenth independent completion verification (iterations 13, 15–22, 24–26). Test count at 1132.
+
 ### Progress Snapshot (Iteration 25, Setup Tool-Help Discoverability Hardening — March 2, 2026)
 
 Implementation performed this iteration:
