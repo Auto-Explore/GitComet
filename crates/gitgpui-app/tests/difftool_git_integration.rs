@@ -435,6 +435,81 @@ fn git_difftool_dir_diff_handles_spaced_unicode_path() {
 }
 
 #[test]
+fn git_difftool_dir_diff_mode_works_from_subdirectory() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+
+    init_repo(repo);
+    write_file(repo, "nested/deeper/tracked.txt", "tracked old\n");
+    write_file(repo, "docs/selected.txt", "selected old\n");
+    commit_all(repo, "base");
+
+    write_file(repo, "nested/deeper/tracked.txt", "tracked new\n");
+    write_file(repo, "docs/selected.txt", "selected new\n");
+    configure_gitgpui_difftool(repo);
+
+    let subdir = repo.join("nested/deeper");
+    let output = run_git_capture_in(&subdir, &["difftool", "--dir-diff", "--no-prompt"]);
+    let text = output_text(&output);
+    assert!(
+        output.status.success(),
+        "git difftool --dir-diff failed from subdirectory\n{text}"
+    );
+    assert!(
+        text.contains("tracked.txt"),
+        "expected nested tracked path in dir-diff output\n{text}"
+    );
+    assert!(
+        text.contains("-tracked old") && text.contains("+tracked new"),
+        "missing expected tracked-file delta in dir-diff output\n{text}"
+    );
+}
+
+#[test]
+fn git_difftool_dir_diff_pathspec_from_subdirectory_limits_to_selected_path() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+
+    init_repo(repo);
+    write_file(repo, "nested/deeper/tracked.txt", "tracked old\n");
+    write_file(repo, "docs/selected.txt", "selected old\n");
+    commit_all(repo, "base");
+
+    write_file(repo, "nested/deeper/tracked.txt", "tracked new\n");
+    write_file(repo, "docs/selected.txt", "selected new\n");
+    configure_gitgpui_difftool(repo);
+
+    let subdir = repo.join("nested/deeper");
+    let output = run_git_capture_in(
+        &subdir,
+        &[
+            "difftool",
+            "--dir-diff",
+            "--no-prompt",
+            "--",
+            "../../docs/selected.txt",
+        ],
+    );
+    let text = output_text(&output);
+    assert!(
+        output.status.success(),
+        "git difftool --dir-diff pathspec failed from subdirectory\n{text}"
+    );
+    assert!(
+        text.contains("selected.txt"),
+        "expected selected path in dir-diff pathspec output\n{text}"
+    );
+    assert!(
+        text.contains("-selected old") && text.contains("+selected new"),
+        "missing expected selected-path delta in dir-diff pathspec output\n{text}"
+    );
+    assert!(
+        !text.contains("tracked.txt"),
+        "did not expect unselected tracked path in dir-diff pathspec output\n{text}"
+    );
+}
+
+#[test]
 fn git_difftool_pathspec_limits_invocation_to_selected_path() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
