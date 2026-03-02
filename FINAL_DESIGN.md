@@ -2,6 +2,60 @@
 
 ## Implementation Progress
 
+### Progress Snapshot (Iteration 16, Independent Completion Verification — March 2, 2026)
+
+Verification scope (this iteration):
+- ✅ Full independent audit of both design documents against the codebase. No unimplemented components found.
+- ✅ `cargo test --workspace --no-default-features --features gix`: **1120 passed, 0 failed, 5 ignored**.
+- ✅ `cargo clippy --workspace --no-default-features --features gix -- -D warnings`: **0 warnings**.
+- ✅ Zero `TODO`/`FIXME`/`HACK`/`unimplemented!()`/`todo!()` in any first-party production `src/` code.
+- ✅ Zero unsafe `unwrap()`/`expect()`/`panic!()` patterns in production code.
+- ✅ All 11 `#[allow(dead_code)]` annotations are justified (feature-gated or forward-compatible API design).
+
+Behavior matrix re-verification (all 10 items from `external_usage.md`):
+1. ✅ File paths with spaces and unicode (11 tests across all E2E suites)
+2. ✅ Invocation from repo subdirectory (3 tests)
+3. ✅ No-base conflicts / BASE absent (5 tests)
+4. ✅ Binary and non-UTF8 content (8 tests)
+5. ✅ Deleted output / tool chooses deletion (4 tests)
+6. ✅ Symlink conflicts (6 tests)
+7. ✅ Submodule path conflicts (12 tests)
+8. ✅ CRLF preservation (3+ tests including subchunk auto-resolve)
+9. ✅ Directory diff mode (5 tests including edge cases)
+10. ✅ Close/cancel behavior and exit code (8+ tests)
+
+Reference Test Portability Plan re-verification (all phases):
+- ✅ Phase 1A: t6403 core merge algorithm — 41 tests
+- ✅ Phase 1B: t6427 zdiff3 — included in Phase 1A
+- ✅ Phase 1C: Conflict label formatting — 5 tests
+- ✅ Phase 2A–2C: KDiff3-style fixture harness — 16 tests + 9 seed fixtures + invariant artifact hardening
+- ✅ Phase 3A: Permutation corpus — 243 sampled cases + exhaustive 161K (ignored, on-demand)
+- ✅ Phase 3B: Implementation approach — Rust test-time generator (no committed fixture bloat)
+- ✅ Phase 3C: Real-world merge extraction — 8 active + 2 on-demand tests
+- ✅ Phase 4A: Mergetool E2E — 64 tests (all reference cases verified present)
+- ✅ Phase 4B: Difftool E2E — 28 tests (all reference cases verified present)
+- ✅ Phase 5A: Myers matching blocks — included in Meld suite
+- ✅ Phase 5B: Interval merging — included in Meld suite
+- ✅ Phase 5C: Newline-aware operations — included in Meld suite (32 total Meld tests)
+
+Specific Phase 4A/4B cross-reference (all matched):
+- ✅ `mergetool_tool_help` → `git_mergetool_tool_help_lists_gitgpui_tool`
+- ✅ `mergetool_order_file` → `git_mergetool_honors_diff_order_file_configuration`
+- ✅ `mergetool_write_to_temp` → `git_mergetool_write_to_temp_true_uses_absolute_stage_paths`
+- ✅ `mergetool_path_prefix` → `git_mergetool_write_to_temp_false_uses_workdir_prefixed_stage_paths`
+- ✅ `difftool_dir_diff` → `git_difftool_dir_diff_mode_works` + edge case variants
+- ✅ All 5 delete/delete conflict tests present
+- ✅ All 12 submodule conflict tests present
+
+Ignored tests (5, all intentional):
+- `extraction_regression_on_external_repo` — requires `GITGPUI_MERGE_EXTRACTION_REPO` env var
+- `generate_fixtures_from_repo` — requires `GITGPUI_MERGE_EXTRACTION_REPO` + `GITGPUI_MERGE_EXTRACTION_DEST`
+- `kdiff3_permutation_corpus_exhaustive_11_pow_5` — 161K cases, too slow for CI (sampled variant runs in CI)
+- `perf_treesitter_tokenization_smoke` — performance benchmark
+- `perf_word_diff_ranges_smoke` — performance benchmark
+
+Conclusion: Both design documents are fully implemented with comprehensive test coverage. No remaining gaps found. This is the third independent completion verification (iterations 13, 15, 16).
+
 ### Progress Snapshot (Iteration 15, Broken-Symlink Difftool Validation Hardening — March 2, 2026)
 
 Implemented this iteration:
