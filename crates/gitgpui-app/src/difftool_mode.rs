@@ -1,5 +1,8 @@
 use crate::cli::{DifftoolConfig, exit_code};
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use tempfile::{Builder, TempDir};
 
 /// Result of running the dedicated difftool mode.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -15,6 +18,8 @@ pub struct DifftoolRunResult {
 /// failure for a diff tool. We normalize both `0` (no diff) and `1` (diff
 /// present) to process success for the app-level contract.
 pub fn run_difftool(config: &DifftoolConfig) -> Result<DifftoolRunResult, String> {
+    let prepared_inputs = prepare_diff_inputs(config)?;
+
     let mut cmd = Command::new("git");
     cmd.arg("diff").arg("--no-index").arg("--no-ext-diff");
     // When launched from `git difftool`, Git sets `GIT_EXTERNAL_DIFF` to its
@@ -22,7 +27,9 @@ pub fn run_difftool(config: &DifftoolConfig) -> Result<DifftoolRunResult, String
     cmd.env_remove("GIT_EXTERNAL_DIFF");
     let labels = resolve_labels(config);
 
-    cmd.arg("--").arg(&config.local).arg(&config.remote);
+    cmd.arg("--")
+        .arg(&prepared_inputs.local)
+        .arg(&prepared_inputs.remote);
 
     let output = cmd
         .output()
@@ -61,6 +68,134 @@ pub fn run_difftool(config: &DifftoolConfig) -> Result<DifftoolRunResult, String
         }
         None => Err("`git diff --no-index` terminated by signal".to_string()),
     }
+}
+
+struct PreparedDiffInputs {
+    local: PathBuf,
+    remote: PathBuf,
+    _tempdir: Option<TempDir>,
+}
+
+fn prepare_diff_inputs(config: &DifftoolConfig) -> Result<PreparedDiffInputs, String> {
+    let local_meta = fs::symlink_metadata(&config.local).map_err(|e| {
+        format!(
+            "Failed to read metadata for local path {}: {e}",
+            config.local.display()
+        )
+    })?;
+    let remote_meta = fs::symlink_metadata(&config.remote).map_err(|e| {
+        format!(
+            "Failed to read metadata for remote path {}: {e}",
+            config.remote.display()
+        )
+    })?;
+
+    if !(local_meta.is_dir() && remote_meta.is_dir()) {
+        return Ok(PreparedDiffInputs {
+            local: config.local.clone(),
+            remote: config.remote.clone(),
+            _tempdir: None,
+        });
+    }
+
+    let tempdir = Builder::new()
+        .prefix("gitgpui-difftool-")
+        .tempdir()
+        .map_err(|e| format!("Failed to create temporary directory staging area: {e}"))?;
+
+    let staged_local = tempdir.path().join("left");
+    let staged_remote = tempdir.path().join("right");
+    copy_tree_dereferencing_symlinks(&config.local, &staged_local)?;
+    copy_tree_dereferencing_symlinks(&config.remote, &staged_remote)?;
+
+    Ok(PreparedDiffInputs {
+        local: staged_local,
+        remote: staged_remote,
+        _tempdir: Some(tempdir),
+    })
+}
+
+fn copy_tree_dereferencing_symlinks(src: &Path, dst: &Path) -> Result<(), String> {
+    fs::create_dir_all(dst)
+        .map_err(|e| format!("Failed to create staged directory {}: {e}", dst.display()))?;
+
+    let entries = fs::read_dir(src)
+        .map_err(|e| format!("Failed to read directory {}: {e}", src.display()))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("Failed to read entry in {}: {e}", src.display()))?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+        let file_type = entry
+            .file_type()
+            .map_err(|e| format!("Failed to read file type for {}: {e}", src_path.display()))?;
+
+        if file_type.is_dir() {
+            copy_tree_dereferencing_symlinks(&src_path, &dst_path)?;
+            continue;
+        }
+
+        if file_type.is_symlink() {
+            copy_symlink_target_contents(&src_path, &dst_path)?;
+            continue;
+        }
+
+        if file_type.is_file() {
+            fs::copy(&src_path, &dst_path).map_err(|e| {
+                format!(
+                    "Failed to stage file {} to {}: {e}",
+                    src_path.display(),
+                    dst_path.display()
+                )
+            })?;
+            continue;
+        }
+
+        return Err(format!(
+            "Unsupported entry type at {} while staging directory diff inputs",
+            src_path.display()
+        ));
+    }
+
+    Ok(())
+}
+
+fn copy_symlink_target_contents(link_path: &Path, dst_path: &Path) -> Result<(), String> {
+    let target = fs::read_link(link_path)
+        .map_err(|e| format!("Failed to read symlink target {}: {e}", link_path.display()))?;
+    let resolved_target = if target.is_absolute() {
+        target.clone()
+    } else {
+        link_path
+            .parent()
+            .unwrap_or_else(|| Path::new(""))
+            .join(&target)
+    };
+
+    match fs::metadata(&resolved_target) {
+        Ok(meta) if meta.is_file() => {
+            fs::copy(&resolved_target, dst_path).map_err(|e| {
+                format!(
+                    "Failed to stage symlink target file {} to {}: {e}",
+                    resolved_target.display(),
+                    dst_path.display()
+                )
+            })?;
+        }
+        Ok(meta) if meta.is_dir() => {
+            copy_tree_dereferencing_symlinks(&resolved_target, dst_path)?;
+        }
+        _ => {
+            fs::write(dst_path, target.to_string_lossy().as_bytes()).map_err(|e| {
+                format!(
+                    "Failed to materialize unresolved symlink {} into {}: {e}",
+                    link_path.display(),
+                    dst_path.display()
+                )
+            })?;
+        }
+    }
+
+    Ok(())
 }
 
 fn has_git_error_prefix(stderr: &str) -> bool {
@@ -224,7 +359,8 @@ mod tests {
 
         let err = run_difftool(&config(left, right)).expect_err("expected error");
         assert!(
-            err.contains("failed with exit code"),
+            err.contains("Failed to read metadata for local path")
+                || err.contains("failed with exit code"),
             "unexpected error message: {err}"
         );
     }
@@ -244,6 +380,36 @@ mod tests {
         assert!(
             result.stdout.contains("a.txt"),
             "expected filename in dir diff output, got: {}",
+            result.stdout
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_difftool_directory_diff_dereferences_symlinked_files() {
+        use std::os::unix::fs as unix_fs;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let left = tmp.path().join("left");
+        let right = tmp.path().join("right");
+        std::fs::create_dir_all(&left).unwrap();
+        std::fs::create_dir_all(&right).unwrap();
+
+        write_file(&left.join("a.txt"), "before\n");
+        write_file(&right.join("target.txt"), "after\n");
+        unix_fs::symlink(right.join("target.txt"), right.join("a.txt"))
+            .expect("create symlink in right dir");
+
+        let result = run_difftool(&config(left, right)).expect("difftool run");
+        assert_eq!(result.exit_code, exit_code::SUCCESS);
+        assert!(
+            result.stdout.contains("-before") && result.stdout.contains("+after"),
+            "expected dereferenced content diff, got: {}",
+            result.stdout
+        );
+        assert!(
+            !result.stdout.contains("new file mode 120000"),
+            "did not expect symlink mode-only diff, got: {}",
             result.stdout
         );
     }

@@ -21,6 +21,4 @@ gitgpui-git = { path = "../gitgpui-git" }
 gitgpui-git-gix = { path = "../gitgpui-git-gix", optional = true }
 gitgpui-ui = { path = "../gitgpui-ui", optional = true }
 gitgpui-ui-gpui = { path = "../gitgpui-ui-gpui", optional = true }
-
-[dev-dependencies]
 tempfile = "3"

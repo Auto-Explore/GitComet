@@ -406,6 +406,35 @@ fn git_difftool_dir_diff_mode_works() {
 }
 
 #[test]
+fn git_difftool_dir_diff_handles_spaced_unicode_path() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+
+    init_repo(repo);
+    let tricky_path = "nested/spaced \u{65e5}\u{672c}\u{8a9e} file.txt";
+    write_file(repo, tricky_path, "before line\n");
+    commit_all(repo, "base");
+
+    write_file(repo, tricky_path, "after line\n");
+    configure_gitgpui_difftool(repo);
+
+    let output = run_git_capture(repo, &["difftool", "--dir-diff", "--no-prompt"]);
+    let text = output_text(&output);
+    assert!(
+        output.status.success(),
+        "git difftool --dir-diff failed for spaced/unicode path\n{text}"
+    );
+    assert!(
+        text.contains("spaced") && text.contains("file.txt"),
+        "expected spaced/unicode filename in dir-diff output\n{text}"
+    );
+    assert!(
+        text.contains("-before line") && text.contains("+after line"),
+        "missing expected line delta in dir-diff output\n{text}"
+    );
+}
+
+#[test]
 fn git_difftool_pathspec_limits_invocation_to_selected_path() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();

@@ -2,6 +2,22 @@
 
 ## Implementation Progress
 
+### Progress Snapshot (Iteration 2, Follow-up — March 2, 2026)
+
+External Diff/Merge Usage Design (`external_usage.md`)
+- ✅ Iteration 2 component implemented: fixed `difftool --dir-diff` handling when Git provides symlink-backed directory entries (common in `git difftool --dir-diff` temp directories). `crates/gitgpui-app/src/difftool_mode.rs` now stages directory inputs into a temporary workspace and dereferences symlinked file entries before running `git diff --no-index`, so file-content deltas are shown instead of symlink-mode (`120000`) noise.
+- ✅ Added regression coverage:
+  - `crates/gitgpui-app/tests/difftool_git_integration.rs`: `git_difftool_dir_diff_handles_spaced_unicode_path`
+  - `crates/gitgpui-app/src/difftool_mode.rs`: `run_difftool_directory_diff_dereferences_symlinked_files` (unit)
+- ✅ Verification run: `cargo test -p gitgpui-app --no-default-features --features gix` passed (153 unit tests + 26 difftool integration tests + 63 mergetool integration tests + 37 standalone-tool integration tests).
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
+Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
+- ✅ No new portability gaps found in this iteration; previous Phase 1A–5C coverage remains complete.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
 ### Progress Snapshot (Iteration 2 — March 2, 2026)
 
 Full independent verification audit confirms all design document components are implemented.
