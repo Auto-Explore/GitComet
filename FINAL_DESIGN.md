@@ -2,6 +2,34 @@
 
 ## Implementation Progress
 
+### Progress Snapshot (Iteration 20, Mergetool No-Trust Delete-Output Parity Hardening — March 2, 2026)
+
+Implemented this iteration:
+- ✅ Added a new git-level mergetool E2E parity regression in `crates/gitgpui-app/tests/mergetool_git_integration.rs`:
+  - `git_mergetool_no_trust_exit_code_deleted_output_prompts_and_stays_unresolved`
+- ✅ This locks upstream Git behavior for `trustExitCode=false` when a tool deletes `MERGED`: Git reports "seems unchanged", prompts, and keeps the conflict unresolved.
+- ✅ Existing `trustExitCode=true` delete-output success coverage remains in place (`git_mergetool_trust_exit_code_deleted_output_resolves_conflict`), so both trust semantics are now explicitly covered for delete-output.
+
+Verification scope (this iteration):
+- ✅ `cargo test -p gitgpui-app --no-default-features --features gix --test mergetool_git_integration` (**65 passed, 0 failed**)
+- ✅ `cargo test -p gitgpui-app --no-default-features --features gix --test difftool_git_integration --test standalone_tool_mode_integration --test mergetool_git_integration` (**138 passed, 0 failed**)
+- ✅ `cargo test -p gitgpui-core --test merge_algorithm --test merge_fixture_harness --test merge_permutation_corpus --test merge_git_extraction --test meld_algorithm_tests --test conflict_label_formatting` (**103 passed, 0 failed, 3 ignored**)
+
+External Diff/Merge Usage Design (`external_usage.md`):
+- ✅ CLI modes (`difftool`, `mergetool`, `setup`) remain fully implemented with documented flags and env fallback.
+- ✅ Exit policy remains aligned (`0` success, `1` unresolved/canceled, `>=2` errors).
+- ✅ Behavior matrix item 5 (deleted output) now has explicit parity coverage for both trust modes at git invocation level.
+- ✅ Git integration (`guiDefault=auto`, headless+GUI tool config, quoting contract) remains complete.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
+Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`):
+- ✅ Phase 4A (`t7610` mergetool parity) strengthened with an additional trust semantics edge case for delete-output behavior under `trustExitCode=false`.
+- ✅ Phase 4B remains complete (28 difftool git E2E tests).
+- ✅ Phases 1A–1C, 2A–2C, 3A–3C, and 5A–5C remain complete.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
 ### Progress Snapshot (Iteration 20, Independent Completion Verification — March 2, 2026)
 
 Verification performed this iteration:

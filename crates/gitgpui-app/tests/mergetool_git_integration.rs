@@ -1098,6 +1098,58 @@ fn git_mergetool_trust_exit_code_deleted_output_resolves_conflict() {
 }
 
 #[test]
+fn git_mergetool_no_trust_exit_code_deleted_output_prompts_and_stays_unresolved() {
+    // With trustExitCode=false, upstream git does not treat deleted MERGED as
+    // a changed-resolution signal in this flow: it restores backup content,
+    // prompts, and leaves the conflict unresolved.
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+
+    setup_overlapping_conflict(repo);
+    configure_mergetool_selection(repo, "fake", None, None);
+    configure_mergetool_command(repo, "fake", "rm -f \"$MERGED\"; exit 1");
+    configure_mergetool_trust_exit_code(repo, "fake", false);
+
+    let output = run_git_capture(repo, &["mergetool", "--no-prompt", "--tool", "fake"]);
+    let text = output_text(&output);
+
+    assert!(
+        !output.status.success(),
+        "expected git mergetool to fail for delete-output with trustExitCode=false\n{text}"
+    );
+    assert!(
+        text.contains("seems unchanged"),
+        "expected unchanged-output warning in git output\n{text}"
+    );
+    assert!(
+        text.contains("Was the merge successful"),
+        "expected no-trust follow-up prompt in git output\n{text}"
+    );
+    assert!(
+        repo.join("file.txt").exists(),
+        "expected MERGED path to be restored by git after failed run\n{text}"
+    );
+
+    let merged = fs::read_to_string(repo.join("file.txt")).unwrap();
+    assert!(
+        merged.contains("<<<<<<<"),
+        "expected conflict markers to remain after failed delete-output run\nmerged:\n{merged}\n{text}"
+    );
+
+    assert!(
+        has_unmerged_entries_for_path(repo, "file.txt"),
+        "expected unmerged entries to remain after failed delete-output run\n{text}"
+    );
+
+    let status = run_git_capture(repo, &["status", "--porcelain"]);
+    let status_text = String::from_utf8_lossy(&status.stdout);
+    assert!(
+        status_text.contains("UU") || status_text.contains("AA"),
+        "expected unresolved conflict after failed delete-output run\nstatus:\n{status_text}\n{text}"
+    );
+}
+
+#[test]
 fn git_mergetool_multiple_conflicted_files() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
