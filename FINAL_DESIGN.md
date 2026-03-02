@@ -2,6 +2,48 @@
 
 ## Implementation Progress
 
+### Progress Snapshot (Iteration 29, Difftool Special-File Input Validation Hardening — March 2, 2026)
+
+Implementation performed this iteration:
+- ✅ Read both design documents in full (`external_usage.md`, `docs/REFERENCE_TEST_PORTABILITY.md`).
+- ✅ Identified a remaining validation gap in difftool argument handling: `classify_difftool_input()` treated non-file/non-directory special paths as file-like (for example FIFO/sockets), while the design contract requires existing file or directory inputs with clear early validation errors.
+- ✅ Hardened `classify_difftool_input()` in `crates/gitgpui-app/src/cli.rs`:
+  - Accepts only regular files, directories, symlinks to regular files/directories, and broken symlinks (for symlink-conflict compatibility).
+  - Rejects direct special-file paths with actionable error text.
+  - Rejects symlinks whose targets resolve to unsupported special file types.
+- ✅ Added unit coverage in `crates/gitgpui-app/src/cli.rs`:
+  - `difftool_rejects_fifo_input`
+  - `difftool_rejects_symlink_to_fifo_input`
+- ✅ Added standalone integration coverage in `crates/gitgpui-app/tests/standalone_tool_mode_integration.rs`:
+  - `standalone_difftool_rejects_fifo_input_exits_two`
+- ✅ Validation commands:
+  - `cargo test -p gitgpui-app --no-default-features --features gix difftool_rejects_fifo_input -- --nocapture` (**2 passed, 0 failed**)
+  - `cargo test -p gitgpui-app --no-default-features --features gix difftool_rejects_symlink_to_fifo_input -- --nocapture` (**1 passed, 0 failed**)
+
+External Diff/Merge Usage Design (`external_usage.md`):
+- ✅ CLI modes: `difftool`, `mergetool`, and `setup` implemented with all documented flags and env fallback.
+- ✅ Exit policy: dedicated modes return `0`/`1`/`>=2` per design contract.
+- ✅ Git integration: setup/config emits full headless+GUI tool config with `guiDefault=auto`.
+- ✅ Compatibility: KDiff3/Meld invocation forms supported (`--L1/--L2/--L3`, `-o/--output/--out`, `--base`, positional forms).
+- ✅ Behavior matrix: all 10 required scenarios covered by automated tests.
+- ✅ Strict difftool input validation now enforces file/directory-only contract for real paths and symlink targets.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
+Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`):
+- ✅ Phase 1A: t6403 core merge algorithm — 41 tests.
+- ✅ Phase 1B: t6427 zdiff3 — 4 tests.
+- ✅ Phase 1C: Conflict label formatting — 5 tests.
+- ✅ Phase 2A–2C: KDiff3-style fixture harness — 16 tests + 9 seed fixtures.
+- ✅ Phase 3A–3C: Permutation corpus (243 sampled + 161K on-demand) + real-world merge extraction.
+- ✅ Phase 4A: Mergetool E2E — 65 tests.
+- ✅ Phase 4B: Difftool E2E — 32 tests (validation hardening coverage added for unsupported special-file inputs).
+- ✅ Phase 5A–5C: Meld-derived algorithm tests — 32 tests.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
+Conclusion: All components from both design documents remain fully implemented; this iteration hardened strict input validation to reject unsupported special-path difftool inputs with explicit non-zero errors.
+
 ### Progress Snapshot (Iteration 29, Non-UTF-8 Symlink Target Byte Preservation — March 2, 2026)
 
 Implementation performed this iteration:

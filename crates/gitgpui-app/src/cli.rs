@@ -262,7 +262,13 @@ pub(crate) fn classify_difftool_input(
     if metadata.file_type().is_symlink() {
         match std::fs::metadata(path) {
             Ok(target_meta) if target_meta.is_dir() => return Ok(DifftoolInputKind::Directory),
-            Ok(_) => return Ok(DifftoolInputKind::FileLike),
+            Ok(target_meta) if target_meta.is_file() => return Ok(DifftoolInputKind::FileLike),
+            Ok(_) => {
+                return Err(format!(
+                    "{role_name} path symlink target must resolve to a regular file or directory: {}",
+                    path.display()
+                ));
+            }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 return Ok(DifftoolInputKind::FileLike);
             }
@@ -275,7 +281,14 @@ pub(crate) fn classify_difftool_input(
         }
     }
 
-    Ok(DifftoolInputKind::FileLike)
+    if metadata.is_file() {
+        return Ok(DifftoolInputKind::FileLike);
+    }
+
+    Err(format!(
+        "{role_name} path must be a regular file or directory: {}",
+        path.display()
+    ))
 }
 
 /// Resolve and validate difftool arguments.
@@ -1425,6 +1438,77 @@ mod tests {
         let config = resolve_difftool_with_env(args, &TestEnv::new()).unwrap();
         assert_eq!(config.local, left_link);
         assert_eq!(config.remote, right_link);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn difftool_rejects_fifo_input() {
+        use std::process::Command;
+
+        let dir = tempfile::tempdir().unwrap();
+        let local_fifo = dir.path().join("left.fifo");
+        let fifo_status = Command::new("mkfifo")
+            .arg(&local_fifo)
+            .status()
+            .expect("run mkfifo");
+        assert!(fifo_status.success(), "mkfifo failed: {fifo_status}");
+        let remote = tmp_file(&dir, "remote.txt", "remote\n");
+
+        let args = DifftoolArgs {
+            local: Some(local_fifo.clone()),
+            remote: Some(remote),
+            path: None,
+            label_left: None,
+            label_right: None,
+            gui: false,
+        };
+
+        let err = resolve_difftool_with_env(args, &TestEnv::new()).unwrap_err();
+        assert!(
+            err.contains("must be a regular file or directory"),
+            "error should explain supported path kinds: {err}"
+        );
+        assert!(
+            err.contains(&local_fifo.display().to_string()),
+            "error should include offending path: {err}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn difftool_rejects_symlink_to_fifo_input() {
+        use std::os::unix::fs as unix_fs;
+        use std::process::Command;
+
+        let dir = tempfile::tempdir().unwrap();
+        let fifo_target = dir.path().join("target.fifo");
+        let local_link = dir.path().join("left-link");
+        let fifo_status = Command::new("mkfifo")
+            .arg(&fifo_target)
+            .status()
+            .expect("run mkfifo");
+        assert!(fifo_status.success(), "mkfifo failed: {fifo_status}");
+        unix_fs::symlink(&fifo_target, &local_link).expect("create symlink to fifo");
+
+        let remote = tmp_file(&dir, "remote.txt", "remote\n");
+        let args = DifftoolArgs {
+            local: Some(local_link.clone()),
+            remote: Some(remote),
+            path: None,
+            label_left: None,
+            label_right: None,
+            gui: false,
+        };
+
+        let err = resolve_difftool_with_env(args, &TestEnv::new()).unwrap_err();
+        assert!(
+            err.contains("symlink target must resolve to a regular file or directory"),
+            "error should explain unsupported symlink targets: {err}"
+        );
+        assert!(
+            err.contains(&local_link.display().to_string()),
+            "error should include offending symlink path: {err}"
+        );
     }
 
     // ── MergetoolArgs resolution ─────────────────────────────────────

@@ -1249,6 +1249,37 @@ fn standalone_difftool_missing_input_exits_two() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn standalone_difftool_rejects_fifo_input_exits_two() {
+    use std::process::Command;
+
+    let dir = tempfile::tempdir().unwrap();
+    let local_fifo = dir.path().join("left.fifo");
+    let fifo_status = Command::new("mkfifo")
+        .arg(&local_fifo)
+        .status()
+        .expect("run mkfifo");
+    assert!(fifo_status.success(), "mkfifo failed: {fifo_status}");
+    let remote = dir.path().join("right.txt");
+    write_file(&remote, "right\n");
+
+    let output = run_gitgpui([
+        OsString::from("difftool"),
+        OsString::from("--local"),
+        local_fifo.as_os_str().to_owned(),
+        OsString::from("--remote"),
+        remote.as_os_str().to_owned(),
+    ]);
+
+    let text = output_text(&output);
+    assert_eq!(output.status.code(), Some(2), "expected exit 2\n{text}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("must be a regular file or directory"),
+        "expected actionable special-file validation error\n{text}"
+    );
+}
+
 #[cfg(not(feature = "ui-gpui"))]
 #[test]
 fn standalone_difftool_gui_flag_without_ui_feature_exits_two() {
