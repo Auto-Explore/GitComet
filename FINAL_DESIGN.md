@@ -2,6 +2,28 @@
 
 ## Implementation Progress
 
+### Progress Snapshot (Iteration 5, Verification Refresh — March 2, 2026)
+
+Independent implementation audit for this loop found no remaining unimplemented components from either design document.
+
+Verification run (this iteration):
+- ✅ `cargo test --workspace --no-default-features --features gix` passed (all tests green, including difftool/mergetool E2E and portability suites).
+- ✅ `cargo clippy --workspace --no-default-features --features gix -- -D warnings` passed (0 warnings).
+
+External Diff/Merge Usage Design (`external_usage.md`)
+- ✅ All components implemented and verified.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
+Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
+- ✅ Phase 1A–1C complete (t6403 core merge, t6427 zdiff3, label formatting).
+- ✅ Phase 2 complete (KDiff3-style fixture harness + invariants + seed fixtures).
+- ✅ Phase 3A–3C complete (permutation corpus + real-world merge extraction).
+- ✅ Phase 4 complete (t7610/t7800 mergetool+difftool E2E parity).
+- ✅ Phase 5 complete (Meld-derived algorithm tests).
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
 ### Progress Snapshot (Iteration 5 — March 2, 2026)
 
 Independent verification audit: all design document components remain fully implemented. No new components to add.
