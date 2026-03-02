@@ -15,10 +15,11 @@ ui-gpui = ["ui", "dep:gitgpui-ui-gpui"]
 gix = ["dep:gitgpui-git-gix"]
 
 [dependencies]
-clap = { version = "4", features = ["derive"] }
-gitgpui-core = { path = "../gitgpui-core" }
-gitgpui-git = { path = "../gitgpui-git" }
-gitgpui-git-gix = { path = "../gitgpui-git-gix", optional = true }
-gitgpui-ui = { path = "../gitgpui-ui", optional = true }
-gitgpui-ui-gpui = { path = "../gitgpui-ui-gpui", optional = true }
-tempfile = "3"
+clap = { workspace = true }
+gitgpui-core = { workspace = true }
+gitgpui-git = { workspace = true }
+gitgpui-git-gix = { workspace = true, optional = true }
+gitgpui-ui = { workspace = true, optional = true }
+gitgpui-ui-gpui = { workspace = true, optional = true }
+mimalloc = { workspace = true }
+tempfile = { workspace = true }

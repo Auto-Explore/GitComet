@@ -9,8 +9,8 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
-regex = "1"
+regex = { workspace = true }
 
 [dev-dependencies]
 rustc-hash = { workspace = true }
-tempfile = "3"
+tempfile = { workspace = true }

@@ -9,4 +9,4 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
-gitgpui-core = { path = "../gitgpui-core" }
+gitgpui-core = { workspace = true }

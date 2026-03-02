@@ -229,7 +229,7 @@ name = "action_macros"
 path = "tests/action_macros.rs"
 
 [dependencies.anyhow]
-version = "1.0.101"
+version = "1.0.102"
 
 [dependencies.async-task]
 version = "4.7"
@@ -239,7 +239,7 @@ version = "0.3"
 optional = true
 
 [dependencies.blade-graphics]
-version = "0.7.0"
+version = "0.7.1"
 optional = true
 
 [dependencies.blade-macros]
@@ -283,7 +283,7 @@ package = "gpui_http_client"
 version = "0.25.9"
 
 [dependencies.inventory]
-version = "0.3.21"
+version = "0.3.22"
 
 [dependencies.itertools]
 version = "0.14.0"
@@ -311,7 +311,7 @@ version = "2.2.1"
 version = "0.12.5"
 
 [dependencies.pin-project]
-version = "1.1.10"
+version = "1.1.11"
 
 [dependencies.postage]
 version = "0.5"
@@ -405,7 +405,7 @@ version = "0.2.2"
 package = "gpui_util_macros"
 
 [dependencies.uuid]
-version = "1.20.0"
+version = "1.21.0"
 features = [
     "v4",
     "v5",
@@ -456,13 +456,13 @@ version = "1"
 optional = true
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.ashpd]
-version = "0.12.1"
+version = "0.12.3"
 features = ["async-std"]
 optional = true
 default-features = false
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.blade-graphics]
-version = "0.7.0"
+version = "0.7.1"
 optional = true
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.blade-macros]
@@ -478,14 +478,14 @@ version = "1"
 optional = true
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.calloop]
-version = "0.14.3"
+version = "0.14.4"
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.calloop-wayland-source]
 version = "0.4.1"
 optional = true
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.cosmic-text]
-version = "0.17.1"
+version = "0.17.2"
 optional = true
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.filedescriptor]

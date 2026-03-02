@@ -7,7 +7,11 @@ mod mergetool_mode;
 mod setup_mode;
 
 use cli::{AppMode, exit_code};
+use mimalloc::MiMalloc;
 use std::io::{self, Write};
+
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
 
 #[cfg(any(feature = "ui-gpui", test))]
 fn should_launch_focused_diff_gui(

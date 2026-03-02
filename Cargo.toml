@@ -1,5 +1,5 @@
 [workspace]
-resolver = "2"
+resolver = "3"
 members = [
   "crates/gitgpui-app",
   "crates/gitgpui-core",
@@ -27,7 +27,40 @@ license = "GPL-3.0-or-later"
 repository = "https://github.com/<your-org>/gitgpui"
 
 [workspace.dependencies]
-rustc-hash = "2.1.1"
+# Internal crates
+gitgpui-core = { path = "crates/gitgpui-core" }
+gitgpui-git = { path = "crates/gitgpui-git" }
+gitgpui-git-gix = { path = "crates/gitgpui-git-gix" }
+gitgpui-state = { path = "crates/gitgpui-state" }
+gitgpui-ui = { path = "crates/gitgpui-ui" }
+gitgpui-ui-gpui = { path = "crates/gitgpui-ui-gpui" }
+
+# External crates
+clap = { version = "4", features = ["derive"] }
+criterion = "0.8"
+gix = "0.78"
+gix-diff = "0.58"
+globset = "0.4"
+gpui = "0.2.2"
+mimalloc = { version = "0.1", features = ["v3"] }
+notify = "8"
+regex = "1"
+rustc-hash = "2.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+smol = "2"
+tempfile = "3"
+tree-sitter = "0.26"
+tree-sitter-bash = "0.25.1"
+tree-sitter-css = "0.25.0"
+tree-sitter-go = "0.25"
+tree-sitter-html = "0.23.2"
+tree-sitter-json = "0.24"
+tree-sitter-python = "0.25"
+tree-sitter-rust = "0.24"
+tree-sitter-typescript = "0.23.2"
+tree-sitter-yaml = "0.7.2"
+unicode-segmentation = "1.12"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

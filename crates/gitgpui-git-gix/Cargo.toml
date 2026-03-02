@@ -9,8 +9,8 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
-gitgpui-core = { path = "../gitgpui-core" }
-gix = "0.78"
-gix-diff = "0.58"
+gitgpui-core = { workspace = true }
+gix = { workspace = true }
+gix-diff = { workspace = true }
 rustc-hash = { workspace = true }
-tempfile = "3.25.0"
+tempfile = { workspace = true }

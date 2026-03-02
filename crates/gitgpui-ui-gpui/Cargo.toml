@@ -9,27 +9,27 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
-gitgpui-core = { path = "../gitgpui-core" }
-gitgpui-state = { path = "../gitgpui-state" }
-gitgpui-ui = { path = "../gitgpui-ui" }
-gpui = "0.2.2"
+gitgpui-core = { workspace = true }
+gitgpui-state = { workspace = true }
+gitgpui-ui = { workspace = true }
+gpui = { workspace = true }
 rustc-hash = { workspace = true }
-smol = "2"
-tree-sitter = "0.26"
-tree-sitter-bash = "0.25.1"
-tree-sitter-css = "0.25.0"
-tree-sitter-go = "0.25"
-tree-sitter-html = "0.23.2"
-tree-sitter-json = "0.24"
-tree-sitter-python = "0.25"
-tree-sitter-rust = "0.24"
-tree-sitter-typescript = "0.23.2"
-tree-sitter-yaml = "0.7.2"
-unicode-segmentation = "1.12.0"
+smol = { workspace = true }
+tree-sitter = { workspace = true }
+tree-sitter-bash = { workspace = true }
+tree-sitter-css = { workspace = true }
+tree-sitter-go = { workspace = true }
+tree-sitter-html = { workspace = true }
+tree-sitter-json = { workspace = true }
+tree-sitter-python = { workspace = true }
+tree-sitter-rust = { workspace = true }
+tree-sitter-typescript = { workspace = true }
+tree-sitter-yaml = { workspace = true }
+unicode-segmentation = { workspace = true }
 
 [dev-dependencies]
-gpui = { version = "0.2.2", features = ["test-support"] }
-criterion = "0.8.2"
+gpui = { workspace = true, features = ["test-support"] }
+criterion = { workspace = true }
 
 [[bench]]
 name = "performance"

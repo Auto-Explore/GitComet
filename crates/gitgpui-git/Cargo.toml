@@ -12,4 +12,4 @@ workspace = true
 default = []
 
 [dependencies]
-gitgpui-core = { path = "../gitgpui-core" }
+gitgpui-core = { workspace = true }
