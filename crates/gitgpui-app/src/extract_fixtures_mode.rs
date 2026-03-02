@@ -16,6 +16,15 @@ pub struct ExtractMergeFixturesRunResult {
 pub fn run_extract_merge_fixtures(
     config: &ExtractMergeFixturesConfig,
 ) -> Result<ExtractMergeFixturesRunResult, String> {
+    if config.max_merges == 0 {
+        return Err("Invalid --max-merges value '0': expected a positive integer.".to_string());
+    }
+    if config.max_files_per_merge == 0 {
+        return Err(
+            "Invalid --max-files-per-merge value '0': expected a positive integer.".to_string(),
+        );
+    }
+
     let options = MergeExtractionOptions {
         max_merges: config.max_merges,
         max_files_per_merge: config.max_files_per_merge,
@@ -179,6 +188,42 @@ mod tests {
         assert!(
             err.contains("not a git repository"),
             "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn run_extract_merge_fixtures_rejects_zero_max_merges() {
+        let repo = create_conflicting_merge_repo();
+        let out = tempfile::tempdir().expect("create output dir");
+        let config = ExtractMergeFixturesConfig {
+            repo: repo.path().to_path_buf(),
+            output_dir: out.path().to_path_buf(),
+            max_merges: 0,
+            max_files_per_merge: 1,
+        };
+
+        let err = run_extract_merge_fixtures(&config).expect_err("expected validation error");
+        assert_eq!(
+            err,
+            "Invalid --max-merges value '0': expected a positive integer."
+        );
+    }
+
+    #[test]
+    fn run_extract_merge_fixtures_rejects_zero_max_files_per_merge() {
+        let repo = create_conflicting_merge_repo();
+        let out = tempfile::tempdir().expect("create output dir");
+        let config = ExtractMergeFixturesConfig {
+            repo: repo.path().to_path_buf(),
+            output_dir: out.path().to_path_buf(),
+            max_merges: 1,
+            max_files_per_merge: 0,
+        };
+
+        let err = run_extract_merge_fixtures(&config).expect_err("expected validation error");
+        assert_eq!(
+            err,
+            "Invalid --max-files-per-merge value '0': expected a positive integer."
         );
     }
 }

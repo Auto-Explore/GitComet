@@ -185,3 +185,27 @@ fn extract_merge_fixtures_e2e_rejects_zero_max_merges() {
         "expected max-merges validation error\n{text}"
     );
 }
+
+#[test]
+fn extract_merge_fixtures_e2e_rejects_zero_max_files_per_merge() {
+    let repo = create_conflicting_merge_repo();
+    let out = tempfile::tempdir().expect("create output dir");
+
+    let output = run_gitgpui([
+        OsString::from("extract-merge-fixtures"),
+        OsString::from("--repo"),
+        repo.path().as_os_str().to_owned(),
+        OsString::from("--out"),
+        out.path().as_os_str().to_owned(),
+        OsString::from("--max-files-per-merge"),
+        OsString::from("0"),
+    ]);
+
+    let text = output_text(&output);
+    assert_eq!(output.status.code(), Some(2), "expected exit 2\n{text}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("Invalid --max-files-per-merge value '0': expected a positive integer."),
+        "expected max-files-per-merge validation error\n{text}"
+    );
+}
