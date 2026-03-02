@@ -1237,6 +1237,39 @@ fn standalone_compat_diff_rejects_too_many_positionals_exits_two() {
 }
 
 #[test]
+fn standalone_compat_merge_rejects_too_many_positionals_exits_two() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = dir.path().join("base.txt");
+    let local = dir.path().join("local.txt");
+    let remote = dir.path().join("remote.txt");
+    let extra = dir.path().join("extra.txt");
+    let merged = dir.path().join("merged.txt");
+
+    write_file(&base, "base\n");
+    write_file(&local, "left\n");
+    write_file(&remote, "right\n");
+    write_file(&extra, "extra\n");
+
+    let output = run_gitgpui([
+        OsString::from("--output"),
+        merged.as_os_str().to_owned(),
+        base.as_os_str().to_owned(),
+        local.as_os_str().to_owned(),
+        remote.as_os_str().to_owned(),
+        extra.as_os_str().to_owned(),
+    ]);
+
+    let text = output_text(&output);
+    assert_eq!(output.status.code(), Some(2), "expected exit 2\n{text}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains(
+            "too many positional paths; expected 2 (LOCAL REMOTE) or 3 (BASE LOCAL REMOTE)"
+        ),
+        "expected actionable compatibility error\n{text}"
+    );
+}
+
+#[test]
 fn standalone_difftool_file_directory_mismatch_exits_two() {
     let dir = tempfile::tempdir().unwrap();
     let local = dir.path().join("left.txt");
