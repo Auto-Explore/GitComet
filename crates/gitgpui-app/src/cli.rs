@@ -1,9 +1,11 @@
 //! CLI argument parsing for gitgpui-app.
 //!
-//! Supports three modes:
+//! Supports five modes:
 //! - Default (no subcommand): open the full repository browser
 //! - `difftool`: focused diff view, compatible with `git difftool`
 //! - `mergetool`: focused merge view, compatible with `git mergetool`
+//! - `setup`: configure git difftool/mergetool integration
+//! - `extract-merge-fixtures`: generate Phase 3C real-world merge fixtures
 
 use clap::{Parser, Subcommand};
 use gitgpui_core::merge::{ConflictStyle, DEFAULT_MARKER_SIZE, DiffAlgorithm};
@@ -41,6 +43,8 @@ pub enum Command {
     Mergetool(MergetoolArgs),
     /// Configure git to use gitgpui as the global diff/merge tool.
     Setup(SetupArgs),
+    /// Extract non-trivial merge cases from git history as fixture files.
+    ExtractMergeFixtures(ExtractMergeFixturesArgs),
 }
 
 #[derive(clap::Args, Debug)]
@@ -167,6 +171,31 @@ pub struct SetupArgs {
     pub local: bool,
 }
 
+#[derive(clap::Args, Debug)]
+pub struct ExtractMergeFixturesArgs {
+    /// Repository to scan for merge commits (default: current directory).
+    #[arg(long, default_value = ".")]
+    pub repo: PathBuf,
+    /// Destination directory for generated fixture files.
+    #[arg(long)]
+    pub out: PathBuf,
+    /// Maximum number of merge commits to scan.
+    #[arg(long, default_value_t = 20)]
+    pub max_merges: usize,
+    /// Maximum number of files extracted per merge commit.
+    #[arg(long, default_value_t = 5)]
+    pub max_files_per_merge: usize,
+}
+
+/// Validated extraction configuration.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExtractMergeFixturesConfig {
+    pub repo: PathBuf,
+    pub output_dir: PathBuf,
+    pub max_merges: usize,
+    pub max_files_per_merge: usize,
+}
+
 /// Which mode the application was launched in.
 #[derive(Clone, Debug)]
 pub enum AppMode {
@@ -178,6 +207,8 @@ pub enum AppMode {
     Mergetool(MergetoolConfig),
     /// Write git config for difftool/mergetool integration.
     Setup { dry_run: bool, local: bool },
+    /// Generate merge fixtures from repository history.
+    ExtractMergeFixtures(ExtractMergeFixturesConfig),
 }
 
 // ── Environment lookup trait for testability ─────────────────────────
@@ -577,6 +608,29 @@ fn resolve_mergetool_with_config(
     Ok(config)
 }
 
+fn resolve_extract_merge_fixtures(
+    args: ExtractMergeFixturesArgs,
+) -> Result<ExtractMergeFixturesConfig, String> {
+    let repo = require_non_empty_path(args.repo, "repository")?;
+    let output_dir = require_non_empty_path(args.out, "output directory")?;
+
+    if args.max_merges == 0 {
+        return Err("Invalid --max-merges value '0': expected a positive integer.".to_string());
+    }
+    if args.max_files_per_merge == 0 {
+        return Err(
+            "Invalid --max-files-per-merge value '0': expected a positive integer.".to_string(),
+        );
+    }
+
+    Ok(ExtractMergeFixturesConfig {
+        repo,
+        output_dir,
+        max_merges: args.max_merges,
+        max_files_per_merge: args.max_files_per_merge,
+    })
+}
+
 fn assign_next_compat_label(
     label_l1: &mut Option<String>,
     label_l2: &mut Option<String>,
@@ -964,6 +1018,9 @@ fn parse_app_mode_from_args_env_and_config(
                 dry_run: args.dry_run,
                 local: args.local,
             }),
+            Some(Command::ExtractMergeFixtures(args)) => {
+                resolve_extract_merge_fixtures(args).map(AppMode::ExtractMergeFixtures)
+            }
         },
         Err(clap_err) => {
             // --help and --version produce informational clap errors that
@@ -2251,10 +2308,7 @@ mod tests {
         let config = resolve_difftool_with_env(args, &env).unwrap();
         assert_eq!(config.local, local);
         assert_eq!(config.remote, remote);
-        assert_eq!(
-            config.display_path.as_deref(),
-            Some("src/lib/module.rs")
-        );
+        assert_eq!(config.display_path.as_deref(), Some("src/lib/module.rs"));
     }
 
     #[test]
@@ -3817,5 +3871,83 @@ mod tests {
             }
             _ => panic!("expected Mergetool mode"),
         }
+    }
+
+    #[test]
+    fn clap_parses_extract_merge_fixtures_subcommand() {
+        let cli = Cli::try_parse_from([
+            "gitgpui-app",
+            "extract-merge-fixtures",
+            "--repo",
+            "/tmp/repo",
+            "--out",
+            "/tmp/out",
+            "--max-merges",
+            "42",
+            "--max-files-per-merge",
+            "9",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Some(Command::ExtractMergeFixtures(args)) => {
+                assert_eq!(args.repo, PathBuf::from("/tmp/repo"));
+                assert_eq!(args.out, PathBuf::from("/tmp/out"));
+                assert_eq!(args.max_merges, 42);
+                assert_eq!(args.max_files_per_merge, 9);
+            }
+            other => panic!("expected ExtractMergeFixtures command, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn extract_merge_fixtures_mode_resolves_into_app_mode() {
+        let env = TestEnv::new();
+        let mode = parse_mode_for_test(
+            vec![
+                "gitgpui-app".into(),
+                "extract-merge-fixtures".into(),
+                "--repo".into(),
+                "/tmp/repo".into(),
+                "--out".into(),
+                "/tmp/out".into(),
+            ],
+            &env,
+        )
+        .expect("parse extract-merge-fixtures mode");
+
+        match mode {
+            AppMode::ExtractMergeFixtures(config) => {
+                assert_eq!(config.repo, PathBuf::from("/tmp/repo"));
+                assert_eq!(config.output_dir, PathBuf::from("/tmp/out"));
+                assert_eq!(config.max_merges, 20);
+                assert_eq!(config.max_files_per_merge, 5);
+            }
+            other => panic!("expected ExtractMergeFixtures mode, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn extract_merge_fixtures_rejects_zero_limits() {
+        let err = resolve_extract_merge_fixtures(ExtractMergeFixturesArgs {
+            repo: PathBuf::from("."),
+            out: PathBuf::from("fixtures"),
+            max_merges: 0,
+            max_files_per_merge: 1,
+        })
+        .expect_err("zero max-merges should error");
+        assert!(err.contains("--max-merges"), "unexpected error: {err}");
+
+        let err = resolve_extract_merge_fixtures(ExtractMergeFixturesArgs {
+            repo: PathBuf::from("."),
+            out: PathBuf::from("fixtures"),
+            max_merges: 1,
+            max_files_per_merge: 0,
+        })
+        .expect_err("zero max-files-per-merge should error");
+        assert!(
+            err.contains("--max-files-per-merge"),
+            "unexpected error: {err}"
+        );
     }
 }

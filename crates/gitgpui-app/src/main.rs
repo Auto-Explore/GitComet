@@ -2,6 +2,7 @@ mod cli;
 #[cfg(feature = "ui")]
 mod crashlog;
 mod difftool_mode;
+mod extract_fixtures_mode;
 mod mergetool_mode;
 mod setup_mode;
 
@@ -47,44 +48,44 @@ fn main() {
             }
 
             match difftool_mode::run_difftool(&config) {
-            Ok(result) => {
-                // When UI is available and --gui was requested, open a focused
-                // GPUI diff window instead of printing raw text to stdout.
-                #[cfg(feature = "ui-gpui")]
-                if should_launch_focused_diff_gui(&config, &result) {
-                    let label_left = config
-                        .label_left
-                        .clone()
-                        .unwrap_or_else(|| path_label(&config.local));
-                    let label_right = config
-                        .label_right
-                        .clone()
-                        .unwrap_or_else(|| path_label(&config.remote));
+                Ok(result) => {
+                    // When UI is available and --gui was requested, open a focused
+                    // GPUI diff window instead of printing raw text to stdout.
+                    #[cfg(feature = "ui-gpui")]
+                    if should_launch_focused_diff_gui(&config, &result) {
+                        let label_left = config
+                            .label_left
+                            .clone()
+                            .unwrap_or_else(|| path_label(&config.local));
+                        let label_right = config
+                            .label_right
+                            .clone()
+                            .unwrap_or_else(|| path_label(&config.remote));
 
-                    let gui_config = gitgpui_ui_gpui::FocusedDiffConfig {
-                        label_left,
-                        label_right,
-                        display_path: config.display_path.clone(),
-                        diff_text: result.stdout.clone(),
-                    };
-                    let code = gitgpui_ui_gpui::run_focused_diff(gui_config);
-                    std::process::exit(code);
-                }
+                        let gui_config = gitgpui_ui_gpui::FocusedDiffConfig {
+                            label_left,
+                            label_right,
+                            display_path: config.display_path.clone(),
+                            diff_text: result.stdout.clone(),
+                        };
+                        let code = gitgpui_ui_gpui::run_focused_diff(gui_config);
+                        std::process::exit(code);
+                    }
 
-                if !result.stdout.is_empty() {
-                    print!("{}", result.stdout);
+                    if !result.stdout.is_empty() {
+                        print!("{}", result.stdout);
+                    }
+                    if !result.stderr.is_empty() {
+                        eprint!("{}", result.stderr);
+                    }
+                    let _ = io::stdout().flush();
+                    let _ = io::stderr().flush();
+                    std::process::exit(result.exit_code);
                 }
-                if !result.stderr.is_empty() {
-                    eprint!("{}", result.stderr);
+                Err(msg) => {
+                    eprintln!("{msg}");
+                    std::process::exit(exit_code::ERROR);
                 }
-                let _ = io::stdout().flush();
-                let _ = io::stderr().flush();
-                std::process::exit(result.exit_code);
-            }
-            Err(msg) => {
-                eprintln!("{msg}");
-                std::process::exit(exit_code::ERROR);
-            }
             }
         }
         AppMode::Browser { path } => {
@@ -161,16 +162,13 @@ fn main() {
                             .label_remote
                             .clone()
                             .unwrap_or_else(|| path_label(&config.remote));
-                        let label_base = config
-                            .label_base
-                            .clone()
-                            .unwrap_or_else(|| {
-                                config
-                                    .base
-                                    .as_ref()
-                                    .map(|p| path_label(p))
-                                    .unwrap_or_else(|| "empty tree".to_string())
-                            });
+                        let label_base = config.label_base.clone().unwrap_or_else(|| {
+                            config
+                                .base
+                                .as_ref()
+                                .map(|p| path_label(p))
+                                .unwrap_or_else(|| "empty tree".to_string())
+                        });
 
                         let gui_config = gitgpui_ui_gpui::FocusedMergeConfig {
                             merged_path: config.merged.clone(),
@@ -214,6 +212,25 @@ fn main() {
                 std::process::exit(exit_code::ERROR);
             }
         },
+        AppMode::ExtractMergeFixtures(config) => {
+            match extract_fixtures_mode::run_extract_merge_fixtures(&config) {
+                Ok(result) => {
+                    if !result.stdout.is_empty() {
+                        print!("{}", result.stdout);
+                    }
+                    if !result.stderr.is_empty() {
+                        eprint!("{}", result.stderr);
+                    }
+                    let _ = io::stdout().flush();
+                    let _ = io::stderr().flush();
+                    std::process::exit(result.exit_code);
+                }
+                Err(msg) => {
+                    eprintln!("{msg}");
+                    std::process::exit(exit_code::ERROR);
+                }
+            }
+        }
     }
 }
 
@@ -228,7 +245,7 @@ fn path_label(path: &std::path::Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gitgpui_core::merge::{ConflictStyle, DiffAlgorithm, MergeResult, DEFAULT_MARKER_SIZE};
+    use gitgpui_core::merge::{ConflictStyle, DEFAULT_MARKER_SIZE, DiffAlgorithm, MergeResult};
 
     fn mergetool_config(gui: bool, auto: bool) -> cli::MergetoolConfig {
         cli::MergetoolConfig {

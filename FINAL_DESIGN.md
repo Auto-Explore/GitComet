@@ -2,13 +2,17 @@
 
 ## Implementation Progress
 
-### Progress Snapshot (Iteration 43, Independent Completion Verification — March 2, 2026)
+### Progress Snapshot (Iteration 43, Phase 3C Extraction Command Surface — March 2, 2026)
 
 Performed this iteration:
 - ✅ Read both design documents in full (`external_usage.md`, `docs/REFERENCE_TEST_PORTABILITY.md`).
-- ✅ Full workspace test suite: `cargo test --workspace --no-default-features --features gix` — **1189 passed, 0 failed, 5 ignored**.
-- ✅ Clippy clean: `cargo clippy --workspace --no-default-features --features gix -- -D warnings` — **0 warnings**.
-- ✅ Scanned all project code for `TODO`/`FIXME`/`todo!()`/`unimplemented!()` — none found in project code (only in vendor crates and test mock stubs).
+- ✅ Implemented a new app-mode command: `gitgpui-app extract-merge-fixtures`.
+  - Added CLI parsing and validation (`--repo`, `--out`, `--max-merges`, `--max-files-per-merge`).
+  - Added runtime mode wiring in `main.rs`.
+  - Added new execution module `extract_fixtures_mode.rs` that calls production `gitgpui_core::merge_extraction::{extract_merge_cases_from_repo, write_fixture_files}`.
+  - Added unit tests for parsing/validation and extraction behavior (fixture files written, non-repo error handling).
+- ✅ Validation: `cargo test -p gitgpui-app --no-default-features --features gix` (**191 unit + 158 integration tests, all passing**).
+- ✅ Validation: `cargo clippy -p gitgpui-app --no-default-features --features gix -- -D warnings` (**0 warnings**).
 
 External Diff/Merge Usage Design (`external_usage.md`):
 - ✅ CLI modes: `difftool`, `mergetool`, and `setup` implemented with all documented flags and env fallback.
@@ -28,13 +32,14 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`):
 - ✅ Phase 1C: Conflict label formatting — 5 tests.
 - ✅ Phase 2A–2C: KDiff3-style fixture harness — 18 tests + 9 seed fixtures.
 - ✅ Phase 3A–3C: Permutation corpus (243 sampled + 161K on-demand) + real-world merge extraction.
+  - Added first-class command surface for Phase 3C extraction/generation in `gitgpui-app`.
 - ✅ Phase 4A: Mergetool E2E — 65 tests.
 - ✅ Phase 4B: Difftool E2E — 32 tests.
 - ✅ Phase 5A–5C: Meld-derived algorithm tests — 32 tests.
 - 🔧 Partially implemented components: none.
 - ⬜ Not-yet-started components: none.
 
-Conclusion: All components from both design documents remain fully implemented. Test count grew from 897 (iteration 42) to 1189 due to accumulated hardenings across iterations 39–42. No gaps found.
+Conclusion: All components from both design documents remain fully implemented. Iteration 43 closes the remaining ergonomics gap by exposing Phase 3C extraction as a reusable app command instead of test-only entry points.
 
 ### Progress Snapshot (Iteration 42, Merge-Extraction Locale-Agnostic Blob Lookup Hardening — March 2, 2026)
 
