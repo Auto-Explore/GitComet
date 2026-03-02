@@ -2,6 +2,34 @@
 
 ## Implementation Progress
 
+### Progress Snapshot (Iteration 5 — March 2, 2026)
+
+Independent verification audit: all design document components remain fully implemented. No new components to add.
+
+Verification scope:
+- ✅ Cross-referenced every Phase (1A–5C) from `REFERENCE_TEST_PORTABILITY.md` and every section from `external_usage.md` against actual test names and source files — no gaps found.
+- ✅ Verified GUI interactive mode is fully implemented (not stubbed): `focused_merge.rs` (1,185 lines, 21 tests) and `focused_diff.rs` (349 lines, 3 tests) provide complete GPUI conflict resolution and diff windows.
+- ✅ Verified CI configuration (`.github/workflows/rust.yml`) runs headless tests with `--no-default-features --features gix`.
+- ✅ Core source code (`gitgpui-core`, `gitgpui-app`, `gitgpui-ui-gpui`, `gitgpui-git-gix`) contains zero TODO/FIXME/HACK markers. The `unimplemented!()` calls in `gitgpui-state/src/store/tests.rs` are standard test mock trait stubs — not production gaps.
+- ✅ `cargo clippy --workspace --no-default-features --features gix -- -D warnings`: **0 warnings**
+- ✅ `cargo test --workspace --no-default-features --features gix`: **1097 passed, 0 failed, 5 ignored**
+  - Ignored tests (intentional): exhaustive 161K permutation corpus, external repo extraction, fixture generation utility, 2 perf benchmarks in ui-gpui.
+
+External Diff/Merge Usage Design (`external_usage.md`)
+- ✅ All components implemented and verified. No remaining gaps.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
+Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
+- ✅ Phase 1A–1C complete (t6403 core merge, t6427 zdiff3, label formatting).
+- ✅ Phase 2 complete (KDiff3-style fixture harness + seed fixtures + invariants).
+- ✅ Phase 3A–3B complete (permutation corpus generation + invariants).
+- ✅ Phase 3C complete (production extraction module + integration tests using public API, hardened against fixture-stem collisions).
+- ✅ Phase 4 complete (t7610/t7800 mergetool/difftool E2E parity suites).
+- ✅ Phase 5 complete (Meld-derived matcher/interval/newline behavior tests).
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
 ### Progress Snapshot (Iteration 4, Follow-up — March 2, 2026)
 
 Implemented this iteration:
