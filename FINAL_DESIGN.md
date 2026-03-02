@@ -2,6 +2,58 @@
 
 ## Implementation Progress
 
+### Progress Snapshot (Iteration 15, Independent Completion Verification — March 2, 2026)
+
+Verification scope (this iteration):
+- ✅ Full independent audit of both design documents against the codebase. No unimplemented components found.
+- ✅ `cargo test --workspace --no-default-features --features gix`: **1122 passed, 0 failed, 5 ignored** (6 new tests since iteration 13 baseline).
+- ✅ `cargo clippy --workspace --no-default-features --features gix -- -D warnings`: **0 warnings**.
+- ✅ Zero `TODO`/`FIXME`/`unimplemented!()`/`todo!()` in any first-party production `src/` code.
+
+Design document cross-reference audit:
+- ✅ **CLI argument structure** (`cli.rs`): All flags from `external_usage.md` present — `difftool` (`--local`, `--remote`, `--path`, `--label-left`, `--label-right`, `--gui`), `mergetool` (`--merged`/`-o`/`--output`/`--out`, `--local`, `--remote`, `--base`, `--label-base`/`--L1`, `--label-local`/`--L2`, `--label-remote`/`--L3`, `--auto`/`--auto-merge`, `--gui`, `--conflict-style`, `--diff-algorithm`, `--marker-size`), `setup` (`--dry-run`, `--local`).
+- ✅ **Setup config entries** (`setup_mode.rs`): All 18 config keys from the design doc's "Git Global Config Setup" section emitted correctly (headless tool `gitgpui` + GUI tool `gitgpui-gui` + `guiDefault=auto`).
+- ✅ **Exit code policy**: SUCCESS=0, CANCELED=1, ERROR≥2 — implemented in `cli.rs` and `mergetool_mode.rs`.
+- ✅ **Env var fallback**: `LOCAL`, `REMOTE`, `BASE`, `MERGED` — implemented in `resolve_difftool_with_env()` and `resolve_mergetool_with_env()`.
+- ✅ **KDiff3/Meld compat mode**: Positional args (`BASE LOCAL REMOTE -o OUTPUT`) — implemented in `parse_compat_external_mode_with_config()`.
+- ✅ **writeToTemp support**: 6 integration tests in `status_integration.rs` covering `writeToTemp=true/false × keepTemporaries=true/false × success/abort`.
+- ✅ **--tool-help parity**: Verified via git-level integration tests (`git_mergetool_tool_help_lists_gitgpui_tool`, `git_difftool_tool_help_lists_gitgpui_tool`).
+
+Behavior matrix (all 10 items from `external_usage.md`):
+1. ✅ File paths with spaces and unicode (10+ tests across all E2E suites)
+2. ✅ Invocation from repo subdirectory (3 tests)
+3. ✅ No-base conflicts / BASE absent (5 tests)
+4. ✅ Binary and non-UTF8 content (8 tests)
+5. ✅ Deleted output / tool chooses deletion (5 tests)
+6. ✅ Symlink conflicts (4 tests)
+7. ✅ Submodule path conflicts (12 tests)
+8. ✅ CRLF preservation (7 tests including subchunk auto-resolve)
+9. ✅ Directory diff mode (4 tests)
+10. ✅ Close/cancel behavior and exit code (30+ tests)
+
+Reference Test Portability Plan (all phases):
+- ✅ Phase 1A: t6403 core merge algorithm — 41 tests
+- ✅ Phase 1B: t6427 zdiff3 — included in Phase 1A
+- ✅ Phase 1C: Conflict label formatting — 5 tests
+- ✅ Phase 2A–2C: KDiff3-style fixture harness — 16 tests + 9 seed fixtures + invariant artifact hardening
+- ✅ Phase 3A: Permutation corpus — 243 sampled cases + exhaustive 161K (ignored, on-demand)
+- ✅ Phase 3B: Implementation approach — Rust test-time generator (no committed fixture bloat)
+- ✅ Phase 3C: Real-world merge extraction — 8 active + 2 on-demand tests
+- ✅ Phase 4A: Mergetool E2E — 64 tests
+- ✅ Phase 4B: Difftool E2E — 28 tests
+- ✅ Phase 5A: Myers matching blocks — included in Meld suite
+- ✅ Phase 5B: Interval merging — included in Meld suite
+- ✅ Phase 5C: Newline-aware operations — included in Meld suite (32 total Meld tests)
+
+Ignored tests (5, all intentional):
+- `extraction_regression_on_external_repo` — requires `GITGPUI_MERGE_EXTRACTION_REPO` env var
+- `generate_fixtures_from_repo` — requires `GITGPUI_MERGE_EXTRACTION_REPO` + `GITGPUI_MERGE_EXTRACTION_DEST`
+- `kdiff3_permutation_corpus_exhaustive_11_pow_5` — 161K cases, too slow for CI (sampled variant runs in CI)
+- `perf_treesitter_tokenization_smoke` — performance benchmark
+- `perf_word_diff_ranges_smoke` — performance benchmark
+
+Conclusion: Both design documents are fully implemented with comprehensive test coverage. No remaining gaps found.
+
 ### Progress Snapshot (Iteration 14, Fixture Harness Failure Artifact Hardening — March 2, 2026)
 
 Implemented this iteration:
