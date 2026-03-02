@@ -67,7 +67,6 @@ struct FocusedMergeView {
     output_path: PathBuf,
     label_local: String,
     label_remote: String,
-    #[allow(dead_code)] // Used when base column is shown in 3-way view.
     label_base: String,
     saved: bool,
     exit_code: Arc<AtomicI32>,

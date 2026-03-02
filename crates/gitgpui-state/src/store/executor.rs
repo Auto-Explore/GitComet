@@ -1,5 +1,3 @@
-use gitgpui_core::error::{Error, ErrorKind};
-use std::path::{Path, PathBuf};
 use std::sync::{Arc, mpsc};
 use std::thread;
 
@@ -45,10 +43,4 @@ impl TaskExecutor {
     pub(super) fn spawn(&self, task: impl FnOnce() + Send + 'static) {
         let _ = self.tx.send(Box::new(task));
     }
-}
-
-#[allow(dead_code)]
-fn validate_repo_path(path: &Path) -> Result<PathBuf, Error> {
-    path.canonicalize()
-        .map_err(|e| Error::new(ErrorKind::Io(e.kind())))
 }
