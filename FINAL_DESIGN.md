@@ -2,6 +2,34 @@
 
 ## Implementation Progress
 
+### Progress Snapshot (Iteration 9, Independent Verification Audit — March 2, 2026)
+
+Independent verification audit by a fresh agent confirms all design document components remain fully implemented. No new components to add, no gaps found.
+
+Verification scope (this iteration):
+- ✅ `cargo test --workspace --no-default-features --features gix`: **1105 passed, 0 failed, 5 ignored** (2 new tests since iteration 8).
+- ✅ `cargo clippy --workspace --no-default-features --features gix -- -D warnings`: **0 warnings**.
+- ✅ Conducted three independent deep structural audits:
+  - **CLI validation audit**: Verified all 10 behavior matrix items (paths with spaces/unicode, subdirectory invocation, no-base conflicts, binary/non-UTF8 content, deleted output, symlink conflicts, submodule conflicts, CRLF preservation, directory diff, close/cancel exit codes). Verified exit code policy (0/1/≥2), env var fallbacks, setup subcommand config generation, git config fallback (`merge.conflictstyle`, `diff.algorithm`), and backward compatibility parsing (KDiff3/Meld styles). All FULLY IMPLEMENTED.
+  - **Mergetool backend audit**: Verified trust-exit-code precedence chain (`mergetool.<tool>.trustExitCode` → `mergetool.trustExitCode` → default `false`), launch_mergetool trust semantics (exit code vs content change detection), all git-standard config keys (`cmd`, `path`, `trustExitCode`, `writeToTemp`, `keepTemporaries`), empty `$BASE` handling, and absence of unsafe unwrap() calls. All FULLY IMPLEMENTED. Note: `mergetool.keepBackup` and `mergetool.prompt` are git-side features handled by git itself, not the external tool.
+  - **Core merge algorithm audit**: Verified all conflict styles (merge/diff3/zdiff3), resolution strategies (ours/theirs/union), zealous coalescing, CRLF-aware markers, binary file detection, configurable marker size, trailing newline handling, and absence of panicking patterns. All FULLY IMPLEMENTED.
+- ✅ Verified zero TODO/FIXME/HACK markers in production code (all matches in vendor crates only).
+- ✅ Verified zero `unimplemented!()` / `todo!()` in production code (all matches in test mock trait stubs only).
+
+External Diff/Merge Usage Design (`external_usage.md`)
+- ✅ All components implemented and verified. No remaining gaps.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
+Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
+- ✅ Phase 1A–1C complete (t6403 core merge, t6427 zdiff3, label formatting).
+- ✅ Phase 2 complete (KDiff3-style fixture harness + invariants + seed fixtures + optional expected-result support).
+- ✅ Phase 3A–3C complete (permutation corpus + real-world merge extraction).
+- ✅ Phase 4 complete (t7610/t7800 mergetool+difftool E2E parity).
+- ✅ Phase 5 complete (Meld-derived algorithm tests).
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
 ### Progress Snapshot (Iteration 8, TrustExitCode Fallback Hardening — March 2, 2026)
 
 Implemented this iteration:
