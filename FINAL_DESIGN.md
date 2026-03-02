@@ -2,6 +2,35 @@
 
 ## Implementation Progress
 
+### Progress Snapshot (Iteration 6, Independent Verification — March 2, 2026)
+
+Independent verification audit by a fresh agent confirms all design document components remain fully implemented. No new components to add, no gaps found.
+
+Verification scope (this iteration):
+- ✅ `cargo test --workspace --no-default-features --features gix`: **1097 passed, 0 failed, 5 ignored** (unchanged from iteration 5).
+- ✅ `cargo clippy --workspace --no-default-features --features gix -- -D warnings`: **0 warnings**.
+- ✅ Conducted parallel deep audit of all major subsystems via three independent exploration agents:
+  - **CLI & tool modes audit**: Verified all CLI subcommands (`difftool`, `mergetool`, `setup`) with full flag sets, env fallbacks, KDiff3/Meld compatibility parsing, exit code policy (0/1/≥2), and setup mode config generation. All FULLY IMPLEMENTED.
+  - **Core merge & reference test audit**: Verified merge algorithm (3-way, conflict styles, strategies, zealous coalescing, CRLF, binary detection), all Phase 1A–5C test suites against `REFERENCE_TEST_PORTABILITY.md` requirements. All FULLY IMPLEMENTED.
+  - **E2E test & GUI audit**: Verified test counts (63 mergetool + 26 difftool + 37 standalone = 126 E2E integration tests), test coverage of all behavior matrix categories, and confirmed GUI focused windows are real GPUI implementations (1,185 + 349 lines, not stubs).
+- ✅ Searched for TODO/FIXME/HACK markers in production code: **none found** (all matches are in vendor crates or test data string literals).
+- ✅ Searched for `unimplemented!()` / `todo!()` in production code: **none found** (all matches are in vendor crates or test mock trait stubs).
+- ✅ Verified CI configuration (`.github/workflows/rust.yml`) properly gates all phases: clippy, build, merge-algorithm (Phase 1A/1B/1C/5), merge-regression (Phase 2/3A/3C), tool-integration (Phase 4A/4B), and backend-integration.
+
+External Diff/Merge Usage Design (`external_usage.md`)
+- ✅ All components implemented and verified. No remaining gaps.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
+Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
+- ✅ Phase 1A–1C complete (t6403 core merge, t6427 zdiff3, label formatting).
+- ✅ Phase 2 complete (KDiff3-style fixture harness + invariants + seed fixtures).
+- ✅ Phase 3A–3C complete (permutation corpus + real-world merge extraction).
+- ✅ Phase 4 complete (t7610/t7800 mergetool+difftool E2E parity).
+- ✅ Phase 5 complete (Meld-derived algorithm tests).
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
 ### Progress Snapshot (Iteration 5, Verification Refresh — March 2, 2026)
 
 Independent implementation audit for this loop found no remaining unimplemented components from either design document.
