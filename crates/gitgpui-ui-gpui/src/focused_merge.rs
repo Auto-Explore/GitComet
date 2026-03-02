@@ -11,7 +11,10 @@ use crate::view::conflict_resolver::{
     conflict_count, next_unresolved_conflict_index, parse_conflict_markers,
     prev_unresolved_conflict_index, resolved_conflict_count,
 };
-use gitgpui_core::text_utils::{LineEndingDetectionMode, detect_line_ending_from_texts};
+use gitgpui_core::conflict_output::{
+    ConflictMarkerLabels, ConflictOutputBlockRef, ConflictOutputChoice, ConflictOutputSegmentRef,
+    GenerateResolvedTextOptions, UnresolvedConflictMode,
+};
 use gpui::prelude::*;
 use gpui::{
     App, Application, Bounds, ClickEvent, FocusHandle, Focusable, FontWeight, KeyBinding, Render,
@@ -147,7 +150,12 @@ impl FocusedMergeView {
     }
 
     fn save(&mut self, cx: &mut Context<Self>) {
-        let output = self.build_output();
+        let output = build_output_from_segments_with_labels(
+            &self.segments,
+            &self.label_local,
+            &self.label_remote,
+            &self.label_base,
+        );
         if let Err(e) = std::fs::write(&self.output_path, &output) {
             eprintln!(
                 "Failed to write merged output to {}: {e}",
@@ -204,25 +212,6 @@ impl FocusedMergeView {
         cx.notify();
     }
 
-    /// Build the resolved output text from current segment state.
-    fn build_output(&self) -> String {
-        let mut out = String::new();
-        for seg in &self.segments {
-            match seg {
-                ConflictSegment::Text(text) => out.push_str(text),
-                ConflictSegment::Block(block) => {
-                    out.push_str(&block_output_text(
-                        block,
-                        &self.label_local,
-                        &self.label_remote,
-                        &self.label_base,
-                    ));
-                }
-            }
-        }
-        out
-    }
-
     fn get_conflict_block(&self, conflict_ix: usize) -> Option<&ConflictBlock> {
         let mut idx = 0usize;
         for seg in &self.segments {
@@ -242,75 +231,48 @@ impl FocusedMergeView {
     }
 }
 
-/// Get the chosen text for a conflict block based on its current choice.
-fn chosen_block_text(block: &ConflictBlock) -> String {
-    match block.choice {
-        ConflictChoice::Base => block.base.clone().unwrap_or_default(),
-        ConflictChoice::Ours => block.ours.clone(),
-        ConflictChoice::Theirs => block.theirs.clone(),
-        ConflictChoice::Both => {
-            let mut s = block.ours.clone();
-            s.push_str(&block.theirs);
-            s
-        }
-    }
-}
-
-fn block_output_text(
-    block: &ConflictBlock,
+fn build_output_from_segments_with_labels(
+    segments: &[ConflictSegment],
     label_local: &str,
     label_remote: &str,
     label_base: &str,
 ) -> String {
-    if block.resolved {
-        return chosen_block_text(block);
-    }
-
-    render_unresolved_marker_block(block, label_local, label_remote, label_base)
-}
-
-fn render_unresolved_marker_block(
-    block: &ConflictBlock,
-    label_local: &str,
-    label_remote: &str,
-    label_base: &str,
-) -> String {
-    let newline = detect_line_ending_from_texts(
-        [
-            block.ours.as_str(),
-            block.theirs.as_str(),
-            block.base.as_deref().unwrap_or_default(),
-        ],
-        LineEndingDetectionMode::Presence,
-    );
-    let mut out = String::new();
-    out.push_str("<<<<<<< ");
-    out.push_str(label_local);
-    out.push_str(newline);
-    out.push_str(&block.ours);
-    // Guard: ensure content ends with a newline so marker starts on its own line.
-    if !block.ours.is_empty() && !block.ours.ends_with(newline) {
-        out.push_str(newline);
-    }
-    if let Some(base) = block.base.as_deref() {
-        out.push_str("||||||| ");
-        out.push_str(label_base);
-        out.push_str(newline);
-        out.push_str(base);
-        if !base.is_empty() && !base.ends_with(newline) {
-            out.push_str(newline);
+    fn map_choice(choice: ConflictChoice) -> ConflictOutputChoice {
+        match choice {
+            ConflictChoice::Base => ConflictOutputChoice::Base,
+            ConflictChoice::Ours => ConflictOutputChoice::Ours,
+            ConflictChoice::Theirs => ConflictOutputChoice::Theirs,
+            ConflictChoice::Both => ConflictOutputChoice::Both,
         }
     }
-    out.push_str("=======");
-    out.push_str(newline);
-    out.push_str(&block.theirs);
-    if !block.theirs.is_empty() && !block.theirs.ends_with(newline) {
-        out.push_str(newline);
-    }
-    out.push_str(">>>>>>> ");
-    out.push_str(label_remote);
-    out.push_str(newline);
-    out
+
+    let core_segments: Vec<ConflictOutputSegmentRef<'_>> = segments
+        .iter()
+        .map(|segment| match segment {
+            ConflictSegment::Text(text) => ConflictOutputSegmentRef::Text(text),
+            ConflictSegment::Block(block) => {
+                ConflictOutputSegmentRef::Block(ConflictOutputBlockRef {
+                    base: block.base.as_deref(),
+                    ours: &block.ours,
+                    theirs: &block.theirs,
+                    choice: map_choice(block.choice),
+                    resolved: block.resolved,
+                })
+            }
+        })
+        .collect();
+
+    gitgpui_core::conflict_output::generate_resolved_text(
+        &core_segments,
+        GenerateResolvedTextOptions {
+            unresolved_mode: UnresolvedConflictMode::PreserveMarkers,
+            labels: Some(ConflictMarkerLabels {
+                local: label_local,
+                remote: label_remote,
+                base: label_base,
+            }),
+        },
+    )
 }
 
 #[cfg(test)]
@@ -1025,15 +987,15 @@ mod tests {
     }
 
     #[test]
-    fn chosen_block_text_base_missing() {
-        let block = ConflictBlock {
+    fn build_output_resolved_base_missing_is_empty() {
+        let segments = vec![ConflictSegment::Block(ConflictBlock {
             base: None,
             ours: "ours".to_string(),
             theirs: "theirs".to_string(),
             choice: ConflictChoice::Base,
-            resolved: false,
-        };
-        assert_eq!(chosen_block_text(&block), "");
+            resolved: true,
+        })];
+        assert_eq!(build_output_from_segments(&segments), "");
     }
 
     #[test]
@@ -1237,27 +1199,6 @@ mod tests {
 
     /// Helper to build output without needing a full view.
     fn build_output_from_segments(segments: &[ConflictSegment]) -> String {
-        build_output_from_segments_with_labels(segments, "LOCAL", "REMOTE", "BASE")
-    }
-
-    fn build_output_from_segments_with_labels(
-        segments: &[ConflictSegment],
-        label_local: &str,
-        label_remote: &str,
-        label_base: &str,
-    ) -> String {
-        let mut out = String::new();
-        for seg in segments {
-            match seg {
-                ConflictSegment::Text(text) => out.push_str(text),
-                ConflictSegment::Block(block) => out.push_str(&block_output_text(
-                    block,
-                    label_local,
-                    label_remote,
-                    label_base,
-                )),
-            }
-        }
-        out
+        super::build_output_from_segments_with_labels(segments, "LOCAL", "REMOTE", "BASE")
     }
 }

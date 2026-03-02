@@ -1,4 +1,5 @@
 pub mod conflict_labels;
+pub mod conflict_output;
 pub mod conflict_session;
 pub mod diff;
 pub mod domain;

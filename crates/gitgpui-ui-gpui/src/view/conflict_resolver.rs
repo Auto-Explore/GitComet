@@ -875,38 +875,37 @@ pub fn auto_resolve_segments_pass2_with_region_indices(
 }
 
 pub fn generate_resolved_text(segments: &[ConflictSegment]) -> String {
-    let approx_len: usize = segments
-        .iter()
-        .map(|seg| match seg {
-            ConflictSegment::Text(t) => t.len(),
-            ConflictSegment::Block(block) => match block.choice {
-                ConflictChoice::Base => block.base.as_ref().map_or(0, |b| b.len()),
-                ConflictChoice::Ours => block.ours.len(),
-                ConflictChoice::Theirs => block.theirs.len(),
-                ConflictChoice::Both => block.ours.len() + block.theirs.len(),
-            },
-        })
-        .sum();
-    let mut out = String::with_capacity(approx_len);
-    for seg in segments {
-        match seg {
-            ConflictSegment::Text(t) => out.push_str(t),
-            ConflictSegment::Block(block) => match block.choice {
-                ConflictChoice::Base => {
-                    if let Some(base) = block.base.as_deref() {
-                        out.push_str(base)
-                    }
-                }
-                ConflictChoice::Ours => out.push_str(&block.ours),
-                ConflictChoice::Theirs => out.push_str(&block.theirs),
-                ConflictChoice::Both => {
-                    out.push_str(&block.ours);
-                    out.push_str(&block.theirs);
-                }
-            },
+    use gitgpui_core::conflict_output::{
+        ConflictOutputBlockRef, ConflictOutputChoice, ConflictOutputSegmentRef,
+        GenerateResolvedTextOptions, generate_resolved_text as generate_core_resolved_text,
+    };
+
+    fn map_choice(choice: ConflictChoice) -> ConflictOutputChoice {
+        match choice {
+            ConflictChoice::Base => ConflictOutputChoice::Base,
+            ConflictChoice::Ours => ConflictOutputChoice::Ours,
+            ConflictChoice::Theirs => ConflictOutputChoice::Theirs,
+            ConflictChoice::Both => ConflictOutputChoice::Both,
         }
     }
-    out
+
+    let core_segments: Vec<ConflictOutputSegmentRef<'_>> = segments
+        .iter()
+        .map(|segment| match segment {
+            ConflictSegment::Text(text) => ConflictOutputSegmentRef::Text(text),
+            ConflictSegment::Block(block) => {
+                ConflictOutputSegmentRef::Block(ConflictOutputBlockRef {
+                    base: block.base.as_deref(),
+                    ours: &block.ours,
+                    theirs: &block.theirs,
+                    choice: map_choice(block.choice),
+                    resolved: block.resolved,
+                })
+            }
+        })
+        .collect();
+
+    generate_core_resolved_text(&core_segments, GenerateResolvedTextOptions::default())
 }
 
 pub fn build_inline_rows(rows: &[gitgpui_core::file_diff::FileDiffRow]) -> Vec<ConflictInlineRow> {
