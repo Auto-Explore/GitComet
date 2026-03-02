@@ -3926,7 +3926,13 @@ fn conflict_session_added_by_them_keep_resolves_conflict() {
 
     // AddedByThem: only theirs stage present (no base, no ours)
     let theirs_blob = hash_blob(repo, b"added by them\n");
-    set_unmerged_stages(repo, "their_new.txt", None, None, Some(theirs_blob.as_str()));
+    set_unmerged_stages(
+        repo,
+        "their_new.txt",
+        None,
+        None,
+        Some(theirs_blob.as_str()),
+    );
 
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
@@ -3965,9 +3971,10 @@ fn conflict_session_added_by_them_keep_resolves_conflict() {
     );
     let status_after = opened.status().unwrap();
     assert!(
-        !status_after.unstaged.iter().any(
-            |e| e.path == Path::new("their_new.txt") && e.kind == FileStatusKind::Conflicted
-        ),
+        !status_after
+            .unstaged
+            .iter()
+            .any(|e| e.path == Path::new("their_new.txt") && e.kind == FileStatusKind::Conflicted),
         "their_new.txt should no longer be conflicted after keeping theirs"
     );
     assert!(
@@ -4042,7 +4049,10 @@ fn conflict_session_deleted_by_them_keep_ours_resolves_conflict() {
         matches!(session.ours, ConflictPayload::Text(ref t) if t == "modified by us\n"),
         "ours (modified side) should have text"
     );
-    assert!(session.theirs.is_absent(), "theirs (delete side) should be absent");
+    assert!(
+        session.theirs.is_absent(),
+        "theirs (delete side) should be absent"
+    );
     assert_eq!(session.unsolved_count(), 1);
     assert_eq!(session.regions[0].ours, "modified by us\n");
     assert_eq!(session.regions[0].theirs, "");

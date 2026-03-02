@@ -1,6 +1,12 @@
 use super::*;
 use gitgpui_core::services::ConflictSide;
 
+fn conflict_side_image(path: &std::path::Path, bytes: Option<&[u8]>) -> Option<Arc<gpui::Image>> {
+    let format = crate::view::diff_utils::image_format_for_path(path)?;
+    let bytes = bytes?;
+    Some(Arc::new(gpui::Image::from_bytes(format, bytes.to_vec())))
+}
+
 impl MainPaneView {
     /// Render the binary/non-UTF8 conflict resolver panel.
     ///
@@ -86,6 +92,10 @@ impl MainPaneView {
         let has_base = file.base_bytes.is_some();
         let has_ours = file.ours_bytes.is_some();
         let has_theirs = file.theirs_bytes.is_some();
+        let has_image_preview = crate::view::diff_utils::image_format_for_path(&path).is_some();
+        let base_image = conflict_side_image(&path, file.base_bytes.as_deref());
+        let ours_image = conflict_side_image(&path, file.ours_bytes.as_deref());
+        let theirs_image = conflict_side_image(&path, file.theirs_bytes.as_deref());
 
         let action_section = div()
             .flex()
@@ -139,6 +149,90 @@ impl MainPaneView {
                     }),
             );
 
+        let image_preview = has_image_preview.then(|| {
+            let image_cell =
+                |id: &'static str, label: &'static str, image: Option<Arc<gpui::Image>>| {
+                    div()
+                        .id(id)
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .h_full()
+                        .border_1()
+                        .border_color(theme.colors.border)
+                        .rounded(px(theme.radii.row))
+                        .overflow_hidden()
+                        .flex()
+                        .flex_col()
+                        .child(
+                            div()
+                                .h(px(24.0))
+                                .px_2()
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .bg(theme.colors.surface_bg_elevated)
+                                .text_xs()
+                                .text_color(theme.colors.text_muted)
+                                .child(label),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_h(px(0.0))
+                                .bg(theme.colors.window_bg)
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .child(match image {
+                                    Some(img_data) => gpui::img(img_data)
+                                        .w_full()
+                                        .h_full()
+                                        .object_fit(gpui::ObjectFit::Contain)
+                                        .into_any_element(),
+                                    None => div()
+                                        .text_xs()
+                                        .text_color(theme.colors.text_muted)
+                                        .child("No image")
+                                        .into_any_element(),
+                                }),
+                        )
+                };
+
+            div()
+                .w_full()
+                .px_3()
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(theme.colors.text)
+                        .child("Image preview"),
+                )
+                .child(
+                    div()
+                        .h(px(180.0))
+                        .w_full()
+                        .mt_2()
+                        .flex()
+                        .gap_2()
+                        .child(image_cell(
+                            "binary_conflict_preview_base",
+                            "Base (A)",
+                            base_image,
+                        ))
+                        .child(image_cell(
+                            "binary_conflict_preview_ours",
+                            "Ours (B)",
+                            ours_image,
+                        ))
+                        .child(image_cell(
+                            "binary_conflict_preview_theirs",
+                            "Theirs (C)",
+                            theirs_image,
+                        )),
+                )
+        });
+
         let title: SharedString =
             format!("Resolve conflict: {}", self.cached_path_display(&path)).into();
 
@@ -189,6 +283,7 @@ impl MainPaneView {
                     .child(div().text_sm().text_color(theme.colors.text_muted).child(
                         "This file contains binary or non-UTF8 data and cannot be merged as text.",
                     ))
+                    .when_some(image_preview, |d, preview| d.child(preview))
                     // Side info
                     .child(
                         div()
@@ -202,5 +297,27 @@ impl MainPaneView {
                     .child(action_section),
             )
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::conflict_side_image;
+
+    #[test]
+    fn conflict_side_image_requires_supported_path_extension() {
+        let bytes = [1_u8, 2, 3, 4];
+        assert!(conflict_side_image("file.bin".as_ref(), Some(&bytes)).is_none());
+    }
+
+    #[test]
+    fn conflict_side_image_requires_bytes() {
+        assert!(conflict_side_image("file.png".as_ref(), None).is_none());
+    }
+
+    #[test]
+    fn conflict_side_image_builds_for_image_path_and_bytes() {
+        let bytes = [1_u8, 2, 3, 4];
+        assert!(conflict_side_image("file.png".as_ref(), Some(&bytes)).is_some());
     }
 }
