@@ -2,22 +2,20 @@
 
 ## Implementation Progress
 
-### Progress Snapshot (Iteration 9, Independent Verification Audit — March 2, 2026)
+### Progress Snapshot (Iteration 9, Dir-Diff Symlink-Cycle Hardening — March 2, 2026)
 
-Independent verification audit by a fresh agent confirms all design document components remain fully implemented. No new components to add, no gaps found.
+Implemented this iteration:
+- ✅ Hardened `difftool --dir-diff` staging in `crates/gitgpui-app/src/difftool_mode.rs` to detect and reject symlink cycles instead of recursing indefinitely.
+  - Added canonical active-directory tracking during recursive staging.
+  - Added explicit cycle error reporting (`Detected symlink cycle while staging directory diff inputs ...`).
+- ✅ Added regression coverage:
+  - `difftool_mode::tests::run_difftool_directory_diff_rejects_symlink_cycles` (Unix-only).
 
 Verification scope (this iteration):
-- ✅ `cargo test --workspace --no-default-features --features gix`: **1105 passed, 0 failed, 5 ignored** (2 new tests since iteration 8).
-- ✅ `cargo clippy --workspace --no-default-features --features gix -- -D warnings`: **0 warnings**.
-- ✅ Conducted three independent deep structural audits:
-  - **CLI validation audit**: Verified all 10 behavior matrix items (paths with spaces/unicode, subdirectory invocation, no-base conflicts, binary/non-UTF8 content, deleted output, symlink conflicts, submodule conflicts, CRLF preservation, directory diff, close/cancel exit codes). Verified exit code policy (0/1/≥2), env var fallbacks, setup subcommand config generation, git config fallback (`merge.conflictstyle`, `diff.algorithm`), and backward compatibility parsing (KDiff3/Meld styles). All FULLY IMPLEMENTED.
-  - **Mergetool backend audit**: Verified trust-exit-code precedence chain (`mergetool.<tool>.trustExitCode` → `mergetool.trustExitCode` → default `false`), launch_mergetool trust semantics (exit code vs content change detection), all git-standard config keys (`cmd`, `path`, `trustExitCode`, `writeToTemp`, `keepTemporaries`), empty `$BASE` handling, and absence of unsafe unwrap() calls. All FULLY IMPLEMENTED. Note: `mergetool.keepBackup` and `mergetool.prompt` are git-side features handled by git itself, not the external tool.
-  - **Core merge algorithm audit**: Verified all conflict styles (merge/diff3/zdiff3), resolution strategies (ours/theirs/union), zealous coalescing, CRLF-aware markers, binary file detection, configurable marker size, trailing newline handling, and absence of panicking patterns. All FULLY IMPLEMENTED.
-- ✅ Verified zero TODO/FIXME/HACK markers in production code (all matches in vendor crates only).
-- ✅ Verified zero `unimplemented!()` / `todo!()` in production code (all matches in test mock trait stubs only).
+- ✅ `cargo test -p gitgpui-app --no-default-features --features gix` (all unit and integration suites passing).
 
 External Diff/Merge Usage Design (`external_usage.md`)
-- ✅ All components implemented and verified. No remaining gaps.
+- ✅ All components implemented and verified, including hardened symlink edge-case handling in directory diff staging.
 - 🔧 Partially implemented components: none.
 - ⬜ Not-yet-started components: none.
 

@@ -1,4 +1,5 @@
 use crate::cli::{DifftoolConfig, exit_code};
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -116,6 +117,38 @@ fn prepare_diff_inputs(config: &DifftoolConfig) -> Result<PreparedDiffInputs, St
 }
 
 fn copy_tree_dereferencing_symlinks(src: &Path, dst: &Path) -> Result<(), String> {
+    let mut active_dirs = HashSet::new();
+    copy_tree_dereferencing_symlinks_inner(src, dst, &mut active_dirs)
+}
+
+fn copy_tree_dereferencing_symlinks_inner(
+    src: &Path,
+    dst: &Path,
+    active_dirs: &mut HashSet<PathBuf>,
+) -> Result<(), String> {
+    let canonical_src = fs::canonicalize(src).map_err(|e| {
+        format!(
+            "Failed to resolve directory {} while staging directory diff inputs: {e}",
+            src.display()
+        )
+    })?;
+    if !active_dirs.insert(canonical_src.clone()) {
+        return Err(format!(
+            "Detected symlink cycle while staging directory diff inputs at {}",
+            src.display()
+        ));
+    }
+
+    let result = copy_tree_dereferencing_symlinks_impl(src, dst, active_dirs);
+    active_dirs.remove(&canonical_src);
+    result
+}
+
+fn copy_tree_dereferencing_symlinks_impl(
+    src: &Path,
+    dst: &Path,
+    active_dirs: &mut HashSet<PathBuf>,
+) -> Result<(), String> {
     fs::create_dir_all(dst)
         .map_err(|e| format!("Failed to create staged directory {}: {e}", dst.display()))?;
 
@@ -130,12 +163,12 @@ fn copy_tree_dereferencing_symlinks(src: &Path, dst: &Path) -> Result<(), String
             .map_err(|e| format!("Failed to read file type for {}: {e}", src_path.display()))?;
 
         if file_type.is_dir() {
-            copy_tree_dereferencing_symlinks(&src_path, &dst_path)?;
+            copy_tree_dereferencing_symlinks_inner(&src_path, &dst_path, active_dirs)?;
             continue;
         }
 
         if file_type.is_symlink() {
-            copy_symlink_target_contents(&src_path, &dst_path)?;
+            copy_symlink_target_contents(&src_path, &dst_path, active_dirs)?;
             continue;
         }
 
@@ -159,7 +192,11 @@ fn copy_tree_dereferencing_symlinks(src: &Path, dst: &Path) -> Result<(), String
     Ok(())
 }
 
-fn copy_symlink_target_contents(link_path: &Path, dst_path: &Path) -> Result<(), String> {
+fn copy_symlink_target_contents(
+    link_path: &Path,
+    dst_path: &Path,
+    active_dirs: &mut HashSet<PathBuf>,
+) -> Result<(), String> {
     let target = fs::read_link(link_path)
         .map_err(|e| format!("Failed to read symlink target {}: {e}", link_path.display()))?;
     let resolved_target = if target.is_absolute() {
@@ -182,7 +219,7 @@ fn copy_symlink_target_contents(link_path: &Path, dst_path: &Path) -> Result<(),
             })?;
         }
         Ok(meta) if meta.is_dir() => {
-            copy_tree_dereferencing_symlinks(&resolved_target, dst_path)?;
+            copy_tree_dereferencing_symlinks_inner(&resolved_target, dst_path, active_dirs)?;
         }
         _ => {
             fs::write(dst_path, target.to_string_lossy().as_bytes()).map_err(|e| {
@@ -411,6 +448,28 @@ mod tests {
             !result.stdout.contains("new file mode 120000"),
             "did not expect symlink mode-only diff, got: {}",
             result.stdout
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_difftool_directory_diff_rejects_symlink_cycles() {
+        use std::os::unix::fs as unix_fs;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let left = tmp.path().join("left");
+        let right = tmp.path().join("right");
+        std::fs::create_dir_all(&left).unwrap();
+        std::fs::create_dir_all(&right).unwrap();
+
+        write_file(&left.join("a.txt"), "left\n");
+        write_file(&right.join("a.txt"), "right\n");
+        unix_fs::symlink(".", right.join("loop")).expect("create self-referential symlink");
+
+        let err = run_difftool(&config(left, right)).expect_err("expected symlink cycle error");
+        assert!(
+            err.contains("symlink cycle"),
+            "expected cycle-specific error, got: {err}"
         );
     }
 
