@@ -2,12 +2,20 @@
 
 ## Implementation Progress
 
-### Progress Snapshot (Iteration 25, Independent Completion Verification — March 2, 2026)
+### Progress Snapshot (Iteration 25, Setup Tool-Help Discoverability Hardening — March 2, 2026)
 
-Verification performed this iteration:
+Implementation performed this iteration:
 - ✅ Read both design documents in full (`external_usage.md`, `docs/REFERENCE_TEST_PORTABILITY.md`).
-- ✅ `cargo test --workspace --no-default-features --features gix`: **1130 passed, 0 failed, 5 ignored**.
-- ✅ `cargo clippy --workspace --no-default-features --features gix -- -D warnings`: **0 warnings**.
+- ✅ Added setup-driven tool-help discoverability integration tests in `crates/gitgpui-app/tests/standalone_tool_mode_integration.rs`:
+  - `setup_local_mergetool_tool_help_lists_headless_and_gui_entries`
+  - `setup_local_difftool_tool_help_lists_headless_and_gui_entries`
+- ✅ New tests verify `git mergetool --tool-help` / `git difftool --tool-help` expose both setup-generated entries:
+  - headless tool (`gitgpui.cmd`)
+  - GUI tool (`gitgpui-gui.cmd`)
+  - command-shape discoverability for both `--gui` and non-`--gui` invocations.
+- ✅ Validation commands:
+  - `cargo test -p gitgpui-app --no-default-features --features gix --test standalone_tool_mode_integration tool_help_lists_headless_and_gui_entries -- --nocapture`
+  - `cargo test -p gitgpui-app --no-default-features --features gix --test standalone_tool_mode_integration` (**49 passed, 0 failed**)
 
 External Diff/Merge Usage Design (`external_usage.md`):
 - ✅ CLI modes: `difftool`, `mergetool`, and `setup` implemented with all documented flags and env fallback.
@@ -15,7 +23,7 @@ External Diff/Merge Usage Design (`external_usage.md`):
 - ✅ Git integration: setup/config emits full headless+GUI tool config with `guiDefault=auto`.
 - ✅ Compatibility: KDiff3/Meld invocation forms supported (`--L1/--L2/--L3`, `-o/--output/--out`, `--base`, positional forms).
 - ✅ Behavior matrix: all 10 required scenarios covered by automated tests.
-- ✅ Setup E2E covers both local (`--local`) and isolated global scopes end-to-end.
+- ✅ `--tool-help` discoverability now explicitly covered for both setup-generated headless and GUI tool entries.
 - 🔧 Partially implemented components: none.
 - ⬜ Not-yet-started components: none.
 
@@ -28,11 +36,11 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`):
 - ✅ Phase 4A: Mergetool E2E — 65 tests.
 - ✅ Phase 4B: Difftool E2E — 28 tests.
 - ✅ Phase 5A–5C: Meld-derived algorithm tests — 32 tests.
-- ✅ Phase 4A/4B strengthened with isolated global-setup invocation parity tests.
+- ✅ Phase 4A/4B strengthened with setup-generated tool-help parity coverage.
 - 🔧 Partially implemented components: none.
 - ⬜ Not-yet-started components: none.
 
-Conclusion: All components from both design documents remain fully implemented. This is the tenth independent verification (iterations 13, 15–25). Test count stable at 1130 (up 2 from iteration 24).
+Conclusion: All components from both design documents remain fully implemented, with explicit setup-time tool-help discoverability now locked by integration tests.
 
 ### Progress Snapshot (Iteration 24, Global Setup E2E Hardening — March 2, 2026)
 

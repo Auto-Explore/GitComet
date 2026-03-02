@@ -1400,6 +1400,76 @@ fn setup_local_writes_config_to_repo() {
     );
 }
 
+#[test]
+fn setup_local_mergetool_tool_help_lists_headless_and_gui_entries() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    setup_e2e_init(repo);
+
+    let setup = run_gitgpui_in_dir(repo, ["setup", "--local"]);
+    let setup_text = output_text(&setup);
+    assert_eq!(setup.status.code(), Some(0), "setup failed\n{setup_text}");
+
+    let tool_help = setup_e2e_git_capture(repo, &["mergetool", "--tool-help"]);
+    let text = output_text(&tool_help);
+    assert!(
+        tool_help.status.success(),
+        "git mergetool --tool-help failed\n{text}"
+    );
+    assert!(
+        text.contains("gitgpui.cmd"),
+        "expected headless gitgpui tool in mergetool --tool-help output\n{text}"
+    );
+    assert!(
+        text.contains("gitgpui-gui.cmd"),
+        "expected gui gitgpui-gui tool in mergetool --tool-help output\n{text}"
+    );
+    assert!(
+        text.contains("mergetool --base"),
+        "expected mergetool command shape in --tool-help output\n{text}"
+    );
+    assert!(
+        text.contains("mergetool --gui"),
+        "expected gui mergetool command shape in --tool-help output\n{text}"
+    );
+}
+
+#[test]
+fn setup_local_difftool_tool_help_lists_headless_and_gui_entries() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    setup_e2e_init(repo);
+
+    let setup = run_gitgpui_in_dir(repo, ["setup", "--local"]);
+    let setup_text = output_text(&setup);
+    assert_eq!(setup.status.code(), Some(0), "setup failed\n{setup_text}");
+
+    let tool_help = setup_e2e_git_capture(repo, &["difftool", "--tool-help"]);
+    let text = output_text(&tool_help);
+    assert!(
+        tool_help.status.success(),
+        "git difftool --tool-help failed\n{text}"
+    );
+    assert!(
+        text.contains("gitgpui.cmd"),
+        "expected headless gitgpui tool in difftool --tool-help output\n{text}"
+    );
+    assert!(
+        text.contains("gitgpui-gui.cmd"),
+        "expected gui gitgpui-gui tool in difftool --tool-help output\n{text}"
+    );
+    assert!(
+        text.contains("difftool --local"),
+        "expected difftool command shape in --tool-help output\n{text}"
+    );
+    assert!(
+        text.contains("difftool --gui"),
+        "expected gui difftool command shape in --tool-help output\n{text}"
+    );
+}
+
 // ── Auto-resolve mode E2E ───────────────────────────────────────────
 
 #[test]
