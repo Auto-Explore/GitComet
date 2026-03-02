@@ -817,6 +817,10 @@ impl GitGpuiViewConfig {
     }
 }
 
+fn renders_full_chrome(view_mode: GitGpuiViewMode) -> bool {
+    matches!(view_mode, GitGpuiViewMode::Normal)
+}
+
 pub struct GitGpuiView {
     store: Arc<AppStore>,
     state: Arc<AppState>,
@@ -1440,70 +1444,87 @@ impl Render for GitGpuiView {
             .map(cursor_style_for_resize_edge)
             .unwrap_or(CursorStyle::Arrow);
 
+        let center_content = if renders_full_chrome(self.view_mode) {
+            div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_h(px(0.0))
+                .child(self.repo_tabs_bar.clone())
+                .child(self.open_repo_panel(cx))
+                .child(self.action_bar.clone())
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .flex_1()
+                        .min_h(px(0.0))
+                        .child(
+                            div()
+                                .id("sidebar_pane")
+                                .w(self.sidebar_width)
+                                .min_h(px(0.0))
+                                .bg(theme.colors.surface_bg)
+                                .child(self.sidebar_pane.clone()),
+                        )
+                        .child(self.pane_resize_handle(
+                            theme,
+                            "pane_resize_sidebar",
+                            PaneResizeHandle::Sidebar,
+                            cx,
+                        ))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w(px(0.0))
+                                .min_h(px(0.0))
+                                .child(self.main_pane.clone()),
+                        )
+                        .child(self.pane_resize_handle(
+                            theme,
+                            "pane_resize_details",
+                            PaneResizeHandle::Details,
+                            cx,
+                        ))
+                        .child(
+                            div()
+                                .id("details_pane")
+                                .w(self.details_width)
+                                .min_h(px(0.0))
+                                .flex()
+                                .flex_col()
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_h(px(0.0))
+                                        .child(self.details_pane.clone()),
+                                ),
+                        ),
+                )
+                .into_any_element()
+        } else {
+            div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_h(px(0.0))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .min_h(px(0.0))
+                        .child(self.main_pane.clone()),
+                )
+                .into_any_element()
+        };
+
         let mut body = div()
             .flex()
             .flex_col()
             .size_full()
             .text_color(theme.colors.text)
             .child(self.title_bar.clone())
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .flex_1()
-                    .min_h(px(0.0))
-                    .child(self.repo_tabs_bar.clone())
-                    .child(self.open_repo_panel(cx))
-                    .child(self.action_bar.clone())
-                    .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .flex_1()
-                            .min_h(px(0.0))
-                            .child(
-                                div()
-                                    .id("sidebar_pane")
-                                    .w(self.sidebar_width)
-                                    .min_h(px(0.0))
-                                    .bg(theme.colors.surface_bg)
-                                    .child(self.sidebar_pane.clone()),
-                            )
-                            .child(self.pane_resize_handle(
-                                theme,
-                                "pane_resize_sidebar",
-                                PaneResizeHandle::Sidebar,
-                                cx,
-                            ))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w(px(0.0))
-                                    .min_h(px(0.0))
-                                    .child(self.main_pane.clone()),
-                            )
-                            .child(self.pane_resize_handle(
-                                theme,
-                                "pane_resize_details",
-                                PaneResizeHandle::Details,
-                                cx,
-                            ))
-                            .child(
-                                div()
-                                    .id("details_pane")
-                                    .w(self.details_width)
-                                    .min_h(px(0.0))
-                                    .flex()
-                                    .flex_col()
-                                    .child(
-                                        div()
-                                            .flex_1()
-                                            .min_h(px(0.0))
-                                            .child(self.details_pane.clone()),
-                                    ),
-                            ),
-                    ),
-            );
+            .child(center_content);
 
         if let Some(repo_id) = self.active_repo_id()
             && let Some(repo) = self.active_repo()
@@ -1966,5 +1987,11 @@ mod tests {
             ConflictResolverPreviewMode::default(),
             ConflictResolverPreviewMode::Text
         );
+    }
+
+    #[test]
+    fn focused_mergetool_mode_hides_full_chrome() {
+        assert!(renders_full_chrome(GitGpuiViewMode::Normal));
+        assert!(!renders_full_chrome(GitGpuiViewMode::FocusedMergetool));
     }
 }
