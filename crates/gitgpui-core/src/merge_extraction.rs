@@ -4,6 +4,7 @@
 //! `docs/REFERENCE_TEST_PORTABILITY.md` Phase 3C (real-world merge extraction)
 //! into production code so it can be reused outside ad-hoc test harnesses.
 
+use crate::merge::{MergeOptions, merge_file};
 use std::collections::{BTreeSet, HashSet};
 use std::fmt;
 use std::io;
@@ -318,7 +319,17 @@ pub fn write_fixture_files(
         write_text_file(&contrib2_path, &case.contrib2)?;
 
         if !expected_path.exists() {
-            write_text_file(&expected_path, "")?;
+            // Generate a golden expected result from the current merge engine
+            // so newly extracted fixtures are immediately runnable in the
+            // Phase 2 fixture harness without manual bootstrapping.
+            let expected = merge_file(
+                &case.base,
+                &case.contrib1,
+                &case.contrib2,
+                &MergeOptions::default(),
+            )
+            .output;
+            write_text_file(&expected_path, &expected)?;
         }
     }
 
@@ -760,6 +771,38 @@ mod tests {
     }
 
     #[test]
+    fn write_fixture_files_generates_expected_result_from_merge_output() {
+        let tmp = tempfile::tempdir().expect("create temp dir");
+        let dest = tmp.path().join("fixtures");
+
+        let case = ExtractedMergeCase {
+            merge_commit: "def67890".to_string(),
+            file_path: "src/lib.rs".to_string(),
+            base: "line one\nline two\n".to_string(),
+            contrib1: "line one changed\nline two\n".to_string(),
+            contrib2: "line one\nline two changed\n".to_string(),
+        };
+        let prefix = "def67890_src_lib_rs";
+
+        write_fixture_files(std::slice::from_ref(&case), &dest).expect("write fixtures");
+
+        let expected_path = dest.join(format!("{prefix}_expected_result.txt"));
+        let expected =
+            std::fs::read_to_string(&expected_path).expect("read generated expected result");
+        let merge_expected = merge_file(
+            &case.base,
+            &case.contrib1,
+            &case.contrib2,
+            &MergeOptions::default(),
+        )
+        .output;
+        assert_eq!(
+            expected, merge_expected,
+            "expected_result should match merge engine output for extracted fixture"
+        );
+    }
+
+    #[test]
     fn write_fixture_files_disambiguates_colliding_sanitized_paths() {
         let tmp = tempfile::tempdir().expect("create temp dir");
         let dest = tmp.path().join("fixtures");
@@ -793,12 +836,22 @@ mod tests {
         assert_eq!(first_base, "base one\n");
         assert_eq!(second_base, "base two\n");
 
-        assert!(dest
-            .join(format!("{first_prefix}_expected_result.txt"))
-            .exists());
-        assert!(dest
-            .join(format!("{second_prefix}_expected_result.txt"))
-            .exists());
+        let first_expected = std::fs::read_to_string(dest.join(format!(
+            "{first_prefix}_expected_result.txt"
+        )))
+        .expect("read first expected result");
+        let second_expected = std::fs::read_to_string(dest.join(format!(
+            "{second_prefix}_expected_result.txt"
+        )))
+        .expect("read second expected result");
+        assert!(
+            !first_expected.is_empty(),
+            "generated expected result should not be empty"
+        );
+        assert!(
+            !second_expected.is_empty(),
+            "generated expected result should not be empty"
+        );
     }
 
     #[test]

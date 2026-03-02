@@ -2,6 +2,48 @@
 
 ## Implementation Progress
 
+### Progress Snapshot (Iteration 37, Merge-Extraction Golden Expected Generation — March 2, 2026)
+
+Performed this iteration:
+- ✅ Read both design documents in full (`external_usage.md`, `docs/REFERENCE_TEST_PORTABILITY.md`).
+- ✅ Identified a remaining Phase 3C portability gap in `crates/gitgpui-core/src/merge_extraction.rs`:
+  - `write_fixture_files()` created empty `*_expected_result.txt` placeholders for new extracted fixtures.
+  - this prevented extracted fixture sets from being immediately usable as golden regression data in the Phase 2 harness.
+- ✅ Implemented expected-result generation for extracted fixtures:
+  - `write_fixture_files()` now computes expected content from `merge_file(base, contrib1, contrib2, MergeOptions::default())` when `*_expected_result.txt` is missing.
+  - existing manually curated `*_expected_result.txt` files are still preserved and never overwritten.
+- ✅ Added/updated regression tests in `merge_extraction.rs`:
+  - `write_fixture_files_generates_expected_result_from_merge_output`
+  - strengthened `write_fixture_files_disambiguates_colliding_sanitized_paths` to assert generated expected files are non-empty.
+- ✅ Validation: `cargo test -p gitgpui-core merge_extraction -- --nocapture` (**11 passed, 0 failed**).
+
+External Diff/Merge Usage Design (`external_usage.md`):
+- ✅ CLI modes: `difftool`, `mergetool`, and `setup` implemented with all documented flags and env fallback.
+- ✅ Exit policy: dedicated modes return `0`/`1`/`>=2` per design contract.
+- ✅ Git integration: setup/config emits full headless+GUI tool config with `guiDefault=auto`.
+- ✅ Compatibility: KDiff3/Meld invocation forms supported (`--L1/--L2/--L3`, `-o/--output/--out`, `--base`, positional forms).
+- ✅ Behavior matrix: all 10 required scenarios covered by automated tests.
+- ✅ Test strategy: all three sections (A: Git scenarios, B: existing test extensions, C: fixture harness) complete.
+- ✅ Rollout plan: all three phases (MVP, compat parity hardening, regression suite) complete.
+- ✅ Acceptance criteria: all 5 criteria met.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
+Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`):
+- ✅ Phase 1A: t6403 core merge algorithm — 41 tests.
+- ✅ Phase 1B: t6427 zdiff3 — 4 tests.
+- ✅ Phase 1C: Conflict label formatting — 5 tests.
+- ✅ Phase 2A–2C: KDiff3-style fixture harness — 18 tests + 9 seed fixtures.
+- ✅ Phase 3A–3C: Permutation corpus (243 sampled + 161K on-demand) + real-world merge extraction.
+  - Hardening this iteration: extracted fixture generation now writes algorithm-generated expected goldens by default, making new fixture sets immediately regression-runnable.
+- ✅ Phase 4A: Mergetool E2E — 65 tests.
+- ✅ Phase 4B: Difftool E2E — 32 tests.
+- ✅ Phase 5A–5C: Meld-derived algorithm tests — 32 tests.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
+Conclusion: All components from both design documents remain fully implemented. This iteration hardened Phase 3C fixture extraction by generating `*_expected_result.*` golden outputs from the merge engine for newly extracted cases while preserving existing manual expectations.
+
 ### Progress Snapshot (Iteration 36, Fixture Harness Filename-Suffix Hardening — March 2, 2026)
 
 Performed this iteration:
