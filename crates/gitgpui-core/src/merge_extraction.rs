@@ -220,15 +220,11 @@ pub fn extract_merge_cases(
             continue;
         }
 
-        let base_ref = format!("{base_sha}:{file_path}");
-        let parent1_ref = format!("{}:{file_path}", merge.parent1_sha);
-        let parent2_ref = format!("{}:{file_path}", merge.parent2_sha);
-
-        let base_bytes = run_git_bytes_optional(repo, &["show", &base_ref])?.unwrap_or_default();
+        let base_bytes = read_blob_bytes_optional(repo, &base_sha, file_path)?.unwrap_or_default();
         let contrib1_bytes =
-            run_git_bytes_optional(repo, &["show", &parent1_ref])?.unwrap_or_default();
+            read_blob_bytes_optional(repo, &merge.parent1_sha, file_path)?.unwrap_or_default();
         let contrib2_bytes =
-            run_git_bytes_optional(repo, &["show", &parent2_ref])?.unwrap_or_default();
+            read_blob_bytes_optional(repo, &merge.parent2_sha, file_path)?.unwrap_or_default();
 
         // Trivial merge cases are not useful as regression samples.
         if base_bytes == contrib1_bytes
@@ -436,30 +432,38 @@ fn run_git_text(repo: &Path, args: &[&str]) -> Result<String, MergeExtractionErr
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
-fn run_git_bytes_optional(
+fn read_blob_bytes_optional(
     repo: &Path,
-    args: &[&str],
+    commit_sha: &str,
+    path: &str,
 ) -> Result<Option<Vec<u8>>, MergeExtractionError> {
-    let output = run_git(repo, args)?;
-    if output.status.success() {
-        Ok(Some(output.stdout))
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        if is_missing_path_error(&stderr) {
-            Ok(None)
-        } else {
-            Err(MergeExtractionError::GitCommandFailed {
-                command: git_command_string(args),
-                stderr,
-            })
-        }
+    // Use `ls-tree` for locale-independent existence checks instead of parsing
+    // `git show` stderr strings, which vary with localization.
+    let existence_args = ["ls-tree", "-z", "--full-tree", commit_sha, "--", path];
+    let existence = run_git(repo, &existence_args)?;
+    if !existence.status.success() {
+        return Err(MergeExtractionError::GitCommandFailed {
+            command: git_command_string(&existence_args),
+            stderr: String::from_utf8_lossy(&existence.stderr).trim().to_string(),
+        });
     }
-}
+    if existence.stdout.is_empty() {
+        return Ok(None);
+    }
 
-fn is_missing_path_error(stderr: &str) -> bool {
-    let lower = stderr.to_ascii_lowercase();
-    (lower.contains("path '") && lower.contains("does not exist in"))
-        || (lower.contains("path '") && lower.contains("exists on disk, but not in"))
+    // Blob exists at this path in this commit, so `git show <sha>:<path>`
+    // should succeed and provides stable textual formatting for gitlinks.
+    let object_ref = format!("{commit_sha}:{path}");
+    let show_args = ["show", object_ref.as_str()];
+    let show = run_git(repo, &show_args)?;
+    if show.status.success() {
+        Ok(Some(show.stdout))
+    } else {
+        Err(MergeExtractionError::GitCommandFailed {
+            command: git_command_string(&show_args),
+            stderr: String::from_utf8_lossy(&show.stderr).trim().to_string(),
+        })
+    }
 }
 
 fn run_git(repo: &Path, args: &[&str]) -> Result<Output, MergeExtractionError> {
@@ -893,7 +897,7 @@ mod tests {
     #[test]
     fn git_show_missing_path_is_treated_as_absent_side() {
         let repo = create_conflicting_merge_repo();
-        let missing = run_git_bytes_optional(repo.path(), &["show", "HEAD:this-file-does-not-exist"])
+        let missing = read_blob_bytes_optional(repo.path(), "HEAD", "this-file-does-not-exist")
             .expect("missing path should not error");
         assert!(
             missing.is_none(),
@@ -904,22 +908,18 @@ mod tests {
     #[test]
     fn git_show_non_missing_errors_are_propagated() {
         let repo = create_conflicting_merge_repo();
-        let err = run_git_bytes_optional(repo.path(), &["show", "definitely-not-a-ref:a.txt"])
+        let err = read_blob_bytes_optional(repo.path(), "definitely-not-a-ref", "a.txt")
             .expect_err("invalid ref should surface as git command failure");
 
         match err {
             MergeExtractionError::GitCommandFailed { command, stderr } => {
                 assert_eq!(
-                    command, "git show definitely-not-a-ref:a.txt",
+                    command, "git ls-tree -z --full-tree definitely-not-a-ref -- a.txt",
                     "unexpected git command context"
                 );
                 assert!(
                     !stderr.is_empty(),
                     "expected stderr details for invalid ref failure"
-                );
-                assert!(
-                    !is_missing_path_error(&stderr),
-                    "invalid ref error must not be misclassified as missing path: {stderr}"
                 );
             }
             other => panic!("expected GitCommandFailed, got {other:?}"),
@@ -927,16 +927,13 @@ mod tests {
     }
 
     #[test]
-    fn missing_path_error_detection_matches_git_patterns() {
-        assert!(is_missing_path_error(
-            "fatal: path 'docs/file.txt' does not exist in 'HEAD'"
-        ));
-        assert!(is_missing_path_error(
-            "fatal: path 'docs/file.txt' exists on disk, but not in 'HEAD'"
-        ));
-        assert!(!is_missing_path_error(
-            "fatal: invalid object name 'definitely-not-a-ref'"
-        ));
+    fn read_blob_bytes_optional_reads_existing_blob_content() {
+        let repo = create_conflicting_merge_repo();
+        let content =
+            read_blob_bytes_optional(repo.path(), "HEAD", "a.txt").expect("read existing path");
+        let text = String::from_utf8(content.expect("expected blob content"))
+            .expect("existing blob content should be UTF-8");
+        assert_eq!(text, "resolved a\n");
     }
 
     #[test]

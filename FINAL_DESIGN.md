@@ -2,6 +2,50 @@
 
 ## Implementation Progress
 
+### Progress Snapshot (Iteration 42, Merge-Extraction Locale-Agnostic Blob Lookup Hardening — March 2, 2026)
+
+Performed this iteration:
+- ✅ Read both design documents in full (`external_usage.md`, `docs/REFERENCE_TEST_PORTABILITY.md`).
+- ✅ Identified a remaining Phase 3C portability hardening gap in `crates/gitgpui-core/src/merge_extraction.rs`:
+  - missing-side detection depended on parsing English `git show` stderr text.
+  - this was brittle under localized git output.
+- ✅ Implemented locale-agnostic blob-side detection:
+  - replaced stderr-pattern matching with `git ls-tree -z --full-tree <commit> -- <path>` existence checks.
+  - retained `git show <commit>:<path>` for byte extraction so gitlink textual formatting remains stable.
+  - non-missing git errors now surface as `MergeExtractionError::GitCommandFailed` from deterministic command failures.
+- ✅ Updated regression coverage:
+  - adapted `git_show_missing_path_is_treated_as_absent_side`
+  - adapted `git_show_non_missing_errors_are_propagated`
+  - added `read_blob_bytes_optional_reads_existing_blob_content`
+- ✅ Validation: `cargo test -p gitgpui-core merge_extraction -- --nocapture` (**17 passed, 0 failed**).
+
+External Diff/Merge Usage Design (`external_usage.md`):
+- ✅ CLI modes: `difftool`, `mergetool`, and `setup` implemented with all documented flags and env fallback.
+- ✅ Exit policy: dedicated modes return `0`/`1`/`>=2` per design contract.
+- ✅ Git integration: setup/config emits full headless+GUI tool config with `guiDefault=auto`.
+- ✅ Compatibility: KDiff3/Meld invocation forms supported (`--L1/--L2/--L3`, `-o/--output/--out`, `--base`, positional forms).
+- ✅ Behavior matrix: all 10 required scenarios covered by automated tests.
+- ✅ Test strategy: all three sections (A: Git scenarios, B: existing test extensions, C: fixture harness) complete.
+- ✅ Rollout plan: all three phases (MVP, compat parity hardening, regression suite) complete.
+- ✅ Acceptance criteria: all 5 criteria met.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
+Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`):
+- ✅ Phase 1A: t6403 core merge algorithm — 41 tests.
+- ✅ Phase 1B: t6427 zdiff3 — 4 tests.
+- ✅ Phase 1C: Conflict label formatting — 5 tests.
+- ✅ Phase 2A–2C: KDiff3-style fixture harness — 18 tests + 9 seed fixtures.
+- ✅ Phase 3A–3C: Permutation corpus (243 sampled + 161K on-demand) + real-world merge extraction.
+  - hardening this iteration: missing-side extraction now uses locale-agnostic tree membership checks instead of stderr text parsing.
+- ✅ Phase 4A: Mergetool E2E — 65 tests.
+- ✅ Phase 4B: Difftool E2E — 32 tests.
+- ✅ Phase 5A–5C: Meld-derived algorithm tests — 32 tests.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
+Conclusion: All components from both design documents remain fully implemented. This iteration hardened Phase 3C extraction portability by removing localization-sensitive missing-path detection.
+
 ### Progress Snapshot (Iteration 42, Independent Completion Verification — March 2, 2026)
 
 Performed this iteration:
