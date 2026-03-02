@@ -111,31 +111,65 @@ pub fn discover_merge_commits(
         ));
     }
 
-    let max_count = max_merges.saturating_mul(2);
-    let rev_list = run_git_text(
-        repo,
-        &[
-            "rev-list",
-            "--merges",
-            "--parents",
-            &format!("--max-count={max_count}"),
-            "HEAD",
-        ],
-    )?;
-
     let mut merges = Vec::new();
-    for line in rev_list.lines() {
-        let fields: Vec<&str> = line.split_whitespace().collect();
-        if fields.len() == 3 {
-            merges.push(MergeCommit {
-                merge_sha: fields[0].to_string(),
-                parent1_sha: fields[1].to_string(),
-                parent2_sha: fields[2].to_string(),
-            });
-        }
-        if merges.len() >= max_merges {
+    let mut skip = 0usize;
+    let page_size = max_merges.saturating_mul(4).max(32);
+
+    loop {
+        let rev_list = run_git_text(
+            repo,
+            &[
+                "rev-list",
+                "--merges",
+                "--parents",
+                &format!("--max-count={page_size}"),
+                &format!("--skip={skip}"),
+                "HEAD",
+            ],
+        )?;
+
+        if rev_list.trim().is_empty() {
             break;
         }
+
+        let mut lines_seen = 0usize;
+        for line in rev_list.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            lines_seen += 1;
+
+            let mut parts = trimmed.split_whitespace();
+            let Some(merge_sha) = parts.next() else {
+                continue;
+            };
+            let Some(parent1_sha) = parts.next() else {
+                continue;
+            };
+            let Some(parent2_sha) = parts.next() else {
+                continue;
+            };
+
+            // Keep only exactly two-parent merges.
+            if parts.next().is_none() {
+                merges.push(MergeCommit {
+                    merge_sha: merge_sha.to_string(),
+                    parent1_sha: parent1_sha.to_string(),
+                    parent2_sha: parent2_sha.to_string(),
+                });
+            }
+
+            if merges.len() >= max_merges {
+                return Ok(merges);
+            }
+        }
+
+        if lines_seen < page_size {
+            break;
+        }
+
+        skip = skip.saturating_add(lines_seen);
     }
 
     Ok(merges)
@@ -504,6 +538,109 @@ mod tests {
             merges.len(),
             1,
             "expected merge discovery to work from nested subdirectory"
+        );
+    }
+
+    #[test]
+    fn discover_merge_commits_zero_max_merges_errors() {
+        let repo = create_conflicting_merge_repo();
+        let error =
+            discover_merge_commits(repo.path(), 0).expect_err("expected invalid argument error");
+
+        assert!(
+            matches!(
+                error,
+                MergeExtractionError::InvalidArgument("max_merges must be greater than zero")
+            ),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn discovers_merge_commits_after_recent_octopus_merges() {
+        let tmp = tempfile::tempdir().expect("create temp dir");
+        let repo = tmp.path();
+
+        run_git(repo, &["init"]);
+        run_git(repo, &["checkout", "-b", "main"]);
+        configure_git_user(repo);
+        std::fs::write(repo.join("base.txt"), "base\n").expect("write base");
+        run_git(repo, &["add", "base.txt"]);
+        run_git(repo, &["commit", "-m", "base"]);
+
+        // Oldest merge: normal two-parent merge.
+        run_git(repo, &["checkout", "-b", "two-parent"]);
+        std::fs::write(repo.join("two_parent.txt"), "two-parent branch\n")
+            .expect("write two-parent branch");
+        run_git(repo, &["add", "two_parent.txt"]);
+        run_git(repo, &["commit", "-m", "two-parent branch"]);
+        run_git(repo, &["checkout", "main"]);
+        run_git(repo, &["merge", "--no-edit", "--no-ff", "two-parent"]);
+
+        // Newer merge #1: octopus merge (more than two parents).
+        run_git(repo, &["checkout", "-b", "oct1-a"]);
+        std::fs::write(repo.join("oct1_a.txt"), "octopus one a\n").expect("write oct1-a");
+        run_git(repo, &["add", "oct1_a.txt"]);
+        run_git(repo, &["commit", "-m", "oct1 a"]);
+        run_git(repo, &["checkout", "main"]);
+
+        run_git(repo, &["checkout", "-b", "oct1-b"]);
+        std::fs::write(repo.join("oct1_b.txt"), "octopus one b\n").expect("write oct1-b");
+        run_git(repo, &["add", "oct1_b.txt"]);
+        run_git(repo, &["commit", "-m", "oct1 b"]);
+        run_git(repo, &["checkout", "main"]);
+
+        run_git(repo, &["checkout", "-b", "oct1-c"]);
+        std::fs::write(repo.join("oct1_c.txt"), "octopus one c\n").expect("write oct1-c");
+        run_git(repo, &["add", "oct1_c.txt"]);
+        run_git(repo, &["commit", "-m", "oct1 c"]);
+        run_git(repo, &["checkout", "main"]);
+
+        run_git(repo, &["merge", "--no-edit", "oct1-a", "oct1-b", "oct1-c"]);
+
+        // Newest merge #2: another octopus merge.
+        run_git(repo, &["checkout", "-b", "oct2-a"]);
+        std::fs::write(repo.join("oct2_a.txt"), "octopus two a\n").expect("write oct2-a");
+        run_git(repo, &["add", "oct2_a.txt"]);
+        run_git(repo, &["commit", "-m", "oct2 a"]);
+        run_git(repo, &["checkout", "main"]);
+
+        run_git(repo, &["checkout", "-b", "oct2-b"]);
+        std::fs::write(repo.join("oct2_b.txt"), "octopus two b\n").expect("write oct2-b");
+        run_git(repo, &["add", "oct2_b.txt"]);
+        run_git(repo, &["commit", "-m", "oct2 b"]);
+        run_git(repo, &["checkout", "main"]);
+
+        run_git(repo, &["checkout", "-b", "oct2-c"]);
+        std::fs::write(repo.join("oct2_c.txt"), "octopus two c\n").expect("write oct2-c");
+        run_git(repo, &["add", "oct2_c.txt"]);
+        run_git(repo, &["commit", "-m", "oct2 c"]);
+        run_git(repo, &["checkout", "main"]);
+
+        run_git(repo, &["merge", "--no-edit", "oct2-a", "oct2-b", "oct2-c"]);
+
+        // max_merges=1 should still find the older two-parent merge even
+        // though the two newest merges are octopus merges.
+        let merges = discover_merge_commits(repo, 1).expect("discover merges");
+        assert_eq!(merges.len(), 1, "expected one two-parent merge");
+
+        let parent_line = run_git_text(repo, &["rev-list", "--parents", "-n", "1", "HEAD"])
+            .expect("read head parent line");
+        assert!(
+            parent_line.split_whitespace().count() > 3,
+            "HEAD should be an octopus merge in this fixture"
+        );
+
+        let merge = &merges[0];
+        let discovered_parent_line = run_git_text(
+            repo,
+            &["rev-list", "--parents", "-n", "1", &merge.merge_sha],
+        )
+        .expect("read discovered merge parent line");
+        assert_eq!(
+            discovered_parent_line.split_whitespace().count(),
+            3,
+            "discovered merge should have exactly two parents"
         );
     }
 
