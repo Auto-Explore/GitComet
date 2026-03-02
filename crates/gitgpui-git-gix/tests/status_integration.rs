@@ -11,8 +11,23 @@ use std::process::{Command, Stdio};
 #[cfg(unix)]
 use std::{fs::Permissions, os::unix::fs::PermissionsExt};
 
+#[cfg(windows)]
+const NULL_DEVICE: &str = "NUL";
+#[cfg(not(windows))]
+const NULL_DEVICE: &str = "/dev/null";
+
+fn git_command() -> Command {
+    let mut cmd = Command::new("git");
+    // Keep integration tests deterministic by isolating from host git config.
+    cmd.env("GIT_CONFIG_NOSYSTEM", "1");
+    cmd.env("GIT_CONFIG_GLOBAL", NULL_DEVICE);
+    // Some scenarios clone local file:// remotes (submodules, temp-origin repos).
+    cmd.env("GIT_ALLOW_PROTOCOL", "file");
+    cmd
+}
+
 fn run_git(repo: &Path, args: &[&str]) {
-    let status = Command::new("git")
+    let status = git_command()
         .arg("-C")
         .arg(repo)
         .args(args)
@@ -22,7 +37,7 @@ fn run_git(repo: &Path, args: &[&str]) {
 }
 
 fn run_git_expect_failure(repo: &Path, args: &[&str]) {
-    let status = Command::new("git")
+    let status = git_command()
         .arg("-C")
         .arg(repo)
         .args(args)
@@ -50,7 +65,7 @@ fn write_bytes(repo: &Path, rel: &str, contents: &[u8]) -> PathBuf {
 }
 
 fn hash_blob(repo: &Path, contents: &[u8]) -> String {
-    let mut child = Command::new("git")
+    let mut child = git_command()
         .arg("-C")
         .arg(repo)
         .args(["hash-object", "-w", "--stdin"])
@@ -105,7 +120,7 @@ fn set_unmerged_stages(
         return;
     }
 
-    let mut child = Command::new("git")
+    let mut child = git_command()
         .arg("-C")
         .arg(repo)
         .args(["update-index", "--index-info"])
@@ -134,6 +149,8 @@ fn setup_both_modified_text_conflict(repo: &Path, path: &str, ours: &str, theirs
     run_git(repo, &["config", "user.email", "you@example.com"]);
     run_git(repo, &["config", "user.name", "You"]);
     run_git(repo, &["config", "commit.gpgsign", "false"]);
+    run_git(repo, &["config", "mergetool.guiDefault", "false"]);
+    run_git(repo, &["config", "merge.guitool", ""]);
 
     write(repo, path, "base\n");
     run_git(repo, &["add", path]);
@@ -166,6 +183,8 @@ fn setup_both_added_text_conflict(repo: &Path, path: &str, ours: &str, theirs: &
     run_git(repo, &["config", "user.email", "you@example.com"]);
     run_git(repo, &["config", "user.name", "You"]);
     run_git(repo, &["config", "commit.gpgsign", "false"]);
+    run_git(repo, &["config", "mergetool.guiDefault", "false"]);
+    run_git(repo, &["config", "merge.guitool", ""]);
 
     write(repo, "seed.txt", "seed\n");
     run_git(repo, &["add", "seed.txt"]);
@@ -429,7 +448,7 @@ fn diff_file_text_reports_old_and_new_for_working_tree_and_commits() {
         repo,
         &["-c", "commit.gpgsign=false", "commit", "-m", "second"],
     );
-    let head = Command::new("git")
+    let head = git_command()
         .arg("-C")
         .arg(repo)
         .args(["rev-parse", "HEAD"])
@@ -570,7 +589,7 @@ fn diff_file_image_reports_old_and_new_for_working_tree_and_commits() {
         repo,
         &["-c", "commit.gpgsign=false", "commit", "-m", "second"],
     );
-    let head = Command::new("git")
+    let head = git_command()
         .arg("-C")
         .arg(repo)
         .args(["rev-parse", "HEAD"])
@@ -2379,7 +2398,7 @@ fn commit_creates_new_commit_and_cleans_status() {
 
     opened.commit("second").unwrap();
 
-    let msg = Command::new("git")
+    let msg = git_command()
         .arg("-C")
         .arg(repo)
         .args(["log", "-1", "--pretty=%B"])
@@ -2406,7 +2425,7 @@ fn reset_soft_moves_head_and_leaves_changes_staged() {
     write(repo, "a.txt", "one\n");
     run_git(repo, &["add", "a.txt"]);
     run_git(repo, &["-c", "commit.gpgsign=false", "commit", "-m", "c1"]);
-    let c1 = Command::new("git")
+    let c1 = git_command()
         .arg("-C")
         .arg(repo)
         .args(["rev-parse", "HEAD"])
@@ -2426,7 +2445,7 @@ fn reset_soft_moves_head_and_leaves_changes_staged() {
         .reset_with_output("HEAD~1", gitgpui_core::services::ResetMode::Soft)
         .unwrap();
 
-    let head = Command::new("git")
+    let head = git_command()
         .arg("-C")
         .arg(repo)
         .args(["rev-parse", "HEAD"])
@@ -2456,7 +2475,7 @@ fn reset_mixed_moves_head_and_leaves_changes_unstaged() {
     write(repo, "a.txt", "one\n");
     run_git(repo, &["add", "a.txt"]);
     run_git(repo, &["-c", "commit.gpgsign=false", "commit", "-m", "c1"]);
-    let c1 = Command::new("git")
+    let c1 = git_command()
         .arg("-C")
         .arg(repo)
         .args(["rev-parse", "HEAD"])
@@ -2476,7 +2495,7 @@ fn reset_mixed_moves_head_and_leaves_changes_unstaged() {
         .reset_with_output("HEAD~1", gitgpui_core::services::ResetMode::Mixed)
         .unwrap();
 
-    let head = Command::new("git")
+    let head = git_command()
         .arg("-C")
         .arg(repo)
         .args(["rev-parse", "HEAD"])
@@ -2506,7 +2525,7 @@ fn reset_hard_moves_head_and_discards_changes() {
     write(repo, "a.txt", "one\n");
     run_git(repo, &["add", "a.txt"]);
     run_git(repo, &["-c", "commit.gpgsign=false", "commit", "-m", "c1"]);
-    let c1 = Command::new("git")
+    let c1 = git_command()
         .arg("-C")
         .arg(repo)
         .args(["rev-parse", "HEAD"])
@@ -2528,7 +2547,7 @@ fn reset_hard_moves_head_and_discards_changes() {
         .reset_with_output("HEAD~1", gitgpui_core::services::ResetMode::Hard)
         .unwrap();
 
-    let head = Command::new("git")
+    let head = git_command()
         .arg("-C")
         .arg(repo)
         .args(["rev-parse", "HEAD"])
@@ -2561,7 +2580,7 @@ fn revert_commit_creates_new_commit_and_reverts_content() {
     run_git(repo, &["add", "a.txt"]);
     run_git(repo, &["-c", "commit.gpgsign=false", "commit", "-m", "c2"]);
 
-    let c2 = Command::new("git")
+    let c2 = git_command()
         .arg("-C")
         .arg(repo)
         .args(["rev-parse", "HEAD"])
@@ -2582,7 +2601,7 @@ fn revert_commit_creates_new_commit_and_reverts_content() {
     assert!(status.staged.is_empty());
     assert!(status.unstaged.is_empty());
 
-    let head = Command::new("git")
+    let head = git_command()
         .arg("-C")
         .arg(repo)
         .args(["rev-parse", "HEAD"])
@@ -2610,7 +2629,7 @@ fn amend_rewrites_head_commit_message_and_content() {
         &["-c", "commit.gpgsign=false", "commit", "-m", "init"],
     );
 
-    let head_before = Command::new("git")
+    let head_before = git_command()
         .arg("-C")
         .arg(repo)
         .args(["rev-parse", "HEAD"])
@@ -2630,7 +2649,7 @@ fn amend_rewrites_head_commit_message_and_content() {
 
     opened.commit_amend("amended").unwrap();
 
-    let head_after = Command::new("git")
+    let head_after = git_command()
         .arg("-C")
         .arg(repo)
         .args(["rev-parse", "HEAD"])
@@ -2643,7 +2662,7 @@ fn amend_rewrites_head_commit_message_and_content() {
         .to_string();
     assert_ne!(head_after, head_before);
 
-    let count = Command::new("git")
+    let count = git_command()
         .arg("-C")
         .arg(repo)
         .args(["rev-list", "--count", "HEAD"])
@@ -2652,7 +2671,7 @@ fn amend_rewrites_head_commit_message_and_content() {
     assert!(count.status.success());
     assert_eq!(String::from_utf8(count.stdout).unwrap().trim(), "1");
 
-    let msg = Command::new("git")
+    let msg = git_command()
         .arg("-C")
         .arg(repo)
         .args(["log", "-1", "--pretty=%B"])
@@ -2708,7 +2727,7 @@ fn merge_creates_merge_commit_when_branches_diverged() {
 
     opened.merge_ref_with_output("feature").unwrap();
 
-    let parents = Command::new("git")
+    let parents = git_command()
         .arg("-C")
         .arg(repo)
         .args(["rev-list", "--parents", "-n", "1", "HEAD"])
@@ -2761,7 +2780,7 @@ fn merge_fast_forwards_when_possible_even_if_merge_ff_is_disabled() {
 
     opened.merge_ref_with_output("feature").unwrap();
 
-    let parents = Command::new("git")
+    let parents = git_command()
         .arg("-C")
         .arg(repo)
         .args(["rev-list", "--parents", "-n", "1", "HEAD"])
@@ -2775,7 +2794,7 @@ fn merge_fast_forwards_when_possible_even_if_merge_ff_is_disabled() {
         .saturating_sub(1);
     assert_eq!(parent_count, 1, "expected fast-forward");
 
-    let msg = Command::new("git")
+    let msg = git_command()
         .arg("-C")
         .arg(repo)
         .args(["log", "-1", "--pretty=%B"])
@@ -2872,7 +2891,7 @@ fn rebase_replays_commits_onto_target_branch() {
         repo,
         &["-c", "commit.gpgsign=false", "commit", "-m", "main"],
     );
-    let master_head = Command::new("git")
+    let master_head = git_command()
         .arg("-C")
         .arg(repo)
         .args(["rev-parse", "HEAD"])
@@ -2891,7 +2910,7 @@ fn rebase_replays_commits_onto_target_branch() {
 
     opened.rebase_with_output("main").unwrap();
 
-    let parent = Command::new("git")
+    let parent = git_command()
         .arg("-C")
         .arg(repo)
         .args(["rev-parse", "HEAD^"])
@@ -2942,7 +2961,7 @@ fn create_and_delete_local_branch() {
     );
 
     opened.delete_branch("feature").unwrap();
-    let deleted = Command::new("git")
+    let deleted = git_command()
         .arg("-C")
         .arg(repo)
         .args(["show-ref", "--verify", "--quiet", "refs/heads/feature"])
@@ -2978,7 +2997,7 @@ fn create_and_delete_local_tag() {
     );
 
     opened.delete_tag_with_output("v1.0.0").unwrap();
-    let deleted = Command::new("git")
+    let deleted = git_command()
         .arg("-C")
         .arg(repo)
         .args(["show-ref", "--verify", "--quiet", "refs/tags/v1.0.0"])
@@ -3074,7 +3093,7 @@ fn push_with_output_updates_remote_head() {
         &repo,
         &["-c", "commit.gpgsign=false", "commit", "-m", "second"],
     );
-    let head_local = Command::new("git")
+    let head_local = git_command()
         .arg("-C")
         .arg(&repo)
         .args(["rev-parse", "HEAD"])
@@ -3090,7 +3109,7 @@ fn push_with_output_updates_remote_head() {
     let opened = backend.open(&repo).unwrap();
     opened.push_with_output().unwrap();
 
-    let head_remote = Command::new("git")
+    let head_remote = git_command()
         .arg("-C")
         .arg(&origin)
         .args(["rev-parse", "refs/heads/main"])
@@ -3154,7 +3173,7 @@ fn force_push_with_output_updates_remote_head_after_rewrite() {
             "second rewritten",
         ],
     );
-    let head_local = Command::new("git")
+    let head_local = git_command()
         .arg("-C")
         .arg(&repo)
         .args(["rev-parse", "HEAD"])
@@ -3170,7 +3189,7 @@ fn force_push_with_output_updates_remote_head_after_rewrite() {
     let opened = backend.open(&repo).unwrap();
     opened.push_force_with_output().unwrap();
 
-    let head_remote = Command::new("git")
+    let head_remote = git_command()
         .arg("-C")
         .arg(&origin)
         .args(["rev-parse", "refs/heads/main"])
@@ -3228,7 +3247,7 @@ fn pull_with_output_fast_forwards_from_remote() {
     );
     run_git(&repo_a, &["push"]);
 
-    let head_origin = Command::new("git")
+    let head_origin = git_command()
         .arg("-C")
         .arg(&origin)
         .args(["rev-parse", "refs/heads/main"])
@@ -3246,7 +3265,7 @@ fn pull_with_output_fast_forwards_from_remote() {
         .pull_with_output(gitgpui_core::services::PullMode::FastForwardOnly)
         .unwrap();
 
-    let head_b = Command::new("git")
+    let head_b = git_command()
         .arg("-C")
         .arg(&repo_b)
         .args(["rev-parse", "HEAD"])
@@ -3306,7 +3325,7 @@ fn pull_with_output_fast_forwards_when_possible_even_if_pull_ff_is_disabled() {
     );
     run_git(&repo_a, &["push"]);
 
-    let head_origin = Command::new("git")
+    let head_origin = git_command()
         .arg("-C")
         .arg(&origin)
         .args(["rev-parse", "refs/heads/main"])
@@ -3324,7 +3343,7 @@ fn pull_with_output_fast_forwards_when_possible_even_if_pull_ff_is_disabled() {
         .pull_with_output(gitgpui_core::services::PullMode::Merge)
         .unwrap();
 
-    let head_b = Command::new("git")
+    let head_b = git_command()
         .arg("-C")
         .arg(&repo_b)
         .args(["rev-parse", "HEAD"])
@@ -3334,7 +3353,7 @@ fn pull_with_output_fast_forwards_when_possible_even_if_pull_ff_is_disabled() {
     let head_b = String::from_utf8(head_b.stdout).unwrap().trim().to_string();
     assert_eq!(head_b, head_origin);
 
-    let parents = Command::new("git")
+    let parents = git_command()
         .arg("-C")
         .arg(&repo_b)
         .args(["rev-list", "--parents", "-n", "1", "HEAD"])
@@ -3406,7 +3425,7 @@ fn checkout_commit_detaches_head_at_target() {
         &["-c", "commit.gpgsign=false", "commit", "-m", "init"],
     );
 
-    let sha = Command::new("git")
+    let sha = git_command()
         .arg("-C")
         .arg(repo)
         .args(["rev-parse", "HEAD"])
@@ -3421,7 +3440,7 @@ fn checkout_commit_detaches_head_at_target() {
         .checkout_commit(&gitgpui_core::domain::CommitId(sha.clone()))
         .unwrap();
 
-    let head_name = Command::new("git")
+    let head_name = git_command()
         .arg("-C")
         .arg(repo)
         .args(["rev-parse", "--abbrev-ref", "HEAD"])
@@ -3430,7 +3449,7 @@ fn checkout_commit_detaches_head_at_target() {
     assert!(head_name.status.success());
     assert_eq!(String::from_utf8(head_name.stdout).unwrap().trim(), "HEAD");
 
-    let head_sha = Command::new("git")
+    let head_sha = git_command()
         .arg("-C")
         .arg(repo)
         .args(["rev-parse", "HEAD"])

@@ -226,7 +226,7 @@ impl MainPaneView {
 
                     // Dedupe checks for plus icon gating.
                     let line_no_u32 = u32::try_from(ix + 1).unwrap_or(0);
-                    let base_in_output = base_line.as_ref().map_or(false, |text| {
+                    let base_in_output = base_line.as_ref().is_some_and(|text| {
                         conflict_resolver::is_source_line_in_output(
                             &this.conflict_resolver.resolved_output_line_sources_index,
                             ConflictResolverViewMode::ThreeWay,
@@ -236,7 +236,7 @@ impl MainPaneView {
                         )
                     });
                     let base_show_plus = base_line.is_some() && !base_in_output;
-                    let ours_in_output = ours_line.as_ref().map_or(false, |text| {
+                    let ours_in_output = ours_line.as_ref().is_some_and(|text| {
                         conflict_resolver::is_source_line_in_output(
                             &this.conflict_resolver.resolved_output_line_sources_index,
                             ConflictResolverViewMode::ThreeWay,
@@ -246,7 +246,7 @@ impl MainPaneView {
                         )
                     });
                     let ours_show_plus = ours_line.is_some() && !ours_in_output;
-                    let theirs_in_output = theirs_line.as_ref().map_or(false, |text| {
+                    let theirs_in_output = theirs_line.as_ref().is_some_and(|text| {
                         conflict_resolver::is_source_line_in_output(
                             &this.conflict_resolver.resolved_output_line_sources_index,
                             ConflictResolverViewMode::ThreeWay,
@@ -1192,7 +1192,7 @@ impl MainPaneView {
         let right_bg = split_cell_bg(theme, row.kind, ConflictPickSide::Theirs);
 
         // Check dedupe: whether each side's line is already in the resolved output.
-        let left_in_output = row.old.as_ref().map_or(false, |text| {
+        let left_in_output = row.old.as_ref().is_some_and(|text| {
             conflict_resolver::is_source_line_in_output(
                 &self.conflict_resolver.resolved_output_line_sources_index,
                 ConflictResolverViewMode::TwoWayDiff,
@@ -1201,7 +1201,7 @@ impl MainPaneView {
                 text,
             )
         });
-        let right_in_output = row.new.as_ref().map_or(false, |text| {
+        let right_in_output = row.new.as_ref().is_some_and(|text| {
             conflict_resolver::is_source_line_in_output(
                 &self.conflict_resolver.resolved_output_line_sources_index,
                 ConflictResolverViewMode::TwoWayDiff,

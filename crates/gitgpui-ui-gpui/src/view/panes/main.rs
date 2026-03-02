@@ -803,6 +803,7 @@ impl MainPaneView {
         });
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(in super::super) fn open_conflict_resolver_input_row_context_menu(
         &mut self,
         invoker: SharedString,
@@ -2224,7 +2225,6 @@ impl MainPaneView {
             resolver_pending_recompute_seq: 0,
             resolved_line_meta: Vec::new(),
             resolved_output_line_sources_index: HashSet::default(),
-            resolver_hover: ConflictResolverHoverState::default(),
             resolver_preview_mode,
         };
 
@@ -2563,7 +2563,8 @@ impl MainPaneView {
         let current = self
             .conflict_resolver_input
             .read_with(cx, |i, _| i.text().to_string());
-        let next = conflict_resolver::append_lines_to_output(&current, &[row.content.clone()]);
+        let next =
+            conflict_resolver::append_lines_to_output(&current, std::slice::from_ref(&row.content));
         let theme = self.theme;
         self.conflict_resolver_input.update(cx, |input, cx| {
             input.set_theme(theme, cx);

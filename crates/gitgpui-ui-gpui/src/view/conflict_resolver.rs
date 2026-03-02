@@ -78,6 +78,7 @@ pub enum ResolvedLineSource {
 
 impl ResolvedLineSource {
     /// Compact single-character label for UI badges.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn badge_char(self) -> char {
         match self {
             Self::A => 'A',
@@ -130,15 +131,6 @@ impl SourceLineKey {
             content_hash: hasher.finish(),
         }
     }
-}
-
-/// Hover state for conflict resolver input panes (chunk outline + row plus-icon).
-#[derive(Clone, Debug, Default)]
-pub struct ConflictResolverHoverState {
-    /// Currently hovered chunk (for green outline). (conflict_index, side)
-    pub hovered_chunk: Option<(usize, ConflictPickSide)>,
-    /// Currently hovered row index (for plus-icon). (row_index, side)
-    pub hovered_line: Option<(usize, ResolvedLineSource)>,
 }
 
 /// Per-line word-highlight ranges. `None` means no highlights for that line.
@@ -613,6 +605,7 @@ pub fn next_unresolved_conflict_index(
 
 /// Find the previous unresolved conflict index before `current`.
 /// Wraps around to the last unresolved conflict.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn prev_unresolved_conflict_index(
     segments: &[ConflictSegment],
     current: usize,

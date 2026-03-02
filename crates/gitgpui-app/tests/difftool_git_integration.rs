@@ -2,6 +2,17 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+#[cfg(windows)]
+const NULL_DEVICE: &str = "NUL";
+#[cfg(not(windows))]
+const NULL_DEVICE: &str = "/dev/null";
+
+fn apply_isolated_git_config_env(cmd: &mut Command) {
+    // Keep integration tests deterministic by ignoring host git config.
+    cmd.env("GIT_CONFIG_NOSYSTEM", "1");
+    cmd.env("GIT_CONFIG_GLOBAL", NULL_DEVICE);
+}
+
 fn gitgpui_bin() -> PathBuf {
     std::env::var_os("CARGO_BIN_EXE_gitgpui-app")
         .map(PathBuf::from)
@@ -13,7 +24,9 @@ fn shell_quote(value: &str) -> String {
 }
 
 fn run_git(repo: &Path, args: &[&str]) {
-    let output = Command::new("git")
+    let mut cmd = Command::new("git");
+    apply_isolated_git_config_env(&mut cmd);
+    let output = cmd
         .arg("-C")
         .arg(repo)
         .args(args)
@@ -29,8 +42,9 @@ fn run_git(repo: &Path, args: &[&str]) {
 }
 
 fn run_git_capture(repo: &Path, args: &[&str]) -> Output {
-    Command::new("git")
-        .arg("-C")
+    let mut cmd = Command::new("git");
+    apply_isolated_git_config_env(&mut cmd);
+    cmd.arg("-C")
         .arg(repo)
         .args(args)
         .output()
@@ -39,6 +53,7 @@ fn run_git_capture(repo: &Path, args: &[&str]) -> Output {
 
 fn run_git_capture_with_display(repo: &Path, args: &[&str], display: Option<&str>) -> Output {
     let mut cmd = Command::new("git");
+    apply_isolated_git_config_env(&mut cmd);
     cmd.arg("-C").arg(repo).args(args);
     if let Some(display) = display {
         cmd.env("DISPLAY", display);
@@ -49,8 +64,9 @@ fn run_git_capture_with_display(repo: &Path, args: &[&str], display: Option<&str
 }
 
 fn run_git_capture_in(cwd: &Path, args: &[&str]) -> Output {
-    Command::new("git")
-        .current_dir(cwd)
+    let mut cmd = Command::new("git");
+    apply_isolated_git_config_env(&mut cmd);
+    cmd.current_dir(cwd)
         .args(args)
         .output()
         .expect("git command to run")

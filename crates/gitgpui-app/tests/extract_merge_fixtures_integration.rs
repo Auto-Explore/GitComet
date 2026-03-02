@@ -3,6 +3,16 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+#[cfg(windows)]
+const NULL_DEVICE: &str = "NUL";
+#[cfg(not(windows))]
+const NULL_DEVICE: &str = "/dev/null";
+
+fn apply_isolated_git_config_env(cmd: &mut Command) {
+    cmd.env("GIT_CONFIG_NOSYSTEM", "1");
+    cmd.env("GIT_CONFIG_GLOBAL", NULL_DEVICE);
+}
+
 fn gitgpui_bin() -> PathBuf {
     std::env::var_os("CARGO_BIN_EXE_gitgpui-app")
         .map(PathBuf::from)
@@ -21,8 +31,9 @@ where
 }
 
 fn run_git_capture(repo: &Path, args: &[&str]) -> Output {
-    Command::new("git")
-        .arg("-c")
+    let mut cmd = Command::new("git");
+    apply_isolated_git_config_env(&mut cmd);
+    cmd.arg("-c")
         .arg("commit.gpgsign=false")
         .args(args)
         .current_dir(repo)
@@ -135,10 +146,22 @@ fn extract_merge_fixtures_e2e_writes_fixture_sets() {
     let contrib2_count = count_suffix(out.path(), "_contrib2.txt");
     let expected_count = count_suffix(out.path(), "_expected_result.txt");
 
-    assert!(base_count >= 1, "expected at least one extracted fixture\n{text}");
-    assert_eq!(contrib1_count, base_count, "contrib1 fixture count mismatch");
-    assert_eq!(contrib2_count, base_count, "contrib2 fixture count mismatch");
-    assert_eq!(expected_count, base_count, "expected fixture count mismatch");
+    assert!(
+        base_count >= 1,
+        "expected at least one extracted fixture\n{text}"
+    );
+    assert_eq!(
+        contrib1_count, base_count,
+        "contrib1 fixture count mismatch"
+    );
+    assert_eq!(
+        contrib2_count, base_count,
+        "contrib2 fixture count mismatch"
+    );
+    assert_eq!(
+        expected_count, base_count,
+        "expected fixture count mismatch"
+    );
 }
 
 #[test]

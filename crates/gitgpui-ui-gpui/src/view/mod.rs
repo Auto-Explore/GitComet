@@ -69,8 +69,8 @@ use chrome::{
     CLIENT_SIDE_DECORATION_INSET, TitleBarView, cursor_style_for_resize_edge, resize_edge,
 };
 use conflict_resolver::{
-    ConflictDiffMode, ConflictInlineRow, ConflictPickSide, ConflictResolverHoverState,
-    ConflictResolverViewMode, ResolvedLineMeta, SourceLineKey,
+    ConflictDiffMode, ConflictInlineRow, ConflictPickSide, ConflictResolverViewMode,
+    ResolvedLineMeta, SourceLineKey,
 };
 #[cfg(test)]
 use date_time::format_datetime_utc;
@@ -496,8 +496,6 @@ struct ConflictResolverUiState {
     resolved_line_meta: Vec<ResolvedLineMeta>,
     /// Set of source line keys currently represented in resolved output (for dedupe/plus-icon).
     resolved_output_line_sources_index: HashSet<SourceLineKey>,
-    /// Hover state for chunk outlines and row plus-icons.
-    resolver_hover: ConflictResolverHoverState,
     /// Preview mode for the merge-input pane (Text vs rendered Preview).
     resolver_preview_mode: ConflictResolverPreviewMode,
 }
@@ -539,7 +537,6 @@ impl Default for ConflictResolverUiState {
             resolver_pending_recompute_seq: 0,
             resolved_line_meta: Vec::new(),
             resolved_output_line_sources_index: HashSet::default(),
-            resolver_hover: ConflictResolverHoverState::default(),
             resolver_preview_mode: ConflictResolverPreviewMode::default(),
         }
     }
