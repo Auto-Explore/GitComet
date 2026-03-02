@@ -2,6 +2,44 @@
 
 ## Implementation Progress
 
+### Progress Snapshot (Iteration 31, Comprehensive Verification Audit — March 2, 2026)
+
+Performed this iteration:
+- ✅ Read both design documents in full (`external_usage.md`, `docs/REFERENCE_TEST_PORTABILITY.md`).
+- ✅ Full verification audit confirming all design components are implemented:
+  - Ran full test suite: **1152 passed, 0 failed, 5 ignored**.
+  - Ran clippy: **0 warnings**.
+  - Searched all production code for TODO/FIXME/HACK/XXX/unimplemented!(): **none found**.
+  - Verified all 10 behavior matrix items have dedicated test coverage (80+ integration tests).
+  - Verified `--tool-help` discoverability: 4 integration tests confirm gitgpui appears in Git's tool-help after setup.
+  - Verified `setup` subcommand: 33 tests (18 unit + 15 integration) covering dry-run, local/global scope, headless+GUI variants, shell quoting, and end-to-end Git integration.
+
+External Diff/Merge Usage Design (`external_usage.md`):
+- ✅ CLI modes: `difftool`, `mergetool`, and `setup` implemented with all documented flags and env fallback.
+- ✅ Exit policy: dedicated modes return `0`/`1`/`>=2` per design contract; `--help`/`--version` exit 0.
+- ✅ Git integration: setup/config emits full headless+GUI tool config with `guiDefault=auto`.
+- ✅ Compatibility: KDiff3/Meld invocation forms supported (`--L1/--L2/--L3`, `-o/--output/--out`, `--base`, positional forms).
+- ✅ Behavior matrix: all 10 required scenarios covered by automated tests.
+- ✅ Test strategy: all three sections (A: Git scenarios, B: existing test extensions, C: fixture harness) complete.
+- ✅ Rollout plan: all three phases (MVP, compat parity hardening, regression suite) complete.
+- ✅ Acceptance criteria: all 5 criteria met.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
+Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`):
+- ✅ Phase 1A: t6403 core merge algorithm — 41 tests.
+- ✅ Phase 1B: t6427 zdiff3 — 4 tests.
+- ✅ Phase 1C: Conflict label formatting — 5 tests.
+- ✅ Phase 2A–2C: KDiff3-style fixture harness — 16 tests + 9 seed fixtures.
+- ✅ Phase 3A–3C: Permutation corpus (243 sampled + 161K on-demand) + real-world merge extraction.
+- ✅ Phase 4A: Mergetool E2E — 65 tests.
+- ✅ Phase 4B: Difftool E2E — 32 tests.
+- ✅ Phase 5A–5C: Meld-derived algorithm tests — 32 tests.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
+Conclusion: Comprehensive verification audit confirms all components from both design documents are fully implemented. No gaps, no remaining work items. Total test suite: 1152 passing, 0 failing, 5 ignored; clippy clean.
+
 ### Progress Snapshot (Iteration 30, Difftool Label-Header Rewrite Hardening — March 2, 2026)
 
 Implementation performed this iteration:
