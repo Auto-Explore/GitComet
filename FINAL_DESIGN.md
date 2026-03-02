@@ -2,6 +2,37 @@
 
 ## Implementation Progress
 
+### Progress Snapshot (Iteration 14, Fixture Harness Failure Artifact Hardening — March 2, 2026)
+
+Implemented this iteration:
+- ✅ Hardened the Phase 2 KDiff3-style fixture harness failure path in `crates/gitgpui-core/tests/merge_fixture_harness.rs` so invariant failures no longer lose debugging artifacts.
+  - Added guarded validation execution (`run_validation_with_artifact`) that catches invariant panics and converts them into deterministic `Result` errors.
+  - Ensures `*_actual_result.*` is written even when merge-output or alignment invariant checks fail, not only when expected-vs-actual mismatch occurs.
+  - Added targeted regression tests:
+    - `run_validation_with_artifact_writes_actual_result_on_panic`
+    - `run_validation_with_artifact_success_does_not_write_actual_result`
+
+Gap closed:
+- Previously, fixture harness artifact emission was guaranteed only for explicit expected-output/alignment mismatches. Invariant-panics short-circuited execution before writing `*_actual_result.*`, making regressions harder to diagnose. This iteration closes that gap and aligns the harness with the Phase 2B requirement for deterministic failure triage artifacts.
+
+Verification scope (this iteration):
+- ✅ `cargo test -p gitgpui-core --test merge_fixture_harness` (**16 passed, 0 failed**).
+- ✅ `cargo test -p gitgpui-core` (**all tests passed**, including fixture harness, merge portability suites, and core unit tests).
+
+External Diff/Merge Usage Design (`external_usage.md`)
+- ✅ All components remain implemented and verified.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
+Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
+- ✅ Phase 1A–1C complete (t6403 core merge, t6427 zdiff3, label formatting).
+- ✅ Phase 2 complete and hardened (fixture harness now preserves `actual_result` artifacts for invariant failures as well as golden mismatches).
+- ✅ Phase 3A–3C complete (permutation corpus + real-world merge extraction).
+- ✅ Phase 4A–4B complete (t7610/t7800 mergetool+difftool E2E parity).
+- ✅ Phase 5A–5C complete (Meld-derived algorithm tests).
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
 ### Progress Snapshot (Iteration 14, Setup Command E2E Integration Tests — March 2, 2026)
 
 Implemented this iteration:

@@ -23,6 +23,7 @@
 
 use gitgpui_core::merge::{MergeOptions, merge_file};
 use std::collections::{BTreeMap, HashSet};
+use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 
 /// A single discovered merge fixture.
@@ -672,6 +673,46 @@ fn is_base_marker(line: &str) -> bool {
         })
 }
 
+fn panic_payload_message(payload: Box<dyn std::any::Any + Send>) -> String {
+    if let Some(message) = payload.downcast_ref::<&str>() {
+        (*message).to_string()
+    } else if let Some(message) = payload.downcast_ref::<String>() {
+        message.clone()
+    } else {
+        "unknown panic payload".to_string()
+    }
+}
+
+fn run_validation_with_artifact<F>(
+    fixture_name: &str,
+    validation_name: &str,
+    actual_path: &Path,
+    actual_content: &str,
+    validate: F,
+) -> Result<(), String>
+where
+    F: FnOnce(),
+{
+    match panic::catch_unwind(AssertUnwindSafe(validate)) {
+        Ok(()) => Ok(()),
+        Err(payload) => {
+            let panic_message = panic_payload_message(payload);
+            let artifact_note = match std::fs::write(actual_path, actual_content) {
+                Ok(()) => format!("actual written to {}", actual_path.display()),
+                Err(e) => format!(
+                    "failed to write actual result to {}: {}",
+                    actual_path.display(),
+                    e
+                ),
+            };
+            Err(format!(
+                "[{}] {} failed ({artifact_note}): {}",
+                fixture_name, validation_name, panic_message
+            ))
+        }
+    }
+}
+
 fn run_fixture(fixture: &MergeFixture) -> Result<(), String> {
     let base = std::fs::read_to_string(&fixture.base_path)
         .map_err(|e| format!("[{}] failed to read base: {}", fixture.name, e))?;
@@ -681,7 +722,22 @@ fn run_fixture(fixture: &MergeFixture) -> Result<(), String> {
         .map_err(|e| format!("[{}] failed to read contrib2: {}", fixture.name, e))?;
 
     let result = merge_file(&base, &contrib1, &contrib2, &MergeOptions::default());
-    validate_merge_output_invariants(&base, &contrib1, &contrib2, &result.output, &fixture.name);
+    let merge_actual_path = actual_result_path(fixture);
+    run_validation_with_artifact(
+        &fixture.name,
+        "merge output invariants",
+        &merge_actual_path,
+        &result.output,
+        || {
+            validate_merge_output_invariants(
+                &base,
+                &contrib1,
+                &contrib2,
+                &result.output,
+                &fixture.name,
+            )
+        },
+    )?;
 
     let expected = match &fixture.expected_path {
         Some(expected_path) => {
@@ -698,8 +754,8 @@ fn run_fixture(fixture: &MergeFixture) -> Result<(), String> {
             if result.output == expected_output {
                 Ok(())
             } else {
-                let actual_path = actual_result_path(fixture);
-                let _ = std::fs::write(&actual_path, &result.output);
+                let actual_path = &merge_actual_path;
+                let _ = std::fs::write(actual_path, &result.output);
                 Err(format!(
                     "[{}] merge output mismatch (actual written to {})\n  expected:\n{}\n  actual:\n{}",
                     fixture.name,
@@ -711,13 +767,27 @@ fn run_fixture(fixture: &MergeFixture) -> Result<(), String> {
         }
         Some(ExpectedFixture::Alignment(expected_rows)) => {
             let actual_rows = build_three_way_alignment(&base, &contrib1, &contrib2);
-            validate_alignment_invariants(&base, &contrib1, &contrib2, &actual_rows, &fixture.name);
+            let actual_path = actual_result_path(fixture);
+            let actual_text = serialize_alignment_rows(&actual_rows);
+            run_validation_with_artifact(
+                &fixture.name,
+                "alignment invariants",
+                &actual_path,
+                &actual_text,
+                || {
+                    validate_alignment_invariants(
+                        &base,
+                        &contrib1,
+                        &contrib2,
+                        &actual_rows,
+                        &fixture.name,
+                    )
+                },
+            )?;
 
             if actual_rows == expected_rows {
                 Ok(())
             } else {
-                let actual_path = actual_result_path(fixture);
-                let actual_text = serialize_alignment_rows(&actual_rows);
                 let expected_text = serialize_alignment_rows(&expected_rows);
                 let _ = std::fs::write(&actual_path, &actual_text);
                 Err(format!(
@@ -861,10 +931,8 @@ fn run_fixture_without_expected_result_succeeds() {
     let fixtures_dir = dir.path();
 
     std::fs::write(fixtures_dir.join("11_no_expected_base.txt"), "base\n").expect("write base");
-    std::fs::write(fixtures_dir.join("11_no_expected_contrib1.txt"), "base\n")
-        .expect("write c1");
-    std::fs::write(fixtures_dir.join("11_no_expected_contrib2.txt"), "base\n")
-        .expect("write c2");
+    std::fs::write(fixtures_dir.join("11_no_expected_contrib1.txt"), "base\n").expect("write c1");
+    std::fs::write(fixtures_dir.join("11_no_expected_contrib2.txt"), "base\n").expect("write c2");
 
     let fixtures = discover_fixtures(fixtures_dir);
     let fixture = fixtures
@@ -889,6 +957,53 @@ fn actual_result_path_without_expected_uses_base_directory() {
     assert_eq!(
         actual_result_path(&fixture),
         dir.path().join("12_path_fallback_actual_result.txt")
+    );
+}
+
+#[test]
+fn run_validation_with_artifact_writes_actual_result_on_panic() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let actual_path = dir.path().join("panic_actual.txt");
+
+    let err = run_validation_with_artifact(
+        "fixture_case",
+        "synthetic validation",
+        &actual_path,
+        "actual-output\n",
+        || panic!("synthetic panic"),
+    )
+    .expect_err("validation should report panic as an error");
+
+    assert!(
+        err.contains("synthetic validation failed"),
+        "unexpected error text: {err}"
+    );
+    assert!(
+        err.contains("synthetic panic"),
+        "panic message should be preserved: {err}"
+    );
+
+    let written = std::fs::read_to_string(&actual_path).expect("read actual output artifact");
+    assert_eq!(written, "actual-output\n");
+}
+
+#[test]
+fn run_validation_with_artifact_success_does_not_write_actual_result() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let actual_path = dir.path().join("success_actual.txt");
+
+    run_validation_with_artifact(
+        "fixture_case",
+        "synthetic validation",
+        &actual_path,
+        "unused\n",
+        || {},
+    )
+    .expect("successful validation should pass");
+
+    assert!(
+        !actual_path.exists(),
+        "success path should not write an actual_result artifact"
     );
 }
 
