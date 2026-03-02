@@ -227,7 +227,7 @@ fn copy_symlink_target_contents(
             copy_tree_dereferencing_symlinks_inner(&resolved_target, dst_path, active_dirs)?;
         }
         _ => {
-            fs::write(dst_path, target.to_string_lossy().as_bytes()).map_err(|e| {
+            write_symlink_target(dst_path, &target).map_err(|e| {
                 format!(
                     "Failed to materialize unresolved symlink {} into {}: {e}",
                     link_path.display(),
@@ -238,6 +238,19 @@ fn copy_symlink_target_contents(
     }
 
     Ok(())
+}
+
+/// Write symlink target path bytes to a file, preserving non-UTF-8 content on Unix.
+fn write_symlink_target(dst: &Path, target: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        fs::write(dst, target.as_os_str().as_bytes())
+    }
+    #[cfg(not(unix))]
+    {
+        fs::write(dst, target.to_string_lossy().as_bytes())
+    }
 }
 
 fn has_git_error_prefix(stderr: &str) -> bool {
@@ -543,6 +556,39 @@ mod tests {
         assert!(
             !result.stdout.trim().is_empty(),
             "expected non-empty diff output for non-UTF8 content"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_difftool_directory_diff_preserves_non_utf8_broken_symlink_target_bytes() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+        use std::os::unix::fs as unix_fs;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let left = tmp.path().join("left");
+        let right = tmp.path().join("right");
+        std::fs::create_dir_all(&left).unwrap();
+        std::fs::create_dir_all(&right).unwrap();
+
+        // Non-UTF-8 bytes that to_string_lossy() would corrupt.
+        let non_utf8_bytes = b"target-\xff-\xfe";
+        let non_utf8_target = OsStr::from_bytes(non_utf8_bytes);
+
+        // Left side: broken symlink with non-UTF-8 target (materialized as target bytes).
+        unix_fs::symlink(non_utf8_target, left.join("entry"))
+            .expect("create non-UTF-8 symlink");
+
+        // Right side: file containing the exact same raw bytes.
+        write_bytes(&right.join("entry"), non_utf8_bytes);
+
+        let result = run_difftool(&config(left.clone(), right)).expect("difftool run");
+        assert_eq!(result.exit_code, exit_code::SUCCESS);
+        assert!(
+            result.stdout.trim().is_empty(),
+            "expected no diff when broken symlink target bytes match file content, got: {}",
+            result.stdout
         );
     }
 

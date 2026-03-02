@@ -860,6 +860,41 @@ fn standalone_difftool_broken_symlink_inputs_exit_zero() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn standalone_difftool_broken_symlink_preserves_non_utf8_target_bytes() {
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs as unix_fs;
+
+    let dir = tempfile::tempdir().unwrap();
+    // Non-UTF-8 bytes that to_string_lossy() would corrupt (\xff → U+FFFD).
+    let non_utf8_bytes = b"target-\xff-\xfe";
+    let non_utf8_target = std::ffi::OsStr::from_bytes(non_utf8_bytes);
+
+    let local = dir.path().join("left-link");
+    let remote = dir.path().join("right-link");
+
+    // Both sides: broken symlinks with the same non-UTF-8 target.
+    unix_fs::symlink(non_utf8_target, &local).expect("create local non-UTF-8 symlink");
+    unix_fs::symlink(non_utf8_target, &remote).expect("create remote non-UTF-8 symlink");
+
+    let output = run_gitgpui([
+        OsString::from("difftool"),
+        OsString::from("--local"),
+        local.as_os_str().to_owned(),
+        OsString::from("--remote"),
+        remote.as_os_str().to_owned(),
+    ]);
+
+    let text = output_text(&output);
+    assert_eq!(output.status.code(), Some(0), "expected exit 0\n{text}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.trim().is_empty(),
+        "identical non-UTF-8 symlink targets should produce no diff\n{text}"
+    );
+}
+
 #[test]
 fn standalone_difftool_handles_unicode_paths() {
     let dir = tempfile::tempdir().unwrap();

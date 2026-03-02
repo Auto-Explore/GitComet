@@ -2,6 +2,44 @@
 
 ## Implementation Progress
 
+### Progress Snapshot (Iteration 29, Non-UTF-8 Symlink Target Byte Preservation — March 2, 2026)
+
+Implementation performed this iteration:
+- ✅ Read both design documents in full (`external_usage.md`, `docs/REFERENCE_TEST_PORTABILITY.md`).
+- ✅ Deep audit of all production code and test coverage identified a correctness bug: `copy_symlink_target_contents()` in `difftool_mode.rs` used `to_string_lossy()` to write broken symlink target bytes, corrupting non-UTF-8 path bytes (behavior matrix item 4: "binary and non-UTF8 content").
+- ✅ Fixed `difftool_mode.rs`:
+  - Extracted `write_symlink_target()` helper that uses `OsStrExt::as_bytes()` on Unix to preserve raw bytes, falling back to `to_string_lossy()` on non-Unix platforms.
+  - Replaced the inline `to_string_lossy()` call in `copy_symlink_target_contents()`.
+- ✅ Added unit test: `run_difftool_directory_diff_preserves_non_utf8_broken_symlink_target_bytes` — creates a broken symlink with `\xff\xfe` target bytes on both sides and asserts no diff (would fail with the old lossy conversion).
+- ✅ Added standalone integration test: `standalone_difftool_broken_symlink_preserves_non_utf8_target_bytes` — end-to-end verification through the CLI binary.
+- ✅ Validation commands:
+  - `cargo test -p gitgpui-app --no-default-features --features gix -- non_utf8` (**9 passed, 0 failed**)
+  - `cargo test --workspace --no-default-features --features gix` (**1143 passed, 0 failed, 5 ignored**)
+  - `cargo clippy --workspace --no-default-features --features gix -- -D warnings` (**0 warnings**)
+
+External Diff/Merge Usage Design (`external_usage.md`):
+- ✅ CLI modes: `difftool`, `mergetool`, and `setup` implemented with all documented flags and env fallback.
+- ✅ Exit policy: dedicated modes return `0`/`1`/`>=2` per design contract.
+- ✅ Git integration: setup/config emits full headless+GUI tool config with `guiDefault=auto`.
+- ✅ Compatibility: KDiff3/Meld invocation forms supported (`--L1/--L2/--L3`, `-o/--output/--out`, `--base`, positional forms).
+- ✅ Behavior matrix: all 10 required scenarios covered by automated tests, including non-UTF-8 byte preservation now correctly implemented for symlink targets in directory diff staging.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
+Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`):
+- ✅ Phase 1A: t6403 core merge algorithm — 41 tests.
+- ✅ Phase 1B: t6427 zdiff3 — 4 tests.
+- ✅ Phase 1C: Conflict label formatting — 5 tests.
+- ✅ Phase 2A–2C: KDiff3-style fixture harness — 16 tests + 9 seed fixtures.
+- ✅ Phase 3A–3C: Permutation corpus (243 sampled + 161K on-demand) + real-world merge extraction.
+- ✅ Phase 4A: Mergetool E2E — 65 tests.
+- ✅ Phase 4B: Difftool E2E — 32 tests.
+- ✅ Phase 5A–5C: Meld-derived algorithm tests — 32 tests.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
+Conclusion: All components from both design documents remain fully implemented; this iteration fixed a correctness bug where non-UTF-8 symlink target bytes were corrupted during directory diff staging (behavior matrix item 4).
+
 ### Progress Snapshot (Iteration 28, Standalone Spaced-Path Direct-Mode Parity — March 2, 2026)
 
 Implementation performed this iteration:
