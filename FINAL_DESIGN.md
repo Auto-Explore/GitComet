@@ -2,6 +2,48 @@
 
 ## Implementation Progress
 
+### Progress Snapshot (Iteration 27, trustExitCode Resolved-State Assertion Hardening — March 2, 2026)
+
+Implementation performed this iteration:
+- ✅ Read both design documents in full (`external_usage.md`, `docs/REFERENCE_TEST_PORTABILITY.md`).
+- ✅ Deep-audited behavior matrix (10 items) and acceptance criteria (5 items) against test suite — all covered.
+- ✅ Hardened `git_mergetool_with_trust_exit_code_marks_clean_merge_resolved` in `mergetool_git_integration.rs`:
+  - Replaced non-deterministic `setup_resolvable_conflict` (which fell back to overlapping conflicts) with a deterministic whitespace-only conflict scenario.
+  - Configured mergetool with `--auto` flag so whitespace-only conflicts are resolved cleanly (exit 0).
+  - Added assertion: `git mergetool` exits successfully when tool reports clean merge.
+  - Added assertion: `git ls-files -u` confirms no unmerged index entries remain (file is resolved).
+  - Added assertion: merged output contains no conflict markers.
+  - Removed dead helper `setup_resolvable_conflict` (no longer referenced).
+- ✅ Validation commands:
+  - `cargo test -p gitgpui-app --no-default-features --features gix --test mergetool_git_integration git_mergetool_with_trust_exit_code_marks_clean_merge_resolved` (**1 passed, 0 failed**)
+  - `cargo test -p gitgpui-app --no-default-features --features gix --test mergetool_git_integration` (**65 passed, 0 failed**)
+  - `cargo test --workspace --no-default-features --features gix` (**1132 passed, 0 failed, 5 ignored**)
+  - `cargo clippy --workspace --no-default-features --features gix -- -D warnings` (**0 warnings**)
+
+External Diff/Merge Usage Design (`external_usage.md`):
+- ✅ CLI modes: `difftool`, `mergetool`, and `setup` implemented with all documented flags and env fallback.
+- ✅ Exit policy: dedicated modes return `0`/`1`/`>=2` per design contract.
+- ✅ Git integration: setup/config emits full headless+GUI tool config with `guiDefault=auto`.
+- ✅ Compatibility: KDiff3/Meld invocation forms supported (`--L1/--L2/--L3`, `-o/--output/--out`, `--base`, positional forms).
+- ✅ Behavior matrix: all 10 required scenarios covered by automated tests.
+- ✅ trustExitCode=true resolved-state contract now verified end-to-end with deterministic assertions.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
+Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`):
+- ✅ Phase 1A: t6403 core merge algorithm — 41 tests.
+- ✅ Phase 1B: t6427 zdiff3 — 4 tests.
+- ✅ Phase 1C: Conflict label formatting — 5 tests.
+- ✅ Phase 2A–2C: KDiff3-style fixture harness — 16 tests + 9 seed fixtures.
+- ✅ Phase 3A–3C: Permutation corpus (243 sampled + 161K on-demand) + real-world merge extraction.
+- ✅ Phase 4A: Mergetool E2E — 65 tests (trustExitCode resolved-state now deterministically verified).
+- ✅ Phase 4B: Difftool E2E — 28 tests.
+- ✅ Phase 5A–5C: Meld-derived algorithm tests — 32 tests.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
+Conclusion: All components from both design documents remain fully implemented; this iteration hardened the trustExitCode=true → resolved-state contract with deterministic end-to-end assertions.
+
 ### Progress Snapshot (Iteration 26, Phase 1A EOF Parity Hardening — March 2, 2026)
 
 Implementation performed this iteration:

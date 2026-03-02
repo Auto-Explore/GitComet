@@ -396,80 +396,6 @@ fn setup_overlapping_conflict_at_path(repo: &Path, path: &str) {
 /// but to the same file, creating a conflict that our tool can auto-resolve.
 ///
 /// Git's merge strategy may or may not auto-resolve non-overlapping changes.
-/// To ensure a conflict that git leaves for the mergetool, we use changes
-/// that are close enough to conflict (adjacent lines).
-fn setup_resolvable_conflict(repo: &Path) {
-    init_repo(repo);
-    // Use a file with enough context separation.
-    write_file(
-        repo,
-        "file.txt",
-        "header\n\
-         aaa\n\
-         bbb\n\
-         ccc\n\
-         ddd\n\
-         eee\n\
-         footer\n",
-    );
-    commit_all(repo, "base");
-
-    run_git(repo, &["checkout", "-b", "feature"]);
-    write_file(
-        repo,
-        "file.txt",
-        "header\n\
-         aaa\n\
-         REMOTE_CHANGE\n\
-         ccc\n\
-         ddd\n\
-         eee\n\
-         footer\n",
-    );
-    commit_all(repo, "feature: change bbb");
-
-    run_git(repo, &["checkout", "main"]);
-    write_file(
-        repo,
-        "file.txt",
-        "header\n\
-         aaa\n\
-         bbb\n\
-         ccc\n\
-         ddd\n\
-         LOCAL_CHANGE\n\
-         footer\n",
-    );
-    commit_all(repo, "main: change eee");
-
-    // Try merge. Git may auto-resolve non-overlapping, so we check.
-    let output = run_git_capture(repo, &["merge", "feature"]);
-    if output.status.success() {
-        // Git auto-resolved — this test scenario won't exercise mergetool.
-        // Fall back to an overlapping conflict that our tool can also handle.
-        // Reset the merge and create a real conflict instead.
-        run_git(repo, &["reset", "--hard", "HEAD~1"]);
-
-        write_file(
-            repo,
-            "file.txt",
-            "header\n\
-             aaa\n\
-             LOCAL_BBB\n\
-             ccc\n\
-             ddd\n\
-             eee\n\
-             footer\n",
-        );
-        commit_all(repo, "main: change bbb differently");
-
-        let output = run_git_capture(repo, &["merge", "feature"]);
-        assert!(
-            !output.status.success(),
-            "expected merge to fail with conflict"
-        );
-    }
-}
 
 // ── Tests ────────────────────────────────────────────────────────────
 
@@ -678,35 +604,76 @@ fn git_mergetool_meld_path_override_handles_spaced_unicode_path() {
 
 #[test]
 fn git_mergetool_with_trust_exit_code_marks_clean_merge_resolved() {
+    // Create an overlapping conflict (both sides modify the same line with
+    // only whitespace differences). Our mergetool with --auto resolves
+    // whitespace-only conflicts cleanly (exit 0). With trustExitCode=true,
+    // git accepts the result and removes the file from the unmerged index.
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
 
-    setup_resolvable_conflict(repo);
-    configure_gitgpui_mergetool(repo);
+    init_repo(repo);
+    write_file(repo, "ws.txt", "aaa\nbbb\nccc\n");
+    commit_all(repo, "base");
+
+    run_git(repo, &["checkout", "-b", "feature"]);
+    // Remote adds trailing tab to bbb.
+    write_file(repo, "ws.txt", "aaa\nbbb\t\nccc\n");
+    commit_all(repo, "feature: add tab to bbb");
+
+    run_git(repo, &["checkout", "main"]);
+    // Local adds trailing spaces to bbb.
+    write_file(repo, "ws.txt", "aaa\nbbb  \nccc\n");
+    commit_all(repo, "main: add spaces to bbb");
+
+    let merge_out = run_git_capture(repo, &["merge", "feature"]);
+    assert!(
+        !merge_out.status.success(),
+        "expected overlapping merge conflict for ws.txt"
+    );
+
+    // Configure mergetool with --auto so whitespace-only conflicts are
+    // resolved automatically by our tool's heuristics.
+    let bin = gitgpui_bin();
+    let bin_q = shell_quote(&bin.to_string_lossy());
+    let cmd = format!(
+        "{bin_q} mergetool --auto --base \"$BASE\" --local \"$LOCAL\" --remote \"$REMOTE\" --merged \"$MERGED\""
+    );
+    run_git(repo, &["config", "merge.tool", "gitgpui"]);
+    run_git(repo, &["config", "mergetool.gitgpui.cmd", &cmd]);
+    run_git(
+        repo,
+        &["config", "mergetool.gitgpui.trustExitCode", "true"],
+    );
+    run_git(repo, &["config", "mergetool.prompt", "false"]);
+    run_git(repo, &["config", "mergetool.keepBackup", "false"]);
 
     let output = run_git_capture(repo, &["mergetool", "--no-prompt"]);
     let text = output_text(&output);
 
-    // Check the file was processed by our tool.
-    let merged = fs::read_to_string(repo.join("file.txt")).unwrap();
-    // The file should not contain unprocessed git conflict markers from
-    // the pre-mergetool state (those have <<<<<<< HEAD etc).
-    // Our tool either cleanly merged or wrote its own markers.
+    // git mergetool should succeed because our tool auto-resolved the
+    // whitespace conflict and exited 0, and trustExitCode=true accepts that.
     assert!(
-        !merged.is_empty(),
-        "expected mergetool to write content to file.txt\ngit output:\n{text}"
+        output.status.success(),
+        "expected git mergetool to exit 0 when tool reports clean merge\n{text}"
     );
 
-    // After mergetool, check if there are still unresolved conflicts.
-    let status = run_git_capture(repo, &["status", "--porcelain"]);
-    let status_text = String::from_utf8_lossy(&status.stdout);
-
-    // If our tool produced a clean merge (exit 0), git should have staged
-    // the file. If it produced conflicts (exit 1), it remains unmerged.
-    // Either way, the tool successfully ran.
+    // The merged file should contain clean content with no conflict markers.
+    let merged = fs::read_to_string(repo.join("ws.txt")).unwrap();
     assert!(
-        merged.contains("header") && merged.contains("footer"),
-        "merged output should contain surrounding context\nmerged:\n{merged}\nstatus:\n{status_text}"
+        !merged.contains("<<<<<<<"),
+        "expected no conflict markers in auto-resolved output\n{merged}"
+    );
+    assert!(
+        merged.contains("aaa") && merged.contains("ccc"),
+        "expected surrounding context preserved\n{merged}"
+    );
+
+    // The file should no longer be in the unmerged state in the index.
+    let unmerged = run_git_capture(repo, &["ls-files", "-u", "--", "ws.txt"]);
+    let unmerged_text = String::from_utf8_lossy(&unmerged.stdout);
+    assert!(
+        unmerged_text.is_empty(),
+        "expected file to be resolved (no unmerged index entries)\n{unmerged_text}"
     );
 }
 
