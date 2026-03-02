@@ -95,22 +95,7 @@ fn main() {
         AppMode::Browser { path } => {
             #[cfg(feature = "ui")]
             {
-                use gitgpui_core::services::GitBackend;
-                use std::sync::Arc;
-
-                let backend: Arc<dyn GitBackend> = if cfg!(feature = "gix") {
-                    #[cfg(feature = "gix")]
-                    {
-                        Arc::new(gitgpui_git_gix::GixBackend)
-                    }
-
-                    #[cfg(not(feature = "gix"))]
-                    {
-                        gitgpui_git::default_backend()
-                    }
-                } else {
-                    gitgpui_git::default_backend()
-                };
+                let backend = build_backend();
 
                 // Pass path to the UI layer. The existing run() reads
                 // std::env::args_os().nth(1) internally, so for now we
@@ -154,9 +139,15 @@ fn main() {
                     // conflicts remain unresolved, open the focused GPUI merge
                     // window for interactive resolution.
                     #[cfg(feature = "ui-gpui")]
-                    if should_launch_focused_merge_gui(&config, &result)
-                        && let Some(ref merge_result) = result.merge_result
-                    {
+                    if should_launch_focused_merge_gui(&config, &result) {
+                        let Some(repo_path) = resolve_mergetool_repo_path(&config.merged) else {
+                            eprintln!(
+                                "Failed to locate repository root for merged path {}",
+                                config.merged.display()
+                            );
+                            std::process::exit(exit_code::ERROR);
+                        };
+
                         // Determine labels for display.
                         let label_local = config
                             .label_local
@@ -174,16 +165,15 @@ fn main() {
                                 .unwrap_or_else(|| "empty tree".to_string())
                         });
 
-                        let gui_config = gitgpui_ui_gpui::FocusedMergeConfig {
-                            merged_path: config.merged.clone(),
+                        let gui_config = gitgpui_ui_gpui::FocusedMergetoolConfig {
+                            repo_path,
+                            conflicted_file_path: config.merged.clone(),
                             label_local,
                             label_remote,
                             label_base,
-                            merged_text: merge_result.output.clone(),
-                            is_clean: merge_result.is_clean(),
-                            conflict_count: merge_result.conflict_count,
                         };
-                        let code = gitgpui_ui_gpui::run_focused_merge(gui_config);
+                        let backend = build_backend();
+                        let code = gitgpui_ui_gpui::run_focused_mergetool(backend, gui_config);
                         std::process::exit(code);
                     }
 
@@ -238,12 +228,56 @@ fn main() {
     }
 }
 
+#[cfg(feature = "ui")]
+fn build_backend() -> std::sync::Arc<dyn gitgpui_core::services::GitBackend> {
+    if cfg!(feature = "gix") {
+        #[cfg(feature = "gix")]
+        {
+            std::sync::Arc::new(gitgpui_git_gix::GixBackend)
+        }
+
+        #[cfg(not(feature = "gix"))]
+        {
+            gitgpui_git::default_backend()
+        }
+    } else {
+        gitgpui_git::default_backend()
+    }
+}
+
 /// Extract a filename label from a path.
 #[cfg(feature = "ui-gpui")]
 fn path_label(path: &std::path::Path) -> String {
     path.file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.display().to_string())
+}
+
+#[cfg(feature = "ui-gpui")]
+fn resolve_mergetool_repo_path(merged_path: &std::path::Path) -> Option<std::path::PathBuf> {
+    let absolute_merged_path = if merged_path.is_absolute() {
+        merged_path.to_path_buf()
+    } else {
+        std::env::current_dir().ok()?.join(merged_path)
+    };
+    let absolute_merged_path = absolute_merged_path
+        .canonicalize()
+        .unwrap_or(absolute_merged_path);
+
+    let mut cursor = if absolute_merged_path.is_dir() {
+        absolute_merged_path.as_path()
+    } else {
+        absolute_merged_path.parent()?
+    };
+
+    loop {
+        let dot_git = cursor.join(".git");
+        if dot_git.is_dir() || dot_git.is_file() {
+            return Some(cursor.to_path_buf());
+        }
+
+        cursor = cursor.parent()?;
+    }
 }
 
 #[cfg(test)]
