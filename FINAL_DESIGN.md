@@ -2,6 +2,38 @@
 
 ## Implementation Progress
 
+### Progress Snapshot (Iteration 18, Independent Completion Verification — March 2, 2026)
+
+Verification performed this iteration:
+- ✅ Read and cross-checked both design documents (`external_usage.md`, `docs/REFERENCE_TEST_PORTABILITY.md`) against the current codebase.
+- ✅ `cargo test --workspace --no-default-features --features gix`: **1123 passed, 0 failed, 5 ignored**.
+- ✅ `cargo clippy --workspace --no-default-features --features gix -- -D warnings`: **0 warnings**.
+- ✅ Zero `TODO`/`FIXME`/`HACK`/`unimplemented!()`/`todo!()` in any first-party production `src/` code (only in vendored gpui/resvg).
+- ✅ Deep agent-driven cross-reference verified all CLI flags, exit codes, env fallbacks, setup mode, and test phases against both design documents.
+
+External Diff/Merge Usage Design (`external_usage.md`):
+- ✅ CLI modes: `difftool`, `mergetool`, and `setup` implemented with all documented flags and env fallback.
+- ✅ Exit policy: dedicated modes return `0`/`1`/`>=2` per design contract.
+- ✅ Git integration: setup/config emits full headless+GUI tool config with `guiDefault=auto`.
+- ✅ Compatibility: KDiff3/Meld invocation forms supported (`--L1/--L2/--L3`, `-o/--output/--out`, positional forms).
+- ✅ Behavior matrix: all 10 required scenarios covered by automated tests.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
+Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`):
+- ✅ Phase 1A: t6403 core merge algorithm — 41 tests.
+- ✅ Phase 1B: t6427 zdiff3 — included in Phase 1A.
+- ✅ Phase 1C: Conflict label formatting — 5 tests.
+- ✅ Phase 2A–2C: KDiff3-style fixture harness — 16 tests + 9 seed fixtures.
+- ✅ Phase 3A–3C: Permutation corpus (243 sampled + 161K on-demand) + real-world merge extraction.
+- ✅ Phase 4A: Mergetool E2E — 64 tests.
+- ✅ Phase 4B: Difftool E2E — 28 tests.
+- ✅ Phase 5A–5C: Meld-derived algorithm tests — 32 tests.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
+Conclusion: All components from both design documents are fully implemented and verified. This is the fifth independent completion verification (iterations 13, 15, 16, 17, 18). Test count stable at 1123.
+
 ### Progress Snapshot (Iteration 17, Independent Completion Verification — March 2, 2026)
 
 Verification performed this iteration:
