@@ -774,20 +774,25 @@ fn parse_merged_spans(text: &str) -> Vec<MergedSpan> {
             spans.push(MergedSpan::Context(std::mem::take(&mut context)));
         }
 
+        let mut base_marker_line: Option<&str> = None;
         let mut base: Option<String> = None;
         let mut ours = String::new();
         let mut found_sep = false;
+        let mut separator_line: Option<String> = None;
 
         while let Some(l) = it.next() {
             if l.starts_with("=======") {
                 found_sep = true;
+                separator_line = Some(l.to_string());
                 break;
             }
             if l.starts_with("|||||||") {
+                base_marker_line = Some(l);
                 let mut base_buf = String::new();
                 for base_line in it.by_ref() {
                     if base_line.starts_with("=======") {
                         found_sep = true;
+                        separator_line = Some(base_line.to_string());
                         break;
                     }
                     base_buf.push_str(base_line);
@@ -799,8 +804,15 @@ fn parse_merged_spans(text: &str) -> Vec<MergedSpan> {
         }
 
         if !found_sep {
-            // Malformed: treat remaining as context.
+            // Malformed: preserve all consumed content as context text.
             context.push_str(line);
+            context.push_str(&ours);
+            if let Some(base_marker_line) = base_marker_line {
+                context.push_str(base_marker_line);
+            }
+            if let Some(ref base_content) = base {
+                context.push_str(base_content);
+            }
             break;
         }
 
@@ -815,8 +827,19 @@ fn parse_merged_spans(text: &str) -> Vec<MergedSpan> {
         }
 
         if !found_end {
-            // Malformed: treat remaining as context.
+            // Malformed: preserve all consumed content as context text.
             context.push_str(line);
+            context.push_str(&ours);
+            if let Some(base_marker_line) = base_marker_line {
+                context.push_str(base_marker_line);
+            }
+            if let Some(ref base_content) = base {
+                context.push_str(base_content);
+            }
+            if let Some(ref sep) = separator_line {
+                context.push_str(sep);
+            }
+            context.push_str(&theirs);
             break;
         }
 
@@ -3835,5 +3858,44 @@ unterminated content with no separator
     fn detect_subchunk_line_ending_empty_defaults_to_lf() {
         assert_eq!(detect_subchunk_line_ending(&[""]), "\n");
         assert_eq!(detect_subchunk_line_ending(&[]), "\n");
+    }
+
+    // ── parse_merged_spans malformed-marker preservation tests ──────
+
+    #[test]
+    fn autosolve_malformed_no_separator_preserves_all_content() {
+        // A <<<<<<< marker with no matching ======= — all consumed
+        // content should be preserved as context text in the output.
+        let text = "before\n<<<<<<< ours\nours line 1\nours line 2\n";
+        let result = try_autosolve_merged_text(text);
+        // No valid conflicts to resolve, so the function returns
+        // Some(original) since there are zero conflicts.
+        assert_eq!(result.as_deref(), Some(text));
+    }
+
+    #[test]
+    fn autosolve_malformed_no_end_marker_preserves_all_content() {
+        // A <<<<<<< and ======= but no matching >>>>>>> — all consumed
+        // content should be preserved as context text in the output.
+        let text = "before\n<<<<<<< ours\nours line\n=======\ntheirs line\n";
+        let result = try_autosolve_merged_text(text);
+        assert_eq!(result.as_deref(), Some(text));
+    }
+
+    #[test]
+    fn autosolve_malformed_diff3_no_separator_preserves_base_content() {
+        // A <<<<<<< marker followed by ||||||| base section but no =======.
+        let text = "before\n<<<<<<< ours\nours line\n||||||| base\nbase line\n";
+        let result = try_autosolve_merged_text(text);
+        assert_eq!(result.as_deref(), Some(text));
+    }
+
+    #[test]
+    fn autosolve_malformed_diff3_no_end_preserves_all_sections() {
+        // A full diff3 conflict header (<<<, |||, ===) but no >>>>>>>.
+        let text =
+            "before\n<<<<<<< ours\nours\n||||||| base\nbase\n=======\ntheirs\n";
+        let result = try_autosolve_merged_text(text);
+        assert_eq!(result.as_deref(), Some(text));
     }
 }

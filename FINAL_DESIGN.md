@@ -2,6 +2,55 @@
 
 ## Implementation Progress
 
+### Progress Snapshot (Iteration 34, Autosolve Malformed-Marker Content Preservation Fix — March 2, 2026)
+
+Performed this iteration:
+- ✅ Read both design documents in full (`external_usage.md`, `docs/REFERENCE_TEST_PORTABILITY.md`).
+- ✅ Full independent codebase audit:
+  - Confirmed all 10 behavior matrix items have production implementations and dedicated tests.
+  - Confirmed zero `.unwrap()` calls in non-test production code.
+  - Confirmed zero TODO/FIXME/HACK comments in production code.
+  - Confirmed all 5 ignored tests are intentionally excluded (performance benchmarks, external repo dependencies).
+  - Confirmed all CLI flags from design documents are implemented with environment variable fallback.
+  - Confirmed exit code contract (0/1/≥2) is enforced at all entry points.
+- ✅ Fixed a content preservation bug in `parse_merged_spans()` (`crates/gitgpui-core/src/conflict_session.rs`):
+  - **Bug**: When encountering malformed conflict markers (missing `=======` or `>>>>>>>`), the function silently dropped all content consumed from the iterator (ours section, base marker, base content, separator, theirs section), preserving only the opening `<<<<<<<` line.
+  - **Fix**: Now preserves all consumed content as context text when markers are malformed, matching the robust handling already present in the GPUI `parse_conflict_markers()` implementation.
+  - This ensures `try_autosolve_merged_text()` never silently truncates content, even with externally-provided malformed input.
+- ✅ Added 4 regression tests for malformed marker handling:
+  - `autosolve_malformed_no_separator_preserves_all_content`
+  - `autosolve_malformed_no_end_marker_preserves_all_content`
+  - `autosolve_malformed_diff3_no_separator_preserves_base_content`
+  - `autosolve_malformed_diff3_no_end_preserves_all_sections`
+- ✅ Validation: `cargo test --workspace --no-default-features --features gix` (**1167 passed, 0 failed, 5 ignored**).
+- ✅ Validation: `cargo clippy --workspace --no-default-features --features gix -- -D warnings` (**0 warnings**).
+
+External Diff/Merge Usage Design (`external_usage.md`):
+- ✅ CLI modes: `difftool`, `mergetool`, and `setup` implemented with all documented flags and env fallback.
+- ✅ Exit policy: dedicated modes return `0`/`1`/`>=2` per design contract.
+- ✅ Git integration: setup/config emits full headless+GUI tool config with `guiDefault=auto`.
+- ✅ Compatibility: KDiff3/Meld invocation forms supported (`--L1/--L2/--L3`, `-o/--output/--out`, `--base`, positional forms).
+- ✅ Behavior matrix: all 10 required scenarios covered by automated tests.
+- ✅ Test strategy: all three sections (A: Git scenarios, B: existing test extensions, C: fixture harness) complete.
+- ✅ Rollout plan: all three phases (MVP, compat parity hardening, regression suite) complete.
+- ✅ Acceptance criteria: all 5 criteria met.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
+Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`):
+- ✅ Phase 1A: t6403 core merge algorithm — 41 tests.
+- ✅ Phase 1B: t6427 zdiff3 — 4 tests.
+- ✅ Phase 1C: Conflict label formatting — 5 tests.
+- ✅ Phase 2A–2C: KDiff3-style fixture harness — 16 tests + 9 seed fixtures.
+- ✅ Phase 3A–3C: Permutation corpus (243 sampled + 161K on-demand) + real-world merge extraction.
+- ✅ Phase 4A: Mergetool E2E — 65 tests.
+- ✅ Phase 4B: Difftool E2E — 32 tests.
+- ✅ Phase 5A–5C: Meld-derived algorithm tests — 32 tests.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
+Conclusion: All components from both design documents remain fully implemented. This iteration fixed a content preservation bug in `parse_merged_spans()` where malformed conflict markers would silently drop consumed content, added 4 regression tests, and performed a full independent verification audit (1167 tests, 0 failures, 0 clippy warnings).
+
 ### Progress Snapshot (Iteration 33, Merge Extraction Subdirectory Support Hardening — March 2, 2026)
 
 Performed this iteration:
