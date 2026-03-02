@@ -2,14 +2,16 @@
 
 ## Implementation Progress
 
-### Progress Snapshot (Iteration 44, Independent Completion Verification — March 2, 2026)
+### Progress Snapshot (Iteration 44, Phase 3C Extraction CLI E2E Hardening — March 2, 2026)
 
 Performed this iteration:
 - ✅ Read both design documents in full (`external_usage.md`, `docs/REFERENCE_TEST_PORTABILITY.md`).
-- ✅ Full workspace test suite: `cargo test --workspace --no-default-features --features gix` — **1,194 passed, 0 failed, 5 ignored**.
-- ✅ Clippy clean: `cargo clippy --workspace --no-default-features --features gix -- -D warnings` — **0 warnings**.
-- ✅ Scanned all project code for `TODO`/`FIXME`/`todo!()`/`unimplemented!()` — none found in project code (only in vendor crates and test mock stubs).
-- ✅ Verified all 5 ignored tests are intentional: 2 external-repo extraction (on-demand), 1 exhaustive 161K permutation corpus (on-demand), 2 performance smoke benchmarks (on-demand).
+- ✅ Added command-level integration coverage for Phase 3C extraction in [`crates/gitgpui-app/tests/extract_merge_fixtures_integration.rs`](/home/sampo/gitgpui/crates/gitgpui-app/tests/extract_merge_fixtures_integration.rs):
+  - `extract_merge_fixtures_e2e_writes_fixture_sets` validates end-to-end fixture generation via `gitgpui-app extract-merge-fixtures`.
+  - `extract_merge_fixtures_e2e_non_repo_exits_two` validates non-repository error handling and exit code policy.
+  - `extract_merge_fixtures_e2e_rejects_zero_max_merges` validates CLI argument validation for extraction limits.
+- ✅ Validation: `cargo test -p gitgpui-app --test extract_merge_fixtures_integration --no-default-features --features gix` — **3 passed, 0 failed**.
+- ✅ Validation: `cargo test -p gitgpui-app --no-default-features --features gix` — **352 passed, 0 failed**.
 
 External Diff/Merge Usage Design (`external_usage.md`):
 - ✅ CLI modes: `difftool`, `mergetool`, and `setup` implemented with all documented flags and env fallback.
@@ -29,13 +31,14 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`):
 - ✅ Phase 1C: Conflict label formatting — 5 tests.
 - ✅ Phase 2A–2C: KDiff3-style fixture harness — 18 tests + 9 seed fixtures.
 - ✅ Phase 3A–3C: Permutation corpus (243 sampled + 161K on-demand) + real-world merge extraction.
+  - Hardening this iteration: added app-level E2E coverage for extraction command invocation and failure semantics.
 - ✅ Phase 4A: Mergetool E2E — 65 tests.
 - ✅ Phase 4B: Difftool E2E — 32 tests.
 - ✅ Phase 5A–5C: Meld-derived algorithm tests — 32 tests.
 - 🔧 Partially implemented components: none.
 - ⬜ Not-yet-started components: none.
 
-Conclusion: All components from both design documents remain fully implemented. Iteration 44 performed a comprehensive independent verification: full test suite (1,194 passing), clippy (0 warnings), code scan for unfinished markers, and confirmed all ignored tests are intentional on-demand entries. No gaps found.
+Conclusion: All components from both design documents remain fully implemented. Iteration 44 added the remaining command-surface E2E verification layer for Phase 3C extraction workflows while preserving full test pass status.
 
 ### Progress Snapshot (Iteration 43, Phase 3C Extraction Command Surface — March 2, 2026)
 
