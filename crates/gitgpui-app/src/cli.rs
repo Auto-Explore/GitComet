@@ -2220,6 +2220,148 @@ mod tests {
         assert_eq!(config.remote, remote);
     }
 
+    // ── Subdirectory path resolution ────────────────────────────────
+
+    #[test]
+    fn difftool_resolves_paths_in_nested_subdirectory() {
+        let dir = tempfile::tempdir().unwrap();
+        let subdir = dir.path().join("src").join("lib");
+        std::fs::create_dir_all(&subdir).unwrap();
+        let local = {
+            let p = subdir.join("module.rs");
+            std::fs::write(&p, "fn old() {}").unwrap();
+            p
+        };
+        let remote = {
+            let p = subdir.join("module_REMOTE.rs");
+            std::fs::write(&p, "fn new() {}").unwrap();
+            p
+        };
+        let env = TestEnv::new();
+
+        let args = DifftoolArgs {
+            local: Some(local.clone()),
+            remote: Some(remote.clone()),
+            path: Some("src/lib/module.rs".into()),
+            label_left: None,
+            label_right: None,
+            gui: false,
+        };
+
+        let config = resolve_difftool_with_env(args, &env).unwrap();
+        assert_eq!(config.local, local);
+        assert_eq!(config.remote, remote);
+        assert_eq!(
+            config.display_path.as_deref(),
+            Some("src/lib/module.rs")
+        );
+    }
+
+    #[test]
+    fn mergetool_resolves_paths_in_nested_subdirectory() {
+        let dir = tempfile::tempdir().unwrap();
+        let subdir = dir.path().join("packages").join("core").join("src");
+        std::fs::create_dir_all(&subdir).unwrap();
+        let merged = {
+            let p = subdir.join("index.ts");
+            std::fs::write(&p, "conflict").unwrap();
+            p
+        };
+        let local = {
+            let p = subdir.join("index_LOCAL.ts");
+            std::fs::write(&p, "local").unwrap();
+            p
+        };
+        let remote = {
+            let p = subdir.join("index_REMOTE.ts");
+            std::fs::write(&p, "remote").unwrap();
+            p
+        };
+        let base = {
+            let p = subdir.join("index_BASE.ts");
+            std::fs::write(&p, "base").unwrap();
+            p
+        };
+        let env = TestEnv::new();
+
+        let args = MergetoolArgs {
+            merged: Some(merged.clone()),
+            local: Some(local.clone()),
+            remote: Some(remote.clone()),
+            base: Some(base.clone()),
+            label_base: None,
+            label_local: None,
+            label_remote: None,
+            conflict_style: None,
+            diff_algorithm: None,
+            marker_size: None,
+            auto: false,
+            gui: false,
+        };
+
+        let config = resolve_mergetool_with_env(args, &env).unwrap();
+        assert_eq!(config.merged, merged);
+        assert_eq!(config.local, local);
+        assert_eq!(config.remote, remote);
+        assert_eq!(config.base.as_ref(), Some(&base));
+    }
+
+    #[test]
+    fn mergetool_env_resolution_with_subdirectory_paths() {
+        // Simulates `git mergetool` providing paths via environment variables
+        // when invoked from a repo subdirectory.
+        let dir = tempfile::tempdir().unwrap();
+        let subdir = dir.path().join("deep").join("nested");
+        std::fs::create_dir_all(&subdir).unwrap();
+        let merged = {
+            let p = subdir.join("file.txt");
+            std::fs::write(&p, "x").unwrap();
+            p
+        };
+        let local = {
+            let p = subdir.join("file_LOCAL.txt");
+            std::fs::write(&p, "a").unwrap();
+            p
+        };
+        let remote = {
+            let p = subdir.join("file_REMOTE.txt");
+            std::fs::write(&p, "b").unwrap();
+            p
+        };
+        let base = {
+            let p = subdir.join("file_BASE.txt");
+            std::fs::write(&p, "o").unwrap();
+            p
+        };
+
+        let mut env = TestEnv::new();
+        env.set("MERGED", &merged)
+            .set("LOCAL", &local)
+            .set("REMOTE", &remote)
+            .set("BASE", &base);
+
+        let args = MergetoolArgs {
+            merged: None,
+            local: None,
+            remote: None,
+            base: None,
+            label_base: None,
+            label_local: None,
+            label_remote: None,
+            conflict_style: None,
+            diff_algorithm: None,
+            marker_size: None,
+            auto: false,
+            gui: false,
+        };
+
+        let config = resolve_mergetool_with_env(args, &env).unwrap();
+        assert_eq!(config.merged, merged);
+        assert_eq!(config.local, local);
+        assert_eq!(config.remote, remote);
+        assert_eq!(config.base.as_ref(), Some(&base));
+    }
+
     // ── Env-only resolution with no flags ────────────────────────────
 
     #[test]

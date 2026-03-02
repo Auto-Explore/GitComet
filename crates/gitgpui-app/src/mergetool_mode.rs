@@ -1391,4 +1391,127 @@ mod tests {
         let merged = fs::read_to_string(&config.merged).unwrap();
         assert_eq!(merged, "aaa\nXXX\nccc\n");
     }
+
+    // ── Subdirectory invocation ─────────────────────────────────────
+
+    #[test]
+    fn merge_with_files_in_nested_subdirectory() {
+        // Simulates `git mergetool` invoked from a subdirectory: files are
+        // located in a nested path, not the root temp directory.
+        let tmp = tempfile::tempdir().unwrap();
+        let subdir = tmp.path().join("src").join("components");
+        fs::create_dir_all(&subdir).unwrap();
+
+        let merged_path = subdir.join("widget.txt");
+        let local_path = subdir.join("widget_LOCAL.txt");
+        let remote_path = subdir.join("widget_REMOTE.txt");
+        let base_path = subdir.join("widget_BASE.txt");
+
+        write_file(&base_path, "line1\nline2\nline3\n");
+        write_file(&local_path, "LINE1\nline2\nline3\n");
+        write_file(&remote_path, "line1\nline2\nLINE3\n");
+        write_file(&merged_path, "");
+
+        let config = MergetoolConfig {
+            merged: merged_path.clone(),
+            local: local_path,
+            remote: remote_path,
+            base: Some(base_path),
+            label_base: None,
+            label_local: None,
+            label_remote: None,
+            conflict_style: gitgpui_core::merge::ConflictStyle::default(),
+            diff_algorithm: gitgpui_core::merge::DiffAlgorithm::default(),
+            marker_size: gitgpui_core::merge::DEFAULT_MARKER_SIZE,
+            auto: false,
+            gui: false,
+        };
+
+        let result = run_mergetool(&config).expect("mergetool run");
+        assert_eq!(result.exit_code, exit_code::SUCCESS);
+        let merged = fs::read_to_string(&merged_path).unwrap();
+        assert_eq!(merged, "LINE1\nline2\nLINE3\n");
+    }
+
+    #[test]
+    fn merge_creates_parent_directories_for_output_in_subdirectory() {
+        // When the merged output path is in a subdirectory that doesn't
+        // exist yet, mergetool should create the parent directories.
+        let tmp = tempfile::tempdir().unwrap();
+
+        let local_path = tmp.path().join("local.txt");
+        let remote_path = tmp.path().join("remote.txt");
+        let base_path = tmp.path().join("base.txt");
+        // Output goes into a not-yet-created subdirectory.
+        let merged_path = tmp.path().join("output").join("deep").join("merged.txt");
+
+        write_file(&base_path, "original\n");
+        write_file(&local_path, "changed by local\n");
+        write_file(&remote_path, "original\n"); // no remote change = clean merge
+
+        let config = MergetoolConfig {
+            merged: merged_path.clone(),
+            local: local_path,
+            remote: remote_path,
+            base: Some(base_path),
+            label_base: None,
+            label_local: None,
+            label_remote: None,
+            conflict_style: gitgpui_core::merge::ConflictStyle::default(),
+            diff_algorithm: gitgpui_core::merge::DiffAlgorithm::default(),
+            marker_size: gitgpui_core::merge::DEFAULT_MARKER_SIZE,
+            auto: false,
+            gui: false,
+        };
+
+        let result = run_mergetool(&config).expect("mergetool run");
+        assert_eq!(result.exit_code, exit_code::SUCCESS);
+        assert!(merged_path.exists(), "merged output should be created");
+        let merged = fs::read_to_string(&merged_path).unwrap();
+        assert_eq!(merged, "changed by local\n");
+    }
+
+    #[test]
+    fn merge_conflict_with_files_scattered_across_directories() {
+        // Input files are in different directories, simulating writeToTemp
+        // mode where Git places stage files in a temp directory while the
+        // merged file is in the working tree subdirectory.
+        let tmp = tempfile::tempdir().unwrap();
+        let temp_stages = tmp.path().join("temp_stages");
+        let workdir = tmp.path().join("repo").join("src");
+        fs::create_dir_all(&temp_stages).unwrap();
+        fs::create_dir_all(&workdir).unwrap();
+
+        let base_path = temp_stages.join("file_BASE_12345.txt");
+        let local_path = temp_stages.join("file_LOCAL_12345.txt");
+        let remote_path = temp_stages.join("file_REMOTE_12345.txt");
+        let merged_path = workdir.join("file.txt");
+
+        write_file(&base_path, "base\n");
+        write_file(&local_path, "local\n");
+        write_file(&remote_path, "remote\n");
+        write_file(&merged_path, "");
+
+        let config = MergetoolConfig {
+            merged: merged_path.clone(),
+            local: local_path,
+            remote: remote_path,
+            base: Some(base_path),
+            label_base: None,
+            label_local: None,
+            label_remote: None,
+            conflict_style: gitgpui_core::merge::ConflictStyle::default(),
+            diff_algorithm: gitgpui_core::merge::DiffAlgorithm::default(),
+            marker_size: gitgpui_core::merge::DEFAULT_MARKER_SIZE,
+            auto: false,
+            gui: false,
+        };
+
+        let result = run_mergetool(&config).expect("mergetool run");
+        assert_eq!(result.exit_code, exit_code::CANCELED);
+        let merged = fs::read_to_string(&merged_path).unwrap();
+        assert!(merged.contains("<<<<<<<"), "conflict markers expected");
+        assert!(merged.contains("local"), "local side content expected");
+        assert!(merged.contains("remote"), "remote side content expected");
+    }
 }

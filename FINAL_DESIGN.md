@@ -2,6 +2,54 @@
 
 ## Implementation Progress
 
+### Progress Snapshot (Iteration 36, Behavior Matrix Subdirectory Invocation Tests — March 2, 2026)
+
+Performed this iteration:
+- ✅ Read both design documents in full (`external_usage.md`, `docs/REFERENCE_TEST_PORTABILITY.md`).
+- ✅ Audited all 10 behavior matrix items from `external_usage.md` for test coverage depth.
+- ✅ Identified gap: Behavior matrix item #2 ("invocation from repo subdirectory") had integration-level tests but no unit-level coverage in the app-level `mergetool_mode.rs`, `difftool_mode.rs`, or `cli.rs` test modules.
+- ✅ Added 3 mergetool unit tests in `mergetool_mode.rs`:
+  - `merge_with_files_in_nested_subdirectory` — files in `src/components/` subdirectory.
+  - `merge_creates_parent_directories_for_output_in_subdirectory` — merged output in a not-yet-created nested directory.
+  - `merge_conflict_with_files_scattered_across_directories` — input files in temp stages dir, merged output in working tree subdirectory (simulates writeToTemp mode).
+- ✅ Added 3 difftool unit tests in `difftool_mode.rs`:
+  - `run_difftool_files_in_nested_subdirectory` — files in `src/components/` subdirectory.
+  - `run_difftool_files_in_different_directories` — local in temp stages dir, remote in working tree subdirectory.
+  - `run_difftool_directory_diff_in_nested_subdirectories` — directory diff mode with nested `workspace/left` and `workspace/right` directories.
+- ✅ Added 3 CLI argument resolution tests in `cli.rs`:
+  - `difftool_resolves_paths_in_nested_subdirectory` — flag-based paths with display path preserving subdirectory layout.
+  - `mergetool_resolves_paths_in_nested_subdirectory` — flag-based paths in `packages/core/src/` subdirectory.
+  - `mergetool_env_resolution_with_subdirectory_paths` — env-variable-based paths in `deep/nested/` subdirectory.
+- ✅ Validation: `cargo test --workspace --no-default-features --features gix` (**1180 passed, 0 failed, 5 ignored**).
+- ✅ Validation: `cargo clippy --workspace --no-default-features --features gix -- -D warnings` (**0 warnings**).
+
+External Diff/Merge Usage Design (`external_usage.md`):
+- ✅ CLI modes: `difftool`, `mergetool`, and `setup` implemented with all documented flags and env fallback.
+- ✅ Exit policy: dedicated modes return `0`/`1`/`>=2` per design contract.
+- ✅ Git integration: setup/config emits full headless+GUI tool config with `guiDefault=auto`.
+- ✅ Compatibility: KDiff3/Meld invocation forms supported (`--L1/--L2/--L3`, `-o/--output/--out`, `--base`, positional forms).
+- ✅ Behavior matrix: all 10 required scenarios covered by automated tests.
+  - Hardening this iteration: added 9 unit-level tests for behavior matrix item #2 (subdirectory invocation), complementing existing integration tests.
+- ✅ Test strategy: all three sections (A: Git scenarios, B: existing test extensions, C: fixture harness) complete.
+- ✅ Rollout plan: all three phases (MVP, compat parity hardening, regression suite) complete.
+- ✅ Acceptance criteria: all 5 criteria met.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
+Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`):
+- ✅ Phase 1A: t6403 core merge algorithm — 41 tests.
+- ✅ Phase 1B: t6427 zdiff3 — 4 tests.
+- ✅ Phase 1C: Conflict label formatting — 5 tests.
+- ✅ Phase 2A–2C: KDiff3-style fixture harness — 16 tests + 9 seed fixtures.
+- ✅ Phase 3A–3C: Permutation corpus (243 sampled + 161K on-demand) + real-world merge extraction.
+- ✅ Phase 4A: Mergetool E2E — 65 tests.
+- ✅ Phase 4B: Difftool E2E — 32 tests.
+- ✅ Phase 5A–5C: Meld-derived algorithm tests — 32 tests.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
+Conclusion: All components from both design documents remain fully implemented. This iteration added 9 unit-level tests for behavior matrix item #2 (subdirectory invocation) across mergetool mode, difftool mode, and CLI argument resolution, closing the last remaining unit-test coverage gap in the behavior matrix.
+
 ### Progress Snapshot (Iteration 35, Merge Extraction Fixture-Collision Hardening — March 2, 2026)
 
 Performed this iteration:

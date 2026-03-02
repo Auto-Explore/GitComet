@@ -675,4 +675,73 @@ mod tests {
         ));
         assert!(!has_git_error_prefix("warning: textconv failed"));
     }
+
+    // ── Subdirectory invocation ─────────────────────────────────────
+
+    #[test]
+    fn run_difftool_files_in_nested_subdirectory() {
+        // Simulates `git difftool` invoked from a subdirectory: diff inputs
+        // are in a nested path, not the root temp directory.
+        let tmp = tempfile::tempdir().unwrap();
+        let subdir = tmp.path().join("src").join("components");
+        std::fs::create_dir_all(&subdir).unwrap();
+
+        let left = subdir.join("widget_LOCAL.txt");
+        let right = subdir.join("widget_REMOTE.txt");
+        write_file(&left, "original line\n");
+        write_file(&right, "changed line\n");
+
+        let result = run_difftool(&config(left, right)).expect("difftool run");
+        assert_eq!(result.exit_code, exit_code::SUCCESS);
+        assert!(
+            result.stdout.contains("original line")
+                || result.stdout.contains("changed line"),
+            "diff output should contain file content: {}",
+            result.stdout
+        );
+    }
+
+    #[test]
+    fn run_difftool_files_in_different_directories() {
+        // Input files are in different directories, simulating writeToTemp
+        // mode where Git places stage files in a temp directory.
+        let tmp = tempfile::tempdir().unwrap();
+        let dir_a = tmp.path().join("stages");
+        let dir_b = tmp.path().join("workdir").join("src");
+        std::fs::create_dir_all(&dir_a).unwrap();
+        std::fs::create_dir_all(&dir_b).unwrap();
+
+        let left = dir_a.join("file_LOCAL_12345.txt");
+        let right = dir_b.join("file.txt");
+        write_file(&left, "before\n");
+        write_file(&right, "after\n");
+
+        let result = run_difftool(&config(left, right)).expect("difftool run");
+        assert_eq!(result.exit_code, exit_code::SUCCESS);
+        assert!(
+            !result.stdout.is_empty(),
+            "diff should produce output for different files"
+        );
+    }
+
+    #[test]
+    fn run_difftool_directory_diff_in_nested_subdirectories() {
+        // Directory diff mode with directories nested inside subdirectories.
+        let tmp = tempfile::tempdir().unwrap();
+        let left_dir = tmp.path().join("workspace").join("left");
+        let right_dir = tmp.path().join("workspace").join("right");
+        std::fs::create_dir_all(&left_dir).unwrap();
+        std::fs::create_dir_all(&right_dir).unwrap();
+
+        write_file(&left_dir.join("main.rs"), "fn main() {}\n");
+        write_file(&right_dir.join("main.rs"), "fn main() { println!(\"hello\"); }\n");
+
+        let result = run_difftool(&config(left_dir, right_dir)).expect("difftool run");
+        assert_eq!(result.exit_code, exit_code::SUCCESS);
+        assert!(
+            result.stdout.contains("main.rs"),
+            "directory diff output should mention the changed file: {}",
+            result.stdout
+        );
+    }
 }
