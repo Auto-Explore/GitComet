@@ -2,6 +2,49 @@
 
 ## Implementation Progress
 
+### Progress Snapshot (Iteration 39, Merge-Extraction Git Error Classification Hardening — March 2, 2026)
+
+Performed this iteration:
+- ✅ Read both design documents in full (`external_usage.md`, `docs/REFERENCE_TEST_PORTABILITY.md`).
+- ✅ Identified a remaining Phase 3C robustness gap in `crates/gitgpui-core/src/merge_extraction.rs`:
+  - `run_git_bytes_optional()` treated every non-zero `git show` exit as "missing path", which could silently mask real git errors as empty-side content.
+- ✅ Implemented strict git-show error classification:
+  - only explicit missing-path diagnostics (`path ... does not exist in ...` / `exists on disk, but not in ...`) are mapped to `None`.
+  - all other failures now return `MergeExtractionError::GitCommandFailed` with command and stderr context.
+- ✅ Added regression coverage in `merge_extraction.rs`:
+  - `git_show_missing_path_is_treated_as_absent_side`
+  - `git_show_non_missing_errors_are_propagated`
+  - `missing_path_error_detection_matches_git_patterns`
+- ✅ Validation: `cargo test -p gitgpui-core merge_extraction -- --nocapture` (**15 passed, 0 failed**).
+- ✅ Validation: `cargo test --workspace --no-default-features --features gix` (**all passed, 0 failed, 5 ignored**).
+
+External Diff/Merge Usage Design (`external_usage.md`):
+- ✅ CLI modes: `difftool`, `mergetool`, and `setup` implemented with all documented flags and env fallback.
+- ✅ Exit policy: dedicated modes return `0`/`1`/`>=2` per design contract.
+- ✅ Git integration: setup/config emits full headless+GUI tool config with `guiDefault=auto`.
+- ✅ Compatibility: KDiff3/Meld invocation forms supported (`--L1/--L2/--L3`, `-o/--output/--out`, `--base`, positional forms).
+- ✅ Behavior matrix: all 10 required scenarios covered by automated tests.
+- ✅ Test strategy: all three sections (A: Git scenarios, B: existing test extensions, C: fixture harness) complete.
+- ✅ Rollout plan: all three phases (MVP, compat parity hardening, regression suite) complete.
+- ✅ Acceptance criteria: all 5 criteria met.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
+Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`):
+- ✅ Phase 1A: t6403 core merge algorithm — 41 tests.
+- ✅ Phase 1B: t6427 zdiff3 — 4 tests.
+- ✅ Phase 1C: Conflict label formatting — 5 tests.
+- ✅ Phase 2A–2C: KDiff3-style fixture harness — 18 tests + 9 seed fixtures.
+- ✅ Phase 3A–3C: Permutation corpus (243 sampled + 161K on-demand) + real-world merge extraction.
+  - Hardening this iteration: extraction now differentiates true missing-side blobs from non-missing git failures, preventing silent fixture corruption.
+- ✅ Phase 4A: Mergetool E2E — 65 tests.
+- ✅ Phase 4B: Difftool E2E — 32 tests.
+- ✅ Phase 5A–5C: Meld-derived algorithm tests — 32 tests.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
+Conclusion: All components from both design documents remain fully implemented. This iteration hardened Phase 3C extraction reliability by propagating non-missing `git show` failures instead of silently treating them as empty content.
+
 ### Progress Snapshot (Iteration 38, Merge-Extraction Missing-Side Case Support — March 2, 2026)
 
 Performed this iteration:

@@ -428,8 +428,22 @@ fn run_git_bytes_optional(
     if output.status.success() {
         Ok(Some(output.stdout))
     } else {
-        Ok(None)
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        if is_missing_path_error(&stderr) {
+            Ok(None)
+        } else {
+            Err(MergeExtractionError::GitCommandFailed {
+                command: git_command_string(args),
+                stderr,
+            })
+        }
     }
+}
+
+fn is_missing_path_error(stderr: &str) -> bool {
+    let lower = stderr.to_ascii_lowercase();
+    (lower.contains("path '") && lower.contains("does not exist in"))
+        || (lower.contains("path '") && lower.contains("exists on disk, but not in"))
 }
 
 fn run_git(repo: &Path, args: &[&str]) -> Result<Output, MergeExtractionError> {
@@ -813,6 +827,55 @@ mod tests {
             moddel.contrib1,
             moddel.contrib2
         );
+    }
+
+    #[test]
+    fn git_show_missing_path_is_treated_as_absent_side() {
+        let repo = create_conflicting_merge_repo();
+        let missing = run_git_bytes_optional(repo.path(), &["show", "HEAD:this-file-does-not-exist"])
+            .expect("missing path should not error");
+        assert!(
+            missing.is_none(),
+            "missing path should be interpreted as absent side content"
+        );
+    }
+
+    #[test]
+    fn git_show_non_missing_errors_are_propagated() {
+        let repo = create_conflicting_merge_repo();
+        let err = run_git_bytes_optional(repo.path(), &["show", "definitely-not-a-ref:a.txt"])
+            .expect_err("invalid ref should surface as git command failure");
+
+        match err {
+            MergeExtractionError::GitCommandFailed { command, stderr } => {
+                assert_eq!(
+                    command, "git show definitely-not-a-ref:a.txt",
+                    "unexpected git command context"
+                );
+                assert!(
+                    !stderr.is_empty(),
+                    "expected stderr details for invalid ref failure"
+                );
+                assert!(
+                    !is_missing_path_error(&stderr),
+                    "invalid ref error must not be misclassified as missing path: {stderr}"
+                );
+            }
+            other => panic!("expected GitCommandFailed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn missing_path_error_detection_matches_git_patterns() {
+        assert!(is_missing_path_error(
+            "fatal: path 'docs/file.txt' does not exist in 'HEAD'"
+        ));
+        assert!(is_missing_path_error(
+            "fatal: path 'docs/file.txt' exists on disk, but not in 'HEAD'"
+        ));
+        assert!(!is_missing_path_error(
+            "fatal: invalid object name 'definitely-not-a-ref'"
+        ));
     }
 
     #[test]
