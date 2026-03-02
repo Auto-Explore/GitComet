@@ -927,6 +927,42 @@ pub fn is_whitespace_only_diff(a: &str, b: &str) -> bool {
     a != b && normalize_whitespace(a) == normalize_whitespace(b)
 }
 
+/// Pass 1 safe auto-resolve decision helper.
+///
+/// Returns which side to pick when one of the always-safe rules applies.
+pub fn safe_auto_resolve_pick(
+    base: Option<&str>,
+    ours: &str,
+    theirs: &str,
+    whitespace_normalize: bool,
+) -> Option<(AutosolveRule, AutosolvePickSide)> {
+    // Rule 1: both sides identical.
+    if ours == theirs {
+        return Some((AutosolveRule::IdenticalSides, AutosolvePickSide::Ours));
+    }
+
+    // Rules 2 & 3 require a base.
+    if let Some(base_raw) = base {
+        // Rule 2: only theirs changed (ours == base).
+        if ours == base_raw && theirs != base_raw {
+            return Some((AutosolveRule::OnlyTheirsChanged, AutosolvePickSide::Theirs));
+        }
+
+        // Rule 3: only ours changed (theirs == base).
+        if theirs == base_raw && ours != base_raw {
+            return Some((AutosolveRule::OnlyOursChanged, AutosolvePickSide::Ours));
+        }
+    }
+
+    // Rule 4 (optional): whitespace-only difference between sides.
+    // This rule does not require a base.
+    if whitespace_normalize && is_whitespace_only_diff(ours, theirs) {
+        return Some((AutosolveRule::WhitespaceOnly, AutosolvePickSide::Ours));
+    }
+
+    None
+}
+
 /// Attempt to auto-resolve a single conflict region using Pass 1 safe rules.
 ///
 /// When `whitespace_normalize` is true, an additional rule checks whether
@@ -938,31 +974,17 @@ fn safe_auto_resolve(
     region: &ConflictRegion,
     whitespace_normalize: bool,
 ) -> Option<(AutosolveRule, String)> {
-    // Rule 1: both sides identical.
-    if region.ours == region.theirs {
-        return Some((AutosolveRule::IdenticalSides, region.ours.clone()));
-    }
-
-    // Rules 2 & 3 require a base.
-    if let Some(base) = region.base.as_deref() {
-        // Rule 2: only theirs changed (ours == base).
-        if region.ours == base && region.theirs != base {
-            return Some((AutosolveRule::OnlyTheirsChanged, region.theirs.clone()));
-        }
-
-        // Rule 3: only ours changed (theirs == base).
-        if region.theirs == base && region.ours != base {
-            return Some((AutosolveRule::OnlyOursChanged, region.ours.clone()));
-        }
-    }
-
-    // Rule 4 (optional): whitespace-only difference between sides.
-    // This rule does not require a base.
-    if whitespace_normalize && is_whitespace_only_diff(&region.ours, &region.theirs) {
-        return Some((AutosolveRule::WhitespaceOnly, region.ours.clone()));
-    }
-
-    None
+    let (rule, pick) = safe_auto_resolve_pick(
+        region.base.as_deref(),
+        &region.ours,
+        &region.theirs,
+        whitespace_normalize,
+    )?;
+    let content = match pick {
+        AutosolvePickSide::Ours => region.ours.clone(),
+        AutosolvePickSide::Theirs => region.theirs.clone(),
+    };
+    Some((rule, content))
 }
 
 fn compile_regex_patterns(

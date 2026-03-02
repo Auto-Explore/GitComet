@@ -645,6 +645,8 @@ pub fn auto_resolve_segments_with_options(
     segments: &mut [ConflictSegment],
     whitespace_normalize: bool,
 ) -> usize {
+    use gitgpui_core::conflict_session::{AutosolvePickSide, safe_auto_resolve_pick};
+
     let mut count = 0;
     for seg in segments.iter_mut() {
         let ConflictSegment::Block(block) = seg else {
@@ -654,41 +656,21 @@ pub fn auto_resolve_segments_with_options(
             continue;
         }
 
-        // Rule 1: both sides identical.
-        if block.ours == block.theirs {
-            block.choice = ConflictChoice::Ours;
-            block.resolved = true;
-            count += 1;
+        let Some((_, pick)) = safe_auto_resolve_pick(
+            block.base.as_deref(),
+            &block.ours,
+            &block.theirs,
+            whitespace_normalize,
+        ) else {
             continue;
-        }
+        };
 
-        // Rules 2 & 3 require a base.
-        if let Some(base) = block.base.as_deref() {
-            // Rule 2: only theirs changed (ours == base).
-            if block.ours == base && block.theirs != base {
-                block.choice = ConflictChoice::Theirs;
-                block.resolved = true;
-                count += 1;
-                continue;
-            }
-
-            // Rule 3: only ours changed (theirs == base).
-            if block.theirs == base && block.ours != base {
-                block.choice = ConflictChoice::Ours;
-                block.resolved = true;
-                count += 1;
-                continue;
-            }
-        }
-
-        // Rule 4 (optional): whitespace-only difference.
-        if whitespace_normalize
-            && gitgpui_core::conflict_session::is_whitespace_only_diff(&block.ours, &block.theirs)
-        {
-            block.choice = ConflictChoice::Ours;
-            block.resolved = true;
-            count += 1;
-        }
+        block.choice = match pick {
+            AutosolvePickSide::Ours => ConflictChoice::Ours,
+            AutosolvePickSide::Theirs => ConflictChoice::Theirs,
+        };
+        block.resolved = true;
+        count += 1;
     }
     count
 }
