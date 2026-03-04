@@ -485,6 +485,8 @@ struct ConflictResolverUiState {
     nav_anchor: Option<usize>,
     hide_resolved: bool,
     three_way_visible_map: Vec<conflict_resolver::ThreeWayVisibleItem>,
+    diff_row_conflict_map: Vec<Option<usize>>,
+    inline_row_conflict_map: Vec<Option<usize>>,
     diff_visible_row_indices: Vec<usize>,
     inline_visible_row_indices: Vec<usize>,
     /// True when any conflict side contains non-UTF8 binary data.
@@ -540,6 +542,8 @@ impl Default for ConflictResolverUiState {
             nav_anchor: None,
             hide_resolved: false,
             three_way_visible_map: Vec::new(),
+            diff_row_conflict_map: Vec::new(),
+            inline_row_conflict_map: Vec::new(),
             diff_visible_row_indices: Vec::new(),
             inline_visible_row_indices: Vec::new(),
             is_binary_conflict: false,

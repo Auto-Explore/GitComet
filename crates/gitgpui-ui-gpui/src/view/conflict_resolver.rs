@@ -979,17 +979,6 @@ fn build_two_way_conflict_line_ranges(
     ranges
 }
 
-/// Build marker-conflict line ranges for the two-way resolver panes.
-///
-/// Returns one entry per marker conflict block:
-/// - `.0` is the 1-based `A`/ours line range (`start..end_exclusive`)
-/// - `.1` is the 1-based `B`/theirs line range (`start..end_exclusive`)
-pub fn two_way_conflict_line_ranges(
-    segments: &[ConflictSegment],
-) -> Vec<(std::ops::Range<u32>, std::ops::Range<u32>)> {
-    build_two_way_conflict_line_ranges(segments)
-}
-
 fn row_conflict_index_for_lines(
     old_line: Option<u32>,
     new_line: Option<u32>,

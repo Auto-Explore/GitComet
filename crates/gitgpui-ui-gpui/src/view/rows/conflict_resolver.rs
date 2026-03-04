@@ -748,16 +748,6 @@ impl MainPaneView {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
-        let (split_conflict_map, inline_conflict_map) =
-            conflict_resolver::map_two_way_rows_to_conflicts(
-                &this.conflict_resolver.marker_segments,
-                &this.conflict_resolver.diff_rows,
-                &this.conflict_resolver.inline_rows,
-            );
-        let two_way_conflict_ranges = conflict_resolver::two_way_conflict_line_ranges(
-            &this.conflict_resolver.marker_segments,
-        );
-
         match this.conflict_resolver.diff_mode {
             ConflictDiffMode::Split => range
                 .map(|visible_row_ix| {
@@ -775,14 +765,13 @@ impl MainPaneView {
                             .child("")
                             .into_any_element();
                     };
-                    let conflict_ix = split_conflict_map.get(row_ix).copied().flatten();
-                    this.render_conflict_resolver_split_row(
-                        visible_row_ix,
-                        row_ix,
-                        conflict_ix,
-                        &two_way_conflict_ranges,
-                        cx,
-                    )
+                    let conflict_ix = this
+                        .conflict_resolver
+                        .diff_row_conflict_map
+                        .get(row_ix)
+                        .copied()
+                        .flatten();
+                    this.render_conflict_resolver_split_row(visible_row_ix, row_ix, conflict_ix, cx)
                 })
                 .collect(),
             ConflictDiffMode::Inline => range
@@ -801,14 +790,13 @@ impl MainPaneView {
                             .child("")
                             .into_any_element();
                     };
-                    let conflict_ix = inline_conflict_map.get(ix).copied().flatten();
-                    this.render_conflict_resolver_inline_row(
-                        visible_ix,
-                        ix,
-                        conflict_ix,
-                        &two_way_conflict_ranges,
-                        cx,
-                    )
+                    let conflict_ix = this
+                        .conflict_resolver
+                        .inline_row_conflict_map
+                        .get(ix)
+                        .copied()
+                        .flatten();
+                    this.render_conflict_resolver_inline_row(visible_ix, ix, conflict_ix, cx)
                 })
                 .collect(),
         }
@@ -1088,7 +1076,6 @@ impl MainPaneView {
         _visible_row_ix: usize,
         row_ix: usize,
         conflict_ix: Option<usize>,
-        _two_way_conflict_ranges: &[(Range<u32>, Range<u32>)],
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         let theme = self.theme;
@@ -1318,7 +1305,6 @@ impl MainPaneView {
         _visible_ix: usize,
         ix: usize,
         conflict_ix: Option<usize>,
-        _two_way_conflict_ranges: &[(Range<u32>, Range<u32>)],
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         let theme = self.theme;
