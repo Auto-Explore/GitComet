@@ -5782,6 +5782,52 @@ mod tests {
     }
 
     #[test]
+    fn adjacent_markers_with_same_text_but_different_regions_do_not_interfere() {
+        let mut segments = vec![
+            ConflictSegment::Block(ConflictBlock {
+                base: Some("base\n".to_string()),
+                ours: "ours\n".to_string(),
+                theirs: "theirs\n".to_string(),
+                choice: ConflictChoice::Theirs,
+                resolved: true,
+            }),
+            ConflictSegment::Block(ConflictBlock {
+                base: Some("base\n".to_string()),
+                ours: "ours\n".to_string(),
+                theirs: "theirs\n".to_string(),
+                choice: ConflictChoice::Ours,
+                resolved: false,
+            }),
+        ];
+        let mut region_indices = vec![10, 11];
+
+        assert_eq!(
+            super::conflict_group_selected_choices_for_ix(&segments, &region_indices, 1),
+            Vec::<ConflictChoice>::new()
+        );
+        assert_eq!(
+            super::conflict_group_indices_for_choice(
+                &segments,
+                &region_indices,
+                1,
+                ConflictChoice::Theirs
+            ),
+            Vec::<usize>::new()
+        );
+
+        assert_eq!(
+            super::append_choice_after_conflict_block(
+                &mut segments,
+                &mut region_indices,
+                1,
+                ConflictChoice::Theirs,
+            ),
+            None
+        );
+        assert_eq!(conflict_resolver::conflict_count(&segments), 2);
+    }
+
+    #[test]
     fn pick_sequence_is_reversible_to_original_unpicked_state() {
         let mut segments = vec![
             ConflictSegment::Text("pre\n".to_string()),
