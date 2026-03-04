@@ -2,75 +2,6 @@ use super::super::conflict_resolver;
 use super::diff_text::*;
 use super::*;
 
-#[derive(Clone, Debug, Default)]
-struct ThreeWayColumnConflictRanges {
-    base: Vec<Range<usize>>,
-    ours: Vec<Range<usize>>,
-    theirs: Vec<Range<usize>>,
-}
-
-fn three_way_line_count(text: &str) -> usize {
-    if text.is_empty() {
-        0
-    } else {
-        text.lines().count()
-    }
-}
-
-fn build_three_way_column_conflict_ranges(
-    segments: &[conflict_resolver::ConflictSegment],
-) -> ThreeWayColumnConflictRanges {
-    let mut ranges = ThreeWayColumnConflictRanges::default();
-    let mut base_offset = 0usize;
-    let mut ours_offset = 0usize;
-    let mut theirs_offset = 0usize;
-
-    for seg in segments {
-        match seg {
-            conflict_resolver::ConflictSegment::Text(text) => {
-                let n = three_way_line_count(text);
-                base_offset = base_offset.saturating_add(n);
-                ours_offset = ours_offset.saturating_add(n);
-                theirs_offset = theirs_offset.saturating_add(n);
-            }
-            conflict_resolver::ConflictSegment::Block(block) => {
-                let base_count = three_way_line_count(block.base.as_deref().unwrap_or_default());
-                let ours_count = three_way_line_count(&block.ours);
-                let theirs_count = three_way_line_count(&block.theirs);
-                ranges
-                    .base
-                    .push(base_offset..base_offset.saturating_add(base_count));
-                ranges
-                    .ours
-                    .push(ours_offset..ours_offset.saturating_add(ours_count));
-                ranges
-                    .theirs
-                    .push(theirs_offset..theirs_offset.saturating_add(theirs_count));
-                base_offset = base_offset.saturating_add(base_count);
-                ours_offset = ours_offset.saturating_add(ours_count);
-                theirs_offset = theirs_offset.saturating_add(theirs_count);
-            }
-        }
-    }
-
-    ranges
-}
-
-fn conflict_range_for_line(ranges: &[Range<usize>], line_ix: usize) -> Option<usize> {
-    ranges.iter().position(|r| r.contains(&line_ix))
-}
-
-fn conflict_has_base(segments: &[conflict_resolver::ConflictSegment], conflict_ix: usize) -> bool {
-    segments
-        .iter()
-        .filter_map(|seg| match seg {
-            conflict_resolver::ConflictSegment::Block(block) => Some(block.base.is_some()),
-            _ => None,
-        })
-        .nth(conflict_ix)
-        .unwrap_or(false)
-}
-
 impl MainPaneView {
     pub(in super::super) fn render_conflict_resolver_three_way_rows(
         this: &mut Self,
@@ -81,8 +12,6 @@ impl MainPaneView {
         let theme = this.theme;
         let show_ws = this.show_whitespace;
         let [col_a_w, col_b_w, col_c_w] = this.conflict_three_way_col_widths;
-        let conflict_ranges =
-            build_three_way_column_conflict_ranges(&this.conflict_resolver.marker_segments);
 
         // Build per-conflict choice lookup so we can highlight the selected column.
         let conflict_choices: Vec<conflict_resolver::ConflictChoice> = this
@@ -91,15 +20,6 @@ impl MainPaneView {
             .iter()
             .filter_map(|seg| match seg {
                 conflict_resolver::ConflictSegment::Block(b) => Some(b.choice),
-                _ => None,
-            })
-            .collect();
-        let conflict_has_base: Vec<bool> = this
-            .conflict_resolver
-            .marker_segments
-            .iter()
-            .filter_map(|seg| match seg {
-                conflict_resolver::ConflictSegment::Block(b) => Some(b.base.is_some()),
                 _ => None,
             })
             .collect();
@@ -257,7 +177,12 @@ impl MainPaneView {
                         )
                         .child(div().w(col_c_w).flex_grow().min_w(px(0.0)).h_full())
                         .cursor(CursorStyle::PointingHand);
-                    let has_base = conflict_has_base.get(range_ix).copied().unwrap_or(false);
+                    let has_base = this
+                        .conflict_resolver
+                        .conflict_has_base
+                        .get(range_ix)
+                        .copied()
+                        .unwrap_or(false);
                     let selected_choices =
                         this.conflict_resolver_selected_choices_for_conflict_ix(range_ix);
                     let context_menu_invoker: SharedString =
@@ -285,11 +210,26 @@ impl MainPaneView {
                     let base_line = this.conflict_resolver.three_way_base_lines.get(ix);
                     let ours_line = this.conflict_resolver.three_way_ours_lines.get(ix);
                     let theirs_line = this.conflict_resolver.three_way_theirs_lines.get(ix);
-                    let base_range_ix = conflict_range_for_line(&conflict_ranges.base, ix)
+                    let base_range_ix = this
+                        .conflict_resolver
+                        .three_way_base_line_conflict_map
+                        .get(ix)
+                        .copied()
+                        .flatten()
                         .filter(|_| base_line.is_some());
-                    let ours_range_ix = conflict_range_for_line(&conflict_ranges.ours, ix)
+                    let ours_range_ix = this
+                        .conflict_resolver
+                        .three_way_ours_line_conflict_map
+                        .get(ix)
+                        .copied()
+                        .flatten()
                         .filter(|_| ours_line.is_some());
-                    let theirs_range_ix = conflict_range_for_line(&conflict_ranges.theirs, ix)
+                    let theirs_range_ix = this
+                        .conflict_resolver
+                        .three_way_theirs_line_conflict_map
+                        .get(ix)
+                        .copied()
+                        .flatten()
                         .filter(|_| theirs_line.is_some());
                     let is_in_conflict = base_range_ix.is_some()
                         || ours_range_ix.is_some()
@@ -451,7 +391,12 @@ impl MainPaneView {
                         ));
 
                     if let Some(conflict_ix) = base_range_ix {
-                        let has_base = conflict_has_base.get(conflict_ix).copied().unwrap_or(false);
+                        let has_base = this
+                            .conflict_resolver
+                            .conflict_has_base
+                            .get(conflict_ix)
+                            .copied()
+                            .unwrap_or(false);
                         let selected_choices =
                             this.conflict_resolver_selected_choices_for_conflict_ix(conflict_ix);
                         let context_menu_invoker: SharedString =
@@ -476,7 +421,12 @@ impl MainPaneView {
                         );
                     }
                     if let Some(conflict_ix) = ours_range_ix {
-                        let has_base = conflict_has_base.get(conflict_ix).copied().unwrap_or(false);
+                        let has_base = this
+                            .conflict_resolver
+                            .conflict_has_base
+                            .get(conflict_ix)
+                            .copied()
+                            .unwrap_or(false);
                         let selected_choices =
                             this.conflict_resolver_selected_choices_for_conflict_ix(conflict_ix);
                         let context_menu_invoker: SharedString =
@@ -501,7 +451,12 @@ impl MainPaneView {
                         );
                     }
                     if let Some(conflict_ix) = theirs_range_ix {
-                        let has_base = conflict_has_base.get(conflict_ix).copied().unwrap_or(false);
+                        let has_base = this
+                            .conflict_resolver
+                            .conflict_has_base
+                            .get(conflict_ix)
+                            .copied()
+                            .unwrap_or(false);
                         let selected_choices =
                             this.conflict_resolver_selected_choices_for_conflict_ix(conflict_ix);
                         let context_menu_invoker: SharedString = format!(
@@ -693,10 +648,12 @@ impl MainPaneView {
                             ),
                     );
                 if let Some(marker) = conflict_marker {
-                    let has_base = conflict_has_base(
-                        &this.conflict_resolver.marker_segments,
-                        marker.conflict_ix,
-                    );
+                    let has_base = this
+                        .conflict_resolver
+                        .conflict_has_base
+                        .get(marker.conflict_ix)
+                        .copied()
+                        .unwrap_or(false);
                     let is_three_way =
                         this.conflict_resolver.view_mode == ConflictResolverViewMode::ThreeWay;
                     let selected_choices =
@@ -1197,7 +1154,12 @@ impl MainPaneView {
                 show_ws,
             ));
         if let Some(conflict_ix) = conflict_ix {
-            let has_base = conflict_has_base(&self.conflict_resolver.marker_segments, conflict_ix);
+            let has_base = self
+                .conflict_resolver
+                .conflict_has_base
+                .get(conflict_ix)
+                .copied()
+                .unwrap_or(false);
             let selected_choices =
                 self.conflict_resolver_selected_choices_for_conflict_ix(conflict_ix);
             let context_menu_invoker: SharedString = format!(
@@ -1254,7 +1216,12 @@ impl MainPaneView {
                 show_ws,
             ));
         if let Some(conflict_ix) = conflict_ix {
-            let has_base = conflict_has_base(&self.conflict_resolver.marker_segments, conflict_ix);
+            let has_base = self
+                .conflict_resolver
+                .conflict_has_base
+                .get(conflict_ix)
+                .copied()
+                .unwrap_or(false);
             let selected_choices =
                 self.conflict_resolver_selected_choices_for_conflict_ix(conflict_ix);
             let context_menu_invoker: SharedString = format!(
@@ -1396,7 +1363,12 @@ impl MainPaneView {
                 show_ws,
             ));
         if let Some(conflict_ix) = conflict_ix {
-            let has_base = conflict_has_base(&self.conflict_resolver.marker_segments, conflict_ix);
+            let has_base = self
+                .conflict_resolver
+                .conflict_has_base
+                .get(conflict_ix)
+                .copied()
+                .unwrap_or(false);
             let selected_choices =
                 self.conflict_resolver_selected_choices_for_conflict_ix(conflict_ix);
             let context_menu_invoker: SharedString =

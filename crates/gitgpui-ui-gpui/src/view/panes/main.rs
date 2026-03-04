@@ -3308,9 +3308,10 @@ impl MainPaneView {
             conflict_resolver::ThreeWayVisibleItem::CollapsedBlock(ri) => Some(*ri),
             conflict_resolver::ThreeWayVisibleItem::Line(line_ix) => self
                 .conflict_resolver
-                .three_way_conflict_ranges
-                .iter()
-                .position(|r| r.contains(line_ix)),
+                .three_way_ours_line_conflict_map
+                .get(*line_ix)
+                .copied()
+                .flatten(),
         }
     }
 
@@ -3637,27 +3638,12 @@ impl MainPaneView {
             .max(three_way_ours_lines.len())
             .max(three_way_theirs_lines.len());
 
-        let three_way_conflict_ranges = {
-            let mut ranges = Vec::new();
-            let mut line_offset = 0usize;
-            for seg in &marker_segments {
-                match seg {
-                    conflict_resolver::ConflictSegment::Text(text) => {
-                        line_offset += text.lines().count();
-                    }
-                    conflict_resolver::ConflictSegment::Block(block) => {
-                        let count = if block.ours.is_empty() {
-                            0
-                        } else {
-                            block.ours.lines().count()
-                        };
-                        ranges.push(line_offset..line_offset + count);
-                        line_offset += count;
-                    }
-                }
-            }
-            ranges
-        };
+        let three_way_conflict_maps = conflict_resolver::build_three_way_conflict_maps(
+            &marker_segments,
+            three_way_base_lines.len(),
+            three_way_ours_lines.len(),
+            three_way_theirs_lines.len(),
+        );
 
         let view_mode = if self.conflict_resolver.repo_id == Some(repo_id)
             && self.conflict_resolver.path.as_ref() == Some(&path)
@@ -3731,7 +3717,7 @@ impl MainPaneView {
 
         let three_way_visible_map = conflict_resolver::build_three_way_visible_map(
             three_way_len,
-            &three_way_conflict_ranges,
+            &three_way_conflict_maps.conflict_ranges,
             &marker_segments,
             hide_resolved,
         );
@@ -3762,7 +3748,11 @@ impl MainPaneView {
             three_way_ours_lines,
             three_way_theirs_lines,
             three_way_len,
-            three_way_conflict_ranges,
+            three_way_conflict_ranges: three_way_conflict_maps.conflict_ranges,
+            three_way_base_line_conflict_map: three_way_conflict_maps.base_line_conflict_map,
+            three_way_ours_line_conflict_map: three_way_conflict_maps.ours_line_conflict_map,
+            three_way_theirs_line_conflict_map: three_way_conflict_maps.theirs_line_conflict_map,
+            conflict_has_base: three_way_conflict_maps.conflict_has_base,
             three_way_word_highlights_base,
             three_way_word_highlights_ours,
             three_way_word_highlights_theirs,
@@ -3870,28 +3860,12 @@ impl MainPaneView {
         // Read hide_resolved from state (authoritative source).
         let hide_resolved = repo.conflict_hide_resolved;
 
-        // Recompute three-way conflict ranges from updated marker segments.
-        let three_way_conflict_ranges = {
-            let mut ranges = Vec::new();
-            let mut line_offset = 0usize;
-            for seg in &marker_segments {
-                match seg {
-                    conflict_resolver::ConflictSegment::Text(text) => {
-                        line_offset += text.lines().count();
-                    }
-                    conflict_resolver::ConflictSegment::Block(block) => {
-                        let count = if block.ours.is_empty() {
-                            0
-                        } else {
-                            block.ours.lines().count()
-                        };
-                        ranges.push(line_offset..line_offset + count);
-                        line_offset += count;
-                    }
-                }
-            }
-            ranges
-        };
+        let three_way_conflict_maps = conflict_resolver::build_three_way_conflict_maps(
+            &marker_segments,
+            self.conflict_resolver.three_way_base_lines.len(),
+            self.conflict_resolver.three_way_ours_lines.len(),
+            self.conflict_resolver.three_way_theirs_lines.len(),
+        );
 
         // Recompute row→conflict maps using existing diff/inline rows.
         let (diff_row_conflict_map, inline_row_conflict_map) =
@@ -3904,7 +3878,7 @@ impl MainPaneView {
         // Rebuild visible maps.
         let three_way_visible_map = conflict_resolver::build_three_way_visible_map(
             self.conflict_resolver.three_way_len,
-            &three_way_conflict_ranges,
+            &three_way_conflict_maps.conflict_ranges,
             &marker_segments,
             hide_resolved,
         );
@@ -3933,7 +3907,14 @@ impl MainPaneView {
         self.conflict_resolver.marker_segments = marker_segments;
         self.conflict_resolver.conflict_region_indices = conflict_region_indices;
         self.conflict_resolver.hide_resolved = hide_resolved;
-        self.conflict_resolver.three_way_conflict_ranges = three_way_conflict_ranges;
+        self.conflict_resolver.three_way_conflict_ranges = three_way_conflict_maps.conflict_ranges;
+        self.conflict_resolver.three_way_base_line_conflict_map =
+            three_way_conflict_maps.base_line_conflict_map;
+        self.conflict_resolver.three_way_ours_line_conflict_map =
+            three_way_conflict_maps.ours_line_conflict_map;
+        self.conflict_resolver.three_way_theirs_line_conflict_map =
+            three_way_conflict_maps.theirs_line_conflict_map;
+        self.conflict_resolver.conflict_has_base = three_way_conflict_maps.conflict_has_base;
         self.conflict_resolver.three_way_visible_map = three_way_visible_map;
         self.conflict_resolver.diff_row_conflict_map = diff_row_conflict_map;
         self.conflict_resolver.inline_row_conflict_map = inline_row_conflict_map;
@@ -4042,6 +4023,20 @@ impl MainPaneView {
     }
 
     fn conflict_resolver_rebuild_visible_map(&mut self) {
+        let three_way_conflict_maps = conflict_resolver::build_three_way_conflict_maps(
+            &self.conflict_resolver.marker_segments,
+            self.conflict_resolver.three_way_base_lines.len(),
+            self.conflict_resolver.three_way_ours_lines.len(),
+            self.conflict_resolver.three_way_theirs_lines.len(),
+        );
+        self.conflict_resolver.three_way_conflict_ranges = three_way_conflict_maps.conflict_ranges;
+        self.conflict_resolver.three_way_base_line_conflict_map =
+            three_way_conflict_maps.base_line_conflict_map;
+        self.conflict_resolver.three_way_ours_line_conflict_map =
+            three_way_conflict_maps.ours_line_conflict_map;
+        self.conflict_resolver.three_way_theirs_line_conflict_map =
+            three_way_conflict_maps.theirs_line_conflict_map;
+        self.conflict_resolver.conflict_has_base = three_way_conflict_maps.conflict_has_base;
         self.conflict_resolver.three_way_visible_map =
             conflict_resolver::build_three_way_visible_map(
                 self.conflict_resolver.three_way_len,

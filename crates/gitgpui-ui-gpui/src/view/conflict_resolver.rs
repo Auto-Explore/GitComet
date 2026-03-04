@@ -990,6 +990,111 @@ fn row_conflict_index_for_lines(
     })
 }
 
+fn text_line_count_usize(text: &str) -> usize {
+    if text.is_empty() {
+        0
+    } else {
+        text.lines().count()
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ThreeWayConflictMaps {
+    pub conflict_ranges: Vec<std::ops::Range<usize>>,
+    pub base_line_conflict_map: Vec<Option<usize>>,
+    pub ours_line_conflict_map: Vec<Option<usize>>,
+    pub theirs_line_conflict_map: Vec<Option<usize>>,
+    pub conflict_has_base: Vec<bool>,
+}
+
+/// Build per-column line-to-conflict maps for three-way conflict rendering.
+///
+/// The returned `conflict_ranges` follow the legacy behavior and are expressed
+/// in the ours-column line space. The line maps provide O(1) conflict lookup
+/// for each column at render/navigation time.
+pub fn build_three_way_conflict_maps(
+    segments: &[ConflictSegment],
+    base_line_count: usize,
+    ours_line_count: usize,
+    theirs_line_count: usize,
+) -> ThreeWayConflictMaps {
+    let block_count = segments
+        .iter()
+        .filter(|segment| matches!(segment, ConflictSegment::Block(_)))
+        .count();
+    let mut maps = ThreeWayConflictMaps {
+        conflict_ranges: Vec::with_capacity(block_count),
+        base_line_conflict_map: vec![None; base_line_count],
+        ours_line_conflict_map: vec![None; ours_line_count],
+        theirs_line_conflict_map: vec![None; theirs_line_count],
+        conflict_has_base: Vec::with_capacity(block_count),
+    };
+
+    fn mark_range(map: &mut [Option<usize>], start: usize, end: usize, conflict_ix: usize) {
+        if map.is_empty() {
+            return;
+        }
+        let from = start.min(map.len());
+        let to = end.min(map.len());
+        for slot in &mut map[from..to] {
+            *slot = Some(conflict_ix);
+        }
+    }
+
+    let mut base_offset = 0usize;
+    let mut ours_offset = 0usize;
+    let mut theirs_offset = 0usize;
+    let mut conflict_ix = 0usize;
+    for segment in segments {
+        match segment {
+            ConflictSegment::Text(text) => {
+                let line_count = text_line_count_usize(text);
+                base_offset = base_offset.saturating_add(line_count);
+                ours_offset = ours_offset.saturating_add(line_count);
+                theirs_offset = theirs_offset.saturating_add(line_count);
+            }
+            ConflictSegment::Block(block) => {
+                let base_count = text_line_count_usize(block.base.as_deref().unwrap_or_default());
+                let ours_count = text_line_count_usize(&block.ours);
+                let theirs_count = text_line_count_usize(&block.theirs);
+
+                let base_end = base_offset.saturating_add(base_count);
+                let ours_end = ours_offset.saturating_add(ours_count);
+                let theirs_end = theirs_offset.saturating_add(theirs_count);
+
+                maps.conflict_ranges.push(ours_offset..ours_end);
+                maps.conflict_has_base.push(block.base.is_some());
+
+                mark_range(
+                    &mut maps.base_line_conflict_map,
+                    base_offset,
+                    base_end,
+                    conflict_ix,
+                );
+                mark_range(
+                    &mut maps.ours_line_conflict_map,
+                    ours_offset,
+                    ours_end,
+                    conflict_ix,
+                );
+                mark_range(
+                    &mut maps.theirs_line_conflict_map,
+                    theirs_offset,
+                    theirs_end,
+                    conflict_ix,
+                );
+
+                base_offset = base_end;
+                ours_offset = ours_end;
+                theirs_offset = theirs_end;
+                conflict_ix = conflict_ix.saturating_add(1);
+            }
+        }
+    }
+
+    maps
+}
+
 /// Build conflict-index maps for two-way split and inline rows.
 ///
 /// Each output entry is `Some(conflict_index)` when the row belongs to a marker
@@ -3409,6 +3514,69 @@ theirs only line
 
         assert_eq!(split_map, vec![Some(0)]);
         assert_eq!(inline_map, vec![Some(0)]);
+    }
+
+    #[test]
+    fn build_three_way_conflict_maps_tracks_column_conflict_indices() {
+        let markers = concat!(
+            "ctx\n",
+            "<<<<<<< HEAD\n",
+            "ours-a\nours-b\n",
+            "||||||| base\n",
+            "base-a\n",
+            "=======\n",
+            "theirs-a\n",
+            ">>>>>>> other\n",
+            "mid\n",
+            "<<<<<<< HEAD\n",
+            "ours-c\n",
+            "||||||| base\n",
+            "base-b\nbase-c\n",
+            "=======\n",
+            "theirs-b\ntheirs-c\n",
+            ">>>>>>> other\n",
+            "tail\n",
+        );
+        let segments = parse_conflict_markers(markers);
+        let maps = build_three_way_conflict_maps(&segments, 6, 6, 6);
+
+        assert_eq!(maps.conflict_ranges, vec![1..3, 4..5]);
+        assert_eq!(
+            maps.base_line_conflict_map,
+            vec![None, Some(0), None, Some(1), Some(1), None]
+        );
+        assert_eq!(
+            maps.ours_line_conflict_map,
+            vec![None, Some(0), Some(0), None, Some(1), None]
+        );
+        assert_eq!(
+            maps.theirs_line_conflict_map,
+            vec![None, Some(0), None, Some(1), Some(1), None]
+        );
+        assert_eq!(maps.conflict_has_base, vec![true, true]);
+    }
+
+    #[test]
+    fn build_three_way_conflict_maps_handles_single_sided_and_no_base_blocks() {
+        let markers = concat!(
+            "ctx\n",
+            "<<<<<<< HEAD\n",
+            "=======\n",
+            "theirs-a\ntheirs-b\n",
+            ">>>>>>> other\n",
+            "tail\n",
+        );
+        let segments = parse_conflict_markers(markers);
+        let maps = build_three_way_conflict_maps(&segments, 3, 2, 4);
+
+        assert_eq!(maps.conflict_ranges, vec![1..1]);
+        assert_eq!(maps.base_line_conflict_map, vec![None, None, None]);
+        assert_eq!(maps.ours_line_conflict_map, vec![None, None]);
+        assert_eq!(
+            maps.theirs_line_conflict_map,
+            vec![None, Some(0), Some(0), None]
+        );
+        assert_eq!(maps.conflict_has_base, vec![false]);
     }
 
     #[test]

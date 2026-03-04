@@ -6,17 +6,17 @@
 
 - P0
   - ✅ Resolved output gutter virtualization (`uniform_list` + shared `conflict_resolved_preview_scroll`)
-  - 🔧 Render-time recomputation in conflict hot paths (two-way map/range rebuilds removed from render/nav; three-way range scans still pending)
+  - ✅ Render-time recomputation in conflict hot paths (two-way + three-way line/conflict maps precomputed in state; render/nav now use O(1) lookups)
   - ⬜ Conflict rows on canvas fast path (fallback renderer still primary)
 - P1
   - ⬜ Syntax mode/language caching in conflict renderers
   - ⬜ Cache invalidation scope reduction (search typing + split resize)
 - P2
-  - 🔧 Precomputed state usage improved (two-way row/conflict maps in state); additional three-way render indices/maps still pending
+  - ✅ Precomputed state usage improved (two-way row/conflict maps + three-way column line maps in state)
 
 ### Phase Status
 
-- 🔧 Phase 1 (2/3 complete: gutter virtualization + two-way conflict map precompute done; three-way line map precompute pending)
+- ✅ Phase 1 (3/3 complete: gutter virtualization + two-way/three-way conflict map precompute + render-time map/range rebuild removal)
 - ⬜ Phase 2
 - ⬜ Phase 3
 - ⬜ Phase 4
@@ -31,6 +31,10 @@
   - before: `diff_scroll/style_window/200` = `2.1763 ms .. 2.1908 ms`
   - after: `diff_scroll/style_window/200` = `2.2042 ms .. 2.2140 ms`
   - note: criterion reported "Change within noise threshold"; this benchmark still does not isolate conflict resolver map lookup improvements directly.
+- 2026-03-04 (`cargo bench -p gitgpui-ui-gpui --bench performance -- diff_scroll/style_window`)
+  - before: `diff_scroll/style_window/200` = `2.2042 ms .. 2.2140 ms`
+  - after: `diff_scroll/style_window/200` = `2.1486 ms .. 2.1521 ms`
+  - note: criterion reported `Performance has improved` (~2.17%..2.88% faster); benchmark remains generic diff styling and does not isolate three-way conflict render lookups directly.
 
 ## Context
 
@@ -99,9 +103,9 @@ Implementation anchors:
 
 ### P0: Render-time recomputation in hot paths
 
-Status: 🔧 Partially implemented (iteration 2, 2026-03-04): two-way row/conflict maps are now precomputed in `ConflictResolverUiState` and reused by render/navigation; three-way per-line range scans are still render-time.
+Status: ✅ Implemented (iteration 3, 2026-03-04): two-way and three-way row/line conflict mappings are precomputed in `ConflictResolverUiState` and reused by render/navigation.
 
-Evidence (three-way):
+Historical evidence (three-way, before iteration 3):
 
 - `crates/gitgpui-ui-gpui/src/view/rows/conflict_resolver.rs:85` calls `build_three_way_column_conflict_ranges(...)` inside render
 - `crates/gitgpui-ui-gpui/src/view/rows/conflict_resolver.rs:59` uses `position()` scan per line (`conflict_range_for_line`)
@@ -128,7 +132,7 @@ State integration anchors:
 
 - state struct: `crates/gitgpui-ui-gpui/src/view/mod.rs:462`
 - state build path: `crates/gitgpui-ui-gpui/src/view/panes/main.rs:3633` and `:3750`
-- mapping helpers: `crates/gitgpui-ui-gpui/src/view/conflict_resolver.rs:953` and `:997`
+- mapping helpers: `crates/gitgpui-ui-gpui/src/view/conflict_resolver.rs:997` and `:1062`
 
 ### P0: Conflict rows are not on the canvas fast path
 
