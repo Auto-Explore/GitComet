@@ -10,7 +10,7 @@
   - ✅ Conflict rows on canvas fast path (two-way + three-way resolver rows and conflict compare split/inline rows now on keyed canvas behind `GITGPUI_CONFLICT_CANVAS_ROWS`, with fallback preserved)
 - P1
   - ✅ Syntax mode/language caching in conflict renderers (cached per-file language in `ConflictResolverUiState` + per-batch syntax mode gating in conflict compare/resolver + three-way rows)
-  - 🔧 Cache invalidation scope reduction (split-resize cache churn removed; search-typing cache-layer split pending)
+  - ✅ Cache invalidation scope reduction (split-resize cache churn removed; conflict split/inline search typing now uses stable base caches + volatile query overlay caches)
 - P2
   - ✅ Precomputed state usage improved (two-way row/conflict maps + three-way column line maps in state)
 
@@ -18,11 +18,19 @@
 
 - ✅ Phase 1 (3/3 complete: gutter virtualization + two-way/three-way conflict map precompute + render-time map/range rebuild removal)
 - ✅ Phase 2 (3/3 complete: two-way + three-way conflict resolver and compare keyed canvas paths + fallback flag)
-- 🔧 Phase 3 (1/2 complete: syntax mode/language caching done; split-resize invalidation narrowed; search-typing invalidation scope reduction pending)
+- ✅ Phase 3 (2/2 complete: syntax mode/language caching done; split-resize + conflict search-typing invalidation now narrowed to volatile query overlays)
 - ⬜ Phase 4
 
 ### Benchmark Notes
 
+- 2026-03-05 (`cargo bench -p gitgpui-ui-gpui --bench performance -- diff_scroll/style_window`)
+  - before: `diff_scroll/style_window/200` = `2.1872 ms .. 2.1997 ms`
+  - after: `diff_scroll/style_window/200` = `2.1837 ms .. 2.1955 ms`
+  - note: criterion reported "No change in performance detected" (estimated `-0.1778% .. +1.1635%`); this benchmark remains generic diff styling and does not isolate conflict search typing overlays directly.
+- 2026-03-05 (`cargo bench -p gitgpui-ui-gpui --bench performance -- diff_scroll/style_window`)
+  - before: `diff_scroll/style_window/200` = `2.1421 ms .. 2.1472 ms`
+  - after: `diff_scroll/style_window/200` = `2.1872 ms .. 2.1997 ms`
+  - note: criterion reported "Change within noise threshold" (estimated `+0.1954% .. +0.8947%`); this harness is generic diff styling and still does not isolate conflict search-typing overlay cache behavior directly.
 - 2026-03-05 (`cargo bench -p gitgpui-ui-gpui --bench performance -- diff_scroll/style_window`)
   - before: `diff_scroll/style_window/200` = `2.1486 ms .. 2.1521 ms`
   - after: `diff_scroll/style_window/200` = `2.1421 ms .. 2.1472 ms`
@@ -222,14 +230,12 @@ Implementation anchors:
 
 ### P1: Cache invalidation is broad and frequent
 
-Status: 🔧 Partially implemented (iteration 8, 2026-03-05): split conflict resize drag no longer clears `conflict_diff_segments_cache_split` on each move; search typing cache-layer split/volatile overlay invalidation is still pending.
+Status: ✅ Implemented (iteration 9, 2026-03-05): split conflict resize drag no longer clears split caches on each move, and conflict split/inline search typing now invalidates only volatile query overlays while retaining stable syntax/word styled-text caches.
 
 Evidence:
 
-- on each diff search text change, multiple caches are fully cleared:
-  - `crates/gitgpui-ui-gpui/src/view/panes/main.rs:1785` to `:1789`
-- historical (before iteration 8): during split resize drag, split conflict style cache was cleared each move:
-  - `crates/gitgpui-ui-gpui/src/view/panels/main.rs:1541` to `:1542`
+- historical (before iteration 9): diff search text changes cleared conflict split/inline styled caches.
+- historical (before iteration 8): split resize drag cleared split conflict style cache each move.
 
 Impact:
 
@@ -244,10 +250,12 @@ Fix:
 - invalidate only volatile layer on each query keystroke
 - for split resize, avoid full text-style cache clears; only invalidate geometry-dependent artifacts
 
-Implementation anchors (iteration 8):
+Implementation anchors:
 
-- resize ratio helper: `crates/gitgpui-ui-gpui/src/view/panels/main.rs`
-- split drag move path (cache clear removed): `crates/gitgpui-ui-gpui/src/view/panels/main.rs`
+- resize ratio helper + drag invalidation scope: `crates/gitgpui-ui-gpui/src/view/panels/main.rs`
+- query overlay cache state + targeted search invalidation: `crates/gitgpui-ui-gpui/src/view/panes/main.rs`
+- split/inline stable-cache + query-overlay composition: `crates/gitgpui-ui-gpui/src/view/rows/conflict_resolver.rs`
+- query overlay composer: `crates/gitgpui-ui-gpui/src/view/rows/diff_text.rs`
 
 ### P2: Precomputed state is underused
 

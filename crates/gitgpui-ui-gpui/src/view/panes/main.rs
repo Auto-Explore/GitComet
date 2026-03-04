@@ -1537,6 +1537,11 @@ pub(in super::super) struct MainPaneView {
     pub(in super::super) conflict_diff_segments_cache_split:
         HashMap<(usize, ConflictPickSide), CachedDiffStyledText>,
     pub(in super::super) conflict_diff_segments_cache_inline: HashMap<usize, CachedDiffStyledText>,
+    pub(in super::super) conflict_diff_query_segments_cache_split:
+        HashMap<(usize, ConflictPickSide), CachedDiffStyledText>,
+    pub(in super::super) conflict_diff_query_segments_cache_inline:
+        HashMap<usize, CachedDiffStyledText>,
+    pub(in super::super) conflict_diff_query_cache_query: SharedString,
     pub(in super::super) conflict_three_way_segments_cache:
         HashMap<(usize, ThreeWayColumn), CachedDiffStyledText>,
     pub(in super::super) conflict_resolved_preview_path: Option<std::path::PathBuf>,
@@ -1799,8 +1804,7 @@ impl MainPaneView {
                 this.diff_text_segments_cache.clear();
                 this.worktree_preview_segments_cache_path = None;
                 this.worktree_preview_segments_cache.clear();
-                this.conflict_diff_segments_cache_split.clear();
-                this.conflict_diff_segments_cache_inline.clear();
+                this.clear_conflict_diff_query_overlay_caches();
                 this.diff_search_recompute_matches();
                 cx.notify();
             }
@@ -1933,6 +1937,9 @@ impl MainPaneView {
             conflict_canvas_rows_enabled: conflict_canvas_rows_enabled_from_env(),
             conflict_diff_segments_cache_split: HashMap::default(),
             conflict_diff_segments_cache_inline: HashMap::default(),
+            conflict_diff_query_segments_cache_split: HashMap::default(),
+            conflict_diff_query_segments_cache_inline: HashMap::default(),
+            conflict_diff_query_cache_query: SharedString::default(),
             conflict_three_way_segments_cache: HashMap::default(),
             conflict_resolved_preview_path: None,
             conflict_resolved_preview_source_hash: None,
@@ -1960,6 +1967,9 @@ impl MainPaneView {
         self.worktree_preview_segments_cache.clear();
         self.conflict_diff_segments_cache_split.clear();
         self.conflict_diff_segments_cache_inline.clear();
+        self.conflict_diff_query_segments_cache_split.clear();
+        self.conflict_diff_query_segments_cache_inline.clear();
+        self.conflict_diff_query_cache_query = SharedString::default();
         self.conflict_resolved_preview_segments_cache.clear();
         self.diff_raw_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
@@ -1981,6 +1991,26 @@ impl MainPaneView {
         self.history_view
             .update(cx, |view, cx| view.set_theme(theme, cx));
         cx.notify();
+    }
+
+    pub(in super::super) fn clear_conflict_diff_query_overlay_caches(&mut self) {
+        self.conflict_diff_query_segments_cache_split.clear();
+        self.conflict_diff_query_segments_cache_inline.clear();
+        self.conflict_diff_query_cache_query = SharedString::default();
+    }
+
+    pub(in super::super) fn sync_conflict_diff_query_overlay_caches(&mut self, query: &str) {
+        if self.conflict_diff_query_cache_query.as_ref() != query {
+            self.conflict_diff_query_cache_query = query.to_string().into();
+            self.conflict_diff_query_segments_cache_split.clear();
+            self.conflict_diff_query_segments_cache_inline.clear();
+        }
+    }
+
+    pub(in super::super) fn clear_conflict_diff_style_caches(&mut self) {
+        self.conflict_diff_segments_cache_split.clear();
+        self.conflict_diff_segments_cache_inline.clear();
+        self.clear_conflict_diff_query_overlay_caches();
     }
 
     fn conflict_resolver_invalidate_resolved_outline(&mut self) {
@@ -3540,6 +3570,9 @@ impl MainPaneView {
 
         self.conflict_diff_segments_cache_split.clear();
         self.conflict_diff_segments_cache_inline.clear();
+        self.conflict_diff_query_segments_cache_split.clear();
+        self.conflict_diff_query_segments_cache_inline.clear();
+        self.conflict_diff_query_cache_query = SharedString::default();
 
         // Use the ConflictSession from state for strategy if available,
         // otherwise fall back to local computation.
@@ -3940,11 +3973,10 @@ impl MainPaneView {
         self.conflict_resolver.diff_visible_row_indices = diff_visible_row_indices;
         self.conflict_resolver.inline_visible_row_indices = inline_visible_row_indices;
         self.conflict_resolver.active_conflict = active_conflict;
-        self.conflict_resolver.conflict_syntax_language = self
-            .conflict_resolver
-            .path
-            .as_ref()
-            .and_then(|path| rows::diff_syntax_language_for_path(path.to_string_lossy().as_ref()));
+        self.conflict_resolver.conflict_syntax_language =
+            self.conflict_resolver.path.as_ref().and_then(|path| {
+                rows::diff_syntax_language_for_path(path.to_string_lossy().as_ref())
+            });
         if self
             .conflict_resolver
             .hovered_conflict
@@ -3955,8 +3987,7 @@ impl MainPaneView {
         self.conflict_resolver.conflict_rev = new_rev;
 
         // Clear segment caches since marker_segments changed.
-        self.conflict_diff_segments_cache_split.clear();
-        self.conflict_diff_segments_cache_inline.clear();
+        self.clear_conflict_diff_style_caches();
         self.conflict_three_way_segments_cache.clear();
 
         // Update the resolved text input.

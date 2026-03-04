@@ -270,12 +270,7 @@ pub(super) fn build_cached_diff_styled_text(
         };
     }
 
-    let mut hasher = DefaultHasher::new();
-    for (range, style) in &highlights {
-        range.hash(&mut hasher);
-        style.hash(&mut hasher);
-    }
-    let highlights_hash = hasher.finish();
+    let highlights_hash = hash_highlights(&highlights);
 
     CachedDiffStyledText {
         text: expanded_text,
@@ -283,6 +278,109 @@ pub(super) fn build_cached_diff_styled_text(
         highlights_hash,
         text_hash,
     }
+}
+
+pub(super) fn build_cached_diff_query_overlay_styled_text(
+    theme: AppTheme,
+    base: &CachedDiffStyledText,
+    query: &str,
+) -> CachedDiffStyledText {
+    let query = query.trim();
+    if query.is_empty() || base.text.is_empty() {
+        return base.clone();
+    }
+
+    let query_ranges = find_all_ascii_case_insensitive(base.text.as_ref(), query);
+    if query_ranges.is_empty() {
+        return base.clone();
+    }
+
+    let base_highlights = base.highlights.as_ref();
+    let mut boundaries: Vec<usize> =
+        Vec::with_capacity(2 + base_highlights.len() * 2 + query_ranges.len() * 2);
+    boundaries.push(0);
+    boundaries.push(base.text.len());
+    for (range, _) in base_highlights {
+        boundaries.push(range.start.min(base.text.len()));
+        boundaries.push(range.end.min(base.text.len()));
+    }
+    for range in &query_ranges {
+        boundaries.push(range.start.min(base.text.len()));
+        boundaries.push(range.end.min(base.text.len()));
+    }
+    boundaries.sort_unstable();
+    boundaries.dedup();
+
+    let query_bg = with_alpha(theme.colors.accent, if theme.is_dark { 0.22 } else { 0.16 }).into();
+    let mut merged: Vec<(Range<usize>, gpui::HighlightStyle)> =
+        Vec::with_capacity(boundaries.len().saturating_sub(1));
+    let mut base_ix = 0usize;
+    let mut query_ix = 0usize;
+    let default_style = gpui::HighlightStyle::default();
+
+    for window in boundaries.windows(2) {
+        let (a, b) = (window[0], window[1]);
+        if a >= b || a >= base.text.len() {
+            continue;
+        }
+        let b = b.min(base.text.len());
+        if a >= b {
+            continue;
+        }
+
+        while base_ix < base_highlights.len() && base_highlights[base_ix].0.end <= a {
+            base_ix += 1;
+        }
+        let base_style = base_highlights
+            .get(base_ix)
+            .filter(|(range, _)| range.start <= a && range.end >= b)
+            .map(|(_, style)| *style);
+
+        while query_ix < query_ranges.len() && query_ranges[query_ix].end <= a {
+            query_ix += 1;
+        }
+        let in_query = query_ranges
+            .get(query_ix)
+            .is_some_and(|range| range.start <= a && range.end >= b);
+
+        let mut style = base_style.unwrap_or_default();
+        if in_query {
+            style.background_color = Some(query_bg);
+        }
+
+        if style != default_style {
+            merged.push((a..b, style));
+        }
+    }
+
+    if merged.is_empty() {
+        return CachedDiffStyledText {
+            text: base.text.clone(),
+            highlights: empty_highlights(),
+            highlights_hash: 0,
+            text_hash: base.text_hash,
+        };
+    }
+
+    let highlights_hash = hash_highlights(&merged);
+    CachedDiffStyledText {
+        text: base.text.clone(),
+        highlights: Arc::new(merged),
+        highlights_hash,
+        text_hash: base.text_hash,
+    }
+}
+
+fn hash_highlights(highlights: &[(Range<usize>, gpui::HighlightStyle)]) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = DefaultHasher::new();
+    for (range, style) in highlights {
+        range.hash(&mut hasher);
+        style.hash(&mut hasher);
+    }
+    hasher.finish()
 }
 
 fn mix_colors(a: gpui::Rgba, b: gpui::Rgba, t: f32) -> gpui::Rgba {
@@ -337,8 +435,10 @@ pub(in crate::view) fn syntax_highlights_for_line(
                 return None;
             }
             let fg = syntax_highlight_color(theme, token.kind)?;
-            let mut style = gpui::HighlightStyle::default();
-            style.color = Some(fg.into());
+            let style = gpui::HighlightStyle {
+                color: Some(fg.into()),
+                ..gpui::HighlightStyle::default()
+            };
             Some((token.range.start..end, style))
         })
         .collect()
@@ -593,5 +693,63 @@ mod tests {
         assert_eq!(highlights.len(), 1);
         assert_eq!(highlights[0].0, 0..2);
         assert_ne!(highlights[0].1.color, Some(theme.colors.accent.into()));
+    }
+
+    #[test]
+    fn query_overlay_reuses_base_when_query_is_empty_or_missing() {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        let theme = AppTheme::zed_ayu_dark();
+        let text: SharedString = "abcdef".into();
+        let mut text_hasher = DefaultHasher::new();
+        text.as_ref().hash(&mut text_hasher);
+        let text_hash = text_hasher.finish();
+        let mut style = gpui::HighlightStyle::default();
+        style.color = Some(theme.colors.text.into());
+        let base = CachedDiffStyledText {
+            text,
+            highlights: Arc::new(vec![(0..6, style)]),
+            highlights_hash: 42,
+            text_hash,
+        };
+
+        let empty_query = build_cached_diff_query_overlay_styled_text(theme, &base, "");
+        assert!(Arc::ptr_eq(&empty_query.highlights, &base.highlights));
+        assert_eq!(empty_query.highlights_hash, base.highlights_hash);
+
+        let missing_query = build_cached_diff_query_overlay_styled_text(theme, &base, "xyz");
+        assert!(Arc::ptr_eq(&missing_query.highlights, &base.highlights));
+        assert_eq!(missing_query.highlights_hash, base.highlights_hash);
+    }
+
+    #[test]
+    fn query_overlay_adds_background_without_losing_existing_color() {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        let theme = AppTheme::zed_ayu_dark();
+        let text: SharedString = "abcdef".into();
+        let mut text_hasher = DefaultHasher::new();
+        text.as_ref().hash(&mut text_hasher);
+        let text_hash = text_hasher.finish();
+        let mut style = gpui::HighlightStyle::default();
+        style.color = Some(theme.colors.warning.into());
+        let base = CachedDiffStyledText {
+            text,
+            highlights: Arc::new(vec![(0..6, style)]),
+            highlights_hash: 7,
+            text_hash,
+        };
+
+        let overlaid = build_cached_diff_query_overlay_styled_text(theme, &base, "cd");
+        assert_eq!(overlaid.highlights.len(), 3);
+        assert_eq!(overlaid.highlights[1].0, 2..4);
+        assert_eq!(
+            overlaid.highlights[1].1.color,
+            Some(theme.colors.warning.into())
+        );
+        assert!(overlaid.highlights[1].1.background_color.is_some());
+        assert_ne!(overlaid.highlights_hash, base.highlights_hash);
     }
 }

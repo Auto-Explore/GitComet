@@ -675,8 +675,7 @@ impl MainPaneView {
                     .on_click(theme, cx, |this, _e, _w, cx| {
                         this.show_whitespace = !this.show_whitespace;
                         this.diff_text_segments_cache.clear();
-                        this.conflict_diff_segments_cache_split.clear();
-                        this.conflict_diff_segments_cache_inline.clear();
+                        this.clear_conflict_diff_style_caches();
                         this.conflict_three_way_segments_cache.clear();
                         cx.notify();
                     })
@@ -755,8 +754,7 @@ impl MainPaneView {
                             this.diff_text_segments_cache.clear();
                             this.worktree_preview_segments_cache_path = None;
                             this.worktree_preview_segments_cache.clear();
-                            this.conflict_diff_segments_cache_split.clear();
-                            this.conflict_diff_segments_cache_inline.clear();
+                            this.clear_conflict_diff_query_overlay_caches();
                             window.focus(&this.diff_panel_focus_handle);
                             cx.notify();
                         }),
@@ -2644,8 +2642,7 @@ impl MainPaneView {
                         this.diff_text_segments_cache.clear();
                         this.worktree_preview_segments_cache_path = None;
                         this.worktree_preview_segments_cache.clear();
-                        this.conflict_diff_segments_cache_split.clear();
-                        this.conflict_diff_segments_cache_inline.clear();
+                        this.clear_conflict_diff_query_overlay_caches();
                         window.focus(&this.diff_panel_focus_handle);
                         handled = true;
                     }
@@ -2666,8 +2663,7 @@ impl MainPaneView {
                     this.diff_text_segments_cache.clear();
                     this.worktree_preview_segments_cache_path = None;
                     this.worktree_preview_segments_cache.clear();
-                    this.conflict_diff_segments_cache_split.clear();
-                    this.conflict_diff_segments_cache_inline.clear();
+                    this.clear_conflict_diff_query_overlay_caches();
                     this.diff_search_recompute_matches();
                     let focus = this.diff_search_input.read(cx).focus_handle();
                     window.focus(&focus);
@@ -2863,8 +2859,7 @@ impl MainPaneView {
                             this.show_whitespace = !this.show_whitespace;
                             // Clear styled text caches so they rebuild with new whitespace setting.
                             this.diff_text_segments_cache.clear();
-                            this.conflict_diff_segments_cache_split.clear();
-                            this.conflict_diff_segments_cache_inline.clear();
+                            this.clear_conflict_diff_style_caches();
                             this.conflict_three_way_segments_cache.clear();
                             handled = true;
                         }

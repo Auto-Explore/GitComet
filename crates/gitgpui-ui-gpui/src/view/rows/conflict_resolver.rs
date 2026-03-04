@@ -794,6 +794,13 @@ impl MainPaneView {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
+        let query: SharedString = if this.diff_search_active {
+            this.diff_search_query.clone()
+        } else {
+            SharedString::default()
+        };
+        let query = query.as_ref().trim().to_string();
+        this.sync_conflict_diff_query_overlay_caches(query.as_str());
         let syntax_lang = this.conflict_resolver.conflict_syntax_language;
         match this.diff_view {
             DiffViewMode::Split => {
@@ -801,12 +808,7 @@ impl MainPaneView {
                     conflict_syntax_mode_for_total_rows(this.conflict_resolver.diff_rows.len());
                 range
                     .map(|row_ix| {
-                        this.render_conflict_compare_split_row(
-                            row_ix,
-                            syntax_lang,
-                            syntax_mode,
-                            cx,
-                        )
+                        this.render_conflict_compare_split_row(row_ix, syntax_lang, syntax_mode, cx)
                     })
                     .collect()
             }
@@ -815,12 +817,7 @@ impl MainPaneView {
                     conflict_syntax_mode_for_total_rows(this.conflict_resolver.inline_rows.len());
                 range
                     .map(|ix| {
-                        this.render_conflict_compare_inline_row(
-                            ix,
-                            syntax_lang,
-                            syntax_mode,
-                            cx,
-                        )
+                        this.render_conflict_compare_inline_row(ix, syntax_lang, syntax_mode, cx)
                     })
                     .collect()
             }
@@ -833,6 +830,13 @@ impl MainPaneView {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
+        let query: SharedString = if this.diff_search_active {
+            this.diff_search_query.clone()
+        } else {
+            SharedString::default()
+        };
+        let query = query.as_ref().trim().to_string();
+        this.sync_conflict_diff_query_overlay_caches(query.as_str());
         let syntax_lang = this.conflict_resolver.conflict_syntax_language;
         match this.conflict_resolver.diff_mode {
             ConflictDiffMode::Split => {
@@ -910,6 +914,120 @@ impl MainPaneView {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn conflict_split_row_styled(
+        theme: AppTheme,
+        stable_cache: &mut HashMap<(usize, ConflictPickSide), CachedDiffStyledText>,
+        query_cache: &mut HashMap<(usize, ConflictPickSide), CachedDiffStyledText>,
+        row_ix: usize,
+        side: ConflictPickSide,
+        text: Option<&str>,
+        word_ranges: &[Range<usize>],
+        query: &str,
+        syntax_lang: Option<DiffSyntaxLanguage>,
+        syntax_mode: DiffSyntaxMode,
+    ) -> Option<CachedDiffStyledText> {
+        let text = text?;
+        if text.is_empty() {
+            return None;
+        }
+
+        let query = query.trim();
+        let query_active = !query.is_empty();
+        let base_has_style = !word_ranges.is_empty() || syntax_lang.is_some();
+        let key = (row_ix, side);
+
+        if base_has_style {
+            stable_cache.entry(key).or_insert_with(|| {
+                build_cached_diff_styled_text(
+                    theme,
+                    text,
+                    word_ranges,
+                    "",
+                    syntax_lang,
+                    syntax_mode,
+                    None,
+                )
+            });
+        }
+
+        if query_active {
+            query_cache.entry(key).or_insert_with(|| {
+                if let Some(base) = stable_cache.get(&key) {
+                    build_cached_diff_query_overlay_styled_text(theme, base, query)
+                } else {
+                    build_cached_diff_styled_text(
+                        theme,
+                        text,
+                        word_ranges,
+                        query,
+                        syntax_lang,
+                        syntax_mode,
+                        None,
+                    )
+                }
+            });
+            return query_cache.get(&key).cloned();
+        }
+
+        if base_has_style {
+            stable_cache.get(&key).cloned()
+        } else {
+            None
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn conflict_inline_row_styled(
+        theme: AppTheme,
+        stable_cache: &mut HashMap<usize, CachedDiffStyledText>,
+        query_cache: &mut HashMap<usize, CachedDiffStyledText>,
+        row_ix: usize,
+        text: &str,
+        query: &str,
+        syntax_lang: Option<DiffSyntaxLanguage>,
+        syntax_mode: DiffSyntaxMode,
+    ) -> Option<CachedDiffStyledText> {
+        if text.is_empty() {
+            return None;
+        }
+
+        let query = query.trim();
+        let query_active = !query.is_empty();
+        let base_has_style = syntax_lang.is_some();
+
+        if base_has_style {
+            stable_cache.entry(row_ix).or_insert_with(|| {
+                build_cached_diff_styled_text(theme, text, &[], "", syntax_lang, syntax_mode, None)
+            });
+        }
+
+        if query_active {
+            query_cache.entry(row_ix).or_insert_with(|| {
+                if let Some(base) = stable_cache.get(&row_ix) {
+                    build_cached_diff_query_overlay_styled_text(theme, base, query)
+                } else {
+                    build_cached_diff_styled_text(
+                        theme,
+                        text,
+                        &[],
+                        query,
+                        syntax_lang,
+                        syntax_mode,
+                        None,
+                    )
+                }
+            });
+            return query_cache.get(&row_ix).cloned();
+        }
+
+        if base_has_style {
+            stable_cache.get(&row_ix).cloned()
+        } else {
+            None
+        }
+    }
+
     fn render_conflict_compare_split_row(
         &mut self,
         row_ix: usize,
@@ -940,61 +1058,31 @@ impl MainPaneView {
             .and_then(|o| o.as_ref());
         let old_word_ranges = word_hl.map(|(o, _)| o.as_slice()).unwrap_or(&[]);
         let new_word_ranges = word_hl.map(|(_, n)| n.as_slice()).unwrap_or(&[]);
-
-        let query = if self.diff_search_active {
-            self.diff_search_query.clone()
-        } else {
-            SharedString::default()
-        };
-        let query = query.as_ref().trim();
-        let should_style = !query.is_empty()
-            || !old_word_ranges.is_empty()
-            || !new_word_ranges.is_empty()
-            || syntax_lang.is_some();
-        if should_style {
-            if let Some(text) = row.old.as_deref() {
-                self.conflict_diff_segments_cache_split
-                    .entry((row_ix, ConflictPickSide::Ours))
-                    .or_insert_with(|| {
-                        build_cached_diff_styled_text(
-                            theme,
-                            text,
-                            old_word_ranges,
-                            query,
-                            syntax_lang,
-                            syntax_mode,
-                            None,
-                        )
-                    });
-            }
-            if let Some(text) = row.new.as_deref() {
-                self.conflict_diff_segments_cache_split
-                    .entry((row_ix, ConflictPickSide::Theirs))
-                    .or_insert_with(|| {
-                        build_cached_diff_styled_text(
-                            theme,
-                            text,
-                            new_word_ranges,
-                            query,
-                            syntax_lang,
-                            syntax_mode,
-                            None,
-                        )
-                    });
-            }
-        }
-        let left_styled = should_style
-            .then(|| {
-                self.conflict_diff_segments_cache_split
-                    .get(&(row_ix, ConflictPickSide::Ours))
-            })
-            .flatten();
-        let right_styled = should_style
-            .then(|| {
-                self.conflict_diff_segments_cache_split
-                    .get(&(row_ix, ConflictPickSide::Theirs))
-            })
-            .flatten();
+        let query = self.conflict_diff_query_cache_query.as_ref();
+        let left_styled = Self::conflict_split_row_styled(
+            theme,
+            &mut self.conflict_diff_segments_cache_split,
+            &mut self.conflict_diff_query_segments_cache_split,
+            row_ix,
+            ConflictPickSide::Ours,
+            row.old.as_deref(),
+            old_word_ranges,
+            query,
+            syntax_lang,
+            syntax_mode,
+        );
+        let right_styled = Self::conflict_split_row_styled(
+            theme,
+            &mut self.conflict_diff_segments_cache_split,
+            &mut self.conflict_diff_query_segments_cache_split,
+            row_ix,
+            ConflictPickSide::Theirs,
+            row.new.as_deref(),
+            new_word_ranges,
+            query,
+            syntax_lang,
+            syntax_mode,
+        );
 
         let left_bg = split_cell_bg(theme, row.kind, ConflictPickSide::Ours);
         let right_bg = split_cell_bg(theme, row.kind, ConflictPickSide::Theirs);
@@ -1029,8 +1117,8 @@ impl MainPaneView {
                 right_fg,
                 left_text,
                 right_text,
-                left_styled,
-                right_styled,
+                left_styled.as_ref(),
+                right_styled.as_ref(),
                 show_ws,
                 None,
             );
@@ -1057,7 +1145,7 @@ impl MainPaneView {
             )
             .child(conflict_diff_text_cell(
                 left_text.clone(),
-                left_styled,
+                left_styled.as_ref(),
                 show_ws,
             ));
 
@@ -1083,7 +1171,7 @@ impl MainPaneView {
             )
             .child(conflict_diff_text_cell(
                 right_text.clone(),
-                right_styled,
+                right_styled.as_ref(),
                 show_ws,
             ));
 
@@ -1126,31 +1214,17 @@ impl MainPaneView {
                 .into_any_element();
         };
 
-        let query = if self.diff_search_active {
-            self.diff_search_query.clone()
-        } else {
-            SharedString::default()
-        };
-        let query = query.as_ref().trim();
-        let should_style = !query.is_empty() || syntax_lang.is_some();
-        if should_style && !row.content.is_empty() {
-            self.conflict_diff_segments_cache_inline
-                .entry(ix)
-                .or_insert_with(|| {
-                    build_cached_diff_styled_text(
-                        theme,
-                        row.content.as_str(),
-                        &[],
-                        query,
-                        syntax_lang,
-                        syntax_mode,
-                        None,
-                    )
-                });
-        }
-        let styled = should_style
-            .then(|| self.conflict_diff_segments_cache_inline.get(&ix))
-            .flatten();
+        let query = self.conflict_diff_query_cache_query.as_ref();
+        let styled = Self::conflict_inline_row_styled(
+            theme,
+            &mut self.conflict_diff_segments_cache_inline,
+            &mut self.conflict_diff_query_segments_cache_inline,
+            ix,
+            row.content.as_str(),
+            query,
+            syntax_lang,
+            syntax_mode,
+        );
 
         let bg = inline_row_bg(theme, row.kind, row.side);
         let prefix: SharedString = match row.kind {
@@ -1175,7 +1249,7 @@ impl MainPaneView {
                 bg,
                 theme.colors.text,
                 row.content.clone().into(),
-                styled,
+                styled.as_ref(),
                 show_ws,
                 None,
             );
@@ -1212,7 +1286,7 @@ impl MainPaneView {
             )
             .child(conflict_diff_text_cell(
                 row.content.clone().into(),
-                styled,
+                styled.as_ref(),
                 show_ws,
             ))
             .into_any_element()
@@ -1250,61 +1324,31 @@ impl MainPaneView {
             .and_then(|o| o.as_ref());
         let old_word_ranges = word_hl.map(|(o, _)| o.as_slice()).unwrap_or(&[]);
         let new_word_ranges = word_hl.map(|(_, n)| n.as_slice()).unwrap_or(&[]);
-
-        let query = if self.diff_search_active {
-            self.diff_search_query.clone()
-        } else {
-            SharedString::default()
-        };
-        let query = query.as_ref().trim();
-        let should_style = !query.is_empty()
-            || !old_word_ranges.is_empty()
-            || !new_word_ranges.is_empty()
-            || syntax_lang.is_some();
-        if should_style {
-            if let Some(text) = row.old.as_deref() {
-                self.conflict_diff_segments_cache_split
-                    .entry((row_ix, ConflictPickSide::Ours))
-                    .or_insert_with(|| {
-                        build_cached_diff_styled_text(
-                            theme,
-                            text,
-                            old_word_ranges,
-                            query,
-                            syntax_lang,
-                            syntax_mode,
-                            None,
-                        )
-                    });
-            }
-            if let Some(text) = row.new.as_deref() {
-                self.conflict_diff_segments_cache_split
-                    .entry((row_ix, ConflictPickSide::Theirs))
-                    .or_insert_with(|| {
-                        build_cached_diff_styled_text(
-                            theme,
-                            text,
-                            new_word_ranges,
-                            query,
-                            syntax_lang,
-                            syntax_mode,
-                            None,
-                        )
-                    });
-            }
-        }
-        let left_styled = should_style
-            .then(|| {
-                self.conflict_diff_segments_cache_split
-                    .get(&(row_ix, ConflictPickSide::Ours))
-            })
-            .flatten();
-        let right_styled = should_style
-            .then(|| {
-                self.conflict_diff_segments_cache_split
-                    .get(&(row_ix, ConflictPickSide::Theirs))
-            })
-            .flatten();
+        let query = self.conflict_diff_query_cache_query.as_ref();
+        let left_styled = Self::conflict_split_row_styled(
+            theme,
+            &mut self.conflict_diff_segments_cache_split,
+            &mut self.conflict_diff_query_segments_cache_split,
+            row_ix,
+            ConflictPickSide::Ours,
+            row.old.as_deref(),
+            old_word_ranges,
+            query,
+            syntax_lang,
+            syntax_mode,
+        );
+        let right_styled = Self::conflict_split_row_styled(
+            theme,
+            &mut self.conflict_diff_segments_cache_split,
+            &mut self.conflict_diff_query_segments_cache_split,
+            row_ix,
+            ConflictPickSide::Theirs,
+            row.new.as_deref(),
+            new_word_ranges,
+            query,
+            syntax_lang,
+            syntax_mode,
+        );
 
         let left_bg = split_cell_bg(theme, row.kind, ConflictPickSide::Ours);
         let right_bg = split_cell_bg(theme, row.kind, ConflictPickSide::Theirs);
@@ -1350,8 +1394,8 @@ impl MainPaneView {
                 right_fg,
                 left_text,
                 right_text,
-                left_styled,
-                right_styled,
+                left_styled.as_ref(),
+                right_styled.as_ref(),
                 show_ws,
                 chunk_context,
             );
@@ -1378,7 +1422,7 @@ impl MainPaneView {
             )
             .child(conflict_diff_text_cell(
                 left_text.clone(),
-                left_styled,
+                left_styled.as_ref(),
                 show_ws,
             ));
         if let Some(conflict_ix) = conflict_ix {
@@ -1436,7 +1480,7 @@ impl MainPaneView {
             )
             .child(conflict_diff_text_cell(
                 right_text.clone(),
-                right_styled,
+                right_styled.as_ref(),
                 show_ws,
             ));
         if let Some(conflict_ix) = conflict_ix {
@@ -1513,31 +1557,17 @@ impl MainPaneView {
                 .into_any_element();
         };
 
-        let query = if self.diff_search_active {
-            self.diff_search_query.clone()
-        } else {
-            SharedString::default()
-        };
-        let query = query.as_ref().trim();
-        let should_style = !query.is_empty() || syntax_lang.is_some();
-        if should_style && !row.content.is_empty() {
-            self.conflict_diff_segments_cache_inline
-                .entry(ix)
-                .or_insert_with(|| {
-                    build_cached_diff_styled_text(
-                        theme,
-                        row.content.as_str(),
-                        &[],
-                        query,
-                        syntax_lang,
-                        syntax_mode,
-                        None,
-                    )
-                });
-        }
-        let styled = should_style
-            .then(|| self.conflict_diff_segments_cache_inline.get(&ix))
-            .flatten();
+        let query = self.conflict_diff_query_cache_query.as_ref();
+        let styled = Self::conflict_inline_row_styled(
+            theme,
+            &mut self.conflict_diff_segments_cache_inline,
+            &mut self.conflict_diff_query_segments_cache_inline,
+            ix,
+            row.content.as_str(),
+            query,
+            syntax_lang,
+            syntax_mode,
+        );
 
         let bg = inline_row_bg(theme, row.kind, row.side);
         let prefix: SharedString = match row.kind {
@@ -1573,7 +1603,7 @@ impl MainPaneView {
                 bg,
                 theme.colors.text,
                 row.content.clone().into(),
-                styled,
+                styled.as_ref(),
                 show_ws,
                 chunk_context,
             );
@@ -1610,7 +1640,7 @@ impl MainPaneView {
             )
             .child(conflict_diff_text_cell(
                 row.content.clone().into(),
-                styled,
+                styled.as_ref(),
                 show_ws,
             ));
         if let Some(conflict_ix) = conflict_ix {
