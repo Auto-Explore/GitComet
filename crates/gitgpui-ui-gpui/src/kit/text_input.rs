@@ -1881,8 +1881,8 @@ fn runs_for_line(
                 font.style = next_style;
             }
             background_color = style.background_color;
-            underline = style.underline.clone();
-            strikethrough = style.strikethrough.clone();
+            underline = style.underline;
+            strikethrough = style.strikethrough;
             if let Some(fade_out) = style.fade_out {
                 color.a *= (1.0 - fade_out).clamp(0.0, 1.0);
             }

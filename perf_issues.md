@@ -1,3 +1,5 @@
+## STATUS: COMPLETE
+
 # Diff And Conflict Resolver Performance Design
 
 ## Implementation Progress
@@ -14,16 +16,26 @@
 - P2
   - ✅ Precomputed state usage improved (two-way row/conflict maps + three-way column line maps in state)
   - ✅ Conflict hot-path tracing counters (debug/dev timing spans + row requested/painted counters for three-way rows, resolver diff rows, resolved preview rows, plus styled-text/syntax/word-query timing buckets)
+  - ✅ CI performance budget reporting (new `perf_budget_report` Criterion parser + alert-only `performance-budgets` workflow job; optional strict mode via `--strict` / `GITGPUI_PERF_BUDGET_STRICT`)
 
 ### Phase Status
 
 - ✅ Phase 1 (3/3 complete: gutter virtualization + two-way/three-way conflict map precompute + render-time map/range rebuild removal)
 - ✅ Phase 2 (3/3 complete: two-way + three-way conflict resolver and compare keyed canvas paths + fallback flag)
 - ✅ Phase 3 (2/2 complete: syntax mode/language caching done; split-resize + conflict search-typing invalidation now narrowed to volatile query overlays)
-- 🔧 Phase 4 (1/2 complete: dedicated conflict benchmarks now include `conflict_three_way_scroll/style_window`, `conflict_two_way_split_scroll/window_{100,200,400}`, `conflict_resolved_output_gutter_scroll/window_{100,200,400}`, `conflict_search_query_update/window/200`, and `conflict_split_resize_step/window/200` + debug/dev tracing counters; CI budget reporting still pending)
+- ✅ Phase 4 (2/2 complete: dedicated conflict benchmarks now include `conflict_three_way_scroll/style_window`, `conflict_two_way_split_scroll/window_{100,200,400}`, `conflict_resolved_output_gutter_scroll/window_{100,200,400}`, `conflict_search_query_update/window/200`, and `conflict_split_resize_step/window/200`; debug/dev tracing counters plus alert-only CI budget reporting are wired)
 
 ### Benchmark Notes
 
+- 2026-03-05 (`cargo bench -p gitgpui-ui-gpui --bench performance -- diff_scroll/style_window`)
+  - measured: `diff_scroll/style_window/200` = `2.1714 ms .. 2.1929 ms`
+  - note: criterion reported "No change in performance detected" (`-1.6194% .. +0.0717%`, `p = 0.15`); this remains a generic diff-styling harness and not a direct budget-slice signal.
+- 2026-03-05 (`cargo run -p gitgpui-ui-gpui --bin perf_budget_report -- --criterion-root target/criterion`)
+  - report: `conflict_three_way_scroll/style_window/200` (`298.963 µs` upper), `conflict_two_way_split_scroll/window_200` (`181.223 µs` upper), `conflict_search_query_update/window/200` (`60.092 µs` upper), `conflict_split_resize_step/window/200` (`16.007 µs` upper)
+  - note: all tracked conflict budgets were within configured alert thresholds (8 ms, 6 ms, 40 ms, and 25 ms respectively); CI now emits this markdown summary in alert-only mode.
+- 2026-03-05 (`cargo bench -p gitgpui-ui-gpui --bench performance -- diff_scroll/style_window`)
+  - measured: `diff_scroll/style_window/200` = `2.1841 ms .. 2.1966 ms`
+  - note: criterion reported `Performance has regressed` (`+1.0865% .. +1.6846%`); this remains a generic diff styling harness and not a direct signal for conflict-budget reporting changes.
 - 2026-03-05 (`cargo bench -p gitgpui-ui-gpui --bench performance -- conflict_split_resize_step`)
   - first run: `conflict_split_resize_step/window/200` = `15.295 µs .. 16.722 µs`
   - note: new split-resize drag-step benchmark fixture added in this iteration (simulated two-way conflict split drag updates while reusing stable/query styled-text caches).
@@ -344,13 +356,13 @@ Expected result: improved responsiveness during search typing and pane resizing.
 ### Phase 4 (Measurement and guardrails)
 
 - ✅ add dedicated conflict benchmarks and tracing counters
-- ⬜ set performance budgets in CI reports (alerting first, hard fail later)
+- ✅ set performance budgets in CI reports (alerting first, hard fail later)
 
 Expected result: prevent regressions and quantify gains per phase.
 
 ## Instrumentation Plan
 
-Status: ✅ Partial (iteration 11, 2026-03-05): debug/dev timing spans and row-batch counters are now wired for conflict hot paths; cache hit/miss counters and CI budget reporting remain pending.
+Status: ✅ Phase 4 complete (iteration 16, 2026-03-05): debug/dev timing spans and row-batch counters are wired for conflict hot paths, and CI now publishes alert-only budget reports from conflict Criterion estimates. Cache hit/miss counters remain an optional follow-up for deeper diagnostics.
 
 Add lightweight timing around hot functions (debug/dev builds first):
 

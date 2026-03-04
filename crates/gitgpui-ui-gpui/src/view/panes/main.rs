@@ -382,8 +382,13 @@ fn build_resolved_output_conflict_markers(
             for marker_range in marker_ranges {
                 if marker_range.start < marker_range.end {
                     let end = marker_range.end.min(output_line_count);
-                    for line_ix in marker_range.start..end {
-                        markers[line_ix] = Some(ResolvedOutputConflictMarker {
+                    for (line_ix, marker_slot) in markers
+                        .iter_mut()
+                        .enumerate()
+                        .take(end)
+                        .skip(marker_range.start)
+                    {
+                        *marker_slot = Some(ResolvedOutputConflictMarker {
                             conflict_ix,
                             range_start: marker_range.start,
                             range_end: marker_range.end,
@@ -936,9 +941,7 @@ fn append_choice_after_conflict_block(
         .clone();
     let group_indices =
         conflict_group_member_indices_for_ix(marker_segments, conflict_region_indices, conflict_ix);
-    let Some(&group_end_ix) = group_indices.last() else {
-        return None;
-    };
+    let &group_end_ix = group_indices.last()?;
     let target_region_ix = conflict_region_indices
         .get(conflict_ix)
         .copied()
@@ -1073,7 +1076,7 @@ fn apply_three_way_empty_base_provenance_hints(
                 let b_count = u32::try_from(source_line_count(&block.ours)).unwrap_or(0);
                 let c_count = u32::try_from(source_line_count(&block.theirs)).unwrap_or(0);
 
-                let base_empty = block.base.as_ref().map_or(true, |s| s.is_empty());
+                let base_empty = block.base.as_ref().is_none_or(|s| s.is_empty());
                 if base_empty
                     && let Some(range) = output_line_range_for_conflict_block_in_text(
                         marker_segments,

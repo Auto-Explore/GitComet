@@ -1324,16 +1324,19 @@ pub fn compute_three_way_word_highlights(
         if line.is_empty() {
             return Vec::new();
         }
-        vec![0..line.len()]
+        std::iter::once(0..line.len()).collect()
+    }
+
+    struct HighlightSide<'a> {
+        global_start: usize,
+        lines: &'a [gpui::SharedString],
     }
 
     fn apply_aligned_word_highlights(
         old_text: &str,
         new_text: &str,
-        old_global_start: usize,
-        new_global_start: usize,
-        old_lines: &[gpui::SharedString],
-        new_lines: &[gpui::SharedString],
+        old_side: HighlightSide<'_>,
+        new_side: HighlightSide<'_>,
         old_highlights: &mut WordHighlights,
         new_highlights: &mut WordHighlights,
     ) {
@@ -1348,21 +1351,21 @@ pub fn compute_three_way_word_highlights(
                     let (old_ranges, new_ranges) =
                         super::word_diff::capped_word_diff_ranges(old, new);
 
-                    if let Some(ix) = line_index(old_global_start, row.old_line) {
+                    if let Some(ix) = line_index(old_side.global_start, row.old_line) {
                         merge_line_ranges(old_highlights, ix, old_ranges);
                     }
-                    if let Some(ix) = line_index(new_global_start, row.new_line) {
+                    if let Some(ix) = line_index(new_side.global_start, row.new_line) {
                         merge_line_ranges(new_highlights, ix, new_ranges);
                     }
                 }
                 FileDiffRowKind::Remove => {
-                    if let Some(ix) = line_index(old_global_start, row.old_line) {
-                        merge_line_ranges(old_highlights, ix, full_line_range(old_lines, ix));
+                    if let Some(ix) = line_index(old_side.global_start, row.old_line) {
+                        merge_line_ranges(old_highlights, ix, full_line_range(old_side.lines, ix));
                     }
                 }
                 FileDiffRowKind::Add => {
-                    if let Some(ix) = line_index(new_global_start, row.new_line) {
-                        merge_line_ranges(new_highlights, ix, full_line_range(new_lines, ix));
+                    if let Some(ix) = line_index(new_side.global_start, row.new_line) {
+                        merge_line_ranges(new_highlights, ix, full_line_range(new_side.lines, ix));
                     }
                 }
                 FileDiffRowKind::Context => {}
@@ -1386,20 +1389,28 @@ pub fn compute_three_way_word_highlights(
                     apply_aligned_word_highlights(
                         base,
                         &block.ours,
-                        base_offset,
-                        ours_offset,
-                        base_lines,
-                        ours_lines,
+                        HighlightSide {
+                            global_start: base_offset,
+                            lines: base_lines,
+                        },
+                        HighlightSide {
+                            global_start: ours_offset,
+                            lines: ours_lines,
+                        },
                         &mut wh_base,
                         &mut wh_ours,
                     );
                     apply_aligned_word_highlights(
                         base,
                         &block.theirs,
-                        base_offset,
-                        theirs_offset,
-                        base_lines,
-                        theirs_lines,
+                        HighlightSide {
+                            global_start: base_offset,
+                            lines: base_lines,
+                        },
+                        HighlightSide {
+                            global_start: theirs_offset,
+                            lines: theirs_lines,
+                        },
                         &mut wh_base,
                         &mut wh_theirs,
                     );
@@ -1408,10 +1419,14 @@ pub fn compute_three_way_word_highlights(
                 apply_aligned_word_highlights(
                     &block.ours,
                     &block.theirs,
-                    ours_offset,
-                    theirs_offset,
-                    ours_lines,
-                    theirs_lines,
+                    HighlightSide {
+                        global_start: ours_offset,
+                        lines: ours_lines,
+                    },
+                    HighlightSide {
+                        global_start: theirs_offset,
+                        lines: theirs_lines,
+                    },
                     &mut wh_ours,
                     &mut wh_theirs,
                 );
