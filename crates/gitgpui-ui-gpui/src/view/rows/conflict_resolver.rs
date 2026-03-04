@@ -565,6 +565,7 @@ impl MainPaneView {
     pub(in super::super) fn render_conflict_resolved_preview_rows(
         this: &mut Self,
         range: Range<usize>,
+        _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
         let theme = this.theme;
