@@ -19,10 +19,17 @@
 - ✅ Phase 1 (3/3 complete: gutter virtualization + two-way/three-way conflict map precompute + render-time map/range rebuild removal)
 - ✅ Phase 2 (3/3 complete: two-way + three-way conflict resolver and compare keyed canvas paths + fallback flag)
 - ✅ Phase 3 (2/2 complete: syntax mode/language caching done; split-resize + conflict search-typing invalidation now narrowed to volatile query overlays)
-- ⬜ Phase 4
+- 🔧 Phase 4 (1/2 complete: dedicated `conflict_three_way_scroll/style_window` benchmark added; tracing counters + CI budget reporting still pending)
 
 ### Benchmark Notes
 
+- 2026-03-05 (`cargo bench -p gitgpui-ui-gpui --bench performance -- conflict_three_way_scroll/style_window`)
+  - first run: `conflict_three_way_scroll/style_window/200` = `296.05 µs .. 299.31 µs`
+  - note: new conflict-specific benchmark path added in this iteration (synthetic three-way conflict scroll fixture; 10k lines / 300 blocks defaults).
+- 2026-03-05 (`cargo bench -p gitgpui-ui-gpui --bench performance -- diff_scroll/style_window`)
+  - before: `diff_scroll/style_window/200` = `2.1837 ms .. 2.1955 ms`
+  - after: `diff_scroll/style_window/200` = `2.1740 ms .. 2.1796 ms`
+  - note: criterion showed an estimated improvement (`-1.8199% .. -0.5377%`) but still labeled this "Change within noise threshold"; this harness remains generic diff styling.
 - 2026-03-05 (`cargo bench -p gitgpui-ui-gpui --bench performance -- diff_scroll/style_window`)
   - before: `diff_scroll/style_window/200` = `2.1872 ms .. 2.1997 ms`
   - after: `diff_scroll/style_window/200` = `2.1837 ms .. 2.1955 ms`
@@ -331,11 +338,11 @@ Extend existing benchmark harness:
 
 Add fixtures/benches:
 
-- `conflict_three_way_scroll/window_{100,200,400}`
-- `conflict_two_way_split_scroll/window_{100,200,400}`
-- `conflict_resolved_output_gutter_scroll/window_{100,200,400}`
-- `conflict_search_query_update` (simulate keystroke churn)
-- `conflict_split_resize_step` (simulate drag updates)
+- ✅ `conflict_three_way_scroll/style_window` (window size configurable via `GITGPUI_BENCH_CONFLICT_WINDOW`)
+- ⬜ `conflict_two_way_split_scroll/window_{100,200,400}`
+- ⬜ `conflict_resolved_output_gutter_scroll/window_{100,200,400}`
+- ⬜ `conflict_search_query_update` (simulate keystroke churn)
+- ⬜ `conflict_split_resize_step` (simulate drag updates)
 
 Acceptance thresholds (initial):
 

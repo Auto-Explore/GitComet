@@ -1,6 +1,9 @@
 use super::diff_text::{DiffSyntaxMode, diff_syntax_language_for_path};
 use super::*;
 use crate::theme::AppTheme;
+use crate::view::conflict_resolver::{
+    self, ConflictBlock, ConflictChoice, ConflictSegment, ThreeWayVisibleItem,
+};
 use crate::view::history_graph;
 use gitgpui_core::domain::{
     Branch, Commit, CommitDetails, CommitFileChange, CommitId, FileStatusKind, Remote,
@@ -9,6 +12,7 @@ use gitgpui_core::domain::{
 use gitgpui_state::model::{Loadable, RepoId, RepoState};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::ops::Range;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
@@ -142,6 +146,164 @@ impl LargeFileDiffScrollFixture {
             styled.highlights.len().hash(&mut h);
         }
         h.finish()
+    }
+}
+
+pub struct ConflictThreeWayScrollFixture {
+    base_lines: Vec<SharedString>,
+    ours_lines: Vec<SharedString>,
+    theirs_lines: Vec<SharedString>,
+    base_word_highlights: conflict_resolver::WordHighlights,
+    ours_word_highlights: conflict_resolver::WordHighlights,
+    theirs_word_highlights: conflict_resolver::WordHighlights,
+    base_line_conflict_map: Vec<Option<usize>>,
+    ours_line_conflict_map: Vec<Option<usize>>,
+    theirs_line_conflict_map: Vec<Option<usize>>,
+    visible_map: Vec<ThreeWayVisibleItem>,
+    conflict_count: usize,
+    language: Option<super::diff_text::DiffSyntaxLanguage>,
+    syntax_mode: DiffSyntaxMode,
+    theme: AppTheme,
+}
+
+impl ConflictThreeWayScrollFixture {
+    pub fn new(lines: usize, conflict_blocks: usize) -> Self {
+        let theme = AppTheme::zed_ayu_dark();
+        let segments = build_synthetic_three_way_segments(lines, conflict_blocks);
+        let (base_text, ours_text, theirs_text) = materialize_three_way_side_texts(&segments);
+        let base_lines = split_lines_shared(&base_text);
+        let ours_lines = split_lines_shared(&ours_text);
+        let theirs_lines = split_lines_shared(&theirs_text);
+        let three_way_len = base_lines
+            .len()
+            .max(ours_lines.len())
+            .max(theirs_lines.len());
+        let conflict_maps = conflict_resolver::build_three_way_conflict_maps(
+            &segments,
+            base_lines.len(),
+            ours_lines.len(),
+            theirs_lines.len(),
+        );
+        let visible_map = conflict_resolver::build_three_way_visible_map(
+            three_way_len,
+            &conflict_maps.conflict_ranges,
+            &segments,
+            false,
+        );
+        let (base_word_highlights, ours_word_highlights, theirs_word_highlights) =
+            conflict_resolver::compute_three_way_word_highlights(
+                &base_lines,
+                &ours_lines,
+                &theirs_lines,
+                &segments,
+            );
+        let syntax_mode = if three_way_len > 4_000 {
+            DiffSyntaxMode::HeuristicOnly
+        } else {
+            DiffSyntaxMode::Auto
+        };
+
+        Self {
+            base_lines,
+            ours_lines,
+            theirs_lines,
+            base_word_highlights,
+            ours_word_highlights,
+            theirs_word_highlights,
+            base_line_conflict_map: conflict_maps.base_line_conflict_map,
+            ours_line_conflict_map: conflict_maps.ours_line_conflict_map,
+            theirs_line_conflict_map: conflict_maps.theirs_line_conflict_map,
+            visible_map,
+            conflict_count: conflict_maps.conflict_ranges.len(),
+            language: diff_syntax_language_for_path("src/conflict.rs"),
+            syntax_mode,
+            theme,
+        }
+    }
+
+    pub fn run_scroll_step(&self, start: usize, window: usize) -> u64 {
+        if self.visible_map.is_empty() || window == 0 {
+            return 0;
+        }
+        let start = start % self.visible_map.len();
+        let end = (start + window).min(self.visible_map.len());
+
+        let mut h = DefaultHasher::new();
+        for visible_item in &self.visible_map[start..end] {
+            let line_ix = match *visible_item {
+                ThreeWayVisibleItem::Line(ix) => ix,
+                ThreeWayVisibleItem::CollapsedBlock(conflict_ix) => {
+                    conflict_ix.hash(&mut h);
+                    continue;
+                }
+            };
+
+            self.base_line_conflict_map
+                .get(line_ix)
+                .copied()
+                .flatten()
+                .hash(&mut h);
+            self.ours_line_conflict_map
+                .get(line_ix)
+                .copied()
+                .flatten()
+                .hash(&mut h);
+            self.theirs_line_conflict_map
+                .get(line_ix)
+                .copied()
+                .flatten()
+                .hash(&mut h);
+
+            if let Some(line) = self.base_lines.get(line_ix) {
+                let styled = super::diff_text::build_cached_diff_styled_text(
+                    self.theme,
+                    line.as_ref(),
+                    word_ranges_for_line(&self.base_word_highlights, line_ix),
+                    "",
+                    self.language,
+                    self.syntax_mode,
+                    None,
+                );
+                styled.text_hash.hash(&mut h);
+                styled.highlights_hash.hash(&mut h);
+            }
+            if let Some(line) = self.ours_lines.get(line_ix) {
+                let styled = super::diff_text::build_cached_diff_styled_text(
+                    self.theme,
+                    line.as_ref(),
+                    word_ranges_for_line(&self.ours_word_highlights, line_ix),
+                    "",
+                    self.language,
+                    self.syntax_mode,
+                    None,
+                );
+                styled.text_hash.hash(&mut h);
+                styled.highlights_hash.hash(&mut h);
+            }
+            if let Some(line) = self.theirs_lines.get(line_ix) {
+                let styled = super::diff_text::build_cached_diff_styled_text(
+                    self.theme,
+                    line.as_ref(),
+                    word_ranges_for_line(&self.theirs_word_highlights, line_ix),
+                    "",
+                    self.language,
+                    self.syntax_mode,
+                    None,
+                );
+                styled.text_hash.hash(&mut h);
+                styled.highlights_hash.hash(&mut h);
+            }
+        }
+
+        h.finish()
+    }
+
+    pub fn visible_rows(&self) -> usize {
+        self.visible_map.len()
+    }
+
+    pub fn conflict_count(&self) -> usize {
+        self.conflict_count
     }
 }
 
@@ -310,4 +472,121 @@ fn build_synthetic_source_lines(count: usize) -> Vec<String> {
         lines.push(line);
     }
     lines
+}
+
+fn build_synthetic_three_way_segments(
+    total_lines: usize,
+    requested_conflict_blocks: usize,
+) -> Vec<ConflictSegment> {
+    let total_lines = total_lines.max(1);
+    let conflict_blocks = requested_conflict_blocks.max(1).min(total_lines);
+    let context_lines = total_lines.saturating_sub(conflict_blocks);
+    let context_slots = conflict_blocks.saturating_add(1);
+    let context_per_slot = context_lines / context_slots;
+    let context_remainder = context_lines % context_slots;
+
+    let mut segments: Vec<ConflictSegment> = Vec::with_capacity(conflict_blocks * 2 + 1);
+    for slot_ix in 0..context_slots {
+        let slot_lines = context_per_slot + usize::from(slot_ix < context_remainder);
+        if slot_lines > 0 {
+            let mut text = String::with_capacity(slot_lines * 64);
+            for line_ix in 0..slot_lines {
+                let seed = slot_ix * 1_000 + line_ix;
+                let line = match seed % 5 {
+                    0 => {
+                        format!(
+                            "fn ctx_{slot_ix}_{line_ix}(value: usize) -> usize {{ value + {seed} }}"
+                        )
+                    }
+                    1 => format!("let ctx_{slot_ix}_{line_ix} = \"context line {seed}\";"),
+                    2 => {
+                        format!("if ctx_{slot_ix}_{line_ix}.len() > 3 {{ println!(\"{seed}\"); }}")
+                    }
+                    3 => format!("match opt_{slot_ix}_{line_ix} {{ Some(v) => v, None => 0 }}"),
+                    _ => format!("// context {seed} repeated words for highlight coverage"),
+                };
+                text.push_str(&line);
+                text.push('\n');
+            }
+            segments.push(ConflictSegment::Text(text));
+        }
+
+        if slot_ix < conflict_blocks {
+            let choice = match slot_ix % 4 {
+                0 => ConflictChoice::Base,
+                1 => ConflictChoice::Ours,
+                2 => ConflictChoice::Theirs,
+                _ => ConflictChoice::Both,
+            };
+            segments.push(ConflictSegment::Block(ConflictBlock {
+                base: Some(format!("let shared_{slot_ix} = compute_base({slot_ix});\n")),
+                ours: format!("let shared_{slot_ix} = compute_local({slot_ix});\n"),
+                theirs: format!("let shared_{slot_ix} = compute_remote({slot_ix});\n"),
+                choice,
+                resolved: slot_ix % 5 == 0,
+            }));
+        }
+    }
+
+    segments
+}
+
+fn materialize_three_way_side_texts(segments: &[ConflictSegment]) -> (String, String, String) {
+    let mut base = String::new();
+    let mut ours = String::new();
+    let mut theirs = String::new();
+    for segment in segments {
+        match segment {
+            ConflictSegment::Text(text) => {
+                base.push_str(text);
+                ours.push_str(text);
+                theirs.push_str(text);
+            }
+            ConflictSegment::Block(block) => {
+                base.push_str(block.base.as_deref().unwrap_or_default());
+                ours.push_str(&block.ours);
+                theirs.push_str(&block.theirs);
+            }
+        }
+    }
+    (base, ours, theirs)
+}
+
+fn split_lines_shared(text: &str) -> Vec<SharedString> {
+    if text.is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::with_capacity(text.as_bytes().iter().filter(|&&b| b == b'\n').count() + 1);
+    out.extend(text.lines().map(|line| line.to_string().into()));
+    out
+}
+
+fn word_ranges_for_line(
+    highlights: &conflict_resolver::WordHighlights,
+    line_ix: usize,
+) -> &[Range<usize>] {
+    highlights
+        .get(line_ix)
+        .and_then(|ranges| ranges.as_deref())
+        .unwrap_or(&[])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn conflict_three_way_fixture_tracks_requested_conflict_blocks() {
+        let fixture = ConflictThreeWayScrollFixture::new(120, 12);
+        assert_eq!(fixture.conflict_count(), 12);
+        assert_eq!(fixture.visible_rows(), 120);
+    }
+
+    #[test]
+    fn conflict_three_way_fixture_wraps_start_offsets() {
+        let fixture = ConflictThreeWayScrollFixture::new(180, 18);
+        let hash_a = fixture.run_scroll_step(17, 40);
+        let hash_b = fixture.run_scroll_step(17 + fixture.visible_rows() * 3, 40);
+        assert_eq!(hash_a, hash_b);
+    }
 }

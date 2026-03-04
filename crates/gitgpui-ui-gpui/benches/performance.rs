@@ -1,6 +1,7 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use gitgpui_ui_gpui::benchmarks::{
-    CommitDetailsFixture, LargeFileDiffScrollFixture, OpenRepoFixture,
+    CommitDetailsFixture, ConflictThreeWayScrollFixture, LargeFileDiffScrollFixture,
+    OpenRepoFixture,
 };
 use std::env;
 use std::time::Duration;
@@ -71,10 +72,35 @@ fn bench_large_file_diff_scroll(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_conflict_three_way_scroll(c: &mut Criterion) {
+    let lines = env_usize("GITGPUI_BENCH_CONFLICT_LINES", 10_000);
+    let conflict_blocks = env_usize("GITGPUI_BENCH_CONFLICT_BLOCKS", 300);
+    let window = env_usize("GITGPUI_BENCH_CONFLICT_WINDOW", 200);
+    let fixture = ConflictThreeWayScrollFixture::new(lines, conflict_blocks);
+
+    let mut group = c.benchmark_group("conflict_three_way_scroll");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    group.bench_with_input(
+        BenchmarkId::new("style_window", window),
+        &window,
+        |b, &window| {
+            let mut start = 0usize;
+            b.iter(|| {
+                let h = fixture.run_scroll_step(start, window);
+                start = start.wrapping_add(window) % lines.max(1);
+                h
+            })
+        },
+    );
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_open_repo,
     bench_commit_details,
-    bench_large_file_diff_scroll
+    bench_large_file_diff_scroll,
+    bench_conflict_three_way_scroll
 );
 criterion_main!(benches);
