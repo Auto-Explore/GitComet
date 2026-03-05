@@ -248,21 +248,24 @@ pub(super) fn model(
         };
     }
 
-    items.push(ContextMenuItem::Entry {
-        label: if use_selection {
-            format!("Discard ({})", selected_count).into()
-        } else {
-            "Discard changes".into()
-        },
-        icon: Some("↺".into()),
-        shortcut: Some("D".into()),
-        disabled: !can_discard_worktree_changes,
-        action: Box::new(ContextMenuAction::DiscardWorktreeChangesSelectionOrPath {
-            repo_id,
-            area,
-            path: path.clone(),
-        }),
-    });
+    let show_discard_changes = !(is_conflicted && area == DiffArea::Staged);
+    if show_discard_changes {
+        items.push(ContextMenuItem::Entry {
+            label: if use_selection {
+                format!("Discard ({})", selected_count).into()
+            } else {
+                "Discard changes".into()
+            },
+            icon: Some("↺".into()),
+            shortcut: Some("D".into()),
+            disabled: !can_discard_worktree_changes,
+            action: Box::new(ContextMenuAction::DiscardWorktreeChangesSelectionOrPath {
+                repo_id,
+                area,
+                path: path.clone(),
+            }),
+        });
+    }
 
     items.push(ContextMenuItem::Separator);
     let copy_path_text = this

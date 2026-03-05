@@ -1469,6 +1469,7 @@ impl PopoverHost {
                     },
                     cx,
                 )
+                .w(px(220.0))
                 .min_w(px(160.0))
                 .max_w(px(260.0)),
             PopoverKind::ConflictResolverInputRowMenu {
@@ -1505,6 +1506,7 @@ impl PopoverHost {
                     },
                     cx,
                 )
+                .w(px(220.0))
                 .min_w(px(190.0))
                 .max_w(px(280.0)),
             PopoverKind::ConflictResolverOutputMenu {
@@ -1526,6 +1528,7 @@ impl PopoverHost {
                     },
                     cx,
                 )
+                .w(px(240.0))
                 .min_w(px(200.0))
                 .max_w(px(300.0)),
             PopoverKind::StatusFileMenu {
@@ -2527,7 +2530,12 @@ mod tests {
                 }
                 _ => false,
             });
+            let has_discard_changes = model.items.iter().any(|item| match item {
+                ContextMenuItem::Entry { label, .. } => label.as_ref() == "Discard changes",
+                _ => false,
+            });
             assert!(!has_external_mergetool);
+            assert!(!has_discard_changes);
         });
     }
 

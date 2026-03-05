@@ -8,6 +8,8 @@ use super::CONTROL_HEIGHT_MD_PX;
 
 pub fn context_menu(theme: AppTheme, content: impl IntoElement) -> Div {
     div()
+        .w_full()
+        .min_w_full()
         .flex()
         .flex_col()
         .text_color(theme.colors.text)
@@ -16,6 +18,7 @@ pub fn context_menu(theme: AppTheme, content: impl IntoElement) -> Div {
 
 pub fn context_menu_header(theme: AppTheme, title: impl Into<SharedString>) -> Div {
     div()
+        .w_full()
         .px_2()
         .py_1()
         .text_xs()
@@ -25,6 +28,7 @@ pub fn context_menu_header(theme: AppTheme, title: impl Into<SharedString>) -> D
 
 pub fn context_menu_label(theme: AppTheme, text: impl Into<SharedString>) -> Div {
     div()
+        .w_full()
         .px_2()
         .pb_1()
         .text_sm()
@@ -34,7 +38,10 @@ pub fn context_menu_label(theme: AppTheme, text: impl Into<SharedString>) -> Div
 }
 
 pub fn context_menu_separator(theme: AppTheme) -> Div {
-    div().border_t_1().border_color(theme.colors.border)
+    div()
+        .w_full()
+        .border_t_1()
+        .border_color(theme.colors.border)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -60,6 +67,7 @@ pub fn context_menu_entry(
         .id(id)
         .h(px(CONTROL_HEIGHT_MD_PX))
         .w_full()
+        .min_w_full()
         .px_2()
         .flex()
         .items_center()
@@ -155,6 +163,7 @@ pub fn context_menu_entry_with_end_slot(
         .id(id)
         .h(px(CONTROL_HEIGHT_MD_PX))
         .w_full()
+        .min_w_full()
         .px_2()
         .flex()
         .items_center()

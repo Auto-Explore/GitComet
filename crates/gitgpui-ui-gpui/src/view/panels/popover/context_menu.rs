@@ -852,6 +852,10 @@ impl PopoverHost {
         zed::context_menu(
             theme,
             div()
+                .w_full()
+                .min_w_full()
+                .flex()
+                .flex_col()
                 .track_focus(&focus)
                 .key_context("ContextMenu")
                 .on_mouse_down(

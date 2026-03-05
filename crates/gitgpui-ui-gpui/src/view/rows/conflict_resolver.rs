@@ -1763,7 +1763,27 @@ fn conflict_diff_text_cell(
             .into_any_element();
     }
 
-    // When highlights exist, don't transform (would break byte ranges).
+    if show_whitespace {
+        let (display, highlights) = whitespace_visible_text_and_highlights(
+            styled.text.as_ref(),
+            styled.highlights.as_ref(),
+        );
+        if highlights.is_empty() {
+            return div()
+                .flex_1()
+                .min_w(px(0.0))
+                .overflow_hidden()
+                .child(display)
+                .into_any_element();
+        }
+        return div()
+            .flex_1()
+            .min_w(px(0.0))
+            .overflow_hidden()
+            .child(gpui::StyledText::new(display).with_highlights(highlights))
+            .into_any_element();
+    }
+
     div()
         .flex_1()
         .min_w(px(0.0))
@@ -1776,15 +1796,43 @@ fn conflict_diff_text_cell(
 }
 
 fn whitespace_visible_text(text: &str) -> SharedString {
+    whitespace_visible_text_and_highlights(text, &[]).0
+}
+
+fn whitespace_visible_text_and_highlights(
+    text: &str,
+    highlights: &[(Range<usize>, gpui::HighlightStyle)],
+) -> (SharedString, Vec<(Range<usize>, gpui::HighlightStyle)>) {
     let mut out = String::with_capacity(text.len());
-    for ch in text.chars() {
+    let mut byte_map = vec![0usize; text.len() + 1];
+
+    for (start, ch) in text.char_indices() {
+        byte_map[start] = out.len();
         match ch {
-            ' ' => out.push('\u{00B7}'),  // middle dot
-            '\t' => out.push('\u{2192}'), // rightwards arrow
+            ' ' => out.push('\u{00B7}'),                     // middle dot
+            '\t' => out.push('\u{2192}'),                    // rightwards arrow
+            '\r' => out.push('\u{240D}'),                    // carriage return symbol
+            '\n' => out.push('\u{21B5}'),                    // carriage return arrow
+            _ if ch.is_whitespace() => out.push('\u{2420}'), // symbol for space
             _ => out.push(ch),
         }
+        let end = start + ch.len_utf8();
+        let mapped_end = out.len();
+        for ix in (start + 1)..=end {
+            byte_map[ix] = mapped_end;
+        }
     }
-    out.into()
+
+    let mut remapped = Vec::with_capacity(highlights.len());
+    for (range, style) in highlights {
+        let start = *byte_map.get(range.start).unwrap_or(&out.len());
+        let end = *byte_map.get(range.end).unwrap_or(&out.len());
+        if start < end {
+            remapped.push((start..end, *style));
+        }
+    }
+
+    (out.into(), remapped)
 }
 
 fn resolved_output_source_badge_colors(
@@ -1880,5 +1928,22 @@ mod tests {
             conflict_syntax_mode_for_total_rows(MAX_LINES_FOR_SYNTAX_HIGHLIGHTING + 1),
             DiffSyntaxMode::HeuristicOnly
         );
+    }
+
+    #[test]
+    fn whitespace_visible_text_and_highlights_remaps_highlight_ranges() {
+        let style = gpui::HighlightStyle::default();
+        let (display, highlights) =
+            whitespace_visible_text_and_highlights("a b\t", &[(1..4, style)]);
+
+        assert_eq!(display.as_ref(), "a·b→");
+        assert_eq!(highlights.len(), 1);
+        assert_eq!(highlights[0].0, 1..7);
+    }
+
+    #[test]
+    fn whitespace_visible_text_marks_all_whitespace_kinds() {
+        let display = whitespace_visible_text(" \t\r\n");
+        assert_eq!(display.as_ref(), "·→␍↵");
     }
 }
