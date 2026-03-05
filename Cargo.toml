@@ -37,8 +37,8 @@ gitgpui-ui-gpui = { path = "crates/gitgpui-ui-gpui" }
 # External crates
 clap = { version = "4", features = ["derive"] }
 criterion = "0.8"
-gix = "0.78"
-gix-diff = "0.58"
+gix = "0.80"
+gix-diff = "0.60"
 globset = "0.4"
 gpui = "0.2.2"
 mimalloc = { version = "0.1", features = ["v3"] }
