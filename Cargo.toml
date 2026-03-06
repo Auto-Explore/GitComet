@@ -23,7 +23,7 @@ default-members = [
 [workspace.package]
 edition = "2024"
 license = "GPL-3.0-or-later"
-repository = "https://github.com/<your-org>/gitgpui"
+repository = "https://github.com/GitGpui/gitgpui"
 
 [workspace.dependencies]
 # Internal crates

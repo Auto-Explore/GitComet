@@ -1,0 +1,7 @@
+<<<<<<<
+tree df_side1:file-4
+
+new
+=======
+this is file 4 (modified in right)
+>>>>>>>

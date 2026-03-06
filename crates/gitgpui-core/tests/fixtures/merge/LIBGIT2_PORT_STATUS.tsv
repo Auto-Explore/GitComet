@@ -1,0 +1,26 @@
+libgit2_suite	libgit2_test	fixture_ids	status	notes
+merge/files.c	automerge_from_bufs	58	strict	matches expected merged text
+merge/files.c	automerge_use_best_path_and_mode	1185	content_only	path/mode assertions not represented
+merge/files.c	conflict_from_bufs	59	strict	matches marker text with labels
+merge/files.c	automerge_from_index	1186	content_only	index/OID/path/mode assertions not represented
+merge/files.c	automerge_whitespace_eol	60	divergent	libgit2 whitespace option unsupported (conflicts in gitgpui)
+merge/files.c	automerge_whitespace_change	61	divergent	libgit2 whitespace option unsupported (conflicts in gitgpui)
+merge/files.c	doesnt_add_newline	62	divergent	blocked by whitespace-option divergence
+merge/files.c	skips_large_files	1188	behavioral_proxy	gitgpui has no xdiff size cutoff
+merge/files.c	skips_binaries	1184	divergent	gitgpui bytes API rejects binary inputs
+merge/files.c	handles_binaries_when_favored	1187,1189	content_plus_divergence	text-api proxy + bytes-api divergence case
+merge/files.c	crlf_conflict_markers_for_crlf_files	63,1183	strict	merge and diff3 variants
+merge/files.c	conflicts_in_zdiff3	64	divergent	gitgpui zdiff3 base section differs from libgit2
+merge/trees/whitespace.c	conflict	23	behavioral	default conflict case
+merge/trees/whitespace.c	eol	23,60	divergent	whitespace-eol option unsupported
+merge/trees/whitespace.c	change	24,61	divergent	whitespace-change option unsupported
+merge/trees/commits.c	automerge	10,11,74,75,84,88,90,92,99,101,108,110,115,118,124	behavioral	repo-derived triplets cover key content paths
+merge/trees/commits.c	no_ancestor	129,130,1199-1205	synthetic	port mirrors no-common-ancestor path set with empty-base triplets
+merge/trees/commits.c	df_conflict	12,85-89,91,100,102,103,107,109,111,112,117,1190-1198	behavioral	includes path-level tree/file entries and nested file entries
+merge/trees/automerge.c	master_vs_branch	10,11,74,75,84,88,90,92,99,101,108,110,115,118,124	behavioral	covered by merge-resolve master/branch triplets
+merge/trees/automerge.c	master_vs_unrelated	129,130,1199-1205	synthetic	no-common-ancestor behavior represented via empty-base fixtures
+merge/trees/recursive.c	branchA_K_pairs	13-57,94,95,104,114	behavioral	recursive pair corpus imported from merge-recursive repo
+merge/trees/renames.c	rename_conflict_pairs	93,96-98,105,106,113,116,119-123,125-128	behavioral	rename conflict content triplets imported
+merge/workdir/simple.c	conflict_style_diff3	1206	behavioral	option-driven fixture with conflict_count assertions
+merge/workdir/simple.c	conflict_style_zdiff3	1207	behavioral	option-driven fixture with conflict_count assertions
+merge/workdir/simple.c	favor_ours_theirs_union	1208-1210	behavioral	option-driven fixtures with clean merge assertions

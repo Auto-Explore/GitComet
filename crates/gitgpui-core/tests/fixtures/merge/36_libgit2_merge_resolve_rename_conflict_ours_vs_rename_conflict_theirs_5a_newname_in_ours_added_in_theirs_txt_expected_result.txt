@@ -1,0 +1,30 @@
+<<<<<<<
+This file will be
+renamed in 'ours',
+and a file of the
+same name will be
+added in 'theirs'.
+
+The original file
+will exist in the
+'theirs' side as
+well.
+
+Expected index
+entries are:
+
+1 A
+3 A
+2 B
+3 B
+=======
+This file has
+the same name
+as a file that
+was renamed in
+the other branch.
+
+This will, upon
+merging, lead to
+a rename conflict.
+>>>>>>>

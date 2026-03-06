@@ -1,0 +1,4 @@
+<<<<<<<
+=======
+Removed in '7' but modified in '7-branch'.
+>>>>>>>

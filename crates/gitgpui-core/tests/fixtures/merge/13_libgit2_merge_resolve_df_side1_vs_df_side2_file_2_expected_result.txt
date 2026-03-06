@@ -1,0 +1,7 @@
+<<<<<<<
+this is file 2 (modified in left)
+=======
+tree df_side2:file-2
+
+new
+>>>>>>>

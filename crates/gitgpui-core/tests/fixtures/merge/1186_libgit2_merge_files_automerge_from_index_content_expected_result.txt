@@ -1,0 +1,2 @@
+# Ported from libgit2 files.c automerge_from_index at content level only.
+# Index/OID/path/mode assertions are not represented in this fixture harness.

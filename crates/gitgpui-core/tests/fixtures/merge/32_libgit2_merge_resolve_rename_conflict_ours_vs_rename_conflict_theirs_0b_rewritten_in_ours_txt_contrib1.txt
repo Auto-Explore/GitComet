@@ -1,0 +1,20 @@
+this file was rewritten in the
+ours branch, and the original
+file was copied to the file
+0b-duplicated-in-ours.txt.  that
+duplicated file will not be
+eligible for rename detection.
+
+this file was rewritten in the
+ours branch, and the original
+file was copied to the file
+0b-duplicated-in-ours.txt.  that
+duplicated file will not be
+eligible for rename detection.
+
+this file was rewritten in the
+ours branch, and the original
+file was copied to the file
+0b-duplicated-in-ours.txt.  that
+duplicated file will not be
+eligible for rename detection.

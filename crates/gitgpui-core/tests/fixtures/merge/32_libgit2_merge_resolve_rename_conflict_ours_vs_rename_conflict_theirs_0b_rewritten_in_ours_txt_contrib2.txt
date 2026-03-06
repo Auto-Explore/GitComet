@@ -1,0 +1,26 @@
+this file will be rewritten in
+ours, and its contents will be
+duplicated in another file.
+but it will not be eligible for
+rename detection.
+
+note that it has also been edited
+in the theirs branch
+
+this file will be rewritten in
+ours, and its contents will be
+duplicated in another file.
+but it will not be eligible for
+rename detection.
+
+this file will be rewritten in
+ours, and its contents will be
+duplicated in another file.
+but it will not be eligible for
+rename detection.
+
+this file will be rewritten in
+ours, and its contents will be
+duplicated in another file.
+but it will not be eligible for
+rename detection.

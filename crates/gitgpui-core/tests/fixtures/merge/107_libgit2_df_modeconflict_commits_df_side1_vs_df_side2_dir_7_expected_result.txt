@@ -1,0 +1,7 @@
+<<<<<<<
+tree df_side1:dir-7
+
+file.txt
+=======
+this is case 7 (right)
+>>>>>>>

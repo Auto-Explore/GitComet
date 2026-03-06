@@ -1,0 +1,3 @@
+#@ expect.clean=true
+#@ expect.conflict_count=0
+initial revision

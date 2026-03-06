@@ -1,0 +1,4 @@
+#@ expect.clean=false
+# Ported from libgit2 files.c doesnt_add_newline.
+# libgit2 uses IGNORE_WHITESPACE_CHANGE and merges cleanly without trailing LF;
+# gitgpui currently conflicts before newline behavior is comparable.

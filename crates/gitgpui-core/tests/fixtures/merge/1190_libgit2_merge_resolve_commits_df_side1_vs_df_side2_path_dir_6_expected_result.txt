@@ -1,0 +1,7 @@
+<<<<<<<
+tree a7dbfcbfc1a60709cb80b5ca24539008456531d0:dir-6
+
+file.txt
+=======
+this is case 6 (right)
+>>>>>>>

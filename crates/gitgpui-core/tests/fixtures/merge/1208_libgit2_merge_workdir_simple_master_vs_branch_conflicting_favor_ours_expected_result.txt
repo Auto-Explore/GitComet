@@ -1,0 +1,4 @@
+#@ opts.strategy=ours
+#@ expect.clean=true
+#@ expect.conflict_count=0
+this file is changed in master and branch

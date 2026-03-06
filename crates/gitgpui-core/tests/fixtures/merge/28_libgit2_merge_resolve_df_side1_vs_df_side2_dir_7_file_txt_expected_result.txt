@@ -1,0 +1,4 @@
+<<<<<<<
+this is case 7 (modified in left)
+=======
+>>>>>>>

@@ -1,0 +1,46 @@
+<<<<<<<
+this file was rewritten in
+ours and will appear as an
+independent add of a file
+
+this file was rewritten in
+ours and will appear as an
+independent add of a file
+
+this file was rewritten in
+ours and will appear as an
+independent add of a file
+
+this file was rewritten in
+ours and will appear as an
+independent add of a file
+
+this file was rewritten in
+ours and will appear as an
+independent add of a file
+=======
+this will be renamed in theirs
+and a file with the same name
+will be independently added
+in ours
+
+this will be renamed in theirs
+and a file with the same name
+will be independently added
+in ours
+
+this will be renamed in theirs
+and a file with the same name
+will be independently added
+in ours
+
+this will be renamed in theirs
+and a file with the same name
+will be independently added
+in ours
+
+this will be renamed in theirs
+and a file with the same name
+will be independently added
+in ours
+>>>>>>>

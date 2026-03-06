@@ -1,0 +1,17 @@
+file2
+file2; modified in master
+file2
+file2
+file2
+file2
+file2
+file2
+file2
+file2
+file2
+file2
+file2
+<<<<<<<
+=======
+file2; modified in branch2
+>>>>>>>

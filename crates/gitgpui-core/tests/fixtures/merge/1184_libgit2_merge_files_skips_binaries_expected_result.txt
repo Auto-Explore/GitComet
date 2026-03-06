@@ -1,0 +1,2 @@
+#@ api=bytes
+#@ expect.error=binary_content

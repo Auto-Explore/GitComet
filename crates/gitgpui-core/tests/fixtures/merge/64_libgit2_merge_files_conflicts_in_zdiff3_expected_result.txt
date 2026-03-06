@@ -1,0 +1,8 @@
+#@ opts.style=zdiff3
+#@ opts.label.ours=file.txt
+#@ opts.label.base=file.txt
+#@ opts.label.theirs=file.txt
+#@ expect.clean=false
+#@ expect.conflict_count=1
+# libgit2 expected output includes base section text in this case.
+# gitgpui currently elides that line in zdiff3 output, so body is unspecified.

@@ -1,0 +1,6 @@
+<<<<<<<
+this is case 10 (left)
+=======
+both
+modified
+>>>>>>>

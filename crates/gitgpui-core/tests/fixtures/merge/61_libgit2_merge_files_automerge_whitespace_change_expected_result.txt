@@ -1,0 +1,3 @@
+#@ expect.clean=false
+# Ported from libgit2 files.c automerge_whitespace_change.
+# libgit2 uses IGNORE_WHITESPACE_CHANGE and merges cleanly; gitgpui currently conflicts.

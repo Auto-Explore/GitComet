@@ -1,0 +1,4 @@
+#@ expect.clean=false
+# Ported as a behavioral proxy for libgit2 files.c skips_large_files.
+# libgit2 marks oversized inputs as non-automergeable via xdiff size limits.
+# gitgpui has no size cutoff; this fixture asserts large, divergent adds remain conflicted.

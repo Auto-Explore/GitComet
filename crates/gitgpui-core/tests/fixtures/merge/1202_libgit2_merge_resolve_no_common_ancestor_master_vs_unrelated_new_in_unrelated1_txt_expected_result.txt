@@ -1,0 +1,6 @@
+#@ expect.clean=true
+#@ expect.conflict_count=0
+this file
+is in a branch
+that has no
+common ancestor

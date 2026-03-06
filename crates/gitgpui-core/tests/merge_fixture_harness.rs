@@ -12,16 +12,33 @@
 //! 2. **Alignment triples** (KDiff3-style): one row per visual line with
 //!    `base_idx contrib1_idx contrib2_idx` and `-1` for gaps.
 //!
+//! Expected files may also include optional directive lines prefixed with
+//! `#@` to control fixture execution, for example:
+//!   - `#@ api=bytes`
+//!   - `#@ opts.style=diff3`
+//!   - `#@ opts.strategy=ours`
+//!   - `#@ opts.marker_size=10`
+//!   - `#@ opts.diff_algorithm=histogram`
+//!   - `#@ opts.label.ours=HEAD`
+//!   - `#@ opts.label.base=BASE`
+//!   - `#@ opts.label.theirs=branch`
+//!   - `#@ expect.clean=true`
+//!   - `#@ expect.conflict_count=0`
+//!   - `#@ expect.error=binary_content`
+//!
 //! For each discovered fixture the runner:
 //! 1. Loads all three input files.
-//! 2. Runs `merge_file(base, contrib1, contrib2, &default_options)`.
+//! 2. Runs `merge_file` or `merge_file_bytes` (per directives).
 //! 3. Applies algorithm-independent merge-output invariants.
 //! 4. If fixture uses alignment triples, builds a three-way line alignment and
 //!    validates sequence monotonicity + equality consistency invariants.
 //! 5. Compares actual output/alignment against expected result when present.
 //! 6. On mismatch, writes `{prefix}_actual_result.{ext}` for manual diff.
 
-use gitgpui_core::merge::{MergeOptions, merge_file};
+use gitgpui_core::merge::{
+    ConflictStyle, DiffAlgorithm, MergeError, MergeOptions, MergeStrategy, merge_file,
+    merge_file_bytes,
+};
 use std::collections::{BTreeMap, HashSet};
 use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
@@ -48,6 +65,45 @@ enum ExpectedFixture {
     Empty,
     MergeOutput(String),
     Alignment(Vec<AlignmentRow>),
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum MergeApi {
+    #[default]
+    Text,
+    Bytes,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ExpectedError {
+    BinaryContent,
+}
+
+#[derive(Clone, Debug)]
+struct FixtureDirectives {
+    api: MergeApi,
+    merge_options: MergeOptions,
+    expected_clean: Option<bool>,
+    expected_conflict_count: Option<usize>,
+    expected_error: Option<ExpectedError>,
+}
+
+impl Default for FixtureDirectives {
+    fn default() -> Self {
+        Self {
+            api: MergeApi::Text,
+            merge_options: MergeOptions::default(),
+            expected_clean: None,
+            expected_conflict_count: None,
+            expected_error: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct ParsedExpectedFixture {
+    expected: ExpectedFixture,
+    directives: FixtureDirectives,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -166,6 +222,149 @@ fn parse_expected_fixture(raw: &str) -> ExpectedFixture {
     }
 
     ExpectedFixture::MergeOutput(raw.to_string())
+}
+
+fn parse_expected_fixture_with_directives(raw: &str) -> Result<ParsedExpectedFixture, String> {
+    let mut directives = FixtureDirectives::default();
+    let mut filtered = String::new();
+
+    for segment in raw.split_inclusive('\n') {
+        let line_without_lf = segment.strip_suffix('\n').unwrap_or(segment);
+        let directive_line = line_without_lf.trim_end_matches('\r');
+
+        if let Some(rest) = directive_line.strip_prefix("#@") {
+            parse_directive(rest.trim(), &mut directives)?;
+            continue;
+        }
+
+        filtered.push_str(segment);
+    }
+
+    // Handle final line when the file does not end with '\n'.
+    if !raw.ends_with('\n')
+        && !raw.is_empty()
+        && filtered.is_empty()
+        && !raw.trim_end_matches('\r').starts_with("#@")
+    {
+        filtered.push_str(raw);
+    }
+
+    Ok(ParsedExpectedFixture {
+        expected: parse_expected_fixture(&filtered),
+        directives,
+    })
+}
+
+fn parse_directive(raw: &str, directives: &mut FixtureDirectives) -> Result<(), String> {
+    let (key, value) = raw
+        .split_once('=')
+        .ok_or_else(|| format!("directive must be key=value, got `{raw}`"))?;
+    let key = key.trim();
+    let value = value.trim();
+
+    match key {
+        "api" => {
+            directives.api = parse_merge_api(value)?;
+            Ok(())
+        }
+        "opts.style" => {
+            directives.merge_options.style = parse_conflict_style(value)?;
+            Ok(())
+        }
+        "opts.strategy" => {
+            directives.merge_options.strategy = parse_merge_strategy(value)?;
+            Ok(())
+        }
+        "opts.marker_size" => {
+            directives.merge_options.marker_size = value
+                .parse::<usize>()
+                .map_err(|_| format!("invalid marker size `{value}`"))?;
+            Ok(())
+        }
+        "opts.diff_algorithm" => {
+            directives.merge_options.diff_algorithm = parse_diff_algorithm(value)?;
+            Ok(())
+        }
+        "opts.label.ours" => {
+            directives.merge_options.labels.ours = Some(value.to_string());
+            Ok(())
+        }
+        "opts.label.base" => {
+            directives.merge_options.labels.base = Some(value.to_string());
+            Ok(())
+        }
+        "opts.label.theirs" => {
+            directives.merge_options.labels.theirs = Some(value.to_string());
+            Ok(())
+        }
+        "expect.clean" => {
+            directives.expected_clean = Some(parse_bool(value)?);
+            Ok(())
+        }
+        "expect.conflict_count" => {
+            directives.expected_conflict_count = Some(
+                value
+                    .parse::<usize>()
+                    .map_err(|_| format!("invalid conflict_count `{value}`"))?,
+            );
+            Ok(())
+        }
+        "expect.error" => {
+            directives.expected_error = Some(parse_expected_error(value)?);
+            Ok(())
+        }
+        _ => Err(format!("unknown directive key `{key}`")),
+    }
+}
+
+fn parse_merge_api(value: &str) -> Result<MergeApi, String> {
+    match value.to_ascii_lowercase().as_str() {
+        "text" => Ok(MergeApi::Text),
+        "bytes" => Ok(MergeApi::Bytes),
+        _ => Err(format!("unknown api `{value}`")),
+    }
+}
+
+fn parse_conflict_style(value: &str) -> Result<ConflictStyle, String> {
+    match value.to_ascii_lowercase().as_str() {
+        "merge" => Ok(ConflictStyle::Merge),
+        "diff3" => Ok(ConflictStyle::Diff3),
+        "zdiff3" => Ok(ConflictStyle::Zdiff3),
+        _ => Err(format!("unknown opts.style `{value}`")),
+    }
+}
+
+fn parse_merge_strategy(value: &str) -> Result<MergeStrategy, String> {
+    match value.to_ascii_lowercase().as_str() {
+        "normal" => Ok(MergeStrategy::Normal),
+        "ours" => Ok(MergeStrategy::Ours),
+        "theirs" => Ok(MergeStrategy::Theirs),
+        "union" => Ok(MergeStrategy::Union),
+        _ => Err(format!("unknown opts.strategy `{value}`")),
+    }
+}
+
+fn parse_diff_algorithm(value: &str) -> Result<DiffAlgorithm, String> {
+    match value.to_ascii_lowercase().as_str() {
+        "myers" => Ok(DiffAlgorithm::Myers),
+        "histogram" => Ok(DiffAlgorithm::Histogram),
+        _ => Err(format!("unknown opts.diff_algorithm `{value}`")),
+    }
+}
+
+fn parse_bool(value: &str) -> Result<bool, String> {
+    match value.to_ascii_lowercase().as_str() {
+        "true" | "1" | "yes" => Ok(true),
+        "false" | "0" | "no" => Ok(false),
+        _ => Err(format!("invalid boolean `{value}`")),
+    }
+}
+
+fn parse_expected_error(value: &str) -> Result<ExpectedError, String> {
+    match value.to_ascii_lowercase().as_str() {
+        "binary" | "binary_content" => Ok(ExpectedError::BinaryContent),
+        _ => Err(format!("unknown expect.error `{value}`")),
+    }
 }
 
 fn parse_alignment_rows(raw: &str) -> Option<Vec<AlignmentRow>> {
@@ -514,7 +713,14 @@ fn validate_merge_output_invariants(
     output: &str,
     fixture_name: &str,
 ) {
-    validate_marker_wellformedness(output, fixture_name);
+    // If any input already contains marker-like lines, marker structure checks
+    // become ambiguous because those lines may be payload.
+    let has_ambiguous_input_markers = [base, contrib1, contrib2]
+        .iter()
+        .any(|text| contains_marker_like_line(text));
+    if !has_ambiguous_input_markers {
+        validate_marker_wellformedness(output, fixture_name);
+    }
     validate_content_integrity(base, contrib1, contrib2, output, fixture_name);
     validate_context_preservation(base, contrib1, contrib2, output, fixture_name);
 }
@@ -692,6 +898,16 @@ fn is_base_marker(line: &str) -> bool {
         })
 }
 
+fn contains_marker_like_line(text: &str) -> bool {
+    text.lines().any(|line| {
+        let trimmed = line.trim_end();
+        is_open_marker(trimmed)
+            || is_base_marker(trimmed)
+            || is_separator_marker(trimmed)
+            || is_close_marker(trimmed)
+    })
+}
+
 fn panic_payload_message(payload: Box<dyn std::any::Any + Send>) -> String {
     if let Some(message) = payload.downcast_ref::<&str>() {
         (*message).to_string()
@@ -732,15 +948,136 @@ where
     }
 }
 
+fn merge_error_name(err: &MergeError) -> &'static str {
+    match err {
+        MergeError::BinaryContent => "binary_content",
+    }
+}
+
 fn run_fixture(fixture: &MergeFixture) -> Result<(), String> {
-    let base = std::fs::read_to_string(&fixture.base_path)
+    let base_bytes = std::fs::read(&fixture.base_path)
         .map_err(|e| format!("[{}] failed to read base: {}", fixture.name, e))?;
-    let contrib1 = std::fs::read_to_string(&fixture.contrib1_path)
+    let contrib1_bytes = std::fs::read(&fixture.contrib1_path)
         .map_err(|e| format!("[{}] failed to read contrib1: {}", fixture.name, e))?;
-    let contrib2 = std::fs::read_to_string(&fixture.contrib2_path)
+    let contrib2_bytes = std::fs::read(&fixture.contrib2_path)
         .map_err(|e| format!("[{}] failed to read contrib2: {}", fixture.name, e))?;
 
-    let result = merge_file(&base, &contrib1, &contrib2, &MergeOptions::default());
+    let ParsedExpectedFixture {
+        expected,
+        directives,
+    } = match &fixture.expected_path {
+        Some(expected_path) => {
+            let expected_raw = std::fs::read_to_string(expected_path)
+                .map_err(|e| format!("[{}] failed to read expected_result: {}", fixture.name, e))?;
+            parse_expected_fixture_with_directives(&expected_raw)
+                .map_err(|e| format!("[{}] invalid expected directives: {}", fixture.name, e))?
+        }
+        None => ParsedExpectedFixture {
+            expected: ExpectedFixture::Empty,
+            directives: FixtureDirectives::default(),
+        },
+    };
+
+    if directives.expected_error.is_some() && !matches!(expected, ExpectedFixture::Empty) {
+        return Err(format!(
+            "[{}] expected error fixtures must not include non-directive expected output",
+            fixture.name
+        ));
+    }
+
+    let (base_text_opt, contrib1_text_opt, contrib2_text_opt, merge_result) = match directives.api {
+        MergeApi::Text => {
+            let base = String::from_utf8(base_bytes.clone())
+                .map_err(|e| format!("[{}] base is not valid UTF-8: {}", fixture.name, e))?;
+            let contrib1 = String::from_utf8(contrib1_bytes.clone())
+                .map_err(|e| format!("[{}] contrib1 is not valid UTF-8: {}", fixture.name, e))?;
+            let contrib2 = String::from_utf8(contrib2_bytes.clone())
+                .map_err(|e| format!("[{}] contrib2 is not valid UTF-8: {}", fixture.name, e))?;
+            let result = merge_file(&base, &contrib1, &contrib2, &directives.merge_options);
+            (Some(base), Some(contrib1), Some(contrib2), Ok(result))
+        }
+        MergeApi::Bytes => (
+            None,
+            None,
+            None,
+            merge_file_bytes(
+                &base_bytes,
+                &contrib1_bytes,
+                &contrib2_bytes,
+                &directives.merge_options,
+            ),
+        ),
+    };
+
+    let result = match merge_result {
+        Ok(result) => {
+            if let Some(expected_error) = directives.expected_error {
+                return Err(format!(
+                    "[{}] expected error {:?}, but merge succeeded with {} conflict(s)",
+                    fixture.name, expected_error, result.conflict_count
+                ));
+            }
+            result
+        }
+        Err(err) => {
+            return if let Some(expected_error) = directives.expected_error {
+                if expected_error == ExpectedError::BinaryContent
+                    && matches!(err, MergeError::BinaryContent)
+                {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "[{}] expected error {:?}, got {}",
+                        fixture.name,
+                        expected_error,
+                        merge_error_name(&err)
+                    ))
+                }
+            } else {
+                Err(format!(
+                    "[{}] merge failed unexpectedly: {}",
+                    fixture.name,
+                    merge_error_name(&err)
+                ))
+            };
+        }
+    };
+
+    if let Some(expected_clean) = directives.expected_clean {
+        let actual_clean = result.is_clean();
+        if actual_clean != expected_clean {
+            return Err(format!(
+                "[{}] expected clean={}, got clean={}",
+                fixture.name, expected_clean, actual_clean
+            ));
+        }
+    }
+
+    if let Some(expected_conflict_count) = directives.expected_conflict_count {
+        if result.conflict_count != expected_conflict_count {
+            return Err(format!(
+                "[{}] expected conflict_count={}, got {}",
+                fixture.name, expected_conflict_count, result.conflict_count
+            ));
+        }
+    }
+
+    let base = match base_text_opt {
+        Some(base) => base,
+        None => String::from_utf8(base_bytes)
+            .map_err(|e| format!("[{}] base is not valid UTF-8: {}", fixture.name, e))?,
+    };
+    let contrib1 = match contrib1_text_opt {
+        Some(contrib1) => contrib1,
+        None => String::from_utf8(contrib1_bytes)
+            .map_err(|e| format!("[{}] contrib1 is not valid UTF-8: {}", fixture.name, e))?,
+    };
+    let contrib2 = match contrib2_text_opt {
+        Some(contrib2) => contrib2,
+        None => String::from_utf8(contrib2_bytes)
+            .map_err(|e| format!("[{}] contrib2 is not valid UTF-8: {}", fixture.name, e))?,
+    };
+
     let merge_actual_path = actual_result_path(fixture);
     run_validation_with_artifact(
         &fixture.name,
@@ -758,18 +1095,9 @@ fn run_fixture(fixture: &MergeFixture) -> Result<(), String> {
         },
     )?;
 
-    let expected = match &fixture.expected_path {
-        Some(expected_path) => {
-            let expected_raw = std::fs::read_to_string(expected_path)
-                .map_err(|e| format!("[{}] failed to read expected_result: {}", fixture.name, e))?;
-            Some(parse_expected_fixture(&expected_raw))
-        }
-        None => None,
-    };
-
     match expected {
-        None | Some(ExpectedFixture::Empty) => Ok(()),
-        Some(ExpectedFixture::MergeOutput(expected_output)) => {
+        ExpectedFixture::Empty => Ok(()),
+        ExpectedFixture::MergeOutput(expected_output) => {
             if result.output == expected_output {
                 Ok(())
             } else {
@@ -784,7 +1112,7 @@ fn run_fixture(fixture: &MergeFixture) -> Result<(), String> {
                 ))
             }
         }
-        Some(ExpectedFixture::Alignment(expected_rows)) => {
+        ExpectedFixture::Alignment(expected_rows) => {
             let actual_rows = build_three_way_alignment(&base, &contrib1, &contrib2);
             let actual_path = actual_result_path(fixture);
             let actual_text = serialize_alignment_rows(&actual_rows);
@@ -924,6 +1252,70 @@ fn parses_alignment_expected_rows() {
 }
 
 #[test]
+fn parses_directives_and_merge_output_body() {
+    let parsed = parse_expected_fixture_with_directives(
+        "#@ api=bytes\n\
+         #@ opts.style=diff3\n\
+         #@ opts.strategy=union\n\
+         #@ opts.marker_size=10\n\
+         #@ opts.diff_algorithm=histogram\n\
+         #@ opts.label.ours=HEAD\n\
+         #@ opts.label.base=BASE\n\
+         #@ opts.label.theirs=theirs\n\
+         #@ expect.clean=false\n\
+         #@ expect.conflict_count=1\n\
+         body line\n",
+    )
+    .expect("directives should parse");
+
+    assert_eq!(parsed.directives.api, MergeApi::Bytes);
+    assert_eq!(parsed.directives.merge_options.style, ConflictStyle::Diff3);
+    assert_eq!(
+        parsed.directives.merge_options.strategy,
+        MergeStrategy::Union
+    );
+    assert_eq!(parsed.directives.merge_options.marker_size, 10);
+    assert_eq!(
+        parsed.directives.merge_options.diff_algorithm,
+        DiffAlgorithm::Histogram
+    );
+    assert_eq!(
+        parsed.directives.merge_options.labels.ours.as_deref(),
+        Some("HEAD")
+    );
+    assert_eq!(
+        parsed.directives.merge_options.labels.base.as_deref(),
+        Some("BASE")
+    );
+    assert_eq!(
+        parsed.directives.merge_options.labels.theirs.as_deref(),
+        Some("theirs")
+    );
+    assert_eq!(parsed.directives.expected_clean, Some(false));
+    assert_eq!(parsed.directives.expected_conflict_count, Some(1));
+    assert!(matches!(
+        parsed.expected,
+        ExpectedFixture::MergeOutput(ref s) if s == "body line\n"
+    ));
+}
+
+#[test]
+fn parses_directive_expected_error_binary() {
+    let parsed = parse_expected_fixture_with_directives(
+        "#@ api=bytes\n\
+         #@ expect.error=binary_content\n",
+    )
+    .expect("directives should parse");
+
+    assert_eq!(parsed.directives.api, MergeApi::Bytes);
+    assert_eq!(
+        parsed.directives.expected_error,
+        Some(ExpectedError::BinaryContent)
+    );
+    assert!(matches!(parsed.expected, ExpectedFixture::Empty));
+}
+
+#[test]
 fn discover_fixtures_includes_cases_without_expected_result() {
     let dir = tempfile::tempdir().expect("tempdir");
     let fixtures_dir = dir.path();
@@ -1001,6 +1393,37 @@ fn run_fixture_without_expected_result_succeeds() {
         .expect("fixture should be discovered");
 
     run_fixture(fixture).expect("fixture should pass without expected result file");
+}
+
+#[test]
+fn run_fixture_bytes_api_expected_binary_error_succeeds() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let fixtures_dir = dir.path();
+
+    std::fs::write(
+        fixtures_dir.join("15_binary_error_base.txt"),
+        b"text\x00binary\n",
+    )
+    .expect("write base");
+    std::fs::write(
+        fixtures_dir.join("15_binary_error_contrib1.txt"),
+        b"text\x00binary\n",
+    )
+    .expect("write c1");
+    std::fs::write(fixtures_dir.join("15_binary_error_contrib2.txt"), b"text\n").expect("write c2");
+    std::fs::write(
+        fixtures_dir.join("15_binary_error_expected_result.txt"),
+        "#@ api=bytes\n#@ expect.error=binary_content\n",
+    )
+    .expect("write expected");
+
+    let fixtures = discover_fixtures(fixtures_dir);
+    let fixture = fixtures
+        .iter()
+        .find(|f| f.name == "15_binary_error")
+        .expect("fixture should be discovered");
+
+    run_fixture(fixture).expect("fixture should pass with expected binary error");
 }
 
 #[test]

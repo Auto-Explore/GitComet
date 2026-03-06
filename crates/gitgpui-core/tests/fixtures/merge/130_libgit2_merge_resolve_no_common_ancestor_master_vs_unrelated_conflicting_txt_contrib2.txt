@@ -1,0 +1,7 @@
+this
+file
+is
+conflicting
+but in
+an unrelated
+branch

@@ -1,0 +1,7 @@
+<<<<<<<
+this is case 8 (left)
+=======
+tree fc90237dc4891fa6c69827fc465632225e391618:dir-8
+
+file.txt
+>>>>>>>

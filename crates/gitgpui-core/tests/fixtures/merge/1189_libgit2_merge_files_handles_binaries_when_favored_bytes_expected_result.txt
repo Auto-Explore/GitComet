@@ -1,0 +1,4 @@
+#@ api=bytes
+#@ opts.strategy=ours
+#@ expect.error=binary_content
+# Divergence note: libgit2 can merge binary with FAVOR_OURS; gitgpui bytes API rejects binary payloads.

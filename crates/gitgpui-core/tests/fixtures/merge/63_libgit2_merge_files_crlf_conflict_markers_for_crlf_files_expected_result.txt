@@ -1,0 +1,11 @@
+#@ opts.label.ours=file.txt
+#@ opts.label.theirs=file.txt
+#@ expect.clean=false
+#@ expect.conflict_count=1
+<<<<<<< file.txt
+This file
+does, too.
+=======
+And so does
+this one.
+>>>>>>> file.txt

@@ -1,0 +1,7 @@
+<<<<<<<
+this is case 8 (left)
+=======
+tree df_side2:dir-8
+
+file.txt
+>>>>>>>

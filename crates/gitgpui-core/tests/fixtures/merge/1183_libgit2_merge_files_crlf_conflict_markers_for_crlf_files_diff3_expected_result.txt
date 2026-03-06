@@ -1,0 +1,16 @@
+#@ opts.style=diff3
+#@ opts.label.ours=file.txt
+#@ opts.label.base=file.txt
+#@ opts.label.theirs=file.txt
+#@ expect.clean=false
+#@ expect.conflict_count=1
+<<<<<<< file.txt
+This file
+does, too.
+||||||| file.txt
+This file has
+CRLF line endings.
+=======
+And so does
+this one.
+>>>>>>> file.txt

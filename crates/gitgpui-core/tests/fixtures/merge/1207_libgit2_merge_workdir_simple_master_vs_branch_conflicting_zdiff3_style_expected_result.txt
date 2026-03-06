@@ -1,0 +1,6 @@
+#@ opts.style=zdiff3
+#@ opts.label.ours=HEAD
+#@ opts.label.base=BASE
+#@ opts.label.theirs=branch
+#@ expect.clean=false
+#@ expect.conflict_count=1

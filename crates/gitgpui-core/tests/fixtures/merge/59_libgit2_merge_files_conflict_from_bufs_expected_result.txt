@@ -1,0 +1,11 @@
+#@ opts.label.ours=testfile.txt
+#@ opts.label.theirs=theirs.txt
+#@ expect.clean=false
+#@ expect.conflict_count=1
+<<<<<<< testfile.txt
+Aloha!
+Ours.
+=======
+Hi!
+Theirs.
+>>>>>>> theirs.txt
