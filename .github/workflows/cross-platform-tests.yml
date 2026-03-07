@@ -1,0 +1,188 @@
+name: Cross-Platform Tests
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch:
+
+concurrency:
+  group: cross-platform-tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  APP_FEATURES: --no-default-features --features gix
+
+jobs:
+  linux-ubuntu:
+    name: Linux Headless Suite (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-22.04, ubuntu-24.04]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+      - name: Run headless test suite
+        run: |
+          cargo test --workspace \
+            --exclude gitcomet-ui \
+            --exclude gitcomet-ui-gpui \
+            $APP_FEATURES \
+            --locked \
+            --verbose
+
+  linux-fedora:
+    name: Linux Headless Suite (Fedora container)
+    runs-on: ubuntu-latest
+    container:
+      image: fedora:41
+    steps:
+      - name: Install build dependencies
+        run: |
+          dnf -y install \
+            bash \
+            curl \
+            findutils \
+            gcc \
+            gcc-c++ \
+            git \
+            make \
+            openssl-devel \
+            pkg-config \
+            tar \
+            which
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - name: Run headless test suite
+        shell: bash
+        run: |
+          cargo test --workspace \
+            --exclude gitcomet-ui \
+            --exclude gitcomet-ui-gpui \
+            $APP_FEATURES \
+            --locked \
+            --verbose
+
+  linux-display-profiles:
+    name: Linux Display Profile (${{ matrix.profile.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        profile:
+          - name: x11-gnome
+            display: ":99"
+            wayland_display: ""
+            session_type: x11
+            desktop: GNOME
+          - name: wayland-gnome
+            display: ""
+            wayland_display: wayland-1
+            session_type: wayland
+            desktop: GNOME
+          - name: wayland-kde
+            display: ""
+            wayland_display: wayland-1
+            session_type: wayland
+            desktop: KDE
+    env:
+      DISPLAY: ${{ matrix.profile.display }}
+      WAYLAND_DISPLAY: ${{ matrix.profile.wayland_display }}
+      XDG_SESSION_TYPE: ${{ matrix.profile.session_type }}
+      XDG_CURRENT_DESKTOP: ${{ matrix.profile.desktop }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+      - name: Print display profile
+        run: |
+          echo "DISPLAY=${DISPLAY:-<unset>}"
+          echo "WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-<unset>}"
+          echo "XDG_SESSION_TYPE=${XDG_SESSION_TYPE:-<unset>}"
+          echo "XDG_CURRENT_DESKTOP=${XDG_CURRENT_DESKTOP:-<unset>}"
+      - name: Run display-selection integration tests
+        run: |
+          cargo test -p gitcomet-app $APP_FEATURES --test mergetool_git_integration gui_default --verbose
+          cargo test -p gitcomet-app $APP_FEATURES --test difftool_git_integration gui_default --verbose
+      - name: Run UI smoke test under selected profile
+        run: cargo test -p gitcomet-ui-gpui smoke_tests::smoke_view_renders_without_panicking -- --exact
+
+  macos-tests:
+    name: macOS Tests (${{ matrix.name }})
+    runs-on: ${{ matrix.runs_on }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: apple-silicon (macos-latest)
+            runs_on: macos-latest
+          - name: intel (macos-13)
+            runs_on: macos-13
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+      - name: Show host target
+        run: rustc -vV
+      - name: Run headless test suite
+        run: |
+          cargo test --workspace \
+            --exclude gitcomet-ui \
+            --exclude gitcomet-ui-gpui \
+            $APP_FEATURES \
+            --locked \
+            --verbose
+      - name: Gatekeeper and code-signing check (informational)
+        run: |
+          cargo build -p gitcomet-app $APP_FEATURES --release --locked
+          codesign --verify --verbose target/release/gitcomet-app || true
+          spctl --assess --type execute --verbose target/release/gitcomet-app || true
+
+  windows-tests:
+    name: Windows Tests (PowerShell + CMD)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+      - name: Show path behavior (PowerShell + Git Bash)
+        shell: pwsh
+        run: |
+          Write-Host "PowerShell path: $pwd"
+          $bashPwd = bash -lc "pwd"
+          Write-Host "Git Bash path: $bashPwd"
+      - name: Run headless test suite (PowerShell)
+        shell: pwsh
+        run: |
+          cargo test --workspace `
+            --exclude gitcomet-ui `
+            --exclude gitcomet-ui-gpui `
+            --no-default-features `
+            --features gix `
+            --locked `
+            --verbose
+      - name: Run standalone smoke test in CMD
+        shell: cmd
+        run: cargo test -p gitcomet-app --no-default-features --features gix --test standalone_tool_mode_integration help_flag_exits_zero -- --exact
+      - name: Show path behavior (CMD + Git Bash)
+        shell: cmd
+        run: |
+          echo CMD path: %CD%
+          for /f "delims=" %%i in ('bash -lc "pwd"') do set BASH_PWD=%%i
+          echo Git Bash path: %BASH_PWD%
