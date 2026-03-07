@@ -562,16 +562,65 @@ fn resolve_mergetool_with_env(
 
 // ── Git config fallback ──────────────────────────────────────────────
 
-/// Read a single git config value via `git config --get`.
+/// Read a single git config value from an explicit repository root.
 /// Returns `None` if the key is not set or git is not available.
-fn read_git_config(key: &str) -> Option<String> {
+fn read_git_config_at_repo(repo_root: &Path, key: &str) -> Option<String> {
     std::process::Command::new("git")
+        .arg("-C")
+        .arg(repo_root)
         .args(["config", "--get", key])
         .output()
         .ok()
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .filter(|s| !s.is_empty())
+}
+
+fn git_repo_toplevel_from_probe_dir(probe_dir: &Path) -> Option<PathBuf> {
+    std::process::Command::new("git")
+        .arg("-C")
+        .arg(probe_dir)
+        .args(["rev-parse", "--show-toplevel"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+}
+
+fn resolve_git_repo_root_from_path(path: &Path) -> Option<PathBuf> {
+    let mut probe_dirs = Vec::with_capacity(2);
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        probe_dirs.push(parent.to_path_buf());
+    }
+
+    let path_buf = path.to_path_buf();
+    if !path_buf.as_os_str().is_empty() && !probe_dirs.iter().any(|p| p == &path_buf) {
+        probe_dirs.push(path_buf);
+    }
+
+    probe_dirs
+        .into_iter()
+        .find_map(|probe| git_repo_toplevel_from_probe_dir(&probe))
+}
+
+fn resolve_mergetool_repo_root(config: &MergetoolConfig) -> Option<PathBuf> {
+    let mut candidates = vec![
+        config.merged.as_path(),
+        config.local.as_path(),
+        config.remote.as_path(),
+    ];
+    if let Some(base) = config.base.as_deref() {
+        candidates.push(base);
+    }
+
+    candidates
+        .into_iter()
+        .find_map(resolve_git_repo_root_from_path)
+        .or_else(|| git_repo_toplevel_from_probe_dir(Path::new(".")))
 }
 
 /// Apply git config fallback for `merge.conflictstyle` and `diff.algorithm`
@@ -614,11 +663,18 @@ fn resolve_mergetool_with_config(
     let had_explicit_algorithm = args.diff_algorithm.is_some();
 
     let mut config = resolve_mergetool_with_env(args, env)?;
+    let repo_root = resolve_mergetool_repo_root(&config);
+    let repo_scoped_git_config = |key: &str| {
+        repo_root
+            .as_deref()
+            .and_then(|repo| read_git_config_at_repo(repo, key))
+            .or_else(|| git_config(key))
+    };
     apply_git_config_fallback(
         &mut config,
         had_explicit_style,
         had_explicit_algorithm,
-        git_config,
+        &repo_scoped_git_config,
     );
     Ok(config)
 }
@@ -667,11 +723,31 @@ fn assign_next_compat_label(
     Err("Invalid external invocation: too many label flags; expected at most 3 labels across --L1/--L2/--L3 and -L/--label.".to_string())
 }
 
+fn maybe_record_compat_argv(raw_args: &[OsString], env: &dyn EnvLookup) {
+    let Some(path) = env.var_os("GITCOMET_COMPAT_ARGV_LOG").map(PathBuf::from) else {
+        return;
+    };
+
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+
+    let mut dump = String::new();
+    for arg in raw_args {
+        dump.push_str(&arg.to_string_lossy());
+        dump.push('\n');
+    }
+
+    let _ = std::fs::write(path, dump);
+}
+
 fn parse_compat_external_mode_with_config(
     raw_args: &[OsString],
     env: &dyn EnvLookup,
     git_config: &dyn Fn(&str) -> Option<String>,
 ) -> Result<Option<AppMode>, String> {
+    maybe_record_compat_argv(raw_args, env);
+
     let mut label_l1: Option<String> = None;
     let mut label_l2: Option<String> = None;
     let mut label_l3: Option<String> = None;
@@ -716,6 +792,23 @@ fn parse_compat_external_mode_with_config(
             continue;
         }
 
+        if token == "-L1" || token == "-L2" || token == "-L3" {
+            let next_idx = idx + 1;
+            let value = raw_args.get(next_idx).ok_or_else(|| {
+                format!("Missing value for compatibility flag {token} in external tool mode")
+            })?;
+            let value = value.to_string_lossy().into_owned();
+            match token.as_ref() {
+                "-L1" => label_l1 = Some(value),
+                "-L2" => label_l2 = Some(value),
+                "-L3" => label_l3 = Some(value),
+                _ => unreachable!(),
+            }
+            has_kdiff3_label_flags = true;
+            idx += 2;
+            continue;
+        }
+
         if token == "-L" || token == "--label" {
             let next_idx = idx + 1;
             let value = raw_args.get(next_idx).ok_or_else(|| {
@@ -748,6 +841,48 @@ fn parse_compat_external_mode_with_config(
             has_kdiff3_label_flags = true;
             idx += 1;
             continue;
+        }
+        if let Some(value) = token.strip_prefix("-L1=") {
+            label_l1 = Some(value.to_string());
+            has_kdiff3_label_flags = true;
+            idx += 1;
+            continue;
+        }
+        if let Some(value) = token.strip_prefix("-L2=") {
+            label_l2 = Some(value.to_string());
+            has_kdiff3_label_flags = true;
+            idx += 1;
+            continue;
+        }
+        if let Some(value) = token.strip_prefix("-L3=") {
+            label_l3 = Some(value.to_string());
+            has_kdiff3_label_flags = true;
+            idx += 1;
+            continue;
+        }
+        if let Some(value) = token.strip_prefix("-L1") {
+            if !value.is_empty() {
+                label_l1 = Some(value.to_string());
+                has_kdiff3_label_flags = true;
+                idx += 1;
+                continue;
+            }
+        }
+        if let Some(value) = token.strip_prefix("-L2") {
+            if !value.is_empty() {
+                label_l2 = Some(value.to_string());
+                has_kdiff3_label_flags = true;
+                idx += 1;
+                continue;
+            }
+        }
+        if let Some(value) = token.strip_prefix("-L3") {
+            if !value.is_empty() {
+                label_l3 = Some(value.to_string());
+                has_kdiff3_label_flags = true;
+                idx += 1;
+                continue;
+            }
         }
         if let Some(value) = token.strip_prefix("--label=") {
             assign_next_compat_label(
@@ -1072,7 +1207,8 @@ fn parse_app_mode_from_args_and_env(
     args: Vec<OsString>,
     env: &dyn EnvLookup,
 ) -> Result<AppMode, String> {
-    parse_app_mode_from_args_env_and_config(args, env, &read_git_config)
+    // Use only repo-scoped lookups resolved from mergetool file paths.
+    parse_app_mode_from_args_env_and_config(args, env, &|_| None)
 }
 
 /// Parse CLI arguments and resolve into a validated `AppMode`.
@@ -2867,6 +3003,89 @@ mod tests {
                 base.clone().into_os_string(),
                 OsString::from("--output"),
                 merged.clone().into_os_string(),
+                local.clone().into_os_string(),
+                remote.clone().into_os_string(),
+            ],
+            &env,
+        )
+        .unwrap();
+
+        match mode {
+            AppMode::Mergetool(config) => {
+                assert_eq!(config.merged, merged);
+                assert_eq!(config.base.as_ref(), Some(&base));
+                assert_eq!(config.local, local);
+                assert_eq!(config.remote, remote);
+                assert_eq!(config.label_base.as_deref(), Some("BASE_LABEL"));
+                assert_eq!(config.label_local.as_deref(), Some("LOCAL_LABEL"));
+                assert_eq!(config.label_remote.as_deref(), Some("REMOTE_LABEL"));
+            }
+            _ => panic!("expected Mergetool mode"),
+        }
+    }
+
+    #[test]
+    fn compat_parses_kdiff3_style_mergetool_with_short_numbered_label_flags() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = tmp_file(&dir, "base.txt", "base\n");
+        let local = tmp_file(&dir, "local.txt", "local\n");
+        let remote = tmp_file(&dir, "remote.txt", "remote\n");
+        let merged = dir.path().join("merged.txt");
+        let env = TestEnv::new();
+
+        let mode = parse_mode_for_test(
+            vec![
+                OsString::from("gitcomet-app"),
+                OsString::from("--auto"),
+                OsString::from("-L1"),
+                OsString::from("BASE_LABEL"),
+                OsString::from("-L2"),
+                OsString::from("LOCAL_LABEL"),
+                OsString::from("-L3"),
+                OsString::from("REMOTE_LABEL"),
+                OsString::from("-o"),
+                merged.clone().into_os_string(),
+                base.clone().into_os_string(),
+                local.clone().into_os_string(),
+                remote.clone().into_os_string(),
+            ],
+            &env,
+        )
+        .unwrap();
+
+        match mode {
+            AppMode::Mergetool(config) => {
+                assert_eq!(config.merged, merged);
+                assert_eq!(config.base.as_ref(), Some(&base));
+                assert_eq!(config.local, local);
+                assert_eq!(config.remote, remote);
+                assert_eq!(config.label_base.as_deref(), Some("BASE_LABEL"));
+                assert_eq!(config.label_local.as_deref(), Some("LOCAL_LABEL"));
+                assert_eq!(config.label_remote.as_deref(), Some("REMOTE_LABEL"));
+            }
+            _ => panic!("expected Mergetool mode"),
+        }
+    }
+
+    #[test]
+    fn compat_parses_kdiff3_style_mergetool_with_attached_short_numbered_label_flags() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = tmp_file(&dir, "base.txt", "base\n");
+        let local = tmp_file(&dir, "local.txt", "local\n");
+        let remote = tmp_file(&dir, "remote.txt", "remote\n");
+        let merged = dir.path().join("merged.txt");
+        let env = TestEnv::new();
+
+        let mode = parse_mode_for_test(
+            vec![
+                OsString::from("gitcomet-app"),
+                OsString::from("--auto"),
+                OsString::from("-L1BASE_LABEL"),
+                OsString::from("-L2=LOCAL_LABEL"),
+                OsString::from("-L3REMOTE_LABEL"),
+                OsString::from("-o"),
+                merged.clone().into_os_string(),
+                base.clone().into_os_string(),
                 local.clone().into_os_string(),
                 remote.clone().into_os_string(),
             ],

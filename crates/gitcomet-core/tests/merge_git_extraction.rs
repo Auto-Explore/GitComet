@@ -189,30 +189,44 @@ fn contains_marker_like_line(text: &str) -> bool {
 // ---------------------------------------------------------------------------
 
 /// Find the root of the gitcomet repository (the repo we're building from).
-fn find_gitcomet_repo() -> PathBuf {
+fn find_gitcomet_repo() -> Option<PathBuf> {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     // Walk up to find the .git directory
-    let mut dir = manifest_dir;
-    loop {
-        if dir.join(".git").exists() {
-            return dir.to_path_buf();
+    let mut dir = Some(manifest_dir);
+    while let Some(current) = dir {
+        if current.join(".git").exists() {
+            return Some(current.to_path_buf());
         }
-        dir = match dir.parent() {
-            Some(p) => p,
-            None => panic!(
-                "Could not find git repository root from {}",
-                manifest_dir.display()
-            ),
-        };
+        dir = current.parent();
     }
+    None
 }
 
-/// Check if the repo has enough merge commits for meaningful testing.
-fn repo_has_merges(repo: &Path, minimum: usize) -> bool {
-    match discover_merge_commits(repo, minimum) {
-        Ok(merges) => merges.len() >= minimum,
-        Err(_) => false,
-    }
+fn create_repo_with_merge_commit() -> tempfile::TempDir {
+    let tmp = tempfile::tempdir().expect("create temp dir");
+    let repo = tmp.path();
+
+    run_git(repo, &["init"]);
+    run_git(repo, &["checkout", "-b", "main"]);
+    configure_git_user(repo);
+    std::fs::write(repo.join("base.txt"), "base\n").expect("write base");
+    run_git(repo, &["add", "base.txt"]);
+    run_git(repo, &["commit", "-m", "base"]);
+
+    run_git(repo, &["checkout", "-b", "branch-a"]);
+    std::fs::write(repo.join("from_a.txt"), "change from A\n").expect("write from_a");
+    run_git(repo, &["add", "from_a.txt"]);
+    run_git(repo, &["commit", "-m", "branch-a"]);
+
+    run_git(repo, &["checkout", "main"]);
+    run_git(repo, &["checkout", "-b", "branch-b"]);
+    std::fs::write(repo.join("from_b.txt"), "change from B\n").expect("write from_b");
+    run_git(repo, &["add", "from_b.txt"]);
+    run_git(repo, &["commit", "-m", "branch-b"]);
+
+    run_git(repo, &["merge", "branch-a", "--no-edit"]);
+
+    tmp
 }
 
 /// Run the extraction pipeline on a repository and validate all extracted cases.
@@ -301,26 +315,30 @@ fn run_extraction_and_validate(
 
 #[test]
 fn extraction_discovers_merge_commits() {
-    let repo = find_gitcomet_repo();
-    let merges = discover_merge_commits(&repo, 10).expect("discover merges");
-    // The gitcomet repo may or may not have merges depending on branch strategy.
-    // This test verifies the discovery mechanism works without panicking.
-    eprintln!(
-        "Discovered {} merge commits in {}",
-        merges.len(),
-        repo.display()
+    let tmp = create_repo_with_merge_commit();
+    let merges = discover_merge_commits(tmp.path(), 10).expect("discover merges");
+    assert_eq!(merges.len(), 1, "Expected exactly one merge commit");
+
+    let merge = &merges[0];
+    assert!(!merge.merge_sha.is_empty());
+    assert!(!merge.parent1_sha.is_empty());
+    assert!(!merge.parent2_sha.is_empty());
+    // All should be hex SHA strings.
+    assert!(
+        merge.merge_sha.chars().all(|c| c.is_ascii_hexdigit()),
+        "Invalid merge SHA: {}",
+        merge.merge_sha
     );
-    for merge in &merges {
-        assert!(!merge.merge_sha.is_empty());
-        assert!(!merge.parent1_sha.is_empty());
-        assert!(!merge.parent2_sha.is_empty());
-        // All should be hex SHA strings
-        assert!(
-            merge.merge_sha.chars().all(|c| c.is_ascii_hexdigit()),
-            "Invalid merge SHA: {}",
-            merge.merge_sha
-        );
-    }
+    assert!(
+        merge.parent1_sha.chars().all(|c| c.is_ascii_hexdigit()),
+        "Invalid parent1 SHA: {}",
+        merge.parent1_sha
+    );
+    assert!(
+        merge.parent2_sha.chars().all(|c| c.is_ascii_hexdigit()),
+        "Invalid parent2 SHA: {}",
+        merge.parent2_sha
+    );
 }
 
 #[test]
@@ -677,9 +695,27 @@ fn extraction_handles_multifile_merge() {
 /// If the repo has no merge commits (linear history), the test passes trivially.
 #[test]
 fn extraction_regression_on_gitcomet_repo() {
-    let repo = find_gitcomet_repo();
+    let Some(repo) = find_gitcomet_repo() else {
+        eprintln!(
+            "Skipping gitcomet extraction: could not find a host repository root from {}",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        return;
+    };
 
-    if !repo_has_merges(&repo, 1) {
+    let host_merges = match discover_merge_commits(&repo, 1) {
+        Ok(merges) => merges,
+        Err(error) => {
+            eprintln!(
+                "Skipping gitcomet extraction: repository validation failed for {}: {}",
+                repo.display(),
+                error
+            );
+            return;
+        }
+    };
+
+    if host_merges.is_empty() {
         eprintln!(
             "Skipping gitcomet extraction: no merge commits in {}",
             repo.display()

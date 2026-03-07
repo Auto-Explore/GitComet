@@ -11,6 +11,9 @@ const NULL_DEVICE: &str = "/dev/null";
 fn apply_isolated_git_config_env(cmd: &mut Command) {
     cmd.env("GIT_CONFIG_NOSYSTEM", "1");
     cmd.env("GIT_CONFIG_GLOBAL", NULL_DEVICE);
+    // Force deterministic git output for string assertions in tests.
+    cmd.env("LC_ALL", "C");
+    cmd.env("LANG", "C");
 }
 
 fn gitcomet_bin() -> PathBuf {

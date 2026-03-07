@@ -46,14 +46,14 @@ impl GixRepo {
         let output = if let Some(ref custom_cmd) = tool_cmd {
             // Match git-mergetool behavior by providing variables as shell env.
             // This supports both "$VAR" and "${VAR}" templates in config.
-            Command::new("sh")
-                .arg("-c")
-                .arg(custom_cmd)
+            let mut command = shell_command(custom_cmd);
+            command
                 .env("BASE", base_path)
                 .env("LOCAL", local_path)
                 .env("REMOTE", remote_path)
                 .env("MERGED", &merged_path)
-                .current_dir(workdir)
+                .current_dir(workdir);
+            command
                 .output()
                 .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?
         } else {
@@ -188,6 +188,20 @@ struct MergetoolConfig {
 
 fn env_has_display() -> bool {
     std::env::var_os("DISPLAY").is_some() || std::env::var_os("WAYLAND_DISPLAY").is_some()
+}
+
+#[cfg(windows)]
+fn shell_command(custom_cmd: &str) -> Command {
+    let mut command = Command::new("cmd");
+    command.arg("/C").arg(custom_cmd);
+    command
+}
+
+#[cfg(not(windows))]
+fn shell_command(custom_cmd: &str) -> Command {
+    let mut command = Command::new("sh");
+    command.arg("-c").arg(custom_cmd);
+    command
 }
 
 fn parse_gui_default(value: Option<&str>) -> Result<GuiDefault> {
@@ -692,6 +706,34 @@ mod tests {
         for value in ["false", "FALSE", "no", "off", "0", "  Off  "] {
             assert_eq!(parse_git_bool(value), Some(false), "value={value:?}");
         }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_shell_command_windows_uses_cmd_percent_expansion() {
+        let output = shell_command("echo %GITCOMET_MERGETOOL_TEST_TOKEN%")
+            .env("GITCOMET_MERGETOOL_TEST_TOKEN", "from-cmd")
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("from-cmd"),
+            "expected cmd percent expansion in stdout"
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn test_shell_command_unix_uses_sh_dollar_expansion() {
+        let output = shell_command("echo \"$GITCOMET_MERGETOOL_TEST_TOKEN\"")
+            .env("GITCOMET_MERGETOOL_TEST_TOKEN", "from-sh")
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("from-sh"),
+            "expected sh dollar expansion in stdout"
+        );
     }
 
     #[test]
