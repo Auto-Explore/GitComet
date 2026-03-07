@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::OnceLock;
 
 #[cfg(windows)]
 const NULL_DEVICE: &str = "NUL";
@@ -14,6 +15,46 @@ fn apply_isolated_git_config_env(cmd: &mut Command) {
     // Force deterministic git output for string assertions in tests.
     cmd.env("LC_ALL", "C");
     cmd.env("LANG", "C");
+}
+#[cfg(windows)]
+fn is_git_shell_startup_failure(text: &str) -> bool {
+    text.contains("sh.exe: *** fatal error -")
+        && (text.contains("couldn't create signal pipe") || text.contains("CreateFileMapping"))
+}
+
+#[cfg(windows)]
+fn git_shell_available_for_tooling() -> bool {
+    static AVAILABLE: OnceLock<bool> = OnceLock::new();
+    *AVAILABLE.get_or_init(|| {
+        let mut cmd = Command::new("git");
+        apply_isolated_git_config_env(&mut cmd);
+        let output = match cmd.args(["difftool", "--tool-help"]).output() {
+            Ok(output) => output,
+            Err(_) => return true,
+        };
+        if output.status.success() {
+            return true;
+        }
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        !is_git_shell_startup_failure(&text)
+    })
+}
+
+fn require_git_shell_for_tool_tests() -> bool {
+    #[cfg(windows)]
+    {
+        if !git_shell_available_for_tooling() {
+            eprintln!(
+                "skipping Git difftool integration tests: Git-for-Windows shell startup failed in this environment"
+            );
+            return false;
+        }
+    }
+    true
 }
 
 fn gitcomet_bin() -> PathBuf {
@@ -194,6 +235,9 @@ fn output_text(output: &Output) -> String {
 
 #[test]
 fn git_difftool_invokes_gitcomet_app_for_basic_diff() {
+    if !require_git_shell_for_tool_tests() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
 
@@ -219,6 +263,9 @@ fn git_difftool_invokes_gitcomet_app_for_basic_diff() {
 
 #[test]
 fn git_difftool_kdiff3_path_override_invokes_compat_mode() {
+    if !require_git_shell_for_tool_tests() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
 
@@ -239,6 +286,9 @@ fn git_difftool_kdiff3_path_override_invokes_compat_mode() {
 
 #[test]
 fn git_difftool_meld_path_override_invokes_compat_mode() {
+    if !require_git_shell_for_tool_tests() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
 
@@ -263,6 +313,9 @@ fn git_difftool_meld_path_override_invokes_compat_mode() {
 
 #[test]
 fn git_difftool_kdiff3_path_override_handles_spaced_unicode_path() {
+    if !require_git_shell_for_tool_tests() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
 
@@ -292,6 +345,9 @@ fn git_difftool_kdiff3_path_override_handles_spaced_unicode_path() {
 
 #[test]
 fn git_difftool_meld_path_override_handles_spaced_unicode_path() {
+    if !require_git_shell_for_tool_tests() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
 
@@ -321,6 +377,9 @@ fn git_difftool_meld_path_override_handles_spaced_unicode_path() {
 
 #[test]
 fn git_difftool_handles_path_with_spaces() {
+    if !require_git_shell_for_tool_tests() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
 
@@ -352,6 +411,9 @@ fn git_difftool_handles_path_with_spaces() {
 
 #[test]
 fn git_difftool_handles_unicode_path() {
+    if !require_git_shell_for_tool_tests() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
 
@@ -377,6 +439,9 @@ fn git_difftool_handles_unicode_path() {
 
 #[test]
 fn git_difftool_works_from_subdirectory() {
+    if !require_git_shell_for_tool_tests() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
 
@@ -402,6 +467,9 @@ fn git_difftool_works_from_subdirectory() {
 
 #[test]
 fn git_difftool_dir_diff_mode_works() {
+    if !require_git_shell_for_tool_tests() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
 
@@ -426,6 +494,9 @@ fn git_difftool_dir_diff_mode_works() {
 
 #[test]
 fn git_difftool_dir_diff_handles_spaced_unicode_path() {
+    if !require_git_shell_for_tool_tests() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
 
@@ -455,6 +526,9 @@ fn git_difftool_dir_diff_handles_spaced_unicode_path() {
 
 #[test]
 fn git_difftool_dir_diff_mode_works_from_subdirectory() {
+    if !require_git_shell_for_tool_tests() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
 
@@ -486,6 +560,9 @@ fn git_difftool_dir_diff_mode_works_from_subdirectory() {
 
 #[test]
 fn git_difftool_dir_diff_pathspec_from_subdirectory_limits_to_selected_path() {
+    if !require_git_shell_for_tool_tests() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
 
@@ -530,6 +607,9 @@ fn git_difftool_dir_diff_pathspec_from_subdirectory_limits_to_selected_path() {
 
 #[test]
 fn git_difftool_pathspec_limits_invocation_to_selected_path() {
+    if !require_git_shell_for_tool_tests() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
 
@@ -564,6 +644,9 @@ fn git_difftool_pathspec_limits_invocation_to_selected_path() {
 
 #[test]
 fn git_difftool_handles_binary_content_change() {
+    if !require_git_shell_for_tool_tests() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
 
@@ -590,6 +673,9 @@ fn git_difftool_handles_binary_content_change() {
 
 #[test]
 fn git_difftool_handles_non_utf8_content_change() {
+    if !require_git_shell_for_tool_tests() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
 
@@ -619,6 +705,9 @@ fn git_difftool_handles_non_utf8_content_change() {
 
 #[test]
 fn git_difftool_crlf_content_preserved() {
+    if !require_git_shell_for_tool_tests() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
 
@@ -650,6 +739,9 @@ fn git_difftool_crlf_content_preserved() {
 
 #[test]
 fn git_difftool_crlf_to_lf_line_ending_change_detected() {
+    if !require_git_shell_for_tool_tests() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
 
@@ -673,6 +765,9 @@ fn git_difftool_crlf_to_lf_line_ending_change_detected() {
 
 #[test]
 fn git_difftool_gui_default_auto_prefers_gui_tool_when_display_set() {
+    if !require_git_shell_for_tool_tests() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
 
@@ -701,6 +796,9 @@ fn git_difftool_gui_default_auto_prefers_gui_tool_when_display_set() {
 
 #[test]
 fn git_difftool_gui_default_auto_prefers_cli_tool_without_display() {
+    if !require_git_shell_for_tool_tests() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
 
@@ -726,6 +824,9 @@ fn git_difftool_gui_default_auto_prefers_cli_tool_without_display() {
 
 #[test]
 fn git_difftool_gui_default_true_prefers_gui_tool_without_display() {
+    if !require_git_shell_for_tool_tests() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
 
@@ -751,6 +852,9 @@ fn git_difftool_gui_default_true_prefers_gui_tool_without_display() {
 
 #[test]
 fn git_difftool_gui_default_false_prefers_cli_tool_with_display() {
+    if !require_git_shell_for_tool_tests() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
 
@@ -779,6 +883,9 @@ fn git_difftool_gui_default_false_prefers_cli_tool_with_display() {
 
 #[test]
 fn git_difftool_gui_flag_overrides_selection() {
+    if !require_git_shell_for_tool_tests() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
 
@@ -807,6 +914,9 @@ fn git_difftool_gui_flag_overrides_selection() {
 
 #[test]
 fn git_difftool_no_gui_flag_overrides_gui_default_true() {
+    if !require_git_shell_for_tool_tests() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
 
@@ -835,6 +945,9 @@ fn git_difftool_no_gui_flag_overrides_gui_default_true() {
 
 #[test]
 fn git_difftool_gui_fallback_when_no_guitool_configured() {
+    if !require_git_shell_for_tool_tests() {
+        return;
+    }
     // When --gui is requested but only diff.tool is configured, git difftool
     // should fall back to the regular tool selection.
     let tmp = tempfile::tempdir().unwrap();
@@ -864,6 +977,9 @@ fn git_difftool_gui_fallback_when_no_guitool_configured() {
 
 #[test]
 fn git_difftool_gui_default_true_fallback_when_no_guitool_configured() {
+    if !require_git_shell_for_tool_tests() {
+        return;
+    }
     // Even with guiDefault=true, git difftool should fall back to diff.tool
     // if no diff.guitool is configured.
     let tmp = tempfile::tempdir().unwrap();
@@ -893,6 +1009,9 @@ fn git_difftool_gui_default_true_fallback_when_no_guitool_configured() {
 
 #[test]
 fn git_difftool_honors_tool_trust_exit_code_false() {
+    if !require_git_shell_for_tool_tests() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
 
@@ -915,6 +1034,9 @@ fn git_difftool_honors_tool_trust_exit_code_false() {
 
 #[test]
 fn git_difftool_honors_tool_trust_exit_code_true() {
+    if !require_git_shell_for_tool_tests() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
 
@@ -937,6 +1059,9 @@ fn git_difftool_honors_tool_trust_exit_code_true() {
 
 #[test]
 fn git_difftool_trust_exit_code_flag_overrides_config() {
+    if !require_git_shell_for_tool_tests() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
 
@@ -985,6 +1110,9 @@ fn git_difftool_trust_exit_code_flag_overrides_config() {
 
 #[test]
 fn git_difftool_shows_submodule_gitlink_change() {
+    if !require_git_shell_for_tool_tests() {
+        return;
+    }
     // When only a submodule gitlink changes, git difftool passes temporary
     // files containing "Subproject commit <sha>" lines to the external tool.
     // Verify that GitComet surfaces both old and new commit pointers.
@@ -1049,6 +1177,9 @@ fn git_difftool_shows_submodule_gitlink_change() {
 #[cfg(unix)]
 #[test]
 fn git_difftool_shows_symlink_target_change() {
+    if !require_git_shell_for_tool_tests() {
+        return;
+    }
     // When a symlink target changes, git difftool shows the diff of
     // the symlink targets (short text strings).
     let tmp = tempfile::tempdir().unwrap();
@@ -1081,6 +1212,9 @@ fn git_difftool_shows_symlink_target_change() {
 
 #[test]
 fn git_difftool_tool_help_lists_gitcomet_tool() {
+    if !require_git_shell_for_tool_tests() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
 
@@ -1101,6 +1235,9 @@ fn git_difftool_tool_help_lists_gitcomet_tool() {
 
 #[test]
 fn git_difftool_absent_tool_reports_cmd_not_set_error() {
+    if !require_git_shell_for_tool_tests() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
 
@@ -1125,3 +1262,4 @@ fn git_difftool_absent_tool_reports_cmd_not_set_error() {
         "expected missing-tool command error text\n{text}"
     );
 }
+

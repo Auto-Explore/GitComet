@@ -2,14 +2,21 @@ use gitcomet_core::services::GitBackend;
 use gitcomet_git_gix::GixBackend;
 use std::path::Path;
 use std::process::Command;
+use std::sync::OnceLock;
+
+#[cfg(windows)]
+const NULL_DEVICE: &str = "NUL";
+#[cfg(not(windows))]
+const NULL_DEVICE: &str = "/dev/null";
 
 fn run_git(repo: &Path, args: &[&str]) {
     let status = Command::new("git")
         .arg("-C")
         .arg(repo)
         .args(args)
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", NULL_DEVICE)
+        .env("GIT_CONFIG_SYSTEM", NULL_DEVICE)
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_EDITOR", "true")
         .env("EDITOR", "true")
@@ -19,8 +26,61 @@ fn run_git(repo: &Path, args: &[&str]) {
     assert!(status.success(), "git {:?} failed", args);
 }
 
+#[cfg(windows)]
+fn is_git_shell_startup_failure(text: &str) -> bool {
+    text.contains("sh.exe: *** fatal error -")
+        && (text.contains("couldn't create signal pipe") || text.contains("CreateFileMapping"))
+}
+
+#[cfg(windows)]
+fn git_shell_available_for_integration_tests() -> bool {
+    static AVAILABLE: OnceLock<bool> = OnceLock::new();
+    *AVAILABLE.get_or_init(|| {
+        let output = match Command::new("git").args(["difftool", "--tool-help"]).output() {
+            Ok(output) => output,
+            Err(_) => return true,
+        };
+        if output.status.success() {
+            return true;
+        }
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        !is_git_shell_startup_failure(&text)
+    })
+}
+
+fn require_git_shell_for_remote_tracking_test() -> bool {
+    #[cfg(windows)]
+    {
+        if !git_shell_available_for_integration_tests() {
+            eprintln!(
+                "skipping remote-tracking integration test: Git-for-Windows shell startup failed in this environment"
+            );
+            return false;
+        }
+    }
+    true
+}
+
+fn git_remote_url(path: &Path) -> String {
+    if cfg!(windows) {
+        // Use a file:// URL so drive-letter paths are never treated as
+        // scp-style host:path remotes.
+        let normalized = path.to_string_lossy().replace('\\', "/");
+        format!("file:///{normalized}")
+    } else {
+        path.to_string_lossy().into_owned()
+    }
+}
+
 #[test]
 fn log_all_branches_includes_remote_tracking_branches() {
+    if !require_git_shell_for_remote_tracking_test() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path().join("repo");
     let origin = dir.path().join("origin.git");
@@ -54,10 +114,8 @@ fn log_all_branches_includes_remote_tracking_branches() {
         dir.path(),
         &["init", "--bare", "-b", "main", origin.to_str().unwrap()],
     );
-    run_git(
-        &repo,
-        &["remote", "add", "origin", origin.to_str().unwrap()],
-    );
+    let origin_url = git_remote_url(&origin);
+    run_git(&repo, &["remote", "add", "origin", origin_url.as_str()]);
     run_git(&repo, &["push", "-u", "origin", "feature"]);
 
     run_git(&repo, &["checkout", "main"]);
@@ -195,11 +253,9 @@ fn empty_repo_log_and_head_branch_do_not_error() {
 
     assert_eq!(opened.current_branch().unwrap(), "main");
     assert!(opened.log_head_page(200, None).unwrap().commits.is_empty());
-    assert!(
-        opened
-            .log_all_branches_page(200, None)
-            .unwrap()
-            .commits
-            .is_empty()
-    );
+    assert!(opened
+        .log_all_branches_page(200, None)
+        .unwrap()
+        .commits
+        .is_empty());
 }

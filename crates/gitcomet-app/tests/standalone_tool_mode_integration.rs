@@ -2,6 +2,7 @@ use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::OnceLock;
 
 fn gitcomet_bin() -> PathBuf {
     std::env::var_os("CARGO_BIN_EXE_gitcomet-app")
@@ -112,6 +113,69 @@ fn output_text(output: &Output) -> String {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     )
+}
+#[cfg(windows)]
+fn is_git_shell_startup_failure(text: &str) -> bool {
+    text.contains("sh.exe: *** fatal error -")
+        && (text.contains("couldn't create signal pipe") || text.contains("CreateFileMapping"))
+}
+
+#[cfg(windows)]
+fn git_shell_available_for_tooling() -> bool {
+    static AVAILABLE: OnceLock<bool> = OnceLock::new();
+    *AVAILABLE.get_or_init(|| {
+        let output = match Command::new("git").args(["difftool", "--tool-help"]).output() {
+            Ok(output) => output,
+            Err(_) => return true,
+        };
+        if output.status.success() {
+            return true;
+        }
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        !is_git_shell_startup_failure(&text)
+    })
+}
+
+#[cfg(windows)]
+fn posix_sh_available() -> bool {
+    static AVAILABLE: OnceLock<bool> = OnceLock::new();
+    *AVAILABLE.get_or_init(|| {
+        Command::new("sh")
+            .args(["-lc", "exit 0"])
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false)
+    })
+}
+
+fn require_git_shell_for_setup_integration_tests() -> bool {
+    #[cfg(windows)]
+    {
+        if !git_shell_available_for_tooling() {
+            eprintln!(
+                "skipping setup integration test: Git-for-Windows shell startup failed in this environment"
+            );
+            return false;
+        }
+    }
+    true
+}
+
+fn require_posix_shell_binary_for_setup_test() -> bool {
+    #[cfg(windows)]
+    {
+        if !posix_sh_available() {
+            eprintln!(
+                "skipping setup dry-run shell execution test: `sh` is unavailable in PATH on this environment"
+            );
+            return false;
+        }
+    }
+    true
 }
 
 fn count_occurrences(haystack: &str, needle: &str) -> usize {
@@ -1487,6 +1551,9 @@ fn setup_dry_run_local_uses_local_scope() {
 
 #[test]
 fn setup_dry_run_commands_execute_verbatim_in_shell() {
+    if !require_posix_shell_binary_for_setup_test() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
 
     let init = Command::new("git")
@@ -1715,6 +1782,9 @@ fn setup_local_writes_config_to_repo() {
 
 #[test]
 fn setup_local_mergetool_tool_help_lists_headless_and_gui_entries() {
+    if !require_git_shell_for_setup_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -1750,6 +1820,9 @@ fn setup_local_mergetool_tool_help_lists_headless_and_gui_entries() {
 
 #[test]
 fn setup_local_difftool_tool_help_lists_headless_and_gui_entries() {
+    if !require_git_shell_for_setup_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -2495,6 +2568,9 @@ fn git_config_get_global_with_env(env: &IsolatedGlobalGitEnv, key: &str) -> Opti
 /// stderr messages, which differ from git's own merge output.
 #[test]
 fn setup_local_enables_git_mergetool_end_to_end() {
+    if !require_git_shell_for_setup_integration_tests() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
 
@@ -2551,6 +2627,9 @@ fn setup_local_enables_git_mergetool_end_to_end() {
 /// gitcomet-app's built-in diff and produce unified diff output.
 #[test]
 fn setup_local_enables_git_difftool_end_to_end() {
+    if !require_git_shell_for_setup_integration_tests() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
 
@@ -2596,6 +2675,9 @@ fn setup_local_enables_git_difftool_end_to_end() {
 /// mergetool command must preserve paths containing spaces/unicode.
 #[test]
 fn setup_local_mergetool_handles_spaced_unicode_path_end_to_end() {
+    if !require_git_shell_for_setup_integration_tests() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
     let conflict_path = "docs/spaced 日本語 file.txt";
@@ -2649,6 +2731,9 @@ fn setup_local_mergetool_handles_spaced_unicode_path_end_to_end() {
 /// difftool command must preserve paths containing spaces/unicode.
 #[test]
 fn setup_local_difftool_handles_spaced_unicode_path_end_to_end() {
+    if !require_git_shell_for_setup_integration_tests() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
     let diff_path = "docs/spaced 日本語 file.txt";
@@ -2694,6 +2779,9 @@ fn setup_local_difftool_handles_spaced_unicode_path_end_to_end() {
 /// gitconfig so `git mergetool` works end-to-end without local repo config.
 #[test]
 fn setup_global_enables_git_mergetool_end_to_end_with_isolated_global_config() {
+    if !require_git_shell_for_setup_integration_tests() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path().join("repo");
     fs::create_dir_all(&repo).unwrap();
@@ -2768,6 +2856,9 @@ fn setup_global_enables_git_mergetool_end_to_end_with_isolated_global_config() {
 /// gitconfig so `git difftool` works end-to-end without local repo config.
 #[test]
 fn setup_global_enables_git_difftool_end_to_end_with_isolated_global_config() {
+    if !require_git_shell_for_setup_integration_tests() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path().join("repo");
     fs::create_dir_all(&repo).unwrap();
@@ -2822,6 +2913,9 @@ fn setup_global_enables_git_difftool_end_to_end_with_isolated_global_config() {
 /// mergetool entries discoverable via `git mergetool --tool-help`.
 #[test]
 fn setup_global_mergetool_tool_help_lists_headless_and_gui_entries() {
+    if !require_git_shell_for_setup_integration_tests() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path().join("repo");
     fs::create_dir_all(&repo).unwrap();
@@ -2871,6 +2965,9 @@ fn setup_global_mergetool_tool_help_lists_headless_and_gui_entries() {
 /// difftool entries discoverable via `git difftool --tool-help`.
 #[test]
 fn setup_global_difftool_tool_help_lists_headless_and_gui_entries() {
+    if !require_git_shell_for_setup_integration_tests() {
+        return;
+    }
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path().join("repo");
     fs::create_dir_all(&repo).unwrap();
@@ -2961,3 +3058,4 @@ fn help_subcommand_exits_zero() {
     let out = run_gitcomet(["help"]);
     assert_eq!(out.status.code(), Some(0), "help subcommand should exit 0");
 }
+

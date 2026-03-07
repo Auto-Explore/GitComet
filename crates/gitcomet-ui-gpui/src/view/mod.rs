@@ -2374,10 +2374,13 @@ mod tests {
         );
     }
 
-    fn focused_bootstrap(repo_path: &str, conflicted_file_path: &str) -> FocusedMergetoolBootstrap {
+    fn focused_bootstrap(
+        repo_path: PathBuf,
+        conflicted_file_path: PathBuf,
+    ) -> FocusedMergetoolBootstrap {
         FocusedMergetoolBootstrap::from_view_config(FocusedMergetoolViewConfig {
-            repo_path: PathBuf::from(repo_path),
-            conflicted_file_path: PathBuf::from(conflicted_file_path),
+            repo_path,
+            conflicted_file_path,
             labels: FocusedMergetoolLabels {
                 local: "LOCAL".to_string(),
                 remote: "REMOTE".to_string(),
@@ -2390,7 +2393,7 @@ mod tests {
         let mut repo = RepoState::new_opening(
             RepoId(1),
             RepoSpec {
-                workdir: PathBuf::from(workdir),
+                workdir: normalize_bootstrap_repo_path(PathBuf::from(workdir)),
             },
         );
         repo.open = Loadable::Ready(());
@@ -2399,32 +2402,33 @@ mod tests {
 
     #[test]
     fn focused_mergetool_target_path_prefers_repo_relative_path() {
+        let repo = normalize_bootstrap_repo_path(PathBuf::from("/repo"));
         let target = focused_mergetool_target_path(
-            std::path::Path::new("/repo"),
-            std::path::Path::new("/repo/src/conflict.txt"),
+            &repo,
+            &repo.join("src/conflict.txt"),
         );
         assert_eq!(target, PathBuf::from("src/conflict.txt"));
     }
 
     #[test]
     fn focused_mergetool_bootstrap_requests_open_repo_when_missing() {
-        let bootstrap = focused_bootstrap("/repo", "/repo/src/conflict.txt");
+        let repo = normalize_bootstrap_repo_path(PathBuf::from("/repo"));
+        let bootstrap = focused_bootstrap(repo.clone(), repo.join("src/conflict.txt"));
         let state = AppState::default();
 
         assert_eq!(
             focused_mergetool_bootstrap_action(&state, &bootstrap),
-            Some(FocusedMergetoolBootstrapAction::OpenRepo(PathBuf::from(
-                "/repo"
-            )))
+            Some(FocusedMergetoolBootstrapAction::OpenRepo(repo))
         );
     }
 
     #[test]
     fn focused_mergetool_bootstrap_selects_worktree_diff_target() {
-        let bootstrap = focused_bootstrap("/repo", "/repo/src/conflict.txt");
+        let repo = normalize_bootstrap_repo_path(PathBuf::from("/repo"));
+        let bootstrap = focused_bootstrap(repo.clone(), repo.join("src/conflict.txt"));
         let mut state = AppState::default();
         state.active_repo = Some(RepoId(1));
-        state.repos.push(open_repo_state_with_workdir("/repo"));
+        state.repos.push(open_repo_state_with_workdir(&repo.to_string_lossy()));
 
         assert_eq!(
             focused_mergetool_bootstrap_action(&state, &bootstrap),
@@ -2440,15 +2444,16 @@ mod tests {
 
     #[test]
     fn focused_mergetool_bootstrap_loads_conflict_file_after_diff_target() {
-        let bootstrap = focused_bootstrap("/repo", "/repo/src/conflict.txt");
+        let repo = normalize_bootstrap_repo_path(PathBuf::from("/repo"));
+        let bootstrap = focused_bootstrap(repo.clone(), repo.join("src/conflict.txt"));
         let mut state = AppState::default();
         state.active_repo = Some(RepoId(1));
-        let mut repo = open_repo_state_with_workdir("/repo");
-        repo.diff_target = Some(DiffTarget::WorkingTree {
+        let mut repo_state = open_repo_state_with_workdir(&repo.to_string_lossy());
+        repo_state.diff_target = Some(DiffTarget::WorkingTree {
             area: DiffArea::Unstaged,
             path: PathBuf::from("src/conflict.txt"),
         });
-        state.repos.push(repo);
+        state.repos.push(repo_state);
 
         assert_eq!(
             focused_mergetool_bootstrap_action(&state, &bootstrap),
@@ -2461,17 +2466,18 @@ mod tests {
 
     #[test]
     fn focused_mergetool_bootstrap_completes_after_conflict_file_target_set() {
-        let bootstrap = focused_bootstrap("/repo", "/repo/src/conflict.txt");
+        let repo = normalize_bootstrap_repo_path(PathBuf::from("/repo"));
+        let bootstrap = focused_bootstrap(repo.clone(), repo.join("src/conflict.txt"));
         let mut state = AppState::default();
         state.active_repo = Some(RepoId(1));
-        let mut repo = open_repo_state_with_workdir("/repo");
-        repo.diff_target = Some(DiffTarget::WorkingTree {
+        let mut repo_state = open_repo_state_with_workdir(&repo.to_string_lossy());
+        repo_state.diff_target = Some(DiffTarget::WorkingTree {
             area: DiffArea::Unstaged,
             path: PathBuf::from("src/conflict.txt"),
         });
-        repo.conflict_file_path = Some(PathBuf::from("src/conflict.txt"));
-        repo.conflict_file = Loadable::Loading;
-        state.repos.push(repo);
+        repo_state.conflict_file_path = Some(PathBuf::from("src/conflict.txt"));
+        repo_state.conflict_file = Loadable::Loading;
+        state.repos.push(repo_state);
 
         assert_eq!(
             focused_mergetool_bootstrap_action(&state, &bootstrap),
