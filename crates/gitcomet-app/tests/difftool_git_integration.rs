@@ -11,6 +11,9 @@ fn apply_isolated_git_config_env(cmd: &mut Command) {
     // Keep integration tests deterministic by ignoring host git config.
     cmd.env("GIT_CONFIG_NOSYSTEM", "1");
     cmd.env("GIT_CONFIG_GLOBAL", NULL_DEVICE);
+    // Force deterministic git output for string assertions in tests.
+    cmd.env("LC_ALL", "C");
+    cmd.env("LANG", "C");
 }
 
 fn gitcomet_bin() -> PathBuf {
@@ -1043,6 +1046,7 @@ fn git_difftool_shows_submodule_gitlink_change() {
 
 // ── Symlink diff ─────────────────────────────────────────────────────
 
+#[cfg(unix)]
 #[test]
 fn git_difftool_shows_symlink_target_change() {
     // When a symlink target changes, git difftool shows the diff of

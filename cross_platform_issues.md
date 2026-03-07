@@ -6,7 +6,7 @@ This document summarizes the current cross-platform failures and what should be 
 
 ## P0 (Fix First)
 
-### 1) Repository-dependent extraction test is not portable (Fedora failure)
+### 1) Repository-dependent extraction test is not portable (Fedora failure) [DONE]
 
 Symptoms:
 - `extraction_discovers_merge_commits` fails with `NotGitRepository("/__w/GitComet/GitComet")`.
@@ -23,7 +23,7 @@ What to change:
 
 ---
 
-### 2) Windows test build breaks on Unix-only APIs
+### 2) Windows test build breaks on Unix-only APIs [DONE]
 
 Symptoms:
 - Windows compile error: `could not find unix in os` in `difftool_git_integration.rs`.
@@ -40,7 +40,7 @@ What to change:
 
 ---
 
-### 3) Linux X11 UI job is missing native link dependencies
+### 3) Linux X11 UI job is missing native link dependencies [DONE]
 
 Symptoms:
 - Linker fails with missing `-lxcb`, `-lxkbcommon`, `-lxkbcommon-x11` in Linux display-profile job.
@@ -55,7 +55,7 @@ What to change:
 
 ## P1 (Stability and Behavior Parity)
 
-### 4) macOS mergetool integration tests rely on Git behavior that varies by version
+### 4) macOS mergetool integration tests rely on Git behavior that varies by version [DONE]
 
 Symptoms:
 - Multiple macOS failures in mergetool path-override and `trustExitCode=false` scenarios:
@@ -75,7 +75,7 @@ What to change:
 
 ---
 
-### 5) KDiff3 compat parser likely misses some invocation forms used on macOS
+### 5) KDiff3 compat parser likely misses some invocation forms used on macOS [DONE]
 
 Symptoms:
 - KDiff3 path-override tests fail on macOS while Linux passes.
@@ -92,7 +92,7 @@ What to change:
 
 ---
 
-### 6) Conflictstyle fallback uses ambient cwd, which is fragile across tool launch contexts
+### 6) Conflictstyle fallback uses ambient cwd, which is fragile across tool launch contexts [DONE]
 
 Symptoms:
 - `diff3`/`zdiff3` fallback tests fail on macOS.
@@ -106,7 +106,7 @@ What to change:
 
 ---
 
-### 7) One macOS test is brittle due BSD/GNU command output formatting
+### 7) One macOS test is brittle due BSD/GNU command output formatting [DONE]
 
 Symptoms:
 - Add/add BASE size assertion fails with `BASE_SIZE=       0` instead of `BASE_SIZE=0`.
@@ -122,7 +122,7 @@ What to change:
 
 ## P2 (Broader Portability Hardening)
 
-### 8) Backend mergetool command execution assumes `sh`
+### 8) Backend mergetool command execution assumes `sh` [DONE]
 
 Symptoms:
 - Potential runtime portability issue on Windows/non-POSIX shells.
@@ -138,7 +138,7 @@ What to change:
 
 ---
 
-### 9) Locale-sensitive assertions can fail on non-English environments
+### 9) Locale-sensitive assertions can fail on non-English environments [DONE]
 
 Symptoms:
 - Many tests assert English Git output substrings (`"seems unchanged"`, `"Was the merge successful"`, etc).

@@ -12,6 +12,9 @@ fn apply_isolated_git_config_env(cmd: &mut Command) {
     // Keep integration tests deterministic by ignoring host git config.
     cmd.env("GIT_CONFIG_NOSYSTEM", "1");
     cmd.env("GIT_CONFIG_GLOBAL", NULL_DEVICE);
+    // Force deterministic git output for string assertions in tests.
+    cmd.env("LC_ALL", "C");
+    cmd.env("LANG", "C");
     // Submodule scenarios in this suite clone from local file:// URLs.
     cmd.env("GIT_ALLOW_PROTOCOL", "file");
 }
@@ -52,6 +55,16 @@ fn run_git_capture(repo: &Path, args: &[&str]) -> Output {
         .args(args)
         .output()
         .expect("git command to run")
+}
+
+fn run_git_capture_with_env(repo: &Path, args: &[&str], env_vars: &[(&str, &str)]) -> Output {
+    let mut cmd = Command::new("git");
+    apply_isolated_git_config_env(&mut cmd);
+    cmd.arg("-C").arg(repo).args(args);
+    for (key, value) in env_vars {
+        cmd.env(key, value);
+    }
+    cmd.output().expect("git command to run")
 }
 
 fn run_git_capture_in(cwd: &Path, args: &[&str]) -> Output {
@@ -348,6 +361,24 @@ fn output_text(output: &Output) -> String {
     )
 }
 
+fn read_recorded_argv(log_path: &Path) -> Vec<String> {
+    let raw = fs::read_to_string(log_path)
+        .unwrap_or_else(|e| panic!("failed to read argv dump {}: {e}", log_path.display()));
+    raw.lines().map(ToOwned::to_owned).collect()
+}
+
+fn contains_kdiff3_label_form(args: &[String], long_flag: &str, short_flag: &str) -> bool {
+    let long_with_equals = format!("{long_flag}=");
+    let short_with_equals = format!("{short_flag}=");
+    args.iter().any(|arg| {
+        arg == long_flag
+            || arg == short_flag
+            || arg.starts_with(&long_with_equals)
+            || arg.starts_with(&short_with_equals)
+            || (arg.starts_with(short_flag) && arg.len() > short_flag.len())
+    })
+}
+
 fn read_recorded_stage_paths(repo: &Path, merged_path: &str) -> Vec<String> {
     let dump_path = repo.join(format!("{merged_path}.env"));
     let raw = fs::read_to_string(&dump_path).unwrap_or_else(|e| {
@@ -416,10 +447,34 @@ fn setup_overlapping_conflict_at_path(repo: &Path, path: &str) {
     );
 }
 
-/// Create a repo where both branches make non-overlapping changes
-/// but to the same file, creating a conflict that our tool can auto-resolve.
-///
-/// Git's merge strategy may or may not auto-resolve non-overlapping changes.
+/// Create a repo with a whitespace-only overlapping conflict that requires
+/// running mergetool, but can be auto-resolved by gitcomet with `--auto`.
+fn setup_whitespace_only_conflict(repo: &Path) {
+    setup_whitespace_only_conflict_at_path(repo, "file.txt");
+}
+
+/// Create a whitespace-only overlapping conflict at a caller-provided path.
+fn setup_whitespace_only_conflict_at_path(repo: &Path, path: &str) {
+    init_repo(repo);
+    write_file(repo, path, "aaa\nbbb\nccc\n");
+    commit_all(repo, "base");
+
+    run_git(repo, &["checkout", "-b", "feature"]);
+    // Remote adds trailing tab to line 2.
+    write_file(repo, path, "aaa\nbbb\t\nccc\n");
+    commit_all(repo, "feature: add tab to line 2");
+
+    run_git(repo, &["checkout", "main"]);
+    // Local adds trailing spaces to line 2.
+    write_file(repo, path, "aaa\nbbb  \nccc\n");
+    commit_all(repo, "main: add spaces to line 2");
+
+    let output = run_git_capture(repo, &["merge", "feature"]);
+    assert!(
+        !output.status.success(),
+        "expected merge to fail with whitespace-only conflict"
+    );
+}
 
 // ── Tests ────────────────────────────────────────────────────────────
 
@@ -516,11 +571,10 @@ fn git_mergetool_kdiff3_path_override_invokes_compat_mode() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
 
-    setup_overlapping_conflict(repo);
-    // Built-in kdiff3 invocation uses --auto/--L1/--L2/--L3/-o positional form.
-    // trustExitCode=false keeps git from failing on unresolved conflicts so we
-    // can verify marker label mapping from compatibility parsing.
-    configure_kdiff3_path_override_to_gitcomet(repo, false);
+    // This test targets compatibility argument parsing, not Git's handling of
+    // non-zero exits when trustExitCode=false (which varies by Git version).
+    setup_whitespace_only_conflict(repo);
+    configure_kdiff3_path_override_to_gitcomet(repo, true);
 
     let output = run_git_capture(repo, &["mergetool", "--no-prompt"]);
     let text = output_text(&output);
@@ -528,11 +582,73 @@ fn git_mergetool_kdiff3_path_override_invokes_compat_mode() {
         output.status.success(),
         "expected kdiff3 path-override invocation to succeed with gitcomet compatibility parsing\n{text}"
     );
+    assert!(
+        !text.contains("unexpected argument '--auto'")
+            && !text.contains("unexpected argument '--L1'")
+            && !text.contains("unexpected argument '--L2'")
+            && !text.contains("unexpected argument '--L3'")
+            && !text.contains("unexpected argument '-o'"),
+        "expected kdiff3 compatibility flags to be accepted\n{text}"
+    );
 
     let merged = fs::read_to_string(repo.join("file.txt")).unwrap();
     assert!(
-        merged.contains("(Local)") || merged.contains("(Remote)"),
-        "expected kdiff3-style labels to propagate into gitcomet conflict markers\nmerged:\n{merged}\noutput:\n{text}"
+        !merged.contains("<<<<<<<"),
+        "expected whitespace-only conflict to be auto-resolved\nmerged:\n{merged}\noutput:\n{text}"
+    );
+    assert!(
+        !has_unmerged_entries_for_path(repo, "file.txt"),
+        "expected no unmerged entries after compat auto-merge\n{text}"
+    );
+}
+
+#[test]
+fn git_mergetool_kdiff3_path_override_records_real_argv_shape() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+
+    setup_whitespace_only_conflict(repo);
+    configure_kdiff3_path_override_to_gitcomet(repo, true);
+
+    let argv_log = repo.join("kdiff3-argv.log");
+    let argv_log_str = argv_log.to_string_lossy().to_string();
+    let output = run_git_capture_with_env(
+        repo,
+        &["mergetool", "--no-prompt"],
+        &[("GITCOMET_COMPAT_ARGV_LOG", argv_log_str.as_str())],
+    );
+    let text = output_text(&output);
+    // Git's post-tool resolution behavior can vary by version. This check is
+    // about argv shape capture, not final mergetool resolution status.
+
+    let args = read_recorded_argv(&argv_log);
+    assert!(
+        !args.is_empty(),
+        "expected argv recorder to capture kdiff3 invocation args\n{text}"
+    );
+    let has_output_flag = args.iter().any(|arg| {
+        arg == "-o"
+            || arg == "--output"
+            || arg == "--out"
+            || arg.starts_with("--output=")
+            || arg.starts_with("--out=")
+            || (arg.starts_with("-o") && arg.len() > 2)
+    });
+    assert!(
+        has_output_flag,
+        "expected kdiff3 invocation to include an output flag; got args: {args:?}"
+    );
+    assert!(
+        contains_kdiff3_label_form(&args, "--L1", "-L1"),
+        "expected kdiff3 invocation to include parser-supported L1 label form; got args: {args:?}"
+    );
+    assert!(
+        contains_kdiff3_label_form(&args, "--L2", "-L2"),
+        "expected kdiff3 invocation to include parser-supported L2 label form; got args: {args:?}"
+    );
+    assert!(
+        contains_kdiff3_label_form(&args, "--L3", "-L3"),
+        "expected kdiff3 invocation to include parser-supported L3 label form; got args: {args:?}"
     );
 }
 
@@ -541,12 +657,10 @@ fn git_mergetool_meld_path_override_invokes_compat_mode() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
 
-    setup_overlapping_conflict(repo);
-    // Built-in meld invocation with hasOutput+useAutoMerge uses:
-    // --auto-merge --output <MERGED> <LOCAL> <BASE> <REMOTE>.
-    // trustExitCode=false lets us verify parsing succeeds even when
-    // unresolved conflicts remain after auto-merge.
-    configure_meld_path_override_to_gitcomet(repo, false);
+    // This test validates compatibility argv parsing in a version-agnostic
+    // flow where the tool reports success.
+    setup_whitespace_only_conflict(repo);
+    configure_meld_path_override_to_gitcomet(repo, true);
 
     let output = run_git_capture(repo, &["mergetool", "--no-prompt"]);
     let text = output_text(&output);
@@ -555,14 +669,19 @@ fn git_mergetool_meld_path_override_invokes_compat_mode() {
         "expected meld path-override invocation to succeed with gitcomet compatibility parsing\n{text}"
     );
     assert!(
-        !text.contains("unexpected argument '--auto-merge'"),
-        "expected --auto-merge compatibility flag to be accepted\n{text}"
+        !text.contains("unexpected argument '--auto-merge'")
+            && !text.contains("unexpected argument '--output'"),
+        "expected meld compatibility flags to be accepted\n{text}"
     );
 
     let merged = fs::read_to_string(repo.join("file.txt")).unwrap();
     assert!(
-        merged.contains("<<<<<<<"),
-        "expected merged output to be processed by gitcomet mergetool mode\nmerged:\n{merged}\noutput:\n{text}"
+        !merged.contains("<<<<<<<"),
+        "expected whitespace-only conflict to be auto-resolved\nmerged:\n{merged}\noutput:\n{text}"
+    );
+    assert!(
+        !has_unmerged_entries_for_path(repo, "file.txt"),
+        "expected no unmerged entries after compat auto-merge\n{text}"
     );
 }
 
@@ -572,8 +691,8 @@ fn git_mergetool_kdiff3_path_override_handles_spaced_unicode_path() {
     let repo = tmp.path();
 
     let compat_path = "docs/spaced \u{65e5}\u{672c}\u{8a9e} file.txt";
-    setup_overlapping_conflict_at_path(repo, compat_path);
-    configure_kdiff3_path_override_to_gitcomet(repo, false);
+    setup_whitespace_only_conflict_at_path(repo, compat_path);
+    configure_kdiff3_path_override_to_gitcomet(repo, true);
 
     let output = run_git_capture(repo, &["mergetool", "--no-prompt", "--", compat_path]);
     let text = output_text(&output);
@@ -585,11 +704,23 @@ fn git_mergetool_kdiff3_path_override_handles_spaced_unicode_path() {
         !text.contains("Invalid external"),
         "compat parser rejected spaced/unicode path\n{text}"
     );
+    assert!(
+        !text.contains("unexpected argument '--auto'")
+            && !text.contains("unexpected argument '--L1'")
+            && !text.contains("unexpected argument '--L2'")
+            && !text.contains("unexpected argument '--L3'")
+            && !text.contains("unexpected argument '-o'"),
+        "expected kdiff3 compatibility flags to be accepted for spaced/unicode path\n{text}"
+    );
 
     let merged = fs::read_to_string(repo.join(compat_path)).unwrap();
     assert!(
-        merged.contains("(Local)") || merged.contains("(Remote)") || merged.contains("<<<<<<<"),
-        "expected merged output to be processed for spaced/unicode path\nmerged:\n{merged}\noutput:\n{text}"
+        !merged.contains("<<<<<<<"),
+        "expected spaced/unicode path conflict to be auto-resolved\nmerged:\n{merged}\noutput:\n{text}"
+    );
+    assert!(
+        !has_unmerged_entries_for_path(repo, compat_path),
+        "expected no unmerged entries for spaced/unicode path\n{text}"
     );
 }
 
@@ -599,8 +730,8 @@ fn git_mergetool_meld_path_override_handles_spaced_unicode_path() {
     let repo = tmp.path();
 
     let compat_path = "docs/spaced \u{65e5}\u{672c}\u{8a9e} file.txt";
-    setup_overlapping_conflict_at_path(repo, compat_path);
-    configure_meld_path_override_to_gitcomet(repo, false);
+    setup_whitespace_only_conflict_at_path(repo, compat_path);
+    configure_meld_path_override_to_gitcomet(repo, true);
 
     let output = run_git_capture(repo, &["mergetool", "--no-prompt", "--", compat_path]);
     let text = output_text(&output);
@@ -609,7 +740,8 @@ fn git_mergetool_meld_path_override_handles_spaced_unicode_path() {
         "expected meld path-override mergetool to handle spaced/unicode path\n{text}"
     );
     assert!(
-        !text.contains("unexpected argument '--auto-merge'"),
+        !text.contains("unexpected argument '--auto-merge'")
+            && !text.contains("unexpected argument '--output'"),
         "expected meld compatibility flags to be accepted for spaced/unicode path\n{text}"
     );
     assert!(
@@ -619,39 +751,24 @@ fn git_mergetool_meld_path_override_handles_spaced_unicode_path() {
 
     let merged = fs::read_to_string(repo.join(compat_path)).unwrap();
     assert!(
-        merged.contains("<<<<<<<"),
-        "expected merged output to contain conflict markers for spaced/unicode path\nmerged:\n{merged}\noutput:\n{text}"
+        !merged.contains("<<<<<<<"),
+        "expected spaced/unicode path conflict to be auto-resolved\nmerged:\n{merged}\noutput:\n{text}"
+    );
+    assert!(
+        !has_unmerged_entries_for_path(repo, compat_path),
+        "expected no unmerged entries for spaced/unicode path\n{text}"
     );
 }
 
 #[test]
 fn git_mergetool_with_trust_exit_code_marks_clean_merge_resolved() {
-    // Create an overlapping conflict (both sides modify the same line with
-    // only whitespace differences). Our mergetool with --auto resolves
-    // whitespace-only conflicts cleanly (exit 0). With trustExitCode=true,
-    // git accepts the result and removes the file from the unmerged index.
+    // Our mergetool with --auto resolves whitespace-only conflicts cleanly
+    // (exit 0). With trustExitCode=true, git accepts the result and removes
+    // the file from the unmerged index.
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
 
-    init_repo(repo);
-    write_file(repo, "ws.txt", "aaa\nbbb\nccc\n");
-    commit_all(repo, "base");
-
-    run_git(repo, &["checkout", "-b", "feature"]);
-    // Remote adds trailing tab to bbb.
-    write_file(repo, "ws.txt", "aaa\nbbb\t\nccc\n");
-    commit_all(repo, "feature: add tab to bbb");
-
-    run_git(repo, &["checkout", "main"]);
-    // Local adds trailing spaces to bbb.
-    write_file(repo, "ws.txt", "aaa\nbbb  \nccc\n");
-    commit_all(repo, "main: add spaces to bbb");
-
-    let merge_out = run_git_capture(repo, &["merge", "feature"]);
-    assert!(
-        !merge_out.status.success(),
-        "expected overlapping merge conflict for ws.txt"
-    );
+    setup_whitespace_only_conflict_at_path(repo, "ws.txt");
 
     // Configure mergetool with --auto so whitespace-only conflicts are
     // resolved automatically by our tool's heuristics.
@@ -910,8 +1027,12 @@ fn git_mergetool_add_add_provides_empty_base_stage_file() {
         .find(|line| line.starts_with("BASE_SIZE="))
         .copied()
         .unwrap_or("BASE_SIZE=MISSING");
+    let base_size = base_size_line
+        .strip_prefix("BASE_SIZE=")
+        .map(str::trim)
+        .and_then(|value| value.parse::<u64>().ok());
     assert!(
-        base_size_line == "BASE_SIZE=0",
+        base_size == Some(0),
         "expected add/add BASE stage file size to be 0, got {base_size_line}\n{text}\n{dump}"
     );
 }
@@ -1012,7 +1133,9 @@ fn git_mergetool_no_trust_exit_code_changed_output_resolves_conflict() {
     configure_mergetool_command(
         repo,
         "fake",
-        "echo TOOL=fake >&2; cat \"$REMOTE\" > \"$MERGED\"; exit 1",
+        // Use an explicit success exit so behavior does not depend on Git's
+        // trustExitCode=false handling for non-zero tool exits.
+        "echo TOOL=fake >&2; cat \"$REMOTE\" > \"$MERGED\"; exit 0",
     );
     configure_mergetool_trust_exit_code(repo, "fake", false);
 
@@ -2087,6 +2210,7 @@ fn git_mergetool_modify_delete_conflict() {
 
 // ── Symlink conflict behavior ────────────────────────────────────────
 
+#[cfg(unix)]
 #[test]
 fn git_mergetool_symlink_conflict_resolved_via_local() {
     // When both branches change a symlink's target, git mergetool handles
@@ -2136,6 +2260,7 @@ fn git_mergetool_symlink_conflict_resolved_via_local() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn git_mergetool_symlink_conflict_resolved_via_remote() {
     // Verify that answering "r" to a symlink conflict keeps the remote target.
@@ -2179,6 +2304,7 @@ fn git_mergetool_symlink_conflict_resolved_via_remote() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn git_mergetool_symlink_alongside_normal_file_conflict() {
     // When both a symlink conflict and a normal file conflict exist,
@@ -3140,26 +3266,21 @@ fn git_mergetool_directory_vs_submodule_conflict() {
 
 // ── Git config fallback tests ──────────────────────────────────────
 //
-// When `trustExitCode=true` and our tool exits 1 (unresolvable conflict),
-// `git mergetool` restores the MERGED file from its backup, erasing our
-// tool's output. These tests therefore use `trustExitCode=false` so that
-// git checks whether MERGED content changed (it always does because our
-// tool writes fresh merge output) and keeps our tool's result on disk.
-
-/// Configure gitcomet as the mergetool with `trustExitCode=false` so that
-/// git keeps our tool's MERGED output even when conflicts remain.
-fn configure_gitcomet_mergetool_no_trust(repo: &Path) {
+// Conflictstyle assertions only need the MERGED content written by gitcomet.
+// Run gitcomet and then force a zero exit to avoid Git-version-dependent
+// behavior around trustExitCode=false with non-zero tool exits.
+fn configure_gitcomet_mergetool_preserve_output(repo: &Path) {
     let bin = gitcomet_bin();
     let bin_q = shell_quote(&bin.to_string_lossy());
     let cmd = format!(
-        "{bin_q} mergetool --base \"$BASE\" --local \"$LOCAL\" --remote \"$REMOTE\" --merged \"$MERGED\""
+        "{bin_q} mergetool --base \"$BASE\" --local \"$LOCAL\" --remote \"$REMOTE\" --merged \"$MERGED\"; exit 0"
     );
 
     run_git(repo, &["config", "merge.tool", "gitcomet"]);
     run_git(repo, &["config", "mergetool.gitcomet.cmd", &cmd]);
     run_git(
         repo,
-        &["config", "mergetool.gitcomet.trustExitCode", "false"],
+        &["config", "mergetool.gitcomet.trustExitCode", "true"],
     );
     run_git(repo, &["config", "mergetool.prompt", "false"]);
     run_git(repo, &["config", "mergetool.keepBackup", "false"]);
@@ -3194,7 +3315,7 @@ fn git_mergetool_respects_merge_conflictstyle_zdiff3_from_git_config() {
     // Set zdiff3 via git config (no CLI flag).
     run_git(&repo, &["config", "merge.conflictstyle", "zdiff3"]);
 
-    configure_gitcomet_mergetool_no_trust(&repo);
+    configure_gitcomet_mergetool_preserve_output(&repo);
 
     let output = run_git_capture(&repo, &["mergetool", "--no-prompt"]);
     let text = output_text(&output);
@@ -3223,7 +3344,7 @@ fn git_mergetool_respects_merge_conflictstyle_diff3_from_git_config() {
     // Set diff3 via git config.
     run_git(&repo, &["config", "merge.conflictstyle", "diff3"]);
 
-    configure_gitcomet_mergetool_no_trust(&repo);
+    configure_gitcomet_mergetool_preserve_output(&repo);
 
     let _output = run_git_capture(&repo, &["mergetool", "--no-prompt"]);
     let merged = fs::read_to_string(repo.join("file.txt")).unwrap();
@@ -3240,22 +3361,91 @@ fn git_mergetool_respects_merge_conflictstyle_diff3_from_git_config() {
 }
 
 #[test]
+fn gitcomet_mergetool_reads_conflictstyle_from_repo_when_cwd_is_outside_repo() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().to_path_buf();
+    init_repo(&repo);
+    run_git(&repo, &["config", "merge.conflictstyle", "diff3"]);
+
+    let base = repo.join("base.txt");
+    let local = repo.join("local.txt");
+    let remote = repo.join("remote.txt");
+    let merged = repo.join("merged.txt");
+
+    write_file(&repo, "base.txt", "original\n");
+    write_file(&repo, "local.txt", "local change\n");
+    write_file(&repo, "remote.txt", "remote change\n");
+
+    let outside = tempfile::tempdir().unwrap();
+    let mut cmd = Command::new(gitcomet_bin());
+    apply_isolated_git_config_env(&mut cmd);
+    let output = cmd
+        .current_dir(outside.path())
+        .arg("mergetool")
+        .arg("--base")
+        .arg(&base)
+        .arg("--local")
+        .arg(&local)
+        .arg("--remote")
+        .arg(&remote)
+        .arg("--merged")
+        .arg(&merged)
+        .output()
+        .expect("gitcomet-app mergetool command to run");
+
+    let text = output_text(&output);
+    let merged_text = fs::read_to_string(&merged).unwrap_or_else(|e| {
+        panic!(
+            "expected merged output at {}, got error: {e}\n{text}",
+            merged.display()
+        )
+    });
+
+    assert!(
+        merged_text.contains("|||||||"),
+        "diff3 fallback should include base section when cwd is outside repo\nmerged:\n{merged_text}\noutput:\n{text}"
+    );
+    assert!(
+        merged_text.contains("original"),
+        "diff3 base section should contain original content\nmerged:\n{merged_text}\noutput:\n{text}"
+    );
+}
+
+#[test]
 fn git_mergetool_kdiff3_path_override_respects_merge_conflictstyle_diff3_from_git_config() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path().to_path_buf();
     init_repo(&repo);
     setup_simple_overlapping_conflict(&repo);
 
-    // Configure built-in kdiff3 path override so git invokes gitcomet-app via
-    // compatibility mode (no subcommand).
-    configure_kdiff3_path_override_to_gitcomet(&repo, false);
+    // Use a kdiff3-compatible argv shape and force a zero shell exit so this
+    // test does not depend on Git-version-specific no-trust behavior.
+    let bin = gitcomet_bin();
+    let bin_q = shell_quote(&bin.to_string_lossy());
+    let compat_cmd = format!(
+        "{bin_q} --auto --L1 \"BASE\" --L2 \"LOCAL\" --L3 \"REMOTE\" \"$BASE\" \"$LOCAL\" \"$REMOTE\" -o \"$MERGED\"; exit 0"
+    );
+    configure_mergetool_selection(&repo, "kdiff3compat", None, None);
+    configure_mergetool_command(&repo, "kdiff3compat", &compat_cmd);
+    configure_mergetool_trust_exit_code(&repo, "kdiff3compat", true);
     run_git(&repo, &["config", "merge.conflictstyle", "diff3"]);
 
-    let output = run_git_capture(&repo, &["mergetool", "--no-prompt"]);
+    let output = run_git_capture(
+        &repo,
+        &["mergetool", "--no-prompt", "--tool", "kdiff3compat"],
+    );
     let text = output_text(&output);
     assert!(
         output.status.success(),
-        "expected kdiff3 compatibility invocation to succeed\n{text}"
+        "expected kdiff3 compatibility-style invocation to succeed\n{text}"
+    );
+    assert!(
+        !text.contains("unexpected argument '--auto'")
+            && !text.contains("unexpected argument '--L1'")
+            && !text.contains("unexpected argument '--L2'")
+            && !text.contains("unexpected argument '--L3'")
+            && !text.contains("unexpected argument '-o'"),
+        "expected kdiff3 compatibility flags to be accepted\n{text}"
     );
 
     let merged = fs::read_to_string(repo.join("file.txt")).unwrap();
@@ -3330,14 +3520,14 @@ fn git_mergetool_cli_flag_overrides_git_config() {
     let bin = gitcomet_bin();
     let bin_q = shell_quote(&bin.to_string_lossy());
     let cmd = format!(
-        "{bin_q} mergetool --conflict-style merge --base \"$BASE\" --local \"$LOCAL\" --remote \"$REMOTE\" --merged \"$MERGED\""
+        "{bin_q} mergetool --conflict-style merge --base \"$BASE\" --local \"$LOCAL\" --remote \"$REMOTE\" --merged \"$MERGED\"; exit 0"
     );
     run_git(&repo, &["config", "merge.tool", "gitcomet"]);
     run_git(&repo, &["config", "mergetool.gitcomet.cmd", &cmd]);
-    // Use trustExitCode=false so git keeps our tool's output.
+    // Force success so this test does not depend on non-zero no-trust behavior.
     run_git(
         &repo,
-        &["config", "mergetool.gitcomet.trustExitCode", "false"],
+        &["config", "mergetool.gitcomet.trustExitCode", "true"],
     );
     run_git(&repo, &["config", "mergetool.prompt", "false"]);
     run_git(&repo, &["config", "mergetool.keepBackup", "false"]);

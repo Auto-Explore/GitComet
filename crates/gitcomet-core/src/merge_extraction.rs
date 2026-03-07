@@ -56,7 +56,10 @@ impl Default for MergeExtractionOptions {
 #[derive(Debug)]
 pub enum MergeExtractionError {
     InvalidArgument(&'static str),
-    NotGitRepository(PathBuf),
+    NotGitRepository {
+        path: PathBuf,
+        stderr: String,
+    },
     GitCommandFailed {
         command: String,
         stderr: String,
@@ -72,8 +75,12 @@ impl fmt::Display for MergeExtractionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidArgument(message) => write!(f, "{message}"),
-            Self::NotGitRepository(path) => {
-                write!(f, "{} is not a git repository", path.display())
+            Self::NotGitRepository { path, stderr } => {
+                if stderr.is_empty() {
+                    write!(f, "{} is not a git repository", path.display())
+                } else {
+                    write!(f, "{} is not a git repository: {}", path.display(), stderr)
+                }
             }
             Self::GitCommandFailed { command, stderr } => {
                 if stderr.is_empty() {
@@ -386,7 +393,10 @@ fn ensure_git_repository(repo: &Path) -> Result<(), MergeExtractionError> {
     if output.status.success() {
         Ok(())
     } else {
-        Err(MergeExtractionError::NotGitRepository(repo.to_path_buf()))
+        Err(MergeExtractionError::NotGitRepository {
+            path: repo.to_path_buf(),
+            stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        })
     }
 }
 
@@ -694,6 +704,25 @@ mod tests {
             ),
             "unexpected error: {error}"
         );
+    }
+
+    #[test]
+    fn discover_merge_commits_reports_not_git_repository_stderr() {
+        let tmp = tempfile::tempdir().expect("create temp dir");
+        let repo = tmp.path();
+        let error =
+            discover_merge_commits(repo, 1).expect_err("expected not-a-git-repository error");
+
+        match error {
+            MergeExtractionError::NotGitRepository { path, stderr } => {
+                assert_eq!(path, repo);
+                assert!(
+                    !stderr.is_empty(),
+                    "expected stderr details for repository validation failure"
+                );
+            }
+            other => panic!("expected NotGitRepository, got {other:?}"),
+        }
     }
 
     #[test]

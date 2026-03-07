@@ -217,6 +217,164 @@ fn make_executable(path: &Path) {
     fs::set_permissions(path, Permissions::from_mode(0o755)).unwrap();
 }
 
+#[cfg(windows)]
+fn set_fixed_mtime(path: &Path) {
+    let status = Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-Command",
+            "(Get-Item -LiteralPath $env:GITCOMET_TARGET).LastWriteTimeUtc=[DateTimeOffset]::FromUnixTimeSeconds(1700000000).UtcDateTime",
+        ])
+        .env("GITCOMET_TARGET", path)
+        .status()
+        .expect("powershell to run");
+    assert!(status.success());
+}
+
+#[cfg(not(windows))]
+fn set_fixed_mtime(path: &Path) {
+    let status = Command::new("touch")
+        .arg("-d")
+        .arg("@1700000000")
+        .arg(path)
+        .status()
+        .expect("touch to run");
+    assert!(status.success());
+}
+
+#[cfg(windows)]
+fn cmd_same_size_content_change_and_exit_failure() -> &'static str {
+    r#"powershell -NoProfile -Command "$path=$env:MERGED; $len=(Get-Item -LiteralPath $path).Length; $bytes=New-Object byte[] $len; for ($i=0; $i -lt $len; $i++) { $bytes[$i]=[byte][char]'R' }; [System.IO.File]::WriteAllBytes($path, $bytes); (Get-Item -LiteralPath $path).LastWriteTimeUtc=[DateTimeOffset]::FromUnixTimeSeconds(1700000000).UtcDateTime" & exit /b 1"#
+}
+
+#[cfg(not(windows))]
+fn cmd_same_size_content_change_and_exit_failure() -> &'static str {
+    "len=$(wc -c < \"$MERGED\"); head -c \"$len\" /dev/zero | tr '\\0' 'R' > \"$MERGED\"; touch -d '@1700000000' \"$MERGED\"; exit 1"
+}
+
+#[cfg(windows)]
+fn cmd_exit_success() -> &'static str {
+    "exit /b 0"
+}
+
+#[cfg(not(windows))]
+fn cmd_exit_success() -> &'static str {
+    "exit 0"
+}
+
+#[cfg(windows)]
+fn cmd_delete_merged_and_exit_failure() -> &'static str {
+    r#"powershell -NoProfile -Command "Remove-Item -LiteralPath $env:MERGED -Force -ErrorAction SilentlyContinue" & exit /b 1"#
+}
+
+#[cfg(not(windows))]
+fn cmd_delete_merged_and_exit_failure() -> &'static str {
+    "rm -f \"$MERGED\"; exit 1"
+}
+
+#[cfg(windows)]
+fn cmd_write_unresolved_markers_and_exit_success() -> &'static str {
+    r#"powershell -NoProfile -Command "[System.IO.File]::WriteAllText($env:MERGED, ('<<<<<<< ours' + [Environment]::NewLine + 'left' + [Environment]::NewLine + '=======' + [Environment]::NewLine + 'right' + [Environment]::NewLine + '>>>>>>> theirs' + [Environment]::NewLine))" & exit /b 0"#
+}
+
+#[cfg(not(windows))]
+fn cmd_write_unresolved_markers_and_exit_success() -> &'static str {
+    "printf '<<<<<<< ours\nleft\n=======\nright\n>>>>>>> theirs\n' > \"$MERGED\"; exit 0"
+}
+
+#[cfg(windows)]
+fn cmd_copy_remote_to_merged_and_exit_success() -> &'static str {
+    r#"powershell -NoProfile -Command "[System.IO.File]::WriteAllBytes($env:MERGED, [System.IO.File]::ReadAllBytes($env:REMOTE))""#
+}
+
+#[cfg(not(windows))]
+fn cmd_copy_remote_to_merged_and_exit_success() -> &'static str {
+    "cat \"$REMOTE\" > \"$MERGED\"; exit 0"
+}
+
+#[cfg(windows)]
+fn cmd_write_cli_to_merged() -> &'static str {
+    r#"powershell -NoProfile -Command "[System.IO.File]::WriteAllText($env:MERGED, 'cli' + [Environment]::NewLine)""#
+}
+
+#[cfg(not(windows))]
+fn cmd_write_cli_to_merged() -> &'static str {
+    "printf 'cli\\n' > \"$MERGED\""
+}
+
+#[cfg(windows)]
+fn cmd_write_gui_to_merged() -> &'static str {
+    r#"powershell -NoProfile -Command "[System.IO.File]::WriteAllText($env:MERGED, 'gui' + [Environment]::NewLine)""#
+}
+
+#[cfg(not(windows))]
+fn cmd_write_gui_to_merged() -> &'static str {
+    "printf 'gui\\n' > \"$MERGED\""
+}
+
+#[cfg(windows)]
+fn cmd_write_cmd_to_merged() -> &'static str {
+    r#"powershell -NoProfile -Command "[System.IO.File]::WriteAllText($env:MERGED, 'cmd' + [Environment]::NewLine)""#
+}
+
+#[cfg(not(windows))]
+fn cmd_write_cmd_to_merged() -> &'static str {
+    "printf 'cmd\\n' > \"$MERGED\"; exit 0"
+}
+
+#[cfg(windows)]
+fn cmd_dump_stage_paths_and_copy_remote() -> &'static str {
+    r#"powershell -NoProfile -Command "[System.IO.File]::WriteAllLines($env:MERGED + '.env', @($env:BASE, $env:LOCAL, $env:REMOTE)); [System.IO.File]::WriteAllBytes($env:MERGED, [System.IO.File]::ReadAllBytes($env:REMOTE))""#
+}
+
+#[cfg(not(windows))]
+fn cmd_dump_stage_paths_and_copy_remote() -> &'static str {
+    "printf '%s\\n%s\\n%s\\n' \"$BASE\" \"$LOCAL\" \"$REMOTE\" > \"$MERGED.env\"; cat \"$REMOTE\" > \"$MERGED\""
+}
+
+#[cfg(windows)]
+fn cmd_dump_stage_paths_and_exit_failure() -> &'static str {
+    r#"powershell -NoProfile -Command "[System.IO.File]::WriteAllLines($env:MERGED + '.env', @($env:BASE, $env:LOCAL, $env:REMOTE))" & exit /b 1"#
+}
+
+#[cfg(not(windows))]
+fn cmd_dump_stage_paths_and_exit_failure() -> &'static str {
+    "printf '%s\\n%s\\n%s\\n' \"$BASE\" \"$LOCAL\" \"$REMOTE\" > \"$MERGED.env\"; exit 1"
+}
+
+#[cfg(windows)]
+fn cmd_dump_base_size_and_copy_remote() -> &'static str {
+    r#"powershell -NoProfile -Command "$size=(Get-Item -LiteralPath $env:BASE).Length; [System.IO.File]::WriteAllText($env:MERGED + '.base-size', [string]$size); [System.IO.File]::WriteAllBytes($env:MERGED, [System.IO.File]::ReadAllBytes($env:REMOTE))""#
+}
+
+#[cfg(not(windows))]
+fn cmd_dump_base_size_and_copy_remote() -> &'static str {
+    "printf '%s' \"$(wc -c < \"$BASE\" | tr -d '[:space:]')\" > \"$MERGED.base-size\"; cat \"$REMOTE\" > \"$MERGED\""
+}
+
+fn read_stage_env_vars(path: &Path) -> Vec<String> {
+    fs::read_to_string(path)
+        .unwrap()
+        .lines()
+        .map(|line| line.trim().to_string())
+        .collect()
+}
+
+fn normalize_stage_var(stage_var: &str) -> String {
+    stage_var.trim().replace('\\', "/")
+}
+
+fn stage_var_to_fs_path(repo: &Path, stage_var: &str) -> PathBuf {
+    let stage_path = Path::new(stage_var.trim());
+    if stage_path.is_absolute() {
+        stage_path.to_path_buf()
+    } else if let Ok(relative) = stage_path.strip_prefix(".") {
+        repo.join(relative)
+    } else {
+        repo.join(stage_path)
+    }
+}
+
 fn png_1x1_rgba(r: u8, g: u8, b: u8, a: u8) -> Vec<u8> {
     fn push_be_u32(out: &mut Vec<u8>, v: u32) {
         out.extend_from_slice(&v.to_be_bytes());
@@ -1613,17 +1771,17 @@ fn launch_mergetool_trust_exit_false_detects_same_size_content_change() {
 
     // Normalize pre-tool mtime to a fixed timestamp so metadata-only checks
     // cannot detect the edit when the command restores mtime.
-    let touch_status = Command::new("touch")
-        .arg("-d")
-        .arg("@1700000000")
-        .arg(repo.join("a.txt"))
-        .status()
-        .expect("touch to run");
-    assert!(touch_status.success());
+    set_fixed_mtime(&repo.join("a.txt"));
 
     run_git(repo, &["config", "merge.tool", "fake"]);
-    let cmd = "len=$(wc -c < \"$MERGED\"); head -c \"$len\" /dev/zero | tr '\\0' 'R' > \"$MERGED\"; touch -d '@1700000000' \"$MERGED\"; exit 1";
-    run_git(repo, &["config", "mergetool.fake.cmd", cmd]);
+    run_git(
+        repo,
+        &[
+            "config",
+            "mergetool.fake.cmd",
+            cmd_same_size_content_change_and_exit_failure(),
+        ],
+    );
     run_git(repo, &["config", "mergetool.fake.trustExitCode", "false"]);
 
     let backend = GixBackend;
@@ -1656,7 +1814,10 @@ fn launch_mergetool_trust_exit_false_requires_content_change() {
     setup_both_modified_text_conflict(repo, "a.txt", "ours\n", "theirs\n");
 
     run_git(repo, &["config", "merge.tool", "fake"]);
-    run_git(repo, &["config", "mergetool.fake.cmd", "exit 0"]);
+    run_git(
+        repo,
+        &["config", "mergetool.fake.cmd", cmd_exit_success()],
+    );
     run_git(repo, &["config", "mergetool.fake.trustExitCode", "false"]);
 
     let backend = GixBackend;
@@ -1696,7 +1857,11 @@ fn launch_mergetool_trust_exit_false_detects_deleted_output_change() {
     run_git(repo, &["config", "merge.tool", "fake"]);
     run_git(
         repo,
-        &["config", "mergetool.fake.cmd", "rm -f \"$MERGED\"; exit 1"],
+        &[
+            "config",
+            "mergetool.fake.cmd",
+            cmd_delete_merged_and_exit_failure(),
+        ],
     );
     run_git(repo, &["config", "mergetool.fake.trustExitCode", "false"]);
 
@@ -1736,8 +1901,14 @@ fn launch_mergetool_rejects_unresolved_marker_output() {
     setup_both_modified_text_conflict(repo, "a.txt", "ours\n", "theirs\n");
 
     run_git(repo, &["config", "merge.tool", "fake"]);
-    let cmd = "printf '<<<<<<< ours\nleft\n=======\nright\n>>>>>>> theirs\n' > \"$MERGED\"; exit 0";
-    run_git(repo, &["config", "mergetool.fake.cmd", cmd]);
+    run_git(
+        repo,
+        &[
+            "config",
+            "mergetool.fake.cmd",
+            cmd_write_unresolved_markers_and_exit_success(),
+        ],
+    );
     run_git(repo, &["config", "mergetool.fake.trustExitCode", "true"]);
 
     let backend = GixBackend;
@@ -1780,6 +1951,7 @@ fn launch_mergetool_rejects_unresolved_marker_output() {
     );
 }
 
+#[cfg(not(windows))]
 #[test]
 fn launch_mergetool_custom_cmd_supports_braced_env_variables() {
     let dir = tempfile::tempdir().unwrap();
@@ -1831,6 +2003,35 @@ fn launch_mergetool_custom_cmd_supports_braced_env_variables() {
 }
 
 #[test]
+#[cfg(windows)]
+fn launch_mergetool_custom_cmd_supports_cmd_percent_env_variables() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    let conflicted_path = "docs/a space.txt";
+    setup_both_modified_text_conflict(repo, conflicted_path, "ours\n", "theirs\n");
+
+    run_git(repo, &["config", "merge.tool", "fake"]);
+    run_git(
+        repo,
+        &[
+            "config",
+            "mergetool.fake.cmd",
+            "copy /Y \"%REMOTE%\" \"%MERGED%\" > NUL && exit /b 0",
+        ],
+    );
+    run_git(repo, &["config", "mergetool.fake.trustExitCode", "true"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    let path = Path::new(conflicted_path);
+    let result = opened.launch_mergetool(path).unwrap();
+    assert!(result.success, "{result:?}");
+    assert_eq!(result.tool_name, "fake");
+    assert_eq!(result.output.exit_code, Some(0));
+    assert_eq!(fs::read_to_string(repo.join(conflicted_path)).unwrap(), "theirs\n");
+}
+
+#[test]
 fn launch_mergetool_custom_cmd_supports_unicode_conflicted_path() {
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
@@ -1843,7 +2044,7 @@ fn launch_mergetool_custom_cmd_supports_unicode_conflicted_path() {
         &[
             "config",
             "mergetool.fake.cmd",
-            "cat \"${REMOTE}\" > \"${MERGED}\"; exit 0",
+            cmd_copy_remote_to_merged_and_exit_success(),
         ],
     );
     run_git(repo, &["config", "mergetool.fake.trustExitCode", "true"]);
@@ -1894,7 +2095,7 @@ fn launch_mergetool_prefers_merge_guitool_when_gui_default_true() {
         &[
             "config",
             "mergetool.cli.cmd",
-            "printf 'cli\\n' > \"$MERGED\"",
+            cmd_write_cli_to_merged(),
         ],
     );
     run_git(
@@ -1902,7 +2103,7 @@ fn launch_mergetool_prefers_merge_guitool_when_gui_default_true() {
         &[
             "config",
             "mergetool.gui.cmd",
-            "printf 'gui\\n' > \"$MERGED\"",
+            cmd_write_gui_to_merged(),
         ],
     );
     run_git(repo, &["config", "mergetool.cli.trustExitCode", "true"]);
@@ -1984,7 +2185,7 @@ fn launch_mergetool_prefers_custom_cmd_over_tool_path_override() {
         &[
             "config",
             "mergetool.fake.cmd",
-            "printf 'cmd\\n' > \"$MERGED\"; exit 0",
+            cmd_write_cmd_to_merged(),
         ],
     );
     run_git(repo, &["config", "mergetool.fake.trustExitCode", "true"]);
@@ -2015,7 +2216,7 @@ fn launch_mergetool_write_to_temp_true_uses_temp_stage_paths() {
         &[
             "config",
             "mergetool.fake.cmd",
-            "printf '%s\\n%s\\n%s\\n' \"$BASE\" \"$LOCAL\" \"$REMOTE\" > \"$MERGED.env\"; cat \"$REMOTE\" > \"$MERGED\"",
+            cmd_dump_stage_paths_and_copy_remote(),
         ],
     );
     run_git(repo, &["config", "mergetool.fake.trustExitCode", "true"]);
@@ -2026,21 +2227,21 @@ fn launch_mergetool_write_to_temp_true_uses_temp_stage_paths() {
     let result = opened.launch_mergetool(Path::new("a.txt")).unwrap();
     assert!(result.success);
 
-    let env_dump = fs::read_to_string(repo.join("a.txt.env")).unwrap();
-    let vars: Vec<&str> = env_dump.lines().collect();
+    let vars = read_stage_env_vars(&repo.join("a.txt.env"));
     assert_eq!(vars.len(), 3, "expected BASE/LOCAL/REMOTE dump");
     for var in vars {
-        let var_path = Path::new(var);
+        let var_path = Path::new(&var);
+        let normalized_var = normalize_stage_var(&var);
         assert!(
             var_path.is_absolute(),
             "writeToTemp=true should pass absolute temp paths, got {var}"
         );
         assert!(
-            var.contains("gitcomet-mergetool-"),
+            normalized_var.contains("gitcomet-mergetool-"),
             "expected temporary mergetool prefix in path, got {var}"
         );
         assert!(
-            !var.starts_with("./"),
+            !normalized_var.starts_with("./"),
             "writeToTemp=true should not use workdir-prefixed paths: {var}"
         );
         assert!(
@@ -2062,7 +2263,7 @@ fn launch_mergetool_write_to_temp_false_uses_workdir_prefixed_stage_paths() {
         &[
             "config",
             "mergetool.fake.cmd",
-            "printf '%s\\n%s\\n%s\\n' \"$BASE\" \"$LOCAL\" \"$REMOTE\" > \"$MERGED.env\"; cat \"$REMOTE\" > \"$MERGED\"",
+            cmd_dump_stage_paths_and_copy_remote(),
         ],
     );
     run_git(repo, &["config", "mergetool.fake.trustExitCode", "true"]);
@@ -2073,19 +2274,21 @@ fn launch_mergetool_write_to_temp_false_uses_workdir_prefixed_stage_paths() {
     let result = opened.launch_mergetool(Path::new("docs/note.txt")).unwrap();
     assert!(result.success, "{result:?}");
 
-    let env_dump = fs::read_to_string(repo.join("docs/note.txt.env")).unwrap();
-    let vars: Vec<&str> = env_dump.lines().collect();
+    let vars = read_stage_env_vars(&repo.join("docs/note.txt.env"));
     assert_eq!(vars.len(), 3, "expected BASE/LOCAL/REMOTE dump");
     for var in vars {
+        let normalized_var = normalize_stage_var(&var);
         assert!(
-            var.starts_with("./docs/note_"),
+            normalized_var.starts_with("./docs/note_"),
             "writeToTemp=false should use './' prefixed workdir paths, got {var}"
         );
         assert!(
-            var.contains("_BASE_") || var.contains("_LOCAL_") || var.contains("_REMOTE_"),
+            normalized_var.contains("_BASE_")
+                || normalized_var.contains("_LOCAL_")
+                || normalized_var.contains("_REMOTE_"),
             "unexpected stage-file naming: {var}"
         );
-        let fs_path = repo.join(var.trim_start_matches("./"));
+        let fs_path = stage_var_to_fs_path(repo, &var);
         assert!(
             !fs_path.exists(),
             "writeToTemp=false with default keepTemporaries=false should cleanup stage files: {var}"
@@ -2105,7 +2308,7 @@ fn launch_mergetool_write_to_temp_false_keep_temporaries_preserves_stage_files()
         &[
             "config",
             "mergetool.fake.cmd",
-            "printf '%s\\n%s\\n%s\\n' \"$BASE\" \"$LOCAL\" \"$REMOTE\" > \"$MERGED.env\"; cat \"$REMOTE\" > \"$MERGED\"",
+            cmd_dump_stage_paths_and_copy_remote(),
         ],
     );
     run_git(repo, &["config", "mergetool.fake.trustExitCode", "true"]);
@@ -2117,15 +2320,15 @@ fn launch_mergetool_write_to_temp_false_keep_temporaries_preserves_stage_files()
     let result = opened.launch_mergetool(Path::new("docs/note.txt")).unwrap();
     assert!(result.success, "{result:?}");
 
-    let env_dump = fs::read_to_string(repo.join("docs/note.txt.env")).unwrap();
-    let vars: Vec<&str> = env_dump.lines().collect();
+    let vars = read_stage_env_vars(&repo.join("docs/note.txt.env"));
     assert_eq!(vars.len(), 3, "expected BASE/LOCAL/REMOTE dump");
     for var in vars {
+        let normalized_var = normalize_stage_var(&var);
         assert!(
-            var.starts_with("./docs/note_"),
+            normalized_var.starts_with("./docs/note_"),
             "writeToTemp=false should use './' prefixed workdir paths, got {var}"
         );
-        let fs_path = repo.join(var.trim_start_matches("./"));
+        let fs_path = stage_var_to_fs_path(repo, &var);
         assert!(
             fs_path.exists(),
             "keepTemporaries=true should keep stage file in workdir mode: {var}"
@@ -2145,7 +2348,7 @@ fn launch_mergetool_write_to_temp_false_keep_temporaries_preserves_stage_files_o
         &[
             "config",
             "mergetool.fake.cmd",
-            "printf '%s\\n%s\\n%s\\n' \"$BASE\" \"$LOCAL\" \"$REMOTE\" > \"$MERGED.env\"; exit 1",
+            cmd_dump_stage_paths_and_exit_failure(),
         ],
     );
     run_git(repo, &["config", "mergetool.fake.trustExitCode", "true"]);
@@ -2160,15 +2363,15 @@ fn launch_mergetool_write_to_temp_false_keep_temporaries_preserves_stage_files_o
         "tool exit failure should be reported as unresolved"
     );
 
-    let env_dump = fs::read_to_string(repo.join("docs/note.txt.env")).unwrap();
-    let vars: Vec<&str> = env_dump.lines().collect();
+    let vars = read_stage_env_vars(&repo.join("docs/note.txt.env"));
     assert_eq!(vars.len(), 3, "expected BASE/LOCAL/REMOTE dump");
     for var in vars {
+        let normalized_var = normalize_stage_var(&var);
         assert!(
-            var.starts_with("./docs/note_"),
+            normalized_var.starts_with("./docs/note_"),
             "writeToTemp=false should use './' prefixed workdir paths, got {var}"
         );
-        let fs_path = repo.join(var.trim_start_matches("./"));
+        let fs_path = stage_var_to_fs_path(repo, &var);
         assert!(
             fs_path.exists(),
             "keepTemporaries=true should keep stage file on abort in workdir mode: {var}"
@@ -2188,7 +2391,7 @@ fn launch_mergetool_write_to_temp_true_keep_temporaries_preserves_stage_files() 
         &[
             "config",
             "mergetool.fake.cmd",
-            "printf '%s\\n%s\\n%s\\n' \"$BASE\" \"$LOCAL\" \"$REMOTE\" > \"$MERGED.env\"; cat \"$REMOTE\" > \"$MERGED\"",
+            cmd_dump_stage_paths_and_copy_remote(),
         ],
     );
     run_git(repo, &["config", "mergetool.fake.trustExitCode", "true"]);
@@ -2200,19 +2403,19 @@ fn launch_mergetool_write_to_temp_true_keep_temporaries_preserves_stage_files() 
     let result = opened.launch_mergetool(Path::new("a.txt")).unwrap();
     assert!(result.success, "{result:?}");
 
-    let env_dump = fs::read_to_string(repo.join("a.txt.env")).unwrap();
-    let vars: Vec<&str> = env_dump.lines().collect();
+    let vars = read_stage_env_vars(&repo.join("a.txt.env"));
     assert_eq!(vars.len(), 3, "expected BASE/LOCAL/REMOTE dump");
 
     let mut temp_dirs: Vec<PathBuf> = Vec::new();
     for var in vars {
-        let var_path = Path::new(var);
+        let var_path = Path::new(&var);
+        let normalized_var = normalize_stage_var(&var);
         assert!(
             var_path.is_absolute(),
             "writeToTemp=true should pass absolute temp paths, got {var}"
         );
         assert!(
-            var.contains("gitcomet-mergetool-"),
+            normalized_var.contains("gitcomet-mergetool-"),
             "expected temporary mergetool prefix in path, got {var}"
         );
         assert!(
@@ -2244,7 +2447,7 @@ fn launch_mergetool_write_to_temp_true_keep_temporaries_preserves_stage_files_on
         &[
             "config",
             "mergetool.fake.cmd",
-            "printf '%s\\n%s\\n%s\\n' \"$BASE\" \"$LOCAL\" \"$REMOTE\" > \"$MERGED.env\"; exit 1",
+            cmd_dump_stage_paths_and_exit_failure(),
         ],
     );
     run_git(repo, &["config", "mergetool.fake.trustExitCode", "true"]);
@@ -2259,19 +2462,19 @@ fn launch_mergetool_write_to_temp_true_keep_temporaries_preserves_stage_files_on
         "tool exit failure should be reported as unresolved"
     );
 
-    let env_dump = fs::read_to_string(repo.join("a.txt.env")).unwrap();
-    let vars: Vec<&str> = env_dump.lines().collect();
+    let vars = read_stage_env_vars(&repo.join("a.txt.env"));
     assert_eq!(vars.len(), 3, "expected BASE/LOCAL/REMOTE dump");
 
     let mut temp_dirs: Vec<PathBuf> = Vec::new();
     for var in vars {
-        let var_path = Path::new(var);
+        let var_path = Path::new(&var);
+        let normalized_var = normalize_stage_var(&var);
         assert!(
             var_path.is_absolute(),
             "writeToTemp=true should pass absolute temp paths, got {var}"
         );
         assert!(
-            var.contains("gitcomet-mergetool-"),
+            normalized_var.contains("gitcomet-mergetool-"),
             "expected temporary mergetool prefix in path, got {var}"
         );
         assert!(
@@ -2303,7 +2506,7 @@ fn launch_mergetool_no_base_conflict_passes_empty_base_file() {
         &[
             "config",
             "mergetool.fake.cmd",
-            "printf '%s' \"$(wc -c < \"$BASE\" | tr -d '[:space:]')\" > \"$MERGED.base-size\"; cat \"$REMOTE\" > \"$MERGED\"",
+            cmd_dump_base_size_and_copy_remote(),
         ],
     );
     run_git(repo, &["config", "mergetool.fake.trustExitCode", "true"]);
