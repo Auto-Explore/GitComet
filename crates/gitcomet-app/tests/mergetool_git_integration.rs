@@ -99,6 +99,22 @@ fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
+fn is_effectively_absolute_path(value: &str) -> bool {
+    if Path::new(value).is_absolute() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        // Git-for-Windows may surface temp stage paths in POSIX form such as
+        // `/tmp/...` or `/c/...`; treat these as absolute for parity checks.
+        value.starts_with('/')
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
 fn run_git(repo: &Path, args: &[&str]) {
     let mut cmd = Command::new("git");
     apply_isolated_git_config_env(&mut cmd);
@@ -1579,7 +1595,7 @@ fn git_mergetool_write_to_temp_true_uses_absolute_stage_paths() {
     );
     for var in vars {
         assert!(
-            Path::new(&var).is_absolute(),
+            is_effectively_absolute_path(&var),
             "writeToTemp=true should provide absolute stage paths, got: {var}\n{text}"
         );
         assert!(
