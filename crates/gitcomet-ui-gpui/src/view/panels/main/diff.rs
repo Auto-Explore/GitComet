@@ -1,5 +1,17 @@
 use super::*;
 
+fn file_diff_ready_shows_processing(
+    has_file: bool,
+    cache_active: bool,
+    cache_inflight: bool,
+) -> bool {
+    has_file && (!cache_active || cache_inflight)
+}
+
+fn image_diff_ready_shows_processing(has_file: bool, cache_active: bool) -> bool {
+    has_file && !cache_active
+}
+
 impl MainPaneView {
     pub(in crate::view) fn conflict_resolver_strategy(
         conflict: Option<gitcomet_core::domain::FileConflictKind>,
@@ -79,14 +91,41 @@ impl MainPaneView {
                         .into_any_element()
                 }
                 DiffFileImageState::Ready { has_file } => {
-                    if !has_file || !self.is_file_image_diff_view_active() {
+                    if !has_file {
                         components::empty_state(theme, "Diff", "No image contents available.")
                             .into_any_element()
+                    } else if image_diff_ready_shows_processing(
+                        has_file,
+                        self.is_file_image_diff_view_active(),
+                    ) {
+                        components::empty_state(theme, "Diff", "Processing image...")
+                            .into_any_element()
                     } else {
-                        let old = self.file_image_diff_cache_old.clone();
-                        let new = self.file_image_diff_cache_new.clone();
+                        enum CachedDiffImageSource {
+                            Path(std::path::PathBuf),
+                            Image(Arc<gpui::Image>),
+                        }
 
-                        let cell = |id: &'static str, image: Option<Arc<gpui::Image>>| {
+                        let old = self
+                            .file_image_diff_cache_old_svg_path
+                            .clone()
+                            .map(CachedDiffImageSource::Path)
+                            .or_else(|| {
+                                self.file_image_diff_cache_old
+                                    .clone()
+                                    .map(CachedDiffImageSource::Image)
+                            });
+                        let new = self
+                            .file_image_diff_cache_new_svg_path
+                            .clone()
+                            .map(CachedDiffImageSource::Path)
+                            .or_else(|| {
+                                self.file_image_diff_cache_new
+                                    .clone()
+                                    .map(CachedDiffImageSource::Image)
+                            });
+
+                        let cell = |id: &'static str, image: Option<CachedDiffImageSource>| {
                             div()
                                 .id(id)
                                 .flex_1()
@@ -97,11 +136,18 @@ impl MainPaneView {
                                 .items_center()
                                 .justify_center()
                                 .child(match image {
-                                    Some(img_data) => gpui::img(img_data)
+                                    Some(CachedDiffImageSource::Path(path)) => gpui::img(path)
                                         .w_full()
                                         .h_full()
                                         .object_fit(gpui::ObjectFit::Contain)
                                         .into_any_element(),
+                                    Some(CachedDiffImageSource::Image(img_data)) => {
+                                        gpui::img(img_data)
+                                            .w_full()
+                                            .h_full()
+                                            .object_fit(gpui::ObjectFit::Contain)
+                                            .into_any_element()
+                                    }
                                     None => div()
                                         .text_sm()
                                         .text_color(theme.colors.text_muted)
@@ -187,11 +233,15 @@ impl MainPaneView {
                         .into_any_element()
                 }
                 DiffFileState::Ready { has_file } => {
-                    if !has_file || !self.is_file_diff_view_active() {
+                    if !has_file {
                         components::empty_state(theme, "Diff", "No file contents available.")
                             .into_any_element()
-                    } else if self.file_diff_cache_inflight.is_some() {
-                        components::empty_state(theme, "Diff", "Processing file…")
+                    } else if file_diff_ready_shows_processing(
+                        has_file,
+                        self.is_file_diff_view_active(),
+                        self.file_diff_cache_inflight.is_some(),
+                    ) {
+                        components::empty_state(theme, "Diff", "Processing file...")
                             .into_any_element()
                     } else {
                         self.ensure_diff_visible_indices();
@@ -510,5 +560,25 @@ impl MainPaneView {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn file_diff_ready_state_prefers_processing_when_cache_is_stale() {
+        assert!(file_diff_ready_shows_processing(true, false, false));
+        assert!(file_diff_ready_shows_processing(true, true, true));
+        assert!(!file_diff_ready_shows_processing(true, true, false));
+        assert!(!file_diff_ready_shows_processing(false, false, true));
+    }
+
+    #[test]
+    fn image_diff_ready_state_prefers_processing_when_cache_is_stale() {
+        assert!(image_diff_ready_shows_processing(true, false));
+        assert!(!image_diff_ready_shows_processing(true, true));
+        assert!(!image_diff_ready_shows_processing(false, false));
     }
 }

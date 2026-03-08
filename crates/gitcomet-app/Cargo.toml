@@ -24,3 +24,6 @@ gitcomet-ui = { workspace = true, optional = true }
 gitcomet-ui-gpui = { workspace = true, optional = true }
 mimalloc = { workspace = true }
 tempfile = { workspace = true }
+
+[build-dependencies]
+embed-resource = "3"

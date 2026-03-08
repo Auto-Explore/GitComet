@@ -1517,6 +1517,8 @@ pub(in super::super) struct MainPaneView {
     pub(in super::super) file_image_diff_cache_path: Option<std::path::PathBuf>,
     pub(in super::super) file_image_diff_cache_old: Option<Arc<gpui::Image>>,
     pub(in super::super) file_image_diff_cache_new: Option<Arc<gpui::Image>>,
+    pub(in super::super) file_image_diff_cache_old_svg_path: Option<std::path::PathBuf>,
+    pub(in super::super) file_image_diff_cache_new_svg_path: Option<std::path::PathBuf>,
 
     pub(in super::super) worktree_preview_path: Option<std::path::PathBuf>,
     pub(in super::super) worktree_preview: Loadable<Arc<Vec<String>>>,
@@ -1816,7 +1818,7 @@ impl MainPaneView {
 
         let diff_panel_focus_handle = cx.focus_handle().tab_index(0).tab_stop(false);
 
-        let last_window_size = window.window_bounds().get_bounds().size;
+        let last_window_size = window.viewport_size();
         let history_view = cx.new(|cx| {
             super::HistoryView::new(
                 Arc::clone(&store),
@@ -1920,6 +1922,8 @@ impl MainPaneView {
             file_image_diff_cache_path: None,
             file_image_diff_cache_old: None,
             file_image_diff_cache_new: None,
+            file_image_diff_cache_old_svg_path: None,
+            file_image_diff_cache_new_svg_path: None,
             worktree_preview_path: None,
             worktree_preview: Loadable::NotLoaded,
             worktree_preview_segments_cache_path: None,
@@ -2672,7 +2676,9 @@ impl MainPaneView {
             && self.file_image_diff_cache_target == repo.diff_target
             && self.file_image_diff_cache_path.is_some()
             && (self.file_image_diff_cache_old.is_some()
-                || self.file_image_diff_cache_new.is_some())
+                || self.file_image_diff_cache_new.is_some()
+                || self.file_image_diff_cache_old_svg_path.is_some()
+                || self.file_image_diff_cache_new_svg_path.is_some())
     }
 
     pub(in super::super) fn consume_suppress_click_after_drag(&mut self) -> bool {
@@ -5221,7 +5227,7 @@ impl Render for MainPaneView {
             self.view_mode,
             GitCometViewMode::Normal | GitCometViewMode::FocusedMergetool
         ));
-        self.last_window_size = window.window_bounds().get_bounds().size;
+        self.last_window_size = window.viewport_size();
         self.history_view
             .update(cx, |v, _| v.set_last_window_size(self.last_window_size));
 

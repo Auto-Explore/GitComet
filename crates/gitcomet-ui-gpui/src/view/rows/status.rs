@@ -257,14 +257,14 @@ fn status_row(
 ) -> AnyElement {
     let (icon, color) = match entry.kind {
         FileStatusKind::Untracked => match area {
-            DiffArea::Unstaged => ("+", theme.colors.success),
-            DiffArea::Staged => ("?", theme.colors.warning),
+            DiffArea::Unstaged => ("icons/plus.svg", theme.colors.success),
+            DiffArea::Staged => ("icons/question.svg", theme.colors.warning),
         },
-        FileStatusKind::Modified => ("✎", theme.colors.warning),
-        FileStatusKind::Added => ("+", theme.colors.success),
-        FileStatusKind::Deleted => ("−", theme.colors.danger),
-        FileStatusKind::Renamed => ("→", theme.colors.accent),
-        FileStatusKind::Conflicted => ("!", theme.colors.danger),
+        FileStatusKind::Modified => ("icons/pencil.svg", theme.colors.warning),
+        FileStatusKind::Added => ("icons/plus.svg", theme.colors.success),
+        FileStatusKind::Deleted => ("icons/minus.svg", theme.colors.danger),
+        FileStatusKind::Renamed => ("icons/swap.svg", theme.colors.accent),
+        FileStatusKind::Conflicted => ("icons/warning.svg", theme.colors.danger),
     };
 
     let path = Arc::new(entry.path.clone());
@@ -458,13 +458,7 @@ fn status_row(
                 .flex()
                 .items_center()
                 .justify_center()
-                .child(
-                    div()
-                        .text_sm()
-                        .font_weight(FontWeight::BOLD)
-                        .text_color(color)
-                        .child(icon),
-                ),
+                .child(svg_icon(icon, color, px(14.0))),
         )
         .child(
             div()

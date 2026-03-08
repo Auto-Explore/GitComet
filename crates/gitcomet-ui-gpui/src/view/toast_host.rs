@@ -293,7 +293,12 @@ impl Render for ToastHost {
                 None => vec![Animation::new(fade_in).with_easing(gpui::quadratic)],
             };
 
-            let close = components::Button::new(format!("toast_close_{}", t.id), "✕")
+            let close = components::Button::new(format!("toast_close_{}", t.id), "")
+                .start_slot(svg_icon(
+                    "icons/generic_close.svg",
+                    theme.colors.text_muted,
+                    px(12.0),
+                ))
                 .style(components::ButtonStyle::Transparent)
                 .on_click(theme, cx, move |this, _e, _w, cx| {
                     this.remove_toast(t.id, cx);

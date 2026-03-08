@@ -347,11 +347,7 @@ impl Render for TitleBarView {
             max_active,
         )
         .id("win_max")
-        .window_control_area(WindowControlArea::Max)
-        .on_click(cx.listener(|_this, _e: &ClickEvent, window, cx| {
-            cx.stop_propagation();
-            window.zoom_window();
-        }));
+        .window_control_area(WindowControlArea::Max);
 
         let close_hover = with_alpha(theme.colors.danger, if theme.is_dark { 0.45 } else { 0.28 });
         let close_active = with_alpha(theme.colors.danger, if theme.is_dark { 0.60 } else { 0.40 });

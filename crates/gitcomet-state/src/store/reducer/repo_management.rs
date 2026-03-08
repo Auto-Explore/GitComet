@@ -24,9 +24,9 @@ pub(super) fn open_repo(id_alloc: &AtomicU64, state: &mut AppState, path: PathBu
         .find(|r| r.spec.workdir == path)
         .map(|r| r.id)
     {
-        state.active_repo = Some(repo_id);
-        let _ = session::persist_from_state(state);
-        return Vec::new();
+        // Re-opening an already open repository should still refresh primary state, so stale
+        // status/diff data gets reconciled immediately.
+        return set_active_repo(state, repo_id);
     }
 
     let repo_id = RepoId(id_alloc.fetch_add(1, Ordering::Relaxed));

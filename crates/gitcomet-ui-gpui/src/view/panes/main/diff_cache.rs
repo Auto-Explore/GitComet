@@ -1,5 +1,37 @@
 use super::*;
 
+fn decode_file_image_diff_bytes(
+    format: gpui::ImageFormat,
+    bytes: &[u8],
+    svg_temp_path: Option<&mut Option<std::path::PathBuf>>,
+) -> Option<Arc<gpui::Image>> {
+    match format {
+        gpui::ImageFormat::Svg => {
+            if let Some(path) = svg_temp_path {
+                *path = Some(svg_diff_cache_path(bytes)?);
+            }
+            None
+        }
+        _ => Some(Arc::new(gpui::Image::from_bytes(format, bytes.to_vec()))),
+    }
+}
+
+fn svg_diff_cache_path(bytes: &[u8]) -> Option<std::path::PathBuf> {
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    bytes.hash(&mut hasher);
+    let key = hasher.finish();
+
+    let dir = std::env::temp_dir().join("gitcomet").join("svg_diff_cache");
+    std::fs::create_dir_all(&dir).ok()?;
+    let path = dir.join(format!("{key:016x}.svg"));
+    if !path.exists() {
+        std::fs::write(&path, bytes).ok()?;
+    }
+    Some(path)
+}
+
 impl MainPaneView {
     pub(in super::super::super) fn ensure_file_diff_cache(&mut self, cx: &mut gpui::Context<Self>) {
         struct Rebuild {
@@ -220,6 +252,8 @@ impl MainPaneView {
             file_path: Option<std::path::PathBuf>,
             old: Option<Arc<gpui::Image>>,
             new: Option<Arc<gpui::Image>>,
+            old_svg_path: Option<std::path::PathBuf>,
+            new_svg_path: Option<std::path::PathBuf>,
         }
 
         enum Action {
@@ -269,11 +303,17 @@ impl MainPaneView {
             };
 
             let format = Self::image_format_for_path(&file.path);
+            let mut old_svg_path = None;
+            let mut new_svg_path = None;
             let old = file.old.as_ref().and_then(|bytes| {
-                format.map(|format| Arc::new(gpui::Image::from_bytes(format, bytes.clone())))
+                format.and_then(|format| {
+                    decode_file_image_diff_bytes(format, bytes, Some(&mut old_svg_path))
+                })
             });
             let new = file.new.as_ref().and_then(|bytes| {
-                format.map(|format| Arc::new(gpui::Image::from_bytes(format, bytes.clone())))
+                format.and_then(|format| {
+                    decode_file_image_diff_bytes(format, bytes, Some(&mut new_svg_path))
+                })
             });
 
             let workdir = &repo.spec.workdir;
@@ -290,6 +330,8 @@ impl MainPaneView {
                 file_path,
                 old,
                 new,
+                old_svg_path,
+                new_svg_path,
             })
         })();
 
@@ -302,6 +344,8 @@ impl MainPaneView {
                 self.file_image_diff_cache_path = None;
                 self.file_image_diff_cache_old = None;
                 self.file_image_diff_cache_new = None;
+                self.file_image_diff_cache_old_svg_path = None;
+                self.file_image_diff_cache_new_svg_path = None;
             }
             Action::Reset {
                 repo_id,
@@ -314,6 +358,8 @@ impl MainPaneView {
                 self.file_image_diff_cache_path = None;
                 self.file_image_diff_cache_old = None;
                 self.file_image_diff_cache_new = None;
+                self.file_image_diff_cache_old_svg_path = None;
+                self.file_image_diff_cache_new_svg_path = None;
             }
             Action::Rebuild(rebuild) => {
                 self.file_image_diff_cache_repo_id = Some(rebuild.repo_id);
@@ -322,6 +368,8 @@ impl MainPaneView {
                 self.file_image_diff_cache_path = rebuild.file_path;
                 self.file_image_diff_cache_old = rebuild.old;
                 self.file_image_diff_cache_new = rebuild.new;
+                self.file_image_diff_cache_old_svg_path = rebuild.old_svg_path;
+                self.file_image_diff_cache_new_svg_path = rebuild.new_svg_path;
             }
         }
     }
@@ -685,5 +733,29 @@ mod tests {
             None
         );
         assert_eq!(MainPaneView::image_format_for_path(Path::new("x")), None);
+    }
+
+    #[test]
+    fn decode_file_image_diff_bytes_keeps_non_svg_bytes() {
+        let bytes = [1_u8, 2, 3, 4, 5];
+        let mut svg_path = None;
+        let image =
+            decode_file_image_diff_bytes(gpui::ImageFormat::Png, &bytes, Some(&mut svg_path))
+                .unwrap();
+        assert_eq!(image.format(), gpui::ImageFormat::Png);
+        assert_eq!(image.bytes(), bytes);
+        assert!(svg_path.is_none());
+    }
+
+    #[test]
+    fn decode_file_image_diff_bytes_writes_svg_cache_file() {
+        let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+<rect width="16" height="16" fill="#00aaff"/>
+</svg>"##;
+        let mut svg_path = None;
+        let image = decode_file_image_diff_bytes(gpui::ImageFormat::Svg, svg, Some(&mut svg_path));
+        assert!(image.is_none());
+        assert!(svg_path.is_some());
+        assert!(svg_path.unwrap().exists());
     }
 }

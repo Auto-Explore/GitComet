@@ -45,7 +45,12 @@ impl DetailsPaneView {
                         .child(header_title),
                 )
                 .child(
-                    components::Button::new("commit_details_close", "✕")
+                    components::Button::new("commit_details_close", "")
+                        .start_slot(svg_icon(
+                            "icons/generic_close.svg",
+                            theme.colors.text_muted,
+                            px(12.0),
+                        ))
                         .style(components::ButtonStyle::Transparent)
                         .on_click(theme, cx, |this, _e, _w, cx| {
                             if let Some(repo_id) = this.active_repo_id() {

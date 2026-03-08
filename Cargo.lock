@@ -2249,6 +2249,7 @@ name = "gitcomet-app"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "embed-resource",
  "gitcomet-core",
  "gitcomet-git",
  "gitcomet-git-gix",

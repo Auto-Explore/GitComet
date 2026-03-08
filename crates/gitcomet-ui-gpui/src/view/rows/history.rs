@@ -352,18 +352,12 @@ fn working_tree_summary_history_row(
     cx: &mut gpui::Context<HistoryView>,
 ) -> AnyElement {
     let cell_pad_x = px(HISTORY_COL_HANDLE_PX / 2.0);
-    let icon_count = |icon: &'static str, color: gpui::Rgba, count: usize| {
+    let icon_count = |icon_path: &'static str, color: gpui::Rgba, count: usize| {
         div()
             .flex()
             .items_center()
             .gap_1()
-            .child(
-                div()
-                    .text_sm()
-                    .font_weight(FontWeight::BOLD)
-                    .text_color(color)
-                    .child(icon),
-            )
+            .child(svg_icon(icon_path, color, px(12.0)))
             .child(
                 div()
                     .text_xs()
@@ -376,13 +370,17 @@ fn working_tree_summary_history_row(
     let (added, modified, deleted) = counts;
     let mut parts: Vec<AnyElement> = Vec::with_capacity(3);
     if modified > 0 {
-        parts.push(icon_count("✎", theme.colors.warning, modified));
+        parts.push(icon_count(
+            "icons/pencil.svg",
+            theme.colors.warning,
+            modified,
+        ));
     }
     if added > 0 {
-        parts.push(icon_count("+", theme.colors.success, added));
+        parts.push(icon_count("icons/plus.svg", theme.colors.success, added));
     }
     if deleted > 0 {
-        parts.push(icon_count("−", theme.colors.danger, deleted));
+        parts.push(icon_count("icons/minus.svg", theme.colors.danger, deleted));
     }
 
     let black = gpui::rgba(0x000000ff);

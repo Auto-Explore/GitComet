@@ -6,7 +6,7 @@ use super::HistoryView;
 
 impl Render for HistoryView {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
-        self.last_window_size = window.window_bounds().get_bounds().size;
+        self.last_window_size = window.viewport_size();
         self.history_view_inner(cx)
     }
 }

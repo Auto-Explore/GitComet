@@ -1,5 +1,22 @@
 use super::*;
 use std::hash::{Hash, Hasher};
+use std::sync::Arc;
+
+fn head_branch_has_tracking_upstream(
+    head_branch: &Loadable<String>,
+    branches: &Loadable<Arc<Vec<Branch>>>,
+) -> bool {
+    let Loadable::Ready(head) = head_branch else {
+        return false;
+    };
+    let Loadable::Ready(branches) = branches else {
+        return false;
+    };
+    branches
+        .iter()
+        .find(|branch| branch.name == *head)
+        .is_some_and(|branch| branch.upstream.is_some())
+}
 
 pub(in super::super) struct ActionBarView {
     store: Arc<AppStore>,
@@ -209,6 +226,9 @@ impl Render for ActionBarView {
             .map(|r| (r.pull_in_flight > 0, r.push_in_flight > 0))
             .unwrap_or((false, false));
         let active_repo_key = self.active_repo_id().map(|id| id.0).unwrap_or(0);
+        let pull_default_enabled = self.active_repo().is_some_and(|repo| {
+            head_branch_has_tracking_upstream(&repo.head_branch, &repo.branches)
+        });
 
         let can_stash = self
             .active_repo()
@@ -340,7 +360,8 @@ impl Render for ActionBarView {
                 icon("icons/arrow_down.svg", pull_color).into_any_element()
             })
             .style(components::ButtonStyle::Subtle)
-            .no_hover_border();
+            .no_hover_border()
+            .disabled(!pull_default_enabled);
         if pull_count > 0 {
             pull_main = pull_main.end_slot(count_badge(pull_count, pull_color));
         }
@@ -628,5 +649,53 @@ impl Render for ActionBarView {
                     .child(create_branch)
                     .child(stash),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gitcomet_core::domain::Upstream;
+
+    fn test_branch(name: &str, upstream: Option<Upstream>) -> Branch {
+        Branch {
+            name: name.to_string(),
+            target: CommitId("deadbeef".to_string()),
+            upstream,
+            divergence: None,
+        }
+    }
+
+    #[test]
+    fn head_branch_has_tracking_upstream_returns_true_for_configured_head() {
+        let head_branch = Loadable::Ready("main".to_string());
+        let branches = Loadable::Ready(Arc::new(vec![test_branch(
+            "main",
+            Some(Upstream {
+                remote: "origin".to_string(),
+                branch: "main".to_string(),
+            }),
+        )]));
+        assert!(head_branch_has_tracking_upstream(&head_branch, &branches));
+    }
+
+    #[test]
+    fn head_branch_has_tracking_upstream_returns_false_without_upstream() {
+        let head_branch = Loadable::Ready("feat/no-upstream".to_string());
+        let branches = Loadable::Ready(Arc::new(vec![test_branch("feat/no-upstream", None)]));
+        assert!(!head_branch_has_tracking_upstream(&head_branch, &branches));
+    }
+
+    #[test]
+    fn head_branch_has_tracking_upstream_returns_false_when_head_not_loaded() {
+        let head_branch = Loadable::NotLoaded;
+        let branches = Loadable::Ready(Arc::new(vec![test_branch(
+            "main",
+            Some(Upstream {
+                remote: "origin".to_string(),
+                branch: "main".to_string(),
+            }),
+        )]));
+        assert!(!head_branch_has_tracking_upstream(&head_branch, &branches));
     }
 }

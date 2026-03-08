@@ -65,22 +65,28 @@ impl MainPaneView {
 
                         let (icon, color) = match kind.unwrap_or(FileStatusKind::Modified) {
                             FileStatusKind::Untracked | FileStatusKind::Added => {
-                                ("+", theme.colors.success)
+                                ("icons/plus.svg", theme.colors.success)
                             }
-                            FileStatusKind::Modified => ("✎", theme.colors.warning),
-                            FileStatusKind::Deleted => ("−", theme.colors.danger),
-                            FileStatusKind::Renamed => ("→", theme.colors.accent),
-                            FileStatusKind::Conflicted => ("!", theme.colors.danger),
+                            FileStatusKind::Modified => ("icons/pencil.svg", theme.colors.warning),
+                            FileStatusKind::Deleted => ("icons/minus.svg", theme.colors.danger),
+                            FileStatusKind::Renamed => ("icons/swap.svg", theme.colors.accent),
+                            FileStatusKind::Conflicted => {
+                                ("icons/warning.svg", theme.colors.danger)
+                            }
                         };
                         (Some(icon), color, self.cached_path_display(path))
                     }
                     DiffTarget::Commit { commit_id: _, path } => match path {
                         Some(path) => (
-                            Some("✎"),
+                            Some("icons/pencil.svg"),
                             theme.colors.text_muted,
                             self.cached_path_display(path),
                         ),
-                        None => (Some("✎"), theme.colors.text_muted, "Full diff".into()),
+                        None => (
+                            Some("icons/pencil.svg"),
+                            theme.colors.text_muted,
+                            "Full diff".into(),
+                        ),
                     },
                 };
 
@@ -97,13 +103,7 @@ impl MainPaneView {
                             .items_center()
                             .justify_center()
                             .when_some(icon, |this, icon| {
-                                this.child(
-                                    div()
-                                        .text_sm()
-                                        .font_weight(FontWeight::BOLD)
-                                        .text_color(color)
-                                        .child(icon),
-                                )
+                                this.child(svg_icon(icon, color, px(14.0)))
                             }),
                     )
                     .child(
@@ -650,7 +650,12 @@ impl MainPaneView {
 
         if let Some(repo_id) = repo_id {
             controls = controls.child(
-                components::Button::new("diff_close", "✕")
+                components::Button::new("diff_close", "")
+                    .start_slot(svg_icon(
+                        "icons/generic_close.svg",
+                        theme.colors.text_muted,
+                        px(12.0),
+                    ))
                     .style(components::ButtonStyle::Transparent)
                     .on_click(theme, cx, move |this, _e, _w, cx| {
                         this.clear_diff_selection_or_exit(repo_id, cx);
@@ -699,7 +704,12 @@ impl MainPaneView {
                         .child(match_label),
                 )
                 .child(
-                    components::Button::new("diff_search_close", "✕")
+                    components::Button::new("diff_search_close", "")
+                        .start_slot(svg_icon(
+                            "icons/generic_close.svg",
+                            theme.colors.text_muted,
+                            px(12.0),
+                        ))
                         .style(components::ButtonStyle::Transparent)
                         .on_click(theme, cx, |this, _e, window, cx| {
                             this.diff_search_active = false;
@@ -963,9 +973,11 @@ impl MainPaneView {
                                         .child("Show whitespace")
                                         .when(show_whitespace, |d| {
                                             d.child(
-                                                div()
-                                                    .text_color(theme.colors.success)
-                                                    .child("✓"),
+                                                div().child(svg_icon(
+                                                    "icons/check.svg",
+                                                    theme.colors.success,
+                                                    px(12.0),
+                                                )),
                                             )
                                         }),
                                 );

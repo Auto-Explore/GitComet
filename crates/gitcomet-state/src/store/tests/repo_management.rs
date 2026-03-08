@@ -49,7 +49,12 @@ fn open_repo_focuses_existing_repo_instead_of_opening_duplicate() {
         Msg::OpenRepo(PathBuf::from("/tmp/repo1")),
     );
 
-    assert!(effects.is_empty());
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadStatus { repo_id } if *repo_id == RepoId(1))),
+        "expected status refresh when focusing an already open repo"
+    );
     assert_eq!(state.repos.len(), 2);
     assert_eq!(state.active_repo, Some(RepoId(1)));
     let repo1 = super::reducer::normalize_repo_path(PathBuf::from("/tmp/repo1"));
@@ -106,7 +111,12 @@ fn open_repo_allows_same_basename_in_different_folders() {
         &mut state,
         Msg::OpenRepo(repo_a.clone()),
     );
-    assert!(effects.is_empty());
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadStatus { repo_id } if *repo_id == RepoId(1))),
+        "expected status refresh when re-focusing repo by path"
+    );
     assert_eq!(state.repos.len(), 2);
     assert_eq!(state.active_repo, Some(RepoId(1)));
     assert_eq!(
@@ -124,6 +134,36 @@ fn open_repo_allows_same_basename_in_different_folders() {
             .filter(|r| r.spec.workdir == super::reducer::normalize_repo_path(repo_b.clone()))
             .count(),
         1
+    );
+}
+
+#[test]
+fn open_repo_refreshes_when_repo_is_already_active() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo")),
+    );
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo")),
+    );
+
+    assert_eq!(state.repos.len(), 1);
+    assert_eq!(state.active_repo, Some(RepoId(1)));
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadStatus { repo_id } if *repo_id == RepoId(1))),
+        "expected status refresh when re-opening active repo"
     );
 }
 

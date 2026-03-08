@@ -667,7 +667,8 @@ impl SidebarPaneView {
                     let menu_button_id: SharedString = format!("branch_remote_menu_{ix}").into();
                     let remote_name_for_button: String = name.as_ref().to_owned();
                     let context_menu_invoker_for_button = context_menu_invoker.clone();
-                    let menu_button = components::Button::new(menu_button_id, "⋯")
+                    let menu_button = components::Button::new(menu_button_id, "")
+                        .start_slot(svg_icon("icons/menu.svg", theme.colors.text_muted, 14.0))
                         .style(components::ButtonStyle::Transparent)
                         .on_click(theme, cx, move |this, e, window, cx| {
                             cx.stop_propagation();
@@ -1000,12 +1001,12 @@ impl DetailsPaneView {
             .map(|(ix, f)| {
                 let commit_id = details.id.clone();
                 let (icon, color) = match f.kind {
-                    FileStatusKind::Added => (Some("+"), theme.colors.success),
-                    FileStatusKind::Modified => (Some("✎"), theme.colors.warning),
-                    FileStatusKind::Deleted => (Some("−"), theme.colors.danger),
-                    FileStatusKind::Renamed => (Some("→"), theme.colors.accent),
-                    FileStatusKind::Untracked => (Some("?"), theme.colors.warning),
-                    FileStatusKind::Conflicted => (Some("!"), theme.colors.danger),
+                    FileStatusKind::Added => (Some("icons/plus.svg"), theme.colors.success),
+                    FileStatusKind::Modified => (Some("icons/pencil.svg"), theme.colors.warning),
+                    FileStatusKind::Deleted => (Some("icons/minus.svg"), theme.colors.danger),
+                    FileStatusKind::Renamed => (Some("icons/swap.svg"), theme.colors.accent),
+                    FileStatusKind::Untracked => (Some("icons/question.svg"), theme.colors.warning),
+                    FileStatusKind::Conflicted => (Some("icons/warning.svg"), theme.colors.danger),
                 };
 
                 let path = f.path.clone();
@@ -1058,13 +1059,7 @@ impl DetailsPaneView {
                             .items_center()
                             .justify_center()
                             .when_some(icon, |this, icon| {
-                                this.child(
-                                    div()
-                                        .text_sm()
-                                        .font_weight(FontWeight::BOLD)
-                                        .text_color(color)
-                                        .child(icon),
-                                )
+                                this.child(svg_icon(icon, color, px(14.0)))
                             }),
                     )
                     .child(

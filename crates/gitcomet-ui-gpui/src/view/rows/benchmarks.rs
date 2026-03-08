@@ -260,12 +260,12 @@ impl CommitDetailsFixture {
         let mut counts = [0usize; 6];
         for f in &self.details.files {
             let icon: Option<&'static str> = match f.kind {
-                FileStatusKind::Added => Some("+"),
-                FileStatusKind::Modified => Some("✎"),
-                FileStatusKind::Deleted => None,
-                FileStatusKind::Renamed => Some("→"),
-                FileStatusKind::Untracked => Some("?"),
-                FileStatusKind::Conflicted => Some("!"),
+                FileStatusKind::Added => Some("icons/plus.svg"),
+                FileStatusKind::Modified => Some("icons/pencil.svg"),
+                FileStatusKind::Deleted => Some("icons/minus.svg"),
+                FileStatusKind::Renamed => Some("icons/swap.svg"),
+                FileStatusKind::Untracked => Some("icons/question.svg"),
+                FileStatusKind::Conflicted => Some("icons/warning.svg"),
             };
             icon.hash(&mut h);
             let kind_key: u8 = match f.kind {
