@@ -16,6 +16,7 @@ gitcomet-ui = { workspace = true }
 gpui = { workspace = true }
 resvg = { workspace = true }
 rustc-hash = { workspace = true }
+semver = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 smol = { workspace = true }
@@ -30,6 +31,7 @@ tree-sitter-rust = { workspace = true }
 tree-sitter-typescript = { workspace = true }
 tree-sitter-yaml = { workspace = true }
 unicode-segmentation = { workspace = true }
+zed-reqwest = { workspace = true }
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }

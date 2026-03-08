@@ -24,7 +24,7 @@ default-members = [
 edition = "2024"
 license = "AGPL-3.0-only"
 authors = ["AutoExplore Oy <info@autoexplore.ai>"]
-repository = "https://github.com/GitComet/gitcomet"
+repository = "https://github.com/Auto-Explore/GitComet"
 
 [workspace.dependencies]
 # Internal crates
@@ -47,6 +47,7 @@ notify = "8"
 regex = "1"
 resvg = "0.47.0"
 rustc-hash = "2.1"
+semver = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 smol = "2"
@@ -62,6 +63,7 @@ tree-sitter-rust = "0.24"
 tree-sitter-typescript = "0.23.2"
 tree-sitter-yaml = "0.7.2"
 unicode-segmentation = "1.12"
+zed-reqwest = { version = "0.12.15-zed", default-features = false, features = ["blocking", "json", "rustls-tls-native-roots"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

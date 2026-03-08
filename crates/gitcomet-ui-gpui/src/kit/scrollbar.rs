@@ -76,7 +76,7 @@ impl Scrollbar {
             handle,
             axis: ScrollbarAxis::Vertical,
             markers: Vec::new(),
-            always_visible: false,
+            always_visible: true,
             #[cfg(test)]
             debug_selector: None,
         }
@@ -88,7 +88,7 @@ impl Scrollbar {
             handle,
             axis: ScrollbarAxis::Horizontal,
             markers: Vec::new(),
-            always_visible: false,
+            always_visible: true,
             #[cfg(test)]
             debug_selector: None,
         }

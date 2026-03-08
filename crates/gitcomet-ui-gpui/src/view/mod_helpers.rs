@@ -259,6 +259,8 @@ pub(super) struct ToastState {
     pub(super) kind: components::ToastKind,
     pub(super) input: Entity<components::TextInput>,
     pub(super) is_code_message: bool,
+    pub(super) action_url: Option<String>,
+    pub(super) action_label: Option<String>,
     pub(super) ttl: Option<Duration>,
 }
 

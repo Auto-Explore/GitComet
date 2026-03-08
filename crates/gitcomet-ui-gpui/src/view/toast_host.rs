@@ -50,7 +50,24 @@ impl ToastHost {
             components::ToastKind::Warning => Duration::from_secs(10),
             components::ToastKind::Success => Duration::from_secs(6),
         };
-        let _ = self.push_toast_inner(kind, message, Some(ttl), cx);
+        let _ = self.push_toast_inner(kind, message, None, Some(ttl), cx);
+    }
+
+    #[cfg_attr(test, allow(dead_code))]
+    pub(super) fn push_toast_with_link(
+        &mut self,
+        kind: components::ToastKind,
+        message: String,
+        link_url: String,
+        link_label: String,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let ttl = match kind {
+            components::ToastKind::Error => Duration::from_secs(15),
+            components::ToastKind::Warning => Duration::from_secs(10),
+            components::ToastKind::Success => Duration::from_secs(6),
+        };
+        let _ = self.push_toast_inner(kind, message, Some((link_url, link_label)), Some(ttl), cx);
     }
 
     pub(super) fn push_persistent_toast(
@@ -59,13 +76,14 @@ impl ToastHost {
         message: String,
         cx: &mut gpui::Context<Self>,
     ) -> u64 {
-        self.push_toast_inner(kind, message, None, cx)
+        self.push_toast_inner(kind, message, None, None, cx)
     }
 
     fn push_toast_inner(
         &mut self,
         kind: components::ToastKind,
         message: String,
+        action: Option<(String, String)>,
         ttl: Option<Duration>,
         cx: &mut gpui::Context<Self>,
     ) -> u64 {
@@ -99,11 +117,16 @@ impl ToastHost {
             input.set_read_only(true, cx);
         });
 
+        let (action_url, action_label) = action
+            .map(|(url, label)| (Some(url), Some(label)))
+            .unwrap_or((None, None));
         self.toasts.push(ToastState {
             id,
             kind,
             input,
             is_code_message,
+            action_url,
+            action_label,
             ttl,
         });
         cx.notify();
@@ -312,7 +335,7 @@ impl Render for ToastHost {
                     }
                 }));
 
-            let message = div()
+            let message_scroll = div()
                 .id(("toast_message_scroll", t.id))
                 .max_h(px(200.0))
                 .overflow_y_scroll()
@@ -330,6 +353,36 @@ impl Render for ToastHost {
                         })
                         .child(t.input.clone()),
                 );
+
+            let action_button =
+                t.action_url
+                    .clone()
+                    .zip(t.action_label.clone())
+                    .map(|(url, label)| {
+                        components::Button::new(format!("toast_action_{}", t.id), label)
+                            .style(components::ButtonStyle::Outlined)
+                            .on_click(theme, cx, move |this, _e, _w, cx| {
+                                match super::platform_open::open_url(&url) {
+                                    Ok(()) => {
+                                        this.remove_toast(t.id, cx);
+                                    }
+                                    Err(err) => {
+                                        this.push_toast(
+                                            components::ToastKind::Error,
+                                            format!("Failed to open link: {err}"),
+                                            cx,
+                                        );
+                                    }
+                                }
+                            })
+                    });
+
+            let message = div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(message_scroll)
+                .when_some(action_button, |this, button| this.child(button));
 
             div()
                 .relative()

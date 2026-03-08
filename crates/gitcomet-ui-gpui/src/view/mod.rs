@@ -61,6 +61,7 @@ mod state_apply;
 mod toast_host;
 mod tooltip;
 mod tooltip_host;
+mod update_check;
 mod word_diff;
 
 use app_model::AppUiModel;
@@ -532,6 +533,7 @@ impl GitCometView {
         view.maybe_auto_install_linux_desktop_integration(cx);
 
         view.drive_focused_mergetool_bootstrap();
+        view.maybe_check_for_updates_on_startup(cx);
 
         view
     }
@@ -730,6 +732,20 @@ impl GitCometView {
     ) {
         self.toast_host
             .update(cx, |host, cx| host.push_toast(kind, message, cx));
+    }
+
+    #[cfg_attr(test, allow(dead_code))]
+    fn push_toast_with_link(
+        &mut self,
+        kind: components::ToastKind,
+        message: String,
+        link_url: String,
+        link_label: String,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.toast_host.update(cx, |host, cx| {
+            host.push_toast_with_link(kind, message, link_url, link_label, cx)
+        });
     }
 
     fn open_external_url(&mut self, url: &str) -> Result<(), std::io::Error> {

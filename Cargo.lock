@@ -2321,6 +2321,7 @@ dependencies = [
  "gpui",
  "resvg 0.47.0",
  "rustc-hash 2.1.1",
+ "semver",
  "serde",
  "serde_json",
  "smol",
@@ -2336,6 +2337,7 @@ dependencies = [
  "tree-sitter-typescript",
  "tree-sitter-yaml",
  "unicode-segmentation",
+ "zed-reqwest",
 ]
 
 [[package]]
@@ -8874,6 +8876,7 @@ dependencies = [
  "base64",
  "bytes",
  "encoding_rs",
+ "futures-channel",
  "futures-core",
  "futures-util",
  "h2",
