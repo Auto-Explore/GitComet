@@ -123,6 +123,83 @@ impl GitBackend for TestBackend {
     }
 }
 
+fn assert_file_preview_ctrl_a_ctrl_c_copies_all(
+    cx: &mut gpui::TestAppContext,
+    repo_id: gitcomet_state::model::RepoId,
+    workdir: std::path::PathBuf,
+    file_rel: std::path::PathBuf,
+    status_kind: gitcomet_core::domain::FileStatusKind,
+    lines: Arc<Vec<String>>,
+) {
+    let expected = lines.join("\n");
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = gitcomet_state::model::RepoState::new_opening(
+                repo_id,
+                gitcomet_core::domain::RepoSpec {
+                    workdir: workdir.clone(),
+                },
+            );
+            repo.status = gitcomet_state::model::Loadable::Ready(
+                gitcomet_core::domain::RepoStatus {
+                    staged: vec![gitcomet_core::domain::FileStatus {
+                        path: file_rel.clone(),
+                        kind: status_kind,
+                        conflict: None,
+                    }],
+                    unstaged: vec![],
+                }
+                .into(),
+            );
+            repo.diff_target = Some(gitcomet_core::domain::DiffTarget::WorkingTree {
+                path: file_rel.clone(),
+                area: gitcomet_core::domain::DiffArea::Staged,
+            });
+
+            let next_state = Arc::new(AppState {
+                repos: vec![repo],
+                active_repo: Some(repo_id),
+                ..Default::default()
+            });
+
+            this._ui_model.update(cx, |model, cx| {
+                model.set_state(Arc::clone(&next_state), cx);
+            });
+
+            let workdir = workdir.clone();
+            let file_rel = file_rel.clone();
+            let lines = Arc::clone(&lines);
+            this.main_pane.update(cx, |pane, cx| {
+                pane.worktree_preview_path = Some(workdir.join(&file_rel));
+                pane.worktree_preview = gitcomet_state::model::Loadable::Ready(lines);
+                pane.worktree_preview_segments_cache_path = None;
+                pane.worktree_preview_segments_cache.clear();
+                pane.worktree_preview_scroll
+                    .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
+                cx.notify();
+            });
+        });
+    });
+
+    cx.update(|window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        let focus = main_pane.read(app).diff_panel_focus_handle.clone();
+        window.focus(&focus);
+        let _ = window.draw(app);
+    });
+
+    cx.simulate_keystrokes("ctrl-a ctrl-c");
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|item| item.text()),
+        Some(expected.into())
+    );
+}
+
 #[gpui::test]
 fn file_preview_renders_scrollable_syntax_highlighted_rows(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
@@ -378,6 +455,45 @@ fn staged_deleted_file_preview_uses_old_contents(cx: &mut gpui::TestAppContext) 
         };
         assert_eq!(lines.as_ref(), &vec!["one".to_string(), "two".to_string()]);
     });
+}
+
+#[gpui::test]
+fn added_file_preview_ctrl_a_ctrl_c_copies_all_content(cx: &mut gpui::TestAppContext) {
+    let repo_id = gitcomet_state::model::RepoId(31);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_preview_added_copy",
+        std::process::id()
+    ));
+    let file_rel = std::path::PathBuf::from("added.rs");
+    let lines: Arc<Vec<String>> =
+        Arc::new(vec!["alpha".into(), "beta".into(), "gamma".into()]);
+    assert_file_preview_ctrl_a_ctrl_c_copies_all(
+        cx,
+        repo_id,
+        workdir,
+        file_rel,
+        gitcomet_core::domain::FileStatusKind::Added,
+        lines,
+    );
+}
+
+#[gpui::test]
+fn deleted_file_preview_ctrl_a_ctrl_c_copies_all_content(cx: &mut gpui::TestAppContext) {
+    let repo_id = gitcomet_state::model::RepoId(32);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_preview_deleted_copy",
+        std::process::id()
+    ));
+    let file_rel = std::path::PathBuf::from("deleted.rs");
+    let lines: Arc<Vec<String>> = Arc::new(vec!["old one".into(), "old two".into()]);
+    assert_file_preview_ctrl_a_ctrl_c_copies_all(
+        cx,
+        repo_id,
+        workdir,
+        file_rel,
+        gitcomet_core::domain::FileStatusKind::Deleted,
+        lines,
+    );
 }
 
 #[gpui::test]

@@ -2667,22 +2667,44 @@ impl MainPaneView {
                     handled = this.try_select_adjacent_status_file(repo_id, direction, window, cx);
                 }
 
+                let copy_target_is_focused = this
+                    .diff_raw_input
+                    .read(cx)
+                    .focus_handle()
+                    .is_focused(window);
                 let is_file_preview = this.untracked_worktree_preview_path().is_some()
                     || this.added_file_preview_abs_path().is_some()
                     || this.deleted_file_preview_abs_path().is_some();
                 if is_file_preview {
+                    if !handled
+                        && !copy_target_is_focused
+                        && (mods.control || mods.platform)
+                        && !mods.alt
+                        && !mods.function
+                        && key == "c"
+                        && this.diff_text_has_selection()
+                    {
+                        this.copy_selected_diff_text_to_clipboard(cx);
+                        handled = true;
+                    }
+
+                    if !handled
+                        && !copy_target_is_focused
+                        && (mods.control || mods.platform)
+                        && !mods.alt
+                        && !mods.function
+                        && key == "a"
+                    {
+                        this.select_all_diff_text();
+                        handled = true;
+                    }
+
                     if handled {
                         cx.stop_propagation();
                         cx.notify();
                     }
                     return;
                 }
-
-                let copy_target_is_focused = this
-                    .diff_raw_input
-                    .read(cx)
-                    .focus_handle()
-                    .is_focused(window);
 
                 let conflict_resolver_active = this.active_repo().is_some_and(|repo| {
                     let Some(DiffTarget::WorkingTree { path, area }) = repo.diff_target.as_ref()
