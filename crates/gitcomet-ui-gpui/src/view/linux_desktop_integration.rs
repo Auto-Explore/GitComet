@@ -8,7 +8,7 @@ impl GitCometView {
     ) {
         use std::path::PathBuf;
 
-        if std::env::var_os("GITGPUI_NO_DESKTOP_INSTALL").is_some() {
+        if std::env::var_os("GITCOMET_NO_DESKTOP_INSTALL").is_some() {
             return;
         }
 

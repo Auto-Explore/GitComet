@@ -731,20 +731,20 @@ fn extraction_regression_on_gitcomet_repo() {
 }
 
 /// Run extraction against a large external repository for comprehensive
-/// regression testing. Set the `GITGPUI_MERGE_EXTRACTION_REPO` environment
+/// regression testing. Set the `GITCOMET_MERGE_EXTRACTION_REPO` environment
 /// variable to the path of the repository to test against.
 ///
 /// Example:
-///   GITGPUI_MERGE_EXTRACTION_REPO=/home/user/git/linux cargo test \
+///   GITCOMET_MERGE_EXTRACTION_REPO=/home/user/git/linux cargo test \
 ///     --test merge_git_extraction extraction_regression_on_external_repo \
 ///     -- --ignored
 #[test]
 #[ignore]
 fn extraction_regression_on_external_repo() {
-    let repo_path = std::env::var("GITGPUI_MERGE_EXTRACTION_REPO").unwrap_or_else(|_| {
+    let repo_path = std::env::var("GITCOMET_MERGE_EXTRACTION_REPO").unwrap_or_else(|_| {
         panic!(
-            "Set GITGPUI_MERGE_EXTRACTION_REPO to a git repo path to run this test.\n\
-             Example: GITGPUI_MERGE_EXTRACTION_REPO=/home/user/git/linux"
+            "Set GITCOMET_MERGE_EXTRACTION_REPO to a git repo path to run this test.\n\
+             Example: GITCOMET_MERGE_EXTRACTION_REPO=/home/user/git/linux"
         )
     });
     let repo = Path::new(&repo_path);
@@ -763,20 +763,20 @@ fn extraction_regression_on_external_repo() {
 
 /// Generate fixture files from real merge commits to disk.
 ///
-/// Set `GITGPUI_MERGE_EXTRACTION_REPO` and `GITGPUI_MERGE_EXTRACTION_DEST`
+/// Set `GITCOMET_MERGE_EXTRACTION_REPO` and `GITCOMET_MERGE_EXTRACTION_DEST`
 /// to run. Generated fixtures are compatible with the existing fixture harness.
 ///
 /// Example:
-///   GITGPUI_MERGE_EXTRACTION_REPO=/home/user/git/linux \
-///   GITGPUI_MERGE_EXTRACTION_DEST=crates/gitcomet-core/tests/fixtures/merge_extracted \
+///   GITCOMET_MERGE_EXTRACTION_REPO=/home/user/git/linux \
+///   GITCOMET_MERGE_EXTRACTION_DEST=crates/gitcomet-core/tests/fixtures/merge_extracted \
 ///   cargo test --test merge_git_extraction generate_fixtures_from_repo -- --ignored
 #[test]
 #[ignore]
 fn generate_fixtures_from_repo() {
-    let repo_path = std::env::var("GITGPUI_MERGE_EXTRACTION_REPO")
-        .unwrap_or_else(|_| panic!("Set GITGPUI_MERGE_EXTRACTION_REPO to a git repo path"));
-    let dest_path = std::env::var("GITGPUI_MERGE_EXTRACTION_DEST")
-        .unwrap_or_else(|_| panic!("Set GITGPUI_MERGE_EXTRACTION_DEST to an output directory"));
+    let repo_path = std::env::var("GITCOMET_MERGE_EXTRACTION_REPO")
+        .unwrap_or_else(|_| panic!("Set GITCOMET_MERGE_EXTRACTION_REPO to a git repo path"));
+    let dest_path = std::env::var("GITCOMET_MERGE_EXTRACTION_DEST")
+        .unwrap_or_else(|_| panic!("Set GITCOMET_MERGE_EXTRACTION_DEST to an output directory"));
 
     let repo = Path::new(&repo_path);
     let dest = Path::new(&dest_path);

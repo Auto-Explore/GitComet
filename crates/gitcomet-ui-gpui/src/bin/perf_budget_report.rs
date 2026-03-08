@@ -341,7 +341,7 @@ where
 }
 
 fn strict_from_env() -> bool {
-    match env::var("GITGPUI_PERF_BUDGET_STRICT") {
+    match env::var("GITCOMET_PERF_BUDGET_STRICT") {
         Ok(value) => is_truthy(&value),
         Err(_) => false,
     }

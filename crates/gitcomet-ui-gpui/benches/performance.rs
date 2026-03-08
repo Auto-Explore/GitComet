@@ -18,23 +18,23 @@ fn env_usize(key: &str, default: usize) -> usize {
 fn bench_open_repo(c: &mut Criterion) {
     // Note: Criterion's "Warming up for Xs" can look "stuck" if a single iteration takes longer
     // than the warm-up duration. Keep defaults moderate; scale up via env vars for stress runs.
-    let commits = env_usize("GITGPUI_BENCH_COMMITS", 5_000);
-    let local_branches = env_usize("GITGPUI_BENCH_LOCAL_BRANCHES", 200);
-    let remote_branches = env_usize("GITGPUI_BENCH_REMOTE_BRANCHES", 800);
-    let remotes = env_usize("GITGPUI_BENCH_REMOTES", 2);
+    let commits = env_usize("GITCOMET_BENCH_COMMITS", 5_000);
+    let local_branches = env_usize("GITCOMET_BENCH_LOCAL_BRANCHES", 200);
+    let remote_branches = env_usize("GITCOMET_BENCH_REMOTE_BRANCHES", 800);
+    let remotes = env_usize("GITCOMET_BENCH_REMOTES", 2);
     let history_heavy_commits = env_usize(
-        "GITGPUI_BENCH_HISTORY_HEAVY_COMMITS",
+        "GITCOMET_BENCH_HISTORY_HEAVY_COMMITS",
         commits.saturating_mul(3),
     );
     let branch_heavy_local_branches = env_usize(
-        "GITGPUI_BENCH_BRANCH_HEAVY_LOCAL_BRANCHES",
+        "GITCOMET_BENCH_BRANCH_HEAVY_LOCAL_BRANCHES",
         local_branches.saturating_mul(6),
     );
     let branch_heavy_remote_branches = env_usize(
-        "GITGPUI_BENCH_BRANCH_HEAVY_REMOTE_BRANCHES",
+        "GITCOMET_BENCH_BRANCH_HEAVY_REMOTE_BRANCHES",
         remote_branches.saturating_mul(4),
     );
-    let branch_heavy_remotes = env_usize("GITGPUI_BENCH_BRANCH_HEAVY_REMOTES", remotes.max(8));
+    let branch_heavy_remotes = env_usize("GITCOMET_BENCH_BRANCH_HEAVY_REMOTES", remotes.max(8));
 
     let balanced = OpenRepoFixture::new(commits, local_branches, remote_branches, remotes);
     let history_heavy = OpenRepoFixture::new(
@@ -66,12 +66,12 @@ fn bench_open_repo(c: &mut Criterion) {
 }
 
 fn bench_branch_sidebar(c: &mut Criterion) {
-    let local_branches = env_usize("GITGPUI_BENCH_LOCAL_BRANCHES", 200);
-    let remote_branches = env_usize("GITGPUI_BENCH_REMOTE_BRANCHES", 800);
-    let remotes = env_usize("GITGPUI_BENCH_REMOTES", 2);
-    let worktrees = env_usize("GITGPUI_BENCH_WORKTREES", 80);
-    let submodules = env_usize("GITGPUI_BENCH_SUBMODULES", 150);
-    let stashes = env_usize("GITGPUI_BENCH_STASHES", 300);
+    let local_branches = env_usize("GITCOMET_BENCH_LOCAL_BRANCHES", 200);
+    let remote_branches = env_usize("GITCOMET_BENCH_REMOTE_BRANCHES", 800);
+    let remotes = env_usize("GITCOMET_BENCH_REMOTES", 2);
+    let worktrees = env_usize("GITCOMET_BENCH_WORKTREES", 80);
+    let submodules = env_usize("GITCOMET_BENCH_SUBMODULES", 150);
+    let stashes = env_usize("GITCOMET_BENCH_STASHES", 300);
 
     let local_heavy = BranchSidebarFixture::new(
         local_branches.saturating_mul(8),
@@ -114,9 +114,9 @@ fn bench_branch_sidebar(c: &mut Criterion) {
 }
 
 fn bench_history_graph(c: &mut Criterion) {
-    let commits = env_usize("GITGPUI_BENCH_COMMITS", 5_000);
-    let merge_stride = env_usize("GITGPUI_BENCH_HISTORY_MERGE_EVERY", 50);
-    let branch_head_every = env_usize("GITGPUI_BENCH_HISTORY_BRANCH_HEAD_EVERY", 11);
+    let commits = env_usize("GITCOMET_BENCH_COMMITS", 5_000);
+    let merge_stride = env_usize("GITCOMET_BENCH_HISTORY_MERGE_EVERY", 50);
+    let branch_head_every = env_usize("GITCOMET_BENCH_HISTORY_BRANCH_HEAD_EVERY", 11);
 
     let linear_history = HistoryGraphFixture::new(commits, 0, 0);
     let merge_dense = HistoryGraphFixture::new(commits, merge_stride.max(5).min(25), 0);
@@ -139,13 +139,13 @@ fn bench_history_graph(c: &mut Criterion) {
 }
 
 fn bench_commit_details(c: &mut Criterion) {
-    let files = env_usize("GITGPUI_BENCH_COMMIT_FILES", 5_000);
-    let depth = env_usize("GITGPUI_BENCH_COMMIT_PATH_DEPTH", 4);
+    let files = env_usize("GITCOMET_BENCH_COMMIT_FILES", 5_000);
+    let depth = env_usize("GITCOMET_BENCH_COMMIT_PATH_DEPTH", 4);
     let deep_depth = env_usize(
-        "GITGPUI_BENCH_COMMIT_DEEP_PATH_DEPTH",
+        "GITCOMET_BENCH_COMMIT_DEEP_PATH_DEPTH",
         depth.saturating_mul(4).max(12),
     );
-    let huge_files = env_usize("GITGPUI_BENCH_COMMIT_HUGE_FILES", files.saturating_mul(2));
+    let huge_files = env_usize("GITCOMET_BENCH_COMMIT_HUGE_FILES", files.saturating_mul(2));
     let balanced = CommitDetailsFixture::new(files, depth);
     let deep_paths = CommitDetailsFixture::new(files, deep_depth);
     let huge_list = CommitDetailsFixture::new(huge_files, depth);
@@ -166,10 +166,10 @@ fn bench_commit_details(c: &mut Criterion) {
 }
 
 fn bench_large_file_diff_scroll(c: &mut Criterion) {
-    let lines = env_usize("GITGPUI_BENCH_DIFF_LINES", 10_000);
-    let window = env_usize("GITGPUI_BENCH_DIFF_WINDOW", 200);
-    let line_bytes = env_usize("GITGPUI_BENCH_DIFF_LINE_BYTES", 96);
-    let long_line_bytes = env_usize("GITGPUI_BENCH_DIFF_LONG_LINE_BYTES", 4_096);
+    let lines = env_usize("GITCOMET_BENCH_DIFF_LINES", 10_000);
+    let window = env_usize("GITCOMET_BENCH_DIFF_WINDOW", 200);
+    let line_bytes = env_usize("GITCOMET_BENCH_DIFF_LINE_BYTES", 96);
+    let long_line_bytes = env_usize("GITCOMET_BENCH_DIFF_LONG_LINE_BYTES", 4_096);
     let normal_fixture = LargeFileDiffScrollFixture::new_with_line_bytes(lines, line_bytes);
     let long_line_fixture = LargeFileDiffScrollFixture::new_with_line_bytes(lines, long_line_bytes);
 
@@ -205,9 +205,9 @@ fn bench_large_file_diff_scroll(c: &mut Criterion) {
 }
 
 fn bench_conflict_three_way_scroll(c: &mut Criterion) {
-    let lines = env_usize("GITGPUI_BENCH_CONFLICT_LINES", 10_000);
-    let conflict_blocks = env_usize("GITGPUI_BENCH_CONFLICT_BLOCKS", 300);
-    let window = env_usize("GITGPUI_BENCH_CONFLICT_WINDOW", 200);
+    let lines = env_usize("GITCOMET_BENCH_CONFLICT_LINES", 10_000);
+    let conflict_blocks = env_usize("GITCOMET_BENCH_CONFLICT_BLOCKS", 300);
+    let window = env_usize("GITCOMET_BENCH_CONFLICT_WINDOW", 200);
     let fixture = ConflictThreeWayScrollFixture::new(lines, conflict_blocks);
 
     let mut group = c.benchmark_group("conflict_three_way_scroll");
@@ -229,8 +229,8 @@ fn bench_conflict_three_way_scroll(c: &mut Criterion) {
 }
 
 fn bench_conflict_two_way_split_scroll(c: &mut Criterion) {
-    let lines = env_usize("GITGPUI_BENCH_CONFLICT_LINES", 10_000);
-    let conflict_blocks = env_usize("GITGPUI_BENCH_CONFLICT_BLOCKS", 300);
+    let lines = env_usize("GITCOMET_BENCH_CONFLICT_LINES", 10_000);
+    let conflict_blocks = env_usize("GITCOMET_BENCH_CONFLICT_BLOCKS", 300);
     let fixture = ConflictTwoWaySplitScrollFixture::new(lines, conflict_blocks);
     let windows = [100usize, 200, 400];
 
@@ -255,8 +255,8 @@ fn bench_conflict_two_way_split_scroll(c: &mut Criterion) {
 }
 
 fn bench_conflict_resolved_output_gutter_scroll(c: &mut Criterion) {
-    let lines = env_usize("GITGPUI_BENCH_CONFLICT_LINES", 10_000);
-    let conflict_blocks = env_usize("GITGPUI_BENCH_CONFLICT_BLOCKS", 300);
+    let lines = env_usize("GITCOMET_BENCH_CONFLICT_LINES", 10_000);
+    let conflict_blocks = env_usize("GITCOMET_BENCH_CONFLICT_BLOCKS", 300);
     let fixture = ConflictResolvedOutputGutterScrollFixture::new(lines, conflict_blocks);
     let windows = [100usize, 200, 400];
 
@@ -281,9 +281,9 @@ fn bench_conflict_resolved_output_gutter_scroll(c: &mut Criterion) {
 }
 
 fn bench_conflict_search_query_update(c: &mut Criterion) {
-    let lines = env_usize("GITGPUI_BENCH_CONFLICT_LINES", 10_000);
-    let conflict_blocks = env_usize("GITGPUI_BENCH_CONFLICT_BLOCKS", 300);
-    let window = env_usize("GITGPUI_BENCH_CONFLICT_WINDOW", 200);
+    let lines = env_usize("GITCOMET_BENCH_CONFLICT_LINES", 10_000);
+    let conflict_blocks = env_usize("GITCOMET_BENCH_CONFLICT_BLOCKS", 300);
+    let window = env_usize("GITCOMET_BENCH_CONFLICT_WINDOW", 200);
     let mut fixture = ConflictSearchQueryUpdateFixture::new(lines, conflict_blocks);
     let query_cycle = [
         "s", "sh", "sha", "shar", "share", "shared", "shared_", "shared_1",
@@ -307,11 +307,11 @@ fn bench_conflict_search_query_update(c: &mut Criterion) {
 }
 
 fn bench_conflict_split_resize_step(c: &mut Criterion) {
-    let lines = env_usize("GITGPUI_BENCH_CONFLICT_LINES", 10_000);
-    let conflict_blocks = env_usize("GITGPUI_BENCH_CONFLICT_BLOCKS", 300);
-    let window = env_usize("GITGPUI_BENCH_CONFLICT_WINDOW", 200);
+    let lines = env_usize("GITCOMET_BENCH_CONFLICT_LINES", 10_000);
+    let conflict_blocks = env_usize("GITCOMET_BENCH_CONFLICT_BLOCKS", 300);
+    let window = env_usize("GITCOMET_BENCH_CONFLICT_WINDOW", 200);
     let resize_query =
-        env::var("GITGPUI_BENCH_CONFLICT_RESIZE_QUERY").unwrap_or_else(|_| "shared".to_string());
+        env::var("GITCOMET_BENCH_CONFLICT_RESIZE_QUERY").unwrap_or_else(|_| "shared".to_string());
     let mut fixture = ConflictSplitResizeStepFixture::new(lines, conflict_blocks);
 
     let mut group = c.benchmark_group("conflict_split_resize_step");

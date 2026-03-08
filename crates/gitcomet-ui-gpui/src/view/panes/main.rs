@@ -1584,7 +1584,7 @@ fn parse_conflict_canvas_rows_env(value: &str) -> bool {
 }
 
 fn conflict_canvas_rows_enabled_from_env() -> bool {
-    std::env::var("GITGPUI_CONFLICT_CANVAS_ROWS")
+    std::env::var("GITCOMET_CONFLICT_CANVAS_ROWS")
         .ok()
         .is_none_or(|value| parse_conflict_canvas_rows_env(&value))
 }
