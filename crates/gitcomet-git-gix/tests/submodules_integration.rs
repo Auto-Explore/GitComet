@@ -3,6 +3,7 @@ use gitcomet_git_gix::GixBackend;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
+use std::sync::OnceLock;
 
 fn run_git(repo: &Path, args: &[&str]) {
     let status = Command::new("git")
@@ -14,8 +15,50 @@ fn run_git(repo: &Path, args: &[&str]) {
     assert!(status.success(), "git {:?} failed", args);
 }
 
+#[cfg(windows)]
+fn is_git_shell_startup_failure(text: &str) -> bool {
+    text.contains("sh.exe: *** fatal error -")
+        && (text.contains("couldn't create signal pipe") || text.contains("CreateFileMapping"))
+}
+
+#[cfg(windows)]
+fn git_shell_available_for_submodule_tests() -> bool {
+    static AVAILABLE: OnceLock<bool> = OnceLock::new();
+    *AVAILABLE.get_or_init(|| {
+        let output = match Command::new("git").args(["difftool", "--tool-help"]).output() {
+            Ok(output) => output,
+            Err(_) => return true,
+        };
+        if output.status.success() {
+            return true;
+        }
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        !is_git_shell_startup_failure(&text)
+    })
+}
+
+fn require_git_shell_for_submodule_tests() -> bool {
+    #[cfg(windows)]
+    {
+        if !git_shell_available_for_submodule_tests() {
+            eprintln!(
+                "skipping submodule integration test: Git-for-Windows shell startup failed in this environment"
+            );
+            return false;
+        }
+    }
+    true
+}
+
 #[test]
 fn list_submodules_ignores_missing_gitmodules_mapping() {
+    if !require_git_shell_for_submodule_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
 

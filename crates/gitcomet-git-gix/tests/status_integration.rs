@@ -8,6 +8,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::OnceLock;
 #[cfg(unix)]
 use std::{fs::Permissions, os::unix::fs::PermissionsExt};
 
@@ -16,6 +17,44 @@ const NULL_DEVICE: &str = "NUL";
 #[cfg(not(windows))]
 const NULL_DEVICE: &str = "/dev/null";
 
+#[cfg(windows)]
+fn is_git_shell_startup_failure(text: &str) -> bool {
+    text.contains("sh.exe: *** fatal error -")
+        && (text.contains("couldn't create signal pipe") || text.contains("CreateFileMapping"))
+}
+
+#[cfg(windows)]
+fn git_shell_available_for_status_integration_tests() -> bool {
+    static AVAILABLE: OnceLock<bool> = OnceLock::new();
+    *AVAILABLE.get_or_init(|| {
+        let output = match Command::new("git").args(["difftool", "--tool-help"]).output() {
+            Ok(output) => output,
+            Err(_) => return true,
+        };
+        if output.status.success() {
+            return true;
+        }
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        !is_git_shell_startup_failure(&text)
+    })
+}
+
+fn require_git_shell_for_status_integration_tests() -> bool {
+    #[cfg(windows)]
+    {
+        if !git_shell_available_for_status_integration_tests() {
+            eprintln!(
+                "skipping status integration test: Git-for-Windows shell startup failed in this environment"
+            );
+            return false;
+        }
+    }
+    true
+}
 fn git_command() -> Command {
     let mut cmd = Command::new("git");
     // Keep integration tests deterministic by isolating from host git config.
@@ -457,6 +496,9 @@ struct ConflictStageFixture {
 
 #[test]
 fn status_separates_staged_and_unstaged() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -491,6 +533,9 @@ fn status_separates_staged_and_unstaged() {
 
 #[test]
 fn status_lists_untracked_files_in_directories() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -520,6 +565,9 @@ fn status_lists_untracked_files_in_directories() {
 
 #[test]
 fn diff_unified_works_for_staged_and_unstaged() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -561,6 +609,9 @@ fn diff_unified_works_for_staged_and_unstaged() {
 
 #[test]
 fn diff_file_text_reports_old_and_new_for_working_tree_and_commits() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -669,6 +720,9 @@ fn diff_file_text_root_commit_has_no_parent_side() {
 
 #[test]
 fn diff_file_text_staged_add_and_delete_report_missing_sides() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -717,6 +771,9 @@ fn diff_file_text_staged_add_and_delete_report_missing_sides() {
 
 #[test]
 fn diff_file_text_returns_none_for_directories() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -738,6 +795,9 @@ fn diff_file_text_returns_none_for_directories() {
 
 #[test]
 fn diff_file_image_reports_old_and_new_for_working_tree_and_commits() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -810,6 +870,9 @@ fn diff_file_image_reports_old_and_new_for_working_tree_and_commits() {
 
 #[test]
 fn diff_file_image_returns_none_for_directories() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -831,6 +894,9 @@ fn diff_file_image_returns_none_for_directories() {
 
 #[test]
 fn diff_file_text_uses_ours_and_theirs_for_conflicted_paths() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -899,6 +965,9 @@ fn diff_file_text_uses_ours_and_theirs_for_conflicted_paths() {
 
 #[test]
 fn status_and_conflict_stages_cover_all_conflict_kinds() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -1051,6 +1120,9 @@ fn status_and_conflict_stages_cover_all_conflict_kinds() {
 
 #[test]
 fn checkout_conflict_side_resolves_all_conflict_stage_shapes() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     #[derive(Clone, Copy)]
     struct ConflictCheckoutFixture {
         kind: FileConflictKind,
@@ -1200,6 +1272,9 @@ fn checkout_conflict_side_resolves_all_conflict_stage_shapes() {
 
 #[test]
 fn accept_conflict_deletion_resolves_delete_outcome_conflicts() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     #[derive(Clone, Copy)]
     struct ConflictDeleteFixture {
         kind: FileConflictKind,
@@ -1303,6 +1378,9 @@ fn accept_conflict_deletion_resolves_delete_outcome_conflicts() {
 
 #[test]
 fn status_reports_single_conflict_for_modify_delete() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -1356,6 +1434,9 @@ fn status_reports_single_conflict_for_modify_delete() {
 
 #[test]
 fn status_reports_conflict_kind_for_add_add() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -1403,6 +1484,9 @@ fn status_reports_conflict_kind_for_add_add() {
 
 #[test]
 fn conflict_file_stages_preserve_non_utf8_bytes() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -1474,6 +1558,9 @@ fn conflict_file_stages_preserve_non_utf8_bytes() {
 
 #[test]
 fn checkout_conflict_side_resolves_non_utf8_binary_conflict() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -1545,6 +1632,9 @@ fn checkout_conflict_side_resolves_non_utf8_binary_conflict() {
 
 #[test]
 fn conflict_session_both_deleted_binary_prefers_decision_strategy() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -1588,6 +1678,9 @@ fn conflict_session_both_deleted_binary_prefers_decision_strategy() {
 
 #[test]
 fn diff_file_text_handles_modify_delete_conflicts() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -1636,6 +1729,9 @@ fn diff_file_text_handles_modify_delete_conflicts() {
 
 #[test]
 fn checkout_conflict_side_resolves_modify_delete_using_ours() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -1691,6 +1787,9 @@ fn checkout_conflict_side_resolves_modify_delete_using_ours() {
 
 #[test]
 fn checkout_conflict_side_resolves_modify_delete_using_theirs() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -1751,6 +1850,9 @@ fn checkout_conflict_side_resolves_modify_delete_using_theirs() {
 
 #[test]
 fn checkout_conflict_side_stages_resolution() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -1806,6 +1908,9 @@ fn checkout_conflict_side_stages_resolution() {
 
 #[test]
 fn launch_mergetool_trust_exit_false_detects_same_size_content_change() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
     setup_both_modified_text_conflict(repo, "a.txt", "ours\n", "theirs\n");
@@ -1850,6 +1955,9 @@ fn launch_mergetool_trust_exit_false_detects_same_size_content_change() {
 
 #[test]
 fn launch_mergetool_trust_exit_false_requires_content_change() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
     setup_both_modified_text_conflict(repo, "a.txt", "ours\n", "theirs\n");
@@ -1888,6 +1996,9 @@ fn launch_mergetool_trust_exit_false_requires_content_change() {
 
 #[test]
 fn launch_mergetool_trust_exit_false_detects_deleted_output_change() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
     setup_both_modified_text_conflict(repo, "a.txt", "ours\n", "theirs\n");
@@ -1934,6 +2045,9 @@ fn launch_mergetool_trust_exit_false_detects_deleted_output_change() {
 
 #[test]
 fn launch_mergetool_rejects_unresolved_marker_output() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
     setup_both_modified_text_conflict(repo, "a.txt", "ours\n", "theirs\n");
@@ -1992,6 +2106,9 @@ fn launch_mergetool_rejects_unresolved_marker_output() {
 #[cfg(not(windows))]
 #[test]
 fn launch_mergetool_custom_cmd_supports_braced_env_variables() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
     let conflicted_path = "docs/a space.txt";
@@ -2043,6 +2160,9 @@ fn launch_mergetool_custom_cmd_supports_braced_env_variables() {
 #[test]
 #[cfg(windows)]
 fn launch_mergetool_custom_cmd_supports_cmd_percent_env_variables() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
     let conflicted_path = "docs/a space.txt";
@@ -2074,6 +2194,9 @@ fn launch_mergetool_custom_cmd_supports_cmd_percent_env_variables() {
 
 #[test]
 fn launch_mergetool_custom_cmd_supports_unicode_conflicted_path() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
     let conflicted_path = "docs/spaced 日本語 file.txt";
@@ -2124,6 +2247,9 @@ fn launch_mergetool_custom_cmd_supports_unicode_conflicted_path() {
 
 #[test]
 fn launch_mergetool_prefers_merge_guitool_when_gui_default_true() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
     setup_both_modified_text_conflict(repo, "a.txt", "ours\n", "theirs\n");
@@ -2154,6 +2280,9 @@ fn launch_mergetool_prefers_merge_guitool_when_gui_default_true() {
 #[cfg(unix)]
 #[test]
 fn launch_mergetool_uses_tool_path_override_without_custom_cmd() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
     setup_both_modified_text_conflict(repo, "a.txt", "ours\n", "theirs\n");
@@ -2192,6 +2321,9 @@ fn launch_mergetool_uses_tool_path_override_without_custom_cmd() {
 #[cfg(unix)]
 #[test]
 fn launch_mergetool_prefers_custom_cmd_over_tool_path_override() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
     setup_both_modified_text_conflict(repo, "a.txt", "ours\n", "theirs\n");
@@ -2235,6 +2367,9 @@ fn launch_mergetool_prefers_custom_cmd_over_tool_path_override() {
 
 #[test]
 fn launch_mergetool_write_to_temp_true_uses_temp_stage_paths() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
     setup_both_modified_text_conflict(repo, "a.txt", "ours\n", "theirs\n");
@@ -2282,6 +2417,9 @@ fn launch_mergetool_write_to_temp_true_uses_temp_stage_paths() {
 
 #[test]
 fn launch_mergetool_write_to_temp_false_uses_workdir_prefixed_stage_paths() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
     setup_both_modified_text_conflict(repo, "docs/note.txt", "ours\n", "theirs\n");
@@ -2327,6 +2465,9 @@ fn launch_mergetool_write_to_temp_false_uses_workdir_prefixed_stage_paths() {
 
 #[test]
 fn launch_mergetool_write_to_temp_false_keep_temporaries_preserves_stage_files() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
     setup_both_modified_text_conflict(repo, "docs/note.txt", "ours\n", "theirs\n");
@@ -2367,6 +2508,9 @@ fn launch_mergetool_write_to_temp_false_keep_temporaries_preserves_stage_files()
 
 #[test]
 fn launch_mergetool_write_to_temp_false_keep_temporaries_preserves_stage_files_on_abort() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
     setup_both_modified_text_conflict(repo, "docs/note.txt", "ours\n", "theirs\n");
@@ -2410,6 +2554,9 @@ fn launch_mergetool_write_to_temp_false_keep_temporaries_preserves_stage_files_o
 
 #[test]
 fn launch_mergetool_write_to_temp_true_keep_temporaries_preserves_stage_files() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
     setup_both_modified_text_conflict(repo, "a.txt", "ours\n", "theirs\n");
@@ -2466,6 +2613,9 @@ fn launch_mergetool_write_to_temp_true_keep_temporaries_preserves_stage_files() 
 
 #[test]
 fn launch_mergetool_write_to_temp_true_keep_temporaries_preserves_stage_files_on_abort() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
     setup_both_modified_text_conflict(repo, "a.txt", "ours\n", "theirs\n");
@@ -2525,6 +2675,9 @@ fn launch_mergetool_write_to_temp_true_keep_temporaries_preserves_stage_files_on
 
 #[test]
 fn launch_mergetool_no_base_conflict_passes_empty_base_file() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
     setup_both_added_text_conflict(repo, "new.txt", "ours added\n", "theirs added\n");
@@ -2557,6 +2710,9 @@ fn launch_mergetool_no_base_conflict_passes_empty_base_file() {
 
 #[test]
 fn stage_and_unstage_paths_update_status() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -2607,6 +2763,9 @@ fn stage_and_unstage_paths_update_status() {
 
 #[test]
 fn commit_creates_new_commit_and_cleans_status() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -2646,6 +2805,9 @@ fn commit_creates_new_commit_and_cleans_status() {
 
 #[test]
 fn reset_soft_moves_head_and_leaves_changes_staged() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -2696,6 +2858,9 @@ fn reset_soft_moves_head_and_leaves_changes_staged() {
 
 #[test]
 fn reset_mixed_moves_head_and_leaves_changes_unstaged() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -2746,6 +2911,9 @@ fn reset_mixed_moves_head_and_leaves_changes_unstaged() {
 
 #[test]
 fn reset_hard_moves_head_and_discards_changes() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -2796,6 +2964,9 @@ fn reset_hard_moves_head_and_discards_changes() {
 
 #[test]
 fn revert_commit_creates_new_commit_and_reverts_content() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -2846,6 +3017,9 @@ fn revert_commit_creates_new_commit_and_reverts_content() {
 
 #[test]
 fn amend_rewrites_head_commit_message_and_content() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -2923,6 +3097,9 @@ fn amend_rewrites_head_commit_message_and_content() {
 
 #[test]
 fn merge_creates_merge_commit_when_branches_diverged() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -2981,6 +3158,9 @@ fn merge_creates_merge_commit_when_branches_diverged() {
 
 #[test]
 fn merge_fast_forwards_when_possible_even_if_merge_ff_is_disabled() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -3038,6 +3218,9 @@ fn merge_fast_forwards_when_possible_even_if_merge_ff_is_disabled() {
 
 #[test]
 fn merge_commit_message_is_available_during_conflict() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -3093,6 +3276,9 @@ fn merge_commit_message_is_available_during_conflict() {
 
 #[test]
 fn commit_finishes_merge_when_resolved_tree_matches_head() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -3158,6 +3344,9 @@ fn commit_finishes_merge_when_resolved_tree_matches_head() {
 
 #[test]
 fn rebase_replays_commits_onto_target_branch() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -3228,6 +3417,9 @@ fn rebase_replays_commits_onto_target_branch() {
 
 #[test]
 fn create_and_delete_local_branch() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -3269,6 +3461,9 @@ fn create_and_delete_local_branch() {
 
 #[test]
 fn create_and_delete_local_tag() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -3305,6 +3500,9 @@ fn create_and_delete_local_tag() {
 
 #[test]
 fn push_and_delete_remote_tag() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path().join("repo");
     let origin = dir.path().join("origin.git");
@@ -3353,6 +3551,9 @@ fn push_and_delete_remote_tag() {
 
 #[test]
 fn prune_merged_branches_deletes_local_branches_missing_on_remote() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path().join("repo");
     let origin = dir.path().join("origin.git");
@@ -3426,6 +3627,9 @@ fn prune_merged_branches_deletes_local_branches_missing_on_remote() {
 
 #[test]
 fn prune_local_tags_deletes_tags_missing_from_remotes() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path().join("repo");
     let origin = dir.path().join("origin.git");
@@ -3481,6 +3685,9 @@ fn prune_local_tags_deletes_tags_missing_from_remotes() {
 
 #[test]
 fn list_remote_branches_includes_fetched_remote_tracking_refs() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path().join("repo");
     let origin = dir.path().join("origin.git");
@@ -3535,6 +3742,9 @@ fn list_remote_branches_includes_fetched_remote_tracking_refs() {
 
 #[test]
 fn push_with_output_updates_remote_head() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path().join("repo");
     let origin = dir.path().join("origin.git");
@@ -3598,6 +3808,9 @@ fn push_with_output_updates_remote_head() {
 
 #[test]
 fn force_push_with_output_updates_remote_head_after_rewrite() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path().join("repo");
     let origin = dir.path().join("origin.git");
@@ -3678,6 +3891,9 @@ fn force_push_with_output_updates_remote_head_after_rewrite() {
 
 #[test]
 fn pull_with_output_fast_forwards_from_remote() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let origin = dir.path().join("origin.git");
     let repo_a = dir.path().join("repo-a");
@@ -3751,6 +3967,9 @@ fn pull_with_output_fast_forwards_from_remote() {
 
 #[test]
 fn pull_with_output_fast_forwards_when_possible_even_if_pull_ff_is_disabled() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let origin = dir.path().join("origin.git");
     let repo_a = dir.path().join("repo-a");
@@ -3843,6 +4062,9 @@ fn pull_with_output_fast_forwards_when_possible_even_if_pull_ff_is_disabled() {
 
 #[test]
 fn stash_create_list_apply_and_drop_work() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -3884,6 +4106,9 @@ fn stash_create_list_apply_and_drop_work() {
 
 #[test]
 fn stash_apply_conflict_is_mergeable() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -3946,6 +4171,9 @@ fn stash_apply_conflict_is_mergeable() {
 
 #[test]
 fn stash_apply_still_errors_when_merge_does_not_start() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -3989,6 +4217,9 @@ fn stash_apply_still_errors_when_merge_does_not_start() {
 
 #[test]
 fn stash_apply_allows_merge_when_only_untracked_restore_fails() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -4051,6 +4282,9 @@ fn stash_apply_allows_merge_when_only_untracked_restore_fails() {
 
 #[test]
 fn stash_apply_allows_untracked_restore_failure_when_stash_has_tracked_payload() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -4128,6 +4362,9 @@ fn stash_apply_allows_untracked_restore_failure_when_stash_has_tracked_payload()
 
 #[test]
 fn stash_apply_merges_when_only_untracked_restore_fails_without_tracked_changes() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -4176,6 +4413,9 @@ fn stash_apply_merges_when_only_untracked_restore_fails_without_tracked_changes(
 
 #[test]
 fn stash_list_reports_reflog_indices_for_drop() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -4214,6 +4454,9 @@ fn stash_list_reports_reflog_indices_for_drop() {
 
 #[test]
 fn checkout_commit_detaches_head_at_target() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -4265,6 +4508,9 @@ fn checkout_commit_detaches_head_at_target() {
 
 #[test]
 fn discard_worktree_changes_reverts_to_index_version() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -4308,6 +4554,9 @@ fn discard_worktree_changes_reverts_to_index_version() {
 
 #[test]
 fn discard_worktree_changes_reverts_modified_file_to_head() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -4340,6 +4589,9 @@ fn discard_worktree_changes_reverts_modified_file_to_head() {
 
 #[test]
 fn discard_worktree_changes_removes_staged_new_file() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -4378,6 +4630,9 @@ fn discard_worktree_changes_removes_staged_new_file() {
 
 #[test]
 fn discard_worktree_changes_removes_untracked_file() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -4414,6 +4669,9 @@ fn discard_worktree_changes_removes_untracked_file() {
 
 #[test]
 fn discard_worktree_changes_supports_mixed_selection() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -4451,6 +4709,9 @@ fn discard_worktree_changes_supports_mixed_selection() {
 
 #[test]
 fn stage_hunk_applies_only_part_of_a_file_to_index() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -4553,6 +4814,9 @@ fn stage_hunk_applies_only_part_of_a_file_to_index() {
 
 #[test]
 fn unstage_hunk_reverts_only_that_part_in_index() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -4677,6 +4941,9 @@ fn unstage_hunk_reverts_only_that_part_in_index() {
 /// stage the file, and verify the conflict is fully resolved.
 #[test]
 fn resolve_conflict_write_and_stage_clears_conflict() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -4770,6 +5037,9 @@ fn resolve_conflict_write_and_stage_clears_conflict() {
 
 #[test]
 fn resolve_both_added_conflict_write_and_stage_clears_conflict() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
     setup_both_added_text_conflict(repo, "new.txt", "ours added\n", "theirs added\n");
@@ -4832,6 +5102,9 @@ fn resolve_both_added_conflict_write_and_stage_clears_conflict() {
 /// resolvable (one side equals base) while others are genuine conflicts.
 #[test]
 fn autosolve_safe_resolves_trivial_conflict_regions_end_to_end() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     use gitcomet_core::conflict_session::{
         ConflictPayload, ConflictRegionResolution, ConflictSession,
     };
@@ -4967,6 +5240,9 @@ fn autosolve_safe_resolves_trivial_conflict_regions_end_to_end() {
 /// staged to resolve the conflict.
 #[test]
 fn conflict_session_modify_delete_keep_resolves_conflict() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -5057,6 +5333,9 @@ fn conflict_session_modify_delete_keep_resolves_conflict() {
 /// detects remaining markers in partially-resolved text.
 #[test]
 fn validate_conflict_resolution_detects_partial_resolution() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     use gitcomet_core::services::validate_conflict_resolution_text;
 
     // Fully resolved text — no markers
@@ -5097,6 +5376,9 @@ fn validate_conflict_resolution_detects_partial_resolution() {
 /// resolves the conflict.
 #[test]
 fn conflict_session_both_deleted_restore_from_base_resolves_conflict() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -5156,6 +5438,9 @@ fn conflict_session_both_deleted_restore_from_base_resolves_conflict() {
 /// resolves the conflict.
 #[test]
 fn conflict_session_added_by_us_keep_resolves_conflict() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -5232,6 +5517,9 @@ fn conflict_session_added_by_us_keep_resolves_conflict() {
 /// resolves the conflict.
 #[test]
 fn conflict_session_added_by_them_keep_resolves_conflict() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -5314,6 +5602,9 @@ fn conflict_session_added_by_them_keep_resolves_conflict() {
 /// via `checkout_conflict_side(Ours)` resolves the conflict.
 #[test]
 fn conflict_session_deleted_by_them_keep_ours_resolves_conflict() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
 
@@ -5399,3 +5690,4 @@ fn conflict_session_deleted_by_them_keep_ours_resolves_conflict() {
         "a.txt should no longer be conflicted after keeping ours"
     );
 }
+

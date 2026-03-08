@@ -21,6 +21,13 @@ Fast, resource-efficient, fully open source Git GUI written in Rust, targeting G
 
 ### Getting started
 
+Windows prerequisites (Windows 10/11):
+
+- Install Visual Studio 2022 (Community or Build Tools).
+- Install the `Desktop development with C++` workload.
+- Ensure both MSVC tools and Windows 10/11 SDK components are installed.
+- This repo configures Cargo to use `scripts/windows/msvc-linker.cmd`, so `cargo build` works from a regular PowerShell/CMD shell when those components are present.
+
 Offline-friendly default build (does not build the UI or the Git backend):
 
 ```bash

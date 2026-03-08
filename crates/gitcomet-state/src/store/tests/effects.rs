@@ -2,6 +2,9 @@ use super::*;
 
 #[test]
 fn clone_repo_effect_clones_local_repo_and_emits_finished_and_open_repo() {
+    if !super::require_git_shell_for_store_tests() {
+        return;
+    }
     struct Backend;
     impl GitBackend for Backend {
         fn open(&self, _path: &Path) -> std::result::Result<Arc<dyn GitRepository>, Error> {

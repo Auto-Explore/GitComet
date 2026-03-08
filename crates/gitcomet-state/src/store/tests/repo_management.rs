@@ -52,11 +52,12 @@ fn open_repo_focuses_existing_repo_instead_of_opening_duplicate() {
     assert!(effects.is_empty());
     assert_eq!(state.repos.len(), 2);
     assert_eq!(state.active_repo, Some(RepoId(1)));
+    let repo1 = super::reducer::normalize_repo_path(PathBuf::from("/tmp/repo1"));
     assert_eq!(
         state
             .repos
             .iter()
-            .filter(|r| r.spec.workdir == std::path::Path::new("/tmp/repo1"))
+            .filter(|r| r.spec.workdir == repo1)
             .count(),
         1
     );
@@ -645,7 +646,10 @@ fn repo_opened_err_not_a_repository_allows_opening_another_repo_afterwards() {
 
     assert_eq!(state.repos.len(), 1);
     assert_eq!(state.repos[0].id, RepoId(2));
-    assert_eq!(state.repos[0].spec.workdir, PathBuf::from("/tmp/repo"));
+    assert_eq!(
+        state.repos[0].spec.workdir,
+        super::reducer::normalize_repo_path(PathBuf::from("/tmp/repo"))
+    );
     assert!(state.repos[0].open.is_loading());
     assert_eq!(state.active_repo, Some(RepoId(2)));
     assert!(matches!(effects.as_slice(), [Effect::OpenRepo { .. }]));
