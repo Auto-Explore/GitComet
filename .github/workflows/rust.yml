@@ -104,6 +104,28 @@ jobs:
     needs: build
     steps:
     - uses: actions/checkout@v4
+    - name: Install Linux UI native dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          pkg-config \
+          libxcb1-dev \
+          libxkbcommon-dev \
+          libxkbcommon-x11-dev
+    - name: Preflight Linux UI link dependencies
+      run: |
+        missing=0
+        for dep in xcb xkbcommon xkbcommon-x11; do
+          if ! pkg-config --exists "$dep"; then
+            echo "::error title=Missing Linux UI dependency::pkg-config could not find '$dep'. Install libxcb1-dev, libxkbcommon-dev, and libxkbcommon-x11-dev."
+            missing=1
+          fi
+        done
+        if [ "$missing" -ne 0 ]; then
+          echo "performance-budgets job is missing required native UI link dependencies."
+          exit 1
+        fi
+        pkg-config --modversion xcb xkbcommon xkbcommon-x11
     - name: Benchmark conflict scroll/search/resize hot paths
       run: |
         cargo bench -p gitcomet-ui-gpui --bench performance -- conflict_three_way_scroll/style_window
