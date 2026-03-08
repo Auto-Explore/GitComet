@@ -54,6 +54,16 @@ pub(super) fn push_diagnostic(
     util::push_diagnostic(repo_state, kind, message)
 }
 
+#[cfg(test)]
+pub(super) fn handle_session_persist_result(
+    state: &mut crate::model::AppState,
+    repo_id: Option<crate::model::RepoId>,
+    action: &'static str,
+    result: std::io::Result<()>,
+) {
+    util::handle_session_persist_result(state, repo_id, action, result)
+}
+
 pub(super) fn reduce(
     repos: &mut HashMap<RepoId, Arc<dyn GitRepository>>,
     id_alloc: &AtomicU64,

@@ -7,15 +7,15 @@ mod history;
 mod keep_delete_conflict;
 mod status_nav;
 
-fn show_external_mergetool_actions(view_mode: GitCometViewMode) -> bool {
+pub(super) fn show_external_mergetool_actions(view_mode: GitCometViewMode) -> bool {
     matches!(view_mode, GitCometViewMode::Normal)
 }
 
-fn show_conflict_save_stage_action(view_mode: GitCometViewMode) -> bool {
+pub(super) fn show_conflict_save_stage_action(view_mode: GitCometViewMode) -> bool {
     matches!(view_mode, GitCometViewMode::Normal)
 }
 
-fn next_conflict_diff_split_ratio(
+pub(super) fn next_conflict_diff_split_ratio(
     state: ConflictDiffSplitResizeState,
     current_x: Pixels,
     column_widths: [Pixels; 2],
@@ -811,56 +811,60 @@ impl MainPaneView {
                 (Some(repo), Some(path)) => {
                     let title: SharedString =
                         format!("Resolve conflict: {}", self.cached_path_display(&path)).into();
-
-                    match &repo.conflict_file {
-                        Loadable::NotLoaded | Loadable::Loading => {
-                            components::empty_state(theme, title, "Loading conflict data…")
-                                .into_any_element()
-                        }
-                        Loadable::Error(e) => {
-                            components::empty_state(theme, title, e.clone()).into_any_element()
-                        }
-                        Loadable::Ready(None) => {
-                            components::empty_state(theme, title, "No conflict data.").into_any_element()
-                        }
-                        Loadable::Ready(Some(file))
-                            if self.conflict_resolver.is_binary_conflict =>
-                        {
-                            // Binary/non-UTF8 side-pick resolver panel.
-                            let file_clone = file.clone();
-                            let rid = repo_id.unwrap();
-                            self.render_binary_conflict_resolver(theme, rid, path, &file_clone, cx)
-                        }
-                        Loadable::Ready(Some(file))
-                            if matches!(
-                                self.conflict_resolver.strategy,
-                                Some(gitcomet_core::conflict_session::ConflictResolverStrategy::TwoWayKeepDelete)
-                            ) =>
-                        {
-                            // Keep/delete resolver for modify/delete conflicts.
-                            let file_clone = file.clone();
-                            let rid = repo_id.unwrap();
-                            let kind = self.conflict_resolver.conflict_kind.unwrap_or(
-                                gitcomet_core::domain::FileConflictKind::DeletedByUs,
-                            );
-                            self.render_keep_delete_conflict_resolver(
-                                theme, rid, path, &file_clone, kind, cx,
-                            )
-                        }
-                        Loadable::Ready(Some(file))
-                            if matches!(
-                                self.conflict_resolver.strategy,
-                                Some(gitcomet_core::conflict_session::ConflictResolverStrategy::DecisionOnly)
-                            ) =>
-                        {
-                            // Decision-only resolver for BothDeleted conflicts.
-                            let file_clone = file.clone();
-                            let rid = repo_id.unwrap();
-                            self.render_decision_conflict_resolver(
-                                theme, rid, path, &file_clone, cx,
-                            )
-                        }
-                        Loadable::Ready(Some(file)) => {
+                    if let Some(repo_id) = repo_id {
+                        match &repo.conflict_file {
+                            Loadable::NotLoaded | Loadable::Loading => {
+                                components::empty_state(theme, title, "Loading conflict data…")
+                                    .into_any_element()
+                            }
+                            Loadable::Error(e) => {
+                                components::empty_state(theme, title, e.clone()).into_any_element()
+                            }
+                            Loadable::Ready(None) => {
+                                components::empty_state(theme, title, "No conflict data.")
+                                    .into_any_element()
+                            }
+                            Loadable::Ready(Some(file))
+                                if self.conflict_resolver.is_binary_conflict =>
+                            {
+                                // Binary/non-UTF8 side-pick resolver panel.
+                                let file_clone = file.clone();
+                                self.render_binary_conflict_resolver(
+                                    theme,
+                                    repo_id,
+                                    path,
+                                    &file_clone,
+                                    cx,
+                                )
+                            }
+                            Loadable::Ready(Some(file))
+                                if matches!(
+                                    self.conflict_resolver.strategy,
+                                    Some(gitcomet_core::conflict_session::ConflictResolverStrategy::TwoWayKeepDelete)
+                                ) =>
+                            {
+                                // Keep/delete resolver for modify/delete conflicts.
+                                let file_clone = file.clone();
+                                let kind = self.conflict_resolver.conflict_kind.unwrap_or(
+                                    gitcomet_core::domain::FileConflictKind::DeletedByUs,
+                                );
+                                self.render_keep_delete_conflict_resolver(
+                                    theme, repo_id, path, &file_clone, kind, cx,
+                                )
+                            }
+                            Loadable::Ready(Some(file))
+                                if matches!(
+                                    self.conflict_resolver.strategy,
+                                    Some(gitcomet_core::conflict_session::ConflictResolverStrategy::DecisionOnly)
+                                ) =>
+                            {
+                                // Decision-only resolver for BothDeleted conflicts.
+                                let file_clone = file.clone();
+                                self.render_decision_conflict_resolver(
+                                    theme, repo_id, path, &file_clone, cx,
+                                )
+                            }
+                            Loadable::Ready(Some(file)) => {
                             let base = file.base.clone().unwrap_or_default();
                             let local = file.ours.clone().unwrap_or_default();
                             let remote = file.theirs.clone().unwrap_or_default();
@@ -2159,7 +2163,12 @@ impl MainPaneView {
                                     bottom_section
                                 })
                                 .into_any_element()
+                            }
                         }
+                    } else {
+                        debug_assert!(false, "conflict resolver rendered without active repo id");
+                        components::empty_state(theme, title, "Repository context unavailable.")
+                            .into_any_element()
                     }
                 }
             }
@@ -3075,69 +3084,5 @@ impl MainPaneView {
             )
             .child(div().flex_1().min_h(px(0.0)).w_full().h_full().child(body))
             .child(DiffTextSelectionTracker { view: cx.entity() })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{
-        ConflictDiffSplitResizeState, next_conflict_diff_split_ratio,
-        show_conflict_save_stage_action, show_external_mergetool_actions,
-    };
-    use crate::view::GitCometViewMode;
-    use gpui::px;
-
-    #[test]
-    fn shows_external_mergetool_actions_only_in_normal_mode() {
-        assert!(show_external_mergetool_actions(GitCometViewMode::Normal));
-        assert!(!show_external_mergetool_actions(
-            GitCometViewMode::FocusedMergetool
-        ));
-    }
-
-    #[test]
-    fn shows_save_stage_action_only_in_normal_mode() {
-        assert!(show_conflict_save_stage_action(GitCometViewMode::Normal));
-        assert!(!show_conflict_save_stage_action(
-            GitCometViewMode::FocusedMergetool
-        ));
-    }
-
-    #[test]
-    fn next_conflict_diff_split_ratio_returns_none_when_main_width_is_not_positive() {
-        let state = ConflictDiffSplitResizeState {
-            start_x: px(10.0),
-            start_ratio: 0.5,
-        };
-        let ratio = next_conflict_diff_split_ratio(state, px(20.0), [px(-4.0), px(-4.0)]);
-        assert!(ratio.is_none());
-    }
-
-    #[test]
-    fn next_conflict_diff_split_ratio_applies_drag_delta() {
-        let state = ConflictDiffSplitResizeState {
-            start_x: px(100.0),
-            start_ratio: 0.5,
-        };
-        let ratio =
-            next_conflict_diff_split_ratio(state, px(160.0), [px(300.0), px(300.0)]).unwrap();
-
-        let expected =
-            (0.5 + (60.0 / (300.0 + 300.0 + super::PANE_RESIZE_HANDLE_PX))).clamp(0.1, 0.9);
-        assert!((ratio - expected).abs() < 0.0001);
-    }
-
-    #[test]
-    fn next_conflict_diff_split_ratio_clamps_to_expected_bounds() {
-        let state = ConflictDiffSplitResizeState {
-            start_x: px(100.0),
-            start_ratio: 0.5,
-        };
-        let min_ratio =
-            next_conflict_diff_split_ratio(state, px(-10_000.0), [px(240.0), px(240.0)]).unwrap();
-        let max_ratio =
-            next_conflict_diff_split_ratio(state, px(10_000.0), [px(240.0), px(240.0)]).unwrap();
-        assert_eq!(min_ratio, 0.1);
-        assert_eq!(max_ratio, 0.9);
     }
 }

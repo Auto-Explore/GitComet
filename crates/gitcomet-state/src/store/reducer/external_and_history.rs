@@ -1,5 +1,6 @@
 use super::util::{
-    diff_reload_effects, push_diagnostic, refresh_full_effects, refresh_primary_effects,
+    diff_reload_effects, handle_session_persist_result, push_diagnostic, refresh_full_effects,
+    refresh_primary_effects,
 };
 use crate::model::{AppState, DiagnosticKind, Loadable, RepoLoadsInFlight};
 use crate::msg::{Effect, RepoExternalChange};
@@ -92,20 +93,33 @@ pub(super) fn set_history_scope(
     repo_id: crate::model::RepoId,
     scope: LogScope,
 ) -> Vec<Effect> {
-    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+    let Some(repo_ix) = state.repos.iter().position(|r| r.id == repo_id) else {
         return Vec::new();
     };
 
-    if repo_state.history_scope == scope {
-        return Vec::new();
-    }
+    let workdir = {
+        let repo_state = &mut state.repos[repo_ix];
+        if repo_state.history_scope == scope {
+            return Vec::new();
+        }
 
-    repo_state.set_log_scope(scope);
-    let _ = session::persist_repo_history_scope(&repo_state.spec.workdir, scope);
-    repo_state.set_log(Loadable::Loading);
-    repo_state.log_loading_more = false;
+        repo_state.set_log_scope(scope);
+        repo_state.set_log(Loadable::Loading);
+        repo_state.log_loading_more = false;
+        repo_state.spec.workdir.clone()
+    };
+    let persist_result = session::persist_repo_history_scope(&workdir, scope);
+    handle_session_persist_result(
+        state,
+        Some(repo_id),
+        "updating history scope",
+        persist_result,
+    );
 
-    if repo_state.loads_in_flight.request_log(scope, 200, None) {
+    if state.repos[repo_ix]
+        .loads_in_flight
+        .request_log(scope, 200, None)
+    {
         vec![Effect::LoadLog {
             repo_id,
             scope,

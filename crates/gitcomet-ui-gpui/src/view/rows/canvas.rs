@@ -7,6 +7,12 @@ use gpui::{
 type PrepaintCallback<T> = Box<dyn FnOnce(Bounds<Pixels>, &mut Window, &mut App) -> T>;
 type PaintCallback<T> = Box<dyn FnOnce(Bounds<Pixels>, T, &mut Window, &mut App)>;
 
+pub(super) fn take_once_or_debug<T>(slot: &mut Option<T>, context: &'static str) -> Option<T> {
+    let value = slot.take();
+    debug_assert!(value.is_some(), "{context}");
+    value
+}
+
 pub(super) fn keyed_canvas<T>(
     id: impl Into<ElementId>,
     prepaint: impl 'static + FnOnce(Bounds<Pixels>, &mut Window, &mut App) -> T,
@@ -69,7 +75,9 @@ impl<T: 'static> Element for KeyedCanvas<T> {
         window: &mut Window,
         cx: &mut App,
     ) -> Option<T> {
-        Some(self.prepaint.take().unwrap()(bounds, window, cx))
+        let prepaint =
+            take_once_or_debug(&mut self.prepaint, "KeyedCanvas::prepaint callback missing")?;
+        Some(prepaint(bounds, window, cx))
     }
 
     fn paint(
@@ -82,9 +90,19 @@ impl<T: 'static> Element for KeyedCanvas<T> {
         window: &mut Window,
         cx: &mut App,
     ) {
-        let prepaint = prepaint.take().unwrap();
-        style.paint(bounds, window, cx, |window, cx| {
-            (self.paint.take().unwrap())(bounds, prepaint, window, cx)
+        let Some(prepaint_state) =
+            take_once_or_debug(prepaint, "KeyedCanvas::paint called without prepaint state")
+        else {
+            return;
+        };
+        let Some(paint) =
+            take_once_or_debug(&mut self.paint, "KeyedCanvas::paint callback missing")
+        else {
+            return;
+        };
+
+        style.paint(bounds, window, cx, move |window, cx| {
+            paint(bounds, prepaint_state, window, cx)
         });
     }
 }

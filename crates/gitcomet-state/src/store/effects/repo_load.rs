@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::sync::mpsc;
 
 use super::super::{RepoId, executor::TaskExecutor};
-use super::util::{RepoMap, spawn_with_repo};
+use super::util::{RepoMap, send_or_log, spawn_with_repo};
 
 pub(super) fn schedule_load_branches(
     executor: &TaskExecutor,
@@ -15,10 +15,13 @@ pub(super) fn schedule_load_branches(
     repo_id: RepoId,
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let _ = msg_tx.send(Msg::BranchesLoaded {
-            repo_id,
-            result: repo.list_branches(),
-        });
+        send_or_log(
+            &msg_tx,
+            Msg::BranchesLoaded {
+                repo_id,
+                result: repo.list_branches(),
+            },
+        );
     });
 }
 
@@ -29,10 +32,13 @@ pub(super) fn schedule_load_remotes(
     repo_id: RepoId,
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let _ = msg_tx.send(Msg::RemotesLoaded {
-            repo_id,
-            result: repo.list_remotes(),
-        });
+        send_or_log(
+            &msg_tx,
+            Msg::RemotesLoaded {
+                repo_id,
+                result: repo.list_remotes(),
+            },
+        );
     });
 }
 
@@ -43,10 +49,13 @@ pub(super) fn schedule_load_remote_branches(
     repo_id: RepoId,
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let _ = msg_tx.send(Msg::RemoteBranchesLoaded {
-            repo_id,
-            result: repo.list_remote_branches(),
-        });
+        send_or_log(
+            &msg_tx,
+            Msg::RemoteBranchesLoaded {
+                repo_id,
+                result: repo.list_remote_branches(),
+            },
+        );
     });
 }
 
@@ -57,10 +66,13 @@ pub(super) fn schedule_load_status(
     repo_id: RepoId,
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let _ = msg_tx.send(Msg::StatusLoaded {
-            repo_id,
-            result: repo.status(),
-        });
+        send_or_log(
+            &msg_tx,
+            Msg::StatusLoaded {
+                repo_id,
+                result: repo.status(),
+            },
+        );
     });
 }
 
@@ -71,10 +83,13 @@ pub(super) fn schedule_load_head_branch(
     repo_id: RepoId,
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let _ = msg_tx.send(Msg::HeadBranchLoaded {
-            repo_id,
-            result: repo.current_branch(),
-        });
+        send_or_log(
+            &msg_tx,
+            Msg::HeadBranchLoaded {
+                repo_id,
+                result: repo.current_branch(),
+            },
+        );
     });
 }
 
@@ -85,10 +100,13 @@ pub(super) fn schedule_load_upstream_divergence(
     repo_id: RepoId,
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let _ = msg_tx.send(Msg::UpstreamDivergenceLoaded {
-            repo_id,
-            result: repo.upstream_divergence(),
-        });
+        send_or_log(
+            &msg_tx,
+            Msg::UpstreamDivergenceLoaded {
+                repo_id,
+                result: repo.upstream_divergence(),
+            },
+        );
     });
 }
 
@@ -109,12 +127,15 @@ pub(super) fn schedule_load_log(
                 LogScope::AllBranches => repo.log_all_branches_page(limit, cursor_ref),
             }
         };
-        let _ = msg_tx.send(Msg::LogLoaded {
-            repo_id,
-            scope,
-            cursor,
-            result,
-        });
+        send_or_log(
+            &msg_tx,
+            Msg::LogLoaded {
+                repo_id,
+                scope,
+                cursor,
+                result,
+            },
+        );
     });
 }
 
@@ -125,10 +146,13 @@ pub(super) fn schedule_load_tags(
     repo_id: RepoId,
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let _ = msg_tx.send(Msg::TagsLoaded {
-            repo_id,
-            result: repo.list_tags(),
-        });
+        send_or_log(
+            &msg_tx,
+            Msg::TagsLoaded {
+                repo_id,
+                result: repo.list_tags(),
+            },
+        );
     });
 }
 
@@ -139,10 +163,13 @@ pub(super) fn schedule_load_remote_tags(
     repo_id: RepoId,
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let _ = msg_tx.send(Msg::RemoteTagsLoaded {
-            repo_id,
-            result: repo.list_remote_tags(),
-        });
+        send_or_log(
+            &msg_tx,
+            Msg::RemoteTagsLoaded {
+                repo_id,
+                result: repo.list_remote_tags(),
+            },
+        );
     });
 }
 
@@ -158,10 +185,13 @@ pub(super) fn schedule_load_stashes(
         if let Ok(v) = &mut entries {
             v.truncate(limit);
         }
-        let _ = msg_tx.send(Msg::StashesLoaded {
-            repo_id,
-            result: entries,
-        });
+        send_or_log(
+            &msg_tx,
+            Msg::StashesLoaded {
+                repo_id,
+                result: entries,
+            },
+        );
     });
 }
 
@@ -229,12 +259,15 @@ pub(super) fn schedule_load_conflict_file(
             })
         });
 
-        let _ = msg_tx.send(Msg::ConflictFileLoaded {
-            repo_id,
-            path,
-            result: Box::new(result),
-            conflict_session,
-        });
+        send_or_log(
+            &msg_tx,
+            Msg::ConflictFileLoaded {
+                repo_id,
+                path,
+                result: Box::new(result),
+                conflict_session,
+            },
+        );
     });
 }
 
@@ -246,10 +279,13 @@ pub(super) fn schedule_load_reflog(
     limit: usize,
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let _ = msg_tx.send(Msg::ReflogLoaded {
-            repo_id,
-            result: repo.reflog_head(limit),
-        });
+        send_or_log(
+            &msg_tx,
+            Msg::ReflogLoaded {
+                repo_id,
+                result: repo.reflog_head(limit),
+            },
+        );
     });
 }
 
@@ -262,11 +298,14 @@ pub(super) fn schedule_load_file_history(
     limit: usize,
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let _ = msg_tx.send(Msg::FileHistoryLoaded {
-            repo_id,
-            path: path.clone(),
-            result: repo.log_file_page(&path, limit, None),
-        });
+        send_or_log(
+            &msg_tx,
+            Msg::FileHistoryLoaded {
+                repo_id,
+                path: path.clone(),
+                result: repo.log_file_page(&path, limit, None),
+            },
+        );
     });
 }
 
@@ -280,12 +319,15 @@ pub(super) fn schedule_load_blame(
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
         let result = repo.blame_file(&path, rev.as_deref());
-        let _ = msg_tx.send(Msg::BlameLoaded {
-            repo_id,
-            path: path.clone(),
-            rev: rev.clone(),
-            result,
-        });
+        send_or_log(
+            &msg_tx,
+            Msg::BlameLoaded {
+                repo_id,
+                path: path.clone(),
+                rev: rev.clone(),
+                result,
+            },
+        );
     });
 }
 
@@ -296,10 +338,13 @@ pub(super) fn schedule_load_worktrees(
     repo_id: RepoId,
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let _ = msg_tx.send(Msg::WorktreesLoaded {
-            repo_id,
-            result: repo.list_worktrees(),
-        });
+        send_or_log(
+            &msg_tx,
+            Msg::WorktreesLoaded {
+                repo_id,
+                result: repo.list_worktrees(),
+            },
+        );
     });
 }
 
@@ -310,10 +355,13 @@ pub(super) fn schedule_load_submodules(
     repo_id: RepoId,
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let _ = msg_tx.send(Msg::SubmodulesLoaded {
-            repo_id,
-            result: repo.list_submodules(),
-        });
+        send_or_log(
+            &msg_tx,
+            Msg::SubmodulesLoaded {
+                repo_id,
+                result: repo.list_submodules(),
+            },
+        );
     });
 }
 
@@ -324,10 +372,13 @@ pub(super) fn schedule_load_rebase_state(
     repo_id: RepoId,
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let _ = msg_tx.send(Msg::RebaseStateLoaded {
-            repo_id,
-            result: repo.rebase_in_progress(),
-        });
+        send_or_log(
+            &msg_tx,
+            Msg::RebaseStateLoaded {
+                repo_id,
+                result: repo.rebase_in_progress(),
+            },
+        );
     });
 }
 
@@ -338,10 +389,13 @@ pub(super) fn schedule_load_merge_commit_message(
     repo_id: RepoId,
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let _ = msg_tx.send(Msg::MergeCommitMessageLoaded {
-            repo_id,
-            result: repo.merge_commit_message(),
-        });
+        send_or_log(
+            &msg_tx,
+            Msg::MergeCommitMessageLoaded {
+                repo_id,
+                result: repo.merge_commit_message(),
+            },
+        );
     });
 }
 
@@ -353,11 +407,14 @@ pub(super) fn schedule_load_commit_details(
     commit_id: gitcomet_core::domain::CommitId,
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let _ = msg_tx.send(Msg::CommitDetailsLoaded {
-            repo_id,
-            commit_id: commit_id.clone(),
-            result: repo.commit_details(&commit_id),
-        });
+        send_or_log(
+            &msg_tx,
+            Msg::CommitDetailsLoaded {
+                repo_id,
+                commit_id: commit_id.clone(),
+                result: repo.commit_details(&commit_id),
+            },
+        );
     });
 }
 
@@ -372,11 +429,14 @@ pub(super) fn schedule_load_diff(
         let result = repo
             .diff_unified(&target)
             .map(|text| Diff::from_unified(target.clone(), &text));
-        let _ = msg_tx.send(Msg::DiffLoaded {
-            repo_id,
-            target,
-            result,
-        });
+        send_or_log(
+            &msg_tx,
+            Msg::DiffLoaded {
+                repo_id,
+                target,
+                result,
+            },
+        );
     });
 }
 
@@ -389,11 +449,14 @@ pub(super) fn schedule_load_diff_file(
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
         let result = repo.diff_file_text(&target);
-        let _ = msg_tx.send(Msg::DiffFileLoaded {
-            repo_id,
-            target,
-            result,
-        });
+        send_or_log(
+            &msg_tx,
+            Msg::DiffFileLoaded {
+                repo_id,
+                target,
+                result,
+            },
+        );
     });
 }
 
@@ -406,10 +469,13 @@ pub(super) fn schedule_load_diff_file_image(
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
         let result = repo.diff_file_image(&target);
-        let _ = msg_tx.send(Msg::DiffFileImageLoaded {
-            repo_id,
-            target,
-            result,
-        });
+        send_or_log(
+            &msg_tx,
+            Msg::DiffFileImageLoaded {
+                repo_id,
+                target,
+                result,
+            },
+        );
     });
 }

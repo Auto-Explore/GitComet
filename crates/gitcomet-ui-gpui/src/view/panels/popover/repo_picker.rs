@@ -1,5 +1,5 @@
-use super::*;
 use super::super::super::path_display;
+use super::*;
 
 pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>) -> gpui::Div {
     let theme = this.theme;
@@ -44,7 +44,6 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                     None,
                     label.clone(),
                     None,
-                    false,
                 )
                 .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
                     this.store.dispatch(Msg::SetActiveRepo { repo_id: id });

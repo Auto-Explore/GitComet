@@ -7,6 +7,7 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc;
 
 use super::super::executor::TaskExecutor;
+use super::util::send_or_log;
 
 pub(super) fn schedule_clone_repo(
     executor: &TaskExecutor,
@@ -31,11 +32,14 @@ pub(super) fn schedule_clone_repo(
             Ok(child) => child,
             Err(e) => {
                 let err = Error::new(ErrorKind::Io(e.kind()));
-                let _ = msg_tx.send(Msg::CloneRepoFinished {
-                    url,
-                    dest,
-                    result: Err(err),
-                });
+                send_or_log(
+                    &msg_tx,
+                    Msg::CloneRepoFinished {
+                        url,
+                        dest,
+                        result: Err(err),
+                    },
+                );
                 return;
             }
         };
@@ -56,10 +60,13 @@ pub(super) fn schedule_clone_repo(
             for line in reader.lines().map_while(Result::ok) {
                 stderr_acc.push_str(&line);
                 stderr_acc.push('\n');
-                let _ = msg_tx.send(Msg::CloneRepoProgress {
-                    dest: dest.clone(),
-                    line,
-                });
+                send_or_log(
+                    &msg_tx,
+                    Msg::CloneRepoProgress {
+                        dest: dest.clone(),
+                        line,
+                    },
+                );
             }
         }
 
@@ -90,14 +97,17 @@ pub(super) fn schedule_clone_repo(
         };
 
         let ok = result.is_ok();
-        let _ = msg_tx.send(Msg::CloneRepoFinished {
-            url: url.clone(),
-            dest: dest.clone(),
-            result,
-        });
+        send_or_log(
+            &msg_tx,
+            Msg::CloneRepoFinished {
+                url: url.clone(),
+                dest: dest.clone(),
+                result,
+            },
+        );
 
         if ok {
-            let _ = msg_tx.send(Msg::OpenRepo(dest));
+            send_or_log(&msg_tx, Msg::OpenRepo(dest));
         }
     });
 }

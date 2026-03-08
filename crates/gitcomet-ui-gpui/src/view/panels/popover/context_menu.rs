@@ -446,24 +446,6 @@ impl PopoverHost {
                 self.schedule_ui_settings_persist(cx);
                 close_after_action = false;
             }
-            ContextMenuAction::StagePath { repo_id, path } => {
-                self.store.dispatch(Msg::SelectDiff {
-                    repo_id,
-                    target: DiffTarget::WorkingTree {
-                        path: path.clone(),
-                        area: DiffArea::Unstaged,
-                    },
-                });
-                self.store.dispatch(Msg::StagePath { repo_id, path });
-            }
-            ContextMenuAction::StagePaths { repo_id, paths } => {
-                self.details_pane.update(cx, |pane, cx| {
-                    pane.status_multi_selection.remove(&repo_id);
-                    cx.notify();
-                });
-                self.store.dispatch(Msg::ClearDiffSelection { repo_id });
-                self.store.dispatch(Msg::StagePaths { repo_id, paths });
-            }
             ContextMenuAction::StageSelectionOrPath {
                 repo_id,
                 area,
@@ -484,24 +466,6 @@ impl PopoverHost {
                     });
                     self.store.dispatch(Msg::StagePath { repo_id, path });
                 }
-            }
-            ContextMenuAction::UnstagePath { repo_id, path } => {
-                self.store.dispatch(Msg::SelectDiff {
-                    repo_id,
-                    target: DiffTarget::WorkingTree {
-                        path: path.clone(),
-                        area: DiffArea::Staged,
-                    },
-                });
-                self.store.dispatch(Msg::UnstagePath { repo_id, path });
-            }
-            ContextMenuAction::UnstagePaths { repo_id, paths } => {
-                self.details_pane.update(cx, |pane, cx| {
-                    pane.status_multi_selection.remove(&repo_id);
-                    cx.notify();
-                });
-                self.store.dispatch(Msg::ClearDiffSelection { repo_id });
-                self.store.dispatch(Msg::UnstagePaths { repo_id, paths });
             }
             ContextMenuAction::UnstageSelectionOrPath {
                 repo_id,
@@ -548,24 +512,6 @@ impl PopoverHost {
                     cx,
                 );
                 return;
-            }
-            ContextMenuAction::CheckoutConflictSide {
-                repo_id,
-                paths,
-                side,
-            } => {
-                self.details_pane.update(cx, |pane, cx| {
-                    pane.status_multi_selection.remove(&repo_id);
-                    cx.notify();
-                });
-                self.store.dispatch(Msg::ClearDiffSelection { repo_id });
-                for path in paths {
-                    self.store.dispatch(Msg::CheckoutConflictSide {
-                        repo_id,
-                        path,
-                        side,
-                    });
-                }
             }
             ContextMenuAction::CheckoutConflictSideSelectionOrPath {
                 repo_id,
@@ -1041,7 +987,6 @@ impl PopoverHost {
                                 icon,
                                 label,
                                 shortcut,
-                                false,
                             );
 
                             row.on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {

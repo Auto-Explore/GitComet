@@ -42,7 +42,6 @@ pub fn context_menu_separator(theme: AppTheme) -> Div {
         .border_color(theme.colors.border)
 }
 
-#[allow(clippy::too_many_arguments)]
 pub fn context_menu_entry(
     id: impl Into<ElementId>,
     theme: AppTheme,
@@ -51,7 +50,6 @@ pub fn context_menu_entry(
     icon: Option<SharedString>,
     label: impl Into<SharedString>,
     shortcut: Option<SharedString>,
-    has_submenu: bool,
 ) -> Stateful<Div> {
     let label: SharedString = label.into();
     let icon_path = icon
@@ -128,13 +126,6 @@ pub fn context_menu_entry(
 
     if let Some(shortcut) = shortcut {
         end = end.child(shortcut);
-    }
-    if has_submenu {
-        end = end.child(crate::view::icons::svg_icon(
-            "icons/arrow_right.svg",
-            theme.colors.text_muted,
-            px(12.0),
-        ));
     }
     row = row.child(end);
 
@@ -316,8 +307,8 @@ mod tests {
     fn context_menu_icon_path_covers_all_context_menu_glyph_icons() {
         // Keep this list in sync with `ContextMenuItem::Entry { icon: Some(...) }` glyphs.
         let glyphs = [
-            "+", "?", "!", "✓", "⎇", "↓", "⬇", "↑", "⇡", "🧹", "🏷", "🗑", "↺", "↻", "⟲", "↗",
-            "🗎", "📂", "⧉", "▣", "≡", "⇄", "⚠", "∞", "⇤", "⇥", "↶", "✎", "−", "→",
+            "+", "?", "!", "✓", "⎇", "↓", "⬇", "↑", "⇡", "🧹", "🏷", "🗑", "↺", "↻", "⟲", "↗", "🗎",
+            "📂", "⧉", "▣", "≡", "⇄", "⚠", "∞", "⇤", "⇥", "↶", "✎", "−", "→",
         ];
         for glyph in glyphs {
             assert!(

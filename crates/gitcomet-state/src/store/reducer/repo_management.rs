@@ -1,7 +1,7 @@
 use super::util::{
     dedup_paths_in_order, diff_target_is_svg, diff_target_wants_image_preview,
-    format_failure_summary, normalize_repo_path, push_diagnostic, push_notification,
-    refresh_full_effects, refresh_primary_effects,
+    format_failure_summary, handle_session_persist_result, normalize_repo_path, push_diagnostic,
+    push_notification, refresh_full_effects, refresh_primary_effects,
 };
 use crate::model::{
     AppNotificationKind, AppState, CloneOpState, CloneOpStatus, DiagnosticKind, Loadable, RepoId,
@@ -49,7 +49,8 @@ pub(super) fn open_repo(id_alloc: &AtomicU64, state: &mut AppState, path: PathBu
         repo_id,
         path: spec.workdir.clone(),
     }];
-    let _ = session::persist_from_state(state);
+    let persist_result = session::persist_from_state(state);
+    handle_session_persist_result(state, Some(repo_id), "opening a repository", persist_result);
     effects
 }
 
@@ -115,7 +116,13 @@ pub(super) fn restore_session(
         state.repos.last().map(|r| r.id)
     };
 
-    let _ = session::persist_from_state(state);
+    let persist_result = session::persist_from_state(state);
+    handle_session_persist_result(
+        state,
+        state.active_repo,
+        "restoring repository session",
+        persist_result,
+    );
     effects
 }
 
@@ -129,7 +136,13 @@ pub(super) fn close_repo(
     if state.active_repo == Some(repo_id) {
         state.active_repo = state.repos.first().map(|r| r.id);
     }
-    let _ = session::persist_from_state(state);
+    let persist_result = session::persist_from_state(state);
+    handle_session_persist_result(
+        state,
+        state.active_repo,
+        "closing a repository",
+        persist_result,
+    );
     Vec::new()
 }
 
@@ -141,7 +154,13 @@ pub(super) fn set_active_repo(state: &mut AppState, repo_id: RepoId) -> Vec<Effe
     let changed = state.active_repo != Some(repo_id);
     state.active_repo = Some(repo_id);
     if changed {
-        let _ = session::persist_from_state(state);
+        let persist_result = session::persist_from_state(state);
+        handle_session_persist_result(
+            state,
+            Some(repo_id),
+            "switching active repository",
+            persist_result,
+        );
     }
 
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
@@ -190,18 +209,26 @@ pub(super) fn set_fetch_prune_deleted_remote_tracking_branches(
     repo_id: RepoId,
     enabled: bool,
 ) -> Vec<Effect> {
-    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+    let Some(repo_ix) = state.repos.iter().position(|r| r.id == repo_id) else {
         return Vec::new();
     };
 
-    if repo_state.fetch_prune_deleted_remote_tracking_branches == enabled {
-        return Vec::new();
-    }
+    let workdir = {
+        let repo_state = &mut state.repos[repo_ix];
+        if repo_state.fetch_prune_deleted_remote_tracking_branches == enabled {
+            return Vec::new();
+        }
 
-    repo_state.fetch_prune_deleted_remote_tracking_branches = enabled;
-    let _ = session::persist_repo_fetch_prune_deleted_remote_tracking_branches(
-        &repo_state.spec.workdir,
-        enabled,
+        repo_state.fetch_prune_deleted_remote_tracking_branches = enabled;
+        repo_state.spec.workdir.clone()
+    };
+    let persist_result =
+        session::persist_repo_fetch_prune_deleted_remote_tracking_branches(&workdir, enabled);
+    handle_session_persist_result(
+        state,
+        Some(repo_id),
+        "updating fetch prune settings",
+        persist_result,
     );
     Vec::new()
 }
@@ -245,7 +272,13 @@ pub(super) fn reorder_repo_tabs(
     };
     state.repos.insert(insert_ix, moved);
 
-    let _ = session::persist_from_state(state);
+    let persist_result = session::persist_from_state(state);
+    handle_session_persist_result(
+        state,
+        state.active_repo,
+        "reordering repository tabs",
+        persist_result,
+    );
     Vec::new()
 }
 
@@ -394,7 +427,13 @@ pub(super) fn repo_opened_err(
                     state.repos.get(ix).map(|r| r.id)
                 };
             }
-            let _ = session::persist_from_state(state);
+            let persist_result = session::persist_from_state(state);
+            handle_session_persist_result(
+                state,
+                state.active_repo,
+                "removing an invalid repository from session",
+                persist_result,
+            );
         }
         return Vec::new();
     }

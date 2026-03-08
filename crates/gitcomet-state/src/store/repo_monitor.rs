@@ -4,6 +4,7 @@ use globset::{Glob, GlobMatcher};
 use notify::event::{AccessKind, AccessMode};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use rustc_hash::FxHashMap as HashMap;
+use std::any::Any;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -12,9 +13,95 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use super::send_diagnostics::{SendFailureKind, send_or_log};
+
 enum MonitorMsg {
     Event(notify::Result<notify::Event>),
     Stop,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum MonitorFailureKind {
+    Start,
+    Stop,
+    Join,
+}
+
+static REPO_MONITOR_START_FAILURES: AtomicU64 = AtomicU64::new(0);
+static REPO_MONITOR_STOP_FAILURES: AtomicU64 = AtomicU64::new(0);
+static REPO_MONITOR_JOIN_FAILURES: AtomicU64 = AtomicU64::new(0);
+
+fn monitor_failure_counter(kind: MonitorFailureKind) -> &'static AtomicU64 {
+    match kind {
+        MonitorFailureKind::Start => &REPO_MONITOR_START_FAILURES,
+        MonitorFailureKind::Stop => &REPO_MONITOR_STOP_FAILURES,
+        MonitorFailureKind::Join => &REPO_MONITOR_JOIN_FAILURES,
+    }
+}
+
+fn record_monitor_failure(
+    kind: MonitorFailureKind,
+    context: &'static str,
+    detail: impl std::fmt::Display,
+) {
+    let count = monitor_failure_counter(kind).fetch_add(1, Ordering::Relaxed) + 1;
+    eprintln!(
+        "gitcomet-state: repo monitor failure ({kind:?}) in {context}: {detail}; total_failures={count}"
+    );
+}
+
+fn send_stop_or_log(tx: &mpsc::Sender<MonitorMsg>, repo_id: RepoId, context: &'static str) {
+    if let Err(error) = tx.send(MonitorMsg::Stop) {
+        record_monitor_failure(
+            MonitorFailureKind::Stop,
+            context,
+            format!("repo_id={repo_id:?}; send failed: {error}"),
+        );
+    }
+}
+
+fn panic_payload_to_string(payload: Box<dyn Any + Send + 'static>) -> String {
+    if let Some(message) = payload.downcast_ref::<&'static str>() {
+        (*message).to_string()
+    } else if let Some(message) = payload.downcast_ref::<String>() {
+        message.clone()
+    } else {
+        "unknown panic payload".to_string()
+    }
+}
+
+fn join_monitor_or_log(join: thread::JoinHandle<()>, repo_id: RepoId, context: &'static str) {
+    if let Err(error) = join.join() {
+        record_monitor_failure(
+            MonitorFailureKind::Join,
+            context,
+            format!(
+                "repo_id={repo_id:?}; join failed: {}",
+                panic_payload_to_string(error)
+            ),
+        );
+    }
+}
+
+#[cfg(test)]
+pub(super) fn monitor_failure_count(kind: MonitorFailureKind) -> u64 {
+    monitor_failure_counter(kind).load(Ordering::Relaxed)
+}
+
+#[cfg(test)]
+pub(super) fn record_stop_send_failure_for_test(repo_id: RepoId, context: &'static str) {
+    let (tx, rx) = mpsc::channel::<MonitorMsg>();
+    drop(rx);
+    send_stop_or_log(&tx, repo_id, context);
+}
+
+#[cfg(test)]
+pub(super) fn join_monitor_for_test(
+    join: thread::JoinHandle<()>,
+    repo_id: RepoId,
+    context: &'static str,
+) {
+    join_monitor_or_log(join, repo_id, context);
 }
 
 fn canonicalize_path(path: PathBuf) -> PathBuf {
@@ -118,9 +205,9 @@ impl RepoMonitorManager {
     }
 
     pub(super) fn stop_all(&mut self) {
-        for (_repo_id, handle) in self.handles.drain() {
-            let _ = handle.msg_tx.send(MonitorMsg::Stop);
-            let _ = handle.join.join();
+        for (repo_id, handle) in self.handles.drain() {
+            send_stop_or_log(&handle.msg_tx, repo_id, "RepoMonitorManager::stop_all");
+            join_monitor_or_log(handle.join, repo_id, "RepoMonitorManager::stop_all");
         }
     }
 
@@ -128,8 +215,8 @@ impl RepoMonitorManager {
         let Some(handle) = self.handles.remove(&repo_id) else {
             return;
         };
-        let _ = handle.msg_tx.send(MonitorMsg::Stop);
-        let _ = handle.join.join();
+        send_stop_or_log(&handle.msg_tx, repo_id, "RepoMonitorManager::stop");
+        join_monitor_or_log(handle.join, repo_id, "RepoMonitorManager::stop");
     }
 
     pub(super) fn running_repo_ids(&self) -> Vec<RepoId> {
@@ -348,27 +435,60 @@ fn repo_monitor_thread(
     let watcher = notify::recommended_watcher({
         let monitor_tx = monitor_tx.clone();
         move |res| {
-            let _ = monitor_tx.send(MonitorMsg::Event(res));
+            send_or_log(
+                &monitor_tx,
+                MonitorMsg::Event(res),
+                SendFailureKind::RepoMonitorMessage,
+                "repo monitor watcher callback",
+            );
         }
     });
 
     let mut watcher: RecommendedWatcher = match watcher {
         Ok(w) => w,
-        Err(_) => return,
+        Err(error) => {
+            record_monitor_failure(
+                MonitorFailureKind::Start,
+                "repo_monitor_thread initialize watcher",
+                format!(
+                    "repo_id={repo_id:?}, workdir={}: {error}",
+                    workdir.display()
+                ),
+            );
+            return;
+        }
     };
 
-    if watcher
+    if let Err(error) = watcher
         .watch(&workdir, RecursiveMode::Recursive)
         .or_else(|_| watcher.watch(&workdir, RecursiveMode::NonRecursive))
-        .is_err()
     {
+        record_monitor_failure(
+            MonitorFailureKind::Start,
+            "repo_monitor_thread watch workdir",
+            format!(
+                "repo_id={repo_id:?}, workdir={}: {error}",
+                workdir.display()
+            ),
+        );
         return;
     }
 
     if let Some(git_dir) = &git_dir {
-        let _ = watcher
+        if let Err(error) = watcher
             .watch(git_dir, RecursiveMode::Recursive)
-            .or_else(|_| watcher.watch(git_dir, RecursiveMode::NonRecursive));
+            .or_else(|_| watcher.watch(git_dir, RecursiveMode::NonRecursive))
+        {
+            record_monitor_failure(
+                MonitorFailureKind::Start,
+                "repo_monitor_thread watch git dir",
+                format!(
+                    "repo_id={repo_id:?}, workdir={}, git_dir={}: {error}",
+                    workdir.display(),
+                    git_dir.display()
+                ),
+            );
+        }
     }
 
     let debounce = Duration::from_millis(250);
@@ -379,7 +499,12 @@ fn repo_monitor_thread(
 
     let flush = |change: RepoExternalChange| {
         if active_repo_id.load(Ordering::Relaxed) == repo_id.0 {
-            let _ = msg_tx.send(Msg::RepoExternallyChanged { repo_id, change });
+            send_or_log(
+                &msg_tx,
+                Msg::RepoExternallyChanged { repo_id, change },
+                SendFailureKind::RepoMonitorMessage,
+                "repo monitor flush",
+            );
         }
     };
 
@@ -387,7 +512,12 @@ fn repo_monitor_thread(
         if let Some(change) = pending
             && active_repo_id.load(Ordering::Relaxed) == repo_id.0
         {
-            let _ = msg_tx.send(Msg::RepoExternallyChanged { repo_id, change });
+            send_or_log(
+                &msg_tx,
+                Msg::RepoExternallyChanged { repo_id, change },
+                SendFailureKind::RepoMonitorMessage,
+                "repo monitor flush_if_active",
+            );
         }
     };
 

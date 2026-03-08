@@ -52,30 +52,10 @@ enum ContextMenuAction {
         show_date: bool,
         show_sha: bool,
     },
-    #[allow(dead_code)]
-    StagePath {
-        repo_id: RepoId,
-        path: std::path::PathBuf,
-    },
-    #[allow(dead_code)]
-    StagePaths {
-        repo_id: RepoId,
-        paths: Vec<std::path::PathBuf>,
-    },
     StageSelectionOrPath {
         repo_id: RepoId,
         area: DiffArea,
         path: std::path::PathBuf,
-    },
-    #[allow(dead_code)]
-    UnstagePath {
-        repo_id: RepoId,
-        path: std::path::PathBuf,
-    },
-    #[allow(dead_code)]
-    UnstagePaths {
-        repo_id: RepoId,
-        paths: Vec<std::path::PathBuf>,
     },
     UnstageSelectionOrPath {
         repo_id: RepoId,
@@ -86,12 +66,6 @@ enum ContextMenuAction {
         repo_id: RepoId,
         area: DiffArea,
         path: std::path::PathBuf,
-    },
-    #[allow(dead_code)]
-    CheckoutConflictSide {
-        repo_id: RepoId,
-        paths: Vec<std::path::PathBuf>,
-        side: gitcomet_core::services::ConflictSide,
     },
     CheckoutConflictSideSelectionOrPath {
         repo_id: RepoId,

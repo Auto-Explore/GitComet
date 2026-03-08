@@ -756,7 +756,11 @@ mod tests {
             .collect();
         assert_eq!(
             components,
-            vec!["docs".to_string(), "nested".to_string(), "file.txt".to_string()]
+            vec![
+                "docs".to_string(),
+                "nested".to_string(),
+                "file.txt".to_string()
+            ]
         );
     }
 
@@ -764,8 +768,8 @@ mod tests {
     #[test]
     fn test_build_stage_paths_write_to_temp_false_normalizes_windows_separators() {
         let tmp = tempfile::tempdir().unwrap();
-        let paths = build_stage_paths(tmp.path(), Path::new("docs/a space.txt"), false, false)
-            .unwrap();
+        let paths =
+            build_stage_paths(tmp.path(), Path::new("docs/a space.txt"), false, false).unwrap();
         let base = paths.base.to_string_lossy();
         let local = paths.local.to_string_lossy();
         let remote = paths.remote.to_string_lossy();

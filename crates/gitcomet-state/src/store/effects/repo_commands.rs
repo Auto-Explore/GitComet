@@ -1,11 +1,36 @@
 use crate::msg::{Msg, RepoCommandKind};
 use gitcomet_core::error::{Error, ErrorKind};
-use gitcomet_core::services::{CommandOutput, ConflictSide, PullMode, RemoteUrlKind, ResetMode};
+use gitcomet_core::services::{
+    CommandOutput, ConflictSide, GitRepository, PullMode, RemoteUrlKind, ResetMode,
+};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc};
 
-use super::super::{RepoId, executor::TaskExecutor};
-use super::util::{RepoMap, spawn_with_repo};
+use super::super::{executor::TaskExecutor, RepoId};
+use super::util::{send_or_log, spawn_with_repo, RepoMap};
+
+fn schedule_repo_command<F>(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: mpsc::Sender<Msg>,
+    repo_id: RepoId,
+    command: RepoCommandKind,
+    run: F,
+) where
+    F: FnOnce(Arc<dyn GitRepository>) -> Result<CommandOutput, Error> + Send + 'static,
+{
+    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
+        let result = run(repo);
+        send_or_log(
+            &msg_tx,
+            Msg::RepoCommandFinished {
+                repo_id,
+                command,
+                result,
+            },
+        );
+    });
+}
 
 pub(super) fn schedule_save_worktree_file(
     executor: &TaskExecutor,
@@ -16,9 +41,18 @@ pub(super) fn schedule_save_worktree_file(
     contents: String,
     stage: bool,
 ) {
-    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let full = repo.spec().workdir.join(&path);
-        let result = (|| -> Result<CommandOutput, Error> {
+    let command_path = path.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::SaveWorktreeFile {
+            path: command_path,
+            stage,
+        },
+        move |repo| {
+            let full = repo.spec().workdir.join(&path);
             if let Some(parent) = full.parent() {
                 std::fs::create_dir_all(parent).map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
             }
@@ -38,14 +72,8 @@ pub(super) fn schedule_save_worktree_file(
                 stderr: String::new(),
                 exit_code: Some(0),
             })
-        })();
-
-        let _ = msg_tx.send(Msg::RepoCommandFinished {
-            repo_id,
-            command: RepoCommandKind::SaveWorktreeFile { path, stage },
-            result,
-        });
-    });
+        },
+    );
 }
 
 pub(super) fn schedule_export_patch(
@@ -56,16 +84,19 @@ pub(super) fn schedule_export_patch(
     commit_id: gitcomet_core::domain::CommitId,
     dest: PathBuf,
 ) {
-    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let _ = msg_tx.send(Msg::RepoCommandFinished {
-            repo_id,
-            command: RepoCommandKind::ExportPatch {
-                commit_id: commit_id.clone(),
-                dest: dest.clone(),
-            },
-            result: repo.export_patch_with_output(&commit_id, &dest),
-        });
-    });
+    let command_commit_id = commit_id.clone();
+    let command_dest = dest.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::ExportPatch {
+            commit_id: command_commit_id,
+            dest: command_dest,
+        },
+        move |repo| repo.export_patch_with_output(&commit_id, &dest),
+    );
 }
 
 pub(super) fn schedule_apply_patch(
@@ -75,15 +106,17 @@ pub(super) fn schedule_apply_patch(
     repo_id: RepoId,
     patch: PathBuf,
 ) {
-    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let _ = msg_tx.send(Msg::RepoCommandFinished {
-            repo_id,
-            command: RepoCommandKind::ApplyPatch {
-                patch: patch.clone(),
-            },
-            result: repo.apply_patch_with_output(&patch),
-        });
-    });
+    let command_patch = patch.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::ApplyPatch {
+            patch: command_patch,
+        },
+        move |repo| repo.apply_patch_with_output(&patch),
+    );
 }
 
 pub(super) fn schedule_add_worktree(
@@ -94,16 +127,19 @@ pub(super) fn schedule_add_worktree(
     path: PathBuf,
     reference: Option<String>,
 ) {
-    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let _ = msg_tx.send(Msg::RepoCommandFinished {
-            repo_id,
-            command: RepoCommandKind::AddWorktree {
-                path: path.clone(),
-                reference: reference.clone(),
-            },
-            result: repo.add_worktree_with_output(&path, reference.as_deref()),
-        });
-    });
+    let command_path = path.clone();
+    let command_reference = reference.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::AddWorktree {
+            path: command_path,
+            reference: command_reference,
+        },
+        move |repo| repo.add_worktree_with_output(&path, reference.as_deref()),
+    );
 }
 
 pub(super) fn schedule_remove_worktree(
@@ -113,13 +149,15 @@ pub(super) fn schedule_remove_worktree(
     repo_id: RepoId,
     path: PathBuf,
 ) {
-    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let _ = msg_tx.send(Msg::RepoCommandFinished {
-            repo_id,
-            command: RepoCommandKind::RemoveWorktree { path: path.clone() },
-            result: repo.remove_worktree_with_output(&path),
-        });
-    });
+    let command_path = path.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::RemoveWorktree { path: command_path },
+        move |repo| repo.remove_worktree_with_output(&path),
+    );
 }
 
 pub(super) fn schedule_add_submodule(
@@ -130,16 +168,19 @@ pub(super) fn schedule_add_submodule(
     url: String,
     path: PathBuf,
 ) {
-    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let _ = msg_tx.send(Msg::RepoCommandFinished {
-            repo_id,
-            command: RepoCommandKind::AddSubmodule {
-                url: url.clone(),
-                path: path.clone(),
-            },
-            result: repo.add_submodule_with_output(&url, &path),
-        });
-    });
+    let command_url = url.clone();
+    let command_path = path.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::AddSubmodule {
+            url: command_url,
+            path: command_path,
+        },
+        move |repo| repo.add_submodule_with_output(&url, &path),
+    );
 }
 
 pub(super) fn schedule_update_submodules(
@@ -148,13 +189,14 @@ pub(super) fn schedule_update_submodules(
     msg_tx: mpsc::Sender<Msg>,
     repo_id: RepoId,
 ) {
-    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let _ = msg_tx.send(Msg::RepoCommandFinished {
-            repo_id,
-            command: RepoCommandKind::UpdateSubmodules,
-            result: repo.update_submodules_with_output(),
-        });
-    });
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::UpdateSubmodules,
+        |repo| repo.update_submodules_with_output(),
+    );
 }
 
 pub(super) fn schedule_remove_submodule(
@@ -164,13 +206,15 @@ pub(super) fn schedule_remove_submodule(
     repo_id: RepoId,
     path: PathBuf,
 ) {
-    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let _ = msg_tx.send(Msg::RepoCommandFinished {
-            repo_id,
-            command: RepoCommandKind::RemoveSubmodule { path: path.clone() },
-            result: repo.remove_submodule_with_output(&path),
-        });
-    });
+    let command_path = path.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::RemoveSubmodule { path: command_path },
+        move |repo| repo.remove_submodule_with_output(&path),
+    );
 }
 
 pub(super) fn schedule_stage_hunk(
@@ -180,13 +224,14 @@ pub(super) fn schedule_stage_hunk(
     repo_id: RepoId,
     patch: String,
 ) {
-    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let _ = msg_tx.send(Msg::RepoCommandFinished {
-            repo_id,
-            command: RepoCommandKind::StageHunk,
-            result: repo.apply_unified_patch_to_index_with_output(&patch, false),
-        });
-    });
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::StageHunk,
+        move |repo| repo.apply_unified_patch_to_index_with_output(&patch, false),
+    );
 }
 
 pub(super) fn schedule_unstage_hunk(
@@ -196,13 +241,14 @@ pub(super) fn schedule_unstage_hunk(
     repo_id: RepoId,
     patch: String,
 ) {
-    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let _ = msg_tx.send(Msg::RepoCommandFinished {
-            repo_id,
-            command: RepoCommandKind::UnstageHunk,
-            result: repo.apply_unified_patch_to_index_with_output(&patch, true),
-        });
-    });
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::UnstageHunk,
+        move |repo| repo.apply_unified_patch_to_index_with_output(&patch, true),
+    );
 }
 
 pub(super) fn schedule_apply_worktree_patch(
@@ -213,13 +259,14 @@ pub(super) fn schedule_apply_worktree_patch(
     patch: String,
     reverse: bool,
 ) {
-    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let _ = msg_tx.send(Msg::RepoCommandFinished {
-            repo_id,
-            command: RepoCommandKind::ApplyWorktreePatch { reverse },
-            result: repo.apply_unified_patch_to_worktree_with_output(&patch, reverse),
-        });
-    });
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::ApplyWorktreePatch { reverse },
+        move |repo| repo.apply_unified_patch_to_worktree_with_output(&patch, reverse),
+    );
 }
 
 pub(super) fn schedule_fetch_all(
@@ -229,13 +276,14 @@ pub(super) fn schedule_fetch_all(
     repo_id: RepoId,
     prune: bool,
 ) {
-    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let _ = msg_tx.send(Msg::RepoCommandFinished {
-            repo_id,
-            command: RepoCommandKind::FetchAll,
-            result: repo.fetch_all_with_output_prune(prune),
-        });
-    });
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::FetchAll,
+        move |repo| repo.fetch_all_with_output_prune(prune),
+    );
 }
 
 pub(super) fn schedule_prune_merged_branches(
@@ -244,13 +292,14 @@ pub(super) fn schedule_prune_merged_branches(
     msg_tx: mpsc::Sender<Msg>,
     repo_id: RepoId,
 ) {
-    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let _ = msg_tx.send(Msg::RepoCommandFinished {
-            repo_id,
-            command: RepoCommandKind::PruneMergedBranches,
-            result: repo.prune_merged_branches_with_output(),
-        });
-    });
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::PruneMergedBranches,
+        |repo| repo.prune_merged_branches_with_output(),
+    );
 }
 
 pub(super) fn schedule_prune_local_tags(
@@ -259,13 +308,14 @@ pub(super) fn schedule_prune_local_tags(
     msg_tx: mpsc::Sender<Msg>,
     repo_id: RepoId,
 ) {
-    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let _ = msg_tx.send(Msg::RepoCommandFinished {
-            repo_id,
-            command: RepoCommandKind::PruneLocalTags,
-            result: repo.prune_local_tags_with_output(),
-        });
-    });
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::PruneLocalTags,
+        |repo| repo.prune_local_tags_with_output(),
+    );
 }
 
 pub(super) fn schedule_pull(
@@ -275,13 +325,14 @@ pub(super) fn schedule_pull(
     repo_id: RepoId,
     mode: PullMode,
 ) {
-    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let _ = msg_tx.send(Msg::RepoCommandFinished {
-            repo_id,
-            command: RepoCommandKind::Pull { mode },
-            result: repo.pull_with_output(mode),
-        });
-    });
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::Pull { mode },
+        move |repo| repo.pull_with_output(mode),
+    );
 }
 
 pub(super) fn schedule_pull_branch(
@@ -292,16 +343,19 @@ pub(super) fn schedule_pull_branch(
     remote: String,
     branch: String,
 ) {
-    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let _ = msg_tx.send(Msg::RepoCommandFinished {
-            repo_id,
-            command: RepoCommandKind::PullBranch {
-                remote: remote.clone(),
-                branch: branch.clone(),
-            },
-            result: repo.pull_branch_with_output(&remote, &branch),
-        });
-    });
+    let command_remote = remote.clone();
+    let command_branch = branch.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::PullBranch {
+            remote: command_remote,
+            branch: command_branch,
+        },
+        move |repo| repo.pull_branch_with_output(&remote, &branch),
+    );
 }
 
 pub(super) fn schedule_merge_ref(
@@ -311,15 +365,17 @@ pub(super) fn schedule_merge_ref(
     repo_id: RepoId,
     reference: String,
 ) {
-    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let _ = msg_tx.send(Msg::RepoCommandFinished {
-            repo_id,
-            command: RepoCommandKind::MergeRef {
-                reference: reference.clone(),
-            },
-            result: repo.merge_ref_with_output(&reference),
-        });
-    });
+    let command_reference = reference.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::MergeRef {
+            reference: command_reference,
+        },
+        move |repo| repo.merge_ref_with_output(&reference),
+    );
 }
 
 pub(super) fn schedule_push(
@@ -328,13 +384,14 @@ pub(super) fn schedule_push(
     msg_tx: mpsc::Sender<Msg>,
     repo_id: RepoId,
 ) {
-    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let _ = msg_tx.send(Msg::RepoCommandFinished {
-            repo_id,
-            command: RepoCommandKind::Push,
-            result: repo.push_with_output(),
-        });
-    });
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::Push,
+        |repo| repo.push_with_output(),
+    );
 }
 
 pub(super) fn schedule_force_push(
@@ -343,13 +400,14 @@ pub(super) fn schedule_force_push(
     msg_tx: mpsc::Sender<Msg>,
     repo_id: RepoId,
 ) {
-    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let _ = msg_tx.send(Msg::RepoCommandFinished {
-            repo_id,
-            command: RepoCommandKind::ForcePush,
-            result: repo.push_force_with_output(),
-        });
-    });
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::ForcePush,
+        |repo| repo.push_force_with_output(),
+    );
 }
 
 pub(super) fn schedule_push_set_upstream(
@@ -360,16 +418,19 @@ pub(super) fn schedule_push_set_upstream(
     remote: String,
     branch: String,
 ) {
-    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let _ = msg_tx.send(Msg::RepoCommandFinished {
-            repo_id,
-            command: RepoCommandKind::PushSetUpstream {
-                remote: remote.clone(),
-                branch: branch.clone(),
-            },
-            result: repo.push_set_upstream_with_output(&remote, &branch),
-        });
-    });
+    let command_remote = remote.clone();
+    let command_branch = branch.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::PushSetUpstream {
+            remote: command_remote,
+            branch: command_branch,
+        },
+        move |repo| repo.push_set_upstream_with_output(&remote, &branch),
+    );
 }
 
 pub(super) fn schedule_delete_remote_branch(
@@ -380,16 +441,19 @@ pub(super) fn schedule_delete_remote_branch(
     remote: String,
     branch: String,
 ) {
-    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let _ = msg_tx.send(Msg::RepoCommandFinished {
-            repo_id,
-            command: RepoCommandKind::DeleteRemoteBranch {
-                remote: remote.clone(),
-                branch: branch.clone(),
-            },
-            result: repo.delete_remote_branch_with_output(&remote, &branch),
-        });
-    });
+    let command_remote = remote.clone();
+    let command_branch = branch.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::DeleteRemoteBranch {
+            remote: command_remote,
+            branch: command_branch,
+        },
+        move |repo| repo.delete_remote_branch_with_output(&remote, &branch),
+    );
 }
 
 pub(super) fn schedule_reset(
@@ -400,16 +464,18 @@ pub(super) fn schedule_reset(
     target: String,
     mode: ResetMode,
 ) {
-    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let _ = msg_tx.send(Msg::RepoCommandFinished {
-            repo_id,
-            command: RepoCommandKind::Reset {
-                mode,
-                target: target.clone(),
-            },
-            result: repo.reset_with_output(&target, mode),
-        });
-    });
+    let command_target = target.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::Reset {
+            mode,
+            target: command_target,
+        },
+        move |repo| repo.reset_with_output(&target, mode),
+    );
 }
 
 pub(super) fn schedule_rebase(
@@ -419,13 +485,15 @@ pub(super) fn schedule_rebase(
     repo_id: RepoId,
     onto: String,
 ) {
-    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let _ = msg_tx.send(Msg::RepoCommandFinished {
-            repo_id,
-            command: RepoCommandKind::Rebase { onto: onto.clone() },
-            result: repo.rebase_with_output(&onto),
-        });
-    });
+    let command_onto = onto.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::Rebase { onto: command_onto },
+        move |repo| repo.rebase_with_output(&onto),
+    );
 }
 
 pub(super) fn schedule_rebase_continue(
@@ -434,13 +502,14 @@ pub(super) fn schedule_rebase_continue(
     msg_tx: mpsc::Sender<Msg>,
     repo_id: RepoId,
 ) {
-    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let _ = msg_tx.send(Msg::RepoCommandFinished {
-            repo_id,
-            command: RepoCommandKind::RebaseContinue,
-            result: repo.rebase_continue_with_output(),
-        });
-    });
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::RebaseContinue,
+        |repo| repo.rebase_continue_with_output(),
+    );
 }
 
 pub(super) fn schedule_rebase_abort(
@@ -449,13 +518,14 @@ pub(super) fn schedule_rebase_abort(
     msg_tx: mpsc::Sender<Msg>,
     repo_id: RepoId,
 ) {
-    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let _ = msg_tx.send(Msg::RepoCommandFinished {
-            repo_id,
-            command: RepoCommandKind::RebaseAbort,
-            result: repo.rebase_abort_with_output(),
-        });
-    });
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::RebaseAbort,
+        |repo| repo.rebase_abort_with_output(),
+    );
 }
 
 pub(super) fn schedule_merge_abort(
@@ -464,13 +534,14 @@ pub(super) fn schedule_merge_abort(
     msg_tx: mpsc::Sender<Msg>,
     repo_id: RepoId,
 ) {
-    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let _ = msg_tx.send(Msg::RepoCommandFinished {
-            repo_id,
-            command: RepoCommandKind::MergeAbort,
-            result: repo.merge_abort_with_output(),
-        });
-    });
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::MergeAbort,
+        |repo| repo.merge_abort_with_output(),
+    );
 }
 
 pub(super) fn schedule_create_tag(
@@ -481,16 +552,19 @@ pub(super) fn schedule_create_tag(
     name: String,
     target: String,
 ) {
-    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let _ = msg_tx.send(Msg::RepoCommandFinished {
-            repo_id,
-            command: RepoCommandKind::CreateTag {
-                name: name.clone(),
-                target: target.clone(),
-            },
-            result: repo.create_tag_with_output(&name, &target),
-        });
-    });
+    let command_name = name.clone();
+    let command_target = target.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::CreateTag {
+            name: command_name,
+            target: command_target,
+        },
+        move |repo| repo.create_tag_with_output(&name, &target),
+    );
 }
 
 pub(super) fn schedule_delete_tag(
@@ -500,13 +574,15 @@ pub(super) fn schedule_delete_tag(
     repo_id: RepoId,
     name: String,
 ) {
-    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let _ = msg_tx.send(Msg::RepoCommandFinished {
-            repo_id,
-            command: RepoCommandKind::DeleteTag { name: name.clone() },
-            result: repo.delete_tag_with_output(&name),
-        });
-    });
+    let command_name = name.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::DeleteTag { name: command_name },
+        move |repo| repo.delete_tag_with_output(&name),
+    );
 }
 
 pub(super) fn schedule_push_tag(
@@ -517,16 +593,19 @@ pub(super) fn schedule_push_tag(
     remote: String,
     name: String,
 ) {
-    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let _ = msg_tx.send(Msg::RepoCommandFinished {
-            repo_id,
-            command: RepoCommandKind::PushTag {
-                remote: remote.clone(),
-                name: name.clone(),
-            },
-            result: repo.push_tag_with_output(&remote, &name),
-        });
-    });
+    let command_remote = remote.clone();
+    let command_name = name.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::PushTag {
+            remote: command_remote,
+            name: command_name,
+        },
+        move |repo| repo.push_tag_with_output(&remote, &name),
+    );
 }
 
 pub(super) fn schedule_delete_remote_tag(
@@ -537,16 +616,19 @@ pub(super) fn schedule_delete_remote_tag(
     remote: String,
     name: String,
 ) {
-    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let _ = msg_tx.send(Msg::RepoCommandFinished {
-            repo_id,
-            command: RepoCommandKind::DeleteRemoteTag {
-                remote: remote.clone(),
-                name: name.clone(),
-            },
-            result: repo.delete_remote_tag_with_output(&remote, &name),
-        });
-    });
+    let command_remote = remote.clone();
+    let command_name = name.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::DeleteRemoteTag {
+            remote: command_remote,
+            name: command_name,
+        },
+        move |repo| repo.delete_remote_tag_with_output(&remote, &name),
+    );
 }
 
 pub(super) fn schedule_add_remote(
@@ -557,16 +639,19 @@ pub(super) fn schedule_add_remote(
     name: String,
     url: String,
 ) {
-    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let _ = msg_tx.send(Msg::RepoCommandFinished {
-            repo_id,
-            command: RepoCommandKind::AddRemote {
-                name: name.clone(),
-                url: url.clone(),
-            },
-            result: repo.add_remote_with_output(&name, &url),
-        });
-    });
+    let command_name = name.clone();
+    let command_url = url.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::AddRemote {
+            name: command_name,
+            url: command_url,
+        },
+        move |repo| repo.add_remote_with_output(&name, &url),
+    );
 }
 
 pub(super) fn schedule_remove_remote(
@@ -576,13 +661,15 @@ pub(super) fn schedule_remove_remote(
     repo_id: RepoId,
     name: String,
 ) {
-    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let _ = msg_tx.send(Msg::RepoCommandFinished {
-            repo_id,
-            command: RepoCommandKind::RemoveRemote { name: name.clone() },
-            result: repo.remove_remote_with_output(&name),
-        });
-    });
+    let command_name = name.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::RemoveRemote { name: command_name },
+        move |repo| repo.remove_remote_with_output(&name),
+    );
 }
 
 pub(super) fn schedule_set_remote_url(
@@ -594,17 +681,20 @@ pub(super) fn schedule_set_remote_url(
     url: String,
     kind: RemoteUrlKind,
 ) {
-    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let _ = msg_tx.send(Msg::RepoCommandFinished {
-            repo_id,
-            command: RepoCommandKind::SetRemoteUrl {
-                name: name.clone(),
-                url: url.clone(),
-                kind,
-            },
-            result: repo.set_remote_url_with_output(&name, &url, kind),
-        });
-    });
+    let command_name = name.clone();
+    let command_url = url.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::SetRemoteUrl {
+            name: command_name,
+            url: command_url,
+            kind,
+        },
+        move |repo| repo.set_remote_url_with_output(&name, &url, kind),
+    );
 }
 
 pub(super) fn schedule_checkout_conflict_side(
@@ -615,17 +705,18 @@ pub(super) fn schedule_checkout_conflict_side(
     path: PathBuf,
     side: ConflictSide,
 ) {
-    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let result = repo.checkout_conflict_side(&path, side);
-        let _ = msg_tx.send(Msg::RepoCommandFinished {
-            repo_id,
-            command: RepoCommandKind::CheckoutConflict {
-                path: path.clone(),
-                side,
-            },
-            result,
-        });
-    });
+    let command_path = path.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::CheckoutConflict {
+            path: command_path,
+            side,
+        },
+        move |repo| repo.checkout_conflict_side(&path, side),
+    );
 }
 
 pub(super) fn schedule_checkout_conflict_base(
@@ -635,14 +726,15 @@ pub(super) fn schedule_checkout_conflict_base(
     repo_id: RepoId,
     path: PathBuf,
 ) {
-    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let result = repo.checkout_conflict_base(&path);
-        let _ = msg_tx.send(Msg::RepoCommandFinished {
-            repo_id,
-            command: RepoCommandKind::CheckoutConflictBase { path: path.clone() },
-            result,
-        });
-    });
+    let command_path = path.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::CheckoutConflictBase { path: command_path },
+        move |repo| repo.checkout_conflict_base(&path),
+    );
 }
 
 pub(super) fn schedule_accept_conflict_deletion(
@@ -652,14 +744,15 @@ pub(super) fn schedule_accept_conflict_deletion(
     repo_id: RepoId,
     path: PathBuf,
 ) {
-    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let result = repo.accept_conflict_deletion(&path);
-        let _ = msg_tx.send(Msg::RepoCommandFinished {
-            repo_id,
-            command: RepoCommandKind::AcceptConflictDeletion { path: path.clone() },
-            result,
-        });
-    });
+    let command_path = path.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::AcceptConflictDeletion { path: command_path },
+        move |repo| repo.accept_conflict_deletion(&path),
+    );
 }
 
 pub(super) fn schedule_launch_mergetool(
@@ -669,32 +762,35 @@ pub(super) fn schedule_launch_mergetool(
     repo_id: RepoId,
     path: PathBuf,
 ) {
-    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let result = repo.launch_mergetool(&path);
-        let cmd_result = match result {
-            Ok(mergetool_result) => {
-                if mergetool_result.success {
-                    Ok(CommandOutput {
-                        command: format!("mergetool ({})", mergetool_result.tool_name),
-                        stdout: mergetool_result.output.stdout,
-                        stderr: mergetool_result.output.stderr,
-                        exit_code: mergetool_result.output.exit_code,
-                    })
-                } else {
-                    Err(gitcomet_core::error::Error::new(
-                        gitcomet_core::error::ErrorKind::Backend(format!(
-                            "Mergetool '{}' did not complete successfully",
-                            mergetool_result.tool_name
-                        )),
-                    ))
+    let command_path = path.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::LaunchMergetool { path: command_path },
+        move |repo| {
+            let result = repo.launch_mergetool(&path);
+            match result {
+                Ok(mergetool_result) => {
+                    if mergetool_result.success {
+                        Ok(CommandOutput {
+                            command: format!("mergetool ({})", mergetool_result.tool_name),
+                            stdout: mergetool_result.output.stdout,
+                            stderr: mergetool_result.output.stderr,
+                            exit_code: mergetool_result.output.exit_code,
+                        })
+                    } else {
+                        Err(gitcomet_core::error::Error::new(
+                            gitcomet_core::error::ErrorKind::Backend(format!(
+                                "Mergetool '{}' did not complete successfully",
+                                mergetool_result.tool_name
+                            )),
+                        ))
+                    }
                 }
+                Err(e) => Err(e),
             }
-            Err(e) => Err(e),
-        };
-        let _ = msg_tx.send(Msg::RepoCommandFinished {
-            repo_id,
-            command: RepoCommandKind::LaunchMergetool { path: path.clone() },
-            result: cmd_result,
-        });
-    });
+        },
+    );
 }

@@ -743,3 +743,63 @@ fn diagnostics_are_capped() {
     assert_eq!(repo_state.diagnostics[0].message, "err-5");
     assert_eq!(repo_state.diagnostics.last().unwrap().message, "err-204");
 }
+
+#[test]
+fn session_persist_error_reports_notification_and_repo_diagnostic() {
+    let mut state = AppState::default();
+    state.repos.push(RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+
+    super::reducer::handle_session_persist_result(
+        &mut state,
+        Some(RepoId(1)),
+        "opening a repository",
+        Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "permission denied",
+        )),
+    );
+
+    assert!(
+        state
+            .notifications
+            .iter()
+            .any(|n| n.message.contains("Failed to persist session state"))
+    );
+    assert!(
+        state
+            .notifications
+            .iter()
+            .any(|n| n.message.contains("permission denied"))
+    );
+    assert!(
+        state.repos[0]
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("permission denied"))
+    );
+}
+
+#[test]
+fn session_persist_error_without_repo_still_reports_notification() {
+    let mut state = AppState::default();
+
+    super::reducer::handle_session_persist_result(
+        &mut state,
+        Some(RepoId(999)),
+        "closing a repository",
+        Err(std::io::Error::new(std::io::ErrorKind::Other, "disk full")),
+    );
+
+    assert!(
+        state
+            .notifications
+            .iter()
+            .any(|n| n.message.contains("disk full"))
+    );
+    assert!(state.repos.is_empty());
+}

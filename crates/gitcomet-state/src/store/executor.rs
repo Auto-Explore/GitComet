@@ -1,3 +1,4 @@
+use super::send_diagnostics::{SendFailureKind, send_or_log};
 use std::sync::{Arc, mpsc};
 use std::thread;
 
@@ -41,6 +42,11 @@ impl TaskExecutor {
     }
 
     pub(super) fn spawn(&self, task: impl FnOnce() + Send + 'static) {
-        let _ = self.tx.send(Box::new(task));
+        send_or_log(
+            &self.tx,
+            Box::new(task),
+            SendFailureKind::ExecutorQueue,
+            "TaskExecutor::spawn",
+        );
     }
 }

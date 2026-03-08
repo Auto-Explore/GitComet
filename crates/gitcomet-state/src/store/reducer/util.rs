@@ -7,6 +7,7 @@ use gitcomet_core::domain::DiffTarget;
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::CommandOutput;
 use rustc_hash::FxHashSet;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -283,6 +284,24 @@ pub(super) fn push_diagnostic(repo_state: &mut RepoState, kind: DiagnosticKind, 
     if repo_state.diagnostics.len() > MAX_DIAGNOSTICS {
         let extra = repo_state.diagnostics.len() - MAX_DIAGNOSTICS;
         repo_state.diagnostics.drain(0..extra);
+    }
+}
+
+pub(super) fn handle_session_persist_result(
+    state: &mut AppState,
+    repo_id: Option<RepoId>,
+    action: &'static str,
+    result: io::Result<()>,
+) {
+    let Err(error) = result else {
+        return;
+    };
+    let message = format!("Failed to persist session state while {action}: {error}");
+    push_notification(state, AppNotificationKind::Error, message.clone());
+    if let Some(repo_id) = repo_id
+        && let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
+    {
+        push_diagnostic(repo_state, DiagnosticKind::Error, message);
     }
 }
 

@@ -1,5 +1,5 @@
-use super::*;
 use super::super::path_display;
+use super::*;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 

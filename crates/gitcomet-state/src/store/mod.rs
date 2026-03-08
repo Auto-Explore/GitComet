@@ -11,11 +11,13 @@ mod effects;
 mod executor;
 mod reducer;
 mod repo_monitor;
+mod send_diagnostics;
 
 use effects::schedule_effect;
 use executor::{TaskExecutor, default_worker_threads};
 use reducer::reduce;
 use repo_monitor::RepoMonitorManager;
+use send_diagnostics::{SendFailureKind, send_or_log, try_send_state_changed_or_log};
 
 pub struct AppStore {
     state: Arc<RwLock<AppState>>,
@@ -69,7 +71,7 @@ impl AppStore {
                     .unwrap_or(0);
                 active_repo_id.store(active_value, Ordering::Relaxed);
 
-                let _ = event_tx.try_send(StoreEvent::StateChanged);
+                try_send_state_changed_or_log(&event_tx, "store worker loop state notification");
 
                 // Keep filesystem monitoring scoped to the active repository only, to minimize
                 // OS watcher load in large multi-repo sessions.
@@ -114,7 +116,12 @@ impl AppStore {
     }
 
     pub fn dispatch(&self, msg: Msg) {
-        let _ = self.msg_tx.send(msg);
+        send_or_log(
+            &self.msg_tx,
+            msg,
+            SendFailureKind::StoreDispatch,
+            "AppStore::dispatch",
+        );
     }
 
     pub fn snapshot(&self) -> AppState {

@@ -28,6 +28,8 @@ fn line_number_string(n: Option<u32>) -> SharedString {
 }
 
 mod canvas;
+#[cfg(test)]
+mod canvas_tests;
 mod conflict_canvas;
 mod conflict_resolver;
 mod diff;

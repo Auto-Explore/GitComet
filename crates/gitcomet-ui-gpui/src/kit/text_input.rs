@@ -1610,7 +1610,7 @@ impl Element for TextElement {
             match layout {
                 TextInputLayout::Plain(lines) => {
                     for (ix, line) in lines.iter().enumerate() {
-                        line.paint(
+                        let painted = line.paint(
                             point(
                                 bounds.origin.x - prepaint.scroll_x,
                                 bounds.origin.y + line_height * ix as f32,
@@ -1618,8 +1618,11 @@ impl Element for TextElement {
                             line_height,
                             window,
                             cx,
-                        )
-                        .unwrap();
+                        );
+                        debug_assert!(
+                            painted.is_ok(),
+                            "TextInput plain line paint failed at line index {ix}"
+                        );
                     }
                 }
                 TextInputLayout::Wrapped { lines, y_offsets } => {

@@ -102,9 +102,11 @@ impl MainPaneView {
                             .child("")
                             .into_any_element();
                     };
-                    let styled = this
-                        .diff_text_segments_cache_get(inline_ix)
-                        .expect("cache populated above");
+                    let styled = this.diff_text_segments_cache_get(inline_ix);
+                    debug_assert!(
+                        styled.is_some(),
+                        "diff text segment cache missing for inline row {inline_ix} after populate"
+                    );
 
                     diff_row(
                         theme,
@@ -116,7 +118,7 @@ impl MainPaneView {
                         line,
                         None,
                         None,
-                        Some(styled),
+                        styled,
                         false,
                         cx,
                     )

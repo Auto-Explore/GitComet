@@ -43,7 +43,6 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                                 None,
                                 label,
                                 None,
-                                false,
                             )
                             .on_click(cx.listener(
                                 move |this, _e: &ClickEvent, _w, cx| {

@@ -48,17 +48,15 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn strips_verbatim_disk_prefix_and_uses_forward_slashes() {
-        let formatted = format_windows_path_for_display(
-            r"\\?\C:\Users\sanni\git\GitComet".to_string(),
-        );
+        let formatted =
+            format_windows_path_for_display(r"\\?\C:\Users\sanni\git\GitComet".to_string());
         assert_eq!(formatted, "C:/Users/sanni/git/GitComet");
     }
 
     #[cfg(windows)]
     #[test]
     fn strips_verbatim_unc_prefix_and_uses_forward_slashes() {
-        let formatted =
-            format_windows_path_for_display(r"\\?\UNC\server\share\repo".to_string());
+        let formatted = format_windows_path_for_display(r"\\?\UNC\server\share\repo".to_string());
         assert_eq!(formatted, "//server/share/repo");
     }
 

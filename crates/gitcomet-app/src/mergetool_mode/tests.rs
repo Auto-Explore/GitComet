@@ -1,0 +1,1272 @@
+use super::*;
+
+fn write_file(path: &std::path::Path, content: &str) {
+    fs::write(path, content).expect("write fixture file");
+}
+
+fn write_bytes(path: &std::path::Path, content: &[u8]) {
+    fs::write(path, content).expect("write fixture file");
+}
+
+fn make_config(
+    dir: &std::path::Path,
+    base: Option<&str>,
+    local: &str,
+    remote: &str,
+    merged_content: &str,
+) -> MergetoolConfig {
+    let merged_path = dir.join("merged.txt");
+    let local_path = dir.join("local.txt");
+    let remote_path = dir.join("remote.txt");
+
+    write_file(&merged_path, merged_content);
+    write_file(&local_path, local);
+    write_file(&remote_path, remote);
+
+    let base_path = base.map(|b| {
+        let p = dir.join("base.txt");
+        write_file(&p, b);
+        p
+    });
+
+    MergetoolConfig {
+        merged: merged_path,
+        local: local_path,
+        remote: remote_path,
+        base: base_path,
+        label_base: None,
+        label_local: None,
+        label_remote: None,
+        conflict_style: gitcomet_core::merge::ConflictStyle::default(),
+        diff_algorithm: gitcomet_core::merge::DiffAlgorithm::default(),
+        marker_size: gitcomet_core::merge::DEFAULT_MARKER_SIZE,
+        auto: false,
+        gui: false,
+    }
+}
+
+// ── Clean merge ──────────────────────────────────────────────────
+
+#[test]
+fn clean_merge_non_overlapping_changes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = make_config(
+        tmp.path(),
+        Some("line1\nline2\nline3\n"),
+        "LINE1\nline2\nline3\n", // local changes line 1
+        "line1\nline2\nLINE3\n", // remote changes line 3
+        "",                      // MERGED placeholder
+    );
+
+    let result = run_mergetool(&config).expect("mergetool run");
+    assert_eq!(result.exit_code, exit_code::SUCCESS);
+    assert!(result.merge_result.as_ref().unwrap().is_clean());
+
+    // Verify the merged output was written correctly.
+    let merged = fs::read_to_string(&config.merged).unwrap();
+    assert_eq!(merged, "LINE1\nline2\nLINE3\n");
+    assert!(result.stderr.contains("Auto-merged"));
+}
+
+#[test]
+fn clean_merge_identical_files() {
+    let tmp = tempfile::tempdir().unwrap();
+    let content = "same content\n";
+    let config = make_config(tmp.path(), Some(content), content, content, "");
+
+    let result = run_mergetool(&config).expect("mergetool run");
+    assert_eq!(result.exit_code, exit_code::SUCCESS);
+    assert_eq!(result.merge_result.as_ref().unwrap().conflict_count, 0);
+
+    let merged = fs::read_to_string(&config.merged).unwrap();
+    assert_eq!(merged, content);
+}
+
+// ── Conflicts ────────────────────────────────────────────────────
+
+#[test]
+fn conflicting_merge_returns_canceled_exit() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = make_config(
+        tmp.path(),
+        Some("original\n"),
+        "local change\n",
+        "remote change\n",
+        "",
+    );
+
+    let result = run_mergetool(&config).expect("mergetool run");
+    assert_eq!(result.exit_code, exit_code::CANCELED);
+    assert_eq!(result.merge_result.as_ref().unwrap().conflict_count, 1);
+
+    // MERGED should contain conflict markers.
+    let merged = fs::read_to_string(&config.merged).unwrap();
+    assert!(merged.contains("<<<<<<<"));
+    assert!(merged.contains("======="));
+    assert!(merged.contains(">>>>>>>"));
+    assert!(merged.contains("local change"));
+    assert!(merged.contains("remote change"));
+    assert!(result.stderr.contains("CONFLICT"));
+    assert!(result.stderr.contains("1 conflict(s)"));
+}
+
+#[test]
+fn conflict_with_labels() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut config = make_config(tmp.path(), Some("original\n"), "ours\n", "theirs\n", "");
+    config.label_local = Some("HEAD".to_string());
+    config.label_remote = Some("feature-branch".to_string());
+
+    let result = run_mergetool(&config).expect("mergetool run");
+    assert_eq!(result.exit_code, exit_code::CANCELED);
+
+    let merged = fs::read_to_string(&config.merged).unwrap();
+    assert!(merged.contains("<<<<<<< HEAD"), "output: {merged}");
+    assert!(
+        merged.contains(">>>>>>> feature-branch"),
+        "output: {merged}"
+    );
+}
+
+#[test]
+fn conflict_without_explicit_labels_defaults_to_filenames() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = make_config(tmp.path(), Some("original\n"), "ours\n", "theirs\n", "");
+
+    let result = run_mergetool(&config).expect("mergetool run");
+    assert_eq!(result.exit_code, exit_code::CANCELED);
+
+    let merged = fs::read_to_string(&config.merged).unwrap();
+    assert!(merged.contains("<<<<<<< local.txt"), "output: {merged}");
+    assert!(merged.contains(">>>>>>> remote.txt"), "output: {merged}");
+}
+
+#[test]
+fn conflict_with_partial_labels_defaults_missing_side_to_filename() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut config = make_config(tmp.path(), Some("original\n"), "ours\n", "theirs\n", "");
+    config.label_local = Some("LOCAL_LABEL".to_string());
+    // Intentionally omit remote label: should fall back to remote filename.
+    config.label_remote = None;
+
+    let result = run_mergetool(&config).expect("mergetool run");
+    assert_eq!(result.exit_code, exit_code::CANCELED);
+
+    let merged = fs::read_to_string(&config.merged).unwrap();
+    assert!(merged.contains("<<<<<<< LOCAL_LABEL"), "output: {merged}");
+    assert!(merged.contains(">>>>>>> remote.txt"), "output: {merged}");
+}
+
+// ── No base (add/add conflict) ───────────────────────────────────
+
+#[test]
+fn no_base_uses_empty_base() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = make_config(
+        tmp.path(),
+        None, // no base
+        "added by local\n",
+        "added by remote\n",
+        "",
+    );
+
+    let result = run_mergetool(&config).expect("mergetool run");
+    // With empty base, both sides adding different content = conflict.
+    assert_eq!(result.exit_code, exit_code::CANCELED);
+
+    let merged = fs::read_to_string(&config.merged).unwrap();
+    assert!(merged.contains("<<<<<<<"));
+    assert!(merged.contains("added by local"));
+    assert!(merged.contains("added by remote"));
+}
+
+#[test]
+fn no_base_identical_content_is_clean() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = make_config(
+        tmp.path(),
+        None, // no base
+        "same content\n",
+        "same content\n",
+        "",
+    );
+
+    let result = run_mergetool(&config).expect("mergetool run");
+    assert_eq!(result.exit_code, exit_code::SUCCESS);
+
+    let merged = fs::read_to_string(&config.merged).unwrap();
+    assert_eq!(merged, "same content\n");
+}
+
+// ── Binary content ───────────────────────────────────────────────
+
+#[test]
+fn binary_content_copies_local_and_returns_conflict() {
+    let tmp = tempfile::tempdir().unwrap();
+    let merged_path = tmp.path().join("merged.bin");
+    let local_path = tmp.path().join("local.bin");
+    let remote_path = tmp.path().join("remote.bin");
+
+    let local_bytes: Vec<u8> = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]; // PNG header
+    let remote_bytes: Vec<u8> = vec![0xFF, 0xD8, 0xFF, 0xE0]; // JPEG header
+
+    write_bytes(&merged_path, b"placeholder");
+    write_bytes(&local_path, &local_bytes);
+    write_bytes(&remote_path, &remote_bytes);
+
+    let config = MergetoolConfig {
+        merged: merged_path.clone(),
+        local: local_path,
+        remote: remote_path,
+        base: None,
+        label_base: None,
+        label_local: None,
+        label_remote: None,
+        conflict_style: gitcomet_core::merge::ConflictStyle::default(),
+        diff_algorithm: gitcomet_core::merge::DiffAlgorithm::default(),
+        marker_size: gitcomet_core::merge::DEFAULT_MARKER_SIZE,
+        auto: false,
+        gui: false,
+    };
+
+    let result = run_mergetool(&config).expect("mergetool run");
+    assert_eq!(result.exit_code, exit_code::CANCELED);
+    assert!(
+        result.merge_result.is_none(),
+        "binary files skip text merge"
+    );
+    assert!(result.stderr.contains("binary"));
+
+    // MERGED should contain the local bytes.
+    let output = fs::read(&merged_path).unwrap();
+    assert_eq!(output, local_bytes);
+}
+
+#[test]
+fn non_utf8_content_without_nul_is_treated_as_binary_conflict() {
+    let tmp = tempfile::tempdir().unwrap();
+    let merged_path = tmp.path().join("merged.dat");
+    let local_path = tmp.path().join("local.dat");
+    let remote_path = tmp.path().join("remote.dat");
+
+    // These payloads are intentionally invalid UTF-8 but contain no NUL
+    // bytes to ensure we specifically exercise non-UTF-8 detection.
+    let local_bytes: Vec<u8> = b"prefix\n\xFF\n".to_vec();
+    let remote_bytes: Vec<u8> = b"prefix\n\xFE\n".to_vec();
+
+    write_bytes(&merged_path, b"placeholder");
+    write_bytes(&local_path, &local_bytes);
+    write_bytes(&remote_path, &remote_bytes);
+
+    let config = MergetoolConfig {
+        merged: merged_path.clone(),
+        local: local_path,
+        remote: remote_path,
+        base: None,
+        label_base: None,
+        label_local: None,
+        label_remote: None,
+        conflict_style: gitcomet_core::merge::ConflictStyle::default(),
+        diff_algorithm: gitcomet_core::merge::DiffAlgorithm::default(),
+        marker_size: gitcomet_core::merge::DEFAULT_MARKER_SIZE,
+        auto: false,
+        gui: false,
+    };
+
+    let result = run_mergetool(&config).expect("mergetool run");
+    assert_eq!(result.exit_code, exit_code::CANCELED);
+    assert!(
+        result.merge_result.is_none(),
+        "non-UTF-8 inputs should route to binary handling"
+    );
+    assert!(result.stderr.contains("binary"));
+
+    // Conflict fallback keeps local bytes in MERGED.
+    let output = fs::read(&merged_path).unwrap();
+    assert_eq!(output, local_bytes);
+}
+
+#[test]
+fn binary_identical_sides_auto_merge_success() {
+    let tmp = tempfile::tempdir().unwrap();
+    let merged_path = tmp.path().join("merged.bin");
+    let local_path = tmp.path().join("local.bin");
+    let remote_path = tmp.path().join("remote.bin");
+
+    let shared = vec![0x00, 0x10, 0x20, 0x30, 0x40];
+    write_bytes(&merged_path, b"placeholder");
+    write_bytes(&local_path, &shared);
+    write_bytes(&remote_path, &shared);
+
+    let config = MergetoolConfig {
+        merged: merged_path.clone(),
+        local: local_path,
+        remote: remote_path,
+        base: None,
+        label_base: None,
+        label_local: None,
+        label_remote: None,
+        conflict_style: gitcomet_core::merge::ConflictStyle::default(),
+        diff_algorithm: gitcomet_core::merge::DiffAlgorithm::default(),
+        marker_size: gitcomet_core::merge::DEFAULT_MARKER_SIZE,
+        auto: false,
+        gui: false,
+    };
+
+    let result = run_mergetool(&config).expect("mergetool run");
+    assert_eq!(result.exit_code, exit_code::SUCCESS);
+    assert!(result.stderr.contains("Auto-merged"));
+    let output = fs::read(&merged_path).unwrap();
+    assert_eq!(output, shared);
+}
+
+#[test]
+fn binary_with_base_local_matches_base_chooses_remote() {
+    let tmp = tempfile::tempdir().unwrap();
+    let merged_path = tmp.path().join("merged.bin");
+    let local_path = tmp.path().join("local.bin");
+    let remote_path = tmp.path().join("remote.bin");
+    let base_path = tmp.path().join("base.bin");
+
+    let base = vec![0xAA, 0xBB, 0xCC, 0xDD];
+    let remote = vec![0xAA, 0xBB, 0x99, 0xDD];
+
+    write_bytes(&merged_path, b"placeholder");
+    write_bytes(&local_path, &base);
+    write_bytes(&remote_path, &remote);
+    write_bytes(&base_path, &base);
+
+    let config = MergetoolConfig {
+        merged: merged_path.clone(),
+        local: local_path,
+        remote: remote_path,
+        base: Some(base_path),
+        label_base: None,
+        label_local: None,
+        label_remote: None,
+        conflict_style: gitcomet_core::merge::ConflictStyle::default(),
+        diff_algorithm: gitcomet_core::merge::DiffAlgorithm::default(),
+        marker_size: gitcomet_core::merge::DEFAULT_MARKER_SIZE,
+        auto: false,
+        gui: false,
+    };
+
+    let result = run_mergetool(&config).expect("mergetool run");
+    assert_eq!(result.exit_code, exit_code::SUCCESS);
+    let output = fs::read(&merged_path).unwrap();
+    assert_eq!(output, remote);
+}
+
+#[test]
+fn binary_with_base_remote_matches_base_chooses_local() {
+    let tmp = tempfile::tempdir().unwrap();
+    let merged_path = tmp.path().join("merged.bin");
+    let local_path = tmp.path().join("local.bin");
+    let remote_path = tmp.path().join("remote.bin");
+    let base_path = tmp.path().join("base.bin");
+
+    let base = vec![0xAA, 0xBB, 0xCC, 0xDD];
+    let local = vec![0xAA, 0xBB, 0x77, 0xDD];
+
+    write_bytes(&merged_path, b"placeholder");
+    write_bytes(&local_path, &local);
+    write_bytes(&remote_path, &base);
+    write_bytes(&base_path, &base);
+
+    let config = MergetoolConfig {
+        merged: merged_path.clone(),
+        local: local_path,
+        remote: remote_path,
+        base: Some(base_path),
+        label_base: None,
+        label_local: None,
+        label_remote: None,
+        conflict_style: gitcomet_core::merge::ConflictStyle::default(),
+        diff_algorithm: gitcomet_core::merge::DiffAlgorithm::default(),
+        marker_size: gitcomet_core::merge::DEFAULT_MARKER_SIZE,
+        auto: false,
+        gui: false,
+    };
+
+    let result = run_mergetool(&config).expect("mergetool run");
+    assert_eq!(result.exit_code, exit_code::SUCCESS);
+    let output = fs::read(&merged_path).unwrap();
+    assert_eq!(output, local);
+}
+
+#[test]
+fn binary_without_base_does_not_treat_empty_side_as_unchanged() {
+    let tmp = tempfile::tempdir().unwrap();
+    let merged_path = tmp.path().join("merged.bin");
+    let local_path = tmp.path().join("local.bin");
+    let remote_path = tmp.path().join("remote.bin");
+
+    write_bytes(&merged_path, b"placeholder");
+    write_bytes(&local_path, b"");
+    write_bytes(&remote_path, &[0x00, 0x02, 0x03]);
+
+    let config = MergetoolConfig {
+        merged: merged_path.clone(),
+        local: local_path,
+        remote: remote_path,
+        base: None,
+        label_base: None,
+        label_local: None,
+        label_remote: None,
+        conflict_style: gitcomet_core::merge::ConflictStyle::default(),
+        diff_algorithm: gitcomet_core::merge::DiffAlgorithm::default(),
+        marker_size: gitcomet_core::merge::DEFAULT_MARKER_SIZE,
+        auto: false,
+        gui: false,
+    };
+
+    let result = run_mergetool(&config).expect("mergetool run");
+    assert_eq!(result.exit_code, exit_code::CANCELED);
+    assert!(result.stderr.contains("CONFLICT (binary)"));
+    let output = fs::read(&merged_path).unwrap();
+    assert_eq!(output, b"");
+}
+
+#[test]
+fn binary_base_with_text_sides_is_binary_conflict() {
+    let tmp = tempfile::tempdir().unwrap();
+    let merged_path = tmp.path().join("merged.txt");
+    let local_path = tmp.path().join("local.txt");
+    let remote_path = tmp.path().join("remote.txt");
+    let base_path = tmp.path().join("base.bin");
+
+    write_file(&merged_path, "");
+    write_file(&local_path, "text local\n");
+    write_file(&remote_path, "text remote\n");
+    write_bytes(&base_path, &[0x00, 0xFF, 0xFE]);
+
+    let config = MergetoolConfig {
+        merged: merged_path,
+        local: local_path,
+        remote: remote_path,
+        base: Some(base_path),
+        label_base: None,
+        label_local: None,
+        label_remote: None,
+        conflict_style: gitcomet_core::merge::ConflictStyle::default(),
+        diff_algorithm: gitcomet_core::merge::DiffAlgorithm::default(),
+        marker_size: gitcomet_core::merge::DEFAULT_MARKER_SIZE,
+        auto: false,
+        gui: false,
+    };
+
+    let result = run_mergetool(&config).expect("mergetool run");
+    assert_eq!(result.exit_code, exit_code::CANCELED);
+    assert!(result.stderr.contains("binary"));
+}
+
+#[test]
+fn null_byte_content_with_single_side_change_auto_merges() {
+    let tmp = tempfile::tempdir().unwrap();
+    let merged_path = tmp.path().join("merged.bin");
+    let local_path = tmp.path().join("local.bin");
+    let remote_path = tmp.path().join("remote.bin");
+    let base_path = tmp.path().join("base.txt");
+
+    let local_bytes = b"hello\0world\n".to_vec();
+    let remote_bytes = b"hello world\n".to_vec();
+
+    write_bytes(&merged_path, b"placeholder");
+    write_bytes(&local_path, &local_bytes);
+    write_bytes(&remote_path, &remote_bytes);
+    write_file(&base_path, "hello world\n");
+
+    let config = MergetoolConfig {
+        merged: merged_path.clone(),
+        local: local_path,
+        remote: remote_path,
+        base: Some(base_path),
+        label_base: None,
+        label_local: None,
+        label_remote: None,
+        conflict_style: gitcomet_core::merge::ConflictStyle::default(),
+        diff_algorithm: gitcomet_core::merge::DiffAlgorithm::default(),
+        marker_size: gitcomet_core::merge::DEFAULT_MARKER_SIZE,
+        auto: false,
+        gui: false,
+    };
+
+    let result = run_mergetool(&config).expect("mergetool run");
+    assert_eq!(result.exit_code, exit_code::SUCCESS);
+    assert!(
+        result.merge_result.is_none(),
+        "binary files skip text merge"
+    );
+    assert!(result.stderr.contains("Auto-merged"));
+
+    let output = fs::read(&merged_path).unwrap();
+    assert_eq!(output, local_bytes);
+}
+
+#[test]
+fn null_byte_content_conflicting_changes_still_conflicts() {
+    let tmp = tempfile::tempdir().unwrap();
+    let merged_path = tmp.path().join("merged.bin");
+    let local_path = tmp.path().join("local.bin");
+    let remote_path = tmp.path().join("remote.bin");
+    let base_path = tmp.path().join("base.txt");
+
+    let local_bytes = b"hello\0local\n".to_vec();
+    let remote_bytes = b"hello\0remote\n".to_vec();
+
+    write_bytes(&merged_path, b"placeholder");
+    write_bytes(&local_path, &local_bytes);
+    write_bytes(&remote_path, &remote_bytes);
+    write_file(&base_path, "hello world\n");
+
+    let config = MergetoolConfig {
+        merged: merged_path.clone(),
+        local: local_path,
+        remote: remote_path,
+        base: Some(base_path),
+        label_base: None,
+        label_local: None,
+        label_remote: None,
+        conflict_style: gitcomet_core::merge::ConflictStyle::default(),
+        diff_algorithm: gitcomet_core::merge::DiffAlgorithm::default(),
+        marker_size: gitcomet_core::merge::DEFAULT_MARKER_SIZE,
+        auto: false,
+        gui: false,
+    };
+
+    let result = run_mergetool(&config).expect("mergetool run");
+    assert_eq!(result.exit_code, exit_code::CANCELED);
+    assert!(result.stderr.contains("CONFLICT (binary)"));
+
+    let output = fs::read(&merged_path).unwrap();
+    assert_eq!(output, local_bytes);
+}
+
+// ── File I/O errors ──────────────────────────────────────────────
+
+#[test]
+fn missing_local_file_returns_error() {
+    let tmp = tempfile::tempdir().unwrap();
+    let merged_path = tmp.path().join("merged.txt");
+    let remote_path = tmp.path().join("remote.txt");
+    write_file(&merged_path, "");
+    write_file(&remote_path, "remote\n");
+
+    let config = MergetoolConfig {
+        merged: merged_path,
+        local: tmp.path().join("nonexistent_local.txt"),
+        remote: remote_path,
+        base: None,
+        label_base: None,
+        label_local: None,
+        label_remote: None,
+        conflict_style: gitcomet_core::merge::ConflictStyle::default(),
+        diff_algorithm: gitcomet_core::merge::DiffAlgorithm::default(),
+        marker_size: gitcomet_core::merge::DEFAULT_MARKER_SIZE,
+        auto: false,
+        gui: false,
+    };
+
+    let err = run_mergetool(&config).expect_err("expected error");
+    assert!(err.contains("Failed to read local file"), "error: {err}");
+}
+
+#[test]
+fn missing_remote_file_returns_error() {
+    let tmp = tempfile::tempdir().unwrap();
+    let merged_path = tmp.path().join("merged.txt");
+    let local_path = tmp.path().join("local.txt");
+    write_file(&merged_path, "");
+    write_file(&local_path, "local\n");
+
+    let config = MergetoolConfig {
+        merged: merged_path,
+        local: local_path,
+        remote: tmp.path().join("nonexistent_remote.txt"),
+        base: None,
+        label_base: None,
+        label_local: None,
+        label_remote: None,
+        conflict_style: gitcomet_core::merge::ConflictStyle::default(),
+        diff_algorithm: gitcomet_core::merge::DiffAlgorithm::default(),
+        marker_size: gitcomet_core::merge::DEFAULT_MARKER_SIZE,
+        auto: false,
+        gui: false,
+    };
+
+    let err = run_mergetool(&config).expect_err("expected error");
+    assert!(err.contains("Failed to read remote file"), "error: {err}");
+}
+
+#[test]
+fn missing_base_file_returns_error() {
+    let tmp = tempfile::tempdir().unwrap();
+    let merged_path = tmp.path().join("merged.txt");
+    let local_path = tmp.path().join("local.txt");
+    let remote_path = tmp.path().join("remote.txt");
+    write_file(&merged_path, "");
+    write_file(&local_path, "local\n");
+    write_file(&remote_path, "remote\n");
+
+    let config = MergetoolConfig {
+        merged: merged_path,
+        local: local_path,
+        remote: remote_path,
+        base: Some(tmp.path().join("nonexistent_base.txt")),
+        label_base: None,
+        label_local: None,
+        label_remote: None,
+        conflict_style: gitcomet_core::merge::ConflictStyle::default(),
+        diff_algorithm: gitcomet_core::merge::DiffAlgorithm::default(),
+        marker_size: gitcomet_core::merge::DEFAULT_MARKER_SIZE,
+        auto: false,
+        gui: false,
+    };
+
+    let err = run_mergetool(&config).expect_err("expected error");
+    assert!(err.contains("Failed to read base file"), "error: {err}");
+}
+
+#[test]
+fn merged_output_path_can_be_created_when_missing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let merged_path = tmp.path().join("nested/out/merged.txt");
+    let local_path = tmp.path().join("local.txt");
+    let remote_path = tmp.path().join("remote.txt");
+    let base_path = tmp.path().join("base.txt");
+
+    write_file(&local_path, "LOCAL\nline2\nline3\n");
+    write_file(&remote_path, "line1\nline2\nREMOTE\n");
+    write_file(&base_path, "line1\nline2\nline3\n");
+
+    let config = MergetoolConfig {
+        merged: merged_path.clone(),
+        local: local_path,
+        remote: remote_path,
+        base: Some(base_path),
+        label_base: None,
+        label_local: None,
+        label_remote: None,
+        conflict_style: gitcomet_core::merge::ConflictStyle::default(),
+        diff_algorithm: gitcomet_core::merge::DiffAlgorithm::default(),
+        marker_size: gitcomet_core::merge::DEFAULT_MARKER_SIZE,
+        auto: false,
+        gui: false,
+    };
+
+    let result = run_mergetool(&config).expect("mergetool run");
+    assert_eq!(result.exit_code, exit_code::SUCCESS);
+    assert!(merged_path.exists(), "expected output file to be created");
+    assert_eq!(
+        fs::read_to_string(&merged_path).unwrap(),
+        "LOCAL\nline2\nREMOTE\n"
+    );
+}
+
+#[test]
+fn merged_output_parent_dirs_created_for_binary_conflict() {
+    let tmp = tempfile::tempdir().unwrap();
+    let merged_path = tmp.path().join("nested/bin/merged.bin");
+    let local_path = tmp.path().join("local.bin");
+    let remote_path = tmp.path().join("remote.bin");
+
+    let local_bytes: Vec<u8> = vec![0x89, 0x50, 0x4E, 0x47];
+    let remote_bytes: Vec<u8> = vec![0xFF, 0xD8, 0xFF, 0xE0];
+    write_bytes(&local_path, &local_bytes);
+    write_bytes(&remote_path, &remote_bytes);
+
+    let config = MergetoolConfig {
+        merged: merged_path.clone(),
+        local: local_path,
+        remote: remote_path,
+        base: None,
+        label_base: None,
+        label_local: None,
+        label_remote: None,
+        conflict_style: gitcomet_core::merge::ConflictStyle::default(),
+        diff_algorithm: gitcomet_core::merge::DiffAlgorithm::default(),
+        marker_size: gitcomet_core::merge::DEFAULT_MARKER_SIZE,
+        auto: false,
+        gui: false,
+    };
+
+    let result = run_mergetool(&config).expect("mergetool run");
+    assert_eq!(result.exit_code, exit_code::CANCELED);
+    assert!(result.stderr.contains("binary"));
+    assert!(merged_path.exists(), "expected output file to be created");
+    assert_eq!(fs::read(&merged_path).unwrap(), local_bytes);
+}
+
+// ── CRLF preservation ────────────────────────────────────────────
+
+#[test]
+fn crlf_content_preserved_in_clean_merge() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = make_config(
+        tmp.path(),
+        Some("line1\r\nline2\r\nline3\r\n"),
+        "LINE1\r\nline2\r\nline3\r\n",
+        "line1\r\nline2\r\nLINE3\r\n",
+        "",
+    );
+
+    let result = run_mergetool(&config).expect("mergetool run");
+    assert_eq!(result.exit_code, exit_code::SUCCESS);
+
+    let merged = fs::read_to_string(&config.merged).unwrap();
+    assert_eq!(merged, "LINE1\r\nline2\r\nLINE3\r\n");
+}
+
+#[test]
+fn crlf_conflict_markers_match_input_line_endings() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = make_config(
+        tmp.path(),
+        Some("original\r\n"),
+        "local\r\n",
+        "remote\r\n",
+        "",
+    );
+
+    let result = run_mergetool(&config).expect("mergetool run");
+    assert_eq!(result.exit_code, exit_code::CANCELED);
+
+    let merged = fs::read_to_string(&config.merged).unwrap();
+    // Conflict markers should use CRLF when input uses CRLF —
+    // verify the markers themselves are terminated with \r\n.
+    assert!(
+        merged.contains("<<<<<<< local.txt\r\n"),
+        "opening marker should be terminated with CRLF: {merged:?}"
+    );
+    assert!(
+        merged.contains("\r\n=======\r\n"),
+        "separator marker should be surrounded by CRLF: {merged:?}"
+    );
+    assert!(
+        merged.contains("\r\n>>>>>>> remote.txt\r\n"),
+        "closing marker should be surrounded by CRLF: {merged:?}"
+    );
+    // Verify all line endings in the output use CRLF consistently.
+    assert_eq!(
+        merged.matches("\r\n").count(),
+        merged.matches('\n').count(),
+        "all line endings in conflict output should be CRLF: {merged:?}"
+    );
+}
+
+// ── Merged output path ───────────────────────────────────────────
+
+#[test]
+fn merged_output_overwrites_existing_content() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = make_config(
+        tmp.path(),
+        Some("base\n"),
+        "local change\n",
+        "local change\n", // same as local = clean merge
+        "<<<<<<< this was the old conflict content\nold stuff\n>>>>>>>",
+    );
+
+    let result = run_mergetool(&config).expect("mergetool run");
+    assert_eq!(result.exit_code, exit_code::SUCCESS);
+
+    let merged = fs::read_to_string(&config.merged).unwrap();
+    assert_eq!(merged, "local change\n");
+    assert!(
+        !merged.contains("<<<<<<<"),
+        "old conflict markers should be gone"
+    );
+}
+
+// ── Multi-region conflicts ───────────────────────────────────────
+
+#[test]
+fn multiple_conflicts_reported_correctly() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = make_config(
+        tmp.path(),
+        Some("a\nb\nc\nd\ne\n"),
+        "A\nb\nC\nd\nE\n", // changes a, c, e
+        "X\nb\nY\nd\nZ\n", // changes a, c, e differently
+        "",
+    );
+
+    let result = run_mergetool(&config).expect("mergetool run");
+    assert_eq!(result.exit_code, exit_code::CANCELED);
+    let count = result.merge_result.as_ref().unwrap().conflict_count;
+    assert!(count >= 1, "expected at least 1 conflict, got {count}");
+    assert!(result.stderr.contains("conflict(s)"));
+}
+
+// ── Paths with spaces ────────────────────────────────────────────
+
+#[test]
+fn handles_paths_with_spaces() {
+    let tmp = tempfile::tempdir().unwrap();
+    let merged_path = tmp.path().join("my merged file.txt");
+    let local_path = tmp.path().join("my local file.txt");
+    let remote_path = tmp.path().join("my remote file.txt");
+    let base_path = tmp.path().join("my base file.txt");
+
+    write_file(&merged_path, "");
+    write_file(&local_path, "local\n");
+    write_file(&remote_path, "local\n"); // same = clean merge
+    write_file(&base_path, "base\n");
+
+    let config = MergetoolConfig {
+        merged: merged_path.clone(),
+        local: local_path,
+        remote: remote_path,
+        base: Some(base_path),
+        label_base: None,
+        label_local: None,
+        label_remote: None,
+        conflict_style: gitcomet_core::merge::ConflictStyle::default(),
+        diff_algorithm: gitcomet_core::merge::DiffAlgorithm::default(),
+        marker_size: gitcomet_core::merge::DEFAULT_MARKER_SIZE,
+        auto: false,
+        gui: false,
+    };
+
+    let result = run_mergetool(&config).expect("mergetool run");
+    assert_eq!(result.exit_code, exit_code::SUCCESS);
+    let merged = fs::read_to_string(&merged_path).unwrap();
+    assert_eq!(merged, "local\n");
+}
+
+// ── Empty files ──────────────────────────────────────────────────
+
+#[test]
+fn all_empty_files_produce_clean_merge() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = make_config(tmp.path(), Some(""), "", "", "");
+
+    let result = run_mergetool(&config).expect("mergetool run");
+    assert_eq!(result.exit_code, exit_code::SUCCESS);
+
+    let merged = fs::read_to_string(&config.merged).unwrap();
+    assert!(merged.is_empty());
+}
+
+#[test]
+fn empty_base_with_identical_additions_is_clean() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = make_config(tmp.path(), Some(""), "new content\n", "new content\n", "");
+
+    let result = run_mergetool(&config).expect("mergetool run");
+    assert_eq!(result.exit_code, exit_code::SUCCESS);
+
+    let merged = fs::read_to_string(&config.merged).unwrap();
+    assert_eq!(merged, "new content\n");
+}
+
+// ── Trailing newline preservation ────────────────────────────────
+
+#[test]
+fn preserves_missing_trailing_newline() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = make_config(
+        tmp.path(),
+        Some("line1\nline2"), // no trailing LF
+        "LINE1\nline2",       // changed line1, no trailing LF
+        "line1\nline2",       // unchanged, no trailing LF
+        "",
+    );
+
+    let result = run_mergetool(&config).expect("mergetool run");
+    assert_eq!(result.exit_code, exit_code::SUCCESS);
+
+    let merged = fs::read_to_string(&config.merged).unwrap();
+    assert!(
+        !merged.ends_with('\n'),
+        "should preserve missing trailing LF"
+    );
+    assert!(merged.contains("LINE1"));
+}
+
+// ── Conflict style selection ──────────────────────────────────────
+
+#[test]
+fn diff3_style_includes_base_section() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut config = make_config(
+        tmp.path(),
+        Some("original\n"),
+        "local change\n",
+        "remote change\n",
+        "",
+    );
+    config.conflict_style = gitcomet_core::merge::ConflictStyle::Diff3;
+
+    let result = run_mergetool(&config).expect("mergetool run");
+    assert_eq!(result.exit_code, exit_code::CANCELED);
+
+    let merged = fs::read_to_string(&config.merged).unwrap();
+    assert!(merged.contains("<<<<<<<"), "output: {merged}");
+    assert!(
+        merged.contains("|||||||"),
+        "diff3 should include base section: {merged}"
+    );
+    assert!(
+        merged.contains("original"),
+        "base content should appear: {merged}"
+    );
+    assert!(merged.contains("======="), "output: {merged}");
+    assert!(merged.contains(">>>>>>>"), "output: {merged}");
+}
+
+#[test]
+fn diff3_style_defaults_base_label_to_filename() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut config = make_config(
+        tmp.path(),
+        Some("original\n"),
+        "local change\n",
+        "remote change\n",
+        "",
+    );
+    config.conflict_style = gitcomet_core::merge::ConflictStyle::Diff3;
+
+    let result = run_mergetool(&config).expect("mergetool run");
+    assert_eq!(result.exit_code, exit_code::CANCELED);
+
+    let merged = fs::read_to_string(&config.merged).unwrap();
+    assert!(merged.contains("||||||| base.txt"), "output: {merged}");
+}
+
+#[test]
+fn diff3_style_no_base_uses_empty_tree_label() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut config = make_config(tmp.path(), None, "local change\n", "remote change\n", "");
+    config.conflict_style = gitcomet_core::merge::ConflictStyle::Diff3;
+
+    let result = run_mergetool(&config).expect("mergetool run");
+    assert_eq!(result.exit_code, exit_code::CANCELED);
+
+    let merged = fs::read_to_string(&config.merged).unwrap();
+    assert!(merged.contains("||||||| empty tree"), "output: {merged}");
+}
+
+#[test]
+fn zdiff3_style_extracts_common_prefix_suffix() {
+    let tmp = tempfile::tempdir().unwrap();
+    // base=1..9, local=1..4+ABCDE+7..9, remote=1..4+AXCYE+7..9
+    let base = "1\n2\n3\n4\n5\n6\n7\n8\n9\n";
+    let local = "1\n2\n3\n4\nA\nB\nC\nD\nE\n7\n8\n9\n";
+    let remote = "1\n2\n3\n4\nA\nX\nC\nY\nE\n7\n8\n9\n";
+    let mut config = make_config(tmp.path(), Some(base), local, remote, "");
+    config.conflict_style = gitcomet_core::merge::ConflictStyle::Zdiff3;
+
+    let result = run_mergetool(&config).expect("mergetool run");
+    assert_eq!(result.exit_code, exit_code::CANCELED);
+
+    let merged = fs::read_to_string(&config.merged).unwrap();
+    // zdiff3 should extract common prefix "A" and suffix "E" outside markers.
+    assert!(
+        merged.contains("A\n<<<<<<<"),
+        "common prefix A should be outside markers: {merged}"
+    );
+    let close_idx = merged
+        .find(">>>>>>>")
+        .expect("missing conflict close marker");
+    let suffix_after_close = merged[close_idx..].contains("\nE\n");
+    assert!(
+        suffix_after_close,
+        "common suffix E should be outside markers: {merged}"
+    );
+}
+
+#[test]
+fn marker_size_from_config_controls_conflict_marker_width() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut config = make_config(
+        tmp.path(),
+        Some("line\n"),
+        "local change\n",
+        "remote change\n",
+        "",
+    );
+    config.marker_size = 10;
+
+    let result = run_mergetool(&config).expect("mergetool run");
+    assert_eq!(result.exit_code, exit_code::CANCELED);
+
+    let merged = fs::read_to_string(&config.merged).unwrap();
+    assert!(
+        merged.contains("<<<<<<<<<< local.txt"),
+        "expected 10-char opening marker\noutput: {merged}"
+    );
+    assert!(
+        merged.contains("\n==========\n"),
+        "expected 10-char separator marker\noutput: {merged}"
+    );
+    assert!(
+        merged.contains(">>>>>>>>>> remote.txt"),
+        "expected 10-char closing marker\noutput: {merged}"
+    );
+}
+
+// ── Diff algorithm selection ──────────────────────────────────────
+
+#[test]
+fn histogram_algorithm_produces_clean_merge_on_structural_code() {
+    let tmp = tempfile::tempdir().unwrap();
+    // C code case where Myers produces spurious conflicts but histogram doesn't.
+    let base = "void f() {\n    x = 1;\n}\nvoid g() {\n    y = 1;\n}\n";
+    let ours = "void h() {\n    z = 1;\n}\nvoid g() {\n    y = 1;\n}\n";
+    let theirs = "void f() {\n    x = 1;\n}\nvoid g() {\n    y = 2;\n}\n";
+
+    let mut config = make_config(tmp.path(), Some(base), ours, theirs, "");
+    config.diff_algorithm = gitcomet_core::merge::DiffAlgorithm::Histogram;
+
+    let result = run_mergetool(&config).expect("mergetool run");
+    // Histogram should produce a clean merge for this case.
+    assert_eq!(
+        result.exit_code,
+        exit_code::SUCCESS,
+        "histogram should cleanly merge structural code changes"
+    );
+
+    let merged = fs::read_to_string(&config.merged).unwrap();
+    assert!(merged.contains("void h()"), "should have ours' h()");
+    assert!(merged.contains("y = 2"), "should have theirs' y = 2");
+}
+
+// ── Auto-resolve mode ───────────────────────────────────────────
+
+#[test]
+fn auto_mode_resolves_whitespace_only_conflict() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base = "aaa\nbbb\nccc\n";
+    let ours = "aaa\nbbb  \nccc\n";
+    let theirs = "aaa\nbbb\t\nccc\n";
+
+    let mut config = make_config(tmp.path(), Some(base), ours, theirs, "");
+    config.auto = true;
+
+    let result = run_mergetool(&config).expect("mergetool run");
+    assert_eq!(
+        result.exit_code,
+        exit_code::SUCCESS,
+        "auto mode should resolve whitespace-only conflicts"
+    );
+    assert!(
+        result.stderr.contains("Auto-resolved"),
+        "stderr should report auto-resolution"
+    );
+    let merged = fs::read_to_string(&config.merged).unwrap();
+    assert!(
+        !merged.contains("<<<<<<<"),
+        "output should not contain conflict markers"
+    );
+}
+
+#[test]
+fn auto_mode_resolves_diff3_subchunk_conflict() {
+    let tmp = tempfile::tempdir().unwrap();
+    // Base has 3 lines; ours changes line 2, theirs changes line 1.
+    let base = "aaa\nbbb\nccc\n";
+    let ours = "aaa\nBBB\nccc\n";
+    let theirs = "AAA\nbbb\nccc\n";
+
+    let mut config = make_config(tmp.path(), Some(base), ours, theirs, "");
+    config.conflict_style = gitcomet_core::merge::ConflictStyle::Diff3;
+    config.auto = true;
+
+    let result = run_mergetool(&config).expect("mergetool run");
+    assert_eq!(
+        result.exit_code,
+        exit_code::SUCCESS,
+        "auto mode should resolve subchunk-splittable conflict with diff3 base"
+    );
+    let merged = fs::read_to_string(&config.merged).unwrap();
+    assert_eq!(merged, "AAA\nBBB\nccc\n");
+}
+
+#[test]
+fn auto_mode_true_conflict_still_exits_one() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base = "aaa\nbbb\nccc\n";
+    let ours = "aaa\nXXX\nccc\n";
+    let theirs = "aaa\nYYY\nccc\n";
+
+    let mut config = make_config(tmp.path(), Some(base), ours, theirs, "");
+    config.auto = true;
+
+    let result = run_mergetool(&config).expect("mergetool run");
+    assert_eq!(
+        result.exit_code,
+        exit_code::CANCELED,
+        "auto mode should still exit 1 for true conflicts"
+    );
+    let merged = fs::read_to_string(&config.merged).unwrap();
+    assert!(merged.contains("<<<<<<<"), "output should contain markers");
+}
+
+#[test]
+fn auto_mode_disabled_does_not_try_heuristics() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base = "aaa\nbbb\nccc\n";
+    let ours = "aaa\nbbb  \nccc\n";
+    let theirs = "aaa\nbbb\t\nccc\n";
+
+    let mut config = make_config(tmp.path(), Some(base), ours, theirs, "");
+    config.auto = false;
+
+    let result = run_mergetool(&config).expect("mergetool run");
+    assert_eq!(
+        result.exit_code,
+        exit_code::CANCELED,
+        "without auto, whitespace-only conflict should exit 1"
+    );
+    let merged = fs::read_to_string(&config.merged).unwrap();
+    assert!(
+        merged.contains("<<<<<<<"),
+        "without auto, output should contain markers"
+    );
+}
+
+#[test]
+fn auto_mode_identical_sides_in_conflict_block_resolves() {
+    let tmp = tempfile::tempdir().unwrap();
+    // Artificially create a scenario where both sides make the same
+    // overlapping change from the base. The merge algorithm already
+    // handles this, but auto mode should handle it too if markers
+    // are present.
+    let base = "aaa\nbbb\nccc\n";
+    let ours = "aaa\nXXX\nccc\n";
+    let theirs = "aaa\nXXX\nccc\n";
+
+    let mut config = make_config(tmp.path(), Some(base), ours, theirs, "");
+    config.auto = true;
+
+    let result = run_mergetool(&config).expect("mergetool run");
+    // The basic merge algorithm already resolves identical sides,
+    // so this should exit 0 without even needing autosolve.
+    assert_eq!(result.exit_code, exit_code::SUCCESS);
+    let merged = fs::read_to_string(&config.merged).unwrap();
+    assert_eq!(merged, "aaa\nXXX\nccc\n");
+}
+
+// ── Subdirectory invocation ─────────────────────────────────────
+
+#[test]
+fn merge_with_files_in_nested_subdirectory() {
+    // Simulates `git mergetool` invoked from a subdirectory: files are
+    // located in a nested path, not the root temp directory.
+    let tmp = tempfile::tempdir().unwrap();
+    let subdir = tmp.path().join("src").join("components");
+    fs::create_dir_all(&subdir).unwrap();
+
+    let merged_path = subdir.join("widget.txt");
+    let local_path = subdir.join("widget_LOCAL.txt");
+    let remote_path = subdir.join("widget_REMOTE.txt");
+    let base_path = subdir.join("widget_BASE.txt");
+
+    write_file(&base_path, "line1\nline2\nline3\n");
+    write_file(&local_path, "LINE1\nline2\nline3\n");
+    write_file(&remote_path, "line1\nline2\nLINE3\n");
+    write_file(&merged_path, "");
+
+    let config = MergetoolConfig {
+        merged: merged_path.clone(),
+        local: local_path,
+        remote: remote_path,
+        base: Some(base_path),
+        label_base: None,
+        label_local: None,
+        label_remote: None,
+        conflict_style: gitcomet_core::merge::ConflictStyle::default(),
+        diff_algorithm: gitcomet_core::merge::DiffAlgorithm::default(),
+        marker_size: gitcomet_core::merge::DEFAULT_MARKER_SIZE,
+        auto: false,
+        gui: false,
+    };
+
+    let result = run_mergetool(&config).expect("mergetool run");
+    assert_eq!(result.exit_code, exit_code::SUCCESS);
+    let merged = fs::read_to_string(&merged_path).unwrap();
+    assert_eq!(merged, "LINE1\nline2\nLINE3\n");
+}
+
+#[test]
+fn merge_creates_parent_directories_for_output_in_subdirectory() {
+    // When the merged output path is in a subdirectory that doesn't
+    // exist yet, mergetool should create the parent directories.
+    let tmp = tempfile::tempdir().unwrap();
+
+    let local_path = tmp.path().join("local.txt");
+    let remote_path = tmp.path().join("remote.txt");
+    let base_path = tmp.path().join("base.txt");
+    // Output goes into a not-yet-created subdirectory.
+    let merged_path = tmp.path().join("output").join("deep").join("merged.txt");
+
+    write_file(&base_path, "original\n");
+    write_file(&local_path, "changed by local\n");
+    write_file(&remote_path, "original\n"); // no remote change = clean merge
+
+    let config = MergetoolConfig {
+        merged: merged_path.clone(),
+        local: local_path,
+        remote: remote_path,
+        base: Some(base_path),
+        label_base: None,
+        label_local: None,
+        label_remote: None,
+        conflict_style: gitcomet_core::merge::ConflictStyle::default(),
+        diff_algorithm: gitcomet_core::merge::DiffAlgorithm::default(),
+        marker_size: gitcomet_core::merge::DEFAULT_MARKER_SIZE,
+        auto: false,
+        gui: false,
+    };
+
+    let result = run_mergetool(&config).expect("mergetool run");
+    assert_eq!(result.exit_code, exit_code::SUCCESS);
+    assert!(merged_path.exists(), "merged output should be created");
+    let merged = fs::read_to_string(&merged_path).unwrap();
+    assert_eq!(merged, "changed by local\n");
+}
+
+#[test]
+fn merge_conflict_with_files_scattered_across_directories() {
+    // Input files are in different directories, simulating writeToTemp
+    // mode where Git places stage files in a temp directory while the
+    // merged file is in the working tree subdirectory.
+    let tmp = tempfile::tempdir().unwrap();
+    let temp_stages = tmp.path().join("temp_stages");
+    let workdir = tmp.path().join("repo").join("src");
+    fs::create_dir_all(&temp_stages).unwrap();
+    fs::create_dir_all(&workdir).unwrap();
+
+    let base_path = temp_stages.join("file_BASE_12345.txt");
+    let local_path = temp_stages.join("file_LOCAL_12345.txt");
+    let remote_path = temp_stages.join("file_REMOTE_12345.txt");
+    let merged_path = workdir.join("file.txt");
+
+    write_file(&base_path, "base\n");
+    write_file(&local_path, "local\n");
+    write_file(&remote_path, "remote\n");
+    write_file(&merged_path, "");
+
+    let config = MergetoolConfig {
+        merged: merged_path.clone(),
+        local: local_path,
+        remote: remote_path,
+        base: Some(base_path),
+        label_base: None,
+        label_local: None,
+        label_remote: None,
+        conflict_style: gitcomet_core::merge::ConflictStyle::default(),
+        diff_algorithm: gitcomet_core::merge::DiffAlgorithm::default(),
+        marker_size: gitcomet_core::merge::DEFAULT_MARKER_SIZE,
+        auto: false,
+        gui: false,
+    };
+
+    let result = run_mergetool(&config).expect("mergetool run");
+    assert_eq!(result.exit_code, exit_code::CANCELED);
+    let merged = fs::read_to_string(&merged_path).unwrap();
+    assert!(merged.contains("<<<<<<<"), "conflict markers expected");
+    assert!(merged.contains("local"), "local side content expected");
+    assert!(merged.contains("remote"), "remote side content expected");
+}

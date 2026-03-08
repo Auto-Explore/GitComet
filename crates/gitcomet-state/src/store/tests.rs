@@ -10,6 +10,7 @@ use gitcomet_core::services::{CommandOutput, PullMode, Result};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
+#[cfg(windows)]
 use std::sync::OnceLock;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -175,3 +176,5 @@ mod diff_selection;
 mod effects;
 mod external_and_history;
 mod repo_management;
+mod repo_monitor;
+mod send_failures;

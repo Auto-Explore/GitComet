@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, mpsc};
 
 use super::super::{RepoId, executor::TaskExecutor};
+use super::util::send_or_log;
 
 pub(super) fn schedule_open_repo(
     executor: &TaskExecutor,
@@ -17,18 +18,24 @@ pub(super) fn schedule_open_repo(
         let spec = RepoSpec { workdir: path };
         match backend.open(&spec.workdir) {
             Ok(repo) => {
-                let _ = msg_tx.send(Msg::RepoOpenedOk {
-                    repo_id,
-                    spec,
-                    repo,
-                });
+                send_or_log(
+                    &msg_tx,
+                    Msg::RepoOpenedOk {
+                        repo_id,
+                        spec,
+                        repo,
+                    },
+                );
             }
             Err(error) => {
-                let _ = msg_tx.send(Msg::RepoOpenedErr {
-                    repo_id,
-                    spec,
-                    error,
-                });
+                send_or_log(
+                    &msg_tx,
+                    Msg::RepoOpenedErr {
+                        repo_id,
+                        spec,
+                        error,
+                    },
+                );
             }
         }
     });
