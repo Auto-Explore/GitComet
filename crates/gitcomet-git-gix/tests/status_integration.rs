@@ -76,6 +76,13 @@ fn run_git(repo: &Path, args: &[&str]) {
         .status()
         .expect("git command to run");
     assert!(status.success(), "git {:?} failed", args);
+
+    if args.first() == Some(&"init") {
+        // Keep text-file assertions deterministic across platforms, regardless
+        // of host/user git defaults.
+        run_git(repo, &["config", "core.autocrlf", "false"]);
+        run_git(repo, &["config", "core.eol", "lf"]);
+    }
 }
 
 fn run_git_expect_failure(repo: &Path, args: &[&str]) {
@@ -338,7 +345,7 @@ fn cmd_copy_remote_to_merged_and_exit_success() -> &'static str {
 
 #[cfg(windows)]
 fn cmd_write_cli_to_merged() -> &'static str {
-    r#"powershell -NoProfile -Command "[System.IO.File]::WriteAllText($env:MERGED, 'cli' + [Environment]::NewLine)""#
+    r#"powershell -NoProfile -Command "[System.IO.File]::WriteAllText($env:MERGED, 'cli' + [char]10)""#
 }
 
 #[cfg(not(windows))]
@@ -348,7 +355,7 @@ fn cmd_write_cli_to_merged() -> &'static str {
 
 #[cfg(windows)]
 fn cmd_write_gui_to_merged() -> &'static str {
-    r#"powershell -NoProfile -Command "[System.IO.File]::WriteAllText($env:MERGED, 'gui' + [Environment]::NewLine)""#
+    r#"powershell -NoProfile -Command "[System.IO.File]::WriteAllText($env:MERGED, 'gui' + [char]10)""#
 }
 
 #[cfg(not(windows))]
@@ -358,7 +365,7 @@ fn cmd_write_gui_to_merged() -> &'static str {
 
 #[cfg(windows)]
 fn cmd_write_cmd_to_merged() -> &'static str {
-    r#"powershell -NoProfile -Command "[System.IO.File]::WriteAllText($env:MERGED, 'cmd' + [Environment]::NewLine)""#
+    r#"powershell -NoProfile -Command "[System.IO.File]::WriteAllText($env:MERGED, 'cmd' + [char]10)""#
 }
 
 #[cfg(not(windows))]

@@ -17,6 +17,27 @@ enum MonitorMsg {
     Stop,
 }
 
+fn canonicalize_path(path: PathBuf) -> PathBuf {
+    strip_windows_verbatim_prefix(path.canonicalize().unwrap_or(path))
+}
+
+#[cfg(windows)]
+fn strip_windows_verbatim_prefix(path: PathBuf) -> PathBuf {
+    let path_text = path.to_string_lossy();
+    if let Some(stripped) = path_text.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{stripped}"));
+    }
+    if let Some(stripped) = path_text.strip_prefix(r"\\?\") {
+        return PathBuf::from(stripped);
+    }
+    path
+}
+
+#[cfg(not(windows))]
+fn strip_windows_verbatim_prefix(path: PathBuf) -> PathBuf {
+    path
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct DebouncedChange {
     pending: Option<RepoExternalChange>,
@@ -320,7 +341,7 @@ fn repo_monitor_thread(
     monitor_tx: mpsc::Sender<MonitorMsg>,
     active_repo_id: Arc<AtomicU64>,
 ) {
-    let workdir = workdir.canonicalize().unwrap_or(workdir);
+    let workdir = canonicalize_path(workdir);
     let git_dir = resolve_git_dir(&workdir);
     let mut gitignore = GitignoreRules::load(&workdir, git_dir.as_deref());
 

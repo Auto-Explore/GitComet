@@ -236,7 +236,28 @@ pub(super) fn normalize_repo_path(path: PathBuf) -> PathBuf {
         path
     };
 
-    std::fs::canonicalize(&path).unwrap_or(path)
+    canonicalize_path(path)
+}
+
+pub(super) fn canonicalize_path(path: PathBuf) -> PathBuf {
+    strip_windows_verbatim_prefix(std::fs::canonicalize(&path).unwrap_or(path))
+}
+
+#[cfg(windows)]
+fn strip_windows_verbatim_prefix(path: PathBuf) -> PathBuf {
+    let path_text = path.to_string_lossy();
+    if let Some(stripped) = path_text.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{stripped}"));
+    }
+    if let Some(stripped) = path_text.strip_prefix(r"\\?\") {
+        return PathBuf::from(stripped);
+    }
+    path
+}
+
+#[cfg(not(windows))]
+fn strip_windows_verbatim_prefix(path: PathBuf) -> PathBuf {
+    path
 }
 
 pub(super) fn push_notification(state: &mut AppState, kind: AppNotificationKind, message: String) {

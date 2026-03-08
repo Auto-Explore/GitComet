@@ -27,7 +27,7 @@ fn normalize_repo_relative_path(
     } else {
         path
     };
-    std::fs::canonicalize(&path).unwrap_or(path)
+    util::canonicalize_path(path)
 }
 
 fn begin_local_action(state: &mut AppState, repo_id: RepoId) {

@@ -1,4 +1,5 @@
 use super::*;
+use super::super::path_display;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
@@ -197,7 +198,7 @@ impl Render for ActionBarView {
 
         let repo_title: SharedString = self
             .active_repo()
-            .map(|r| r.spec.workdir.display().to_string().into())
+            .map(|r| path_display::path_display_shared(&r.spec.workdir))
             .unwrap_or_else(|| "No repository".into());
 
         let branch: SharedString = self

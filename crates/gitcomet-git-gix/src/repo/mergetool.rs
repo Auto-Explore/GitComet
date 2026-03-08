@@ -32,7 +32,7 @@ impl GixRepo {
         let base_path = &stage_paths.base;
         let local_path = &stage_paths.local;
         let remote_path = &stage_paths.remote;
-        let merged_path = workdir.join(path);
+        let merged_path = workdir.join(normalize_path_for_platform(path));
 
         // 4. Snapshot merged contents before tool invocation so we can
         //    detect actual content changes when trustExitCode is false.
@@ -44,18 +44,14 @@ impl GixRepo {
 
         // Build and invoke the mergetool command
         let output = if let Some(ref custom_cmd) = tool_cmd {
-            // Match git-mergetool behavior by providing variables as shell env.
-            // This supports both "$VAR" and "${VAR}" templates in config.
-            let mut command = shell_command(custom_cmd);
-            command
-                .env("BASE", base_path)
-                .env("LOCAL", local_path)
-                .env("REMOTE", remote_path)
-                .env("MERGED", &merged_path)
-                .current_dir(workdir);
-            command
-                .output()
-                .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?
+            run_custom_mergetool_command(
+                custom_cmd,
+                workdir,
+                base_path,
+                local_path,
+                remote_path,
+                &merged_path,
+            )?
         } else {
             // No custom command — try invoking the tool name directly with
             // the standard argument convention used by many merge tools.
@@ -191,6 +187,7 @@ fn env_has_display() -> bool {
 }
 
 #[cfg(windows)]
+#[allow(dead_code)]
 fn shell_command(custom_cmd: &str) -> Command {
     let mut command = Command::new("cmd");
     command.arg("/C").arg(custom_cmd);
@@ -202,6 +199,53 @@ fn shell_command(custom_cmd: &str) -> Command {
     let mut command = Command::new("sh");
     command.arg("-c").arg(custom_cmd);
     command
+}
+
+fn run_custom_mergetool_command(
+    custom_cmd: &str,
+    workdir: &Path,
+    base_path: &Path,
+    local_path: &Path,
+    remote_path: &Path,
+    merged_path: &Path,
+) -> Result<std::process::Output> {
+    #[cfg(windows)]
+    {
+        let script_dir = tempfile::Builder::new()
+            .prefix("gitcomet-mergetool-shell-")
+            .tempdir()
+            .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+        let script_path = script_dir.path().join("run-mergetool.cmd");
+        let mut script = String::from("@echo off\r\n");
+        script.push_str(custom_cmd);
+        script.push_str("\r\n");
+        std::fs::write(&script_path, script).map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+
+        let mut command = Command::new("cmd");
+        command.arg("/C").arg(&script_path);
+        command
+            .env("BASE", base_path)
+            .env("LOCAL", local_path)
+            .env("REMOTE", remote_path)
+            .env("MERGED", merged_path)
+            .current_dir(workdir);
+        command
+            .output()
+            .map_err(|e| Error::new(ErrorKind::Io(e.kind())))
+    }
+    #[cfg(not(windows))]
+    {
+        let mut command = shell_command(custom_cmd);
+        command
+            .env("BASE", base_path)
+            .env("LOCAL", local_path)
+            .env("REMOTE", remote_path)
+            .env("MERGED", merged_path)
+            .current_dir(workdir);
+        command
+            .output()
+            .map_err(|e| Error::new(ErrorKind::Io(e.kind())))
+    }
 }
 
 fn parse_gui_default(value: Option<&str>) -> Result<GuiDefault> {
@@ -348,7 +392,8 @@ fn build_stage_paths(
     write_to_temp: bool,
     keep_temporaries: bool,
 ) -> Result<StagePaths> {
-    let (mut merge_base, ext) = split_merged_path_and_extension(conflict_path);
+    let normalized_conflict_path = normalize_path_for_platform(conflict_path);
+    let (mut merge_base, ext) = split_merged_path_and_extension(&normalized_conflict_path);
     let pid = std::process::id();
 
     if write_to_temp {
@@ -413,6 +458,14 @@ fn split_merged_path_and_extension(path: &Path) -> (PathBuf, String) {
     let ext = format!(".{}", ext.to_string_lossy());
     merge_base.set_extension("");
     (merge_base, ext)
+}
+
+fn normalize_path_for_platform(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        normalized.push(component.as_os_str());
+    }
+    normalized
 }
 
 fn stage_path_to_fs_path(workdir: &Path, stage_path: &Path) -> PathBuf {
@@ -692,6 +745,73 @@ mod tests {
         assert!(local_name.starts_with("a_LOCAL_"), "{local_name}");
         assert!(remote_name.starts_with("a_REMOTE_"), "{remote_name}");
         assert!(base_name.ends_with(".txt"));
+    }
+
+    #[test]
+    fn test_normalize_path_for_platform_preserves_components() {
+        let normalized = normalize_path_for_platform(Path::new("docs/nested/file.txt"));
+        let components: Vec<String> = normalized
+            .components()
+            .map(|component| component.as_os_str().to_string_lossy().to_string())
+            .collect();
+        assert_eq!(
+            components,
+            vec!["docs".to_string(), "nested".to_string(), "file.txt".to_string()]
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_build_stage_paths_write_to_temp_false_normalizes_windows_separators() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = build_stage_paths(tmp.path(), Path::new("docs/a space.txt"), false, false)
+            .unwrap();
+        let base = paths.base.to_string_lossy();
+        let local = paths.local.to_string_lossy();
+        let remote = paths.remote.to_string_lossy();
+        assert!(
+            !base.contains('/'),
+            "stage path should avoid mixed separators on Windows: {base}"
+        );
+        assert!(
+            !local.contains('/'),
+            "stage path should avoid mixed separators on Windows: {local}"
+        );
+        assert!(
+            !remote.contains('/'),
+            "stage path should avoid mixed separators on Windows: {remote}"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_run_custom_mergetool_command_windows_executes_quoted_powershell_payload() {
+        let tmp = tempfile::tempdir().unwrap();
+        let workdir = tmp.path();
+        let remote = workdir.join("remote.txt");
+        let merged = workdir.join("merged.txt");
+        std::fs::write(&remote, b"theirs\n").unwrap();
+
+        let output = run_custom_mergetool_command(
+            r#"powershell -NoProfile -Command "[System.IO.File]::WriteAllBytes($env:MERGED, [System.IO.File]::ReadAllBytes($env:REMOTE))""#,
+            workdir,
+            Path::new("base.txt"),
+            Path::new("local.txt"),
+            Path::new("remote.txt"),
+            &merged,
+        )
+        .unwrap();
+
+        assert!(
+            output.status.success(),
+            "stderr={}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(std::fs::read(&merged).unwrap(), b"theirs\n");
+        assert!(
+            !String::from_utf8_lossy(&output.stdout).contains("[System.IO.File]"),
+            "powershell payload should execute, not be echoed as a string expression"
+        );
     }
 
     #[test]

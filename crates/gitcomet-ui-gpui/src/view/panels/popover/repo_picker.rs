@@ -1,4 +1,5 @@
 use super::*;
+use super::super::super::path_display;
 
 pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>) -> gpui::Div {
     let theme = this.theme;
@@ -9,7 +10,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
             .state
             .repos
             .iter()
-            .map(|r| r.spec.workdir.display().to_string().into())
+            .map(|r| path_display::path_display_shared(&r.spec.workdir))
             .collect::<Vec<SharedString>>();
 
         components::context_menu(
@@ -33,7 +34,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
         let mut menu = div().flex().flex_col().min_w(px(420.0)).max_w(px(820.0));
         for repo in this.state.repos.iter() {
             let id = repo.id;
-            let label: SharedString = repo.spec.workdir.display().to_string().into();
+            let label = path_display::path_display_shared(&repo.spec.workdir);
             menu = menu.child(
                 components::context_menu_entry(
                     ("repo_item", id.0),

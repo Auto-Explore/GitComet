@@ -1,4 +1,5 @@
 use super::*;
+use super::super::path_display;
 use std::hash::{Hash, Hasher};
 
 pub(in super::super) struct RepoTabsBarView {
@@ -253,7 +254,7 @@ impl Render for RepoTabsBarView {
                 .file_name()
                 .and_then(|s| s.to_str())
                 .map(ToOwned::to_owned)
-                .unwrap_or_else(|| repo.spec.workdir.display().to_string())
+                .unwrap_or_else(|| path_display::path_display_string(&repo.spec.workdir))
                 .into();
             let label_for_drag = label.clone();
 
@@ -270,7 +271,7 @@ impl Render for RepoTabsBarView {
                 components::TabPosition::Middle(ordering)
             };
 
-            let tooltip: SharedString = repo.spec.workdir.display().to_string().into();
+            let tooltip = path_display::path_display_shared(&repo.spec.workdir);
             let close_tooltip: SharedString = "Close repository".into();
 
             let close_button = div()

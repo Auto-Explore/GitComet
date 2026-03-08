@@ -939,7 +939,7 @@ fn normalize_bootstrap_repo_path(path: std::path::PathBuf) -> std::path::PathBuf
     } else {
         path
     };
-    std::fs::canonicalize(&path).unwrap_or(path)
+    canonicalize_path(path)
 }
 
 fn focused_mergetool_target_path(
@@ -954,13 +954,33 @@ fn focused_mergetool_target_path(
         return relative.to_path_buf();
     }
 
-    let normalized_conflicted = std::fs::canonicalize(conflicted_file_path)
-        .unwrap_or_else(|_| conflicted_file_path.to_path_buf());
+    let normalized_conflicted = canonicalize_path(conflicted_file_path.to_path_buf());
     if let Ok(relative) = normalized_conflicted.strip_prefix(repo_path) {
         return relative.to_path_buf();
     }
 
     conflicted_file_path.to_path_buf()
+}
+
+fn canonicalize_path(path: std::path::PathBuf) -> std::path::PathBuf {
+    strip_windows_verbatim_prefix(std::fs::canonicalize(&path).unwrap_or(path))
+}
+
+#[cfg(windows)]
+fn strip_windows_verbatim_prefix(path: std::path::PathBuf) -> std::path::PathBuf {
+    let path_text = path.to_string_lossy();
+    if let Some(stripped) = path_text.strip_prefix(r"\\?\UNC\") {
+        return std::path::PathBuf::from(format!(r"\\{stripped}"));
+    }
+    if let Some(stripped) = path_text.strip_prefix(r"\\?\") {
+        return std::path::PathBuf::from(stripped);
+    }
+    path
+}
+
+#[cfg(not(windows))]
+fn strip_windows_verbatim_prefix(path: std::path::PathBuf) -> std::path::PathBuf {
+    path
 }
 
 fn focused_mergetool_bootstrap_action(
