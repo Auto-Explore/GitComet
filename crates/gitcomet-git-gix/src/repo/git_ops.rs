@@ -28,9 +28,12 @@ impl<'repo> GitOps<'repo> {
     }
 
     pub(super) fn list_branches(&self) -> Result<Vec<Branch>> {
-        prefer_gix_with_fallback(
-            || self.gix.list_branches(),
+        // Branch upstream tracking is config-driven (`branch.*`) and may change during the app
+        // lifetime (e.g. after `push -u`). Prefer CLI reads so we always observe the latest
+        // on-disk config without requiring a repo reopen.
+        prefer_cli_with_fallback(
             || self.cli.list_branches(),
+            || self.gix.list_branches(),
             "list branches",
         )
     }
@@ -46,6 +49,21 @@ fn prefer_gix_with_fallback<T>(
         Err(gix_err) => cli_call().map_err(|cli_err| {
             Error::new(ErrorKind::Backend(format!(
                 "{op_label}: gix path failed ({gix_err}); cli fallback failed ({cli_err})"
+            )))
+        }),
+    }
+}
+
+fn prefer_cli_with_fallback<T>(
+    cli_call: impl FnOnce() -> Result<T>,
+    gix_call: impl FnOnce() -> Result<T>,
+    op_label: &str,
+) -> Result<T> {
+    match cli_call() {
+        Ok(value) => Ok(value),
+        Err(cli_err) => gix_call().map_err(|gix_err| {
+            Error::new(ErrorKind::Backend(format!(
+                "{op_label}: cli path failed ({cli_err}); gix fallback failed ({gix_err})"
             )))
         }),
     }

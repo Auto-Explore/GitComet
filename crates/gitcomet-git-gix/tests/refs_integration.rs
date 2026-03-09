@@ -192,3 +192,70 @@ fn list_branches_gone_upstream_keeps_upstream_and_clears_divergence() {
     );
     assert_eq!(feature.divergence, None);
 }
+
+#[test]
+fn list_branches_reflects_new_upstream_without_reopen() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+
+    let remote_repo = root.join("remote.git");
+    let work_repo = root.join("work");
+    fs::create_dir_all(&remote_repo).unwrap();
+    fs::create_dir_all(&work_repo).unwrap();
+
+    run_git(&remote_repo, &["init", "--bare", "-b", "main"]);
+
+    run_git(&work_repo, &["init", "-b", "main"]);
+    run_git(&work_repo, &["config", "user.email", "you@example.com"]);
+    run_git(&work_repo, &["config", "user.name", "You"]);
+    run_git(&work_repo, &["config", "commit.gpgsign", "false"]);
+    run_git(
+        &work_repo,
+        &[
+            "remote",
+            "add",
+            "origin",
+            remote_repo.to_str().expect("remote path"),
+        ],
+    );
+
+    fs::write(work_repo.join("file.txt"), "base\n").unwrap();
+    run_git(&work_repo, &["add", "file.txt"]);
+    run_git(
+        &work_repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "base"],
+    );
+
+    run_git(&work_repo, &["checkout", "-b", "feature"]);
+    fs::write(work_repo.join("feature.txt"), "feature\n").unwrap();
+    run_git(&work_repo, &["add", "feature.txt"]);
+    run_git(
+        &work_repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "feature"],
+    );
+
+    let backend = GixBackend;
+    let opened = backend.open(&work_repo).unwrap();
+
+    let before = opened.list_branches().unwrap();
+    let feature_before = before
+        .iter()
+        .find(|branch| branch.name == "feature")
+        .expect("feature branch present");
+    assert_eq!(feature_before.upstream, None);
+
+    opened.push_set_upstream("origin", "feature").unwrap();
+
+    let after = opened.list_branches().unwrap();
+    let feature_after = after
+        .iter()
+        .find(|branch| branch.name == "feature")
+        .expect("feature branch present");
+    assert_eq!(
+        feature_after.upstream,
+        Some(Upstream {
+            remote: "origin".to_string(),
+            branch: "feature".to_string(),
+        })
+    );
+}
