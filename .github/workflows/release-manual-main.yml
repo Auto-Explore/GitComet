@@ -105,7 +105,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     needs: validate
-    environment: production-release
+    environment: release
     outputs:
       release_id: ${{ steps.create_release.outputs.release_id }}
     steps:
