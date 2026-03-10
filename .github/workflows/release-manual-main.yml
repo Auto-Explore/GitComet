@@ -23,7 +23,7 @@ permissions:
   id-token: write
 
 concurrency:
-  group: release-manual-main-${{ github.event.inputs.version }}
+  group: release-manual-main-${{ startsWith(github.event.inputs.version, 'v') && github.event.inputs.version || format('v{0}', github.event.inputs.version) }}
   cancel-in-progress: false
 
 env:

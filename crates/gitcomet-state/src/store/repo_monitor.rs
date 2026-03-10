@@ -4,7 +4,6 @@ use notify::event::{AccessKind, AccessMode};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::any::Any;
-use std::ffi::OsString;
 use std::fs;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -586,7 +585,7 @@ fn run_git_check_ignore_batch(workdir: &Path, rels: &[PathBuf]) -> Option<HashSe
         #[cfg(unix)]
         {
             use std::os::unix::ffi::OsStringExt as _;
-            ignored.insert(PathBuf::from(OsString::from_vec(raw.to_vec())));
+            ignored.insert(PathBuf::from(std::ffi::OsString::from_vec(raw.to_vec())));
         }
         #[cfg(not(unix))]
         {
@@ -607,7 +606,7 @@ fn rel_path_with_trailing_separator(rel: &Path) -> PathBuf {
             return rel.to_path_buf();
         }
         bytes.push(b'/');
-        PathBuf::from(OsString::from_vec(bytes))
+        PathBuf::from(std::ffi::OsString::from_vec(bytes))
     }
 
     #[cfg(not(unix))]

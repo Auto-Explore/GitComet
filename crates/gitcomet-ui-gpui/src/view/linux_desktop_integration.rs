@@ -1,7 +1,5 @@
 use super::*;
 
-const ICON_SIZES: &[u32] = &[32, 48, 128, 256, 512];
-
 fn desktop_entry_exec_path_arg(exe: &std::path::Path) -> Result<String, String> {
     let Some(exe) = exe.to_str() else {
         return Err(format!(
@@ -41,6 +39,7 @@ impl GitCometView {
         cx: &mut gpui::Context<Self>,
     ) {
         use std::path::PathBuf;
+        const ICON_SIZES: &[u32] = &[32, 48, 128, 256, 512];
 
         let desktop = std::env::var("XDG_CURRENT_DESKTOP").ok();
         if !should_auto_install_linux_desktop_integration(

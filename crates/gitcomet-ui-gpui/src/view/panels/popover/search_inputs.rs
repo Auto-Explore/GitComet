@@ -61,36 +61,6 @@ impl PopoverHost {
         input.clone()
     }
 
-    pub(super) fn ensure_remote_picker_search_input(
-        &mut self,
-        window: &mut Window,
-        cx: &mut gpui::Context<Self>,
-    ) -> Entity<components::TextInput> {
-        let theme = self.theme;
-        let input = self.remote_picker_search_input.get_or_insert_with(|| {
-            cx.new(|cx| {
-                components::TextInput::new(
-                    components::TextInputOptions {
-                        placeholder: "Filter remotes".into(),
-                        multiline: false,
-                        read_only: false,
-                        chromeless: false,
-                        soft_wrap: false,
-                    },
-                    window,
-                    cx,
-                )
-            })
-        });
-        input.update(cx, |input, cx| {
-            input.set_theme(theme, cx);
-            input.set_text("", cx);
-        });
-        let focus_handle = input.read_with(cx, |input, _| input.focus_handle());
-        window.focus(&focus_handle);
-        input.clone()
-    }
-
     pub(super) fn ensure_worktree_picker_search_input(
         &mut self,
         window: &mut Window,

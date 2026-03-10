@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
 Name=GitComet
-Comment=Git UI built with GPUI
+Comment=GitComet - Git UI
 Exec=gitcomet-app
 Icon=gitcomet
 StartupWMClass=gitcomet

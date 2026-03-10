@@ -28,7 +28,6 @@ pub enum ConflictPickSide {
 #[cfg_attr(not(test), allow(dead_code))]
 pub enum AutosolveTraceMode {
     Safe,
-    Regex,
     History,
 }
 
@@ -179,15 +178,6 @@ pub fn format_autosolve_trace_summary(
             stats.pass1,
             stats.pass2_split,
             stats.pass1_after_split
-        ),
-        AutosolveTraceMode::Regex => format!(
-            "Last autosolve (regex): resolved {resolved} {blocks_word}, unresolved {} -> {} (pass1 {}, split {}, pass1-after-split {}, regex {}).",
-            unresolved_before,
-            unresolved_after,
-            stats.pass1,
-            stats.pass2_split,
-            stats.pass1_after_split,
-            stats.regex
         ),
         AutosolveTraceMode::History => format!(
             "Last autosolve (history): resolved {resolved} {blocks_word}, unresolved {} -> {} (history {}).",

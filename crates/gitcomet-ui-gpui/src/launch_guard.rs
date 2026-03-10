@@ -25,6 +25,7 @@ impl UiLaunchError {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn from_launch_failure(context: &'static str, message: impl Into<String>) -> Self {
         Self {
             context,

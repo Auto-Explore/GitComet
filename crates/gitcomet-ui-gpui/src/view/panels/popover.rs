@@ -21,13 +21,9 @@ mod merge_abort_confirm;
 mod open_source_licenses;
 mod pull_reconcile_prompt;
 mod push_set_upstream_prompt;
-mod rebase_prompt;
 mod remote_add_prompt;
-mod remote_branch_delete_picker;
 mod remote_edit_url_prompt;
 mod remote_remove_confirm;
-mod remote_remove_picker;
-mod remote_url_picker;
 mod repo_picker;
 mod reset_prompt;
 mod search_inputs;
@@ -624,18 +620,6 @@ impl PopoverHost {
                         .read_with(cx, |i, _| i.focus_handle());
                     window.focus(&focus);
                 }
-                PopoverKind::RebasePrompt { .. } => {
-                    let theme = self.theme;
-                    self.rebase_onto_input.update(cx, |input, cx| {
-                        input.set_theme(theme, cx);
-                        input.set_text("", cx);
-                        cx.notify();
-                    });
-                    let focus = self
-                        .rebase_onto_input
-                        .read_with(cx, |i, _| i.focus_handle());
-                    window.focus(&focus);
-                }
                 PopoverKind::CreateTagPrompt { .. } => {
                     let theme = self.theme;
                     self.create_tag_input.update(cx, |input, cx| {
@@ -693,21 +677,6 @@ impl PopoverHost {
                         .remote_url_edit_input
                         .read_with(cx, |i, _| i.focus_handle());
                     window.focus(&focus);
-                }
-                PopoverKind::Repo {
-                    kind:
-                        RepoPopoverKind::Remote(
-                            RemotePopoverKind::UrlPicker { .. } | RemotePopoverKind::RemovePicker,
-                        ),
-                    ..
-                } => {
-                    let _ = self.ensure_remote_picker_search_input(window, cx);
-                }
-                PopoverKind::Repo {
-                    kind: RepoPopoverKind::Remote(RemotePopoverKind::BranchDeletePicker { .. }),
-                    ..
-                } => {
-                    let _ = self.ensure_branch_picker_search_input(window, cx);
                 }
                 PopoverKind::Repo {
                     kind: RepoPopoverKind::Worktree(WorktreePopoverKind::AddPrompt),
@@ -1009,14 +978,11 @@ impl PopoverHost {
             | PopoverKind::StashDropConfirm { .. }
             | PopoverKind::CloneRepo
             | PopoverKind::ResetPrompt { .. }
-            | PopoverKind::RebasePrompt { .. }
             | PopoverKind::CreateTagPrompt { .. }
             | PopoverKind::Repo {
                 kind:
                     RepoPopoverKind::Remote(
                         RemotePopoverKind::AddPrompt
-                        | RemotePopoverKind::UrlPicker { .. }
-                        | RemotePopoverKind::RemovePicker
                         | RemotePopoverKind::EditUrlPrompt { .. }
                         | RemotePopoverKind::RemoveConfirm { .. },
                     ),
@@ -1416,22 +1382,12 @@ impl PopoverHost {
                 target,
                 mode,
             } => reset_prompt::panel(self, repo_id, target, mode, cx),
-            PopoverKind::RebasePrompt { repo_id } => rebase_prompt::panel(self, repo_id, cx),
             PopoverKind::CreateTagPrompt { repo_id, target } => {
                 create_tag_prompt::panel(self, repo_id, target, cx)
             }
             PopoverKind::Repo { repo_id, kind } => match kind {
                 RepoPopoverKind::Remote(remote_kind) => match remote_kind {
                     RemotePopoverKind::AddPrompt => remote_add_prompt::panel(self, repo_id, cx),
-                    RemotePopoverKind::UrlPicker { kind } => {
-                        remote_url_picker::panel(self, repo_id, kind, cx)
-                    }
-                    RemotePopoverKind::RemovePicker => {
-                        remote_remove_picker::panel(self, repo_id, cx)
-                    }
-                    RemotePopoverKind::BranchDeletePicker { remote } => {
-                        remote_branch_delete_picker::panel(self, repo_id, remote, cx)
-                    }
                     RemotePopoverKind::EditUrlPrompt { name, kind } => {
                         remote_edit_url_prompt::panel(self, repo_id, name, kind, cx)
                     }

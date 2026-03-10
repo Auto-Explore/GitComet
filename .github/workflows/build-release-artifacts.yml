@@ -37,6 +37,10 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  WIXTOOLSET_VERSION: 3.14.1.20250415
+  CARGO_WIX_VERSION: 0.3.9
+  APPIMAGETOOL_VERSION: 1.9.1
+  APPIMAGETOOL_X86_64_SHA256: ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
 
 jobs:
   prepare:
@@ -138,8 +142,8 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          choco install wixtoolset --yes --no-progress
-          cargo install cargo-wix --locked
+          choco install wixtoolset --version "${env:WIXTOOLSET_VERSION}" --yes --no-progress
+          cargo install cargo-wix --version "${env:CARGO_WIX_VERSION}" --locked
           if (!(Test-Path "wix\main.wxs")) {
             cargo wix init --package gitcomet-app
           }
@@ -154,7 +158,7 @@ jobs:
             dist/*.zip
             dist/*.msi
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 7
 
   build_linux:
     name: Build Linux artifacts
@@ -174,6 +178,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
+            desktop-file-utils \
             pkg-config \
             libxcb1-dev \
             libxkbcommon-dev \
@@ -187,6 +192,14 @@ jobs:
 
       - name: Build release binary
         run: cargo build -p gitcomet-app --release --locked --features ui-gpui,gix
+
+      - name: Normalize desktop entry metadata
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          # Backward compatibility for older tags that used non-standard categories.
+          sed 's/VersionControl;/RevisionControl;/g' assets/linux/gitcomet.desktop > dist/gitcomet.desktop
+          desktop-file-validate dist/gitcomet.desktop
 
       - name: Package tar.gz
         run: |
@@ -210,7 +223,7 @@ jobs:
           mkdir -p "${pkg_root}/usr/share/icons/hicolor/512x512/apps"
 
           install -m755 target/release/gitcomet-app "${pkg_root}/usr/bin/gitcomet-app"
-          install -m644 assets/linux/gitcomet.desktop "${pkg_root}/usr/share/applications/gitcomet.desktop"
+          install -m644 dist/gitcomet.desktop "${pkg_root}/usr/share/applications/gitcomet.desktop"
           install -m644 assets/gitcomet-512.png "${pkg_root}/usr/share/icons/hicolor/512x512/apps/gitcomet.png"
 
           {
@@ -232,7 +245,7 @@ jobs:
           appdir="dist/AppDir"
           mkdir -p "${appdir}/usr/bin"
           install -m755 target/release/gitcomet-app "${appdir}/usr/bin/gitcomet-app"
-          install -m644 assets/linux/gitcomet.desktop "${appdir}/gitcomet.desktop"
+          install -m644 dist/gitcomet.desktop "${appdir}/gitcomet.desktop"
           install -m644 assets/gitcomet-512.png "${appdir}/gitcomet.png"
 
           {
@@ -244,8 +257,9 @@ jobs:
           chmod +x "${appdir}/AppRun"
 
           curl -fsSL \
-            "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage" \
+            "https://github.com/AppImage/appimagetool/releases/download/${APPIMAGETOOL_VERSION}/appimagetool-x86_64.AppImage" \
             -o /tmp/appimagetool.AppImage
+          echo "${APPIMAGETOOL_X86_64_SHA256}  /tmp/appimagetool.AppImage" | sha256sum -c -
           chmod +x /tmp/appimagetool.AppImage
           ARCH=x86_64 /tmp/appimagetool.AppImage --appimage-extract-and-run \
             "${appdir}" "dist/gitcomet-v${VERSION}-linux-x86_64.AppImage"
@@ -258,9 +272,8 @@ jobs:
             dist/*.tar.gz
             dist/*.AppImage
             dist/*.deb
-            dist/*.rpm
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 7
 
   publish_release_assets:
     name: Attach assets and checksums to GitHub release
@@ -334,7 +347,7 @@ jobs:
           name: release-payload
           path: dist/release/*
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 7
 
       - name: Upload assets to GitHub release
         if: ${{ env.RELEASE_ID != '' }}

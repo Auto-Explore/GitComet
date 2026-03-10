@@ -529,9 +529,6 @@ pub(super) enum PopoverKind {
         target: String,
         mode: ResetMode,
     },
-    RebasePrompt {
-        repo_id: RepoId,
-    },
     CreateTagPrompt {
         repo_id: RepoId,
         target: String,
@@ -664,9 +661,6 @@ pub(super) enum RepoPopoverKind {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum RemotePopoverKind {
     AddPrompt,
-    UrlPicker { kind: RemoteUrlKind },
-    RemovePicker,
-    BranchDeletePicker { remote: Option<String> },
     EditUrlPrompt { name: String, kind: RemoteUrlKind },
     RemoveConfirm { name: String },
     Menu { name: String },

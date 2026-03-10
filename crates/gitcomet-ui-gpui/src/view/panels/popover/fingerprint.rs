@@ -76,7 +76,6 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         // Popovers that carry an explicit repo id.
         PopoverKind::ResetPrompt { repo_id, .. }
         | PopoverKind::CheckoutRemoteBranchPrompt { repo_id, .. }
-        | PopoverKind::RebasePrompt { repo_id }
         | PopoverKind::StashDropConfirm { repo_id, .. }
         | PopoverKind::StashMenu { repo_id, .. }
         | PopoverKind::CreateTagPrompt { repo_id, .. }
@@ -211,7 +210,6 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         | PopoverKind::ConflictSaveStageConfirm { .. }
         | PopoverKind::ResetPrompt { .. }
         | PopoverKind::CheckoutRemoteBranchPrompt { .. }
-        | PopoverKind::RebasePrompt { .. }
         | PopoverKind::CreateTagPrompt { .. }
         | PopoverKind::ForceRemoveWorktreeConfirm { .. }
         | PopoverKind::CommitMenu { .. }
@@ -278,10 +276,6 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             repo_id.hash(hasher);
             target.hash(hasher);
             hash_reset_mode(*mode, hasher);
-        }
-        PopoverKind::RebasePrompt { repo_id } => {
-            7u8.hash(hasher);
-            repo_id.hash(hasher);
         }
         PopoverKind::CreateTagPrompt { repo_id, target } => {
             8u8.hash(hasher);
@@ -478,20 +472,6 @@ fn hash_repo_popover_kind<H: Hasher>(repo_id: RepoId, kind: &RepoPopoverKind, ha
             RemotePopoverKind::AddPrompt => {
                 9u8.hash(hasher);
                 repo_id.hash(hasher);
-            }
-            RemotePopoverKind::UrlPicker { kind } => {
-                10u8.hash(hasher);
-                repo_id.hash(hasher);
-                hash_remote_url_kind(*kind, hasher);
-            }
-            RemotePopoverKind::RemovePicker => {
-                11u8.hash(hasher);
-                repo_id.hash(hasher);
-            }
-            RemotePopoverKind::BranchDeletePicker { remote } => {
-                12u8.hash(hasher);
-                repo_id.hash(hasher);
-                remote.hash(hasher);
             }
             RemotePopoverKind::EditUrlPrompt { name, kind } => {
                 13u8.hash(hasher);
