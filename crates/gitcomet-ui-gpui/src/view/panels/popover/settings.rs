@@ -195,15 +195,18 @@ fn is_supported_git_version(version: GitVersion) -> bool {
 
 pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>) -> gpui::Div {
     let theme = this.theme;
+    let current_theme_mode = this.theme_mode;
     let current_format = this.date_time_format;
     let current_timezone = this.timezone;
     let show_timezone = this.show_timezone;
-    let runtime = &this.settings_runtime_info;
-    let preview_now = std::time::SystemTime::now();
+    let runtime = this.settings_runtime_info.clone();
 
     let row = |id: &'static str, label: &'static str, value: SharedString, open: bool| {
         div()
             .id(id)
+            .w_full()
+            .min_w_full()
+            .max_w_full()
             .px_2()
             .py_1()
             .flex()
@@ -233,6 +236,9 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
     let toggle_row = |id: &'static str, label: &'static str, enabled: bool| {
         div()
             .id(id)
+            .w_full()
+            .min_w_full()
+            .max_w_full()
             .px_2()
             .py_1()
             .flex()
@@ -274,111 +280,6 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
             )
     };
 
-    // --- Date format dropdown ---
-    let mut date_dropdown = div().flex().flex_col().gap_1().px_2().pb_2();
-
-    if this.settings_date_format_open {
-        for fmt in DateTimeFormat::all() {
-            let selected = *fmt == current_format;
-            let fmt_val = *fmt;
-            let preview: SharedString =
-                format_datetime(preview_now, fmt_val, current_timezone, show_timezone).into();
-            date_dropdown = date_dropdown.child(
-                div()
-                    .id(("settings_date_format_item", *fmt as usize))
-                    .px_2()
-                    .py_1()
-                    .rounded(px(theme.radii.row))
-                    .when(!selected, |d| {
-                        d.hover(move |s| s.bg(theme.colors.hover))
-                            .active(move |s| s.bg(theme.colors.active))
-                    })
-                    .when(selected, |d| d.bg(with_alpha(theme.colors.accent, 0.15)))
-                    .cursor(CursorStyle::PointingHand)
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .gap_2()
-                            .child(div().text_sm().child(fmt.label()))
-                            .child(
-                                div()
-                                    .font_family("monospace")
-                                    .text_xs()
-                                    .text_color(theme.colors.text_muted)
-                                    .child(preview),
-                            ),
-                    )
-                    .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
-                        this.settings_date_format_open = false;
-                        this.set_date_time_format(fmt_val, cx);
-                        cx.notify();
-                    })),
-            );
-        }
-    }
-
-    // --- Timezone dropdown ---
-    let mut tz_dropdown = div().flex().flex_col().gap_1().px_2().pb_2();
-
-    if this.settings_timezone_open {
-        for tz in Timezone::all() {
-            let selected = *tz == current_timezone;
-            let tz_val = *tz;
-            let preview: SharedString =
-                format_datetime(preview_now, current_format, tz_val, show_timezone).into();
-            tz_dropdown = tz_dropdown.child(
-                div()
-                    .id(SharedString::from(format!(
-                        "settings_tz_item_{}",
-                        tz.offset_seconds()
-                    )))
-                    .px_2()
-                    .py_1()
-                    .rounded(px(theme.radii.row))
-                    .when(!selected, |d| {
-                        d.hover(move |s| s.bg(theme.colors.hover))
-                            .active(move |s| s.bg(theme.colors.active))
-                    })
-                    .when(selected, |d| d.bg(with_alpha(theme.colors.accent, 0.15)))
-                    .cursor(CursorStyle::PointingHand)
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .child(div().text_sm().child(tz.label()))
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(theme.colors.text_muted)
-                                            .child(tz.cities()),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .font_family("monospace")
-                                    .text_xs()
-                                    .text_color(theme.colors.text_muted)
-                                    .child(preview),
-                            ),
-                    )
-                    .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
-                        this.settings_timezone_open = false;
-                        this.set_timezone(tz_val, cx);
-                        cx.notify();
-                    })),
-            );
-        }
-    }
-
     let header = div()
         .px_2()
         .py_1()
@@ -394,53 +295,244 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
         .text_color(theme.colors.text_muted)
         .child("General");
 
-    let date_row = row(
-        "settings_date_format",
-        "Date format",
-        current_format.label().into(),
-        this.settings_date_format_open,
-    )
-    .on_click(cx.listener(|this, _e: &ClickEvent, _w, cx| {
-        this.settings_date_format_open = !this.settings_date_format_open;
-        this.settings_timezone_open = false;
-        cx.notify();
-    }));
+    let content_bounds: std::rc::Rc<std::cell::RefCell<Option<Bounds<Pixels>>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(None));
+    let general_section_bounds: std::rc::Rc<std::cell::RefCell<Option<Bounds<Pixels>>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(None));
 
-    let tz_row = row(
-        "settings_timezone",
-        "Date timezone",
-        current_timezone.label().into(),
-        this.settings_timezone_open,
-    )
-    .on_click(cx.listener(|this, _e: &ClickEvent, _w, cx| {
-        this.settings_timezone_open = !this.settings_timezone_open;
-        this.settings_date_format_open = false;
-        cx.notify();
-    }));
+    let theme_anchor_bounds: std::rc::Rc<std::cell::RefCell<Option<Bounds<Pixels>>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(None));
+    let theme_anchor_bounds_for_prepaint = std::rc::Rc::clone(&theme_anchor_bounds);
+    let theme_anchor_bounds_for_click = std::rc::Rc::clone(&theme_anchor_bounds);
+    let content_bounds_for_theme_click = std::rc::Rc::clone(&content_bounds);
+    let general_section_bounds_for_theme_click = std::rc::Rc::clone(&general_section_bounds);
+    let theme_row = div()
+        .flex()
+        .w_full()
+        .min_w_full()
+        .max_w_full()
+        .on_children_prepainted(move |children_bounds, _w, _cx| {
+            if let Some(bounds) = children_bounds.first() {
+                *theme_anchor_bounds_for_prepaint.borrow_mut() = Some(*bounds);
+            }
+        })
+        .child(
+            row(
+                "settings_theme",
+                "Theme",
+                current_theme_mode.label().into(),
+                this.settings_submenu == Some(SettingsSubmenu::Theme),
+            )
+            .flex_1()
+            .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+                this.settings_submenu = if this.settings_submenu == Some(SettingsSubmenu::Theme) {
+                    this.settings_submenu_top = None;
+                    this.settings_submenu_left = None;
+                    this.settings_submenu_width = None;
+                    this.settings_submenu_max_h = None;
+                    None
+                } else {
+                    if let (Some(row_bounds), Some(panel_bounds), Some(section_bounds)) = (
+                        *theme_anchor_bounds_for_click.borrow(),
+                        *content_bounds_for_theme_click.borrow(),
+                        *general_section_bounds_for_theme_click.borrow(),
+                    ) {
+                        let submenu_width = section_bounds.size.width.min(px(240.0));
+                        this.settings_submenu_top =
+                            Some((row_bounds.bottom() - panel_bounds.top()) + px(1.0));
+                        this.settings_submenu_left =
+                            Some(section_bounds.right() - panel_bounds.left() - submenu_width);
+                        this.settings_submenu_width = Some(submenu_width);
+                        this.settings_submenu_max_h = Some(
+                            ((panel_bounds.bottom() - row_bounds.bottom()) - px(12.0))
+                                .max(px(120.0))
+                                .min(px(280.0)),
+                        );
+                    } else {
+                        this.settings_submenu_top = None;
+                        this.settings_submenu_left = None;
+                        this.settings_submenu_width = None;
+                        this.settings_submenu_max_h = None;
+                    }
+                    Some(SettingsSubmenu::Theme)
+                };
+                cx.notify();
+            })),
+        );
+
+    let date_format_anchor_bounds: std::rc::Rc<std::cell::RefCell<Option<Bounds<Pixels>>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(None));
+    let date_format_anchor_bounds_for_prepaint = std::rc::Rc::clone(&date_format_anchor_bounds);
+    let date_format_anchor_bounds_for_click = std::rc::Rc::clone(&date_format_anchor_bounds);
+    let content_bounds_for_date_click = std::rc::Rc::clone(&content_bounds);
+    let general_section_bounds_for_date_click = std::rc::Rc::clone(&general_section_bounds);
+    let date_row = div()
+        .flex()
+        .w_full()
+        .min_w_full()
+        .max_w_full()
+        .on_children_prepainted(move |children_bounds, _w, _cx| {
+            if let Some(bounds) = children_bounds.first() {
+                *date_format_anchor_bounds_for_prepaint.borrow_mut() = Some(*bounds);
+            }
+        })
+        .child(
+            row(
+                "settings_date_format",
+                "Date format",
+                current_format.label().into(),
+                this.settings_submenu == Some(SettingsSubmenu::DateFormat),
+            )
+            .flex_1()
+            .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+                this.settings_submenu =
+                    if this.settings_submenu == Some(SettingsSubmenu::DateFormat) {
+                        this.settings_submenu_top = None;
+                        this.settings_submenu_left = None;
+                        this.settings_submenu_width = None;
+                        this.settings_submenu_max_h = None;
+                        None
+                    } else {
+                        if let (Some(row_bounds), Some(panel_bounds), Some(section_bounds)) = (
+                            *date_format_anchor_bounds_for_click.borrow(),
+                            *content_bounds_for_date_click.borrow(),
+                            *general_section_bounds_for_date_click.borrow(),
+                        ) {
+                            let submenu_width = section_bounds.size.width.min(px(320.0));
+                            this.settings_submenu_top =
+                                Some((row_bounds.bottom() - panel_bounds.top()) + px(1.0));
+                            this.settings_submenu_left =
+                                Some(section_bounds.right() - panel_bounds.left() - submenu_width);
+                            this.settings_submenu_width = Some(submenu_width);
+                            this.settings_submenu_max_h = Some(
+                                ((panel_bounds.bottom() - row_bounds.bottom()) - px(12.0))
+                                    .max(px(120.0))
+                                    .min(px(280.0)),
+                            );
+                        } else {
+                            this.settings_submenu_top = None;
+                            this.settings_submenu_left = None;
+                            this.settings_submenu_width = None;
+                            this.settings_submenu_max_h = None;
+                        }
+                        Some(SettingsSubmenu::DateFormat)
+                    };
+                cx.notify();
+            })),
+        );
+
+    let timezone_anchor_bounds: std::rc::Rc<std::cell::RefCell<Option<Bounds<Pixels>>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(None));
+    let timezone_anchor_bounds_for_prepaint = std::rc::Rc::clone(&timezone_anchor_bounds);
+    let timezone_anchor_bounds_for_click = std::rc::Rc::clone(&timezone_anchor_bounds);
+    let content_bounds_for_tz_click = std::rc::Rc::clone(&content_bounds);
+    let general_section_bounds_for_tz_click = std::rc::Rc::clone(&general_section_bounds);
+    let tz_row = div()
+        .flex()
+        .w_full()
+        .min_w_full()
+        .max_w_full()
+        .on_children_prepainted(move |children_bounds, _w, _cx| {
+            if let Some(bounds) = children_bounds.first() {
+                *timezone_anchor_bounds_for_prepaint.borrow_mut() = Some(*bounds);
+            }
+        })
+        .child(
+            row(
+                "settings_timezone",
+                "Date timezone",
+                current_timezone.label().into(),
+                this.settings_submenu == Some(SettingsSubmenu::Timezone),
+            )
+            .flex_1()
+            .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+                this.settings_submenu = if this.settings_submenu == Some(SettingsSubmenu::Timezone)
+                {
+                    this.settings_submenu_top = None;
+                    this.settings_submenu_left = None;
+                    this.settings_submenu_width = None;
+                    this.settings_submenu_max_h = None;
+                    None
+                } else {
+                    if let (Some(row_bounds), Some(panel_bounds), Some(section_bounds)) = (
+                        *timezone_anchor_bounds_for_click.borrow(),
+                        *content_bounds_for_tz_click.borrow(),
+                        *general_section_bounds_for_tz_click.borrow(),
+                    ) {
+                        let submenu_width = section_bounds.size.width.min(px(420.0));
+                        this.settings_submenu_top =
+                            Some((row_bounds.bottom() - panel_bounds.top()) + px(1.0));
+                        this.settings_submenu_left =
+                            Some(section_bounds.right() - panel_bounds.left() - submenu_width);
+                        this.settings_submenu_width = Some(submenu_width);
+                        this.settings_submenu_max_h = Some(
+                            ((panel_bounds.bottom() - row_bounds.bottom()) - px(12.0))
+                                .max(px(120.0))
+                                .min(px(280.0)),
+                        );
+                    } else {
+                        this.settings_submenu_top = None;
+                        this.settings_submenu_left = None;
+                        this.settings_submenu_width = None;
+                        this.settings_submenu_max_h = None;
+                    }
+                    Some(SettingsSubmenu::Timezone)
+                };
+                cx.notify();
+            })),
+        );
+
+    let general_section_bounds_for_prepaint = std::rc::Rc::clone(&general_section_bounds);
+    let general_section = div()
+        .w_full()
+        .min_w_full()
+        .max_w_full()
+        .on_children_prepainted(move |children_bounds, _w, _cx| {
+            if let Some(bounds) = children_bounds.first() {
+                *general_section_bounds_for_prepaint.borrow_mut() = Some(*bounds);
+            }
+        })
+        .child(
+            div()
+                .w_full()
+                .min_w_full()
+                .max_w_full()
+                .pb_1()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(theme_row)
+                .child(date_row)
+                .child(tz_row),
+        );
 
     let show_timezone_row = toggle_row("settings_show_timezone", "Show timezone", show_timezone)
+        .flex_1()
         .on_click(cx.listener(|this, _e: &ClickEvent, _w, cx| {
             this.set_show_timezone(!this.show_timezone, cx);
             cx.notify();
         }));
 
     let mut content = div()
+        .w_full()
+        .min_w_full()
+        .max_w_full()
+        .w(px(760.0))
         .flex()
         .flex_col()
-        .min_w(px(560.0))
-        .max_w(px(720.0))
+        .min_w(px(600.0))
+        .max_w(px(760.0))
         .child(header)
         .child(div().border_t_1().border_color(theme.colors.border))
         .child(section_label)
+        .child(general_section)
         .child(
             div()
-                .px_2()
-                .pb_1()
                 .flex()
-                .flex_col()
-                .gap_1()
-                .child(date_row)
-                .child(tz_row)
+                .w_full()
+                .min_w_full()
+                .max_w_full()
+                .pb_1()
                 .child(show_timezone_row),
         );
 
@@ -606,8 +698,6 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                 .child(div().font_family("monospace").child("↗")),
         )
         .on_click(cx.listener(|this, _e: &ClickEvent, window, cx| {
-            this.settings_date_format_open = false;
-            this.settings_timezone_open = false;
             this.open_popover_at(
                 PopoverKind::OpenSourceLicenses,
                 crate::view::chrome::window_top_left_corner(window),
@@ -642,33 +732,69 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
         );
     }
 
-    if this.settings_date_format_open {
-        content = content
-            .child(
-                div()
-                    .px_2()
-                    .pb_1()
-                    .text_xs()
-                    .text_color(theme.colors.text_muted)
-                    .child("Choose a format:"),
-            )
-            .child(date_dropdown);
+    let content_bounds_for_prepaint = std::rc::Rc::clone(&content_bounds);
+    let mut panel = div()
+        .relative()
+        .on_children_prepainted(move |children_bounds, _w, _cx| {
+            if let Some(bounds) = children_bounds.first() {
+                *content_bounds_for_prepaint.borrow_mut() = Some(*bounds);
+            }
+        })
+        .child(content);
+
+    if let (
+        Some(menu),
+        Some(overlay_top),
+        Some(overlay_left),
+        Some(overlay_width),
+        Some(overlay_max_h),
+    ) = (
+        this.settings_submenu,
+        this.settings_submenu_top,
+        this.settings_submenu_left,
+        this.settings_submenu_width,
+        this.settings_submenu_max_h,
+    ) {
+        let menu_kind = match menu {
+            SettingsSubmenu::Theme => PopoverKind::SettingsThemeMenu,
+            SettingsSubmenu::DateFormat => PopoverKind::SettingsDateFormatMenu,
+            SettingsSubmenu::Timezone => PopoverKind::SettingsTimezoneMenu,
+        };
+
+        panel = panel.child(
+            div()
+                .id("settings_submenu")
+                .absolute()
+                .top(overlay_top)
+                .left(overlay_left)
+                .w(overlay_width)
+                .min_w(overlay_width)
+                .max_w(overlay_width)
+                .occlude()
+                .bg(theme.colors.surface_bg_elevated)
+                .border_1()
+                .border_color(with_alpha(theme.colors.accent, 0.90))
+                .rounded(px(theme.radii.panel))
+                .shadow_lg()
+                .overflow_hidden()
+                .p_1()
+                .child(
+                    div()
+                        .id("settings_submenu_scroll")
+                        .min_h(px(0.0))
+                        .max_h(overlay_max_h)
+                        .overflow_y_scroll()
+                        .child(
+                            this.context_menu_view(menu_kind, cx)
+                                .w_full()
+                                .min_w_full()
+                                .max_w_full(),
+                        ),
+                ),
+        );
     }
 
-    if this.settings_timezone_open {
-        content = content
-            .child(
-                div()
-                    .px_2()
-                    .pb_1()
-                    .text_xs()
-                    .text_color(theme.colors.text_muted)
-                    .child("Choose a timezone:"),
-            )
-            .child(tz_dropdown);
-    }
-
-    components::context_menu(theme, content)
+    components::context_menu(theme, panel)
 }
 
 #[cfg(test)]

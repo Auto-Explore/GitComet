@@ -53,6 +53,15 @@ enum ContextMenuAction {
         show_date: bool,
         show_sha: bool,
     },
+    SetThemeMode {
+        mode: ThemeMode,
+    },
+    SetDateTimeFormat {
+        format: DateTimeFormat,
+    },
+    SetTimezone {
+        timezone: Timezone,
+    },
     StageSelectionOrPath {
         repo_id: RepoId,
         area: DiffArea,

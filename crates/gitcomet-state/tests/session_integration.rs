@@ -289,6 +289,7 @@ fn persist_ui_settings_to_path_updates_optional_fields_and_requires_both_window_
             window_height: None,
             sidebar_width: Some(42),
             details_width: Some(84),
+            theme_mode: Some("light".to_string()),
             date_time_format: Some("ymd_hm_utc".to_string()),
             timezone: Some("UTC".to_string()),
             show_timezone: Some(true),
@@ -305,6 +306,7 @@ fn persist_ui_settings_to_path_updates_optional_fields_and_requires_both_window_
     assert_eq!(loaded.window_height, Some(200));
     assert_eq!(loaded.sidebar_width, Some(42));
     assert_eq!(loaded.details_width, Some(84));
+    assert_eq!(loaded.theme_mode.as_deref(), Some("light"));
     assert_eq!(loaded.date_time_format.as_deref(), Some("ymd_hm_utc"));
     assert_eq!(loaded.timezone.as_deref(), Some("UTC"));
     assert_eq!(loaded.show_timezone, Some(true));

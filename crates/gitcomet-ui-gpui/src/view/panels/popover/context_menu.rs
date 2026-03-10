@@ -22,6 +22,87 @@ mod tag;
 mod worktree;
 mod worktree_section;
 
+fn settings_theme_model(host: &PopoverHost) -> ContextMenuModel {
+    let selected = host.theme_mode;
+    let check = |enabled: bool| enabled.then_some("✓".into());
+
+    ContextMenuModel::new(vec![
+        ContextMenuItem::Header("Theme".into()),
+        ContextMenuItem::Separator,
+        ContextMenuItem::Entry {
+            label: ThemeMode::Automatic.label().into(),
+            icon: check(selected == ThemeMode::Automatic),
+            shortcut: Some("A".into()),
+            disabled: false,
+            action: Box::new(ContextMenuAction::SetThemeMode {
+                mode: ThemeMode::Automatic,
+            }),
+        },
+        ContextMenuItem::Entry {
+            label: ThemeMode::Light.label().into(),
+            icon: check(selected == ThemeMode::Light),
+            shortcut: Some("L".into()),
+            disabled: false,
+            action: Box::new(ContextMenuAction::SetThemeMode {
+                mode: ThemeMode::Light,
+            }),
+        },
+        ContextMenuItem::Entry {
+            label: ThemeMode::Dark.label().into(),
+            icon: check(selected == ThemeMode::Dark),
+            shortcut: Some("D".into()),
+            disabled: false,
+            action: Box::new(ContextMenuAction::SetThemeMode {
+                mode: ThemeMode::Dark,
+            }),
+        },
+    ])
+}
+
+fn settings_date_format_model(host: &PopoverHost) -> ContextMenuModel {
+    let selected = host.date_time_format;
+    let check = |enabled: bool| enabled.then_some("✓".into());
+    let mut items = vec![
+        ContextMenuItem::Header("Date format".into()),
+        ContextMenuItem::Separator,
+    ];
+
+    for fmt in DateTimeFormat::all() {
+        let format = *fmt;
+        items.push(ContextMenuItem::Entry {
+            label: format.label().into(),
+            icon: check(selected == format),
+            shortcut: None,
+            disabled: false,
+            action: Box::new(ContextMenuAction::SetDateTimeFormat { format }),
+        });
+    }
+
+    ContextMenuModel::new(items)
+}
+
+fn settings_timezone_model(host: &PopoverHost) -> ContextMenuModel {
+    let selected = host.timezone;
+    let check = |enabled: bool| enabled.then_some("✓".into());
+    let mut items = vec![
+        ContextMenuItem::Header("Date timezone".into()),
+        ContextMenuItem::Separator,
+    ];
+
+    for tz in Timezone::all() {
+        let timezone = *tz;
+        items.push(ContextMenuItem::Entry {
+            label: format!("{} ({})", timezone.label(), timezone.cities()).into(),
+            icon: check(selected == timezone),
+            shortcut: None,
+            disabled: false,
+            action: Box::new(ContextMenuAction::SetTimezone { timezone }),
+        });
+    }
+
+    ContextMenuModel::new(items)
+}
+
 impl PopoverHost {
     fn workdir_for_repo(&self, repo_id: RepoId) -> Option<std::path::PathBuf> {
         self.state
@@ -159,6 +240,9 @@ impl PopoverHost {
             PopoverKind::DiffHunkMenu { repo_id, src_ix } => {
                 Some(diff_hunk::model(self, *repo_id, *src_ix))
             }
+            PopoverKind::SettingsThemeMenu => Some(settings_theme_model(self)),
+            PopoverKind::SettingsDateFormatMenu => Some(settings_date_format_model(self)),
+            PopoverKind::SettingsTimezoneMenu => Some(settings_timezone_model(self)),
             PopoverKind::DiffEditorMenu {
                 repo_id,
                 area,
@@ -372,6 +456,33 @@ impl PopoverHost {
                     });
                 });
                 self.schedule_ui_settings_persist(cx);
+                close_after_action = false;
+            }
+            ContextMenuAction::SetThemeMode { mode } => {
+                self.set_theme_mode(mode, window.appearance(), cx);
+                self.settings_submenu = None;
+                self.settings_submenu_top = None;
+                self.settings_submenu_left = None;
+                self.settings_submenu_width = None;
+                self.settings_submenu_max_h = None;
+                close_after_action = false;
+            }
+            ContextMenuAction::SetDateTimeFormat { format } => {
+                self.set_date_time_format(format, cx);
+                self.settings_submenu = None;
+                self.settings_submenu_top = None;
+                self.settings_submenu_left = None;
+                self.settings_submenu_width = None;
+                self.settings_submenu_max_h = None;
+                close_after_action = false;
+            }
+            ContextMenuAction::SetTimezone { timezone } => {
+                self.set_timezone(timezone, cx);
+                self.settings_submenu = None;
+                self.settings_submenu_top = None;
+                self.settings_submenu_left = None;
+                self.settings_submenu_width = None;
+                self.settings_submenu_max_h = None;
                 close_after_action = false;
             }
             ContextMenuAction::StageSelectionOrPath {

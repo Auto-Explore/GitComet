@@ -34,6 +34,7 @@ impl GitCometView {
                                 .then_some(sidebar_width as u32),
                             details_width: (details_width.is_finite() && details_width >= 1.0)
                                 .then_some(details_width as u32),
+                            theme_mode: Some(this.theme_mode.key().to_string()),
                             date_time_format: Some(this.date_time_format.key().to_string()),
                             timezone: Some(this.timezone.key()),
                             show_timezone: Some(this.show_timezone),

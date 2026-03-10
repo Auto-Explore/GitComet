@@ -252,7 +252,6 @@ impl GitCometView {
             None
         };
         let store = Arc::new(store);
-        let initial_theme = AppTheme::default_for_window_appearance(window.appearance());
 
         let mut ui_session = session::load();
         if view_mode == GitCometViewMode::Normal
@@ -266,6 +265,12 @@ impl GitCometView {
 
         let restored_sidebar_width = ui_session.sidebar_width;
         let restored_details_width = ui_session.details_width;
+        let theme_mode = ui_session
+            .theme_mode
+            .as_deref()
+            .and_then(ThemeMode::from_key)
+            .unwrap_or_default();
+        let initial_theme = theme_mode.resolve_theme(window.appearance());
         let date_time_format = ui_session
             .date_time_format
             .as_deref()
@@ -402,6 +407,7 @@ impl GitCometView {
                 Arc::clone(&store),
                 ui_model.clone(),
                 initial_theme,
+                theme_mode,
                 date_time_format,
                 timezone,
                 show_timezone,
@@ -435,8 +441,11 @@ impl GitCometView {
                     first = false;
                     return;
                 }
-                let theme = AppTheme::default_for_window_appearance(window.appearance());
                 let _ = view.update(app, |this, cx| {
+                    if this.theme_mode != ThemeMode::Automatic {
+                        return;
+                    }
+                    let theme = this.theme_mode.resolve_theme(window.appearance());
                     this.set_theme(theme, cx);
                     cx.notify();
                 });
@@ -510,6 +519,7 @@ impl GitCometView {
             _activation_subscription: activation_subscription,
             _appearance_subscription: appearance_subscription,
             view_mode,
+            theme_mode,
             theme: initial_theme,
             title_bar,
             sidebar_pane,
@@ -591,6 +601,21 @@ impl GitCometView {
             .update(cx, |input, cx| input.set_theme(theme, cx));
         self.auth_prompt_secret_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
+    }
+
+    fn set_theme_mode(
+        &mut self,
+        mode: ThemeMode,
+        appearance: gpui::WindowAppearance,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.theme_mode == mode {
+            return;
+        }
+
+        self.theme_mode = mode;
+        self.set_theme(mode.resolve_theme(appearance), cx);
+        self.schedule_ui_settings_persist(cx);
     }
 
     fn pane_resize_handle(

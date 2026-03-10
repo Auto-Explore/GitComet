@@ -34,7 +34,12 @@ pub(super) fn notify_fingerprint(state: &AppState, popover: &PopoverKind) -> u64
                 view_fingerprint::hash_loadable_kind(&repo.open, &mut hasher);
             }
         }
-        PopoverKind::Settings | PopoverKind::OpenSourceLicenses | PopoverKind::AppMenu => {
+        PopoverKind::Settings
+        | PopoverKind::SettingsThemeMenu
+        | PopoverKind::SettingsDateFormatMenu
+        | PopoverKind::SettingsTimezoneMenu
+        | PopoverKind::OpenSourceLicenses
+        | PopoverKind::AppMenu => {
             // Mostly local UI state; depend only on whether a repo is active/open.
             state.active_repo.hash(&mut hasher);
             if let Some(repo) = repo_for_popover(state, popover) {
@@ -58,6 +63,9 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         PopoverKind::RepoPicker
         | PopoverKind::CloneRepo
         | PopoverKind::Settings
+        | PopoverKind::SettingsThemeMenu
+        | PopoverKind::SettingsDateFormatMenu
+        | PopoverKind::SettingsTimezoneMenu
         | PopoverKind::OpenSourceLicenses => None,
 
         // Popovers that implicitly use the currently active repo.
@@ -221,6 +229,9 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         | PopoverKind::ConflictResolverOutputMenu { .. }
         | PopoverKind::AppMenu
         | PopoverKind::Settings
+        | PopoverKind::SettingsThemeMenu
+        | PopoverKind::SettingsDateFormatMenu
+        | PopoverKind::SettingsTimezoneMenu
         | PopoverKind::OpenSourceLicenses
         | PopoverKind::RepoPicker
         | PopoverKind::CloneRepo => {}
@@ -265,6 +276,9 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
         }
         PopoverKind::CloneRepo => 4u8.hash(hasher),
         PopoverKind::Settings => 5u8.hash(hasher),
+        PopoverKind::SettingsThemeMenu => 62u8.hash(hasher),
+        PopoverKind::SettingsDateFormatMenu => 63u8.hash(hasher),
+        PopoverKind::SettingsTimezoneMenu => 64u8.hash(hasher),
         PopoverKind::OpenSourceLicenses => 60u8.hash(hasher),
 
         PopoverKind::ResetPrompt {

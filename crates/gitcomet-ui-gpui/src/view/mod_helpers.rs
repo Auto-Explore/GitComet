@@ -523,6 +523,9 @@ pub(super) enum PopoverKind {
     },
     CloneRepo,
     Settings,
+    SettingsThemeMenu,
+    SettingsDateFormatMenu,
+    SettingsTimezoneMenu,
     OpenSourceLicenses,
     ResetPrompt {
         repo_id: RepoId,
@@ -941,6 +944,49 @@ pub(super) fn renders_full_chrome(view_mode: GitCometViewMode) -> bool {
     matches!(view_mode, GitCometViewMode::Normal)
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) enum ThemeMode {
+    #[default]
+    Automatic,
+    Light,
+    Dark,
+}
+
+impl ThemeMode {
+    pub(super) const fn key(self) -> &'static str {
+        match self {
+            Self::Automatic => "automatic",
+            Self::Light => "light",
+            Self::Dark => "dark",
+        }
+    }
+
+    pub(super) fn from_key(raw: &str) -> Option<Self> {
+        match raw {
+            "automatic" => Some(Self::Automatic),
+            "light" => Some(Self::Light),
+            "dark" => Some(Self::Dark),
+            _ => None,
+        }
+    }
+
+    pub(super) const fn label(self) -> &'static str {
+        match self {
+            Self::Automatic => "Automatic",
+            Self::Light => "Light",
+            Self::Dark => "Dark",
+        }
+    }
+
+    pub(super) fn resolve_theme(self, appearance: gpui::WindowAppearance) -> AppTheme {
+        match self {
+            Self::Automatic => AppTheme::default_for_window_appearance(appearance),
+            Self::Light => AppTheme::zed_one_light(),
+            Self::Dark => AppTheme::zed_ayu_dark(),
+        }
+    }
+}
+
 pub struct GitCometView {
     pub(super) store: Arc<AppStore>,
     pub(super) state: Arc<AppState>,
@@ -950,6 +996,7 @@ pub struct GitCometView {
     pub(super) _activation_subscription: gpui::Subscription,
     pub(super) _appearance_subscription: gpui::Subscription,
     pub(super) view_mode: GitCometViewMode,
+    pub(super) theme_mode: ThemeMode,
     pub(super) theme: AppTheme,
     pub(super) title_bar: Entity<TitleBarView>,
     pub(super) sidebar_pane: Entity<SidebarPaneView>,

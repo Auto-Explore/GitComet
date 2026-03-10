@@ -45,16 +45,27 @@ enum PopoverAnchor {
     Bounds(Bounds<Pixels>),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SettingsSubmenu {
+    Theme,
+    DateFormat,
+    Timezone,
+}
+
 pub(in super::super) struct PopoverHost {
     store: Arc<AppStore>,
     state: Arc<AppState>,
     theme: AppTheme,
+    theme_mode: ThemeMode,
     date_time_format: DateTimeFormat,
     timezone: Timezone,
     show_timezone: bool,
+    settings_submenu: Option<SettingsSubmenu>,
+    settings_submenu_top: Option<Pixels>,
+    settings_submenu_left: Option<Pixels>,
+    settings_submenu_width: Option<Pixels>,
+    settings_submenu_max_h: Option<Pixels>,
     settings_runtime_info: settings::SettingsRuntimeInfo,
-    settings_date_format_open: bool,
-    settings_timezone_open: bool,
     _ui_model_subscription: gpui::Subscription,
     _create_branch_input_subscription: gpui::Subscription,
     _stash_message_input_subscription: gpui::Subscription,
@@ -122,6 +133,7 @@ impl PopoverHost {
         store: Arc<AppStore>,
         ui_model: Entity<AppUiModel>,
         theme: AppTheme,
+        theme_mode: ThemeMode,
         date_time_format: DateTimeFormat,
         timezone: Timezone,
         show_timezone: bool,
@@ -360,12 +372,16 @@ impl PopoverHost {
             store,
             state,
             theme,
+            theme_mode,
             date_time_format,
             timezone,
             show_timezone,
+            settings_submenu: None,
+            settings_submenu_top: None,
+            settings_submenu_left: None,
+            settings_submenu_width: None,
+            settings_submenu_max_h: None,
             settings_runtime_info: settings::SettingsRuntimeInfo::detect(),
-            settings_date_format_open: false,
-            settings_timezone_open: false,
             _ui_model_subscription: subscription,
             _create_branch_input_subscription: create_branch_input_subscription,
             _stash_message_input_subscription: stash_message_input_subscription,
@@ -465,6 +481,11 @@ impl PopoverHost {
         self.popover_anchor = None;
         self.context_menu_selected_ix = None;
         self.notify_fingerprint = 0;
+        self.settings_submenu = None;
+        self.settings_submenu_top = None;
+        self.settings_submenu_left = None;
+        self.settings_submenu_width = None;
+        self.settings_submenu_max_h = None;
         self.sync_titlebar_app_menu_state(cx);
         self.clear_active_context_menu_invoker(cx);
         cx.notify();
@@ -502,12 +523,23 @@ impl PopoverHost {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        if !matches!(kind, PopoverKind::Settings) {
+            self.settings_submenu = None;
+            self.settings_submenu_top = None;
+            self.settings_submenu_left = None;
+            self.settings_submenu_width = None;
+            self.settings_submenu_max_h = None;
+        }
+
         let is_context_menu = matches!(
             &kind,
             PopoverKind::PullPicker
                 | PopoverKind::PushPicker
                 | PopoverKind::HistoryBranchFilter { .. }
                 | PopoverKind::HistoryColumnSettings
+                | PopoverKind::SettingsThemeMenu
+                | PopoverKind::SettingsDateFormatMenu
+                | PopoverKind::SettingsTimezoneMenu
                 | PopoverKind::DiffHunkMenu { .. }
                 | PopoverKind::DiffEditorMenu { .. }
                 | PopoverKind::ConflictResolverInputRowMenu { .. }
@@ -842,11 +874,33 @@ impl PopoverHost {
         self.schedule_ui_settings_persist(cx);
     }
 
+    pub(super) fn set_theme_mode(
+        &mut self,
+        next: ThemeMode,
+        appearance: gpui::WindowAppearance,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.theme_mode == next {
+            return;
+        }
+
+        self.theme_mode = next;
+        self.set_theme(next.resolve_theme(appearance), cx);
+        let root_view = self.root_view.clone();
+        cx.defer(move |cx| {
+            let _ = root_view.update(cx, |root, cx| {
+                root.set_theme_mode(next, appearance, cx);
+            });
+        });
+    }
+
     fn schedule_ui_settings_persist(&mut self, cx: &mut gpui::Context<Self>) {
+        let mode = self.theme_mode;
         let fmt = self.date_time_format;
         let tz = self.timezone;
         let show_tz = self.show_timezone;
         let _ = self.root_view.update(cx, |root, cx| {
+            root.theme_mode = mode;
             root.date_time_format = fmt;
             root.timezone = tz;
             root.show_timezone = show_tz;
@@ -1016,7 +1070,10 @@ impl PopoverHost {
             | PopoverKind::ForceRemoveWorktreeConfirm { .. }
             | PopoverKind::PullReconcilePrompt { .. }
             | PopoverKind::HistoryBranchFilter { .. }
-            | PopoverKind::HistoryColumnSettings => Corner::TopRight,
+            | PopoverKind::HistoryColumnSettings
+            | PopoverKind::SettingsThemeMenu
+            | PopoverKind::SettingsDateFormatMenu
+            | PopoverKind::SettingsTimezoneMenu => Corner::TopRight,
             _ => Corner::TopLeft,
         };
 
@@ -1508,6 +1565,18 @@ impl PopoverHost {
                 .context_menu_view(PopoverKind::HistoryColumnSettings, cx)
                 .min_w(px(160.0))
                 .max_w(px(220.0)),
+            PopoverKind::SettingsThemeMenu => self
+                .context_menu_view(PopoverKind::SettingsThemeMenu, cx)
+                .min_w(px(180.0))
+                .max_w(px(260.0)),
+            PopoverKind::SettingsDateFormatMenu => self
+                .context_menu_view(PopoverKind::SettingsDateFormatMenu, cx)
+                .min_w(px(220.0))
+                .max_w(px(320.0)),
+            PopoverKind::SettingsTimezoneMenu => self
+                .context_menu_view(PopoverKind::SettingsTimezoneMenu, cx)
+                .min_w(px(260.0))
+                .max_w(px(420.0)),
             PopoverKind::PullPicker => self.context_menu_view(PopoverKind::PullPicker, cx),
             PopoverKind::PushPicker => self.context_menu_view(PopoverKind::PushPicker, cx),
             PopoverKind::DiffHunks => diff_hunks::panel(self, cx),

@@ -16,6 +16,7 @@ pub struct UiSession {
     pub window_height: Option<u32>,
     pub sidebar_width: Option<u32>,
     pub details_width: Option<u32>,
+    pub theme_mode: Option<String>,
     pub date_time_format: Option<String>,
     pub timezone: Option<String>,
     pub show_timezone: Option<bool>,
@@ -65,6 +66,7 @@ struct UiSessionFileV2 {
     window_height: Option<u32>,
     sidebar_width: Option<u32>,
     details_width: Option<u32>,
+    theme_mode: Option<String>,
     date_time_format: Option<String>,
     timezone: Option<String>,
     show_timezone: Option<bool>,
@@ -107,6 +109,7 @@ pub fn load_from_path(path: &Path) -> UiSession {
         window_height: file.window_height,
         sidebar_width: file.sidebar_width,
         details_width: file.details_width,
+        theme_mode: file.theme_mode,
         date_time_format: file.date_time_format,
         timezone: file.timezone,
         show_timezone: file.show_timezone,
@@ -182,6 +185,7 @@ pub struct UiSettings {
     pub window_height: Option<u32>,
     pub sidebar_width: Option<u32>,
     pub details_width: Option<u32>,
+    pub theme_mode: Option<String>,
     pub date_time_format: Option<String>,
     pub timezone: Option<String>,
     pub show_timezone: Option<bool>,
@@ -209,6 +213,9 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
     }
     if let Some(w) = settings.details_width {
         file.details_width = Some(w);
+    }
+    if let Some(theme_mode) = settings.theme_mode {
+        file.theme_mode = Some(theme_mode);
     }
     if let Some(fmt) = settings.date_time_format {
         file.date_time_format = Some(fmt);
@@ -836,6 +843,7 @@ mod tests {
                 window_height: None,
                 sidebar_width: None,
                 details_width: None,
+                theme_mode: None,
                 date_time_format: Some("ymd_hm_utc".to_string()),
                 timezone: None,
                 show_timezone: None,
@@ -881,6 +889,7 @@ mod tests {
                 window_height: None,
                 sidebar_width: None,
                 details_width: None,
+                theme_mode: None,
                 date_time_format: None,
                 timezone: None,
                 show_timezone: Some(false),
@@ -894,6 +903,52 @@ mod tests {
 
         let loaded = load_from_path(&path);
         assert_eq!(loaded.show_timezone, Some(false));
+    }
+
+    #[test]
+    fn persist_ui_settings_round_trips_theme_mode() {
+        let dir = env::temp_dir().join(format!(
+            "gitcomet-ui-settings-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("session.json");
+
+        persist_to_path(
+            &path,
+            &UiSessionFileV2 {
+                version: CURRENT_SESSION_FILE_VERSION,
+                open_repos: Vec::new(),
+                active_repo: None,
+                ..UiSessionFileV2::default()
+            },
+        )
+        .expect("seed session file");
+
+        persist_ui_settings_to_path(
+            UiSettings {
+                window_width: None,
+                window_height: None,
+                sidebar_width: None,
+                details_width: None,
+                theme_mode: Some("dark".to_string()),
+                date_time_format: None,
+                timezone: None,
+                show_timezone: None,
+                history_show_author: None,
+                history_show_date: None,
+                history_show_sha: None,
+            },
+            &path,
+        )
+        .expect("persist ui settings");
+
+        let loaded = load_from_path(&path);
+        assert_eq!(loaded.theme_mode.as_deref(), Some("dark"));
     }
     #[test]
     fn persist_repo_history_scope_round_trips() {
