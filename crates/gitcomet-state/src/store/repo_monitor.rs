@@ -635,11 +635,7 @@ fn repo_monitor_thread(
         let monitor_tx = monitor_tx.clone();
         let callback_enabled = Arc::clone(&callback_enabled);
         move |res| {
-            send_watcher_event_or_log(
-                &monitor_tx,
-                res,
-                callback_enabled.as_ref(),
-            );
+            send_watcher_event_or_log(&monitor_tx, res, callback_enabled.as_ref());
         }
     });
 
@@ -1552,7 +1548,10 @@ mod tests {
             }),
             &callback_enabled,
         );
-        assert!(did_send, "callback should attempt sends while monitor is active");
+        assert!(
+            did_send,
+            "callback should attempt sends while monitor is active"
+        );
 
         let after = super::super::send_diagnostics::send_failure_count(
             super::super::send_diagnostics::SendFailureKind::RepoMonitorMessage,
