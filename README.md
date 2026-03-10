@@ -1,59 +1,26 @@
 ## GitComet
 
 [![Build Status](https://github.com/Auto-Explore/GitComet/actions/workflows/rust.yml/badge.svg?branch=main)](https://github.com/Auto-Explore/GitComet/actions/workflows/rust.yml)
-[![Coverage](https://codecov.io/gh/Auto-Explore/GitComet/branch/main/graph/badge.svg)](https://codecov.io/gh/Auto-Explore/GitComet)
 
 Fast, resource-efficient, fully open source Git GUI written in Rust, targeting GitKraken/SourceTree/GitHub Desktop-class workflows using `gpui` for the UI.
 
 ### Goals
 
-- Pure Rust Git backend (recommended: `gix`/gitoxide backend).
-- Fast UI for very large repositories (virtualized lists, incremental loading, caching).
-- Modular architecture with clear boundaries, to support benchmarking and testing.
-- Drop-in replacement for `git difftool` and `git mergetool` with CLI compatibility for Meld and KDiff3.
+- Fast UI for very large repositories
+- Support `git difftool` and `git mergetool` flows
+- Open source with a permissive license (AGPL-3.0)
+- Cross-platform (Windows, Linux, macOS)
 
-### Workspace layout
-
-- `crates/gitcomet-core`: domain types, merge algorithm, conflict session, text utils.
-- `crates/gitcomet-git`: Git abstraction + no-op backend.
-- `crates/gitcomet-git-gix`: `gix`/gitoxide backend implementation.
-- `crates/gitcomet-state`: MVU state store, reducers, effects, conflict session management.
-- `crates/gitcomet-ui`: UI model/state (toolkit-independent).
-- `crates/gitcomet-ui-gpui`: gpui views/components (focused diff/merge windows, conflict resolver, word diff).
-- `crates/gitcomet-app`: binary entrypoint, CLI (clap), difftool/mergetool/setup/uninstall modes.
-
-### Getting started
-
-Windows prerequisites (Windows 10/11):
-
-- Install Visual Studio 2022 (Community or Build Tools).
-- Install the `Desktop development with C++` workload.
-- Ensure both MSVC tools and Windows 10/11 SDK components are installed.
-- This repo configures Cargo to use `scripts/windows/msvc-linker.cmd`, so `cargo build` works from a regular PowerShell/CMD shell when those components are present.
-
-Offline-friendly default build (does not build the UI or the Git backend):
-
-```bash
-cargo build
-```
-
-To build the actual app you'll enable features (requires network for dependencies):
-
-```bash
-cargo build -p gitcomet-app --features ui,gix
-```
-
-To also compile the gpui-based UI crate:
+### Quick start
 
 ```bash
 cargo build -p gitcomet-app --features ui-gpui,gix
-```
-
-Run (opens the repo passed as the first arg, or falls back to the current directory):
-
-```bash
 cargo run -p gitcomet-app --features ui-gpui,gix -- /path/to/repo
 ```
+
+### Contributing
+
+Developer setup, workspace layout, testing, and coverage docs live in `CONTRIBUTING.md`.
 
 ### Using as a Git difftool / mergetool
 
@@ -141,59 +108,6 @@ Also reads `LOCAL`/`REMOTE`/`MERGED`/`BASE` from environment. Base is optional f
 
 KDiff3 and Meld invocation forms are supported (`--L1/--L2/--L3`, `-o/--output/--out`, `--base`, positional arguments), so GitComet can be a drop-in replacement.
 
-#### Exit codes
-
-| Code | Meaning |
-|------|---------|
-| `0`  | User completed the action and the result was saved |
-| `1`  | User canceled or closed with unresolved result |
-| `>=2`| Input, I/O, or internal error |
-
-### Testing
-
-Full headless test suite (CI mode):
-
-```bash
-cargo test --workspace --no-default-features --features gix
-```
-
-Clippy (CI mode):
-
-```bash
-cargo clippy --workspace --no-default-features --features gix -- -D warnings
-```
-
-Coverage (local + CI-compatible):
-
-```bash
-rustup component add llvm-tools-preview
-cargo install --locked cargo-llvm-cov
-bash scripts/coverage.sh
-```
-
-This writes:
-
-- `target/llvm-cov/lcov.info` (used by CI upload)
-- `target/llvm-cov/html/index.html` (local detailed report)
-
-The test suite covers:
-
-- Core merge algorithm (ported from Git t6403/t6427)
-- KDiff3-style fixture harness with permutation corpus
-- Meld algorithm parity tests
-- Git mergetool and difftool E2E integration
-- Standalone tool mode (CLI arg/env parsing, compatibility forms, exit codes)
-- State management (reducers, effects, conflict sessions)
-- UI components (focused merge/diff windows, word diff, conflict resolver)
-
-### Profiling (Callgrind)
-
-To profile the app with Valgrind Callgrind (interactive on/off instrumentation):
-
-```bash
-bash scripts/profile-callgrind.sh --open -- /path/to/repo
-```
-
 ### Crash logs
 
 If the app crashes due to a Rust panic, GitComet writes a crash log to:
@@ -205,14 +119,6 @@ If the app crashes due to a Rust panic, GitComet writes a crash log to:
 On next startup, GitComet can prompt you to report the crash as a prefilled
 GitHub issue in `Auto-Explore/GitComet`, including app version, platform,
 panic details, and a trimmed backtrace.
-
-### Roadmap (high level)
-
-- Open repositories; show status + commit history timeline.
-- Branch/remote tracking; pull/push; fetch with progress.
-- Stash create/apply/drop; discard changes; stage/unstage.
-- Visualize branch/merge topology from refs (commit graph lanes).
-- Benchmarks for log/graph/status/diff on large repos.
 
 ### License
 
