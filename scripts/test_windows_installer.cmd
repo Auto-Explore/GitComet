@@ -1,0 +1,1 @@
+cargo wix crates\gitcomet-app\Cargo.toml -p gitcomet-app --profile release --nocapture --output dist\gitcomet-local-test.msi

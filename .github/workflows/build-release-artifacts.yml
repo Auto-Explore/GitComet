@@ -122,7 +122,7 @@ jobs:
       - name: Build release binary
         shell: pwsh
         run: |
-          cargo build -p gitcomet-app --release --locked --features ui-gpui,gix
+          cargo build -p gitcomet-app --release --locked --features ui-gpui,gix --bins
 
       - name: Package portable ZIP
         shell: pwsh
@@ -144,7 +144,7 @@ jobs:
           $ErrorActionPreference = "Stop"
           choco install wixtoolset --version "${env:WIXTOOLSET_VERSION}" --yes --no-progress
           cargo install cargo-wix --version "${env:CARGO_WIX_VERSION}" --locked
-          if (!(Test-Path "wix\main.wxs")) {
+          if (!(Test-Path "crates\gitcomet-app\wix\main.wxs")) {
             cargo wix init --package gitcomet-app
           }
           $msiName = "gitcomet-v${env:VERSION}-windows-x86_64.msi"

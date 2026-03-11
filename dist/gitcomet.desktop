@@ -1,9 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=GitComet
-Comment=GitComet - Git UI
-Exec=gitcomet-app
-Icon=gitcomet
-StartupWMClass=gitcomet
-Terminal=false
-Categories=Development;RevisionControl;
