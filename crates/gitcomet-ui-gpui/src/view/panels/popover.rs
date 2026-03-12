@@ -109,7 +109,17 @@ pub(in super::super) struct PopoverHost {
 impl PopoverHost {
     fn sync_titlebar_app_menu_state(&self, cx: &mut gpui::Context<Self>) {
         let root_view = self.root_view.clone();
-        let app_menu_open = matches!(self.popover, Some(PopoverKind::AppMenu));
+        let app_menu_open = matches!(
+            self.popover,
+            Some(
+                PopoverKind::AppMenu
+                    | PopoverKind::Settings
+                    | PopoverKind::OpenSourceLicenses
+                    | PopoverKind::SettingsThemeMenu
+                    | PopoverKind::SettingsDateFormatMenu
+                    | PopoverKind::SettingsTimezoneMenu
+            )
+        );
         cx.defer(move |cx| {
             let _ = root_view.update(cx, |root, cx| {
                 root.title_bar.update(cx, |title_bar, cx| {

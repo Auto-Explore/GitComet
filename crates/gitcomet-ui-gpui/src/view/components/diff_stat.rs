@@ -9,7 +9,7 @@ pub fn diff_stat(theme: AppTheme, added: usize, removed: usize) -> Div {
         .gap_2()
         .px_2()
         .py(px(1.0))
-        .rounded(px(999.0))
+        .rounded(px(2.0))
         .bg(theme.colors.surface_bg)
         .border_1()
         .border_color(theme.colors.border)

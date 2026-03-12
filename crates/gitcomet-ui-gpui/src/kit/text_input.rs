@@ -1889,7 +1889,7 @@ impl TextInput {
             .h(px(24.0))
             .w_full()
             .px_2()
-            .rounded(px(4.0))
+            .rounded(px(2.0))
             .flex()
             .items_center()
             .justify_between()
@@ -2036,7 +2036,7 @@ impl TextInput {
             .bg(with_alpha(self.style.background, 0.98))
             .border_1()
             .border_color(self.style.hover_border)
-            .rounded(px(8.0))
+            .rounded(px(2.0))
             .shadow_lg()
             .on_mouse_down(
                 MouseButton::Left,

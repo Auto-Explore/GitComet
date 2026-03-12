@@ -135,6 +135,19 @@ install -m644 "${repo_root}/README.md" "${release_dir}/README.md"
 install -m644 "${repo_root}/LICENSE-AGPL-3.0" "${release_dir}/LICENSE-AGPL-3.0"
 install -m644 "${repo_root}/NOTICE" "${release_dir}/NOTICE"
 
+icon_png="${repo_root}/assets/gitcomet-512.png"
+icon_icns="${resources_dir}/GitComet.icns"
+
+if [[ ! -f "$icon_png" ]]; then
+  echo "Missing macOS icon source: $icon_png" >&2
+  exit 1
+fi
+if ! command -v sips >/dev/null 2>&1; then
+  echo "sips is required to build the macOS app icon." >&2
+  exit 1
+fi
+sips -s format icns "$icon_png" --out "$icon_icns" >/dev/null
+
 cat > "${contents_dir}/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -148,6 +161,8 @@ cat > "${contents_dir}/Info.plist" <<PLIST
   <string>gitcomet-app</string>
   <key>CFBundleIdentifier</key>
   <string>ai.autoexplore.gitcomet</string>
+  <key>CFBundleIconFile</key>
+  <string>GitComet.icns</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>
@@ -165,9 +180,6 @@ cat > "${contents_dir}/Info.plist" <<PLIST
 </dict>
 </plist>
 PLIST
-
-# Keep bundle metadata minimal for reliable packaging in CI. The app uses the
-# default icon unless a prebuilt .icns file is added to the repository later.
 
 # Create a deterministic tarball root directory per version/arch.
 tarball_path="${out_abs}/${release_root}.tar.gz"

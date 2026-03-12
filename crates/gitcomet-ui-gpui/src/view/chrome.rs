@@ -4,6 +4,7 @@ use gpui::ObjectFit;
 pub(super) const CLIENT_SIDE_DECORATION_INSET: Pixels = px(10.0);
 pub(super) const TITLE_BAR_HEIGHT: Pixels = px(34.0);
 pub(super) const WINDOW_OUTLINE_RGBA: u32 = 0x5a5d63ff;
+const MACOS_TRAFFIC_LIGHTS_SAFE_INSET: Pixels = px(78.0);
 
 pub(super) struct TitleBarView {
     theme: AppTheme,
@@ -33,7 +34,7 @@ fn titlebar_app_icon(theme: AppTheme) -> AnyElement {
             div()
                 .id("titlebar_app_icon")
                 .size(px(16.0))
-                .rounded(px(4.0))
+                .rounded(px(2.0))
                 .overflow_hidden()
                 .child(
                     gpui::img("gitcomet_logo_window.svg")
@@ -233,11 +234,16 @@ impl TitleBarView {
 impl Render for TitleBarView {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         let theme = self.theme;
+        let is_macos = cfg!(target_os = "macos");
         let app_menu_open = self.app_menu_open;
         let app_menu_open_bg =
             with_alpha(theme.colors.accent, if theme.is_dark { 0.30 } else { 0.24 });
-        let app_menu_open_hover_bg =
-            with_alpha(theme.colors.accent, if theme.is_dark { 0.40 } else { 0.32 });
+        let app_menu_open_active_bg =
+            with_alpha(theme.colors.accent, if theme.is_dark { 0.48 } else { 0.38 });
+        let app_menu_hover_bg =
+            with_alpha(theme.colors.text, if theme.is_dark { 0.10 } else { 0.08 });
+        let app_menu_active_bg =
+            with_alpha(theme.colors.text, if theme.is_dark { 0.16 } else { 0.12 });
         let bar_bg = if window.is_window_active() {
             lighten(
                 theme.colors.surface_bg,
@@ -252,48 +258,49 @@ impl Render for TitleBarView {
             with_alpha(theme.colors.border, 0.7)
         };
 
-        let app_icon = div()
-            .id("app_icon")
-            .h_full()
-            .pl_2()
-            .pr_1()
-            .flex()
-            .items_center()
-            .child(titlebar_app_icon(theme));
-
-        let hamburger = div()
+        let menu_toggle = div()
             .id("app_menu")
             .debug_selector(|| "app_menu".to_string())
             .h_full()
-            .w(px(44.0))
+            .pl_1()
             .flex()
             .items_center()
-            .justify_center()
             .cursor(CursorStyle::PointingHand)
             .child(
                 div()
                     .id("app_menu_btn")
-                    .size(px(26.0))
+                    .h(px(26.0))
+                    .px_2()
                     .flex()
                     .items_center()
-                    .justify_center()
+                    .gap_1()
                     .rounded(px(theme.radii.pill))
                     .when(app_menu_open, move |s| s.bg(app_menu_open_bg))
                     .hover(move |s| {
                         if app_menu_open {
-                            s.bg(app_menu_open_hover_bg)
+                            s.bg(app_menu_open_bg)
                         } else {
-                            s.bg(theme.colors.hover)
+                            s.bg(app_menu_hover_bg)
                         }
                     })
                     .active(move |s| {
                         if app_menu_open {
-                            s.bg(app_menu_open_hover_bg)
+                            s.bg(app_menu_open_active_bg)
                         } else {
-                            s.bg(theme.colors.active)
+                            s.bg(app_menu_active_bg)
                         }
                     })
-                    .child(titlebar_control_icon("icons/menu.svg", theme.colors.accent)),
+                    .child(titlebar_app_icon(theme))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .text_sm()
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(gpui::rgba(0xFFFFFFFF))
+                            .whitespace_nowrap()
+                            .child("GITCOMET"),
+                    ),
             )
             .on_click(cx.listener(|this, _e: &ClickEvent, window, cx| {
                 this.set_app_menu_open(true, cx);
@@ -343,17 +350,7 @@ impl Render for TitleBarView {
                     this.title_should_move = false;
                     window.start_window_move();
                 }
-            }))
-            .child(
-                div()
-                    .h_full()
-                    .flex()
-                    .items_center()
-                    .text_sm()
-                    .text_color(theme.colors.text_muted)
-                    .whitespace_nowrap()
-                    .child("GitComet"),
-            );
+            }));
 
         let min_hover = with_alpha(theme.colors.text, if theme.is_dark { 0.10 } else { 0.08 });
         let min_active = with_alpha(theme.colors.text, if theme.is_dark { 0.16 } else { 0.12 });
@@ -449,6 +446,34 @@ impl Render for TitleBarView {
             }
         }));
 
+        let free_badge_bg = with_alpha(
+            theme.colors.text_muted,
+            if theme.is_dark { 0.38 } else { 0.26 },
+        );
+        let free_badge_border = with_alpha(
+            theme.colors.text_muted,
+            if theme.is_dark { 0.62 } else { 0.48 },
+        );
+        let free_badge_text = with_alpha(
+            gpui::rgba(0xFFFFFFFF),
+            if theme.is_dark { 0.86 } else { 0.78 },
+        );
+        let free_badge = div()
+            .id("free_badge")
+            .h(px(18.0))
+            .px(px(6.0))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(2.0))
+            .bg(free_badge_bg)
+            .border_1()
+            .border_color(free_badge_border)
+            .text_xs()
+            .font_weight(FontWeight::NORMAL)
+            .text_color(free_badge_text)
+            .child("FREE");
+
         div()
             .id("title_bar")
             .flex()
@@ -463,18 +488,19 @@ impl Render for TitleBarView {
                     .flex()
                     .items_center()
                     .h_full()
-                    .gap_1()
-                    .child(app_icon)
-                    .child(hamburger),
+                    .gap_0p5()
+                    .when(is_macos, |d| d.pl(MACOS_TRAFFIC_LIGHTS_SAFE_INSET))
+                    .child(menu_toggle),
             )
             .child(drag_region)
             .child(
                 div()
                     .flex()
                     .items_center()
-                    .child(min)
-                    .child(max)
-                    .child(close),
+                    .gap_1()
+                    .when(!is_macos, |d| d.child(min).child(max).child(close))
+                    .pr_2()
+                    .child(free_badge),
             )
             .into_any_element()
     }

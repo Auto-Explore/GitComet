@@ -170,7 +170,7 @@ impl Render for FocusedDiffView {
                             .py(px(4.0))
                             .bg(theme.colors.accent)
                             .text_color(gpui::rgba(0xffffffff))
-                            .rounded(px(4.0))
+                            .rounded(px(2.0))
                             .cursor_pointer()
                             .font_weight(FontWeight::BOLD)
                             .on_click(|_: &gpui::ClickEvent, _window, cx| {

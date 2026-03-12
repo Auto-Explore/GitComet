@@ -428,14 +428,14 @@ fn working_tree_summary_history_row(
                     ),
                     node_color,
                 )
-                .corner_radii(outer),
+                .corner_radii(outer.min(px(2.0))),
             );
             window.paint_quad(
                 fill(
                     gpui::Bounds::new(point(center.x - r, center.y - r), size(r * 2.0, r * 2.0)),
                     black,
                 )
-                .corner_radii(r),
+                .corner_radii(r.min(px(2.0))),
             );
         },
     )

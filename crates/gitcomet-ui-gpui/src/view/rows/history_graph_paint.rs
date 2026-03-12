@@ -157,7 +157,7 @@ fn paint_commit_node(
             ),
             border_color,
         )
-        .corner_radii(outer_r),
+        .corner_radii(outer_r.min(px(2.0))),
     );
     window.paint_quad(
         fill(
@@ -167,7 +167,7 @@ fn paint_commit_node(
             ),
             node_color,
         )
-        .corner_radii(node_radius),
+        .corner_radii(node_radius.min(px(2.0))),
     );
 }
 
@@ -194,8 +194,9 @@ fn paint_stash_node(
         size(box_w, box_h),
     );
 
-    window.paint_quad(fill(outer, border_color).corner_radii(r));
-    window.paint_quad(fill(inner, fill_color).corner_radii((r - px(0.4)).max(px(0.0))));
+    window.paint_quad(fill(outer, border_color).corner_radii(r.min(px(2.0))));
+    window
+        .paint_quad(fill(inner, fill_color).corner_radii((r - px(0.4)).max(px(0.0)).min(px(2.0))));
 
     // Simple "lid" line to make it read as a stash/box.
     let lid_y = inner.top() + px(2.4);

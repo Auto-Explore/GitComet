@@ -373,7 +373,7 @@ pub(super) fn history_commit_row_canvas(
                         Bounds::new(point(summary_bounds.left(), y), size(marker_w, marker_h)),
                         node_color,
                     )
-                    .corner_radii(px(999.0)),
+                    .corner_radii(px(2.0)),
                 );
             }
 

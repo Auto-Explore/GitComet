@@ -183,6 +183,11 @@ fn main() {
         AppMode::Browser { path } => {
             #[cfg(feature = "ui")]
             {
+                #[cfg(all(target_os = "macos", feature = "ui-gpui"))]
+                if maybe_relaunch_browser_from_macos_app_bundle() {
+                    std::process::exit(exit_code::SUCCESS);
+                }
+
                 let startup_crash_report = crashlog::take_startup_report();
                 let backend = build_backend();
 
@@ -296,6 +301,129 @@ fn main() {
             run_and_exit(extract_fixtures_mode::run_extract_merge_fixtures(&config))
         }
     }
+}
+
+#[cfg(all(target_os = "macos", feature = "ui-gpui"))]
+const MACOS_BUNDLE_RELAUNCH_ENV: &str = "GITCOMET_SKIP_APP_BUNDLE_RELAUNCH";
+#[cfg(all(target_os = "macos", feature = "ui-gpui"))]
+const MACOS_APP_ICON_PNG: &[u8] = include_bytes!("../../../assets/gitcomet-512.png");
+
+#[cfg(all(target_os = "macos", feature = "ui-gpui"))]
+fn maybe_relaunch_browser_from_macos_app_bundle() -> bool {
+    if std::env::var_os(MACOS_BUNDLE_RELAUNCH_ENV).is_some() {
+        return false;
+    }
+
+    let Ok(current_exe) = std::env::current_exe() else {
+        return false;
+    };
+    if current_exe
+        .to_string_lossy()
+        .contains(".app/Contents/MacOS/")
+    {
+        return false;
+    }
+
+    let Some(bin_dir) = current_exe.parent() else {
+        return false;
+    };
+    let app_bundle = bin_dir.join("GitComet.app");
+    let app_exe = match ensure_macos_dev_app_bundle(&current_exe, &app_bundle) {
+        Ok(path) => path,
+        Err(err) => {
+            eprintln!("Failed to prepare macOS app bundle icon: {err}");
+            return false;
+        }
+    };
+
+    let mut relaunch = std::process::Command::new(app_exe);
+    relaunch.args(std::env::args_os().skip(1));
+    relaunch.env(MACOS_BUNDLE_RELAUNCH_ENV, "1");
+    match relaunch.spawn() {
+        Ok(_) => true,
+        Err(err) => {
+            eprintln!("Failed to relaunch via macOS app bundle: {err}");
+            false
+        }
+    }
+}
+
+#[cfg(all(target_os = "macos", feature = "ui-gpui"))]
+fn ensure_macos_dev_app_bundle(
+    current_exe: &std::path::Path,
+    app_bundle: &std::path::Path,
+) -> Result<std::path::PathBuf, String> {
+    let contents = app_bundle.join("Contents");
+    let macos = contents.join("MacOS");
+    let resources = contents.join("Resources");
+    std::fs::create_dir_all(&macos).map_err(|e| format!("failed to create MacOS dir: {e}"))?;
+    std::fs::create_dir_all(&resources)
+        .map_err(|e| format!("failed to create Resources dir: {e}"))?;
+
+    let app_exe = macos.join("gitcomet-app");
+    std::fs::copy(current_exe, &app_exe)
+        .map_err(|e| format!("failed to copy executable into bundle: {e}"))?;
+
+    let icon_png = resources.join("GitComet.png");
+    let icon_icns = resources.join("GitComet.icns");
+    std::fs::write(&icon_png, MACOS_APP_ICON_PNG)
+        .map_err(|e| format!("failed to write icon PNG: {e}"))?;
+
+    let icon_status = std::process::Command::new("sips")
+        .arg("-s")
+        .arg("format")
+        .arg("icns")
+        .arg(&icon_png)
+        .arg("--out")
+        .arg(&icon_icns)
+        .status()
+        .map_err(|e| format!("failed to run sips: {e}"))?;
+    if !icon_status.success() {
+        return Err(format!(
+            "sips returned non-zero exit status while generating {}",
+            icon_icns.display()
+        ));
+    }
+    let _ = std::fs::remove_file(icon_png);
+
+    let plist = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key>
+  <string>en</string>
+  <key>CFBundleDisplayName</key>
+  <string>GitComet</string>
+  <key>CFBundleExecutable</key>
+  <string>gitcomet-app</string>
+  <key>CFBundleIdentifier</key>
+  <string>ai.autoexplore.gitcomet.dev</string>
+  <key>CFBundleIconFile</key>
+  <string>GitComet.icns</string>
+  <key>CFBundleInfoDictionaryVersion</key>
+  <string>6.0</string>
+  <key>CFBundleName</key>
+  <string>GitComet</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleShortVersionString</key>
+  <string>{version}</string>
+  <key>CFBundleVersion</key>
+  <string>{version}</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>13.0</string>
+  <key>NSHighResolutionCapable</key>
+  <true/>
+</dict>
+</plist>
+"#,
+        version = env!("CARGO_PKG_VERSION")
+    );
+    std::fs::write(contents.join("Info.plist"), plist)
+        .map_err(|e| format!("failed to write Info.plist: {e}"))?;
+
+    Ok(app_exe)
 }
 
 #[cfg(feature = "ui")]

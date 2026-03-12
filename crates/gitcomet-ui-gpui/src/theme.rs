@@ -84,9 +84,9 @@ impl AppTheme {
                 success: gpui::rgba(0xaad84cff),
             },
             radii: Radii {
-                panel: 6.0,
-                pill: 999.0,
-                row: 4.0,
+                panel: 2.0,
+                pill: 2.0,
+                row: 2.0,
             },
         }
     }
@@ -130,9 +130,9 @@ impl AppTheme {
                 success: gpui::rgba(0x3f953aff),
             },
             radii: Radii {
-                panel: 6.0,
-                pill: 999.0,
-                row: 4.0,
+                panel: 2.0,
+                pill: 2.0,
+                row: 2.0,
             },
         }
     }
