@@ -5,23 +5,66 @@
 [![Website](https://img.shields.io/badge/Website-gitcomet.dev-0A66C2?logo=googlechrome&logoColor=white)](https://gitcomet.dev)
 [![AutoExplore](https://img.shields.io/badge/AutoExplore-autoexplore.ai-0B7A75?logo=safari&logoColor=white)](https://autoexplore.ai)
 
-Fast, resource-efficient, fully open source Git GUI written in Rust, targeting GitKraken/SourceTree/GitHub Desktop-class workflows using `gpui` for the UI.
+**Speed is a feature.**
 
-### Goals
+GitComet is built for teams that want fast Git operations with local-first privacy, familiar workflows, and open source freedom.
 
-- Fast UI for very large repositories
-- Support `git difftool` and `git mergetool` flows
-- Open source with a permissive license (AGPL-3.0)
-- Cross-platform (Windows, Linux, macOS)
-
+Available for Linux, Windows, and macOS.
 
 <img alt="GitComet demo" src="assets/gitcomet.gif"/>
 
-### Quick start
+### Download
 
-Download the latest available GitComet version (prebuilt binaries/installers) from [GitHub Releases](https://github.com/Auto-Explore/GitComet/releases).
+Download the latest prebuilt binaries/installers from [GitHub Releases](https://github.com/Auto-Explore/GitComet/releases).
 
-To build and run from source instead:
+### Fast, Free, Familiar
+
+- **Fast**: Built end-to-end in Rust for speed and efficiency using [smol](https://github.com/smol-rs/smol), [gix](https://github.com/GitoxideLabs/gitoxide), and [gpui](https://www.gpui.rs/).
+- **Free**: Free to use for individuals and organizations.
+- **Familiar**: Familiar history browsing and drop-in `git difftool` and `git mergetool` compatibility.
+
+### Why GitComet
+
+GitComet started from frustration with existing tools on huge codebases like Chromium. We could not find a product that stays responsive and functional when browsing large repositories and file diffs.
+
+#### Chromium benchmark snapshot
+
+| Tool | Version | Time to open Chromium repo | Memory while opening |
+| --- | --- | ---: | ---: |
+| GitComet | v0.2.0 | 1s | 265MB |
+| GitFiend | v0.45.3 | 1s | 289MB |
+| SmartGit | v25.1.110 | 18s | 4.8GB |
+| GitKraken | v11.10.0 | 25s | 2GB |
+| Megit | v0.10.0 | 29s | 14.4GB |
+| Gittyup | v2.0.0 | 43s | 2.5GB + 1.5GB indexer |
+
+Measured on Linux 6.19.6-zen (x64), Ryzen 5950x, 128GB DDR4. Detailed test steps will be published.
+
+### Editions (planned)
+
+#### Open Source
+
+- **Price**: €0 forever
+- **Usage**: Free for personal and commercial use
+- **Includes**:
+  - Full local-first desktop workflow
+  - Git remotes, pull/push, staging, commits
+  - Worktrees, branching, and full history
+  - Multi-repository browsing
+  - Inline and side-by-side diffs
+  - 2-way and 3-way merge tools
+
+#### Professional
+
+- **Price**: €20 lifetime access (limited-time early adopter offer)
+- **Includes everything in Open Source, plus**:
+  - Claude Code, Codex, and GitHub CLI integrations
+  - Code test coverage workflows
+  - GitHub and Azure DevOps integrations
+  - Priority improvements during early access
+- Join waitlist: [gitcomet.com/#pricing](https://gitcomet.com/#pricing)
+
+### Build from source
 
 ```bash
 cargo build -p gitcomet-app --features ui-gpui,gix
@@ -60,7 +103,7 @@ Built-in `setup` writes these Git config entries:
 ```bash
 GITCOMET_BIN="/absolute/path/to/gitcomet-app"
 
-# Headless tool — algorithm-only merge/diff for CI, scripts, and no-display environments
+# Headless tool: algorithm-only merge/diff for CI, scripts, and no-display environments
 git config --global merge.tool gitcomet
 git config --global mergetool.gitcomet.cmd \
   "'$GITCOMET_BIN' mergetool --base \"\$BASE\" --local \"\$LOCAL\" --remote \"\$REMOTE\" --merged \"\$MERGED\""
@@ -75,7 +118,7 @@ git config --global difftool.trustExitCode true
 git config --global difftool.gitcomet.trustExitCode true
 git config --global difftool.prompt false
 
-# GUI tool — opens focused GPUI windows for interactive diff/merge
+# GUI tool: opens focused GPUI windows for interactive diff/merge
 git config --global merge.guitool gitcomet-gui
 git config --global mergetool.gitcomet-gui.cmd \
   "'$GITCOMET_BIN' mergetool --gui --base \"\$BASE\" --local \"\$LOCAL\" --remote \"\$REMOTE\" --merged \"\$MERGED\""
@@ -129,6 +172,12 @@ If the app crashes due to a Rust panic, GitComet writes a crash log to:
 On next startup, GitComet can prompt you to report the crash as a prefilled
 GitHub issue in `Auto-Explore/GitComet`, including app version, platform,
 panic details, and a trimmed backtrace.
+
+### Prior work and ideas inspired by:
+
+SourceTree, GitKraken, Zed, GPUI, KDiff3, Meld, Github Desktop, Git, Gix, Rust, Smol, and many more.
+
+This project has been created with the help of AI tools, including OpenAI Codex and Claude Code.
 
 ### License
 
