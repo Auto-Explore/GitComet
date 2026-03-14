@@ -1,5 +1,5 @@
 use super::super::conflict_resolver;
-use super::super::perf::{self, ConflictPerfRenderLane, ConflictPerfSpan};
+use super::super::perf::{self, ViewPerfRenderLane, ViewPerfSpan};
 use super::conflict_canvas::{
     self, ConflictChunkContext, ThreeWayCanvasColumn, ThreeWayChunkContext,
 };
@@ -43,7 +43,7 @@ fn build_conflict_cached_diff_styled_text(
     syntax_mode: DiffSyntaxMode,
     word_color: Option<gpui::Rgba>,
 ) -> CachedDiffStyledText {
-    let _perf_scope = perf::span(ConflictPerfSpan::StyledTextBuild);
+    let _perf_scope = perf::span(ViewPerfSpan::StyledTextBuild);
     build_cached_diff_styled_text(
         theme,
         text,
@@ -55,14 +55,53 @@ fn build_conflict_cached_diff_styled_text(
     )
 }
 
+fn render_conflict_markdown_preview_rows(
+    this: &MainPaneView,
+    range: Range<usize>,
+    side: ThreeWayColumn,
+) -> Vec<AnyElement> {
+    let theme = this.theme;
+    let Loadable::Ready(document) = this.conflict_resolver.markdown_preview.document(side) else {
+        return Vec::new();
+    };
+    super::history::render_markdown_preview_document_rows(theme, document, range, None)
+}
+
 impl MainPaneView {
+    pub(in super::super) fn render_conflict_markdown_base_rows(
+        this: &mut Self,
+        range: Range<usize>,
+        _window: &mut Window,
+        _cx: &mut gpui::Context<Self>,
+    ) -> Vec<AnyElement> {
+        render_conflict_markdown_preview_rows(this, range, ThreeWayColumn::Base)
+    }
+
+    pub(in super::super) fn render_conflict_markdown_ours_rows(
+        this: &mut Self,
+        range: Range<usize>,
+        _window: &mut Window,
+        _cx: &mut gpui::Context<Self>,
+    ) -> Vec<AnyElement> {
+        render_conflict_markdown_preview_rows(this, range, ThreeWayColumn::Ours)
+    }
+
+    pub(in super::super) fn render_conflict_markdown_theirs_rows(
+        this: &mut Self,
+        range: Range<usize>,
+        _window: &mut Window,
+        _cx: &mut gpui::Context<Self>,
+    ) -> Vec<AnyElement> {
+        render_conflict_markdown_preview_rows(this, range, ThreeWayColumn::Theirs)
+    }
+
     pub(in super::super) fn render_conflict_resolver_three_way_rows(
         this: &mut Self,
         range: Range<usize>,
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
-        let _perf_scope = perf::span(ConflictPerfSpan::RenderThreeWayRows);
+        let _perf_scope = perf::span(ViewPerfSpan::RenderThreeWayRows);
         let requested_rows = range.len();
         let theme = this.theme;
         let show_ws = this.show_whitespace;
@@ -746,11 +785,7 @@ impl MainPaneView {
                 }
             }
         }
-        perf::record_row_batch(
-            ConflictPerfRenderLane::ThreeWay,
-            requested_rows,
-            elements.len(),
-        );
+        perf::record_row_batch(ViewPerfRenderLane::ThreeWay, requested_rows, elements.len());
         elements
     }
 
@@ -760,7 +795,7 @@ impl MainPaneView {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
-        let _perf_scope = perf::span(ConflictPerfSpan::RenderResolvedPreviewRows);
+        let _perf_scope = perf::span(ViewPerfSpan::RenderResolvedPreviewRows);
         let requested_rows = range.len();
         let theme = this.theme;
 
@@ -921,7 +956,7 @@ impl MainPaneView {
             })
             .collect();
         perf::record_row_batch(
-            ConflictPerfRenderLane::ResolvedPreview,
+            ViewPerfRenderLane::ResolvedPreview,
             requested_rows,
             elements.len(),
         );
@@ -934,7 +969,7 @@ impl MainPaneView {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
-        let _perf_scope = perf::span(ConflictPerfSpan::RenderResolvedPreviewRows);
+        let _perf_scope = perf::span(ViewPerfSpan::RenderResolvedPreviewRows);
         let requested_rows = range.len();
         let theme = this.theme;
         let syntax_language = this.conflict_resolved_preview_syntax_language;
@@ -1067,7 +1102,7 @@ impl MainPaneView {
             })
             .collect();
         perf::record_row_batch(
-            ConflictPerfRenderLane::ResolvedPreview,
+            ViewPerfRenderLane::ResolvedPreview,
             requested_rows,
             elements.len(),
         );
@@ -1116,7 +1151,7 @@ impl MainPaneView {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
-        let _perf_scope = perf::span(ConflictPerfSpan::RenderResolverDiffRows);
+        let _perf_scope = perf::span(ViewPerfSpan::RenderResolverDiffRows);
         let requested_rows = range.len();
         let query: SharedString = if this.diff_search_active {
             this.diff_search_query.clone()
@@ -1201,7 +1236,7 @@ impl MainPaneView {
             }
         };
         perf::record_row_batch(
-            ConflictPerfRenderLane::ResolverDiff,
+            ViewPerfRenderLane::ResolverDiff,
             requested_rows,
             elements.len(),
         );

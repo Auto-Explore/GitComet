@@ -15,7 +15,7 @@ struct PerfBudgetSpec {
     threshold_ns: f64,
 }
 
-const PERF_BUDGETS: [PerfBudgetSpec; 4] = [
+const PERF_BUDGETS: &[PerfBudgetSpec] = &[
     PerfBudgetSpec {
         label: "conflict_three_way_scroll/style_window/200",
         estimate_path: "conflict_three_way_scroll/style_window/200/new/estimates.json",
@@ -35,6 +35,26 @@ const PERF_BUDGETS: [PerfBudgetSpec; 4] = [
         label: "conflict_split_resize_step/window/200",
         estimate_path: "conflict_split_resize_step/window/200/new/estimates.json",
         threshold_ns: 25.0 * NANOS_PER_MILLISECOND,
+    },
+    PerfBudgetSpec {
+        label: "markdown_preview_parse_build/single_document/medium",
+        estimate_path: "markdown_preview_parse_build/single_document/medium/new/estimates.json",
+        threshold_ns: 2.0 * NANOS_PER_MILLISECOND,
+    },
+    PerfBudgetSpec {
+        label: "markdown_preview_parse_build/two_sided_diff/medium",
+        estimate_path: "markdown_preview_parse_build/two_sided_diff/medium/new/estimates.json",
+        threshold_ns: 500.0 * NANOS_PER_MILLISECOND,
+    },
+    PerfBudgetSpec {
+        label: "markdown_preview_render_single/window_rows/200",
+        estimate_path: "markdown_preview_render_single/window_rows/200/new/estimates.json",
+        threshold_ns: 1.0 * NANOS_PER_MILLISECOND,
+    },
+    PerfBudgetSpec {
+        label: "markdown_preview_render_diff/window_rows/200",
+        estimate_path: "markdown_preview_render_diff/window_rows/200/new/estimates.json",
+        threshold_ns: 1.5 * NANOS_PER_MILLISECOND,
     },
 ];
 
@@ -119,7 +139,7 @@ fn main() {
 
 fn run_report(cli: CliArgs) -> Result<(), String> {
     let mut results = Vec::with_capacity(PERF_BUDGETS.len());
-    for spec in PERF_BUDGETS {
+    for &spec in PERF_BUDGETS {
         results.push(evaluate_budget(spec, &cli.criterion_root));
     }
 
@@ -204,7 +224,7 @@ fn read_estimates(path: &Path) -> Result<CriterionEstimates, String> {
 
 fn build_report_markdown(results: &[BudgetResult], criterion_root: &Path, strict: bool) -> String {
     let mut markdown = String::new();
-    let _ = writeln!(markdown, "## Conflict Performance Budget Report");
+    let _ = writeln!(markdown, "## View Performance Budget Report");
     let _ = writeln!(markdown);
     let _ = writeln!(markdown, "- criterion root: `{}`", criterion_root.display());
     let _ = writeln!(
@@ -253,10 +273,7 @@ fn build_report_markdown(results: &[BudgetResult], criterion_root: &Path, strict
 
     let _ = writeln!(markdown);
     if alert_count == 0 {
-        let _ = writeln!(
-            markdown,
-            "All tracked conflict benchmarks are within budget."
-        );
+        let _ = writeln!(markdown, "All tracked view benchmarks are within budget.");
     } else {
         let _ = writeln!(markdown, "Budget alerts: {alert_count}");
         for result in results {
@@ -285,7 +302,7 @@ fn append_github_summary(markdown: &str) -> Result<(), String> {
 }
 
 fn emit_github_warning(message: &str) {
-    println!("::warning title=Conflict performance budget::{message}");
+    println!("::warning title=View performance budget::{message}");
 }
 
 fn format_duration_ns(ns: f64) -> String {
@@ -452,6 +469,25 @@ mod tests {
         assert_eq!(mode, CliParseResult::Run);
         assert_eq!(cli.criterion_root, PathBuf::from("/tmp/criterion"));
         assert!(cli.strict);
+    }
+
+    #[test]
+    fn perf_budgets_include_markdown_preview_targets() {
+        let labels = PERF_BUDGETS
+            .iter()
+            .map(|spec| spec.label)
+            .collect::<Vec<_>>();
+        assert!(labels.contains(&"markdown_preview_parse_build/single_document/medium"));
+        assert!(labels.contains(&"markdown_preview_parse_build/two_sided_diff/medium"));
+        assert!(labels.contains(&"markdown_preview_render_single/window_rows/200"));
+        assert!(labels.contains(&"markdown_preview_render_diff/window_rows/200"));
+    }
+
+    #[test]
+    fn build_report_markdown_uses_generic_view_heading() {
+        let markdown = build_report_markdown(&[], Path::new("target/criterion"), false);
+        assert!(markdown.contains("## View Performance Budget Report"));
+        assert!(markdown.contains("All tracked view benchmarks are within budget."));
     }
 
     fn write_estimate_file(root: &Path, relative_path: &str, mean: f64, upper: f64) {

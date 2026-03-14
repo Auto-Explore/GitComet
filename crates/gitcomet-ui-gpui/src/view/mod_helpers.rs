@@ -96,23 +96,90 @@ pub(super) enum DiffViewMode {
     Split,
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(super) enum RenderedPreviewKind {
+    Svg,
+    Markdown,
+}
+
+impl RenderedPreviewKind {
+    pub(super) fn rendered_label(self) -> &'static str {
+        match self {
+            Self::Svg => "Image",
+            Self::Markdown => "Preview",
+        }
+    }
+
+    pub(super) fn source_label(self) -> &'static str {
+        match self {
+            Self::Svg => "Code",
+            Self::Markdown => "Text",
+        }
+    }
+
+    pub(super) fn rendered_button_id(self) -> &'static str {
+        match self {
+            Self::Svg => "svg_diff_view_image",
+            Self::Markdown => "markdown_diff_view_preview",
+        }
+    }
+
+    pub(super) fn source_button_id(self) -> &'static str {
+        match self {
+            Self::Svg => "svg_diff_view_code",
+            Self::Markdown => "markdown_diff_view_text",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum SvgDiffViewMode {
-    Image,
-    Code,
+pub(super) enum RenderedPreviewMode {
+    Rendered,
+    Source,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct RenderedPreviewModes {
+    pub(super) svg: RenderedPreviewMode,
+    pub(super) markdown: RenderedPreviewMode,
+}
+
+impl Default for RenderedPreviewModes {
+    fn default() -> Self {
+        Self {
+            svg: RenderedPreviewMode::Rendered,
+            markdown: RenderedPreviewMode::Source,
+        }
+    }
+}
+
+impl RenderedPreviewModes {
+    pub(super) fn get(self, kind: RenderedPreviewKind) -> RenderedPreviewMode {
+        match kind {
+            RenderedPreviewKind::Svg => self.svg,
+            RenderedPreviewKind::Markdown => self.markdown,
+        }
+    }
+
+    pub(super) fn set(&mut self, kind: RenderedPreviewKind, mode: RenderedPreviewMode) {
+        match kind {
+            RenderedPreviewKind::Svg => self.svg = mode,
+            RenderedPreviewKind::Markdown => self.markdown = mode,
+        }
+    }
 }
 
 /// Preview mode for the conflict resolver merge-input pane.
 ///
-/// When the conflicted file supports a visual preview (e.g. SVG images),
-/// the user can toggle between the normal text diff view and a rendered
-/// preview of each conflict side.
+/// When the conflicted file supports a rendered preview (for example, SVG or
+/// markdown), the user can toggle between the normal text diff view and a
+/// rendered preview of each conflict side.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(super) enum ConflictResolverPreviewMode {
     /// Normal text/diff view with syntax highlighting.
     #[default]
     Text,
-    /// Rendered preview (image for SVG files, syntax-highlighted view for markdown).
+    /// Rendered preview (image for SVG files, rendered rows for markdown).
     Preview,
 }
 
@@ -125,6 +192,43 @@ pub(super) fn is_markdown_path(path: &std::path::Path) -> bool {
                 "md" | "markdown" | "mdown" | "mkd" | "mkdn" | "mdwn"
             )
         })
+}
+
+pub(super) fn preview_path_rendered_kind(path: &std::path::Path) -> Option<RenderedPreviewKind> {
+    if is_svg_path(path) {
+        Some(RenderedPreviewKind::Svg)
+    } else if is_markdown_path(path) {
+        Some(RenderedPreviewKind::Markdown)
+    } else {
+        None
+    }
+}
+
+pub(super) fn diff_target_rendered_preview_kind(
+    target: Option<&DiffTarget>,
+) -> Option<RenderedPreviewKind> {
+    let path = match target? {
+        DiffTarget::WorkingTree { path, .. } => path.as_path(),
+        DiffTarget::Commit {
+            path: Some(path), ..
+        } => path.as_path(),
+        _ => return None,
+    };
+    preview_path_rendered_kind(path)
+}
+
+pub(super) fn main_diff_rendered_preview_toggle_kind(
+    wants_file_diff: bool,
+    is_file_preview: bool,
+    preview_kind: Option<RenderedPreviewKind>,
+) -> Option<RenderedPreviewKind> {
+    match preview_kind? {
+        RenderedPreviewKind::Svg if wants_file_diff => Some(RenderedPreviewKind::Svg),
+        RenderedPreviewKind::Markdown if wants_file_diff || is_file_preview => {
+            Some(RenderedPreviewKind::Markdown)
+        }
+        _ => None,
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -351,6 +455,41 @@ pub(super) struct ThreeWaySides<T> {
     pub(super) theirs: T,
 }
 
+pub(super) type LoadableMarkdownDoc =
+    Loadable<Arc<crate::view::markdown_preview::MarkdownPreviewDocument>>;
+
+pub(super) type LoadableMarkdownDiff =
+    Loadable<Arc<crate::view::markdown_preview::MarkdownPreviewDiff>>;
+
+#[derive(Clone, Debug)]
+pub(super) struct ConflictResolverMarkdownPreviewState {
+    pub(super) source_hash: Option<u64>,
+    pub(super) documents: ThreeWaySides<LoadableMarkdownDoc>,
+}
+
+impl Default for ConflictResolverMarkdownPreviewState {
+    fn default() -> Self {
+        Self {
+            source_hash: None,
+            documents: ThreeWaySides {
+                base: Loadable::NotLoaded,
+                ours: Loadable::NotLoaded,
+                theirs: Loadable::NotLoaded,
+            },
+        }
+    }
+}
+
+impl ConflictResolverMarkdownPreviewState {
+    pub(super) fn document(&self, side: ThreeWayColumn) -> &LoadableMarkdownDoc {
+        match side {
+            ThreeWayColumn::Base => &self.documents.base,
+            ThreeWayColumn::Ours => &self.documents.ours,
+            ThreeWayColumn::Theirs => &self.documents.theirs,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct ResolvedOutputConflictMarker {
     pub(super) conflict_ix: usize,
@@ -416,6 +555,8 @@ pub(super) struct ConflictResolverUiState {
     pub(super) resolved_output_conflict_markers: Vec<Option<ResolvedOutputConflictMarker>>,
     /// Set of source line keys currently represented in resolved output (for dedupe/plus-icon).
     pub(super) resolved_output_line_sources_index: HashSet<SourceLineKey>,
+    /// Cached rendered markdown previews for the merge-input sides.
+    pub(super) markdown_preview: ConflictResolverMarkdownPreviewState,
     /// Preview mode for the merge-input pane (Text vs rendered Preview).
     pub(super) resolver_preview_mode: ConflictResolverPreviewMode,
 }
@@ -461,6 +602,7 @@ impl Default for ConflictResolverUiState {
             resolved_line_meta: Vec::new(),
             resolved_output_conflict_markers: Vec::new(),
             resolved_output_line_sources_index: HashSet::default(),
+            markdown_preview: ConflictResolverMarkdownPreviewState::default(),
             resolver_preview_mode: ConflictResolverPreviewMode::default(),
         }
     }
@@ -537,7 +679,7 @@ impl ConflictResolverUiState {
 
 #[cfg(test)]
 mod conflict_resolver_ui_state_tests {
-    use super::{ConflictResolverUiState, ThreeWaySides};
+    use super::{ConflictResolverUiState, Loadable, ThreeWaySides};
 
     #[test]
     fn default_groups_three_way_side_fields() {
@@ -557,6 +699,19 @@ mod conflict_resolver_ui_state_tests {
         assert!(state.three_way_word_highlights.base.is_empty());
         assert!(state.three_way_word_highlights.ours.is_empty());
         assert!(state.three_way_word_highlights.theirs.is_empty());
+
+        assert!(matches!(
+            state.markdown_preview.documents.base,
+            Loadable::NotLoaded
+        ));
+        assert!(matches!(
+            state.markdown_preview.documents.ours,
+            Loadable::NotLoaded
+        ));
+        assert!(matches!(
+            state.markdown_preview.documents.theirs,
+            Loadable::NotLoaded
+        ));
     }
 
     #[test]

@@ -1,4 +1,6 @@
 use super::*;
+use crate::view::markdown_preview;
+use crate::view::perf::{self, ViewPerfSpan};
 use gitcomet_core::domain::DiffRowProvider;
 
 const IMAGE_DIFF_CACHE_FILE_PREFIX: &str = "gitcomet-image-diff-";
@@ -36,6 +38,33 @@ fn file_diff_text_signature(file: &gitcomet_core::domain::FileDiffText) -> u64 {
     file.old.hash(&mut hasher);
     file.new.hash(&mut hasher);
     hasher.finish()
+}
+
+#[cfg(test)]
+fn preview_lines_source_len(lines: &[String]) -> usize {
+    lines
+        .iter()
+        .map(|line| line.len())
+        .sum::<usize>()
+        .saturating_add(lines.len().saturating_sub(1))
+}
+
+fn preview_lines_to_source(lines: &[String]) -> String {
+    lines.join("\n")
+}
+
+fn build_single_markdown_preview_document_from_lines(
+    preview_lines: &[String],
+    source_len: usize,
+) -> Result<Arc<markdown_preview::MarkdownPreviewDocument>, String> {
+    if source_len > markdown_preview::MAX_PREVIEW_SOURCE_BYTES {
+        return Err(markdown_preview::single_preview_unavailable_reason(source_len).to_string());
+    }
+
+    let source = preview_lines_to_source(preview_lines);
+    markdown_preview::parse_markdown(&source)
+        .map(Arc::new)
+        .ok_or_else(|| markdown_preview::single_preview_unavailable_reason(source_len).to_string())
 }
 
 #[derive(Debug)]
@@ -1144,13 +1173,85 @@ impl MainPaneView {
         self.prepared_syntax_document(&key)
     }
 
+    pub(in super::super::super) fn ensure_single_markdown_preview_cache(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let Some(path) = self.worktree_preview_path.clone() else {
+            return;
+        };
+        let source_rev = self.worktree_preview_content_rev;
+        let Loadable::Ready(lines) = &self.worktree_preview else {
+            return;
+        };
+
+        let cache_matches = self.worktree_markdown_preview_path.as_ref() == Some(&path)
+            && self.worktree_markdown_preview_source_rev == source_rev;
+        if cache_matches {
+            match &self.worktree_markdown_preview {
+                Loadable::Ready(_) | Loadable::Error(_) => return,
+                Loadable::Loading if self.worktree_markdown_preview_inflight.is_some() => return,
+                _ => {}
+            }
+        }
+
+        let preview_lines = Arc::clone(lines);
+        self.worktree_markdown_preview_path = Some(path.clone());
+        self.worktree_markdown_preview_source_rev = source_rev;
+
+        let source_len = self.worktree_preview_source_len;
+        if source_len > markdown_preview::MAX_PREVIEW_SOURCE_BYTES {
+            self.worktree_markdown_preview = Loadable::Error(
+                markdown_preview::single_preview_unavailable_reason(source_len).to_string(),
+            );
+            self.worktree_markdown_preview_inflight = None;
+            return;
+        }
+
+        self.worktree_markdown_preview = Loadable::Loading;
+        self.worktree_markdown_preview_seq = self.worktree_markdown_preview_seq.wrapping_add(1);
+        let seq = self.worktree_markdown_preview_seq;
+        self.worktree_markdown_preview_inflight = Some(seq);
+
+        cx.spawn(
+            async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
+                let result = smol::unblock(move || {
+                    let _perf_scope = perf::span(ViewPerfSpan::MarkdownPreviewParse);
+                    build_single_markdown_preview_document_from_lines(&preview_lines, source_len)
+                })
+                .await;
+
+                let _ = view.update(cx, |this, cx| {
+                    if this.worktree_markdown_preview_inflight != Some(seq) {
+                        return;
+                    }
+                    if this.worktree_preview_path.as_ref() != Some(&path)
+                        || this.worktree_preview_content_rev != source_rev
+                    {
+                        return;
+                    }
+
+                    this.worktree_markdown_preview_inflight = None;
+                    match result {
+                        Ok(document) => this.worktree_markdown_preview = Loadable::Ready(document),
+                        Err(error) => this.worktree_markdown_preview = Loadable::Error(error),
+                    }
+                    cx.notify();
+                });
+            },
+        )
+        .detach();
+    }
+
     pub(in crate::view) fn set_worktree_preview_ready_lines(
         &mut self,
         path: std::path::PathBuf,
         lines: Arc<Vec<String>>,
+        source_len: usize,
         cx: &mut gpui::Context<Self>,
     ) {
         let source_changed = self.worktree_preview_path.as_ref() != Some(&path)
+            || self.worktree_preview_source_len != source_len
             || !matches!(
                 &self.worktree_preview,
                 Loadable::Ready(current) if current.as_ref() == lines.as_ref()
@@ -1158,12 +1259,17 @@ impl MainPaneView {
 
         self.worktree_preview_path = Some(path.clone());
         self.worktree_preview = Loadable::Ready(lines);
+        self.worktree_preview_source_len = source_len;
         self.worktree_preview_syntax_language = rows::diff_syntax_language_for_path(&path);
         self.worktree_preview_segments_cache_path = Some(path);
         self.worktree_preview_segments_cache.clear();
 
         if source_changed {
             self.worktree_preview_content_rev = self.worktree_preview_content_rev.wrapping_add(1);
+            self.worktree_markdown_preview_path = None;
+            self.worktree_markdown_preview_source_rev = 0;
+            self.worktree_markdown_preview = Loadable::NotLoaded;
+            self.worktree_markdown_preview_inflight = None;
         }
 
         self.refresh_worktree_preview_syntax_document(cx);
@@ -1722,6 +1828,133 @@ impl MainPaneView {
         .detach();
     }
 
+    pub(in super::super::super) fn ensure_file_markdown_preview_cache(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let clear_cache = |this: &mut Self| {
+            this.file_markdown_preview_cache_repo_id = None;
+            this.file_markdown_preview_cache_target = None;
+            this.file_markdown_preview_cache_rev = 0;
+            this.file_markdown_preview_cache_content_signature = None;
+            this.file_markdown_preview = Loadable::NotLoaded;
+            this.file_markdown_preview_inflight = None;
+        };
+
+        let Some((repo_id, diff_file_rev, diff_target, file)) = (|| {
+            let repo = self.active_repo()?;
+            if !Self::is_file_diff_target(repo.diff_state.diff_target.as_ref()) {
+                return None;
+            }
+
+            let file = match &repo.diff_state.diff_file {
+                Loadable::Ready(Some(file)) => Some(Arc::clone(file)),
+                _ => None,
+            };
+
+            Some((
+                repo.id,
+                repo.diff_state.diff_file_rev,
+                repo.diff_state.diff_target.clone(),
+                file,
+            ))
+        })() else {
+            clear_cache(self);
+            return;
+        };
+
+        let diff_target_for_task = diff_target.clone();
+        let file_content_signature = file
+            .as_ref()
+            .map(|file| file_diff_text_signature(file.as_ref()));
+        let same_repo_and_target = self.file_markdown_preview_cache_repo_id == Some(repo_id)
+            && self.file_markdown_preview_cache_target == diff_target;
+
+        if same_repo_and_target && self.file_markdown_preview_cache_rev == diff_file_rev {
+            return;
+        }
+
+        if same_repo_and_target
+            && let Some(signature) = file_content_signature
+            && self.file_markdown_preview_cache_content_signature == Some(signature)
+        {
+            if self.file_markdown_preview_inflight.is_none() {
+                self.file_markdown_preview_cache_rev = diff_file_rev;
+            }
+            return;
+        }
+
+        self.file_markdown_preview_cache_repo_id = Some(repo_id);
+        self.file_markdown_preview_cache_rev = diff_file_rev;
+        self.file_markdown_preview_cache_content_signature = None;
+        self.file_markdown_preview_cache_target = diff_target;
+        self.file_markdown_preview = Loadable::NotLoaded;
+        self.file_markdown_preview_inflight = None;
+
+        let Some(file) = file else {
+            return;
+        };
+        // `file` was `Some` when `file_content_signature` was computed, so unwrap is safe.
+        let content_signature = file_content_signature.unwrap();
+        let old_source = file.old.clone().unwrap_or_default();
+        let new_source = file.new.clone().unwrap_or_default();
+
+        let combined_len = old_source.len() + new_source.len();
+        if combined_len > markdown_preview::MAX_DIFF_PREVIEW_SOURCE_BYTES {
+            self.file_markdown_preview = Loadable::Error(
+                markdown_preview::diff_preview_unavailable_reason(combined_len).to_string(),
+            );
+            self.file_markdown_preview_cache_content_signature = Some(content_signature);
+            return;
+        }
+
+        self.file_markdown_preview = Loadable::Loading;
+        self.file_markdown_preview_seq = self.file_markdown_preview_seq.wrapping_add(1);
+        let seq = self.file_markdown_preview_seq;
+        self.file_markdown_preview_inflight = Some(seq);
+
+        cx.spawn(
+            async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
+                let result = smol::unblock(move || {
+                    let _perf_scope = perf::span(ViewPerfSpan::MarkdownPreviewParse);
+                    markdown_preview::build_markdown_diff_preview(
+                        old_source.as_str(),
+                        new_source.as_str(),
+                    )
+                    .map(Arc::new)
+                    .ok_or_else(|| {
+                        markdown_preview::diff_preview_unavailable_reason(
+                            old_source.len() + new_source.len(),
+                        )
+                        .to_string()
+                    })
+                })
+                .await;
+
+                let _ = view.update(cx, |this, cx| {
+                    if this.file_markdown_preview_inflight != Some(seq) {
+                        return;
+                    }
+                    if this.file_markdown_preview_cache_repo_id != Some(repo_id)
+                        || this.file_markdown_preview_cache_rev != diff_file_rev
+                        || this.file_markdown_preview_cache_target != diff_target_for_task
+                    {
+                        return;
+                    }
+
+                    this.file_markdown_preview_inflight = None;
+                    this.file_markdown_preview_cache_content_signature = Some(content_signature);
+                    match result {
+                        Ok(preview) => this.file_markdown_preview = Loadable::Ready(preview),
+                        Err(error) => this.file_markdown_preview = Loadable::Error(error),
+                    }
+                    cx.notify();
+                });
+            },
+        )
+        .detach();
+    }
+
     fn image_format_for_path(path: &std::path::Path) -> Option<gpui::ImageFormat> {
         image_format_for_path(path)
     }
@@ -2100,15 +2333,20 @@ impl MainPaneView {
             self.diff_language_for_src_ix.push(language);
         }
 
-        if let Some((abs_path, lines)) = build_new_file_preview_from_diff(
+        if let Some(preview) = build_new_file_preview_from_diff(
             diff.lines.as_slice(),
             &workdir,
             self.diff_cache_target.as_ref(),
         ) {
             self.diff_preview_is_new_file = true;
-            let preview_lines = Arc::new(lines);
+            let preview_lines = Arc::new(preview.lines);
             self.diff_preview_new_file_lines = Arc::clone(&preview_lines);
-            self.set_worktree_preview_ready_lines(abs_path, preview_lines, cx);
+            self.set_worktree_preview_ready_lines(
+                preview.abs_path,
+                preview_lines,
+                preview.source_len,
+                cx,
+            );
             self.worktree_preview_scroll
                 .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
         }
@@ -2373,6 +2611,45 @@ mod tests {
     fn build_inline_text_returns_empty_for_empty_rows() {
         let text = build_inline_text(&[]);
         assert!(text.as_ref().is_empty());
+    }
+
+    #[test]
+    fn build_single_markdown_preview_document_from_lines_reports_row_limit() {
+        let preview_lines =
+            vec!["---\n".repeat(crate::view::markdown_preview::MAX_PREVIEW_ROWS + 1)];
+        let source_len = preview_lines_source_len(&preview_lines);
+        assert!(source_len < crate::view::markdown_preview::MAX_PREVIEW_SOURCE_BYTES);
+
+        let error = build_single_markdown_preview_document_from_lines(&preview_lines, source_len)
+            .expect_err("row-limit markdown preview should return an error");
+        assert!(
+            error.contains("row limit"),
+            "row-limit markdown preview should mention the rendered row limit: {error}"
+        );
+    }
+
+    #[test]
+    fn build_single_markdown_preview_document_from_lines_respects_exact_source_length() {
+        let mut source = "x".repeat(crate::view::markdown_preview::MAX_PREVIEW_SOURCE_BYTES);
+        source.push('\n');
+        let preview_lines = source.lines().map(ToOwned::to_owned).collect::<Vec<_>>();
+        let joined_len = preview_lines_source_len(&preview_lines);
+
+        assert_eq!(
+            joined_len,
+            crate::view::markdown_preview::MAX_PREVIEW_SOURCE_BYTES
+        );
+        assert_eq!(
+            source.len(),
+            crate::view::markdown_preview::MAX_PREVIEW_SOURCE_BYTES + 1
+        );
+
+        let error = build_single_markdown_preview_document_from_lines(&preview_lines, source.len())
+            .expect_err("exact source length over the cap should return an error");
+        assert!(
+            error.contains("1 MiB"),
+            "exact-size markdown preview should mention the size limit: {error}"
+        );
     }
 
     #[test]

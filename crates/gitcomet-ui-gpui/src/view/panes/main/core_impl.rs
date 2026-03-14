@@ -415,7 +415,7 @@ impl MainPaneView {
             layout_details_collapsed: false,
             show_whitespace: false,
             diff_view: DiffViewMode::Split,
-            svg_diff_view_mode: SvgDiffViewMode::Image,
+            rendered_preview_modes: RenderedPreviewModes::default(),
             diff_word_wrap: false,
             diff_split_ratio: 0.5,
             diff_split_resize: None,
@@ -485,6 +485,13 @@ impl MainPaneView {
             file_diff_cache_inflight: None,
             file_diff_syntax_generation: 0,
             prepared_syntax_documents: HashMap::default(),
+            file_markdown_preview_cache_repo_id: None,
+            file_markdown_preview_cache_rev: 0,
+            file_markdown_preview_cache_content_signature: None,
+            file_markdown_preview_cache_target: None,
+            file_markdown_preview: Loadable::NotLoaded,
+            file_markdown_preview_seq: 0,
+            file_markdown_preview_inflight: None,
             file_image_diff_cache_repo_id: None,
             file_image_diff_cache_rev: 0,
             file_image_diff_cache_target: None,
@@ -496,6 +503,12 @@ impl MainPaneView {
             worktree_preview_path: None,
             worktree_preview: Loadable::NotLoaded,
             worktree_preview_content_rev: 0,
+            worktree_preview_source_len: 0,
+            worktree_markdown_preview_path: None,
+            worktree_markdown_preview_source_rev: 0,
+            worktree_markdown_preview: Loadable::NotLoaded,
+            worktree_markdown_preview_seq: 0,
+            worktree_markdown_preview_inflight: None,
             worktree_preview_segments_cache_path: None,
             worktree_preview_syntax_language: None,
             worktree_preview_segments_cache: HashMap::default(),
@@ -530,6 +543,9 @@ impl MainPaneView {
             diff_scroll: UniformListScrollHandle::default(),
             diff_split_right_scroll: UniformListScrollHandle::default(),
             conflict_resolver_diff_scroll: UniformListScrollHandle::default(),
+            conflict_preview_ours_scroll: UniformListScrollHandle::default(),
+            conflict_preview_theirs_scroll: UniformListScrollHandle::default(),
+            conflict_preview_last_synced_y: px(0.0),
             conflict_resolved_preview_scroll: UniformListScrollHandle::default(),
             worktree_preview_scroll: UniformListScrollHandle::default(),
             path_display_cache: std::cell::RefCell::new(HashMap::default()),
@@ -668,7 +684,7 @@ impl MainPaneView {
         path: Option<&std::path::PathBuf>,
         cx: &mut gpui::Context<Self>,
     ) {
-        let _perf_scope = perf::span(ConflictPerfSpan::RecomputeResolvedOutline);
+        let _perf_scope = perf::span(ViewPerfSpan::RecomputeResolvedOutline);
         let output_text = self
             .conflict_resolver_input
             .read_with(cx, |input, _| input.text().to_string());
@@ -1493,6 +1509,11 @@ impl MainPaneView {
             self.worktree_preview_path = None;
             self.worktree_preview = Loadable::NotLoaded;
             self.worktree_preview_content_rev = 0;
+            self.worktree_preview_source_len = 0;
+            self.worktree_markdown_preview_path = None;
+            self.worktree_markdown_preview_source_rev = 0;
+            self.worktree_markdown_preview = Loadable::NotLoaded;
+            self.worktree_markdown_preview_inflight = None;
             self.worktree_preview_segments_cache_path = None;
             self.worktree_preview_syntax_language = None;
             self.worktree_preview_segments_cache.clear();
@@ -1975,6 +1996,52 @@ impl MainPaneView {
         left_handle.set_offset(point(left_offset.x, master_y));
         right_handle.set_offset(point(right_offset.x, master_y));
         self.diff_split_last_synced_y = master_y;
+    }
+
+    pub(in crate::view) fn sync_conflict_preview_vertical_scroll(&mut self) {
+        let base_handle = self
+            .conflict_resolver_diff_scroll
+            .0
+            .borrow()
+            .base_handle
+            .clone();
+        let ours_handle = self
+            .conflict_preview_ours_scroll
+            .0
+            .borrow()
+            .base_handle
+            .clone();
+        let theirs_handle = self
+            .conflict_preview_theirs_scroll
+            .0
+            .borrow()
+            .base_handle
+            .clone();
+
+        let base_offset = base_handle.offset();
+        let ours_offset = ours_handle.offset();
+        let theirs_offset = theirs_handle.offset();
+
+        if base_offset.y == ours_offset.y && base_offset.y == theirs_offset.y {
+            self.conflict_preview_last_synced_y = base_offset.y;
+            return;
+        }
+
+        let last_synced_y = self.conflict_preview_last_synced_y;
+        let master_y = if base_offset.y != last_synced_y {
+            base_offset.y
+        } else if ours_offset.y != last_synced_y {
+            ours_offset.y
+        } else if theirs_offset.y != last_synced_y {
+            theirs_offset.y
+        } else {
+            base_offset.y
+        };
+
+        base_handle.set_offset(point(base_offset.x, master_y));
+        ours_handle.set_offset(point(ours_offset.x, master_y));
+        theirs_handle.set_offset(point(theirs_offset.x, master_y));
+        self.conflict_preview_last_synced_y = master_y;
     }
 
     pub(in crate::view) fn main_pane_content_width(&self, cx: &mut gpui::Context<Self>) -> Pixels {

@@ -4,10 +4,10 @@ use gitcomet_ui_gpui::benchmarks::{
     ConflictSearchQueryUpdateFixture, ConflictSplitResizeStepFixture,
     ConflictThreeWayScrollFixture, ConflictThreeWayVisibleMapBuildFixture,
     ConflictTwoWaySplitScrollFixture, FileDiffSyntaxCacheDropFixture, FileDiffSyntaxPrepareFixture,
-    FileDiffSyntaxReparseFixture, HistoryGraphFixture, LargeFileDiffScrollFixture, OpenRepoFixture,
-    PatchDiffPagedRowsFixture, PatchDiffSearchQueryUpdateFixture,
-    ResolvedOutputRecomputeIncrementalFixture, TextInputHighlightDensity,
-    TextInputLongLineCapFixture, TextInputPrepaintWindowedFixture,
+    FileDiffSyntaxReparseFixture, HistoryGraphFixture, LargeFileDiffScrollFixture,
+    MarkdownPreviewFixture, OpenRepoFixture, PatchDiffPagedRowsFixture,
+    PatchDiffSearchQueryUpdateFixture, ResolvedOutputRecomputeIncrementalFixture,
+    TextInputHighlightDensity, TextInputLongLineCapFixture, TextInputPrepaintWindowedFixture,
     TextInputRunsStreamedHighlightFixture, TextInputWrapIncrementalBurstEditsFixture,
     TextInputWrapIncrementalTabsFixture, TextModelBulkLoadLargeFixture,
     TextModelSnapshotCloneCostFixture, WorktreePreviewRenderFixture,
@@ -612,6 +612,70 @@ fn bench_worktree_preview_render(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_markdown_preview_parse_build(c: &mut Criterion) {
+    let medium_sections = env_usize("GITCOMET_BENCH_MARKDOWN_PREVIEW_MEDIUM_SECTIONS", 256);
+    let large_sections = env_usize("GITCOMET_BENCH_MARKDOWN_PREVIEW_LARGE_SECTIONS", 768);
+    let line_bytes = env_usize("GITCOMET_BENCH_MARKDOWN_PREVIEW_LINE_BYTES", 128);
+    let medium = MarkdownPreviewFixture::new(medium_sections, line_bytes);
+    let large = MarkdownPreviewFixture::new(large_sections, line_bytes);
+
+    let mut group = c.benchmark_group("markdown_preview_parse_build");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+
+    for (label, fixture) in [("medium", &medium), ("large", &large)] {
+        group.bench_function(BenchmarkId::new("single_document", label), |b| {
+            b.iter(|| fixture.run_parse_single_step())
+        });
+        group.bench_function(BenchmarkId::new("two_sided_diff", label), |b| {
+            b.iter(|| fixture.run_parse_diff_step())
+        });
+    }
+
+    group.finish();
+}
+
+fn bench_markdown_preview_render(c: &mut Criterion) {
+    let sections = env_usize("GITCOMET_BENCH_MARKDOWN_PREVIEW_RENDER_SECTIONS", 384);
+    let window = env_usize("GITCOMET_BENCH_MARKDOWN_PREVIEW_WINDOW", 200);
+    let line_bytes = env_usize("GITCOMET_BENCH_MARKDOWN_PREVIEW_RENDER_LINE_BYTES", 128);
+    let fixture = MarkdownPreviewFixture::new(sections, line_bytes);
+
+    let mut single_group = c.benchmark_group("markdown_preview_render_single");
+    single_group.sample_size(10);
+    single_group.warm_up_time(Duration::from_secs(1));
+    single_group.bench_with_input(
+        BenchmarkId::new("window_rows", window),
+        &window,
+        |b, &window| {
+            let mut start = 0usize;
+            b.iter(|| {
+                let hash = fixture.run_render_single_step(start, window);
+                start = start.wrapping_add(window);
+                hash
+            })
+        },
+    );
+    single_group.finish();
+
+    let mut diff_group = c.benchmark_group("markdown_preview_render_diff");
+    diff_group.sample_size(10);
+    diff_group.warm_up_time(Duration::from_secs(1));
+    diff_group.bench_with_input(
+        BenchmarkId::new("window_rows", window),
+        &window,
+        |b, &window| {
+            let mut start = 0usize;
+            b.iter(|| {
+                let hash = fixture.run_render_diff_step(start, window);
+                start = start.wrapping_add(window);
+                hash
+            })
+        },
+    );
+    diff_group.finish();
+}
+
 fn bench_conflict_three_way_scroll(c: &mut Criterion) {
     let lines = env_usize("GITCOMET_BENCH_CONFLICT_LINES", 10_000);
     let conflict_blocks = env_usize("GITCOMET_BENCH_CONFLICT_BLOCKS", 300);
@@ -849,6 +913,8 @@ criterion_group!(
     bench_prepared_syntax_multidoc_cache_hit_rate,
     bench_prepared_syntax_chunk_miss_cost,
     bench_worktree_preview_render,
+    bench_markdown_preview_parse_build,
+    bench_markdown_preview_render,
     bench_conflict_three_way_scroll,
     bench_conflict_three_way_visible_map_build,
     bench_conflict_two_way_split_scroll,

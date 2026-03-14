@@ -360,6 +360,93 @@ fn is_markdown_path_rejects_non_markdown() {
 }
 
 #[test]
+fn preview_path_rendered_kind_detects_supported_preview_kinds() {
+    use std::path::Path;
+
+    assert_eq!(
+        preview_path_rendered_kind(Path::new("diagram.svg")),
+        Some(RenderedPreviewKind::Svg)
+    );
+    assert_eq!(
+        preview_path_rendered_kind(Path::new("README.md")),
+        Some(RenderedPreviewKind::Markdown)
+    );
+    assert_eq!(preview_path_rendered_kind(Path::new("notes.txt")), None);
+}
+
+#[test]
+fn diff_target_rendered_preview_kind_reads_diff_target_paths() {
+    let svg_target = DiffTarget::WorkingTree {
+        path: PathBuf::from("diagram.svg"),
+        area: DiffArea::Unstaged,
+    };
+    assert_eq!(
+        diff_target_rendered_preview_kind(Some(&svg_target)),
+        Some(RenderedPreviewKind::Svg)
+    );
+
+    let markdown_target = DiffTarget::Commit {
+        commit_id: CommitId("deadbeef".to_string()),
+        path: Some(PathBuf::from("README.md")),
+    };
+    assert_eq!(
+        diff_target_rendered_preview_kind(Some(&markdown_target)),
+        Some(RenderedPreviewKind::Markdown)
+    );
+
+    let no_path_target = DiffTarget::Commit {
+        commit_id: CommitId("deadbeef".to_string()),
+        path: None,
+    };
+    assert_eq!(
+        diff_target_rendered_preview_kind(Some(&no_path_target)),
+        None
+    );
+}
+
+#[test]
+fn main_diff_rendered_preview_toggle_kind_matches_supported_modes() {
+    assert_eq!(
+        main_diff_rendered_preview_toggle_kind(true, false, Some(RenderedPreviewKind::Svg),),
+        Some(RenderedPreviewKind::Svg)
+    );
+    assert_eq!(
+        main_diff_rendered_preview_toggle_kind(true, false, Some(RenderedPreviewKind::Markdown),),
+        Some(RenderedPreviewKind::Markdown)
+    );
+    assert_eq!(
+        main_diff_rendered_preview_toggle_kind(false, true, Some(RenderedPreviewKind::Markdown),),
+        Some(RenderedPreviewKind::Markdown)
+    );
+}
+
+#[test]
+fn rendered_preview_modes_track_each_kind_independently() {
+    let mut modes = RenderedPreviewModes::default();
+
+    assert_eq!(
+        modes.get(RenderedPreviewKind::Svg),
+        RenderedPreviewMode::Rendered
+    );
+    assert_eq!(
+        modes.get(RenderedPreviewKind::Markdown),
+        RenderedPreviewMode::Source
+    );
+
+    modes.set(RenderedPreviewKind::Svg, RenderedPreviewMode::Source);
+    modes.set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Rendered);
+
+    assert_eq!(
+        modes.get(RenderedPreviewKind::Svg),
+        RenderedPreviewMode::Source
+    );
+    assert_eq!(
+        modes.get(RenderedPreviewKind::Markdown),
+        RenderedPreviewMode::Rendered
+    );
+}
+
+#[test]
 fn conflict_resolver_preview_mode_defaults_to_text() {
     assert_eq!(
         ConflictResolverPreviewMode::default(),

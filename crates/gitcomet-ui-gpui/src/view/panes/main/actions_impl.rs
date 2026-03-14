@@ -936,6 +936,7 @@ impl MainPaneView {
             resolved_line_meta: Vec::new(),
             resolved_output_conflict_markers: Vec::new(),
             resolved_output_line_sources_index: HashSet::default(),
+            markdown_preview: ConflictResolverMarkdownPreviewState::default(),
             resolver_preview_mode,
         };
 

@@ -1,5 +1,5 @@
 use super::super::path_display;
-use super::super::perf::{self, ConflictPerfSpan};
+use super::super::perf::{self, ViewPerfSpan};
 use super::super::*;
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicI32, Ordering};

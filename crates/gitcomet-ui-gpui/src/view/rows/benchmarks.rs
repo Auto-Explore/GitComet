@@ -22,6 +22,7 @@ use crate::view::conflict_resolver::{
     self, ConflictBlock, ConflictChoice, ConflictSegment, ThreeWayVisibleItem,
 };
 use crate::view::history_graph;
+use crate::view::markdown_preview::{self, MarkdownPreviewDiff, MarkdownPreviewDocument};
 use crate::view::panes::main::diff_cache::{
     PagedPatchDiffRows, PagedPatchSplitRows, PatchInlineVisibleMap,
 };
@@ -2000,6 +2001,115 @@ impl WorktreePreviewRenderFixture {
     }
 }
 
+pub struct MarkdownPreviewFixture {
+    single_source: String,
+    old_source: String,
+    new_source: String,
+    single_document: MarkdownPreviewDocument,
+    diff_preview: MarkdownPreviewDiff,
+    theme: AppTheme,
+}
+
+impl MarkdownPreviewFixture {
+    pub fn new(sections: usize, line_bytes: usize) -> Self {
+        let sections = sections.max(1);
+        let line_bytes = line_bytes.max(48);
+        let single_source = build_synthetic_markdown_document(sections, line_bytes, "single");
+        let old_source = build_synthetic_markdown_document(sections, line_bytes, "before");
+        let new_source = build_synthetic_markdown_document(sections, line_bytes, "after");
+        let single_document = markdown_preview::parse_markdown(&single_source)
+            .expect("synthetic markdown benchmark fixture should stay within preview limits");
+        let diff_preview = markdown_preview::build_markdown_diff_preview(&old_source, &new_source)
+            .expect("synthetic markdown diff benchmark fixture should stay within preview limits");
+
+        Self {
+            single_source,
+            old_source,
+            new_source,
+            single_document,
+            diff_preview,
+            theme: AppTheme::zed_ayu_dark(),
+        }
+    }
+
+    pub fn run_parse_single_step(&self) -> u64 {
+        let Some(document) = markdown_preview::parse_markdown(&self.single_source) else {
+            return 0;
+        };
+        hash_markdown_preview_document(&document)
+    }
+
+    pub fn run_parse_diff_step(&self) -> u64 {
+        let Some(preview) =
+            markdown_preview::build_markdown_diff_preview(&self.old_source, &self.new_source)
+        else {
+            return 0;
+        };
+        let mut h = DefaultHasher::new();
+        hash_markdown_preview_document_into(&preview.old, &mut h);
+        hash_markdown_preview_document_into(&preview.new, &mut h);
+        h.finish()
+    }
+
+    pub fn run_render_single_step(&self, start: usize, window: usize) -> u64 {
+        self.hash_render_window(&self.single_document, start, window)
+    }
+
+    pub fn run_render_diff_step(&self, start: usize, window: usize) -> u64 {
+        if window == 0 {
+            return 0;
+        }
+
+        let left = self.render_window(&self.diff_preview.old, start, window);
+        let right = self.render_window(&self.diff_preview.new, start, window);
+
+        let mut h = DefaultHasher::new();
+        start.hash(&mut h);
+        window.hash(&mut h);
+        std::hint::black_box(left).len().hash(&mut h);
+        std::hint::black_box(right).len().hash(&mut h);
+        h.finish()
+    }
+
+    fn hash_render_window(
+        &self,
+        document: &MarkdownPreviewDocument,
+        start: usize,
+        window: usize,
+    ) -> u64 {
+        if window == 0 {
+            return 0;
+        }
+
+        let rows = self.render_window(document, start, window);
+        let mut h = DefaultHasher::new();
+        start.hash(&mut h);
+        window.hash(&mut h);
+        std::hint::black_box(rows).len().hash(&mut h);
+        h.finish()
+    }
+
+    fn render_window(
+        &self,
+        document: &MarkdownPreviewDocument,
+        start: usize,
+        window: usize,
+    ) -> Vec<AnyElement> {
+        if document.rows.is_empty() || window == 0 {
+            return Vec::new();
+        }
+
+        let start = start % document.rows.len();
+        let end = (start + window).min(document.rows.len());
+        super::history::render_markdown_preview_document_rows(
+            self.theme,
+            document,
+            start..end,
+            None,
+        )
+    }
+}
+
 pub struct ConflictThreeWayScrollFixture {
     base_lines: Vec<SharedString>,
     ours_lines: Vec<SharedString>,
@@ -3484,6 +3594,134 @@ fn build_synthetic_source_lines(count: usize, target_line_bytes: usize) -> Vec<S
     lines
 }
 
+fn build_synthetic_markdown_document(
+    sections: usize,
+    target_line_bytes: usize,
+    variant: &str,
+) -> String {
+    let sections = sections.max(1);
+    let target_line_bytes = target_line_bytes.max(48);
+    let mut source = String::new();
+
+    for ix in 0..sections {
+        if !source.is_empty() {
+            source.push('\n');
+        }
+
+        push_padded_markdown_line(
+            &mut source,
+            format!("# Section {variant} {ix}"),
+            target_line_bytes,
+            ix,
+        );
+        source.push_str("\n\n");
+        push_padded_markdown_line(
+            &mut source,
+            format!(
+                "Paragraph {variant} {ix} explains markdown preview rendering and diff tinting."
+            ),
+            target_line_bytes,
+            ix + 1,
+        );
+        source.push_str("\n\n");
+        push_padded_markdown_line(
+            &mut source,
+            format!("- [x] completed item {variant} {ix}"),
+            target_line_bytes,
+            ix + 2,
+        );
+        source.push('\n');
+        push_padded_markdown_line(
+            &mut source,
+            format!("- [ ] pending item {variant} {ix}"),
+            target_line_bytes,
+            ix + 3,
+        );
+        source.push_str("\n\n");
+        push_padded_markdown_line(
+            &mut source,
+            format!("> quoted note {variant} {ix} for preview rows"),
+            target_line_bytes,
+            ix + 4,
+        );
+        source.push_str("\n\n```rust\n");
+        push_padded_markdown_line(
+            &mut source,
+            format!("fn section_{ix}_before_after() {{ println!(\"{variant}_{ix}\"); }}"),
+            target_line_bytes,
+            ix + 5,
+        );
+        source.push('\n');
+        push_padded_markdown_line(
+            &mut source,
+            format!("let preview_{ix} = \"{variant}_code_{ix}\";"),
+            target_line_bytes,
+            ix + 6,
+        );
+        source.push_str("\n```\n\n| key | value |\n| --- | ----- |\n");
+        push_padded_markdown_line(
+            &mut source,
+            format!("| section_{ix} | table value {variant} {ix} |"),
+            target_line_bytes,
+            ix + 7,
+        );
+        source.push('\n');
+    }
+
+    source
+}
+
+fn push_padded_markdown_line(
+    buffer: &mut String,
+    mut line: String,
+    target_line_bytes: usize,
+    seed: usize,
+) {
+    if line.len() < target_line_bytes {
+        line.push(' ');
+        while line.len() < target_line_bytes {
+            line.push_str(" markdown_token_");
+            line.push_str(&(seed % 997).to_string());
+        }
+    }
+    buffer.push_str(&line);
+}
+
+fn hash_markdown_preview_document(document: &MarkdownPreviewDocument) -> u64 {
+    let mut h = DefaultHasher::new();
+    hash_markdown_preview_document_into(document, &mut h);
+    h.finish()
+}
+
+fn hash_markdown_preview_document_into(
+    document: &MarkdownPreviewDocument,
+    hasher: &mut DefaultHasher,
+) {
+    document.rows.len().hash(hasher);
+    if document.rows.is_empty() {
+        return;
+    }
+
+    let step = (document.rows.len() / 8).max(1);
+    for (ix, row) in document.rows.iter().enumerate().step_by(step).take(8) {
+        ix.hash(hasher);
+        std::mem::discriminant(&row.kind).hash(hasher);
+        row.source_line_range.start.hash(hasher);
+        row.source_line_range.end.hash(hasher);
+        row.indent_level.hash(hasher);
+        row.blockquote_level.hash(hasher);
+        std::mem::discriminant(&row.change_hint).hash(hasher);
+        row.inline_spans.len().hash(hasher);
+
+        let sample_len = row.text.len().min(32);
+        row.text
+            .as_ref()
+            .get(..sample_len)
+            .unwrap_or("")
+            .hash(hasher);
+    }
+}
+
 fn build_synthetic_nested_query_stress_lines(
     count: usize,
     target_line_bytes: usize,
@@ -4294,5 +4532,19 @@ mod tests {
         let fixture = WorktreePreviewRenderFixture::new(2_048, 192);
         assert_ne!(fixture.run_cached_lookup_step(0, 256), 0);
         assert_ne!(fixture.run_render_time_prepare_step(0, 256), 0);
+    }
+
+    #[test]
+    fn markdown_preview_fixture_runs_parse_steps() {
+        let fixture = MarkdownPreviewFixture::new(64, 96);
+        assert_ne!(fixture.run_parse_single_step(), 0);
+        assert_ne!(fixture.run_parse_diff_step(), 0);
+    }
+
+    #[test]
+    fn markdown_preview_fixture_runs_render_steps() {
+        let fixture = MarkdownPreviewFixture::new(96, 112);
+        assert_ne!(fixture.run_render_single_step(24, 64), 0);
+        assert_ne!(fixture.run_render_diff_step(24, 64), 0);
     }
 }

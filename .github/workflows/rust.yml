@@ -211,11 +211,15 @@ jobs:
       uses: dtolnay/rust-toolchain@stable
     - name: Cache Rust artifacts
       uses: Swatinem/rust-cache@v2
-    - name: Benchmark conflict scroll/search/resize hot paths
+    - name: Benchmark conflict and markdown preview hot paths
       run: |
         cargo bench -p gitcomet-ui-gpui --bench performance -- conflict_three_way_scroll/style_window
         cargo bench -p gitcomet-ui-gpui --bench performance -- conflict_two_way_split_scroll/window_200
         cargo bench -p gitcomet-ui-gpui --bench performance -- conflict_search_query_update/window/200
         cargo bench -p gitcomet-ui-gpui --bench performance -- conflict_split_resize_step/window/200
+        cargo bench -p gitcomet-ui-gpui --bench performance -- markdown_preview_parse_build/single_document/medium
+        cargo bench -p gitcomet-ui-gpui --bench performance -- markdown_preview_parse_build/two_sided_diff/medium
+        cargo bench -p gitcomet-ui-gpui --bench performance -- markdown_preview_render_single/window_rows/200
+        cargo bench -p gitcomet-ui-gpui --bench performance -- markdown_preview_render_diff/window_rows/200
     - name: Emit budget report (alerting mode)
       run: cargo run -p gitcomet-ui-gpui --bin perf_budget_report -- --criterion-root target/criterion

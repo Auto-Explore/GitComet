@@ -9,6 +9,36 @@ impl MainPaneView {
         self.conflict_three_way_segments_cache.clear();
     }
 
+    fn prepare_source_mode_for_diff_search(&mut self, cx: &mut gpui::Context<Self>) {
+        if self.is_markdown_preview_active() {
+            self.rendered_preview_modes
+                .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Source);
+            let wants_file_diff = !self.is_file_preview_active()
+                && !self.is_worktree_target_directory()
+                && self.active_repo().is_some_and(|repo| {
+                    Self::is_file_diff_target(repo.diff_state.diff_target.as_ref())
+                });
+            if wants_file_diff {
+                self.ensure_file_diff_cache(cx);
+            }
+        }
+        if self.is_conflict_rendered_preview_active() {
+            self.conflict_resolver.resolver_preview_mode = ConflictResolverPreviewMode::Text;
+        }
+    }
+
+    fn activate_diff_search(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
+        self.prepare_source_mode_for_diff_search(cx);
+        self.diff_search_active = true;
+        self.clear_diff_text_query_overlay_cache();
+        self.worktree_preview_segments_cache_path = None;
+        self.worktree_preview_segments_cache.clear();
+        self.clear_conflict_diff_query_overlay_caches();
+        self.diff_search_recompute_matches();
+        let focus = self.diff_search_input.read(cx).focus_handle();
+        window.focus(&focus);
+    }
+
     pub(in crate::view) fn diff_view(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
         let theme = self.theme;
         let repo_id = self.active_repo_id();
@@ -35,6 +65,7 @@ impl MainPaneView {
         {
             self.worktree_preview_path = None;
             self.worktree_preview = Loadable::NotLoaded;
+            self.worktree_preview_source_len = 0;
             self.worktree_preview_segments_cache_path = None;
             self.worktree_preview_segments_cache.clear();
             self.diff_horizontal_min_width = px(0.0);
@@ -87,22 +118,29 @@ impl MainPaneView {
         let conflict_strategy = Self::conflict_resolver_strategy(conflict_kind, is_binary_conflict);
         let is_conflict_resolver = conflict_strategy.is_some();
         let is_conflict_compare = conflict_target_path.is_some() && conflict_strategy.is_none();
+        let conflict_rendered_preview_active = self.is_conflict_rendered_preview_active();
 
-        let diff_target_path =
-            repo.and_then(|repo| match repo.diff_state.diff_target.as_ref()? {
-                DiffTarget::WorkingTree { path, .. } => Some(path.as_path()),
-                DiffTarget::Commit {
-                    path: Some(path), ..
-                } => Some(path.as_path()),
-                _ => None,
-            });
-        let is_svg_diff_target = diff_target_path.is_some_and(super::super::is_svg_path);
-        let show_svg_view_toggle = wants_file_diff && is_svg_diff_target;
+        let rendered_preview_kind = super::super::diff_target_rendered_preview_kind(
+            repo.and_then(|repo| repo.diff_state.diff_target.as_ref()),
+        );
+        let rendered_view_toggle_kind = super::super::main_diff_rendered_preview_toggle_kind(
+            wants_file_diff,
+            is_file_preview,
+            rendered_preview_kind,
+        );
+        let is_markdown_preview_view = rendered_view_toggle_kind
+            == Some(RenderedPreviewKind::Markdown)
+            && self
+                .rendered_preview_modes
+                .get(RenderedPreviewKind::Markdown)
+                == RenderedPreviewMode::Rendered;
         let is_image_diff_loaded = repo
             .is_some_and(|repo| !matches!(repo.diff_state.diff_file_image, Loadable::NotLoaded));
         let is_image_diff_view = wants_file_diff
             && is_image_diff_loaded
-            && (!is_svg_diff_target || self.svg_diff_view_mode == SvgDiffViewMode::Image);
+            && (!matches!(rendered_preview_kind, Some(RenderedPreviewKind::Svg))
+                || self.rendered_preview_modes.get(RenderedPreviewKind::Svg)
+                    == RenderedPreviewMode::Rendered);
 
         let (prev_file_btn, next_file_btn) = self.diff_prev_next_file_buttons(repo_id, theme, cx);
 
@@ -145,35 +183,39 @@ impl MainPaneView {
                 }
             }
         } else if is_conflict_resolver {
-            let nav_entries = self.conflict_nav_entries();
-            let current_nav_ix = self.conflict_resolver.nav_anchor.unwrap_or(0);
-            let can_nav_prev =
-                diff_navigation::diff_nav_prev_target(&nav_entries, current_nav_ix).is_some();
-            let can_nav_next =
-                diff_navigation::diff_nav_next_target(&nav_entries, current_nav_ix).is_some();
-
             controls = controls
                 .when_some(prev_file_btn, |d, btn| d.child(btn))
-                .child(
-                    components::Button::new("conflict_prev", "Prev")
-                        .end_slot(Self::diff_nav_hotkey_hint(theme, "F2"))
-                        .style(components::ButtonStyle::Outlined)
-                        .disabled(!can_nav_prev)
-                        .on_click(theme, cx, |this, _e, _w, cx| {
-                            this.conflict_jump_prev(cx);
-                            cx.notify();
-                        }),
-                )
-                .child(
-                    components::Button::new("conflict_next", "Next")
-                        .end_slot(Self::diff_nav_hotkey_hint(theme, "F3"))
-                        .style(components::ButtonStyle::Outlined)
-                        .disabled(!can_nav_next)
-                        .on_click(theme, cx, |this, _e, _w, cx| {
-                            this.conflict_jump_next(cx);
-                            cx.notify();
-                        }),
-                )
+                .when(!conflict_rendered_preview_active, |d| {
+                    let nav_entries = self.conflict_nav_entries();
+                    let current_nav_ix = self.conflict_resolver.nav_anchor.unwrap_or(0);
+                    let can_nav_prev =
+                        diff_navigation::diff_nav_prev_target(&nav_entries, current_nav_ix)
+                            .is_some();
+                    let can_nav_next =
+                        diff_navigation::diff_nav_next_target(&nav_entries, current_nav_ix)
+                            .is_some();
+
+                    d.child(
+                        components::Button::new("conflict_prev", "Prev")
+                            .end_slot(Self::diff_nav_hotkey_hint(theme, "F2"))
+                            .style(components::ButtonStyle::Outlined)
+                            .disabled(!can_nav_prev)
+                            .on_click(theme, cx, |this, _e, _w, cx| {
+                                this.conflict_jump_prev(cx);
+                                cx.notify();
+                            }),
+                    )
+                    .child(
+                        components::Button::new("conflict_next", "Next")
+                            .end_slot(Self::diff_nav_hotkey_hint(theme, "F3"))
+                            .style(components::ButtonStyle::Outlined)
+                            .disabled(!can_nav_next)
+                            .on_click(theme, cx, |this, _e, _w, cx| {
+                                this.conflict_jump_next(cx);
+                                cx.notify();
+                            }),
+                    )
+                })
                 .when_some(next_file_btn, |d, btn| d.child(btn));
 
             let resolved_output_text = self
@@ -271,7 +313,7 @@ impl MainPaneView {
         } else if !is_file_preview {
             controls = controls.when_some(prev_file_btn, |d, btn| d.child(btn));
 
-            if !is_image_diff_view {
+            if !is_image_diff_view && !is_markdown_preview_view {
                 let nav_entries = self.diff_nav_entries();
                 let current_nav_ix = self.diff_selection_anchor.unwrap_or(0);
                 let can_nav_prev =
@@ -436,31 +478,40 @@ impl MainPaneView {
                 controls = controls.when_some(next_file_btn, |d, btn| d.child(btn));
             }
 
-            if show_svg_view_toggle {
+            if let Some(preview_kind) = rendered_view_toggle_kind {
+                let preview_mode = self.rendered_preview_modes.get(preview_kind);
                 controls = controls
                     .child(
-                        components::Button::new("svg_diff_view_image", "Image")
-                            .style(if self.svg_diff_view_mode == SvgDiffViewMode::Image {
-                                components::ButtonStyle::Filled
-                            } else {
-                                components::ButtonStyle::Outlined
-                            })
-                            .on_click(theme, cx, |this, _e, _w, cx| {
-                                this.svg_diff_view_mode = SvgDiffViewMode::Image;
-                                cx.notify();
-                            }),
+                        components::Button::new(
+                            preview_kind.rendered_button_id(),
+                            preview_kind.rendered_label(),
+                        )
+                        .style(if preview_mode == RenderedPreviewMode::Rendered {
+                            components::ButtonStyle::Filled
+                        } else {
+                            components::ButtonStyle::Outlined
+                        })
+                        .on_click(theme, cx, move |this, _e, _w, cx| {
+                            this.rendered_preview_modes
+                                .set(preview_kind, RenderedPreviewMode::Rendered);
+                            cx.notify();
+                        }),
                     )
                     .child(
-                        components::Button::new("svg_diff_view_code", "Code")
-                            .style(if self.svg_diff_view_mode == SvgDiffViewMode::Code {
-                                components::ButtonStyle::Filled
-                            } else {
-                                components::ButtonStyle::Outlined
-                            })
-                            .on_click(theme, cx, |this, _e, _w, cx| {
-                                this.svg_diff_view_mode = SvgDiffViewMode::Code;
-                                cx.notify();
-                            }),
+                        components::Button::new(
+                            preview_kind.source_button_id(),
+                            preview_kind.source_label(),
+                        )
+                        .style(if preview_mode == RenderedPreviewMode::Source {
+                            components::ButtonStyle::Filled
+                        } else {
+                            components::ButtonStyle::Outlined
+                        })
+                        .on_click(theme, cx, move |this, _e, _w, cx| {
+                            this.rendered_preview_modes
+                                .set(preview_kind, RenderedPreviewMode::Source);
+                            cx.notify();
+                        }),
                     );
             }
         } else {
@@ -569,67 +620,142 @@ impl MainPaneView {
             if added_preview_path.is_some() || deleted_preview_path.is_some() {
                 self.try_populate_worktree_preview_from_diff_file(cx);
             }
-            match &self.worktree_preview {
-                Loadable::NotLoaded | Loadable::Loading => {
-                    components::empty_state(theme, "File", "Loading").into_any_element()
-                }
-                Loadable::Error(e) => {
-                    self.diff_raw_input.update(cx, |input, cx| {
-                        input.set_theme(theme, cx);
-                        input.set_text(e.clone(), cx);
-                        input.set_read_only(true, cx);
-                    });
-                    div()
-                        .id("worktree_preview_error_scroll")
-                        .flex()
-                        .flex_col()
-                        .flex_1()
-                        .min_h(px(0.0))
-                        .overflow_y_scroll()
-                        .child(self.diff_raw_input.clone())
-                        .into_any_element()
-                }
-                Loadable::Ready(lines) => {
-                    if lines.is_empty() {
-                        components::empty_state(theme, "File", "Empty file.").into_any_element()
-                    } else {
-                        let list = uniform_list(
-                            "worktree_preview_list",
-                            lines.len(),
-                            cx.processor(Self::render_worktree_preview_rows),
-                        )
-                        .h_full()
-                        .min_h(px(0.0))
-                        .track_scroll(self.worktree_preview_scroll.clone())
-                        .with_horizontal_sizing_behavior(
-                            gpui::ListHorizontalSizingBehavior::Unconstrained,
-                        );
+            if is_markdown_preview_view {
+                match &self.worktree_preview {
+                    Loadable::NotLoaded | Loadable::Loading => {
+                        components::empty_state(theme, "Preview", "Loading").into_any_element()
+                    }
+                    Loadable::Error(e) => {
+                        components::empty_state(theme, "Preview", e.clone()).into_any_element()
+                    }
+                    Loadable::Ready(_) => {
+                        self.ensure_single_markdown_preview_cache(cx);
+                        match &self.worktree_markdown_preview {
+                            Loadable::NotLoaded | Loadable::Loading => {
+                                components::empty_state(theme, "Preview", "Loading")
+                                    .into_any_element()
+                            }
+                            Loadable::Error(e) => {
+                                components::empty_state(theme, "Preview", e.clone())
+                                    .into_any_element()
+                            }
+                            Loadable::Ready(document) => {
+                                if document.rows.is_empty() {
+                                    let message = if self.worktree_preview_line_count() == Some(0) {
+                                        "Empty file."
+                                    } else {
+                                        "Nothing to render."
+                                    };
+                                    components::empty_state(theme, "Preview", message)
+                                        .into_any_element()
+                                } else {
+                                    let list = uniform_list(
+                                        "worktree_markdown_preview_list",
+                                        document.rows.len(),
+                                        cx.processor(Self::render_markdown_preview_rows),
+                                    )
+                                    .h_full()
+                                    .min_h(px(0.0))
+                                    .track_scroll(self.worktree_preview_scroll.clone())
+                                    .with_horizontal_sizing_behavior(
+                                        gpui::ListHorizontalSizingBehavior::Unconstrained,
+                                    );
 
-                        let scroll_handle =
-                            self.worktree_preview_scroll.0.borrow().base_handle.clone();
+                                    let scroll_handle =
+                                        self.worktree_preview_scroll.0.borrow().base_handle.clone();
+                                    div()
+                                        .id("worktree_markdown_preview_scroll_container")
+                                        .debug_selector(|| {
+                                            "worktree_markdown_preview_scroll_container".to_string()
+                                        })
+                                        .relative()
+                                        .h_full()
+                                        .min_h(px(0.0))
+                                        .child(list)
+                                        .child(
+                                            components::Scrollbar::new(
+                                                "worktree_markdown_preview_scrollbar",
+                                                scroll_handle.clone(),
+                                            )
+                                            .render(theme),
+                                        )
+                                        .child(
+                                            components::Scrollbar::horizontal(
+                                                "worktree_markdown_preview_hscrollbar",
+                                                scroll_handle,
+                                            )
+                                            .always_visible()
+                                            .render(theme),
+                                        )
+                                        .into_any_element()
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                match &self.worktree_preview {
+                    Loadable::NotLoaded | Loadable::Loading => {
+                        components::empty_state(theme, "File", "Loading").into_any_element()
+                    }
+                    Loadable::Error(e) => {
+                        self.diff_raw_input.update(cx, |input, cx| {
+                            input.set_theme(theme, cx);
+                            input.set_text(e.clone(), cx);
+                            input.set_read_only(true, cx);
+                        });
                         div()
-                            .id("worktree_preview_scroll_container")
-                            .debug_selector(|| "worktree_preview_scroll_container".to_string())
-                            .relative()
+                            .id("worktree_preview_error_scroll")
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .min_h(px(0.0))
+                            .overflow_y_scroll()
+                            .child(self.diff_raw_input.clone())
+                            .into_any_element()
+                    }
+                    Loadable::Ready(lines) => {
+                        if lines.is_empty() {
+                            components::empty_state(theme, "File", "Empty file.").into_any_element()
+                        } else {
+                            let list = uniform_list(
+                                "worktree_preview_list",
+                                lines.len(),
+                                cx.processor(Self::render_worktree_preview_rows),
+                            )
                             .h_full()
                             .min_h(px(0.0))
-                            .child(list)
-                            .child(
-                                components::Scrollbar::new(
-                                    "worktree_preview_scrollbar",
-                                    scroll_handle.clone(),
+                            .track_scroll(self.worktree_preview_scroll.clone())
+                            .with_horizontal_sizing_behavior(
+                                gpui::ListHorizontalSizingBehavior::Unconstrained,
+                            );
+
+                            let scroll_handle =
+                                self.worktree_preview_scroll.0.borrow().base_handle.clone();
+                            div()
+                                .id("worktree_preview_scroll_container")
+                                .debug_selector(|| "worktree_preview_scroll_container".to_string())
+                                .relative()
+                                .h_full()
+                                .min_h(px(0.0))
+                                .child(list)
+                                .child(
+                                    components::Scrollbar::new(
+                                        "worktree_preview_scrollbar",
+                                        scroll_handle.clone(),
+                                    )
+                                    .render(theme),
                                 )
-                                .render(theme),
-                            )
-                            .child(
-                                components::Scrollbar::horizontal(
-                                    "worktree_preview_hscrollbar",
-                                    scroll_handle,
+                                .child(
+                                    components::Scrollbar::horizontal(
+                                        "worktree_preview_hscrollbar",
+                                        scroll_handle,
+                                    )
+                                    .always_visible()
+                                    .render(theme),
                                 )
-                                .always_visible()
-                                .render(theme),
-                            )
-                            .into_any_element()
+                                .into_any_element()
+                        }
                     }
                 }
             }
@@ -1017,10 +1143,12 @@ impl MainPaneView {
                                     )
                                 });
 
-                            let is_svg_conflict = super::super::is_svg_path(&path);
-                            let is_markdown_conflict = super::super::is_markdown_path(&path);
-                            let show_preview_toggle = is_svg_conflict || is_markdown_conflict;
+                            let preview_kind = super::super::preview_path_rendered_kind(&path);
+                            let show_preview_toggle = preview_kind.is_some();
                             let preview_mode = self.conflict_resolver.resolver_preview_mode;
+                            let is_rendered_preview_active =
+                                show_preview_toggle
+                                    && preview_mode == ConflictResolverPreviewMode::Preview;
 
                             let preview_toggle = show_preview_toggle.then(|| {
                                 let view_toggle_border = theme.colors.border;
@@ -1053,7 +1181,9 @@ impl MainPaneView {
                                     .child(
                                         components::Button::new(
                                             "conflict_preview_preview",
-                                            if is_svg_conflict { "Image" } else { "Preview" },
+                                            preview_kind
+                                                .map(RenderedPreviewKind::rendered_label)
+                                                .unwrap_or("Preview"),
                                         )
                                         .borderless()
                                         .style(components::ButtonStyle::Subtle)
@@ -1080,12 +1210,16 @@ impl MainPaneView {
                                         .gap_2()
                                         .child(
                                             div().text_xs().text_color(theme.colors.text_muted).child(
-                                                match view_mode {
-                                                    ConflictResolverViewMode::ThreeWay => {
-                                                        "Merge inputs (base / local / remote)"
-                                                    }
-                                                    ConflictResolverViewMode::TwoWayDiff => {
-                                                        "Diff (local ↔ remote)"
+                                                if is_rendered_preview_active {
+                                                    "Preview inputs (base / local / remote)"
+                                                } else {
+                                                    match view_mode {
+                                                        ConflictResolverViewMode::ThreeWay => {
+                                                            "Merge inputs (base / local / remote)"
+                                                        }
+                                                        ConflictResolverViewMode::TwoWayDiff => {
+                                                            "Diff (local ↔ remote)"
+                                                        }
                                                     }
                                                 },
                                             ),
@@ -1097,12 +1231,15 @@ impl MainPaneView {
                                         .flex()
                                         .items_center()
                                         .gap_2()
-                                        .child(show_whitespace_control)
-                                        .when(
-                                            view_mode == ConflictResolverViewMode::TwoWayDiff,
-                                            |d| d.child(mode_controls),
-                                        )
-                                        .child(view_mode_controls),
+                                        .when(!is_rendered_preview_active, |d| {
+                                            d.child(show_whitespace_control)
+                                                .when(
+                                                    view_mode
+                                                        == ConflictResolverViewMode::TwoWayDiff,
+                                                    |d| d.child(mode_controls),
+                                                )
+                                                .child(view_mode_controls)
+                                        }),
                                 );
 
                             // Compute three-way column widths
@@ -1431,99 +1568,21 @@ impl MainPaneView {
                             let top_body: AnyElement = if diff_len == 0 {
                                 components::empty_state(theme, "Inputs", "Stage data not available.")
                                     .into_any_element()
-                            } else if preview_mode == ConflictResolverPreviewMode::Preview
-                                && is_svg_conflict
-                            {
-                                // SVG image preview: render each side as a visual image.
-                                let svg_image = |text: &str| -> Option<Arc<gpui::Image>> {
-                                    if text.is_empty() {
-                                        return None;
-                                    }
-                                    rasterize_svg_preview_image(text.as_bytes()).or_else(|| {
-                                        Some(Arc::new(gpui::Image::from_bytes(
-                                            gpui::ImageFormat::Svg,
-                                            text.as_bytes().to_vec(),
-                                        )))
-                                    })
-                                };
-                                let base_img = svg_image(&base);
-                                let ours_img = svg_image(&local);
-                                let theirs_img = svg_image(&remote);
-
-                                let preview_cell =
-                                    |id: &'static str,
-                                     label: &'static str,
-                                     img: Option<Arc<gpui::Image>>| {
-                                        div()
-                                            .id(id)
-                                            .flex_1()
-                                            .min_w(px(0.0))
-                                            .h_full()
-                                            .border_1()
-                                            .border_color(theme.colors.border)
-                                            .rounded(px(theme.radii.row))
-                                            .overflow_hidden()
-                                            .flex()
-                                            .flex_col()
-                                            .child(
-                                                div()
-                                                    .h(px(24.0))
-                                                    .px_2()
-                                                    .flex()
-                                                    .items_center()
-                                                    .bg(theme.colors.surface_bg_elevated)
-                                                    .text_xs()
-                                                    .text_color(theme.colors.text_muted)
-                                                    .child(label),
-                                            )
-                                            .child(
-                                                div()
-                                                    .flex_1()
-                                                    .min_h(px(0.0))
-                                                    .bg(theme.colors.window_bg)
-                                                    .flex()
-                                                    .items_center()
-                                                    .justify_center()
-                                                    .child(match img {
-                                                        Some(data) => gpui::img(data)
-                                                            .w_full()
-                                                            .h_full()
-                                                            .object_fit(gpui::ObjectFit::Contain)
-                                                            .into_any_element(),
-                                                        None => div()
-                                                            .text_xs()
-                                                            .text_color(theme.colors.text_muted)
-                                                            .child("(empty)")
-                                                            .into_any_element(),
-                                                    }),
-                                            )
-                                    };
-
-                                div()
-                                    .id("conflict_resolver_preview")
-                                    .flex_1()
-                                    .min_h(px(0.0))
-                                    .w_full()
-                                    .flex()
-                                    .gap_2()
-                                    .p_2()
-                                    .bg(theme.colors.window_bg)
-                                    .child(preview_cell(
-                                        "conflict_preview_base",
-                                        "Base (A)",
-                                        base_img,
-                                    ))
-                                    .child(preview_cell(
-                                        "conflict_preview_ours",
-                                        "Ours (B)",
-                                        ours_img,
-                                    ))
-                                    .child(preview_cell(
-                                        "conflict_preview_theirs",
-                                        "Theirs (C)",
-                                        theirs_img,
-                                    ))
-                                    .into_any_element()
+                            } else if is_rendered_preview_active {
+                                match preview_kind {
+                                    Some(RenderedPreviewKind::Svg) => self
+                                        .render_conflict_resolver_svg_preview(
+                                            theme, &base, &local, &remote,
+                                        ),
+                                    Some(RenderedPreviewKind::Markdown) => self
+                                        .render_conflict_resolver_markdown_preview(theme, cx),
+                                    None => components::empty_state(
+                                        theme,
+                                        "Preview",
+                                        "Preview is not available for this file.",
+                                    )
+                                    .into_any_element(),
+                                }
                             } else {
                                 let list = match view_mode {
                                     ConflictResolverViewMode::ThreeWay => uniform_list(
@@ -2378,38 +2437,23 @@ impl MainPaneView {
                     && !mods.function
                     && key == "f"
                 {
-                    this.diff_search_active = true;
-                    this.clear_diff_text_query_overlay_cache();
-                    this.worktree_preview_segments_cache_path = None;
-                    this.worktree_preview_segments_cache.clear();
-                    this.clear_conflict_diff_query_overlay_caches();
-                    this.diff_search_recompute_matches();
-                    let focus = this.diff_search_input.read(cx).focus_handle();
-                    window.focus(&focus);
+                    this.activate_diff_search(window, cx);
                     handled = true;
                 }
 
                 if !handled
                     && this.diff_search_active
-                    && key == "f2"
+                    && matches!(key, "f2" | "f3")
                     && !mods.control
                     && !mods.alt
                     && !mods.platform
                     && !mods.function
                 {
-                    this.diff_search_prev_match();
-                    handled = true;
-                }
-
-                if !handled
-                    && this.diff_search_active
-                    && key == "f3"
-                    && !mods.control
-                    && !mods.alt
-                    && !mods.platform
-                    && !mods.function
-                {
-                    this.diff_search_next_match();
+                    if key == "f2" {
+                        this.diff_search_prev_match();
+                    } else {
+                        this.diff_search_next_match();
+                    }
                     handled = true;
                 }
 
@@ -2542,43 +2586,24 @@ impl MainPaneView {
                     return;
                 }
 
-                let conflict_resolver_active = this.active_repo().is_some_and(|repo| {
-                    let Some(DiffTarget::WorkingTree { path, area }) =
-                        repo.diff_state.diff_target.as_ref()
-                    else {
-                        return false;
-                    };
-                    if *area != DiffArea::Unstaged {
-                        return false;
-                    }
-                    let Loadable::Ready(status) = &repo.status else {
-                        return false;
-                    };
-                    let conflict = status.unstaged.iter().find(|e| {
-                        e.path == *path
-                            && e.kind == gitcomet_core::domain::FileStatusKind::Conflicted
-                    });
-                    conflict
-                        .and_then(|e| Self::conflict_resolver_strategy(e.conflict, false))
-                        .is_some()
-                });
+                let conflict_resolver_active = this.is_conflict_resolver_active();
+                let markdown_preview_active = this.is_markdown_preview_active();
+                let conflict_preview_active = this.is_conflict_rendered_preview_active();
 
                 if mods.alt && !mods.control && !mods.platform && !mods.function {
                     match key {
-                        "i" => {
-                            if conflict_resolver_active {
-                                this.conflict_resolver_set_mode(ConflictDiffMode::Inline, cx);
+                        "i" | "s" => {
+                            let (conflict_mode, diff_mode) = if key == "i" {
+                                (ConflictDiffMode::Inline, DiffViewMode::Inline)
                             } else {
-                                this.diff_view = DiffViewMode::Inline;
-                                this.clear_diff_text_style_caches();
-                            }
-                            handled = true;
-                        }
-                        "s" => {
+                                (ConflictDiffMode::Split, DiffViewMode::Split)
+                            };
                             if conflict_resolver_active {
-                                this.conflict_resolver_set_mode(ConflictDiffMode::Split, cx);
-                            } else {
-                                this.diff_view = DiffViewMode::Split;
+                                if !conflict_preview_active {
+                                    this.conflict_resolver_set_mode(conflict_mode, cx);
+                                }
+                            } else if !markdown_preview_active {
+                                this.diff_view = diff_mode;
                                 this.clear_diff_text_style_caches();
                             }
                             handled = true;
@@ -2595,15 +2620,15 @@ impl MainPaneView {
                                 handled = true;
                             }
                         }
-                        "w" => {
+                        "w" if !markdown_preview_active && !conflict_preview_active => {
                             this.toggle_show_whitespace();
                             handled = true;
                         }
-                        "up" => {
+                        "up" if !markdown_preview_active => {
                             this.diff_jump_prev();
                             handled = true;
                         }
-                        "down" => {
+                        "down" if !markdown_preview_active => {
                             this.diff_jump_next();
                             handled = true;
                         }
@@ -2612,7 +2637,7 @@ impl MainPaneView {
                 }
 
                 if !handled
-                    && key == "f7"
+                    && matches!(key, "f2" | "f3" | "f7")
                     && !mods.control
                     && !mods.alt
                     && !mods.platform
@@ -2622,81 +2647,17 @@ impl MainPaneView {
                         conflict_resolver::conflict_nav_direction_for_key(key, mods.shift)
                     {
                         if conflict_resolver_active {
-                            match direction {
-                                conflict_resolver::ConflictNavDirection::Prev => {
-                                    this.conflict_jump_prev(cx);
-                                }
-                                conflict_resolver::ConflictNavDirection::Next => {
-                                    this.conflict_jump_next(cx);
-                                }
-                            }
-                        } else {
-                            match direction {
-                                conflict_resolver::ConflictNavDirection::Prev => {
-                                    this.diff_jump_prev()
-                                }
-                                conflict_resolver::ConflictNavDirection::Next => {
-                                    this.diff_jump_next()
+                            if !conflict_preview_active {
+                                match direction {
+                                    conflict_resolver::ConflictNavDirection::Prev => {
+                                        this.conflict_jump_prev(cx);
+                                    }
+                                    conflict_resolver::ConflictNavDirection::Next => {
+                                        this.conflict_jump_next(cx);
+                                    }
                                 }
                             }
-                        }
-                    }
-                    handled = true;
-                }
-
-                if !handled
-                    && key == "f2"
-                    && !mods.control
-                    && !mods.alt
-                    && !mods.platform
-                    && !mods.function
-                {
-                    if let Some(direction) =
-                        conflict_resolver::conflict_nav_direction_for_key(key, mods.shift)
-                    {
-                        if conflict_resolver_active {
-                            match direction {
-                                conflict_resolver::ConflictNavDirection::Prev => {
-                                    this.conflict_jump_prev(cx);
-                                }
-                                conflict_resolver::ConflictNavDirection::Next => {
-                                    this.conflict_jump_next(cx);
-                                }
-                            }
-                        } else {
-                            match direction {
-                                conflict_resolver::ConflictNavDirection::Prev => {
-                                    this.diff_jump_prev()
-                                }
-                                conflict_resolver::ConflictNavDirection::Next => {
-                                    this.diff_jump_next()
-                                }
-                            }
-                        }
-                    }
-                    handled = true;
-                }
-
-                if !handled
-                    && key == "f3"
-                    && !mods.control
-                    && !mods.alt
-                    && !mods.platform
-                    && !mods.function
-                {
-                    if let Some(direction) =
-                        conflict_resolver::conflict_nav_direction_for_key(key, mods.shift)
-                    {
-                        if conflict_resolver_active {
-                            match direction {
-                                conflict_resolver::ConflictNavDirection::Prev => {
-                                    this.conflict_jump_prev(cx);
-                                }
-                                conflict_resolver::ConflictNavDirection::Next => {
-                                    this.conflict_jump_next(cx);
-                                }
-                            }
-                        } else {
+                        } else if !markdown_preview_active {
                             match direction {
                                 conflict_resolver::ConflictNavDirection::Prev => {
                                     this.diff_jump_prev()
@@ -2768,5 +2729,268 @@ impl MainPaneView {
             )
             .child(div().flex_1().min_h(px(0.0)).w_full().h_full().child(body))
             .child(DiffTextSelectionTracker { view: cx.entity() })
+    }
+
+    fn render_conflict_resolver_svg_preview(
+        &self,
+        theme: AppTheme,
+        base: &str,
+        local: &str,
+        remote: &str,
+    ) -> AnyElement {
+        let svg_image = |text: &str| -> Option<Arc<gpui::Image>> {
+            if text.is_empty() {
+                return None;
+            }
+            rasterize_svg_preview_image(text.as_bytes()).or_else(|| {
+                Some(Arc::new(gpui::Image::from_bytes(
+                    gpui::ImageFormat::Svg,
+                    text.as_bytes().to_vec(),
+                )))
+            })
+        };
+        let base_img = svg_image(base);
+        let ours_img = svg_image(local);
+        let theirs_img = svg_image(remote);
+
+        let preview_cell =
+            |id: &'static str, label: &'static str, img: Option<Arc<gpui::Image>>| {
+                div()
+                    .id(id)
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .h_full()
+                    .border_1()
+                    .border_color(theme.colors.border)
+                    .rounded(px(theme.radii.row))
+                    .overflow_hidden()
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div()
+                            .h(px(24.0))
+                            .px_2()
+                            .flex()
+                            .items_center()
+                            .bg(theme.colors.surface_bg_elevated)
+                            .text_xs()
+                            .text_color(theme.colors.text_muted)
+                            .child(label),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_h(px(0.0))
+                            .bg(theme.colors.window_bg)
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(match img {
+                                Some(data) => gpui::img(data)
+                                    .w_full()
+                                    .h_full()
+                                    .object_fit(gpui::ObjectFit::Contain)
+                                    .into_any_element(),
+                                None => div()
+                                    .text_xs()
+                                    .text_color(theme.colors.text_muted)
+                                    .child("(empty)")
+                                    .into_any_element(),
+                            }),
+                    )
+            };
+
+        div()
+            .id("conflict_resolver_preview")
+            .flex_1()
+            .min_h(px(0.0))
+            .w_full()
+            .flex()
+            .gap_2()
+            .p_2()
+            .bg(theme.colors.window_bg)
+            .child(preview_cell("conflict_preview_base", "Base (A)", base_img))
+            .child(preview_cell("conflict_preview_ours", "Local (B)", ours_img))
+            .child(preview_cell(
+                "conflict_preview_theirs",
+                "Remote (C)",
+                theirs_img,
+            ))
+            .into_any_element()
+    }
+
+    fn render_conflict_resolver_markdown_preview(
+        &mut self,
+        theme: AppTheme,
+        cx: &mut gpui::Context<Self>,
+    ) -> AnyElement {
+        self.ensure_conflict_markdown_preview_cache();
+        self.sync_conflict_preview_vertical_scroll();
+
+        let scroll_for = |side: ThreeWayColumn| -> ScrollHandle {
+            match side {
+                ThreeWayColumn::Base => &self.conflict_resolver_diff_scroll,
+                ThreeWayColumn::Ours => &self.conflict_preview_ours_scroll,
+                ThreeWayColumn::Theirs => &self.conflict_preview_theirs_scroll,
+            }
+            .0
+            .borrow()
+            .base_handle
+            .clone()
+        };
+
+        let row_count = |side: ThreeWayColumn| -> usize {
+            match self.conflict_resolver.markdown_preview.document(side) {
+                Loadable::Ready(doc) => doc.rows.len(),
+                _ => 0,
+            }
+        };
+        let tallest = [
+            ThreeWayColumn::Base,
+            ThreeWayColumn::Ours,
+            ThreeWayColumn::Theirs,
+        ]
+        .into_iter()
+        .max_by_key(|s| row_count(*s))
+        .unwrap_or(ThreeWayColumn::Base);
+        let vertical_handle = scroll_for(tallest);
+
+        div()
+            .id("conflict_resolver_preview")
+            .relative()
+            .flex_1()
+            .min_h(px(0.0))
+            .w_full()
+            .flex()
+            .gap_2()
+            .p_2()
+            .bg(theme.colors.window_bg)
+            .child(self.render_conflict_markdown_preview_column(theme, ThreeWayColumn::Base, cx))
+            .child(self.render_conflict_markdown_preview_column(theme, ThreeWayColumn::Ours, cx))
+            .child(self.render_conflict_markdown_preview_column(theme, ThreeWayColumn::Theirs, cx))
+            .child(
+                components::Scrollbar::new("conflict_markdown_preview_scrollbar", vertical_handle)
+                    .always_visible()
+                    .render(theme),
+            )
+            .into_any_element()
+    }
+
+    fn render_conflict_markdown_preview_column(
+        &mut self,
+        theme: AppTheme,
+        side: ThreeWayColumn,
+        cx: &mut gpui::Context<Self>,
+    ) -> AnyElement {
+        let (id, list_id, hscrollbar_id, label, scroll) = match side {
+            ThreeWayColumn::Base => (
+                "conflict_preview_base",
+                "conflict_preview_base_list",
+                "conflict_preview_base_hscrollbar",
+                "Base (A)",
+                self.conflict_resolver_diff_scroll.clone(),
+            ),
+            ThreeWayColumn::Ours => (
+                "conflict_preview_ours",
+                "conflict_preview_ours_list",
+                "conflict_preview_ours_hscrollbar",
+                "Local (B)",
+                self.conflict_preview_ours_scroll.clone(),
+            ),
+            ThreeWayColumn::Theirs => (
+                "conflict_preview_theirs",
+                "conflict_preview_theirs_list",
+                "conflict_preview_theirs_hscrollbar",
+                "Remote (C)",
+                self.conflict_preview_theirs_scroll.clone(),
+            ),
+        };
+        let status = |message: SharedString| {
+            div()
+                .flex_1()
+                .min_h(px(0.0))
+                .flex()
+                .items_center()
+                .justify_center()
+                .p_2()
+                .text_xs()
+                .text_color(theme.colors.text_muted)
+                .child(message)
+                .into_any_element()
+        };
+
+        // Macro to build the column list+scrollbar from a side-specific processor.
+        // Each side needs its own fn item type for `cx.processor()`.
+        macro_rules! mk_list {
+            ($document:expr, $processor:expr) => {{
+                let scroll_handle = scroll.0.borrow().base_handle.clone();
+                let list = uniform_list(list_id, $document.rows.len(), cx.processor($processor))
+                    .h_full()
+                    .min_h(px(0.0))
+                    .track_scroll(scroll)
+                    .with_horizontal_sizing_behavior(
+                        gpui::ListHorizontalSizingBehavior::Unconstrained,
+                    );
+                div()
+                    .relative()
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .child(list)
+                    .child(
+                        components::Scrollbar::horizontal(hscrollbar_id, scroll_handle)
+                            .always_visible()
+                            .render(theme),
+                    )
+                    .into_any_element()
+            }};
+        }
+
+        let body = match (side, self.conflict_resolver.markdown_preview.document(side)) {
+            (_, Loadable::NotLoaded | Loadable::Loading) => status("Processing preview…".into()),
+            (_, Loadable::Error(error)) => status(error.clone().into()),
+            (_, Loadable::Ready(document)) if document.rows.is_empty() => {
+                status("Empty file.".into())
+            }
+            (ThreeWayColumn::Base, Loadable::Ready(doc)) => {
+                mk_list!(doc, Self::render_conflict_markdown_base_rows)
+            }
+            (ThreeWayColumn::Ours, Loadable::Ready(doc)) => {
+                mk_list!(doc, Self::render_conflict_markdown_ours_rows)
+            }
+            (ThreeWayColumn::Theirs, Loadable::Ready(doc)) => {
+                mk_list!(doc, Self::render_conflict_markdown_theirs_rows)
+            }
+        };
+
+        div()
+            .id(id)
+            .flex_1()
+            .min_w(px(0.0))
+            .h_full()
+            .border_1()
+            .border_color(theme.colors.border)
+            .rounded(px(theme.radii.row))
+            .overflow_hidden()
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .h(px(24.0))
+                    .px_2()
+                    .flex()
+                    .items_center()
+                    .bg(theme.colors.surface_bg_elevated)
+                    .text_xs()
+                    .text_color(theme.colors.text_muted)
+                    .child(label),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .bg(theme.colors.window_bg)
+                    .child(body),
+            )
+            .into_any_element()
     }
 }

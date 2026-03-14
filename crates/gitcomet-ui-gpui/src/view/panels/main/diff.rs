@@ -27,22 +27,26 @@ impl MainPaneView {
         theme: AppTheme,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
-        let (wants_image, is_svg) = self
+        let (wants_image, wants_markdown_preview, rendered_preview_kind) = self
             .active_repo()
             .map(|repo| {
-                let is_svg = match repo.diff_state.diff_target.as_ref() {
-                    Some(DiffTarget::WorkingTree { path, .. }) => crate::view::is_svg_path(path),
-                    Some(DiffTarget::Commit {
-                        path: Some(path), ..
-                    }) => crate::view::is_svg_path(path),
-                    _ => false,
-                };
+                let rendered_preview_kind = crate::view::diff_target_rendered_preview_kind(
+                    repo.diff_state.diff_target.as_ref(),
+                );
                 let has_image = !matches!(repo.diff_state.diff_file_image, Loadable::NotLoaded);
-                let wants_image =
-                    has_image && (!is_svg || self.svg_diff_view_mode == SvgDiffViewMode::Image);
-                (wants_image, is_svg)
+                let wants_image = has_image
+                    && (!matches!(rendered_preview_kind, Some(RenderedPreviewKind::Svg))
+                        || self.rendered_preview_modes.get(RenderedPreviewKind::Svg)
+                            == RenderedPreviewMode::Rendered);
+                let wants_markdown_preview = rendered_preview_kind
+                    == Some(RenderedPreviewKind::Markdown)
+                    && self
+                        .rendered_preview_modes
+                        .get(RenderedPreviewKind::Markdown)
+                        == RenderedPreviewMode::Rendered;
+                (wants_image, wants_markdown_preview, rendered_preview_kind)
             })
-            .unwrap_or((false, false));
+            .unwrap_or((false, false, None));
 
         if wants_image {
             enum DiffFileImageState {
@@ -215,35 +219,73 @@ impl MainPaneView {
                 },
             };
 
-            if is_svg && matches!(diff_file_state, DiffFileState::NotLoaded) {
+            if !wants_markdown_preview
+                && rendered_preview_kind == Some(RenderedPreviewKind::Svg)
+                && matches!(diff_file_state, DiffFileState::NotLoaded)
+            {
                 return components::empty_state(theme, "Diff", "SVG code view is not available.")
                     .into_any_element();
             }
 
-            self.ensure_file_diff_cache(cx);
+            if !wants_markdown_preview {
+                self.ensure_file_diff_cache(cx);
+            }
+
             match diff_file_state {
                 DiffFileState::NotLoaded => {
                     components::empty_state(theme, "Diff", "Select a file.").into_any_element()
                 }
                 DiffFileState::Loading => {
-                    components::empty_state(theme, "Diff", "Loading").into_any_element()
+                    let label = if wants_markdown_preview {
+                        "Preview"
+                    } else {
+                        "Diff"
+                    };
+                    components::empty_state(theme, label, "Loading").into_any_element()
                 }
                 DiffFileState::Error(e) => {
-                    self.diff_raw_input.update(cx, |input, cx| {
-                        input.set_theme(theme, cx);
-                        input.set_text(e, cx);
-                        input.set_read_only(true, cx);
-                    });
-                    div()
-                        .id("diff_file_error_scroll")
-                        .bg(theme.colors.window_bg)
-                        .flex()
-                        .flex_col()
-                        .flex_1()
-                        .min_h(px(0.0))
-                        .overflow_y_scroll()
-                        .child(self.diff_raw_input.clone())
-                        .into_any_element()
+                    if wants_markdown_preview {
+                        components::empty_state(theme, "Preview", e).into_any_element()
+                    } else {
+                        self.diff_raw_input.update(cx, |input, cx| {
+                            input.set_theme(theme, cx);
+                            input.set_text(e, cx);
+                            input.set_read_only(true, cx);
+                        });
+                        div()
+                            .id("diff_file_error_scroll")
+                            .bg(theme.colors.window_bg)
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .min_h(px(0.0))
+                            .overflow_y_scroll()
+                            .child(self.diff_raw_input.clone())
+                            .into_any_element()
+                    }
+                }
+                DiffFileState::Ready { has_file } if wants_markdown_preview => {
+                    if !has_file {
+                        components::empty_state(theme, "Preview", "No file contents available.")
+                            .into_any_element()
+                    } else {
+                        self.ensure_file_markdown_preview_cache(cx);
+                        match &self.file_markdown_preview {
+                            Loadable::NotLoaded | Loadable::Loading => {
+                                components::empty_state(theme, "Preview", "Processing preview...")
+                                    .into_any_element()
+                            }
+                            Loadable::Error(e) => {
+                                components::empty_state(theme, "Preview", e.clone())
+                                    .into_any_element()
+                            }
+                            Loadable::Ready(preview) => {
+                                let old_len = preview.old.rows.len();
+                                let new_len = preview.new.rows.len();
+                                self.render_markdown_diff_preview(theme, old_len, new_len, cx)
+                            }
+                        }
+                    }
                 }
                 DiffFileState::Ready { has_file } => {
                     if !has_file {
@@ -577,6 +619,166 @@ impl MainPaneView {
                 }
             }
         }
+    }
+
+    fn render_markdown_diff_preview(
+        &mut self,
+        theme: AppTheme,
+        old_len: usize,
+        new_len: usize,
+        cx: &mut gpui::Context<Self>,
+    ) -> AnyElement {
+        if old_len == 0 && new_len == 0 {
+            return components::empty_state(theme, "Preview", "Empty file.").into_any_element();
+        }
+
+        let empty_column = || {
+            div()
+                .flex_1()
+                .min_w(px(0.0))
+                .h_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_sm()
+                .text_color(theme.colors.text_muted)
+                .child("Empty file.")
+                .into_any_element()
+        };
+
+        let mk_column = |id: &'static str,
+                         hscrollbar_id: &'static str,
+                         list: AnyElement,
+                         scroll_handle: gpui::ScrollHandle|
+         -> AnyElement {
+            div()
+                .id(id)
+                .relative()
+                .flex_1()
+                .min_w(px(0.0))
+                .h_full()
+                .child(list)
+                .child(
+                    components::Scrollbar::horizontal(hscrollbar_id, scroll_handle)
+                        .always_visible()
+                        .render(theme),
+                )
+                .into_any_element()
+        };
+
+        macro_rules! mk_list {
+            ($name:expr, $len:expr, $scroll:expr, $proc:expr) => {
+                uniform_list($name, $len, $proc)
+                    .h_full()
+                    .min_h(px(0.0))
+                    .track_scroll($scroll)
+                    .with_horizontal_sizing_behavior(
+                        gpui::ListHorizontalSizingBehavior::Unconstrained,
+                    )
+                    .into_any_element()
+            };
+        }
+
+        let (left_column, right_column, vertical_scroll_handle) = if old_len == 0 {
+            let handle = self.diff_scroll.0.borrow().base_handle.clone();
+            let list = mk_list!(
+                "diff_markdown_preview_right_single",
+                new_len,
+                self.diff_scroll.clone(),
+                cx.processor(Self::render_markdown_diff_right_rows)
+            );
+            (
+                empty_column(),
+                mk_column(
+                    "diff_markdown_preview_right",
+                    "diff_markdown_preview_right_hscrollbar",
+                    list,
+                    handle.clone(),
+                ),
+                handle,
+            )
+        } else if new_len == 0 {
+            let handle = self.diff_scroll.0.borrow().base_handle.clone();
+            let list = mk_list!(
+                "diff_markdown_preview_left_single",
+                old_len,
+                self.diff_scroll.clone(),
+                cx.processor(Self::render_markdown_diff_left_rows)
+            );
+            (
+                mk_column(
+                    "diff_markdown_preview_left",
+                    "diff_markdown_preview_left_hscrollbar",
+                    list,
+                    handle.clone(),
+                ),
+                empty_column(),
+                handle,
+            )
+        } else {
+            self.sync_diff_split_vertical_scroll();
+            let left_handle = self.diff_scroll.0.borrow().base_handle.clone();
+            let right_handle = self.diff_split_right_scroll.0.borrow().base_handle.clone();
+            let left_list = mk_list!(
+                "diff_markdown_preview_left",
+                old_len,
+                self.diff_scroll.clone(),
+                cx.processor(Self::render_markdown_diff_left_rows)
+            );
+            let right_list = mk_list!(
+                "diff_markdown_preview_right",
+                new_len,
+                self.diff_split_right_scroll.clone(),
+                cx.processor(Self::render_markdown_diff_right_rows)
+            );
+            (
+                mk_column(
+                    "diff_markdown_preview_left",
+                    "diff_markdown_preview_left_hscrollbar",
+                    left_list,
+                    left_handle.clone(),
+                ),
+                mk_column(
+                    "diff_markdown_preview_right",
+                    "diff_markdown_preview_right_hscrollbar",
+                    right_list,
+                    right_handle,
+                ),
+                left_handle,
+            )
+        };
+
+        div()
+            .id("diff_markdown_preview_container")
+            .relative()
+            .h_full()
+            .min_h(px(0.0))
+            .flex()
+            .flex_col()
+            .bg(theme.colors.window_bg)
+            .child(components::split_columns_header(
+                theme,
+                "A (before)",
+                "B (after)",
+            ))
+            .child(
+                div()
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .flex()
+                    .child(left_column)
+                    .child(div().w(px(1.0)).h_full().bg(theme.colors.border))
+                    .child(right_column),
+            )
+            .child(
+                components::Scrollbar::new(
+                    "diff_markdown_preview_scrollbar",
+                    vertical_scroll_handle,
+                )
+                .always_visible()
+                .render(theme),
+            )
+            .into_any_element()
     }
 }
 

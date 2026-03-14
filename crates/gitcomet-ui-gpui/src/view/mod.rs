@@ -47,6 +47,7 @@ mod fingerprint;
 mod history_graph;
 mod icons;
 mod linux_desktop_integration;
+mod markdown_preview;
 mod mod_helpers;
 mod panels;
 mod panes;

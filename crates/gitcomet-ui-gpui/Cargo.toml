@@ -15,6 +15,7 @@ gitcomet-core = { workspace = true }
 gitcomet-state = { workspace = true }
 gitcomet-ui = { workspace = true }
 gpui = { workspace = true }
+pulldown-cmark = { workspace = true }
 resvg = { workspace = true }
 rustc-hash = { workspace = true }
 semver = { workspace = true }

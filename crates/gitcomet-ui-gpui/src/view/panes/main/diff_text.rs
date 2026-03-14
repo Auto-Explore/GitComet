@@ -852,7 +852,7 @@ impl MainPaneView {
             return DiffTextAutoscrollTarget::WorktreePreview;
         }
 
-        if self.is_conflict_resolver_view_active_for_preview() {
+        if self.is_conflict_resolver_active() {
             return DiffTextAutoscrollTarget::ConflictResolvedPreview;
         }
 
@@ -864,30 +864,6 @@ impl MainPaneView {
         }
 
         DiffTextAutoscrollTarget::DiffLeftOrInline
-    }
-
-    fn is_conflict_resolver_view_active_for_preview(&self) -> bool {
-        let Some(repo) = self.active_repo() else {
-            return false;
-        };
-        let Some(DiffTarget::WorkingTree { path, area }) = repo.diff_state.diff_target.as_ref()
-        else {
-            return false;
-        };
-        if *area != DiffArea::Unstaged {
-            return false;
-        }
-
-        let Loadable::Ready(status) = &repo.status else {
-            return false;
-        };
-        let conflict_kind = status
-            .unstaged
-            .iter()
-            .find(|e| e.path == *path && e.kind == FileStatusKind::Conflicted)
-            .and_then(|e| e.conflict);
-
-        Self::conflict_resolver_strategy(conflict_kind, false).is_some()
     }
 
     fn scroll_handle_for_diff_text_autoscroll_target(

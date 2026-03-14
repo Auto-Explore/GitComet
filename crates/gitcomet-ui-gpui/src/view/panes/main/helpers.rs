@@ -1656,7 +1656,7 @@ pub(in crate::view) struct MainPaneView {
 
     pub(in crate::view) show_whitespace: bool,
     pub(in crate::view) diff_view: DiffViewMode,
-    pub(in crate::view) svg_diff_view_mode: SvgDiffViewMode,
+    pub(in crate::view) rendered_preview_modes: RenderedPreviewModes,
     pub(in crate::view) diff_word_wrap: bool,
     pub(in crate::view) diff_split_ratio: f32,
     pub(in crate::view) diff_split_resize: Option<DiffSplitResizeState>,
@@ -1730,6 +1730,14 @@ pub(in crate::view) struct MainPaneView {
     pub(in crate::view) prepared_syntax_documents:
         HashMap<PreparedSyntaxDocumentKey, rows::PreparedDiffSyntaxDocument>,
 
+    pub(in crate::view) file_markdown_preview_cache_repo_id: Option<RepoId>,
+    pub(in crate::view) file_markdown_preview_cache_rev: u64,
+    pub(in crate::view) file_markdown_preview_cache_content_signature: Option<u64>,
+    pub(in crate::view) file_markdown_preview_cache_target: Option<DiffTarget>,
+    pub(in crate::view) file_markdown_preview: LoadableMarkdownDiff,
+    pub(in crate::view) file_markdown_preview_seq: u64,
+    pub(in crate::view) file_markdown_preview_inflight: Option<u64>,
+
     pub(in crate::view) file_image_diff_cache_repo_id: Option<RepoId>,
     pub(in crate::view) file_image_diff_cache_rev: u64,
     pub(in crate::view) file_image_diff_cache_target: Option<DiffTarget>,
@@ -1742,6 +1750,12 @@ pub(in crate::view) struct MainPaneView {
     pub(in crate::view) worktree_preview_path: Option<std::path::PathBuf>,
     pub(in crate::view) worktree_preview: Loadable<Arc<Vec<String>>>,
     pub(in crate::view) worktree_preview_content_rev: u64,
+    pub(in crate::view) worktree_preview_source_len: usize,
+    pub(in crate::view) worktree_markdown_preview_path: Option<std::path::PathBuf>,
+    pub(in crate::view) worktree_markdown_preview_source_rev: u64,
+    pub(in crate::view) worktree_markdown_preview: LoadableMarkdownDoc,
+    pub(in crate::view) worktree_markdown_preview_seq: u64,
+    pub(in crate::view) worktree_markdown_preview_inflight: Option<u64>,
     pub(in crate::view) worktree_preview_segments_cache_path: Option<std::path::PathBuf>,
     pub(in crate::view) worktree_preview_syntax_language: Option<rows::DiffSyntaxLanguage>,
     pub(in crate::view) worktree_preview_segments_cache: HashMap<usize, CachedDiffStyledText>,
@@ -1783,6 +1797,9 @@ pub(in crate::view) struct MainPaneView {
     pub(in crate::view) diff_scroll: UniformListScrollHandle,
     pub(in crate::view) diff_split_right_scroll: UniformListScrollHandle,
     pub(in crate::view) conflict_resolver_diff_scroll: UniformListScrollHandle,
+    pub(in crate::view) conflict_preview_ours_scroll: UniformListScrollHandle,
+    pub(in crate::view) conflict_preview_theirs_scroll: UniformListScrollHandle,
+    pub(in crate::view) conflict_preview_last_synced_y: Pixels,
     pub(in crate::view) conflict_resolved_preview_scroll: UniformListScrollHandle,
     pub(in crate::view) worktree_preview_scroll: UniformListScrollHandle,
 
