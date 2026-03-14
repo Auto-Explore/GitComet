@@ -49,7 +49,7 @@ impl HistoryView {
             )
             .h_full()
             .track_scroll(self.history_scroll.clone());
-            let (scroll_handle, should_load_more) = {
+            let should_load_more = {
                 let state = self.history_scroll.0.borrow();
                 let scroll_handle = state.base_handle.clone();
                 let max_offset = scroll_handle.max_offset().height.max(px(0.0));
@@ -58,7 +58,8 @@ impl HistoryView {
                 } else {
                     true
                 };
-                let should_load_more = state.last_item_size.is_some()
+
+                state.last_item_size.is_some()
                     && repo.is_some_and(|repo| {
                         !repo.log_loading_more
                             && matches!(
@@ -66,8 +67,7 @@ impl HistoryView {
                                 Loadable::Ready(page) if page.next_cursor.is_some()
                             )
                     })
-                    && should_load_by_scroll;
-                (scroll_handle, should_load_more)
+                    && should_load_by_scroll
             };
             if should_load_more && let Some(repo_id) = self.active_repo_id() {
                 self.store.dispatch(Msg::LoadMoreHistory { repo_id });
@@ -78,8 +78,11 @@ impl HistoryView {
                 .h_full()
                 .child(list)
                 .child(
-                    components::Scrollbar::new("history_main_scrollbar", scroll_handle)
-                        .render(theme),
+                    components::Scrollbar::new(
+                        "history_main_scrollbar",
+                        self.history_scroll.clone(),
+                    )
+                    .render(theme),
                 )
                 .into_any_element()
         };

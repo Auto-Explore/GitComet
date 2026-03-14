@@ -162,7 +162,6 @@ impl SidebarPaneView {
         .h_full()
         .min_h(px(0.0))
         .track_scroll(self.branches_scroll.clone());
-        let scroll_handle = self.branches_scroll.0.borrow().base_handle.clone();
         let list = div().flex_1().min_h(px(0.0)).px(px(2.0)).child(list);
         let panel_body: AnyElement = div()
             .id("branch_sidebar_scroll_container")
@@ -173,7 +172,11 @@ impl SidebarPaneView {
             .h_full()
             .child(list.into_any_element())
             .child(
-                components::Scrollbar::new("branch_sidebar_scrollbar", scroll_handle).render(theme),
+                components::Scrollbar::new(
+                    "branch_sidebar_scrollbar",
+                    self.branches_scroll.clone(),
+                )
+                .render(theme),
             )
             .into_any_element();
 

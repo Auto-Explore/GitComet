@@ -18,3 +18,5 @@ pub mod benchmarks {
 
 #[cfg(test)]
 mod smoke_tests;
+#[cfg(test)]
+mod test_support;

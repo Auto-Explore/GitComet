@@ -3,6 +3,7 @@ use super::main::{
     show_external_mergetool_actions,
 };
 use super::*;
+use crate::test_support::lock_clipboard_test;
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{GitBackend, GitRepository, Result};
 use gitcomet_state::store::AppStore;
@@ -132,6 +133,7 @@ fn assert_file_preview_ctrl_a_ctrl_c_copies_all(
     status_kind: gitcomet_core::domain::FileStatusKind,
     lines: Arc<Vec<String>>,
 ) {
+    let _clipboard_guard = lock_clipboard_test();
     let expected = lines.join("\n");
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {

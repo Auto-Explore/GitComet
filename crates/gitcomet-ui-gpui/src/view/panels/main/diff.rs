@@ -360,7 +360,7 @@ impl MainPaneView {
                                         .child(
                                             components::Scrollbar::new(
                                                 "diff_scrollbar",
-                                                scroll_handle.clone(),
+                                                self.diff_scroll.clone(),
                                             )
                                             .markers(markers)
                                             .always_visible()
@@ -605,7 +605,7 @@ impl MainPaneView {
                                         .child(
                                             components::Scrollbar::new(
                                                 "diff_scrollbar",
-                                                scroll_handle.clone(),
+                                                self.diff_scroll.clone(),
                                             )
                                             .markers(markers)
                                             .always_visible()

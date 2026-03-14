@@ -74,16 +74,15 @@ pub(super) fn panel(
             )
             .h(px(360.0))
             .track_scroll(this.blame_scroll.clone());
-            let scroll_handle = {
-                let state = this.blame_scroll.0.borrow();
-                state.base_handle.clone()
-            };
 
             div()
                 .relative()
                 .child(list)
                 .child(
-                    components::Scrollbar::new("blame_popover_scrollbar", scroll_handle)
+                    components::Scrollbar::new(
+                        "blame_popover_scrollbar",
+                        this.blame_scroll.clone(),
+                    )
                         .render(theme),
                 )
                 .into_any_element()

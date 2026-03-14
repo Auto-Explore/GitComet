@@ -1,3 +1,4 @@
+use crate::test_support::lock_clipboard_test;
 use crate::view::components;
 use crate::{theme::AppTheme, view};
 use gitcomet_core::error::{Error, ErrorKind};
@@ -13,6 +14,7 @@ use gpui::{
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 fn assert_no_panic(label: &str, f: impl FnOnce()) {
@@ -345,6 +347,7 @@ fn text_input_constructs_without_panicking(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn text_input_supports_basic_clipboard_and_word_shortcuts(cx: &mut gpui::TestAppContext) {
+    let _clipboard_guard = lock_clipboard_test();
     let (view, cx) = cx.add_window_view(SmokeView::new);
 
     cx.update(|window, app| {
@@ -586,6 +589,7 @@ fn multiline_text_input_mousewheel_does_not_trigger_cursor_autoscroll(
 
 #[gpui::test]
 fn text_input_right_click_context_menu_supports_copy(cx: &mut gpui::TestAppContext) {
+    let _clipboard_guard = lock_clipboard_test();
     let (view, cx) = cx.add_window_view(SmokeView::new);
 
     cx.update(|window, app| {
@@ -734,6 +738,7 @@ fn text_input_context_menu_does_not_resize_input_container(cx: &mut gpui::TestAp
 
 #[gpui::test]
 fn text_input_supports_ctrl_z_undo(cx: &mut gpui::TestAppContext) {
+    let _clipboard_guard = lock_clipboard_test();
     let (view, cx) = cx.add_window_view(SmokeView::new);
 
     cx.update(|window, app| {
@@ -814,6 +819,7 @@ fn text_input_double_click_selects_word(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn text_input_supports_shift_home_end_row_selection(cx: &mut gpui::TestAppContext) {
+    let _clipboard_guard = lock_clipboard_test();
     let (view, cx) = cx.add_window_view(SmokeView::new);
 
     cx.update(|window, app| {
@@ -851,6 +857,7 @@ fn text_input_supports_shift_home_end_row_selection(cx: &mut gpui::TestAppContex
 
 #[gpui::test]
 fn text_input_supports_shift_pageup_pagedown_selection(cx: &mut gpui::TestAppContext) {
+    let _clipboard_guard = lock_clipboard_test();
     let (view, cx) = cx.add_window_view(SmokeView::new);
 
     cx.update(|window, app| {
@@ -1276,7 +1283,7 @@ impl gpui::Render for PanelLayoutTestView {
         let header = div().id("diff_header").h(px(24.0)).child("Header");
         let list = gpui::uniform_list(
             "diff_list",
-            50,
+            200,
             cx.processor(
                 |_this: &mut PanelLayoutTestView,
                  range: std::ops::Range<usize>,
@@ -1298,8 +1305,6 @@ impl gpui::Render for PanelLayoutTestView {
         .h_full()
         .track_scroll(self.handle.clone());
 
-        let scroll_handle = self.handle.0.borrow().base_handle.clone();
-
         let body = div()
             .id("diff_body")
             .debug_selector(|| "diff_body".to_string())
@@ -1307,9 +1312,19 @@ impl gpui::Render for PanelLayoutTestView {
             .flex_col()
             .h_full()
             .child(header)
-            .child(div().flex_1().min_h(px(0.0)).relative().child(list).child(
-                components::Scrollbar::new("diff_scrollbar_test", scroll_handle).render(theme),
-            ));
+            .child({
+                let scrollbar =
+                    components::Scrollbar::new("diff_scrollbar_test", self.handle.clone());
+                #[cfg(test)]
+                let scrollbar = scrollbar.debug_selector("diff_scrollbar_test");
+
+                div()
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .relative()
+                    .child(list)
+                    .child(scrollbar.render(theme))
+            });
 
         div().size_full().bg(theme.colors.window_bg).child(
             components::panel(theme, "Panel", None, body)
@@ -1329,6 +1344,47 @@ fn panel_allows_flex_body_to_have_height(cx: &mut gpui::TestAppContext) {
         .debug_bounds("diff_body")
         .expect("expected diff_body to be painted");
     assert!(bounds.size.height > px(50.0));
+}
+
+#[gpui::test]
+fn uniform_list_scrollbar_allows_dragging_thumb_to_scroll(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = cx.add_window_view(|_window, _cx| PanelLayoutTestView::new());
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    let bounds = cx
+        .debug_bounds("diff_scrollbar_test")
+        .expect("expected diff_scrollbar_test in debug bounds");
+
+    let start = gpui::point(bounds.right() - px(2.0), bounds.top() + px(6.0));
+    cx.simulate_mouse_move(start, None, Modifiers::default());
+    cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_move(
+        gpui::point(start.x, start.y + px(5.0)),
+        Some(MouseButton::Left),
+        Modifiers::default(),
+    );
+    cx.simulate_mouse_move(
+        gpui::point(start.x, start.y + px(60.0)),
+        Some(MouseButton::Left),
+        Modifiers::default(),
+    );
+    cx.simulate_mouse_up(
+        gpui::point(start.x, start.y + px(60.0)),
+        MouseButton::Left,
+        Modifiers::default(),
+    );
+    cx.run_until_parked();
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+        let offset_y = view.read(app).handle.0.borrow().base_handle.offset().y;
+        assert!(
+            offset_y < px(0.0),
+            "expected uniform-list scrollbar drag to scroll (offset should become negative)"
+        );
+    });
 }
 
 struct PickerPromptScrollbarTestView {
@@ -1726,6 +1782,80 @@ fn scrollbar_allows_dragging_thumb_to_scroll(cx: &mut gpui::TestAppContext) {
         assert!(
             offset_y < px(0.0),
             "expected scrollbar drag to scroll (offset should become negative)"
+        );
+    });
+}
+
+#[gpui::test]
+fn scrollbar_drag_does_not_notify_parent_view_for_each_mouse_move(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = cx.add_window_view(|_window, _cx| ScrollbarTestView::new(200));
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    let notify_count = Arc::new(AtomicUsize::new(0));
+    let _notify_sub = cx.update(|_window, app| {
+        let notify_count = Arc::clone(&notify_count);
+        view.update(app, |_this, cx| {
+            cx.observe_self(move |_this, _cx| {
+                notify_count.fetch_add(1, Ordering::Relaxed);
+            })
+        })
+    });
+    notify_count.store(0, Ordering::Relaxed);
+
+    let bounds = cx
+        .debug_bounds("test_scrollbar")
+        .expect("expected test_scrollbar in debug bounds");
+
+    let start = gpui::point(bounds.right() - px(2.0), bounds.top() + px(6.0));
+    cx.simulate_mouse_move(start, None, Modifiers::default());
+    cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+
+    for delta in [px(5.0), px(30.0), px(60.0), px(90.0)] {
+        cx.simulate_mouse_move(
+            gpui::point(start.x, start.y + delta),
+            Some(MouseButton::Left),
+            Modifiers::default(),
+        );
+    }
+    cx.simulate_mouse_up(
+        gpui::point(start.x, start.y + px(90.0)),
+        MouseButton::Left,
+        Modifiers::default(),
+    );
+    cx.run_until_parked();
+
+    let notifies = notify_count.load(Ordering::Relaxed);
+    assert!(
+        notifies <= 1,
+        "expected scrollbar drag to avoid repeated parent-view notifications, got {notifies}"
+    );
+}
+
+#[gpui::test]
+fn scrollbar_gutter_margin_clicks_still_scroll(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = cx.add_window_view(|_window, _cx| ScrollbarTestView::new(50));
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    let bounds = cx
+        .debug_bounds("test_scrollbar")
+        .expect("expected test_scrollbar in debug bounds");
+
+    let click = gpui::point(bounds.right() - px(2.0), bounds.bottom() - px(2.0));
+    cx.simulate_mouse_move(click, None, Modifiers::default());
+    cx.simulate_mouse_down(click, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(click, MouseButton::Left, Modifiers::default());
+    cx.run_until_parked();
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+        let offset_y = view.read(app).handle.offset().y;
+        assert!(
+            offset_y < px(0.0),
+            "expected clicks inside the scrollbar gutter margin to scroll instead of falling through"
         );
     });
 }

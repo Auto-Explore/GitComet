@@ -2,8 +2,8 @@ use crate::theme::AppTheme;
 use gpui::prelude::*;
 use gpui::{
     Bounds, CursorStyle, DispatchPhase, ElementId, Hitbox, HitboxBehavior, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, ScrollHandle, canvas, div, fill, point,
-    px, size,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, ScrollHandle, UniformListScrollHandle,
+    canvas, div, fill, point, px, size,
 };
 use std::time::Duration;
 
@@ -32,12 +32,31 @@ pub struct ScrollbarMarker {
 #[derive(Clone)]
 pub struct Scrollbar {
     id: ElementId,
-    handle: ScrollHandle,
+    handle: ScrollbarHandle,
     axis: ScrollbarAxis,
     markers: Vec<ScrollbarMarker>,
     always_visible: bool,
     #[cfg(test)]
     debug_selector: Option<&'static str>,
+}
+
+#[derive(Clone)]
+#[doc(hidden)]
+pub enum ScrollbarHandle {
+    Scroll(ScrollHandle),
+    UniformList(UniformListScrollHandle),
+}
+
+impl From<ScrollHandle> for ScrollbarHandle {
+    fn from(handle: ScrollHandle) -> Self {
+        Self::Scroll(handle)
+    }
+}
+
+impl From<UniformListScrollHandle> for ScrollbarHandle {
+    fn from(handle: UniformListScrollHandle) -> Self {
+        Self::UniformList(handle)
+    }
 }
 
 struct ScrollbarInteractionState {
@@ -62,18 +81,65 @@ impl Default for ScrollbarInteractionState {
     }
 }
 
+impl ScrollbarHandle {
+    fn base_handle(&self) -> ScrollHandle {
+        match self {
+            Self::Scroll(handle) => handle.clone(),
+            Self::UniformList(handle) => handle.0.borrow().base_handle.clone(),
+        }
+    }
+
+    fn max_offset(&self, axis: ScrollbarAxis) -> Pixels {
+        match (axis, self) {
+            (ScrollbarAxis::Vertical, Self::UniformList(handle)) => handle
+                .0
+                .borrow()
+                .last_item_size
+                .map(|size| (size.contents.height - size.item.height).max(px(0.0)))
+                .unwrap_or_else(|| handle.0.borrow().base_handle.max_offset().height),
+            (ScrollbarAxis::Vertical, _) => self.base_handle().max_offset().height.max(px(0.0)),
+            (ScrollbarAxis::Horizontal, _) => self.base_handle().max_offset().width.max(px(0.0)),
+        }
+    }
+
+    fn raw_offset(&self, axis: ScrollbarAxis) -> Pixels {
+        match (axis, self) {
+            (ScrollbarAxis::Vertical, Self::UniformList(handle)) => {
+                handle.0.borrow().base_handle.offset().y
+            }
+            (ScrollbarAxis::Vertical, _) => self.base_handle().offset().y,
+            (ScrollbarAxis::Horizontal, _) => self.base_handle().offset().x,
+        }
+    }
+
+    fn set_axis_offset(&self, axis: ScrollbarAxis, axis_offset: Pixels) {
+        let base = self.base_handle();
+        let current = base.offset();
+        match axis {
+            ScrollbarAxis::Vertical => base.set_offset(point(current.x, axis_offset)),
+            ScrollbarAxis::Horizontal => base.set_offset(point(axis_offset, current.y)),
+        }
+    }
+
+    fn scrollbar_drag_started(&self, _axis: ScrollbarAxis) {}
+
+    fn scrollbar_drag_ended(&self, _axis: ScrollbarAxis) {}
+}
+
 #[derive(Clone, Debug)]
 struct ScrollbarPrepaintState {
+    interaction_bounds: Bounds<Pixels>,
     track_bounds: Bounds<Pixels>,
     thumb_bounds: Bounds<Pixels>,
+    thumb_hit_bounds: Bounds<Pixels>,
     cursor_hitbox: Hitbox,
 }
 
 impl Scrollbar {
-    pub fn new(id: impl Into<ElementId>, handle: ScrollHandle) -> Self {
+    pub fn new(id: impl Into<ElementId>, handle: impl Into<ScrollbarHandle>) -> Self {
         Self {
             id: id.into(),
-            handle,
+            handle: handle.into(),
             axis: ScrollbarAxis::Vertical,
             markers: Vec::new(),
             always_visible: true,
@@ -85,7 +151,7 @@ impl Scrollbar {
     pub fn horizontal(id: impl Into<ElementId>, handle: ScrollHandle) -> Self {
         Self {
             id: id.into(),
-            handle,
+            handle: handle.into(),
             axis: ScrollbarAxis::Horizontal,
             markers: Vec::new(),
             always_visible: true,
@@ -124,13 +190,13 @@ impl Scrollbar {
                 let (viewport_size, max_offset, raw_offset) = match axis {
                     ScrollbarAxis::Vertical => (
                         bounds.size.height,
-                        prepaint_handle.max_offset().height.max(px(0.0)),
-                        prepaint_handle.offset().y,
+                        prepaint_handle.max_offset(axis),
+                        prepaint_handle.raw_offset(axis),
                     ),
                     ScrollbarAxis::Horizontal => (
                         bounds.size.width,
-                        prepaint_handle.max_offset().width.max(px(0.0)),
-                        prepaint_handle.offset().x,
+                        prepaint_handle.max_offset(axis),
+                        prepaint_handle.raw_offset(axis),
                     ),
                 };
                 let scroll = if raw_offset < px(0.0) {
@@ -179,12 +245,16 @@ impl Scrollbar {
                     }
                 };
 
-                let cursor_hitbox =
-                    window.insert_hitbox(track_bounds, HitboxBehavior::BlockMouseExceptScroll);
+                let interaction_bounds = bounds;
+                let thumb_hit_bounds = expanded_thumb_hit_bounds(bounds, thumb_bounds, axis);
+                let cursor_hitbox = window
+                    .insert_hitbox(interaction_bounds, HitboxBehavior::BlockMouseExceptScroll);
 
                 Some(ScrollbarPrepaintState {
+                    interaction_bounds,
                     track_bounds,
                     thumb_bounds,
+                    thumb_hit_bounds,
                     cursor_hitbox,
                 })
             },
@@ -198,8 +268,6 @@ impl Scrollbar {
                     cx,
                     |_window, _cx| ScrollbarInteractionState::default(),
                 );
-                let current_view = window.current_view();
-
                 let capture_phase = if interaction.read(cx).drag_offset.is_some() {
                     DispatchPhase::Capture
                 } else {
@@ -248,14 +316,8 @@ impl Scrollbar {
                 let hovered = prepaint.cursor_hitbox.is_hovered(window);
                 let is_dragging = interaction.read(cx).drag_offset.is_some();
 
-                let (max_offset, raw_offset) = match axis {
-                    ScrollbarAxis::Vertical => {
-                        (handle.max_offset().height.max(px(0.0)), handle.offset().y)
-                    }
-                    ScrollbarAxis::Horizontal => {
-                        (handle.max_offset().width.max(px(0.0)), handle.offset().x)
-                    }
-                };
+                let max_offset = handle.max_offset(axis);
+                let raw_offset = handle.raw_offset(axis);
                 let observed_sign = if raw_offset < px(0.0) {
                     -1
                 } else if raw_offset > px(0.0) {
@@ -271,49 +333,52 @@ impl Scrollbar {
                 } else {
                     raw_offset.max(px(0.0)).min(max_offset)
                 };
-                let scrolled = interaction.read(cx).last_scroll != scroll;
-                if scrolled {
-                    interaction.update(cx, |state, _cx| {
-                        state.last_scroll = scroll;
-                        state.showing = true;
-                        state.hide_task.take();
-                    });
-                }
+                let show = if always_visible {
+                    true
+                } else {
+                    let scrolled = interaction.read(cx).last_scroll != scroll;
+                    if scrolled {
+                        interaction.update(cx, |state, _cx| {
+                            state.last_scroll = scroll;
+                            state.showing = true;
+                            state.hide_task.take();
+                        });
+                    }
 
-                // Zed-style autohide: show on hover/drag, then hide after a delay.
-                let state = interaction.read(cx);
-                let show = always_visible || hovered || is_dragging || state.showing;
-                let should_schedule_hide = !always_visible
-                    && !hovered
-                    && !is_dragging
-                    && state.showing
-                    && state.hide_task.is_none();
-                let _ = state;
+                    // Zed-style autohide: show on hover/drag, then hide after a delay.
+                    let state = interaction.read(cx);
+                    let show = hovered || is_dragging || state.showing;
+                    let should_schedule_hide =
+                        !hovered && !is_dragging && state.showing && state.hide_task.is_none();
+                    let _ = state;
 
-                if hovered || is_dragging {
-                    interaction.update(cx, |state, _cx| {
-                        state.showing = true;
-                        state.hide_task.take();
-                    });
-                } else if should_schedule_hide {
-                    interaction.update(cx, |state, cx| {
-                        state.hide_task.take();
-                        let task = cx.spawn(
-                            async move |state: gpui::WeakEntity<ScrollbarInteractionState>,
-                                        cx: &mut gpui::AsyncApp| {
-                                gpui::Timer::after(Duration::from_millis(1000)).await;
-                                let _ = state.update(cx, |s, cx| {
-                                    if s.drag_offset.is_none() {
-                                        s.showing = false;
-                                        cx.notify();
-                                    }
-                                    s.hide_task = None;
-                                });
-                            },
-                        );
-                        state.hide_task = Some(task);
-                    });
-                }
+                    if hovered || is_dragging {
+                        interaction.update(cx, |state, _cx| {
+                            state.showing = true;
+                            state.hide_task.take();
+                        });
+                    } else if should_schedule_hide {
+                        interaction.update(cx, |state, cx| {
+                            state.hide_task.take();
+                            let task = cx.spawn(
+                                async move |state: gpui::WeakEntity<ScrollbarInteractionState>,
+                                            cx: &mut gpui::AsyncApp| {
+                                    gpui::Timer::after(Duration::from_millis(1000)).await;
+                                    let _ = state.update(cx, |s, cx| {
+                                        if s.drag_offset.is_none() {
+                                            s.showing = false;
+                                            cx.notify();
+                                        }
+                                        s.hide_task = None;
+                                    });
+                                },
+                            );
+                            state.hide_task = Some(task);
+                        });
+                    }
+
+                    show
+                };
                 let thumb_color = if is_dragging {
                     theme.colors.scrollbar_thumb_active
                 } else if hovered {
@@ -332,8 +397,10 @@ impl Scrollbar {
                     window.set_cursor_style(CursorStyle::Arrow, &prepaint.cursor_hitbox);
                 }
 
+                let interaction_bounds = prepaint.interaction_bounds;
                 let track_bounds = prepaint.track_bounds;
                 let thumb_bounds = prepaint.thumb_bounds;
+                let thumb_hit_bounds = prepaint.thumb_hit_bounds;
                 let thumb_size = match axis {
                     ScrollbarAxis::Vertical => thumb_bounds.size.height,
                     ScrollbarAxis::Horizontal => thumb_bounds.size.width,
@@ -346,19 +413,17 @@ impl Scrollbar {
                         if phase != capture_phase || event.button != MouseButton::Left {
                             return;
                         }
-                        if !track_bounds.contains(&event.position) {
+                        if !interaction_bounds.contains(&event.position) {
                             return;
                         }
 
-                        let max_offset = match axis {
-                            ScrollbarAxis::Vertical => handle.max_offset().height.max(px(0.0)),
-                            ScrollbarAxis::Horizontal => handle.max_offset().width.max(px(0.0)),
-                        };
+                        let max_offset = handle.max_offset(axis);
                         if max_offset <= px(0.0) {
                             return;
                         }
 
-                        if thumb_bounds.contains(&event.position) {
+                        if thumb_hit_bounds.contains(&event.position) {
+                            handle.scrollbar_drag_started(axis);
                             let grab = match axis {
                                 ScrollbarAxis::Vertical => event.position.y - thumb_bounds.origin.y,
                                 ScrollbarAxis::Horizontal => {
@@ -367,19 +432,23 @@ impl Scrollbar {
                             };
                             interaction.update(cx, |state, _cx| {
                                 state.drag_offset = Some(grab);
-                                state.showing = true;
-                                state.hide_task.take();
+                                if !always_visible {
+                                    state.showing = true;
+                                    state.hide_task.take();
+                                }
                             });
                         } else {
                             interaction.update(cx, |state, _cx| {
                                 state.drag_offset = None;
-                                state.showing = true;
-                                state.hide_task.take();
+                                if !always_visible {
+                                    state.showing = true;
+                                    state.hide_task.take();
+                                }
                             });
                             let sign = interaction.read(cx).offset_sign;
                             let new_offset = match axis {
                                 ScrollbarAxis::Vertical => compute_vertical_click_offset(
-                                    event.position.y,
+                                    clamped_track_axis_position(event.position, track_bounds, axis),
                                     track_bounds,
                                     thumb_size,
                                     thumb_size / 2.0,
@@ -387,7 +456,7 @@ impl Scrollbar {
                                     sign,
                                 ),
                                 ScrollbarAxis::Horizontal => compute_horizontal_click_offset(
-                                    event.position.x,
+                                    clamped_track_axis_position(event.position, track_bounds, axis),
                                     track_bounds,
                                     thumb_size,
                                     thumb_size / 2.0,
@@ -395,13 +464,7 @@ impl Scrollbar {
                                     sign,
                                 ),
                             };
-                            let current = handle.offset();
-                            let next = match axis {
-                                ScrollbarAxis::Vertical => point(current.x, new_offset),
-                                ScrollbarAxis::Horizontal => point(new_offset, current.y),
-                            };
-                            handle.set_offset(next);
-                            cx.notify(current_view);
+                            handle.set_axis_offset(axis, new_offset);
                         }
 
                         window.refresh();
@@ -412,7 +475,7 @@ impl Scrollbar {
                 window.on_mouse_event({
                     let interaction = interaction.clone();
                     let handle = handle.clone();
-                    move |event: &MouseMoveEvent, phase, window, cx| {
+                    move |event: &MouseMoveEvent, phase, _window, cx| {
                         if phase != capture_phase || !event.dragging() {
                             return;
                         }
@@ -421,10 +484,7 @@ impl Scrollbar {
                             return;
                         };
 
-                        let max_offset = match axis {
-                            ScrollbarAxis::Vertical => handle.max_offset().height.max(px(0.0)),
-                            ScrollbarAxis::Horizontal => handle.max_offset().width.max(px(0.0)),
-                        };
+                        let max_offset = handle.max_offset(axis);
                         if max_offset <= px(0.0) {
                             return;
                         }
@@ -448,15 +508,11 @@ impl Scrollbar {
                                 sign,
                             ),
                         };
-                        let current = handle.offset();
-                        let next = match axis {
-                            ScrollbarAxis::Vertical => point(current.x, new_offset),
-                            ScrollbarAxis::Horizontal => point(new_offset, current.y),
-                        };
-                        handle.set_offset(next);
-                        cx.notify(current_view);
-                        interaction.update(cx, |state, _cx| state.showing = true);
-                        window.refresh();
+                        handle.set_axis_offset(axis, new_offset);
+                        if !always_visible {
+                            interaction.update(cx, |state, _cx| state.showing = true);
+                        }
+                        _window.refresh();
                         cx.stop_propagation();
                     }
                 });
@@ -470,6 +526,7 @@ impl Scrollbar {
                         if interaction.read(cx).drag_offset.is_none() {
                             return;
                         }
+                        handle.scrollbar_drag_ended(axis);
                         interaction.update(cx, |state, _cx| state.drag_offset = None);
                         window.refresh();
                         cx.stop_propagation();
@@ -547,6 +604,40 @@ fn marker_colors(
         ScrollbarMarkerKind::Add => (Some(add), Some(add)),
         ScrollbarMarkerKind::Remove => (Some(rem), Some(rem)),
         ScrollbarMarkerKind::Modify => (Some(rem), Some(add)),
+    }
+}
+
+fn expanded_thumb_hit_bounds(
+    gutter_bounds: Bounds<Pixels>,
+    thumb_bounds: Bounds<Pixels>,
+    axis: ScrollbarAxis,
+) -> Bounds<Pixels> {
+    match axis {
+        ScrollbarAxis::Vertical => Bounds::new(
+            point(gutter_bounds.left(), thumb_bounds.top()),
+            size(gutter_bounds.size.width, thumb_bounds.size.height),
+        ),
+        ScrollbarAxis::Horizontal => Bounds::new(
+            point(thumb_bounds.left(), gutter_bounds.top()),
+            size(thumb_bounds.size.width, gutter_bounds.size.height),
+        ),
+    }
+}
+
+fn clamped_track_axis_position(
+    position: gpui::Point<Pixels>,
+    track_bounds: Bounds<Pixels>,
+    axis: ScrollbarAxis,
+) -> Pixels {
+    match axis {
+        ScrollbarAxis::Vertical => position
+            .y
+            .max(track_bounds.top())
+            .min(track_bounds.bottom()),
+        ScrollbarAxis::Horizontal => position
+            .x
+            .max(track_bounds.left())
+            .min(track_bounds.right()),
     }
 }
 
@@ -688,5 +779,16 @@ mod tests {
                 assert!(c.a >= 0.0 && c.a <= 1.0);
             }
         }
+    }
+
+    #[test]
+    fn vertical_thumb_hit_bounds_cover_full_gutter_width() {
+        let gutter_bounds = Bounds::new(point(px(100.0), px(20.0)), size(px(16.0), px(120.0)));
+        let thumb_bounds = Bounds::new(point(px(104.0), px(40.0)), size(px(8.0), px(24.0)));
+
+        assert_eq!(
+            expanded_thumb_hit_bounds(gutter_bounds, thumb_bounds, ScrollbarAxis::Vertical),
+            Bounds::new(point(px(100.0), px(40.0)), size(px(16.0), px(24.0)))
+        );
     }
 }

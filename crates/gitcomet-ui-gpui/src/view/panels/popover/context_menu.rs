@@ -1101,6 +1101,7 @@ impl PopoverHost {
                                 row.on_mouse_up(
                                     MouseButton::Right,
                                     cx.listener(move |this, _e: &MouseUpEvent, window, cx| {
+                                        cx.stop_propagation();
                                         this.context_menu_activate_action(
                                             activate_on_right_release.clone(),
                                             window,
@@ -1111,8 +1112,10 @@ impl PopoverHost {
                                 .on_click(cx.listener(
                                     move |this, e: &ClickEvent, window, cx| {
                                         if e.is_right_click() {
+                                            cx.stop_propagation();
                                             return;
                                         }
+                                        cx.stop_propagation();
                                         this.context_menu_activate_action(
                                             activate_on_click.clone(),
                                             window,

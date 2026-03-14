@@ -176,8 +176,6 @@ impl DetailsPaneView {
                                 .flex_1()
                                 .min_h(px(0.0))
                                 .track_scroll(self.commit_files_scroll.clone());
-                                let scroll_handle =
-                                    self.commit_files_scroll.0.borrow().base_handle.clone();
 
                                 div()
                                     .id(("commit_details_files_container", repo_id.0))
@@ -192,7 +190,7 @@ impl DetailsPaneView {
                                     .child(
                                         components::Scrollbar::new(
                                             ("commit_details_files_scrollbar", repo_id.0),
-                                            scroll_handle,
+                                            self.commit_files_scroll.clone(),
                                         )
                                         .render(theme),
                                     )
@@ -319,8 +317,6 @@ impl DetailsPaneView {
                             .flex_1()
                             .min_h(px(0.0))
                             .track_scroll(self.commit_files_scroll.clone());
-                            let scroll_handle =
-                                self.commit_files_scroll.0.borrow().base_handle.clone();
 
                             div()
                                 .id(("commit_details_files_container", repo_id.0))
@@ -335,7 +331,7 @@ impl DetailsPaneView {
                                 .child(
                                     components::Scrollbar::new(
                                         ("commit_details_files_scrollbar", repo_id.0),
-                                        scroll_handle,
+                                        self.commit_files_scroll.clone(),
                                     )
                                     .render(theme),
                                 )
@@ -778,7 +774,6 @@ impl DetailsPaneView {
                         .flex_1()
                         .min_h(px(0.0))
                         .track_scroll(self.unstaged_scroll.clone());
-                let scroll_handle = self.unstaged_scroll.0.borrow().base_handle.clone();
                 div()
                     .id("unstaged_scroll_container")
                     .relative()
@@ -789,8 +784,11 @@ impl DetailsPaneView {
                     .min_h(px(0.0))
                     .child(list)
                     .child(
-                        components::Scrollbar::new("unstaged_scrollbar", scroll_handle)
-                            .render(theme),
+                        components::Scrollbar::new(
+                            "unstaged_scrollbar",
+                            self.unstaged_scroll.clone(),
+                        )
+                        .render(theme),
                     )
                     .into_any_element()
             }
@@ -799,7 +797,6 @@ impl DetailsPaneView {
                     .flex_1()
                     .min_h(px(0.0))
                     .track_scroll(self.staged_scroll.clone());
-                let scroll_handle = self.staged_scroll.0.borrow().base_handle.clone();
                 div()
                     .id("staged_scroll_container")
                     .relative()
@@ -810,7 +807,8 @@ impl DetailsPaneView {
                     .min_h(px(0.0))
                     .child(list)
                     .child(
-                        components::Scrollbar::new("staged_scrollbar", scroll_handle).render(theme),
+                        components::Scrollbar::new("staged_scrollbar", self.staged_scroll.clone())
+                            .render(theme),
                     )
                     .into_any_element()
             }
