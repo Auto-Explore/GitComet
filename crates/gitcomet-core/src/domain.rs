@@ -100,26 +100,31 @@ pub enum SubmoduleStatus {
     NotInitialized,
     HeadMismatch,
     MergeConflict,
+    MissingMapping,
     Unknown(char),
 }
 
 impl SubmoduleStatus {
+    #[cfg(test)]
     pub fn from_git_status_marker(marker: char) -> Self {
         match marker {
             ' ' => Self::UpToDate,
             '-' => Self::NotInitialized,
             '+' => Self::HeadMismatch,
             'U' => Self::MergeConflict,
+            '!' => Self::MissingMapping,
             other => Self::Unknown(other),
         }
     }
 
+    #[cfg(test)]
     pub fn git_status_marker(self) -> char {
         match self {
             Self::UpToDate => ' ',
             Self::NotInitialized => '-',
             Self::HeadMismatch => '+',
             Self::MergeConflict => 'U',
+            Self::MissingMapping => '!',
             Self::Unknown(marker) => marker,
         }
     }
@@ -452,6 +457,10 @@ mod tests {
         assert_eq!(
             SubmoduleStatus::from_git_status_marker('U'),
             SubmoduleStatus::MergeConflict
+        );
+        assert_eq!(
+            SubmoduleStatus::from_git_status_marker('!'),
+            SubmoduleStatus::MissingMapping
         );
     }
 

@@ -676,8 +676,10 @@ fn prepared_syntax_cache_metrics() -> PreparedSyntaxCacheMetrics {
 }
 
 #[cfg(test)]
-fn reset_prepared_syntax_cache_metrics() {
-    TS_DOCUMENT_CACHE.with(|cache| cache.borrow_mut().reset_metrics());
+fn reset_prepared_syntax_cache() {
+    TS_DOCUMENT_CACHE.with(|cache| {
+        *cache.borrow_mut() = TreesitterDocumentCache::new();
+    });
 }
 
 #[cfg(test)]
@@ -3084,7 +3086,9 @@ mod tests {
 
     #[test]
     fn prepared_document_tokens_are_chunked_and_materialized_lazily() {
-        reset_prepared_syntax_cache_metrics();
+        // The prepared-document cache is thread-local and persists across tests on the same worker
+        // thread, so clear it before asserting exact miss/hit behavior.
+        reset_prepared_syntax_cache();
         let lines = (0..(TS_DOCUMENT_LINE_TOKEN_CHUNK_ROWS * 3))
             .map(|ix| format!("let value_{ix} = {ix};"))
             .collect::<Vec<_>>();
@@ -3142,9 +3146,10 @@ mod tests {
 
     #[test]
     fn prepared_document_chunk_hit_does_not_clone_tree_state() {
+        reset_prepared_syntax_cache();
         reset_tree_state_clone_count();
         let lines = (0..(TS_DOCUMENT_LINE_TOKEN_CHUNK_ROWS * 2))
-            .map(|ix| format!("let value_{ix} = {ix};"))
+            .map(|ix| format!("let chunk_clone_probe_{ix} = {ix};"))
             .collect::<Vec<_>>();
         let document = prepare_treesitter_document(
             DiffSyntaxLanguage::Rust,

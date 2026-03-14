@@ -1,4 +1,5 @@
 use gitcomet_core::domain::{CommitId, FileStatusKind};
+use gitcomet_core::error::{ErrorKind, GitFailureId};
 use gitcomet_core::services::GitBackend;
 use gitcomet_git_gix::GixBackend;
 use std::path::Path;
@@ -122,16 +123,7 @@ fn log_all_branches_includes_remote_tracking_branches() {
     std::fs::write(repo.join("b.txt"), "two\n").unwrap();
     run_git(&repo, &["add", "b.txt"]);
     run_git(&repo, &["-c", "commit.gpgsign=false", "commit", "-m", "C"]);
-    let feature_tip = {
-        let out = Command::new("git")
-            .arg("-C")
-            .arg(&repo)
-            .args(["rev-parse", "HEAD"])
-            .output()
-            .expect("git rev-parse to run");
-        assert!(out.status.success());
-        String::from_utf8(out.stdout).unwrap().trim().to_string()
-    };
+    let feature_tip = git_stdout(&repo, &["rev-parse", "HEAD"]);
 
     run_git(
         dir.path(),
@@ -179,16 +171,7 @@ fn log_all_branches_includes_nonstandard_ref_namespaces() {
     std::fs::write(repo.join("b.txt"), "two\n").unwrap();
     run_git(repo, &["add", "b.txt"]);
     run_git(repo, &["-c", "commit.gpgsign=false", "commit", "-m", "C"]);
-    let feature_tip = {
-        let out = Command::new("git")
-            .arg("-C")
-            .arg(repo)
-            .args(["rev-parse", "HEAD"])
-            .output()
-            .expect("git rev-parse to run");
-        assert!(out.status.success());
-        String::from_utf8(out.stdout).unwrap().trim().to_string()
-    };
+    let feature_tip = git_stdout(repo, &["rev-parse", "HEAD"]);
 
     run_git(repo, &["checkout", "main"]);
     run_git(repo, &["branch", "-D", "feature"]);
@@ -228,16 +211,7 @@ fn log_all_branches_does_not_include_tag_only_tips() {
     std::fs::write(repo.join("b.txt"), "two\n").unwrap();
     run_git(repo, &["add", "b.txt"]);
     run_git(repo, &["-c", "commit.gpgsign=false", "commit", "-m", "B"]);
-    let tag_only_tip = {
-        let out = Command::new("git")
-            .arg("-C")
-            .arg(repo)
-            .args(["rev-parse", "HEAD"])
-            .output()
-            .expect("git rev-parse to run");
-        assert!(out.status.success());
-        String::from_utf8(out.stdout).unwrap().trim().to_string()
-    };
+    let tag_only_tip = git_stdout(repo, &["rev-parse", "HEAD"]);
 
     run_git(
         repo,
@@ -262,6 +236,33 @@ fn log_all_branches_does_not_include_tag_only_tips() {
         !all.commits.iter().any(|c| c.id.0 == tag_only_tip),
         "all-branches log should not be expanded by tag-only tips"
     );
+}
+
+#[test]
+fn log_all_branches_ignores_non_commit_refs() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init", "-b", "main"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    std::fs::write(repo.join("a.txt"), "one\n").unwrap();
+    run_git(repo, &["add", "a.txt"]);
+    run_git(repo, &["-c", "commit.gpgsign=false", "commit", "-m", "A"]);
+    let head = git_stdout(repo, &["rev-parse", "HEAD"]);
+
+    let blob = git_stdout(repo, &["hash-object", "-w", "a.txt"]);
+    run_git(repo, &["update-ref", "refs/blob-test", blob.as_str()]);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    let all = opened.log_all_branches_page(200, None).unwrap();
+
+    assert_eq!(all.commits.len(), 1);
+    assert_eq!(all.commits[0].id.0, head);
+    assert_eq!(all.commits[0].summary, "A");
 }
 
 #[test]
@@ -340,6 +341,62 @@ fn log_head_page_limit_sets_next_cursor_and_supports_pagination() {
 }
 
 #[test]
+fn log_head_page_exact_limit_has_no_next_cursor() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init", "-b", "main"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    std::fs::write(repo.join("a.txt"), "one\n").unwrap();
+    run_git(repo, &["add", "a.txt"]);
+    run_git(repo, &["-c", "commit.gpgsign=false", "commit", "-m", "A"]);
+
+    std::fs::write(repo.join("a.txt"), "two\n").unwrap();
+    run_git(repo, &["add", "a.txt"]);
+    run_git(repo, &["-c", "commit.gpgsign=false", "commit", "-m", "B"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+
+    let page = opened.log_head_page(2, None).unwrap();
+    assert_eq!(page.commits.len(), 2);
+    assert!(page.next_cursor.is_none());
+}
+
+#[test]
+fn zero_limit_log_pages_return_empty_without_cursor() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init", "-b", "main"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    std::fs::write(repo.join("a.txt"), "one\n").unwrap();
+    run_git(repo, &["add", "a.txt"]);
+    run_git(repo, &["-c", "commit.gpgsign=false", "commit", "-m", "A"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+
+    let head = opened.log_head_page(0, None).unwrap();
+    assert!(head.commits.is_empty());
+    assert!(head.next_cursor.is_none());
+
+    let all = opened.log_all_branches_page(0, None).unwrap();
+    assert!(all.commits.is_empty());
+    assert!(all.next_cursor.is_none());
+
+    let file = opened.log_file_page(Path::new("a.txt"), 0, None).unwrap();
+    assert!(file.commits.is_empty());
+    assert!(file.next_cursor.is_none());
+}
+
+#[test]
 fn log_file_page_follows_renames() {
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
@@ -407,6 +464,118 @@ fn log_file_page_follows_renames() {
 }
 
 #[test]
+fn log_file_page_cursor_paginates_rename_follow_history() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init", "-b", "main"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    std::fs::create_dir_all(repo.join("docs")).unwrap();
+    std::fs::write(repo.join("docs/old name.txt"), "line 1\n").unwrap();
+    run_git(repo, &["add", "docs/old name.txt"]);
+    run_git(
+        repo,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-m",
+            "add history file",
+        ],
+    );
+
+    run_git(repo, &["mv", "docs/old name.txt", "docs/new name.txt"]);
+    run_git(
+        repo,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-m",
+            "rename history file",
+        ],
+    );
+
+    std::fs::write(repo.join("docs/new name.txt"), "line 1\nline 2\n").unwrap();
+    run_git(repo, &["add", "docs/new name.txt"]);
+    run_git(
+        repo,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-m",
+            "update history file once",
+        ],
+    );
+
+    std::fs::write(repo.join("docs/new name.txt"), "line 1\nline 2\nline 3\n").unwrap();
+    run_git(repo, &["add", "docs/new name.txt"]);
+    run_git(
+        repo,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-m",
+            "update history file twice",
+        ],
+    );
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+
+    let first = opened
+        .log_file_page(Path::new("docs/new name.txt"), 2, None)
+        .unwrap();
+    let first_summaries: Vec<&str> = first.commits.iter().map(|c| c.summary.as_str()).collect();
+    assert_eq!(
+        first_summaries,
+        vec!["update history file twice", "update history file once"]
+    );
+
+    let cursor = first.next_cursor.as_ref().expect("next cursor");
+    let second = opened
+        .log_file_page(Path::new("docs/new name.txt"), 2, Some(cursor))
+        .unwrap();
+    let second_summaries: Vec<&str> = second.commits.iter().map(|c| c.summary.as_str()).collect();
+    assert_eq!(
+        second_summaries,
+        vec!["rename history file", "add history file"]
+    );
+    assert!(second.next_cursor.is_none());
+}
+
+#[test]
+fn log_file_page_exact_limit_has_no_next_cursor() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init", "-b", "main"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    std::fs::write(repo.join("a.txt"), "one\n").unwrap();
+    run_git(repo, &["add", "a.txt"]);
+    run_git(repo, &["-c", "commit.gpgsign=false", "commit", "-m", "A"]);
+
+    std::fs::write(repo.join("a.txt"), "two\n").unwrap();
+    run_git(repo, &["add", "a.txt"]);
+    run_git(repo, &["-c", "commit.gpgsign=false", "commit", "-m", "B"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+
+    let page = opened.log_file_page(Path::new("a.txt"), 2, None).unwrap();
+    assert_eq!(page.commits.len(), 2);
+    assert!(page.next_cursor.is_none());
+}
+
+#[test]
 fn commit_details_reports_merge_parents_and_file_changes() {
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
@@ -463,10 +632,72 @@ fn commit_details_reports_merge_parents_and_file_changes() {
     );
     assert_eq!(merge_details.parent_ids.len(), 2);
     assert!(
+        merge_details.files.is_empty(),
+        "merge commit details should match `git show` and omit file rows without `-m`"
+    );
+    assert!(
         feature_details.files.iter().any(|f| {
             f.path == std::path::PathBuf::from("feature.txt") && f.kind == FileStatusKind::Added
         }),
         "expected feature commit details to include feature file"
+    );
+}
+
+#[test]
+fn commit_details_reports_root_and_rename_file_changes() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init", "-b", "main"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+    run_git(repo, &["config", "diff.renames", "true"]);
+
+    std::fs::write(repo.join("old name.txt"), "hello\n").unwrap();
+    run_git(repo, &["add", "old name.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "root commit"],
+    );
+    let root_id = git_stdout(repo, &["rev-parse", "HEAD"]);
+
+    run_git(repo, &["mv", "old name.txt", "new name.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "rename file"],
+    );
+    let rename_id = git_stdout(repo, &["rev-parse", "HEAD"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    let root_details = opened
+        .commit_details(&CommitId(root_id.clone()))
+        .expect("root commit details");
+    let rename_details = opened
+        .commit_details(&CommitId(rename_id.clone()))
+        .expect("rename commit details");
+
+    assert_eq!(root_details.id, CommitId(root_id));
+    assert_eq!(root_details.message, "root commit");
+    assert_eq!(root_details.parent_ids, Vec::<CommitId>::new());
+    assert_eq!(
+        root_details.files,
+        vec![gitcomet_core::domain::CommitFileChange {
+            path: Path::new("old name.txt").to_path_buf(),
+            kind: FileStatusKind::Added,
+        }]
+    );
+
+    assert_eq!(rename_details.id, CommitId(rename_id));
+    assert_eq!(rename_details.message, "rename file");
+    assert_eq!(rename_details.parent_ids.len(), 1);
+    assert_eq!(
+        rename_details.files,
+        vec![gitcomet_core::domain::CommitFileChange {
+            path: Path::new("new name.txt").to_path_buf(),
+            kind: FileStatusKind::Renamed,
+        }]
     );
 }
 
@@ -493,11 +724,44 @@ fn reflog_head_returns_recent_entries_with_indices() {
     let reflog = opened.reflog_head(2).unwrap();
 
     assert_eq!(reflog.len(), 2);
-    assert!(reflog[0].selector.starts_with("HEAD@{"));
-    assert!(reflog[0].index > 0);
-    assert!(reflog[1].index > 0);
+    assert_eq!(reflog[0].selector, "HEAD@{0}");
+    assert_eq!(reflog[1].selector, "HEAD@{1}");
+    assert_eq!(reflog[0].index, 0);
+    assert_eq!(reflog[1].index, 1);
     assert!(reflog.iter().all(|entry| !entry.new_id.0.is_empty()));
     assert!(reflog.iter().all(|entry| entry.time.is_some()));
+}
+
+#[test]
+fn reflog_head_returns_error_for_unborn_head() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init", "-b", "main"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    let err = opened
+        .reflog_head(5)
+        .expect_err("unborn HEAD should not have a reflog");
+
+    match err.kind() {
+        ErrorKind::Git(failure) => {
+            assert_eq!(failure.command(), "git reflog");
+            assert_eq!(failure.id(), GitFailureId::CommandFailed);
+            assert_eq!(failure.exit_code(), Some(128));
+            assert_eq!(
+                failure.detail(),
+                Some("fatal: your current branch 'main' does not have any commits yet")
+            );
+            assert_eq!(failure.stdout(), b"");
+            assert_eq!(
+                failure.stderr(),
+                b"fatal: your current branch 'main' does not have any commits yet\n"
+            );
+        }
+        other => panic!("expected structured git failure, got {other:?}"),
+    }
 }
 
 #[test]

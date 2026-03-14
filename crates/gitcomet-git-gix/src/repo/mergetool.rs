@@ -1,5 +1,5 @@
-use super::GixRepo;
-use crate::util::git_stage_blob_spec;
+use super::{GixRepo, conflict_stages::gix_index_stage_blob_bytes_optional};
+use crate::util::{bytes_to_text_preserving_utf8, run_git_simple};
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{
     CommandOutput, MergetoolResult, Result, validate_conflict_resolution_text,
@@ -22,6 +22,7 @@ impl GixRepo {
     /// 5. Reads back the merged file and stages it on success.
     pub(super) fn launch_mergetool_impl(&self, path: &Path) -> Result<MergetoolResult> {
         let workdir = &self.spec.workdir;
+        let repo = self.reopen_repo()?;
         let MergetoolConfig {
             tool_name,
             tool_cmd,
@@ -29,9 +30,14 @@ impl GixRepo {
             trust_exit_code,
             write_to_temp,
             keep_temporaries,
-        } = resolve_mergetool_config(workdir, env_has_display())?;
-        let stage_paths =
-            materialize_mergetool_stage_files(workdir, path, write_to_temp, keep_temporaries)?;
+        } = resolve_mergetool_config(&repo, env_has_display())?;
+        let stage_paths = materialize_mergetool_stage_files(
+            &repo,
+            workdir,
+            path,
+            write_to_temp,
+            keep_temporaries,
+        )?;
 
         let base_path = &stage_paths.base;
         let local_path = &stage_paths.local;
@@ -122,40 +128,16 @@ impl GixRepo {
                 }
 
                 // Stage the file
-                let path_ref: &Path = path;
-                let mut add = Command::new("git");
-                add.arg("-C")
-                    .arg(workdir)
-                    .arg("add")
-                    .arg("--")
-                    .arg(path_ref);
-                let add_output = add
-                    .output()
-                    .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
-
-                if !add_output.status.success() {
-                    let add_stderr = bytes_to_text_preserving_utf8(&add_output.stderr);
-                    return Err(Error::new(ErrorKind::Backend(format!(
-                        "git add failed after mergetool: {}",
-                        add_stderr.trim()
-                    ))));
-                }
+                let mut add = self.git_workdir_cmd();
+                add.arg("add").arg("--").arg(path);
+                run_git_simple(add, "git add (after mergetool)")?;
 
                 Some(bytes)
             }
             MergedFileState::Missing => {
-                let mut rm = Command::new("git");
-                rm.arg("-C").arg(workdir).arg("rm").arg("--").arg(path);
-                let rm_output = rm
-                    .output()
-                    .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
-                if !rm_output.status.success() {
-                    let rm_stderr = bytes_to_text_preserving_utf8(&rm_output.stderr);
-                    return Err(Error::new(ErrorKind::Backend(format!(
-                        "git rm failed after mergetool: {}",
-                        rm_stderr.trim()
-                    ))));
-                }
+                let mut rm = self.git_workdir_cmd();
+                rm.arg("rm").arg("--").arg(path);
+                run_git_simple(rm, "git rm (after mergetool)")?;
                 None
             }
         };
@@ -312,23 +294,21 @@ fn choose_mergetool_name(
     )))
 }
 
-fn resolve_mergetool_config(workdir: &Path, has_display: bool) -> Result<MergetoolConfig> {
-    let merge_tool = git_config_get(workdir, "merge.tool")?;
-    let merge_guitool = git_config_get(workdir, "merge.guitool")?;
-    let gui_default =
-        parse_gui_default(git_config_get(workdir, "mergetool.guiDefault")?.as_deref())?;
+fn resolve_mergetool_config(repo: &gix::Repository, has_display: bool) -> Result<MergetoolConfig> {
+    let merge_tool = git_config_get(repo, "merge.tool")?;
+    let merge_guitool = git_config_get(repo, "merge.guitool")?;
+    let gui_default = parse_gui_default(git_config_get(repo, "mergetool.guiDefault")?.as_deref())?;
 
     let tool_name = choose_mergetool_name(merge_tool, merge_guitool, gui_default, has_display)?;
-    let tool_cmd = resolve_mergetool_command_with_trust_mode(workdir, &tool_name)?;
-    let tool_path = git_config_get(workdir, &format!("mergetool.{tool_name}.path"))?;
+    let tool_cmd = resolve_mergetool_command_with_trust_mode(repo, &tool_name)?;
+    let tool_path = git_config_get(repo, &format!("mergetool.{tool_name}.path"))?;
     let trust_exit_code =
-        match git_config_get_bool(workdir, &format!("mergetool.{tool_name}.trustExitCode"))? {
+        match git_config_get_bool(repo, &format!("mergetool.{tool_name}.trustExitCode"))? {
             Some(value) => value,
-            None => git_config_get_bool(workdir, "mergetool.trustExitCode")?.unwrap_or(false),
+            None => git_config_get_bool(repo, "mergetool.trustExitCode")?.unwrap_or(false),
         };
-    let write_to_temp = git_config_get_bool(workdir, "mergetool.writeToTemp")?.unwrap_or(false);
-    let keep_temporaries =
-        git_config_get_bool(workdir, "mergetool.keepTemporaries")?.unwrap_or(false);
+    let write_to_temp = git_config_get_bool(repo, "mergetool.writeToTemp")?.unwrap_or(false);
+    let keep_temporaries = git_config_get_bool(repo, "mergetool.keepTemporaries")?.unwrap_or(false);
 
     Ok(MergetoolConfig {
         tool_name,
@@ -341,18 +321,18 @@ fn resolve_mergetool_config(workdir: &Path, has_display: bool) -> Result<Mergeto
 }
 
 fn resolve_mergetool_command_with_trust_mode(
-    workdir: &Path,
+    repo: &gix::Repository,
     tool_name: &str,
 ) -> Result<Option<String>> {
     let cmd_key = format!("mergetool.{tool_name}.cmd");
-    let global_cmd = git_config_get_with_scope(workdir, &cmd_key, GitConfigScope::Global)?;
-    let local_cmd = git_config_get_with_scope(workdir, &cmd_key, GitConfigScope::Local)?;
+    let global_cmd = git_config_get_with_scope(repo, &cmd_key, GitConfigScope::Global)?;
+    let local_cmd = git_config_get_with_scope(repo, &cmd_key, GitConfigScope::Local)?;
 
     let Some(local_cmd) = local_cmd else {
         return Ok(global_cmd);
     };
 
-    if repo_local_mergetool_command_allowed(workdir, tool_name)? {
+    if repo_local_mergetool_command_allowed(repo, tool_name)? {
         return Ok(Some(local_cmd));
     }
 
@@ -360,7 +340,8 @@ fn resolve_mergetool_command_with_trust_mode(
         return Ok(global_cmd);
     }
 
-    let consent_key = repo_local_mergetool_command_consent_key(workdir, tool_name);
+    let consent_key =
+        repo_local_mergetool_command_consent_key(repo_workdir_for_mergetool(repo), tool_name);
     Err(Error::new(ErrorKind::Backend(format!(
         "Refusing to execute repository-local mergetool command for '{tool_name}' without explicit consent.\n\
          Blocked command from repository config:\n\
@@ -371,12 +352,17 @@ fn resolve_mergetool_command_with_trust_mode(
     ))))
 }
 
-fn repo_local_mergetool_command_allowed(workdir: &Path, tool_name: &str) -> Result<bool> {
-    let consent_key = repo_local_mergetool_command_consent_key(workdir, tool_name);
+fn repo_local_mergetool_command_allowed(repo: &gix::Repository, tool_name: &str) -> Result<bool> {
+    let consent_key =
+        repo_local_mergetool_command_consent_key(repo_workdir_for_mergetool(repo), tool_name);
     Ok(
-        git_config_get_bool_with_scope(workdir, &consent_key, GitConfigScope::Global)?
+        git_config_get_bool_with_scope(repo, &consent_key, GitConfigScope::Global)?
             .unwrap_or(false),
     )
+}
+
+fn repo_workdir_for_mergetool(repo: &gix::Repository) -> &Path {
+    repo.workdir().unwrap_or_else(|| repo.git_dir())
 }
 
 fn repo_local_mergetool_command_consent_key(workdir: &Path, tool_name: &str) -> String {
@@ -428,41 +414,6 @@ fn fnv1a_64(bytes: &[u8]) -> u64 {
     hash
 }
 
-fn bytes_to_text_preserving_utf8(bytes: &[u8]) -> String {
-    use std::fmt::Write as _;
-
-    let mut out = String::with_capacity(bytes.len());
-    let mut cursor = 0usize;
-    while cursor < bytes.len() {
-        match std::str::from_utf8(&bytes[cursor..]) {
-            Ok(valid) => {
-                out.push_str(valid);
-                break;
-            }
-            Err(err) => {
-                let valid_len = err.valid_up_to();
-                if valid_len > 0 {
-                    let valid = &bytes[cursor..cursor + valid_len];
-                    out.push_str(
-                        std::str::from_utf8(valid)
-                            .expect("slice identified by valid_up_to must be valid UTF-8"),
-                    );
-                    cursor += valid_len;
-                }
-
-                let invalid_len = err.error_len().unwrap_or(1);
-                let invalid_end = cursor.saturating_add(invalid_len).min(bytes.len());
-                for byte in &bytes[cursor..invalid_end] {
-                    let _ = write!(out, "\\x{byte:02x}");
-                }
-                cursor = invalid_end;
-            }
-        }
-    }
-
-    out
-}
-
 #[derive(Debug)]
 struct StagePaths {
     workdir: PathBuf,
@@ -490,6 +441,7 @@ impl Drop for StagePaths {
 }
 
 fn materialize_mergetool_stage_files(
+    repo: &gix::Repository,
     workdir: &Path,
     conflict_path: &Path,
     write_to_temp: bool,
@@ -499,21 +451,21 @@ fn materialize_mergetool_stage_files(
     write_stage_bytes(
         workdir,
         &stage_paths.base,
-        git_show_stage_bytes(workdir, 1, conflict_path)?
+        gix_index_stage_blob_bytes_optional(repo, conflict_path, 1)?
             .as_deref()
             .unwrap_or(b""),
     )?;
     write_stage_bytes(
         workdir,
         &stage_paths.local,
-        git_show_stage_bytes(workdir, 2, conflict_path)?
+        gix_index_stage_blob_bytes_optional(repo, conflict_path, 2)?
             .as_deref()
             .unwrap_or(b""),
     )?;
     write_stage_bytes(
         workdir,
         &stage_paths.remote,
-        git_show_stage_bytes(workdir, 3, conflict_path)?
+        gix_index_stage_blob_bytes_optional(repo, conflict_path, 3)?
             .as_deref()
             .unwrap_or(b""),
     )?;
@@ -653,116 +605,77 @@ fn write_stage_bytes(workdir: &Path, stage_path: &Path, bytes: &[u8]) -> Result<
 }
 
 /// Read a git config value. Returns `Ok(None)` if the key is not set.
-fn git_config_get(workdir: &Path, key: &str) -> Result<Option<String>> {
-    git_config_get_with_scope(workdir, key, GitConfigScope::Any)
+fn git_config_get(repo: &gix::Repository, key: &str) -> Result<Option<String>> {
+    git_config_get_with_scope(repo, key, GitConfigScope::Any)
 }
 
 /// Read a git config value from a specific scope. Returns `Ok(None)` if the key is not set.
 fn git_config_get_with_scope(
-    workdir: &Path,
+    repo: &gix::Repository,
     key: &str,
     scope: GitConfigScope,
 ) -> Result<Option<String>> {
-    let output = git_config_get_command(workdir, key, scope)
-        .output()
-        .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+    let config = repo.config_snapshot();
+    let value = match git_config_scope_filter(scope) {
+        Some(filter) => config.plumbing().string_filter(key, filter),
+        None => config.plumbing().string(key),
+    };
 
-    if output.status.success() {
-        let value = bytes_to_text_preserving_utf8(&output.stdout)
-            .trim()
-            .to_string();
-        if value.is_empty() {
-            Ok(None)
-        } else {
-            Ok(Some(value))
-        }
-    } else {
-        // Exit code 1 means key not found; other codes are errors
-        let code = output.status.code().unwrap_or(-1);
-        if code == 1 {
-            Ok(None)
-        } else {
-            let stderr = bytes_to_text_preserving_utf8(&output.stderr);
-            let scope_args = git_config_scope_args(scope);
-            Err(Error::new(ErrorKind::Backend(format!(
-                "git config {scope_args} --get {key} failed: {}",
-                stderr.trim()
-            ))))
-        }
-    }
+    Ok(value.and_then(|value| {
+        let value = bytes_to_text_preserving_utf8(value.as_ref().as_ref());
+        (!value.is_empty()).then_some(value)
+    }))
 }
 
 /// Read a git config boolean value.
 ///
 /// Supports git-style boolean literals: true/false, yes/no, on/off, 1/0.
-fn git_config_get_bool(workdir: &Path, key: &str) -> Result<Option<bool>> {
-    git_config_get_bool_with_scope(workdir, key, GitConfigScope::Any)
+fn git_config_get_bool(repo: &gix::Repository, key: &str) -> Result<Option<bool>> {
+    git_config_get_bool_with_scope(repo, key, GitConfigScope::Any)
 }
 
 /// Read a git config boolean value from a specific scope.
 ///
 /// Supports git-style boolean literals: true/false, yes/no, on/off, 1/0.
 fn git_config_get_bool_with_scope(
-    workdir: &Path,
+    repo: &gix::Repository,
     key: &str,
     scope: GitConfigScope,
 ) -> Result<Option<bool>> {
-    let output = git_config_get_command(workdir, key, scope)
-        .output()
-        .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+    let config = repo.config_snapshot();
+    let value = match git_config_scope_filter(scope) {
+        Some(filter) => config.plumbing().boolean_filter(key, filter),
+        None => config.plumbing().boolean(key),
+    };
 
-    if output.status.success() {
-        // In git config files, a bare boolean key (no explicit value) is
-        // treated as `true`; `git config --get` returns an empty line for it.
-        let value = bytes_to_text_preserving_utf8(&output.stdout)
-            .trim()
-            .to_string();
-        if value.is_empty() {
-            return Ok(Some(true));
-        }
-        parse_git_bool(&value).map(Some).ok_or_else(|| {
-            Error::new(ErrorKind::Backend(format!(
+    match value.transpose() {
+        Ok(value) => Ok(value),
+        Err(err) => {
+            let value = bytes_to_text_preserving_utf8(err.input.as_ref());
+            Err(Error::new(ErrorKind::Backend(format!(
                 "Invalid boolean value for git config {key}: {:?}. Expected true/false, yes/no, on/off, or 1/0.",
                 value
-            )))
-        })
-    } else {
-        let code = output.status.code().unwrap_or(-1);
-        if code == 1 {
-            Ok(None)
-        } else {
-            let stderr = bytes_to_text_preserving_utf8(&output.stderr);
-            let scope_args = git_config_scope_args(scope);
-            Err(Error::new(ErrorKind::Backend(format!(
-                "git config {scope_args} --get {key} failed: {}",
-                stderr.trim()
             ))))
         }
     }
 }
 
-fn git_config_get_command(workdir: &Path, key: &str, scope: GitConfigScope) -> Command {
-    let mut command = Command::new("git");
-    command.arg("-C").arg(workdir).arg("config");
+type GitConfigFilter = fn(&gix::config::file::Metadata) -> bool;
+
+fn git_config_scope_filter(scope: GitConfigScope) -> Option<GitConfigFilter> {
     match scope {
-        GitConfigScope::Any => {}
-        GitConfigScope::Global => {
-            command.arg("--global");
-        }
-        GitConfigScope::Local => {
-            command.arg("--local");
-        }
+        GitConfigScope::Any => None,
+        GitConfigScope::Global => Some(config_value_is_global),
+        GitConfigScope::Local => Some(config_value_is_local),
     }
-    command.arg("--get").arg(key);
-    command
 }
 
-fn git_config_scope_args(scope: GitConfigScope) -> &'static str {
-    match scope {
-        GitConfigScope::Any => "",
-        GitConfigScope::Global => "--global",
-        GitConfigScope::Local => "--local",
-    }
+fn config_value_is_global(meta: &gix::config::file::Metadata) -> bool {
+    meta.source.kind() == gix::config::source::Kind::Global
+}
+
+fn config_value_is_local(meta: &gix::config::file::Metadata) -> bool {
+    meta.source == gix::config::Source::Local
 }
 
 fn parse_git_bool(value: &str) -> Option<bool> {
@@ -770,40 +683,6 @@ fn parse_git_bool(value: &str) -> Option<bool> {
         "true" | "yes" | "on" | "1" => Some(true),
         "false" | "no" | "off" | "0" => Some(false),
         _ => None,
-    }
-}
-
-/// Read the content of a conflict stage as raw bytes.
-/// Stage 1 = base, 2 = ours, 3 = theirs.
-/// Returns `Ok(None)` if the stage doesn't exist for this file.
-fn git_show_stage_bytes(workdir: &Path, stage: u8, path: &Path) -> Result<Option<Vec<u8>>> {
-    let rev = git_stage_blob_spec(stage, path)?;
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(workdir)
-        .arg("show")
-        .arg(rev)
-        .output()
-        .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
-
-    if output.status.success() {
-        Ok(Some(output.stdout))
-    } else {
-        let stderr = bytes_to_text_preserving_utf8(&output.stderr);
-        // Stage might not exist (e.g. add/add conflict has no base)
-        if stderr.contains("does not exist")
-            || stderr.contains("not at stage")
-            || stderr.contains("bad revision")
-            || stderr.contains("invalid object")
-        {
-            Ok(None)
-        } else {
-            Err(Error::new(ErrorKind::Backend(format!(
-                "git show :{stage}:{} failed: {}",
-                path.display(),
-                stderr.trim()
-            ))))
-        }
     }
 }
 
@@ -825,6 +704,10 @@ fn read_merged_file_state(path: &Path) -> Result<MergedFileState> {
 mod tests {
     use super::*;
 
+    fn open_repo(workdir: &Path) -> gix::Repository {
+        gix::open(workdir).unwrap()
+    }
+
     #[test]
     fn test_git_config_get_nonexistent_key_returns_none() {
         // Create a temporary git repo
@@ -837,7 +720,8 @@ mod tests {
             .output()
             .unwrap();
 
-        let result = git_config_get(workdir, "nonexistent.key.xyz").unwrap();
+        let repo = open_repo(workdir);
+        let result = git_config_get(&repo, "nonexistent.key.xyz").unwrap();
         assert_eq!(result, None);
     }
 
@@ -862,12 +746,47 @@ mod tests {
             .output()
             .unwrap();
 
-        let result = git_config_get(workdir, "merge.tool").unwrap();
+        let repo = open_repo(workdir);
+        let result = git_config_get(&repo, "merge.tool").unwrap();
         assert_eq!(result, Some("vimdiff".to_string()));
     }
 
     #[test]
-    fn test_git_show_stage_bytes_no_conflict() {
+    fn test_git_config_get_with_scope_local_ignores_worktree_config() {
+        let tmp = tempfile::tempdir().unwrap();
+        let workdir = tmp.path();
+        Command::new("git")
+            .arg("-C")
+            .arg(workdir)
+            .arg("init")
+            .output()
+            .unwrap();
+        Command::new("git")
+            .arg("-C")
+            .arg(workdir)
+            .args(["config", "extensions.worktreeConfig", "true"])
+            .output()
+            .unwrap();
+        Command::new("git")
+            .arg("-C")
+            .arg(workdir)
+            .args(["config", "--worktree", "mergetool.fake.cmd", "worktree-cmd"])
+            .output()
+            .unwrap();
+
+        let repo = open_repo(workdir);
+        assert_eq!(
+            git_config_get(&repo, "mergetool.fake.cmd").unwrap(),
+            Some("worktree-cmd".to_string())
+        );
+        assert_eq!(
+            git_config_get_with_scope(&repo, "mergetool.fake.cmd", GitConfigScope::Local).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn test_read_index_stage_bytes_optional_no_conflict() {
         let tmp = tempfile::tempdir().unwrap();
         let workdir = tmp.path();
         Command::new("git")
@@ -878,7 +797,9 @@ mod tests {
             .unwrap();
 
         // No conflict stages exist
-        let result = git_show_stage_bytes(workdir, 1, Path::new("nonexistent.txt")).unwrap();
+        let repo = gix::open(workdir).unwrap();
+        let result =
+            gix_index_stage_blob_bytes_optional(&repo, Path::new("nonexistent.txt"), 1).unwrap();
         assert_eq!(result, None);
     }
 
@@ -1158,7 +1079,8 @@ mod tests {
             .output()
             .unwrap();
 
-        let result = git_config_get_bool(workdir, "nonexistent.bool.key").unwrap();
+        let repo = open_repo(workdir);
+        let result = git_config_get_bool(&repo, "nonexistent.bool.key").unwrap();
         assert_eq!(result, None);
     }
 
@@ -1181,8 +1103,9 @@ mod tests {
             .arg("yes")
             .output()
             .unwrap();
+        let repo = open_repo(workdir);
         assert_eq!(
-            git_config_get_bool(workdir, "mergetool.test.trustExitCode").unwrap(),
+            git_config_get_bool(&repo, "mergetool.test.trustExitCode").unwrap(),
             Some(true)
         );
 
@@ -1194,8 +1117,9 @@ mod tests {
             .arg("off")
             .output()
             .unwrap();
+        let repo = open_repo(workdir);
         assert_eq!(
-            git_config_get_bool(workdir, "mergetool.test.trustExitCode").unwrap(),
+            git_config_get_bool(&repo, "mergetool.test.trustExitCode").unwrap(),
             Some(false)
         );
     }
@@ -1220,7 +1144,8 @@ mod tests {
             .output()
             .unwrap();
 
-        let err = git_config_get_bool(workdir, "mergetool.test.trustExitCode").unwrap_err();
+        let repo = open_repo(workdir);
+        let err = git_config_get_bool(&repo, "mergetool.test.trustExitCode").unwrap_err();
         assert!(matches!(
             err.kind(),
             ErrorKind::Backend(message) if message.contains("Invalid boolean value")
@@ -1243,8 +1168,9 @@ mod tests {
         config.push_str("\n[mergetool \"test\"]\n\ttrustExitCode\n");
         std::fs::write(config_path, config).unwrap();
 
+        let repo = open_repo(workdir);
         assert_eq!(
-            git_config_get_bool(workdir, "mergetool.test.trustExitCode").unwrap(),
+            git_config_get_bool(&repo, "mergetool.test.trustExitCode").unwrap(),
             Some(true)
         );
     }
@@ -1291,7 +1217,8 @@ mod tests {
             .output()
             .unwrap();
 
-        let cfg = resolve_mergetool_config(workdir, false).unwrap();
+        let repo = open_repo(workdir);
+        let cfg = resolve_mergetool_config(&repo, false).unwrap();
         assert_eq!(cfg.tool_name, "gui");
         assert_eq!(cfg.tool_cmd, None);
         assert_eq!(cfg.tool_path.as_deref(), Some("/opt/fake-gui-tool"));
@@ -1330,7 +1257,8 @@ mod tests {
             .output()
             .unwrap();
 
-        let cfg = resolve_mergetool_config(workdir, false).unwrap();
+        let repo = open_repo(workdir);
+        let cfg = resolve_mergetool_config(&repo, false).unwrap();
         assert_eq!(cfg.tool_name, "cli");
         assert_eq!(cfg.tool_cmd, None);
         assert!(!cfg.write_to_temp);
@@ -1361,7 +1289,8 @@ mod tests {
             .output()
             .unwrap();
 
-        let cfg = resolve_mergetool_config(workdir, false).unwrap();
+        let repo = open_repo(workdir);
+        let cfg = resolve_mergetool_config(&repo, false).unwrap();
         assert!(cfg.trust_exit_code);
     }
 
@@ -1395,7 +1324,8 @@ mod tests {
             .output()
             .unwrap();
 
-        let cfg = resolve_mergetool_config(workdir, false).unwrap();
+        let repo = open_repo(workdir);
+        let cfg = resolve_mergetool_config(&repo, false).unwrap();
         assert!(!cfg.trust_exit_code);
     }
 
@@ -1423,7 +1353,8 @@ mod tests {
             .output()
             .unwrap();
 
-        let cfg = resolve_mergetool_config(workdir, false).unwrap();
+        let repo = open_repo(workdir);
+        let cfg = resolve_mergetool_config(&repo, false).unwrap();
         assert!(cfg.write_to_temp);
         assert!(!cfg.keep_temporaries);
     }
@@ -1452,7 +1383,8 @@ mod tests {
             .output()
             .unwrap();
 
-        let cfg = resolve_mergetool_config(workdir, false).unwrap();
+        let repo = open_repo(workdir);
+        let cfg = resolve_mergetool_config(&repo, false).unwrap();
         assert!(!cfg.write_to_temp);
         assert!(cfg.keep_temporaries);
     }

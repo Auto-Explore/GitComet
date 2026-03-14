@@ -5,7 +5,7 @@ use crate::model::{
 use crate::msg::{ConflictAutosolveMode, ConflictAutosolveStats, Effect, RepoCommandKind};
 use gitcomet_core::auth::{GitAuthKind, StagedGitAuth, clear_staged_git_auth, stage_git_auth};
 use gitcomet_core::domain::DiffTarget;
-use gitcomet_core::error::{Error, ErrorKind};
+use gitcomet_core::error::{Error, ErrorKind, GitFailure};
 use gitcomet_core::services::CommandOutput;
 use rustc_hash::FxHashSet;
 use std::io;
@@ -663,6 +663,7 @@ fn summarize_command(
 
 pub(super) fn format_error_for_user(error: &Error) -> String {
     match error.kind() {
+        ErrorKind::Git(failure) => failure.to_string(),
         ErrorKind::Backend(message) => message.clone(),
         _ => error.to_string(),
     }
@@ -676,10 +677,11 @@ pub(super) fn format_failure_summary(label: &str, error: &Error) -> String {
 }
 
 pub(super) fn detect_auth_prompt_kind(error: &Error) -> Option<AuthPromptKind> {
-    let ErrorKind::Backend(message) = error.kind() else {
-        return None;
-    };
-    detect_auth_prompt_kind_from_message(message)
+    match error.kind() {
+        ErrorKind::Git(failure) => detect_auth_prompt_kind_from_git_failure(failure),
+        ErrorKind::Backend(message) => detect_auth_prompt_kind_from_message(message),
+        _ => None,
+    }
 }
 
 pub(super) fn detect_auth_prompt_kind_from_message(message: &str) -> Option<AuthPromptKind> {
@@ -731,7 +733,19 @@ pub(super) fn stage_git_auth_env(
     username: Option<&str>,
     secret: &str,
 ) -> Result<(), Error> {
-    if secret.trim().is_empty() {
+    let normalized_secret = match kind {
+        AuthPromptKind::HostVerification => {
+            let trimmed = secret.trim();
+            if trimmed.eq_ignore_ascii_case("yes") {
+                "yes".to_string()
+            } else {
+                trimmed.to_string()
+            }
+        }
+        AuthPromptKind::UsernamePassword | AuthPromptKind::Passphrase => secret.to_string(),
+    };
+
+    if normalized_secret.trim().is_empty() {
         return Err(Error::new(ErrorKind::Backend(
             "credential/passphrase/confirmation cannot be empty".to_string(),
         )));
@@ -749,16 +763,35 @@ pub(super) fn stage_git_auth_env(
             AuthPromptKind::HostVerification => GitAuthKind::HostVerification,
         },
         username: username.map(ToOwned::to_owned),
-        secret: secret.to_string(),
+        secret: normalized_secret,
     });
     Ok(())
 }
 
 fn try_format_git_backend_error(error: &Error) -> Option<(String, String)> {
-    let ErrorKind::Backend(message) = error.kind() else {
+    match error.kind() {
+        ErrorKind::Git(failure) => try_format_structured_git_failure(failure),
+        ErrorKind::Backend(message) => try_format_git_backend_error_message(message),
+        _ => None,
+    }
+}
+
+fn try_format_structured_git_failure(failure: &GitFailure) -> Option<(String, String)> {
+    let command = failure.command().trim().to_string();
+    if !command.starts_with("git ") {
         return None;
-    };
-    try_format_git_backend_error_message(message)
+    }
+    let rendered = render_command_and_output(&command, failure.detail());
+    Some((command, rendered))
+}
+
+fn detect_auth_prompt_kind_from_git_failure(failure: &GitFailure) -> Option<AuthPromptKind> {
+    let stderr = String::from_utf8_lossy(failure.stderr());
+    detect_auth_prompt_kind_from_message(&stderr)
+        .or_else(|| {
+            detect_auth_prompt_kind_from_message(&String::from_utf8_lossy(failure.stdout()))
+        })
+        .or_else(|| detect_auth_prompt_kind_from_message(&failure.to_string()))
 }
 
 fn try_format_git_backend_error_message(message: &str) -> Option<(String, String)> {
@@ -835,6 +868,7 @@ mod tests {
     use crate::model::{AppNotificationKind, DiagnosticKind};
     use crate::msg::RepoCommandKind;
     use gitcomet_core::domain::{CommitId, DiffArea, DiffTarget, RepoSpec};
+    use gitcomet_core::error::{GitFailure, GitFailureId};
     use gitcomet_core::services::{PullMode, RemoteUrlKind, ResetMode};
     use std::path::Path;
 
@@ -1411,13 +1445,27 @@ mod tests {
 
     #[test]
     fn error_format_helpers_cover_non_git_and_failed_suffix_cases() {
-        let backend_error = Error::new(ErrorKind::Backend(
-            "git fetch --all failed: fatal: network down".to_string(),
-        ));
-        let formatted = format_failure_summary("Fetch", &backend_error);
+        let git_error = Error::new(ErrorKind::Git(GitFailure::new(
+            "git fetch --all",
+            GitFailureId::CommandFailed,
+            Some(128),
+            Vec::new(),
+            b"fatal: network down\n".to_vec(),
+            Some("fatal: network down".to_string()),
+        )));
+        let formatted = format_failure_summary("Fetch", &git_error);
         assert!(formatted.contains("Fetch failed"));
         assert!(formatted.contains("git fetch --all"));
         assert!(formatted.contains("fatal: network down"));
+        assert_eq!(
+            format_error_for_user(&git_error),
+            "git fetch --all failed: fatal: network down"
+        );
+
+        let backend_error = Error::new(ErrorKind::Backend(
+            "git fetch --all failed: fatal: network down".to_string(),
+        ));
+        assert!(format_failure_summary("Fetch", &backend_error).contains("git fetch --all"));
 
         let io_error = Error::new(ErrorKind::Io(io::ErrorKind::Other));
         let io_rendered = format_error_for_user(&io_error);
@@ -1473,6 +1521,20 @@ mod tests {
             Some(crate::model::AuthPromptKind::HostVerification)
         );
         assert!(detect_auth_prompt_kind_from_message("git status failed").is_none());
+
+        let structured = Error::new(ErrorKind::Git(GitFailure::new(
+            "git fetch origin",
+            GitFailureId::CommandFailed,
+            Some(128),
+            Vec::new(),
+            b"Host key verification failed.\nfatal: Could not read from remote repository.\n"
+                .to_vec(),
+            None,
+        )));
+        assert_eq!(
+            detect_auth_prompt_kind(&structured),
+            Some(crate::model::AuthPromptKind::HostVerification)
+        );
     }
 
     #[test]
@@ -1505,8 +1567,12 @@ mod tests {
             gitcomet_core::auth::take_staged_git_auth().expect("staged passphrase to exist");
         assert_eq!(staged.kind, gitcomet_core::auth::GitAuthKind::Passphrase);
 
-        stage_git_auth_env(crate::model::AuthPromptKind::HostVerification, None, "yes")
-            .expect("staging host verification");
+        stage_git_auth_env(
+            crate::model::AuthPromptKind::HostVerification,
+            None,
+            " YES ",
+        )
+        .expect("staging host verification");
 
         let staged =
             gitcomet_core::auth::take_staged_git_auth().expect("staged host verification to exist");

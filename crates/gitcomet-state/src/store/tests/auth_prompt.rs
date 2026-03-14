@@ -533,7 +533,7 @@ fn submit_auth_prompt_host_verification_replays_repo_command_and_stages_confirma
         &mut state,
         Msg::SubmitAuthPrompt {
             username: None,
-            secret: "yes".to_string(),
+            secret: " YES ".to_string(),
         },
     );
 

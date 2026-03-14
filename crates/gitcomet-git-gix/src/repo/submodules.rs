@@ -1,43 +1,18 @@
 use super::GixRepo;
+use super::history::gix_head_id_or_none;
 use crate::util::run_git_with_output;
 use gitcomet_core::domain::{CommitId, Submodule, SubmoduleStatus};
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{CommandOutput, Result};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::process::Command;
-
 impl GixRepo {
     pub(super) fn list_submodules_impl(&self) -> Result<Vec<Submodule>> {
-        let mut cmd = Command::new("git");
-        cmd.arg("-C")
-            .arg(&self.spec.workdir)
-            .arg("submodule")
-            .arg("status")
-            .arg("--recursive");
-        let output = cmd
-            .output()
-            .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
-
-        let stdout = String::from_utf8(output.stdout).map_err(|_| {
-            Error::new(ErrorKind::Backend(
-                "git submodule status --recursive produced non-UTF-8 stdout".to_string(),
-            ))
-        })?;
-        let parsed = parse_git_submodule_status(&stdout);
-        if output.status.success() || !parsed.is_empty() {
-            return Ok(parsed);
-        }
-
-        let stderr = std::str::from_utf8(&output.stderr).unwrap_or("<non-utf8 stderr>");
-        // Some repositories may contain gitlinks without corresponding .gitmodules entries.
-        // `git submodule status` treats this as fatal; for UI purposes we just show an empty list.
-        if stderr.contains("no submodule mapping found in .gitmodules for path") {
-            return Ok(Vec::new());
-        }
-
-        Err(Error::new(ErrorKind::Backend(format!(
-            "git submodule status --recursive failed: {stderr}"
-        ))))
+        let repo = self.reopen_repo()?;
+        let mut submodules = Vec::new();
+        collect_repo_submodules(&repo, Path::new(""), &mut submodules)?;
+        submodules.sort_by(|a, b| a.path.cmp(&b.path));
+        Ok(submodules)
     }
 
     pub(super) fn add_submodule_with_output_impl(
@@ -45,10 +20,8 @@ impl GixRepo {
         url: &str,
         path: &Path,
     ) -> Result<CommandOutput> {
-        let mut cmd = Command::new("git");
-        cmd.arg("-C")
-            .arg(&self.spec.workdir)
-            .arg("submodule")
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("submodule")
             .arg("add")
             .arg(url)
             .arg(path)
@@ -59,10 +32,8 @@ impl GixRepo {
     }
 
     pub(super) fn update_submodules_with_output_impl(&self) -> Result<CommandOutput> {
-        let mut cmd = Command::new("git");
-        cmd.arg("-C")
-            .arg(&self.spec.workdir)
-            .arg("submodule")
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("submodule")
             .arg("update")
             .arg("--init")
             .arg("--recursive")
@@ -72,10 +43,8 @@ impl GixRepo {
     }
 
     pub(super) fn remove_submodule_with_output_impl(&self, path: &Path) -> Result<CommandOutput> {
-        let mut cmd1 = Command::new("git");
-        cmd1.arg("-C")
-            .arg(&self.spec.workdir)
-            .arg("submodule")
+        let mut cmd1 = self.git_workdir_cmd();
+        cmd1.arg("submodule")
             .arg("deinit")
             .arg("-f")
             .arg("--")
@@ -83,27 +52,20 @@ impl GixRepo {
         let out1 =
             run_git_with_output(cmd1, &format!("git submodule deinit -f {}", path.display()))?;
 
-        let mut cmd2 = Command::new("git");
-        cmd2.arg("-C")
-            .arg(&self.spec.workdir)
-            .arg("rm")
-            .arg("-f")
-            .arg("--")
-            .arg(path);
+        let mut cmd2 = self.git_workdir_cmd();
+        cmd2.arg("rm").arg("-f").arg("--").arg(path);
         let out2 = run_git_with_output(cmd2, &format!("git rm -f {}", path.display()))?;
 
         Ok(CommandOutput {
             command: format!("Remove submodule {}", path.display()),
             stdout: [out1.stdout.trim_end(), out2.stdout.trim_end()]
-                .iter()
+                .into_iter()
                 .filter(|s| !s.is_empty())
-                .cloned()
                 .collect::<Vec<_>>()
                 .join("\n"),
             stderr: [out1.stderr.trim_end(), out2.stderr.trim_end()]
-                .iter()
+                .into_iter()
                 .filter(|s| !s.is_empty())
-                .cloned()
                 .collect::<Vec<_>>()
                 .join("\n"),
             exit_code: Some(0),
@@ -111,98 +73,184 @@ impl GixRepo {
     }
 }
 
-fn parse_git_submodule_status(output: &str) -> Vec<Submodule> {
-    let approx_lines = output.lines().filter(|l| !l.trim().is_empty()).count();
-    let mut out = Vec::with_capacity(approx_lines);
-    for raw in output.lines() {
-        let line = raw.trim_end();
-        if line.trim().is_empty() {
-            continue;
-        }
-        let mut chars = line.chars();
-        let status = SubmoduleStatus::from_git_status_marker(chars.next().unwrap_or(' '));
-        let rest = chars.as_str().trim();
-        let mut parts = rest.split_whitespace();
-        let Some(sha) = parts.next() else {
-            continue;
-        };
-        let Some(path) = parts.next() else {
-            continue;
-        };
-        out.push(Submodule {
-            path: PathBuf::from(path),
-            head: CommitId(sha.to_string()),
-            status,
-        });
-    }
-    out
+#[derive(Clone, Copy, Debug, Default)]
+struct GitlinkIndexState {
+    kind: Option<gix::hash::Kind>,
+    index_id: Option<gix::ObjectId>,
+    conflict: bool,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::parse_git_submodule_status;
-    use gitcomet_core::domain::SubmoduleStatus;
-    use std::path::PathBuf;
-
-    #[test]
-    fn parse_git_submodule_status_maps_known_markers() {
-        let parsed = parse_git_submodule_status(
-            " 1111111111111111111111111111111111111111 deps/one\n\
-             -2222222222222222222222222222222222222222 deps/two\n\
-             +3333333333333333333333333333333333333333 deps/three\n\
-             U4444444444444444444444444444444444444444 deps/four\n",
-        );
-
-        let statuses = parsed
-            .iter()
-            .map(|submodule| submodule.status)
-            .collect::<Vec<_>>();
-        assert_eq!(
-            statuses,
-            vec![
-                SubmoduleStatus::UpToDate,
-                SubmoduleStatus::NotInitialized,
-                SubmoduleStatus::HeadMismatch,
-                SubmoduleStatus::MergeConflict,
-            ]
-        );
-        assert_eq!(
-            parsed[0].head.as_ref(),
-            "1111111111111111111111111111111111111111"
-        );
-        assert_eq!(parsed[0].path, PathBuf::from("deps/one"));
+impl GitlinkIndexState {
+    fn null_head(self, repo: &gix::Repository) -> CommitId {
+        CommitId(
+            self.kind
+                .unwrap_or_else(|| repo.object_hash())
+                .null()
+                .to_string(),
+        )
     }
 
-    #[test]
-    fn parse_git_submodule_status_preserves_unknown_marker() {
-        let parsed =
-            parse_git_submodule_status("M1111111111111111111111111111111111111111 deps/custom\n");
-        assert_eq!(parsed.len(), 1);
-        assert_eq!(parsed[0].status, SubmoduleStatus::Unknown('M'));
+    fn index_head_or_null(self, repo: &gix::Repository) -> CommitId {
+        self.index_id
+            .map(object_id_to_commit_id)
+            .unwrap_or_else(|| self.null_head(repo))
+    }
+}
+
+fn collect_repo_submodules(
+    repo: &gix::Repository,
+    prefix: &Path,
+    out: &mut Vec<Submodule>,
+) -> Result<()> {
+    let mut gitlinks = collect_gitlinks(repo)?;
+    if let Some(submodules) = repo
+        .submodules()
+        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix submodules: {e}"))))?
+    {
+        for submodule in submodules {
+            let relative_path = submodule
+                .path()
+                .map_err(|e| Error::new(ErrorKind::Backend(format!("gix submodule path: {e}"))))
+                .and_then(|path| pathbuf_from_gix_path(path.as_ref()))?;
+            let Some(gitlink) = gitlinks.remove(&relative_path) else {
+                continue;
+            };
+
+            let full_path = prefix.join(&relative_path);
+            let (row, nested_repo) =
+                configured_submodule_row(repo, submodule, full_path.clone(), gitlink)?;
+            out.push(row);
+            if let Some(nested_repo) = nested_repo {
+                collect_repo_submodules(&nested_repo, &full_path, out)?;
+            }
+        }
     }
 
-    #[test]
-    fn parse_git_submodule_status_ignores_blank_and_malformed_lines() {
-        let parsed = parse_git_submodule_status(
-            r#"
-not-a-real-line
- 5555555555555555555555555555555555555555 libs/ok
- +missing-path
-"#,
-        );
-
-        assert_eq!(parsed.len(), 1);
-        assert_eq!(parsed[0].status, SubmoduleStatus::UpToDate);
-        assert_eq!(
-            parsed[0].head.as_ref(),
-            "5555555555555555555555555555555555555555"
-        );
-        assert_eq!(parsed[0].path, PathBuf::from("libs/ok"));
+    for (relative_path, gitlink) in gitlinks {
+        let full_path = prefix.join(&relative_path);
+        out.push(Submodule {
+            path: full_path.clone(),
+            head: gitlink.index_head_or_null(repo),
+            status: SubmoduleStatus::MissingMapping,
+        });
+        if let Some(nested_repo) = open_gitlink_repo(repo, &relative_path)? {
+            collect_repo_submodules(&nested_repo, &full_path, out)?;
+        }
     }
 
-    #[test]
-    fn parse_git_submodule_status_ignores_lines_without_sha() {
-        let parsed = parse_git_submodule_status("-\n");
-        assert!(parsed.is_empty());
+    Ok(())
+}
+
+fn configured_submodule_row(
+    repo: &gix::Repository,
+    submodule: gix::Submodule<'_>,
+    full_path: PathBuf,
+    gitlink: GitlinkIndexState,
+) -> Result<(Submodule, Option<gix::Repository>)> {
+    if gitlink.conflict {
+        return Ok((
+            Submodule {
+                path: full_path,
+                head: gitlink.null_head(repo),
+                status: SubmoduleStatus::MergeConflict,
+            },
+            None,
+        ));
     }
+
+    let state = submodule
+        .state()
+        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix submodule state: {e}"))))?;
+    let nested_repo = if state.repository_exists && state.worktree_checkout {
+        submodule
+            .open()
+            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix submodule open: {e}"))))?
+    } else {
+        None
+    };
+    let Some(nested_repo) = nested_repo else {
+        return Ok((
+            Submodule {
+                path: full_path,
+                head: gitlink.index_head_or_null(repo),
+                status: SubmoduleStatus::NotInitialized,
+            },
+            None,
+        ));
+    };
+
+    let checked_out_head_id = gix_head_id_or_none(&nested_repo)?;
+    let status = if checked_out_head_id == gitlink.index_id {
+        SubmoduleStatus::UpToDate
+    } else {
+        SubmoduleStatus::HeadMismatch
+    };
+    let head = checked_out_head_id
+        .map(object_id_to_commit_id)
+        .unwrap_or_else(|| gitlink.null_head(repo));
+
+    Ok((
+        Submodule {
+            path: full_path,
+            head,
+            status,
+        },
+        Some(nested_repo),
+    ))
+}
+
+fn collect_gitlinks(repo: &gix::Repository) -> Result<BTreeMap<PathBuf, GitlinkIndexState>> {
+    let index = repo
+        .index_or_load_from_head_or_empty()
+        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix index: {e}"))))?;
+    let path_backing = index.path_backing();
+
+    let mut gitlinks: BTreeMap<PathBuf, GitlinkIndexState> = BTreeMap::new();
+    for entry in index.entries() {
+        if entry.mode != gix::index::entry::Mode::COMMIT {
+            continue;
+        }
+
+        let path = pathbuf_from_gix_path(entry.path_in(path_backing))?;
+        let state = gitlinks.entry(path).or_default();
+        state.kind.get_or_insert(entry.id.kind());
+        if entry.stage() == gix::index::entry::Stage::Unconflicted {
+            state.index_id = Some(entry.id);
+        } else {
+            state.conflict = true;
+        }
+    }
+
+    Ok(gitlinks)
+}
+
+fn open_gitlink_repo(
+    repo: &gix::Repository,
+    relative_path: &Path,
+) -> Result<Option<gix::Repository>> {
+    let Some(workdir) = repo.workdir() else {
+        return Ok(None);
+    };
+    let path = workdir.join(relative_path);
+
+    match gix::open(&path) {
+        Ok(repo) => Ok(Some(repo)),
+        Err(gix::open::Error::NotARepository { .. }) => Ok(None),
+        Err(gix::open::Error::Io(io)) if io.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(gix::open::Error::Io(io)) => Err(Error::new(ErrorKind::Io(io.kind()))),
+        Err(e) => Err(Error::new(ErrorKind::Backend(format!(
+            "gix open nested submodule repo {}: {e}",
+            path.display()
+        )))),
+    }
+}
+
+fn pathbuf_from_gix_path(path: &gix::bstr::BStr) -> Result<PathBuf> {
+    gix::path::try_from_bstr(path)
+        .map(|path| path.into_owned())
+        .map_err(|_| Error::new(ErrorKind::Unsupported("path is not valid UTF-8")))
+}
+
+fn object_id_to_commit_id(id: gix::ObjectId) -> CommitId {
+    CommitId(id.to_string())
 }

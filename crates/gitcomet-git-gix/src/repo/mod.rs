@@ -1,16 +1,20 @@
+use crate::util::git_workdir_cmd_for as util_git_workdir_cmd_for;
 use gitcomet_core::conflict_session::ConflictSession;
 use gitcomet_core::domain::{
     Branch, CommitDetails, CommitId, Diff, DiffTarget, FileDiffImage, FileDiffText, LogCursor,
     LogPage, ReflogEntry, Remote, RemoteBranch, RemoteTag, RepoSpec, RepoStatus, StashEntry,
     Submodule, Tag, UpstreamDivergence, Worktree,
 };
+use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{
     BlameLine, CommandOutput, ConflictFileStages, ConflictSide, GitRepository, MergetoolResult,
     PullMode, RemoteUrlKind, ResetMode, Result,
 };
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 mod blame;
+mod conflict_stages;
 mod diff;
 mod discard;
 mod git_ops;
@@ -19,7 +23,6 @@ mod log;
 mod mergetool;
 mod patch;
 mod porcelain;
-mod refs;
 mod remotes;
 mod status;
 mod submodules;
@@ -37,6 +40,19 @@ impl GixRepo {
             spec: RepoSpec { workdir },
             _repo: repo,
         }
+    }
+
+    /// Returns a `Command` pre-configured with `git -C <workdir>`.
+    pub(super) fn git_workdir_cmd(&self) -> Command {
+        util_git_workdir_cmd_for(&self.spec.workdir)
+    }
+
+    pub(super) fn reopen_repo(&self) -> Result<gix::Repository> {
+        gix::open(&self.spec.workdir).map_err(|e| match e {
+            gix::open::Error::NotARepository { .. } => Error::new(ErrorKind::NotARepository),
+            gix::open::Error::Io(io) => Error::new(ErrorKind::Io(io.kind())),
+            e => Error::new(ErrorKind::Backend(format!("gix open fresh repo: {e}"))),
+        })
     }
 }
 

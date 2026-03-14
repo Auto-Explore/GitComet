@@ -1,11 +1,12 @@
 use super::GixRepo;
-use crate::util::{run_git_capture, run_git_with_output, validate_ref_like_arg};
+use crate::util::{
+    git_workdir_cmd_for, run_git_capture, run_git_with_output, validate_ref_like_arg,
+};
 use gitcomet_core::domain::{CommitId, RemoteTag, Tag};
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{CommandOutput, Result};
 use gix::bstr::ByteSlice as _;
 use rustc_hash::FxHashSet as HashSet;
-use std::process::Command;
 use std::str;
 use std::thread;
 
@@ -97,10 +98,8 @@ impl GixRepo {
             let workdir = workdir.clone();
             let remote_name = remote.name;
             handles.push(thread::spawn(move || {
-                let mut cmd = Command::new("git");
-                cmd.arg("-C")
-                    .arg(&workdir)
-                    .arg("ls-remote")
+                let mut cmd = git_workdir_cmd_for(&workdir);
+                cmd.arg("ls-remote")
                     .arg("--tags")
                     .arg("--refs")
                     .arg("--")
@@ -141,10 +140,8 @@ impl GixRepo {
         validate_ref_like_arg(name, "tag name")?;
         validate_ref_like_arg(target, "tag target")?;
 
-        let mut cmd = Command::new("git");
-        cmd.arg("-C")
-            .arg(&self.spec.workdir)
-            .arg("-c")
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("-c")
             .arg("alias.tag=")
             .arg("tag")
             .arg("-m")
@@ -171,10 +168,8 @@ impl GixRepo {
         validate_ref_like_arg(remote, "remote name")?;
         validate_ref_like_arg(name, "tag name")?;
 
-        let mut cmd = Command::new("git");
-        cmd.arg("-C")
-            .arg(&self.spec.workdir)
-            .arg("push")
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("push")
             .arg("--")
             .arg(remote)
             .arg(format!("refs/tags/{name}"));
@@ -189,10 +184,8 @@ impl GixRepo {
         validate_ref_like_arg(remote, "remote name")?;
         validate_ref_like_arg(name, "tag name")?;
 
-        let mut cmd = Command::new("git");
-        cmd.arg("-C")
-            .arg(&self.spec.workdir)
-            .arg("push")
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("push")
             .arg("--delete")
             .arg("--")
             .arg(remote)
@@ -215,10 +208,8 @@ impl GixRepo {
         for remote in remotes {
             validate_ref_like_arg(&remote.name, "remote name")?;
 
-            let mut cmd = Command::new("git");
-            cmd.arg("-C")
-                .arg(&self.spec.workdir)
-                .arg("ls-remote")
+            let mut cmd = self.git_workdir_cmd();
+            cmd.arg("ls-remote")
                 .arg("--tags")
                 .arg("--refs")
                 .arg("--")
@@ -228,12 +219,8 @@ impl GixRepo {
             remote_tags.extend(parse_ls_remote_tag_names(&output));
         }
 
-        let mut list_cmd = Command::new("git");
-        list_cmd
-            .arg("-C")
-            .arg(&self.spec.workdir)
-            .arg("tag")
-            .arg("--list");
+        let mut list_cmd = self.git_workdir_cmd();
+        list_cmd.arg("tag").arg("--list");
         let local_tags = run_git_capture(list_cmd, "git tag --list")?;
 
         let deleted = local_tags_to_prune(&local_tags, &remote_tags);
@@ -241,10 +228,8 @@ impl GixRepo {
         let mut stdout = String::new();
         let mut stderr = String::new();
         if !deleted.is_empty() {
-            let mut delete_cmd = Command::new("git");
+            let mut delete_cmd = self.git_workdir_cmd();
             delete_cmd
-                .arg("-C")
-                .arg(&self.spec.workdir)
                 .arg("-c")
                 .arg("alias.tag=")
                 .arg("tag")
