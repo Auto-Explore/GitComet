@@ -43,7 +43,7 @@ fn blame_commit_metadata(
         .message_raw_sloppy()
         .lines()
         .next()
-        .map(|line| bytes_to_text_preserving_utf8(line))
+        .map(bytes_to_text_preserving_utf8)
         .unwrap_or_default();
 
     let metadata = Rc::new(BlameCommitMetadata {

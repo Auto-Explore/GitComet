@@ -66,6 +66,25 @@ fn parse_short_remote_branch_name(short_name: &str) -> Option<(&str, &str)> {
     Some((remote, name))
 }
 
+fn normalize_remote_url(url: &str) -> String {
+    let Some(path) = url.strip_prefix("file://") else {
+        return url.to_string();
+    };
+    let path_bytes = path.as_bytes();
+    if path.starts_with('/')
+        || path_bytes.len() < 3
+        || !path_bytes[0].is_ascii_alphabetic()
+        || path_bytes[1] != b':'
+        || !matches!(path_bytes[2], b'/' | b'\\')
+    {
+        return url.to_string();
+    }
+
+    // gix serializes Windows drive-letter file remotes as `file://C:/...`.
+    let normalized_path = path.replace('\\', "/");
+    format!("file:///{normalized_path}")
+}
+
 fn run_git_command<S, O>(
     cmd: Command,
     label: &str,
@@ -160,7 +179,9 @@ impl GixRepo {
 
             let url = remote
                 .url(gix::remote::Direction::Fetch)
-                .map(|url| bytes_to_text_preserving_utf8(url.to_bstring().as_ref()))
+                .map(|url| {
+                    normalize_remote_url(&bytes_to_text_preserving_utf8(url.to_bstring().as_ref()))
+                })
                 .filter(|url| !url.is_empty());
 
             remotes.push(Remote {
@@ -599,7 +620,8 @@ impl GixRepo {
 #[cfg(test)]
 mod tests {
     use super::{
-        branches_to_prune, parse_refname_set, parse_short_remote_branch_name, run_git_command,
+        branches_to_prune, normalize_remote_url, parse_refname_set, parse_short_remote_branch_name,
+        run_git_command,
     };
     use gitcomet_core::services::CommandOutput;
     use rustc_hash::FxHashSet as HashSet;
@@ -652,6 +674,34 @@ feature/no-upstream\t\n";
         );
         assert_eq!(parse_short_remote_branch_name("origin/HEAD"), None);
         assert_eq!(parse_short_remote_branch_name(""), None);
+    }
+
+    #[test]
+    fn normalize_remote_url_preserves_non_drive_letter_urls() {
+        assert_eq!(
+            normalize_remote_url("https://example.com/repo.git"),
+            "https://example.com/repo.git"
+        );
+        assert_eq!(
+            normalize_remote_url("file:///tmp/repo.git"),
+            "file:///tmp/repo.git"
+        );
+        assert_eq!(
+            normalize_remote_url("file://server/share/repo.git"),
+            "file://server/share/repo.git"
+        );
+    }
+
+    #[test]
+    fn normalize_remote_url_fixes_windows_drive_letter_file_urls() {
+        assert_eq!(
+            normalize_remote_url("file://C:/Users/example/repo.git"),
+            "file:///C:/Users/example/repo.git"
+        );
+        assert_eq!(
+            normalize_remote_url(r"file://D:\Users\example\repo.git"),
+            "file:///D:/Users/example/repo.git"
+        );
     }
 
     #[test]
