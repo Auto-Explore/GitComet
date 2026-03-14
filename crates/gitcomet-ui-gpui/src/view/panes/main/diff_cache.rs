@@ -6,13 +6,28 @@ const IMAGE_DIFF_CACHE_MAX_AGE: std::time::Duration =
     std::time::Duration::from_secs(60 * 60 * 24 * 7);
 const IMAGE_DIFF_CACHE_MAX_TOTAL_BYTES: u64 = 256 * 1024 * 1024;
 const IMAGE_DIFF_CACHE_CLEANUP_WRITE_INTERVAL: usize = 16;
-const FILE_DIFF_SYNTAX_AUTO_MAX_LINES: usize = 4_000;
 const PREPARED_SYNTAX_DOCUMENT_CACHE_MAX_ENTRIES: usize = 256;
 const PATCH_DIFF_PAGE_SIZE: usize = 256;
 
 static IMAGE_DIFF_CACHE_STARTUP_CLEANUP: std::sync::Once = std::sync::Once::new();
 static IMAGE_DIFF_CACHE_WRITE_COUNT: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
+
+// Full-document views (file diff, worktree preview) always attempt prepared
+// syntax and fall back to plain/heuristic rendering until it is ready.
+const FULL_DOCUMENT_SYNTAX_MODE: rows::DiffSyntaxMode = rows::DiffSyntaxMode::Auto;
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct FileDiffPreparedSyntaxApplyResult {
+    split_left: bool,
+    split_right: bool,
+}
+
+impl FileDiffPreparedSyntaxApplyResult {
+    fn any(self) -> bool {
+        self.split_left || self.split_right
+    }
+}
 
 fn build_inline_text(lines: &[AnnotatedDiffLine]) -> SharedString {
     let total_len = lines
@@ -25,6 +40,22 @@ fn build_inline_text(lines: &[AnnotatedDiffLine]) -> SharedString {
         text.push('\n');
     }
     SharedString::from(text)
+}
+
+fn build_line_to_split_ix_maps(rows: &[FileDiffRow]) -> (HashMap<u32, usize>, HashMap<u32, usize>) {
+    let mut old_map: HashMap<u32, usize> = HashMap::default();
+    let mut new_map: HashMap<u32, usize> = HashMap::default();
+    old_map.reserve(rows.len());
+    new_map.reserve(rows.len());
+    for (ix, row) in rows.iter().enumerate() {
+        if let Some(old_line) = row.old_line {
+            old_map.insert(old_line, ix);
+        }
+        if let Some(new_line) = row.new_line {
+            new_map.insert(new_line, ix);
+        }
+    }
+    (old_map, new_map)
 }
 
 fn file_diff_text_signature(file: &gitcomet_core::domain::FileDiffText) -> u64 {
@@ -47,7 +78,6 @@ struct ImageDiffCacheEntry {
 
 #[derive(Clone, Debug, Default)]
 struct FileDiffBackgroundPreparedSyntaxDocuments {
-    inline: Option<rows::BackgroundPreparedDiffSyntaxDocument>,
     split_left: Option<rows::BackgroundPreparedDiffSyntaxDocument>,
     split_right: Option<rows::BackgroundPreparedDiffSyntaxDocument>,
 }
@@ -876,14 +906,6 @@ fn prepared_syntax_document_key(
 }
 
 impl MainPaneView {
-    fn file_diff_syntax_mode(&self) -> rows::DiffSyntaxMode {
-        if self.file_diff_cache_rows.len() <= FILE_DIFF_SYNTAX_AUTO_MAX_LINES {
-            rows::DiffSyntaxMode::Auto
-        } else {
-            rows::DiffSyntaxMode::HeuristicOnly
-        }
-    }
-
     pub(in crate::view) fn patch_diff_row_len(&self) -> usize {
         self.diff_row_provider
             .as_ref()
@@ -1036,14 +1058,6 @@ impl MainPaneView {
         }
     }
 
-    fn worktree_preview_syntax_mode_for_line_count(line_count: usize) -> rows::DiffSyntaxMode {
-        if line_count <= FILE_DIFF_SYNTAX_AUTO_MAX_LINES {
-            rows::DiffSyntaxMode::Auto
-        } else {
-            rows::DiffSyntaxMode::HeuristicOnly
-        }
-    }
-
     fn prepared_syntax_document(
         &self,
         key: &PreparedSyntaxDocumentKey,
@@ -1106,22 +1120,63 @@ impl MainPaneView {
         self.prepared_syntax_document(&key)
     }
 
-    pub(in crate::view) fn file_diff_inline_prepared_syntax_document(
-        &self,
-    ) -> Option<rows::PreparedDiffSyntaxDocument> {
-        self.file_diff_prepared_syntax_document(PreparedSyntaxViewMode::FileDiffInline)
+    pub(in crate::view) fn file_diff_split_style_cache_epoch(&self, region: DiffTextRegion) -> u64 {
+        self.file_diff_style_cache_epochs.split_epoch(region)
     }
 
-    pub(in crate::view) fn file_diff_split_left_prepared_syntax_document(
+    pub(in crate::view) fn file_diff_inline_style_cache_epoch(
         &self,
-    ) -> Option<rows::PreparedDiffSyntaxDocument> {
-        self.file_diff_prepared_syntax_document(PreparedSyntaxViewMode::FileDiffSplitLeft)
+        line: &AnnotatedDiffLine,
+    ) -> u64 {
+        self.file_diff_style_cache_epochs.inline_epoch(line.kind)
     }
 
-    pub(in crate::view) fn file_diff_split_right_prepared_syntax_document(
+    /// Project inline-diff syntax from the real old/new (split) documents.
+    ///
+    /// Instead of parsing the synthetic mixed inline stream, look up the correct
+    /// side document and line index based on the diff line kind and old_line/new_line.
+    pub(in crate::view) fn file_diff_inline_projected_syntax(
         &self,
+        line: &AnnotatedDiffLine,
+    ) -> rows::PreparedDiffSyntaxLine {
+        use gitcomet_core::domain::DiffLineKind;
+        match line.kind {
+            DiffLineKind::Remove => {
+                let split_ix = line
+                    .old_line
+                    .and_then(|n| self.file_diff_old_line_to_split_ix.get(&n).copied());
+                rows::PreparedDiffSyntaxLine {
+                    document: self
+                        .file_diff_split_prepared_syntax_document(DiffTextRegion::SplitLeft),
+                    line_ix: split_ix.unwrap_or(0),
+                }
+            }
+            DiffLineKind::Add | DiffLineKind::Context => {
+                let split_ix = line
+                    .new_line
+                    .and_then(|n| self.file_diff_new_line_to_split_ix.get(&n).copied());
+                rows::PreparedDiffSyntaxLine {
+                    document: self
+                        .file_diff_split_prepared_syntax_document(DiffTextRegion::SplitRight),
+                    line_ix: split_ix.unwrap_or(0),
+                }
+            }
+            _ => rows::PreparedDiffSyntaxLine {
+                document: None,
+                line_ix: 0,
+            },
+        }
+    }
+
+    pub(in crate::view) fn file_diff_split_prepared_syntax_document(
+        &self,
+        region: DiffTextRegion,
     ) -> Option<rows::PreparedDiffSyntaxDocument> {
-        self.file_diff_prepared_syntax_document(PreparedSyntaxViewMode::FileDiffSplitRight)
+        let view_mode = match region {
+            DiffTextRegion::SplitLeft => PreparedSyntaxViewMode::FileDiffSplitLeft,
+            _ => PreparedSyntaxViewMode::FileDiffSplitRight,
+        };
+        self.file_diff_prepared_syntax_document(view_mode)
     }
 
     pub(in crate::view) fn worktree_preview_prepared_syntax_key(
@@ -1164,6 +1219,8 @@ impl MainPaneView {
 
         if source_changed {
             self.worktree_preview_content_rev = self.worktree_preview_content_rev.wrapping_add(1);
+            self.worktree_preview_style_cache_epoch =
+                self.worktree_preview_style_cache_epoch.wrapping_add(1);
         }
 
         self.refresh_worktree_preview_syntax_document(cx);
@@ -1183,10 +1240,6 @@ impl MainPaneView {
             return;
         };
 
-        let syntax_mode = Self::worktree_preview_syntax_mode_for_line_count(lines.len());
-        if syntax_mode != rows::DiffSyntaxMode::Auto {
-            return;
-        }
         if self.prepared_syntax_document(&key).is_some() {
             return;
         }
@@ -1195,7 +1248,7 @@ impl MainPaneView {
         let budget = rows::DiffSyntaxBudget::default();
         match rows::prepare_diff_syntax_document_with_budget_reuse(
             language,
-            syntax_mode,
+            FULL_DOCUMENT_SYNTAX_MODE,
             lines.iter().map(String::as_str),
             budget,
             reparse_seed,
@@ -1210,7 +1263,7 @@ impl MainPaneView {
                         let parsed_document = smol::unblock(move || {
                             rows::prepare_diff_syntax_document_in_background(
                                 language,
-                                syntax_mode,
+                                FULL_DOCUMENT_SYNTAX_MODE,
                                 lines.iter().map(String::as_str),
                             )
                         })
@@ -1231,7 +1284,8 @@ impl MainPaneView {
                                 && this.worktree_preview_prepared_syntax_key().as_ref()
                                     == Some(&key)
                             {
-                                this.worktree_preview_segments_cache.clear();
+                                this.worktree_preview_style_cache_epoch =
+                                    this.worktree_preview_style_cache_epoch.wrapping_add(1);
                                 cx.notify();
                             }
                         });
@@ -1243,24 +1297,62 @@ impl MainPaneView {
         }
     }
 
+    /// Applies a foreground sync prepare result for one side. Returns `true` if
+    /// the side needs a background async parse instead.
+    fn apply_sync_syntax_result(
+        &mut self,
+        attempt: Option<rows::PrepareDiffSyntaxDocumentResult>,
+        key: &Option<PreparedSyntaxDocumentKey>,
+    ) -> bool {
+        match attempt {
+            Some(rows::PrepareDiffSyntaxDocumentResult::Ready(document)) => {
+                if let Some(key) = key.clone() {
+                    self.insert_prepared_syntax_document(key, document);
+                }
+                false
+            }
+            Some(rows::PrepareDiffSyntaxDocumentResult::TimedOut) => true,
+            _ => false,
+        }
+    }
+
+    /// Applies background-parsed documents for both sides and reports which
+    /// side became newly cacheable.
+    fn apply_background_syntax_documents(
+        &mut self,
+        left_key: &Option<PreparedSyntaxDocumentKey>,
+        left_doc: Option<rows::BackgroundPreparedDiffSyntaxDocument>,
+        right_key: &Option<PreparedSyntaxDocumentKey>,
+        right_doc: Option<rows::BackgroundPreparedDiffSyntaxDocument>,
+    ) -> FileDiffPreparedSyntaxApplyResult {
+        let mut applied = FileDiffPreparedSyntaxApplyResult::default();
+        if let (Some(key), Some(document)) = (left_key.clone(), left_doc) {
+            applied.split_left = self.insert_prepared_syntax_document(
+                key,
+                rows::inject_background_prepared_diff_syntax_document(document),
+            );
+        }
+        if let (Some(key), Some(document)) = (right_key.clone(), right_doc) {
+            applied.split_right = self.insert_prepared_syntax_document(
+                key,
+                rows::inject_background_prepared_diff_syntax_document(document),
+            );
+        }
+        applied
+    }
+
     fn refresh_file_diff_syntax_documents(&mut self, cx: &mut gpui::Context<Self>) {
         let Some(language) = self.file_diff_cache_language else {
             return;
         };
 
-        let syntax_mode = self.file_diff_syntax_mode();
-        if syntax_mode != rows::DiffSyntaxMode::Auto {
-            return;
-        }
-
-        let inline_key = self.file_diff_prepared_syntax_key(PreparedSyntaxViewMode::FileDiffInline);
+        // Inline syntax is now projected from the split (old/new) documents rather
+        // than parsing the synthetic mixed inline stream. Only split documents are
+        // prepared here; inline rows look up into them via file_diff_inline_projected_syntax.
         let split_left_key =
             self.file_diff_prepared_syntax_key(PreparedSyntaxViewMode::FileDiffSplitLeft);
         let split_right_key =
             self.file_diff_prepared_syntax_key(PreparedSyntaxViewMode::FileDiffSplitRight);
-        let inline_reparse_seed = inline_key
-            .as_ref()
-            .and_then(|key| self.prepared_syntax_reparse_seed_document(key));
         let split_left_reparse_seed = split_left_key
             .as_ref()
             .and_then(|key| self.prepared_syntax_reparse_seed_document(key));
@@ -1268,45 +1360,22 @@ impl MainPaneView {
             .as_ref()
             .and_then(|key| self.prepared_syntax_reparse_seed_document(key));
 
-        let needs_inline_prepare = inline_key
-            .as_ref()
-            .is_some_and(|key| self.prepared_syntax_document(key).is_none());
         let needs_split_left_prepare = split_left_key
             .as_ref()
             .is_some_and(|key| self.prepared_syntax_document(key).is_none());
         let needs_split_right_prepare = split_right_key
             .as_ref()
             .is_some_and(|key| self.prepared_syntax_document(key).is_none());
-        if !needs_inline_prepare && !needs_split_left_prepare && !needs_split_right_prepare {
+        if !needs_split_left_prepare && !needs_split_right_prepare {
             return;
         }
 
         let budget = rows::DiffSyntaxBudget::default();
 
-        let inline_attempt = needs_inline_prepare.then(|| {
-            rows::prepare_diff_syntax_document_with_budget_reuse(
-                language,
-                syntax_mode,
-                self.file_diff_inline_cache.iter().map(|line| {
-                    if matches!(
-                        line.kind,
-                        gitcomet_core::domain::DiffLineKind::Add
-                            | gitcomet_core::domain::DiffLineKind::Remove
-                            | gitcomet_core::domain::DiffLineKind::Context
-                    ) {
-                        diff_content_text(line)
-                    } else {
-                        ""
-                    }
-                }),
-                budget,
-                inline_reparse_seed,
-            )
-        });
         let split_left_attempt = needs_split_left_prepare.then(|| {
             rows::prepare_diff_syntax_document_with_budget_reuse(
                 language,
-                syntax_mode,
+                FULL_DOCUMENT_SYNTAX_MODE,
                 self.file_diff_cache_rows
                     .iter()
                     .map(|row| row.old.as_deref().unwrap_or("")),
@@ -1317,7 +1386,7 @@ impl MainPaneView {
         let split_right_attempt = needs_split_right_prepare.then(|| {
             rows::prepare_diff_syntax_document_with_budget_reuse(
                 language,
-                syntax_mode,
+                FULL_DOCUMENT_SYNTAX_MODE,
                 self.file_diff_cache_rows
                     .iter()
                     .map(|row| row.new.as_deref().unwrap_or("")),
@@ -1326,51 +1395,12 @@ impl MainPaneView {
             )
         });
 
-        let mut needs_inline_async = false;
-        let mut needs_split_left_async = false;
-        let mut needs_split_right_async = false;
+        let needs_split_left_async =
+            self.apply_sync_syntax_result(split_left_attempt, &split_left_key);
+        let needs_split_right_async =
+            self.apply_sync_syntax_result(split_right_attempt, &split_right_key);
 
-        if let Some(inline_attempt) = inline_attempt {
-            match inline_attempt {
-                rows::PrepareDiffSyntaxDocumentResult::Ready(document) => {
-                    if let Some(key) = inline_key.clone() {
-                        self.insert_prepared_syntax_document(key, document);
-                    }
-                }
-                rows::PrepareDiffSyntaxDocumentResult::TimedOut => {
-                    needs_inline_async = true;
-                }
-                rows::PrepareDiffSyntaxDocumentResult::Unsupported => {}
-            }
-        }
-        if let Some(split_left_attempt) = split_left_attempt {
-            match split_left_attempt {
-                rows::PrepareDiffSyntaxDocumentResult::Ready(document) => {
-                    if let Some(key) = split_left_key.clone() {
-                        self.insert_prepared_syntax_document(key, document);
-                    }
-                }
-                rows::PrepareDiffSyntaxDocumentResult::TimedOut => {
-                    needs_split_left_async = true;
-                }
-                rows::PrepareDiffSyntaxDocumentResult::Unsupported => {}
-            }
-        }
-        if let Some(split_right_attempt) = split_right_attempt {
-            match split_right_attempt {
-                rows::PrepareDiffSyntaxDocumentResult::Ready(document) => {
-                    if let Some(key) = split_right_key.clone() {
-                        self.insert_prepared_syntax_document(key, document);
-                    }
-                }
-                rows::PrepareDiffSyntaxDocumentResult::TimedOut => {
-                    needs_split_right_async = true;
-                }
-                rows::PrepareDiffSyntaxDocumentResult::Unsupported => {}
-            }
-        }
-
-        if !needs_inline_async && !needs_split_left_async && !needs_split_right_async {
+        if !needs_split_left_async && !needs_split_right_async {
             return;
         }
 
@@ -1379,23 +1409,6 @@ impl MainPaneView {
         let diff_file_rev = self.file_diff_cache_rev;
         let diff_target = self.file_diff_cache_target.clone();
 
-        let inline_lines: Option<Vec<String>> = needs_inline_async.then(|| {
-            self.file_diff_inline_cache
-                .iter()
-                .map(|line| {
-                    if matches!(
-                        line.kind,
-                        gitcomet_core::domain::DiffLineKind::Add
-                            | gitcomet_core::domain::DiffLineKind::Remove
-                            | gitcomet_core::domain::DiffLineKind::Context
-                    ) {
-                        diff_content_text(line).to_string()
-                    } else {
-                        String::new()
-                    }
-                })
-                .collect()
-        });
         let split_left_lines: Option<Vec<String>> = needs_split_left_async.then(|| {
             self.file_diff_cache_rows
                 .iter()
@@ -1413,24 +1426,17 @@ impl MainPaneView {
             async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
                 let parsed_documents =
                     smol::unblock(move || FileDiffBackgroundPreparedSyntaxDocuments {
-                        inline: inline_lines.and_then(|lines| {
-                            rows::prepare_diff_syntax_document_in_background(
-                                language,
-                                syntax_mode,
-                                lines.iter().map(String::as_str),
-                            )
-                        }),
                         split_left: split_left_lines.and_then(|lines| {
                             rows::prepare_diff_syntax_document_in_background(
                                 language,
-                                syntax_mode,
+                                FULL_DOCUMENT_SYNTAX_MODE,
                                 lines.iter().map(String::as_str),
                             )
                         }),
                         split_right: split_right_lines.and_then(|lines| {
                             rows::prepare_diff_syntax_document_in_background(
                                 language,
-                                syntax_mode,
+                                FULL_DOCUMENT_SYNTAX_MODE,
                                 lines.iter().map(String::as_str),
                             )
                         }),
@@ -1448,34 +1454,20 @@ impl MainPaneView {
                         return;
                     }
 
-                    let FileDiffBackgroundPreparedSyntaxDocuments {
-                        inline,
-                        split_left,
-                        split_right,
-                    } = parsed_documents;
+                    let applied = this.apply_background_syntax_documents(
+                        &split_left_key,
+                        parsed_documents.split_left,
+                        &split_right_key,
+                        parsed_documents.split_right,
+                    );
 
-                    let mut applied = false;
-                    if let (Some(key), Some(document)) = (inline_key.clone(), inline) {
-                        applied |= this.insert_prepared_syntax_document(
-                            key,
-                            rows::inject_background_prepared_diff_syntax_document(document),
-                        );
-                    }
-                    if let (Some(key), Some(document)) = (split_left_key.clone(), split_left) {
-                        applied |= this.insert_prepared_syntax_document(
-                            key,
-                            rows::inject_background_prepared_diff_syntax_document(document),
-                        );
-                    }
-                    if let (Some(key), Some(document)) = (split_right_key.clone(), split_right) {
-                        applied |= this.insert_prepared_syntax_document(
-                            key,
-                            rows::inject_background_prepared_diff_syntax_document(document),
-                        );
-                    }
-
-                    if applied {
-                        this.clear_diff_text_style_caches();
+                    if applied.any() {
+                        if applied.split_left {
+                            this.file_diff_style_cache_epochs.bump_left();
+                        }
+                        if applied.split_right {
+                            this.file_diff_style_cache_epochs.bump_right();
+                        }
                         cx.notify();
                     }
                 });
@@ -1503,9 +1495,12 @@ impl MainPaneView {
             this.file_diff_cache_content_signature = None;
             this.file_diff_cache_inflight = None;
             this.file_diff_syntax_generation = this.file_diff_syntax_generation.wrapping_add(1);
+            this.file_diff_style_cache_epochs.bump_both();
             this.file_diff_cache_path = None;
             this.file_diff_cache_language = None;
             this.file_diff_cache_rows.clear();
+            this.file_diff_old_line_to_split_ix.clear();
+            this.file_diff_new_line_to_split_ix.clear();
             this.file_diff_inline_cache.clear();
             this.file_diff_inline_text = SharedString::default();
             this.file_diff_inline_word_highlights.clear();
@@ -1566,9 +1561,12 @@ impl MainPaneView {
         self.file_diff_cache_target = diff_target;
         self.file_diff_cache_inflight = None;
         self.file_diff_syntax_generation = self.file_diff_syntax_generation.wrapping_add(1);
+        self.file_diff_style_cache_epochs.bump_both();
         self.file_diff_cache_path = None;
         self.file_diff_cache_language = None;
         self.file_diff_cache_rows.clear();
+        self.file_diff_old_line_to_split_ix.clear();
+        self.file_diff_new_line_to_split_ix.clear();
         self.file_diff_inline_cache.clear();
         self.file_diff_inline_text = SharedString::default();
         self.file_diff_inline_word_highlights.clear();
@@ -1704,7 +1702,10 @@ impl MainPaneView {
                     this.file_diff_cache_inflight = None;
                     this.file_diff_cache_path = rebuild.file_path;
                     this.file_diff_cache_language = rebuild.language;
+                    let (old_map, new_map) = build_line_to_split_ix_maps(&rebuild.rows);
                     this.file_diff_cache_rows = rebuild.rows;
+                    this.file_diff_old_line_to_split_ix = old_map;
+                    this.file_diff_new_line_to_split_ix = new_map;
                     this.file_diff_inline_cache = rebuild.inline_rows;
                     this.file_diff_inline_text = rebuild.inline_text;
                     this.file_diff_cache_content_signature = Some(content_signature);
@@ -2376,19 +2377,96 @@ mod tests {
     }
 
     #[test]
+    fn full_document_syntax_mode_is_always_auto() {
+        assert_eq!(FULL_DOCUMENT_SYNTAX_MODE, rows::DiffSyntaxMode::Auto);
+    }
+
+    #[test]
+    fn file_diff_style_cache_epochs_map_rows_to_matching_side() {
+        let epochs = FileDiffStyleCacheEpochs {
+            split_left: 11,
+            split_right: 23,
+        };
+
+        assert_eq!(
+            epochs.split_epoch(crate::view::DiffTextRegion::SplitLeft),
+            11
+        );
+        assert_eq!(
+            epochs.split_epoch(crate::view::DiffTextRegion::SplitRight),
+            23
+        );
+        assert_eq!(
+            epochs.inline_epoch(gitcomet_core::domain::DiffLineKind::Remove),
+            11
+        );
+        assert_eq!(
+            epochs.inline_epoch(gitcomet_core::domain::DiffLineKind::Add),
+            23
+        );
+        assert_eq!(
+            epochs.inline_epoch(gitcomet_core::domain::DiffLineKind::Context),
+            23
+        );
+        assert_eq!(
+            epochs.inline_epoch(gitcomet_core::domain::DiffLineKind::Header),
+            0
+        );
+        assert_eq!(
+            epochs.inline_epoch(gitcomet_core::domain::DiffLineKind::Hunk),
+            0
+        );
+    }
+
+    #[test]
+    fn file_diff_style_cache_epochs_bump_only_changed_side() {
+        let mut epochs = FileDiffStyleCacheEpochs {
+            split_left: 5,
+            split_right: 9,
+        };
+
+        epochs.bump_left();
+        assert_eq!(
+            epochs,
+            FileDiffStyleCacheEpochs {
+                split_left: 6,
+                split_right: 9,
+            }
+        );
+
+        epochs.bump_right();
+        assert_eq!(
+            epochs,
+            FileDiffStyleCacheEpochs {
+                split_left: 6,
+                split_right: 10,
+            }
+        );
+
+        epochs.bump_both();
+        assert_eq!(
+            epochs,
+            FileDiffStyleCacheEpochs {
+                split_left: 7,
+                split_right: 11,
+            }
+        );
+    }
+
+    #[test]
     fn prepared_syntax_document_key_includes_repo_rev_path_and_view_mode() {
         let path = Path::new("src/lib.rs");
         let base = prepared_syntax_document_key(
             RepoId(7),
             42,
             path,
-            PreparedSyntaxViewMode::FileDiffInline,
+            PreparedSyntaxViewMode::FileDiffSplitRight,
         );
         let different_rev = prepared_syntax_document_key(
             RepoId(7),
             43,
             path,
-            PreparedSyntaxViewMode::FileDiffInline,
+            PreparedSyntaxViewMode::FileDiffSplitRight,
         );
         let different_view_mode = prepared_syntax_document_key(
             RepoId(7),
@@ -2400,13 +2478,13 @@ mod tests {
             RepoId(8),
             42,
             path,
-            PreparedSyntaxViewMode::FileDiffInline,
+            PreparedSyntaxViewMode::FileDiffSplitRight,
         );
         let different_path = prepared_syntax_document_key(
             RepoId(7),
             42,
             Path::new("src/main.rs"),
-            PreparedSyntaxViewMode::FileDiffInline,
+            PreparedSyntaxViewMode::FileDiffSplitRight,
         );
 
         assert_ne!(base, different_rev);
@@ -2790,5 +2868,66 @@ index 1111111..2222222 100644\n\
             .sum::<u64>();
         assert!(remaining_total <= 8);
         assert!(non_cache.exists());
+    }
+
+    #[test]
+    fn build_line_to_split_ix_maps_indexes_old_and_new_lines() {
+        use gitcomet_core::file_diff::{FileDiffRow, FileDiffRowKind};
+
+        let rows = vec![
+            FileDiffRow {
+                kind: FileDiffRowKind::Context,
+                old_line: Some(1),
+                new_line: Some(1),
+                old: Some("a".to_string()),
+                new: Some("a".to_string()),
+                eof_newline: None,
+            },
+            FileDiffRow {
+                kind: FileDiffRowKind::Remove,
+                old_line: Some(2),
+                new_line: None,
+                old: Some("b".to_string()),
+                new: None,
+                eof_newline: None,
+            },
+            FileDiffRow {
+                kind: FileDiffRowKind::Add,
+                old_line: None,
+                new_line: Some(2),
+                old: None,
+                new: Some("c".to_string()),
+                eof_newline: None,
+            },
+            FileDiffRow {
+                kind: FileDiffRowKind::Context,
+                old_line: Some(3),
+                new_line: Some(3),
+                old: Some("d".to_string()),
+                new: Some("d".to_string()),
+                eof_newline: None,
+            },
+        ];
+
+        let (old_map, new_map) = build_line_to_split_ix_maps(&rows);
+
+        // old_line 1 → row 0, old_line 2 → row 1, old_line 3 → row 3
+        assert_eq!(old_map.get(&1), Some(&0));
+        assert_eq!(old_map.get(&2), Some(&1));
+        assert_eq!(old_map.get(&3), Some(&3));
+        assert_eq!(old_map.get(&4), None);
+
+        // new_line 1 → row 0, new_line 2 → row 2, new_line 3 → row 3
+        assert_eq!(new_map.get(&1), Some(&0));
+        assert_eq!(new_map.get(&2), Some(&2));
+        assert_eq!(new_map.get(&3), Some(&3));
+        assert_eq!(new_map.get(&4), None);
+    }
+
+    #[test]
+    fn build_line_to_split_ix_maps_empty() {
+        let (old_map, new_map) = build_line_to_split_ix_maps(&[]);
+        assert!(old_map.is_empty());
+        assert!(new_map.is_empty());
     }
 }

@@ -3,8 +3,9 @@ use gitcomet_ui_gpui::benchmarks::{
     BranchSidebarFixture, CommitDetailsFixture, ConflictResolvedOutputGutterScrollFixture,
     ConflictSearchQueryUpdateFixture, ConflictSplitResizeStepFixture,
     ConflictThreeWayScrollFixture, ConflictThreeWayVisibleMapBuildFixture,
-    ConflictTwoWaySplitScrollFixture, FileDiffSyntaxCacheDropFixture, FileDiffSyntaxPrepareFixture,
-    FileDiffSyntaxReparseFixture, HistoryGraphFixture, LargeFileDiffScrollFixture, OpenRepoFixture,
+    ConflictTwoWaySplitScrollFixture, FileDiffInlineSyntaxProjectionFixture,
+    FileDiffSyntaxCacheDropFixture, FileDiffSyntaxPrepareFixture, FileDiffSyntaxReparseFixture,
+    HistoryGraphFixture, LargeFileDiffScrollFixture, LargeHtmlSyntaxFixture, OpenRepoFixture,
     PatchDiffPagedRowsFixture, PatchDiffSearchQueryUpdateFixture,
     ResolvedOutputRecomputeIncrementalFixture, TextInputHighlightDensity,
     TextInputLongLineCapFixture, TextInputPrepaintWindowedFixture,
@@ -20,6 +21,12 @@ fn env_usize(key: &str, default: usize) -> usize {
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .unwrap_or(default)
+}
+
+fn env_string(key: &str) -> Option<String> {
+    let value = env::var(key).ok()?;
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_string())
 }
 
 fn bench_open_repo(c: &mut Criterion) {
@@ -490,6 +497,38 @@ fn bench_file_diff_syntax_reparse(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_file_diff_inline_syntax_projection(c: &mut Criterion) {
+    let lines = env_usize("GITCOMET_BENCH_FILE_DIFF_INLINE_LINES", 4_000);
+    let line_bytes = env_usize("GITCOMET_BENCH_FILE_DIFF_INLINE_LINE_BYTES", 128);
+    let window = env_usize("GITCOMET_BENCH_FILE_DIFF_INLINE_WINDOW", 200);
+    let pending_fixture = FileDiffInlineSyntaxProjectionFixture::new(lines, line_bytes);
+
+    let mut group = c.benchmark_group("file_diff_inline_syntax_projection");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    group.bench_with_input(
+        BenchmarkId::new("visible_window_pending", window),
+        &window,
+        |b, &window| {
+            let mut start = 0usize;
+            b.iter(|| {
+                let hash = pending_fixture.run_window_pending_step(start, window);
+                start = pending_fixture.next_start_row(start, window);
+                hash
+            })
+        },
+    );
+
+    let ready_fixture = FileDiffInlineSyntaxProjectionFixture::new(lines, line_bytes);
+    ready_fixture.prime_window(window);
+    group.bench_with_input(
+        BenchmarkId::new("visible_window_ready", window),
+        &window,
+        |b, &window| b.iter(|| ready_fixture.run_window_step(0, window)),
+    );
+    group.finish();
+}
+
 fn bench_file_diff_syntax_cache_drop(c: &mut Criterion) {
     let lines = env_usize("GITCOMET_BENCH_FILE_DIFF_SYNTAX_DROP_LINES", 2_048);
     let tokens_per_line = env_usize("GITCOMET_BENCH_FILE_DIFF_SYNTAX_DROP_TOKENS_PER_LINE", 8);
@@ -573,6 +612,70 @@ fn bench_prepared_syntax_chunk_miss_cost(c: &mut Criterion) {
             total
         })
     });
+    group.finish();
+}
+
+fn bench_large_html_syntax(c: &mut Criterion) {
+    let fixture_path = env_string("GITCOMET_BENCH_HTML_FIXTURE_PATH");
+    let synthetic_lines = env_usize("GITCOMET_BENCH_HTML_LINES", 20_000);
+    let synthetic_line_bytes = env_usize("GITCOMET_BENCH_HTML_LINE_BYTES", 192);
+    let window_lines = env_usize("GITCOMET_BENCH_HTML_WINDOW_LINES", 160);
+    let prepare_fixture = LargeHtmlSyntaxFixture::new(
+        fixture_path.as_deref(),
+        synthetic_lines,
+        synthetic_line_bytes,
+    );
+    let source_label = prepare_fixture.source_label().to_string();
+
+    let mut group = c.benchmark_group("large_html_syntax");
+    group.sample_size(6);
+    group.warm_up_time(Duration::from_secs(1));
+    group.bench_function(
+        BenchmarkId::new(source_label.as_str(), "background_prepare"),
+        |b| b.iter(|| prepare_fixture.run_background_prepare_step()),
+    );
+    let pending_fixture = LargeHtmlSyntaxFixture::new_prewarmed(
+        fixture_path.as_deref(),
+        synthetic_lines,
+        synthetic_line_bytes,
+    );
+    let mut pending_start_line = 0usize;
+    group.bench_with_input(
+        BenchmarkId::new(source_label.as_str(), "visible_window_pending"),
+        &window_lines,
+        |b, &window_lines| {
+            b.iter(|| {
+                let hash = pending_fixture
+                    .run_visible_window_pending_step(pending_start_line, window_lines);
+                pending_start_line =
+                    pending_fixture.next_start_line(pending_start_line, window_lines);
+                hash
+            })
+        },
+    );
+    let visible_fixture = LargeHtmlSyntaxFixture::new_prewarmed(
+        fixture_path.as_deref(),
+        synthetic_lines,
+        synthetic_line_bytes,
+    );
+    visible_fixture.prime_visible_window(window_lines);
+    group.bench_with_input(
+        BenchmarkId::new(source_label.as_str(), "visible_window_steady"),
+        &window_lines,
+        |b, &window_lines| b.iter(|| visible_fixture.run_visible_window_step(0, window_lines)),
+    );
+    let mut start_line = 0usize;
+    group.bench_with_input(
+        BenchmarkId::new(source_label.as_str(), "visible_window_sweep"),
+        &window_lines,
+        |b, &window_lines| {
+            b.iter(|| {
+                let hash = visible_fixture.run_visible_window_step(start_line, window_lines);
+                start_line = visible_fixture.next_start_line(start_line, window_lines);
+                hash
+            })
+        },
+    );
     group.finish();
 }
 
@@ -845,9 +948,11 @@ criterion_group!(
     bench_file_diff_syntax_prepare,
     bench_file_diff_syntax_query_stress,
     bench_file_diff_syntax_reparse,
+    bench_file_diff_inline_syntax_projection,
     bench_file_diff_syntax_cache_drop,
     bench_prepared_syntax_multidoc_cache_hit_rate,
     bench_prepared_syntax_chunk_miss_cost,
+    bench_large_html_syntax,
     bench_worktree_preview_render,
     bench_conflict_three_way_scroll,
     bench_conflict_three_way_visible_map_build,

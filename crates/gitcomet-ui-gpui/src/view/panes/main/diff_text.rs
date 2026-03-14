@@ -293,17 +293,17 @@ impl MainPaneView {
                 return fallback;
             }
             if self.is_file_diff_view_active() {
-                if let Some(styled) = self.diff_text_segments_cache_get(mapped_ix) {
+                let Some(line) = self.file_diff_inline_cache.get(mapped_ix) else {
+                    return fallback;
+                };
+                let cache_epoch = self.file_diff_inline_style_cache_epoch(line);
+                if let Some(styled) = self.diff_text_segments_cache_get(mapped_ix, cache_epoch) {
                     return styled.text.clone();
                 }
-                return self
-                    .file_diff_inline_cache
-                    .get(mapped_ix)
-                    .map(|l| expand_tabs(diff_content_text(l)))
-                    .unwrap_or(fallback);
+                return expand_tabs(diff_content_text(line));
             }
 
-            if let Some(styled) = self.diff_text_segments_cache_get(mapped_ix) {
+            if let Some(styled) = self.diff_text_segments_cache_get(mapped_ix, 0) {
                 return styled.text.clone();
             }
             let Some(line) = self.patch_diff_row(mapped_ix) else {
@@ -330,8 +330,9 @@ impl MainPaneView {
         }
 
         if self.is_file_diff_view_active() {
+            let cache_epoch = self.file_diff_split_style_cache_epoch(region);
             if let Some(key) = self.file_diff_split_cache_key(mapped_ix, region)
-                && let Some(styled) = self.diff_text_segments_cache_get(key)
+                && let Some(styled) = self.diff_text_segments_cache_get(key, cache_epoch)
             {
                 return styled.text.clone();
             }

@@ -1,22 +1,30 @@
+use super::core_impl::resolved_output_highlight_provider_binding_key;
 use super::{
-    ClearDiffSelectionAction, ResolvedOutputConflictMarker, apply_conflict_choice_provenance_hints,
-    apply_three_way_empty_base_provenance_hints, build_line_starts,
-    build_resolved_output_conflict_markers, clear_diff_selection_action,
+    ClearDiffSelectionAction, ResolvedOutputConflictMarker, VersionedCachedDiffStyledText,
+    apply_conflict_choice_provenance_hints, apply_three_way_empty_base_provenance_hints,
+    build_line_starts, build_resolved_output_conflict_markers,
+    build_resolved_output_syntax_state_for_snapshot,
+    build_resolved_output_syntax_state_for_snapshot_with_budget, clear_diff_selection_action,
     conflict_marker_nav_entries_from_markers, conflict_resolver_output_context_line,
     dirty_byte_range_to_line_range, first_output_marker_line_for_conflict,
     focused_mergetool_save_exit_code, output_line_range_for_conflict_block_in_text,
     pane_content_width_for_layout, parse_conflict_canvas_rows_env,
     remap_line_keyed_cache_for_delta, replace_output_lines_in_range,
-    resolved_outline_delta_between_texts, resolved_output_conflict_block_ranges_in_text,
-    resolved_output_marker_for_line, resolved_output_markers_for_text,
-    split_target_conflict_block_into_subchunks,
+    resolved_outline_delta_between_texts, resolved_outline_delta_for_snapshot_transition,
+    resolved_output_conflict_block_ranges_in_text, resolved_output_marker_for_line,
+    resolved_output_markers_for_text, split_target_conflict_block_into_subchunks,
+    versioned_cached_diff_styled_text_is_current,
 };
+use crate::kit::text_model::TextModel;
+use crate::theme::AppTheme;
 use crate::view::GitCometViewMode;
 use crate::view::conflict_resolver::{
     self, ConflictBlock, ConflictChoice, ConflictResolverViewMode, ConflictSegment,
     ResolvedLineSource, SourceLines,
 };
+use crate::view::rows;
 use rustc_hash::FxHashMap as HashMap;
+use std::sync::Arc;
 
 #[test]
 fn clear_diff_selection_action_is_clear_for_normal_mode() {
@@ -88,6 +96,43 @@ fn resolved_outline_delta_between_texts_clamps_to_utf8_boundaries() {
 }
 
 #[test]
+fn resolved_outline_delta_for_snapshot_transition_prefers_recent_edit_delta() {
+    let mut model = TextModel::from("prefix value\nsuffix");
+    let old_snapshot = model.snapshot();
+    let new_range = model.replace_range(7..12, "token");
+    let new_snapshot = model.snapshot();
+
+    let delta = resolved_outline_delta_for_snapshot_transition(
+        &old_snapshot,
+        &new_snapshot,
+        Some((7..12, new_range)),
+    )
+    .expect("delta");
+
+    assert_eq!(delta.old_range, 7..12);
+    assert_eq!(delta.new_range, 7..12);
+}
+
+#[test]
+fn resolved_outline_delta_for_snapshot_transition_falls_back_after_multiple_revisions() {
+    let mut model = TextModel::from("abcdef");
+    let old_snapshot = model.snapshot();
+    let _first = model.replace_range(1..2, "B");
+    let latest = model.replace_range(4..5, "E");
+    let new_snapshot = model.snapshot();
+
+    let delta = resolved_outline_delta_for_snapshot_transition(
+        &old_snapshot,
+        &new_snapshot,
+        Some((4..5, latest)),
+    )
+    .expect("delta");
+
+    assert_eq!(delta.old_range, 1..5);
+    assert_eq!(delta.new_range, 1..5);
+}
+
+#[test]
 fn dirty_byte_range_to_line_range_includes_line_join_delete() {
     let text = "a\nb\nc";
     let line_starts = build_line_starts(text);
@@ -107,6 +152,62 @@ fn remap_line_keyed_cache_for_delta_shifts_suffix_entries() {
     assert_eq!(cache.get(&0), Some(&10));
     assert_eq!(cache.get(&4), None);
     assert_eq!(cache.get(&5), Some(&70));
+}
+
+#[test]
+fn remap_line_keyed_cache_for_delta_preserves_versioned_preview_entries() {
+    let mut cache: HashMap<usize, VersionedCachedDiffStyledText> = HashMap::default();
+    let make_entry = |text: &str| VersionedCachedDiffStyledText {
+        syntax_epoch: 7,
+        styled: crate::view::diff_text_model::CachedDiffStyledText {
+            text: text.to_string().into(),
+            highlights: Arc::new(Vec::new()),
+            highlights_hash: 11,
+            text_hash: 22,
+        },
+    };
+    cache.insert(0, make_entry("keep"));
+    cache.insert(7, make_entry("shift"));
+
+    remap_line_keyed_cache_for_delta(&mut cache, 2..5, 2..3);
+
+    let keep = versioned_cached_diff_styled_text_is_current(cache.get(&0), 7)
+        .expect("unchanged prefix entry should stay current");
+    assert_eq!(keep.text.as_ref(), "keep");
+
+    let shifted = versioned_cached_diff_styled_text_is_current(cache.get(&5), 7)
+        .expect("suffix entry should move and keep its syntax epoch");
+    assert_eq!(shifted.text.as_ref(), "shift");
+    assert!(cache.get(&7).is_none());
+}
+
+#[test]
+fn versioned_diff_style_cache_entry_only_matches_current_epoch() {
+    let styled = crate::view::diff_text_model::CachedDiffStyledText {
+        text: "styled".into(),
+        highlights: Arc::new(Vec::new()),
+        highlights_hash: 11,
+        text_hash: 22,
+    };
+    let entry = VersionedCachedDiffStyledText {
+        syntax_epoch: 7,
+        styled: styled.clone(),
+    };
+
+    let current = versioned_cached_diff_styled_text_is_current(Some(&entry), 7)
+        .expect("matching epoch should return cached styled text");
+    assert_eq!(current.text, styled.text);
+    assert_eq!(current.highlights_hash, styled.highlights_hash);
+    assert_eq!(current.text_hash, styled.text_hash);
+
+    assert!(
+        versioned_cached_diff_styled_text_is_current(Some(&entry), 8).is_none(),
+        "stale cache entries should be ignored when syntax epoch advances"
+    );
+    assert!(
+        versioned_cached_diff_styled_text_is_current(None, 7).is_none(),
+        "missing cache entries should stay missing"
+    );
 }
 
 #[test]
@@ -1120,6 +1221,143 @@ fn empty_base_conflict_hint_overrides_false_a_badge() {
         )),
         true
     );
+}
+
+#[test]
+fn resolved_output_syntax_state_uses_prepared_document_for_multiline_comment() {
+    let theme = AppTheme::zed_ayu_dark();
+    let output = "/* open comment\nstill comment */ let x = 1;";
+    let output_model = TextModel::from(output);
+    let output_snapshot = output_model.snapshot();
+    let line_starts = output_snapshot.shared_line_starts();
+    let second_line_start = line_starts[1];
+
+    let syntax_state = build_resolved_output_syntax_state_for_snapshot(
+        theme,
+        &output_snapshot,
+        Some(rows::DiffSyntaxLanguage::Rust),
+        None,
+        None,
+    );
+
+    let document = syntax_state.prepared_document.expect(
+        "resolved output should keep a prepared document when full-document syntax is available",
+    );
+    // The state now returns a lazy provider instead of materialized highlights.
+    // Call the provider for the second line's byte range to verify multiline comment
+    // highlighting works correctly through the provider path.
+    let provider = syntax_state
+        .highlight_provider
+        .expect("resolved output should return a highlight provider when prepared document exists");
+    let mut result = provider.resolve(second_line_start..output.len());
+    if result.pending {
+        let started = std::time::Instant::now();
+        while rows::drain_completed_prepared_diff_syntax_chunk_builds_for_document(document) == 0
+            && started.elapsed() < std::time::Duration::from_secs(2)
+        {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        result = provider.resolve(second_line_start..output.len());
+    }
+
+    let highlights = result.highlights;
+    assert!(
+        highlights.iter().any(|(range, style)| {
+            range.start <= second_line_start
+                && range.end > second_line_start
+                && style.color == Some(theme.colors.text_muted.into())
+        }),
+        "second line should inherit comment highlighting from the multiline document parse"
+    );
+}
+
+#[test]
+fn resolved_output_syntax_state_requests_background_prepare_for_large_documents() {
+    let theme = AppTheme::zed_ayu_dark();
+    let output = "let value = Some(42);\n".repeat(4_001);
+    let output_model = TextModel::from(output.clone());
+    let output_snapshot = output_model.snapshot();
+
+    let syntax_state = build_resolved_output_syntax_state_for_snapshot_with_budget(
+        theme,
+        &output_snapshot,
+        Some(rows::DiffSyntaxLanguage::Rust),
+        None,
+        None,
+        rows::DiffSyntaxBudget {
+            foreground_parse: std::time::Duration::ZERO,
+        },
+    );
+
+    assert!(
+        syntax_state.needs_background_prepare,
+        "large resolved output should stay eligible for document syntax and continue in the background when the foreground budget times out"
+    );
+    assert!(
+        syntax_state.prepared_document.is_none(),
+        "timed out foreground parses should not claim a prepared document"
+    );
+    assert!(
+        syntax_state.highlight_provider.is_none(),
+        "provider should only be installed once a prepared document exists"
+    );
+    assert!(
+        syntax_state.highlights.is_empty(),
+        "pending document syntax should paint plain text instead of materializing a full fallback highlight vector"
+    );
+}
+
+#[test]
+fn resolved_output_highlight_provider_binding_key_tracks_theme_language_and_document() {
+    let theme = AppTheme::zed_ayu_dark();
+    let output_a = TextModel::from("fn alpha() -> usize { 1 }\n");
+    let state_a = build_resolved_output_syntax_state_for_snapshot(
+        theme,
+        &output_a.snapshot(),
+        Some(rows::DiffSyntaxLanguage::Rust),
+        None,
+        None,
+    );
+    let document_a = state_a
+        .prepared_document
+        .expect("small Rust output should produce a prepared document");
+
+    let key_a = resolved_output_highlight_provider_binding_key(
+        1,
+        rows::DiffSyntaxLanguage::Rust,
+        document_a,
+    );
+    let key_theme_changed = resolved_output_highlight_provider_binding_key(
+        2,
+        rows::DiffSyntaxLanguage::Rust,
+        document_a,
+    );
+    let key_language_changed = resolved_output_highlight_provider_binding_key(
+        1,
+        rows::DiffSyntaxLanguage::Html,
+        document_a,
+    );
+
+    let output_b = TextModel::from("fn beta() -> usize { 2 }\n");
+    let state_b = build_resolved_output_syntax_state_for_snapshot(
+        theme,
+        &output_b.snapshot(),
+        Some(rows::DiffSyntaxLanguage::Rust),
+        None,
+        None,
+    );
+    let document_b = state_b
+        .prepared_document
+        .expect("different Rust output should produce a prepared document");
+    let key_document_changed = resolved_output_highlight_provider_binding_key(
+        1,
+        rows::DiffSyntaxLanguage::Rust,
+        document_b,
+    );
+
+    assert_ne!(key_a, key_theme_changed);
+    assert_ne!(key_a, key_language_changed);
+    assert_ne!(key_a, key_document_changed);
 }
 
 #[test]

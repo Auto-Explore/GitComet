@@ -55,6 +55,7 @@ actions!(
 
 const MAX_UNDO_STEPS: usize = 100;
 const TEXT_INPUT_GUARD_ROWS: usize = 2;
+const TEXT_INPUT_PROVIDER_PREFETCH_GUARD_ROWS: usize = 24;
 const TEXT_INPUT_MAX_LINE_SHAPE_BYTES: usize = 4 * 1024;
 const TEXT_INPUT_SHAPE_CACHE_LIMIT: usize = 8 * 1024;
 const TEXT_INPUT_TRUNCATION_SUFFIX: &str = "…";
@@ -73,6 +74,95 @@ struct ShapedRowCacheKey {
     wrap_width_key: i32,
     style_epoch: u64,
     text_hash_slice: u64,
+}
+
+#[derive(Clone, Default)]
+pub struct HighlightProviderResult {
+    pub highlights: Vec<(Range<usize>, gpui::HighlightStyle)>,
+    pub pending: bool,
+}
+
+#[derive(Clone)]
+pub struct HighlightProvider {
+    resolve: Arc<dyn Fn(Range<usize>) -> HighlightProviderResult + Send + Sync>,
+    drain_pending: Arc<dyn Fn() -> usize + Send + Sync>,
+    has_pending: Arc<dyn Fn() -> bool + Send + Sync>,
+}
+
+impl HighlightProvider {
+    #[cfg(test)]
+    pub fn from_fn<F>(resolve: F) -> Self
+    where
+        F: Fn(Range<usize>) -> Vec<(Range<usize>, gpui::HighlightStyle)> + Send + Sync + 'static,
+    {
+        Self {
+            resolve: Arc::new(move |range| HighlightProviderResult {
+                highlights: resolve(range),
+                pending: false,
+            }),
+            drain_pending: Arc::new(|| 0),
+            has_pending: Arc::new(|| false),
+        }
+    }
+
+    pub fn with_pending<R, D, H>(resolve: R, drain_pending: D, has_pending: H) -> Self
+    where
+        R: Fn(Range<usize>) -> HighlightProviderResult + Send + Sync + 'static,
+        D: Fn() -> usize + Send + Sync + 'static,
+        H: Fn() -> bool + Send + Sync + 'static,
+    {
+        Self {
+            resolve: Arc::new(resolve),
+            drain_pending: Arc::new(drain_pending),
+            has_pending: Arc::new(has_pending),
+        }
+    }
+
+    pub fn resolve(&self, range: Range<usize>) -> HighlightProviderResult {
+        (self.resolve)(range)
+    }
+
+    fn drain_pending(&self) -> usize {
+        (self.drain_pending)()
+    }
+
+    fn has_pending(&self) -> bool {
+        (self.has_pending)()
+    }
+}
+
+#[derive(Clone)]
+struct ProviderHighlightCache {
+    highlight_epoch: u64,
+    byte_start: usize,
+    byte_end: usize,
+    pending: bool,
+    highlights: Arc<Vec<(Range<usize>, gpui::HighlightStyle)>>,
+}
+
+impl ProviderHighlightCache {
+    fn contains_range(&self, highlight_epoch: u64, byte_range: &Range<usize>) -> bool {
+        self.highlight_epoch == highlight_epoch
+            && self.byte_start <= byte_range.start
+            && self.byte_end >= byte_range.end
+    }
+}
+
+#[derive(Clone)]
+struct ResolvedProviderHighlights {
+    pending: bool,
+    highlights: Arc<Vec<(Range<usize>, gpui::HighlightStyle)>>,
+}
+
+fn should_reset_highlight_provider_binding(
+    has_existing_provider: bool,
+    current_binding_key: Option<u64>,
+    next_binding_key: Option<u64>,
+) -> bool {
+    match next_binding_key {
+        Some(next_key) => !has_existing_provider || current_binding_key != Some(next_key),
+        None => true,
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -229,6 +319,9 @@ pub struct TextInput {
     line_ending: &'static str,
     style: TextInputStyle,
     highlights: Arc<Vec<(Range<usize>, gpui::HighlightStyle)>>,
+    highlight_provider: Option<HighlightProvider>,
+    highlight_provider_binding_key: Option<u64>,
+    provider_highlight_cache: Option<ProviderHighlightCache>,
     highlight_epoch: u64,
     line_height_override: Option<Pixels>,
 
@@ -265,6 +358,7 @@ pub struct TextInput {
     has_focus: bool,
     cursor_blink_visible: bool,
     cursor_blink_task: Option<gpui::Task<()>>,
+    highlight_provider_poll_task: Option<gpui::Task<()>>,
     undo_stack: Vec<UndoSnapshot>,
 }
 
@@ -284,6 +378,9 @@ impl TextInput {
             line_ending: if cfg!(windows) { "\r\n" } else { "\n" },
             style: TextInputStyle::from_theme(AppTheme::zed_ayu_dark()),
             highlights: Arc::new(Vec::new()),
+            highlight_provider: None,
+            highlight_provider_binding_key: None,
+            provider_highlight_cache: None,
             highlight_epoch: 1,
             line_height_override: None,
             selected_range: 0..0,
@@ -317,6 +414,7 @@ impl TextInput {
             has_focus: false,
             cursor_blink_visible: true,
             cursor_blink_task: None,
+            highlight_provider_poll_task: None,
             undo_stack: Vec::new(),
         }
     }
@@ -335,6 +433,9 @@ impl TextInput {
             line_ending: if cfg!(windows) { "\r\n" } else { "\n" },
             style: TextInputStyle::from_theme(AppTheme::zed_ayu_dark()),
             highlights: Arc::new(Vec::new()),
+            highlight_provider: None,
+            highlight_provider_binding_key: None,
+            provider_highlight_cache: None,
             highlight_epoch: 1,
             line_height_override: None,
             selected_range: 0..0,
@@ -368,12 +469,17 @@ impl TextInput {
             has_focus: false,
             cursor_blink_visible: true,
             cursor_blink_task: None,
+            highlight_provider_poll_task: None,
             undo_stack: Vec::new(),
         }
     }
 
     pub fn text(&self) -> &str {
         self.content.as_ref()
+    }
+
+    pub fn text_snapshot(&self) -> TextModelSnapshot {
+        self.content.snapshot()
     }
 
     pub fn focus_handle(&self) -> FocusHandle {
@@ -424,6 +530,17 @@ impl TextInput {
         self.invalidate_layout_caches();
     }
 
+    fn bump_shape_style_epoch_preserving_wrap_rows(&mut self) {
+        self.shape_style_epoch = self.shape_style_epoch.wrapping_add(1).max(1);
+        self.invalidate_layout_caches_preserving_wrap_rows();
+    }
+
+    fn note_provider_highlights_changed(&mut self) {
+        self.provider_highlight_cache = None;
+        self.highlight_epoch = self.highlight_epoch.wrapping_add(1).max(1);
+        self.bump_shape_style_epoch_preserving_wrap_rows();
+    }
+
     pub fn set_theme(&mut self, theme: AppTheme, cx: &mut Context<Self>) {
         let style = TextInputStyle::from_theme(theme);
         if self.style == style {
@@ -460,9 +577,55 @@ impl TextInput {
     ) {
         highlights.sort_by(|(a, _), (b, _)| a.start.cmp(&b.start).then(a.end.cmp(&b.end)));
         self.highlights = Arc::new(highlights);
+        self.highlight_provider = None;
+        self.highlight_provider_binding_key = None;
+        self.highlight_provider_poll_task.take();
+        self.provider_highlight_cache = None;
         self.highlight_epoch = self.highlight_epoch.wrapping_add(1).max(1);
         self.bump_shape_style_epoch();
         cx.notify();
+    }
+
+    fn install_highlight_provider(
+        &mut self,
+        provider: HighlightProvider,
+        binding_key: Option<u64>,
+        cx: &mut Context<Self>,
+    ) {
+        if !should_reset_highlight_provider_binding(
+            self.highlight_provider.is_some(),
+            self.highlight_provider_binding_key,
+            binding_key,
+        ) {
+            return;
+        }
+
+        self.highlight_provider = Some(provider);
+        self.highlight_provider_binding_key = binding_key;
+        self.highlight_provider_poll_task.take();
+        self.highlights = Arc::new(Vec::new());
+        self.provider_highlight_cache = None;
+        self.highlight_epoch = self.highlight_epoch.wrapping_add(1).max(1);
+        self.bump_shape_style_epoch();
+        cx.notify();
+    }
+
+    /// Replace the full highlight vector with a lazy provider that generates highlights
+    /// on demand for only the visible byte range. Use this for large documents where
+    /// materializing all highlights is wasteful.
+    pub fn set_highlight_provider(&mut self, provider: HighlightProvider, cx: &mut Context<Self>) {
+        self.install_highlight_provider(provider, None, cx);
+    }
+
+    /// Like `set_highlight_provider`, but lets callers provide a stable binding key so
+    /// repeated reapplication of the same provider can keep the existing highlight cache.
+    pub fn set_highlight_provider_with_key(
+        &mut self,
+        binding_key: u64,
+        provider: HighlightProvider,
+        cx: &mut Context<Self>,
+    ) {
+        self.install_highlight_provider(provider, Some(binding_key), cx);
     }
 
     pub fn set_line_height(&mut self, line_height: Option<Pixels>, cx: &mut Context<Self>) {
@@ -496,6 +659,83 @@ impl TextInput {
 
     fn queue_cursor_autoscroll(&mut self) {
         self.pending_cursor_autoscroll = true;
+    }
+
+    fn resolve_provider_highlights(
+        &mut self,
+        byte_start: usize,
+        byte_end: usize,
+    ) -> ResolvedProviderHighlights {
+        let requested_range = byte_start..byte_end;
+        if let Some(ref cache) = self.provider_highlight_cache {
+            if cache.contains_range(self.highlight_epoch, &requested_range) {
+                return ResolvedProviderHighlights {
+                    pending: cache.pending,
+                    highlights: Arc::clone(&cache.highlights),
+                };
+            }
+        }
+        let Some(ref provider) = self.highlight_provider else {
+            return ResolvedProviderHighlights {
+                pending: false,
+                highlights: Arc::new(Vec::new()),
+            };
+        };
+        let mut result = provider.resolve(requested_range.clone());
+        result
+            .highlights
+            .sort_by(|(a, _), (b, _)| a.start.cmp(&b.start).then(a.end.cmp(&b.end)));
+        let pending = result.pending;
+        let highlights = Arc::new(result.highlights);
+        self.provider_highlight_cache = Some(ProviderHighlightCache {
+            highlight_epoch: self.highlight_epoch,
+            byte_start: requested_range.start,
+            byte_end: requested_range.end,
+            pending,
+            highlights: Arc::clone(&highlights),
+        });
+        ResolvedProviderHighlights {
+            pending,
+            highlights,
+        }
+    }
+
+    fn ensure_highlight_provider_poll(&mut self, cx: &mut Context<Self>) {
+        if self.highlight_provider_poll_task.is_some() {
+            return;
+        }
+
+        let task = cx.spawn(
+            async move |input: gpui::WeakEntity<TextInput>, cx: &mut gpui::AsyncApp| loop {
+                gpui::Timer::after(Duration::from_millis(16)).await;
+
+                let should_continue = input
+                    .update(cx, |input, cx| {
+                        let Some(provider) = input.highlight_provider.clone() else {
+                            input.highlight_provider_poll_task = None;
+                            return false;
+                        };
+
+                        let applied = provider.drain_pending();
+                        if applied > 0 {
+                            input.note_provider_highlights_changed();
+                            cx.notify();
+                        }
+
+                        let pending = provider.has_pending();
+                        if !pending {
+                            input.highlight_provider_poll_task = None;
+                        }
+                        pending
+                    })
+                    .unwrap_or(false);
+
+                if !should_continue {
+                    break;
+                }
+            },
+        );
+        self.highlight_provider_poll_task = Some(task);
     }
 
     fn trim_shape_caches(&mut self) {
@@ -2539,24 +2779,41 @@ impl Element for TextElement {
             let font_size = style.font_size.to_pixels(window.rem_size());
             let line_height = input.effective_line_height(window);
             let base_font = style.font();
-            let highlights = if !has_content {
-                None
-            } else {
-                Some(Arc::clone(&input.highlights))
-            };
-            let highlight_slice = highlights.as_ref().map(|h| h.as_slice());
 
             let display_text_str = display_text.as_ref();
             let line_starts = compute_line_starts(display_text_str);
             let line_count = line_starts.len().max(1);
+            let (visible_top, visible_bottom) =
+                visible_vertical_window(bounds, input.vertical_scroll_handle.as_ref());
+
+            // Resolve highlights: use the provider path for large documents,
+            // otherwise use the pre-materialized highlight vector.
+            let highlights = if !has_content {
+                None
+            } else if input.highlight_provider.is_some() {
+                let byte_range = provider_prefetch_byte_range_for_visible_window(
+                    line_starts.as_slice(),
+                    display_text_str.len(),
+                    line_count,
+                    line_height,
+                    visible_top,
+                    visible_bottom,
+                );
+                let resolved = input.resolve_provider_highlights(byte_range.start, byte_range.end);
+                if resolved.pending {
+                    input.ensure_highlight_provider_poll(cx);
+                }
+                Some(resolved.highlights)
+            } else {
+                Some(Arc::clone(&input.highlights))
+            };
+            let highlight_slice = highlights.as_ref().map(|h| h.as_slice());
             let shape_style = TextShapeStyle {
                 base_font: &base_font,
                 text_color,
                 highlights: highlight_slice,
                 font_size,
             };
-            let (visible_top, visible_bottom) =
-                visible_vertical_window(bounds, input.vertical_scroll_handle.as_ref());
 
             if !soft_wrap {
                 let mut scroll_x = if input.multiline {
@@ -3401,6 +3658,46 @@ fn visible_plain_line_range(
     start..end
 }
 
+fn byte_range_for_line_range(
+    line_starts: &[usize],
+    text_len: usize,
+    line_range: Range<usize>,
+) -> Range<usize> {
+    if line_range.is_empty() {
+        return 0..0;
+    }
+
+    let start = line_starts
+        .get(line_range.start)
+        .copied()
+        .unwrap_or(text_len)
+        .min(text_len);
+    let end = line_starts
+        .get(line_range.end)
+        .copied()
+        .unwrap_or(text_len)
+        .min(text_len);
+    start.min(end)..end.max(start)
+}
+
+fn provider_prefetch_byte_range_for_visible_window(
+    line_starts: &[usize],
+    text_len: usize,
+    line_count: usize,
+    line_height: Pixels,
+    visible_top: Pixels,
+    visible_bottom: Pixels,
+) -> Range<usize> {
+    let line_range = visible_plain_line_range(
+        line_count,
+        line_height,
+        visible_top,
+        visible_bottom,
+        TEXT_INPUT_PROVIDER_PREFETCH_GUARD_ROWS,
+    );
+    byte_range_for_line_range(line_starts, text_len, line_range)
+}
+
 fn wrapped_line_index_for_y(
     y_offsets: &[Pixels],
     row_counts: &[usize],
@@ -4060,6 +4357,44 @@ mod tests {
     }
 
     #[test]
+    fn provider_prefetch_byte_range_extends_visible_window_with_guard_rows() {
+        let text = std::iter::repeat("x")
+            .take(100)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let line_starts = compute_line_starts(text.as_str());
+        let range = provider_prefetch_byte_range_for_visible_window(
+            line_starts.as_slice(),
+            text.len(),
+            100,
+            px(20.0),
+            px(600.0),
+            px(660.0),
+        );
+
+        assert_eq!(range, 12..116);
+    }
+
+    #[test]
+    fn provider_prefetch_byte_range_clamps_to_document_bounds() {
+        let text = std::iter::repeat("x")
+            .take(10)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let line_starts = compute_line_starts(text.as_str());
+        let range = provider_prefetch_byte_range_for_visible_window(
+            line_starts.as_slice(),
+            text.len(),
+            10,
+            px(20.0),
+            px(0.0),
+            px(20.0),
+        );
+
+        assert_eq!(range, 0..text.len());
+    }
+
+    #[test]
     fn wrapped_line_index_and_visible_range_use_row_counts() {
         let row_counts = vec![1, 3, 1, 2, 1];
         let y_offsets = vec![px(0.0), px(10.0), px(40.0), px(50.0), px(70.0)];
@@ -4348,5 +4683,153 @@ mod tests {
             run_color_at_offset(streamed_runs.as_slice(), 6),
             style_high.color.expect("style_high color should exist")
         );
+    }
+
+    #[test]
+    fn resolve_provider_highlights_caches_by_epoch_and_range() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let call_count = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&call_count);
+        let provider = HighlightProvider::from_fn(move |range: Range<usize>| {
+            counter.fetch_add(1, Ordering::SeqCst);
+            vec![(
+                range.clone(),
+                gpui::HighlightStyle {
+                    color: Some(gpui::hsla(0.0, 1.0, 0.5, 1.0)),
+                    ..gpui::HighlightStyle::default()
+                },
+            )]
+        });
+
+        // Simulate the cache behavior without needing a full GPUI context.
+        let mut cache: Option<ProviderHighlightCache> = None;
+        let epoch: u64 = 1;
+
+        // Helper that mimics resolve_provider_highlights logic.
+        let resolve = |cache: &mut Option<ProviderHighlightCache>,
+                       epoch: u64,
+                       byte_start: usize,
+                       byte_end: usize,
+                       provider: &HighlightProvider|
+         -> ResolvedProviderHighlights {
+            if let Some(c) = cache.as_ref() {
+                if c.contains_range(epoch, &(byte_start..byte_end)) {
+                    return ResolvedProviderHighlights {
+                        pending: c.pending,
+                        highlights: Arc::clone(&c.highlights),
+                    };
+                }
+            }
+            let mut result = provider.resolve(byte_start..byte_end);
+            result
+                .highlights
+                .sort_by(|(a, _), (b, _)| a.start.cmp(&b.start).then(a.end.cmp(&b.end)));
+            let pending = result.pending;
+            let highlights = Arc::new(result.highlights);
+            *cache = Some(ProviderHighlightCache {
+                highlight_epoch: epoch,
+                byte_start,
+                byte_end,
+                pending,
+                highlights: Arc::clone(&highlights),
+            });
+            ResolvedProviderHighlights {
+                pending,
+                highlights,
+            }
+        };
+
+        let h1 = resolve(&mut cache, epoch, 0, 100, &provider);
+        assert_eq!(call_count.load(Ordering::SeqCst), 1);
+        assert!(!h1.pending);
+        assert_eq!(h1.highlights.len(), 1);
+        assert_eq!(h1.highlights[0].0, 0..100);
+
+        // Same range and epoch → cached, no new call.
+        let h2 = resolve(&mut cache, epoch, 0, 100, &provider);
+        assert_eq!(call_count.load(Ordering::SeqCst), 1);
+        assert!(Arc::ptr_eq(&h1.highlights, &h2.highlights));
+
+        // Contained range → cached, no new call.
+        let h3 = resolve(&mut cache, epoch, 20, 80, &provider);
+        assert_eq!(call_count.load(Ordering::SeqCst), 1);
+        assert!(Arc::ptr_eq(&h1.highlights, &h3.highlights));
+
+        // Wider range → new call.
+        let _h4 = resolve(&mut cache, epoch, 0, 120, &provider);
+        assert_eq!(call_count.load(Ordering::SeqCst), 2);
+
+        // Different epoch → new call even for same range.
+        let _h5 = resolve(&mut cache, epoch + 1, 0, 120, &provider);
+        assert_eq!(call_count.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn highlight_provider_binding_key_reuses_existing_provider_when_unchanged() {
+        assert!(!should_reset_highlight_provider_binding(
+            true,
+            Some(41),
+            Some(41)
+        ));
+    }
+
+    #[test]
+    fn highlight_provider_binding_key_rebinds_when_missing_changed_or_unkeyed() {
+        assert!(should_reset_highlight_provider_binding(
+            false,
+            Some(41),
+            Some(41)
+        ));
+        assert!(should_reset_highlight_provider_binding(
+            true,
+            Some(41),
+            Some(42)
+        ));
+        assert!(should_reset_highlight_provider_binding(
+            true,
+            Some(41),
+            None
+        ));
+    }
+
+    #[test]
+    fn highlight_provider_with_pending_uses_custom_callbacks() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+        let pending = Arc::new(AtomicBool::new(true));
+        let pending_for_resolve = Arc::clone(&pending);
+        let pending_for_check = Arc::clone(&pending);
+        let drain_calls = Arc::new(AtomicUsize::new(0));
+        let drain_calls_for_provider = Arc::clone(&drain_calls);
+        let provider = HighlightProvider::with_pending(
+            move |range: Range<usize>| HighlightProviderResult {
+                highlights: vec![(
+                    range,
+                    gpui::HighlightStyle {
+                        color: Some(gpui::hsla(0.66, 1.0, 0.5, 1.0)),
+                        ..gpui::HighlightStyle::default()
+                    },
+                )],
+                pending: pending_for_resolve.load(Ordering::SeqCst),
+            },
+            move || {
+                drain_calls_for_provider.fetch_add(1, Ordering::SeqCst);
+                pending.store(false, Ordering::SeqCst);
+                1
+            },
+            move || pending_for_check.load(Ordering::SeqCst),
+        );
+
+        let first = provider.resolve(4..12);
+        assert!(first.pending);
+        assert_eq!(first.highlights[0].0, 4..12);
+        assert!(provider.has_pending());
+        assert_eq!(provider.drain_pending(), 1);
+        assert_eq!(drain_calls.load(Ordering::SeqCst), 1);
+        assert!(!provider.has_pending());
+
+        let second = provider.resolve(4..12);
+        assert!(!second.pending);
     }
 }

@@ -5,10 +5,50 @@ use std::sync::{Arc, OnceLock};
 mod syntax;
 
 pub(in crate::view) use syntax::{
-    DiffSyntaxBudget, DiffSyntaxLanguage, DiffSyntaxMode, diff_syntax_language_for_path,
+    DiffSyntaxBudget, DiffSyntaxEdit, DiffSyntaxLanguage, DiffSyntaxMode,
+    diff_syntax_language_for_path,
 };
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// Extracts the text content of a specific line from a document using precomputed
+/// line starts. Returns an empty string if the line index is out of bounds.
+/// Strips trailing newline.
+pub(in crate::view) fn resolved_output_line_text<'a>(
+    text: &'a str,
+    line_starts: &[usize],
+    line_ix: usize,
+) -> &'a str {
+    if text.is_empty() {
+        return "";
+    }
+    let text_len = text.len();
+    let start = line_starts.get(line_ix).copied().unwrap_or(text_len);
+    if start >= text_len {
+        return "";
+    }
+    let mut end = line_starts
+        .get(line_ix.saturating_add(1))
+        .copied()
+        .unwrap_or(text_len)
+        .min(text_len);
+    if end > start && text.as_bytes().get(end.saturating_sub(1)) == Some(&b'\n') {
+        end = end.saturating_sub(1);
+    }
+    text.get(start..end).unwrap_or("")
+}
+
+/// Returns `Auto` when a prepared document exists (full-document syntax),
+/// `HeuristicOnly` when it doesn't (per-line fallback).
+pub(super) fn syntax_mode_for_prepared_document(
+    document: Option<PreparedDiffSyntaxDocument>,
+) -> DiffSyntaxMode {
+    if document.is_some() {
+        DiffSyntaxMode::Auto
+    } else {
+        DiffSyntaxMode::HeuristicOnly
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(in crate::view) struct PreparedDiffSyntaxDocument {
     inner: syntax::PreparedSyntaxDocument,
 }
@@ -32,7 +72,7 @@ pub(super) struct DiffSyntaxConfig {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) struct PreparedDiffSyntaxLine {
+pub(in crate::view) struct PreparedDiffSyntaxLine {
     pub document: Option<PreparedDiffSyntaxDocument>,
     pub line_ix: usize,
 }
@@ -49,16 +89,10 @@ where
         .map(|inner| PreparedDiffSyntaxDocument { inner })
 }
 
-pub(in crate::view) fn prepare_diff_syntax_document_with_budget<'a, I>(
-    language: DiffSyntaxLanguage,
-    syntax_mode: DiffSyntaxMode,
-    lines: I,
-    budget: DiffSyntaxBudget,
-) -> PrepareDiffSyntaxDocumentResult
-where
-    I: IntoIterator<Item = &'a str>,
-{
-    match syntax::prepare_treesitter_document_with_budget(language, syntax_mode, lines, budget) {
+fn map_prepare_result(
+    result: syntax::PrepareTreesitterDocumentResult,
+) -> PrepareDiffSyntaxDocumentResult {
+    match result {
         syntax::PrepareTreesitterDocumentResult::Ready(inner) => {
             PrepareDiffSyntaxDocumentResult::Ready(PreparedDiffSyntaxDocument { inner })
         }
@@ -81,23 +115,33 @@ pub(in crate::view) fn prepare_diff_syntax_document_with_budget_reuse<'a, I>(
 where
     I: IntoIterator<Item = &'a str>,
 {
-    match syntax::prepare_treesitter_document_with_budget_reuse(
+    map_prepare_result(syntax::prepare_treesitter_document_with_budget_reuse(
         language,
         syntax_mode,
         lines,
         budget,
         old_document.map(|document| document.inner),
-    ) {
-        syntax::PrepareTreesitterDocumentResult::Ready(inner) => {
-            PrepareDiffSyntaxDocumentResult::Ready(PreparedDiffSyntaxDocument { inner })
-        }
-        syntax::PrepareTreesitterDocumentResult::TimedOut => {
-            PrepareDiffSyntaxDocumentResult::TimedOut
-        }
-        syntax::PrepareTreesitterDocumentResult::Unsupported => {
-            PrepareDiffSyntaxDocumentResult::Unsupported
-        }
-    }
+    ))
+}
+
+pub(in crate::view) fn prepare_diff_syntax_document_with_budget_reuse_text(
+    language: DiffSyntaxLanguage,
+    syntax_mode: DiffSyntaxMode,
+    text: gpui::SharedString,
+    line_starts: Arc<[usize]>,
+    budget: DiffSyntaxBudget,
+    old_document: Option<PreparedDiffSyntaxDocument>,
+    edit_hint: Option<DiffSyntaxEdit>,
+) -> PrepareDiffSyntaxDocumentResult {
+    map_prepare_result(syntax::prepare_treesitter_document_with_budget_reuse_text(
+        language,
+        syntax_mode,
+        text,
+        line_starts,
+        budget,
+        old_document.map(|document| document.inner),
+        edit_hint,
+    ))
 }
 
 pub(in crate::view) fn prepare_diff_syntax_document_in_background<'a, I>(
@@ -109,6 +153,16 @@ where
     I: IntoIterator<Item = &'a str>,
 {
     syntax::prepare_treesitter_document_in_background(language, syntax_mode, lines)
+        .map(|inner| BackgroundPreparedDiffSyntaxDocument { inner })
+}
+
+pub(in crate::view) fn prepare_diff_syntax_document_in_background_text(
+    language: DiffSyntaxLanguage,
+    syntax_mode: DiffSyntaxMode,
+    text: gpui::SharedString,
+    line_starts: Arc<[usize]>,
+) -> Option<BackgroundPreparedDiffSyntaxDocument> {
+    syntax::prepare_treesitter_document_in_background_text(language, syntax_mode, text, line_starts)
         .map(|inner| BackgroundPreparedDiffSyntaxDocument { inner })
 }
 
@@ -175,6 +229,26 @@ pub(in crate::view) fn benchmark_diff_syntax_prepared_cache_contains_document(
     document: PreparedDiffSyntaxDocument,
 ) -> bool {
     syntax::benchmark_prepared_syntax_cache_contains_document(document.inner)
+}
+
+pub(in crate::view) fn drain_completed_prepared_diff_syntax_chunk_builds() -> usize {
+    syntax::drain_completed_prepared_syntax_chunk_builds()
+}
+
+pub(in crate::view) fn has_pending_prepared_diff_syntax_chunk_builds() -> bool {
+    syntax::has_pending_prepared_syntax_chunk_builds()
+}
+
+pub(in crate::view) fn drain_completed_prepared_diff_syntax_chunk_builds_for_document(
+    document: PreparedDiffSyntaxDocument,
+) -> usize {
+    syntax::drain_completed_prepared_syntax_chunk_builds_for_document(document.inner)
+}
+
+pub(in crate::view) fn has_pending_prepared_diff_syntax_chunk_builds_for_document(
+    document: PreparedDiffSyntaxDocument,
+) -> bool {
+    syntax::has_pending_prepared_syntax_chunk_builds_for_document(document.inner)
 }
 
 fn maybe_expand_tabs(s: &str) -> SharedString {
@@ -429,6 +503,54 @@ fn empty_highlights() -> Arc<Vec<(Range<usize>, gpui::HighlightStyle)>> {
     Arc::clone(EMPTY.get_or_init(|| Arc::new(Vec::new())))
 }
 
+fn segments_to_cached_styled_text(
+    theme: AppTheme,
+    segments: &[CachedDiffTextSegment],
+    word_color: Option<gpui::Rgba>,
+) -> CachedDiffStyledText {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let (expanded_text, highlights) = styled_text_for_diff_segments(theme, segments, word_color);
+
+    let mut hasher = DefaultHasher::new();
+    expanded_text.as_ref().hash(&mut hasher);
+    let text_hash = hasher.finish();
+
+    if highlights.is_empty() {
+        return CachedDiffStyledText {
+            text: expanded_text,
+            highlights: empty_highlights(),
+            highlights_hash: 0,
+            text_hash,
+        };
+    }
+
+    let highlights_hash = hash_highlights(&highlights);
+
+    CachedDiffStyledText {
+        text: expanded_text,
+        highlights: Arc::new(highlights),
+        highlights_hash,
+        text_hash,
+    }
+}
+
+fn empty_styled_text() -> CachedDiffStyledText {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = DefaultHasher::new();
+    "".hash(&mut hasher);
+    let text_hash = hasher.finish();
+    CachedDiffStyledText {
+        text: "".into(),
+        highlights: empty_highlights(),
+        highlights_hash: 0,
+        text_hash,
+    }
+}
+
 pub(super) fn build_cached_diff_styled_text(
     theme: AppTheme,
     text: &str,
@@ -438,48 +560,38 @@ pub(super) fn build_cached_diff_styled_text(
     syntax_mode: DiffSyntaxMode,
     word_color: Option<gpui::Rgba>,
 ) -> CachedDiffStyledText {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-
     if text.is_empty() {
-        let mut hasher = DefaultHasher::new();
-        "".hash(&mut hasher);
-        let text_hash = hasher.finish();
-        return CachedDiffStyledText {
-            text: "".into(),
-            highlights: empty_highlights(),
-            highlights_hash: 0,
-            text_hash,
-        };
+        return empty_styled_text();
     }
 
     let segments = build_diff_text_segments(text, word_ranges, query, language, syntax_mode, None);
-    let (expanded_text, highlights) = styled_text_for_diff_segments(theme, &segments, word_color);
+    segments_to_cached_styled_text(theme, &segments, word_color)
+}
 
-    let mut hasher = DefaultHasher::new();
-    expanded_text.as_ref().hash(&mut hasher);
-    let text_hash = hasher.finish();
+pub(super) enum PreparedDocumentLineStyledText {
+    Cacheable(CachedDiffStyledText),
+    Pending(CachedDiffStyledText),
+}
 
-    if highlights.is_empty() {
-        return CachedDiffStyledText {
-            text: expanded_text,
-            highlights: empty_highlights(),
-            highlights_hash: 0,
-            text_hash,
-        };
+impl PreparedDocumentLineStyledText {
+    /// Extracts the inner styled text regardless of variant.
+    pub(super) fn into_inner(self) -> CachedDiffStyledText {
+        match self {
+            Self::Cacheable(s) | Self::Pending(s) => s,
+        }
     }
 
-    let highlights_hash = hash_highlights(&highlights);
-
-    CachedDiffStyledText {
-        text: expanded_text,
-        highlights: Arc::new(highlights),
-        highlights_hash,
-        text_hash,
+    /// Returns `(styled_text, is_pending)`. Use this to avoid the match block
+    /// when the caller just needs to branch on pending vs cacheable.
+    pub(super) fn into_parts(self) -> (CachedDiffStyledText, bool) {
+        match self {
+            Self::Cacheable(s) => (s, false),
+            Self::Pending(s) => (s, true),
+        }
     }
 }
 
-pub(super) fn build_cached_diff_styled_text_for_prepared_document_line(
+pub(super) fn build_cached_diff_styled_text_for_prepared_document_line_nonblocking(
     theme: AppTheme,
     text: &str,
     word_ranges: &[Range<usize>],
@@ -487,112 +599,44 @@ pub(super) fn build_cached_diff_styled_text_for_prepared_document_line(
     syntax: DiffSyntaxConfig,
     word_color: Option<gpui::Rgba>,
     prepared_line: PreparedDiffSyntaxLine,
-) -> CachedDiffStyledText {
+) -> PreparedDocumentLineStyledText {
     let DiffSyntaxConfig {
         language,
         mode: syntax_mode,
     } = syntax;
+    let fallback = |mode| {
+        build_cached_diff_styled_text(theme, text, word_ranges, query, language, mode, word_color)
+    };
+
     if language.is_none() {
-        return build_cached_diff_styled_text(
-            theme,
-            text,
-            word_ranges,
-            query,
-            language,
-            syntax_mode,
-            word_color,
-        );
+        return PreparedDocumentLineStyledText::Cacheable(fallback(syntax_mode));
     }
 
     let Some(document) = prepared_line.document else {
-        return build_cached_diff_styled_text(
-            theme,
-            text,
-            word_ranges,
-            query,
-            language,
-            syntax_mode,
-            word_color,
-        );
+        return PreparedDocumentLineStyledText::Cacheable(fallback(syntax_mode));
     };
 
-    let Some(tokens) =
-        syntax::syntax_tokens_for_prepared_document_line(document.inner, prepared_line.line_ix)
-    else {
-        return build_cached_diff_styled_text(
-            theme,
-            text,
-            word_ranges,
-            query,
-            language,
-            syntax_mode,
-            word_color,
-        );
-    };
-
-    build_cached_diff_styled_text_with_syntax_tokens(
-        theme,
-        text,
-        word_ranges,
-        query,
-        Some(tokens.as_slice()),
-        word_color,
-    )
-}
-
-fn build_cached_diff_styled_text_with_syntax_tokens(
-    theme: AppTheme,
-    text: &str,
-    word_ranges: &[Range<usize>],
-    query: &str,
-    syntax_tokens: Option<&[syntax::SyntaxToken]>,
-    word_color: Option<gpui::Rgba>,
-) -> CachedDiffStyledText {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-
-    if text.is_empty() {
-        let mut hasher = DefaultHasher::new();
-        "".hash(&mut hasher);
-        let text_hash = hasher.finish();
-        return CachedDiffStyledText {
-            text: "".into(),
-            highlights: empty_highlights(),
-            highlights_hash: 0,
-            text_hash,
-        };
-    }
-
-    let segments = build_diff_text_segments(
-        text,
-        word_ranges,
-        query,
-        None,
-        DiffSyntaxMode::HeuristicOnly,
-        syntax_tokens,
-    );
-    let (expanded_text, highlights) = styled_text_for_diff_segments(theme, &segments, word_color);
-
-    let mut hasher = DefaultHasher::new();
-    expanded_text.as_ref().hash(&mut hasher);
-    let text_hash = hasher.finish();
-
-    if highlights.is_empty() {
-        return CachedDiffStyledText {
-            text: expanded_text,
-            highlights: empty_highlights(),
-            highlights_hash: 0,
-            text_hash,
-        };
-    }
-
-    let highlights_hash = hash_highlights(&highlights);
-
-    CachedDiffStyledText {
-        text: expanded_text,
-        highlights: Arc::new(highlights),
-        highlights_hash,
-        text_hash,
+    match syntax::request_syntax_tokens_for_prepared_document_line(
+        document.inner,
+        prepared_line.line_ix,
+    ) {
+        Some(syntax::PreparedSyntaxLineTokensRequest::Ready(tokens)) => {
+            let segments = build_diff_text_segments(
+                text,
+                word_ranges,
+                query,
+                None,
+                DiffSyntaxMode::HeuristicOnly,
+                Some(tokens.as_slice()),
+            );
+            PreparedDocumentLineStyledText::Cacheable(segments_to_cached_styled_text(
+                theme, &segments, word_color,
+            ))
+        }
+        Some(syntax::PreparedSyntaxLineTokensRequest::Pending) => {
+            PreparedDocumentLineStyledText::Pending(fallback(DiffSyntaxMode::HeuristicOnly))
+        }
+        None => PreparedDocumentLineStyledText::Cacheable(fallback(syntax_mode)),
     }
 }
 
@@ -717,17 +761,170 @@ fn calm_syntax_color(theme: AppTheme, token: gpui::Rgba) -> gpui::Rgba {
 
 fn syntax_highlight_color(theme: AppTheme, kind: SyntaxTokenKind) -> Option<gpui::Rgba> {
     match kind {
-        SyntaxTokenKind::Comment => Some(theme.colors.text_muted),
-        SyntaxTokenKind::String => Some(calm_syntax_color(theme, theme.colors.warning)),
-        SyntaxTokenKind::Keyword => Some(calm_syntax_color(theme, theme.colors.accent)),
-        SyntaxTokenKind::Number => Some(calm_syntax_color(theme, theme.colors.success)),
-        SyntaxTokenKind::Function => Some(calm_syntax_color(theme, theme.colors.accent)),
-        SyntaxTokenKind::Type => Some(calm_syntax_color(theme, theme.colors.warning)),
-        SyntaxTokenKind::Property => Some(calm_syntax_color(theme, theme.colors.accent)),
-        SyntaxTokenKind::Constant => Some(calm_syntax_color(theme, theme.colors.success)),
-        SyntaxTokenKind::Punctuation => Some(theme.colors.text_muted),
-        SyntaxTokenKind::None => None,
+        SyntaxTokenKind::None | SyntaxTokenKind::Variable => None,
+        // Muted: comments, parameters, operators, punctuation
+        SyntaxTokenKind::Comment
+        | SyntaxTokenKind::CommentDoc
+        | SyntaxTokenKind::VariableParameter
+        | SyntaxTokenKind::Operator
+        | SyntaxTokenKind::Punctuation
+        | SyntaxTokenKind::PunctuationBracket
+        | SyntaxTokenKind::PunctuationDelimiter => Some(theme.colors.text_muted),
+        // Accent: keywords, functions, properties, attributes, variable.special, lifetime
+        SyntaxTokenKind::Keyword
+        | SyntaxTokenKind::KeywordControl
+        | SyntaxTokenKind::Function
+        | SyntaxTokenKind::FunctionMethod
+        | SyntaxTokenKind::FunctionSpecial
+        | SyntaxTokenKind::VariableSpecial
+        | SyntaxTokenKind::Property
+        | SyntaxTokenKind::Attribute
+        | SyntaxTokenKind::Lifetime => Some(calm_syntax_color(theme, theme.colors.accent)),
+        // Warning: strings, types, tags
+        SyntaxTokenKind::String
+        | SyntaxTokenKind::Type
+        | SyntaxTokenKind::TypeBuiltin
+        | SyntaxTokenKind::TypeInterface
+        | SyntaxTokenKind::Tag => Some(calm_syntax_color(theme, theme.colors.warning)),
+        // Success: numbers, booleans, constants, string escapes
+        SyntaxTokenKind::Number
+        | SyntaxTokenKind::Boolean
+        | SyntaxTokenKind::Constant
+        | SyntaxTokenKind::StringEscape => Some(calm_syntax_color(theme, theme.colors.success)),
     }
+}
+
+fn syntax_highlight_style(theme: AppTheme, kind: SyntaxTokenKind) -> Option<gpui::HighlightStyle> {
+    let fg = syntax_highlight_color(theme, kind)?;
+    let mut style = gpui::HighlightStyle {
+        color: Some(fg.into()),
+        ..gpui::HighlightStyle::default()
+    };
+    match kind {
+        // Doc comments render italic to distinguish from regular comments.
+        SyntaxTokenKind::CommentDoc => {
+            style.font_style = Some(gpui::FontStyle::Italic);
+        }
+        // Control-flow keywords (if/else/for/while/return/match) render semibold.
+        SyntaxTokenKind::KeywordControl => {
+            style.font_weight = Some(gpui::FontWeight::SEMIBOLD);
+        }
+        _ => {}
+    }
+    Some(style)
+}
+
+fn line_range_for_absolute_byte_window(
+    line_starts: &[usize],
+    text_len: usize,
+    byte_range: &Range<usize>,
+) -> Range<usize> {
+    if line_starts.is_empty() || text_len == 0 {
+        return 0..0;
+    }
+
+    let start = byte_range.start.min(text_len);
+    let end = byte_range.end.min(text_len);
+    if start >= end {
+        return 0..0;
+    }
+
+    let start_line = line_starts
+        .partition_point(|&line_start| line_start <= start)
+        .saturating_sub(1);
+    let end_line = line_starts
+        .partition_point(|&line_start| line_start <= end.saturating_sub(1))
+        .saturating_sub(1);
+    start_line..end_line.saturating_add(1)
+}
+
+fn line_end_without_trailing_newline(text: &str, line_starts: &[usize], line_ix: usize) -> usize {
+    let text_len = text.len();
+    let line_start = line_starts
+        .get(line_ix)
+        .copied()
+        .unwrap_or(text_len)
+        .min(text_len);
+    let mut line_end = line_starts
+        .get(line_ix.saturating_add(1))
+        .copied()
+        .unwrap_or(text_len)
+        .min(text_len);
+    if line_end > line_start && text.as_bytes().get(line_end.saturating_sub(1)) == Some(&b'\n') {
+        line_end = line_end.saturating_sub(1);
+    }
+    line_end
+}
+
+/// Clip a line-relative range to an absolute clamped window and push if non-empty.
+fn clip_and_push_line_highlight(
+    highlights: &mut Vec<(Range<usize>, gpui::HighlightStyle)>,
+    line_start: usize,
+    line_end: usize,
+    clamped_range: &Range<usize>,
+    relative_range: Range<usize>,
+    style: gpui::HighlightStyle,
+) {
+    if relative_range.start >= relative_range.end {
+        return;
+    }
+    let absolute_start = line_start
+        .saturating_add(relative_range.start)
+        .min(line_end);
+    let absolute_end = line_start.saturating_add(relative_range.end).min(line_end);
+    let clipped_start = absolute_start.max(clamped_range.start);
+    let clipped_end = absolute_end.min(clamped_range.end);
+    if clipped_start < clipped_end {
+        highlights.push((clipped_start..clipped_end, style));
+    }
+}
+
+fn push_clipped_prepared_document_token_highlights(
+    highlights: &mut Vec<(Range<usize>, gpui::HighlightStyle)>,
+    theme: AppTheme,
+    line_start: usize,
+    line_end: usize,
+    clamped_range: &Range<usize>,
+    tokens: &[syntax::SyntaxToken],
+) {
+    for token in tokens {
+        let Some(style) = syntax_highlight_style(theme, token.kind) else {
+            continue;
+        };
+        clip_and_push_line_highlight(
+            highlights,
+            line_start,
+            line_end,
+            clamped_range,
+            token.range.clone(),
+            style,
+        );
+    }
+}
+
+fn push_clipped_absolute_line_highlights(
+    highlights: &mut Vec<(Range<usize>, gpui::HighlightStyle)>,
+    line_start: usize,
+    line_end: usize,
+    clamped_range: &Range<usize>,
+    line_highlights: Vec<(Range<usize>, gpui::HighlightStyle)>,
+) {
+    for (range, style) in line_highlights {
+        clip_and_push_line_highlight(
+            highlights,
+            line_start,
+            line_end,
+            clamped_range,
+            range,
+            style,
+        );
+    }
+}
+
+#[derive(Clone, Default)]
+pub(in crate::view) struct PreparedDocumentByteRangeHighlights {
+    pub highlights: Vec<(Range<usize>, gpui::HighlightStyle)>,
+    pub pending: bool,
 }
 
 pub(in crate::view) fn syntax_highlights_for_line(
@@ -751,14 +948,117 @@ pub(in crate::view) fn syntax_highlights_for_line(
             if token.range.start >= end {
                 return None;
             }
-            let fg = syntax_highlight_color(theme, token.kind)?;
-            let style = gpui::HighlightStyle {
-                color: Some(fg.into()),
-                ..gpui::HighlightStyle::default()
-            };
+            let style = syntax_highlight_style(theme, token.kind)?;
             Some((token.range.start..end, style))
         })
         .collect()
+}
+
+#[cfg(test)]
+pub(in crate::view) fn syntax_highlights_for_prepared_document_byte_range(
+    theme: AppTheme,
+    text: &str,
+    line_starts: &[usize],
+    document: PreparedDiffSyntaxDocument,
+    byte_range: Range<usize>,
+) -> Option<Vec<(Range<usize>, gpui::HighlightStyle)>> {
+    let text_len = text.len();
+    let clamped_range = byte_range.start.min(text_len)..byte_range.end.min(text_len);
+    if text.is_empty() || clamped_range.is_empty() {
+        return Some(Vec::new());
+    }
+
+    let line_range = line_range_for_absolute_byte_window(line_starts, text_len, &clamped_range);
+    if line_range.is_empty() {
+        return Some(Vec::new());
+    }
+
+    let mut highlights = Vec::new();
+    for line_ix in line_range {
+        let line_start = line_starts
+            .get(line_ix)
+            .copied()
+            .unwrap_or(text_len)
+            .min(text_len);
+        let line_end = line_end_without_trailing_newline(text, line_starts, line_ix).min(text_len);
+        let tokens = syntax::syntax_tokens_for_prepared_document_line(document.inner, line_ix)?;
+        push_clipped_prepared_document_token_highlights(
+            &mut highlights,
+            theme,
+            line_start,
+            line_end,
+            &clamped_range,
+            tokens.as_slice(),
+        );
+    }
+
+    Some(highlights)
+}
+
+pub(in crate::view) fn request_syntax_highlights_for_prepared_document_byte_range(
+    theme: AppTheme,
+    text: &str,
+    line_starts: &[usize],
+    document: PreparedDiffSyntaxDocument,
+    language: DiffSyntaxLanguage,
+    byte_range: Range<usize>,
+) -> Option<PreparedDocumentByteRangeHighlights> {
+    let text_len = text.len();
+    let clamped_range = byte_range.start.min(text_len)..byte_range.end.min(text_len);
+    if text.is_empty() || clamped_range.is_empty() {
+        return Some(PreparedDocumentByteRangeHighlights::default());
+    }
+
+    let line_range = line_range_for_absolute_byte_window(line_starts, text_len, &clamped_range);
+    if line_range.is_empty() {
+        return Some(PreparedDocumentByteRangeHighlights::default());
+    }
+
+    let mut highlights = Vec::new();
+    let mut pending = false;
+    for line_ix in line_range {
+        let line_start = line_starts
+            .get(line_ix)
+            .copied()
+            .unwrap_or(text_len)
+            .min(text_len);
+        let line_end = line_end_without_trailing_newline(text, line_starts, line_ix).min(text_len);
+
+        match syntax::request_syntax_tokens_for_prepared_document_line(document.inner, line_ix)? {
+            syntax::PreparedSyntaxLineTokensRequest::Ready(tokens) => {
+                push_clipped_prepared_document_token_highlights(
+                    &mut highlights,
+                    theme,
+                    line_start,
+                    line_end,
+                    &clamped_range,
+                    tokens.as_slice(),
+                );
+            }
+            syntax::PreparedSyntaxLineTokensRequest::Pending => {
+                pending = true;
+                let line_text = &text[line_start..line_end];
+                let line_highlights = syntax_highlights_for_line(
+                    theme,
+                    line_text,
+                    language,
+                    DiffSyntaxMode::HeuristicOnly,
+                );
+                push_clipped_absolute_line_highlights(
+                    &mut highlights,
+                    line_start,
+                    line_end,
+                    &clamped_range,
+                    line_highlights,
+                );
+            }
+        }
+    }
+
+    Some(PreparedDocumentByteRangeHighlights {
+        highlights,
+        pending,
+    })
 }
 
 fn styled_text_for_diff_segments(
@@ -1032,6 +1332,197 @@ mod tests {
         assert_eq!(highlights.len(), 1);
         assert_eq!(highlights[0].0, 0..2);
         assert_ne!(highlights[0].1.color, Some(theme.colors.accent.into()));
+    }
+
+    #[test]
+    fn doc_comment_renders_italic() {
+        let theme = AppTheme::zed_ayu_dark();
+        let style = syntax_highlight_style(theme, SyntaxTokenKind::CommentDoc);
+        assert!(style.is_some());
+        let style = style.unwrap();
+        assert_eq!(style.font_style, Some(gpui::FontStyle::Italic));
+        // Regular comments should not be italic.
+        let plain = syntax_highlight_style(theme, SyntaxTokenKind::Comment).unwrap();
+        assert_eq!(plain.font_style, None);
+    }
+
+    #[test]
+    fn keyword_control_renders_semibold() {
+        let theme = AppTheme::zed_ayu_dark();
+        let style = syntax_highlight_style(theme, SyntaxTokenKind::KeywordControl);
+        assert!(style.is_some());
+        let style = style.unwrap();
+        assert_eq!(style.font_weight, Some(gpui::FontWeight::SEMIBOLD));
+        // Regular keywords should not have font weight.
+        let plain = syntax_highlight_style(theme, SyntaxTokenKind::Keyword).unwrap();
+        assert_eq!(plain.font_weight, None);
+    }
+
+    #[test]
+    fn prepared_document_byte_range_highlights_multiline_comment_continuation() {
+        let theme = AppTheme::zed_ayu_dark();
+        let text = "/* open comment\nstill comment */ let x = 1;";
+        let line_starts = vec![0, "/* open comment\n".len()];
+        let document = prepare_diff_syntax_document(
+            DiffSyntaxLanguage::Rust,
+            DiffSyntaxMode::Auto,
+            text.split('\n'),
+        )
+        .expect("rust should support prepared document parsing");
+
+        let second_line_start = line_starts[1];
+        let highlights = syntax_highlights_for_prepared_document_byte_range(
+            theme,
+            text,
+            &line_starts,
+            document,
+            second_line_start..text.len(),
+        )
+        .expect("prepared document should still be available");
+
+        assert!(
+            highlights
+                .iter()
+                .all(|(range, _)| range.start >= second_line_start),
+            "returned highlights should be clipped to the requested byte range"
+        );
+        assert!(
+            highlights.iter().any(|(range, style)| {
+                range.start <= second_line_start
+                    && range.end > second_line_start
+                    && style.color == Some(theme.colors.text_muted.into())
+            }),
+            "second line should retain comment highlighting from multiline document context"
+        );
+    }
+
+    #[test]
+    fn nonblocking_prepared_document_byte_range_upgrades_after_chunk_build() {
+        let theme = AppTheme::zed_ayu_dark();
+        let text = "/* open comment\nstill comment */ let x = 1;";
+        let line_starts = vec![0, "/* open comment\n".len()];
+        let document = prepare_diff_syntax_document(
+            DiffSyntaxLanguage::Rust,
+            DiffSyntaxMode::Auto,
+            text.split('\n'),
+        )
+        .expect("rust should support prepared document parsing");
+
+        let second_line_start = line_starts[1];
+        let first = request_syntax_highlights_for_prepared_document_byte_range(
+            theme,
+            text,
+            &line_starts,
+            document,
+            DiffSyntaxLanguage::Rust,
+            second_line_start..text.len(),
+        )
+        .expect("prepared document should be requestable");
+        assert!(first.pending);
+        assert!(
+            !first.highlights.iter().any(|(range, style)| {
+                range.start <= second_line_start
+                    && range.end > second_line_start
+                    && style.color == Some(theme.colors.text_muted.into())
+            }),
+            "heuristic fallback should not invent multiline comment state before the chunk is ready"
+        );
+
+        let started = std::time::Instant::now();
+        while drain_completed_prepared_diff_syntax_chunk_builds_for_document(document) == 0
+            && started.elapsed() < std::time::Duration::from_secs(2)
+        {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+
+        let second = request_syntax_highlights_for_prepared_document_byte_range(
+            theme,
+            text,
+            &line_starts,
+            document,
+            DiffSyntaxLanguage::Rust,
+            second_line_start..text.len(),
+        )
+        .expect("prepared document should still be available after chunk completion");
+        assert!(!second.pending);
+        assert!(
+            second.highlights.iter().any(|(range, style)| {
+                range.start <= second_line_start
+                    && range.end > second_line_start
+                    && style.color == Some(theme.colors.text_muted.into())
+            }),
+            "resolved output should upgrade to full document-aware comment highlighting"
+        );
+    }
+
+    #[test]
+    fn nonblocking_prepared_line_helper_transitions_from_pending_to_cacheable() {
+        let theme = AppTheme::zed_ayu_dark();
+        let text = "let value = 1;";
+        let document = prepare_diff_syntax_document(
+            DiffSyntaxLanguage::Rust,
+            DiffSyntaxMode::Auto,
+            [text].iter().copied(),
+        )
+        .expect("rust should support prepared document parsing");
+
+        let first = build_cached_diff_styled_text_for_prepared_document_line_nonblocking(
+            theme,
+            text,
+            &[],
+            "",
+            DiffSyntaxConfig {
+                language: Some(DiffSyntaxLanguage::Rust),
+                mode: DiffSyntaxMode::Auto,
+            },
+            None,
+            PreparedDiffSyntaxLine {
+                document: Some(document),
+                line_ix: 0,
+            },
+        );
+        match first {
+            PreparedDocumentLineStyledText::Pending(styled) => {
+                assert_eq!(styled.text.as_ref(), text);
+            }
+            PreparedDocumentLineStyledText::Cacheable(_) => {
+                panic!("first nonblocking prepared-line request should be pending")
+            }
+        }
+
+        let started = std::time::Instant::now();
+        while drain_completed_prepared_diff_syntax_chunk_builds() == 0
+            && started.elapsed() < std::time::Duration::from_secs(2)
+        {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+
+        let second = build_cached_diff_styled_text_for_prepared_document_line_nonblocking(
+            theme,
+            text,
+            &[],
+            "",
+            DiffSyntaxConfig {
+                language: Some(DiffSyntaxLanguage::Rust),
+                mode: DiffSyntaxMode::Auto,
+            },
+            None,
+            PreparedDiffSyntaxLine {
+                document: Some(document),
+                line_ix: 0,
+            },
+        );
+        match second {
+            PreparedDocumentLineStyledText::Cacheable(styled) => {
+                assert!(
+                    !styled.highlights.is_empty(),
+                    "cacheable prepared-line styling should contain syntax highlights"
+                );
+            }
+            PreparedDocumentLineStyledText::Pending(_) => {
+                panic!("prepared-line helper should become cacheable after chunk drain")
+            }
+        }
     }
 
     #[test]

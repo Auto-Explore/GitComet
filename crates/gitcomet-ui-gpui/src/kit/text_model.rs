@@ -47,7 +47,7 @@ impl Piece {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct LineIndex {
-    starts: Vec<usize>,
+    starts: Arc<[usize]>,
 }
 
 impl LineIndex {
@@ -59,17 +59,24 @@ impl LineIndex {
                 starts.push(ix + 1);
             }
         }
-        Self { starts }
+        Self {
+            starts: Arc::<[usize]>::from(starts),
+        }
     }
 
     fn starts(&self) -> &[usize] {
-        self.starts.as_slice()
+        self.starts.as_ref()
+    }
+
+    fn shared_starts(&self) -> Arc<[usize]> {
+        Arc::clone(&self.starts)
     }
 
     fn apply_edit(&mut self, range: Range<usize>, inserted: &str) {
-        debug_assert_eq!(self.starts.first().copied(), Some(0));
+        let starts = self.starts.as_ref();
+        debug_assert_eq!(starts.first().copied(), Some(0));
         debug_assert!(
-            self.starts.windows(2).all(|window| window[0] < window[1]),
+            starts.windows(2).all(|window| window[0] < window[1]),
             "line starts must remain strictly increasing before edit"
         );
 
@@ -77,19 +84,19 @@ impl LineIndex {
         let new_len = inserted.len();
         let delta = new_len as isize - old_len as isize;
 
-        let prefix_len = self.starts.partition_point(|&start| start <= range.start);
+        let prefix_len = starts.partition_point(|&start| start <= range.start);
         // For non-empty edits, a line start at `range.end` is produced by a
         // newline byte inside the replaced range and must be removed.
-        let suffix_start = self.starts.partition_point(|&start| start <= range.end);
+        let suffix_start = starts.partition_point(|&start| start <= range.end);
 
         let inserted_breaks = inserted.bytes().filter(|&b| b == b'\n').count();
         let mut updated = Vec::with_capacity(
             prefix_len
                 .saturating_add(inserted_breaks)
-                .saturating_add(self.starts.len().saturating_sub(suffix_start))
+                .saturating_add(starts.len().saturating_sub(suffix_start))
                 .saturating_add(1),
         );
-        updated.extend_from_slice(&self.starts[..prefix_len]);
+        updated.extend_from_slice(&starts[..prefix_len]);
 
         for (ix, byte) in inserted.bytes().enumerate() {
             if byte == b'\n' {
@@ -97,7 +104,7 @@ impl LineIndex {
             }
         }
 
-        for &start in &self.starts[suffix_start..] {
+        for &start in &starts[suffix_start..] {
             let shifted = if delta >= 0 {
                 start.saturating_add(delta as usize)
             } else {
@@ -111,10 +118,13 @@ impl LineIndex {
         if updated.first().copied() != Some(0) {
             updated.insert(0, 0);
         }
-        self.starts = updated;
-        debug_assert_eq!(self.starts.first().copied(), Some(0));
+        self.starts = Arc::<[usize]>::from(updated);
+        debug_assert_eq!(self.starts.as_ref().first().copied(), Some(0));
         debug_assert!(
-            self.starts.windows(2).all(|window| window[0] < window[1]),
+            self.starts
+                .as_ref()
+                .windows(2)
+                .all(|window| window[0] < window[1]),
             "line starts must remain strictly increasing after edit"
         );
     }
@@ -199,6 +209,12 @@ pub struct TextModelSnapshot {
 impl Default for TextModel {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl Default for TextModelSnapshot {
+    fn default() -> Self {
+        TextModel::default().snapshot()
     }
 }
 
@@ -392,6 +408,10 @@ impl TextModelSnapshot {
 
     pub fn line_starts(&self) -> &[usize] {
         self.core.line_index.starts()
+    }
+
+    pub fn shared_line_starts(&self) -> Arc<[usize]> {
+        self.core.line_index.shared_starts()
     }
 
     pub fn is_char_boundary(&self, offset: usize) -> bool {
@@ -737,6 +757,39 @@ mod tests {
         assert_eq!(snapshot_b.as_str(), "hello world");
         assert_eq!(snapshot_a.revision(), snapshot_revision);
         assert_ne!(snapshot_a.revision(), model.revision());
+    }
+
+    #[test]
+    fn snapshot_shared_line_starts_reuse_index_storage() {
+        let model = TextModel::from_large_text("alpha\nbeta\ngamma");
+        let snapshot = model.snapshot();
+
+        let model_starts = model.snapshot().shared_line_starts();
+        let snapshot_starts = snapshot.shared_line_starts();
+
+        assert!(
+            Arc::ptr_eq(&model_starts, &snapshot_starts),
+            "snapshots should share line-start storage with the source model"
+        );
+        assert_eq!(snapshot_starts.as_ref(), &[0, 6, 11]);
+    }
+
+    #[test]
+    fn snapshot_shared_line_starts_remain_stable_after_edit() {
+        let mut model = TextModel::from_large_text("alpha\nbeta\ngamma");
+        let old_snapshot = model.snapshot();
+        let old_starts = old_snapshot.shared_line_starts();
+
+        model.replace_range(6..10, "BETA\nDELTA");
+
+        let new_starts = model.snapshot().shared_line_starts();
+
+        assert!(
+            !Arc::ptr_eq(&old_starts, &new_starts),
+            "editing should swap to a new line-start index"
+        );
+        assert_eq!(old_starts.as_ref(), &[0, 6, 11]);
+        assert_eq!(new_starts.as_ref(), &[0, 6, 11, 17]);
     }
 
     #[test]

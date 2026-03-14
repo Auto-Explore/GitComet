@@ -11,11 +11,7 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
         let min_width = this.diff_horizontal_min_width;
-        let query = if this.diff_search_active {
-            this.diff_search_query.as_ref()
-        } else {
-            ""
-        };
+        let query = this.diff_search_query_or_empty();
 
         let theme = this.theme;
         let Some(path) = this.worktree_preview_path.as_ref() else {
@@ -24,6 +20,7 @@ impl MainPaneView {
         let Loadable::Ready(lines) = &this.worktree_preview else {
             return Vec::new();
         };
+        let lines = Arc::clone(lines);
 
         let should_clear_cache = match this.worktree_preview_segments_cache_path.as_ref() {
             Some(p) => p != path,
@@ -35,18 +32,9 @@ impl MainPaneView {
             this.worktree_preview_segments_cache.clear();
         }
 
-        let configured_syntax_mode = if lines.len() <= MAX_LINES_FOR_SYNTAX_HIGHLIGHTING {
-            DiffSyntaxMode::Auto
-        } else {
-            DiffSyntaxMode::HeuristicOnly
-        };
         let language = this.worktree_preview_syntax_language;
         let syntax_document = this.worktree_preview_prepared_syntax_document();
-        let syntax_mode = if syntax_document.is_some() {
-            configured_syntax_mode
-        } else {
-            DiffSyntaxMode::HeuristicOnly
-        };
+        let syntax_mode = syntax_mode_for_prepared_document(syntax_document);
 
         let highlight_deleted_file = this.deleted_file_preview_abs_path().is_some();
         let highlight_new_file = this.untracked_worktree_preview_path().is_some()
@@ -63,16 +51,14 @@ impl MainPaneView {
         range
             .map(|ix| {
                 let line = lines.get(ix).map(String::as_str).unwrap_or("");
-
-                let styled = this
-                    .worktree_preview_segments_cache
-                    .entry(ix)
-                    .or_insert_with(|| {
-                        build_cached_diff_styled_text_for_prepared_document_line(
+                let mut pending_styled = None;
+                if this.worktree_preview_segments_cache_get(ix).is_none() {
+                    let (styled, is_pending) =
+                        build_cached_diff_styled_text_for_prepared_document_line_nonblocking(
                             theme,
                             line,
                             &[],
-                            query,
+                            query.as_ref(),
                             DiffSyntaxConfig {
                                 language,
                                 mode: syntax_mode,
@@ -83,7 +69,17 @@ impl MainPaneView {
                                 line_ix: ix,
                             },
                         )
-                    });
+                        .into_parts();
+                    if is_pending {
+                        this.ensure_prepared_syntax_chunk_poll(cx);
+                        pending_styled = Some(styled);
+                    } else {
+                        this.worktree_preview_segments_cache_set(ix, styled);
+                    }
+                }
+
+                let cached_styled = this.worktree_preview_segments_cache_get(ix);
+                let styled = pending_styled.as_ref().or(cached_styled);
 
                 let line_no = line_number_string(u32::try_from(ix + 1).ok());
                 diff_canvas::worktree_preview_row_canvas(
@@ -93,7 +89,7 @@ impl MainPaneView {
                     min_width,
                     bar_color,
                     line_no,
-                    styled,
+                    styled.expect("worktree preview row style should exist after populate"),
                 )
             })
             .collect()
@@ -615,7 +611,7 @@ mod tests {
             "row renderer should not build prepared syntax documents"
         );
         assert!(
-            !render_source.contains("prepare_diff_syntax_document_with_budget("),
+            !render_source.contains("prepare_diff_syntax_document_with_budget_reuse("),
             "row renderer should not run full-document parse prep"
         );
     }

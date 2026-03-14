@@ -1,35 +1,221 @@
 use super::*;
+use crate::kit::text_model::TextModelSnapshot;
+use crate::kit::{HighlightProvider, HighlightProviderResult};
 
-pub(super) fn build_resolved_output_syntax_highlights(
+#[derive(Default)]
+pub(super) struct ResolvedOutputSyntaxState {
+    /// Fallback highlights used when full-document syntax is unsupported.
+    pub(super) highlights: Vec<(Range<usize>, gpui::HighlightStyle)>,
+    pub(super) prepared_document: Option<rows::PreparedDiffSyntaxDocument>,
+    /// Lazy provider backed by a prepared document.
+    pub(super) highlight_provider: Option<HighlightProvider>,
+    /// When true, render plain text for now and continue parsing in the background.
+    pub(super) needs_background_prepare: bool,
+}
+
+fn build_resolved_output_syntax_fallback_highlights(
     theme: AppTheme,
     output_text: &str,
-    language: Option<rows::DiffSyntaxLanguage>,
+    language: rows::DiffSyntaxLanguage,
+    syntax_mode: rows::DiffSyntaxMode,
 ) -> Vec<(Range<usize>, gpui::HighlightStyle)> {
-    let Some(language) = language else {
-        return Vec::new();
-    };
-    let line_count = count_newlines(output_text).saturating_add(1);
-    let syntax_mode = if line_count <= CONFLICT_RESOLVED_OUTLINE_AUTO_SYNTAX_MAX_LINES {
-        rows::DiffSyntaxMode::Auto
-    } else {
-        rows::DiffSyntaxMode::HeuristicOnly
-    };
-
+    let line_starts = build_line_starts(output_text);
+    let text_len = output_text.len();
     let mut highlights = Vec::new();
-    let mut line_offset = 0usize;
-    for (line_ix, line) in output_text.split('\n').enumerate() {
+    for (line_ix, &line_start) in line_starts.iter().enumerate() {
+        let line_end = line_starts
+            .get(line_ix + 1)
+            .map(|s| s.saturating_sub(1)) // exclude '\n'
+            .unwrap_or(text_len);
+        let line = &output_text[line_start..line_end];
         for (range, style) in rows::syntax_highlights_for_line(theme, line, language, syntax_mode) {
-            highlights.push((
-                (line_offset + range.start)..(line_offset + range.end),
-                style,
-            ));
-        }
-        line_offset += line.len();
-        if line_ix + 1 < line_count {
-            line_offset += 1;
+            highlights.push(((line_start + range.start)..(line_start + range.end), style));
         }
     }
     highlights
+}
+
+fn resolved_output_highlight_provider(
+    theme: AppTheme,
+    output_text: SharedString,
+    line_starts: Arc<[usize]>,
+    language: rows::DiffSyntaxLanguage,
+    document: rows::PreparedDiffSyntaxDocument,
+) -> HighlightProvider {
+    let shared_text: Arc<str> = output_text.into();
+    HighlightProvider::with_pending(
+        move |byte_range: Range<usize>| {
+            rows::request_syntax_highlights_for_prepared_document_byte_range(
+                theme,
+                &shared_text,
+                line_starts.as_ref(),
+                document,
+                language,
+                byte_range,
+            )
+            .map(|result| HighlightProviderResult {
+                highlights: result.highlights,
+                pending: result.pending,
+            })
+            .unwrap_or_default()
+        },
+        move || rows::drain_completed_prepared_diff_syntax_chunk_builds_for_document(document),
+        move || rows::has_pending_prepared_diff_syntax_chunk_builds_for_document(document),
+    )
+}
+
+fn build_resolved_output_syntax_state_with_source(
+    theme: AppTheme,
+    output_text: SharedString,
+    line_starts: Arc<[usize]>,
+    language: Option<rows::DiffSyntaxLanguage>,
+    old_document: Option<rows::PreparedDiffSyntaxDocument>,
+    edit_hint: Option<rows::DiffSyntaxEdit>,
+    budget: rows::DiffSyntaxBudget,
+) -> ResolvedOutputSyntaxState {
+    let Some(language) = language else {
+        return ResolvedOutputSyntaxState::default();
+    };
+    if output_text.is_empty() {
+        return ResolvedOutputSyntaxState::default();
+    }
+
+    match rows::prepare_diff_syntax_document_with_budget_reuse_text(
+        language,
+        rows::DiffSyntaxMode::Auto,
+        output_text.clone(),
+        line_starts.clone(),
+        budget,
+        old_document,
+        edit_hint,
+    ) {
+        rows::PrepareDiffSyntaxDocumentResult::Ready(document) => ResolvedOutputSyntaxState {
+            highlights: Vec::new(),
+            prepared_document: Some(document),
+            highlight_provider: Some(resolved_output_highlight_provider(
+                theme,
+                output_text,
+                line_starts,
+                language,
+                document,
+            )),
+            needs_background_prepare: false,
+        },
+        rows::PrepareDiffSyntaxDocumentResult::TimedOut => ResolvedOutputSyntaxState {
+            highlights: Vec::new(),
+            prepared_document: None,
+            highlight_provider: None,
+            needs_background_prepare: true,
+        },
+        rows::PrepareDiffSyntaxDocumentResult::Unsupported => ResolvedOutputSyntaxState {
+            highlights: build_resolved_output_syntax_fallback_highlights(
+                theme,
+                output_text.as_ref(),
+                language,
+                rows::DiffSyntaxMode::HeuristicOnly,
+            ),
+            prepared_document: None,
+            highlight_provider: None,
+            needs_background_prepare: false,
+        },
+    }
+}
+
+pub(super) fn build_resolved_output_syntax_state_for_snapshot(
+    theme: AppTheme,
+    output_snapshot: &TextModelSnapshot,
+    language: Option<rows::DiffSyntaxLanguage>,
+    old_document: Option<rows::PreparedDiffSyntaxDocument>,
+    edit_hint: Option<rows::DiffSyntaxEdit>,
+) -> ResolvedOutputSyntaxState {
+    build_resolved_output_syntax_state_with_source(
+        theme,
+        output_snapshot.as_shared_string(),
+        output_snapshot.shared_line_starts(),
+        language,
+        old_document,
+        edit_hint,
+        rows::DiffSyntaxBudget::default(),
+    )
+}
+
+#[cfg(test)]
+pub(super) fn build_resolved_output_syntax_state_for_snapshot_with_budget(
+    theme: AppTheme,
+    output_snapshot: &TextModelSnapshot,
+    language: Option<rows::DiffSyntaxLanguage>,
+    old_document: Option<rows::PreparedDiffSyntaxDocument>,
+    edit_hint: Option<rows::DiffSyntaxEdit>,
+    budget: rows::DiffSyntaxBudget,
+) -> ResolvedOutputSyntaxState {
+    build_resolved_output_syntax_state_with_source(
+        theme,
+        output_snapshot.as_shared_string(),
+        output_snapshot.shared_line_starts(),
+        language,
+        old_document,
+        edit_hint,
+        budget,
+    )
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::view) struct ResolvedOutputSyntaxBackgroundKey {
+    pub(in crate::view) source_hash: u64,
+    pub(in crate::view) language: rows::DiffSyntaxLanguage,
+}
+
+#[derive(Clone, Debug)]
+pub(in crate::view) struct VersionedCachedDiffStyledText {
+    pub(in crate::view) syntax_epoch: u64,
+    pub(in crate::view) styled: CachedDiffStyledText,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(in crate::view) struct FileDiffStyleCacheEpochs {
+    pub(in crate::view) split_left: u64,
+    pub(in crate::view) split_right: u64,
+}
+
+impl FileDiffStyleCacheEpochs {
+    pub(in crate::view) fn bump_left(&mut self) {
+        self.split_left = self.split_left.wrapping_add(1);
+    }
+
+    pub(in crate::view) fn bump_right(&mut self) {
+        self.split_right = self.split_right.wrapping_add(1);
+    }
+
+    pub(in crate::view) fn bump_both(&mut self) {
+        self.bump_left();
+        self.bump_right();
+    }
+
+    pub(in crate::view) fn split_epoch(self, region: crate::view::DiffTextRegion) -> u64 {
+        match region {
+            crate::view::DiffTextRegion::SplitLeft => self.split_left,
+            crate::view::DiffTextRegion::SplitRight => self.split_right,
+            crate::view::DiffTextRegion::Inline => 0,
+        }
+    }
+
+    pub(in crate::view) fn inline_epoch(self, kind: gitcomet_core::domain::DiffLineKind) -> u64 {
+        match kind {
+            gitcomet_core::domain::DiffLineKind::Remove => self.split_left,
+            gitcomet_core::domain::DiffLineKind::Add
+            | gitcomet_core::domain::DiffLineKind::Context => self.split_right,
+            gitcomet_core::domain::DiffLineKind::Header
+            | gitcomet_core::domain::DiffLineKind::Hunk => 0,
+        }
+    }
+}
+
+pub(in crate::view) fn versioned_cached_diff_styled_text_is_current(
+    entry: Option<&VersionedCachedDiffStyledText>,
+    syntax_epoch: u64,
+) -> Option<&CachedDiffStyledText> {
+    let entry = entry?;
+    (entry.syntax_epoch == syntax_epoch).then_some(&entry.styled)
 }
 
 pub(super) fn split_text_lines_owned(text: &str) -> Vec<String> {
@@ -163,6 +349,25 @@ pub(super) fn resolved_outline_delta_between_texts(
         old_range: prefix..old_len.saturating_sub(suffix),
         new_range: prefix..new_len.saturating_sub(suffix),
     })
+}
+
+pub(super) fn resolved_outline_delta_for_snapshot_transition(
+    old_snapshot: &TextModelSnapshot,
+    new_snapshot: &TextModelSnapshot,
+    recent_edit_delta: Option<(Range<usize>, Range<usize>)>,
+) -> Option<ResolvedOutlineDelta> {
+    if old_snapshot.model_id() == new_snapshot.model_id()
+        && new_snapshot.revision() == old_snapshot.revision().saturating_add(1)
+    {
+        if let Some((old_range, new_range)) = recent_edit_delta {
+            return Some(ResolvedOutlineDelta {
+                old_range,
+                new_range,
+            });
+        }
+    }
+
+    resolved_outline_delta_between_texts(old_snapshot.as_ref(), new_snapshot.as_ref())
 }
 
 fn line_index_for_byte_offset(line_starts: &[usize], byte_offset: usize) -> usize {
@@ -662,13 +867,7 @@ pub(super) fn slice_text_by_line_range(text: &str, line_range: Range<usize>) -> 
         return String::new();
     }
 
-    let mut line_starts = Vec::with_capacity(count_newlines(text).saturating_add(2));
-    line_starts.push(0usize);
-    for (ix, byte) in text.as_bytes().iter().enumerate() {
-        if *byte == b'\n' {
-            line_starts.push(ix.saturating_add(1));
-        }
-    }
+    let line_starts = build_line_starts(text);
 
     let start_byte = line_starts
         .get(line_range.start)
@@ -1232,7 +1431,7 @@ pub(super) fn scroll_conflict_resolved_output_to_line(
     base_handle.set_offset(point(current.x, -target_scroll_top));
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 pub(super) fn apply_three_way_empty_base_provenance_hints(
     meta: &mut [conflict_resolver::ResolvedLineMeta],
     marker_segments: &[conflict_resolver::ConflictSegment],
@@ -1620,7 +1819,6 @@ pub(super) fn focused_mergetool_save_exit_code(
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(in crate::view) enum PreparedSyntaxViewMode {
-    FileDiffInline,
     FileDiffSplitLeft,
     FileDiffSplitRight,
     WorktreePreview,
@@ -1689,8 +1887,8 @@ pub(in crate::view) struct MainPaneView {
     pub(in crate::view) diff_word_highlights: Vec<Option<Vec<Range<usize>>>>,
     pub(in crate::view) diff_word_highlights_inflight: Option<u64>,
     pub(in crate::view) diff_file_stats: Vec<Option<(usize, usize)>>,
-    pub(in crate::view) diff_text_segments_cache: Vec<Option<CachedDiffStyledText>>,
-    pub(in crate::view) diff_text_query_segments_cache: Vec<Option<CachedDiffStyledText>>,
+    pub(in crate::view) diff_text_segments_cache: Vec<Option<VersionedCachedDiffStyledText>>,
+    pub(in crate::view) diff_text_query_segments_cache: Vec<Option<VersionedCachedDiffStyledText>>,
     pub(in crate::view) diff_text_query_cache_query: SharedString,
     pub(in crate::view) diff_selection_anchor: Option<usize>,
     pub(in crate::view) diff_selection_range: Option<(usize, usize)>,
@@ -1719,6 +1917,10 @@ pub(in crate::view) struct MainPaneView {
     pub(in crate::view) file_diff_cache_path: Option<std::path::PathBuf>,
     pub(in crate::view) file_diff_cache_language: Option<rows::DiffSyntaxLanguage>,
     pub(in crate::view) file_diff_cache_rows: Vec<FileDiffRow>,
+    /// Maps 1-based old_line → index in file_diff_cache_rows (for inline projection).
+    pub(in crate::view) file_diff_old_line_to_split_ix: HashMap<u32, usize>,
+    /// Maps 1-based new_line → index in file_diff_cache_rows (for inline projection).
+    pub(in crate::view) file_diff_new_line_to_split_ix: HashMap<u32, usize>,
     pub(in crate::view) file_diff_inline_cache: Vec<AnnotatedDiffLine>,
     pub(in crate::view) file_diff_inline_text: SharedString,
     pub(in crate::view) file_diff_inline_word_highlights: Vec<Option<Vec<Range<usize>>>>,
@@ -1727,6 +1929,8 @@ pub(in crate::view) struct MainPaneView {
     pub(in crate::view) file_diff_cache_seq: u64,
     pub(in crate::view) file_diff_cache_inflight: Option<u64>,
     pub(in crate::view) file_diff_syntax_generation: u64,
+    pub(in crate::view) file_diff_style_cache_epochs: FileDiffStyleCacheEpochs,
+    pub(in crate::view) syntax_chunk_poll_task: Option<gpui::Task<()>>,
     pub(in crate::view) prepared_syntax_documents:
         HashMap<PreparedSyntaxDocumentKey, rows::PreparedDiffSyntaxDocument>,
 
@@ -1744,7 +1948,9 @@ pub(in crate::view) struct MainPaneView {
     pub(in crate::view) worktree_preview_content_rev: u64,
     pub(in crate::view) worktree_preview_segments_cache_path: Option<std::path::PathBuf>,
     pub(in crate::view) worktree_preview_syntax_language: Option<rows::DiffSyntaxLanguage>,
-    pub(in crate::view) worktree_preview_segments_cache: HashMap<usize, CachedDiffStyledText>,
+    pub(in crate::view) worktree_preview_style_cache_epoch: u64,
+    pub(in crate::view) worktree_preview_segments_cache:
+        HashMap<usize, VersionedCachedDiffStyledText>,
     pub(in crate::view) diff_preview_is_new_file: bool,
     pub(in crate::view) diff_preview_new_file_lines: Arc<Vec<String>>,
 
@@ -1772,12 +1978,18 @@ pub(in crate::view) struct MainPaneView {
         HashMap<(usize, ThreeWayColumn), CachedDiffStyledText>,
     pub(in crate::view) conflict_resolved_preview_path: Option<std::path::PathBuf>,
     pub(in crate::view) conflict_resolved_preview_source_hash: Option<u64>,
-    pub(in crate::view) conflict_resolved_preview_text: SharedString,
+    pub(in crate::view) conflict_resolved_preview_text: TextModelSnapshot,
     pub(in crate::view) conflict_resolved_preview_syntax_language: Option<rows::DiffSyntaxLanguage>,
+    pub(in crate::view) conflict_resolved_preview_highlight_provider_theme_epoch: u64,
+    pub(in crate::view) conflict_resolved_preview_style_cache_epoch: u64,
+    pub(in crate::view) conflict_resolved_preview_prepared_syntax_document:
+        Option<rows::PreparedDiffSyntaxDocument>,
+    pub(in crate::view) conflict_resolved_preview_syntax_inflight:
+        Option<ResolvedOutputSyntaxBackgroundKey>,
     pub(in crate::view) conflict_resolved_preview_line_count: usize,
-    pub(in crate::view) conflict_resolved_preview_line_starts: Vec<usize>,
+    pub(in crate::view) conflict_resolved_preview_line_starts: Arc<[usize]>,
     pub(in crate::view) conflict_resolved_preview_segments_cache:
-        HashMap<usize, CachedDiffStyledText>,
+        HashMap<usize, VersionedCachedDiffStyledText>,
 
     pub(in crate::view) history_view: Entity<super::HistoryView>,
     pub(in crate::view) diff_scroll: UniformListScrollHandle,

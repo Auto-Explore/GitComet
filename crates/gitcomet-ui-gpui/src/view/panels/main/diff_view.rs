@@ -537,8 +537,7 @@ impl MainPaneView {
                             this.diff_search_matches.clear();
                             this.diff_search_match_ix = None;
                             this.clear_diff_text_query_overlay_cache();
-                            this.worktree_preview_segments_cache_path = None;
-                            this.worktree_preview_segments_cache.clear();
+                            this.clear_worktree_preview_segments_cache();
                             this.clear_conflict_diff_query_overlay_caches();
                             window.focus(&this.diff_panel_focus_handle);
                             cx.notify();
@@ -2359,8 +2358,7 @@ impl MainPaneView {
                         this.diff_search_matches.clear();
                         this.diff_search_match_ix = None;
                         this.clear_diff_text_query_overlay_cache();
-                        this.worktree_preview_segments_cache_path = None;
-                        this.worktree_preview_segments_cache.clear();
+                        this.clear_worktree_preview_segments_cache();
                         this.clear_conflict_diff_query_overlay_caches();
                         window.focus(&this.diff_panel_focus_handle);
                         handled = true;
@@ -2380,8 +2378,7 @@ impl MainPaneView {
                 {
                     this.diff_search_active = true;
                     this.clear_diff_text_query_overlay_cache();
-                    this.worktree_preview_segments_cache_path = None;
-                    this.worktree_preview_segments_cache.clear();
+                    this.clear_worktree_preview_segments_cache();
                     this.clear_conflict_diff_query_overlay_caches();
                     this.diff_search_recompute_matches();
                     let focus = this.diff_search_input.read(cx).focus_handle();

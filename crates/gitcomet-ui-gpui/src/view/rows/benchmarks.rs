@@ -8,8 +8,7 @@ use super::diff_text::{
     benchmark_flush_diff_syntax_deferred_drop_queue,
     benchmark_reset_diff_syntax_prepared_cache_metrics, diff_syntax_language_for_path,
     inject_background_prepared_diff_syntax_document, prepare_diff_syntax_document,
-    prepare_diff_syntax_document_in_background, prepare_diff_syntax_document_with_budget,
-    prepare_diff_syntax_document_with_budget_reuse,
+    prepare_diff_syntax_document_in_background, prepare_diff_syntax_document_with_budget_reuse,
 };
 use super::*;
 use crate::kit::text_model::TextModel;
@@ -25,6 +24,7 @@ use crate::view::history_graph;
 use crate::view::panes::main::diff_cache::{
     PagedPatchDiffRows, PagedPatchSplitRows, PatchInlineVisibleMap,
 };
+use gitcomet_core::domain::DiffLineKind;
 use gitcomet_core::domain::{
     Branch, Commit, CommitDetails, CommitFileChange, CommitId, Diff, DiffArea, DiffRowProvider,
     DiffTarget, FileStatusKind, Remote, RemoteBranch, RepoSpec, StashEntry, Submodule,
@@ -1003,11 +1003,8 @@ fn build_synthetic_unified_patch(line_count: usize) -> String {
     out
 }
 
-fn should_hide_unified_diff_header_for_bench(
-    kind: gitcomet_core::domain::DiffLineKind,
-    text: &str,
-) -> bool {
-    matches!(kind, gitcomet_core::domain::DiffLineKind::Header)
+fn should_hide_unified_diff_header_for_bench(kind: DiffLineKind, text: &str) -> bool {
+    matches!(kind, DiffLineKind::Header)
         && (text.starts_with("index ") || text.starts_with("--- ") || text.starts_with("+++ "))
 }
 
@@ -1037,11 +1034,11 @@ impl PatchDiffPagedRowsFixture {
         split.len().hash(&mut hasher);
         for line in annotated.iter().take(256) {
             let kind_key: u8 = match line.kind {
-                gitcomet_core::domain::DiffLineKind::Header => 0,
-                gitcomet_core::domain::DiffLineKind::Hunk => 1,
-                gitcomet_core::domain::DiffLineKind::Add => 2,
-                gitcomet_core::domain::DiffLineKind::Remove => 3,
-                gitcomet_core::domain::DiffLineKind::Context => 4,
+                DiffLineKind::Header => 0,
+                DiffLineKind::Hunk => 1,
+                DiffLineKind::Add => 2,
+                DiffLineKind::Remove => 3,
+                DiffLineKind::Context => 4,
             };
             kind_key.hash(&mut hasher);
             line.text.len().hash(&mut hasher);
@@ -1083,9 +1080,7 @@ impl PatchDiffPagedRowsFixture {
         for line in &annotated {
             if !matches!(
                 line.kind,
-                gitcomet_core::domain::DiffLineKind::Add
-                    | gitcomet_core::domain::DiffLineKind::Remove
-                    | gitcomet_core::domain::DiffLineKind::Context
+                DiffLineKind::Add | DiffLineKind::Remove | DiffLineKind::Context
             ) {
                 continue;
             }
@@ -1117,11 +1112,11 @@ impl PatchDiffPagedRowsFixture {
 
         for line in rows_provider.slice(0, window).take(window) {
             let kind_key: u8 = match line.kind {
-                gitcomet_core::domain::DiffLineKind::Header => 0,
-                gitcomet_core::domain::DiffLineKind::Hunk => 1,
-                gitcomet_core::domain::DiffLineKind::Add => 2,
-                gitcomet_core::domain::DiffLineKind::Remove => 3,
-                gitcomet_core::domain::DiffLineKind::Context => 4,
+                DiffLineKind::Header => 0,
+                DiffLineKind::Hunk => 1,
+                DiffLineKind::Add => 2,
+                DiffLineKind::Remove => 3,
+                DiffLineKind::Context => 4,
             };
             kind_key.hash(&mut hasher);
             line.text.len().hash(&mut hasher);
@@ -1129,9 +1124,7 @@ impl PatchDiffPagedRowsFixture {
             line.new_line.hash(&mut hasher);
             if matches!(
                 line.kind,
-                gitcomet_core::domain::DiffLineKind::Add
-                    | gitcomet_core::domain::DiffLineKind::Remove
-                    | gitcomet_core::domain::DiffLineKind::Context
+                DiffLineKind::Add | DiffLineKind::Remove | DiffLineKind::Context
             ) {
                 let styled = super::diff_text::build_cached_diff_styled_text(
                     theme,
@@ -1277,7 +1270,7 @@ impl PatchDiffSearchQueryUpdateFixture {
         let mut file_ix = 0usize;
         while diff_rows.len() < target_lines {
             diff_rows.push(AnnotatedDiffLine {
-                kind: gitcomet_core::domain::DiffLineKind::Header,
+                kind: DiffLineKind::Header,
                 text: format!("diff --git a/src/file_{file_ix}.rs b/src/file_{file_ix}.rs").into(),
                 old_line: None,
                 new_line: None,
@@ -1290,7 +1283,7 @@ impl PatchDiffSearchQueryUpdateFixture {
             }
 
             diff_rows.push(AnnotatedDiffLine {
-                kind: gitcomet_core::domain::DiffLineKind::Hunk,
+                kind: DiffLineKind::Hunk,
                 text: format!("@@ -1,12 +1,12 @@ fn synthetic_{file_ix}() {{").into(),
                 old_line: None,
                 new_line: None,
@@ -1311,18 +1304,9 @@ impl PatchDiffSearchQueryUpdateFixture {
                     "let shared_{file_ix}_{line_in_file} = compute_shared({line_in_file});"
                 );
                 let (kind, text) = match line_in_file % 3 {
-                    0 => (
-                        gitcomet_core::domain::DiffLineKind::Add,
-                        format!("+{content}"),
-                    ),
-                    1 => (
-                        gitcomet_core::domain::DiffLineKind::Remove,
-                        format!("-{content}"),
-                    ),
-                    _ => (
-                        gitcomet_core::domain::DiffLineKind::Context,
-                        format!(" {content}"),
-                    ),
+                    0 => (DiffLineKind::Add, format!("+{content}")),
+                    1 => (DiffLineKind::Remove, format!("-{content}")),
+                    _ => (DiffLineKind::Context, format!(" {content}")),
                 };
 
                 let word_start = content.find("shared").unwrap_or(0);
@@ -1415,8 +1399,8 @@ impl PatchDiffSearchQueryUpdateFixture {
                     .unwrap_or(&[]);
                 let language = self.language_for_src_ix.get(src_ix).copied().flatten();
                 let word_color = match line.kind {
-                    gitcomet_core::domain::DiffLineKind::Add => Some(self.theme.colors.success),
-                    gitcomet_core::domain::DiffLineKind::Remove => Some(self.theme.colors.danger),
+                    DiffLineKind::Add => Some(self.theme.colors.success),
+                    DiffLineKind::Remove => Some(self.theme.colors.danger),
                     _ => None,
                 };
 
@@ -1513,6 +1497,31 @@ impl PatchDiffSearchQueryUpdateFixture {
             .iter()
             .filter(|entry| entry.is_some())
             .count()
+    }
+}
+
+fn prepare_bench_diff_syntax_document<'a, I>(
+    language: DiffSyntaxLanguage,
+    budget: DiffSyntaxBudget,
+    lines: I,
+    old_document: Option<super::diff_text::PreparedDiffSyntaxDocument>,
+) -> Option<super::diff_text::PreparedDiffSyntaxDocument>
+where
+    I: Clone + Iterator<Item = &'a str>,
+{
+    match prepare_diff_syntax_document_with_budget_reuse(
+        language,
+        DiffSyntaxMode::Auto,
+        lines.clone(),
+        budget,
+        old_document,
+    ) {
+        PrepareDiffSyntaxDocumentResult::Ready(document) => Some(document),
+        PrepareDiffSyntaxDocumentResult::TimedOut => {
+            prepare_diff_syntax_document_in_background(language, DiffSyntaxMode::Auto, lines)
+                .map(inject_background_prepared_diff_syntax_document)
+        }
+        PrepareDiffSyntaxDocumentResult::Unsupported => None,
     }
 }
 
@@ -1653,23 +1662,12 @@ impl FileDiffSyntaxPrepareFixture {
         &self,
         lines: &[String],
     ) -> Option<super::diff_text::PreparedDiffSyntaxDocument> {
-        match prepare_diff_syntax_document_with_budget(
+        prepare_bench_diff_syntax_document(
             self.language,
-            DiffSyntaxMode::Auto,
-            lines.iter().map(String::as_str),
             self.budget,
-        ) {
-            PrepareDiffSyntaxDocumentResult::Ready(document) => Some(document),
-            PrepareDiffSyntaxDocumentResult::TimedOut => {
-                prepare_diff_syntax_document_in_background(
-                    self.language,
-                    DiffSyntaxMode::Auto,
-                    lines.iter().map(String::as_str),
-                )
-                .map(inject_background_prepared_diff_syntax_document)
-            }
-            PrepareDiffSyntaxDocumentResult::Unsupported => None,
-        }
+            lines.iter().map(String::as_str),
+            None,
+        )
     }
 
     fn hash_prepared(
@@ -1688,18 +1686,20 @@ impl FileDiffSyntaxPrepareFixture {
     ) -> u64 {
         let line_ix = line_ix.min(lines.len().saturating_sub(1));
         let text = lines.get(line_ix).map(String::as_str).unwrap_or("");
-        let styled = super::diff_text::build_cached_diff_styled_text_for_prepared_document_line(
-            self.theme,
-            text,
-            &[],
-            "",
-            super::diff_text::DiffSyntaxConfig {
-                language: Some(self.language),
-                mode: DiffSyntaxMode::Auto,
-            },
-            None,
-            super::diff_text::PreparedDiffSyntaxLine { document, line_ix },
-        );
+        let styled =
+            super::diff_text::build_cached_diff_styled_text_for_prepared_document_line_nonblocking(
+                self.theme,
+                text,
+                &[],
+                "",
+                super::diff_text::DiffSyntaxConfig {
+                    language: Some(self.language),
+                    mode: DiffSyntaxMode::Auto,
+                },
+                None,
+                super::diff_text::PreparedDiffSyntaxLine { document, line_ix },
+            )
+            .into_inner();
 
         let mut h = DefaultHasher::new();
         lines.len().hash(&mut h);
@@ -1799,24 +1799,12 @@ impl FileDiffSyntaxReparseFixture {
         lines: &[String],
         old_document: Option<super::diff_text::PreparedDiffSyntaxDocument>,
     ) -> Option<super::diff_text::PreparedDiffSyntaxDocument> {
-        match prepare_diff_syntax_document_with_budget_reuse(
+        prepare_bench_diff_syntax_document(
             self.language,
-            DiffSyntaxMode::Auto,
-            lines.iter().map(String::as_str),
             self.budget,
+            lines.iter().map(String::as_str),
             old_document,
-        ) {
-            PrepareDiffSyntaxDocumentResult::Ready(document) => Some(document),
-            PrepareDiffSyntaxDocumentResult::TimedOut => {
-                prepare_diff_syntax_document_in_background(
-                    self.language,
-                    DiffSyntaxMode::Auto,
-                    lines.iter().map(String::as_str),
-                )
-                .map(inject_background_prepared_diff_syntax_document)
-            }
-            PrepareDiffSyntaxDocumentResult::Unsupported => None,
-        }
+        )
     }
 
     fn hash_prepared(
@@ -1825,26 +1813,509 @@ impl FileDiffSyntaxReparseFixture {
         document: Option<super::diff_text::PreparedDiffSyntaxDocument>,
     ) -> u64 {
         let text = lines.first().map(String::as_str).unwrap_or("");
-        let styled = super::diff_text::build_cached_diff_styled_text_for_prepared_document_line(
-            self.theme,
-            text,
-            &[],
-            "",
-            super::diff_text::DiffSyntaxConfig {
-                language: Some(self.language),
-                mode: DiffSyntaxMode::Auto,
-            },
-            None,
-            super::diff_text::PreparedDiffSyntaxLine {
-                document,
-                line_ix: 0,
-            },
-        );
+        let styled =
+            super::diff_text::build_cached_diff_styled_text_for_prepared_document_line_nonblocking(
+                self.theme,
+                text,
+                &[],
+                "",
+                super::diff_text::DiffSyntaxConfig {
+                    language: Some(self.language),
+                    mode: DiffSyntaxMode::Auto,
+                },
+                None,
+                super::diff_text::PreparedDiffSyntaxLine {
+                    document,
+                    line_ix: 0,
+                },
+            )
+            .into_inner();
 
         let mut h = DefaultHasher::new();
         lines.len().hash(&mut h);
         styled.text_hash.hash(&mut h);
         styled.highlights_hash.hash(&mut h);
+        h.finish()
+    }
+}
+
+pub struct FileDiffInlineSyntaxProjectionFixture {
+    inline_rows: Vec<AnnotatedDiffLine>,
+    inline_word_highlights: Vec<Option<Vec<Range<usize>>>>,
+    language: DiffSyntaxLanguage,
+    theme: AppTheme,
+    old_document: Option<super::diff_text::PreparedDiffSyntaxDocument>,
+    new_document: Option<super::diff_text::PreparedDiffSyntaxDocument>,
+}
+
+impl FileDiffInlineSyntaxProjectionFixture {
+    pub fn new(lines: usize, line_bytes: usize) -> Self {
+        let language =
+            diff_syntax_language_for_path("src/lib.rs").unwrap_or(DiffSyntaxLanguage::Rust);
+        let generated_lines = build_synthetic_source_lines(lines.max(1), line_bytes.max(32));
+
+        let mut old_lines = Vec::with_capacity(generated_lines.len());
+        let mut new_lines = Vec::with_capacity(generated_lines.len());
+        let mut inline_rows = Vec::with_capacity(generated_lines.len().saturating_mul(2));
+        let mut inline_word_highlights =
+            Vec::with_capacity(generated_lines.len().saturating_mul(2));
+        let mut old_line_no = 1u32;
+        let mut new_line_no = 1u32;
+
+        for (slot_ix, base_line) in generated_lines.into_iter().enumerate() {
+            match slot_ix % 9 {
+                0 => {
+                    let old_line = format!("{base_line} // inline_remove_{slot_ix}");
+                    old_lines.push(old_line.clone());
+                    inline_rows.push(AnnotatedDiffLine {
+                        kind: DiffLineKind::Remove,
+                        text: format!("-{old_line}").into(),
+                        old_line: Some(old_line_no),
+                        new_line: None,
+                    });
+                    inline_word_highlights.push(None);
+                    old_line_no = old_line_no.saturating_add(1);
+                }
+                1 => {
+                    let new_line = format!("{base_line} // inline_add_{slot_ix}");
+                    new_lines.push(new_line.clone());
+                    inline_rows.push(AnnotatedDiffLine {
+                        kind: DiffLineKind::Add,
+                        text: format!("+{new_line}").into(),
+                        old_line: None,
+                        new_line: Some(new_line_no),
+                    });
+                    inline_word_highlights.push(None);
+                    new_line_no = new_line_no.saturating_add(1);
+                }
+                2 => {
+                    let old_line = format!("{base_line} // inline_before_{slot_ix}");
+                    let new_line = format!("{base_line} // inline_after_{slot_ix}");
+                    old_lines.push(old_line.clone());
+                    new_lines.push(new_line.clone());
+                    inline_rows.push(AnnotatedDiffLine {
+                        kind: DiffLineKind::Remove,
+                        text: format!("-{old_line}").into(),
+                        old_line: Some(old_line_no),
+                        new_line: None,
+                    });
+                    inline_word_highlights.push(None);
+                    inline_rows.push(AnnotatedDiffLine {
+                        kind: DiffLineKind::Add,
+                        text: format!("+{new_line}").into(),
+                        old_line: None,
+                        new_line: Some(new_line_no),
+                    });
+                    inline_word_highlights.push(None);
+                    old_line_no = old_line_no.saturating_add(1);
+                    new_line_no = new_line_no.saturating_add(1);
+                }
+                _ => {
+                    old_lines.push(base_line.clone());
+                    new_lines.push(base_line.clone());
+                    inline_rows.push(AnnotatedDiffLine {
+                        kind: DiffLineKind::Context,
+                        text: format!(" {base_line}").into(),
+                        old_line: Some(old_line_no),
+                        new_line: Some(new_line_no),
+                    });
+                    inline_word_highlights.push(None);
+                    old_line_no = old_line_no.saturating_add(1);
+                    new_line_no = new_line_no.saturating_add(1);
+                }
+            }
+        }
+
+        let budget = DiffSyntaxBudget::default();
+        let old_document = prepare_bench_diff_syntax_document(
+            language,
+            budget,
+            old_lines.iter().map(String::as_str),
+            None,
+        );
+        let new_document = prepare_bench_diff_syntax_document(
+            language,
+            budget,
+            new_lines.iter().map(String::as_str),
+            None,
+        );
+
+        Self {
+            inline_rows,
+            inline_word_highlights,
+            language,
+            theme: AppTheme::zed_ayu_dark(),
+            old_document,
+            new_document,
+        }
+    }
+
+    pub fn run_window_pending_step(&self, start: usize, window: usize) -> u64 {
+        self.hash_window_step(start, window).0
+    }
+
+    pub fn run_window_step(&self, start: usize, window: usize) -> u64 {
+        let mut last_hash = 0u64;
+        for _ in 0..64 {
+            let (hash, pending) = self.hash_window_step(start, window);
+            last_hash = hash;
+            if !pending {
+                break;
+            }
+
+            let mut applied = 0usize;
+            if let Some(document) = self.old_document {
+                applied = applied.saturating_add(
+                    drain_completed_prepared_diff_syntax_chunk_builds_for_document(document),
+                );
+            }
+            if let Some(document) = self.new_document {
+                applied = applied.saturating_add(
+                    drain_completed_prepared_diff_syntax_chunk_builds_for_document(document),
+                );
+            }
+            if applied == 0 && self.has_pending_chunks() {
+                std::thread::yield_now();
+            }
+        }
+        last_hash
+    }
+
+    pub fn prime_window(&self, window: usize) {
+        let _ = self.run_window_step(0, window);
+    }
+
+    pub fn next_start_row(&self, start: usize, window: usize) -> usize {
+        let step = (window.max(1) / 2).saturating_add(1);
+        start.wrapping_add(step) % self.inline_rows.len().max(1)
+    }
+
+    #[cfg(test)]
+    fn visible_rows(&self) -> usize {
+        self.inline_rows.len()
+    }
+
+    fn has_pending_chunks(&self) -> bool {
+        self.old_document
+            .is_some_and(has_pending_prepared_diff_syntax_chunk_builds_for_document)
+            || self
+                .new_document
+                .is_some_and(has_pending_prepared_diff_syntax_chunk_builds_for_document)
+    }
+
+    fn projected_syntax_line(
+        &self,
+        line: &AnnotatedDiffLine,
+    ) -> super::diff_text::PreparedDiffSyntaxLine {
+        match line.kind {
+            DiffLineKind::Remove => line
+                .old_line
+                .map(|line_no| super::diff_text::PreparedDiffSyntaxLine {
+                    document: self.old_document,
+                    line_ix: line_no.saturating_sub(1) as usize,
+                })
+                .unwrap_or(super::diff_text::PreparedDiffSyntaxLine {
+                    document: None,
+                    line_ix: 0,
+                }),
+            DiffLineKind::Add | DiffLineKind::Context => line
+                .new_line
+                .map(|line_no| super::diff_text::PreparedDiffSyntaxLine {
+                    document: self.new_document,
+                    line_ix: line_no.saturating_sub(1) as usize,
+                })
+                .unwrap_or(super::diff_text::PreparedDiffSyntaxLine {
+                    document: None,
+                    line_ix: 0,
+                }),
+            DiffLineKind::Header | DiffLineKind::Hunk => super::diff_text::PreparedDiffSyntaxLine {
+                document: None,
+                line_ix: 0,
+            },
+        }
+    }
+
+    fn hash_window_step(&self, start: usize, window: usize) -> (u64, bool) {
+        if self.inline_rows.is_empty() || window == 0 {
+            return (0, false);
+        }
+
+        let start = start % self.inline_rows.len();
+        let end = (start + window).min(self.inline_rows.len());
+        let mut pending = false;
+        let mut h = DefaultHasher::new();
+        for row_ix in start..end {
+            let Some(line) = self.inline_rows.get(row_ix) else {
+                continue;
+            };
+            let word_ranges = self
+                .inline_word_highlights
+                .get(row_ix)
+                .and_then(|ranges| ranges.as_deref())
+                .unwrap_or(&[]);
+            let projected = self.projected_syntax_line(line);
+            let syntax_mode =
+                super::diff_text::syntax_mode_for_prepared_document(projected.document);
+            let word_color = match line.kind {
+                DiffLineKind::Add => Some(self.theme.colors.success),
+                DiffLineKind::Remove => Some(self.theme.colors.danger),
+                _ => None,
+            };
+            let (styled, is_pending) =
+                super::diff_text::build_cached_diff_styled_text_for_prepared_document_line_nonblocking(
+                    self.theme,
+                    diff_content_text(line),
+                    word_ranges,
+                    "",
+                    super::diff_text::DiffSyntaxConfig {
+                        language: Some(self.language),
+                        mode: syntax_mode,
+                    },
+                    word_color,
+                    projected,
+                )
+                .into_parts();
+            pending |= is_pending;
+            row_ix.hash(&mut h);
+            is_pending.hash(&mut h);
+            styled.text_hash.hash(&mut h);
+            styled.highlights_hash.hash(&mut h);
+        }
+        self.inline_rows.len().hash(&mut h);
+        (h.finish(), pending)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LargeHtmlSyntaxSource {
+    External,
+    Synthetic,
+}
+
+pub struct LargeHtmlSyntaxFixture {
+    source: LargeHtmlSyntaxSource,
+    text: Arc<str>,
+    line_starts: Arc<[usize]>,
+    line_count: usize,
+    theme: AppTheme,
+    prepared_document: Option<super::diff_text::PreparedDiffSyntaxDocument>,
+}
+
+impl LargeHtmlSyntaxFixture {
+    pub fn new(
+        fixture_path: Option<&str>,
+        synthetic_lines: usize,
+        synthetic_line_bytes: usize,
+    ) -> Self {
+        Self::new_internal(fixture_path, synthetic_lines, synthetic_line_bytes, false)
+    }
+
+    pub fn new_prewarmed(
+        fixture_path: Option<&str>,
+        synthetic_lines: usize,
+        synthetic_line_bytes: usize,
+    ) -> Self {
+        Self::new_internal(fixture_path, synthetic_lines, synthetic_line_bytes, true)
+    }
+
+    fn new_internal(
+        fixture_path: Option<&str>,
+        synthetic_lines: usize,
+        synthetic_line_bytes: usize,
+        prewarm_document: bool,
+    ) -> Self {
+        let (source, text) = load_large_html_bench_text(fixture_path).unwrap_or_else(|| {
+            (
+                LargeHtmlSyntaxSource::Synthetic,
+                build_synthetic_large_html_text(synthetic_lines, synthetic_line_bytes),
+            )
+        });
+        let text: Arc<str> = Arc::from(text);
+        let line_starts: Arc<[usize]> = Arc::from(line_starts_for_text(text.as_ref()));
+        let line_count = line_starts.len().max(1);
+        let prepared_document = prewarm_document
+            .then(|| Self::prepare_document(text.as_ref()))
+            .flatten();
+
+        Self {
+            source,
+            text,
+            line_starts,
+            line_count,
+            theme: AppTheme::zed_ayu_dark(),
+            prepared_document,
+        }
+    }
+
+    pub fn source_label(&self) -> &'static str {
+        match self.source {
+            LargeHtmlSyntaxSource::External => "external_html_fixture",
+            LargeHtmlSyntaxSource::Synthetic => "synthetic_html_fixture",
+        }
+    }
+
+    pub fn run_background_prepare_step(&self) -> u64 {
+        let prepared = prepare_diff_syntax_document_in_background(
+            DiffSyntaxLanguage::Html,
+            DiffSyntaxMode::Auto,
+            self.text.split('\n'),
+        );
+
+        let mut h = DefaultHasher::new();
+        self.text.len().hash(&mut h);
+        self.line_count.hash(&mut h);
+        self.source_label().hash(&mut h);
+        prepared.is_some().hash(&mut h);
+        h.finish()
+    }
+
+    pub fn run_visible_window_pending_step(&self, start_line: usize, window_lines: usize) -> u64 {
+        let Some(document) = self.prepared_document_handle() else {
+            return 0;
+        };
+        let Some(result) =
+            self.request_visible_window_for_lines(document, start_line, window_lines)
+        else {
+            return 0;
+        };
+        self.hash_visible_window_result(start_line, window_lines, &result)
+    }
+
+    pub fn run_visible_window_step(&self, start_line: usize, window_lines: usize) -> u64 {
+        let Some(document) = self.prepared_document_handle() else {
+            return 0;
+        };
+        let Some(result) =
+            self.request_visible_window_until_ready(document, start_line, window_lines)
+        else {
+            return 0;
+        };
+        self.hash_visible_window_result(start_line, window_lines, &result)
+    }
+
+    pub fn prime_visible_window(&self, window_lines: usize) {
+        let _ = self.run_visible_window_step(0, window_lines);
+    }
+
+    pub fn next_start_line(&self, start_line: usize, window_lines: usize) -> usize {
+        let step = (window_lines.max(1) / 2).saturating_add(1);
+        start_line.wrapping_add(step) % self.line_count.max(1)
+    }
+
+    #[cfg(test)]
+    fn source(&self) -> LargeHtmlSyntaxSource {
+        self.source
+    }
+
+    #[cfg(test)]
+    fn line_count(&self) -> usize {
+        self.line_count
+    }
+
+    fn prepared_document_handle(&self) -> Option<super::diff_text::PreparedDiffSyntaxDocument> {
+        self.prepared_document
+            .or_else(|| Self::prepare_document(self.text.as_ref()))
+    }
+
+    fn prepare_document(text: &str) -> Option<super::diff_text::PreparedDiffSyntaxDocument> {
+        prepare_bench_diff_syntax_document(
+            DiffSyntaxLanguage::Html,
+            DiffSyntaxBudget::default(),
+            text.split('\n'),
+            None,
+        )
+    }
+
+    fn visible_window_byte_range(&self, start_line: usize, window_lines: usize) -> Range<usize> {
+        if self.line_count == 0 || window_lines == 0 {
+            return 0..0;
+        }
+
+        let start_line = start_line % self.line_count.max(1);
+        let end_line = (start_line + window_lines.max(1)).min(self.line_count);
+        let text_len = self.text.len();
+        let start = self
+            .line_starts
+            .get(start_line)
+            .copied()
+            .unwrap_or(text_len)
+            .min(text_len);
+        let end = self
+            .line_starts
+            .get(end_line)
+            .copied()
+            .unwrap_or(text_len)
+            .min(text_len)
+            .max(start);
+        start..end
+    }
+
+    fn request_visible_window_for_lines(
+        &self,
+        document: super::diff_text::PreparedDiffSyntaxDocument,
+        start_line: usize,
+        window_lines: usize,
+    ) -> Option<super::diff_text::PreparedDocumentByteRangeHighlights> {
+        let byte_range = self.visible_window_byte_range(start_line, window_lines);
+        self.request_visible_window(document, byte_range)
+    }
+
+    fn request_visible_window_until_ready(
+        &self,
+        document: super::diff_text::PreparedDiffSyntaxDocument,
+        start_line: usize,
+        window_lines: usize,
+    ) -> Option<super::diff_text::PreparedDocumentByteRangeHighlights> {
+        let byte_range = self.visible_window_byte_range(start_line, window_lines);
+        let mut result = self.request_visible_window(document, byte_range.clone());
+        for _ in 0..64 {
+            if match result.as_ref() {
+                None => true,
+                Some(highlights) => !highlights.pending,
+            } {
+                break;
+            }
+
+            let applied = drain_completed_prepared_diff_syntax_chunk_builds_for_document(document);
+            if applied == 0 && has_pending_prepared_diff_syntax_chunk_builds_for_document(document)
+            {
+                std::thread::yield_now();
+            }
+            result = self.request_visible_window(document, byte_range.clone());
+        }
+        result
+    }
+
+    fn request_visible_window(
+        &self,
+        document: super::diff_text::PreparedDiffSyntaxDocument,
+        byte_range: Range<usize>,
+    ) -> Option<super::diff_text::PreparedDocumentByteRangeHighlights> {
+        super::diff_text::request_syntax_highlights_for_prepared_document_byte_range(
+            self.theme,
+            self.text.as_ref(),
+            self.line_starts.as_ref(),
+            document,
+            DiffSyntaxLanguage::Html,
+            byte_range,
+        )
+    }
+
+    fn hash_visible_window_result(
+        &self,
+        start_line: usize,
+        window_lines: usize,
+        result: &super::diff_text::PreparedDocumentByteRangeHighlights,
+    ) -> u64 {
+        let mut h = DefaultHasher::new();
+        start_line.hash(&mut h);
+        window_lines.hash(&mut h);
+        result.pending.hash(&mut h);
+        result.highlights.len().hash(&mut h);
+        for (range, _style) in result.highlights.iter().take(256) {
+            range.start.hash(&mut h);
+            range.end.hash(&mut h);
+        }
         h.finish()
     }
 }
@@ -1925,11 +2396,7 @@ impl WorktreePreviewRenderFixture {
     pub fn new(lines: usize, line_bytes: usize) -> Self {
         let generated_lines = build_synthetic_source_lines(lines, line_bytes);
         let language = diff_syntax_language_for_path("src/lib.rs");
-        let syntax_mode = if generated_lines.len() <= 4_000 {
-            DiffSyntaxMode::Auto
-        } else {
-            DiffSyntaxMode::HeuristicOnly
-        };
+        let syntax_mode = DiffSyntaxMode::Auto;
         let prepared_document = language.and_then(|language| {
             prepare_diff_syntax_document(
                 language,
@@ -1977,7 +2444,7 @@ impl WorktreePreviewRenderFixture {
         let mut h = DefaultHasher::new();
         for line_ix in start..end {
             let line = self.lines.get(line_ix).map(String::as_str).unwrap_or("");
-            let styled = super::diff_text::build_cached_diff_styled_text_for_prepared_document_line(
+            let styled = super::diff_text::build_cached_diff_styled_text_for_prepared_document_line_nonblocking(
                 self.theme,
                 line,
                 &[],
@@ -1991,7 +2458,7 @@ impl WorktreePreviewRenderFixture {
                     document: prepared_document,
                     line_ix,
                 },
-            );
+            ).into_inner();
             line_ix.hash(&mut h);
             styled.text_hash.hash(&mut h);
             styled.highlights_hash.hash(&mut h);
@@ -3484,6 +3951,94 @@ fn build_synthetic_source_lines(count: usize, target_line_bytes: usize) -> Vec<S
     lines
 }
 
+fn load_large_html_bench_text(
+    fixture_path: Option<&str>,
+) -> Option<(LargeHtmlSyntaxSource, String)> {
+    let path = fixture_path?.trim();
+    if path.is_empty() {
+        return None;
+    }
+
+    let text = std::fs::read_to_string(path).ok()?;
+    if text.is_empty() {
+        return None;
+    }
+
+    Some((LargeHtmlSyntaxSource::External, text))
+}
+
+fn build_synthetic_large_html_text(line_count: usize, target_line_bytes: usize) -> String {
+    let line_count = line_count.max(12);
+    let target_line_bytes = target_line_bytes.max(96);
+    let mut lines = Vec::with_capacity(line_count);
+
+    lines.push("<!doctype html>".to_string());
+    lines.push("<html lang=\"en\">".to_string());
+    lines.push("<head>".to_string());
+    lines.push("<meta charset=\"utf-8\">".to_string());
+    lines.push("<title>GitComet Synthetic HTML Fixture</title>".to_string());
+    lines.push("<style>".to_string());
+    lines.push(
+        ".fixture-root { color: #222; background: linear-gradient(90deg, #fff, #f5f5f5); }"
+            .to_string(),
+    );
+    lines.push("</style>".to_string());
+    lines.push("</head>".to_string());
+    lines.push("<body class=\"fixture-root\">".to_string());
+
+    let reserved_suffix_lines = 2usize;
+    let body_lines = line_count.saturating_sub(lines.len().saturating_add(reserved_suffix_lines));
+    for ix in 0..body_lines {
+        let mut line = match ix % 8 {
+            0 => format!(
+                r#"<style>.row-{ix} {{ color: rgb({r}, {g}, {b}); padding: {pad}px; }}</style>"#,
+                r = (ix * 13) % 255,
+                g = (ix * 29) % 255,
+                b = (ix * 47) % 255,
+                pad = (ix % 9) + 2,
+            ),
+            1 => format!(
+                r#"<script>const card{ix} = {ix}; function bump{ix}() {{ return card{ix} + 1; }}</script>"#
+            ),
+            2 => format!(
+                r#"<div class="row row-{ix}" data-row="{ix}" style="color: rgb({r}, {g}, {b}); background: linear-gradient(90deg, #fff, #eee);" onclick="const next = {ix}; return next + 1;">card {ix}</div>"#,
+                r = (ix * 7) % 255,
+                g = (ix * 17) % 255,
+                b = (ix * 23) % 255,
+            ),
+            3 => format!(
+                r#"<section id="panel-{ix}"><h2>Panel {ix}</h2><p>row {ix} content for syntax benchmarking</p></section>"#
+            ),
+            4 => {
+                format!(r#"<!-- html comment {ix} with repeated tokens for benchmark coverage -->"#)
+            }
+            5 => {
+                format!(r#"<template><span class="slot-{ix}">{{{{value_{ix}}}}}</span></template>"#)
+            }
+            6 => format!(
+                r#"<svg viewBox="0 0 10 10"><path d="M0 0 L10 {y}" stroke="currentColor" /></svg>"#,
+                y = (ix % 9) + 1,
+            ),
+            _ => format!(
+                r#"<article data-kind="bench-{ix}" aria-label="row {ix}"><a href="/items/{ix}">open {ix}</a></article>"#
+            ),
+        };
+
+        if line.len() < target_line_bytes {
+            line.push(' ');
+            while line.len() < target_line_bytes {
+                line.push_str("<!-- filler_token_html_bench -->");
+            }
+        }
+        lines.push(line);
+    }
+
+    lines.push("</body>".to_string());
+    lines.push("</html>".to_string());
+    lines.truncate(line_count);
+    lines.join("\n")
+}
+
 fn build_synthetic_nested_query_stress_lines(
     count: usize,
     target_line_bytes: usize,
@@ -4268,6 +4823,22 @@ mod tests {
     }
 
     #[test]
+    fn file_diff_inline_syntax_projection_fixture_runs_pending_and_ready_windows() {
+        let fixture = FileDiffInlineSyntaxProjectionFixture::new(384, 96);
+        assert!(fixture.visible_rows() > 0);
+        assert_ne!(fixture.run_window_pending_step(0, 64), 0);
+        assert_ne!(fixture.run_window_step(0, 64), 0);
+    }
+
+    #[test]
+    fn file_diff_inline_syntax_projection_fixture_wraps_start_offsets() {
+        let fixture = FileDiffInlineSyntaxProjectionFixture::new(512, 128);
+        let hash_a = fixture.run_window_step(17, 48);
+        let hash_b = fixture.run_window_step(17 + fixture.visible_rows() * 3, 48);
+        assert_eq!(hash_a, hash_b);
+    }
+
+    #[test]
     fn prepared_syntax_multidoc_cache_hit_rate_fixture_runs() {
         let fixture = FileDiffSyntaxPrepareFixture::new(512, 96);
         let hash = fixture.run_prepared_syntax_multidoc_cache_hit_rate_step(4, 1);
@@ -4282,11 +4853,115 @@ mod tests {
     }
 
     #[test]
+    fn large_html_syntax_fixture_synthetic_fallback_runs() {
+        let prepare_fixture = LargeHtmlSyntaxFixture::new(None, 128, 160);
+        let visible_fixture = LargeHtmlSyntaxFixture::new_prewarmed(None, 128, 160);
+
+        assert_eq!(prepare_fixture.source(), LargeHtmlSyntaxSource::Synthetic);
+        assert_eq!(visible_fixture.source(), LargeHtmlSyntaxSource::Synthetic);
+        assert_eq!(visible_fixture.line_count(), 128);
+        assert_ne!(prepare_fixture.run_background_prepare_step(), 0);
+
+        visible_fixture.prime_visible_window(48);
+        assert_ne!(visible_fixture.run_visible_window_step(0, 48), 0);
+    }
+
+    #[test]
+    fn large_html_syntax_fixture_pending_window_is_nonblocking_until_primed() {
+        let path = std::env::temp_dir().join(format!(
+            "gitcomet-large-html-pending-bench-{}.html",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock should be after unix epoch")
+                .as_nanos()
+        ));
+        let text = (0..96)
+            .map(|ix| {
+                format!(
+                    "<div class=\"row-{ix}\" style=\"color: red\" onclick=\"const value = {ix};\">row {ix}</div>"
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(&path, text).expect("temp html fixture should be writable");
+
+        let fixture = LargeHtmlSyntaxFixture::new_prewarmed(path.to_str(), 64, 128);
+        let document = fixture
+            .prepared_document_handle()
+            .expect("HTML fixture should prepare a document");
+
+        let first = fixture
+            .request_visible_window_for_lines(document, 0, 48)
+            .expect("cold visible-window request should return fallback highlights");
+        assert!(
+            first.pending,
+            "cold request should stay nonblocking until chunk work completes"
+        );
+
+        assert_ne!(fixture.run_visible_window_pending_step(0, 48), 0);
+
+        let started = std::time::Instant::now();
+        let mut second = fixture
+            .request_visible_window_for_lines(document, 0, 48)
+            .expect("second visible-window request should still succeed");
+        while second.pending && started.elapsed() < Duration::from_secs(2) {
+            if drain_completed_prepared_diff_syntax_chunk_builds_for_document(document) == 0 {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            second = fixture
+                .request_visible_window_for_lines(document, 0, 48)
+                .expect("ready visible-window request should still succeed");
+        }
+        assert!(
+            !second.pending,
+            "drained request should return ready prepared-document highlights"
+        );
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn large_html_syntax_fixture_uses_external_text_when_available() {
+        let path = std::env::temp_dir().join(format!(
+            "gitcomet-large-html-bench-{}.html",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock should be after unix epoch")
+                .as_nanos()
+        ));
+        let text = [
+            "<!doctype html>",
+            "<html>",
+            "<body>",
+            "<div style=\"color: red\" onclick=\"const value = 1;\">hi</div>",
+            "</body>",
+            "</html>",
+        ]
+        .join("\n");
+        std::fs::write(&path, text).expect("temp html fixture should be writable");
+
+        let fixture = LargeHtmlSyntaxFixture::new_prewarmed(path.to_str(), 64, 128);
+        assert_eq!(fixture.source(), LargeHtmlSyntaxSource::External);
+        assert_eq!(fixture.line_count(), 6);
+        fixture.prime_visible_window(6);
+        assert_ne!(fixture.run_visible_window_step(0, 6), 0);
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
     fn worktree_preview_render_fixture_preserves_output_with_cached_lookup() {
         let fixture = WorktreePreviewRenderFixture::new(1_024, 128);
         let cached = fixture.run_cached_lookup_step(96, 160);
         let render_time_prepare = fixture.run_render_time_prepare_step(96, 160);
         assert_eq!(cached, render_time_prepare);
+    }
+
+    #[test]
+    fn worktree_preview_render_fixture_keeps_auto_mode_for_large_documents() {
+        let fixture = WorktreePreviewRenderFixture::new(8_192, 128);
+        assert_eq!(fixture.syntax_mode, DiffSyntaxMode::Auto);
+        assert!(fixture.prepared_document.is_some());
     }
 
     #[test]

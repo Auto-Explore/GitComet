@@ -1,13 +1,15 @@
 use super::super::*;
+use gpui::SharedString;
 use std::borrow::Cow;
-use std::cell::RefCell;
-use std::collections::{HashMap, VecDeque};
-use std::sync::{OnceLock, mpsc};
+use std::cell::{Cell, RefCell};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use std::time::{Duration, Instant};
 use tree_sitter::StreamingIterator;
 
 const TS_DOCUMENT_CACHE_MAX_ENTRIES: usize = 8;
 const TS_DOCUMENT_LINE_TOKEN_CHUNK_ROWS: usize = 64;
+const TS_DOCUMENT_LINE_TOKEN_PREFETCH_GUARD_CHUNKS: usize = 1;
 const DIFF_SYNTAX_FOREGROUND_PARSE_BUDGET_NON_TEST: Duration = Duration::from_millis(1);
 const DIFF_SYNTAX_FOREGROUND_PARSE_BUDGET_TEST: Duration = Duration::from_millis(2);
 const TS_QUERY_MATCH_LIMIT: u32 = 256;
@@ -17,12 +19,29 @@ const TS_DEFERRED_DROP_MIN_BYTES: usize = 256 * 1024;
 const TS_INCREMENTAL_REPARSE_ENABLE_ENV: &str = "GITCOMET_DIFF_SYNTAX_INCREMENTAL_REPARSE";
 const TS_INCREMENTAL_REPARSE_MAX_CHANGED_BYTES: usize = 64 * 1024;
 const TS_INCREMENTAL_REPARSE_MAX_CHANGED_PERCENT: usize = 35;
+const HTML_HIGHLIGHTS_QUERY: &str = include_str!("queries/html_highlights.scm");
+const HTML_INJECTIONS_QUERY: &str = include_str!("queries/html_injections.scm");
+const CSS_HIGHLIGHTS_QUERY: &str = include_str!("queries/css_highlights.scm");
+const JAVASCRIPT_HIGHLIGHTS_QUERY: &str = include_str!("queries/javascript_highlights.scm");
+const TYPESCRIPT_HIGHLIGHTS_QUERY: &str = include_str!("queries/typescript_highlights.scm");
+const TSX_HIGHLIGHTS_QUERY: &str = include_str!("queries/tsx_highlights.scm");
+const RUST_HIGHLIGHTS_QUERY: &str = include_str!("queries/rust_highlights.scm");
+const XML_HIGHLIGHTS_QUERY: &str = tree_sitter_xml::XML_HIGHLIGHT_QUERY;
+
+/// Maximum injection nesting depth. Root document = 0, first injection = 1.
+/// This prevents infinite recursion if an injected language's highlight spec
+/// itself contains an injection query.
+const TS_MAX_INJECTION_DEPTH: usize = 1;
+const TS_INJECTION_CACHE_MAX_ENTRIES: usize = 32;
 
 thread_local! {
     static TS_PARSER: RefCell<tree_sitter::Parser> = RefCell::new(tree_sitter::Parser::new());
     static TS_CURSOR: RefCell<tree_sitter::QueryCursor> = RefCell::new(tree_sitter::QueryCursor::new());
     static TS_INPUT: RefCell<String> = const { RefCell::new(String::new()) };
     static TS_DOCUMENT_CACHE: RefCell<TreesitterDocumentCache> = RefCell::new(TreesitterDocumentCache::new());
+    static TS_INJECTION_CACHE: RefCell<HashMap<TreesitterInjectionMatch, CachedInjectionTokens>> = RefCell::new(HashMap::new());
+    static TS_INJECTION_ACCESS_COUNTER: Cell<u64> = const { Cell::new(0) };
+    static TS_INJECTION_DEPTH: Cell<usize> = const { Cell::new(0) };
 }
 
 fn ascii_lowercase_for_match(s: &str) -> Cow<'_, str> {
@@ -63,12 +82,19 @@ pub(in crate::view) enum DiffSyntaxLanguage {
     Yaml,
     Sql,
     Bash,
+    Xml,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::view) enum DiffSyntaxMode {
     Auto,
     HeuristicOnly,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::view) struct DiffSyntaxEdit {
+    pub old_range: Range<usize>,
+    pub new_range: Range<usize>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -97,13 +123,12 @@ enum TreesitterParseReuseMode {
 #[derive(Clone, Debug)]
 struct PreparedSyntaxTreeState {
     language: DiffSyntaxLanguage,
-    text: String,
-    line_lengths: Vec<usize>,
-    line_starts: Vec<usize>,
+    text: Arc<str>,
+    line_starts: Arc<[usize]>,
     source_hash: u64,
     source_version: u64,
     tree: tree_sitter::Tree,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // read only in #[cfg(test)] via prepared_document_parse_mode()
     parse_mode: TreesitterParseReuseMode,
 }
 
@@ -150,6 +175,34 @@ enum SyntaxCacheDropMessage {
     Flush(mpsc::Sender<()>),
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct PreparedSyntaxChunkKey {
+    cache_key: PreparedSyntaxCacheKey,
+    chunk_ix: usize,
+}
+
+#[derive(Clone, Debug)]
+struct PreparedSyntaxChunkBuildRequest {
+    chunk_key: PreparedSyntaxChunkKey,
+    line_count: usize,
+    thread_id: std::thread::ThreadId,
+    tree_state: Arc<PreparedSyntaxTreeState>,
+}
+
+#[derive(Clone, Debug)]
+struct PreparedSyntaxChunkBuildResult {
+    chunk_key: PreparedSyntaxChunkKey,
+    chunk_tokens: Option<Vec<Vec<SyntaxToken>>>,
+    chunk_build_ms: u64,
+    thread_id: std::thread::ThreadId,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum PreparedSyntaxLineTokensRequest {
+    Ready(Vec<SyntaxToken>),
+    Pending,
+}
+
 #[cfg(test)]
 static TS_DEFERRED_DROP_ENQUEUED: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
@@ -193,6 +246,45 @@ fn syntax_cache_drop_sender() -> Option<&'static mpsc::Sender<SyntaxCacheDropMes
                 })
                 .ok()?;
             Some(tx)
+        })
+        .as_ref()
+}
+
+struct PreparedSyntaxChunkWorker {
+    sender: mpsc::Sender<PreparedSyntaxChunkBuildRequest>,
+    receiver: Mutex<mpsc::Receiver<PreparedSyntaxChunkBuildResult>>,
+    deferred_results: Mutex<VecDeque<PreparedSyntaxChunkBuildResult>>,
+}
+
+fn syntax_chunk_worker() -> Option<&'static PreparedSyntaxChunkWorker> {
+    static WORKER: OnceLock<Option<PreparedSyntaxChunkWorker>> = OnceLock::new();
+    WORKER
+        .get_or_init(|| {
+            let (request_tx, request_rx) = mpsc::channel::<PreparedSyntaxChunkBuildRequest>();
+            let (result_tx, result_rx) = mpsc::channel::<PreparedSyntaxChunkBuildResult>();
+            let builder = std::thread::Builder::new().name("gitcomet-syntax-chunks".to_string());
+            let _handle = builder
+                .spawn(move || {
+                    while let Ok(request) = request_rx.recv() {
+                        let (chunk_tokens, chunk_build_ms) = build_line_token_chunk_for_state(
+                            request.tree_state.as_ref(),
+                            request.line_count,
+                            request.chunk_key.chunk_ix,
+                        );
+                        let _ = result_tx.send(PreparedSyntaxChunkBuildResult {
+                            chunk_key: request.chunk_key,
+                            chunk_tokens,
+                            chunk_build_ms,
+                            thread_id: request.thread_id,
+                        });
+                    }
+                })
+                .ok()?;
+            Some(PreparedSyntaxChunkWorker {
+                sender: request_tx,
+                receiver: Mutex::new(result_rx),
+                deferred_results: Mutex::new(VecDeque::new()),
+            })
         })
         .as_ref()
 }
@@ -269,11 +361,6 @@ fn tree_state_clone_count() -> usize {
     TS_TREE_STATE_CLONE_COUNT.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-#[cfg(test)]
-fn reset_tree_state_clone_count() {
-    TS_TREE_STATE_CLONE_COUNT.store(0, std::sync::atomic::Ordering::Relaxed);
-}
-
 fn flush_deferred_syntax_cache_drop_queue_with_timeout(timeout: Duration) -> bool {
     let Some(sender) = syntax_cache_drop_sender() else {
         return false;
@@ -300,11 +387,6 @@ fn incremental_reparse_enabled() -> bool {
             })
             .unwrap_or(true)
     })
-}
-
-#[cfg(test)]
-fn flush_deferred_syntax_cache_drop_queue() -> bool {
-    flush_deferred_syntax_cache_drop_queue_with_timeout(Duration::from_secs(2))
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -386,19 +468,81 @@ fn chunk_line_tokens_by_row(
     chunks
 }
 
-fn clone_tree_state_for_chunk_build(
-    tree_state: &Option<PreparedSyntaxTreeState>,
-) -> Option<PreparedSyntaxTreeState> {
-    #[cfg(test)]
-    if tree_state.is_some() {
-        TS_TREE_STATE_CLONE_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+fn insert_line_token_chunk(
+    document: &mut TreesitterCachedDocument,
+    chunk_ix: usize,
+    chunk_tokens: Option<Vec<Vec<SyntaxToken>>>,
+) {
+    if document.line_token_chunks.contains_key(&chunk_ix) {
+        return;
     }
+
+    let fallback_empty_chunk = {
+        let bounds = document.chunk_bounds(chunk_ix);
+        vec![Vec::new(); bounds.end.saturating_sub(bounds.start)]
+    };
+    document
+        .line_token_chunks
+        .insert(chunk_ix, chunk_tokens.unwrap_or(fallback_empty_chunk));
+}
+
+fn shared_tree_state_for_chunk_build(
+    tree_state: &Option<PreparedSyntaxTreeState>,
+) -> Option<Arc<PreparedSyntaxTreeState>> {
+    tree_state
+        .as_ref()
+        .map(clone_tree_state_for_chunk_build_ref)
+        .map(Arc::new)
+}
+
+fn clone_tree_state_for_chunk_build_ref(
+    tree_state: &PreparedSyntaxTreeState,
+) -> PreparedSyntaxTreeState {
+    #[cfg(test)]
+    TS_TREE_STATE_CLONE_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     tree_state.clone()
+}
+
+fn build_line_token_chunk_for_state(
+    tree_state: &PreparedSyntaxTreeState,
+    line_count: usize,
+    chunk_ix: usize,
+) -> (Option<Vec<Vec<SyntaxToken>>>, u64) {
+    let chunk_start = chunk_ix.saturating_mul(TS_DOCUMENT_LINE_TOKEN_CHUNK_ROWS);
+    if chunk_start >= line_count {
+        return (Some(Vec::new()), 0);
+    }
+    let chunk_end = chunk_start
+        .saturating_add(TS_DOCUMENT_LINE_TOKEN_CHUNK_ROWS)
+        .min(line_count);
+    let Some(highlight) = tree_sitter_highlight_spec(tree_state.language) else {
+        return (None, 0);
+    };
+    let started = Instant::now();
+    let chunk = collect_treesitter_document_line_tokens_for_line_window(
+        &tree_state.tree,
+        highlight,
+        tree_state.text.as_bytes(),
+        &tree_state.line_starts,
+        chunk_start,
+        chunk_end,
+    );
+    let chunk_build_ms = started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
+    (Some(chunk), chunk_build_ms)
+}
+
+fn chunk_count_for_line_count(line_count: usize) -> usize {
+    if line_count == 0 {
+        0
+    } else {
+        (line_count.saturating_sub(1) / TS_DOCUMENT_LINE_TOKEN_CHUNK_ROWS).saturating_add(1)
+    }
 }
 
 struct TreesitterDocumentCache {
     by_cache_key: HashMap<PreparedSyntaxCacheKey, TreesitterCachedDocument>,
     lru_order: VecDeque<PreparedSyntaxCacheKey>,
+    pending_chunk_requests: HashSet<PreparedSyntaxChunkKey>,
     metrics: PreparedSyntaxCacheMetrics,
 }
 
@@ -407,6 +551,7 @@ impl TreesitterDocumentCache {
         Self {
             by_cache_key: HashMap::new(),
             lru_order: VecDeque::new(),
+            pending_chunk_requests: HashSet::default(),
             metrics: PreparedSyntaxCacheMetrics::default(),
         }
     }
@@ -422,6 +567,11 @@ impl TreesitterDocumentCache {
         self.lru_order.push_back(cache_key);
     }
 
+    fn record_hit(&mut self, cache_key: PreparedSyntaxCacheKey) {
+        self.metrics.hit = self.metrics.hit.saturating_add(1);
+        self.touch_key(cache_key);
+    }
+
     fn evict_if_needed(&mut self, drop_mode: SyntaxCacheDropMode) {
         while self.by_cache_key.len() >= TS_DOCUMENT_CACHE_MAX_ENTRIES {
             let Some(evict_key) = self.lru_order.pop_front() else {
@@ -435,35 +585,6 @@ impl TreesitterDocumentCache {
         }
     }
 
-    fn build_line_token_chunk(
-        &mut self,
-        tree_state: &PreparedSyntaxTreeState,
-        line_count: usize,
-        chunk_ix: usize,
-    ) -> Option<Vec<Vec<SyntaxToken>>> {
-        let chunk_start = chunk_ix.saturating_mul(TS_DOCUMENT_LINE_TOKEN_CHUNK_ROWS);
-        if chunk_start >= line_count {
-            return Some(Vec::new());
-        }
-        let chunk_end = chunk_start
-            .saturating_add(TS_DOCUMENT_LINE_TOKEN_CHUNK_ROWS)
-            .min(line_count);
-        let highlight = tree_sitter_highlight_spec(tree_state.language)?;
-        let started = Instant::now();
-        let chunk = collect_treesitter_document_line_tokens_for_line_window(
-            &tree_state.tree,
-            highlight,
-            tree_state.text.as_bytes(),
-            &tree_state.line_starts,
-            &tree_state.line_lengths,
-            chunk_start,
-            chunk_end,
-        );
-        let chunk_build_ms = started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
-        self.metrics.chunk_build_ms = self.metrics.chunk_build_ms.saturating_add(chunk_build_ms);
-        Some(chunk)
-    }
-
     fn contains_document(&mut self, cache_key: PreparedSyntaxCacheKey, line_count: usize) -> bool {
         let exists = self
             .by_cache_key
@@ -475,62 +596,220 @@ impl TreesitterDocumentCache {
         exists
     }
 
+    fn extract_line_from_chunk(
+        &self,
+        cache_key: PreparedSyntaxCacheKey,
+        line_ix: usize,
+        chunk_ix: usize,
+    ) -> Vec<SyntaxToken> {
+        self.by_cache_key
+            .get(&cache_key)
+            .map(|document| {
+                let chunk_bounds = document.chunk_bounds(chunk_ix);
+                let line_offset = line_ix.saturating_sub(chunk_bounds.start);
+                document
+                    .line_token_chunks
+                    .get(&chunk_ix)
+                    .and_then(|chunk| chunk.get(line_offset))
+                    .cloned()
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Returns `(line_count, has_chunk)` for the given cache key and line index,
+    /// or `None` if the document is not in the cache.
+    fn lookup_chunk_state(
+        &self,
+        cache_key: PreparedSyntaxCacheKey,
+        line_ix: usize,
+    ) -> Option<(usize, usize, bool)> {
+        let chunk_ix = line_ix / TS_DOCUMENT_LINE_TOKEN_CHUNK_ROWS;
+        let document = self.by_cache_key.get(&cache_key)?;
+        Some((
+            document.line_count,
+            chunk_ix,
+            document.line_token_chunks.contains_key(&chunk_ix),
+        ))
+    }
+
+    #[cfg(test)]
     fn line_tokens(
         &mut self,
         cache_key: PreparedSyntaxCacheKey,
         line_ix: usize,
     ) -> Option<Vec<SyntaxToken>> {
-        let chunk_ix = line_ix / TS_DOCUMENT_LINE_TOKEN_CHUNK_ROWS;
-        let (line_count, has_chunk) = {
-            let document = self.by_cache_key.get(&cache_key)?;
-            (
-                document.line_count,
-                document.line_token_chunks.contains_key(&chunk_ix),
-            )
-        };
+        let (line_count, chunk_ix, has_chunk) = self.lookup_chunk_state(cache_key, line_ix)?;
 
         if line_ix >= line_count {
-            self.metrics.hit = self.metrics.hit.saturating_add(1);
-            self.touch_key(cache_key);
+            self.record_hit(cache_key);
             return Some(Vec::new());
         }
 
-        if has_chunk {
-            self.metrics.hit = self.metrics.hit.saturating_add(1);
-        } else {
+        if !has_chunk {
             self.metrics.miss = self.metrics.miss.saturating_add(1);
             let tree_state = self
                 .by_cache_key
                 .get(&cache_key)
-                .and_then(|document| clone_tree_state_for_chunk_build(&document.tree_state));
-            let chunk_tokens = tree_state
-                .as_ref()
-                .and_then(|state| self.build_line_token_chunk(state, line_count, chunk_ix));
-            if let Some(document) = self.by_cache_key.get_mut(&cache_key)
-                && !document.line_token_chunks.contains_key(&chunk_ix)
-            {
-                let fallback_empty_chunk = {
-                    let bounds = document.chunk_bounds(chunk_ix);
-                    vec![Vec::new(); bounds.end.saturating_sub(bounds.start)]
-                };
-                document
-                    .line_token_chunks
-                    .insert(chunk_ix, chunk_tokens.unwrap_or(fallback_empty_chunk));
+                .and_then(|document| shared_tree_state_for_chunk_build(&document.tree_state));
+            if let Some(tree_state) = tree_state {
+                self.build_chunk_sync_and_insert(
+                    cache_key,
+                    chunk_ix,
+                    tree_state.as_ref(),
+                    line_count,
+                );
             }
+        } else {
+            self.metrics.hit = self.metrics.hit.saturating_add(1);
         }
 
         self.touch_key(cache_key);
-        let document = self.by_cache_key.get(&cache_key)?;
-        let chunk_bounds = document.chunk_bounds(chunk_ix);
-        let line_offset = line_ix.saturating_sub(chunk_bounds.start);
-        Some(
-            document
-                .line_token_chunks
-                .get(&chunk_ix)
-                .and_then(|chunk| chunk.get(line_offset))
-                .cloned()
-                .unwrap_or_default(),
-        )
+        Some(self.extract_line_from_chunk(cache_key, line_ix, chunk_ix))
+    }
+
+    fn build_chunk_sync_and_insert(
+        &mut self,
+        cache_key: PreparedSyntaxCacheKey,
+        chunk_ix: usize,
+        tree_state: &PreparedSyntaxTreeState,
+        line_count: usize,
+    ) {
+        let (chunk_tokens, chunk_build_ms) =
+            build_line_token_chunk_for_state(tree_state, line_count, chunk_ix);
+        self.metrics.chunk_build_ms = self.metrics.chunk_build_ms.saturating_add(chunk_build_ms);
+        if let Some(document) = self.by_cache_key.get_mut(&cache_key) {
+            insert_line_token_chunk(document, chunk_ix, chunk_tokens);
+        }
+    }
+
+    fn queue_chunk_build_request_nonblocking(
+        &mut self,
+        chunk_key: PreparedSyntaxChunkKey,
+        line_count: usize,
+        thread_id: std::thread::ThreadId,
+        tree_state: &Arc<PreparedSyntaxTreeState>,
+    ) -> bool {
+        if self
+            .by_cache_key
+            .get(&chunk_key.cache_key)
+            .is_some_and(|document| document.line_token_chunks.contains_key(&chunk_key.chunk_ix))
+        {
+            return true;
+        }
+        if self.pending_chunk_requests.contains(&chunk_key) {
+            return true;
+        }
+
+        let Some(worker) = syntax_chunk_worker() else {
+            return false;
+        };
+        let request = PreparedSyntaxChunkBuildRequest {
+            chunk_key,
+            line_count,
+            thread_id,
+            tree_state: Arc::clone(tree_state),
+        };
+        if worker.sender.send(request).is_err() {
+            return false;
+        }
+        self.pending_chunk_requests.insert(chunk_key);
+        true
+    }
+
+    fn prefetch_adjacent_chunk_builds_nonblocking(
+        &mut self,
+        cache_key: PreparedSyntaxCacheKey,
+        line_count: usize,
+        center_chunk_ix: usize,
+        thread_id: std::thread::ThreadId,
+        tree_state: &Arc<PreparedSyntaxTreeState>,
+    ) {
+        let chunk_count = chunk_count_for_line_count(line_count);
+        if chunk_count == 0 {
+            return;
+        }
+
+        let start_chunk_ix =
+            center_chunk_ix.saturating_sub(TS_DOCUMENT_LINE_TOKEN_PREFETCH_GUARD_CHUNKS);
+        let end_chunk_ix = center_chunk_ix
+            .saturating_add(TS_DOCUMENT_LINE_TOKEN_PREFETCH_GUARD_CHUNKS)
+            .saturating_add(1)
+            .min(chunk_count);
+        for chunk_ix in start_chunk_ix..end_chunk_ix {
+            if chunk_ix == center_chunk_ix {
+                continue;
+            }
+            let _ = self.queue_chunk_build_request_nonblocking(
+                PreparedSyntaxChunkKey {
+                    cache_key,
+                    chunk_ix,
+                },
+                line_count,
+                thread_id,
+                tree_state,
+            );
+        }
+    }
+
+    fn request_line_tokens(
+        &mut self,
+        cache_key: PreparedSyntaxCacheKey,
+        line_ix: usize,
+    ) -> Option<PreparedSyntaxLineTokensRequest> {
+        let (line_count, chunk_ix, has_chunk) = self.lookup_chunk_state(cache_key, line_ix)?;
+
+        if line_ix >= line_count {
+            self.record_hit(cache_key);
+            return Some(PreparedSyntaxLineTokensRequest::Ready(Vec::new()));
+        }
+
+        if has_chunk {
+            self.record_hit(cache_key);
+            return Some(PreparedSyntaxLineTokensRequest::Ready(
+                self.extract_line_from_chunk(cache_key, line_ix, chunk_ix),
+            ));
+        }
+
+        self.metrics.miss = self.metrics.miss.saturating_add(1);
+        let chunk_key = PreparedSyntaxChunkKey {
+            cache_key,
+            chunk_ix,
+        };
+        if self.pending_chunk_requests.contains(&chunk_key) {
+            self.touch_key(cache_key);
+            return Some(PreparedSyntaxLineTokensRequest::Pending);
+        }
+
+        let tree_state = self
+            .by_cache_key
+            .get(&cache_key)
+            .and_then(|document| shared_tree_state_for_chunk_build(&document.tree_state));
+        let Some(tree_state) = tree_state else {
+            self.touch_key(cache_key);
+            return Some(PreparedSyntaxLineTokensRequest::Ready(Vec::new()));
+        };
+
+        let thread_id = std::thread::current().id();
+        if self.queue_chunk_build_request_nonblocking(chunk_key, line_count, thread_id, &tree_state)
+        {
+            self.prefetch_adjacent_chunk_builds_nonblocking(
+                cache_key,
+                line_count,
+                chunk_ix,
+                thread_id,
+                &tree_state,
+            );
+            self.touch_key(cache_key);
+            return Some(PreparedSyntaxLineTokensRequest::Pending);
+        }
+
+        self.build_chunk_sync_and_insert(cache_key, chunk_ix, tree_state.as_ref(), line_count);
+
+        self.record_hit(cache_key);
+        Some(PreparedSyntaxLineTokensRequest::Ready(
+            self.extract_line_from_chunk(cache_key, line_ix, chunk_ix),
+        ))
     }
 
     fn prepared_document_data(
@@ -574,6 +853,99 @@ impl TreesitterDocumentCache {
 
     fn contains_key(&self, cache_key: PreparedSyntaxCacheKey) -> bool {
         self.by_cache_key.contains_key(&cache_key)
+    }
+
+    fn drain_completed_chunk_builds(&mut self) -> usize {
+        self.drain_completed_chunk_builds_matching(None)
+    }
+
+    fn drain_completed_chunk_builds_for_cache_key(
+        &mut self,
+        cache_key: PreparedSyntaxCacheKey,
+    ) -> usize {
+        self.drain_completed_chunk_builds_matching(Some(cache_key))
+    }
+
+    fn drain_completed_chunk_builds_matching(
+        &mut self,
+        target_cache_key: Option<PreparedSyntaxCacheKey>,
+    ) -> usize {
+        let Some(worker) = syntax_chunk_worker() else {
+            return 0;
+        };
+        let current_thread = std::thread::current().id();
+
+        let mut ready_results = Vec::new();
+        {
+            let mut deferred = match worker.deferred_results.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            let mut remaining = VecDeque::with_capacity(deferred.len());
+            while let Some(result) = deferred.pop_front() {
+                if should_apply_chunk_build_result(&result, current_thread, target_cache_key) {
+                    ready_results.push(result);
+                } else {
+                    remaining.push_back(result);
+                }
+            }
+            *deferred = remaining;
+        }
+
+        let mut polled_results = Vec::new();
+        {
+            let receiver = match worker.receiver.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            while let Ok(result) = receiver.try_recv() {
+                polled_results.push(result);
+            }
+        }
+        if !polled_results.is_empty() {
+            let mut deferred = match worker.deferred_results.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            for result in polled_results {
+                if should_apply_chunk_build_result(&result, current_thread, target_cache_key) {
+                    ready_results.push(result);
+                } else {
+                    deferred.push_back(result);
+                }
+            }
+        }
+
+        let mut applied = 0usize;
+        for result in ready_results {
+            self.pending_chunk_requests.remove(&result.chunk_key);
+            self.metrics.chunk_build_ms = self
+                .metrics
+                .chunk_build_ms
+                .saturating_add(result.chunk_build_ms);
+            let Some(document) = self.by_cache_key.get_mut(&result.chunk_key.cache_key) else {
+                continue;
+            };
+            if document
+                .line_token_chunks
+                .contains_key(&result.chunk_key.chunk_ix)
+            {
+                continue;
+            }
+            insert_line_token_chunk(document, result.chunk_key.chunk_ix, result.chunk_tokens);
+            applied = applied.saturating_add(1);
+        }
+        applied
+    }
+
+    fn has_pending_chunk_requests(&self) -> bool {
+        !self.pending_chunk_requests.is_empty()
+    }
+
+    fn has_pending_chunk_requests_for_cache_key(&self, cache_key: PreparedSyntaxCacheKey) -> bool {
+        self.pending_chunk_requests
+            .iter()
+            .any(|candidate| candidate.cache_key == cache_key)
     }
 
     #[cfg(test)]
@@ -630,9 +1002,21 @@ impl TreesitterDocumentCache {
     }
 }
 
+fn should_apply_chunk_build_result(
+    result: &PreparedSyntaxChunkBuildResult,
+    current_thread: std::thread::ThreadId,
+    target_cache_key: Option<PreparedSyntaxCacheKey>,
+) -> bool {
+    result.thread_id == current_thread
+        && match target_cache_key {
+            Some(cache_key) => result.chunk_key.cache_key == cache_key,
+            None => true,
+        }
+}
+
 struct TreesitterDocumentInput {
-    text: String,
-    line_lengths: Vec<usize>,
+    text: Arc<str>,
+    line_starts: Arc<[usize]>,
 }
 
 struct TreesitterDocumentParseRequest {
@@ -672,27 +1056,23 @@ pub(super) fn benchmark_prepared_syntax_cache_contains_document(
 
 #[cfg(test)]
 fn prepared_syntax_cache_metrics() -> PreparedSyntaxCacheMetrics {
-    TS_DOCUMENT_CACHE.with(|cache| cache.borrow().metrics())
+    let (hit, miss, evict, chunk_build_ms) = benchmark_prepared_syntax_cache_metrics();
+    PreparedSyntaxCacheMetrics {
+        hit,
+        miss,
+        evict,
+        chunk_build_ms,
+    }
 }
 
 #[cfg(test)]
 fn reset_prepared_syntax_cache_metrics() {
-    TS_DOCUMENT_CACHE.with(|cache| cache.borrow_mut().reset_metrics());
+    benchmark_reset_prepared_syntax_cache_metrics();
 }
 
 #[cfg(test)]
 fn prepared_syntax_loaded_chunk_count(document: PreparedSyntaxDocument) -> usize {
-    TS_DOCUMENT_CACHE.with(|cache| {
-        cache
-            .borrow()
-            .loaded_chunk_count(document.cache_key)
-            .unwrap_or_default()
-    })
-}
-
-#[cfg(test)]
-fn make_test_cache_key(doc_hash: u64) -> PreparedSyntaxCacheKey {
-    TreesitterDocumentCache::make_test_cache_key(doc_hash)
+    benchmark_prepared_syntax_loaded_chunk_count(document).unwrap_or_default()
 }
 
 pub(in crate::view) fn diff_syntax_language_for_path(
@@ -707,8 +1087,9 @@ pub(in crate::view) fn diff_syntax_language_for_path(
     Some(match ext.as_ref() {
         "md" | "markdown" | "mdown" | "mkd" | "mkdn" | "mdwn" => DiffSyntaxLanguage::Markdown,
         "html" | "htm" => DiffSyntaxLanguage::Html,
-        // Use HTML highlighting for XML-ish formats as a pragmatic baseline.
-        "xml" | "svg" | "xsl" | "xslt" | "xsd" => DiffSyntaxLanguage::Html,
+        "xml" | "svg" | "xsl" | "xslt" | "xsd" | "xhtml" | "plist" | "csproj" | "fsproj"
+        | "vbproj" | "sln" | "props" | "targets" | "resx" | "xaml" | "wsdl" | "rss" | "atom"
+        | "opml" | "glade" | "ui" | "iml" => DiffSyntaxLanguage::Xml,
         "css" | "less" | "sass" | "scss" => DiffSyntaxLanguage::Css,
         "hcl" | "tf" | "tfvars" => DiffSyntaxLanguage::Hcl,
         "bicep" => DiffSyntaxLanguage::Bicep,
@@ -718,7 +1099,8 @@ pub(in crate::view) fn diff_syntax_language_for_path(
         "zig" => DiffSyntaxLanguage::Zig,
         "rs" => DiffSyntaxLanguage::Rust,
         "py" => DiffSyntaxLanguage::Python,
-        "js" | "jsx" | "mjs" | "cjs" => DiffSyntaxLanguage::JavaScript,
+        "js" | "mjs" | "cjs" => DiffSyntaxLanguage::JavaScript,
+        "jsx" => DiffSyntaxLanguage::Tsx,
         "ts" | "cts" | "mts" => DiffSyntaxLanguage::TypeScript,
         "tsx" => DiffSyntaxLanguage::Tsx,
         "go" => DiffSyntaxLanguage::Go,
@@ -770,6 +1152,8 @@ pub(super) fn syntax_tokens_for_line(
     }
 }
 
+/// Convenience function that prepares a tree-sitter document with no foreground timeout.
+/// Used by tests and benchmarks that need guaranteed completion.
 pub(super) fn prepare_treesitter_document<'a, I>(
     language: DiffSyntaxLanguage,
     mode: DiffSyntaxMode,
@@ -778,23 +1162,14 @@ pub(super) fn prepare_treesitter_document<'a, I>(
 where
     I: IntoIterator<Item = &'a str>,
 {
-    match prepare_treesitter_document_impl(language, mode, lines, None, None) {
+    let Some(request) = treesitter_document_parse_request(language, mode, lines) else {
+        return None;
+    };
+    match prepare_treesitter_document_request_impl(request, None, None, None) {
         PrepareTreesitterDocumentResult::Ready(document) => Some(document),
         PrepareTreesitterDocumentResult::TimedOut
         | PrepareTreesitterDocumentResult::Unsupported => None,
     }
-}
-
-pub(super) fn prepare_treesitter_document_with_budget<'a, I>(
-    language: DiffSyntaxLanguage,
-    mode: DiffSyntaxMode,
-    lines: I,
-    budget: DiffSyntaxBudget,
-) -> PrepareTreesitterDocumentResult
-where
-    I: IntoIterator<Item = &'a str>,
-{
-    prepare_treesitter_document_with_budget_reuse(language, mode, lines, budget, None)
 }
 
 pub(super) fn prepare_treesitter_document_with_budget_reuse<'a, I>(
@@ -807,7 +1182,29 @@ pub(super) fn prepare_treesitter_document_with_budget_reuse<'a, I>(
 where
     I: IntoIterator<Item = &'a str>,
 {
-    prepare_treesitter_document_impl(language, mode, lines, Some(budget), old_document)
+    let Some(request) = treesitter_document_parse_request(language, mode, lines) else {
+        return PrepareTreesitterDocumentResult::Unsupported;
+    };
+    prepare_treesitter_document_request_impl(request, Some(budget), old_document, None)
+}
+
+pub(super) fn prepare_treesitter_document_with_budget_reuse_text(
+    language: DiffSyntaxLanguage,
+    mode: DiffSyntaxMode,
+    text: SharedString,
+    line_starts: Arc<[usize]>,
+    budget: DiffSyntaxBudget,
+    old_document: Option<PreparedSyntaxDocument>,
+    edit_hint: Option<DiffSyntaxEdit>,
+) -> PrepareTreesitterDocumentResult {
+    let Some(request) = treesitter_document_parse_request_from_input(
+        language,
+        mode,
+        treesitter_document_input_from_shared_text(text, line_starts),
+    ) else {
+        return PrepareTreesitterDocumentResult::Unsupported;
+    };
+    prepare_treesitter_document_request_impl(request, Some(budget), old_document, edit_hint)
 }
 
 pub(super) fn prepare_treesitter_document_in_background<'a, I>(
@@ -818,7 +1215,22 @@ pub(super) fn prepare_treesitter_document_in_background<'a, I>(
 where
     I: IntoIterator<Item = &'a str>,
 {
-    prepare_treesitter_document_data_impl(language, mode, lines, None)
+    let request = treesitter_document_parse_request(language, mode, lines)?;
+    prepare_treesitter_document_data_request_impl(request, None, None)
+}
+
+pub(super) fn prepare_treesitter_document_in_background_text(
+    language: DiffSyntaxLanguage,
+    mode: DiffSyntaxMode,
+    text: SharedString,
+    line_starts: Arc<[usize]>,
+) -> Option<PreparedSyntaxDocumentData> {
+    let request = treesitter_document_parse_request_from_input(
+        language,
+        mode,
+        treesitter_document_input_from_shared_text(text, line_starts),
+    )?;
+    prepare_treesitter_document_data_request_impl(request, None, None)
 }
 
 pub(super) fn inject_prepared_document_data(
@@ -840,11 +1252,51 @@ pub(super) fn inject_prepared_document_data(
     }
 }
 
+#[cfg(test)]
 pub(super) fn syntax_tokens_for_prepared_document_line(
     document: PreparedSyntaxDocument,
     line_ix: usize,
 ) -> Option<Vec<SyntaxToken>> {
     TS_DOCUMENT_CACHE.with(|cache| cache.borrow_mut().line_tokens(document.cache_key, line_ix))
+}
+
+pub(super) fn request_syntax_tokens_for_prepared_document_line(
+    document: PreparedSyntaxDocument,
+    line_ix: usize,
+) -> Option<PreparedSyntaxLineTokensRequest> {
+    TS_DOCUMENT_CACHE.with(|cache| {
+        cache
+            .borrow_mut()
+            .request_line_tokens(document.cache_key, line_ix)
+    })
+}
+
+pub(super) fn drain_completed_prepared_syntax_chunk_builds() -> usize {
+    TS_DOCUMENT_CACHE.with(|cache| cache.borrow_mut().drain_completed_chunk_builds())
+}
+
+pub(super) fn has_pending_prepared_syntax_chunk_builds() -> bool {
+    TS_DOCUMENT_CACHE.with(|cache| cache.borrow().has_pending_chunk_requests())
+}
+
+pub(super) fn drain_completed_prepared_syntax_chunk_builds_for_document(
+    document: PreparedSyntaxDocument,
+) -> usize {
+    TS_DOCUMENT_CACHE.with(|cache| {
+        cache
+            .borrow_mut()
+            .drain_completed_chunk_builds_for_cache_key(document.cache_key)
+    })
+}
+
+pub(super) fn has_pending_prepared_syntax_chunk_builds_for_document(
+    document: PreparedSyntaxDocument,
+) -> bool {
+    TS_DOCUMENT_CACHE.with(|cache| {
+        cache
+            .borrow()
+            .has_pending_chunk_requests_for_cache_key(document.cache_key)
+    })
 }
 
 #[cfg(test)]
@@ -875,32 +1327,16 @@ pub(super) fn benchmark_cache_replacement_drop_step(
     replacements: usize,
     defer_drop: bool,
 ) -> u64 {
-    let payloads = benchmark_line_tokens_payload_batch(lines, tokens_per_line, replacements, 0);
-    benchmark_cache_replacement_drop_step_with_payloads(payloads, defer_drop)
-}
-
-pub(super) fn benchmark_drop_payload_timed_step(
-    lines: usize,
-    tokens_per_line: usize,
-    seed: usize,
-    defer_drop: bool,
-) -> Duration {
-    let payload = benchmark_line_tokens_payload(lines.max(1), tokens_per_line.max(1), seed);
-    let start = std::time::Instant::now();
-    drop_line_tokens_with_mode(payload, benchmark_drop_mode(defer_drop));
-    start.elapsed()
-}
-
-fn benchmark_cache_replacement_drop_step_with_payloads(
-    payloads: Vec<Vec<Vec<SyntaxToken>>>,
-    defer_drop: bool,
-) -> u64 {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
 
+    let payloads = benchmark_line_tokens_payload_batch(lines, tokens_per_line, replacements, 0);
+    let drop_mode = if defer_drop {
+        SyntaxCacheDropMode::DeferredWhenLarge
+    } else {
+        SyntaxCacheDropMode::InlineWhenLarge
+    };
     let mut cache = TreesitterDocumentCache::new();
-    let drop_mode = benchmark_drop_mode(defer_drop);
-
     let mut h = DefaultHasher::new();
     for (nonce, line_tokens) in payloads.into_iter().enumerate() {
         cache.insert_document_with_mode(
@@ -917,12 +1353,21 @@ fn benchmark_cache_replacement_drop_step_with_payloads(
     h.finish()
 }
 
-fn benchmark_drop_mode(defer_drop: bool) -> SyntaxCacheDropMode {
-    if defer_drop {
+pub(super) fn benchmark_drop_payload_timed_step(
+    lines: usize,
+    tokens_per_line: usize,
+    seed: usize,
+    defer_drop: bool,
+) -> Duration {
+    let payload = benchmark_line_tokens_payload(lines.max(1), tokens_per_line.max(1), seed);
+    let drop_mode = if defer_drop {
         SyntaxCacheDropMode::DeferredWhenLarge
     } else {
         SyntaxCacheDropMode::InlineWhenLarge
-    }
+    };
+    let start = std::time::Instant::now();
+    drop_line_tokens_with_mode(payload, drop_mode);
+    start.elapsed()
 }
 
 fn benchmark_line_tokens_payload_batch(
@@ -970,21 +1415,80 @@ fn benchmark_line_tokens_payload(
     payload
 }
 
-fn prepare_treesitter_document_impl<'a, I>(
-    language: DiffSyntaxLanguage,
-    mode: DiffSyntaxMode,
-    lines: I,
+/// Core parsing logic shared by both foreground (cache-inserting) and background (data-returning)
+/// document preparation paths.
+fn parse_treesitter_document_core(
+    request: &TreesitterDocumentParseRequest,
+    foreground_timeout: Option<Duration>,
+    old_document: Option<PreparedSyntaxDocument>,
+    edit_hint: Option<DiffSyntaxEdit>,
+) -> Option<PreparedSyntaxDocumentData> {
+    let old_tree_state = old_document.and_then(|document| {
+        TS_DOCUMENT_CACHE.with(|cache| cache.borrow_mut().tree_state(document.cache_key))
+    });
+    let mut used_old_document_without_incremental = false;
+    let incremental_seed = old_tree_state.as_ref().and_then(|state| {
+        let seed = build_incremental_parse_seed(state, request, edit_hint.as_ref());
+        if seed.is_none() && state.language == request.language && incremental_reparse_enabled() {
+            used_old_document_without_incremental = true;
+        }
+        seed
+    });
+
+    #[cfg(test)]
+    {
+        if incremental_seed.is_some() {
+            TS_INCREMENTAL_PARSE_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        } else if used_old_document_without_incremental {
+            TS_INCREMENTAL_FALLBACK_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    let old_tree_for_parse = incremental_seed.as_ref().map(|seed| &seed.tree);
+    let tree = TS_PARSER.with(|parser| {
+        let mut parser = parser.borrow_mut();
+        parser.set_language(&request.ts_language).ok()?;
+        parse_treesitter_tree(
+            &mut parser,
+            request.input.text.as_bytes(),
+            old_tree_for_parse,
+            foreground_timeout,
+        )
+    })?;
+
+    let parse_mode = if incremental_seed.is_some() {
+        TreesitterParseReuseMode::Incremental
+    } else {
+        TreesitterParseReuseMode::Full
+    };
+    let source_version = incremental_seed
+        .as_ref()
+        .map(|seed| seed.next_version)
+        .unwrap_or(1);
+
+    Some(PreparedSyntaxDocumentData {
+        cache_key: request.cache_key,
+        line_count: request.input.line_starts.len(),
+        line_token_chunks: HashMap::new(),
+        tree_state: Some(PreparedSyntaxTreeState {
+            language: request.language,
+            text: request.input.text.clone(),
+            line_starts: request.input.line_starts.clone(),
+            source_hash: request.cache_key.doc_hash,
+            source_version,
+            tree,
+            parse_mode,
+        }),
+    })
+}
+
+fn prepare_treesitter_document_request_impl(
+    request: TreesitterDocumentParseRequest,
     foreground_budget: Option<DiffSyntaxBudget>,
     old_document: Option<PreparedSyntaxDocument>,
-) -> PrepareTreesitterDocumentResult
-where
-    I: IntoIterator<Item = &'a str>,
-{
-    let Some(request) = treesitter_document_parse_request(language, mode, lines) else {
-        return PrepareTreesitterDocumentResult::Unsupported;
-    };
-
-    let line_count = request.input.line_lengths.len();
+    edit_hint: Option<DiffSyntaxEdit>,
+) -> PrepareTreesitterDocumentResult {
+    let line_count = request.input.line_starts.len();
     let has_cache_hit = TS_DOCUMENT_CACHE.with(|cache| {
         cache
             .borrow_mut()
@@ -1000,40 +1504,12 @@ where
         return PrepareTreesitterDocumentResult::TimedOut;
     }
 
-    let old_tree_state = old_document.and_then(|document| {
-        TS_DOCUMENT_CACHE.with(|cache| cache.borrow_mut().tree_state(document.cache_key))
-    });
-    let mut used_old_document_without_incremental = false;
-    let incremental_seed = old_tree_state.as_ref().and_then(|state| {
-        let seed = build_incremental_parse_seed(state, &request);
-        if seed.is_none() && state.language == request.language && incremental_reparse_enabled() {
-            used_old_document_without_incremental = true;
-        }
-        seed
-    });
-
-    #[cfg(test)]
-    {
-        if incremental_seed.is_some() {
-            TS_INCREMENTAL_PARSE_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        } else if used_old_document_without_incremental {
-            TS_INCREMENTAL_FALLBACK_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        }
-    }
-
-    let old_tree_for_parse = incremental_seed.as_ref().map(|seed| &seed.tree);
-    let tree = TS_PARSER.with(|parser| {
-        let mut parser = parser.borrow_mut();
-        parser.set_language(&request.ts_language).ok()?;
-        parse_treesitter_tree(
-            &mut parser,
-            request.input.text.as_bytes(),
-            old_tree_for_parse,
-            foreground_budget.map(|budget| budget.foreground_parse),
-        )
-    });
-
-    let Some(tree) = tree else {
+    let Some(data) = parse_treesitter_document_core(
+        &request,
+        foreground_budget.map(|b| b.foreground_parse),
+        old_document,
+        edit_hint,
+    ) else {
         return if foreground_budget.is_some() {
             PrepareTreesitterDocumentResult::TimedOut
         } else {
@@ -1041,33 +1517,13 @@ where
         };
     };
 
-    let parse_mode = if incremental_seed.is_some() {
-        TreesitterParseReuseMode::Incremental
-    } else {
-        TreesitterParseReuseMode::Full
-    };
-    let source_version = incremental_seed
-        .as_ref()
-        .map(|seed| seed.next_version)
-        .unwrap_or(1);
-    let tree_state = Some(PreparedSyntaxTreeState {
-        language: request.language,
-        text: request.input.text.clone(),
-        line_lengths: request.input.line_lengths.clone(),
-        line_starts: treesitter_document_line_starts(&request.input.line_lengths),
-        source_hash: request.cache_key.doc_hash,
-        source_version,
-        tree,
-        parse_mode,
-    });
-
     TS_DOCUMENT_CACHE.with(|cache| {
         cache.borrow_mut().insert_document_with_mode(
-            request.cache_key,
+            data.cache_key,
             TreesitterCachedDocument {
-                line_count,
-                line_token_chunks: HashMap::new(),
-                tree_state,
+                line_count: data.line_count,
+                line_token_chunks: data.line_token_chunks,
+                tree_state: data.tree_state,
             },
             SyntaxCacheDropMode::DeferredWhenLarge,
         );
@@ -1078,86 +1534,20 @@ where
     })
 }
 
-fn prepare_treesitter_document_data_impl<'a, I>(
-    language: DiffSyntaxLanguage,
-    mode: DiffSyntaxMode,
-    lines: I,
+fn prepare_treesitter_document_data_request_impl(
+    request: TreesitterDocumentParseRequest,
     old_document: Option<PreparedSyntaxDocument>,
-) -> Option<PreparedSyntaxDocumentData>
-where
-    I: IntoIterator<Item = &'a str>,
-{
-    let request = treesitter_document_parse_request(language, mode, lines)?;
-
+    edit_hint: Option<DiffSyntaxEdit>,
+) -> Option<PreparedSyntaxDocumentData> {
     if let Some(cached) = TS_DOCUMENT_CACHE.with(|cache| {
         cache
             .borrow_mut()
-            .prepared_document_data(request.cache_key, request.input.line_lengths.len())
+            .prepared_document_data(request.cache_key, request.input.line_starts.len())
     }) {
         return Some(cached);
     }
 
-    let old_tree_state = old_document.and_then(|document| {
-        TS_DOCUMENT_CACHE.with(|cache| cache.borrow_mut().tree_state(document.cache_key))
-    });
-    let mut used_old_document_without_incremental = false;
-    let incremental_seed = old_tree_state.as_ref().and_then(|state| {
-        let seed = build_incremental_parse_seed(state, &request);
-        if seed.is_none() && state.language == request.language && incremental_reparse_enabled() {
-            used_old_document_without_incremental = true;
-        }
-        seed
-    });
-
-    #[cfg(test)]
-    {
-        if incremental_seed.is_some() {
-            TS_INCREMENTAL_PARSE_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        } else if used_old_document_without_incremental {
-            TS_INCREMENTAL_FALLBACK_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        }
-    }
-
-    let old_tree_for_parse = incremental_seed.as_ref().map(|seed| &seed.tree);
-    let tree = TS_PARSER.with(|parser| {
-        let mut parser = parser.borrow_mut();
-        parser.set_language(&request.ts_language).ok()?;
-        parse_treesitter_tree(
-            &mut parser,
-            request.input.text.as_bytes(),
-            old_tree_for_parse,
-            None,
-        )
-    })?;
-
-    let parse_mode = if incremental_seed.is_some() {
-        TreesitterParseReuseMode::Incremental
-    } else {
-        TreesitterParseReuseMode::Full
-    };
-    let source_version = incremental_seed
-        .as_ref()
-        .map(|seed| seed.next_version)
-        .unwrap_or(1);
-    let line_lengths = request.input.line_lengths.clone();
-    let line_starts = treesitter_document_line_starts(&line_lengths);
-    let line_count = line_lengths.len();
-
-    Some(PreparedSyntaxDocumentData {
-        cache_key: request.cache_key,
-        line_count,
-        line_token_chunks: HashMap::new(),
-        tree_state: Some(PreparedSyntaxTreeState {
-            language: request.language,
-            text: request.input.text,
-            line_lengths,
-            line_starts,
-            source_hash: request.cache_key.doc_hash,
-            source_version,
-            tree,
-            parse_mode,
-        }),
-    })
+    parse_treesitter_document_core(&request, None, old_document, edit_hint)
 }
 
 fn treesitter_document_parse_request<'a, I>(
@@ -1168,6 +1558,18 @@ fn treesitter_document_parse_request<'a, I>(
 where
     I: IntoIterator<Item = &'a str>,
 {
+    treesitter_document_parse_request_from_input(
+        language,
+        mode,
+        collect_treesitter_document_input(lines),
+    )
+}
+
+fn treesitter_document_parse_request_from_input(
+    language: DiffSyntaxLanguage,
+    mode: DiffSyntaxMode,
+    input: TreesitterDocumentInput,
+) -> Option<TreesitterDocumentParseRequest> {
     if mode != DiffSyntaxMode::Auto {
         return None;
     }
@@ -1175,14 +1577,12 @@ where
         return None;
     }
 
-    let ts_language = tree_sitter_language(language)?;
-    tree_sitter_highlight_spec(language)?;
-    let input = collect_treesitter_document_input(lines);
-    let cache_key = treesitter_document_cache_key(language, &input.text);
+    let spec = tree_sitter_highlight_spec(language)?;
+    let cache_key = treesitter_document_cache_key(language, input.text.as_ref());
 
     Some(TreesitterDocumentParseRequest {
         language,
-        ts_language,
+        ts_language: spec.ts_language.clone(),
         input,
         cache_key,
     })
@@ -1193,13 +1593,67 @@ where
     I: IntoIterator<Item = &'a str>,
 {
     let mut text = String::new();
-    let mut line_lengths = Vec::new();
+    let mut line_starts = vec![0usize];
     for line in lines {
         text.push_str(line);
         text.push('\n');
-        line_lengths.push(line.len());
+        line_starts.push(text.len());
     }
-    TreesitterDocumentInput { text, line_lengths }
+    // Remove sentinel for the phantom line after the trailing newline.
+    line_starts.pop();
+    TreesitterDocumentInput {
+        text: Arc::<str>::from(text),
+        line_starts: Arc::<[usize]>::from(line_starts),
+    }
+}
+
+fn treesitter_document_input_from_shared_text(
+    text: SharedString,
+    line_starts: Arc<[usize]>,
+) -> TreesitterDocumentInput {
+    if text.is_empty() {
+        return TreesitterDocumentInput {
+            text: Arc::<str>::from(text),
+            line_starts: Arc::<[usize]>::from(Vec::<usize>::new()),
+        };
+    }
+
+    if line_starts.first().copied() != Some(0)
+        || line_starts.windows(2).any(|window| window[0] >= window[1])
+        || line_starts.last().copied().unwrap_or(0) > text.len()
+    {
+        return treesitter_document_input_from_text(text.as_ref());
+    }
+
+    TreesitterDocumentInput {
+        text: Arc::<str>::from(text),
+        line_starts,
+    }
+}
+
+fn treesitter_document_input_from_text(text: &str) -> TreesitterDocumentInput {
+    if text.is_empty() {
+        return TreesitterDocumentInput {
+            text: Arc::<str>::from(""),
+            line_starts: Arc::<[usize]>::from(Vec::<usize>::new()),
+        };
+    }
+
+    let mut line_starts = vec![0usize];
+    for (byte_ix, byte) in text.bytes().enumerate() {
+        if byte == b'\n' {
+            line_starts.push(byte_ix.saturating_add(1));
+        }
+    }
+    // If text ends with '\n', remove the phantom line start after the trailing newline.
+    if text.as_bytes().ends_with(b"\n") {
+        line_starts.pop();
+    }
+
+    TreesitterDocumentInput {
+        text: Arc::<str>::from(text),
+        line_starts: Arc::<[usize]>::from(line_starts),
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1218,6 +1672,7 @@ struct TreesitterIncrementalSeed {
 fn build_incremental_parse_seed(
     previous: &PreparedSyntaxTreeState,
     request: &TreesitterDocumentParseRequest,
+    edit_hint: Option<&DiffSyntaxEdit>,
 ) -> Option<TreesitterIncrementalSeed> {
     if !incremental_reparse_enabled() {
         return None;
@@ -1231,7 +1686,12 @@ fn build_incremental_parse_seed(
 
     let old_input = previous.text.as_bytes();
     let new_input = request.input.text.as_bytes();
-    let edit_ranges = compute_incremental_edit_ranges(old_input, new_input);
+    let edit_ranges = edit_hint
+        .and_then(|hint| {
+            treesitter_byte_edit_range_from_hint(hint, old_input.len(), new_input.len())
+        })
+        .map(|range| vec![range])
+        .unwrap_or_else(|| compute_incremental_edit_ranges(old_input, new_input));
     if edit_ranges.is_empty() {
         return None;
     }
@@ -1239,7 +1699,7 @@ fn build_incremental_parse_seed(
         return None;
     }
 
-    let new_line_starts = treesitter_document_line_starts(&request.input.line_lengths);
+    let new_line_starts = request.input.line_starts.as_ref();
     let mut tree = previous.tree.clone();
     for edit_range in edit_ranges {
         let input_edit = tree_sitter::InputEdit {
@@ -1268,6 +1728,27 @@ fn build_incremental_parse_seed(
     Some(TreesitterIncrementalSeed {
         tree,
         next_version: previous.source_version.saturating_add(1),
+    })
+}
+
+fn treesitter_byte_edit_range_from_hint(
+    edit_hint: &DiffSyntaxEdit,
+    old_len: usize,
+    new_len: usize,
+) -> Option<TreesitterByteEditRange> {
+    if edit_hint.old_range.start != edit_hint.new_range.start
+        || edit_hint.old_range.start > edit_hint.old_range.end
+        || edit_hint.new_range.start > edit_hint.new_range.end
+        || edit_hint.old_range.end > old_len
+        || edit_hint.new_range.end > new_len
+    {
+        return None;
+    }
+
+    Some(TreesitterByteEditRange {
+        start_byte: edit_hint.old_range.start,
+        old_end_byte: edit_hint.old_range.end,
+        new_end_byte: edit_hint.new_range.end,
     })
 }
 
@@ -1379,8 +1860,10 @@ fn should_use_treesitter_for_line(text: &str) -> bool {
 }
 
 struct TreesitterHighlightSpec {
+    ts_language: tree_sitter::Language,
     query: tree_sitter::Query,
     capture_kinds: Vec<Option<SyntaxTokenKind>>,
+    injection_query: Option<tree_sitter::Query>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1389,9 +1872,52 @@ struct TreesitterQueryPass {
     containing_byte_range: Option<Range<usize>>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct TreesitterInjectionMatch {
+    language: DiffSyntaxLanguage,
+    byte_start: usize,
+    byte_end: usize,
+    /// Hash of the injection content bytes. This ensures the cache is not
+    /// confused when different parent documents happen to produce injection
+    /// regions at the same byte offsets.
+    content_hash: u64,
+}
+
+struct CachedInjectionTokens {
+    /// Full tokenized lines in injection-local coordinates (all lines of the injection).
+    all_line_tokens: Vec<Vec<SyntaxToken>>,
+    /// Line starts for the injection text, used for coordinate remapping.
+    injection_line_starts: Vec<usize>,
+    /// First line in the parent document that this injection starts on.
+    injection_start_line_ix: usize,
+    /// Monotonic access counter for LRU eviction.
+    last_access: u64,
+}
+
+#[derive(Clone, Copy)]
+struct TreesitterQueryAsset {
+    highlights: &'static str,
+    injections: Option<&'static str>,
+}
+
+impl TreesitterQueryAsset {
+    const fn highlights(source: &'static str) -> Self {
+        Self {
+            highlights: source,
+            injections: None,
+        }
+    }
+
+    const fn with_injections(highlights: &'static str, injections: &'static str) -> Self {
+        Self {
+            highlights,
+            injections: Some(injections),
+        }
+    }
+}
+
 struct DocumentTokenCollectionContext<'a> {
     line_starts: &'a [usize],
-    line_lengths: &'a [usize],
     start_line_ix: usize,
     end_line_ix: usize,
     per_line: &'a mut [Vec<SyntaxToken>],
@@ -1401,8 +1927,8 @@ fn syntax_tokens_for_line_treesitter(
     text: &str,
     language: DiffSyntaxLanguage,
 ) -> Option<Vec<SyntaxToken>> {
-    let ts_language = tree_sitter_language(language)?;
     let highlight = tree_sitter_highlight_spec(language)?;
+    let ts_language = &highlight.ts_language;
 
     let input_len = text.len();
     let tree = TS_INPUT.with(|input| {
@@ -1481,50 +2007,25 @@ fn treesitter_document_doc_hash(input: &str) -> u64 {
     hasher.finish()
 }
 
-#[cfg(test)]
-fn collect_treesitter_document_line_tokens(
-    tree: &tree_sitter::Tree,
-    highlight: &TreesitterHighlightSpec,
-    input: &[u8],
-    line_lengths: &[usize],
-) -> Vec<Vec<SyntaxToken>> {
-    if line_lengths.is_empty() {
-        return Vec::new();
-    }
-
-    let line_starts = treesitter_document_line_starts(line_lengths);
-    collect_treesitter_document_line_tokens_for_line_window(
-        tree,
-        highlight,
-        input,
-        &line_starts,
-        line_lengths,
-        0,
-        line_lengths.len(),
-    )
-}
-
 fn collect_treesitter_document_line_tokens_for_line_window(
     tree: &tree_sitter::Tree,
     highlight: &TreesitterHighlightSpec,
     input: &[u8],
     line_starts: &[usize],
-    line_lengths: &[usize],
     start_line_ix: usize,
     end_line_ix: usize,
 ) -> Vec<Vec<SyntaxToken>> {
-    if line_lengths.is_empty()
-        || start_line_ix >= end_line_ix
-        || start_line_ix >= line_lengths.len()
-    {
+    if line_starts.is_empty() {
+        return Vec::new();
+    }
+    let end_line_ix = end_line_ix.min(line_starts.len());
+    if start_line_ix >= end_line_ix {
         return Vec::new();
     }
 
-    let end_line_ix = end_line_ix.min(line_lengths.len());
     let mut per_line: Vec<Vec<SyntaxToken>> = vec![Vec::new(); end_line_ix - start_line_ix];
     let query_passes = treesitter_document_query_passes_for_line_window(
         line_starts,
-        line_lengths,
         input.len(),
         start_line_ix,
         end_line_ix,
@@ -1532,7 +2033,6 @@ fn collect_treesitter_document_line_tokens_for_line_window(
     {
         let mut context = DocumentTokenCollectionContext {
             line_starts,
-            line_lengths,
             start_line_ix,
             end_line_ix,
             per_line: &mut per_line,
@@ -1540,6 +2040,7 @@ fn collect_treesitter_document_line_tokens_for_line_window(
         for pass in &query_passes {
             collect_query_pass_tokens_for_document(tree, highlight, input, pass, &mut context);
         }
+        apply_injection_query_tokens_for_document(tree, highlight, input, &mut context);
     }
 
     for line_tokens in &mut per_line {
@@ -1580,62 +2081,42 @@ fn configure_query_cursor(
     }
 }
 
-fn treesitter_document_line_starts(line_lengths: &[usize]) -> Vec<usize> {
-    let mut line_starts = Vec::with_capacity(line_lengths.len());
-    let mut byte_offset = 0usize;
-    for line_len in line_lengths {
-        line_starts.push(byte_offset);
-        byte_offset = byte_offset.saturating_add(line_len.saturating_add(1));
-    }
+/// Byte offset where the region for line `line_ix` ends (start of next line, or `input_len`).
+/// Replaces the old `line_query_end_byte(line_starts[i], line_lengths[i], input_len)`.
+fn line_region_end_byte(line_starts: &[usize], input_len: usize, line_ix: usize) -> usize {
     line_starts
-}
-
-fn line_query_end_byte(line_start: usize, line_len: usize, input_len: usize) -> usize {
-    line_start
-        .saturating_add(line_len.saturating_add(1))
+        .get(line_ix + 1)
+        .copied()
+        .unwrap_or(input_len)
         .min(input_len)
 }
 
-#[cfg(test)]
-fn treesitter_document_query_passes(
-    line_starts: &[usize],
-    line_lengths: &[usize],
-    input_len: usize,
-) -> Vec<TreesitterQueryPass> {
-    treesitter_document_query_passes_for_line_window(
-        line_starts,
-        line_lengths,
-        input_len,
-        0,
-        line_lengths.len(),
-    )
+/// Content-end byte offset for line `line_ix` (excludes a trailing `\n` when present).
+fn line_content_end_byte(line_starts: &[usize], input: &[u8], line_ix: usize) -> usize {
+    let region_end = line_region_end_byte(line_starts, input.len(), line_ix);
+    if input.get(region_end.saturating_sub(1)) == Some(&b'\n') {
+        region_end.saturating_sub(1)
+    } else {
+        region_end
+    }
 }
 
 fn treesitter_document_query_passes_for_line_window(
     line_starts: &[usize],
-    line_lengths: &[usize],
     input_len: usize,
     start_line_ix: usize,
     end_line_ix: usize,
 ) -> Vec<TreesitterQueryPass> {
-    if input_len == 0
-        || line_lengths.is_empty()
-        || start_line_ix >= end_line_ix
-        || start_line_ix >= line_lengths.len()
-    {
+    if input_len == 0 || line_starts.is_empty() {
         return Vec::new();
     }
-    let end_line_ix = end_line_ix.min(line_lengths.len());
+    let end_line_ix = end_line_ix.min(line_starts.len());
     if start_line_ix >= end_line_ix {
         return Vec::new();
     }
 
     let window_start_byte = line_starts[start_line_ix].min(input_len);
-    let window_end_byte = line_query_end_byte(
-        line_starts[end_line_ix - 1].min(input_len),
-        line_lengths[end_line_ix - 1],
-        input_len,
-    );
+    let window_end_byte = line_region_end_byte(line_starts, input_len, end_line_ix - 1);
     if window_start_byte >= window_end_byte {
         return Vec::new();
     }
@@ -1653,7 +2134,7 @@ fn treesitter_document_query_passes_for_line_window(
     let mut line_ix = start_line_ix;
     while line_ix < end_line_ix {
         let line_start = line_starts[line_ix].min(input_len);
-        let line_end = line_query_end_byte(line_start, line_lengths[line_ix], input_len);
+        let line_end = line_region_end_byte(line_starts, input_len, line_ix);
         let line_bytes = line_end.saturating_sub(line_start);
 
         if line_bytes > TS_MAX_BYTES_TO_QUERY {
@@ -1681,9 +2162,7 @@ fn treesitter_document_query_passes_for_line_window(
             && (window_end_line - window_start_line + 1) < TS_QUERY_MAX_LINES_PER_PASS
         {
             let next_line_ix = window_end_line + 1;
-            let next_line_start = line_starts[next_line_ix].min(input_len);
-            let next_line_end =
-                line_query_end_byte(next_line_start, line_lengths[next_line_ix], input_len);
+            let next_line_end = line_region_end_byte(line_starts, input_len, next_line_ix);
             let candidate_end = window_end.max(next_line_end);
             let candidate_bytes = candidate_end.saturating_sub(window_start);
             if candidate_bytes > TS_MAX_BYTES_TO_QUERY {
@@ -1754,7 +2233,7 @@ fn collect_query_pass_tokens_for_document(
             }
             while line_ix < context.end_line_ix && line_ix < context.line_starts.len() {
                 let line_start = context.line_starts[line_ix];
-                let line_end = line_start.saturating_add(context.line_lengths[line_ix]);
+                let line_end = line_content_end_byte(context.line_starts, input, line_ix);
                 let token_start = byte_range.start.max(line_start);
                 let token_end = byte_range.end.min(line_end);
                 if token_start < token_end {
@@ -1774,6 +2253,408 @@ fn collect_query_pass_tokens_for_document(
     });
 }
 
+struct InjectionDepthGuard(usize);
+
+impl InjectionDepthGuard {
+    fn enter() -> Option<Self> {
+        let depth = TS_INJECTION_DEPTH.with(|d| d.get());
+        if depth >= TS_MAX_INJECTION_DEPTH {
+            return None;
+        }
+        TS_INJECTION_DEPTH.with(|d| d.set(depth + 1));
+        Some(Self(depth))
+    }
+}
+
+impl Drop for InjectionDepthGuard {
+    fn drop(&mut self) {
+        TS_INJECTION_DEPTH.with(|d| d.set(self.0));
+    }
+}
+
+fn apply_injection_query_tokens_for_document(
+    tree: &tree_sitter::Tree,
+    highlight: &TreesitterHighlightSpec,
+    input: &[u8],
+    context: &mut DocumentTokenCollectionContext<'_>,
+) {
+    let Some(_guard) = InjectionDepthGuard::enter() else {
+        return;
+    };
+    let injections = collect_treesitter_injection_matches_for_line_window(
+        tree,
+        highlight,
+        input,
+        context.line_starts,
+        context.start_line_ix,
+        context.end_line_ix,
+    );
+    for injection in injections {
+        let Some(injected_tokens) = collect_injected_tokens_for_parent_line_window(
+            input,
+            context.line_starts,
+            context.start_line_ix,
+            context.end_line_ix,
+            injection,
+        ) else {
+            continue;
+        };
+
+        subtract_absolute_range_from_document_tokens(
+            context.line_starts,
+            input,
+            context.start_line_ix,
+            context.per_line,
+            injection.byte_start..injection.byte_end,
+        );
+
+        for (parent_line_ix, tokens) in injected_tokens {
+            if tokens.is_empty() || parent_line_ix < context.start_line_ix {
+                continue;
+            }
+            let Some(line_tokens) = context
+                .per_line
+                .get_mut(parent_line_ix.saturating_sub(context.start_line_ix))
+            else {
+                continue;
+            };
+            line_tokens.extend(tokens);
+        }
+    }
+}
+
+fn collect_treesitter_injection_matches_for_line_window(
+    tree: &tree_sitter::Tree,
+    highlight: &TreesitterHighlightSpec,
+    input: &[u8],
+    line_starts: &[usize],
+    start_line_ix: usize,
+    end_line_ix: usize,
+) -> Vec<TreesitterInjectionMatch> {
+    let Some(injection_query) = highlight.injection_query.as_ref() else {
+        return Vec::new();
+    };
+    let Some(injection_content_capture_ix) =
+        injection_query.capture_index_for_name("injection.content")
+    else {
+        return Vec::new();
+    };
+
+    let query_passes = treesitter_document_query_passes_for_line_window(
+        line_starts,
+        input.len(),
+        start_line_ix,
+        end_line_ix,
+    );
+    if query_passes.is_empty() {
+        return Vec::new();
+    }
+
+    let mut seen = HashSet::new();
+    let mut injections = Vec::new();
+    for pass in &query_passes {
+        TS_CURSOR.with(|cursor| {
+            let mut cursor = cursor.borrow_mut();
+            configure_query_cursor(&mut cursor, pass, input.len());
+            let mut matches = cursor.matches(injection_query, tree.root_node(), input);
+            tree_sitter::StreamingIterator::advance(&mut matches);
+            while let Some(m) = matches.get() {
+                let Some(language) =
+                    injection_language_for_pattern(injection_query, m.pattern_index)
+                else {
+                    tree_sitter::StreamingIterator::advance(&mut matches);
+                    continue;
+                };
+                for capture in m
+                    .captures
+                    .iter()
+                    .filter(|capture| capture.index == injection_content_capture_ix)
+                {
+                    let mut byte_range = capture.node.byte_range();
+                    byte_range.start = byte_range.start.min(input.len());
+                    byte_range.end = byte_range.end.min(input.len());
+                    if byte_range.start >= byte_range.end {
+                        continue;
+                    }
+                    let injection = TreesitterInjectionMatch {
+                        language,
+                        byte_start: byte_range.start,
+                        byte_end: byte_range.end,
+                        content_hash: {
+                            use std::collections::hash_map::DefaultHasher;
+                            use std::hash::{Hash, Hasher};
+                            let mut h = DefaultHasher::new();
+                            input[byte_range.start..byte_range.end].hash(&mut h);
+                            h.finish()
+                        },
+                    };
+                    if seen.insert(injection) {
+                        injections.push(injection);
+                    }
+                }
+                tree_sitter::StreamingIterator::advance(&mut matches);
+            }
+        });
+    }
+
+    injections.sort_by_key(|injection| (injection.byte_start, injection.byte_end));
+    injections
+}
+
+fn injection_language_for_pattern(
+    query: &tree_sitter::Query,
+    pattern_index: usize,
+) -> Option<DiffSyntaxLanguage> {
+    let language_name = query
+        .property_settings(pattern_index)
+        .iter()
+        .find_map(|setting| {
+            matches!(setting.key.as_ref(), "injection.language" | "language")
+                .then(|| setting.value.as_deref())
+                .flatten()
+        })?;
+    injection_language_from_name(language_name)
+}
+
+fn injection_language_from_name(name: &str) -> Option<DiffSyntaxLanguage> {
+    match name {
+        "html" => Some(DiffSyntaxLanguage::Html),
+        "css" => Some(DiffSyntaxLanguage::Css),
+        "rust" => Some(DiffSyntaxLanguage::Rust),
+        "python" => Some(DiffSyntaxLanguage::Python),
+        "javascript" | "js" => Some(DiffSyntaxLanguage::JavaScript),
+        "typescript" | "ts" => Some(DiffSyntaxLanguage::TypeScript),
+        "tsx" => Some(DiffSyntaxLanguage::Tsx),
+        "go" => Some(DiffSyntaxLanguage::Go),
+        "json" => Some(DiffSyntaxLanguage::Json),
+        "yaml" | "yml" => Some(DiffSyntaxLanguage::Yaml),
+        "bash" | "sh" => Some(DiffSyntaxLanguage::Bash),
+        _ => None,
+    }
+}
+
+fn next_injection_access() -> u64 {
+    TS_INJECTION_ACCESS_COUNTER.with(|c| {
+        let val = c.get().wrapping_add(1);
+        c.set(val);
+        val
+    })
+}
+
+fn ensure_injection_cached(
+    input: &[u8],
+    line_starts: &[usize],
+    injection: TreesitterInjectionMatch,
+) -> bool {
+    TS_INJECTION_CACHE.with(|cache| {
+        if let Some(entry) = cache.borrow_mut().get_mut(&injection) {
+            entry.last_access = next_injection_access();
+            return true;
+        }
+
+        let injection_byte_range =
+            injection.byte_start.min(input.len())..injection.byte_end.min(input.len());
+        if injection_byte_range.is_empty() {
+            return false;
+        }
+        let Ok(injection_text) = std::str::from_utf8(&input[injection_byte_range.clone()]) else {
+            return false;
+        };
+        if injection_text.is_empty() {
+            return false;
+        }
+        let injection_input = treesitter_document_input_from_text(injection_text);
+        if injection_input.line_starts.is_empty() {
+            return false;
+        }
+        let Some(highlight) = tree_sitter_highlight_spec(injection.language) else {
+            return false;
+        };
+        let Some(tree) = TS_PARSER.with(|parser| {
+            let mut parser = parser.borrow_mut();
+            parser.set_language(&highlight.ts_language).ok()?;
+            parse_treesitter_tree(&mut parser, injection_input.text.as_bytes(), None, None)
+        }) else {
+            return false;
+        };
+
+        let injection_line_count = injection_input.line_starts.len();
+        let all_line_tokens = collect_treesitter_document_line_tokens_for_line_window(
+            &tree,
+            highlight,
+            injection_input.text.as_bytes(),
+            injection_input.line_starts.as_ref(),
+            0,
+            injection_line_count,
+        );
+
+        let injection_start_line_ix = line_ix_for_byte(line_starts, injection.byte_start);
+        let access = next_injection_access();
+
+        let mut cache = cache.borrow_mut();
+        if cache.len() >= TS_INJECTION_CACHE_MAX_ENTRIES {
+            // Evict the least-recently-used half instead of clearing everything.
+            let mut entries: Vec<_> = cache.iter().map(|(k, v)| (*k, v.last_access)).collect();
+            entries.sort_unstable_by_key(|(_, a)| *a);
+            let evict_count = entries.len() / 2;
+            for (key, _) in entries.into_iter().take(evict_count) {
+                cache.remove(&key);
+            }
+        }
+        cache.insert(
+            injection,
+            CachedInjectionTokens {
+                all_line_tokens,
+                injection_line_starts: injection_input.line_starts.as_ref().to_vec(),
+                injection_start_line_ix,
+                last_access: access,
+            },
+        );
+        true
+    })
+}
+
+fn collect_injected_tokens_for_parent_line_window(
+    input: &[u8],
+    line_starts: &[usize],
+    start_line_ix: usize,
+    end_line_ix: usize,
+    injection: TreesitterInjectionMatch,
+) -> Option<Vec<(usize, Vec<SyntaxToken>)>> {
+    if !ensure_injection_cached(input, line_starts, injection) {
+        return Some(Vec::new());
+    }
+
+    TS_INJECTION_CACHE.with(|cache| {
+        let cache = cache.borrow();
+        let cached = cache.get(&injection)?;
+
+        let injection_end_line_ix = cached
+            .injection_start_line_ix
+            .saturating_add(cached.all_line_tokens.len());
+        let parent_start_line_ix = start_line_ix.max(cached.injection_start_line_ix);
+        let parent_end_line_ix = end_line_ix.min(injection_end_line_ix);
+        if parent_start_line_ix >= parent_end_line_ix {
+            return Some(Vec::new());
+        }
+
+        let local_start_line_ix =
+            parent_start_line_ix.saturating_sub(cached.injection_start_line_ix);
+        let local_end_line_ix = parent_end_line_ix.saturating_sub(cached.injection_start_line_ix);
+
+        let mut mapped_tokens = Vec::with_capacity(local_end_line_ix - local_start_line_ix);
+        for local_line_ix in local_start_line_ix..local_end_line_ix {
+            let parent_line_ix = cached.injection_start_line_ix.saturating_add(local_line_ix);
+            let Some(parent_line_start) = line_starts.get(parent_line_ix).copied() else {
+                continue;
+            };
+            let parent_content_end = line_content_end_byte(line_starts, input, parent_line_ix);
+            let parent_line_len = parent_content_end.saturating_sub(parent_line_start);
+            let Some(local_line_start) = cached.injection_line_starts.get(local_line_ix).copied()
+            else {
+                continue;
+            };
+            let absolute_line_start = injection.byte_start.saturating_add(local_line_start);
+            let offset_within_parent = absolute_line_start.saturating_sub(parent_line_start);
+            let tokens = cached
+                .all_line_tokens
+                .get(local_line_ix)
+                .cloned()
+                .unwrap_or_default();
+            let mut remapped = Vec::with_capacity(tokens.len());
+            for token in tokens {
+                let start = offset_within_parent.saturating_add(token.range.start);
+                let end = offset_within_parent
+                    .saturating_add(token.range.end)
+                    .min(parent_line_len);
+                if start >= end || start >= parent_line_len {
+                    continue;
+                }
+                remapped.push(SyntaxToken {
+                    range: start..end,
+                    kind: token.kind,
+                });
+            }
+            mapped_tokens.push((parent_line_ix, remapped));
+        }
+
+        Some(mapped_tokens)
+    })
+}
+
+fn subtract_absolute_range_from_document_tokens(
+    line_starts: &[usize],
+    input: &[u8],
+    start_line_ix: usize,
+    per_line: &mut [Vec<SyntaxToken>],
+    absolute_range: Range<usize>,
+) {
+    if absolute_range.start >= absolute_range.end || per_line.is_empty() {
+        return;
+    }
+
+    let first_line_ix = line_ix_for_byte(line_starts, absolute_range.start);
+    let last_line_ix = line_ix_for_byte(line_starts, absolute_range.end.saturating_sub(1));
+    let visible_end_line_ix = start_line_ix.saturating_add(per_line.len());
+    let clipped_start_line_ix = first_line_ix.max(start_line_ix);
+    let clipped_end_line_ix = last_line_ix.saturating_add(1).min(visible_end_line_ix);
+    if clipped_start_line_ix >= clipped_end_line_ix {
+        return;
+    }
+
+    for line_ix in clipped_start_line_ix..clipped_end_line_ix {
+        let Some(line_start) = line_starts.get(line_ix).copied() else {
+            continue;
+        };
+        let content_end = line_content_end_byte(line_starts, input, line_ix);
+        let cut_start = absolute_range
+            .start
+            .max(line_start)
+            .saturating_sub(line_start);
+        let cut_end = absolute_range
+            .end
+            .min(content_end)
+            .saturating_sub(line_start);
+        if cut_start >= cut_end {
+            continue;
+        }
+        let Some(line_tokens) = per_line.get_mut(line_ix.saturating_sub(start_line_ix)) else {
+            continue;
+        };
+        subtract_relative_range_from_line_tokens(line_tokens, cut_start..cut_end);
+    }
+}
+
+fn subtract_relative_range_from_line_tokens(
+    line_tokens: &mut Vec<SyntaxToken>,
+    cut_range: Range<usize>,
+) {
+    if cut_range.start >= cut_range.end || line_tokens.is_empty() {
+        return;
+    }
+
+    let mut out = Vec::with_capacity(line_tokens.len().saturating_add(1));
+    for token in line_tokens.drain(..) {
+        if token.range.end <= cut_range.start || token.range.start >= cut_range.end {
+            out.push(token);
+            continue;
+        }
+        if token.range.start < cut_range.start {
+            out.push(SyntaxToken {
+                range: token.range.start..cut_range.start,
+                kind: token.kind,
+            });
+        }
+        if token.range.end > cut_range.end {
+            out.push(SyntaxToken {
+                range: cut_range.end..token.range.end,
+                kind: token.kind,
+            });
+        }
+    }
+    *line_tokens = out;
+}
+
 fn normalize_non_overlapping_tokens(mut tokens: Vec<SyntaxToken>) -> Vec<SyntaxToken> {
     if tokens.is_empty() {
         return tokens;
@@ -1787,11 +2668,20 @@ fn normalize_non_overlapping_tokens(mut tokens: Vec<SyntaxToken>) -> Vec<SyntaxT
     });
 
     // Ensure non-overlapping tokens so the segment splitter can pick a single style per range.
+    // Tree-sitter queries follow "later pattern wins" semantics: when two patterns capture
+    // the same node, the more specific pattern (later in the query file) should take priority.
+    // Since captures() returns lower pattern indices first, later tokens at the same position
+    // should override earlier ones.
     let mut out: Vec<SyntaxToken> = Vec::with_capacity(tokens.len());
     for mut token in tokens {
-        if let Some(prev) = out.last()
+        if let Some(prev) = out.last_mut()
             && token.range.start < prev.range.end
         {
+            // Exact same range: later pattern wins (replace previous)
+            if token.range == prev.range {
+                *prev = token;
+                continue;
+            }
             if token.range.end <= prev.range.end {
                 continue;
             }
@@ -1805,356 +2695,429 @@ fn normalize_non_overlapping_tokens(mut tokens: Vec<SyntaxToken>) -> Vec<SyntaxT
     out
 }
 
-fn tree_sitter_language(language: DiffSyntaxLanguage) -> Option<tree_sitter::Language> {
+/// Single source of truth for tree-sitter grammar + query asset per language.
+/// Returns `None` for languages without a wired tree-sitter grammar.
+fn tree_sitter_grammar(
+    language: DiffSyntaxLanguage,
+) -> Option<(tree_sitter::Language, TreesitterQueryAsset)> {
     Some(match language {
-        DiffSyntaxLanguage::Markdown => return None,
-        DiffSyntaxLanguage::Html => tree_sitter_html::LANGUAGE.into(),
-        DiffSyntaxLanguage::Css => tree_sitter_css::LANGUAGE.into(),
-        DiffSyntaxLanguage::Hcl => return None,
-        DiffSyntaxLanguage::Bicep => return None,
-        DiffSyntaxLanguage::Lua => return None,
-        DiffSyntaxLanguage::Makefile => return None,
-        DiffSyntaxLanguage::Kotlin => return None,
-        DiffSyntaxLanguage::Zig => return None,
-        DiffSyntaxLanguage::Rust => tree_sitter_rust::LANGUAGE.into(),
-        DiffSyntaxLanguage::Python => tree_sitter_python::LANGUAGE.into(),
-        DiffSyntaxLanguage::Go => tree_sitter_go::LANGUAGE.into(),
-        DiffSyntaxLanguage::C => return None,
-        DiffSyntaxLanguage::Cpp => return None,
-        DiffSyntaxLanguage::CSharp => return None,
-        DiffSyntaxLanguage::FSharp => return None,
-        DiffSyntaxLanguage::VisualBasic => return None,
-        DiffSyntaxLanguage::Java => return None,
-        DiffSyntaxLanguage::Php => return None,
-        DiffSyntaxLanguage::Ruby => return None,
-        DiffSyntaxLanguage::Json => tree_sitter_json::LANGUAGE.into(),
-        DiffSyntaxLanguage::Yaml => tree_sitter_yaml::LANGUAGE.into(),
-        DiffSyntaxLanguage::TypeScript => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
-        DiffSyntaxLanguage::Tsx | DiffSyntaxLanguage::JavaScript => {
-            tree_sitter_typescript::LANGUAGE_TSX.into()
-        }
-        DiffSyntaxLanguage::Sql => return None,
-        DiffSyntaxLanguage::Bash => tree_sitter_bash::LANGUAGE.into(),
-        DiffSyntaxLanguage::Toml => return None,
+        DiffSyntaxLanguage::Html => (
+            tree_sitter_html::LANGUAGE.into(),
+            TreesitterQueryAsset::with_injections(HTML_HIGHLIGHTS_QUERY, HTML_INJECTIONS_QUERY),
+        ),
+        DiffSyntaxLanguage::Css => (
+            tree_sitter_css::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(CSS_HIGHLIGHTS_QUERY),
+        ),
+        DiffSyntaxLanguage::Rust => (
+            tree_sitter_rust::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(RUST_HIGHLIGHTS_QUERY),
+        ),
+        DiffSyntaxLanguage::Python => (
+            tree_sitter_python::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(tree_sitter_python::HIGHLIGHTS_QUERY),
+        ),
+        DiffSyntaxLanguage::Go => (
+            tree_sitter_go::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(tree_sitter_go::HIGHLIGHTS_QUERY),
+        ),
+        DiffSyntaxLanguage::Json => (
+            tree_sitter_json::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(tree_sitter_json::HIGHLIGHTS_QUERY),
+        ),
+        DiffSyntaxLanguage::Yaml => (
+            tree_sitter_yaml::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(tree_sitter_yaml::HIGHLIGHTS_QUERY),
+        ),
+        DiffSyntaxLanguage::TypeScript => (
+            tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+            TreesitterQueryAsset::highlights(TYPESCRIPT_HIGHLIGHTS_QUERY),
+        ),
+        DiffSyntaxLanguage::Tsx => (
+            tree_sitter_typescript::LANGUAGE_TSX.into(),
+            TreesitterQueryAsset::highlights(TSX_HIGHLIGHTS_QUERY),
+        ),
+        DiffSyntaxLanguage::JavaScript => (
+            tree_sitter_javascript::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(JAVASCRIPT_HIGHLIGHTS_QUERY),
+        ),
+        DiffSyntaxLanguage::Bash => (
+            tree_sitter_bash::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(tree_sitter_bash::HIGHLIGHT_QUERY),
+        ),
+        DiffSyntaxLanguage::Xml => (
+            tree_sitter_xml::LANGUAGE_XML.into(),
+            TreesitterQueryAsset::highlights(XML_HIGHLIGHTS_QUERY),
+        ),
+        // Languages without a wired tree-sitter grammar yet:
+        DiffSyntaxLanguage::Markdown
+        | DiffSyntaxLanguage::Hcl
+        | DiffSyntaxLanguage::Bicep
+        | DiffSyntaxLanguage::Lua
+        | DiffSyntaxLanguage::Makefile
+        | DiffSyntaxLanguage::Kotlin
+        | DiffSyntaxLanguage::Zig
+        | DiffSyntaxLanguage::C
+        | DiffSyntaxLanguage::Cpp
+        | DiffSyntaxLanguage::CSharp
+        | DiffSyntaxLanguage::FSharp
+        | DiffSyntaxLanguage::VisualBasic
+        | DiffSyntaxLanguage::Java
+        | DiffSyntaxLanguage::Php
+        | DiffSyntaxLanguage::Ruby
+        | DiffSyntaxLanguage::Sql
+        | DiffSyntaxLanguage::Toml => return None,
     })
+}
+
+fn init_highlight_spec(language: DiffSyntaxLanguage) -> TreesitterHighlightSpec {
+    let (ts_language, asset) =
+        tree_sitter_grammar(language).expect("tree-sitter grammar should exist");
+    let query = tree_sitter::Query::new(&ts_language, asset.highlights)
+        .expect("highlights.scm should compile");
+    let capture_kinds = query
+        .capture_names()
+        .iter()
+        .map(|name| syntax_kind_from_capture_name(name))
+        .collect::<Vec<_>>();
+    let injection_query = asset.injections.map(|source| {
+        tree_sitter::Query::new(&ts_language, source).expect("injections.scm should compile")
+    });
+    TreesitterHighlightSpec {
+        ts_language,
+        query,
+        capture_kinds,
+        injection_query,
+    }
+}
+
+macro_rules! highlight_spec_entry {
+    ($language_variant:ident) => {{
+        static SPEC: OnceLock<TreesitterHighlightSpec> = OnceLock::new();
+        Some(SPEC.get_or_init(|| init_highlight_spec(DiffSyntaxLanguage::$language_variant)))
+    }};
 }
 
 fn tree_sitter_highlight_spec(
     language: DiffSyntaxLanguage,
 ) -> Option<&'static TreesitterHighlightSpec> {
-    static HTML: OnceLock<TreesitterHighlightSpec> = OnceLock::new();
-    static CSS: OnceLock<TreesitterHighlightSpec> = OnceLock::new();
-    static RUST: OnceLock<TreesitterHighlightSpec> = OnceLock::new();
-    static PY: OnceLock<TreesitterHighlightSpec> = OnceLock::new();
-    static GO: OnceLock<TreesitterHighlightSpec> = OnceLock::new();
-    static JSON: OnceLock<TreesitterHighlightSpec> = OnceLock::new();
-    static YAML: OnceLock<TreesitterHighlightSpec> = OnceLock::new();
-    static TS: OnceLock<TreesitterHighlightSpec> = OnceLock::new();
-    static TSX: OnceLock<TreesitterHighlightSpec> = OnceLock::new();
-    static JS: OnceLock<TreesitterHighlightSpec> = OnceLock::new();
-    static BASH: OnceLock<TreesitterHighlightSpec> = OnceLock::new();
+    match language {
+        DiffSyntaxLanguage::Html => highlight_spec_entry!(Html),
+        DiffSyntaxLanguage::Css => highlight_spec_entry!(Css),
+        DiffSyntaxLanguage::Rust => highlight_spec_entry!(Rust),
+        DiffSyntaxLanguage::Python => highlight_spec_entry!(Python),
+        DiffSyntaxLanguage::Go => highlight_spec_entry!(Go),
+        DiffSyntaxLanguage::Json => highlight_spec_entry!(Json),
+        DiffSyntaxLanguage::Yaml => highlight_spec_entry!(Yaml),
+        DiffSyntaxLanguage::TypeScript => highlight_spec_entry!(TypeScript),
+        DiffSyntaxLanguage::Tsx => highlight_spec_entry!(Tsx),
+        DiffSyntaxLanguage::JavaScript => highlight_spec_entry!(JavaScript),
+        DiffSyntaxLanguage::Bash => highlight_spec_entry!(Bash),
+        DiffSyntaxLanguage::Xml => highlight_spec_entry!(Xml),
+        _ => None,
+    }
+}
 
-    let init = |language: tree_sitter::Language, source: &'static str| -> TreesitterHighlightSpec {
-        let query =
-            tree_sitter::Query::new(&language, source).expect("highlights.scm should compile");
-        let capture_kinds = query
-            .capture_names()
-            .iter()
-            .map(|name| syntax_kind_from_capture_name(name))
-            .collect::<Vec<_>>();
-        TreesitterHighlightSpec {
-            query,
-            capture_kinds,
+fn syntax_kind_from_capture_name(mut name: &str) -> Option<SyntaxTokenKind> {
+    // Try the full dotted capture name first and then progressively trim suffix
+    // segments so vendored names like `punctuation.bracket.html` keep their
+    // semantic class instead of collapsing all the way to `punctuation`.
+    loop {
+        if let Some(kind) = syntax_kind_for_capture_name(name) {
+            return Some(kind);
         }
-    };
 
-    Some(match language {
-        DiffSyntaxLanguage::Markdown => return None,
-        DiffSyntaxLanguage::Html => HTML.get_or_init(|| {
-            init(
-                tree_sitter_html::LANGUAGE.into(),
-                tree_sitter_html::HIGHLIGHTS_QUERY,
-            )
-        }),
-        DiffSyntaxLanguage::Css => CSS.get_or_init(|| {
-            init(
-                tree_sitter_css::LANGUAGE.into(),
-                tree_sitter_css::HIGHLIGHTS_QUERY,
-            )
-        }),
-        DiffSyntaxLanguage::Hcl => return None,
-        DiffSyntaxLanguage::Bicep => return None,
-        DiffSyntaxLanguage::Lua => return None,
-        DiffSyntaxLanguage::Makefile => return None,
-        DiffSyntaxLanguage::Kotlin => return None,
-        DiffSyntaxLanguage::Zig => return None,
-        DiffSyntaxLanguage::Rust => RUST.get_or_init(|| {
-            init(
-                tree_sitter_rust::LANGUAGE.into(),
-                tree_sitter_rust::HIGHLIGHTS_QUERY,
-            )
-        }),
-        DiffSyntaxLanguage::Python => PY.get_or_init(|| {
-            init(
-                tree_sitter_python::LANGUAGE.into(),
-                tree_sitter_python::HIGHLIGHTS_QUERY,
-            )
-        }),
-        DiffSyntaxLanguage::Go => GO.get_or_init(|| {
-            init(
-                tree_sitter_go::LANGUAGE.into(),
-                tree_sitter_go::HIGHLIGHTS_QUERY,
-            )
-        }),
-        DiffSyntaxLanguage::C => return None,
-        DiffSyntaxLanguage::Cpp => return None,
-        DiffSyntaxLanguage::CSharp => return None,
-        DiffSyntaxLanguage::FSharp => return None,
-        DiffSyntaxLanguage::VisualBasic => return None,
-        DiffSyntaxLanguage::Java => return None,
-        DiffSyntaxLanguage::Php => return None,
-        DiffSyntaxLanguage::Ruby => return None,
-        DiffSyntaxLanguage::Json => JSON.get_or_init(|| {
-            init(
-                tree_sitter_json::LANGUAGE.into(),
-                tree_sitter_json::HIGHLIGHTS_QUERY,
-            )
-        }),
-        DiffSyntaxLanguage::Yaml => YAML.get_or_init(|| {
-            init(
-                tree_sitter_yaml::LANGUAGE.into(),
-                tree_sitter_yaml::HIGHLIGHTS_QUERY,
-            )
-        }),
-        DiffSyntaxLanguage::TypeScript => TS.get_or_init(|| {
-            init(
-                tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
-                tree_sitter_typescript::HIGHLIGHTS_QUERY,
-            )
-        }),
-        DiffSyntaxLanguage::Tsx => TSX.get_or_init(|| {
-            init(
-                tree_sitter_typescript::LANGUAGE_TSX.into(),
-                tree_sitter_typescript::HIGHLIGHTS_QUERY,
-            )
-        }),
-        DiffSyntaxLanguage::JavaScript => JS.get_or_init(|| {
-            init(
-                tree_sitter_typescript::LANGUAGE_TSX.into(),
-                tree_sitter_typescript::HIGHLIGHTS_QUERY,
-            )
-        }),
-        DiffSyntaxLanguage::Bash => BASH.get_or_init(|| {
-            init(
-                tree_sitter_bash::LANGUAGE.into(),
-                tree_sitter_bash::HIGHLIGHT_QUERY,
-            )
-        }),
-        DiffSyntaxLanguage::Sql => return None,
-        DiffSyntaxLanguage::Toml => return None,
+        let Some((prefix, _)) = name.rsplit_once('.') else {
+            return None;
+        };
+        name = prefix;
+    }
+}
+
+fn syntax_kind_for_capture_name(name: &str) -> Option<SyntaxTokenKind> {
+    Some(match name {
+        // Comments
+        "comment.doc" => SyntaxTokenKind::CommentDoc,
+        "comment" => SyntaxTokenKind::Comment,
+        // Strings
+        "string.escape" => SyntaxTokenKind::StringEscape,
+        "string" | "string.special" | "string.regex" | "character" => SyntaxTokenKind::String,
+        // Keywords
+        "keyword.control" => SyntaxTokenKind::KeywordControl,
+        "keyword" | "keyword.declaration" | "keyword.import" | "include" | "preproc" => {
+            SyntaxTokenKind::Keyword
+        }
+        // Numbers & booleans
+        "number" => SyntaxTokenKind::Number,
+        "boolean" => SyntaxTokenKind::Boolean,
+        // Functions
+        "function.method" => SyntaxTokenKind::FunctionMethod,
+        "function.special" | "function.special.definition" => SyntaxTokenKind::FunctionSpecial,
+        "function" | "function.definition" | "constructor" | "method" => SyntaxTokenKind::Function,
+        // Types
+        "type.builtin" => SyntaxTokenKind::TypeBuiltin,
+        "type.interface" => SyntaxTokenKind::TypeInterface,
+        "type" | "type.class" => SyntaxTokenKind::Type,
+        // Variables - general `@variable` renders as plain text (no color) to avoid
+        // "everything is highlighted" noise. Sub-captures get distinct treatment.
+        "variable.parameter" => SyntaxTokenKind::VariableParameter,
+        "variable.special" => SyntaxTokenKind::VariableSpecial,
+        "variable" => SyntaxTokenKind::Variable,
+        // Properties
+        "property" | "field" => SyntaxTokenKind::Property,
+        // Tags (HTML/JSX)
+        "tag" | "tag.doctype" => SyntaxTokenKind::Tag,
+        // Attributes
+        "attribute" | "attribute.jsx" => SyntaxTokenKind::Attribute,
+        // Constants
+        "constant" | "constant.builtin" => SyntaxTokenKind::Constant,
+        // Operators
+        "operator" => SyntaxTokenKind::Operator,
+        // Punctuation
+        "punctuation.bracket" => SyntaxTokenKind::PunctuationBracket,
+        "punctuation.delimiter" => SyntaxTokenKind::PunctuationDelimiter,
+        "punctuation" | "punctuation.special" => SyntaxTokenKind::Punctuation,
+        // Lifetime (Rust)
+        "lifetime" => SyntaxTokenKind::Lifetime,
+        // Labels (goto, DTD notation names)
+        "label" => SyntaxTokenKind::Variable,
+        // Markup (XML text content, CDATA, URIs)
+        "markup.link" => SyntaxTokenKind::String,
+        "markup.raw" => SyntaxTokenKind::String,
+        "markup.heading" => SyntaxTokenKind::Keyword,
+        "markup" => SyntaxTokenKind::Variable,
+        // Selectors/namespaces map to Type for CSS/XML
+        "namespace" | "selector" => SyntaxTokenKind::Type,
+        // Skip `@none`, `@embedded`, `@text.*` and other non-semantic captures
+        _ => return None,
     })
 }
 
-fn syntax_kind_from_capture_name(name: &str) -> Option<SyntaxTokenKind> {
-    let base = name.split('.').next().unwrap_or(name);
-    Some(match base {
-        "comment" => SyntaxTokenKind::Comment,
-        "string" | "character" => SyntaxTokenKind::String,
-        "keyword" => SyntaxTokenKind::Keyword,
-        "include" | "preproc" => SyntaxTokenKind::Keyword,
-        "number" => SyntaxTokenKind::Number,
-        "boolean" => SyntaxTokenKind::Constant,
-        "function" | "constructor" | "method" => SyntaxTokenKind::Function,
-        "type" => SyntaxTokenKind::Type,
-        // Tree-sitter highlight queries often capture most identifiers as `variable.*`.
-        // Coloring these makes Rust diffs look like "everything is blue", so we skip them.
-        "variable" => return None,
-        "property" | "field" | "attribute" => SyntaxTokenKind::Property,
-        "tag" | "namespace" | "selector" => SyntaxTokenKind::Type,
-        "constant" => SyntaxTokenKind::Constant,
-        "punctuation" | "operator" => SyntaxTokenKind::Punctuation,
-        _ => return None,
-    })
+#[derive(Clone, Copy)]
+struct HeuristicBlockCommentSpec {
+    start: &'static str,
+    end: &'static str,
+}
+
+#[derive(Clone, Copy)]
+struct HeuristicCommentConfig {
+    line_comment: Option<&'static str>,
+    hash_comment: bool,
+    block_comment: Option<HeuristicBlockCommentSpec>,
+    visual_basic_line_comment: bool,
+}
+
+const HEURISTIC_HTML_BLOCK_COMMENT: HeuristicBlockCommentSpec = HeuristicBlockCommentSpec {
+    start: "<!--",
+    end: "-->",
+};
+const HEURISTIC_FSHARP_BLOCK_COMMENT: HeuristicBlockCommentSpec = HeuristicBlockCommentSpec {
+    start: "(*",
+    end: "*)",
+};
+const HEURISTIC_LUA_BLOCK_COMMENT: HeuristicBlockCommentSpec = HeuristicBlockCommentSpec {
+    start: "--[[",
+    end: "]]",
+};
+const HEURISTIC_C_BLOCK_COMMENT: HeuristicBlockCommentSpec = HeuristicBlockCommentSpec {
+    start: "/*",
+    end: "*/",
+};
+
+fn heuristic_comment_config(language: DiffSyntaxLanguage) -> HeuristicCommentConfig {
+    match language {
+        DiffSyntaxLanguage::Html | DiffSyntaxLanguage::Xml => HeuristicCommentConfig {
+            line_comment: None,
+            hash_comment: false,
+            block_comment: Some(HEURISTIC_HTML_BLOCK_COMMENT),
+            visual_basic_line_comment: false,
+        },
+        DiffSyntaxLanguage::FSharp => HeuristicCommentConfig {
+            line_comment: None,
+            hash_comment: false,
+            block_comment: Some(HEURISTIC_FSHARP_BLOCK_COMMENT),
+            visual_basic_line_comment: false,
+        },
+        DiffSyntaxLanguage::Lua => HeuristicCommentConfig {
+            line_comment: Some("--"),
+            hash_comment: false,
+            block_comment: Some(HEURISTIC_LUA_BLOCK_COMMENT),
+            visual_basic_line_comment: false,
+        },
+        DiffSyntaxLanguage::Python
+        | DiffSyntaxLanguage::Toml
+        | DiffSyntaxLanguage::Yaml
+        | DiffSyntaxLanguage::Bash
+        | DiffSyntaxLanguage::Makefile
+        | DiffSyntaxLanguage::Ruby => HeuristicCommentConfig {
+            line_comment: None,
+            hash_comment: true,
+            block_comment: None,
+            visual_basic_line_comment: false,
+        },
+        DiffSyntaxLanguage::Sql => HeuristicCommentConfig {
+            line_comment: Some("--"),
+            hash_comment: false,
+            block_comment: Some(HEURISTIC_C_BLOCK_COMMENT),
+            visual_basic_line_comment: false,
+        },
+        DiffSyntaxLanguage::Rust
+        | DiffSyntaxLanguage::JavaScript
+        | DiffSyntaxLanguage::TypeScript
+        | DiffSyntaxLanguage::Tsx
+        | DiffSyntaxLanguage::Go
+        | DiffSyntaxLanguage::C
+        | DiffSyntaxLanguage::Cpp
+        | DiffSyntaxLanguage::CSharp
+        | DiffSyntaxLanguage::Java
+        | DiffSyntaxLanguage::Kotlin
+        | DiffSyntaxLanguage::Zig
+        | DiffSyntaxLanguage::Bicep => HeuristicCommentConfig {
+            line_comment: Some("//"),
+            hash_comment: false,
+            block_comment: Some(HEURISTIC_C_BLOCK_COMMENT),
+            visual_basic_line_comment: false,
+        },
+        DiffSyntaxLanguage::Hcl | DiffSyntaxLanguage::Php => HeuristicCommentConfig {
+            line_comment: Some("//"),
+            hash_comment: true,
+            block_comment: Some(HEURISTIC_C_BLOCK_COMMENT),
+            visual_basic_line_comment: false,
+        },
+        DiffSyntaxLanguage::VisualBasic => HeuristicCommentConfig {
+            line_comment: None,
+            hash_comment: false,
+            block_comment: None,
+            visual_basic_line_comment: true,
+        },
+        DiffSyntaxLanguage::Markdown | DiffSyntaxLanguage::Css | DiffSyntaxLanguage::Json => {
+            HeuristicCommentConfig {
+                line_comment: None,
+                hash_comment: false,
+                block_comment: None,
+                visual_basic_line_comment: false,
+            }
+        }
+    }
+}
+
+fn heuristic_comment_range(
+    text: &str,
+    start: usize,
+    config: HeuristicCommentConfig,
+) -> Option<std::ops::Range<usize>> {
+    let rest = &text[start..];
+
+    if let Some(block) = config.block_comment
+        && rest.starts_with(block.start)
+    {
+        let end = rest
+            .find(block.end)
+            .map(|ix| start + ix + block.end.len())
+            .unwrap_or(text.len());
+        return Some(start..end);
+    }
+
+    if let Some(prefix) = config.line_comment
+        && rest.starts_with(prefix)
+    {
+        return Some(start..text.len());
+    }
+
+    if config.visual_basic_line_comment
+        && (rest.starts_with('\'')
+            || rest
+                .get(..4)
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case("rem ")))
+    {
+        return Some(start..text.len());
+    }
+
+    if config.hash_comment && rest.starts_with('#') {
+        return Some(start..text.len());
+    }
+
+    None
+}
+
+fn heuristic_string_end(text: &str, start: usize, quote: char) -> usize {
+    let len = text.len();
+    let mut i = start + quote.len_utf8();
+    let mut escaped = false;
+
+    while i < len {
+        let Some(next) = text[i..].chars().next() else {
+            break;
+        };
+        let next_len = next.len_utf8();
+        if escaped {
+            escaped = false;
+            i += next_len;
+            continue;
+        }
+        if next == '\\' {
+            escaped = true;
+            i += next_len;
+            continue;
+        }
+        if next == quote {
+            i += next_len;
+            break;
+        }
+        i += next_len;
+    }
+
+    i.min(len)
+}
+
+fn heuristic_allows_backtick_strings(language: DiffSyntaxLanguage) -> bool {
+    matches!(
+        language,
+        DiffSyntaxLanguage::JavaScript
+            | DiffSyntaxLanguage::TypeScript
+            | DiffSyntaxLanguage::Tsx
+            | DiffSyntaxLanguage::Go
+            | DiffSyntaxLanguage::Bash
+            | DiffSyntaxLanguage::Sql
+    )
 }
 
 fn syntax_tokens_for_line_heuristic(text: &str, language: DiffSyntaxLanguage) -> Vec<SyntaxToken> {
     let mut tokens: Vec<SyntaxToken> = Vec::new();
     let len = text.len();
     let mut i = 0usize;
+    let comment_config = heuristic_comment_config(language);
+    let allow_backtick_strings = heuristic_allows_backtick_strings(language);
+    let highlight_css_selectors = matches!(language, DiffSyntaxLanguage::Css);
 
     let is_ident_start = |ch: char| ch == '_' || ch.is_ascii_alphabetic();
     let is_ident_continue = |ch: char| ch == '_' || ch.is_ascii_alphanumeric();
     let is_digit = |ch: char| ch.is_ascii_digit();
 
     while i < len {
-        let rest = &text[i..];
-
-        if matches!(language, DiffSyntaxLanguage::Html) && rest.starts_with("<!--") {
-            let end = rest.find("-->").map(|ix| i + ix + 3).unwrap_or(len);
+        if let Some(comment_range) = heuristic_comment_range(text, i, comment_config) {
             tokens.push(SyntaxToken {
-                range: i..end,
+                range: comment_range.clone(),
                 kind: SyntaxTokenKind::Comment,
             });
-            i = end;
-            continue;
-        }
-
-        if matches!(language, DiffSyntaxLanguage::FSharp) && rest.starts_with("(*") {
-            let end = rest.find("*)").map(|ix| i + ix + 2).unwrap_or(len);
-            tokens.push(SyntaxToken {
-                range: i..end,
-                kind: SyntaxTokenKind::Comment,
-            });
-            i = end;
-            continue;
-        }
-
-        if matches!(language, DiffSyntaxLanguage::Lua) && rest.starts_with("--") {
-            if rest.starts_with("--[[") {
-                let end = rest.find("]]").map(|ix| i + ix + 2).unwrap_or(len);
-                tokens.push(SyntaxToken {
-                    range: i..end,
-                    kind: SyntaxTokenKind::Comment,
-                });
-                i = end;
-                continue;
+            i = comment_range.end;
+            if i >= len {
+                break;
             }
-            tokens.push(SyntaxToken {
-                range: i..len,
-                kind: SyntaxTokenKind::Comment,
-            });
-            break;
-        }
-
-        let (line_comment, hash_comment, block_comment) = match language {
-            DiffSyntaxLanguage::Python | DiffSyntaxLanguage::Toml | DiffSyntaxLanguage::Yaml => {
-                (None, Some('#'), false)
-            }
-            DiffSyntaxLanguage::Markdown => (None, None, false),
-            DiffSyntaxLanguage::Bash => (None, Some('#'), false),
-            DiffSyntaxLanguage::Makefile => (None, Some('#'), false),
-            DiffSyntaxLanguage::Sql => (Some("--"), None, true),
-            DiffSyntaxLanguage::Rust
-            | DiffSyntaxLanguage::JavaScript
-            | DiffSyntaxLanguage::TypeScript
-            | DiffSyntaxLanguage::Tsx
-            | DiffSyntaxLanguage::Go
-            | DiffSyntaxLanguage::C
-            | DiffSyntaxLanguage::Cpp
-            | DiffSyntaxLanguage::CSharp
-            | DiffSyntaxLanguage::Java
-            | DiffSyntaxLanguage::Kotlin
-            | DiffSyntaxLanguage::Zig
-            | DiffSyntaxLanguage::Bicep => (Some("//"), None, true),
-            DiffSyntaxLanguage::Hcl => (Some("//"), Some('#'), true),
-            DiffSyntaxLanguage::Php => (Some("//"), Some('#'), true),
-            DiffSyntaxLanguage::Ruby
-            | DiffSyntaxLanguage::FSharp
-            | DiffSyntaxLanguage::VisualBasic
-            | DiffSyntaxLanguage::Html
-            | DiffSyntaxLanguage::Css => (None, None, false),
-            DiffSyntaxLanguage::Json => (None, None, false),
-            DiffSyntaxLanguage::Lua => (None, None, false),
-        };
-
-        if let Some(prefix) = line_comment
-            && rest.starts_with(prefix)
-        {
-            tokens.push(SyntaxToken {
-                range: i..len,
-                kind: SyntaxTokenKind::Comment,
-            });
-            break;
-        }
-
-        if block_comment && rest.starts_with("/*") {
-            let end = rest.find("*/").map(|ix| i + ix + 2).unwrap_or(len);
-            tokens.push(SyntaxToken {
-                range: i..end,
-                kind: SyntaxTokenKind::Comment,
-            });
-            i = end;
             continue;
         }
 
-        if matches!(language, DiffSyntaxLanguage::Ruby) && rest.starts_with('#') {
-            tokens.push(SyntaxToken {
-                range: i..len,
-                kind: SyntaxTokenKind::Comment,
-            });
-            break;
-        }
-
-        if matches!(language, DiffSyntaxLanguage::VisualBasic)
-            && (rest.starts_with('\'')
-                || rest
-                    .get(..4)
-                    .is_some_and(|prefix| prefix.eq_ignore_ascii_case("rem ")))
-        {
-            tokens.push(SyntaxToken {
-                range: i..len,
-                kind: SyntaxTokenKind::Comment,
-            });
-            break;
-        }
-
-        if let Some('#') = hash_comment
-            && rest.starts_with('#')
-        {
-            tokens.push(SyntaxToken {
-                range: i..len,
-                kind: SyntaxTokenKind::Comment,
-            });
-            break;
-        }
-
-        let Some(ch) = rest.chars().next() else {
+        let Some(ch) = text[i..].chars().next() else {
             break;
         };
 
-        if ch == '"'
-            || ch == '\''
-            || (ch == '`'
-                && matches!(
-                    language,
-                    DiffSyntaxLanguage::JavaScript
-                        | DiffSyntaxLanguage::TypeScript
-                        | DiffSyntaxLanguage::Tsx
-                        | DiffSyntaxLanguage::Go
-                        | DiffSyntaxLanguage::Bash
-                        | DiffSyntaxLanguage::Sql
-                ))
-        {
-            let quote = ch;
-            let mut j = i + quote.len_utf8();
-            let mut escaped = false;
-            while j < len {
-                let Some(next) = text[j..].chars().next() else {
-                    break;
-                };
-                let next_len = next.len_utf8();
-                if escaped {
-                    escaped = false;
-                    j += next_len;
-                    continue;
-                }
-                if next == '\\' {
-                    escaped = true;
-                    j += next_len;
-                    continue;
-                }
-                if next == quote {
-                    j += next_len;
-                    break;
-                }
-                j += next_len;
-            }
-
+        if ch == '"' || ch == '\'' || (allow_backtick_strings && ch == '`') {
+            let j = heuristic_string_end(text, i, ch);
             tokens.push(SyntaxToken {
-                range: i..j.min(len),
+                range: i..j,
                 kind: SyntaxTokenKind::String,
             });
-            i = j.min(len);
+            i = j;
             continue;
         }
 
@@ -2203,7 +3166,7 @@ fn syntax_tokens_for_line_heuristic(text: &str, language: DiffSyntaxLanguage) ->
             continue;
         }
 
-        if matches!(language, DiffSyntaxLanguage::Css) && (ch == '.' || ch == '#') {
+        if highlight_css_selectors && (ch == '.' || ch == '#') {
             let mut j = i + 1;
             while j < len {
                 let Some(next) = text[j..].chars().next() else {
@@ -2235,8 +3198,13 @@ fn is_keyword(language: DiffSyntaxLanguage, ident: &str) -> bool {
     // NOTE: This is a heuristic fallback when we don't want to use tree-sitter for a line.
     match language {
         DiffSyntaxLanguage::Markdown => false,
-        DiffSyntaxLanguage::Html => matches!(ident, "true" | "false"),
-        DiffSyntaxLanguage::Css => matches!(ident, "true" | "false"),
+        DiffSyntaxLanguage::Html
+        | DiffSyntaxLanguage::Xml
+        | DiffSyntaxLanguage::Css
+        | DiffSyntaxLanguage::Toml => matches!(ident, "true" | "false"),
+        DiffSyntaxLanguage::Json | DiffSyntaxLanguage::Yaml => {
+            matches!(ident, "true" | "false" | "null")
+        }
         DiffSyntaxLanguage::Hcl => matches!(
             ident,
             "true" | "false" | "null" | "for" | "in" | "if" | "else" | "endif" | "endfor"
@@ -2673,9 +3641,6 @@ fn is_keyword(language: DiffSyntaxLanguage, ident: &str) -> bool {
                 | "false"
                 | "nil"
         ),
-        DiffSyntaxLanguage::Json => matches!(ident, "true" | "false" | "null"),
-        DiffSyntaxLanguage::Toml => matches!(ident, "true" | "false"),
-        DiffSyntaxLanguage::Yaml => matches!(ident, "true" | "false" | "null"),
         DiffSyntaxLanguage::Sql => {
             let ident = ascii_lowercase_for_match(ident);
             matches!(
@@ -2870,20 +3835,63 @@ mod tests {
     use super::*;
     use std::time::{Duration, Instant};
 
-    static DEFERRED_DROP_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    /// Serializes all tests that read or write the global atomic counters
+    /// (`TS_DEFERRED_DROP_*`, `TS_INCREMENTAL_*`, `TS_TREE_STATE_CLONE_COUNT`).
+    /// Without this lock, concurrent tests can reset or bump counters that
+    /// another test is asserting on, causing flaky failures under parallel
+    /// test execution.
+    static GLOBAL_COUNTER_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-    fn lock_deferred_drop_test() -> std::sync::MutexGuard<'static, ()> {
-        match DEFERRED_DROP_TEST_LOCK.lock() {
+    fn lock_global_counter_tests() -> std::sync::MutexGuard<'static, ()> {
+        match GLOBAL_COUNTER_TEST_LOCK.lock() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         }
     }
 
-    fn synthetic_line_tokens_for_drop_test(
-        lines: usize,
-        tokens_per_line: usize,
-    ) -> Vec<Vec<SyntaxToken>> {
-        benchmark_line_tokens_payload(lines, tokens_per_line, 0)
+    fn wait_for_background_chunk_build_for_document(
+        document: PreparedSyntaxDocument,
+        timeout: Duration,
+    ) -> usize {
+        let started = Instant::now();
+        loop {
+            let applied = drain_completed_prepared_syntax_chunk_builds_for_document(document);
+            if applied > 0 {
+                return applied;
+            }
+            if started.elapsed() >= timeout {
+                return 0;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    fn wait_for_all_background_chunk_builds_for_document(
+        document: PreparedSyntaxDocument,
+        timeout: Duration,
+    ) -> usize {
+        let started = Instant::now();
+        let mut total_applied = 0usize;
+        loop {
+            let applied = drain_completed_prepared_syntax_chunk_builds_for_document(document);
+            total_applied = total_applied.saturating_add(applied);
+            if !has_pending_prepared_syntax_chunk_builds_for_document(document) {
+                return total_applied;
+            }
+            if started.elapsed() >= timeout {
+                return total_applied;
+            }
+            if applied == 0 {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
+    }
+
+    fn prepare_html_document<'a>(
+        lines: impl IntoIterator<Item = &'a str>,
+    ) -> PreparedSyntaxDocument {
+        prepare_treesitter_document(DiffSyntaxLanguage::Html, DiffSyntaxMode::Auto, lines)
+            .expect("HTML should support prepared documents")
     }
 
     #[test]
@@ -2910,9 +3918,12 @@ mod tests {
     fn large_document_query_passes_are_chunked_to_bounded_windows() {
         let lines = vec!["let value = 1;"; 8_192];
         let input = collect_treesitter_document_input(lines.iter().copied());
-        let line_starts = treesitter_document_line_starts(&input.line_lengths);
-        let passes =
-            treesitter_document_query_passes(&line_starts, &input.line_lengths, input.text.len());
+        let passes = treesitter_document_query_passes_for_line_window(
+            input.line_starts.as_ref(),
+            input.text.len(),
+            0,
+            input.line_starts.len(),
+        );
         assert!(
             passes.len() > 1,
             "large document should be processed in multiple query passes"
@@ -2927,9 +3938,12 @@ mod tests {
         let long_line = format!("let value = {};", "x".repeat(TS_MAX_BYTES_TO_QUERY * 4));
         let lines = [long_line.as_str()];
         let input = collect_treesitter_document_input(lines.iter().copied());
-        let line_starts = treesitter_document_line_starts(&input.line_lengths);
-        let passes =
-            treesitter_document_query_passes(&line_starts, &input.line_lengths, input.text.len());
+        let passes = treesitter_document_query_passes_for_line_window(
+            input.line_starts.as_ref(),
+            input.text.len(),
+            0,
+            input.line_starts.len(),
+        );
 
         assert!(
             passes.len() >= 4,
@@ -2944,10 +3958,35 @@ mod tests {
     }
 
     #[test]
-    fn xml_uses_html_highlighting() {
+    fn xml_has_own_language_variant() {
         assert_eq!(
             diff_syntax_language_for_path("foo.xml"),
+            Some(DiffSyntaxLanguage::Xml)
+        );
+        assert_eq!(
+            diff_syntax_language_for_path("layout.svg"),
+            Some(DiffSyntaxLanguage::Xml)
+        );
+        // HTML stays separate
+        assert_eq!(
+            diff_syntax_language_for_path("index.html"),
             Some(DiffSyntaxLanguage::Html)
+        );
+    }
+
+    #[test]
+    fn js_and_jsx_use_distinct_language_variants() {
+        assert_eq!(
+            diff_syntax_language_for_path("main.js"),
+            Some(DiffSyntaxLanguage::JavaScript)
+        );
+        assert_eq!(
+            diff_syntax_language_for_path("main.jsx"),
+            Some(DiffSyntaxLanguage::Tsx)
+        );
+        assert_eq!(
+            diff_syntax_language_for_path("main.tsx"),
+            Some(DiffSyntaxLanguage::Tsx)
         );
     }
 
@@ -2995,11 +4034,17 @@ mod tests {
     }
 
     #[test]
-    fn treesitter_variable_capture_is_not_colored() {
-        assert_eq!(super::syntax_kind_from_capture_name("variable"), None);
+    fn treesitter_variable_capture_maps_but_gets_no_color() {
+        // `@variable` now maps to `Variable` (tracked but rendered without color)
+        // so the capture info is preserved for potential theme use.
+        assert_eq!(
+            super::syntax_kind_from_capture_name("variable"),
+            Some(SyntaxTokenKind::Variable)
+        );
+        // `@variable.parameter` maps to its own distinct kind
         assert_eq!(
             super::syntax_kind_from_capture_name("variable.parameter"),
-            None
+            Some(SyntaxTokenKind::VariableParameter)
         );
     }
 
@@ -3046,6 +4091,174 @@ mod tests {
             second.iter().any(|t| t.kind == SyntaxTokenKind::Comment),
             "second line should include comment tokens from multiline context"
         );
+    }
+
+    #[test]
+    fn prepared_html_document_highlights_style_element_contents_via_css_injection() {
+        let lines = ["<style>", "body { color: red; }", "</style>"];
+        let doc = prepare_html_document(lines.iter().copied());
+
+        let style_tokens = syntax_tokens_for_prepared_document_line(doc, 1)
+            .expect("style line tokens should be available");
+        assert!(
+            style_tokens
+                .iter()
+                .any(|t| t.kind == SyntaxTokenKind::Property),
+            "embedded CSS should highlight properties inside <style>, got: {style_tokens:?}"
+        );
+    }
+
+    #[test]
+    fn prepared_html_document_highlights_script_element_contents_via_javascript_injection() {
+        let lines = ["<script>", "const value = 1;", "</script>"];
+        let doc = prepare_html_document(lines.iter().copied());
+
+        let script_tokens = syntax_tokens_for_prepared_document_line(doc, 1)
+            .expect("script line tokens should be available");
+        assert!(
+            script_tokens
+                .iter()
+                .any(|t| t.kind == SyntaxTokenKind::Keyword),
+            "embedded JavaScript should highlight keywords inside <script>, got: {script_tokens:?}"
+        );
+        assert!(
+            script_tokens
+                .iter()
+                .any(|t| t.kind == SyntaxTokenKind::Number),
+            "embedded JavaScript should highlight numbers inside <script>, got: {script_tokens:?}"
+        );
+    }
+
+    #[test]
+    fn prepared_html_document_highlights_onclick_attribute_via_javascript_injection() {
+        let lines = [r#"<button onclick="const value = 1;">go</button>"#];
+        let doc = prepare_html_document(lines.iter().copied());
+
+        let tokens = syntax_tokens_for_prepared_document_line(doc, 0)
+            .expect("button line tokens should be available");
+        assert!(
+            tokens.iter().any(|t| t.kind == SyntaxTokenKind::Attribute),
+            "root HTML tokens should still include the onclick attribute, got: {tokens:?}"
+        );
+        assert!(
+            tokens.iter().any(|t| t.kind == SyntaxTokenKind::Keyword),
+            "embedded JavaScript should highlight keywords inside onclick, got: {tokens:?}"
+        );
+    }
+
+    #[test]
+    fn prepared_html_document_highlights_style_attribute_via_css_injection() {
+        let lines = [r#"<div style="color: red; display: block">ok</div>"#];
+        let doc = prepare_html_document(lines.iter().copied());
+
+        let tokens = syntax_tokens_for_prepared_document_line(doc, 0)
+            .expect("div line tokens should be available");
+        assert!(
+            tokens.iter().any(|t| t.kind == SyntaxTokenKind::Attribute),
+            "root HTML tokens should still include the style attribute, got: {tokens:?}"
+        );
+        assert!(
+            tokens.iter().any(|t| t.kind == SyntaxTokenKind::Property),
+            "embedded CSS should highlight properties inside style=, got: {tokens:?}"
+        );
+    }
+
+    #[test]
+    fn injection_cache_reuses_parsed_injection_across_chunks() {
+        // Create an HTML document with a <script> block that spans multiple chunks
+        // (> 64 lines). The injection cache should parse it once and reuse across chunks.
+        let mut lines = Vec::new();
+        lines.push("<html><body>".to_string());
+        lines.push("<script>".to_string());
+        for ix in 0..(TS_DOCUMENT_LINE_TOKEN_CHUNK_ROWS + 20) {
+            lines.push(format!("const value_{ix} = {ix};"));
+        }
+        lines.push("</script>".to_string());
+        lines.push("</body></html>".to_string());
+
+        let doc = prepare_treesitter_document(
+            DiffSyntaxLanguage::Html,
+            DiffSyntaxMode::Auto,
+            lines.iter().map(String::as_str),
+        )
+        .expect("HTML should support prepared documents");
+
+        // Request a line from the first chunk (inside the script block)
+        let first_chunk_line = 5;
+        let tokens_a = syntax_tokens_for_prepared_document_line(doc, first_chunk_line)
+            .expect("tokens for first chunk line should be available");
+        assert!(
+            tokens_a.iter().any(|t| t.kind == SyntaxTokenKind::Keyword),
+            "first chunk should have JavaScript keyword tokens via injection, got: {tokens_a:?}"
+        );
+
+        // Request a line from the second chunk (also inside the script block)
+        let second_chunk_line = TS_DOCUMENT_LINE_TOKEN_CHUNK_ROWS + 2;
+        let tokens_b = syntax_tokens_for_prepared_document_line(doc, second_chunk_line)
+            .expect("tokens for second chunk line should be available");
+        assert!(
+            tokens_b.iter().any(|t| t.kind == SyntaxTokenKind::Keyword),
+            "second chunk should also have JavaScript keyword tokens (cached injection), got: {tokens_b:?}"
+        );
+    }
+
+    #[test]
+    fn injection_cache_content_hash_distinguishes_different_documents() {
+        // Two HTML documents that produce <script> injections at similar byte
+        // positions but with different JavaScript content. The content_hash on
+        // TreesitterInjectionMatch should prevent the second document from
+        // reusing cached tokens from the first.
+        TS_INJECTION_CACHE.with(|cache| cache.borrow_mut().clear());
+
+        let doc_a_lines: Vec<String> = vec![
+            "<html><body><script>".to_string(),
+            "const alpha = 42;".to_string(),
+            "</script></body></html>".to_string(),
+        ];
+        let doc_a = prepare_treesitter_document(
+            DiffSyntaxLanguage::Html,
+            DiffSyntaxMode::Auto,
+            doc_a_lines.iter().map(String::as_str),
+        )
+        .expect("doc A should prepare");
+
+        // Fetch tokens from doc A's injection line to populate cache
+        let tokens_a =
+            syntax_tokens_for_prepared_document_line(doc_a, 1).expect("doc A should have tokens");
+        assert!(
+            tokens_a.iter().any(|t| t.kind == SyntaxTokenKind::Keyword),
+            "doc A injection line should have keyword token, got: {tokens_a:?}"
+        );
+
+        // Doc B: different JS content at a similar structure but different text
+        let doc_b_lines: Vec<String> = vec![
+            "<html><body><script>".to_string(),
+            "let beta = \"hello\";".to_string(),
+            "</script></body></html>".to_string(),
+        ];
+        let doc_b = prepare_treesitter_document(
+            DiffSyntaxLanguage::Html,
+            DiffSyntaxMode::Auto,
+            doc_b_lines.iter().map(String::as_str),
+        )
+        .expect("doc B should prepare");
+
+        let tokens_b =
+            syntax_tokens_for_prepared_document_line(doc_b, 1).expect("doc B should have tokens");
+        assert!(
+            tokens_b.iter().any(|t| t.kind == SyntaxTokenKind::Keyword),
+            "doc B injection line should have keyword token, got: {tokens_b:?}"
+        );
+        // The token sets should differ since the JS content differs.
+        // With the content hash, doc B gets its own injection parse.
+        let a_kinds: Vec<_> = tokens_a.iter().map(|t| (t.range.clone(), t.kind)).collect();
+        let b_kinds: Vec<_> = tokens_b.iter().map(|t| (t.range.clone(), t.kind)).collect();
+        assert_ne!(
+            a_kinds, b_kinds,
+            "different JS content should produce different token sets"
+        );
+
+        TS_INJECTION_CACHE.with(|cache| cache.borrow_mut().clear());
     }
 
     #[test]
@@ -3141,8 +4354,175 @@ mod tests {
     }
 
     #[test]
+    fn prepared_document_chunk_request_builds_in_background() {
+        let lines = (0..(TS_DOCUMENT_LINE_TOKEN_CHUNK_ROWS * 2))
+            .map(|ix| format!("let value_{ix} = {ix};"))
+            .collect::<Vec<_>>();
+        let document = prepare_treesitter_document(
+            DiffSyntaxLanguage::Rust,
+            DiffSyntaxMode::Auto,
+            lines.iter().map(String::as_str),
+        )
+        .expect("document should prepare");
+
+        assert_eq!(
+            prepared_syntax_loaded_chunk_count(document),
+            0,
+            "prepared document should start with no chunk materialization"
+        );
+        assert_eq!(
+            request_syntax_tokens_for_prepared_document_line(document, 0),
+            Some(PreparedSyntaxLineTokensRequest::Pending),
+            "first request should enqueue a background chunk build"
+        );
+        assert_eq!(
+            prepared_syntax_loaded_chunk_count(document),
+            0,
+            "pending request should not materialize the chunk synchronously"
+        );
+        assert!(
+            has_pending_prepared_syntax_chunk_builds(),
+            "background chunk request should remain pending until drained"
+        );
+
+        assert!(
+            wait_for_all_background_chunk_builds_for_document(document, Duration::from_secs(2)) > 0,
+            "background chunk builds should complete within timeout"
+        );
+        assert_eq!(
+            prepared_syntax_loaded_chunk_count(document),
+            2,
+            "first visible miss should also prefetch the adjacent chunk"
+        );
+
+        let ready = request_syntax_tokens_for_prepared_document_line(document, 0);
+        match ready {
+            Some(PreparedSyntaxLineTokensRequest::Ready(tokens)) => {
+                assert!(
+                    tokens
+                        .iter()
+                        .any(|token| token.kind == SyntaxTokenKind::Keyword),
+                    "ready chunk should expose syntax tokens"
+                );
+            }
+            other => panic!("expected ready tokens after background chunk build, got {other:?}"),
+        }
+        let prefetched = request_syntax_tokens_for_prepared_document_line(
+            document,
+            TS_DOCUMENT_LINE_TOKEN_CHUNK_ROWS,
+        );
+        match prefetched {
+            Some(PreparedSyntaxLineTokensRequest::Ready(tokens)) => {
+                assert!(
+                    tokens
+                        .iter()
+                        .any(|token| token.kind == SyntaxTokenKind::Keyword),
+                    "adjacent prefetched chunk should already be ready"
+                );
+            }
+            other => panic!("expected prefetched adjacent chunk to be ready, got {other:?}"),
+        }
+        assert!(
+            !has_pending_prepared_syntax_chunk_builds(),
+            "drained chunk request should clear pending state"
+        );
+    }
+
+    #[test]
+    fn prepared_document_chunk_prefetch_shares_one_tree_state_clone() {
+        let _lock = lock_global_counter_tests();
+        reset_deferred_drop_counters();
+        let lines = (0..(TS_DOCUMENT_LINE_TOKEN_CHUNK_ROWS * 2))
+            .map(|ix| format!("let value_{ix} = {ix};"))
+            .collect::<Vec<_>>();
+        let document = prepare_treesitter_document(
+            DiffSyntaxLanguage::Rust,
+            DiffSyntaxMode::Auto,
+            lines.iter().map(String::as_str),
+        )
+        .expect("document should prepare");
+
+        assert_eq!(tree_state_clone_count(), 0);
+        assert_eq!(
+            request_syntax_tokens_for_prepared_document_line(document, 0),
+            Some(PreparedSyntaxLineTokensRequest::Pending),
+            "first request should enqueue the visible chunk and its prefetched neighbor"
+        );
+        assert_eq!(
+            tree_state_clone_count(),
+            1,
+            "the queued chunk burst should share one cloned tree state"
+        );
+    }
+
+    #[test]
+    fn document_scoped_chunk_drain_preserves_other_documents() {
+        let lines_a = (0..TS_DOCUMENT_LINE_TOKEN_CHUNK_ROWS)
+            .map(|ix| format!("let alpha_{ix} = {ix};"))
+            .collect::<Vec<_>>();
+        let lines_b = (0..TS_DOCUMENT_LINE_TOKEN_CHUNK_ROWS)
+            .map(|ix| format!("let beta_{ix} = {ix};"))
+            .collect::<Vec<_>>();
+        let document_a = prepare_treesitter_document(
+            DiffSyntaxLanguage::Rust,
+            DiffSyntaxMode::Auto,
+            lines_a.iter().map(String::as_str),
+        )
+        .expect("first document should prepare");
+        let document_b = prepare_treesitter_document(
+            DiffSyntaxLanguage::Rust,
+            DiffSyntaxMode::Auto,
+            lines_b.iter().map(String::as_str),
+        )
+        .expect("second document should prepare");
+
+        assert_eq!(
+            request_syntax_tokens_for_prepared_document_line(document_a, 0),
+            Some(PreparedSyntaxLineTokensRequest::Pending)
+        );
+        assert_eq!(
+            request_syntax_tokens_for_prepared_document_line(document_b, 0),
+            Some(PreparedSyntaxLineTokensRequest::Pending)
+        );
+        assert!(has_pending_prepared_syntax_chunk_builds_for_document(
+            document_a
+        ));
+        assert!(has_pending_prepared_syntax_chunk_builds_for_document(
+            document_b
+        ));
+
+        assert!(
+            wait_for_background_chunk_build_for_document(document_a, Duration::from_secs(2)) > 0,
+            "document-scoped drain should eventually apply the requested chunk"
+        );
+        assert_eq!(prepared_syntax_loaded_chunk_count(document_a), 1);
+        assert_eq!(
+            prepared_syntax_loaded_chunk_count(document_b),
+            0,
+            "draining document_a should not materialize document_b"
+        );
+        assert!(!has_pending_prepared_syntax_chunk_builds_for_document(
+            document_a
+        ));
+        assert!(
+            has_pending_prepared_syntax_chunk_builds_for_document(document_b),
+            "other document work should remain pending"
+        );
+
+        assert!(
+            wait_for_background_chunk_build_for_document(document_b, Duration::from_secs(2)) > 0,
+            "remaining document chunk should still be drainable afterward"
+        );
+        assert_eq!(prepared_syntax_loaded_chunk_count(document_b), 1);
+        assert!(!has_pending_prepared_syntax_chunk_builds_for_document(
+            document_b
+        ));
+    }
+
+    #[test]
     fn prepared_document_chunk_hit_does_not_clone_tree_state() {
-        reset_tree_state_clone_count();
+        let _lock = lock_global_counter_tests();
+        reset_deferred_drop_counters();
         let lines = (0..(TS_DOCUMENT_LINE_TOKEN_CHUNK_ROWS * 2))
             .map(|ix| format!("let value_{ix} = {ix};"))
             .collect::<Vec<_>>();
@@ -3171,16 +4551,101 @@ mod tests {
     }
 
     #[test]
+    fn prepared_tree_state_clones_share_source_buffers() {
+        let lines = (0..128usize)
+            .map(|ix| format!("let value_{ix} = {ix};"))
+            .collect::<Vec<_>>();
+        let document = prepare_treesitter_document(
+            DiffSyntaxLanguage::Rust,
+            DiffSyntaxMode::Auto,
+            lines.iter().map(String::as_str),
+        )
+        .expect("document should prepare");
+
+        let (first, second) = TS_DOCUMENT_CACHE.with(|cache| {
+            let mut cache = cache.borrow_mut();
+            let first = cache
+                .tree_state(document.cache_key)
+                .expect("first tree state clone should exist");
+            let second = cache
+                .tree_state(document.cache_key)
+                .expect("second tree state clone should exist");
+            (first, second)
+        });
+
+        assert!(
+            Arc::ptr_eq(&first.text, &second.text),
+            "tree state clones should share source text storage"
+        );
+        assert!(
+            Arc::ptr_eq(&first.line_starts, &second.line_starts),
+            "tree state clones should share line start storage"
+        );
+    }
+
+    #[test]
+    fn shared_text_input_reuses_snapshot_line_start_storage() {
+        let snapshot = crate::kit::text_model::TextModel::from("alpha\nbeta\ngamma").snapshot();
+        let shared_line_starts = snapshot.shared_line_starts();
+        let input = treesitter_document_input_from_shared_text(
+            snapshot.as_shared_string(),
+            shared_line_starts.clone(),
+        );
+
+        assert!(
+            Arc::ptr_eq(&input.line_starts, &shared_line_starts),
+            "full-text tree-sitter input should reuse snapshot line-start storage"
+        );
+        assert_eq!(input.line_starts.as_ref(), snapshot.line_starts());
+    }
+
+    #[test]
+    fn collected_input_last_line_content_excludes_trailing_newline() {
+        let input = collect_treesitter_document_input(["alpha", "beta"].iter().copied());
+
+        assert_eq!(
+            line_content_end_byte(input.line_starts.as_ref(), input.text.as_bytes(), 0),
+            5
+        );
+        assert_eq!(
+            line_content_end_byte(input.line_starts.as_ref(), input.text.as_bytes(), 1),
+            input.text.len() - 1,
+            "iterator-built input should not include the synthetic trailing newline in last-line content"
+        );
+    }
+
+    #[test]
+    fn shared_text_input_last_line_content_excludes_trailing_newline() {
+        let snapshot = crate::kit::text_model::TextModel::from("alpha\nbeta\n").snapshot();
+        let input = treesitter_document_input_from_shared_text(
+            snapshot.as_shared_string(),
+            snapshot.shared_line_starts(),
+        );
+
+        assert_eq!(
+            line_content_end_byte(input.line_starts.as_ref(), input.text.as_bytes(), 1),
+            input.text.len() - 1,
+            "shared full-text input should trim the real trailing newline from the last line"
+        );
+    }
+
+    #[test]
     fn treesitter_document_cache_lru_touch_keeps_recent_entry_alive() {
         for trial in 0..128usize {
             let mut cache = TreesitterDocumentCache::new();
             for key in 0..TS_DOCUMENT_CACHE_MAX_ENTRIES {
-                cache.insert_document(make_test_cache_key(key as u64), vec![Vec::new()]);
+                cache.insert_document(
+                    TreesitterDocumentCache::make_test_cache_key(key as u64),
+                    vec![Vec::new()],
+                );
             }
 
-            let touched_key = make_test_cache_key(0);
+            let touched_key = TreesitterDocumentCache::make_test_cache_key(0);
             assert!(cache.contains_document(touched_key, 1));
-            cache.insert_document(make_test_cache_key(10_000 + trial as u64), vec![Vec::new()]);
+            cache.insert_document(
+                TreesitterDocumentCache::make_test_cache_key(10_000 + trial as u64),
+                vec![Vec::new()],
+            );
 
             assert!(
                 cache.contains_key(touched_key),
@@ -3252,7 +4717,7 @@ mod tests {
     #[test]
     fn treesitter_point_for_byte_maps_newline_terminated_eof_to_next_row() {
         let input = b"alpha\nbeta\n";
-        let line_starts = treesitter_document_line_starts(&[5, 4]);
+        let line_starts: Vec<usize> = vec![0, 6];
         assert_eq!(
             treesitter_point_for_byte(&line_starts, input, input.len()),
             tree_sitter::Point::new(2, 0),
@@ -3262,7 +4727,7 @@ mod tests {
 
     #[test]
     fn small_reparse_reuses_old_tree_with_input_edit() {
-        let _lock = lock_deferred_drop_test();
+        let _lock = lock_global_counter_tests();
         reset_deferred_drop_counters();
         let base_lines = vec!["let value = 1;".to_string(); 256];
         let base_document = prepare_treesitter_document(
@@ -3313,8 +4778,70 @@ mod tests {
     }
 
     #[test]
+    fn small_reparse_reuses_old_tree_with_explicit_edit_hint_text_input() {
+        let _lock = lock_global_counter_tests();
+        reset_deferred_drop_counters();
+
+        let base_text = "let value = 1;\n".repeat(256);
+        let base_input = treesitter_document_input_from_text(&base_text);
+        let PrepareTreesitterDocumentResult::Ready(base_document) =
+            prepare_treesitter_document_with_budget_reuse_text(
+                DiffSyntaxLanguage::Rust,
+                DiffSyntaxMode::Auto,
+                base_text.clone().into(),
+                base_input.line_starts.clone(),
+                DiffSyntaxBudget {
+                    foreground_parse: Duration::from_millis(50),
+                },
+                None,
+                None,
+            )
+        else {
+            panic!("base text document should parse");
+        };
+
+        let insert_offset = base_input.line_starts[42].saturating_add("let value = 1;".len());
+        let mut edited_text = base_text.clone();
+        edited_text.insert_str(insert_offset, " // tiny edit");
+        let edited_input = treesitter_document_input_from_text(&edited_text);
+        let attempt = prepare_treesitter_document_with_budget_reuse_text(
+            DiffSyntaxLanguage::Rust,
+            DiffSyntaxMode::Auto,
+            edited_text.into(),
+            edited_input.line_starts.clone(),
+            DiffSyntaxBudget {
+                foreground_parse: Duration::from_millis(50),
+            },
+            Some(base_document),
+            Some(DiffSyntaxEdit {
+                old_range: insert_offset..insert_offset,
+                new_range: insert_offset..insert_offset.saturating_add(" // tiny edit".len()),
+            }),
+        );
+        let PrepareTreesitterDocumentResult::Ready(reparsed_document) = attempt else {
+            panic!("explicit-edit text reparse should complete within budget");
+        };
+
+        assert_eq!(
+            prepared_document_parse_mode(reparsed_document),
+            Some(TreesitterParseReuseMode::Incremental),
+            "explicit edit hints should keep full-text reparses on the incremental path"
+        );
+
+        let (incremental, fallback) = incremental_reparse_counters();
+        assert!(
+            incremental > 0,
+            "explicit edit hint path should use incremental reparse"
+        );
+        assert_eq!(
+            fallback, 0,
+            "explicit edit hint should not trigger fallback"
+        );
+    }
+
+    #[test]
     fn large_reparse_falls_back_to_full_parse() {
-        let _lock = lock_deferred_drop_test();
+        let _lock = lock_global_counter_tests();
         reset_deferred_drop_counters();
         let base_lines = vec!["let value = 1;".to_string(); 256];
         let base_document = prepare_treesitter_document(
@@ -3354,7 +4881,7 @@ mod tests {
 
     #[test]
     fn incremental_reparse_append_line_matches_full_parse_tokens() {
-        let _lock = lock_deferred_drop_test();
+        let _lock = lock_global_counter_tests();
         reset_deferred_drop_counters();
 
         let base_lines = vec!["let value = 41;".to_string(); 256];
@@ -3401,11 +4928,13 @@ mod tests {
         let highlight =
             tree_sitter_highlight_spec(request.language).expect("rust highlight spec should exist");
 
-        let full_tokens = collect_treesitter_document_line_tokens(
+        let full_tokens = collect_treesitter_document_line_tokens_for_line_window(
             &full_tree,
             highlight,
             request.input.text.as_bytes(),
-            &request.input.line_lengths,
+            &request.input.line_starts,
+            0,
+            request.input.line_starts.len(),
         );
         let incremental_tokens = (0..edited.len())
             .map(|line_ix| {
@@ -3422,19 +4951,19 @@ mod tests {
 
     #[test]
     fn large_cache_replacement_uses_deferred_drop_queue() {
-        let _lock = lock_deferred_drop_test();
+        let _lock = lock_global_counter_tests();
         reset_deferred_drop_counters();
 
         let mut cache = TreesitterDocumentCache::new();
         cache.insert_document(
-            make_test_cache_key(1),
-            synthetic_line_tokens_for_drop_test(2_048, 8),
+            TreesitterDocumentCache::make_test_cache_key(1),
+            benchmark_line_tokens_payload(2_048, 8, 0),
         );
         let (queued_before, dropped_before, _) = deferred_drop_counters();
 
         cache.insert_document(
-            make_test_cache_key(1),
-            synthetic_line_tokens_for_drop_test(2_048, 8),
+            TreesitterDocumentCache::make_test_cache_key(1),
+            benchmark_line_tokens_payload(2_048, 8, 0),
         );
         let (queued_after, _, _) = deferred_drop_counters();
         assert!(
@@ -3443,7 +4972,7 @@ mod tests {
         );
 
         assert!(
-            flush_deferred_syntax_cache_drop_queue(),
+            benchmark_flush_deferred_drop_queue(),
             "deferred drop queue should flush"
         );
         let (_, dropped_after, _) = deferred_drop_counters();
@@ -3455,19 +4984,19 @@ mod tests {
 
     #[test]
     fn small_cache_replacement_keeps_inline_drop_path() {
-        let _lock = lock_deferred_drop_test();
+        let _lock = lock_global_counter_tests();
         reset_deferred_drop_counters();
 
         let mut cache = TreesitterDocumentCache::new();
         cache.insert_document(
-            make_test_cache_key(1),
-            synthetic_line_tokens_for_drop_test(8, 1),
+            TreesitterDocumentCache::make_test_cache_key(1),
+            benchmark_line_tokens_payload(8, 1, 0),
         );
         let (_, _, inline_before) = deferred_drop_counters();
 
         cache.insert_document(
-            make_test_cache_key(1),
-            synthetic_line_tokens_for_drop_test(8, 1),
+            TreesitterDocumentCache::make_test_cache_key(1),
+            benchmark_line_tokens_payload(8, 1, 0),
         );
         let (_, _, inline_after) = deferred_drop_counters();
         assert!(
@@ -3478,21 +5007,21 @@ mod tests {
 
     #[test]
     fn large_cache_eviction_uses_deferred_drop_queue() {
-        let _lock = lock_deferred_drop_test();
+        let _lock = lock_global_counter_tests();
         reset_deferred_drop_counters();
 
         let mut cache = TreesitterDocumentCache::new();
         for key in 0..TS_DOCUMENT_CACHE_MAX_ENTRIES {
             cache.insert_document(
-                make_test_cache_key(key as u64),
-                synthetic_line_tokens_for_drop_test(2_048, 8),
+                TreesitterDocumentCache::make_test_cache_key(key as u64),
+                benchmark_line_tokens_payload(2_048, 8, 0),
             );
         }
         let (queued_before, dropped_before, _) = deferred_drop_counters();
 
         cache.insert_document(
-            make_test_cache_key(TS_DOCUMENT_CACHE_MAX_ENTRIES as u64 + 1),
-            synthetic_line_tokens_for_drop_test(2_048, 8),
+            TreesitterDocumentCache::make_test_cache_key(TS_DOCUMENT_CACHE_MAX_ENTRIES as u64 + 1),
+            benchmark_line_tokens_payload(2_048, 8, 0),
         );
         let (queued_after, _, _) = deferred_drop_counters();
         assert!(
@@ -3501,7 +5030,7 @@ mod tests {
         );
 
         assert!(
-            flush_deferred_syntax_cache_drop_queue(),
+            benchmark_flush_deferred_drop_queue(),
             "deferred drop queue should flush"
         );
         let (_, dropped_after, _) = deferred_drop_counters();
@@ -3514,13 +5043,14 @@ mod tests {
     #[test]
     fn parse_budget_timeout_falls_back_to_background_prepare() {
         let lines = vec!["/* budget */ let value = Some(42);"; 2_048];
-        let attempt = prepare_treesitter_document_with_budget(
+        let attempt = prepare_treesitter_document_with_budget_reuse(
             DiffSyntaxLanguage::Rust,
             DiffSyntaxMode::Auto,
             lines.iter().copied(),
             DiffSyntaxBudget {
                 foreground_parse: Duration::ZERO,
             },
+            None,
         );
         assert_eq!(attempt, PrepareTreesitterDocumentResult::TimedOut);
 
@@ -3577,6 +5107,428 @@ mod tests {
     }
 
     #[test]
+    fn capture_name_mapping_preserves_rich_semantics() {
+        // Full dot-qualified names should map to specific variants
+        assert_eq!(
+            syntax_kind_from_capture_name("comment.doc"),
+            Some(SyntaxTokenKind::CommentDoc)
+        );
+        assert_eq!(
+            syntax_kind_from_capture_name("string.escape"),
+            Some(SyntaxTokenKind::StringEscape)
+        );
+        assert_eq!(
+            syntax_kind_from_capture_name("keyword.control"),
+            Some(SyntaxTokenKind::KeywordControl)
+        );
+        assert_eq!(
+            syntax_kind_from_capture_name("function.method"),
+            Some(SyntaxTokenKind::FunctionMethod)
+        );
+        assert_eq!(
+            syntax_kind_from_capture_name("function.special"),
+            Some(SyntaxTokenKind::FunctionSpecial)
+        );
+        assert_eq!(
+            syntax_kind_from_capture_name("type.builtin"),
+            Some(SyntaxTokenKind::TypeBuiltin)
+        );
+        assert_eq!(
+            syntax_kind_from_capture_name("type.interface"),
+            Some(SyntaxTokenKind::TypeInterface)
+        );
+        assert_eq!(
+            syntax_kind_from_capture_name("variable"),
+            Some(SyntaxTokenKind::Variable)
+        );
+        assert_eq!(
+            syntax_kind_from_capture_name("variable.parameter"),
+            Some(SyntaxTokenKind::VariableParameter)
+        );
+        assert_eq!(
+            syntax_kind_from_capture_name("variable.special"),
+            Some(SyntaxTokenKind::VariableSpecial)
+        );
+        assert_eq!(
+            syntax_kind_from_capture_name("operator"),
+            Some(SyntaxTokenKind::Operator)
+        );
+        assert_eq!(
+            syntax_kind_from_capture_name("punctuation.bracket"),
+            Some(SyntaxTokenKind::PunctuationBracket)
+        );
+        assert_eq!(
+            syntax_kind_from_capture_name("punctuation.delimiter"),
+            Some(SyntaxTokenKind::PunctuationDelimiter)
+        );
+        assert_eq!(
+            syntax_kind_from_capture_name("tag"),
+            Some(SyntaxTokenKind::Tag)
+        );
+        assert_eq!(
+            syntax_kind_from_capture_name("attribute"),
+            Some(SyntaxTokenKind::Attribute)
+        );
+        assert_eq!(
+            syntax_kind_from_capture_name("lifetime"),
+            Some(SyntaxTokenKind::Lifetime)
+        );
+        assert_eq!(
+            syntax_kind_from_capture_name("boolean"),
+            Some(SyntaxTokenKind::Boolean)
+        );
+        assert_eq!(
+            syntax_kind_from_capture_name("tag.jsx"),
+            Some(SyntaxTokenKind::Tag)
+        );
+        assert_eq!(
+            syntax_kind_from_capture_name("property.name"),
+            Some(SyntaxTokenKind::Property)
+        );
+        assert_eq!(
+            syntax_kind_from_capture_name("type.name"),
+            Some(SyntaxTokenKind::Type)
+        );
+        assert_eq!(
+            syntax_kind_from_capture_name("punctuation.bracket.html"),
+            Some(SyntaxTokenKind::PunctuationBracket)
+        );
+        assert_eq!(
+            syntax_kind_from_capture_name("punctuation.delimiter.jsx"),
+            Some(SyntaxTokenKind::PunctuationDelimiter)
+        );
+
+        // Base names should still work
+        assert_eq!(
+            syntax_kind_from_capture_name("comment"),
+            Some(SyntaxTokenKind::Comment)
+        );
+        assert_eq!(
+            syntax_kind_from_capture_name("string"),
+            Some(SyntaxTokenKind::String)
+        );
+        assert_eq!(
+            syntax_kind_from_capture_name("keyword"),
+            Some(SyntaxTokenKind::Keyword)
+        );
+
+        // Unknown dot-qualified names fall back through shorter dotted prefixes
+        assert_eq!(
+            syntax_kind_from_capture_name("keyword.operator.regex"),
+            Some(SyntaxTokenKind::Keyword)
+        );
+        assert_eq!(
+            syntax_kind_from_capture_name("comment.block"),
+            Some(SyntaxTokenKind::Comment)
+        );
+
+        // Truly unknown names return None
+        assert_eq!(syntax_kind_from_capture_name("none"), None);
+        assert_eq!(syntax_kind_from_capture_name("embedded"), None);
+        assert_eq!(syntax_kind_from_capture_name("text.jsx"), None);
+    }
+
+    #[test]
+    fn vendored_rust_query_compiles() {
+        let lang: tree_sitter::Language = tree_sitter_rust::LANGUAGE.into();
+        let source = RUST_HIGHLIGHTS_QUERY;
+        tree_sitter::Query::new(&lang, source)
+            .expect("vendored Rust highlights.scm should compile");
+    }
+
+    #[test]
+    fn vendored_css_query_compiles() {
+        let lang: tree_sitter::Language = tree_sitter_css::LANGUAGE.into();
+        let source = CSS_HIGHLIGHTS_QUERY;
+        tree_sitter::Query::new(&lang, source).expect("vendored CSS highlights.scm should compile");
+    }
+
+    #[test]
+    fn vendored_html_query_compiles() {
+        let lang: tree_sitter::Language = tree_sitter_html::LANGUAGE.into();
+        let source = HTML_HIGHLIGHTS_QUERY;
+        tree_sitter::Query::new(&lang, source)
+            .expect("vendored HTML highlights.scm should compile");
+    }
+
+    #[test]
+    fn vendored_html_injections_query_compiles() {
+        let lang: tree_sitter::Language = tree_sitter_html::LANGUAGE.into();
+        tree_sitter::Query::new(&lang, HTML_INJECTIONS_QUERY)
+            .expect("vendored HTML injections.scm should compile");
+    }
+
+    #[test]
+    fn vendored_javascript_query_compiles() {
+        let lang: tree_sitter::Language = tree_sitter_javascript::LANGUAGE.into();
+        tree_sitter::Query::new(&lang, JAVASCRIPT_HIGHLIGHTS_QUERY)
+            .expect("vendored JavaScript highlights.scm should compile against JS grammar");
+    }
+
+    #[test]
+    fn vendored_typescript_query_compiles() {
+        let lang: tree_sitter::Language = tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into();
+        tree_sitter::Query::new(&lang, TYPESCRIPT_HIGHLIGHTS_QUERY)
+            .expect("vendored TypeScript highlights.scm should compile");
+    }
+
+    #[test]
+    fn vendored_tsx_query_compiles() {
+        let lang: tree_sitter::Language = tree_sitter_typescript::LANGUAGE_TSX.into();
+        tree_sitter::Query::new(&lang, TSX_HIGHLIGHTS_QUERY)
+            .expect("vendored TSX highlights.scm should compile");
+    }
+
+    #[test]
+    fn vendored_xml_query_compiles() {
+        let lang: tree_sitter::Language = tree_sitter_xml::LANGUAGE_XML.into();
+        tree_sitter::Query::new(&lang, XML_HIGHLIGHTS_QUERY)
+            .expect("XML highlights.scm should compile against XML grammar");
+    }
+
+    #[test]
+    fn xml_treesitter_captures_tag_and_attribute() {
+        let text = r#"<root attr="value">text</root>"#;
+        let tokens = syntax_tokens_for_line(text, DiffSyntaxLanguage::Xml, DiffSyntaxMode::Auto);
+        assert!(
+            tokens.iter().any(|t| t.kind == SyntaxTokenKind::Tag),
+            "XML should capture tags: {tokens:?}"
+        );
+        assert!(
+            tokens.iter().any(|t| t.kind == SyntaxTokenKind::Property),
+            "XML should capture attributes as properties: {tokens:?}"
+        );
+        assert!(
+            tokens.iter().any(|t| t.kind == SyntaxTokenKind::String),
+            "XML should capture attribute values as strings: {tokens:?}"
+        );
+    }
+
+    #[test]
+    fn xml_treesitter_captures_comment() {
+        let text = "<!-- a comment -->";
+        let tokens = syntax_tokens_for_line(text, DiffSyntaxLanguage::Xml, DiffSyntaxMode::Auto);
+        assert!(
+            tokens.iter().any(|t| t.kind == SyntaxTokenKind::Comment),
+            "XML should capture comments: {tokens:?}"
+        );
+    }
+
+    #[test]
+    fn javascript_treesitter_captures_function_and_keyword() {
+        let text = "function foo() { return 42; }";
+        let tokens =
+            syntax_tokens_for_line(text, DiffSyntaxLanguage::JavaScript, DiffSyntaxMode::Auto);
+        assert!(
+            tokens.iter().any(|t| t.kind == SyntaxTokenKind::Function),
+            "JS should capture function names: {tokens:?}"
+        );
+        assert!(
+            tokens
+                .iter()
+                .any(|t| t.kind == SyntaxTokenKind::Keyword
+                    || t.kind == SyntaxTokenKind::KeywordControl),
+            "JS should capture keywords: {tokens:?}"
+        );
+        assert!(
+            tokens.iter().any(|t| t.kind == SyntaxTokenKind::Number),
+            "JS should capture numbers: {tokens:?}"
+        );
+    }
+
+    #[test]
+    fn html_highlight_spec_compiles_injection_query() {
+        let spec = tree_sitter_highlight_spec(DiffSyntaxLanguage::Html)
+            .expect("HTML highlight spec should exist");
+        assert!(
+            spec.injection_query.is_some(),
+            "HTML should compile and retain its vendored injections.scm"
+        );
+    }
+
+    fn capture_name_is_intentionally_ignored(name: &str) -> bool {
+        name == "none"
+            || name == "embedded"
+            || name == "error"
+            || name == "nested"
+            || name == "injection.content"
+            || name.starts_with("text.")
+            || name.starts_with('_')
+    }
+
+    fn assert_capture_names_are_supported(language: tree_sitter::Language, source: &str) {
+        let query = tree_sitter::Query::new(&language, source).expect("query should compile");
+        for name in query.capture_names() {
+            assert!(
+                syntax_kind_from_capture_name(name).is_some()
+                    || capture_name_is_intentionally_ignored(name),
+                "unsupported capture name in vendored asset: {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn vendored_capture_names_are_supported_or_ignored() {
+        assert_capture_names_are_supported(
+            tree_sitter_rust::LANGUAGE.into(),
+            RUST_HIGHLIGHTS_QUERY,
+        );
+        assert_capture_names_are_supported(
+            tree_sitter_html::LANGUAGE.into(),
+            HTML_HIGHLIGHTS_QUERY,
+        );
+        assert_capture_names_are_supported(tree_sitter_css::LANGUAGE.into(), CSS_HIGHLIGHTS_QUERY);
+        assert_capture_names_are_supported(
+            tree_sitter_javascript::LANGUAGE.into(),
+            JAVASCRIPT_HIGHLIGHTS_QUERY,
+        );
+        assert_capture_names_are_supported(
+            tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+            TYPESCRIPT_HIGHLIGHTS_QUERY,
+        );
+        assert_capture_names_are_supported(
+            tree_sitter_typescript::LANGUAGE_TSX.into(),
+            TSX_HIGHLIGHTS_QUERY,
+        );
+        assert_capture_names_are_supported(
+            tree_sitter_xml::LANGUAGE_XML.into(),
+            XML_HIGHLIGHTS_QUERY,
+        );
+    }
+
+    #[test]
+    fn rust_treesitter_captures_variable_parameter() {
+        let text = "fn foo(bar: u32) {}";
+        let tokens = syntax_tokens_for_line(text, DiffSyntaxLanguage::Rust, DiffSyntaxMode::Auto);
+        assert!(
+            tokens
+                .iter()
+                .any(|t| t.kind == SyntaxTokenKind::VariableParameter),
+            "Rust function parameter should produce VariableParameter token, got: {tokens:?}"
+        );
+    }
+
+    #[test]
+    fn rust_treesitter_captures_type_builtin() {
+        let text = "let x: u32 = 0;";
+        let tokens = syntax_tokens_for_line(text, DiffSyntaxLanguage::Rust, DiffSyntaxMode::Auto);
+        assert!(
+            tokens
+                .iter()
+                .any(|t| t.kind == SyntaxTokenKind::TypeBuiltin),
+            "Rust primitive type should produce TypeBuiltin token, got: {tokens:?}"
+        );
+    }
+
+    #[test]
+    fn rust_treesitter_captures_macro_as_function_special() {
+        let text = "println!(\"hello\");";
+        let tokens = syntax_tokens_for_line(text, DiffSyntaxLanguage::Rust, DiffSyntaxMode::Auto);
+        assert!(
+            tokens
+                .iter()
+                .any(|t| t.kind == SyntaxTokenKind::FunctionSpecial),
+            "Rust macro invocation should produce FunctionSpecial token, got: {tokens:?}"
+        );
+    }
+
+    #[test]
+    fn tsx_treesitter_highlights_jsx_tag_and_attribute() {
+        let text = "const node = <button disabled />;";
+        let tokens = syntax_tokens_for_line(text, DiffSyntaxLanguage::Tsx, DiffSyntaxMode::Auto);
+        assert!(
+            tokens.iter().any(|t| t.kind == SyntaxTokenKind::Tag),
+            "TSX should highlight JSX tags, got: {tokens:?}"
+        );
+        assert!(
+            tokens.iter().any(|t| t.kind == SyntaxTokenKind::Attribute),
+            "TSX should highlight JSX attributes, got: {tokens:?}"
+        );
+    }
+
+    #[test]
+    fn css_treesitter_captures_property_and_keyword() {
+        let text = "@media screen { .foo { color: red; } }";
+        let tokens = syntax_tokens_for_line(text, DiffSyntaxLanguage::Css, DiffSyntaxMode::Auto);
+        assert!(
+            tokens.iter().any(|t| t.kind == SyntaxTokenKind::Keyword),
+            "CSS should highlight @media as keyword: {tokens:?}"
+        );
+        assert!(
+            tokens.iter().any(|t| t.kind == SyntaxTokenKind::Property),
+            "CSS should highlight 'color' as property: {tokens:?}"
+        );
+    }
+
+    #[test]
+    fn xml_heuristic_highlights_comment() {
+        let text = "<!-- this is a comment -->";
+        let tokens =
+            syntax_tokens_for_line(text, DiffSyntaxLanguage::Xml, DiffSyntaxMode::HeuristicOnly);
+        assert!(
+            tokens.iter().any(|t| t.kind == SyntaxTokenKind::Comment),
+            "XML heuristic should highlight <!-- --> comments"
+        );
+    }
+
+    #[test]
+    fn grammar_and_highlight_spec_agree_on_supported_languages() {
+        let all_languages = [
+            DiffSyntaxLanguage::Markdown,
+            DiffSyntaxLanguage::Html,
+            DiffSyntaxLanguage::Css,
+            DiffSyntaxLanguage::Hcl,
+            DiffSyntaxLanguage::Bicep,
+            DiffSyntaxLanguage::Lua,
+            DiffSyntaxLanguage::Makefile,
+            DiffSyntaxLanguage::Kotlin,
+            DiffSyntaxLanguage::Zig,
+            DiffSyntaxLanguage::Rust,
+            DiffSyntaxLanguage::Python,
+            DiffSyntaxLanguage::JavaScript,
+            DiffSyntaxLanguage::TypeScript,
+            DiffSyntaxLanguage::Tsx,
+            DiffSyntaxLanguage::Go,
+            DiffSyntaxLanguage::C,
+            DiffSyntaxLanguage::Cpp,
+            DiffSyntaxLanguage::CSharp,
+            DiffSyntaxLanguage::FSharp,
+            DiffSyntaxLanguage::VisualBasic,
+            DiffSyntaxLanguage::Java,
+            DiffSyntaxLanguage::Php,
+            DiffSyntaxLanguage::Ruby,
+            DiffSyntaxLanguage::Json,
+            DiffSyntaxLanguage::Toml,
+            DiffSyntaxLanguage::Yaml,
+            DiffSyntaxLanguage::Sql,
+            DiffSyntaxLanguage::Bash,
+            DiffSyntaxLanguage::Xml,
+        ];
+        for lang in all_languages {
+            let has_grammar = tree_sitter_grammar(lang).is_some();
+            let has_spec = tree_sitter_highlight_spec(lang).is_some();
+            assert_eq!(
+                has_grammar, has_spec,
+                "tree_sitter_grammar and tree_sitter_highlight_spec disagree for {lang:?}: \
+                 grammar={has_grammar}, spec={has_spec}"
+            );
+        }
+    }
+
+    #[test]
+    fn highlight_spec_exposes_ts_language() {
+        let spec = tree_sitter_highlight_spec(DiffSyntaxLanguage::Rust)
+            .expect("Rust highlight spec should exist");
+        // Verify the ts_language field is usable for parsing
+        TS_PARSER.with(|parser| {
+            let mut parser = parser.borrow_mut();
+            parser
+                .set_language(&spec.ts_language)
+                .expect("should accept the spec's ts_language");
+        });
+    }
+
+    #[test]
     #[ignore]
     fn perf_treesitter_tokenization_smoke() {
         let text = "fn main() { let x = Some(123); println!(\"{x:?}\"); }";
@@ -3585,5 +5537,232 @@ mod tests {
             let _ = syntax_tokens_for_line(text, DiffSyntaxLanguage::Rust, DiffSyntaxMode::Auto);
         }
         eprintln!("syntax_tokens_for_line (rust): {:?}", start.elapsed());
+    }
+
+    // ---- heuristic tokenizer tests ----
+
+    #[test]
+    fn heuristic_ruby_hash_comment() {
+        let tokens = syntax_tokens_for_line_heuristic("x = 1 # comment", DiffSyntaxLanguage::Ruby);
+        let comment = tokens.iter().find(|t| t.kind == SyntaxTokenKind::Comment);
+        assert!(comment.is_some(), "Ruby '#' should be detected as comment");
+        let c = comment.unwrap();
+        assert!(c.range.start <= 6, "comment should start at or before '#'");
+        assert_eq!(
+            c.range.end,
+            "x = 1 # comment".len(),
+            "comment should extend to end of line"
+        );
+    }
+
+    #[test]
+    fn heuristic_python_hash_comment() {
+        let tokens = syntax_tokens_for_line_heuristic("x = 1 # note", DiffSyntaxLanguage::Python);
+        assert!(tokens.iter().any(|t| t.kind == SyntaxTokenKind::Comment));
+    }
+
+    #[test]
+    fn heuristic_vb_rem_comment() {
+        let tokens = syntax_tokens_for_line_heuristic(
+            "REM this is a comment",
+            DiffSyntaxLanguage::VisualBasic,
+        );
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0].kind, SyntaxTokenKind::Comment);
+        assert_eq!(tokens[0].range, 0..21);
+    }
+
+    #[test]
+    fn heuristic_vb_apostrophe_comment() {
+        let tokens = syntax_tokens_for_line_heuristic(
+            "' this is a comment",
+            DiffSyntaxLanguage::VisualBasic,
+        );
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0].kind, SyntaxTokenKind::Comment);
+    }
+
+    #[test]
+    fn heuristic_rust_line_comment_and_string() {
+        let tokens = syntax_tokens_for_line_heuristic(
+            r#"let s = "hello"; // done"#,
+            DiffSyntaxLanguage::Rust,
+        );
+        let kinds: Vec<_> = tokens.iter().map(|t| t.kind).collect();
+        assert!(
+            kinds.contains(&SyntaxTokenKind::Keyword),
+            "should find 'let'"
+        );
+        assert!(
+            kinds.contains(&SyntaxTokenKind::String),
+            "should find string"
+        );
+        assert!(
+            kinds.contains(&SyntaxTokenKind::Comment),
+            "should find comment"
+        );
+    }
+
+    #[test]
+    fn heuristic_rust_block_comment_continues_scanning() {
+        let tokens =
+            syntax_tokens_for_line_heuristic("/* note */ let value = 1", DiffSyntaxLanguage::Rust);
+        assert!(
+            tokens.iter().any(|t| t.kind == SyntaxTokenKind::Comment),
+            "should find block comment"
+        );
+        assert!(
+            tokens.iter().any(|t| t.kind == SyntaxTokenKind::Keyword),
+            "should keep scanning after block comment"
+        );
+    }
+
+    #[test]
+    fn heuristic_fsharp_block_comment_continues_scanning() {
+        let tokens = syntax_tokens_for_line_heuristic(
+            "(* note *) let value = 1",
+            DiffSyntaxLanguage::FSharp,
+        );
+        assert!(
+            tokens.iter().any(|t| t.kind == SyntaxTokenKind::Comment),
+            "should find F# block comment"
+        );
+        assert!(
+            tokens.iter().any(|t| t.kind == SyntaxTokenKind::Keyword),
+            "should keep scanning after F# block comment"
+        );
+    }
+
+    #[test]
+    fn heuristic_hcl_hash_comment() {
+        let tokens = syntax_tokens_for_line_heuristic("value = 1 # note", DiffSyntaxLanguage::Hcl);
+        assert!(
+            tokens.iter().any(|t| t.kind == SyntaxTokenKind::Comment),
+            "HCL '#' should be detected as comment"
+        );
+    }
+
+    #[test]
+    fn heuristic_html_comment() {
+        let tokens =
+            syntax_tokens_for_line_heuristic("<!-- comment --> <div>", DiffSyntaxLanguage::Html);
+        assert!(tokens.iter().any(|t| t.kind == SyntaxTokenKind::Comment));
+    }
+
+    #[test]
+    fn heuristic_lua_block_comment() {
+        let tokens =
+            syntax_tokens_for_line_heuristic("--[[ block ]] rest", DiffSyntaxLanguage::Lua);
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0].kind, SyntaxTokenKind::Comment);
+        // Should cover "--[[" through "]]"
+        assert_eq!(tokens[0].range.end, 13);
+    }
+
+    #[test]
+    fn heuristic_css_selector() {
+        let tokens =
+            syntax_tokens_for_line_heuristic(".my-class { color: red; }", DiffSyntaxLanguage::Css);
+        assert!(
+            tokens.iter().any(|t| t.kind == SyntaxTokenKind::Type),
+            "CSS class selector should be Type"
+        );
+    }
+
+    #[test]
+    fn heuristic_number_literal() {
+        let tokens = syntax_tokens_for_line_heuristic("x = 42", DiffSyntaxLanguage::Python);
+        assert!(tokens.iter().any(|t| t.kind == SyntaxTokenKind::Number));
+    }
+
+    #[test]
+    fn injection_cache_lru_eviction_preserves_recent_entries() {
+        TS_INJECTION_CACHE.with(|cache| cache.borrow_mut().clear());
+
+        // Fill the cache to max capacity with distinct entries, using the
+        // global counter so access values are monotonically ordered.
+        for i in 0..TS_INJECTION_CACHE_MAX_ENTRIES {
+            let key = TreesitterInjectionMatch {
+                language: DiffSyntaxLanguage::JavaScript,
+                byte_start: i * 100,
+                byte_end: i * 100 + 50,
+                content_hash: i as u64,
+            };
+            let access = next_injection_access();
+            TS_INJECTION_CACHE.with(|cache| {
+                cache.borrow_mut().insert(
+                    key,
+                    CachedInjectionTokens {
+                        all_line_tokens: vec![],
+                        injection_line_starts: vec![],
+                        injection_start_line_ix: 0,
+                        last_access: access,
+                    },
+                );
+            });
+        }
+
+        // Access the first entry to make it "recent" (higher counter than all others).
+        let first_key = TreesitterInjectionMatch {
+            language: DiffSyntaxLanguage::JavaScript,
+            byte_start: 0,
+            byte_end: 50,
+            content_hash: 0,
+        };
+        TS_INJECTION_CACHE.with(|cache| {
+            if let Some(entry) = cache.borrow_mut().get_mut(&first_key) {
+                entry.last_access = next_injection_access();
+            }
+        });
+
+        // Now insert one more to trigger eviction.
+        let overflow_key = TreesitterInjectionMatch {
+            language: DiffSyntaxLanguage::JavaScript,
+            byte_start: 99900,
+            byte_end: 99950,
+            content_hash: 99999,
+        };
+        let access = next_injection_access();
+        TS_INJECTION_CACHE.with(|cache| {
+            let mut cache = cache.borrow_mut();
+            if cache.len() >= TS_INJECTION_CACHE_MAX_ENTRIES {
+                let mut entries: Vec<_> = cache.iter().map(|(k, v)| (*k, v.last_access)).collect();
+                entries.sort_unstable_by_key(|(_, a)| *a);
+                let evict_count = entries.len() / 2;
+                for (key, _) in entries.into_iter().take(evict_count) {
+                    cache.remove(&key);
+                }
+            }
+            cache.insert(
+                overflow_key,
+                CachedInjectionTokens {
+                    all_line_tokens: vec![],
+                    injection_line_starts: vec![],
+                    injection_start_line_ix: 0,
+                    last_access: access,
+                },
+            );
+        });
+
+        TS_INJECTION_CACHE.with(|cache| {
+            let cache = cache.borrow();
+            // The recently-accessed first entry should survive eviction.
+            assert!(
+                cache.contains_key(&first_key),
+                "recently accessed entry should survive LRU eviction"
+            );
+            // The new entry should be present.
+            assert!(
+                cache.contains_key(&overflow_key),
+                "newly inserted entry should be present"
+            );
+            // Cache should be below max.
+            assert!(
+                cache.len() <= TS_INJECTION_CACHE_MAX_ENTRIES,
+                "cache should not exceed max entries"
+            );
+        });
+
+        TS_INJECTION_CACHE.with(|cache| cache.borrow_mut().clear());
     }
 }

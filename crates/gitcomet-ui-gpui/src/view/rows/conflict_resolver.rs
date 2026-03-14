@@ -5,6 +5,7 @@ use super::conflict_canvas::{
 };
 use super::diff_text::*;
 use super::*;
+use gitcomet_core::domain::DiffLineKind;
 
 fn conflict_syntax_mode_for_total_rows(total_rows: usize) -> DiffSyntaxMode {
     if total_rows <= MAX_LINES_FOR_SYNTAX_HIGHLIGHTING {
@@ -12,26 +13,6 @@ fn conflict_syntax_mode_for_total_rows(total_rows: usize) -> DiffSyntaxMode {
     } else {
         DiffSyntaxMode::HeuristicOnly
     }
-}
-
-fn resolved_output_line_text<'a>(text: &'a str, line_starts: &[usize], line_ix: usize) -> &'a str {
-    if text.is_empty() {
-        return "";
-    }
-    let text_len = text.len();
-    let start = line_starts.get(line_ix).copied().unwrap_or(text_len);
-    if start >= text_len {
-        return "";
-    }
-    let mut end = line_starts
-        .get(line_ix.saturating_add(1))
-        .copied()
-        .unwrap_or(text_len)
-        .min(text_len);
-    if end > start && text.as_bytes().get(end.saturating_sub(1)) == Some(&b'\n') {
-        end = end.saturating_sub(1);
-    }
-    text.get(start..end).unwrap_or("")
 }
 
 fn build_conflict_cached_diff_styled_text(
@@ -938,8 +919,8 @@ impl MainPaneView {
         let requested_rows = range.len();
         let theme = this.theme;
         let syntax_language = this.conflict_resolved_preview_syntax_language;
-        let syntax_mode =
-            conflict_syntax_mode_for_total_rows(this.conflict_resolved_preview_line_count);
+        let syntax_document = this.conflict_resolved_preview_prepared_syntax_document;
+        let syntax_mode = syntax_mode_for_prepared_document(syntax_document);
         let line_starts = &this.conflict_resolved_preview_line_starts;
         let line_texts: Vec<SharedString> =
             this.conflict_resolver_input.read_with(cx, |input, _| {
@@ -976,31 +957,40 @@ impl MainPaneView {
                 }
 
                 let row_content = if syntax_language.is_some() && !line_text.is_empty() {
-                    let styled = this
-                        .conflict_resolved_preview_segments_cache
-                        .entry(ix)
-                        .or_insert_with(|| {
-                            build_cached_diff_styled_text(
+                    let needs_refresh = this
+                        .conflict_resolved_preview_segments_cache_get(ix)
+                        .is_none_or(|styled| styled.text.as_ref() != line_text.as_ref());
+                    let mut pending_styled = None;
+                    if needs_refresh {
+                        let (styled, is_pending) =
+                            build_cached_diff_styled_text_for_prepared_document_line_nonblocking(
                                 theme,
                                 line_text.as_ref(),
                                 &[],
                                 "",
-                                syntax_language,
-                                syntax_mode,
+                                DiffSyntaxConfig {
+                                    language: syntax_language,
+                                    mode: syntax_mode,
+                                },
                                 None,
+                                PreparedDiffSyntaxLine {
+                                    document: syntax_document,
+                                    line_ix: ix,
+                                },
                             )
-                        });
-                    if styled.text.as_ref() != line_text.as_ref() {
-                        *styled = build_cached_diff_styled_text(
-                            theme,
-                            line_text.as_ref(),
-                            &[],
-                            "",
-                            syntax_language,
-                            syntax_mode,
-                            None,
-                        );
+                            .into_parts();
+                        if is_pending {
+                            this.ensure_prepared_syntax_chunk_poll(cx);
+                            pending_styled = Some(styled);
+                        } else {
+                            this.conflict_resolved_preview_segments_cache_set(ix, styled);
+                        }
                     }
+                    let cached_styled = this.conflict_resolved_preview_segments_cache_get(ix);
+                    let styled = pending_styled
+                        .as_ref()
+                        .or(cached_styled)
+                        .expect("resolved preview row style should exist after populate");
                     if styled.highlights.is_empty() {
                         div()
                             .w_full()
@@ -1080,11 +1070,7 @@ impl MainPaneView {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
-        let query: SharedString = if this.diff_search_active {
-            this.diff_search_query.clone()
-        } else {
-            SharedString::default()
-        };
+        let query = this.diff_search_query_or_empty();
         let query = query.as_ref().trim().to_string();
         this.sync_conflict_diff_query_overlay_caches(query.as_str());
         let syntax_lang = this.conflict_resolver.conflict_syntax_language;
@@ -1118,11 +1104,7 @@ impl MainPaneView {
     ) -> Vec<AnyElement> {
         let _perf_scope = perf::span(ConflictPerfSpan::RenderResolverDiffRows);
         let requested_rows = range.len();
-        let query: SharedString = if this.diff_search_active {
-            this.diff_search_query.clone()
-        } else {
-            SharedString::default()
-        };
+        let query = this.diff_search_query_or_empty();
         let query = query.as_ref().trim().to_string();
         this.sync_conflict_diff_query_overlay_caches(query.as_str());
         let syntax_lang = this.conflict_resolver.conflict_syntax_language;
@@ -1530,11 +1512,11 @@ impl MainPaneView {
 
         let bg = inline_row_bg(theme, row.kind, row.side);
         let prefix: SharedString = match row.kind {
-            gitcomet_core::domain::DiffLineKind::Add => "+",
-            gitcomet_core::domain::DiffLineKind::Remove => "-",
-            gitcomet_core::domain::DiffLineKind::Context => " ",
-            gitcomet_core::domain::DiffLineKind::Header => " ",
-            gitcomet_core::domain::DiffLineKind::Hunk => " ",
+            DiffLineKind::Add => "+",
+            DiffLineKind::Remove => "-",
+            DiffLineKind::Context => " ",
+            DiffLineKind::Header => " ",
+            DiffLineKind::Hunk => " ",
         }
         .into();
 
@@ -1913,11 +1895,11 @@ impl MainPaneView {
 
         let bg = inline_row_bg(theme, row.kind, row.side);
         let prefix: SharedString = match row.kind {
-            gitcomet_core::domain::DiffLineKind::Add => "+",
-            gitcomet_core::domain::DiffLineKind::Remove => "-",
-            gitcomet_core::domain::DiffLineKind::Context => " ",
-            gitcomet_core::domain::DiffLineKind::Header => " ",
-            gitcomet_core::domain::DiffLineKind::Hunk => " ",
+            DiffLineKind::Add => "+",
+            DiffLineKind::Remove => "-",
+            DiffLineKind::Context => " ",
+            DiffLineKind::Header => " ",
+            DiffLineKind::Hunk => " ",
         }
         .into();
 
@@ -2292,19 +2274,15 @@ fn split_cell_bg(
     }
 }
 
-fn inline_row_bg(
-    theme: AppTheme,
-    kind: gitcomet_core::domain::DiffLineKind,
-    side: ConflictPickSide,
-) -> gpui::Rgba {
+fn inline_row_bg(theme: AppTheme, kind: DiffLineKind, side: ConflictPickSide) -> gpui::Rgba {
     match (kind, side) {
-        (gitcomet_core::domain::DiffLineKind::Add, ConflictPickSide::Ours)
-        | (gitcomet_core::domain::DiffLineKind::Remove, ConflictPickSide::Ours) => with_alpha(
+        (DiffLineKind::Add, ConflictPickSide::Ours)
+        | (DiffLineKind::Remove, ConflictPickSide::Ours) => with_alpha(
             theme.colors.warning,
             if theme.is_dark { 0.10 } else { 0.08 },
         ),
-        (gitcomet_core::domain::DiffLineKind::Add, ConflictPickSide::Theirs)
-        | (gitcomet_core::domain::DiffLineKind::Remove, ConflictPickSide::Theirs) => with_alpha(
+        (DiffLineKind::Add, ConflictPickSide::Theirs)
+        | (DiffLineKind::Remove, ConflictPickSide::Theirs) => with_alpha(
             theme.colors.success,
             if theme.is_dark { 0.10 } else { 0.08 },
         ),

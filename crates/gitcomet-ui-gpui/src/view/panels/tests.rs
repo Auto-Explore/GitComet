@@ -316,7 +316,7 @@ fn file_preview_renders_scrollable_syntax_highlighted_rows(cx: &mut gpui::TestAp
             "expected file preview to overflow horizontally"
         );
 
-        let Some(styled) = pane.worktree_preview_segments_cache.get(&0) else {
+        let Some(styled) = pane.worktree_preview_segments_cache_get(0) else {
             panic!("expected first visible preview row to populate segment cache");
         };
         assert!(
@@ -399,7 +399,7 @@ fn patch_view_applies_syntax_highlighting_to_context_lines(cx: &mut gpui::TestAp
         let styled = pane
             .diff_text_segments_cache
             .get(2)
-            .and_then(|v| v.as_ref())
+            .and_then(|v| v.as_ref().map(|entry| &entry.styled))
             .expect("expected context line to be syntax-highlighted and cached");
         assert!(
             !styled.highlights.is_empty(),
@@ -718,7 +718,7 @@ fn patch_diff_search_query_keeps_stable_style_cache_entries(cx: &mut gpui::TestA
         let stable = pane
             .diff_text_segments_cache
             .get(2)
-            .and_then(|entry| entry.as_ref())
+            .and_then(|entry| entry.as_ref().map(|entry| &entry.styled))
             .expect("expected stable cache entry for context row before search");
         assert!(
             pane.diff_text_query_segments_cache.is_empty(),
@@ -750,7 +750,7 @@ fn patch_diff_search_query_keeps_stable_style_cache_entries(cx: &mut gpui::TestA
         let stable_after = pane
             .diff_text_segments_cache
             .get(2)
-            .and_then(|entry| entry.as_ref())
+            .and_then(|entry| entry.as_ref().map(|entry| &entry.styled))
             .expect("expected stable cache entry for context row after search query update");
         assert_eq!(
             stable_after.highlights_hash, stable_highlights_hash_before,
@@ -765,13 +765,156 @@ fn patch_diff_search_query_keeps_stable_style_cache_entries(cx: &mut gpui::TestA
         let query_overlay = pane
             .diff_text_query_segments_cache
             .get(2)
-            .and_then(|entry| entry.as_ref())
+            .and_then(|entry| entry.as_ref().map(|entry| &entry.styled))
             .expect("expected query overlay cache entry for searched context row");
         assert_ne!(
             query_overlay.highlights_hash, stable_after.highlights_hash,
             "query overlay should layer match highlighting on top of stable highlights"
         );
     });
+}
+
+#[gpui::test]
+fn worktree_preview_search_query_clears_row_cache_without_dropping_source_path(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(23);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_preview_search",
+        std::process::id()
+    ));
+    let file_rel = std::path::PathBuf::from("preview.rs");
+    let preview_abs_path = workdir.join(&file_rel);
+    let lines: Arc<Vec<String>> = Arc::new(vec![
+        "fn needle() { let value = 1; }".to_string(),
+        "fn keep() { let other = 2; }".to_string(),
+    ]);
+
+    let _ = std::fs::create_dir_all(&workdir);
+    std::fs::write(&preview_abs_path, lines.join("\n")).expect("write preview fixture file");
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = gitcomet_state::model::RepoState::new_opening(
+                repo_id,
+                gitcomet_core::domain::RepoSpec {
+                    workdir: workdir.clone(),
+                },
+            );
+            repo.status = gitcomet_state::model::Loadable::Ready(
+                gitcomet_core::domain::RepoStatus {
+                    staged: vec![],
+                    unstaged: vec![gitcomet_core::domain::FileStatus {
+                        path: file_rel.clone(),
+                        kind: gitcomet_core::domain::FileStatusKind::Untracked,
+                        conflict: None,
+                    }],
+                }
+                .into(),
+            );
+            repo.diff_state.diff_target = Some(gitcomet_core::domain::DiffTarget::WorkingTree {
+                path: file_rel.clone(),
+                area: gitcomet_core::domain::DiffArea::Unstaged,
+            });
+
+            let next_state = Arc::new(AppState {
+                repos: vec![repo],
+                active_repo: Some(repo_id),
+                ..Default::default()
+            });
+
+            this._ui_model.update(cx, |model, cx| {
+                model.set_state(Arc::clone(&next_state), cx);
+            });
+        });
+    });
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let lines = Arc::clone(&lines);
+            let preview_abs_path = preview_abs_path.clone();
+            this.main_pane.update(cx, |pane, cx| {
+                pane.worktree_preview_path = Some(preview_abs_path.clone());
+                pane.worktree_preview = gitcomet_state::model::Loadable::Ready(lines);
+                pane.worktree_preview_segments_cache_path = None;
+                pane.worktree_preview_segments_cache.clear();
+                pane.worktree_preview_scroll
+                    .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
+                cx.notify();
+            });
+        });
+    });
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    let mut base_highlights_hash = 0u64;
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        let pane = main_pane.read(app);
+        assert_eq!(
+            pane.worktree_preview_segments_cache_path.as_ref(),
+            Some(&preview_abs_path),
+            "initial draw should bind the preview row cache to the current path"
+        );
+        let base = pane
+            .worktree_preview_segments_cache_get(0)
+            .expect("expected worktree preview row cache before enabling search");
+        base_highlights_hash = base.highlights_hash;
+    });
+
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, cx| {
+            pane.diff_search_active = true;
+            pane.diff_search_input.update(cx, |input, cx| {
+                input.set_text("needle", cx);
+            });
+            cx.notify();
+        });
+    });
+
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        let pane = main_pane.read(app);
+        assert_eq!(pane.diff_search_query.as_ref(), "needle");
+        assert_eq!(
+            pane.worktree_preview_segments_cache_path.as_ref(),
+            Some(&preview_abs_path),
+            "search query changes should preserve the bound preview source path"
+        );
+    });
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        let pane = main_pane.read(app);
+        let searched = pane
+            .worktree_preview_segments_cache_get(0)
+            .expect("expected worktree preview row cache after search query rebuild");
+        assert_ne!(
+            searched.highlights_hash, base_highlights_hash,
+            "search overlay should change the cached preview row highlights"
+        );
+        assert!(
+            searched
+                .highlights
+                .iter()
+                .any(|(_, style)| style.background_color.is_some()),
+            "searched preview row should include a query highlight background"
+        );
+    });
+
+    let _ = std::fs::remove_dir_all(&workdir);
 }
 
 #[gpui::test]

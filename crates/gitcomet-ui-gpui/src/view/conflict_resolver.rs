@@ -1641,11 +1641,6 @@ pub fn split_output_lines_for_outline(output: &str) -> Vec<String> {
     output.split('\n').map(|line| line.to_string()).collect()
 }
 
-#[allow(dead_code)]
-pub fn output_line_count_for_outline(output: &str) -> usize {
-    output.as_bytes().iter().filter(|&&b| b == b'\n').count() + 1
-}
-
 #[cfg_attr(not(test), allow(dead_code))]
 pub fn append_lines_to_output(output: &str, lines: &[String]) -> String {
     if lines.is_empty() {
@@ -1752,15 +1747,6 @@ pub fn compute_resolved_line_provenance(
 ) -> Vec<ResolvedLineMeta> {
     let lookup = build_source_line_lookup(sources);
     compute_resolved_line_provenance_from_iter(output_lines.iter().map(String::as_str), &lookup)
-}
-
-#[allow(dead_code)]
-pub fn compute_resolved_line_provenance_from_text(
-    output_text: &str,
-    sources: &SourceLines<'_>,
-) -> Vec<ResolvedLineMeta> {
-    let lookup = build_source_line_lookup(sources);
-    compute_resolved_line_provenance_from_iter(output_text.split('\n'), &lookup)
 }
 
 fn insert_indexed_source_lines<'a>(
@@ -1893,7 +1879,7 @@ pub fn build_resolved_output_line_sources_index_from_text(
 ///
 /// Returns `true` if the source line's key is in the dedupe index — meaning
 /// the plus-icon for that row should be hidden.
-#[allow(dead_code)]
+#[cfg(test)]
 pub fn is_source_line_in_output(
     index: &rustc_hash::FxHashSet<SourceLineKey>,
     view_mode: ConflictResolverViewMode,

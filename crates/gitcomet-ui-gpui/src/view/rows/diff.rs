@@ -1,16 +1,74 @@
 use super::diff_canvas;
 use super::diff_text::*;
 use super::*;
+use crate::view::panes::main::{
+    VersionedCachedDiffStyledText, versioned_cached_diff_styled_text_is_current,
+};
+use gitcomet_core::domain::DiffLineKind;
+use gitcomet_core::file_diff::FileDiffRowKind;
+
+/// Returns the word-highlight color for a diff line kind: success for Add,
+/// danger for Remove, None otherwise.
+fn diff_line_word_color(kind: DiffLineKind, theme: AppTheme) -> Option<gpui::Rgba> {
+    match kind {
+        DiffLineKind::Add => Some(theme.colors.success),
+        DiffLineKind::Remove => Some(theme.colors.danger),
+        _ => None,
+    }
+}
+
+/// Applies query overlay to pending styled text if a query is active, returning
+/// the final styled text for rendering before it can be cached.
+fn pending_styled_with_query_overlay(
+    styled: CachedDiffStyledText,
+    query: &str,
+    theme: AppTheme,
+) -> CachedDiffStyledText {
+    if query.is_empty() {
+        styled
+    } else {
+        build_cached_diff_query_overlay_styled_text(theme, &styled, query)
+    }
+}
+
+/// Returns the word-highlight color for a file diff split column.
+/// Left highlights Remove/Modify in danger; Right highlights Add/Modify in success.
+fn file_diff_split_word_color(
+    column: PatchSplitColumn,
+    kind: FileDiffRowKind,
+    theme: AppTheme,
+) -> Option<gpui::Rgba> {
+    match column {
+        PatchSplitColumn::Left => matches!(kind, FileDiffRowKind::Remove | FileDiffRowKind::Modify)
+            .then_some(theme.colors.danger),
+        PatchSplitColumn::Right => matches!(kind, FileDiffRowKind::Add | FileDiffRowKind::Modify)
+            .then_some(theme.colors.success),
+    }
+}
+
+fn diff_placeholder_row(id: impl Into<gpui::ElementId>, theme: AppTheme) -> AnyElement {
+    div()
+        .id(id)
+        .h(px(20.0))
+        .px_2()
+        .text_xs()
+        .text_color(theme.colors.text_muted)
+        .child("")
+        .into_any_element()
+}
 
 impl MainPaneView {
     fn diff_text_segments_cache_get_for_query(
         &mut self,
         key: usize,
         query: &str,
+        syntax_epoch: u64,
     ) -> Option<CachedDiffStyledText> {
         let query = query.trim();
         if query.is_empty() {
-            return self.diff_text_segments_cache_get(key).cloned();
+            return self
+                .diff_text_segments_cache_get(key, syntax_epoch)
+                .cloned();
         }
 
         self.sync_diff_text_query_overlay_cache(query);
@@ -19,21 +77,31 @@ impl MainPaneView {
                 .resize_with(key + 1, || None);
         }
 
-        if self
-            .diff_text_query_segments_cache
-            .get(key)
-            .and_then(Option::as_ref)
-            .is_none()
+        if versioned_cached_diff_styled_text_is_current(
+            self.diff_text_query_segments_cache
+                .get(key)
+                .and_then(Option::as_ref),
+            syntax_epoch,
+        )
+        .is_none()
         {
-            let base = self.diff_text_segments_cache_get(key)?.clone();
+            let base = self
+                .diff_text_segments_cache_get(key, syntax_epoch)?
+                .clone();
             let overlaid = build_cached_diff_query_overlay_styled_text(self.theme, &base, query);
-            self.diff_text_query_segments_cache[key] = Some(overlaid);
+            self.diff_text_query_segments_cache[key] = Some(VersionedCachedDiffStyledText {
+                syntax_epoch,
+                styled: overlaid,
+            });
         }
 
-        self.diff_text_query_segments_cache
-            .get(key)
-            .and_then(Option::as_ref)
-            .cloned()
+        versioned_cached_diff_styled_text_is_current(
+            self.diff_text_query_segments_cache
+                .get(key)
+                .and_then(Option::as_ref),
+            syntax_epoch,
+        )
+        .cloned()
     }
 
     pub(in super::super) fn render_diff_rows(
@@ -43,29 +111,14 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
         let min_width = this.diff_horizontal_min_width;
-        static EMPTY_QUERY: SharedString = SharedString::new_static("");
-        let query = if this.diff_search_active {
-            this.diff_search_query.clone()
-        } else {
-            EMPTY_QUERY.clone()
-        };
+        let query = this.diff_search_query_or_empty();
 
         if this.is_file_diff_view_active() {
             let theme = this.theme;
-            let empty_ranges: &[Range<usize>] = &[];
-            let configured_syntax_mode =
-                if this.file_diff_inline_cache.len() <= MAX_LINES_FOR_SYNTAX_HIGHLIGHTING {
-                    DiffSyntaxMode::Auto
-                } else {
-                    DiffSyntaxMode::HeuristicOnly
-                };
             let language = this.file_diff_cache_language;
-            let syntax_document = this.file_diff_inline_prepared_syntax_document();
-            let syntax_mode = if syntax_document.is_some() {
-                configured_syntax_mode
-            } else {
-                DiffSyntaxMode::HeuristicOnly
-            };
+            // Inline syntax is now projected from the real old/new (split)
+            // documents instead of parsing a synthetic mixed inline stream.
+            // syntax_mode is determined per-row based on projection availability.
 
             return range
                 .map(|visible_ix| {
@@ -74,84 +127,79 @@ impl MainPaneView {
                         .is_some_and(|(a, b)| visible_ix >= a.min(b) && visible_ix <= a.max(b));
 
                     let Some(inline_ix) = this.diff_mapped_ix_for_visible_ix(visible_ix) else {
-                        return div()
-                            .id(("diff_missing", visible_ix))
-                            .h(px(20.0))
-                            .px_2()
-                            .text_xs()
-                            .text_color(theme.colors.text_muted)
-                            .child("")
-                            .into_any_element();
+                        return diff_placeholder_row(("diff_missing", visible_ix), theme);
                     };
 
                     let word_ranges: &[Range<usize>] = this
                         .file_diff_inline_word_highlights
                         .get(inline_ix)
                         .and_then(|r| r.as_ref().map(Vec::as_slice))
-                        .unwrap_or(empty_ranges);
+                        .unwrap_or(&[]);
 
-                    if this.diff_text_segments_cache_get(inline_ix).is_none() {
+                    let mut pending_styled = None;
+                    let cache_epoch = match this.file_diff_inline_cache.get(inline_ix) {
+                        Some(line) => this.file_diff_inline_style_cache_epoch(line),
+                        None => {
+                            return diff_placeholder_row(("diff_oob", visible_ix), theme);
+                        }
+                    };
+                    if this
+                        .diff_text_segments_cache_get(inline_ix, cache_epoch)
+                        .is_none()
+                    {
                         let Some(line) = this.file_diff_inline_cache.get(inline_ix) else {
-                            return div()
-                                .id(("diff_oob", visible_ix))
-                                .h(px(20.0))
-                                .px_2()
-                                .text_xs()
-                                .text_color(theme.colors.text_muted)
-                                .child("")
-                                .into_any_element();
+                            return diff_placeholder_row(("diff_oob", visible_ix), theme);
                         };
 
-                        let word_color = match line.kind {
-                            gitcomet_core::domain::DiffLineKind::Add => Some(theme.colors.success),
-                            gitcomet_core::domain::DiffLineKind::Remove => {
-                                Some(theme.colors.danger)
-                            }
-                            _ => None,
-                        };
+                        let word_color = diff_line_word_color(line.kind, theme);
 
-                        let language = matches!(
+                        let is_content_line = matches!(
                             line.kind,
-                            gitcomet_core::domain::DiffLineKind::Add
-                                | gitcomet_core::domain::DiffLineKind::Remove
-                                | gitcomet_core::domain::DiffLineKind::Context
-                        )
-                        .then_some(language)
-                        .flatten();
-
-                        let computed = build_cached_diff_styled_text_for_prepared_document_line(
-                            theme,
-                            diff_content_text(line),
-                            word_ranges,
-                            "",
-                            DiffSyntaxConfig {
-                                language,
-                                mode: syntax_mode,
-                            },
-                            word_color,
-                            PreparedDiffSyntaxLine {
-                                document: syntax_document,
-                                line_ix: inline_ix,
-                            },
+                            DiffLineKind::Add | DiffLineKind::Remove | DiffLineKind::Context
                         );
-                        this.diff_text_segments_cache_set(inline_ix, computed);
+                        let line_language = is_content_line.then_some(language).flatten();
+
+                        // Project syntax from the correct side's prepared document.
+                        // Full-document views always use Auto fallback since prepared
+                        // documents handle the heavy lifting.
+                        let projected = this.file_diff_inline_projected_syntax(line);
+                        let syntax_mode = syntax_mode_for_prepared_document(projected.document);
+
+                        let (styled, is_pending) =
+                            build_cached_diff_styled_text_for_prepared_document_line_nonblocking(
+                                theme,
+                                diff_content_text(line),
+                                word_ranges,
+                                "",
+                                DiffSyntaxConfig {
+                                    language: line_language,
+                                    mode: syntax_mode,
+                                },
+                                word_color,
+                                projected,
+                            )
+                            .into_parts();
+                        if is_pending {
+                            this.ensure_prepared_syntax_chunk_poll(cx);
+                            pending_styled =
+                                Some(pending_styled_with_query_overlay(styled, &query, theme));
+                        } else {
+                            this.diff_text_segments_cache_set(inline_ix, cache_epoch, styled);
+                        }
                     }
 
-                    let styled =
-                        this.diff_text_segments_cache_get_for_query(inline_ix, query.as_ref());
+                    let cached_styled = this.diff_text_segments_cache_get_for_query(
+                        inline_ix,
+                        query.as_ref(),
+                        cache_epoch,
+                    );
+                    let styled = pending_styled.as_ref().or(cached_styled.as_ref());
                     debug_assert!(
-                        styled.is_some(),
+                        pending_styled.is_some() || styled.is_some(),
                         "diff text segment cache missing for inline row {inline_ix} after populate"
                     );
                     let Some(line) = this.file_diff_inline_cache.get(inline_ix) else {
-                        return div()
-                            .id(("diff_oob", visible_ix))
-                            .h(px(20.0))
-                            .px_2()
-                            .text_xs()
-                            .text_color(theme.colors.text_muted)
-                            .child("")
-                            .into_any_element();
+                        return diff_placeholder_row(("diff_oob", visible_ix), theme);
                     };
 
                     diff_row(
@@ -164,7 +212,7 @@ impl MainPaneView {
                         line,
                         None,
                         None,
-                        styled.as_ref(),
+                        styled,
                         false,
                         cx,
                     )
@@ -173,13 +221,10 @@ impl MainPaneView {
         }
 
         let theme = this.theme;
+        let cache_epoch = 0u64;
         let repo_id_for_context_menu = this.active_repo_id();
         let active_context_menu_invoker = this.active_context_menu_invoker.clone();
-        let syntax_mode = if this.patch_diff_row_len() <= MAX_LINES_FOR_SYNTAX_HIGHLIGHTING {
-            DiffSyntaxMode::Auto
-        } else {
-            DiffSyntaxMode::HeuristicOnly
-        };
+        let syntax_mode = this.patch_diff_syntax_mode();
         range
             .map(|visible_ix| {
                 let selected = this
@@ -187,14 +232,7 @@ impl MainPaneView {
                     .is_some_and(|(a, b)| visible_ix >= a.min(b) && visible_ix <= a.max(b));
 
                 let Some(src_ix) = this.diff_mapped_ix_for_visible_ix(visible_ix) else {
-                    return div()
-                        .id(("diff_missing", visible_ix))
-                        .h(px(20.0))
-                        .px_2()
-                        .text_xs()
-                        .text_color(theme.colors.text_muted)
-                        .child("")
-                        .into_any_element();
+                    return diff_placeholder_row(("diff_missing", visible_ix), theme);
                 };
                 let click_kind = this
                     .diff_click_kinds
@@ -214,26 +252,17 @@ impl MainPaneView {
                 let language = this.diff_language_for_src_ix.get(src_ix).copied().flatten();
 
                 let should_style = matches!(click_kind, DiffClickKind::Line) || !query.is_empty();
-                if should_style && this.diff_text_segments_cache_get(src_ix).is_none() {
+                if should_style
+                    && this
+                        .diff_text_segments_cache_get(src_ix, cache_epoch)
+                        .is_none()
+                {
                     let Some(line) = this.patch_diff_row(src_ix) else {
-                        return div()
-                            .id(("diff_oob", visible_ix))
-                            .h(px(20.0))
-                            .px_2()
-                            .text_xs()
-                            .text_color(theme.colors.text_muted)
-                            .child("")
-                            .into_any_element();
+                        return diff_placeholder_row(("diff_oob", visible_ix), theme);
                     };
 
                     let computed = if matches!(click_kind, DiffClickKind::Line) {
-                        let word_color = match line.kind {
-                            gitcomet_core::domain::DiffLineKind::Add => Some(theme.colors.success),
-                            gitcomet_core::domain::DiffLineKind::Remove => {
-                                Some(theme.colors.danger)
-                            }
-                            _ => None,
-                        };
+                        let word_color = diff_line_word_color(line.kind, theme);
 
                         build_cached_diff_styled_text(
                             theme,
@@ -257,22 +286,21 @@ impl MainPaneView {
                             None,
                         )
                     };
-                    this.diff_text_segments_cache_set(src_ix, computed);
+                    this.diff_text_segments_cache_set(src_ix, cache_epoch, computed);
                 }
 
                 let styled = should_style
-                    .then(|| this.diff_text_segments_cache_get_for_query(src_ix, query.as_ref()))
+                    .then(|| {
+                        this.diff_text_segments_cache_get_for_query(
+                            src_ix,
+                            query.as_ref(),
+                            cache_epoch,
+                        )
+                    })
                     .flatten();
 
                 let Some(line) = this.patch_diff_row(src_ix) else {
-                    return div()
-                        .id(("diff_oob", visible_ix))
-                        .h(px(20.0))
-                        .px_2()
-                        .text_xs()
-                        .text_color(theme.colors.text_muted)
-                        .child("")
-                        .into_any_element();
+                    return diff_placeholder_row(("diff_oob", visible_ix), theme);
                 };
 
                 let header_display = matches!(
@@ -311,296 +339,7 @@ impl MainPaneView {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
-        let min_width = this.diff_horizontal_min_width;
-        static EMPTY_QUERY: SharedString = SharedString::new_static("");
-        let query = if this.diff_search_active {
-            this.diff_search_query.clone()
-        } else {
-            EMPTY_QUERY.clone()
-        };
-
-        if this.is_file_diff_view_active() {
-            let theme = this.theme;
-            let empty_ranges: &[Range<usize>] = &[];
-            let configured_syntax_mode =
-                if this.file_diff_cache_rows.len() <= MAX_LINES_FOR_SYNTAX_HIGHLIGHTING {
-                    DiffSyntaxMode::Auto
-                } else {
-                    DiffSyntaxMode::HeuristicOnly
-                };
-            let language = this.file_diff_cache_language;
-            let syntax_document = this.file_diff_split_left_prepared_syntax_document();
-            let syntax_mode = if syntax_document.is_some() {
-                configured_syntax_mode
-            } else {
-                DiffSyntaxMode::HeuristicOnly
-            };
-
-            return range
-                .map(|visible_ix| {
-                    let selected = this
-                        .diff_selection_range
-                        .is_some_and(|(a, b)| visible_ix >= a.min(b) && visible_ix <= a.max(b));
-
-                    let Some(row_ix) = this.diff_mapped_ix_for_visible_ix(visible_ix) else {
-                        return div()
-                            .id(("diff_split_left_missing", visible_ix))
-                            .h(px(20.0))
-                            .px_2()
-                            .text_xs()
-                            .text_color(theme.colors.text_muted)
-                            .child("")
-                            .into_any_element();
-                    };
-                    let key = this.file_diff_split_cache_key(row_ix, DiffTextRegion::SplitLeft);
-                    if let Some(key) = key
-                        && this.diff_text_segments_cache_get(key).is_none()
-                    {
-                        let Some(row) = this.file_diff_cache_rows.get(row_ix) else {
-                            return div()
-                                .id(("diff_split_left_oob", visible_ix))
-                                .h(px(20.0))
-                                .px_2()
-                                .text_xs()
-                                .text_color(theme.colors.text_muted)
-                                .child("")
-                                .into_any_element();
-                        };
-
-                        if let Some(text) = row.old.as_deref() {
-                            let word_color = matches!(
-                                row.kind,
-                                gitcomet_core::file_diff::FileDiffRowKind::Remove
-                                    | gitcomet_core::file_diff::FileDiffRowKind::Modify
-                            )
-                            .then_some(theme.colors.danger);
-
-                            let word_ranges: &[Range<usize>] = this
-                                .file_diff_split_word_highlights_old
-                                .get(row_ix)
-                                .and_then(|r| r.as_ref().map(Vec::as_slice))
-                                .unwrap_or(empty_ranges);
-
-                            let computed = build_cached_diff_styled_text_for_prepared_document_line(
-                                theme,
-                                text,
-                                word_ranges,
-                                "",
-                                DiffSyntaxConfig {
-                                    language,
-                                    mode: syntax_mode,
-                                },
-                                word_color,
-                                PreparedDiffSyntaxLine {
-                                    document: syntax_document,
-                                    line_ix: row_ix,
-                                },
-                            );
-                            this.diff_text_segments_cache_set(key, computed);
-                        }
-                    }
-
-                    let row_has_old = this
-                        .file_diff_cache_rows
-                        .get(row_ix)
-                        .is_some_and(|row| row.old.is_some());
-                    let styled = if row_has_old {
-                        key.and_then(|k| {
-                            this.diff_text_segments_cache_get_for_query(k, query.as_ref())
-                        })
-                    } else {
-                        None
-                    };
-                    debug_assert!(
-                        !row_has_old || key.is_none() || styled.is_some(),
-                        "diff text segment cache missing for split-left row {row_ix} after populate"
-                    );
-
-                    let Some(row) = this.file_diff_cache_rows.get(row_ix) else {
-                        return div()
-                            .id(("diff_split_left_oob", visible_ix))
-                            .h(px(20.0))
-                            .px_2()
-                            .text_xs()
-                            .text_color(theme.colors.text_muted)
-                            .child("")
-                            .into_any_element();
-                    };
-                    patch_split_column_row(
-                        theme,
-                        PatchSplitColumn::Left,
-                        visible_ix,
-                        selected,
-                        min_width,
-                        row,
-                        styled.as_ref(),
-                        cx,
-                    )
-                })
-                .collect();
-        }
-
-        let theme = this.theme;
-        let syntax_mode = if this.patch_diff_row_len() <= MAX_LINES_FOR_SYNTAX_HIGHLIGHTING {
-            DiffSyntaxMode::Auto
-        } else {
-            DiffSyntaxMode::HeuristicOnly
-        };
-        let empty_ranges: &[Range<usize>] = &[];
-        range
-            .map(|visible_ix| {
-                let selected = this
-                    .diff_selection_range
-                    .is_some_and(|(a, b)| visible_ix >= a.min(b) && visible_ix <= a.max(b));
-
-                let Some(row_ix) = this.diff_mapped_ix_for_visible_ix(visible_ix) else {
-                    return div()
-                        .id(("diff_split_left_missing", visible_ix))
-                        .h(px(20.0))
-                        .px_2()
-                        .text_xs()
-                        .text_color(theme.colors.text_muted)
-                        .child("")
-                        .into_any_element();
-                };
-                let Some(row) = this.patch_diff_split_row(row_ix) else {
-                    return div()
-                        .id(("diff_split_left_oob", visible_ix))
-                        .h(px(20.0))
-                        .px_2()
-                        .text_xs()
-                        .text_color(theme.colors.text_muted)
-                        .child("")
-                        .into_any_element();
-                };
-
-                match row {
-                    PatchSplitRow::Aligned {
-                        row, old_src_ix, ..
-                    } => {
-                        if let Some(src_ix) = old_src_ix
-                            && this.diff_text_segments_cache_get(src_ix).is_none()
-                        {
-                            let text = row.old.as_deref().unwrap_or("");
-                            let language =
-                                this.diff_language_for_src_ix.get(src_ix).copied().flatten();
-                            this.ensure_patch_diff_word_highlight_for_src_ix(src_ix);
-                            let word_ranges: &[Range<usize>] = this
-                                .diff_word_highlights
-                                .get(src_ix)
-                                .and_then(|r| r.as_ref().map(Vec::as_slice))
-                                .unwrap_or(empty_ranges);
-                            let word_color =
-                                this.patch_diff_row(src_ix)
-                                    .and_then(|line| match line.kind {
-                                        gitcomet_core::domain::DiffLineKind::Add => {
-                                            Some(theme.colors.success)
-                                        }
-                                        gitcomet_core::domain::DiffLineKind::Remove => {
-                                            Some(theme.colors.danger)
-                                        }
-                                        _ => None,
-                                    });
-
-                            let computed = build_cached_diff_styled_text(
-                                theme,
-                                text,
-                                word_ranges,
-                                "",
-                                language,
-                                syntax_mode,
-                                word_color,
-                            );
-                            this.diff_text_segments_cache_set(src_ix, computed);
-                        }
-
-                        let styled = old_src_ix.and_then(|src_ix| {
-                            this.diff_text_segments_cache_get_for_query(src_ix, query.as_ref())
-                        });
-
-                        patch_split_column_row(
-                            theme,
-                            PatchSplitColumn::Left,
-                            visible_ix,
-                            selected,
-                            min_width,
-                            &row,
-                            styled.as_ref(),
-                            cx,
-                        )
-                    }
-                    PatchSplitRow::Raw { src_ix, click_kind } => {
-                        if this.patch_diff_row(src_ix).is_none() {
-                            return div()
-                                .id(("diff_split_left_src_oob", visible_ix))
-                                .h(px(20.0))
-                                .px_2()
-                                .text_xs()
-                                .text_color(theme.colors.text_muted)
-                                .child("")
-                                .into_any_element();
-                        };
-                        let file_stat = this.diff_file_stats.get(src_ix).and_then(|s| *s);
-                        let should_style = !query.is_empty();
-                        if should_style && this.diff_text_segments_cache_get(src_ix).is_none() {
-                            let display = this
-                                .diff_text_line_for_region(visible_ix, DiffTextRegion::SplitLeft);
-                            let computed = build_cached_diff_styled_text(
-                                theme,
-                                display.as_ref(),
-                                &[],
-                                "",
-                                None,
-                                syntax_mode,
-                                None,
-                            );
-                            this.diff_text_segments_cache_set(src_ix, computed);
-                        }
-                        let styled = should_style
-                            .then(|| {
-                                this.diff_text_segments_cache_get_for_query(src_ix, query.as_ref())
-                            })
-                            .flatten();
-                        let Some(line) = this.patch_diff_row(src_ix) else {
-                            return div()
-                                .id(("diff_split_left_src_oob", visible_ix))
-                                .h(px(20.0))
-                                .px_2()
-                                .text_xs()
-                                .text_color(theme.colors.text_muted)
-                                .child("")
-                                .into_any_element();
-                        };
-                        if should_hide_unified_diff_header_line(&line) {
-                            return div()
-                                .id(("diff_split_left_hidden_header", visible_ix))
-                                .h(px(0.0))
-                                .into_any_element();
-                        }
-                        let context_menu_active = click_kind == DiffClickKind::HunkHeader
-                            && this.active_repo_id().is_some_and(|repo_id| {
-                                let invoker: SharedString =
-                                    format!("diff_hunk_menu_{}_{}", repo_id.0, src_ix).into();
-                                this.active_context_menu_invoker.as_ref() == Some(&invoker)
-                            });
-                        patch_split_header_row(
-                            theme,
-                            PatchSplitColumn::Left,
-                            visible_ix,
-                            click_kind,
-                            selected,
-                            min_width,
-                            &line,
-                            file_stat,
-                            this.diff_header_display_cache.get(&src_ix).cloned(),
-                            styled.as_ref(),
-                            context_menu_active,
-                            cx,
-                        )
-                    }
-                }
-            })
-            .collect()
+        Self::render_diff_split_rows(this, PatchSplitColumn::Left, range, cx)
     }
 
     pub(in super::super) fn render_diff_split_right_rows(
@@ -609,30 +348,47 @@ impl MainPaneView {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
+        Self::render_diff_split_rows(this, PatchSplitColumn::Right, range, cx)
+    }
+
+    fn render_diff_split_rows(
+        this: &mut Self,
+        column: PatchSplitColumn,
+        range: Range<usize>,
+        cx: &mut gpui::Context<Self>,
+    ) -> Vec<AnyElement> {
         let min_width = this.diff_horizontal_min_width;
-        static EMPTY_QUERY: SharedString = SharedString::new_static("");
-        let query = if this.diff_search_active {
-            this.diff_search_query.clone()
+        let query = this.diff_search_query_or_empty();
+
+        let is_left = matches!(column, PatchSplitColumn::Left);
+        let region = if is_left {
+            DiffTextRegion::SplitLeft
         } else {
-            EMPTY_QUERY.clone()
+            DiffTextRegion::SplitRight
+        };
+        // Static ID tags to avoid format!/String allocation in element IDs.
+        let (id_missing, id_oob, id_src_oob, id_hidden) = if is_left {
+            (
+                "diff_split_left_missing",
+                "diff_split_left_oob",
+                "diff_split_left_src_oob",
+                "diff_split_left_hidden_header",
+            )
+        } else {
+            (
+                "diff_split_right_missing",
+                "diff_split_right_oob",
+                "diff_split_right_src_oob",
+                "diff_split_right_hidden_header",
+            )
         };
 
         if this.is_file_diff_view_active() {
             let theme = this.theme;
-            let empty_ranges: &[Range<usize>] = &[];
-            let configured_syntax_mode =
-                if this.file_diff_cache_rows.len() <= MAX_LINES_FOR_SYNTAX_HIGHLIGHTING {
-                    DiffSyntaxMode::Auto
-                } else {
-                    DiffSyntaxMode::HeuristicOnly
-                };
             let language = this.file_diff_cache_language;
-            let syntax_document = this.file_diff_split_right_prepared_syntax_document();
-            let syntax_mode = if syntax_document.is_some() {
-                configured_syntax_mode
-            } else {
-                DiffSyntaxMode::HeuristicOnly
-            };
+            let cache_epoch = this.file_diff_split_style_cache_epoch(region);
+            let syntax_document = this.file_diff_split_prepared_syntax_document(region);
+            let syntax_mode = syntax_mode_for_prepared_document(syntax_document);
 
             return range
                 .map(|visible_ix| {
@@ -641,45 +397,43 @@ impl MainPaneView {
                         .is_some_and(|(a, b)| visible_ix >= a.min(b) && visible_ix <= a.max(b));
 
                     let Some(row_ix) = this.diff_mapped_ix_for_visible_ix(visible_ix) else {
-                        return div()
-                            .id(("diff_split_right_missing", visible_ix))
-                            .h(px(20.0))
-                            .px_2()
-                            .text_xs()
-                            .text_color(theme.colors.text_muted)
-                            .child("")
-                            .into_any_element();
+                        return diff_placeholder_row(
+                            (id_missing, visible_ix),
+                            theme,
+                        );
                     };
-                    let key = this.file_diff_split_cache_key(row_ix, DiffTextRegion::SplitRight);
+                    let key = this.file_diff_split_cache_key(row_ix, region);
+                    let mut pending_styled = None;
                     if let Some(key) = key
-                        && this.diff_text_segments_cache_get(key).is_none()
+                        && this.diff_text_segments_cache_get(key, cache_epoch).is_none()
                     {
                         let Some(row) = this.file_diff_cache_rows.get(row_ix) else {
-                            return div()
-                                .id(("diff_split_right_oob", visible_ix))
-                                .h(px(20.0))
-                                .px_2()
-                                .text_xs()
-                                .text_color(theme.colors.text_muted)
-                                .child("")
-                                .into_any_element();
+                            return diff_placeholder_row(
+                                (id_oob, visible_ix),
+                                theme,
+                            );
                         };
 
-                        if let Some(text) = row.new.as_deref() {
-                            let word_color = matches!(
-                                row.kind,
-                                gitcomet_core::file_diff::FileDiffRowKind::Add
-                                    | gitcomet_core::file_diff::FileDiffRowKind::Modify
-                            )
-                            .then_some(theme.colors.success);
+                        let text = if is_left {
+                            row.old.as_deref()
+                        } else {
+                            row.new.as_deref()
+                        };
+                        if let Some(text) = text {
+                            let word_color =
+                                file_diff_split_word_color(column, row.kind, theme);
 
-                            let word_ranges: &[Range<usize>] = this
-                                .file_diff_split_word_highlights_new
+                            let word_highlights = if is_left {
+                                &this.file_diff_split_word_highlights_old
+                            } else {
+                                &this.file_diff_split_word_highlights_new
+                            };
+                            let word_ranges: &[Range<usize>] = word_highlights
                                 .get(row_ix)
                                 .and_then(|r| r.as_ref().map(Vec::as_slice))
-                                .unwrap_or(empty_ranges);
+                                .unwrap_or(&[]);
 
-                            let computed = build_cached_diff_styled_text_for_prepared_document_line(
+                            let (styled, is_pending) = build_cached_diff_styled_text_for_prepared_document_line_nonblocking(
                                 theme,
                                 text,
                                 word_ranges,
@@ -693,45 +447,54 @@ impl MainPaneView {
                                     document: syntax_document,
                                     line_ix: row_ix,
                                 },
-                            );
-                            this.diff_text_segments_cache_set(key, computed);
+                            )
+                            .into_parts();
+                            if is_pending {
+                                this.ensure_prepared_syntax_chunk_poll(cx);
+                                pending_styled = Some(pending_styled_with_query_overlay(
+                                    styled, &query, theme,
+                                ));
+                            } else {
+                                this.diff_text_segments_cache_set(key, cache_epoch, styled);
+                            }
                         }
                     }
 
-                    let row_has_new = this
+                    let row_has_content = this
                         .file_diff_cache_rows
                         .get(row_ix)
-                        .is_some_and(|row| row.new.is_some());
-                    let styled = if row_has_new {
+                        .is_some_and(|row| if is_left { row.old.is_some() } else { row.new.is_some() });
+                    let cached_styled = if row_has_content {
                         key.and_then(|k| {
-                            this.diff_text_segments_cache_get_for_query(k, query.as_ref())
+                            this.diff_text_segments_cache_get_for_query(
+                                k,
+                                query.as_ref(),
+                                cache_epoch,
+                            )
                         })
                     } else {
                         None
                     };
+                    let styled = pending_styled.as_ref().or(cached_styled.as_ref());
                     debug_assert!(
-                        !row_has_new || key.is_none() || styled.is_some(),
-                        "diff text segment cache missing for split-right row {row_ix} after populate"
+                        !row_has_content || key.is_none() || pending_styled.is_some() || styled.is_some(),
+                        "diff text segment cache missing for split-{column:?} row {row_ix} after populate"
                     );
 
                     let Some(row) = this.file_diff_cache_rows.get(row_ix) else {
-                        return div()
-                            .id(("diff_split_right_oob", visible_ix))
-                            .h(px(20.0))
-                            .px_2()
-                            .text_xs()
-                            .text_color(theme.colors.text_muted)
-                            .child("")
-                            .into_any_element();
+                        return diff_placeholder_row(
+                            (id_oob, visible_ix),
+                            theme,
+                        );
                     };
                     patch_split_column_row(
                         theme,
-                        PatchSplitColumn::Right,
+                        column,
                         visible_ix,
                         selected,
                         min_width,
                         row,
-                        styled.as_ref(),
+                        styled,
                         cx,
                     )
                 })
@@ -739,12 +502,8 @@ impl MainPaneView {
         }
 
         let theme = this.theme;
-        let syntax_mode = if this.patch_diff_row_len() <= MAX_LINES_FOR_SYNTAX_HIGHLIGHTING {
-            DiffSyntaxMode::Auto
-        } else {
-            DiffSyntaxMode::HeuristicOnly
-        };
-        let empty_ranges: &[Range<usize>] = &[];
+        let cache_epoch = 0u64;
+        let syntax_mode = this.patch_diff_syntax_mode();
         range
             .map(|visible_ix| {
                 let selected = this
@@ -752,34 +511,30 @@ impl MainPaneView {
                     .is_some_and(|(a, b)| visible_ix >= a.min(b) && visible_ix <= a.max(b));
 
                 let Some(row_ix) = this.diff_mapped_ix_for_visible_ix(visible_ix) else {
-                    return div()
-                        .id(("diff_split_right_missing", visible_ix))
-                        .h(px(20.0))
-                        .px_2()
-                        .text_xs()
-                        .text_color(theme.colors.text_muted)
-                        .child("")
-                        .into_any_element();
+                    return diff_placeholder_row((id_missing, visible_ix), theme);
                 };
                 let Some(row) = this.patch_diff_split_row(row_ix) else {
-                    return div()
-                        .id(("diff_split_right_oob", visible_ix))
-                        .h(px(20.0))
-                        .px_2()
-                        .text_xs()
-                        .text_color(theme.colors.text_muted)
-                        .child("")
-                        .into_any_element();
+                    return diff_placeholder_row((id_oob, visible_ix), theme);
                 };
 
                 match row {
                     PatchSplitRow::Aligned {
-                        row, new_src_ix, ..
+                        row,
+                        old_src_ix,
+                        new_src_ix,
                     } => {
-                        if let Some(src_ix) = new_src_ix
-                            && this.diff_text_segments_cache_get(src_ix).is_none()
+                        let src_ix = if is_left { old_src_ix } else { new_src_ix };
+                        if let Some(src_ix) = src_ix
+                            && this
+                                .diff_text_segments_cache_get(src_ix, cache_epoch)
+                                .is_none()
                         {
-                            let text = row.new.as_deref().unwrap_or("");
+                            let text = if is_left {
+                                row.old.as_deref()
+                            } else {
+                                row.new.as_deref()
+                            }
+                            .unwrap_or("");
                             let language =
                                 this.diff_language_for_src_ix.get(src_ix).copied().flatten();
                             this.ensure_patch_diff_word_highlight_for_src_ix(src_ix);
@@ -787,18 +542,10 @@ impl MainPaneView {
                                 .diff_word_highlights
                                 .get(src_ix)
                                 .and_then(|r| r.as_ref().map(Vec::as_slice))
-                                .unwrap_or(empty_ranges);
-                            let word_color =
-                                this.patch_diff_row(src_ix)
-                                    .and_then(|line| match line.kind {
-                                        gitcomet_core::domain::DiffLineKind::Add => {
-                                            Some(theme.colors.success)
-                                        }
-                                        gitcomet_core::domain::DiffLineKind::Remove => {
-                                            Some(theme.colors.danger)
-                                        }
-                                        _ => None,
-                                    });
+                                .unwrap_or(&[]);
+                            let word_color = this
+                                .patch_diff_row(src_ix)
+                                .and_then(|line| diff_line_word_color(line.kind, theme));
 
                             let computed = build_cached_diff_styled_text(
                                 theme,
@@ -809,16 +556,20 @@ impl MainPaneView {
                                 syntax_mode,
                                 word_color,
                             );
-                            this.diff_text_segments_cache_set(src_ix, computed);
+                            this.diff_text_segments_cache_set(src_ix, cache_epoch, computed);
                         }
 
-                        let styled = new_src_ix.and_then(|src_ix| {
-                            this.diff_text_segments_cache_get_for_query(src_ix, query.as_ref())
+                        let styled = src_ix.and_then(|src_ix| {
+                            this.diff_text_segments_cache_get_for_query(
+                                src_ix,
+                                query.as_ref(),
+                                cache_epoch,
+                            )
                         });
 
                         patch_split_column_row(
                             theme,
-                            PatchSplitColumn::Right,
+                            column,
                             visible_ix,
                             selected,
                             min_width,
@@ -829,20 +580,16 @@ impl MainPaneView {
                     }
                     PatchSplitRow::Raw { src_ix, click_kind } => {
                         if this.patch_diff_row(src_ix).is_none() {
-                            return div()
-                                .id(("diff_split_right_src_oob", visible_ix))
-                                .h(px(20.0))
-                                .px_2()
-                                .text_xs()
-                                .text_color(theme.colors.text_muted)
-                                .child("")
-                                .into_any_element();
+                            return diff_placeholder_row((id_src_oob, visible_ix), theme);
                         };
                         let file_stat = this.diff_file_stats.get(src_ix).and_then(|s| *s);
                         let should_style = !query.is_empty();
-                        if should_style && this.diff_text_segments_cache_get(src_ix).is_none() {
-                            let display = this
-                                .diff_text_line_for_region(visible_ix, DiffTextRegion::SplitRight);
+                        if should_style
+                            && this
+                                .diff_text_segments_cache_get(src_ix, cache_epoch)
+                                .is_none()
+                        {
+                            let display = this.diff_text_line_for_region(visible_ix, region);
                             let computed = build_cached_diff_styled_text(
                                 theme,
                                 display.as_ref(),
@@ -852,26 +599,23 @@ impl MainPaneView {
                                 syntax_mode,
                                 None,
                             );
-                            this.diff_text_segments_cache_set(src_ix, computed);
+                            this.diff_text_segments_cache_set(src_ix, cache_epoch, computed);
                         }
                         let styled = should_style
                             .then(|| {
-                                this.diff_text_segments_cache_get_for_query(src_ix, query.as_ref())
+                                this.diff_text_segments_cache_get_for_query(
+                                    src_ix,
+                                    query.as_ref(),
+                                    cache_epoch,
+                                )
                             })
                             .flatten();
                         let Some(line) = this.patch_diff_row(src_ix) else {
-                            return div()
-                                .id(("diff_split_right_src_oob", visible_ix))
-                                .h(px(20.0))
-                                .px_2()
-                                .text_xs()
-                                .text_color(theme.colors.text_muted)
-                                .child("")
-                                .into_any_element();
+                            return diff_placeholder_row((id_src_oob, visible_ix), theme);
                         };
                         if should_hide_unified_diff_header_line(&line) {
                             return div()
-                                .id(("diff_split_right_hidden_header", visible_ix))
+                                .id((id_hidden, visible_ix))
                                 .h(px(0.0))
                                 .into_any_element();
                         }
@@ -883,7 +627,7 @@ impl MainPaneView {
                             });
                         patch_split_header_row(
                             theme,
-                            PatchSplitColumn::Right,
+                            column,
                             visible_ix,
                             click_kind,
                             selected,
@@ -1052,32 +796,24 @@ fn diff_row(
             styled,
         ),
         DiffViewMode::Split => {
-            let left_kind = match line.kind {
-                gitcomet_core::domain::DiffLineKind::Remove => {
-                    gitcomet_core::domain::DiffLineKind::Remove
-                }
-                gitcomet_core::domain::DiffLineKind::Add => {
-                    gitcomet_core::domain::DiffLineKind::Context
-                }
-                _ => gitcomet_core::domain::DiffLineKind::Context,
+            let left_kind = if line.kind == DiffLineKind::Remove {
+                DiffLineKind::Remove
+            } else {
+                DiffLineKind::Context
             };
-            let right_kind = match line.kind {
-                gitcomet_core::domain::DiffLineKind::Add => {
-                    gitcomet_core::domain::DiffLineKind::Add
-                }
-                gitcomet_core::domain::DiffLineKind::Remove => {
-                    gitcomet_core::domain::DiffLineKind::Context
-                }
-                _ => gitcomet_core::domain::DiffLineKind::Context,
+            let right_kind = if line.kind == DiffLineKind::Add {
+                DiffLineKind::Add
+            } else {
+                DiffLineKind::Context
             };
 
             let (left_bg, left_fg, left_gutter) = diff_line_colors(theme, left_kind);
             let (right_bg, right_fg, right_gutter) = diff_line_colors(theme, right_kind);
 
             let (left_text, right_text) = match line.kind {
-                gitcomet_core::domain::DiffLineKind::Remove => (styled, None),
-                gitcomet_core::domain::DiffLineKind::Add => (None, styled),
-                gitcomet_core::domain::DiffLineKind::Context => (styled, styled),
+                DiffLineKind::Remove => (styled, None),
+                DiffLineKind::Add => (None, styled),
+                DiffLineKind::Context => (styled, styled),
                 _ => (styled, None),
             };
 
@@ -1119,26 +855,16 @@ fn patch_split_column_row(
     styled: Option<&CachedDiffStyledText>,
     cx: &mut gpui::Context<MainPaneView>,
 ) -> AnyElement {
-    let (ctx_bg, ctx_fg, ctx_gutter) =
-        diff_line_colors(theme, gitcomet_core::domain::DiffLineKind::Context);
-    let (add_bg, add_fg, add_gutter) =
-        diff_line_colors(theme, gitcomet_core::domain::DiffLineKind::Add);
-    let (rem_bg, rem_fg, rem_gutter) =
-        diff_line_colors(theme, gitcomet_core::domain::DiffLineKind::Remove);
-
-    let (bg, fg, gutter_fg) = match (column, row.kind) {
-        (
-            PatchSplitColumn::Left,
-            gitcomet_core::file_diff::FileDiffRowKind::Remove
-            | gitcomet_core::file_diff::FileDiffRowKind::Modify,
-        ) => (rem_bg, rem_fg, rem_gutter),
-        (
-            PatchSplitColumn::Right,
-            gitcomet_core::file_diff::FileDiffRowKind::Add
-            | gitcomet_core::file_diff::FileDiffRowKind::Modify,
-        ) => (add_bg, add_fg, add_gutter),
-        _ => (ctx_bg, ctx_fg, ctx_gutter),
+    let line_kind = match (column, row.kind) {
+        (PatchSplitColumn::Left, FileDiffRowKind::Remove | FileDiffRowKind::Modify) => {
+            DiffLineKind::Remove
+        }
+        (PatchSplitColumn::Right, FileDiffRowKind::Add | FileDiffRowKind::Modify) => {
+            DiffLineKind::Add
+        }
+        _ => DiffLineKind::Context,
     };
+    let (bg, fg, gutter_fg) = diff_line_colors(theme, line_kind);
 
     let line_no = match column {
         PatchSplitColumn::Left => line_number_string(row.old_line),
