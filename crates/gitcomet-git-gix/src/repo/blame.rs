@@ -1,61 +1,103 @@
-use super::GixRepo;
-use crate::util::{git_stage_blob_spec, run_git_capture, run_git_with_output};
+use super::{
+    GixRepo,
+    conflict_stages::{gix_index_stage_blob_bytes_optional, gix_index_stage_exists},
+};
+use crate::util::{bytes_to_text_preserving_utf8, run_git_with_output};
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{BlameLine, CommandOutput, ConflictSide, Result};
+use gix::bstr::ByteSlice as _;
 use rustc_hash::FxHashMap as HashMap;
 use std::fs;
 use std::path::Path;
-use std::process::Command;
+use std::rc::Rc;
 
-fn bytes_to_text_preserving_utf8(bytes: &[u8]) -> String {
-    use std::fmt::Write as _;
+struct BlameCommitMetadata {
+    author: String,
+    author_time_unix: Option<i64>,
+    summary: String,
+}
 
-    let mut out = String::with_capacity(bytes.len());
-    let mut cursor = 0usize;
-    while cursor < bytes.len() {
-        match std::str::from_utf8(&bytes[cursor..]) {
-            Ok(valid) => {
-                out.push_str(valid);
-                break;
-            }
-            Err(err) => {
-                let valid_len = err.valid_up_to();
-                if valid_len > 0 {
-                    let valid = &bytes[cursor..cursor + valid_len];
-                    out.push_str(
-                        std::str::from_utf8(valid)
-                            .expect("slice identified by valid_up_to must be valid UTF-8"),
-                    );
-                    cursor += valid_len;
-                }
-
-                let invalid_len = err.error_len().unwrap_or(1);
-                let invalid_end = cursor.saturating_add(invalid_len).min(bytes.len());
-                for byte in &bytes[cursor..invalid_end] {
-                    let _ = write!(out, "\\x{byte:02x}");
-                }
-                cursor = invalid_end;
-            }
-        }
+fn blame_commit_metadata(
+    repo: &gix::Repository,
+    cache: &mut HashMap<gix::ObjectId, Rc<BlameCommitMetadata>>,
+    commit_id: gix::ObjectId,
+) -> Result<Rc<BlameCommitMetadata>> {
+    if let Some(metadata) = cache.get(&commit_id) {
+        return Ok(Rc::clone(metadata));
     }
 
-    out
+    let commit = repo.find_commit(commit_id).map_err(|e| {
+        Error::new(ErrorKind::Backend(format!(
+            "gix find_commit {commit_id}: {e}"
+        )))
+    })?;
+
+    let (author, author_time_unix) = match commit.author() {
+        Ok(signature) => (
+            bytes_to_text_preserving_utf8(signature.name.as_ref()),
+            signature.time().ok().map(|time| time.seconds),
+        ),
+        Err(_) => (String::new(), None),
+    };
+    let summary = commit
+        .message_raw_sloppy()
+        .lines()
+        .next()
+        .map(bytes_to_text_preserving_utf8)
+        .unwrap_or_default();
+
+    let metadata = Rc::new(BlameCommitMetadata {
+        author,
+        author_time_unix,
+        summary,
+    });
+    cache.insert(commit_id, Rc::clone(&metadata));
+    Ok(metadata)
+}
+
+fn blame_line_text(bytes: &[u8]) -> String {
+    let bytes = bytes.strip_suffix(b"\n").unwrap_or(bytes);
+    let bytes = bytes.strip_suffix(b"\r").unwrap_or(bytes);
+    bytes_to_text_preserving_utf8(bytes)
 }
 
 impl GixRepo {
     pub(super) fn blame_file_impl(&self, path: &Path, rev: Option<&str>) -> Result<Vec<BlameLine>> {
-        let mut cmd = Command::new("git");
-        cmd.arg("-C")
-            .arg(&self.spec.workdir)
-            .arg("blame")
-            .arg("--line-porcelain");
-        if let Some(rev) = rev {
-            cmd.arg(rev);
-        }
-        cmd.arg("--").arg(path);
+        let repo = self._repo.to_thread_local();
+        let spec = rev.unwrap_or("HEAD");
+        let suspect = repo
+            .rev_parse_single(spec)
+            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix rev-parse {spec}: {e}"))))?
+            .detach();
+        let git_path = gix::path::os_str_into_bstr(path.as_os_str())
+            .map(gix::path::to_unix_separators_on_windows)
+            .map_err(|_| Error::new(ErrorKind::Unsupported("path is not valid UTF-8")))?;
+        let outcome = repo
+            .blame_file(git_path.as_ref(), suspect, Default::default())
+            .map_err(|e| {
+                Error::new(ErrorKind::Backend(format!(
+                    "gix blame {}: {e}",
+                    path.display()
+                )))
+            })?;
 
-        let output = run_git_capture(cmd, "git blame --line-porcelain")?;
-        Ok(parse_git_blame_porcelain(&output))
+        let mut metadata_cache = HashMap::default();
+        let mut lines = Vec::new();
+        for (entry, entry_lines) in outcome.entries_with_lines() {
+            let commit_id = entry.commit_id;
+            let commit_id_text = commit_id.to_string();
+            let metadata = blame_commit_metadata(&repo, &mut metadata_cache, commit_id)?;
+            for line in entry_lines {
+                lines.push(BlameLine {
+                    commit_id: commit_id_text.clone(),
+                    author: metadata.author.clone(),
+                    author_time_unix: metadata.author_time_unix,
+                    summary: metadata.summary.clone(),
+                    line: blame_line_text(line.as_ref()),
+                });
+            }
+        }
+        Ok(lines)
     }
 
     pub(super) fn checkout_conflict_side_impl(
@@ -68,20 +110,16 @@ impl GixRepo {
             ConflictSide::Theirs => 3,
         };
 
-        let stage_exists = unmerged_stage_exists(&self.spec.workdir, path, desired_stage)?;
+        let repo = self._repo.to_thread_local();
 
-        if !stage_exists {
-            let mut rm = Command::new("git");
-            rm.arg("-C")
-                .arg(&self.spec.workdir)
-                .arg("rm")
-                .arg("--")
-                .arg(path);
+        if !gix_index_stage_exists(&repo, path, desired_stage)? {
+            let mut rm = self.git_workdir_cmd();
+            rm.arg("rm").arg("--").arg(path);
             return run_git_with_output(rm, "git rm --");
         }
 
-        let mut checkout = Command::new("git");
-        checkout.arg("-C").arg(&self.spec.workdir).arg("checkout");
+        let mut checkout = self.git_workdir_cmd();
+        checkout.arg("checkout");
         match side {
             ConflictSide::Ours => {
                 checkout.arg("--ours");
@@ -93,12 +131,8 @@ impl GixRepo {
         checkout.arg("--").arg(path);
         let checkout_out = run_git_with_output(checkout, "git checkout --ours/--theirs")?;
 
-        let mut add = Command::new("git");
-        add.arg("-C")
-            .arg(&self.spec.workdir)
-            .arg("add")
-            .arg("--")
-            .arg(path);
+        let mut add = self.git_workdir_cmd();
+        add.arg("add").arg("--").arg(path);
         let add_out = run_git_with_output(add, "git add --")?;
 
         Ok(CommandOutput {
@@ -118,36 +152,27 @@ impl GixRepo {
     }
 
     pub(super) fn accept_conflict_deletion_impl(&self, path: &Path) -> Result<CommandOutput> {
-        let mut rm = Command::new("git");
-        rm.arg("-C")
-            .arg(&self.spec.workdir)
-            .arg("rm")
-            .arg("--")
-            .arg(path);
+        let mut rm = self.git_workdir_cmd();
+        rm.arg("rm").arg("--").arg(path);
         run_git_with_output(rm, "git rm --")
     }
 
     pub(super) fn checkout_conflict_base_impl(&self, path: &Path) -> Result<CommandOutput> {
-        if !unmerged_stage_exists(&self.spec.workdir, path, 1)? {
-            return Err(Error::new(ErrorKind::Backend(format!(
+        let repo = self._repo.to_thread_local();
+        let base_bytes = gix_index_stage_blob_bytes_optional(&repo, path, 1)?.ok_or_else(|| {
+            Error::new(ErrorKind::Backend(format!(
                 "base conflict stage is not available for {}",
                 path.display()
-            ))));
-        }
-
-        let base_bytes = read_unmerged_stage_bytes(&self.spec.workdir, path, 1)?;
+            )))
+        })?;
         let abs_path = self.spec.workdir.join(path);
         if let Some(parent) = abs_path.parent() {
             fs::create_dir_all(parent).map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
         }
         fs::write(&abs_path, base_bytes).map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
 
-        let mut add = Command::new("git");
-        add.arg("-C")
-            .arg(&self.spec.workdir)
-            .arg("add")
-            .arg("--")
-            .arg(path);
+        let mut add = self.git_workdir_cmd();
+        add.arg("add").arg("--").arg(path);
         let add_out = run_git_with_output(add, "git add --")?;
 
         Ok(CommandOutput {
@@ -159,207 +184,14 @@ impl GixRepo {
     }
 }
 
-fn unmerged_stage_exists(workdir: &Path, path: &Path, desired_stage: u8) -> Result<bool> {
-    let mut ls = Command::new("git");
-    ls.arg("-C")
-        .arg(workdir)
-        .arg("ls-files")
-        .arg("-u")
-        .arg("--")
-        .arg(path);
-    let output = ls
-        .output()
-        .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
-
-    if !output.status.success() {
-        let stderr = bytes_to_text_preserving_utf8(&output.stderr);
-        return Err(Error::new(ErrorKind::Backend(format!(
-            "git ls-files -u failed: {}",
-            stderr.trim()
-        ))));
-    }
-
-    let stdout = bytes_to_text_preserving_utf8(&output.stdout);
-    Ok(stdout.lines().any(|line| {
-        let mut parts = line.split_whitespace();
-        let _mode = parts.next();
-        let _sha = parts.next();
-        let stage = parts.next().and_then(|s| s.parse::<u8>().ok());
-        stage == Some(desired_stage)
-    }))
-}
-
-fn read_unmerged_stage_bytes(workdir: &Path, path: &Path, stage: u8) -> Result<Vec<u8>> {
-    let rev = git_stage_blob_spec(stage, path)?;
-    let mut cmd = Command::new("git");
-    cmd.arg("-C")
-        .arg(workdir)
-        .arg("-c")
-        .arg("color.ui=false")
-        .arg("--no-pager")
-        .arg("show")
-        .arg("--no-ext-diff")
-        .arg("--pretty=format:")
-        .arg(rev);
-
-    let output = cmd
-        .output()
-        .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
-
-    if output.status.success() {
-        return Ok(output.stdout);
-    }
-
-    let stderr = bytes_to_text_preserving_utf8(&output.stderr);
-    Err(Error::new(ErrorKind::Backend(format!(
-        "git show :{stage}:{} failed: {}",
-        path.display(),
-        stderr.trim()
-    ))))
-}
-
-fn parse_git_blame_porcelain(output: &str) -> Vec<BlameLine> {
-    let mut out = Vec::new();
-    let mut cached_by_commit: HashMap<String, (String, Option<i64>, String)> = HashMap::default();
-
-    let mut current_commit: Option<String> = None;
-    let mut author: Option<String> = None;
-    let mut author_time: Option<i64> = None;
-    let mut summary: Option<String> = None;
-
-    for line in output.lines() {
-        if line.starts_with('\t') {
-            let commit = current_commit
-                .clone()
-                .unwrap_or_else(|| "0000000".to_string());
-            let line_text = line.strip_prefix('\t').unwrap_or("").to_string();
-
-            let cached = if author.is_none() && author_time.is_none() && summary.is_none() {
-                cached_by_commit.get(&commit).cloned()
-            } else {
-                None
-            };
-
-            let (author_filled, author_time_filled, summary_filled) = cached.unwrap_or_else(|| {
-                (
-                    author.clone().unwrap_or_default(),
-                    author_time,
-                    summary.clone().unwrap_or_default(),
-                )
-            });
-
-            cached_by_commit.insert(
-                commit.clone(),
-                (
-                    author_filled.clone(),
-                    author_time_filled,
-                    summary_filled.clone(),
-                ),
-            );
-
-            out.push(BlameLine {
-                commit_id: commit,
-                author: author_filled,
-                author_time_unix: author_time_filled,
-                summary: summary_filled,
-                line: line_text,
-            });
-
-            author = None;
-            author_time = None;
-            summary = None;
-            continue;
-        }
-
-        let mut parts = line.split_whitespace();
-        if let Some(first) = parts.next() {
-            let is_header = first.len() >= 8 && first.chars().all(|c| c.is_ascii_hexdigit());
-            if is_header && parts.next().is_some() && parts.next().is_some() {
-                current_commit = Some(first.to_string());
-                continue;
-            }
-        }
-
-        if let Some(rest) = line.strip_prefix("author ") {
-            author = Some(rest.to_string());
-        } else if let Some(rest) = line.strip_prefix("author-time ") {
-            author_time = rest.trim().parse::<i64>().ok();
-        } else if let Some(rest) = line.strip_prefix("summary ") {
-            summary = Some(rest.to_string());
-        }
-    }
-
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeSet;
-
-    const GITPY_BLAME: &str = include_str!("../../tests/fixtures/gitpython/blame");
-    const GITPY_BLAME_COMPLEX_REVISION: &str =
-        include_str!("../../tests/fixtures/gitpython/blame_complex_revision");
-    const GITPY_BLAME_BINARY: &[u8] = include_bytes!("../../tests/fixtures/gitpython/blame_binary");
 
     #[test]
-    fn parse_git_blame_porcelain_handles_gitpython_blame_fixture() {
-        let parsed = parse_git_blame_porcelain(GITPY_BLAME);
-        assert_eq!(parsed.len(), 25);
-
-        let first = parsed
-            .first()
-            .expect("fixture should parse at least one line");
-        assert_eq!(first.commit_id, "634396b2f541a9f2d58b00be1a07f0c358b999b3");
-        assert_eq!(first.author, "Tom Preston-Werner");
-        assert_eq!(first.author_time_unix, Some(1_191_997_100));
-        assert_eq!(first.summary, "initial grit setup");
-        assert_eq!(
-            first.line,
-            "$:.unshift File.dirname(__FILE__)     # For use/testing when no gem is installed"
-        );
-
-        let second = parsed.get(1).expect("fixture should parse second line");
-        assert_eq!(second.commit_id, first.commit_id);
-        assert_eq!(second.author, first.author);
-        assert_eq!(second.author_time_unix, first.author_time_unix);
-        assert_eq!(second.summary, first.summary);
-        assert!(second.line.is_empty());
-    }
-
-    #[test]
-    fn parse_git_blame_porcelain_handles_gitpython_complex_revision_fixture() {
-        let parsed = parse_git_blame_porcelain(GITPY_BLAME_COMPLEX_REVISION);
-        assert_eq!(parsed.len(), 83);
-
-        let unique_commits = parsed
-            .iter()
-            .map(|line| line.commit_id.as_str())
-            .collect::<BTreeSet<_>>();
-        assert_eq!(unique_commits.len(), 1);
-
-        let first = parsed.first().expect("complex fixture should parse");
-        assert_eq!(first.commit_id, "e40ad6369bc74d01af4dc41d3a9b8e25ac2aa01e");
-        assert_eq!(first.author, "Sebastian Thiel");
-        assert_eq!(first.summary, "Fixed PY3 support.");
-        assert_eq!(first.line, "## GitPython");
-    }
-
-    #[test]
-    fn parse_git_blame_porcelain_handles_gitpython_binary_fixture() {
-        let raw = bytes_to_text_preserving_utf8(GITPY_BLAME_BINARY);
-        let parsed = parse_git_blame_porcelain(&raw);
-        assert_eq!(parsed.len(), 9);
-
-        let unique_commits = parsed
-            .iter()
-            .map(|line| line.commit_id.as_str())
-            .collect::<BTreeSet<_>>();
-        assert_eq!(unique_commits.len(), 2);
-
-        let first = parsed.first().expect("binary fixture should parse");
-        assert_eq!(first.author, "Sebastian Thiel");
-        assert_eq!(first.summary, "binary");
-        assert!(parsed.iter().any(|line| line.line.contains("hi")));
+    fn blame_line_text_trims_crlf_and_lf() {
+        assert_eq!(blame_line_text(b"hello\n"), "hello");
+        assert_eq!(blame_line_text(b"hello\r\n"), "hello");
+        assert_eq!(blame_line_text(b"hello"), "hello");
     }
 }

@@ -1,23 +1,21 @@
-use super::GixRepo;
+use super::{
+    GixRepo,
+    conflict_stages::{conflict_kind_from_stage_mask, gix_index_stage_blob_bytes_optional},
+};
+use crate::util::{git_command_failed_error, run_git_raw_output};
 use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession};
 use gitcomet_core::domain::{
     Diff, DiffArea, DiffTarget, FileConflictKind, FileDiffImage, FileDiffText,
 };
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{ConflictFileStages, Result, decode_utf8_optional};
-use std::io::{BufReader, Read};
 use std::path::Path;
-use std::process::{Command, Stdio};
-use std::str;
+use std::process::Command;
 
 impl GixRepo {
     fn build_unified_diff_command(&self, target: &DiffTarget) -> Command {
-        let mut cmd = Command::new("git");
-        cmd.arg("-C")
-            .arg(&self.spec.workdir)
-            .arg("-c")
-            .arg("color.ui=false")
-            .arg("--no-pager");
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("-c").arg("color.ui=false").arg("--no-pager");
 
         match target {
             DiffTarget::WorkingTree { path, area } => {
@@ -42,17 +40,13 @@ impl GixRepo {
     }
 
     pub(super) fn diff_unified_impl(&self, target: &DiffTarget) -> Result<String> {
-        let output = self
-            .build_unified_diff_command(target)
-            .output()
-            .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+        let label = "git diff";
+        let output = run_git_raw_output(self.build_unified_diff_command(target), label)?;
 
+        // git diff exits 1 when there are differences — that is not a failure.
         let ok_exit = output.status.success() || output.status.code() == Some(1);
         if !ok_exit {
-            let stderr = str::from_utf8(&output.stderr).unwrap_or("<non-utf8 stderr>");
-            return Err(Error::new(ErrorKind::Backend(format!(
-                "git diff failed: {stderr}"
-            ))));
+            return Err(git_command_failed_error(label, output));
         }
 
         String::from_utf8(output.stdout).map_err(|_| {
@@ -63,45 +57,8 @@ impl GixRepo {
     }
 
     pub(super) fn diff_parsed_impl(&self, target: &DiffTarget) -> Result<Diff> {
-        let mut cmd = self.build_unified_diff_command(target);
-        cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
-        let stdout = child.stdout.take().ok_or_else(|| {
-            Error::new(ErrorKind::Backend(
-                "git diff did not provide a stdout pipe".to_string(),
-            ))
-        })?;
-        let mut stderr = child.stderr.take().ok_or_else(|| {
-            Error::new(ErrorKind::Backend(
-                "git diff did not provide a stderr pipe".to_string(),
-            ))
-        })?;
-
-        // Drain stderr concurrently so very large stderr output can't block stdout parsing.
-        let stderr_reader = std::thread::spawn(move || {
-            let mut bytes = Vec::new();
-            let _ = stderr.read_to_end(&mut bytes);
-            bytes
-        });
-
-        let diff = Diff::from_unified_reader(target.clone(), BufReader::new(stdout))
-            .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
-        let status = child
-            .wait()
-            .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
-        let stderr_bytes = stderr_reader.join().unwrap_or_default();
-
-        let ok_exit = status.success() || status.code() == Some(1);
-        if !ok_exit {
-            let stderr = str::from_utf8(&stderr_bytes).unwrap_or("<non-utf8 stderr>");
-            return Err(Error::new(ErrorKind::Backend(format!(
-                "git diff failed: {stderr}"
-            ))));
-        }
-
-        Ok(diff)
+        let text = self.diff_unified_impl(target)?;
+        Ok(Diff::from_unified(target.clone(), &text))
     }
 
     pub(super) fn diff_file_text_impl(&self, target: &DiffTarget) -> Result<Option<FileDiffText>> {
@@ -475,29 +432,6 @@ fn gix_revision_path_blob_bytes_optional(
     gix_blob_bytes_from_object_id_optional(repo, entry.object_id())
 }
 
-fn gix_index_stage_from_u8(stage: u8) -> Option<gix::index::entry::Stage> {
-    match stage {
-        0 => Some(gix::index::entry::Stage::Unconflicted),
-        1 => Some(gix::index::entry::Stage::Base),
-        2 => Some(gix::index::entry::Stage::Ours),
-        3 => Some(gix::index::entry::Stage::Theirs),
-        _ => None,
-    }
-}
-
-fn conflict_kind_from_stage_mask(mask: u8) -> Option<FileConflictKind> {
-    Some(match mask {
-        0b001 => FileConflictKind::BothDeleted,
-        0b010 => FileConflictKind::AddedByUs,
-        0b011 => FileConflictKind::DeletedByThem,
-        0b100 => FileConflictKind::AddedByThem,
-        0b101 => FileConflictKind::DeletedByUs,
-        0b110 => FileConflictKind::BothAdded,
-        0b111 => FileConflictKind::BothModified,
-        _ => return None,
-    })
-}
-
 fn gix_index_conflict_kind_optional(
     repo: &gix::Repository,
     path: &Path,
@@ -530,30 +464,6 @@ fn gix_index_conflict_kind_optional(
     }
 
     Ok(conflict_kind_from_stage_mask(stage_mask))
-}
-
-fn gix_index_stage_blob_bytes_optional(
-    repo: &gix::Repository,
-    path: &Path,
-    stage: u8,
-) -> Result<Option<Vec<u8>>> {
-    let Some(stage) = gix_index_stage_from_u8(stage) else {
-        return Err(Error::new(ErrorKind::Backend(format!(
-            "invalid conflict stage: {stage}"
-        ))));
-    };
-
-    let index = repo
-        .index_or_load_from_head_or_empty()
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix index: {e}"))))?;
-
-    let path = gix::path::os_str_into_bstr(path.as_os_str())
-        .map_err(|_| Error::new(ErrorKind::Unsupported("path is not valid UTF-8")))?;
-    let Some(entry) = index.entry_by_path_and_stage(path, stage) else {
-        return Ok(None);
-    };
-
-    gix_blob_bytes_from_object_id_optional(repo, entry.id)
 }
 
 fn gix_index_unconflicted_blob_bytes_optional(
@@ -594,43 +504,4 @@ fn gix_first_parent_optional(repo: &gix::Repository, commit: &str) -> Result<Opt
         Err(_) => return Ok(None),
     };
     Ok(commit.parent_ids().next().map(|id| id.detach().to_string()))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::conflict_kind_from_stage_mask;
-    use gitcomet_core::domain::FileConflictKind;
-
-    #[test]
-    fn conflict_kind_from_stage_mask_covers_all_shapes() {
-        assert_eq!(
-            conflict_kind_from_stage_mask(0b001),
-            Some(FileConflictKind::BothDeleted)
-        );
-        assert_eq!(
-            conflict_kind_from_stage_mask(0b010),
-            Some(FileConflictKind::AddedByUs)
-        );
-        assert_eq!(
-            conflict_kind_from_stage_mask(0b011),
-            Some(FileConflictKind::DeletedByThem)
-        );
-        assert_eq!(
-            conflict_kind_from_stage_mask(0b100),
-            Some(FileConflictKind::AddedByThem)
-        );
-        assert_eq!(
-            conflict_kind_from_stage_mask(0b101),
-            Some(FileConflictKind::DeletedByUs)
-        );
-        assert_eq!(
-            conflict_kind_from_stage_mask(0b110),
-            Some(FileConflictKind::BothAdded)
-        );
-        assert_eq!(
-            conflict_kind_from_stage_mask(0b111),
-            Some(FileConflictKind::BothModified)
-        );
-        assert_eq!(conflict_kind_from_stage_mask(0), None);
-    }
 }

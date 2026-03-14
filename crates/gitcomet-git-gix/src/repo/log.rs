@@ -1,19 +1,18 @@
 use super::GixRepo;
+use super::history::gix_head_id_or_none;
 use crate::util::{
-    parse_git_log_pretty_records, parse_name_status_line, parse_reflog_index, run_git_capture,
-    unix_seconds_to_system_time, unix_seconds_to_system_time_or_epoch,
+    bytes_to_text_preserving_utf8, parse_git_log_pretty_records, path_buf_from_git_bytes,
+    run_git_capture, unix_seconds_to_system_time, unix_seconds_to_system_time_or_epoch,
 };
 use gitcomet_core::domain::{
-    Commit, CommitDetails, CommitFileChange, CommitId, LogCursor, LogPage, ReflogEntry,
+    Commit, CommitDetails, CommitFileChange, CommitId, LogCursor, LogPage, ReflogEntry, StashEntry,
 };
-use gitcomet_core::error::{Error, ErrorKind};
+use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
 use gitcomet_core::services::Result;
 use gix::bstr::ByteSlice as _;
 use gix::traverse::commit::simple::CommitTimeOrder;
 use rustc_hash::FxHashSet as HashSet;
 use std::path::Path;
-use std::process::Command;
-use std::str;
 
 struct CursorGate<'a> {
     cursor: Option<&'a LogCursor>,
@@ -46,17 +45,95 @@ impl<'a> CursorGate<'a> {
     }
 }
 
-fn repo_head_id_or_none(repo: &gix::Repository) -> Result<Option<gix::ObjectId>> {
-    match repo.head_id() {
-        Ok(id) => Ok(Some(id.detach())),
-        Err(e) => {
-            let msg = e.to_string();
-            if msg.contains("does not have any commits") || msg.contains("doesn't have any commits")
-            {
-                return Ok(None);
-            }
-            Err(Error::new(ErrorKind::Backend(format!("gix head_id: {e}"))))
+fn reflog_lines_rev(
+    platform: &mut gix::refs::file::log::iter::Platform<'_, '_>,
+    context: &str,
+    limit: Option<usize>,
+) -> Result<Vec<gix::refs::log::Line>> {
+    if limit == Some(0) {
+        return Ok(Vec::new());
+    }
+
+    let Some(iter) = platform
+        .rev()
+        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix reflog {context}: {e}"))))?
+    else {
+        return Ok(Vec::new());
+    };
+
+    let mut lines = Vec::new();
+    for line in iter {
+        let line =
+            line.map_err(|e| Error::new(ErrorKind::Backend(format!("gix reflog {context}: {e}"))))?;
+        lines.push(line);
+        if let Some(limit) = limit
+            && lines.len() >= limit
+        {
+            break;
         }
+    }
+    Ok(lines)
+}
+
+fn stash_reflog_lines(
+    repo: &gix::Repository,
+    limit: Option<usize>,
+) -> Result<Vec<gix::refs::log::Line>> {
+    let Some(reference) = repo.try_find_reference("refs/stash").map_err(|e| {
+        Error::new(ErrorKind::Backend(format!(
+            "gix try_find_reference refs/stash: {e}"
+        )))
+    })?
+    else {
+        return Ok(Vec::new());
+    };
+
+    let mut platform = reference.log_iter();
+    reflog_lines_rev(&mut platform, "refs/stash", limit)
+}
+
+pub(super) fn stash_reflog_entries(repo: &gix::Repository) -> Result<Vec<StashEntry>> {
+    stash_reflog_lines(repo, None)?
+        .into_iter()
+        .enumerate()
+        .filter(|(_, line)| !line.new_oid.is_null())
+        .map(|(index, line)| {
+            let created_at = unix_seconds_to_system_time(line.signature.time.seconds);
+            Ok(StashEntry {
+                index,
+                id: CommitId(line.new_oid.to_string()),
+                message: bytes_to_text_preserving_utf8(line.message.as_ref()),
+                created_at,
+            })
+        })
+        .collect()
+}
+
+pub(super) fn stash_reflog_tips(
+    repo: &gix::Repository,
+    limit: usize,
+) -> Result<Vec<gix::ObjectId>> {
+    let mut tips = Vec::new();
+    let mut seen = HashSet::default();
+    for line in stash_reflog_lines(repo, Some(limit))? {
+        let id = line.new_oid;
+        if !id.is_null() && seen.insert(id) {
+            tips.push(id);
+        }
+    }
+    Ok(tips)
+}
+
+fn reference_commit_id(mut reference: gix::Reference<'_>) -> Result<Option<gix::ObjectId>> {
+    let ref_name = reference.name().as_bstr().to_str_lossy().into_owned();
+    match reference.peel_to_commit() {
+        Ok(commit) => Ok(Some(commit.id().detach())),
+        Err(gix::reference::peel::to_kind::Error::PeelObject(
+            gix::object::peel::to_kind::Error::NotFound { .. },
+        )) => Ok(None),
+        Err(e) => Err(Error::new(ErrorKind::Backend(format!(
+            "gix peel commit ref {ref_name}: {e}"
+        )))),
     }
 }
 
@@ -98,6 +175,156 @@ fn commit_from_walk_info<'repo>(
     })
 }
 
+fn commit_file_change_from_diff(
+    change: gix::object::tree::diff::ChangeDetached,
+) -> Result<Option<CommitFileChange>> {
+    use gitcomet_core::domain::FileStatusKind;
+    use gix::object::tree::diff::ChangeDetached;
+
+    let (location, is_tree, kind) = match change {
+        ChangeDetached::Addition {
+            entry_mode,
+            location,
+            ..
+        } => (location, entry_mode.is_tree(), FileStatusKind::Added),
+        ChangeDetached::Deletion {
+            entry_mode,
+            location,
+            ..
+        } => (location, entry_mode.is_tree(), FileStatusKind::Deleted),
+        ChangeDetached::Modification {
+            previous_entry_mode,
+            entry_mode,
+            location,
+            ..
+        } => (
+            location,
+            previous_entry_mode.is_tree() || entry_mode.is_tree(),
+            FileStatusKind::Modified,
+        ),
+        ChangeDetached::Rewrite {
+            source_entry_mode,
+            entry_mode,
+            location,
+            copy,
+            ..
+        } => (
+            location,
+            source_entry_mode.is_tree() || entry_mode.is_tree(),
+            if copy {
+                FileStatusKind::Added
+            } else {
+                FileStatusKind::Renamed
+            },
+        ),
+    };
+
+    if is_tree {
+        return Ok(None);
+    }
+    Ok(Some(CommitFileChange {
+        path: path_buf_from_git_bytes(location.as_ref(), "gix commit details diff path")?,
+        kind,
+    }))
+}
+
+fn commit_file_changes(
+    repo: &gix::Repository,
+    commit: &gix::Commit<'_>,
+    parent_ids: &[gix::ObjectId],
+) -> Result<Vec<CommitFileChange>> {
+    if parent_ids.len() > 1 {
+        return Ok(Vec::new());
+    }
+
+    let commit_tree = commit
+        .tree()
+        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix commit tree: {e}"))))?;
+    let parent_tree = parent_ids
+        .first()
+        .map(|&id| {
+            repo.find_commit(id)
+                .map_err(|e| Error::new(ErrorKind::Backend(format!("gix parent commit: {e}"))))?
+                .tree()
+                .map_err(|e| Error::new(ErrorKind::Backend(format!("gix parent tree: {e}"))))
+        })
+        .transpose()?;
+    let changes = repo
+        .diff_tree_to_tree(parent_tree.as_ref(), &commit_tree, None)
+        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix diff_tree_to_tree: {e}"))))?;
+
+    changes
+        .into_iter()
+        .filter_map(|change| commit_file_change_from_diff(change).transpose())
+        .collect()
+}
+
+fn empty_log_page() -> LogPage {
+    LogPage {
+        commits: Vec::new(),
+        next_cursor: None,
+    }
+}
+
+fn reflog_unborn_head_error(repo: &gix::Repository) -> Error {
+    let branch = repo
+        .head_name()
+        .ok()
+        .flatten()
+        .map(|name| {
+            let name = name.as_bstr().to_str_lossy();
+            name.strip_prefix("refs/heads/")
+                .unwrap_or(name.as_ref())
+                .to_string()
+        })
+        .unwrap_or_else(|| "HEAD".to_string());
+    let detail = format!("fatal: your current branch '{branch}' does not have any commits yet");
+    let stderr = format!("{detail}\n").into_bytes();
+    Error::new(ErrorKind::Git(GitFailure::new(
+        "git reflog",
+        GitFailureId::CommandFailed,
+        Some(128),
+        Vec::new(),
+        stderr,
+        Some(detail),
+    )))
+}
+
+fn paginate_commits(
+    commits: impl Iterator<Item = Result<Commit>>,
+    limit: usize,
+    cursor: Option<&LogCursor>,
+) -> Result<LogPage> {
+    if limit == 0 {
+        return Ok(empty_log_page());
+    }
+
+    let mut cursor_gate = CursorGate::new(cursor);
+    let mut result: Vec<Commit> = Vec::with_capacity(limit.min(2048));
+    let mut next_cursor: Option<LogCursor> = None;
+
+    for commit in commits {
+        let commit = commit?;
+        if cursor_gate.should_skip(commit.id.as_ref()) {
+            continue;
+        }
+
+        if result.len() >= limit {
+            next_cursor = result.last().map(|c| LogCursor {
+                last_seen: c.id.clone(),
+            });
+            break;
+        }
+
+        result.push(commit);
+    }
+
+    Ok(LogPage {
+        commits: result,
+        next_cursor,
+    })
+}
+
 fn log_page_from_walk<'repo, E>(
     walk: impl Iterator<Item = std::result::Result<gix::revision::walk::Info<'repo>, E>>,
     limit: usize,
@@ -106,87 +333,46 @@ fn log_page_from_walk<'repo, E>(
 where
     E: std::fmt::Display,
 {
-    let mut cursor_gate = CursorGate::new(cursor);
-    let mut commits = Vec::with_capacity(limit.min(2048));
-    let mut next_cursor: Option<LogCursor> = None;
-
-    for info in walk {
-        let info = info.map_err(|e| Error::new(ErrorKind::Backend(format!("gix walk: {e}"))))?;
-        let id = info.id().detach().to_string();
-
-        if cursor_gate.should_skip(&id) {
-            continue;
-        }
-
-        commits.push(commit_from_walk_info(&info, id)?);
-
-        if commits.len() >= limit {
-            next_cursor = commits.last().map(|c| LogCursor {
-                last_seen: c.id.clone(),
-            });
-            break;
-        }
-    }
-
-    Ok(LogPage {
-        commits,
-        next_cursor,
-    })
-}
-
-fn parse_object_ids_from_bytes(lines: &[u8]) -> Vec<gix::ObjectId> {
-    let mut tips = Vec::new();
-    let mut seen = HashSet::default();
-    for raw_line in lines.split(|b| *b == b'\n') {
-        let hex = raw_line.trim_ascii();
-        if hex.is_empty() {
-            continue;
-        }
-        if let Ok(id) = gix::ObjectId::from_hex(hex)
-            && seen.insert(id)
-        {
-            tips.push(id);
-        }
-    }
-
-    tips
-}
-
-fn stash_reflog_tips(workdir: &Path) -> Vec<gix::ObjectId> {
-    let mut cmd = Command::new("git");
-    cmd.arg("-C")
-        .arg(workdir)
-        .arg("-c")
-        .arg("color.ui=false")
-        .arg("--no-pager")
-        .arg("reflog")
-        .arg("show")
-        .arg("-n50")
-        .arg("--format=%H")
-        .arg("refs/stash");
-
-    let Ok(output) = cmd.output() else {
-        return Vec::new();
-    };
-    if !output.status.success() {
-        return Vec::new();
-    }
-
-    parse_object_ids_from_bytes(&output.stdout)
+    paginate_commits(
+        walk.map(|result| {
+            let info =
+                result.map_err(|e| Error::new(ErrorKind::Backend(format!("gix walk: {e}"))))?;
+            let id = info.id().detach().to_string();
+            commit_from_walk_info(&info, id)
+        }),
+        limit,
+        cursor,
+    )
 }
 
 impl GixRepo {
+    fn log_follow_commits(&self, path: &Path, max_count: Option<usize>) -> Result<Vec<Commit>> {
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("log")
+            .arg("--follow")
+            .arg("--date=unix")
+            .arg("--pretty=format:%H%x1f%P%x1f%an%x1f%ct%x1f%s%x1e");
+        if let Some(max_count) = max_count {
+            cmd.arg(format!("-n{max_count}"));
+        }
+        cmd.arg("--").arg(path);
+
+        let output = run_git_capture(cmd, "git log --follow")?;
+        Ok(parse_git_log_pretty_records(&output).commits)
+    }
+
     pub(super) fn log_head_page_impl(
         &self,
         limit: usize,
         cursor: Option<&LogCursor>,
     ) -> Result<LogPage> {
+        if limit == 0 {
+            return Ok(empty_log_page());
+        }
+
         let repo = self._repo.to_thread_local();
-        let Some(head_id) = repo_head_id_or_none(&repo)? else {
-            return Ok(LogPage {
-                commits: Vec::new(),
-                next_cursor: None,
-            });
+        let Some(head_id) = gix_head_id_or_none(&repo)? else {
+            return Ok(empty_log_page());
         };
 
         let walk = repo
@@ -205,8 +391,12 @@ impl GixRepo {
         limit: usize,
         cursor: Option<&LogCursor>,
     ) -> Result<LogPage> {
+        if limit == 0 {
+            return Ok(empty_log_page());
+        }
+
         let repo = self._repo.to_thread_local();
-        let head_id = repo_head_id_or_none(&repo)?;
+        let head_id = gix_head_id_or_none(&repo)?;
 
         let refs = repo
             .references()
@@ -224,9 +414,7 @@ impl GixRepo {
 
         let iter = refs
             .all()
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix references(all): {e}"))))?
-            .peeled()
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix peel refs: {e}"))))?;
+            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix references(all): {e}"))))?;
         for reference in iter {
             let reference = reference
                 .map_err(|e| Error::new(ErrorKind::Backend(format!("gix ref iter: {e}"))))?;
@@ -236,7 +424,9 @@ impl GixRepo {
             ) {
                 continue;
             }
-            let id = reference.id().detach();
+            let Some(id) = reference_commit_id(reference)? else {
+                continue;
+            };
             if seen.insert(id) {
                 tips.push(id);
             }
@@ -245,17 +435,14 @@ impl GixRepo {
         // `git log --all` includes only `refs/stash` tip, but users expect history scope=all
         // to also surface older stash entries (reflog-backed). Add stash reflog commits as extra
         // walk tips so stash rows can be rendered consistently in history graph.
-        for id in stash_reflog_tips(&self.spec.workdir) {
+        for id in stash_reflog_tips(&repo, 50).unwrap_or_default() {
             if seen.insert(id) {
                 tips.push(id);
             }
         }
 
         if tips.is_empty() {
-            return Ok(LogPage {
-                commits: Vec::new(),
-                next_cursor: None,
-            });
+            return Ok(empty_log_page());
         }
 
         let walk = repo
@@ -274,76 +461,45 @@ impl GixRepo {
         limit: usize,
         cursor: Option<&LogCursor>,
     ) -> Result<LogPage> {
-        let mut cmd = Command::new("git");
-        cmd.arg("-C")
-            .arg(&self.spec.workdir)
-            .arg("log")
-            .arg("--follow")
-            .arg("--date=unix")
-            .arg("--pretty=format:%H%x1f%P%x1f%an%x1f%ct%x1f%s%x1e");
-        if cursor.is_none() {
-            cmd.arg(format!("-n{limit}"));
-        }
-        cmd.arg("--").arg(path);
-
-        let output = run_git_capture(cmd, "git log --follow")?;
-        let parsed = parse_git_log_pretty_records(&output);
-        let mut cursor_gate = CursorGate::new(cursor);
-        let mut commits = Vec::with_capacity(limit.min(parsed.commits.len()));
-        let mut next_cursor: Option<LogCursor> = None;
-
-        for commit in parsed.commits {
-            if cursor_gate.should_skip(commit.id.as_ref()) {
-                continue;
-            }
-
-            commits.push(commit);
-
-            if commits.len() >= limit {
-                next_cursor = commits.last().map(|c| LogCursor {
-                    last_seen: c.id.clone(),
-                });
-                break;
-            }
+        if limit == 0 {
+            return Ok(empty_log_page());
         }
 
-        Ok(LogPage {
-            commits,
-            next_cursor,
-        })
+        // Only the first page is bounded. `git log --follow` does not combine
+        // reliably with `--skip` across renames, so cursor pages still need to
+        // scan the full follow history and paginate it in-process.
+        let max_count = cursor.is_none().then_some(limit.saturating_add(1));
+        let commits = self.log_follow_commits(path, max_count)?;
+        paginate_commits(commits.into_iter().map(Ok), limit, cursor)
     }
 
     pub(super) fn commit_details_impl(&self, id: &CommitId) -> Result<CommitDetails> {
-        let sha = id.as_ref();
+        let repo = self._repo.to_thread_local();
+        let spec = id.as_ref();
+        let commit = repo
+            .rev_parse_single(spec)
+            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix rev-parse {spec}: {e}"))))?
+            .object()
+            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix commit object {spec}: {e}"))))?
+            .peel_to_commit()
+            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix peel commit {spec}: {e}"))))?;
 
-        let (message, committed_at, parent_ids, files) = {
-            let mut cmd = Command::new("git");
-            cmd.arg("-C")
-                .arg(&self.spec.workdir)
-                .arg("show")
-                .arg("--name-status")
-                .arg("--format=%B%x00%cI%x00%P%x00")
-                .arg(sha);
-            let output = run_git_capture(cmd, "git show --name-status --format=<commit-details>")?;
-
-            let mut parts = output.splitn(4, '\0');
-            let message = parts.next().unwrap_or_default().trim_end().to_string();
-            let committed_at = parts.next().unwrap_or_default().trim().to_string();
-            let parent_ids = parts
-                .next()
-                .unwrap_or_default()
-                .split_whitespace()
-                .map(|p| CommitId(p.to_string()))
-                .collect::<Vec<_>>();
-            let files = parts
-                .next()
-                .unwrap_or_default()
-                .lines()
-                .filter_map(parse_name_status_line)
-                .collect::<Vec<CommitFileChange>>();
-
-            (message, committed_at, parent_ids, files)
-        };
+        let message = bytes_to_text_preserving_utf8(commit.message_raw_sloppy().as_ref())
+            .trim_end()
+            .to_string();
+        let committed_at = commit
+            .time()
+            .map(|time| time.format_or_unix(gix::date::time::format::ISO8601_STRICT))
+            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix commit time {spec}: {e}"))))?;
+        let parent_oids = commit
+            .parent_ids()
+            .map(|parent| parent.detach())
+            .collect::<Vec<_>>();
+        let parent_ids = parent_oids
+            .iter()
+            .map(|parent| CommitId(parent.to_string()))
+            .collect::<Vec<_>>();
+        let files = commit_file_changes(&repo, &commit, &parent_oids)?;
 
         Ok(CommitDetails {
             id: id.clone(),
@@ -355,44 +511,32 @@ impl GixRepo {
     }
 
     pub(super) fn reflog_head_impl(&self, limit: usize) -> Result<Vec<ReflogEntry>> {
-        let mut cmd = Command::new("git");
-        cmd.arg("-C")
-            .arg(&self.spec.workdir)
-            .arg("-c")
-            .arg("color.ui=false")
-            .arg("--no-pager")
-            .arg("reflog")
-            .arg("show")
-            .arg("--date=unix")
-            .arg(format!("-n{limit}"))
-            .arg("--format=%H%x00%gd%x00%gs%x00%ct")
-            .arg("HEAD");
-
-        let output = run_git_capture(cmd, "git reflog")?;
-        let mut entries = Vec::new();
-        for (ix, line) in output.lines().enumerate() {
-            let mut parts = line.split('\0');
-            let Some(new_id) = parts.next().filter(|s| !s.is_empty()) else {
-                continue;
-            };
-            let selector = parts.next().unwrap_or_default().to_string();
-            let message = parts.next().unwrap_or_default().to_string();
-            let time = parts
-                .next()
-                .and_then(|s| s.parse::<i64>().ok())
-                .and_then(unix_seconds_to_system_time);
-
-            let index = parse_reflog_index(&selector).unwrap_or(ix);
-
-            entries.push(ReflogEntry {
-                index,
-                new_id: CommitId(new_id.to_string()),
-                message,
-                time,
-                selector,
-            });
+        if limit == 0 {
+            return Ok(Vec::new());
         }
-        Ok(entries)
+
+        let repo = self._repo.to_thread_local();
+        if gix_head_id_or_none(&repo)?.is_none() {
+            return Err(reflog_unborn_head_error(&repo));
+        }
+
+        let head = repo
+            .head()
+            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix head: {e}"))))?;
+        let mut platform = head.log_iter();
+        reflog_lines_rev(&mut platform, "HEAD", Some(limit))?
+            .into_iter()
+            .enumerate()
+            .map(|(index, line)| {
+                Ok(ReflogEntry {
+                    index,
+                    new_id: CommitId(line.new_oid.to_string()),
+                    message: bytes_to_text_preserving_utf8(line.message.as_ref()),
+                    time: unix_seconds_to_system_time(line.signature.time.seconds),
+                    selector: format!("HEAD@{{{index}}}"),
+                })
+            })
+            .collect()
     }
 }
 
@@ -411,25 +555,5 @@ mod tests {
         assert!(gate.should_skip("c2"));
         assert!(!gate.should_skip("c3"));
         assert!(!gate.should_skip("c4"));
-    }
-
-    #[test]
-    fn parse_object_ids_from_lines_dedups_and_skips_invalid() {
-        let input = "\
-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n\
-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n\
-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n\
-not-a-sha\n\
-\n";
-        let ids = parse_object_ids_from_bytes(input.as_bytes());
-        assert_eq!(ids.len(), 2);
-        assert_eq!(
-            ids[0].to_string(),
-            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-        );
-        assert_eq!(
-            ids[1].to_string(),
-            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-        );
     }
 }

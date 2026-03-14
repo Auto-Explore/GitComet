@@ -1,6 +1,6 @@
 use gitcomet_core::conflict_session::{ConflictPayload, ConflictResolverStrategy};
 use gitcomet_core::domain::{DiffArea, DiffTarget, FileConflictKind, FileStatusKind};
-use gitcomet_core::error::ErrorKind;
+use gitcomet_core::error::{Error, ErrorKind, GitFailureId};
 use gitcomet_core::services::ConflictSide;
 use gitcomet_core::services::GitBackend;
 use gitcomet_git_gix::GixBackend;
@@ -357,16 +357,17 @@ fn run_git_output(repo: &Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&output.stdout).trim().to_string()
 }
 
-fn write(repo: &Path, rel: &str, contents: &str) -> PathBuf {
-    let path = repo.join(rel);
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).unwrap();
+fn assert_git_failure(error: &Error, expected_command: &str, expected_id: GitFailureId) {
+    match error.kind() {
+        ErrorKind::Git(failure) => {
+            assert_eq!(failure.command(), expected_command);
+            assert_eq!(failure.id(), expected_id);
+        }
+        other => panic!("expected structured git error, got {other:?}"),
     }
-    fs::write(&path, contents).unwrap();
-    path
 }
 
-fn write_bytes(repo: &Path, rel: &str, contents: &[u8]) -> PathBuf {
+fn write(repo: &Path, rel: &str, contents: impl AsRef<[u8]>) -> PathBuf {
     let path = repo.join(rel);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).unwrap();
@@ -1138,14 +1139,14 @@ fn diff_file_image_reports_old_and_new_for_working_tree_and_commits() {
     let old_png = png_1x1_rgba(0, 0, 0, 255);
     let new_png = png_1x1_rgba(255, 0, 0, 255);
 
-    write_bytes(repo, "img.png", &old_png);
+    write(repo, "img.png", &old_png);
     run_git(repo, &["add", "img.png"]);
     run_git(
         repo,
         &["-c", "commit.gpgsign=false", "commit", "-m", "init"],
     );
 
-    write_bytes(repo, "img.png", &new_png);
+    write(repo, "img.png", &new_png);
 
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
@@ -1408,7 +1409,7 @@ fn diff_file_commit_target_without_path_returns_none() {
 }
 
 #[test]
-fn diff_unified_outside_repository_path_returns_backend_error() {
+fn diff_unified_outside_repository_path_returns_structured_git_error() {
     if !require_git_shell_for_status_integration_tests() {
         return;
     }
@@ -1437,10 +1438,48 @@ fn diff_unified_outside_repository_path_returns_backend_error() {
             area: DiffArea::Unstaged,
         })
         .expect_err("expected diff_unified to fail for outside path");
-    assert!(
-        matches!(err.kind(), ErrorKind::Backend(_)),
-        "expected backend error, got {err:?}"
+    assert_git_failure(&err, "git diff", GitFailureId::CommandFailed);
+    let ErrorKind::Git(failure) = err.kind() else {
+        unreachable!("assert_git_failure() already checked the error kind");
+    };
+    assert_eq!(failure.exit_code(), Some(128));
+}
+
+#[test]
+fn diff_parsed_outside_repository_path_returns_structured_git_error() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    let outside = dir.path().join("outside.txt");
+    fs::create_dir_all(&repo).unwrap();
+    fs::write(&outside, "outside\n").unwrap();
+
+    run_git(&repo, &["init"]);
+    run_git(&repo, &["config", "user.email", "you@example.com"]);
+    run_git(&repo, &["config", "user.name", "You"]);
+    run_git(&repo, &["config", "commit.gpgsign", "false"]);
+    write(&repo, "a.txt", "one\n");
+    run_git(&repo, &["add", "a.txt"]);
+    run_git(
+        &repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "init"],
     );
+
+    let backend = GixBackend;
+    let opened = backend.open(&repo).unwrap();
+    let err = opened
+        .diff_parsed(&DiffTarget::WorkingTree {
+            path: outside,
+            area: DiffArea::Unstaged,
+        })
+        .expect_err("expected diff_parsed to fail for outside path");
+    assert_git_failure(&err, "git diff", GitFailureId::CommandFailed);
+    let ErrorKind::Git(failure) = err.kind() else {
+        unreachable!("assert_git_failure() already checked the error kind");
+    };
+    assert_eq!(failure.exit_code(), Some(128));
 }
 
 #[test]
@@ -2182,7 +2221,7 @@ fn conflict_file_stages_preserve_non_utf8_bytes() {
     let ours_bytes = b"\x00ours\xff\n".to_vec();
     let theirs_bytes = b"\x00theirs\xff\n".to_vec();
 
-    write_bytes(repo, "bin.dat", &base_bytes);
+    write(repo, "bin.dat", &base_bytes);
     run_git(repo, &["add", "bin.dat"]);
     run_git(
         repo,
@@ -2190,7 +2229,7 @@ fn conflict_file_stages_preserve_non_utf8_bytes() {
     );
 
     run_git(repo, &["checkout", "-b", "feature"]);
-    write_bytes(repo, "bin.dat", &theirs_bytes);
+    write(repo, "bin.dat", &theirs_bytes);
     run_git(repo, &["add", "bin.dat"]);
     run_git(
         repo,
@@ -2198,7 +2237,7 @@ fn conflict_file_stages_preserve_non_utf8_bytes() {
     );
 
     run_git(repo, &["checkout", "-"]);
-    write_bytes(repo, "bin.dat", &ours_bytes);
+    write(repo, "bin.dat", &ours_bytes);
     run_git(repo, &["add", "bin.dat"]);
     run_git(
         repo,
@@ -2256,7 +2295,7 @@ fn checkout_conflict_side_resolves_non_utf8_binary_conflict() {
     let ours_bytes = b"\x00ours\xff\n".to_vec();
     let theirs_bytes = b"\x00theirs\xff\n".to_vec();
 
-    write_bytes(repo, "bin.dat", &base_bytes);
+    write(repo, "bin.dat", &base_bytes);
     run_git(repo, &["add", "bin.dat"]);
     run_git(
         repo,
@@ -2264,7 +2303,7 @@ fn checkout_conflict_side_resolves_non_utf8_binary_conflict() {
     );
 
     run_git(repo, &["checkout", "-b", "feature"]);
-    write_bytes(repo, "bin.dat", &theirs_bytes);
+    write(repo, "bin.dat", &theirs_bytes);
     run_git(repo, &["add", "bin.dat"]);
     run_git(
         repo,
@@ -2272,7 +2311,7 @@ fn checkout_conflict_side_resolves_non_utf8_binary_conflict() {
     );
 
     run_git(repo, &["checkout", "-"]);
-    write_bytes(repo, "bin.dat", &ours_bytes);
+    write(repo, "bin.dat", &ours_bytes);
     run_git(repo, &["add", "bin.dat"]);
     run_git(
         repo,
@@ -2630,6 +2669,52 @@ fn launch_mergetool_trust_exit_false_detects_same_size_content_change() {
             .iter()
             .any(|e| e.path == Path::new("a.txt") && e.kind == FileStatusKind::Modified),
         "expected staged resolution after content-changing mergetool run, got {status:?}"
+    );
+}
+
+#[test]
+fn launch_mergetool_reflects_config_written_after_backend_open() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    setup_both_modified_text_conflict(repo, "a.txt", "ours\n", "theirs\n");
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+
+    run_git(repo, &["config", "merge.tool", "fake"]);
+    set_repo_local_mergetool_cmd_with_consent(
+        repo,
+        "fake",
+        cmd_copy_remote_to_merged_and_exit_success(),
+    );
+    run_git(repo, &["config", "mergetool.fake.trustExitCode", "true"]);
+
+    let result = opened.launch_mergetool(Path::new("a.txt")).unwrap();
+    assert!(result.success);
+    assert_eq!(result.tool_name, "fake");
+    assert_eq!(result.output.exit_code, Some(0));
+    assert_eq!(
+        result.merged_contents.as_deref(),
+        Some("theirs\n".as_bytes())
+    );
+    assert_eq!(fs::read_to_string(repo.join("a.txt")).unwrap(), "theirs\n");
+
+    let status = opened.status().unwrap();
+    assert!(
+        status
+            .unstaged
+            .iter()
+            .all(|entry| entry.path != Path::new("a.txt"))
+    );
+    assert!(
+        status
+            .staged
+            .iter()
+            .any(|entry| entry.path == Path::new("a.txt") && entry.kind == FileStatusKind::Modified),
+        "expected mergetool resolution after config refresh, got {status:?}"
     );
 }
 
@@ -4461,6 +4546,81 @@ fn create_and_delete_local_branch() {
 }
 
 #[test]
+fn create_branch_existing_branch_returns_structured_git_error() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init", "-b", "main"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    write(repo, "a.txt", "one\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "init"],
+    );
+    let head = run_git_output(repo, &["rev-parse", "HEAD"]);
+    run_git(repo, &["branch", "feature"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    let err = opened
+        .create_branch("feature", &gitcomet_core::domain::CommitId(head))
+        .expect_err("creating an existing branch should fail");
+    assert_git_failure(&err, "git branch", GitFailureId::CommandFailed);
+    let ErrorKind::Git(failure) = err.kind() else {
+        unreachable!();
+    };
+    assert_eq!(failure.exit_code(), Some(128));
+    assert_eq!(
+        failure.detail(),
+        Some("fatal: a branch named 'feature' already exists")
+    );
+}
+
+#[test]
+fn create_branch_on_unborn_head_returns_structured_git_error() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init", "-b", "main"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    let err = opened
+        .create_branch(
+            "feature",
+            &gitcomet_core::domain::CommitId("HEAD".to_string()),
+        )
+        .expect_err("creating a branch on unborn HEAD should fail");
+    assert_git_failure(&err, "git branch", GitFailureId::CommandFailed);
+    let ErrorKind::Git(failure) = err.kind() else {
+        unreachable!();
+    };
+    assert_eq!(failure.exit_code(), Some(128));
+    assert_eq!(
+        failure.detail(),
+        Some("fatal: not a valid object name: 'HEAD'")
+    );
+
+    let exists = git_command()
+        .arg("-C")
+        .arg(repo)
+        .args(["show-ref", "--verify", "--quiet", "refs/heads/feature"])
+        .status()
+        .expect("show-ref feature");
+    assert!(!exists.success(), "feature branch should not be created");
+}
+
+#[test]
 fn create_branch_from_detached_head_using_head_revision() {
     if !require_git_shell_for_status_integration_tests() {
         return;
@@ -4503,6 +4663,206 @@ fn create_branch_from_detached_head_using_head_revision() {
 
     let rescue_target = run_git_output(repo, &["rev-parse", "rescue"]);
     assert_eq!(rescue_target, first_commit);
+}
+
+#[test]
+fn create_branch_from_annotated_tag_peels_to_commit() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init", "-b", "main"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+    run_git(repo, &["config", "tag.gpgsign", "false"]);
+
+    write(repo, "a.txt", "one\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "init"],
+    );
+    let head = run_git_output(repo, &["rev-parse", "HEAD"]);
+    run_git(repo, &["tag", "-a", "v1", "-m", "v1"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    opened
+        .create_branch(
+            "feature",
+            &gitcomet_core::domain::CommitId("v1".to_string()),
+        )
+        .unwrap();
+
+    let feature_target = run_git_output(repo, &["rev-parse", "feature"]);
+    assert_eq!(feature_target, head);
+    let feature_kind = run_git_output(repo, &["cat-file", "-t", "feature"]);
+    assert_eq!(feature_kind, "commit");
+}
+
+#[test]
+fn create_branch_from_blob_target_returns_structured_git_error() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init", "-b", "main"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    write(repo, "a.txt", "one\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "init"],
+    );
+    let blob = hash_blob(repo, b"blob target\n");
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    let err = opened
+        .create_branch("feature", &gitcomet_core::domain::CommitId(blob.clone()))
+        .expect_err("creating a branch from a blob should fail");
+    assert_git_failure(&err, "git branch", GitFailureId::CommandFailed);
+    let ErrorKind::Git(failure) = err.kind() else {
+        unreachable!();
+    };
+    assert_eq!(failure.exit_code(), Some(128));
+    let detail = failure.detail().expect("git detail");
+    assert!(
+        detail.contains("not a valid branch point"),
+        "unexpected create-branch detail: {detail}"
+    );
+    assert!(
+        detail.contains(&blob),
+        "expected blob id in create-branch detail: {detail}"
+    );
+}
+
+#[test]
+fn create_branch_head_target_reflects_move_after_backend_open() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init", "-b", "main"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    write(repo, "a.txt", "one\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "first"],
+    );
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+
+    write(repo, "a.txt", "two\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "second"],
+    );
+    let second_commit = run_git_output(repo, &["rev-parse", "HEAD"]);
+
+    opened
+        .create_branch(
+            "feature",
+            &gitcomet_core::domain::CommitId("HEAD".to_string()),
+        )
+        .unwrap();
+
+    let feature_target = run_git_output(repo, &["rev-parse", "feature"]);
+    assert_eq!(feature_target, second_commit);
+}
+
+#[test]
+fn create_branch_target_branch_created_after_backend_open() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init", "-b", "main"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    write(repo, "a.txt", "one\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "init"],
+    );
+    let head = run_git_output(repo, &["rev-parse", "HEAD"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+
+    run_git(repo, &["branch", "source"]);
+
+    opened
+        .create_branch(
+            "feature",
+            &gitcomet_core::domain::CommitId("source".to_string()),
+        )
+        .unwrap();
+
+    let feature_target = run_git_output(repo, &["rev-parse", "feature"]);
+    assert_eq!(feature_target, head);
+}
+
+#[test]
+fn create_branch_succeeds_without_persisted_user_identity() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init", "-b", "main"]);
+
+    write(repo, "a.txt", "one\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(
+        repo,
+        &[
+            "-c",
+            "user.email=you@example.com",
+            "-c",
+            "user.name=You",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-m",
+            "init",
+        ],
+    );
+
+    let head = run_git_output(repo, &["rev-parse", "HEAD"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    opened
+        .create_branch("feature", &gitcomet_core::domain::CommitId(head))
+        .unwrap();
+
+    run_git(
+        repo,
+        &["show-ref", "--verify", "--quiet", "refs/heads/feature"],
+    );
 }
 
 #[test]
@@ -4570,13 +4930,15 @@ fn delete_branch_force_removes_unmerged_branch() {
         .delete_branch("feature")
         .expect_err("safe delete should fail for unmerged branch");
     match err.kind() {
-        ErrorKind::Backend(msg) => {
+        ErrorKind::Git(failure) => {
+            assert_eq!(failure.command(), "git branch -d");
+            let msg = failure.to_string();
             assert!(
                 msg.contains("not fully merged") || msg.contains("cannot delete branch"),
                 "unexpected delete-branch error: {msg}"
             );
         }
-        other => panic!("expected backend error, got {other:?}"),
+        other => panic!("expected structured git error, got {other:?}"),
     }
 
     opened.delete_branch_force("feature").unwrap();
@@ -4588,6 +4950,250 @@ fn delete_branch_force_removes_unmerged_branch() {
         .status()
         .expect("show-ref");
     assert!(!deleted.success(), "expected force-delete to remove branch");
+}
+
+#[test]
+fn delete_branch_force_removes_branch_config_section() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init", "-b", "main"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    write(repo, "a.txt", "one\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "init"],
+    );
+    run_git(repo, &["branch", "feature"]);
+    run_git(repo, &["config", "branch.feature.remote", "origin"]);
+    run_git(
+        repo,
+        &["config", "branch.feature.merge", "refs/heads/feature"],
+    );
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    opened.delete_branch_force("feature").unwrap();
+
+    let branch_config = git_command()
+        .arg("-C")
+        .arg(repo)
+        .args(["config", "--local", "--get-regexp", "^branch\\.feature\\."])
+        .status()
+        .expect("git config --get-regexp");
+    assert_eq!(
+        branch_config.code(),
+        Some(1),
+        "expected branch config section to be removed"
+    );
+}
+
+#[test]
+fn delete_branch_force_keeps_branch_config_when_local_config_is_locked() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init", "-b", "main"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    write(repo, "a.txt", "one\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "init"],
+    );
+    run_git(repo, &["branch", "feature"]);
+    run_git(repo, &["config", "branch.feature.remote", "origin"]);
+    run_git(
+        repo,
+        &["config", "branch.feature.merge", "refs/heads/feature"],
+    );
+    fs::write(repo.join(".git").join("config.lock"), b"held elsewhere").unwrap();
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    opened.delete_branch_force("feature").unwrap();
+
+    let deleted = git_command()
+        .arg("-C")
+        .arg(repo)
+        .args(["show-ref", "--verify", "--quiet", "refs/heads/feature"])
+        .status()
+        .expect("show-ref");
+    assert!(!deleted.success(), "expected force-delete to remove branch");
+
+    let branch_config = git_command()
+        .arg("-C")
+        .arg(repo)
+        .args(["config", "--local", "--get-regexp", "^branch\\.feature\\."])
+        .output()
+        .expect("git config --get-regexp");
+    assert!(
+        branch_config.status.success(),
+        "expected branch config section to remain when .git/config is locked"
+    );
+    let branch_config_stdout = String::from_utf8_lossy(&branch_config.stdout);
+    assert!(
+        branch_config_stdout.contains("branch.feature.remote origin")
+            && branch_config_stdout.contains("branch.feature.merge refs/heads/feature"),
+        "unexpected branch config after locked cleanup skip: {branch_config_stdout}"
+    );
+}
+
+#[test]
+fn delete_branch_force_missing_branch_is_structured_git_failure() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init", "-b", "main"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    let err = opened
+        .delete_branch_force("missing")
+        .expect_err("missing branch must surface as a git command failure");
+    assert_git_failure(&err, "git branch -D", GitFailureId::CommandFailed);
+    let msg = err.to_string();
+    assert!(
+        msg.contains("branch 'missing' not found"),
+        "unexpected delete-branch-force error: {msg}"
+    );
+}
+
+#[test]
+fn delete_branch_force_rejects_unborn_current_branch_before_missing_ref_check() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init", "-b", "main"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    let err = opened
+        .delete_branch_force("main")
+        .expect_err("unborn checked-out branch must still be treated as in-use");
+    assert_git_failure(&err, "git branch -D", GitFailureId::CommandFailed);
+    let msg = err.to_string();
+    assert!(
+        msg.contains("used by worktree") && msg.contains(&git_path_arg(repo)),
+        "unexpected delete-branch-force error: {msg}"
+    );
+}
+
+#[test]
+fn delete_branch_force_rejects_branch_checked_out_in_linked_worktree() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    let linked_worktree = dir.path().join("feature-worktree");
+
+    run_git(repo, &["init", "-b", "main"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    write(repo, "a.txt", "one\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "init"],
+    );
+    run_git(repo, &["branch", "feature"]);
+
+    let linked_worktree_arg = git_path_arg(&linked_worktree);
+    run_git(repo, &["worktree", "add", &linked_worktree_arg, "feature"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    let err = opened
+        .delete_branch_force("feature")
+        .expect_err("branch checked out in linked worktree must not be deleted");
+    assert_git_failure(&err, "git branch -D", GitFailureId::CommandFailed);
+    let msg = err.to_string();
+    assert!(
+        msg.contains("used by worktree") && msg.contains(&linked_worktree_arg),
+        "unexpected delete-branch-force error: {msg}"
+    );
+
+    let still_exists = git_command()
+        .arg("-C")
+        .arg(repo)
+        .args(["show-ref", "--verify", "--quiet", "refs/heads/feature"])
+        .status()
+        .expect("show-ref");
+    assert!(
+        still_exists.success(),
+        "branch should remain after linked-worktree rejection"
+    );
+}
+
+#[test]
+fn delete_branch_force_rejects_branch_checked_out_in_main_worktree_when_opened_from_linked() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    let linked_worktree = dir.path().join("feature-worktree");
+
+    run_git(repo, &["init", "-b", "main"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    write(repo, "a.txt", "one\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "init"],
+    );
+    run_git(repo, &["branch", "feature"]);
+
+    let linked_worktree_arg = git_path_arg(&linked_worktree);
+    run_git(repo, &["worktree", "add", &linked_worktree_arg, "feature"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(&linked_worktree).unwrap();
+    let err = opened
+        .delete_branch_force("main")
+        .expect_err("main-worktree branch use must block deletion from linked worktree");
+    assert_git_failure(&err, "git branch -D", GitFailureId::CommandFailed);
+    let msg = err.to_string();
+    assert!(
+        msg.contains("used by worktree") && msg.contains(&git_path_arg(repo)),
+        "unexpected delete-branch-force error: {msg}"
+    );
+
+    let still_exists = git_command()
+        .arg("-C")
+        .arg(repo)
+        .args(["show-ref", "--verify", "--quiet", "refs/heads/main"])
+        .status()
+        .expect("show-ref");
+    assert!(
+        still_exists.success(),
+        "branch should remain after main-worktree rejection"
+    );
 }
 
 #[test]
@@ -4721,18 +5327,20 @@ fn create_tag_respects_tag_gpgsign_config() {
         .expect_err("tag creation should fail when signing is required and gpg is missing");
 
     match err.kind() {
-        ErrorKind::Backend(msg) => {
+        ErrorKind::Git(failure) => {
+            assert_eq!(failure.command(), "git tag -m v1.0.0 -- v1.0.0 HEAD");
+            let msg = failure.to_string();
             assert!(
                 msg.contains("git tag -m v1.0.0 -- v1.0.0 HEAD failed"),
-                "unexpected backend error: {msg}"
+                "unexpected git error: {msg}"
             );
             let lower = msg.to_ascii_lowercase();
             assert!(
                 msg.contains("gitcomet-missing-gpg-program") || lower.contains("sign"),
-                "expected signing failure details in backend error: {msg}"
+                "expected signing failure details in git error: {msg}"
             );
         }
-        other => panic!("expected backend error, got {other:?}"),
+        other => panic!("expected structured git error, got {other:?}"),
     }
 
     let tag_present = git_command()
@@ -5336,7 +5944,95 @@ fn checkout_remote_branch_existing_local_branch_updates_upstream_and_checks_out(
 }
 
 #[test]
-fn checkout_remote_branch_returns_backend_error_for_missing_remote_branch() {
+fn checkout_remote_branch_sees_local_branch_created_after_backend_open() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let origin = dir.path().join("origin.git");
+    let seed = dir.path().join("seed");
+    let clone = dir.path().join("clone");
+    fs::create_dir_all(&origin).unwrap();
+    fs::create_dir_all(&seed).unwrap();
+
+    run_git(&origin, &["init", "--bare", "-b", "main"]);
+
+    run_git(&seed, &["init", "-b", "main"]);
+    run_git(&seed, &["config", "user.email", "you@example.com"]);
+    run_git(&seed, &["config", "user.name", "You"]);
+    run_git(&seed, &["config", "commit.gpgsign", "false"]);
+    write(&seed, "a.txt", "one\n");
+    run_git(&seed, &["add", "a.txt"]);
+    run_git(
+        &seed,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "init"],
+    );
+    run_git(
+        &seed,
+        &["remote", "add", "origin", git_remote_url(&origin).as_str()],
+    );
+    run_git(&seed, &["push", "-u", "origin", "main"]);
+
+    run_git(&seed, &["checkout", "-b", "feature"]);
+    write(&seed, "feature.txt", "feature\n");
+    run_git(&seed, &["add", "feature.txt"]);
+    run_git(
+        &seed,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "feature"],
+    );
+    run_git(&seed, &["push", "-u", "origin", "feature"]);
+
+    run_git(
+        dir.path(),
+        &[
+            "clone",
+            git_remote_url(&origin).as_str(),
+            git_path_arg(&clone).as_str(),
+        ],
+    );
+
+    let backend = GixBackend;
+    let opened = backend.open(&clone).unwrap();
+
+    run_git(&clone, &["checkout", "-b", "topic"]);
+    run_git(&clone, &["checkout", "main"]);
+
+    let upstream_before = git_command()
+        .arg("-C")
+        .arg(&clone)
+        .args([
+            "rev-parse",
+            "--abbrev-ref",
+            "--symbolic-full-name",
+            "topic@{upstream}",
+        ])
+        .status()
+        .expect("topic upstream probe");
+    assert!(
+        !upstream_before.success(),
+        "topic should start without upstream tracking"
+    );
+
+    opened
+        .checkout_remote_branch("origin", "feature", "topic")
+        .unwrap();
+
+    let head = run_git_output(&clone, &["rev-parse", "--abbrev-ref", "HEAD"]);
+    assert_eq!(head, "topic");
+    let upstream = run_git_output(
+        &clone,
+        &[
+            "rev-parse",
+            "--abbrev-ref",
+            "--symbolic-full-name",
+            "@{upstream}",
+        ],
+    );
+    assert_eq!(upstream, "origin/feature");
+}
+
+#[test]
+fn checkout_remote_branch_returns_structured_git_error_for_missing_remote_branch() {
     if !require_git_shell_for_status_integration_tests() {
         return;
     }
@@ -5369,16 +6065,164 @@ fn checkout_remote_branch_returns_backend_error_for_missing_remote_branch() {
     let opened = backend.open(&repo).unwrap();
     let err = opened
         .checkout_remote_branch("origin", "missing-branch", "topic")
-        .expect_err("missing remote branch should return backend error");
+        .expect_err("missing remote branch should return structured git error");
     match err.kind() {
-        ErrorKind::Backend(msg) => {
+        ErrorKind::Git(failure) => {
+            assert_eq!(failure.id(), GitFailureId::CommandFailed);
+            assert_eq!(failure.command(), "git checkout --track");
             assert!(
-                msg.contains("git checkout --track failed"),
-                "unexpected backend error: {msg}"
+                failure.exit_code().is_some(),
+                "git checkout failure should preserve exit code"
+            );
+            assert!(
+                failure
+                    .detail()
+                    .is_some_and(|detail| !detail.trim().is_empty()),
+                "git checkout failure should preserve stderr detail"
             );
         }
-        other => panic!("expected backend error, got {other:?}"),
+        other => panic!("expected structured git error, got {other:?}"),
     }
+}
+
+#[test]
+fn checkout_remote_branch_with_existing_local_branch_and_missing_remote_keeps_head_unchanged() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let origin = dir.path().join("origin.git");
+    let seed = dir.path().join("seed");
+    let clone = dir.path().join("clone");
+    fs::create_dir_all(&origin).unwrap();
+    fs::create_dir_all(&seed).unwrap();
+
+    run_git(&origin, &["init", "--bare", "-b", "main"]);
+
+    run_git(&seed, &["init", "-b", "main"]);
+    run_git(&seed, &["config", "user.email", "you@example.com"]);
+    run_git(&seed, &["config", "user.name", "You"]);
+    run_git(&seed, &["config", "commit.gpgsign", "false"]);
+    write(&seed, "a.txt", "one\n");
+    run_git(&seed, &["add", "a.txt"]);
+    run_git(
+        &seed,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "init"],
+    );
+    run_git(
+        &seed,
+        &["remote", "add", "origin", git_remote_url(&origin).as_str()],
+    );
+    run_git(&seed, &["push", "-u", "origin", "main"]);
+
+    run_git(
+        dir.path(),
+        &[
+            "clone",
+            git_remote_url(&origin).as_str(),
+            git_path_arg(&clone).as_str(),
+        ],
+    );
+    run_git(&clone, &["checkout", "-b", "topic"]);
+    run_git(&clone, &["checkout", "main"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(&clone).unwrap();
+    let err = opened
+        .checkout_remote_branch("origin", "missing-branch", "topic")
+        .expect_err("missing remote branch should not switch to the existing local branch");
+    assert_git_failure(&err, "git checkout --track", GitFailureId::CommandFailed);
+
+    let head = run_git_output(&clone, &["rev-parse", "--abbrev-ref", "HEAD"]);
+    assert_eq!(head, "main");
+
+    let upstream = git_command()
+        .arg("-C")
+        .arg(&clone)
+        .args([
+            "rev-parse",
+            "--abbrev-ref",
+            "--symbolic-full-name",
+            "topic@{upstream}",
+        ])
+        .status()
+        .expect("topic upstream probe");
+    assert!(
+        !upstream.success(),
+        "topic should remain without upstream tracking after the failed checkout"
+    );
+}
+
+#[test]
+fn checkout_remote_branch_dirty_worktree_failure_does_not_create_local_branch() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let origin = dir.path().join("origin.git");
+    let seed = dir.path().join("seed");
+    let clone = dir.path().join("clone");
+    fs::create_dir_all(&origin).unwrap();
+    fs::create_dir_all(&seed).unwrap();
+
+    run_git(&origin, &["init", "--bare", "-b", "main"]);
+
+    run_git(&seed, &["init", "-b", "main"]);
+    run_git(&seed, &["config", "user.email", "you@example.com"]);
+    run_git(&seed, &["config", "user.name", "You"]);
+    run_git(&seed, &["config", "commit.gpgsign", "false"]);
+    write(&seed, "a.txt", "one\n");
+    run_git(&seed, &["add", "a.txt"]);
+    run_git(
+        &seed,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "init"],
+    );
+    run_git(
+        &seed,
+        &["remote", "add", "origin", git_remote_url(&origin).as_str()],
+    );
+    run_git(&seed, &["push", "-u", "origin", "main"]);
+
+    run_git(&seed, &["checkout", "-b", "feature"]);
+    write(&seed, "a.txt", "feature\n");
+    run_git(&seed, &["add", "a.txt"]);
+    run_git(
+        &seed,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "feature"],
+    );
+    run_git(&seed, &["push", "-u", "origin", "feature"]);
+
+    run_git(
+        dir.path(),
+        &[
+            "clone",
+            git_remote_url(&origin).as_str(),
+            git_path_arg(&clone).as_str(),
+        ],
+    );
+    write(&clone, "a.txt", "dirty\n");
+
+    let backend = GixBackend;
+    let opened = backend.open(&clone).unwrap();
+    let err = opened
+        .checkout_remote_branch("origin", "feature", "topic")
+        .expect_err("dirty checkout should fail");
+    assert_git_failure(&err, "git checkout --track", GitFailureId::CommandFailed);
+
+    let topic_exists = git_command()
+        .arg("-C")
+        .arg(&clone)
+        .args(["show-ref", "--verify", "--quiet", "refs/heads/topic"])
+        .status()
+        .expect("show-ref topic");
+    assert!(
+        !topic_exists.success(),
+        "topic branch should not be created when checkout fails"
+    );
+
+    let head = run_git_output(&clone, &["rev-parse", "--abbrev-ref", "HEAD"]);
+    assert_eq!(head, "main");
+    assert_eq!(fs::read_to_string(clone.join("a.txt")).unwrap(), "dirty\n");
 }
 
 #[test]
@@ -5787,6 +6631,7 @@ fn stash_apply_conflict_is_mergeable() {
     let err = opened
         .stash_apply(0)
         .expect_err("stash apply conflict should report failure");
+    assert_git_failure(&err, "git stash apply", GitFailureId::StashApplyConflict);
     assert!(
         err.to_string().contains("git stash apply failed"),
         "unexpected error: {err}"
@@ -5841,6 +6686,11 @@ fn stash_apply_still_errors_when_merge_does_not_start() {
     let err = opened
         .stash_apply(0)
         .expect_err("stash apply should fail when local edits would be overwritten");
+    assert_git_failure(
+        &err,
+        "git stash apply",
+        GitFailureId::WorktreeWouldBeOverwritten,
+    );
     assert!(
         err.to_string().contains("overwritten by merge"),
         "unexpected error: {err}"
@@ -5854,6 +6704,106 @@ fn stash_apply_still_errors_when_merge_does_not_start() {
         .expect("expected modified file in unstaged status");
     assert_eq!(entry.kind, FileStatusKind::Modified);
     assert_eq!(entry.conflict, None);
+}
+
+#[test]
+fn stash_apply_tracked_payload_overwriting_untracked_file_is_worktree_overwrite() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    write(repo, "a.txt", "base\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "init"],
+    );
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+
+    write(repo, "new.txt", "from stash\n");
+    run_git(repo, &["add", "new.txt"]);
+    opened.stash_create("wip", false).unwrap();
+
+    write(repo, "new.txt", "local untracked\n");
+
+    let err = opened.stash_apply(0).expect_err(
+        "stash apply should fail when tracked stash payload would overwrite an untracked file",
+    );
+    assert_git_failure(
+        &err,
+        "git stash apply",
+        GitFailureId::WorktreeWouldBeOverwritten,
+    );
+    assert!(
+        err.to_string().contains("overwritten by merge"),
+        "unexpected error: {err}"
+    );
+
+    assert_eq!(
+        fs::read_to_string(repo.join("new.txt")).unwrap(),
+        "local untracked\n"
+    );
+    let status = opened.status().unwrap();
+    let entry = status
+        .unstaged
+        .iter()
+        .find(|candidate| candidate.path == Path::new("new.txt"))
+        .expect("expected blocked untracked file to remain in the worktree");
+    assert_eq!(entry.kind, FileStatusKind::Untracked);
+    assert_eq!(entry.conflict, None);
+}
+
+#[test]
+fn stash_apply_staged_overlap_still_merges_into_conflict() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    write(repo, "a.txt", "base\nline\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "init"],
+    );
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+
+    write(repo, "a.txt", "base\nstash-change\n");
+    opened.stash_create("wip", false).unwrap();
+
+    write(repo, "a.txt", "base\nlocal-staged-change\n");
+    run_git(repo, &["add", "a.txt"]);
+
+    let err = opened
+        .stash_apply(0)
+        .expect_err("stash apply should report a conflict when only the index overlaps");
+    assert_git_failure(&err, "git stash apply", GitFailureId::StashApplyConflict);
+
+    let status = opened.status().unwrap();
+    let entry = status
+        .unstaged
+        .iter()
+        .find(|candidate| candidate.path == Path::new("a.txt"))
+        .expect("expected conflicted file after stash apply merge");
+    assert_eq!(entry.kind, FileStatusKind::Conflicted);
+    assert_eq!(entry.conflict, Some(FileConflictKind::BothModified));
 }
 
 #[test]
@@ -5889,6 +6839,11 @@ fn stash_apply_allows_merge_when_only_untracked_restore_fails() {
     let err = opened
         .stash_apply(0)
         .expect_err("stash apply should report untracked restore failure");
+    assert_git_failure(
+        &err,
+        "git stash apply",
+        GitFailureId::UntrackedRestoreConflict,
+    );
     assert!(
         err.to_string()
             .contains("could not restore untracked files from stash")
@@ -5919,6 +6874,53 @@ fn stash_apply_allows_merge_when_only_untracked_restore_fails() {
         candidate.path == Path::new("Cargo.toml.orig")
             && candidate.kind == FileStatusKind::Untracked
     }));
+}
+
+#[test]
+fn stash_apply_preserves_original_error_when_untracked_merge_markers_fail() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    write(repo, "a.txt", "base\nline\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "init"],
+    );
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+
+    write(repo, "Cargo.toml.orig", "from stash\n");
+    opened.stash_create("wip", true).unwrap();
+
+    let local_binary = b"\xff\xfe\x00\x80";
+    write(repo, "Cargo.toml.orig", local_binary);
+
+    let err = opened
+        .stash_apply(0)
+        .expect_err("stash apply should still report the original untracked restore failure");
+    assert_git_failure(
+        &err,
+        "git stash apply",
+        GitFailureId::UntrackedRestoreConflict,
+    );
+    assert!(
+        !err.to_string().contains("cannot merge binary"),
+        "unexpected recovery error replaced the original stash failure: {err}"
+    );
+    assert_eq!(
+        fs::read(repo.join("Cargo.toml.orig")).unwrap(),
+        local_binary,
+    );
 }
 
 #[test]
@@ -5970,6 +6972,11 @@ fn stash_apply_allows_untracked_restore_failure_when_stash_has_tracked_payload()
     let err = opened
         .stash_apply(0)
         .expect_err("stash apply should report untracked restore failure");
+    assert_git_failure(
+        &err,
+        "git stash apply",
+        GitFailureId::UntrackedRestoreConflict,
+    );
     assert!(
         err.to_string()
             .contains("could not restore untracked files from stash")
@@ -6032,6 +7039,11 @@ fn stash_apply_merges_when_only_untracked_restore_fails_without_tracked_changes(
     let err = opened
         .stash_apply(0)
         .expect_err("stash apply should report untracked restore failure");
+    assert_git_failure(
+        &err,
+        "git stash apply",
+        GitFailureId::UntrackedRestoreConflict,
+    );
     assert!(
         err.to_string()
             .contains("could not restore untracked files from stash")

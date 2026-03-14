@@ -404,17 +404,25 @@ fn collect_uninstall_snapshot_keys(entries: &[UninstallEntry]) -> Vec<&'static s
 }
 
 fn parse_git_config_values(output: &[u8]) -> Result<Vec<String>, String> {
-    let text = String::from_utf8(output.to_vec())
-        .map_err(|_| "git config returned non-UTF-8 output".to_string())?;
-    Ok(text
-        .lines()
-        .map(|line| line.trim_end_matches('\r').to_string())
-        .collect())
+    if output.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    output
+        .strip_suffix(b"\0")
+        .unwrap_or(output)
+        .split(|byte| *byte == b'\0')
+        .map(|value| {
+            std::str::from_utf8(value)
+                .map(str::to_owned)
+                .map_err(|_| "git config returned non-UTF-8 output".to_string())
+        })
+        .collect()
 }
 
 fn read_git_config_values(scope: &str, key: &str) -> Result<Vec<String>, String> {
     let output = std::process::Command::new("git")
-        .args(["config", scope, "--get-all", key])
+        .args(["config", scope, "--null", "--get-all", key])
         .output()
         .map_err(|e| format!("Failed to run git config --get-all for {key}: {e}"))?;
 
@@ -1299,6 +1307,19 @@ mod tests {
     }
 
     #[test]
+    fn parse_git_config_values_preserves_nul_separated_multiline_and_empty_values() {
+        let parsed = parse_git_config_values(b"line1\nline2\0\0tail\0").unwrap();
+        assert_eq!(
+            parsed,
+            vec![
+                "line1\nline2".to_string(),
+                "".to_string(),
+                "tail".to_string()
+            ]
+        );
+    }
+
+    #[test]
     fn write_config_values_supports_empty_and_multi_value_sequences() {
         let (_dir, scope, _) = temp_file_scope();
         write_config_values(&scope, "foo.multi", &[]).unwrap();
@@ -1308,7 +1329,7 @@ mod tests {
                 .is_empty()
         );
 
-        let values = vec!["one".to_string(), "two".to_string(), "three".to_string()];
+        let values = vec!["one".to_string(), "two\nthree".to_string(), "".to_string()];
         write_config_values(&scope, "foo.multi", &values).unwrap();
         assert_eq!(read_git_config_values(&scope, "foo.multi").unwrap(), values);
     }

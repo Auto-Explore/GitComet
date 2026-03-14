@@ -5,7 +5,6 @@ use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{CommandOutput, Result};
 use std::io::Write;
 use std::path::Path;
-use std::process::Command;
 use tempfile::NamedTempFile;
 
 impl GixRepo {
@@ -15,10 +14,8 @@ impl GixRepo {
         dest: &Path,
     ) -> Result<CommandOutput> {
         let sha = commit_id.as_ref();
-        let mut cmd = Command::new("git");
-        cmd.arg("-C")
-            .arg(&self.spec.workdir)
-            .arg("format-patch")
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("format-patch")
             .arg("-1")
             .arg(sha)
             .arg("--stdout")
@@ -34,13 +31,8 @@ impl GixRepo {
     }
 
     pub(super) fn apply_patch_with_output_impl(&self, patch: &Path) -> Result<CommandOutput> {
-        let mut cmd = Command::new("git");
-        cmd.arg("-C")
-            .arg(&self.spec.workdir)
-            .arg("am")
-            .arg("--3way")
-            .arg("--")
-            .arg(patch);
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("am").arg("--3way").arg("--").arg(patch);
         run_git_with_output(cmd, &format!("git am --3way {}", patch.display()))
     }
 
@@ -55,10 +47,8 @@ impl GixRepo {
             .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
         let tmp_path = tmp_file.path();
 
-        let mut cmd = Command::new("git");
-        cmd.arg("-C")
-            .arg(&self.spec.workdir)
-            .arg("apply")
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("apply")
             .arg("--cached")
             .arg("--recount")
             .arg("--whitespace=nowarn");
@@ -87,12 +77,8 @@ impl GixRepo {
             .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
         let tmp_path = tmp_file.path();
 
-        let mut cmd = Command::new("git");
-        cmd.arg("-C")
-            .arg(&self.spec.workdir)
-            .arg("apply")
-            .arg("--recount")
-            .arg("--whitespace=nowarn");
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("apply").arg("--recount").arg("--whitespace=nowarn");
         if reverse {
             cmd.arg("--reverse");
         }

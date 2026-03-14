@@ -1,5 +1,8 @@
 use super::GixRepo;
-use crate::util::{run_git_capture, run_git_simple, run_git_with_output, validate_ref_like_arg};
+use crate::util::{
+    bytes_to_text_preserving_utf8, run_git_capture, run_git_simple, run_git_with_output,
+    validate_ref_like_arg,
+};
 use gitcomet_core::domain::{Remote, RemoteBranch};
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{CommandOutput, PullMode, RemoteUrlKind, Result};
@@ -63,6 +66,25 @@ fn parse_short_remote_branch_name(short_name: &str) -> Option<(&str, &str)> {
     Some((remote, name))
 }
 
+fn normalize_remote_url(url: &str) -> String {
+    let Some(path) = url.strip_prefix("file://") else {
+        return url.to_string();
+    };
+    let path_bytes = path.as_bytes();
+    if path.starts_with('/')
+        || path_bytes.len() < 3
+        || !path_bytes[0].is_ascii_alphabetic()
+        || path_bytes[1] != b':'
+        || !matches!(path_bytes[2], b'/' | b'\\')
+    {
+        return url.to_string();
+    }
+
+    // gix serializes Windows drive-letter file remotes as `file://C:/...`.
+    let normalized_path = path.replace('\\', "/");
+    format!("file:///{normalized_path}")
+}
+
 fn run_git_command<S, O>(
     cmd: Command,
     label: &str,
@@ -97,6 +119,14 @@ fn run_git_command_with_optional_output(
 }
 
 impl GixRepo {
+    fn best_effort_delete_reference(&self, ref_name: &str) {
+        let repo = self._repo.to_thread_local();
+        let Ok(Some(reference)) = repo.try_find_reference(ref_name) else {
+            return;
+        };
+        let _ = reference.delete();
+    }
+
     fn preferred_remote_name(&self) -> Result<Option<String>> {
         let remotes = self.list_remotes_impl()?;
         if remotes.is_empty() {
@@ -120,7 +150,7 @@ impl GixRepo {
     fn branch_has_upstream(&self, branch: &str) -> Result<bool> {
         validate_ref_like_arg(branch, "branch name")?;
 
-        let repo = self._repo.to_thread_local();
+        let repo = self.reopen_repo()?;
         let ref_name = format!("refs/heads/{branch}");
         let Some(reference) = repo
             .try_find_reference(ref_name.as_str())
@@ -136,25 +166,27 @@ impl GixRepo {
     }
 
     pub(super) fn list_remotes_impl(&self) -> Result<Vec<Remote>> {
+        let repo = self.reopen_repo()?;
         let mut remotes = Vec::new();
 
-        let mut list_cmd = Command::new("git");
-        list_cmd.arg("-C").arg(&self.spec.workdir).arg("remote");
-        let names = run_git_capture(list_cmd, "git remote")?;
-        for name in names.lines().map(str::trim).filter(|name| !name.is_empty()) {
-            let mut url_cmd = Command::new("git");
-            url_cmd
-                .arg("-C")
-                .arg(&self.spec.workdir)
-                .arg("remote")
-                .arg("get-url")
-                .arg(name);
-            let url = run_git_capture(url_cmd, &format!("git remote get-url {name}"))?;
-            let url = url.trim();
+        for name in repo.remote_names() {
+            let remote = repo.find_remote(name.as_ref()).map_err(|e| {
+                Error::new(ErrorKind::Backend(format!(
+                    "gix find_remote {}: {e}",
+                    name.to_str_lossy()
+                )))
+            })?;
+
+            let url = remote
+                .url(gix::remote::Direction::Fetch)
+                .map(|url| {
+                    normalize_remote_url(&bytes_to_text_preserving_utf8(url.to_bstring().as_ref()))
+                })
+                .filter(|url| !url.is_empty());
 
             remotes.push(Remote {
-                name: name.to_string(),
-                url: (!url.is_empty()).then(|| url.to_string()),
+                name: name.to_str_lossy().into_owned(),
+                url,
             });
         }
 
@@ -204,11 +236,8 @@ impl GixRepo {
         prune: bool,
         capture_output: bool,
     ) -> Result<CommandOutput> {
-        let mut cmd = Command::new("git");
-        cmd.arg("-C")
-            .arg(&self.spec.workdir)
-            .arg("fetch")
-            .arg("--all");
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("fetch").arg("--all");
         if prune {
             cmd.arg("--prune");
         }
@@ -243,8 +272,8 @@ impl GixRepo {
             None => true,
         };
 
-        let mut cmd = Command::new("git");
-        cmd.arg("-C").arg(&self.spec.workdir).arg("pull");
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("pull");
         match mode {
             // Be explicit about ff behavior so we don't create merge commits when a fast-forward
             // is possible, even if the user's git config disables ff.
@@ -280,10 +309,8 @@ impl GixRepo {
                 capture_output,
             )?;
 
-            let mut set_upstream = Command::new("git");
+            let mut set_upstream = self.git_workdir_cmd();
             set_upstream
-                .arg("-C")
-                .arg(&self.spec.workdir)
                 .arg("branch")
                 .arg("--set-upstream-to")
                 .arg(format!("{remote}/{branch}"))
@@ -314,10 +341,8 @@ impl GixRepo {
         validate_ref_like_arg(branch, "branch name")?;
 
         let command_label = format!("git push --set-upstream {remote} HEAD:refs/heads/{branch}");
-        let mut cmd = Command::new("git");
-        cmd.arg("-C")
-            .arg(&self.spec.workdir)
-            .arg("push")
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("push")
             .arg("--set-upstream")
             .arg("--")
             .arg(remote)
@@ -337,8 +362,8 @@ impl GixRepo {
             );
         }
 
-        let mut cmd = Command::new("git");
-        cmd.arg("-C").arg(&self.spec.workdir).arg("push");
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("push");
         run_git_command_with_optional_output(cmd, "git push", capture_output)
     }
 
@@ -351,11 +376,8 @@ impl GixRepo {
     }
 
     fn push_force_with_optional_output_impl(&self, capture_output: bool) -> Result<CommandOutput> {
-        let mut cmd = Command::new("git");
-        cmd.arg("-C")
-            .arg(&self.spec.workdir)
-            .arg("push")
-            .arg("--force-with-lease");
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("push").arg("--force-with-lease");
         run_git_command_with_optional_output(cmd, "git push --force-with-lease", capture_output)
     }
 
@@ -376,10 +398,8 @@ impl GixRepo {
         validate_ref_like_arg(branch, "branch name")?;
 
         let command_str = format!("git pull --no-rebase --ff {remote} {branch}");
-        let mut cmd = Command::new("git");
-        cmd.arg("-C")
-            .arg(&self.spec.workdir)
-            .arg("-c")
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("-c")
             .arg("color.ui=false")
             .arg("--no-pager")
             .arg("pull")
@@ -395,10 +415,8 @@ impl GixRepo {
         validate_ref_like_arg(reference, "reference")?;
 
         let command_str = format!("git merge --ff --no-edit {reference}");
-        let mut cmd = Command::new("git");
-        cmd.arg("-C")
-            .arg(&self.spec.workdir)
-            .arg("-c")
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("-c")
             .arg("color.ui=false")
             .arg("--no-pager")
             .arg("merge")
@@ -413,10 +431,8 @@ impl GixRepo {
         validate_ref_like_arg(reference, "reference")?;
 
         let command_str = format!("git merge --squash --no-commit {reference}");
-        let mut cmd = Command::new("git");
-        cmd.arg("-C")
-            .arg(&self.spec.workdir)
-            .arg("-c")
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("-c")
             .arg("color.ui=false")
             .arg("--no-pager")
             .arg("merge")
@@ -434,27 +450,16 @@ impl GixRepo {
     ) -> Result<CommandOutput> {
         validate_ref_like_arg(name, "remote name")?;
 
-        let mut cmd = Command::new("git");
-        cmd.arg("-C")
-            .arg(&self.spec.workdir)
-            .arg("remote")
-            .arg("add")
-            .arg("--")
-            .arg(name)
-            .arg(url);
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("remote").arg("add").arg("--").arg(name).arg(url);
         run_git_with_output(cmd, &format!("git remote add {name} {url}"))
     }
 
     pub(super) fn remove_remote_with_output_impl(&self, name: &str) -> Result<CommandOutput> {
         validate_ref_like_arg(name, "remote name")?;
 
-        let mut cmd = Command::new("git");
-        cmd.arg("-C")
-            .arg(&self.spec.workdir)
-            .arg("remote")
-            .arg("remove")
-            .arg("--")
-            .arg(name);
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("remote").arg("remove").arg("--").arg(name);
         run_git_with_output(cmd, &format!("git remote remove {name}"))
     }
 
@@ -466,11 +471,8 @@ impl GixRepo {
     ) -> Result<CommandOutput> {
         validate_ref_like_arg(name, "remote name")?;
 
-        let mut cmd = Command::new("git");
-        cmd.arg("-C")
-            .arg(&self.spec.workdir)
-            .arg("remote")
-            .arg("set-url");
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("remote").arg("set-url");
         match kind {
             RemoteUrlKind::Fetch => {}
             RemoteUrlKind::Push => {
@@ -507,10 +509,8 @@ impl GixRepo {
         validate_ref_like_arg(branch, "branch name")?;
 
         let label = format!("git push --delete {remote} {branch}");
-        let mut cmd = Command::new("git");
-        cmd.arg("-C")
-            .arg(&self.spec.workdir)
-            .arg("push")
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("push")
             .arg("--delete")
             .arg("--")
             .arg(remote)
@@ -518,14 +518,7 @@ impl GixRepo {
         let output = run_git_with_output(cmd, &label)?;
 
         let refname = format!("refs/remotes/{remote}/{branch}");
-        let mut prune = Command::new("git");
-        prune
-            .arg("-C")
-            .arg(&self.spec.workdir)
-            .arg("update-ref")
-            .arg("-d")
-            .arg(refname);
-        let _ = prune.output();
+        self.best_effort_delete_reference(&refname);
 
         Ok(output)
     }
@@ -533,10 +526,8 @@ impl GixRepo {
     pub(super) fn prune_merged_branches_with_output_impl(&self) -> Result<CommandOutput> {
         let fetch_output = self.fetch_all_with_output_impl(true)?;
 
-        let mut merged_cmd = Command::new("git");
+        let mut merged_cmd = self.git_workdir_cmd();
         merged_cmd
-            .arg("-C")
-            .arg(&self.spec.workdir)
             .arg("for-each-ref")
             .arg("--format=%(refname:short)")
             .arg("--merged=HEAD")
@@ -545,10 +536,8 @@ impl GixRepo {
             run_git_capture(merged_cmd, "git for-each-ref --merged=HEAD refs/heads")?;
         let merged = parse_refname_set(&merged_output);
 
-        let mut branches_cmd = Command::new("git");
+        let mut branches_cmd = self.git_workdir_cmd();
         branches_cmd
-            .arg("-C")
-            .arg(&self.spec.workdir)
             .arg("for-each-ref")
             .arg("--format=%(refname:short)\t%(upstream:short)")
             .arg("refs/heads");
@@ -557,10 +546,8 @@ impl GixRepo {
             "git for-each-ref --format=%(refname:short)\\t%(upstream:short) refs/heads",
         )?;
 
-        let mut refs_cmd = Command::new("git");
+        let mut refs_cmd = self.git_workdir_cmd();
         refs_cmd
-            .arg("-C")
-            .arg(&self.spec.workdir)
             .arg("for-each-ref")
             .arg("--format=%(refname)")
             .arg("refs/remotes");
@@ -581,14 +568,8 @@ impl GixRepo {
         let mut deleted_outputs: Vec<CommandOutput> = Vec::new();
 
         for branch in prune_candidates {
-            let mut delete_cmd = Command::new("git");
-            delete_cmd
-                .arg("-C")
-                .arg(&self.spec.workdir)
-                .arg("branch")
-                .arg("-d")
-                .arg("--")
-                .arg(&branch);
+            let mut delete_cmd = self.git_workdir_cmd();
+            delete_cmd.arg("branch").arg("-d").arg("--").arg(&branch);
             let output = run_git_with_output(delete_cmd, &format!("git branch -d {branch}"))?;
             deleted.push(branch);
             deleted_outputs.push(output);
@@ -639,7 +620,8 @@ impl GixRepo {
 #[cfg(test)]
 mod tests {
     use super::{
-        branches_to_prune, parse_refname_set, parse_short_remote_branch_name, run_git_command,
+        branches_to_prune, normalize_remote_url, parse_refname_set, parse_short_remote_branch_name,
+        run_git_command,
     };
     use gitcomet_core::services::CommandOutput;
     use rustc_hash::FxHashSet as HashSet;
@@ -692,6 +674,34 @@ feature/no-upstream\t\n";
         );
         assert_eq!(parse_short_remote_branch_name("origin/HEAD"), None);
         assert_eq!(parse_short_remote_branch_name(""), None);
+    }
+
+    #[test]
+    fn normalize_remote_url_preserves_non_drive_letter_urls() {
+        assert_eq!(
+            normalize_remote_url("https://example.com/repo.git"),
+            "https://example.com/repo.git"
+        );
+        assert_eq!(
+            normalize_remote_url("file:///tmp/repo.git"),
+            "file:///tmp/repo.git"
+        );
+        assert_eq!(
+            normalize_remote_url("file://server/share/repo.git"),
+            "file://server/share/repo.git"
+        );
+    }
+
+    #[test]
+    fn normalize_remote_url_fixes_windows_drive_letter_file_urls() {
+        assert_eq!(
+            normalize_remote_url("file://C:/Users/example/repo.git"),
+            "file:///C:/Users/example/repo.git"
+        );
+        assert_eq!(
+            normalize_remote_url(r"file://D:\Users\example\repo.git"),
+            "file:///D:/Users/example/repo.git"
+        );
     }
 
     #[test]

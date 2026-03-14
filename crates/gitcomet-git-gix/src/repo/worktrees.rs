@@ -1,20 +1,15 @@
 use super::GixRepo;
-use crate::util::{run_git_capture, run_git_with_output};
+use crate::util::{path_buf_from_git_bytes, run_git_capture_bytes, run_git_with_output};
 use gitcomet_core::domain::{CommitId, Worktree};
 use gitcomet_core::services::{CommandOutput, Result};
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::path::Path;
 
 impl GixRepo {
     pub(super) fn list_worktrees_impl(&self) -> Result<Vec<Worktree>> {
-        let mut cmd = Command::new("git");
-        cmd.arg("-C")
-            .arg(&self.spec.workdir)
-            .arg("worktree")
-            .arg("list")
-            .arg("--porcelain");
-        let output = run_git_capture(cmd, "git worktree list --porcelain")?;
-        Ok(parse_git_worktree_list_porcelain(&output))
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("worktree").arg("list").arg("--porcelain").arg("-z");
+        let output = run_git_capture_bytes(cmd, "git worktree list --porcelain -z")?;
+        parse_git_worktree_list_porcelain_z(&output)
     }
 
     pub(super) fn add_worktree_with_output_impl(
@@ -22,12 +17,8 @@ impl GixRepo {
         path: &Path,
         reference: Option<&str>,
     ) -> Result<CommandOutput> {
-        let mut cmd = Command::new("git");
-        cmd.arg("-C")
-            .arg(&self.spec.workdir)
-            .arg("worktree")
-            .arg("add")
-            .arg(path);
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("worktree").arg("add").arg(path);
         let label = if let Some(reference) = reference {
             cmd.arg(reference);
             format!("git worktree add {} {}", path.display(), reference)
@@ -38,12 +29,8 @@ impl GixRepo {
     }
 
     pub(super) fn remove_worktree_with_output_impl(&self, path: &Path) -> Result<CommandOutput> {
-        let mut cmd = Command::new("git");
-        cmd.arg("-C")
-            .arg(&self.spec.workdir)
-            .arg("worktree")
-            .arg("remove")
-            .arg(path);
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("worktree").arg("remove").arg(path);
         run_git_with_output(cmd, &format!("git worktree remove {}", path.display()))
     }
 
@@ -51,13 +38,8 @@ impl GixRepo {
         &self,
         path: &Path,
     ) -> Result<CommandOutput> {
-        let mut cmd = Command::new("git");
-        cmd.arg("-C")
-            .arg(&self.spec.workdir)
-            .arg("worktree")
-            .arg("remove")
-            .arg("--force")
-            .arg(path);
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("worktree").arg("remove").arg("--force").arg(path);
         run_git_with_output(
             cmd,
             &format!("git worktree remove --force {}", path.display()),
@@ -65,25 +47,24 @@ impl GixRepo {
     }
 }
 
-fn parse_git_worktree_list_porcelain(output: &str) -> Vec<Worktree> {
+fn parse_git_worktree_list_porcelain_z(output: &[u8]) -> Result<Vec<Worktree>> {
     let mut out = Vec::new();
     let mut current: Option<Worktree> = None;
 
-    for raw in output.lines() {
-        let line = raw.trim();
-        if line.is_empty() {
+    for field in output.split(|b| *b == b'\0') {
+        if field.is_empty() {
             if let Some(wt) = current.take() {
                 out.push(wt);
             }
             continue;
         }
 
-        if let Some(rest) = line.strip_prefix("worktree ") {
+        if let Some(rest) = field.strip_prefix(b"worktree ") {
             if let Some(wt) = current.take() {
                 out.push(wt);
             }
             current = Some(Worktree {
-                path: PathBuf::from(rest.trim()),
+                path: path_buf_from_git_bytes(rest, "git worktree list path")?,
                 head: None,
                 branch: None,
                 detached: false,
@@ -95,19 +76,18 @@ fn parse_git_worktree_list_porcelain(output: &str) -> Vec<Worktree> {
             continue;
         };
 
-        if let Some(rest) = line.strip_prefix("HEAD ") {
-            let sha = rest.trim();
-            if !sha.is_empty() {
-                wt.head = Some(CommitId(sha.to_string()));
+        if let Some(rest) = field.strip_prefix(b"HEAD ") {
+            if !rest.is_empty() {
+                wt.head = Some(CommitId(String::from_utf8_lossy(rest).into_owned()));
             }
-        } else if let Some(rest) = line.strip_prefix("branch ") {
-            let b = rest.trim();
-            if let Some(stripped) = b.strip_prefix("refs/heads/") {
+        } else if let Some(rest) = field.strip_prefix(b"branch ") {
+            let branch = String::from_utf8_lossy(rest);
+            if let Some(stripped) = branch.strip_prefix("refs/heads/") {
                 wt.branch = Some(stripped.to_string());
-            } else if !b.is_empty() {
-                wt.branch = Some(b.to_string());
+            } else if !branch.is_empty() {
+                wt.branch = Some(branch.into_owned());
             }
-        } else if line == "detached" {
+        } else if field == b"detached" {
             wt.detached = true;
             wt.branch = None;
         }
@@ -117,27 +97,20 @@ fn parse_git_worktree_list_porcelain(output: &str) -> Vec<Worktree> {
         out.push(wt);
     }
 
-    out
+    Ok(out)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::parse_git_worktree_list_porcelain;
+    use super::parse_git_worktree_list_porcelain_z;
     use std::path::PathBuf;
 
     #[test]
-    fn parse_git_worktree_list_porcelain_parses_regular_and_detached_entries() {
-        let parsed = parse_git_worktree_list_porcelain(
-            "\
-worktree /repo
-HEAD 1111111111111111111111111111111111111111
-branch refs/heads/main
-
-worktree /repo-linked
-HEAD 2222222222222222222222222222222222222222
-detached
-",
-        );
+    fn parse_git_worktree_list_porcelain_z_parses_regular_and_detached_entries() {
+        let parsed = parse_git_worktree_list_porcelain_z(
+            b"worktree /repo\0HEAD 1111111111111111111111111111111111111111\0branch refs/heads/main\0\0worktree /repo-linked\0HEAD 2222222222222222222222222222222222222222\0detached\0\0",
+        )
+        .unwrap();
 
         assert_eq!(parsed.len(), 2);
 
@@ -159,16 +132,11 @@ detached
     }
 
     #[test]
-    fn parse_git_worktree_list_porcelain_ignores_noise_before_first_worktree() {
-        let parsed = parse_git_worktree_list_porcelain(
-            "\
-HEAD deadbeef
-branch refs/heads/ignored
-
-worktree /repo
-branch feature/topic
-",
-        );
+    fn parse_git_worktree_list_porcelain_z_ignores_noise_before_first_worktree() {
+        let parsed = parse_git_worktree_list_porcelain_z(
+            b"HEAD deadbeef\0branch refs/heads/ignored\0\0worktree /repo\0branch feature/topic\0\0",
+        )
+        .unwrap();
 
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0].path, PathBuf::from("/repo"));
@@ -177,17 +145,26 @@ branch feature/topic
     }
 
     #[test]
-    fn parse_git_worktree_list_porcelain_skips_empty_head_values() {
-        let parsed = parse_git_worktree_list_porcelain(
-            "\
-worktree /repo
-HEAD
-branch refs/heads/main
-",
-        );
+    fn parse_git_worktree_list_porcelain_z_skips_empty_head_values() {
+        let parsed = parse_git_worktree_list_porcelain_z(
+            b"worktree /repo\0HEAD \0branch refs/heads/main\0\0",
+        )
+        .unwrap();
 
         assert_eq!(parsed.len(), 1);
         assert!(parsed[0].head.is_none());
         assert_eq!(parsed[0].branch.as_deref(), Some("main"));
+    }
+
+    #[test]
+    fn parse_git_worktree_list_porcelain_z_preserves_newlines_in_paths() {
+        let parsed = parse_git_worktree_list_porcelain_z(
+            b"worktree /repo\nlinked\0HEAD 1111111111111111111111111111111111111111\0detached\0\0",
+        )
+        .unwrap();
+
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].path, PathBuf::from("/repo\nlinked"));
+        assert!(parsed[0].detached);
     }
 }

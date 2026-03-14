@@ -72,6 +72,9 @@ fn worktree_add_list_remove_round_trip() {
         );
     }
 
+    #[cfg(unix)]
+    let linked_path = root.join("linked\ntree");
+    #[cfg(not(unix))]
     let linked_path = root.join("linked tree");
     let add_output = opened
         .add_worktree_with_output(&linked_path, Some("--detach"))

@@ -3,20 +3,19 @@ use gitcomet_core::auth::{
     GITCOMET_AUTH_KIND_USERNAME_PASSWORD, GITCOMET_AUTH_SECRET_ENV, GITCOMET_AUTH_USERNAME_ENV,
     GitAuthKind, StagedGitAuth, take_staged_git_auth,
 };
-use gitcomet_core::domain::{Commit, CommitFileChange, CommitId, FileStatusKind, LogPage};
-use gitcomet_core::error::{Error, ErrorKind};
+use gitcomet_core::domain::{Commit, CommitId, LogPage};
+use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
 use gitcomet_core::services::{CommandOutput, Result};
-use std::ffi::OsString;
 use std::fs;
-use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
-use std::str;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
 #[cfg(test)]
 use gitcomet_core::domain::RemoteBranch;
+#[cfg(test)]
+use std::ffi::OsString;
 
 const GIT_COMMAND_TIMEOUT_ENV: &str = "GITCOMET_GIT_COMMAND_TIMEOUT_SECS";
 const GIT_COMMAND_TIMEOUT_DEFAULT_SECS: u64 = 300;
@@ -38,9 +37,31 @@ fn git_command_timeout() -> Duration {
         .unwrap_or(Duration::from_secs(GIT_COMMAND_TIMEOUT_DEFAULT_SECS))
 }
 
+fn io_err(e: std::io::Error) -> Error {
+    Error::new(ErrorKind::Io(e.kind()))
+}
+
+fn spawn_read_pipe(
+    pipe: Option<impl std::io::Read + Send + 'static>,
+) -> thread::JoinHandle<Vec<u8>> {
+    thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(mut r) = pipe {
+            let _ = r.read_to_end(&mut buf);
+        }
+        buf
+    })
+}
+
 fn configure_non_interactive_git(cmd: &mut Command) {
     cmd.env("GIT_TERMINAL_PROMPT", "0");
     cmd.stdin(Stdio::null());
+}
+
+pub(crate) fn git_workdir_cmd_for(workdir: &Path) -> Command {
+    let mut cmd = Command::new("git");
+    cmd.arg("-C").arg(workdir);
+    cmd
 }
 
 fn command_may_require_auth(cmd: &Command) -> bool {
@@ -50,10 +71,7 @@ fn command_may_require_auth(cmd: &Command) -> bool {
             return false;
         };
         match arg {
-            "-C" | "-c" => {
-                let _ = args.next();
-            }
-            "--git-dir" | "--work-tree" | "--namespace" => {
+            "-C" | "-c" | "--git-dir" | "--work-tree" | "--namespace" => {
                 let _ = args.next();
             }
             value if value.starts_with('-') => {}
@@ -134,7 +152,7 @@ echo %GITCOMET_AUTH_SECRET%
 }
 
 fn create_askpass_script() -> Result<AskPassScript> {
-    let dir = tempfile::tempdir().map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+    let dir = tempfile::tempdir().map_err(io_err)?;
     #[cfg(windows)]
     let script_name = "gitcomet-askpass.cmd";
     #[cfg(not(windows))]
@@ -142,18 +160,16 @@ fn create_askpass_script() -> Result<AskPassScript> {
     let path = dir.path().join(script_name);
     let prompt_log_path = dir.path().join("gitcomet-askpass-prompt.log");
 
-    fs::write(&path, askpass_script_contents()).map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
-    fs::write(&prompt_log_path, b"").map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+    fs::write(&path, askpass_script_contents()).map_err(io_err)?;
+    fs::write(&prompt_log_path, b"").map_err(io_err)?;
 
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
 
-        let mut permissions = fs::metadata(&path)
-            .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?
-            .permissions();
+        let mut permissions = fs::metadata(&path).map_err(io_err)?.permissions();
         permissions.set_mode(0o700);
-        fs::set_permissions(&path, permissions).map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+        fs::set_permissions(&path, permissions).map_err(io_err)?;
     }
 
     Ok(AskPassScript {
@@ -218,7 +234,48 @@ fn append_host_prompt_to_stderr(stderr: &mut Vec<u8>, askpass: &AskPassScript) {
     stderr.push(b'\n');
 }
 
-fn run_git_output_with_timeout(mut cmd: Command, label: &str) -> Result<Output> {
+fn git_timeout_error(
+    label: &str,
+    timeout: Duration,
+    exit_code: Option<i32>,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+) -> Error {
+    Error::new(ErrorKind::Git(GitFailure::new(
+        label,
+        GitFailureId::Timeout,
+        exit_code,
+        stdout,
+        stderr,
+        Some(format!(
+            "after {} seconds (set {GIT_COMMAND_TIMEOUT_ENV} to override)",
+            timeout.as_secs()
+        )),
+    )))
+}
+
+pub(crate) fn git_command_failed_error(label: &str, output: Output) -> Error {
+    let Output {
+        status,
+        stdout,
+        stderr,
+    } = output;
+    let detail = [stderr.as_slice(), stdout.as_slice()]
+        .into_iter()
+        .map(bytes_to_text_preserving_utf8)
+        .map(|text| text.trim().to_string())
+        .find(|text| !text.is_empty());
+    Error::new(ErrorKind::Git(GitFailure::new(
+        label,
+        GitFailureId::CommandFailed,
+        status.code(),
+        stdout,
+        stderr,
+        detail,
+    )))
+}
+
+fn run_command_with_timeout(mut cmd: Command, label: &str, timeout: Duration) -> Result<Output> {
     configure_non_interactive_git(&mut cmd);
     let askpass_script = if command_may_require_auth(&cmd) {
         let auth = take_pending_git_auth();
@@ -230,30 +287,11 @@ fn run_git_output_with_timeout(mut cmd: Command, label: &str) -> Result<Output> 
     };
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
-    let askpass_script = askpass_script;
+    let mut child = cmd.spawn().map_err(io_err)?;
 
-    let stdout = child.stdout.take();
-    let stdout_handle = thread::spawn(move || {
-        let mut buf = Vec::new();
-        if let Some(mut stdout) = stdout {
-            let _ = stdout.read_to_end(&mut buf);
-        }
-        buf
-    });
+    let stdout_handle = spawn_read_pipe(child.stdout.take());
+    let stderr_handle = spawn_read_pipe(child.stderr.take());
 
-    let stderr = child.stderr.take();
-    let stderr_handle = thread::spawn(move || {
-        let mut buf = Vec::new();
-        if let Some(mut stderr) = stderr {
-            let _ = stderr.read_to_end(&mut buf);
-        }
-        buf
-    });
-
-    let timeout = git_command_timeout();
     let start = Instant::now();
     let mut timed_out = false;
 
@@ -266,12 +304,12 @@ fn run_git_output_with_timeout(mut cmd: Command, label: &str) -> Result<Output> 
                     let _ = child.kill();
                     match child.wait() {
                         Ok(status) => break status,
-                        Err(e) => return Err(Error::new(ErrorKind::Io(e.kind()))),
+                        Err(e) => return Err(io_err(e)),
                     }
                 }
                 thread::sleep(GIT_COMMAND_WAIT_POLL);
             }
-            Err(e) => return Err(Error::new(ErrorKind::Io(e.kind()))),
+            Err(e) => return Err(io_err(e)),
         }
     };
 
@@ -283,10 +321,13 @@ fn run_git_output_with_timeout(mut cmd: Command, label: &str) -> Result<Output> 
     }
 
     if timed_out {
-        return Err(Error::new(ErrorKind::Backend(format!(
-            "{label} timed out after {} seconds (set {GIT_COMMAND_TIMEOUT_ENV} to override)",
-            timeout.as_secs()
-        ))));
+        return Err(git_timeout_error(
+            label,
+            timeout,
+            status.code(),
+            stdout,
+            stderr,
+        ));
     }
 
     Ok(Output {
@@ -296,16 +337,21 @@ fn run_git_output_with_timeout(mut cmd: Command, label: &str) -> Result<Output> 
     })
 }
 
-pub(crate) fn run_git_simple(cmd: Command, label: &str) -> Result<()> {
-    let output = run_git_output_with_timeout(cmd, label)?;
+pub(crate) fn run_git_raw_output(cmd: Command, label: &str) -> Result<Output> {
+    run_command_with_timeout(cmd, label, git_command_timeout())
+}
 
-    if !output.status.success() {
-        let stderr = str::from_utf8(&output.stderr).unwrap_or("<non-utf8 stderr>");
-        return Err(Error::new(ErrorKind::Backend(format!(
-            "{label} failed: {stderr}"
-        ))));
+fn run_git_checked_output(cmd: Command, label: &str) -> Result<Output> {
+    let output = run_git_raw_output(cmd, label)?;
+    if output.status.success() {
+        Ok(output)
+    } else {
+        Err(git_command_failed_error(label, output))
     }
+}
 
+pub(crate) fn run_git_simple(cmd: Command, label: &str) -> Result<()> {
+    run_git_checked_output(cmd, label)?;
     Ok(())
 }
 
@@ -354,18 +400,12 @@ pub(crate) fn path_buf_from_git_bytes(path_bytes: &[u8], context: &str) -> Resul
     }
 }
 
+#[cfg(test)]
 pub(crate) fn git_stage_blob_spec(stage: u8, path: &Path) -> Result<OsString> {
     git_revision_with_path(&format!(":{stage}:"), path, "build conflict stage revision")
 }
 
-pub(crate) fn git_stash_untracked_blob_spec(index: usize, path: &Path) -> Result<OsString> {
-    git_revision_with_path(
-        &format!("stash@{{{index}}}^3:"),
-        path,
-        "build stash untracked blob revision",
-    )
-}
-
+#[cfg(test)]
 fn git_revision_with_path(prefix: &str, path: &Path, context: &str) -> Result<OsString> {
     #[cfg(unix)]
     {
@@ -422,11 +462,20 @@ pub(crate) fn run_git_simple_with_paths(
     const MAX_PATH_BYTES_PER_CMD: usize = 28_000;
     const MAX_PATHS_PER_CMD: usize = 1024;
 
-    if paths.is_empty() {
-        let mut cmd = Command::new("git");
-        cmd.arg("-C").arg(workdir);
+    let run_batch = |batch: &[&Path]| -> Result<()> {
+        let mut cmd = git_workdir_cmd_for(workdir);
         cmd.args(args);
-        return run_git_simple(cmd, label);
+        if !batch.is_empty() {
+            cmd.arg("--");
+            for p in batch {
+                cmd.arg(p);
+            }
+        }
+        run_git_simple(cmd, label)
+    };
+
+    if paths.is_empty() {
+        return run_batch(&[]);
     }
 
     let mut batch: Vec<&Path> = Vec::with_capacity(paths.len().min(MAX_PATHS_PER_CMD));
@@ -438,14 +487,7 @@ pub(crate) fn run_git_simple_with_paths(
             && (batch.len() >= MAX_PATHS_PER_CMD
                 || bytes.saturating_add(path_len) > MAX_PATH_BYTES_PER_CMD)
         {
-            let mut cmd = Command::new("git");
-            cmd.arg("-C").arg(workdir);
-            cmd.args(args);
-            cmd.arg("--");
-            for p in &batch {
-                cmd.arg(p);
-            }
-            run_git_simple(cmd, label)?;
+            run_batch(&batch)?;
             batch.clear();
             bytes = 0;
         }
@@ -455,20 +497,13 @@ pub(crate) fn run_git_simple_with_paths(
     }
 
     if !batch.is_empty() {
-        let mut cmd = Command::new("git");
-        cmd.arg("-C").arg(workdir);
-        cmd.args(args);
-        cmd.arg("--");
-        for p in &batch {
-            cmd.arg(p);
-        }
-        run_git_simple(cmd, label)?;
+        run_batch(&batch)?;
     }
 
     Ok(())
 }
 
-fn bytes_to_text_preserving_utf8(bytes: &[u8]) -> String {
+pub(crate) fn bytes_to_text_preserving_utf8(bytes: &[u8]) -> String {
     use std::fmt::Write as _;
 
     let mut out = String::with_capacity(bytes.len());
@@ -504,24 +539,10 @@ fn bytes_to_text_preserving_utf8(bytes: &[u8]) -> String {
 }
 
 pub(crate) fn run_git_with_output(cmd: Command, label: &str) -> Result<CommandOutput> {
-    let output = run_git_output_with_timeout(cmd, label)?;
-
+    let output = run_git_checked_output(cmd, label)?;
     let exit_code = output.status.code();
     let stdout = bytes_to_text_preserving_utf8(&output.stdout);
     let stderr = bytes_to_text_preserving_utf8(&output.stderr);
-
-    if !output.status.success() {
-        let stderr_trimmed = stderr.trim();
-        return Err(Error::new(ErrorKind::Backend(
-            (if stderr_trimmed.is_empty() {
-                format!("{label} failed")
-            } else {
-                format!("{label} failed: {stderr_trimmed}")
-            })
-            .to_string(),
-        )));
-    }
-
     Ok(CommandOutput {
         command: label.to_string(),
         stdout,
@@ -531,16 +552,13 @@ pub(crate) fn run_git_with_output(cmd: Command, label: &str) -> Result<CommandOu
 }
 
 pub(crate) fn run_git_capture(cmd: Command, label: &str) -> Result<String> {
-    let output = run_git_output_with_timeout(cmd, label)?;
+    let bytes = run_git_capture_bytes(cmd, label)?;
+    Ok(bytes_to_text_preserving_utf8(&bytes))
+}
 
-    if !output.status.success() {
-        let stderr = str::from_utf8(&output.stderr).unwrap_or("<non-utf8 stderr>");
-        return Err(Error::new(ErrorKind::Backend(format!(
-            "{label} failed: {stderr}"
-        ))));
-    }
-
-    Ok(bytes_to_text_preserving_utf8(&output.stdout))
+pub(crate) fn run_git_capture_bytes(cmd: Command, label: &str) -> Result<Vec<u8>> {
+    let output = run_git_checked_output(cmd, label)?;
+    Ok(output.stdout)
 }
 
 pub(crate) fn parse_git_log_pretty_records(output: &str) -> LogPage {
@@ -572,15 +590,10 @@ pub(crate) fn parse_git_log_pretty_records(output: &str) -> LogPage {
             .unwrap_or(0);
         let summary = parts.next().unwrap_or_default().to_string();
 
-        let time = if time_secs >= 0 {
-            SystemTime::UNIX_EPOCH + Duration::from_secs(time_secs as u64)
-        } else {
-            SystemTime::UNIX_EPOCH
-        };
+        let time = unix_seconds_to_system_time_or_epoch(time_secs);
 
         let parent_ids = parents
             .split_whitespace()
-            .filter(|p| !p.trim().is_empty())
             .map(|p| CommitId(p.to_string()))
             .collect::<Vec<_>>();
 
@@ -599,59 +612,6 @@ pub(crate) fn parse_git_log_pretty_records(output: &str) -> LogPage {
     }
 }
 
-fn pathbuf_from_git_output_path(path: &str) -> PathBuf {
-    #[cfg(windows)]
-    {
-        PathBuf::from(path.replace('/', "\\"))
-    }
-    #[cfg(not(windows))]
-    {
-        PathBuf::from(path)
-    }
-}
-
-pub(crate) fn parse_name_status_line(line: &str) -> Option<CommitFileChange> {
-    let line = line.trim_end_matches(&['\n', '\r'][..]);
-    if line.is_empty() {
-        return None;
-    }
-    let mut parts = line.split('\t');
-    let status = parts.next()?.trim();
-    if status.is_empty() {
-        return None;
-    }
-
-    let status_kind = status.chars().next()?;
-    let kind = match status_kind {
-        'A' => FileStatusKind::Added,
-        'M' => FileStatusKind::Modified,
-        'D' => FileStatusKind::Deleted,
-        'R' => FileStatusKind::Renamed,
-        'C' => FileStatusKind::Added,
-        'T' | 'U' | 'X' | '!' | '?' => FileStatusKind::Modified,
-        _ => {
-            debug_assert!(false, "unrecognized git status code: {status_kind:?}");
-            FileStatusKind::Modified
-        }
-    };
-
-    let path = match status_kind {
-        'R' | 'C' => {
-            let _old = parts.next()?;
-            parts.next().unwrap_or_default()
-        }
-        _ => parts.next().unwrap_or_default(),
-    };
-    if path.is_empty() {
-        return None;
-    }
-
-    Some(CommitFileChange {
-        path: pathbuf_from_git_output_path(path),
-        kind,
-    })
-}
-
 pub(crate) fn unix_seconds_to_system_time(seconds: i64) -> Option<SystemTime> {
     if seconds >= 0 {
         Some(SystemTime::UNIX_EPOCH + Duration::from_secs(seconds as u64))
@@ -662,12 +622,6 @@ pub(crate) fn unix_seconds_to_system_time(seconds: i64) -> Option<SystemTime> {
 
 pub(crate) fn unix_seconds_to_system_time_or_epoch(seconds: i64) -> SystemTime {
     unix_seconds_to_system_time(seconds).unwrap_or(SystemTime::UNIX_EPOCH)
-}
-
-pub(crate) fn parse_reflog_index(selector: &str) -> Option<usize> {
-    let start = selector.rfind("@{")? + 2;
-    let end = selector[start..].find('}')? + start;
-    selector[start..end].parse::<usize>().ok()
 }
 
 #[cfg(test)]
@@ -710,23 +664,10 @@ pub(crate) fn parse_remote_branches(output: &str) -> Vec<RemoteBranch> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::process::Command;
 
     const GITPY_FOR_EACH_REF_WITH_PATH_COMPONENT: &[u8] =
         include_bytes!("../tests/fixtures/gitpython/for_each_ref_with_path_component");
-    const GITPY_DIFF_FILE_WITH_COLON: &[u8] =
-        include_bytes!("../tests/fixtures/gitpython/diff_file_with_colon");
-    const GITPY_DIFF_FILE_WITH_SPACES: &str =
-        include_str!("../tests/fixtures/gitpython/diff_file_with_spaces");
-    const GITPY_DIFF_RENAME: &str = include_str!("../tests/fixtures/gitpython/diff_rename");
-    const GITPY_DIFF_CHANGE_IN_TYPE_RAW: &str =
-        include_str!("../tests/fixtures/gitpython/diff_change_in_type_raw");
-    const GITPY_DIFF_COPIED_MODE_RAW: &str =
-        include_str!("../tests/fixtures/gitpython/diff_copied_mode_raw");
-    const GITPY_DIFF_RENAME_RAW: &str = include_str!("../tests/fixtures/gitpython/diff_rename_raw");
-    const GITPY_DIFF_RAW_BINARY: &str = include_str!("../tests/fixtures/gitpython/diff_raw_binary");
-    const GITPY_DIFF_INDEX_RAW: &str = include_str!("../tests/fixtures/gitpython/diff_index_raw");
-    const GITPY_DIFF_PATCH_UNSAFE_PATHS: &[u8] =
-        include_bytes!("../tests/fixtures/gitpython/diff_patch_unsafe_paths");
     const GITPY_UNCOMMON_BRANCH_PREFIX_FETCH_HEAD: &str =
         include_str!("../tests/fixtures/gitpython/uncommon_branch_prefix_FETCH_HEAD");
     const GITPY_REV_LIST_SINGLE: &str = include_str!("../tests/fixtures/gitpython/rev_list_single");
@@ -766,57 +707,6 @@ mod tests {
         );
     }
 
-    #[cfg(windows)]
-    #[test]
-    fn git_stash_untracked_blob_spec_normalizes_windows_separators() {
-        let rev =
-            git_stash_untracked_blob_spec(4, Path::new(r"nested\file.bin")).expect("stash spec");
-        assert_eq!(
-            rev.to_str()
-                .expect("ascii revision should be valid unicode"),
-            "stash@{4}^3:nested/file.bin"
-        );
-    }
-
-    fn gitpython_raw_to_name_status_line(raw: &str) -> String {
-        let mut parts = raw.split_whitespace();
-        let _old_mode = parts.next().expect("raw fixture old mode");
-        let _new_mode = parts.next().expect("raw fixture new mode");
-        let _old_sha = parts.next().expect("raw fixture old sha");
-        let _new_sha = parts.next().expect("raw fixture new sha");
-        let status = parts.next().expect("raw fixture status");
-        let first_path = parts.next().expect("raw fixture path");
-
-        if status.starts_with('R') || status.starts_with('C') {
-            let second_path = parts.next().expect("raw fixture second path");
-            format!("{status}\t{first_path}\t{second_path}")
-        } else {
-            format!("{status}\t{first_path}")
-        }
-    }
-
-    fn gitpython_patch_b_paths(patch_bytes: &[u8]) -> Vec<String> {
-        let text = std::str::from_utf8(patch_bytes).expect("test patch bytes should be utf-8");
-        let mut out = Vec::new();
-        for line in text.lines() {
-            let Some(rest) = line.strip_prefix("+++ ") else {
-                continue;
-            };
-            if rest == "/dev/null" {
-                continue;
-            }
-            if let Some(path) = rest.strip_prefix("b/") {
-                out.push(path.to_string());
-            } else if let Some(quoted) = rest.strip_prefix("\"b/") {
-                let path = quoted
-                    .strip_suffix('\"')
-                    .expect("quoted +++ line should have trailing quote");
-                out.push(path.to_string());
-            }
-        }
-        out
-    }
-
     fn gitpython_fetch_head_to_remote_ref_output(fetch_head: &str, remote: &str) -> String {
         let mut out = String::new();
         for line in fetch_head.lines() {
@@ -843,6 +733,111 @@ mod tests {
             out.push('\n');
         }
         out
+    }
+
+    #[cfg(unix)]
+    fn shell_command(script: &str) -> Command {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg(script);
+        cmd
+    }
+
+    #[cfg(windows)]
+    fn shell_command(script: &str) -> Command {
+        let mut cmd = Command::new("powershell");
+        cmd.args(["-NoProfile", "-Command", script]);
+        cmd
+    }
+
+    #[cfg(unix)]
+    fn failing_command_with_streams() -> Command {
+        shell_command("printf out; printf err >&2; exit 7")
+    }
+
+    #[cfg(windows)]
+    fn failing_command_with_streams() -> Command {
+        shell_command("[Console]::Out.Write('out'); [Console]::Error.Write('err'); exit 7")
+    }
+
+    #[cfg(unix)]
+    fn failing_command_with_stdout_only() -> Command {
+        shell_command("printf 'stdout only'; exit 9")
+    }
+
+    #[cfg(windows)]
+    fn failing_command_with_stdout_only() -> Command {
+        shell_command("[Console]::Out.Write('stdout only'); exit 9")
+    }
+
+    #[cfg(unix)]
+    fn sleep_command(seconds: u64) -> Command {
+        shell_command(&format!("sleep {seconds}"))
+    }
+
+    #[cfg(windows)]
+    fn sleep_command(seconds: u64) -> Command {
+        shell_command(&format!("Start-Sleep -Seconds {seconds}"))
+    }
+
+    #[test]
+    fn run_git_with_output_failure_preserves_structured_details() {
+        let err = run_git_with_output(failing_command_with_streams(), "git synthetic")
+            .expect_err("expected failing command");
+
+        match err.kind() {
+            ErrorKind::Git(failure) => {
+                assert_eq!(failure.command(), "git synthetic");
+                assert_eq!(failure.id(), GitFailureId::CommandFailed);
+                assert_eq!(failure.exit_code(), Some(7));
+                assert_eq!(failure.stdout(), b"out");
+                assert_eq!(failure.stderr(), b"err");
+                assert_eq!(failure.detail(), Some("err"));
+                assert_eq!(failure.to_string(), "git synthetic failed: err");
+            }
+            other => panic!("expected structured git failure, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn run_git_with_output_failure_falls_back_to_stdout_when_stderr_is_empty() {
+        let err = run_git_with_output(failing_command_with_stdout_only(), "git synthetic")
+            .expect_err("expected failing command");
+
+        match err.kind() {
+            ErrorKind::Git(failure) => {
+                assert_eq!(failure.command(), "git synthetic");
+                assert_eq!(failure.id(), GitFailureId::CommandFailed);
+                assert_eq!(failure.exit_code(), Some(9));
+                assert_eq!(failure.stdout(), b"stdout only");
+                assert_eq!(failure.stderr(), b"");
+                assert_eq!(failure.detail(), Some("stdout only"));
+                assert_eq!(failure.to_string(), "git synthetic failed: stdout only");
+            }
+            other => panic!("expected structured git failure, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn run_command_with_timeout_returns_structured_timeout_failure() {
+        let err =
+            run_command_with_timeout(sleep_command(2), "git synthetic", Duration::from_millis(50))
+                .expect_err("expected timed out command");
+
+        match err.kind() {
+            ErrorKind::Git(failure) => {
+                assert_eq!(failure.command(), "git synthetic");
+                assert_eq!(failure.id(), GitFailureId::Timeout);
+                assert!(failure.detail().is_some_and(|detail| {
+                    detail.contains("set GITCOMET_GIT_COMMAND_TIMEOUT_SECS to override")
+                }));
+                assert!(
+                    failure
+                        .to_string()
+                        .starts_with("git synthetic timed out after")
+                );
+            }
+            other => panic!("expected structured git timeout, got {other:?}"),
+        }
     }
 
     fn gitpython_rev_list_fixture_to_pretty_record(fixture: &str) -> String {
@@ -1014,137 +1009,6 @@ mod tests {
             branches[0].target,
             CommitId("c2e3c20affa3e2b61a05fdc9ee3061dd416d915e".to_string())
         );
-    }
-
-    #[test]
-    fn parse_name_status_line_handles_colon_paths_from_gitpython_fixture() {
-        let raw = std::str::from_utf8(GITPY_DIFF_FILE_WITH_COLON).expect("fixture should be utf-8");
-        let colon_path = raw
-            .split('\0')
-            .find(|segment| segment.contains("file with : colon.txt"))
-            .expect("fixture contains colon path")
-            .trim();
-
-        let parsed = parse_name_status_line(&format!("M\t{colon_path}"))
-            .expect("name-status line with colon path should parse");
-
-        assert_eq!(parsed.path, PathBuf::from("file with : colon.txt"));
-        assert_eq!(parsed.kind, FileStatusKind::Modified);
-    }
-
-    #[test]
-    fn parse_name_status_line_handles_space_paths_from_gitpython_fixture() {
-        let added_path = GITPY_DIFF_FILE_WITH_SPACES
-            .lines()
-            .find_map(|line| line.strip_prefix("+++ b/"))
-            .expect("fixture contains +++ path line")
-            .trim();
-
-        let parsed = parse_name_status_line(&format!("A\t{added_path}"))
-            .expect("name-status line with spaces should parse");
-
-        assert_eq!(parsed.path, PathBuf::from("file with spaces"));
-        assert_eq!(parsed.kind, FileStatusKind::Added);
-    }
-
-    #[test]
-    fn parse_name_status_line_normalizes_git_separators_to_platform_path() {
-        let parsed = parse_name_status_line("M\tnested/file.txt")
-            .expect("name-status line with nested path should parse");
-
-        assert_eq!(parsed.path, Path::new("nested").join("file.txt"));
-        assert_eq!(parsed.kind, FileStatusKind::Modified);
-
-        #[cfg(windows)]
-        assert_eq!(parsed.path.to_str(), Some(r"nested\file.txt"));
-    }
-
-    #[test]
-    fn parse_name_status_line_handles_unicode_rename_from_gitpython_fixture() {
-        let from = GITPY_DIFF_RENAME
-            .lines()
-            .find_map(|line| line.strip_prefix("rename from "))
-            .expect("fixture contains rename-from line")
-            .trim();
-        let to = GITPY_DIFF_RENAME
-            .lines()
-            .find_map(|line| line.strip_prefix("rename to "))
-            .expect("fixture contains rename-to line")
-            .trim();
-
-        let parsed = parse_name_status_line(&format!("R100\t{from}\t{to}"))
-            .expect("rename name-status line should parse");
-
-        assert_eq!(parsed.path, PathBuf::from("müller"));
-        assert_eq!(parsed.kind, FileStatusKind::Renamed);
-    }
-
-    #[test]
-    fn parse_name_status_line_handles_copy_status_from_gitpython_raw_fixture() {
-        let line = gitpython_raw_to_name_status_line(GITPY_DIFF_COPIED_MODE_RAW.trim());
-        let parsed = parse_name_status_line(&line).expect("copied raw status should parse");
-
-        assert_eq!(parsed.path, PathBuf::from("test2.txt"));
-        assert_eq!(parsed.kind, FileStatusKind::Added);
-    }
-
-    #[test]
-    fn parse_name_status_line_maps_type_change_to_modified_from_gitpython_raw_fixture() {
-        let line = gitpython_raw_to_name_status_line(GITPY_DIFF_CHANGE_IN_TYPE_RAW.trim());
-        let parsed = parse_name_status_line(&line).expect("type-change raw status should parse");
-
-        assert_eq!(parsed.path, PathBuf::from("this"));
-        assert_eq!(parsed.kind, FileStatusKind::Modified);
-    }
-
-    #[test]
-    fn parse_name_status_line_handles_raw_rename_from_gitpython_fixture() {
-        let line = gitpython_raw_to_name_status_line(GITPY_DIFF_RENAME_RAW.trim());
-        let parsed = parse_name_status_line(&line).expect("rename raw status should parse");
-
-        assert_eq!(parsed.path, PathBuf::from("that"));
-        assert_eq!(parsed.kind, FileStatusKind::Renamed);
-    }
-
-    #[test]
-    fn parse_name_status_line_handles_raw_binary_modified_from_gitpython_fixture() {
-        let line = gitpython_raw_to_name_status_line(GITPY_DIFF_RAW_BINARY.trim());
-        let parsed = parse_name_status_line(&line).expect("binary raw status should parse");
-
-        assert_eq!(parsed.path, PathBuf::from("rps"));
-        assert_eq!(parsed.kind, FileStatusKind::Modified);
-    }
-
-    #[test]
-    fn parse_name_status_line_preserves_single_space_path_from_gitpython_raw_fixture() {
-        let raw = GITPY_DIFF_INDEX_RAW.trim_end_matches('\n');
-        let status_start = raw
-            .find(" D\t")
-            .map(|ix| ix + 1)
-            .expect("fixture should contain deleted status with tab-separated path");
-        let line = &raw[status_start..];
-
-        let parsed = parse_name_status_line(line).expect("single-space path should parse");
-        assert_eq!(parsed.path, PathBuf::from(" "));
-        assert_eq!(parsed.kind, FileStatusKind::Deleted);
-    }
-
-    #[test]
-    fn parse_name_status_line_preserves_unsafe_paths_from_gitpython_patch_fixture() {
-        let paths = gitpython_patch_b_paths(GITPY_DIFF_PATCH_UNSAFE_PATHS);
-        assert!(paths.iter().any(|p| p == "path/ starting with a space"));
-        assert!(paths.iter().any(|p| p == "path/ending in a space "));
-        assert!(paths.iter().any(|p| p == r#"path/with\ttab"#));
-        assert!(paths.iter().any(|p| p == r#"path/with\nnewline"#));
-        assert!(paths.iter().any(|p| p == "path/with spaces"));
-        assert!(paths.iter().any(|p| p == "path/with-question-mark?"));
-
-        for path in paths {
-            let parsed = parse_name_status_line(&format!("A\t{path}"))
-                .expect("unsafe path from fixture should parse");
-            assert_eq!(parsed.path, PathBuf::from(&path));
-            assert_eq!(parsed.kind, FileStatusKind::Added);
-        }
     }
 
     #[test]
