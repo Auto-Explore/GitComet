@@ -3,7 +3,6 @@ use rustc_hash::FxHashMap as HashMap;
 use std::cell::RefCell;
 
 pub(in crate::view) const MAX_LINES_FOR_SYNTAX_HIGHLIGHTING: usize = 4_000;
-const MAX_TREESITTER_LINE_BYTES: usize = 512;
 const TEXT_LAYOUT_CACHE_PARTIAL_EVICT_DIVISOR: usize = 8;
 const MAX_CACHED_LINE_NUMBER: usize = 16_384;
 
@@ -75,17 +74,24 @@ pub(crate) mod benchmarks;
 pub(in crate::view) use diff_text::{
     BackgroundPreparedDiffSyntaxDocument, DiffSyntaxBudget, DiffSyntaxEdit, DiffSyntaxLanguage,
     DiffSyntaxMode, PrepareDiffSyntaxDocumentResult, PreparedDiffSyntaxDocument,
-    PreparedDiffSyntaxLine, diff_syntax_language_for_code_fence_info,
-    diff_syntax_language_for_path, drain_completed_prepared_diff_syntax_chunk_builds,
+    PreparedDiffSyntaxLine, PreparedDiffSyntaxReparseSeed,
+    diff_syntax_language_for_code_fence_info, diff_syntax_language_for_path,
+    drain_completed_prepared_diff_syntax_chunk_builds,
     drain_completed_prepared_diff_syntax_chunk_builds_for_document,
     has_pending_prepared_diff_syntax_chunk_builds,
     has_pending_prepared_diff_syntax_chunk_builds_for_document,
-    inject_background_prepared_diff_syntax_document, prepare_diff_syntax_document_in_background,
-    prepare_diff_syntax_document_in_background_text,
-    prepare_diff_syntax_document_with_budget_reuse,
+    inject_background_prepared_diff_syntax_document,
+    prepare_diff_syntax_document_in_background_text_with_reuse,
     prepare_diff_syntax_document_with_budget_reuse_text,
-    request_syntax_highlights_for_prepared_document_byte_range, resolved_output_line_text,
-    syntax_highlights_for_line,
+    prepared_diff_syntax_line_for_inline_diff_row, prepared_diff_syntax_line_for_one_based_line,
+    prepared_diff_syntax_reparse_seed, request_syntax_highlights_for_prepared_document_byte_range,
+    resolved_output_line_text, syntax_highlights_for_line,
+};
+
+#[cfg(test)]
+pub(in crate::view) use diff_text::{
+    PreparedDiffSyntaxParseMode, prepare_diff_syntax_document_in_background_text,
+    prepared_diff_syntax_parse_mode, prepared_diff_syntax_source_version,
 };
 
 #[cfg(test)]

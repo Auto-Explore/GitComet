@@ -115,7 +115,7 @@ struct PreparedSyntaxCacheKey {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum TreesitterParseReuseMode {
+pub(super) enum TreesitterParseReuseMode {
     Full,
     Incremental,
 }
@@ -138,6 +138,11 @@ pub(super) struct PreparedSyntaxDocumentData {
     line_count: usize,
     line_token_chunks: HashMap<usize, Vec<Vec<SyntaxToken>>>,
     tree_state: Option<PreparedSyntaxTreeState>,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct PreparedSyntaxReparseSeed {
+    tree_state: PreparedSyntaxTreeState,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1165,42 +1170,6 @@ pub(super) fn syntax_tokens_for_line(
     }
 }
 
-/// Convenience function that prepares a tree-sitter document with no foreground timeout.
-/// Used by tests and benchmarks that need guaranteed completion.
-pub(super) fn prepare_treesitter_document<'a, I>(
-    language: DiffSyntaxLanguage,
-    mode: DiffSyntaxMode,
-    lines: I,
-) -> Option<PreparedSyntaxDocument>
-where
-    I: IntoIterator<Item = &'a str>,
-{
-    let Some(request) = treesitter_document_parse_request(language, mode, lines) else {
-        return None;
-    };
-    match prepare_treesitter_document_request_impl(request, None, None, None) {
-        PrepareTreesitterDocumentResult::Ready(document) => Some(document),
-        PrepareTreesitterDocumentResult::TimedOut
-        | PrepareTreesitterDocumentResult::Unsupported => None,
-    }
-}
-
-pub(super) fn prepare_treesitter_document_with_budget_reuse<'a, I>(
-    language: DiffSyntaxLanguage,
-    mode: DiffSyntaxMode,
-    lines: I,
-    budget: DiffSyntaxBudget,
-    old_document: Option<PreparedSyntaxDocument>,
-) -> PrepareTreesitterDocumentResult
-where
-    I: IntoIterator<Item = &'a str>,
-{
-    let Some(request) = treesitter_document_parse_request(language, mode, lines) else {
-        return PrepareTreesitterDocumentResult::Unsupported;
-    };
-    prepare_treesitter_document_request_impl(request, Some(budget), old_document, None)
-}
-
 pub(super) fn prepare_treesitter_document_with_budget_reuse_text(
     language: DiffSyntaxLanguage,
     mode: DiffSyntaxMode,
@@ -1220,30 +1189,45 @@ pub(super) fn prepare_treesitter_document_with_budget_reuse_text(
     prepare_treesitter_document_request_impl(request, Some(budget), old_document, edit_hint)
 }
 
-pub(super) fn prepare_treesitter_document_in_background<'a, I>(
-    language: DiffSyntaxLanguage,
-    mode: DiffSyntaxMode,
-    lines: I,
-) -> Option<PreparedSyntaxDocumentData>
-where
-    I: IntoIterator<Item = &'a str>,
-{
-    let request = treesitter_document_parse_request(language, mode, lines)?;
-    prepare_treesitter_document_data_request_impl(request, None, None)
-}
-
-pub(super) fn prepare_treesitter_document_in_background_text(
+#[cfg(test)]
+pub(super) fn prepare_treesitter_document_in_background_text_with_reuse(
     language: DiffSyntaxLanguage,
     mode: DiffSyntaxMode,
     text: SharedString,
     line_starts: Arc<[usize]>,
+    old_document: Option<PreparedSyntaxDocument>,
+    edit_hint: Option<DiffSyntaxEdit>,
 ) -> Option<PreparedSyntaxDocumentData> {
     let request = treesitter_document_parse_request_from_input(
         language,
         mode,
         treesitter_document_input_from_shared_text(text, line_starts),
     )?;
-    prepare_treesitter_document_data_request_impl(request, None, None)
+    prepare_treesitter_document_data_request_impl(
+        request,
+        old_document.and_then(prepared_document_tree_state),
+        edit_hint,
+    )
+}
+
+pub(super) fn prepare_treesitter_document_in_background_text_with_reparse_seed(
+    language: DiffSyntaxLanguage,
+    mode: DiffSyntaxMode,
+    text: SharedString,
+    line_starts: Arc<[usize]>,
+    reparse_seed: Option<PreparedSyntaxReparseSeed>,
+    edit_hint: Option<DiffSyntaxEdit>,
+) -> Option<PreparedSyntaxDocumentData> {
+    let request = treesitter_document_parse_request_from_input(
+        language,
+        mode,
+        treesitter_document_input_from_shared_text(text, line_starts),
+    )?;
+    prepare_treesitter_document_data_request_impl(
+        request,
+        reparse_seed.map(|seed| seed.tree_state),
+        edit_hint,
+    )
 }
 
 pub(super) fn inject_prepared_document_data(
@@ -1312,8 +1296,21 @@ pub(super) fn has_pending_prepared_syntax_chunk_builds_for_document(
     })
 }
 
+fn prepared_document_tree_state(
+    document: PreparedSyntaxDocument,
+) -> Option<PreparedSyntaxTreeState> {
+    TS_DOCUMENT_CACHE.with(|cache| cache.borrow_mut().tree_state(document.cache_key))
+}
+
+pub(super) fn prepared_document_reparse_seed(
+    document: PreparedSyntaxDocument,
+) -> Option<PreparedSyntaxReparseSeed> {
+    prepared_document_tree_state(document)
+        .map(|tree_state| PreparedSyntaxReparseSeed { tree_state })
+}
+
 #[cfg(test)]
-fn prepared_document_parse_mode(
+pub(super) fn prepared_document_parse_mode(
     document: PreparedSyntaxDocument,
 ) -> Option<TreesitterParseReuseMode> {
     TS_DOCUMENT_CACHE.with(|cache| {
@@ -1325,7 +1322,7 @@ fn prepared_document_parse_mode(
 }
 
 #[cfg(test)]
-fn prepared_document_source_version(document: PreparedSyntaxDocument) -> Option<u64> {
+pub(super) fn prepared_document_source_version(document: PreparedSyntaxDocument) -> Option<u64> {
     TS_DOCUMENT_CACHE.with(|cache| {
         cache
             .borrow_mut()
@@ -1433,12 +1430,9 @@ fn benchmark_line_tokens_payload(
 fn parse_treesitter_document_core(
     request: &TreesitterDocumentParseRequest,
     foreground_timeout: Option<Duration>,
-    old_document: Option<PreparedSyntaxDocument>,
+    old_tree_state: Option<PreparedSyntaxTreeState>,
     edit_hint: Option<DiffSyntaxEdit>,
 ) -> Option<PreparedSyntaxDocumentData> {
-    let old_tree_state = old_document.and_then(|document| {
-        TS_DOCUMENT_CACHE.with(|cache| cache.borrow_mut().tree_state(document.cache_key))
-    });
     let mut used_old_document_without_incremental = false;
     let incremental_seed = old_tree_state.as_ref().and_then(|state| {
         let seed = build_incremental_parse_seed(state, request, edit_hint.as_ref());
@@ -1520,7 +1514,7 @@ fn prepare_treesitter_document_request_impl(
     let Some(data) = parse_treesitter_document_core(
         &request,
         foreground_budget.map(|b| b.foreground_parse),
-        old_document,
+        old_document.and_then(prepared_document_tree_state),
         edit_hint,
     ) else {
         return if foreground_budget.is_some() {
@@ -1549,7 +1543,7 @@ fn prepare_treesitter_document_request_impl(
 
 fn prepare_treesitter_document_data_request_impl(
     request: TreesitterDocumentParseRequest,
-    old_document: Option<PreparedSyntaxDocument>,
+    old_tree_state: Option<PreparedSyntaxTreeState>,
     edit_hint: Option<DiffSyntaxEdit>,
 ) -> Option<PreparedSyntaxDocumentData> {
     if let Some(cached) = TS_DOCUMENT_CACHE.with(|cache| {
@@ -1560,22 +1554,7 @@ fn prepare_treesitter_document_data_request_impl(
         return Some(cached);
     }
 
-    parse_treesitter_document_core(&request, None, old_document, edit_hint)
-}
-
-fn treesitter_document_parse_request<'a, I>(
-    language: DiffSyntaxLanguage,
-    mode: DiffSyntaxMode,
-    lines: I,
-) -> Option<TreesitterDocumentParseRequest>
-where
-    I: IntoIterator<Item = &'a str>,
-{
-    treesitter_document_parse_request_from_input(
-        language,
-        mode,
-        collect_treesitter_document_input(lines),
-    )
+    parse_treesitter_document_core(&request, None, old_tree_state, edit_hint)
 }
 
 fn treesitter_document_parse_request_from_input(
@@ -1601,25 +1580,6 @@ fn treesitter_document_parse_request_from_input(
     })
 }
 
-fn collect_treesitter_document_input<'a, I>(lines: I) -> TreesitterDocumentInput
-where
-    I: IntoIterator<Item = &'a str>,
-{
-    let mut text = String::new();
-    let mut line_starts = vec![0usize];
-    for line in lines {
-        text.push_str(line);
-        text.push('\n');
-        line_starts.push(text.len());
-    }
-    // Remove sentinel for the phantom line after the trailing newline.
-    line_starts.pop();
-    TreesitterDocumentInput {
-        text: Arc::<str>::from(text),
-        line_starts: Arc::<[usize]>::from(line_starts),
-    }
-}
-
 fn treesitter_document_input_from_shared_text(
     text: SharedString,
     line_starts: Arc<[usize]>,
@@ -1627,28 +1587,44 @@ fn treesitter_document_input_from_shared_text(
     if text.is_empty() {
         return TreesitterDocumentInput {
             text: Arc::<str>::from(text),
-            line_starts: Arc::<[usize]>::from(Vec::<usize>::new()),
+            line_starts: Arc::default(),
         };
     }
 
-    if line_starts.first().copied() != Some(0)
-        || line_starts.windows(2).any(|window| window[0] >= window[1])
-        || line_starts.last().copied().unwrap_or(0) > text.len()
+    let normalized_line_starts =
+        normalized_treesitter_line_starts(text.as_ref(), line_starts.as_ref());
+
+    if normalized_line_starts.first().copied() != Some(0)
+        || normalized_line_starts
+            .windows(2)
+            .any(|window| window[0] >= window[1])
+        || normalized_line_starts.last().copied().unwrap_or(0) > text.len()
     {
         return treesitter_document_input_from_text(text.as_ref());
     }
 
     TreesitterDocumentInput {
         text: Arc::<str>::from(text),
-        line_starts,
+        line_starts: if normalized_line_starts.len() == line_starts.len() {
+            line_starts
+        } else {
+            Arc::<[usize]>::from(normalized_line_starts)
+        },
     }
+}
+
+fn normalized_treesitter_line_starts<'a>(text: &str, line_starts: &'a [usize]) -> &'a [usize] {
+    if text.as_bytes().ends_with(b"\n") && line_starts.last().copied() == Some(text.len()) {
+        return &line_starts[..line_starts.len().saturating_sub(1)];
+    }
+    line_starts
 }
 
 fn treesitter_document_input_from_text(text: &str) -> TreesitterDocumentInput {
     if text.is_empty() {
         return TreesitterDocumentInput {
             text: Arc::<str>::from(""),
-            line_starts: Arc::<[usize]>::from(Vec::<usize>::new()),
+            line_starts: Arc::default(),
         };
     }
 
@@ -1867,6 +1843,8 @@ fn parse_treesitter_tree(
     let options = tree_sitter::ParseOptions::new().progress_callback(&mut progress);
     parser.parse_with_options(&mut read_input, old_tree, Some(options))
 }
+
+const MAX_TREESITTER_LINE_BYTES: usize = 512;
 
 fn should_use_treesitter_for_line(text: &str) -> bool {
     text.len() <= MAX_TREESITTER_LINE_BYTES
@@ -2840,9 +2818,7 @@ fn syntax_kind_from_capture_name(mut name: &str) -> Option<SyntaxTokenKind> {
             return Some(kind);
         }
 
-        let Some((prefix, _)) = name.rsplit_once('.') else {
-            return None;
-        };
+        let (prefix, _) = name.rsplit_once('.')?;
         name = prefix;
     }
 }
@@ -3900,11 +3876,59 @@ mod tests {
         }
     }
 
-    fn prepare_html_document<'a>(
-        lines: impl IntoIterator<Item = &'a str>,
-    ) -> PreparedSyntaxDocument {
-        prepare_treesitter_document(DiffSyntaxLanguage::Html, DiffSyntaxMode::Auto, lines)
-            .expect("HTML should support prepared documents")
+    fn prepare_test_document(language: DiffSyntaxLanguage, text: &str) -> PreparedSyntaxDocument {
+        let input = treesitter_document_input_from_text(text);
+        match prepare_treesitter_document_with_budget_reuse_text(
+            language,
+            DiffSyntaxMode::Auto,
+            SharedString::from(text.to_owned()),
+            input.line_starts,
+            DiffSyntaxBudget {
+                foreground_parse: Duration::from_millis(200),
+            },
+            None,
+            None,
+        ) {
+            PrepareTreesitterDocumentResult::Ready(doc) => doc,
+            other => panic!("test document should parse successfully, got {other:?}"),
+        }
+    }
+
+    fn prepare_test_document_with_budget_reuse(
+        language: DiffSyntaxLanguage,
+        text: &str,
+        budget: DiffSyntaxBudget,
+        old_document: Option<PreparedSyntaxDocument>,
+    ) -> PrepareTreesitterDocumentResult {
+        let input = treesitter_document_input_from_text(text);
+        prepare_treesitter_document_with_budget_reuse_text(
+            language,
+            DiffSyntaxMode::Auto,
+            SharedString::from(text.to_owned()),
+            input.line_starts,
+            budget,
+            old_document,
+            None,
+        )
+    }
+
+    fn prepare_test_document_in_background(
+        language: DiffSyntaxLanguage,
+        text: &str,
+    ) -> Option<PreparedSyntaxDocumentData> {
+        let input = treesitter_document_input_from_text(text);
+        prepare_treesitter_document_in_background_text_with_reuse(
+            language,
+            DiffSyntaxMode::Auto,
+            SharedString::from(text.to_owned()),
+            input.line_starts,
+            None,
+            None,
+        )
+    }
+
+    fn prepare_html_document(lines: &[&str]) -> PreparedSyntaxDocument {
+        prepare_test_document(DiffSyntaxLanguage::Html, &lines.join("\n"))
     }
 
     #[test]
@@ -3930,7 +3954,7 @@ mod tests {
     #[test]
     fn large_document_query_passes_are_chunked_to_bounded_windows() {
         let lines = vec!["let value = 1;"; 8_192];
-        let input = collect_treesitter_document_input(lines.iter().copied());
+        let input = treesitter_document_input_from_text(&lines.join("\n"));
         let passes = treesitter_document_query_passes_for_line_window(
             input.line_starts.as_ref(),
             input.text.len(),
@@ -3949,8 +3973,7 @@ mod tests {
     #[test]
     fn pathological_long_line_uses_containing_ranges_for_subpasses() {
         let long_line = format!("let value = {};", "x".repeat(TS_MAX_BYTES_TO_QUERY * 4));
-        let lines = [long_line.as_str()];
-        let input = collect_treesitter_document_input(lines.iter().copied());
+        let input = treesitter_document_input_from_text(&long_line);
         let passes = treesitter_document_query_passes_for_line_window(
             input.line_starts.as_ref(),
             input.text.len(),
@@ -4100,12 +4123,7 @@ mod tests {
     #[test]
     fn prepared_document_preserves_multiline_treesitter_context() {
         let lines = ["/* open comment", "still comment */ let x = 1;"];
-        let doc = prepare_treesitter_document(
-            DiffSyntaxLanguage::Rust,
-            DiffSyntaxMode::Auto,
-            lines.iter().copied(),
-        )
-        .expect("rust should support tree-sitter document preparation");
+        let doc = prepare_test_document(DiffSyntaxLanguage::Rust, &lines.join("\n"));
 
         let first = syntax_tokens_for_prepared_document_line(doc, 0)
             .expect("prepared tokens should be available for line 0");
@@ -4125,7 +4143,7 @@ mod tests {
     #[test]
     fn prepared_html_document_highlights_style_element_contents_via_css_injection() {
         let lines = ["<style>", "body { color: red; }", "</style>"];
-        let doc = prepare_html_document(lines.iter().copied());
+        let doc = prepare_html_document(&lines);
 
         let style_tokens = syntax_tokens_for_prepared_document_line(doc, 1)
             .expect("style line tokens should be available");
@@ -4140,7 +4158,7 @@ mod tests {
     #[test]
     fn prepared_html_document_highlights_script_element_contents_via_javascript_injection() {
         let lines = ["<script>", "const value = 1;", "</script>"];
-        let doc = prepare_html_document(lines.iter().copied());
+        let doc = prepare_html_document(&lines);
 
         let script_tokens = syntax_tokens_for_prepared_document_line(doc, 1)
             .expect("script line tokens should be available");
@@ -4161,7 +4179,7 @@ mod tests {
     #[test]
     fn prepared_html_document_highlights_onclick_attribute_via_javascript_injection() {
         let lines = [r#"<button onclick="const value = 1;">go</button>"#];
-        let doc = prepare_html_document(lines.iter().copied());
+        let doc = prepare_html_document(&lines);
 
         let tokens = syntax_tokens_for_prepared_document_line(doc, 0)
             .expect("button line tokens should be available");
@@ -4178,7 +4196,7 @@ mod tests {
     #[test]
     fn prepared_html_document_highlights_style_attribute_via_css_injection() {
         let lines = [r#"<div style="color: red; display: block">ok</div>"#];
-        let doc = prepare_html_document(lines.iter().copied());
+        let doc = prepare_html_document(&lines);
 
         let tokens = syntax_tokens_for_prepared_document_line(doc, 0)
             .expect("div line tokens should be available");
@@ -4205,12 +4223,7 @@ mod tests {
         lines.push("</script>".to_string());
         lines.push("</body></html>".to_string());
 
-        let doc = prepare_treesitter_document(
-            DiffSyntaxLanguage::Html,
-            DiffSyntaxMode::Auto,
-            lines.iter().map(String::as_str),
-        )
-        .expect("HTML should support prepared documents");
+        let doc = prepare_test_document(DiffSyntaxLanguage::Html, &lines.join("\n"));
 
         // Request a line from the first chunk (inside the script block)
         let first_chunk_line = 5;
@@ -4239,17 +4252,10 @@ mod tests {
         // reusing cached tokens from the first.
         TS_INJECTION_CACHE.with(|cache| cache.borrow_mut().clear());
 
-        let doc_a_lines: Vec<String> = vec![
-            "<html><body><script>".to_string(),
-            "const alpha = 42;".to_string(),
-            "</script></body></html>".to_string(),
-        ];
-        let doc_a = prepare_treesitter_document(
+        let doc_a = prepare_test_document(
             DiffSyntaxLanguage::Html,
-            DiffSyntaxMode::Auto,
-            doc_a_lines.iter().map(String::as_str),
-        )
-        .expect("doc A should prepare");
+            "<html><body><script>\nconst alpha = 42;\n</script></body></html>",
+        );
 
         // Fetch tokens from doc A's injection line to populate cache
         let tokens_a =
@@ -4260,17 +4266,10 @@ mod tests {
         );
 
         // Doc B: different JS content at a similar structure but different text
-        let doc_b_lines: Vec<String> = vec![
-            "<html><body><script>".to_string(),
-            "let beta = \"hello\";".to_string(),
-            "</script></body></html>".to_string(),
-        ];
-        let doc_b = prepare_treesitter_document(
+        let doc_b = prepare_test_document(
             DiffSyntaxLanguage::Html,
-            DiffSyntaxMode::Auto,
-            doc_b_lines.iter().map(String::as_str),
-        )
-        .expect("doc B should prepare");
+            "<html><body><script>\nlet beta = \"hello\";\n</script></body></html>",
+        );
 
         let tokens_b =
             syntax_tokens_for_prepared_document_line(doc_b, 1).expect("doc B should have tokens");
@@ -4292,18 +4291,8 @@ mod tests {
 
     #[test]
     fn prepared_document_cache_keeps_multiple_documents_available() {
-        let first_doc = prepare_treesitter_document(
-            DiffSyntaxLanguage::Rust,
-            DiffSyntaxMode::Auto,
-            ["/* one */ let a = 1;"].iter().copied(),
-        )
-        .expect("first document should prepare");
-        let second_doc = prepare_treesitter_document(
-            DiffSyntaxLanguage::Rust,
-            DiffSyntaxMode::Auto,
-            ["/* two */ let b = 2;"].iter().copied(),
-        )
-        .expect("second document should prepare");
+        let first_doc = prepare_test_document(DiffSyntaxLanguage::Rust, "/* one */ let a = 1;");
+        let second_doc = prepare_test_document(DiffSyntaxLanguage::Rust, "/* two */ let b = 2;");
 
         let first_tokens = syntax_tokens_for_prepared_document_line(first_doc, 0)
             .expect("first prepared document should remain in cache");
@@ -4332,12 +4321,7 @@ mod tests {
         let lines = (0..(TS_DOCUMENT_LINE_TOKEN_CHUNK_ROWS * 3))
             .map(|ix| format!("let value_{ix} = {ix};"))
             .collect::<Vec<_>>();
-        let document = prepare_treesitter_document(
-            DiffSyntaxLanguage::Rust,
-            DiffSyntaxMode::Auto,
-            lines.iter().map(String::as_str),
-        )
-        .expect("document should prepare");
+        let document = prepare_test_document(DiffSyntaxLanguage::Rust, &lines.join("\n"));
 
         assert_eq!(
             prepared_syntax_loaded_chunk_count(document),
@@ -4389,12 +4373,7 @@ mod tests {
         let lines = (0..(TS_DOCUMENT_LINE_TOKEN_CHUNK_ROWS * 2))
             .map(|ix| format!("let value_{ix} = {ix};"))
             .collect::<Vec<_>>();
-        let document = prepare_treesitter_document(
-            DiffSyntaxLanguage::Rust,
-            DiffSyntaxMode::Auto,
-            lines.iter().map(String::as_str),
-        )
-        .expect("document should prepare");
+        let document = prepare_test_document(DiffSyntaxLanguage::Rust, &lines.join("\n"));
 
         assert_eq!(
             prepared_syntax_loaded_chunk_count(document),
@@ -4467,12 +4446,7 @@ mod tests {
         let lines = (0..(TS_DOCUMENT_LINE_TOKEN_CHUNK_ROWS * 2))
             .map(|ix| format!("let value_{ix} = {ix};"))
             .collect::<Vec<_>>();
-        let document = prepare_treesitter_document(
-            DiffSyntaxLanguage::Rust,
-            DiffSyntaxMode::Auto,
-            lines.iter().map(String::as_str),
-        )
-        .expect("document should prepare");
+        let document = prepare_test_document(DiffSyntaxLanguage::Rust, &lines.join("\n"));
 
         let clones_before_request = tree_state_clone_count();
         assert_eq!(
@@ -4495,18 +4469,8 @@ mod tests {
         let lines_b = (0..TS_DOCUMENT_LINE_TOKEN_CHUNK_ROWS)
             .map(|ix| format!("let beta_{ix} = {ix};"))
             .collect::<Vec<_>>();
-        let document_a = prepare_treesitter_document(
-            DiffSyntaxLanguage::Rust,
-            DiffSyntaxMode::Auto,
-            lines_a.iter().map(String::as_str),
-        )
-        .expect("first document should prepare");
-        let document_b = prepare_treesitter_document(
-            DiffSyntaxLanguage::Rust,
-            DiffSyntaxMode::Auto,
-            lines_b.iter().map(String::as_str),
-        )
-        .expect("second document should prepare");
+        let document_a = prepare_test_document(DiffSyntaxLanguage::Rust, &lines_a.join("\n"));
+        let document_b = prepare_test_document(DiffSyntaxLanguage::Rust, &lines_b.join("\n"));
 
         assert_eq!(
             request_syntax_tokens_for_prepared_document_line(document_a, 0),
@@ -4559,12 +4523,7 @@ mod tests {
         let lines = (0..(TS_DOCUMENT_LINE_TOKEN_CHUNK_ROWS * 2))
             .map(|ix| format!("let chunk_clone_probe_{ix} = {ix};"))
             .collect::<Vec<_>>();
-        let document = prepare_treesitter_document(
-            DiffSyntaxLanguage::Rust,
-            DiffSyntaxMode::Auto,
-            lines.iter().map(String::as_str),
-        )
-        .expect("document should prepare");
+        let document = prepare_test_document(DiffSyntaxLanguage::Rust, &lines.join("\n"));
 
         let _ = syntax_tokens_for_prepared_document_line(document, 0)
             .expect("first miss should resolve and build first chunk");
@@ -4588,12 +4547,7 @@ mod tests {
         let lines = (0..128usize)
             .map(|ix| format!("let value_{ix} = {ix};"))
             .collect::<Vec<_>>();
-        let document = prepare_treesitter_document(
-            DiffSyntaxLanguage::Rust,
-            DiffSyntaxMode::Auto,
-            lines.iter().map(String::as_str),
-        )
-        .expect("document should prepare");
+        let document = prepare_test_document(DiffSyntaxLanguage::Rust, &lines.join("\n"));
 
         let (first, second) = TS_DOCUMENT_CACHE.with(|cache| {
             let mut cache = cache.borrow_mut();
@@ -4634,7 +4588,7 @@ mod tests {
 
     #[test]
     fn collected_input_last_line_content_excludes_trailing_newline() {
-        let input = collect_treesitter_document_input(["alpha", "beta"].iter().copied());
+        let input = treesitter_document_input_from_text("alpha\nbeta");
 
         assert_eq!(
             line_content_end_byte(input.line_starts.as_ref(), input.text.as_bytes(), 0),
@@ -4642,23 +4596,55 @@ mod tests {
         );
         assert_eq!(
             line_content_end_byte(input.line_starts.as_ref(), input.text.as_bytes(), 1),
-            input.text.len() - 1,
-            "iterator-built input should not include the synthetic trailing newline in last-line content"
+            input.text.len(),
+            "text-built input should not include trailing content beyond the last line"
         );
     }
 
     #[test]
     fn shared_text_input_last_line_content_excludes_trailing_newline() {
         let snapshot = crate::kit::text_model::TextModel::from("alpha\nbeta\n").snapshot();
+        let text_input = treesitter_document_input_from_text("alpha\nbeta\n");
         let input = treesitter_document_input_from_shared_text(
             snapshot.as_shared_string(),
             snapshot.shared_line_starts(),
         );
 
         assert_eq!(
+            input.line_starts.as_ref(),
+            text_input.line_starts.as_ref(),
+            "shared full-text input should normalize trailing-newline line starts to the same shape as collected text input"
+        );
+        assert_eq!(
             line_content_end_byte(input.line_starts.as_ref(), input.text.as_bytes(), 1),
             input.text.len() - 1,
             "shared full-text input should trim the real trailing newline from the last line"
+        );
+    }
+
+    #[test]
+    fn shared_text_input_preserves_real_empty_last_line_while_trimming_phantom_entry() {
+        let source = "alpha\n\n";
+        let snapshot = crate::kit::text_model::TextModel::from(source).snapshot();
+        let input = treesitter_document_input_from_shared_text(
+            snapshot.as_shared_string(),
+            snapshot.shared_line_starts(),
+        );
+
+        assert_eq!(
+            snapshot.line_starts(),
+            &[0, 6, source.len()],
+            "snapshot line starts should still include the text-model phantom trailing entry"
+        );
+        assert_eq!(
+            input.line_starts.as_ref(),
+            &[0, 6],
+            "tree-sitter input should keep the real empty last line but drop the phantom trailing entry"
+        );
+        assert_eq!(
+            line_content_end_byte(input.line_starts.as_ref(), input.text.as_bytes(), 1),
+            source.len() - 1,
+            "the empty last line should end before the terminal newline byte"
         );
     }
 
@@ -4763,12 +4749,7 @@ mod tests {
         let _lock = lock_global_counter_tests();
         reset_deferred_drop_counters();
         let base_lines = vec!["let value = 1;".to_string(); 256];
-        let base_document = prepare_treesitter_document(
-            DiffSyntaxLanguage::Rust,
-            DiffSyntaxMode::Auto,
-            base_lines.iter().map(String::as_str),
-        )
-        .expect("base document should parse");
+        let base_document = prepare_test_document(DiffSyntaxLanguage::Rust, &base_lines.join("\n"));
         let base_version =
             prepared_document_source_version(base_document).expect("base source version");
         assert_eq!(
@@ -4778,10 +4759,9 @@ mod tests {
 
         let mut edited = base_lines.clone();
         edited[42].push_str(" // tiny edit");
-        let attempt = prepare_treesitter_document_with_budget_reuse(
+        let attempt = prepare_test_document_with_budget_reuse(
             DiffSyntaxLanguage::Rust,
-            DiffSyntaxMode::Auto,
-            edited.iter().map(String::as_str),
+            &edited.join("\n"),
             DiffSyntaxBudget {
                 foreground_parse: Duration::from_millis(50),
             },
@@ -4877,21 +4857,15 @@ mod tests {
         let _lock = lock_global_counter_tests();
         reset_deferred_drop_counters();
         let base_lines = vec!["let value = 1;".to_string(); 256];
-        let base_document = prepare_treesitter_document(
-            DiffSyntaxLanguage::Rust,
-            DiffSyntaxMode::Auto,
-            base_lines.iter().map(String::as_str),
-        )
-        .expect("base document should parse");
+        let base_document = prepare_test_document(DiffSyntaxLanguage::Rust, &base_lines.join("\n"));
 
         let mut edited = base_lines.clone();
         for line in edited.iter_mut().take(180) {
             *line = "pub fn massive_fallback_path() { let x = vec![1,2,3,4]; }".to_string();
         }
-        let attempt = prepare_treesitter_document_with_budget_reuse(
+        let attempt = prepare_test_document_with_budget_reuse(
             DiffSyntaxLanguage::Rust,
-            DiffSyntaxMode::Auto,
-            edited.iter().map(String::as_str),
+            &edited.join("\n"),
             DiffSyntaxBudget {
                 foreground_parse: Duration::from_millis(50),
             },
@@ -4918,19 +4892,13 @@ mod tests {
         reset_deferred_drop_counters();
 
         let base_lines = vec!["let value = 41;".to_string(); 256];
-        let base_document = prepare_treesitter_document(
-            DiffSyntaxLanguage::Rust,
-            DiffSyntaxMode::Auto,
-            base_lines.iter().map(String::as_str),
-        )
-        .expect("base document should parse");
+        let base_document = prepare_test_document(DiffSyntaxLanguage::Rust, &base_lines.join("\n"));
 
         let mut edited = base_lines.clone();
         edited.push("let appended = 42;".to_string());
-        let attempt = prepare_treesitter_document_with_budget_reuse(
+        let attempt = prepare_test_document_with_budget_reuse(
             DiffSyntaxLanguage::Rust,
-            DiffSyntaxMode::Auto,
-            edited.iter().map(String::as_str),
+            &edited.join("\n"),
             DiffSyntaxBudget {
                 foreground_parse: Duration::from_millis(50),
             },
@@ -4945,10 +4913,12 @@ mod tests {
             "small EOF append should stay on incremental reparse path"
         );
 
-        let request = treesitter_document_parse_request(
+        let edited_text = edited.join("\n");
+        let edited_input = treesitter_document_input_from_text(&edited_text);
+        let request = treesitter_document_parse_request_from_input(
             DiffSyntaxLanguage::Rust,
             DiffSyntaxMode::Auto,
-            edited.iter().map(String::as_str),
+            edited_input,
         )
         .expect("edited rust lines should produce parse request");
         let full_tree = TS_PARSER
@@ -5075,11 +5045,10 @@ mod tests {
 
     #[test]
     fn parse_budget_timeout_falls_back_to_background_prepare() {
-        let lines = vec!["/* budget */ let value = Some(42);"; 2_048];
-        let attempt = prepare_treesitter_document_with_budget_reuse(
+        let text = vec!["/* budget */ let value = Some(42);"; 2_048].join("\n");
+        let attempt = prepare_test_document_with_budget_reuse(
             DiffSyntaxLanguage::Rust,
-            DiffSyntaxMode::Auto,
-            lines.iter().copied(),
+            &text,
             DiffSyntaxBudget {
                 foreground_parse: Duration::ZERO,
             },
@@ -5087,12 +5056,8 @@ mod tests {
         );
         assert_eq!(attempt, PrepareTreesitterDocumentResult::TimedOut);
 
-        let prepared = prepare_treesitter_document_in_background(
-            DiffSyntaxLanguage::Rust,
-            DiffSyntaxMode::Auto,
-            lines.iter().copied(),
-        )
-        .expect("background parse should produce a prepared document");
+        let prepared = prepare_test_document_in_background(DiffSyntaxLanguage::Rust, &text)
+            .expect("background parse should produce a prepared document");
         let document = inject_prepared_document_data(prepared);
         let tokens = syntax_tokens_for_prepared_document_line(document, 0)
             .expect("background-prepared document should have tokens");
@@ -5103,18 +5068,151 @@ mod tests {
     }
 
     #[test]
+    fn background_text_reparse_reuses_old_tree_without_explicit_edit_hint() {
+        let _lock = lock_global_counter_tests();
+        reset_deferred_drop_counters();
+
+        let base_text = "let value = 1;\n".repeat(256);
+        let base_input = treesitter_document_input_from_text(&base_text);
+        let PrepareTreesitterDocumentResult::Ready(base_document) =
+            prepare_treesitter_document_with_budget_reuse_text(
+                DiffSyntaxLanguage::Rust,
+                DiffSyntaxMode::Auto,
+                base_text.clone().into(),
+                base_input.line_starts.clone(),
+                DiffSyntaxBudget {
+                    foreground_parse: Duration::from_millis(50),
+                },
+                None,
+                None,
+            )
+        else {
+            panic!("base text document should parse");
+        };
+        let base_version =
+            prepared_document_source_version(base_document).expect("base source version");
+
+        let insert_offset = base_input.line_starts[42].saturating_add("let value = 1;".len());
+        let mut edited_text = base_text.clone();
+        edited_text.insert_str(insert_offset, " // background tiny edit");
+        let edited_input = treesitter_document_input_from_text(&edited_text);
+
+        let prepared = prepare_treesitter_document_in_background_text_with_reuse(
+            DiffSyntaxLanguage::Rust,
+            DiffSyntaxMode::Auto,
+            edited_text.into(),
+            edited_input.line_starts.clone(),
+            Some(base_document),
+            None,
+        )
+        .expect("background text reparse should produce prepared data");
+        let reparsed_document = inject_prepared_document_data(prepared);
+
+        assert_eq!(
+            prepared_document_parse_mode(reparsed_document),
+            Some(TreesitterParseReuseMode::Incremental),
+            "background text reparses should keep small edits on the incremental path even without explicit edit hints"
+        );
+        let reparsed_version =
+            prepared_document_source_version(reparsed_document).expect("reparsed source version");
+        assert!(
+            reparsed_version > base_version,
+            "background incremental reparse should advance source version"
+        );
+
+        let (incremental, fallback) = incremental_reparse_counters();
+        assert!(
+            incremental > 0,
+            "background no-edit-hint path should use incremental reparse"
+        );
+        assert_eq!(
+            fallback, 0,
+            "background no-edit-hint path should not trigger fallback"
+        );
+    }
+
+    #[test]
+    fn background_text_reparse_reuses_old_tree_with_explicit_edit_hint() {
+        let _lock = lock_global_counter_tests();
+        reset_deferred_drop_counters();
+
+        let base_text = "let value = 1;\n".repeat(256);
+        let base_input = treesitter_document_input_from_text(&base_text);
+        let PrepareTreesitterDocumentResult::Ready(base_document) =
+            prepare_treesitter_document_with_budget_reuse_text(
+                DiffSyntaxLanguage::Rust,
+                DiffSyntaxMode::Auto,
+                base_text.clone().into(),
+                base_input.line_starts.clone(),
+                DiffSyntaxBudget {
+                    foreground_parse: Duration::from_millis(50),
+                },
+                None,
+                None,
+            )
+        else {
+            panic!("base text document should parse");
+        };
+        let base_version =
+            prepared_document_source_version(base_document).expect("base source version");
+
+        let insert_offset = base_input.line_starts[42].saturating_add("let value = 1;".len());
+        let mut edited_text = base_text.clone();
+        edited_text.insert_str(insert_offset, " // background tiny edit");
+        let edited_input = treesitter_document_input_from_text(&edited_text);
+
+        let prepared = prepare_treesitter_document_in_background_text_with_reuse(
+            DiffSyntaxLanguage::Rust,
+            DiffSyntaxMode::Auto,
+            edited_text.into(),
+            edited_input.line_starts.clone(),
+            Some(base_document),
+            Some(DiffSyntaxEdit {
+                old_range: insert_offset..insert_offset,
+                new_range: insert_offset
+                    ..insert_offset.saturating_add(" // background tiny edit".len()),
+            }),
+        )
+        .expect("background text reparse should produce prepared data");
+        let reparsed_document = inject_prepared_document_data(prepared);
+
+        assert_eq!(
+            prepared_document_parse_mode(reparsed_document),
+            Some(TreesitterParseReuseMode::Incremental),
+            "background text reparses should keep small edits on the incremental path"
+        );
+        let reparsed_version =
+            prepared_document_source_version(reparsed_document).expect("reparsed source version");
+        assert!(
+            reparsed_version > base_version,
+            "background incremental reparse should advance source version"
+        );
+
+        let (incremental, fallback) = incremental_reparse_counters();
+        assert!(
+            incremental > 0,
+            "background explicit edit hint path should use incremental reparse"
+        );
+        assert_eq!(
+            fallback, 0,
+            "background explicit edit hint should not trigger fallback"
+        );
+    }
+
+    #[test]
     fn background_prepared_document_not_in_tls_until_injected() {
-        let lines = vec![
-            "/* background comment */".to_string(),
-            "let value = 42;".to_string(),
-        ];
+        let text = "/* background comment */\nlet value = 42;".to_string();
         let prepared = std::thread::spawn({
-            let lines = lines.clone();
+            let text = text.clone();
             move || {
-                prepare_treesitter_document_in_background(
+                let input = treesitter_document_input_from_text(&text);
+                prepare_treesitter_document_in_background_text_with_reuse(
                     DiffSyntaxLanguage::Rust,
                     DiffSyntaxMode::Auto,
-                    lines.iter().map(String::as_str),
+                    SharedString::from(text),
+                    input.line_starts,
+                    None,
+                    None,
                 )
                 .expect("background parse should produce prepared data")
             }

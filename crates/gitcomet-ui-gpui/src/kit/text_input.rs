@@ -56,6 +56,7 @@ actions!(
 const MAX_UNDO_STEPS: usize = 100;
 const TEXT_INPUT_GUARD_ROWS: usize = 2;
 const TEXT_INPUT_PROVIDER_PREFETCH_GUARD_ROWS: usize = 24;
+const TEXT_INPUT_PROVIDER_HIGHLIGHT_CACHE_LIMIT: usize = 4;
 const TEXT_INPUT_MAX_LINE_SHAPE_BYTES: usize = 4 * 1024;
 const TEXT_INPUT_SHAPE_CACHE_LIMIT: usize = 8 * 1024;
 const TEXT_INPUT_TRUNCATION_SUFFIX: &str = "…";
@@ -132,19 +133,96 @@ impl HighlightProvider {
 }
 
 #[derive(Clone)]
-struct ProviderHighlightCache {
-    highlight_epoch: u64,
+struct ProviderHighlightCacheEntry {
     byte_start: usize,
     byte_end: usize,
     pending: bool,
     highlights: Arc<Vec<(Range<usize>, gpui::HighlightStyle)>>,
 }
 
+impl ProviderHighlightCacheEntry {
+    fn contains_range(&self, byte_range: &Range<usize>) -> bool {
+        self.byte_start <= byte_range.start && self.byte_end >= byte_range.end
+    }
+
+    fn span_len(&self) -> usize {
+        self.byte_end.saturating_sub(self.byte_start)
+    }
+}
+
+#[derive(Clone)]
+struct ProviderHighlightCache {
+    highlight_epoch: u64,
+    entries: Vec<ProviderHighlightCacheEntry>,
+}
+
 impl ProviderHighlightCache {
-    fn contains_range(&self, highlight_epoch: u64, byte_range: &Range<usize>) -> bool {
-        self.highlight_epoch == highlight_epoch
-            && self.byte_start <= byte_range.start
-            && self.byte_end >= byte_range.end
+    fn new(highlight_epoch: u64) -> Self {
+        Self {
+            highlight_epoch,
+            entries: Vec::new(),
+        }
+    }
+
+    fn resolve(
+        &mut self,
+        highlight_epoch: u64,
+        byte_range: &Range<usize>,
+    ) -> Option<ResolvedProviderHighlights> {
+        if self.highlight_epoch != highlight_epoch {
+            self.highlight_epoch = highlight_epoch;
+            self.entries.clear();
+            return None;
+        }
+
+        let best_idx = self
+            .entries
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| entry.contains_range(byte_range))
+            .min_by_key(|(_, entry)| entry.span_len())
+            .map(|(idx, _)| idx)?;
+
+        if best_idx + 1 != self.entries.len() {
+            let entry = self.entries.remove(best_idx);
+            self.entries.push(entry);
+        }
+
+        let entry = self
+            .entries
+            .last()
+            .expect("provider highlight cache should contain the requested entry");
+        Some(ResolvedProviderHighlights {
+            pending: entry.pending,
+            highlights: Arc::clone(&entry.highlights),
+        })
+    }
+
+    fn insert(
+        &mut self,
+        highlight_epoch: u64,
+        byte_range: Range<usize>,
+        pending: bool,
+        highlights: Arc<Vec<(Range<usize>, gpui::HighlightStyle)>>,
+    ) {
+        if self.highlight_epoch != highlight_epoch {
+            self.highlight_epoch = highlight_epoch;
+            self.entries.clear();
+        }
+
+        self.entries.retain(|entry| {
+            entry.byte_start != byte_range.start || entry.byte_end != byte_range.end
+        });
+        self.entries.push(ProviderHighlightCacheEntry {
+            byte_start: byte_range.start,
+            byte_end: byte_range.end,
+            pending,
+            highlights,
+        });
+        if self.entries.len() > TEXT_INPUT_PROVIDER_HIGHLIGHT_CACHE_LIMIT {
+            let overflow = self.entries.len() - TEXT_INPUT_PROVIDER_HIGHLIGHT_CACHE_LIMIT;
+            self.entries.drain(0..overflow);
+        }
     }
 }
 
@@ -535,10 +613,28 @@ impl TextInput {
         self.invalidate_layout_caches_preserving_wrap_rows();
     }
 
-    fn note_provider_highlights_changed(&mut self) {
+    fn invalidate_highlights(&mut self, preserve_wrap_rows: bool) {
         self.provider_highlight_cache = None;
         self.highlight_epoch = self.highlight_epoch.wrapping_add(1).max(1);
-        self.bump_shape_style_epoch_preserving_wrap_rows();
+        if preserve_wrap_rows {
+            self.bump_shape_style_epoch_preserving_wrap_rows();
+        } else {
+            self.bump_shape_style_epoch();
+        }
+    }
+
+    fn note_provider_highlights_changed(&mut self) {
+        self.invalidate_highlights(true);
+    }
+
+    fn invalidate_provider_highlights_for_text_change(&mut self) {
+        if self.highlight_provider.is_none() {
+            return;
+        }
+
+        self.provider_highlight_cache = None;
+        self.prepaint_highlight_runs_cache = None;
+        self.highlight_epoch = self.highlight_epoch.wrapping_add(1).max(1);
     }
 
     pub fn set_theme(&mut self, theme: AppTheme, cx: &mut Context<Self>) {
@@ -567,6 +663,7 @@ impl TextInput {
             self.request_wrap_recompute();
         }
         self.pending_text_edit_delta = None;
+        self.invalidate_provider_highlights_for_text_change();
         cx.notify();
     }
 
@@ -580,9 +677,7 @@ impl TextInput {
         self.highlight_provider = None;
         self.highlight_provider_binding_key = None;
         self.highlight_provider_poll_task.take();
-        self.provider_highlight_cache = None;
-        self.highlight_epoch = self.highlight_epoch.wrapping_add(1).max(1);
-        self.bump_shape_style_epoch();
+        self.invalidate_highlights(false);
         cx.notify();
     }
 
@@ -604,9 +699,7 @@ impl TextInput {
         self.highlight_provider_binding_key = binding_key;
         self.highlight_provider_poll_task.take();
         self.highlights = Arc::new(Vec::new());
-        self.provider_highlight_cache = None;
-        self.highlight_epoch = self.highlight_epoch.wrapping_add(1).max(1);
-        self.bump_shape_style_epoch();
+        self.invalidate_highlights(false);
         cx.notify();
     }
 
@@ -667,13 +760,11 @@ impl TextInput {
         byte_end: usize,
     ) -> ResolvedProviderHighlights {
         let requested_range = byte_start..byte_end;
-        if let Some(ref cache) = self.provider_highlight_cache
-            && cache.contains_range(self.highlight_epoch, &requested_range) {
-                return ResolvedProviderHighlights {
-                    pending: cache.pending,
-                    highlights: Arc::clone(&cache.highlights),
-                };
-            }
+        if let Some(cache) = self.provider_highlight_cache.as_mut()
+            && let Some(resolved) = cache.resolve(self.highlight_epoch, &requested_range)
+        {
+            return resolved;
+        }
         let Some(ref provider) = self.highlight_provider else {
             return ResolvedProviderHighlights {
                 pending: false,
@@ -686,13 +777,14 @@ impl TextInput {
             .sort_by(|(a, _), (b, _)| a.start.cmp(&b.start).then(a.end.cmp(&b.end)));
         let pending = result.pending;
         let highlights = Arc::new(result.highlights);
-        self.provider_highlight_cache = Some(ProviderHighlightCache {
-            highlight_epoch: self.highlight_epoch,
-            byte_start: requested_range.start,
-            byte_end: requested_range.end,
-            pending,
-            highlights: Arc::clone(&highlights),
-        });
+        self.provider_highlight_cache
+            .get_or_insert_with(|| ProviderHighlightCache::new(self.highlight_epoch))
+            .insert(
+                self.highlight_epoch,
+                requested_range,
+                pending,
+                Arc::clone(&highlights),
+            );
         ResolvedProviderHighlights {
             pending,
             highlights,
@@ -1790,6 +1882,7 @@ impl TextInput {
         self.vertical_motion_x = None;
         self.cursor_blink_visible = true;
         self.invalidate_layout_caches_preserving_wrap_rows();
+        self.invalidate_provider_highlights_for_text_change();
         self.queue_cursor_autoscroll();
         cx.notify();
         inserted
@@ -1921,6 +2014,7 @@ impl TextInput {
             self.request_wrap_recompute();
         }
         self.pending_text_edit_delta = None;
+        self.invalidate_provider_highlights_for_text_change();
         self.queue_cursor_autoscroll();
         cx.notify();
     }
@@ -2526,6 +2620,7 @@ impl EntityInputHandler for TextInput {
         self.vertical_motion_x = None;
         self.cursor_blink_visible = true;
         self.invalidate_layout_caches_preserving_wrap_rows();
+        self.invalidate_provider_highlights_for_text_change();
         self.queue_cursor_autoscroll();
         cx.notify();
     }
@@ -2571,6 +2666,7 @@ impl EntityInputHandler for TextInput {
         self.vertical_motion_x = None;
         self.cursor_blink_visible = true;
         self.invalidate_layout_caches_preserving_wrap_rows();
+        self.invalidate_provider_highlights_for_text_change();
         self.queue_cursor_autoscroll();
         cx.notify();
     }
@@ -4686,82 +4782,183 @@ mod tests {
 
     #[test]
     fn resolve_provider_highlights_caches_by_epoch_and_range() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::atomic::Ordering;
 
-        let call_count = Arc::new(AtomicUsize::new(0));
-        let counter = Arc::clone(&call_count);
-        let provider = HighlightProvider::from_fn(move |range: Range<usize>| {
-            counter.fetch_add(1, Ordering::SeqCst);
-            vec![(
-                range.clone(),
-                gpui::HighlightStyle {
-                    color: Some(gpui::hsla(0.0, 1.0, 0.5, 1.0)),
-                    ..gpui::HighlightStyle::default()
-                },
-            )]
-        });
+        let (call_count, provider) = make_counting_provider();
 
         // Simulate the cache behavior without needing a full GPUI context.
         let mut cache: Option<ProviderHighlightCache> = None;
         let epoch: u64 = 1;
 
-        // Helper that mimics resolve_provider_highlights logic.
-        let resolve = |cache: &mut Option<ProviderHighlightCache>,
-                       epoch: u64,
-                       byte_start: usize,
-                       byte_end: usize,
-                       provider: &HighlightProvider|
-         -> ResolvedProviderHighlights {
-            if let Some(c) = cache.as_ref() {
-                if c.contains_range(epoch, &(byte_start..byte_end)) {
-                    return ResolvedProviderHighlights {
-                        pending: c.pending,
-                        highlights: Arc::clone(&c.highlights),
-                    };
-                }
-            }
-            let mut result = provider.resolve(byte_start..byte_end);
-            result
-                .highlights
-                .sort_by(|(a, _), (b, _)| a.start.cmp(&b.start).then(a.end.cmp(&b.end)));
-            let pending = result.pending;
-            let highlights = Arc::new(result.highlights);
-            *cache = Some(ProviderHighlightCache {
-                highlight_epoch: epoch,
-                byte_start,
-                byte_end,
-                pending,
-                highlights: Arc::clone(&highlights),
-            });
-            ResolvedProviderHighlights {
-                pending,
-                highlights,
-            }
-        };
-
-        let h1 = resolve(&mut cache, epoch, 0, 100, &provider);
+        let h1 = test_resolve_with_cache(&mut cache, epoch, 0, 100, &provider);
         assert_eq!(call_count.load(Ordering::SeqCst), 1);
         assert!(!h1.pending);
         assert_eq!(h1.highlights.len(), 1);
         assert_eq!(h1.highlights[0].0, 0..100);
 
         // Same range and epoch → cached, no new call.
-        let h2 = resolve(&mut cache, epoch, 0, 100, &provider);
+        let h2 = test_resolve_with_cache(&mut cache, epoch, 0, 100, &provider);
         assert_eq!(call_count.load(Ordering::SeqCst), 1);
         assert!(Arc::ptr_eq(&h1.highlights, &h2.highlights));
 
         // Contained range → cached, no new call.
-        let h3 = resolve(&mut cache, epoch, 20, 80, &provider);
+        let h3 = test_resolve_with_cache(&mut cache, epoch, 20, 80, &provider);
         assert_eq!(call_count.load(Ordering::SeqCst), 1);
         assert!(Arc::ptr_eq(&h1.highlights, &h3.highlights));
 
         // Wider range → new call.
-        let _h4 = resolve(&mut cache, epoch, 0, 120, &provider);
+        let _h4 = test_resolve_with_cache(&mut cache, epoch, 0, 120, &provider);
         assert_eq!(call_count.load(Ordering::SeqCst), 2);
 
         // Different epoch → new call even for same range.
-        let _h5 = resolve(&mut cache, epoch + 1, 0, 120, &provider);
+        let _h5 = test_resolve_with_cache(&mut cache, epoch + 1, 0, 120, &provider);
         assert_eq!(call_count.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn resolve_provider_highlights_reuses_multiple_cached_ranges() {
+        use std::sync::atomic::Ordering;
+
+        let (call_count, provider) = make_counting_provider();
+
+        let mut cache: Option<ProviderHighlightCache> = None;
+        let epoch = 1;
+
+        let first = test_resolve_with_cache(&mut cache, epoch, 0, 100, &provider);
+        let second = test_resolve_with_cache(&mut cache, epoch, 200, 300, &provider);
+        assert_eq!(call_count.load(Ordering::SeqCst), 2);
+
+        let first_subrange = test_resolve_with_cache(&mut cache, epoch, 20, 80, &provider);
+        assert_eq!(call_count.load(Ordering::SeqCst), 2);
+        assert!(Arc::ptr_eq(&first.highlights, &first_subrange.highlights));
+
+        let second_subrange = test_resolve_with_cache(&mut cache, epoch, 220, 260, &provider);
+        assert_eq!(call_count.load(Ordering::SeqCst), 2);
+        assert!(Arc::ptr_eq(&second.highlights, &second_subrange.highlights));
+
+        let cache = cache.expect("resolved ranges should populate the provider cache");
+        assert_eq!(cache.highlight_epoch, epoch);
+        assert_eq!(cache.entries.len(), 2);
+    }
+
+    #[test]
+    fn resolve_provider_highlights_prefers_smallest_containing_cached_range() {
+        use std::sync::atomic::Ordering;
+
+        let (call_count, provider) = make_counting_provider();
+
+        let mut cache: Option<ProviderHighlightCache> = None;
+        let epoch = 1;
+
+        let narrow = test_resolve_with_cache(&mut cache, epoch, 50, 150, &provider);
+        let wide = test_resolve_with_cache(&mut cache, epoch, 0, 200, &provider);
+        assert_eq!(call_count.load(Ordering::SeqCst), 2);
+
+        let resolved = test_resolve_with_cache(&mut cache, epoch, 60, 140, &provider);
+        assert_eq!(call_count.load(Ordering::SeqCst), 2);
+        assert!(
+            Arc::ptr_eq(&resolved.highlights, &narrow.highlights),
+            "the smallest cached containing slice should win even if a wider slice is newer"
+        );
+        assert!(
+            !Arc::ptr_eq(&resolved.highlights, &wide.highlights),
+            "the wider containing slice should not be reused when a tighter one exists"
+        );
+
+        let cache = cache.expect("resolved ranges should populate the provider cache");
+        assert_eq!(cached_provider_ranges(&cache), vec![0..200, 50..150]);
+    }
+
+    #[test]
+    fn resolve_provider_highlights_cache_is_bounded() {
+        use std::sync::atomic::Ordering;
+
+        let (call_count, provider) = make_counting_provider();
+
+        let mut cache: Option<ProviderHighlightCache> = None;
+        let epoch = 1;
+        for window in 0..TEXT_INPUT_PROVIDER_HIGHLIGHT_CACHE_LIMIT {
+            let start = window * 100;
+            let end = start + 100;
+            let _ = test_resolve_with_cache(&mut cache, epoch, start, end, &provider);
+        }
+        assert_eq!(
+            call_count.load(Ordering::SeqCst),
+            TEXT_INPUT_PROVIDER_HIGHLIGHT_CACHE_LIMIT
+        );
+
+        let _ = test_resolve_with_cache(
+            &mut cache,
+            epoch,
+            TEXT_INPUT_PROVIDER_HIGHLIGHT_CACHE_LIMIT * 100,
+            TEXT_INPUT_PROVIDER_HIGHLIGHT_CACHE_LIMIT * 100 + 100,
+            &provider,
+        );
+        assert_eq!(
+            call_count.load(Ordering::SeqCst),
+            TEXT_INPUT_PROVIDER_HIGHLIGHT_CACHE_LIMIT + 1
+        );
+
+        let cache_ref = cache.as_ref().expect("cache should retain recent ranges");
+        assert_eq!(
+            cache_ref.entries.len(),
+            TEXT_INPUT_PROVIDER_HIGHLIGHT_CACHE_LIMIT
+        );
+
+        let _ = test_resolve_with_cache(&mut cache, epoch, 0, 50, &provider);
+        assert_eq!(
+            call_count.load(Ordering::SeqCst),
+            TEXT_INPUT_PROVIDER_HIGHLIGHT_CACHE_LIMIT + 2,
+            "the oldest cached slice should be evicted once the cache reaches its bound"
+        );
+    }
+
+    #[test]
+    fn resolve_provider_highlights_cache_hit_promotes_entry_before_eviction() {
+        use std::sync::atomic::Ordering;
+
+        let (call_count, provider) = make_counting_provider();
+
+        let mut cache: Option<ProviderHighlightCache> = None;
+        let epoch = 1;
+
+        let first = test_resolve_with_cache(&mut cache, epoch, 0, 100, &provider);
+        let _second = test_resolve_with_cache(&mut cache, epoch, 100, 200, &provider);
+        let _third = test_resolve_with_cache(&mut cache, epoch, 200, 300, &provider);
+        let _fourth = test_resolve_with_cache(&mut cache, epoch, 300, 400, &provider);
+        assert_eq!(
+            call_count.load(Ordering::SeqCst),
+            TEXT_INPUT_PROVIDER_HIGHLIGHT_CACHE_LIMIT
+        );
+
+        let promoted = test_resolve_with_cache(&mut cache, epoch, 20, 80, &provider);
+        assert_eq!(call_count.load(Ordering::SeqCst), 4);
+        assert!(Arc::ptr_eq(&promoted.highlights, &first.highlights));
+
+        let _fifth = test_resolve_with_cache(&mut cache, epoch, 400, 500, &provider);
+        assert_eq!(call_count.load(Ordering::SeqCst), 5);
+
+        let cache_ref = cache
+            .as_ref()
+            .expect("cache should retain recent ranges after a bounded insert");
+        assert_eq!(
+            cached_provider_ranges(cache_ref),
+            vec![200..300, 300..400, 0..100, 400..500]
+        );
+
+        let reused = test_resolve_with_cache(&mut cache, epoch, 10, 50, &provider);
+        assert_eq!(call_count.load(Ordering::SeqCst), 5);
+        assert!(
+            Arc::ptr_eq(&reused.highlights, &first.highlights),
+            "a cache hit should keep the promoted slice resident across the next eviction"
+        );
+
+        let _evicted = test_resolve_with_cache(&mut cache, epoch, 120, 180, &provider);
+        assert_eq!(
+            call_count.load(Ordering::SeqCst),
+            6,
+            "the cold slice should be evicted instead of the recently-used one"
+        );
     }
 
     #[test]
@@ -4790,6 +4987,535 @@ mod tests {
             Some(41),
             None
         ));
+    }
+
+    fn test_resolve_with_cache(
+        cache: &mut Option<ProviderHighlightCache>,
+        epoch: u64,
+        byte_start: usize,
+        byte_end: usize,
+        provider: &HighlightProvider,
+    ) -> ResolvedProviderHighlights {
+        let requested_range = byte_start..byte_end;
+        if let Some(resolved) = cache
+            .as_mut()
+            .and_then(|c| c.resolve(epoch, &requested_range))
+        {
+            return resolved;
+        }
+        let mut result = provider.resolve(requested_range.clone());
+        result
+            .highlights
+            .sort_by(|(a, _), (b, _)| a.start.cmp(&b.start).then(a.end.cmp(&b.end)));
+        let pending = result.pending;
+        let highlights = Arc::new(result.highlights);
+        cache
+            .get_or_insert_with(|| ProviderHighlightCache::new(epoch))
+            .insert(epoch, requested_range, pending, Arc::clone(&highlights));
+        ResolvedProviderHighlights {
+            pending,
+            highlights,
+        }
+    }
+
+    fn make_counting_provider() -> (Arc<std::sync::atomic::AtomicUsize>, HighlightProvider) {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let call_count = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&call_count);
+        let provider = HighlightProvider::from_fn(move |range: Range<usize>| {
+            counter.fetch_add(1, Ordering::SeqCst);
+            vec![(
+                range,
+                gpui::HighlightStyle {
+                    color: Some(gpui::hsla(0.0, 1.0, 0.5, 1.0)),
+                    ..gpui::HighlightStyle::default()
+                },
+            )]
+        });
+
+        (call_count, provider)
+    }
+
+    fn cached_provider_ranges(cache: &ProviderHighlightCache) -> Vec<Range<usize>> {
+        cache
+            .entries
+            .iter()
+            .map(|entry| entry.byte_start..entry.byte_end)
+            .collect()
+    }
+
+    struct DualProviders {
+        first_calls: Arc<std::sync::atomic::AtomicUsize>,
+        second_calls: Arc<std::sync::atomic::AtomicUsize>,
+        first_color: gpui::Hsla,
+        second_color: gpui::Hsla,
+        first: HighlightProvider,
+        second: HighlightProvider,
+    }
+
+    fn make_dual_providers() -> DualProviders {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let first_color = gpui::hsla(0.0, 1.0, 0.5, 1.0);
+        let second_color = gpui::hsla(0.66, 1.0, 0.5, 1.0);
+        let first_calls = Arc::new(AtomicUsize::new(0));
+        let second_calls = Arc::new(AtomicUsize::new(0));
+        let fc = Arc::clone(&first_calls);
+        let sc = Arc::clone(&second_calls);
+        DualProviders {
+            first_calls,
+            second_calls,
+            first_color,
+            second_color,
+            first: HighlightProvider::from_fn(move |range: Range<usize>| {
+                fc.fetch_add(1, Ordering::SeqCst);
+                vec![(
+                    range,
+                    gpui::HighlightStyle {
+                        color: Some(first_color),
+                        ..gpui::HighlightStyle::default()
+                    },
+                )]
+            }),
+            second: HighlightProvider::from_fn(move |range: Range<usize>| {
+                sc.fetch_add(1, Ordering::SeqCst);
+                vec![(
+                    range,
+                    gpui::HighlightStyle {
+                        color: Some(second_color),
+                        ..gpui::HighlightStyle::default()
+                    },
+                )]
+            }),
+        }
+    }
+
+    #[gpui::test]
+    fn stable_highlight_provider_binding_key_preserves_existing_provider_and_cache(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use std::sync::atomic::Ordering;
+
+        let (input, cx) = cx.add_window_view(|window, cx| {
+            TextInput::new(
+                TextInputOptions {
+                    multiline: true,
+                    ..Default::default()
+                },
+                window,
+                cx,
+            )
+        });
+
+        let dp = make_dual_providers();
+
+        cx.update(|_window, app| {
+            input.update(app, |input, cx| {
+                input.set_text("alpha\nbeta", cx);
+                input.set_highlight_provider_with_key(41, dp.first.clone(), cx);
+
+                let initial_resolved = input.resolve_provider_highlights(0, 5);
+                assert_eq!(dp.first_calls.load(Ordering::SeqCst), 1);
+                assert_eq!(initial_resolved.highlights[0].1.color, Some(dp.first_color));
+
+                let initial_cache = input
+                    .provider_highlight_cache
+                    .as_ref()
+                    .expect("initial resolve should populate the provider cache");
+                assert_eq!(initial_cache.entries.len(), 1);
+                let initial_entry = initial_cache
+                    .entries
+                    .last()
+                    .expect("initial cache should contain one provider slice");
+                assert_eq!(initial_entry.byte_start, 0);
+                assert_eq!(initial_entry.byte_end, 5);
+
+                let initial_highlight_epoch = input.highlight_epoch;
+                let initial_shape_epoch = input.shape_style_epoch;
+                let initial_cached_highlights = Arc::clone(&initial_entry.highlights);
+
+                input.set_highlight_provider_with_key(41, dp.second.clone(), cx);
+
+                assert_eq!(
+                    input.highlight_epoch, initial_highlight_epoch,
+                    "reinstalling the same binding key should not invalidate provider highlights"
+                );
+                assert_eq!(
+                    input.shape_style_epoch, initial_shape_epoch,
+                    "reinstalling the same binding key should not invalidate shaped rows"
+                );
+
+                let cache = input
+                    .provider_highlight_cache
+                    .as_ref()
+                    .expect("stable binding key should preserve the cached provider range");
+                let cache_entry = cache
+                    .entries
+                    .last()
+                    .expect("stable binding key should keep the cached provider slice");
+                assert!(
+                    Arc::ptr_eq(&cache_entry.highlights, &initial_cached_highlights),
+                    "stable binding key should preserve the existing cached highlight vector"
+                );
+
+                let resolved = input.resolve_provider_highlights(1, 4);
+                assert_eq!(
+                    dp.first_calls.load(Ordering::SeqCst),
+                    1,
+                    "stable binding key should keep using the original provider/cache"
+                );
+                assert_eq!(
+                    dp.second_calls.load(Ordering::SeqCst),
+                    0,
+                    "stable binding key should not bind a replacement provider"
+                );
+                assert!(Arc::ptr_eq(
+                    &resolved.highlights,
+                    &initial_cached_highlights
+                ));
+                assert_eq!(resolved.highlights[0].1.color, Some(dp.first_color));
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn changed_highlight_provider_binding_key_rebinds_and_clears_cached_range(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use std::sync::atomic::Ordering;
+
+        let (input, cx) = cx.add_window_view(|window, cx| {
+            TextInput::new(
+                TextInputOptions {
+                    multiline: true,
+                    ..Default::default()
+                },
+                window,
+                cx,
+            )
+        });
+
+        let dp = make_dual_providers();
+
+        cx.update(|_window, app| {
+            input.update(app, |input, cx| {
+                input.set_text("alpha\nbeta", cx);
+                input.set_highlight_provider_with_key(41, dp.first.clone(), cx);
+                let _ = input.resolve_provider_highlights(0, 5);
+                assert_eq!(dp.first_calls.load(Ordering::SeqCst), 1);
+                let previous_highlight_epoch = input.highlight_epoch;
+                let previous_shape_epoch = input.shape_style_epoch;
+
+                input.set_highlight_provider_with_key(42, dp.second.clone(), cx);
+
+                assert!(
+                    input.provider_highlight_cache.is_none(),
+                    "changing the binding key should drop the cached provider range"
+                );
+                assert!(
+                    input.highlight_epoch > previous_highlight_epoch,
+                    "changing the binding key should invalidate provider highlight epochs"
+                );
+                assert!(
+                    input.shape_style_epoch > previous_shape_epoch,
+                    "changing the binding key should invalidate shaped text caches"
+                );
+
+                let resolved = input.resolve_provider_highlights(0, 5);
+                assert_eq!(
+                    dp.first_calls.load(Ordering::SeqCst),
+                    1,
+                    "rebinding should stop using the previous provider"
+                );
+                assert_eq!(
+                    dp.second_calls.load(Ordering::SeqCst),
+                    1,
+                    "rebinding should resolve highlights from the new provider"
+                );
+                assert_eq!(resolved.highlights[0].1.color, Some(dp.second_color));
+
+                let cache = input
+                    .provider_highlight_cache
+                    .as_ref()
+                    .expect("resolving after a rebind should repopulate the provider cache");
+                assert_eq!(cache.highlight_epoch, input.highlight_epoch);
+                assert_eq!(cache.entries.len(), 1);
+                let cache_entry = cache
+                    .entries
+                    .last()
+                    .expect("rebind resolve should cache the requested provider slice");
+                assert_eq!(cache_entry.byte_start, 0);
+                assert_eq!(cache_entry.byte_end, 5);
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn replace_utf8_range_invalidates_cached_provider_highlights(cx: &mut gpui::TestAppContext) {
+        use std::sync::atomic::Ordering;
+
+        let (input, cx) = cx.add_window_view(|window, cx| {
+            TextInput::new(
+                TextInputOptions {
+                    multiline: true,
+                    ..Default::default()
+                },
+                window,
+                cx,
+            )
+        });
+
+        let dp = make_dual_providers();
+
+        cx.update(|_window, app| {
+            input.update(app, |input, cx| {
+                input.set_text("alpha\nbeta", cx);
+                input.set_highlight_provider_with_key(41, dp.first.clone(), cx);
+
+                let _ = input.resolve_provider_highlights(0, 5);
+                assert_eq!(dp.first_calls.load(Ordering::SeqCst), 1);
+                let previous_highlight_epoch = input.highlight_epoch;
+                assert!(
+                    input.provider_highlight_cache.is_some(),
+                    "initial resolve should populate the provider cache"
+                );
+
+                let inserted = input.replace_utf8_range(0..5, "gamma", cx);
+                assert_eq!(inserted, 0..5);
+                assert!(
+                    input.provider_highlight_cache.is_none(),
+                    "text edits should clear cached provider ranges"
+                );
+                assert!(
+                    input.highlight_epoch > previous_highlight_epoch,
+                    "text edits should invalidate provider highlight epochs"
+                );
+
+                let resolved = input.resolve_provider_highlights(0, 5);
+                assert_eq!(
+                    dp.first_calls.load(Ordering::SeqCst),
+                    2,
+                    "after an edit, the stable provider should be asked for a fresh range"
+                );
+                assert_eq!(resolved.highlights[0].1.color, Some(dp.first_color));
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn set_text_invalidates_cached_provider_highlights(cx: &mut gpui::TestAppContext) {
+        use std::sync::atomic::Ordering;
+
+        let (input, cx) = cx.add_window_view(|window, cx| {
+            TextInput::new(
+                TextInputOptions {
+                    multiline: true,
+                    ..Default::default()
+                },
+                window,
+                cx,
+            )
+        });
+
+        let dp = make_dual_providers();
+
+        cx.update(|_window, app| {
+            input.update(app, |input, cx| {
+                input.set_text("alpha\nbeta", cx);
+                input.set_highlight_provider_with_key(41, dp.first.clone(), cx);
+
+                let _ = input.resolve_provider_highlights(0, 5);
+                assert_eq!(dp.first_calls.load(Ordering::SeqCst), 1);
+                let previous_highlight_epoch = input.highlight_epoch;
+                assert!(
+                    input.provider_highlight_cache.is_some(),
+                    "initial resolve should populate the provider cache"
+                );
+
+                input.set_text("gamma\nbeta", cx);
+
+                assert!(
+                    input.provider_highlight_cache.is_none(),
+                    "set_text should clear cached provider ranges"
+                );
+                assert!(
+                    input.highlight_epoch > previous_highlight_epoch,
+                    "set_text should invalidate provider highlight epochs"
+                );
+
+                let resolved = input.resolve_provider_highlights(0, 5);
+                assert_eq!(
+                    dp.first_calls.load(Ordering::SeqCst),
+                    2,
+                    "after set_text, the stable provider should be asked for a fresh range"
+                );
+                assert_eq!(resolved.highlights[0].1.color, Some(dp.first_color));
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn undo_invalidates_cached_provider_highlights(cx: &mut gpui::TestAppContext) {
+        use std::sync::atomic::Ordering;
+
+        let (input, cx) = cx.add_window_view(|window, cx| {
+            TextInput::new(
+                TextInputOptions {
+                    multiline: true,
+                    ..Default::default()
+                },
+                window,
+                cx,
+            )
+        });
+
+        let dp = make_dual_providers();
+
+        cx.update(|window, app| {
+            input.update(app, |input, cx| {
+                input.set_text("alpha\nbeta", cx);
+                input.set_highlight_provider_with_key(41, dp.first.clone(), cx);
+
+                let _ = input.resolve_provider_highlights(0, 5);
+                assert_eq!(dp.first_calls.load(Ordering::SeqCst), 1);
+
+                let inserted = input.replace_utf8_range(0..5, "gamma", cx);
+                assert_eq!(inserted, 0..5);
+                let _ = input.resolve_provider_highlights(0, 5);
+                assert_eq!(dp.first_calls.load(Ordering::SeqCst), 2);
+                let previous_highlight_epoch = input.highlight_epoch;
+
+                input.undo(&Undo, window, cx);
+
+                assert_eq!(input.text(), "alpha\nbeta");
+                assert!(
+                    input.provider_highlight_cache.is_none(),
+                    "undo should clear cached provider ranges restored from the old snapshot"
+                );
+                assert!(
+                    input.highlight_epoch > previous_highlight_epoch,
+                    "undo should invalidate provider highlight epochs"
+                );
+
+                let resolved = input.resolve_provider_highlights(0, 5);
+                assert_eq!(
+                    dp.first_calls.load(Ordering::SeqCst),
+                    3,
+                    "after undo, the provider should be asked for a fresh range"
+                );
+                assert_eq!(resolved.highlights[0].1.color, Some(dp.first_color));
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn replace_text_in_range_invalidates_cached_provider_highlights(cx: &mut gpui::TestAppContext) {
+        use std::sync::atomic::Ordering;
+
+        let (input, cx) = cx.add_window_view(|window, cx| {
+            TextInput::new(
+                TextInputOptions {
+                    multiline: true,
+                    ..Default::default()
+                },
+                window,
+                cx,
+            )
+        });
+
+        let dp = make_dual_providers();
+
+        cx.update(|window, app| {
+            input.update(app, |input, cx| {
+                input.set_text("alpha\nbeta", cx);
+                input.set_highlight_provider_with_key(41, dp.first.clone(), cx);
+
+                let _ = input.resolve_provider_highlights(0, 5);
+                assert_eq!(dp.first_calls.load(Ordering::SeqCst), 1);
+                let previous_highlight_epoch = input.highlight_epoch;
+                assert!(
+                    input.provider_highlight_cache.is_some(),
+                    "initial resolve should populate the provider cache"
+                );
+
+                input.replace_text_in_range(Some(0..5), "gamma", window, cx);
+
+                assert_eq!(input.text(), "gamma\nbeta");
+                assert!(
+                    input.provider_highlight_cache.is_none(),
+                    "IME replace_text_in_range should clear cached provider ranges"
+                );
+                assert!(
+                    input.highlight_epoch > previous_highlight_epoch,
+                    "IME replace_text_in_range should invalidate provider highlight epochs"
+                );
+
+                let resolved = input.resolve_provider_highlights(0, 5);
+                assert_eq!(
+                    dp.first_calls.load(Ordering::SeqCst),
+                    2,
+                    "after replace_text_in_range, the stable provider should be asked for a fresh range"
+                );
+                assert_eq!(resolved.highlights[0].1.color, Some(dp.first_color));
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn replace_and_mark_text_in_range_invalidates_cached_provider_highlights(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use std::sync::atomic::Ordering;
+
+        let (input, cx) = cx.add_window_view(|window, cx| {
+            TextInput::new(
+                TextInputOptions {
+                    multiline: true,
+                    ..Default::default()
+                },
+                window,
+                cx,
+            )
+        });
+
+        let dp = make_dual_providers();
+
+        cx.update(|window, app| {
+            input.update(app, |input, cx| {
+                input.set_text("alpha\nbeta", cx);
+                input.set_highlight_provider_with_key(41, dp.first.clone(), cx);
+
+                let _ = input.resolve_provider_highlights(0, 5);
+                assert_eq!(dp.first_calls.load(Ordering::SeqCst), 1);
+                let previous_highlight_epoch = input.highlight_epoch;
+                assert!(
+                    input.provider_highlight_cache.is_some(),
+                    "initial resolve should populate the provider cache"
+                );
+
+                input.replace_and_mark_text_in_range(Some(0..5), "gamma", None, window, cx);
+
+                assert_eq!(input.text(), "gamma\nbeta");
+                assert_eq!(input.marked_range, Some(0..5));
+                assert!(
+                    input.provider_highlight_cache.is_none(),
+                    "IME replace_and_mark_text_in_range should clear cached provider ranges"
+                );
+                assert!(
+                    input.highlight_epoch > previous_highlight_epoch,
+                    "IME replace_and_mark_text_in_range should invalidate provider highlight epochs"
+                );
+
+                let resolved = input.resolve_provider_highlights(0, 5);
+                assert_eq!(
+                    dp.first_calls.load(Ordering::SeqCst),
+                    2,
+                    "after replace_and_mark_text_in_range, the stable provider should be asked for a fresh range"
+                );
+                assert_eq!(resolved.highlights[0].1.color, Some(dp.first_color));
+            });
+        });
     }
 
     #[test]

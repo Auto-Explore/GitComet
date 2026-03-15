@@ -275,12 +275,9 @@ impl MainPaneView {
             if region != DiffTextRegion::Inline {
                 return fallback;
             }
-            let Loadable::Ready(lines) = &self.worktree_preview else {
-                return fallback;
-            };
-            return lines
-                .get(visible_ix)
-                .map(|l| expand_tabs(l))
+            return self
+                .worktree_preview_line_text(visible_ix)
+                .map(expand_tabs)
                 .unwrap_or(fallback);
         }
 

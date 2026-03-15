@@ -49,10 +49,13 @@ impl MainPaneView {
         }
 
         if self.is_file_preview_active() {
-            let Loadable::Ready(lines) = &self.worktree_preview else {
+            let Some(line_count) = self.worktree_preview_line_count() else {
                 return;
             };
-            for (ix, line) in lines.iter().enumerate() {
+            for ix in 0..line_count {
+                let Some(line) = self.worktree_preview_line_text(ix) else {
+                    continue;
+                };
                 if contains_ascii_case_insensitive(line, query) {
                     self.diff_search_matches.push(ix);
                 }

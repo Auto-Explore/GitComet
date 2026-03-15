@@ -141,20 +141,10 @@ impl MainPaneView {
                     .and_then(|o| o.as_ref())
                     .map(|v| v.as_slice())
                     .unwrap_or(&[]);
-                let text = match col {
-                    ThreeWayColumn::Base => this
-                        .conflict_resolver
-                        .three_way_line_text(ThreeWayColumn::Base, ix)
-                        .unwrap_or(""),
-                    ThreeWayColumn::Ours => this
-                        .conflict_resolver
-                        .three_way_line_text(ThreeWayColumn::Ours, ix)
-                        .unwrap_or(""),
-                    ThreeWayColumn::Theirs => this
-                        .conflict_resolver
-                        .three_way_line_text(ThreeWayColumn::Theirs, ix)
-                        .unwrap_or(""),
-                };
+                let text = this
+                    .conflict_resolver
+                    .three_way_line_text(col, ix)
+                    .unwrap_or("");
                 if text.is_empty() {
                     continue;
                 }
@@ -957,18 +947,35 @@ impl MainPaneView {
         let syntax_document = this.conflict_resolved_preview_prepared_syntax_document;
         let syntax_mode = syntax_mode_for_prepared_document(syntax_document);
         let line_starts = &this.conflict_resolved_preview_line_starts;
-        let line_texts: Vec<SharedString> =
+        let (line_texts, prepared_line_highlights) =
             this.conflict_resolver_input.read_with(cx, |input, _| {
                 let text = input.text();
-                range
+                let line_texts: Vec<SharedString> = range
                     .clone()
                     .map(|ix| {
                         resolved_output_line_text(text, line_starts, ix)
                             .to_string()
                             .into()
                     })
-                    .collect()
+                    .collect();
+                let prepared_line_highlights = syntax_document
+                    .zip(syntax_language)
+                    .and_then(|(document, language)| {
+                        request_syntax_highlights_for_prepared_document_line_range(
+                            theme,
+                            text,
+                            line_starts,
+                            document,
+                            language,
+                            range.clone(),
+                        )
+                    })
+                    .unwrap_or_default();
+                (line_texts, prepared_line_highlights)
             });
+        if prepared_line_highlights.iter().any(|line| line.pending) {
+            this.ensure_prepared_syntax_chunk_poll(cx);
+        }
 
         let unresolved_row_bg =
             with_alpha(theme.colors.danger, if theme.is_dark { 0.18 } else { 0.10 });
@@ -979,7 +986,8 @@ impl MainPaneView {
 
         let elements: Vec<AnyElement> = range
             .zip(line_texts)
-            .map(|(ix, line_text)| {
+            .enumerate()
+            .map(|(local_ix, (ix, line_text))| {
                 if ix >= this.conflict_resolved_preview_line_count {
                     return div()
                         .id(("conflict_resolved_output_oob", ix))
@@ -992,32 +1000,34 @@ impl MainPaneView {
                 }
 
                 let row_content = if syntax_language.is_some() && !line_text.is_empty() {
+                    let prepared_line_highlight = prepared_line_highlights
+                        .get(local_ix)
+                        .filter(|line| line.line_ix == ix);
                     let needs_refresh = this
                         .conflict_resolved_preview_segments_cache_get(ix)
                         .is_none_or(|styled| styled.text.as_ref() != line_text.as_ref());
                     let mut pending_styled = None;
                     if needs_refresh {
-                        let (styled, is_pending) =
-                            build_cached_diff_styled_text_for_prepared_document_line_nonblocking(
+                        if let Some(line_highlights) = prepared_line_highlight {
+                            let styled = build_cached_diff_styled_text_from_relative_highlights(
+                                line_text.as_ref(),
+                                line_highlights.highlights.as_slice(),
+                            );
+                            if line_highlights.pending {
+                                pending_styled = Some(styled);
+                            } else {
+                                this.conflict_resolved_preview_segments_cache_set(ix, styled);
+                            }
+                        } else {
+                            let styled = build_conflict_cached_diff_styled_text(
                                 theme,
                                 line_text.as_ref(),
                                 &[],
                                 "",
-                                DiffSyntaxConfig {
-                                    language: syntax_language,
-                                    mode: syntax_mode,
-                                },
+                                syntax_language,
+                                syntax_mode,
                                 None,
-                                PreparedDiffSyntaxLine {
-                                    document: syntax_document,
-                                    line_ix: ix,
-                                },
-                            )
-                            .into_parts();
-                        if is_pending {
-                            this.ensure_prepared_syntax_chunk_poll(cx);
-                            pending_styled = Some(styled);
-                        } else {
+                            );
                             this.conflict_resolved_preview_segments_cache_set(ix, styled);
                         }
                     }

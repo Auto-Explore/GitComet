@@ -121,6 +121,7 @@ fn build_resolved_output_syntax_state_with_source(
     }
 }
 
+#[cfg(test)]
 pub(super) fn build_resolved_output_syntax_state_for_snapshot(
     theme: AppTheme,
     output_snapshot: &TextModelSnapshot,
@@ -139,7 +140,6 @@ pub(super) fn build_resolved_output_syntax_state_for_snapshot(
     )
 }
 
-#[cfg(test)]
 pub(super) fn build_resolved_output_syntax_state_for_snapshot_with_budget(
     theme: AppTheme,
     output_snapshot: &TextModelSnapshot,
@@ -241,6 +241,28 @@ pub(super) fn build_line_starts(text: &str) -> Vec<usize> {
     line_starts
 }
 
+pub(super) fn preview_source_text_from_lines(lines: &[String], source_len: usize) -> SharedString {
+    let mut source = lines.join("\n");
+    if source.len() < source_len {
+        source.push('\n');
+    }
+    debug_assert_eq!(
+        source.len(),
+        source_len,
+        "preview lines/source length should only differ by an optional trailing newline",
+    );
+    source.into()
+}
+
+pub(in crate::view) fn preview_source_text_and_line_starts_from_lines(
+    lines: &[String],
+    source_len: usize,
+) -> (SharedString, Arc<[usize]>) {
+    let text = preview_source_text_from_lines(lines, source_len);
+    let line_starts = Arc::from(build_line_starts(text.as_ref()));
+    (text, line_starts)
+}
+
 pub(super) fn line_start_offset_for_index(
     line_starts: &[usize],
     text_len: usize,
@@ -254,6 +276,18 @@ pub(super) fn source_line_count(text: &str) -> usize {
         0
     } else {
         text.lines().count()
+    }
+}
+
+/// Number of logical rows represented by precomputed line starts.
+///
+/// Uses `split('\n')` row semantics for non-empty text, so a trailing newline
+/// preserves a final empty row.
+pub(super) fn indexed_line_count(text: &str, line_starts: &[usize]) -> usize {
+    if text.is_empty() {
+        0
+    } else {
+        line_starts.len().max(1)
     }
 }
 
@@ -358,12 +392,13 @@ pub(super) fn resolved_outline_delta_for_snapshot_transition(
 ) -> Option<ResolvedOutlineDelta> {
     if old_snapshot.model_id() == new_snapshot.model_id()
         && new_snapshot.revision() == old_snapshot.revision().saturating_add(1)
-        && let Some((old_range, new_range)) = recent_edit_delta {
-            return Some(ResolvedOutlineDelta {
-                old_range,
-                new_range,
-            });
-        }
+        && let Some((old_range, new_range)) = recent_edit_delta
+    {
+        return Some(ResolvedOutlineDelta {
+            old_range,
+            new_range,
+        });
+    }
 
     resolved_outline_delta_between_texts(old_snapshot.as_ref(), new_snapshot.as_ref())
 }
@@ -1915,10 +1950,12 @@ pub(in crate::view) struct MainPaneView {
     pub(in crate::view) file_diff_cache_path: Option<std::path::PathBuf>,
     pub(in crate::view) file_diff_cache_language: Option<rows::DiffSyntaxLanguage>,
     pub(in crate::view) file_diff_cache_rows: Vec<FileDiffRow>,
-    /// Maps 1-based old_line → index in file_diff_cache_rows (for inline projection).
-    pub(in crate::view) file_diff_old_line_to_split_ix: HashMap<u32, usize>,
-    /// Maps 1-based new_line → index in file_diff_cache_rows (for inline projection).
-    pub(in crate::view) file_diff_new_line_to_split_ix: HashMap<u32, usize>,
+    /// Real old-side file text used for split and inline syntax projection.
+    pub(in crate::view) file_diff_old_text: SharedString,
+    pub(in crate::view) file_diff_old_line_starts: Arc<[usize]>,
+    /// Real new-side file text used for split and inline syntax projection.
+    pub(in crate::view) file_diff_new_text: SharedString,
+    pub(in crate::view) file_diff_new_line_starts: Arc<[usize]>,
     pub(in crate::view) file_diff_inline_cache: Vec<AnnotatedDiffLine>,
     pub(in crate::view) file_diff_inline_text: SharedString,
     pub(in crate::view) file_diff_inline_word_highlights: Vec<Option<Vec<Range<usize>>>>,
@@ -1931,6 +1968,8 @@ pub(in crate::view) struct MainPaneView {
     pub(in crate::view) syntax_chunk_poll_task: Option<gpui::Task<()>>,
     pub(in crate::view) prepared_syntax_documents:
         HashMap<PreparedSyntaxDocumentKey, rows::PreparedDiffSyntaxDocument>,
+    #[cfg(test)]
+    pub(in crate::view) diff_syntax_budget_override: Option<rows::DiffSyntaxBudget>,
 
     pub(in crate::view) file_markdown_preview_cache_repo_id: Option<RepoId>,
     pub(in crate::view) file_markdown_preview_cache_rev: u64,
@@ -1950,9 +1989,10 @@ pub(in crate::view) struct MainPaneView {
     pub(in crate::view) file_image_diff_cache_new_svg_path: Option<std::path::PathBuf>,
 
     pub(in crate::view) worktree_preview_path: Option<std::path::PathBuf>,
-    pub(in crate::view) worktree_preview: Loadable<Arc<Vec<String>>>,
+    pub(in crate::view) worktree_preview: Loadable<usize>,
+    pub(in crate::view) worktree_preview_text: SharedString,
+    pub(in crate::view) worktree_preview_line_starts: Arc<[usize]>,
     pub(in crate::view) worktree_preview_content_rev: u64,
-    pub(in crate::view) worktree_preview_source_len: usize,
     pub(in crate::view) worktree_markdown_preview_path: Option<std::path::PathBuf>,
     pub(in crate::view) worktree_markdown_preview_source_rev: u64,
     pub(in crate::view) worktree_markdown_preview: LoadableMarkdownDoc,
@@ -1964,7 +2004,6 @@ pub(in crate::view) struct MainPaneView {
     pub(in crate::view) worktree_preview_segments_cache:
         HashMap<usize, VersionedCachedDiffStyledText>,
     pub(in crate::view) diff_preview_is_new_file: bool,
-    pub(in crate::view) diff_preview_new_file_lines: Arc<Vec<String>>,
 
     pub(in crate::view) conflict_resolver_input: Entity<components::TextInput>,
     pub(super) _conflict_resolver_input_subscription: gpui::Subscription,
@@ -2035,4 +2074,31 @@ pub(super) fn conflict_canvas_rows_enabled_from_env() -> bool {
     std::env::var("GITCOMET_CONFLICT_CANVAS_ROWS")
         .ok()
         .is_none_or(|value| parse_conflict_canvas_rows_env(&value))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn indexed_line_count_returns_zero_for_empty_text() {
+        assert_eq!(indexed_line_count("", &[]), 0);
+    }
+
+    #[test]
+    fn indexed_line_count_matches_nonempty_line_starts() {
+        let text = "alpha\nbeta";
+        let line_starts = build_line_starts(text);
+
+        assert_eq!(indexed_line_count(text, &line_starts), 2);
+    }
+
+    #[test]
+    fn indexed_line_count_preserves_trailing_empty_row() {
+        let text = "alpha\nbeta\n";
+        let line_starts = build_line_starts(text);
+
+        assert_eq!(line_starts, vec![0, 6, 11]);
+        assert_eq!(indexed_line_count(text, &line_starts), 3);
+    }
 }

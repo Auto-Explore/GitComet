@@ -65,7 +65,6 @@ impl MainPaneView {
         {
             self.worktree_preview_path = None;
             self.worktree_preview = Loadable::NotLoaded;
-            self.worktree_preview_source_len = 0;
             self.worktree_preview_segments_cache_path = None;
             self.worktree_preview_segments_cache.clear();
             self.diff_horizontal_min_width = px(0.0);
@@ -483,58 +482,49 @@ impl MainPaneView {
                 .when_some(next_file_btn, |d, btn| d.child(btn));
         }
 
-        if !is_conflict_resolver
-            && let Some(preview_kind) = rendered_view_toggle_kind {
-                let preview_mode = self.rendered_preview_modes.get(preview_kind);
-                controls = controls.child(
-                    div()
-                        .id(preview_kind.toggle_id())
-                        .debug_selector(move || preview_kind.toggle_id().to_string())
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .child(
-                            components::Button::new(
-                                preview_kind.rendered_button_id(),
-                                preview_kind.rendered_label(),
-                            )
-                            .style(if preview_mode == RenderedPreviewMode::Rendered {
-                                components::ButtonStyle::Filled
-                            } else {
-                                components::ButtonStyle::Outlined
-                            })
-                            .on_click(
-                                theme,
-                                cx,
-                                move |this, _e, _w, cx| {
-                                    this.rendered_preview_modes
-                                        .set(preview_kind, RenderedPreviewMode::Rendered);
-                                    cx.notify();
-                                },
-                            ),
+        if !is_conflict_resolver && let Some(preview_kind) = rendered_view_toggle_kind {
+            let preview_mode = self.rendered_preview_modes.get(preview_kind);
+            controls = controls.child(
+                div()
+                    .id(preview_kind.toggle_id())
+                    .debug_selector(move || preview_kind.toggle_id().to_string())
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .child(
+                        components::Button::new(
+                            preview_kind.rendered_button_id(),
+                            preview_kind.rendered_label(),
                         )
-                        .child(
-                            components::Button::new(
-                                preview_kind.source_button_id(),
-                                preview_kind.source_label(),
-                            )
-                            .style(if preview_mode == RenderedPreviewMode::Source {
-                                components::ButtonStyle::Filled
-                            } else {
-                                components::ButtonStyle::Outlined
-                            })
-                            .on_click(
-                                theme,
-                                cx,
-                                move |this, _e, _w, cx| {
-                                    this.rendered_preview_modes
-                                        .set(preview_kind, RenderedPreviewMode::Source);
-                                    cx.notify();
-                                },
-                            ),
-                        ),
-                );
-            }
+                        .style(if preview_mode == RenderedPreviewMode::Rendered {
+                            components::ButtonStyle::Filled
+                        } else {
+                            components::ButtonStyle::Outlined
+                        })
+                        .on_click(theme, cx, move |this, _e, _w, cx| {
+                            this.rendered_preview_modes
+                                .set(preview_kind, RenderedPreviewMode::Rendered);
+                            cx.notify();
+                        }),
+                    )
+                    .child(
+                        components::Button::new(
+                            preview_kind.source_button_id(),
+                            preview_kind.source_label(),
+                        )
+                        .style(if preview_mode == RenderedPreviewMode::Source {
+                            components::ButtonStyle::Filled
+                        } else {
+                            components::ButtonStyle::Outlined
+                        })
+                        .on_click(theme, cx, move |this, _e, _w, cx| {
+                            this.rendered_preview_modes
+                                .set(preview_kind, RenderedPreviewMode::Source);
+                            cx.notify();
+                        }),
+                    ),
+            );
+        }
 
         if let Some(repo_id) = repo_id {
             controls = controls.child(
@@ -729,13 +719,13 @@ impl MainPaneView {
                             .child(self.diff_raw_input.clone())
                             .into_any_element()
                     }
-                    Loadable::Ready(lines) => {
-                        if lines.is_empty() {
+                    Loadable::Ready(line_count) => {
+                        if *line_count == 0 {
                             components::empty_state(theme, "File", "Empty file.").into_any_element()
                         } else {
                             let list = uniform_list(
                                 "worktree_preview_list",
-                                lines.len(),
+                                *line_count,
                                 cx.processor(Self::render_worktree_preview_rows),
                             )
                             .h_full()

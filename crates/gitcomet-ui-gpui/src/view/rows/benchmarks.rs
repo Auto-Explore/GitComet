@@ -7,8 +7,9 @@ use super::diff_text::{
     benchmark_diff_syntax_prepared_loaded_chunk_count,
     benchmark_flush_diff_syntax_deferred_drop_queue,
     benchmark_reset_diff_syntax_prepared_cache_metrics, diff_syntax_language_for_path,
-    inject_background_prepared_diff_syntax_document, prepare_diff_syntax_document,
-    prepare_diff_syntax_document_in_background, prepare_diff_syntax_document_with_budget_reuse,
+    inject_background_prepared_diff_syntax_document,
+    prepare_diff_syntax_document_in_background_text,
+    prepare_diff_syntax_document_with_budget_reuse_text,
 };
 use super::*;
 use crate::kit::text_model::TextModel;
@@ -1501,26 +1502,36 @@ impl PatchDiffSearchQueryUpdateFixture {
     }
 }
 
-fn prepare_bench_diff_syntax_document<'a, I>(
+fn prepare_bench_diff_syntax_document(
     language: DiffSyntaxLanguage,
     budget: DiffSyntaxBudget,
-    lines: I,
+    text: &str,
     old_document: Option<super::diff_text::PreparedDiffSyntaxDocument>,
-) -> Option<super::diff_text::PreparedDiffSyntaxDocument>
-where
-    I: Clone + Iterator<Item = &'a str>,
-{
-    match prepare_diff_syntax_document_with_budget_reuse(
+) -> Option<super::diff_text::PreparedDiffSyntaxDocument> {
+    let text: SharedString = text.to_owned().into();
+    let line_starts: Arc<[usize]> = Arc::from(line_starts_for_text(text.as_ref()));
+
+    match prepare_diff_syntax_document_with_budget_reuse_text(
         language,
         DiffSyntaxMode::Auto,
-        lines.clone(),
+        text.clone(),
+        Arc::clone(&line_starts),
         budget,
         old_document,
+        None,
     ) {
         PrepareDiffSyntaxDocumentResult::Ready(document) => Some(document),
         PrepareDiffSyntaxDocumentResult::TimedOut => {
-            prepare_diff_syntax_document_in_background(language, DiffSyntaxMode::Auto, lines)
-                .map(inject_background_prepared_diff_syntax_document)
+            let old_reparse_seed = old_document.and_then(prepared_diff_syntax_reparse_seed);
+            prepare_diff_syntax_document_in_background_text_with_reuse(
+                language,
+                DiffSyntaxMode::Auto,
+                text,
+                line_starts,
+                old_reparse_seed,
+                None,
+            )
+            .map(inject_background_prepared_diff_syntax_document)
         }
         PrepareDiffSyntaxDocumentResult::Unsupported => None,
     }
@@ -1663,12 +1674,8 @@ impl FileDiffSyntaxPrepareFixture {
         &self,
         lines: &[String],
     ) -> Option<super::diff_text::PreparedDiffSyntaxDocument> {
-        prepare_bench_diff_syntax_document(
-            self.language,
-            self.budget,
-            lines.iter().map(String::as_str),
-            None,
-        )
+        let text = lines.join("\n");
+        prepare_bench_diff_syntax_document(self.language, self.budget, text.as_str(), None)
     }
 
     fn hash_prepared(
@@ -1800,12 +1807,8 @@ impl FileDiffSyntaxReparseFixture {
         lines: &[String],
         old_document: Option<super::diff_text::PreparedDiffSyntaxDocument>,
     ) -> Option<super::diff_text::PreparedDiffSyntaxDocument> {
-        prepare_bench_diff_syntax_document(
-            self.language,
-            self.budget,
-            lines.iter().map(String::as_str),
-            old_document,
-        )
+        let text = lines.join("\n");
+        prepare_bench_diff_syntax_document(self.language, self.budget, text.as_str(), old_document)
     }
 
     fn hash_prepared(
@@ -1928,18 +1931,12 @@ impl FileDiffInlineSyntaxProjectionFixture {
         }
 
         let budget = DiffSyntaxBudget::default();
-        let old_document = prepare_bench_diff_syntax_document(
-            language,
-            budget,
-            old_lines.iter().map(String::as_str),
-            None,
-        );
-        let new_document = prepare_bench_diff_syntax_document(
-            language,
-            budget,
-            new_lines.iter().map(String::as_str),
-            None,
-        );
+        let old_text = old_lines.join("\n");
+        let old_document =
+            prepare_bench_diff_syntax_document(language, budget, old_text.as_str(), None);
+        let new_text = new_lines.join("\n");
+        let new_document =
+            prepare_bench_diff_syntax_document(language, budget, new_text.as_str(), None);
 
         Self {
             inline_rows,
@@ -2009,32 +2006,11 @@ impl FileDiffInlineSyntaxProjectionFixture {
         &self,
         line: &AnnotatedDiffLine,
     ) -> super::diff_text::PreparedDiffSyntaxLine {
-        match line.kind {
-            DiffLineKind::Remove => line
-                .old_line
-                .map(|line_no| super::diff_text::PreparedDiffSyntaxLine {
-                    document: self.old_document,
-                    line_ix: line_no.saturating_sub(1) as usize,
-                })
-                .unwrap_or(super::diff_text::PreparedDiffSyntaxLine {
-                    document: None,
-                    line_ix: 0,
-                }),
-            DiffLineKind::Add | DiffLineKind::Context => line
-                .new_line
-                .map(|line_no| super::diff_text::PreparedDiffSyntaxLine {
-                    document: self.new_document,
-                    line_ix: line_no.saturating_sub(1) as usize,
-                })
-                .unwrap_or(super::diff_text::PreparedDiffSyntaxLine {
-                    document: None,
-                    line_ix: 0,
-                }),
-            DiffLineKind::Header | DiffLineKind::Hunk => super::diff_text::PreparedDiffSyntaxLine {
-                document: None,
-                line_ix: 0,
-            },
-        }
+        super::diff_text::prepared_diff_syntax_line_for_inline_diff_row(
+            self.old_document,
+            self.new_document,
+            line,
+        )
     }
 
     fn hash_window_step(&self, start: usize, window: usize) -> (u64, bool) {
@@ -2157,10 +2133,11 @@ impl LargeHtmlSyntaxFixture {
     }
 
     pub fn run_background_prepare_step(&self) -> u64 {
-        let prepared = prepare_diff_syntax_document_in_background(
+        let prepared = prepare_diff_syntax_document_in_background_text(
             DiffSyntaxLanguage::Html,
             DiffSyntaxMode::Auto,
-            self.text.split('\n'),
+            self.text.as_ref().to_owned().into(),
+            Arc::clone(&self.line_starts),
         );
 
         let mut h = DefaultHasher::new();
@@ -2223,7 +2200,7 @@ impl LargeHtmlSyntaxFixture {
         prepare_bench_diff_syntax_document(
             DiffSyntaxLanguage::Html,
             DiffSyntaxBudget::default(),
-            text.split('\n'),
+            text,
             None,
         )
     }
@@ -2399,11 +2376,13 @@ impl WorktreePreviewRenderFixture {
         let generated_lines = build_synthetic_source_lines(lines, line_bytes);
         let language = diff_syntax_language_for_path("src/lib.rs");
         let syntax_mode = DiffSyntaxMode::Auto;
+        let generated_text = generated_lines.join("\n");
         let prepared_document = language.and_then(|language| {
-            prepare_diff_syntax_document(
+            prepare_bench_diff_syntax_document(
                 language,
-                syntax_mode,
-                generated_lines.iter().map(String::as_str),
+                DiffSyntaxBudget::default(),
+                &generated_text,
+                None,
             )
         });
 
@@ -2421,11 +2400,13 @@ impl WorktreePreviewRenderFixture {
     }
 
     pub fn run_render_time_prepare_step(&self, start: usize, window: usize) -> u64 {
+        let text = self.lines.join("\n");
         let prepared_document = self.language.and_then(|language| {
-            prepare_diff_syntax_document(
+            prepare_bench_diff_syntax_document(
                 language,
-                self.syntax_mode,
-                self.lines.iter().map(String::as_str),
+                DiffSyntaxBudget::default(),
+                text.as_str(),
+                None,
             )
         });
         self.hash_window(start, window, prepared_document)
@@ -5098,6 +5079,18 @@ mod tests {
     }
 
     #[test]
+    fn file_diff_syntax_prepare_fixture_keeps_prepared_document_for_large_documents() {
+        let fixture = FileDiffSyntaxPrepareFixture::new(4_001, 96);
+        let prepared = fixture.prepare_document(&fixture.lines);
+
+        assert!(
+            prepared.is_some(),
+            "file diff syntax prepare should stay enabled above the old 4,000-line gate"
+        );
+        assert_ne!(fixture.run_prepare_warm(), 0);
+    }
+
+    #[test]
     fn large_html_syntax_fixture_synthetic_fallback_runs() {
         let prepare_fixture = LargeHtmlSyntaxFixture::new(None, 128, 160);
         let visible_fixture = LargeHtmlSyntaxFixture::new_prewarmed(None, 128, 160);
@@ -5163,6 +5156,20 @@ mod tests {
         );
 
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn large_html_syntax_fixture_keeps_prepared_document_for_large_documents() {
+        let fixture = LargeHtmlSyntaxFixture::new_prewarmed(None, 4_001, 192);
+
+        assert_eq!(fixture.source(), LargeHtmlSyntaxSource::Synthetic);
+        assert!(
+            fixture.prepared_document_handle().is_some(),
+            "large HTML fixture should still produce a prepared document above the old 4,000-line gate"
+        );
+
+        fixture.prime_visible_window(96);
+        assert_ne!(fixture.run_visible_window_step(128, 96), 0);
     }
 
     #[test]

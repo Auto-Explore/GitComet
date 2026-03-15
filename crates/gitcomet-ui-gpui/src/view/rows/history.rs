@@ -23,10 +23,11 @@ impl MainPaneView {
         let Some(path) = this.worktree_preview_path.as_ref() else {
             return Vec::new();
         };
-        let Loadable::Ready(lines) = &this.worktree_preview else {
+        let Some(line_count) = this.worktree_preview_line_count() else {
             return Vec::new();
         };
-        let lines = Arc::clone(lines);
+        let source_text = this.worktree_preview_text.clone();
+        let line_starts = Arc::clone(&this.worktree_preview_line_starts);
 
         let should_clear_cache = match this.worktree_preview_segments_cache_path.as_ref() {
             Some(p) => p != path,
@@ -45,8 +46,9 @@ impl MainPaneView {
         let bar_color = worktree_preview_bar_color(this, theme);
 
         range
+            .take_while(|ix| *ix < line_count)
             .map(|ix| {
-                let line = lines.get(ix).map(String::as_str).unwrap_or("");
+                let line = rows::resolved_output_line_text(source_text.as_ref(), &line_starts, ix);
                 let mut pending_styled = None;
                 if this.worktree_preview_segments_cache_get(ix).is_none() {
                     let (styled, is_pending) =
@@ -457,8 +459,8 @@ fn markdown_preview_blockquote_gutter(
     let alert_bar_color = alert_kind.map(|kind| markdown_preview_alert_color(theme, kind));
     let bars = (0..blockquote_level)
         .map(|ix| {
-            let bar_color = if alert_bar_color.is_some() && ix + 1 == blockquote_level {
-                alert_bar_color.unwrap()
+            let bar_color = if ix + 1 == blockquote_level {
+                alert_bar_color.unwrap_or(quote_bar_color)
             } else {
                 quote_bar_color
             };

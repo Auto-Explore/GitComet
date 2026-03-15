@@ -43,14 +43,6 @@ fn diff_syntax_edit_from_outline_delta(delta: ResolvedOutlineDelta) -> rows::Dif
     }
 }
 
-fn indexed_line_count(text: &str, line_starts: &[usize]) -> usize {
-    if text.is_empty() {
-        0
-    } else {
-        line_starts.len().max(1)
-    }
-}
-
 fn insert_lookup_from_indexed_text<'a>(
     lookup: &mut HashMap<&'a str, (conflict_resolver::ResolvedLineSource, Option<u32>)>,
     source: conflict_resolver::ResolvedLineSource,
@@ -533,8 +525,10 @@ impl MainPaneView {
             file_diff_cache_path: None,
             file_diff_cache_language: None,
             file_diff_cache_rows: Vec::new(),
-            file_diff_old_line_to_split_ix: HashMap::default(),
-            file_diff_new_line_to_split_ix: HashMap::default(),
+            file_diff_old_text: SharedString::default(),
+            file_diff_old_line_starts: Arc::default(),
+            file_diff_new_text: SharedString::default(),
+            file_diff_new_line_starts: Arc::default(),
             file_diff_inline_cache: Vec::new(),
             file_diff_inline_text: SharedString::default(),
             file_diff_inline_word_highlights: Vec::new(),
@@ -546,6 +540,8 @@ impl MainPaneView {
             file_diff_style_cache_epochs: FileDiffStyleCacheEpochs::default(),
             syntax_chunk_poll_task: None,
             prepared_syntax_documents: HashMap::default(),
+            #[cfg(test)]
+            diff_syntax_budget_override: None,
             file_markdown_preview_cache_repo_id: None,
             file_markdown_preview_cache_rev: 0,
             file_markdown_preview_cache_content_signature: None,
@@ -563,8 +559,9 @@ impl MainPaneView {
             file_image_diff_cache_new_svg_path: None,
             worktree_preview_path: None,
             worktree_preview: Loadable::NotLoaded,
+            worktree_preview_text: SharedString::default(),
+            worktree_preview_line_starts: Arc::default(),
             worktree_preview_content_rev: 0,
-            worktree_preview_source_len: 0,
             worktree_markdown_preview_path: None,
             worktree_markdown_preview_source_rev: 0,
             worktree_markdown_preview: Loadable::NotLoaded,
@@ -575,7 +572,6 @@ impl MainPaneView {
             worktree_preview_style_cache_epoch: 0,
             worktree_preview_segments_cache: HashMap::default(),
             diff_preview_is_new_file: false,
-            diff_preview_new_file_lines: Arc::new(Vec::new()),
             conflict_resolver_input,
             _conflict_resolver_input_subscription: conflict_resolver_subscription,
             conflict_resolver: ConflictResolverUiState::default(),
@@ -603,7 +599,7 @@ impl MainPaneView {
             conflict_resolved_preview_prepared_syntax_document: None,
             conflict_resolved_preview_syntax_inflight: None,
             conflict_resolved_preview_line_count: 0,
-            conflict_resolved_preview_line_starts: Arc::<[usize]>::from(Vec::<usize>::new()),
+            conflict_resolved_preview_line_starts: Arc::default(),
             conflict_resolved_preview_segments_cache: HashMap::default(),
             history_view,
             diff_scroll: UniformListScrollHandle::default(),
@@ -728,12 +724,13 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) {
         let old_document = self.conflict_resolved_preview_prepared_syntax_document;
-        let syntax_state = build_resolved_output_syntax_state_for_snapshot(
+        let syntax_state = build_resolved_output_syntax_state_for_snapshot_with_budget(
             self.theme,
             output_snapshot,
             self.conflict_resolved_preview_syntax_language,
             old_document,
-            syntax_edit,
+            syntax_edit.clone(),
+            self.full_document_syntax_budget(),
         );
         let background_key = if syntax_state.needs_background_prepare {
             self.conflict_resolved_preview_syntax_language
@@ -790,6 +787,8 @@ impl MainPaneView {
             self.ensure_conflict_resolved_output_background_syntax_prepare(
                 background_key,
                 output_snapshot,
+                old_document,
+                syntax_edit,
                 cx,
             );
         }
@@ -799,6 +798,8 @@ impl MainPaneView {
         &mut self,
         request_key: ResolvedOutputSyntaxBackgroundKey,
         output_snapshot: &TextModelSnapshot,
+        old_document: Option<rows::PreparedDiffSyntaxDocument>,
+        syntax_edit: Option<rows::DiffSyntaxEdit>,
         cx: &mut gpui::Context<Self>,
     ) {
         if self.conflict_resolved_preview_syntax_inflight == Some(request_key) {
@@ -807,14 +808,17 @@ impl MainPaneView {
         self.conflict_resolved_preview_syntax_inflight = Some(request_key);
         let output_text = output_snapshot.as_shared_string();
         let output_line_starts = output_snapshot.shared_line_starts();
+        let old_reparse_seed = old_document.and_then(rows::prepared_diff_syntax_reparse_seed);
         cx.spawn(
             async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
                 let parsed_document = smol::unblock(move || {
-                    rows::prepare_diff_syntax_document_in_background_text(
+                    rows::prepare_diff_syntax_document_in_background_text_with_reuse(
                         request_key.language,
                         rows::DiffSyntaxMode::Auto,
                         output_text,
                         output_line_starts,
+                        old_reparse_seed,
+                        syntax_edit,
                     )
                 })
                 .await;
@@ -832,9 +836,8 @@ impl MainPaneView {
 
                     this.conflict_resolved_preview_syntax_inflight = None;
                     if let Some(parsed_document) = parsed_document {
-                        this.conflict_resolved_preview_prepared_syntax_document = Some(
-                            rows::inject_background_prepared_diff_syntax_document(parsed_document),
-                        );
+                        let _ =
+                            rows::inject_background_prepared_diff_syntax_document(parsed_document);
                     }
                     let current_output_snapshot = this
                         .conflict_resolver_input
@@ -903,7 +906,7 @@ impl MainPaneView {
         self.conflict_resolved_preview_prepared_syntax_document = None;
         self.conflict_resolved_preview_syntax_inflight = None;
         self.conflict_resolved_preview_line_count = 0;
-        self.conflict_resolved_preview_line_starts = Arc::<[usize]>::from(Vec::<usize>::new());
+        self.conflict_resolved_preview_line_starts = Arc::default();
         self.conflict_resolved_preview_segments_cache.clear();
         self.conflict_resolver.resolved_line_meta.clear();
         self.conflict_resolver
@@ -1337,6 +1340,19 @@ impl MainPaneView {
         .detach();
     }
 
+    #[cfg(test)]
+    pub(in crate::view) fn recompute_conflict_resolved_outline_for_tests(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let path = self.conflict_resolver.path.clone();
+        self.recompute_conflict_resolved_outline_and_provenance_with_syntax_edit(
+            path.as_ref(),
+            None,
+            cx,
+        );
+    }
+
     pub(in crate::view) fn set_active_context_menu_invoker(
         &mut self,
         next: Option<SharedString>,
@@ -1751,14 +1767,12 @@ impl MainPaneView {
             self.worktree_preview_path = None;
             self.worktree_preview = Loadable::NotLoaded;
             self.worktree_preview_content_rev = 0;
-            self.worktree_preview_source_len = 0;
             self.worktree_markdown_preview_path = None;
             self.worktree_markdown_preview_source_rev = 0;
             self.worktree_markdown_preview = Loadable::NotLoaded;
             self.worktree_markdown_preview_inflight = None;
-            self.worktree_preview_segments_cache_path = None;
             self.worktree_preview_syntax_language = None;
-            self.worktree_preview_segments_cache.clear();
+            self.reset_worktree_preview_source_state();
             self.diff_horizontal_min_width = px(0.0);
         }
 

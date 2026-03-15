@@ -44,22 +44,6 @@ fn build_inline_text(lines: &[AnnotatedDiffLine]) -> SharedString {
     SharedString::from(text)
 }
 
-fn build_line_to_split_ix_maps(rows: &[FileDiffRow]) -> (HashMap<u32, usize>, HashMap<u32, usize>) {
-    let mut old_map: HashMap<u32, usize> = HashMap::default();
-    let mut new_map: HashMap<u32, usize> = HashMap::default();
-    old_map.reserve(rows.len());
-    new_map.reserve(rows.len());
-    for (ix, row) in rows.iter().enumerate() {
-        if let Some(old_line) = row.old_line {
-            old_map.insert(old_line, ix);
-        }
-        if let Some(new_line) = row.new_line {
-            new_map.insert(new_line, ix);
-        }
-    }
-    (old_map, new_map)
-}
-
 fn file_diff_text_signature(file: &gitcomet_core::domain::FileDiffText) -> u64 {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
@@ -80,22 +64,24 @@ fn preview_lines_source_len(lines: &[String]) -> usize {
         .saturating_add(lines.len().saturating_sub(1))
 }
 
-fn preview_lines_to_source(lines: &[String]) -> String {
-    lines.join("\n")
+fn build_file_diff_document_source(text: Option<&str>) -> (SharedString, Arc<[usize]>) {
+    let text: SharedString = text.unwrap_or_default().to_owned().into();
+    let line_starts = Arc::from(build_line_starts(text.as_ref()));
+    (text, line_starts)
 }
 
-fn build_single_markdown_preview_document_from_lines(
-    preview_lines: &[String],
-    source_len: usize,
+fn build_single_markdown_preview_document(
+    source: &str,
 ) -> Result<Arc<markdown_preview::MarkdownPreviewDocument>, String> {
-    if source_len > markdown_preview::MAX_PREVIEW_SOURCE_BYTES {
-        return Err(markdown_preview::single_preview_unavailable_reason(source_len).to_string());
+    if source.len() > markdown_preview::MAX_PREVIEW_SOURCE_BYTES {
+        return Err(markdown_preview::single_preview_unavailable_reason(source.len()).to_string());
     }
 
-    let source = preview_lines_to_source(preview_lines);
-    markdown_preview::parse_markdown(&source)
+    markdown_preview::parse_markdown(source)
         .map(Arc::new)
-        .ok_or_else(|| markdown_preview::single_preview_unavailable_reason(source_len).to_string())
+        .ok_or_else(|| {
+            markdown_preview::single_preview_unavailable_reason(source.len()).to_string()
+        })
 }
 
 #[derive(Debug)]
@@ -109,6 +95,123 @@ struct ImageDiffCacheEntry {
 struct FileDiffBackgroundPreparedSyntaxDocuments {
     split_left: Option<rows::BackgroundPreparedDiffSyntaxDocument>,
     split_right: Option<rows::BackgroundPreparedDiffSyntaxDocument>,
+}
+
+#[derive(Debug)]
+struct FileDiffCacheRebuild {
+    file_path: Option<std::path::PathBuf>,
+    language: Option<rows::DiffSyntaxLanguage>,
+    rows: Vec<FileDiffRow>,
+    old_text: SharedString,
+    old_line_starts: Arc<[usize]>,
+    new_text: SharedString,
+    new_line_starts: Arc<[usize]>,
+    inline_rows: Vec<AnnotatedDiffLine>,
+    inline_text: SharedString,
+    inline_word_highlights: Vec<Option<Vec<Range<usize>>>>,
+    split_word_highlights_old: Vec<Option<Vec<Range<usize>>>>,
+    split_word_highlights_new: Vec<Option<Vec<Range<usize>>>>,
+}
+
+fn build_file_diff_cache_rebuild(
+    file: &gitcomet_core::domain::FileDiffText,
+    workdir: &std::path::Path,
+) -> FileDiffCacheRebuild {
+    let (old_text, old_line_starts) = build_file_diff_document_source(file.old.as_deref());
+    let (new_text, new_line_starts) = build_file_diff_document_source(file.new.as_deref());
+    let rows = gitcomet_core::file_diff::side_by_side_rows(old_text.as_ref(), new_text.as_ref());
+
+    let file_path = Some(if file.path.is_absolute() {
+        file.path.clone()
+    } else {
+        workdir.join(&file.path)
+    });
+    let language = file_path
+        .as_ref()
+        .and_then(rows::diff_syntax_language_for_path);
+
+    let mut split_word_highlights_old: Vec<Option<Vec<Range<usize>>>> = vec![None; rows.len()];
+    let mut split_word_highlights_new: Vec<Option<Vec<Range<usize>>>> = vec![None; rows.len()];
+    let mut inline_rows: Vec<AnnotatedDiffLine> = Vec::with_capacity(rows.len().saturating_mul(2));
+    let mut inline_word_highlights: Vec<Option<Vec<Range<usize>>>> =
+        Vec::with_capacity(rows.len().saturating_mul(2));
+
+    for (row_ix, row) in rows.iter().enumerate() {
+        use gitcomet_core::file_diff::FileDiffRowKind as K;
+
+        match row.kind {
+            K::Context => {
+                inline_rows.push(AnnotatedDiffLine {
+                    kind: gitcomet_core::domain::DiffLineKind::Context,
+                    text: format!(" {}", row.old.as_deref().unwrap_or("")).into(),
+                    old_line: row.old_line,
+                    new_line: row.new_line,
+                });
+                inline_word_highlights.push(None);
+            }
+            K::Add => {
+                inline_rows.push(AnnotatedDiffLine {
+                    kind: gitcomet_core::domain::DiffLineKind::Add,
+                    text: format!("+{}", row.new.as_deref().unwrap_or("")).into(),
+                    old_line: None,
+                    new_line: row.new_line,
+                });
+                inline_word_highlights.push(None);
+            }
+            K::Remove => {
+                inline_rows.push(AnnotatedDiffLine {
+                    kind: gitcomet_core::domain::DiffLineKind::Remove,
+                    text: format!("-{}", row.old.as_deref().unwrap_or("")).into(),
+                    old_line: row.old_line,
+                    new_line: None,
+                });
+                inline_word_highlights.push(None);
+            }
+            K::Modify => {
+                let old = row.old.as_deref().unwrap_or("");
+                let new = row.new.as_deref().unwrap_or("");
+                let (old_ranges, new_ranges) = capped_word_diff_ranges(old, new);
+                let old_ranges_opt = (!old_ranges.is_empty()).then_some(old_ranges);
+                let new_ranges_opt = (!new_ranges.is_empty()).then_some(new_ranges);
+
+                split_word_highlights_old[row_ix] = old_ranges_opt.clone();
+                split_word_highlights_new[row_ix] = new_ranges_opt.clone();
+
+                inline_rows.push(AnnotatedDiffLine {
+                    kind: gitcomet_core::domain::DiffLineKind::Remove,
+                    text: format!("-{}", old).into(),
+                    old_line: row.old_line,
+                    new_line: None,
+                });
+                inline_word_highlights.push(old_ranges_opt);
+
+                inline_rows.push(AnnotatedDiffLine {
+                    kind: gitcomet_core::domain::DiffLineKind::Add,
+                    text: format!("+{}", new).into(),
+                    old_line: None,
+                    new_line: row.new_line,
+                });
+                inline_word_highlights.push(new_ranges_opt);
+            }
+        }
+    }
+
+    let inline_text = build_inline_text(inline_rows.as_slice());
+
+    FileDiffCacheRebuild {
+        file_path,
+        language,
+        rows,
+        old_text,
+        old_line_starts,
+        new_text,
+        new_line_starts,
+        inline_rows,
+        inline_text,
+        inline_word_highlights,
+        split_word_highlights_old,
+        split_word_highlights_new,
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -934,6 +1037,36 @@ fn prepared_syntax_document_key(
     }
 }
 
+fn diff_syntax_edit_from_text_change(old: &str, new: &str) -> Option<rows::DiffSyntaxEdit> {
+    if old == new {
+        return None;
+    }
+
+    let old_bytes = old.as_bytes();
+    let new_bytes = new.as_bytes();
+
+    let mut prefix = 0usize;
+    let max_prefix = old_bytes.len().min(new_bytes.len());
+    while prefix < max_prefix && old_bytes[prefix] == new_bytes[prefix] {
+        prefix += 1;
+    }
+
+    let mut old_suffix_start = old_bytes.len();
+    let mut new_suffix_start = new_bytes.len();
+    while old_suffix_start > prefix
+        && new_suffix_start > prefix
+        && old_bytes[old_suffix_start - 1] == new_bytes[new_suffix_start - 1]
+    {
+        old_suffix_start -= 1;
+        new_suffix_start -= 1;
+    }
+
+    Some(rows::DiffSyntaxEdit {
+        old_range: prefix..old_suffix_start,
+        new_range: prefix..new_suffix_start,
+    })
+}
+
 impl MainPaneView {
     pub(in crate::view) fn patch_diff_row_len(&self) -> usize {
         self.diff_row_provider
@@ -1127,6 +1260,61 @@ impl MainPaneView {
         true
     }
 
+    fn rekey_prepared_syntax_document(
+        &mut self,
+        old_key: PreparedSyntaxDocumentKey,
+        new_key: PreparedSyntaxDocumentKey,
+    ) {
+        if old_key == new_key {
+            return;
+        }
+        let Some(document) = self.prepared_syntax_documents.remove(&old_key) else {
+            return;
+        };
+        self.prepared_syntax_documents
+            .entry(new_key)
+            .or_insert(document);
+    }
+
+    fn rekey_file_diff_prepared_syntax_documents_for_rev(&mut self, new_rev: u64) {
+        let Some(repo_id) = self.file_diff_cache_repo_id else {
+            return;
+        };
+        let Some(path) = self.file_diff_cache_path.clone() else {
+            return;
+        };
+        let old_rev = self.file_diff_cache_rev;
+        if old_rev == new_rev {
+            return;
+        }
+
+        for view_mode in [
+            PreparedSyntaxViewMode::FileDiffSplitLeft,
+            PreparedSyntaxViewMode::FileDiffSplitRight,
+        ] {
+            let old_key = prepared_syntax_document_key(repo_id, old_rev, &path, view_mode);
+            let new_key = prepared_syntax_document_key(repo_id, new_rev, &path, view_mode);
+            self.rekey_prepared_syntax_document(old_key, new_key);
+        }
+    }
+
+    pub(super) fn full_document_syntax_budget(&self) -> rows::DiffSyntaxBudget {
+        #[cfg(test)]
+        if let Some(budget) = self.diff_syntax_budget_override {
+            return budget;
+        }
+
+        rows::DiffSyntaxBudget::default()
+    }
+
+    #[cfg(test)]
+    pub(in crate::view) fn set_full_document_syntax_budget_override_for_tests(
+        &mut self,
+        budget: rows::DiffSyntaxBudget,
+    ) {
+        self.diff_syntax_budget_override = Some(budget);
+    }
+
     pub(in crate::view) fn file_diff_prepared_syntax_key(
         &self,
         view_mode: PreparedSyntaxViewMode,
@@ -1162,39 +1350,17 @@ impl MainPaneView {
 
     /// Project inline-diff syntax from the real old/new (split) documents.
     ///
-    /// Instead of parsing the synthetic mixed inline stream, look up the correct
-    /// side document and line index based on the diff line kind and old_line/new_line.
+    /// Instead of parsing the synthetic mixed inline stream, project each row into
+    /// the correct real old/new document using its 1-based diff line numbers.
     pub(in crate::view) fn file_diff_inline_projected_syntax(
         &self,
         line: &AnnotatedDiffLine,
     ) -> rows::PreparedDiffSyntaxLine {
-        use gitcomet_core::domain::DiffLineKind;
-        match line.kind {
-            DiffLineKind::Remove => {
-                let split_ix = line
-                    .old_line
-                    .and_then(|n| self.file_diff_old_line_to_split_ix.get(&n).copied());
-                rows::PreparedDiffSyntaxLine {
-                    document: self
-                        .file_diff_split_prepared_syntax_document(DiffTextRegion::SplitLeft),
-                    line_ix: split_ix.unwrap_or(0),
-                }
-            }
-            DiffLineKind::Add | DiffLineKind::Context => {
-                let split_ix = line
-                    .new_line
-                    .and_then(|n| self.file_diff_new_line_to_split_ix.get(&n).copied());
-                rows::PreparedDiffSyntaxLine {
-                    document: self
-                        .file_diff_split_prepared_syntax_document(DiffTextRegion::SplitRight),
-                    line_ix: split_ix.unwrap_or(0),
-                }
-            }
-            _ => rows::PreparedDiffSyntaxLine {
-                document: None,
-                line_ix: 0,
-            },
-        }
+        rows::prepared_diff_syntax_line_for_inline_diff_row(
+            self.file_diff_split_prepared_syntax_document(DiffTextRegion::SplitLeft),
+            self.file_diff_split_prepared_syntax_document(DiffTextRegion::SplitRight),
+            line,
+        )
     }
 
     pub(in crate::view) fn file_diff_split_prepared_syntax_document(
@@ -1203,7 +1369,9 @@ impl MainPaneView {
     ) -> Option<rows::PreparedDiffSyntaxDocument> {
         let view_mode = match region {
             DiffTextRegion::SplitLeft => PreparedSyntaxViewMode::FileDiffSplitLeft,
-            _ => PreparedSyntaxViewMode::FileDiffSplitRight,
+            DiffTextRegion::SplitRight | DiffTextRegion::Inline => {
+                PreparedSyntaxViewMode::FileDiffSplitRight
+            }
         };
         self.file_diff_prepared_syntax_document(view_mode)
     }
@@ -1236,9 +1404,9 @@ impl MainPaneView {
             return;
         };
         let source_rev = self.worktree_preview_content_rev;
-        let Loadable::Ready(lines) = &self.worktree_preview else {
+        if !matches!(self.worktree_preview, Loadable::Ready(_)) {
             return;
-        };
+        }
 
         let cache_matches = self.worktree_markdown_preview_path.as_ref() == Some(&path)
             && self.worktree_markdown_preview_source_rev == source_rev;
@@ -1250,14 +1418,13 @@ impl MainPaneView {
             }
         }
 
-        let preview_lines = Arc::clone(lines);
         self.worktree_markdown_preview_path = Some(path.clone());
         self.worktree_markdown_preview_source_rev = source_rev;
 
-        let source_len = self.worktree_preview_source_len;
-        if source_len > markdown_preview::MAX_PREVIEW_SOURCE_BYTES {
+        let source_text = self.worktree_preview_text.clone();
+        if source_text.len() > markdown_preview::MAX_PREVIEW_SOURCE_BYTES {
             self.worktree_markdown_preview = Loadable::Error(
-                markdown_preview::single_preview_unavailable_reason(source_len).to_string(),
+                markdown_preview::single_preview_unavailable_reason(source_text.len()).to_string(),
             );
             self.worktree_markdown_preview_inflight = None;
             return;
@@ -1272,7 +1439,7 @@ impl MainPaneView {
             async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
                 let result = smol::unblock(move || {
                     let _perf_scope = perf::span(ViewPerfSpan::MarkdownPreviewParse);
-                    build_single_markdown_preview_document_from_lines(&preview_lines, source_len)
+                    build_single_markdown_preview_document(source_text.as_ref())
                 })
                 .await;
 
@@ -1298,26 +1465,30 @@ impl MainPaneView {
         .detach();
     }
 
-    pub(in crate::view) fn set_worktree_preview_ready_lines(
+    pub(in crate::view) fn set_worktree_preview_ready_source(
         &mut self,
         path: std::path::PathBuf,
-        lines: Arc<Vec<String>>,
-        source_len: usize,
+        source_text: SharedString,
+        line_starts: Arc<[usize]>,
         cx: &mut gpui::Context<Self>,
     ) {
+        let line_count = indexed_line_count(source_text.as_ref(), line_starts.as_ref());
         let source_changed = self.worktree_preview_path.as_ref() != Some(&path)
-            || self.worktree_preview_source_len != source_len
-            || !matches!(
-                &self.worktree_preview,
-                Loadable::Ready(current) if current.as_ref() == lines.as_ref()
-            );
+            || self.worktree_preview_line_count() != Some(line_count)
+            || self.worktree_preview_text.len() != source_text.len()
+            || self.worktree_preview_text.as_ref() != source_text.as_ref();
+        let cache_binding_changed =
+            self.worktree_preview_segments_cache_path.as_ref() != Some(&path);
 
         self.worktree_preview_path = Some(path.clone());
-        self.worktree_preview = Loadable::Ready(lines);
-        self.worktree_preview_source_len = source_len;
+        self.worktree_preview = Loadable::Ready(line_count);
+        self.worktree_preview_text = source_text;
+        self.worktree_preview_line_starts = line_starts;
         self.worktree_preview_syntax_language = rows::diff_syntax_language_for_path(&path);
         self.worktree_preview_segments_cache_path = Some(path);
-        self.worktree_preview_segments_cache.clear();
+        if source_changed || cache_binding_changed {
+            self.worktree_preview_segments_cache.clear();
+        }
 
         if source_changed {
             self.worktree_preview_content_rev = self.worktree_preview_content_rev.wrapping_add(1);
@@ -1332,6 +1503,18 @@ impl MainPaneView {
         self.refresh_worktree_preview_syntax_document(cx);
     }
 
+    pub(in crate::view) fn set_worktree_preview_ready_rows(
+        &mut self,
+        path: std::path::PathBuf,
+        lines: &[String],
+        source_len: usize,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let (source_text, line_starts) =
+            preview_source_text_and_line_starts_from_lines(lines, source_len);
+        self.set_worktree_preview_ready_source(path, source_text, line_starts, cx);
+    }
+
     pub(in crate::view) fn refresh_worktree_preview_syntax_document(
         &mut self,
         cx: &mut gpui::Context<Self>,
@@ -1342,35 +1525,43 @@ impl MainPaneView {
         let Some(key) = self.worktree_preview_prepared_syntax_key() else {
             return;
         };
-        let Loadable::Ready(lines) = &self.worktree_preview else {
+        if !matches!(self.worktree_preview, Loadable::Ready(_)) {
             return;
-        };
+        }
+        let source_text = self.worktree_preview_text.clone();
+        let line_starts = Arc::clone(&self.worktree_preview_line_starts);
 
         if self.prepared_syntax_document(&key).is_some() {
             return;
         }
         let reparse_seed = self.prepared_syntax_reparse_seed_document(&key);
+        let background_reparse_seed: Option<rows::PreparedDiffSyntaxReparseSeed> =
+            reparse_seed.and_then(rows::prepared_diff_syntax_reparse_seed);
 
-        let budget = rows::DiffSyntaxBudget::default();
-        match rows::prepare_diff_syntax_document_with_budget_reuse(
+        let budget = self.full_document_syntax_budget();
+        match rows::prepare_diff_syntax_document_with_budget_reuse_text(
             language,
             FULL_DOCUMENT_SYNTAX_MODE,
-            lines.iter().map(String::as_str),
+            source_text.clone(),
+            Arc::clone(&line_starts),
             budget,
             reparse_seed,
+            None,
         ) {
             rows::PrepareDiffSyntaxDocumentResult::Ready(document) => {
                 self.insert_prepared_syntax_document(key, document);
             }
             rows::PrepareDiffSyntaxDocumentResult::TimedOut => {
-                let lines = lines.iter().cloned().collect::<Vec<_>>();
                 cx.spawn(
                     async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
                         let parsed_document = smol::unblock(move || {
-                            rows::prepare_diff_syntax_document_in_background(
+                            rows::prepare_diff_syntax_document_in_background_text_with_reuse(
                                 language,
                                 FULL_DOCUMENT_SYNTAX_MODE,
-                                lines.iter().map(String::as_str),
+                                source_text,
+                                line_starts,
+                                background_reparse_seed,
+                                None,
                             )
                         })
                         .await;
@@ -1412,8 +1603,8 @@ impl MainPaneView {
     ) -> bool {
         match attempt {
             Some(rows::PrepareDiffSyntaxDocumentResult::Ready(document)) => {
-                if let Some(key) = key.clone() {
-                    self.insert_prepared_syntax_document(key, document);
+                if let Some(key) = key.as_ref() {
+                    self.insert_prepared_syntax_document(key.clone(), document);
                 }
                 false
             }
@@ -1432,39 +1623,50 @@ impl MainPaneView {
         right_doc: Option<rows::BackgroundPreparedDiffSyntaxDocument>,
     ) -> FileDiffPreparedSyntaxApplyResult {
         let mut applied = FileDiffPreparedSyntaxApplyResult::default();
-        if let (Some(key), Some(document)) = (left_key.clone(), left_doc) {
+        if let (Some(key), Some(document)) = (left_key.as_ref(), left_doc) {
             applied.split_left = self.insert_prepared_syntax_document(
-                key,
+                key.clone(),
                 rows::inject_background_prepared_diff_syntax_document(document),
             );
         }
-        if let (Some(key), Some(document)) = (right_key.clone(), right_doc) {
+        if let (Some(key), Some(document)) = (right_key.as_ref(), right_doc) {
             applied.split_right = self.insert_prepared_syntax_document(
-                key,
+                key.clone(),
                 rows::inject_background_prepared_diff_syntax_document(document),
             );
         }
         applied
     }
 
-    fn refresh_file_diff_syntax_documents(&mut self, cx: &mut gpui::Context<Self>) {
+    fn refresh_file_diff_syntax_documents(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+        split_left_reparse_seed_override: Option<rows::PreparedDiffSyntaxDocument>,
+        split_right_reparse_seed_override: Option<rows::PreparedDiffSyntaxDocument>,
+        split_left_edit_hint: Option<rows::DiffSyntaxEdit>,
+        split_right_edit_hint: Option<rows::DiffSyntaxEdit>,
+    ) {
         let Some(language) = self.file_diff_cache_language else {
             return;
         };
 
-        // Inline syntax is now projected from the split (old/new) documents rather
-        // than parsing the synthetic mixed inline stream. Only split documents are
-        // prepared here; inline rows look up into them via file_diff_inline_projected_syntax.
+        // Split and inline syntax both project from the real old/new documents.
+        // Only those real side documents are parsed here; inline rows later map
+        // through old_line/new_line instead of parsing any synthetic diff stream.
         let split_left_key =
             self.file_diff_prepared_syntax_key(PreparedSyntaxViewMode::FileDiffSplitLeft);
         let split_right_key =
             self.file_diff_prepared_syntax_key(PreparedSyntaxViewMode::FileDiffSplitRight);
-        let split_left_reparse_seed = split_left_key
-            .as_ref()
-            .and_then(|key| self.prepared_syntax_reparse_seed_document(key));
-        let split_right_reparse_seed = split_right_key
-            .as_ref()
-            .and_then(|key| self.prepared_syntax_reparse_seed_document(key));
+        let split_left_reparse_seed = split_left_reparse_seed_override.or_else(|| {
+            split_left_key
+                .as_ref()
+                .and_then(|key| self.prepared_syntax_reparse_seed_document(key))
+        });
+        let split_right_reparse_seed = split_right_reparse_seed_override.or_else(|| {
+            split_right_key
+                .as_ref()
+                .and_then(|key| self.prepared_syntax_reparse_seed_document(key))
+        });
 
         let needs_split_left_prepare = split_left_key
             .as_ref()
@@ -1476,28 +1678,28 @@ impl MainPaneView {
             return;
         }
 
-        let budget = rows::DiffSyntaxBudget::default();
+        let budget = self.full_document_syntax_budget();
 
         let split_left_attempt = needs_split_left_prepare.then(|| {
-            rows::prepare_diff_syntax_document_with_budget_reuse(
+            rows::prepare_diff_syntax_document_with_budget_reuse_text(
                 language,
                 FULL_DOCUMENT_SYNTAX_MODE,
-                self.file_diff_cache_rows
-                    .iter()
-                    .map(|row| row.old.as_deref().unwrap_or("")),
+                self.file_diff_old_text.clone(),
+                Arc::clone(&self.file_diff_old_line_starts),
                 budget,
                 split_left_reparse_seed,
+                split_left_edit_hint.clone(),
             )
         });
         let split_right_attempt = needs_split_right_prepare.then(|| {
-            rows::prepare_diff_syntax_document_with_budget_reuse(
+            rows::prepare_diff_syntax_document_with_budget_reuse_text(
                 language,
                 FULL_DOCUMENT_SYNTAX_MODE,
-                self.file_diff_cache_rows
-                    .iter()
-                    .map(|row| row.new.as_deref().unwrap_or("")),
+                self.file_diff_new_text.clone(),
+                Arc::clone(&self.file_diff_new_line_starts),
                 budget,
                 split_right_reparse_seed,
+                split_right_edit_hint.clone(),
             )
         });
 
@@ -1515,35 +1717,49 @@ impl MainPaneView {
         let diff_file_rev = self.file_diff_cache_rev;
         let diff_target = self.file_diff_cache_target.clone();
 
-        let split_left_lines: Option<Vec<String>> = needs_split_left_async.then(|| {
-            self.file_diff_cache_rows
-                .iter()
-                .map(|row| row.old.as_deref().unwrap_or("").to_string())
-                .collect()
+        let split_left_source = needs_split_left_async.then(|| {
+            (
+                self.file_diff_old_text.clone(),
+                Arc::clone(&self.file_diff_old_line_starts),
+            )
         });
-        let split_right_lines: Option<Vec<String>> = needs_split_right_async.then(|| {
-            self.file_diff_cache_rows
-                .iter()
-                .map(|row| row.new.as_deref().unwrap_or("").to_string())
-                .collect()
+        let split_left_background_reparse_seed = split_left_reparse_seed
+            .filter(|_| needs_split_left_async)
+            .and_then(rows::prepared_diff_syntax_reparse_seed);
+        let split_left_edit_hint = split_left_edit_hint.filter(|_| needs_split_left_async);
+        let split_right_source = needs_split_right_async.then(|| {
+            (
+                self.file_diff_new_text.clone(),
+                Arc::clone(&self.file_diff_new_line_starts),
+            )
         });
+        let split_right_background_reparse_seed = split_right_reparse_seed
+            .filter(|_| needs_split_right_async)
+            .and_then(rows::prepared_diff_syntax_reparse_seed);
+        let split_right_edit_hint = split_right_edit_hint.filter(|_| needs_split_right_async);
 
         cx.spawn(
             async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
                 let parsed_documents =
                     smol::unblock(move || FileDiffBackgroundPreparedSyntaxDocuments {
-                        split_left: split_left_lines.and_then(|lines| {
-                            rows::prepare_diff_syntax_document_in_background(
+                        split_left: split_left_source.and_then(|(text, line_starts)| {
+                            rows::prepare_diff_syntax_document_in_background_text_with_reuse(
                                 language,
                                 FULL_DOCUMENT_SYNTAX_MODE,
-                                lines.iter().map(String::as_str),
+                                text,
+                                line_starts,
+                                split_left_background_reparse_seed,
+                                split_left_edit_hint,
                             )
                         }),
-                        split_right: split_right_lines.and_then(|lines| {
-                            rows::prepare_diff_syntax_document_in_background(
+                        split_right: split_right_source.and_then(|(text, line_starts)| {
+                            rows::prepare_diff_syntax_document_in_background_text_with_reuse(
                                 language,
                                 FULL_DOCUMENT_SYNTAX_MODE,
-                                lines.iter().map(String::as_str),
+                                text,
+                                line_starts,
+                                split_right_background_reparse_seed,
+                                split_right_edit_hint,
                             )
                         }),
                     })
@@ -1582,38 +1798,28 @@ impl MainPaneView {
         .detach();
     }
 
+    /// Resets file-diff data fields (syntax, rows, text, highlights) without
+    /// touching the identity fields (repo_id, target, rev).
+    fn reset_file_diff_cache_data(&mut self) {
+        self.file_diff_cache_content_signature = None;
+        self.file_diff_cache_inflight = None;
+        self.file_diff_syntax_generation = self.file_diff_syntax_generation.wrapping_add(1);
+        self.file_diff_style_cache_epochs.bump_both();
+        self.file_diff_cache_path = None;
+        self.file_diff_cache_language = None;
+        self.file_diff_cache_rows.clear();
+        self.file_diff_old_text = SharedString::default();
+        self.file_diff_old_line_starts = Arc::default();
+        self.file_diff_new_text = SharedString::default();
+        self.file_diff_new_line_starts = Arc::default();
+        self.file_diff_inline_cache.clear();
+        self.file_diff_inline_text = SharedString::default();
+        self.file_diff_inline_word_highlights.clear();
+        self.file_diff_split_word_highlights_old.clear();
+        self.file_diff_split_word_highlights_new.clear();
+    }
+
     pub(in super::super::super) fn ensure_file_diff_cache(&mut self, cx: &mut gpui::Context<Self>) {
-        struct Rebuild {
-            file_path: Option<std::path::PathBuf>,
-            language: Option<rows::DiffSyntaxLanguage>,
-            rows: Vec<FileDiffRow>,
-            inline_rows: Vec<AnnotatedDiffLine>,
-            inline_text: SharedString,
-            inline_word_highlights: Vec<Option<Vec<Range<usize>>>>,
-            split_word_highlights_old: Vec<Option<Vec<Range<usize>>>>,
-            split_word_highlights_new: Vec<Option<Vec<Range<usize>>>>,
-        }
-
-        let clear_cache = |this: &mut Self| {
-            this.file_diff_cache_repo_id = None;
-            this.file_diff_cache_target = None;
-            this.file_diff_cache_rev = 0;
-            this.file_diff_cache_content_signature = None;
-            this.file_diff_cache_inflight = None;
-            this.file_diff_syntax_generation = this.file_diff_syntax_generation.wrapping_add(1);
-            this.file_diff_style_cache_epochs.bump_both();
-            this.file_diff_cache_path = None;
-            this.file_diff_cache_language = None;
-            this.file_diff_cache_rows.clear();
-            this.file_diff_old_line_to_split_ix.clear();
-            this.file_diff_new_line_to_split_ix.clear();
-            this.file_diff_inline_cache.clear();
-            this.file_diff_inline_text = SharedString::default();
-            this.file_diff_inline_word_highlights.clear();
-            this.file_diff_split_word_highlights_old.clear();
-            this.file_diff_split_word_highlights_new.clear();
-        };
-
         let Some((repo_id, diff_file_rev, diff_target, workdir, file)) = (|| {
             let repo = self.active_repo()?;
             if !Self::is_file_diff_target(repo.diff_state.diff_target.as_ref()) {
@@ -1633,7 +1839,10 @@ impl MainPaneView {
                 file,
             ))
         })() else {
-            clear_cache(self);
+            self.file_diff_cache_repo_id = None;
+            self.file_diff_cache_target = None;
+            self.file_diff_cache_rev = 0;
+            self.reset_file_diff_cache_data();
             return;
         };
 
@@ -1641,9 +1850,16 @@ impl MainPaneView {
         let file_content_signature = file
             .as_ref()
             .map(|file| file_diff_text_signature(file.as_ref()));
-
         let same_repo_and_target = self.file_diff_cache_repo_id == Some(repo_id)
             && self.file_diff_cache_target == diff_target;
+        let previous_split_left_reparse_seed = same_repo_and_target
+            .then(|| self.file_diff_split_prepared_syntax_document(DiffTextRegion::SplitLeft))
+            .flatten();
+        let previous_split_right_reparse_seed = same_repo_and_target
+            .then(|| self.file_diff_split_prepared_syntax_document(DiffTextRegion::SplitRight))
+            .flatten();
+        let previous_old_text = same_repo_and_target.then(|| self.file_diff_old_text.clone());
+        let previous_new_text = same_repo_and_target.then(|| self.file_diff_new_text.clone());
 
         if same_repo_and_target && self.file_diff_cache_rev == diff_file_rev {
             return;
@@ -1654,30 +1870,20 @@ impl MainPaneView {
             && self.file_diff_cache_content_signature == Some(signature)
         {
             // Store-side refreshes can bump diff_file_rev with identical file payloads.
-            // Keep the prepared cache and only advance the rev marker after inflight work settles.
+            // Keep the row cache and prepared syntax documents alive across rev-only refreshes.
+            // If syntax was still missing, kick the syntax refresh path for the new active key.
             if self.file_diff_cache_inflight.is_none() {
+                self.rekey_file_diff_prepared_syntax_documents_for_rev(diff_file_rev);
                 self.file_diff_cache_rev = diff_file_rev;
+                self.refresh_file_diff_syntax_documents(cx, None, None, None, None);
             }
             return;
         }
 
         self.file_diff_cache_repo_id = Some(repo_id);
         self.file_diff_cache_rev = diff_file_rev;
-        self.file_diff_cache_content_signature = None;
         self.file_diff_cache_target = diff_target;
-        self.file_diff_cache_inflight = None;
-        self.file_diff_syntax_generation = self.file_diff_syntax_generation.wrapping_add(1);
-        self.file_diff_style_cache_epochs.bump_both();
-        self.file_diff_cache_path = None;
-        self.file_diff_cache_language = None;
-        self.file_diff_cache_rows.clear();
-        self.file_diff_old_line_to_split_ix.clear();
-        self.file_diff_new_line_to_split_ix.clear();
-        self.file_diff_inline_cache.clear();
-        self.file_diff_inline_text = SharedString::default();
-        self.file_diff_inline_word_highlights.clear();
-        self.file_diff_split_word_highlights_old.clear();
-        self.file_diff_split_word_highlights_new.clear();
+        self.reset_file_diff_cache_data();
 
         // Reset the segment cache to avoid mixing patch/file indices.
         self.clear_diff_text_style_caches();
@@ -1695,104 +1901,9 @@ impl MainPaneView {
 
         cx.spawn(
             async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
-                let rebuild = smol::unblock(move || {
-                    let old_text = file.old.as_deref().unwrap_or("");
-                    let new_text = file.new.as_deref().unwrap_or("");
-                    let rows = gitcomet_core::file_diff::side_by_side_rows(old_text, new_text);
-
-                    // Store the file path for syntax highlighting.
-                    let file_path = Some(if file.path.is_absolute() {
-                        file.path.clone()
-                    } else {
-                        workdir.join(&file.path)
-                    });
-                    let language = file_path
-                        .as_ref()
-                        .and_then(rows::diff_syntax_language_for_path);
-
-                    // Precompute word highlights and inline rows.
-                    let mut split_word_highlights_old: Vec<Option<Vec<Range<usize>>>> =
-                        vec![None; rows.len()];
-                    let mut split_word_highlights_new: Vec<Option<Vec<Range<usize>>>> =
-                        vec![None; rows.len()];
-
-                    let mut inline_rows: Vec<AnnotatedDiffLine> =
-                        Vec::with_capacity(rows.len().saturating_mul(2));
-                    let mut inline_word_highlights: Vec<Option<Vec<Range<usize>>>> =
-                        Vec::with_capacity(rows.len().saturating_mul(2));
-                    for (row_ix, row) in rows.iter().enumerate() {
-                        use gitcomet_core::file_diff::FileDiffRowKind as K;
-                        match row.kind {
-                            K::Context => {
-                                inline_rows.push(AnnotatedDiffLine {
-                                    kind: gitcomet_core::domain::DiffLineKind::Context,
-                                    text: format!(" {}", row.old.as_deref().unwrap_or("")).into(),
-                                    old_line: row.old_line,
-                                    new_line: row.new_line,
-                                });
-                                inline_word_highlights.push(None);
-                            }
-                            K::Add => {
-                                inline_rows.push(AnnotatedDiffLine {
-                                    kind: gitcomet_core::domain::DiffLineKind::Add,
-                                    text: format!("+{}", row.new.as_deref().unwrap_or("")).into(),
-                                    old_line: None,
-                                    new_line: row.new_line,
-                                });
-                                inline_word_highlights.push(None);
-                            }
-                            K::Remove => {
-                                inline_rows.push(AnnotatedDiffLine {
-                                    kind: gitcomet_core::domain::DiffLineKind::Remove,
-                                    text: format!("-{}", row.old.as_deref().unwrap_or("")).into(),
-                                    old_line: row.old_line,
-                                    new_line: None,
-                                });
-                                inline_word_highlights.push(None);
-                            }
-                            K::Modify => {
-                                let old = row.old.as_deref().unwrap_or("");
-                                let new = row.new.as_deref().unwrap_or("");
-                                let (old_ranges, new_ranges) = capped_word_diff_ranges(old, new);
-                                let old_ranges_opt = (!old_ranges.is_empty()).then_some(old_ranges);
-                                let new_ranges_opt = (!new_ranges.is_empty()).then_some(new_ranges);
-
-                                split_word_highlights_old[row_ix] = old_ranges_opt.clone();
-                                split_word_highlights_new[row_ix] = new_ranges_opt.clone();
-
-                                inline_rows.push(AnnotatedDiffLine {
-                                    kind: gitcomet_core::domain::DiffLineKind::Remove,
-                                    text: format!("-{}", old).into(),
-                                    old_line: row.old_line,
-                                    new_line: None,
-                                });
-                                inline_word_highlights.push(old_ranges_opt);
-
-                                inline_rows.push(AnnotatedDiffLine {
-                                    kind: gitcomet_core::domain::DiffLineKind::Add,
-                                    text: format!("+{}", new).into(),
-                                    old_line: None,
-                                    new_line: row.new_line,
-                                });
-                                inline_word_highlights.push(new_ranges_opt);
-                            }
-                        }
-                    }
-
-                    let inline_text = build_inline_text(inline_rows.as_slice());
-
-                    Rebuild {
-                        file_path,
-                        language,
-                        rows,
-                        inline_rows,
-                        inline_text,
-                        inline_word_highlights,
-                        split_word_highlights_old,
-                        split_word_highlights_new,
-                    }
-                })
-                .await;
+                let rebuild =
+                    smol::unblock(move || build_file_diff_cache_rebuild(file.as_ref(), &workdir))
+                        .await;
 
                 let _ = view.update(cx, |this, cx| {
                     if this.file_diff_cache_inflight != Some(seq) {
@@ -1808,17 +1919,36 @@ impl MainPaneView {
                     this.file_diff_cache_inflight = None;
                     this.file_diff_cache_path = rebuild.file_path;
                     this.file_diff_cache_language = rebuild.language;
-                    let (old_map, new_map) = build_line_to_split_ix_maps(&rebuild.rows);
                     this.file_diff_cache_rows = rebuild.rows;
-                    this.file_diff_old_line_to_split_ix = old_map;
-                    this.file_diff_new_line_to_split_ix = new_map;
+                    this.file_diff_old_text = rebuild.old_text;
+                    this.file_diff_old_line_starts = rebuild.old_line_starts;
+                    this.file_diff_new_text = rebuild.new_text;
+                    this.file_diff_new_line_starts = rebuild.new_line_starts;
                     this.file_diff_inline_cache = rebuild.inline_rows;
                     this.file_diff_inline_text = rebuild.inline_text;
                     this.file_diff_cache_content_signature = Some(content_signature);
                     this.file_diff_inline_word_highlights = rebuild.inline_word_highlights;
                     this.file_diff_split_word_highlights_old = rebuild.split_word_highlights_old;
                     this.file_diff_split_word_highlights_new = rebuild.split_word_highlights_new;
-                    this.refresh_file_diff_syntax_documents(cx);
+                    let split_left_edit_hint = previous_old_text.as_ref().and_then(|previous| {
+                        diff_syntax_edit_from_text_change(
+                            previous.as_ref(),
+                            this.file_diff_old_text.as_ref(),
+                        )
+                    });
+                    let split_right_edit_hint = previous_new_text.as_ref().and_then(|previous| {
+                        diff_syntax_edit_from_text_change(
+                            previous.as_ref(),
+                            this.file_diff_new_text.as_ref(),
+                        )
+                    });
+                    this.refresh_file_diff_syntax_documents(
+                        cx,
+                        previous_split_left_reparse_seed,
+                        previous_split_right_reparse_seed,
+                        split_left_edit_hint,
+                        split_right_edit_hint,
+                    );
 
                     // Reset the segment cache to avoid mixing patch/file indices.
                     this.clear_diff_text_style_caches();
@@ -2213,7 +2343,6 @@ impl MainPaneView {
         self.diff_selection_anchor = None;
         self.diff_selection_range = None;
         self.diff_preview_is_new_file = false;
-        self.diff_preview_new_file_lines = Arc::new(Vec::new());
 
         let (repo_id, diff_rev, diff_target, workdir, diff) = {
             let Some(repo) = self.active_repo() else {
@@ -2340,11 +2469,9 @@ impl MainPaneView {
             self.diff_cache_target.as_ref(),
         ) {
             self.diff_preview_is_new_file = true;
-            let preview_lines = Arc::new(preview.lines);
-            self.diff_preview_new_file_lines = Arc::clone(&preview_lines);
-            self.set_worktree_preview_ready_lines(
+            self.set_worktree_preview_ready_rows(
                 preview.abs_path,
-                preview_lines,
+                preview.lines.as_slice(),
                 preview.source_len,
                 cx,
             );
@@ -2581,6 +2708,41 @@ mod tests {
         )
     }
 
+    fn prepare_test_document(
+        language: rows::DiffSyntaxLanguage,
+        text: &str,
+    ) -> rows::PreparedDiffSyntaxDocument {
+        let text: SharedString = text.to_owned().into();
+        let line_starts = Arc::from(build_line_starts(text.as_ref()));
+        match rows::prepare_diff_syntax_document_with_budget_reuse_text(
+            language,
+            rows::DiffSyntaxMode::Auto,
+            text.clone(),
+            Arc::clone(&line_starts),
+            rows::DiffSyntaxBudget {
+                foreground_parse: std::time::Duration::from_millis(50),
+            },
+            None,
+            None,
+        ) {
+            rows::PrepareDiffSyntaxDocumentResult::Ready(document) => document,
+            rows::PrepareDiffSyntaxDocumentResult::TimedOut => {
+                rows::inject_background_prepared_diff_syntax_document(
+                    rows::prepare_diff_syntax_document_in_background_text(
+                        language,
+                        rows::DiffSyntaxMode::Auto,
+                        text,
+                        line_starts,
+                    )
+                    .expect("background parse should be available for supported test documents"),
+                )
+            }
+            rows::PrepareDiffSyntaxDocumentResult::Unsupported => {
+                panic!("test document should support prepared syntax parsing")
+            }
+        }
+    }
+
     #[test]
     fn build_inline_text_joins_lines_with_trailing_newline() {
         let rows = vec![
@@ -2612,6 +2774,128 @@ mod tests {
     fn build_inline_text_returns_empty_for_empty_rows() {
         let text = build_inline_text(&[]);
         assert!(text.as_ref().is_empty());
+    }
+
+    #[test]
+    fn build_file_diff_cache_rebuild_preserves_real_document_sources() {
+        let file = gitcomet_core::domain::FileDiffText {
+            path: PathBuf::from("src/demo.rs"),
+            old: Some("alpha\nbeta\n".to_string()),
+            new: Some("gamma\ndelta".to_string()),
+        };
+
+        let rebuild = build_file_diff_cache_rebuild(&file, Path::new("/tmp/repo"));
+
+        assert_eq!(
+            rebuild.file_path,
+            Some(PathBuf::from("/tmp/repo/src/demo.rs"))
+        );
+        assert_eq!(rebuild.language, Some(rows::DiffSyntaxLanguage::Rust));
+        assert_eq!(rebuild.old_text.as_ref(), "alpha\nbeta\n");
+        assert_eq!(rebuild.old_line_starts.as_ref(), &[0, 6, 11]);
+        assert_eq!(rebuild.new_text.as_ref(), "gamma\ndelta");
+        assert_eq!(rebuild.new_line_starts.as_ref(), &[0, 6]);
+    }
+
+    #[test]
+    fn build_file_diff_cache_rebuild_inline_rows_keep_file_line_numbers() {
+        use gitcomet_core::domain::DiffLineKind;
+
+        let file = gitcomet_core::domain::FileDiffText {
+            path: PathBuf::from("src/demo.rs"),
+            old: Some("struct Old;\nfn keep() {}\n".to_string()),
+            new: Some("fn keep() {}\nlet added = 42;\n".to_string()),
+        };
+
+        let rebuild = build_file_diff_cache_rebuild(&file, Path::new("/tmp/repo"));
+        let language = rebuild
+            .language
+            .expect("rust path should resolve a syntax language");
+        let old_document = prepare_test_document(language, rebuild.old_text.as_ref());
+        let new_document = prepare_test_document(language, rebuild.new_text.as_ref());
+
+        let remove_row = rebuild
+            .inline_rows
+            .iter()
+            .find(|row| row.kind == DiffLineKind::Remove)
+            .expect("diff should contain a remove row");
+        assert_eq!(remove_row.old_line, Some(1));
+        assert_eq!(
+            rows::prepared_diff_syntax_line_for_inline_diff_row(
+                Some(old_document),
+                Some(new_document),
+                remove_row,
+            ),
+            rows::PreparedDiffSyntaxLine {
+                document: Some(old_document),
+                line_ix: 0,
+            }
+        );
+
+        let context_row = rebuild
+            .inline_rows
+            .iter()
+            .find(|row| row.kind == DiffLineKind::Context)
+            .expect("diff should contain a context row");
+        assert_eq!(context_row.old_line, Some(2));
+        assert_eq!(context_row.new_line, Some(1));
+        assert_eq!(
+            rows::prepared_diff_syntax_line_for_inline_diff_row(
+                Some(old_document),
+                Some(new_document),
+                context_row,
+            ),
+            rows::PreparedDiffSyntaxLine {
+                document: Some(new_document),
+                line_ix: 0,
+            }
+        );
+
+        let add_row = rebuild
+            .inline_rows
+            .iter()
+            .find(|row| row.kind == DiffLineKind::Add)
+            .expect("diff should contain an add row");
+        assert_eq!(add_row.new_line, Some(2));
+        assert_eq!(
+            rows::prepared_diff_syntax_line_for_inline_diff_row(
+                Some(old_document),
+                Some(new_document),
+                add_row,
+            ),
+            rows::PreparedDiffSyntaxLine {
+                document: Some(new_document),
+                line_ix: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn preview_source_text_from_lines_preserves_missing_trailing_newline() {
+        let lines = vec![
+            "fn main() {".to_string(),
+            "    42".to_string(),
+            "}".to_string(),
+        ];
+        let source_len = "fn main() {\n    42\n}".len();
+
+        let source = preview_source_text_from_lines(&lines, source_len);
+        let (_, line_starts) = preview_source_text_and_line_starts_from_lines(&lines, source_len);
+
+        assert_eq!(source.as_ref(), "fn main() {\n    42\n}");
+        assert_eq!(line_starts.as_ref(), &[0, 12, 19]);
+    }
+
+    #[test]
+    fn preview_source_text_from_lines_restores_trailing_newline() {
+        let lines = vec!["alpha".to_string(), "beta".to_string()];
+        let source_len = "alpha\nbeta\n".len();
+
+        let source = preview_source_text_from_lines(&lines, source_len);
+        let (_, line_starts) = preview_source_text_and_line_starts_from_lines(&lines, source_len);
+
+        assert_eq!(source.as_ref(), "alpha\nbeta\n");
+        assert_eq!(line_starts.as_ref(), &[0, 6, 11]);
     }
 
     #[test]
@@ -2657,13 +2941,16 @@ mod tests {
     }
 
     #[test]
-    fn build_single_markdown_preview_document_from_lines_reports_row_limit() {
+    fn build_single_markdown_preview_document_reports_row_limit() {
         let preview_lines =
             vec!["---\n".repeat(crate::view::markdown_preview::MAX_PREVIEW_ROWS + 1)];
-        let source_len = preview_lines_source_len(&preview_lines);
-        assert!(source_len < crate::view::markdown_preview::MAX_PREVIEW_SOURCE_BYTES);
+        let source = preview_source_text_from_lines(
+            &preview_lines,
+            preview_lines_source_len(&preview_lines),
+        );
+        assert!(source.len() < crate::view::markdown_preview::MAX_PREVIEW_SOURCE_BYTES);
 
-        let error = build_single_markdown_preview_document_from_lines(&preview_lines, source_len)
+        let error = build_single_markdown_preview_document(source.as_ref())
             .expect_err("row-limit markdown preview should return an error");
         assert!(
             error.contains("row limit"),
@@ -2707,22 +2994,15 @@ mod tests {
     }
 
     #[test]
-    fn build_single_markdown_preview_document_from_lines_respects_exact_source_length() {
+    fn build_single_markdown_preview_document_respects_exact_source_length() {
         let mut source = "x".repeat(crate::view::markdown_preview::MAX_PREVIEW_SOURCE_BYTES);
         source.push('\n');
-        let preview_lines = source.lines().map(ToOwned::to_owned).collect::<Vec<_>>();
-        let joined_len = preview_lines_source_len(&preview_lines);
-
-        assert_eq!(
-            joined_len,
-            crate::view::markdown_preview::MAX_PREVIEW_SOURCE_BYTES
-        );
         assert_eq!(
             source.len(),
             crate::view::markdown_preview::MAX_PREVIEW_SOURCE_BYTES + 1
         );
 
-        let error = build_single_markdown_preview_document_from_lines(&preview_lines, source.len())
+        let error = build_single_markdown_preview_document(&source)
             .expect_err("exact source length over the cap should return an error");
         assert!(
             error.contains("1 MiB"),
@@ -3148,63 +3428,82 @@ index 1111111..2222222 100644\n\
     }
 
     #[test]
-    fn build_line_to_split_ix_maps_indexes_old_and_new_lines() {
-        use gitcomet_core::file_diff::{FileDiffRow, FileDiffRowKind};
-
-        let rows = vec![
-            FileDiffRow {
-                kind: FileDiffRowKind::Context,
-                old_line: Some(1),
-                new_line: Some(1),
-                old: Some("a".to_string()),
-                new: Some("a".to_string()),
-                eof_newline: None,
-            },
-            FileDiffRow {
-                kind: FileDiffRowKind::Remove,
-                old_line: Some(2),
-                new_line: None,
-                old: Some("b".to_string()),
-                new: None,
-                eof_newline: None,
-            },
-            FileDiffRow {
-                kind: FileDiffRowKind::Add,
-                old_line: None,
-                new_line: Some(2),
-                old: None,
-                new: Some("c".to_string()),
-                eof_newline: None,
-            },
-            FileDiffRow {
-                kind: FileDiffRowKind::Context,
-                old_line: Some(3),
-                new_line: Some(3),
-                old: Some("d".to_string()),
-                new: Some("d".to_string()),
-                eof_newline: None,
-            },
-        ];
-
-        let (old_map, new_map) = build_line_to_split_ix_maps(&rows);
-
-        // old_line 1 → row 0, old_line 2 → row 1, old_line 3 → row 3
-        assert_eq!(old_map.get(&1), Some(&0));
-        assert_eq!(old_map.get(&2), Some(&1));
-        assert_eq!(old_map.get(&3), Some(&3));
-        assert_eq!(old_map.get(&4), None);
-
-        // new_line 1 → row 0, new_line 2 → row 2, new_line 3 → row 3
-        assert_eq!(new_map.get(&1), Some(&0));
-        assert_eq!(new_map.get(&2), Some(&2));
-        assert_eq!(new_map.get(&3), Some(&3));
-        assert_eq!(new_map.get(&4), None);
+    fn diff_syntax_edit_identical_texts_returns_none() {
+        assert!(diff_syntax_edit_from_text_change("hello world", "hello world").is_none());
+        assert!(diff_syntax_edit_from_text_change("", "").is_none());
     }
 
     #[test]
-    fn build_line_to_split_ix_maps_empty() {
-        let (old_map, new_map) = build_line_to_split_ix_maps(&[]);
-        assert!(old_map.is_empty());
-        assert!(new_map.is_empty());
+    fn diff_syntax_edit_completely_different_texts() {
+        let edit = diff_syntax_edit_from_text_change("abc", "xyz").unwrap();
+        assert_eq!(edit.old_range, 0..3);
+        assert_eq!(edit.new_range, 0..3);
+    }
+
+    #[test]
+    fn diff_syntax_edit_shared_prefix() {
+        let edit = diff_syntax_edit_from_text_change("hello world", "hello rust").unwrap();
+        assert_eq!(edit.old_range, 6..11);
+        assert_eq!(edit.new_range, 6..10);
+    }
+
+    #[test]
+    fn diff_syntax_edit_shared_suffix() {
+        let edit = diff_syntax_edit_from_text_change("old suffix", "new suffix").unwrap();
+        assert_eq!(edit.old_range, 0..3);
+        assert_eq!(edit.new_range, 0..3);
+    }
+
+    #[test]
+    fn diff_syntax_edit_shared_prefix_and_suffix() {
+        let edit = diff_syntax_edit_from_text_change("fn foo() {}", "fn bar() {}").unwrap();
+        // "fn " is shared prefix (3 bytes), "() {}" is shared suffix (5 bytes)
+        assert_eq!(edit.old_range, 3..6);
+        assert_eq!(edit.new_range, 3..6);
+    }
+
+    #[test]
+    fn diff_syntax_edit_insertion_at_beginning() {
+        let edit = diff_syntax_edit_from_text_change("fn main() {}", "/* comment */\nfn main() {}")
+            .unwrap();
+        assert_eq!(edit.old_range, 0..0);
+        assert_eq!(edit.new_range, 0..14);
+    }
+
+    #[test]
+    fn diff_syntax_edit_insertion_at_end() {
+        let edit =
+            diff_syntax_edit_from_text_change("fn main() {}", "fn main() {}\n// end").unwrap();
+        // "fn main() {}" is 12 bytes; insertion starts after byte 12
+        assert_eq!(edit.old_range, 12..12);
+        assert_eq!(edit.new_range, 12..19);
+    }
+
+    #[test]
+    fn diff_syntax_edit_deletion() {
+        let edit = diff_syntax_edit_from_text_change("fn foo() { body }", "fn foo() {}").unwrap();
+        // shared prefix: "fn foo() {" (10 bytes), shared suffix: "}" (1 byte)
+        assert_eq!(edit.old_range, 10..16);
+        assert_eq!(edit.new_range, 10..10);
+    }
+
+    #[test]
+    fn diff_syntax_edit_one_empty_string() {
+        let edit = diff_syntax_edit_from_text_change("", "hello").unwrap();
+        assert_eq!(edit.old_range, 0..0);
+        assert_eq!(edit.new_range, 0..5);
+
+        let edit = diff_syntax_edit_from_text_change("hello", "").unwrap();
+        assert_eq!(edit.old_range, 0..5);
+        assert_eq!(edit.new_range, 0..0);
+    }
+
+    #[test]
+    fn diff_syntax_edit_multibyte_utf8() {
+        // "café" is 5 bytes (é is 2 bytes), "caff" is 4 bytes
+        let edit = diff_syntax_edit_from_text_change("café", "caff").unwrap();
+        // shared prefix: "caf" (3 bytes), diverges at é vs f
+        assert_eq!(edit.old_range, 3..5);
+        assert_eq!(edit.new_range, 3..4);
     }
 }

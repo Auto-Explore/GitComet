@@ -443,10 +443,10 @@ impl MainPaneView {
                                     mode: syntax_mode,
                                 },
                                 word_color,
-                                PreparedDiffSyntaxLine {
-                                    document: syntax_document,
-                                    line_ix: row_ix,
-                                },
+                                rows::prepared_diff_syntax_line_for_one_based_line(
+                                    syntax_document,
+                                    if is_left { row.old_line } else { row.new_line },
+                                ),
                             )
                             .into_parts();
                             if is_pending {
