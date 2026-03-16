@@ -564,11 +564,6 @@ impl DeferredLineStarts {
         self.line_count == 0
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(super) fn is_materialized(&self) -> bool {
-        self.starts.get().is_some()
-    }
-
     pub(super) fn starts<'a>(&'a self, text: &str) -> &'a [usize] {
         self.starts
             .get_or_init(|| std::sync::Arc::from(deferred_line_starts_for_text(text)))
@@ -721,8 +716,6 @@ pub(super) struct ConflictResolverUiState {
     pub(super) three_way_conflict_ranges: ThreeWaySides<Vec<Range<usize>>>,
     pub(super) conflict_has_base: Vec<bool>,
     pub(super) three_way_word_highlights: ThreeWaySides<conflict_resolver::WordHighlights>,
-    pub(super) diff_word_highlights_split: conflict_resolver::TwoWayWordHighlights,
-    pub(super) diff_mode: ConflictDiffMode,
     pub(super) nav_anchor: Option<usize>,
     pub(super) hide_resolved: bool,
     /// True when any conflict side contains non-UTF8 binary data.
@@ -771,8 +764,6 @@ impl Default for ConflictResolverUiState {
             three_way_conflict_ranges: ThreeWaySides::default(),
             conflict_has_base: Vec::new(),
             three_way_word_highlights: ThreeWaySides::default(),
-            diff_word_highlights_split: Vec::new(),
-            diff_mode: ConflictDiffMode::Split,
             nav_anchor: None,
             hide_resolved: false,
             is_binary_conflict: false,
@@ -786,14 +777,6 @@ impl Default for ConflictResolverUiState {
             markdown_preview: ConflictResolverMarkdownPreviewState::default(),
             resolver_preview_mode: ConflictResolverPreviewMode::default(),
         }
-    }
-}
-
-fn indexed_line_count(text: &str, line_starts: &[usize]) -> usize {
-    if text.is_empty() {
-        0
-    } else {
-        line_starts.len()
     }
 }
 
@@ -834,11 +817,6 @@ impl ConflictResolverUiState {
 
     // ----- Mode accessors -----
 
-    /// True if in streamed large-file mode.
-    pub(super) fn is_streamed_large_file(&self) -> bool {
-        true
-    }
-
     /// Return the rendering mode enum (for tracing / external APIs that expect it).
     #[cfg_attr(not(test), allow(dead_code))]
     pub(super) fn rendering_mode(&self) -> conflict_resolver::ConflictRenderingMode {
@@ -861,44 +839,6 @@ impl ConflictResolverUiState {
         match &mut self.mode_state {
             ConflictModeState::Streamed(s) => s,
         }
-    }
-
-    // ----- Field-level accessors for external code -----
-    // Compatibility accessors retained while callers migrate to the streamed API.
-
-    pub(super) fn diff_rows(&self) -> &[FileDiffRow] {
-        &[]
-    }
-
-    pub(super) fn inline_rows(&self) -> &[ConflictInlineRow] {
-        &[]
-    }
-
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(super) fn diff_row_conflict_map(&self) -> &[Option<usize>] {
-        &[]
-    }
-
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(super) fn diff_visible_row_indices(&self) -> &[usize] {
-        &[]
-    }
-
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(super) fn inline_visible_row_indices(&self) -> &[usize] {
-        &[]
-    }
-
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(super) fn three_way_visible_map(&self) -> &[conflict_resolver::ThreeWayVisibleItem] {
-        &[]
-    }
-
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(super) fn three_way_line_conflict_map(&self) -> &ThreeWaySides<Vec<Option<usize>>> {
-        static EMPTY: std::sync::LazyLock<ThreeWaySides<Vec<Option<usize>>>> =
-            std::sync::LazyLock::new(ThreeWaySides::default);
-        &EMPTY
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
@@ -928,15 +868,7 @@ impl ConflictResolverUiState {
 
     #[track_caller]
     pub(super) fn debug_assert_rendering_mode_invariants(&self) {
-        // The enum makes most invariants structural. The one remaining
-        // runtime invariant is that streamed mode must stay in split diff mode.
-        if self.is_streamed_large_file() {
-            debug_assert_eq!(
-                self.diff_mode,
-                ConflictDiffMode::Split,
-                "streamed large-file mode must stay in split diff mode"
-            );
-        }
+        let _ = self;
     }
 
     pub(super) fn three_way_line_count(&self, side: ThreeWayColumn) -> usize {
@@ -1040,11 +972,6 @@ impl ConflictResolverUiState {
         }
     }
 
-    /// Number of visible rows in the two-way inline view.
-    pub(super) fn two_way_inline_visible_len(&self) -> usize {
-        0
-    }
-
     /// Retrieve a split row for the given visible index, dispatching between
     /// the paged index (giant) and the eager `diff_rows` array (small).
     ///
@@ -1072,27 +999,6 @@ impl ConflictResolverUiState {
                 s.split_row_index.row_at(&self.marker_segments, row_ix)
             }
         }
-    }
-
-    /// Retrieve an inline row for the given visible index.
-    ///
-    /// Returns `(source_row_ix, row, conflict_ix)`. Streamed mode returns
-    /// `None` because inline diff is disabled for giant files.
-    pub(super) fn two_way_inline_visible_row(
-        &self,
-        visible_ix: usize,
-    ) -> Option<(usize, ConflictInlineRow, Option<usize>)> {
-        let _ = visible_ix;
-        None
-    }
-
-    /// Retrieve an inline row by source row index (not visible index).
-    ///
-    /// Streamed mode returns `None` because inline diff is disabled for giant
-    /// files.
-    pub(super) fn two_way_inline_row_by_source(&self, row_ix: usize) -> Option<ConflictInlineRow> {
-        let _ = row_ix;
-        None
     }
 
     /// Find the first visible index for a conflict in two-way split view.
@@ -1132,19 +1038,18 @@ impl ConflictResolverUiState {
     // ----- Unified two-way dispatch (Split + Inline, giant vs eager) -----
 
     /// Build unresolved conflict navigation entries for the current two-way
-    /// diff mode (split or inline). Handles both giant and eager rendering modes.
+    /// conflict diff view.
     pub(super) fn two_way_nav_entries(&self) -> Vec<usize> {
         self.two_way_split_nav_entries()
     }
 
-    /// Map a two-way visible index to its conflict index, dispatching on diff mode
-    /// (split/inline) and rendering mode (giant/eager).
+    /// Map a two-way visible index to its conflict index.
     pub(super) fn two_way_conflict_ix_for_visible(&self, visible_ix: usize) -> Option<usize> {
         self.two_way_split_conflict_ix_for_visible(visible_ix)
     }
 
     /// Find the first visible index for a conflict in the current two-way diff
-    /// mode (split/inline). Handles both giant and eager rendering modes.
+    /// view.
     pub(super) fn two_way_visible_ix_for_conflict(&self, conflict_ix: usize) -> Option<usize> {
         self.two_way_split_visible_ix_for_conflict(conflict_ix)
     }
@@ -1261,11 +1166,11 @@ mod conflict_resolver_ui_state_tests {
         assert!(state.three_way_text.base.is_empty());
         assert!(state.three_way_text.ours.is_empty());
         assert!(state.three_way_text.theirs.is_empty());
-        assert!(state.is_streamed_large_file());
+        assert!(state.rendering_mode().is_streamed_large_file());
         assert!(state.three_way_line_starts.base.is_empty());
         assert!(state.three_way_line_starts.ours.is_empty());
         assert!(state.three_way_line_starts.theirs.is_empty());
-        assert!(state.three_way_line_conflict_map().base.is_empty());
+        assert!(state.three_way_conflict_ranges.base.is_empty());
         assert!(state.three_way_word_highlights.base.is_empty());
         assert!(state.split_row_index().is_some());
         assert!(state.two_way_split_projection().is_some());
@@ -1532,14 +1437,6 @@ mod conflict_resolver_ui_state_tests {
     }
 
     #[test]
-    fn two_way_inline_helpers_are_disabled() {
-        let streamed = streamed_state_with_one_conflict();
-        assert_eq!(streamed.two_way_inline_visible_len(), 0);
-        assert!(streamed.two_way_inline_visible_row(0).is_none());
-        assert!(streamed.two_way_inline_row_by_source(0).is_none());
-    }
-
-    #[test]
     fn two_way_conflict_ix_for_visible_dispatch() {
         let streamed = streamed_state_with_one_conflict();
         let vis_len = streamed.two_way_split_visible_len();
@@ -1563,8 +1460,7 @@ mod conflict_resolver_ui_state_tests {
     #[test]
     fn default_mode_state_is_streamed() {
         let state = ConflictResolverUiState::default();
-        assert!(state.is_streamed_large_file());
-        assert!(state.diff_rows().is_empty());
+        assert!(state.rendering_mode().is_streamed_large_file());
         assert!(state.split_row_index().is_some());
     }
 }
@@ -1581,8 +1477,6 @@ pub(super) enum ResolverPickTarget {
         row_ix: usize,
         side: conflict_resolver::ConflictPickSide,
     },
-    /// Append a specific line from the 2-way inline resolver pane.
-    TwoWayInlineLine { row_ix: usize },
     /// Pick a full conflict chunk for the requested side.
     Chunk {
         conflict_ix: usize,

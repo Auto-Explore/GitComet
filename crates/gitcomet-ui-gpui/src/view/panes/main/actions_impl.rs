@@ -838,9 +838,7 @@ impl MainPaneView {
         }
 
         self.conflict_diff_segments_cache_split.clear();
-        self.conflict_diff_segments_cache_inline.clear();
         self.conflict_diff_query_segments_cache_split.clear();
-        self.conflict_diff_query_segments_cache_inline.clear();
         self.conflict_diff_query_cache_query = SharedString::default();
 
         // Use the ConflictSession from state for strategy if available,
@@ -1095,7 +1093,6 @@ impl MainPaneView {
         });
 
         let two_way_word_highlights_started = Instant::now();
-        let diff_word_highlights_split = Vec::new();
         mergetool_trace::record_with(|| {
             trace_ctx
                 .bootstrap_event(
@@ -1191,8 +1188,6 @@ impl MainPaneView {
         self.conflict_three_way_prepared_syntax_documents = three_way_prepared_docs;
         self.conflict_three_way_syntax_inflight = ThreeWaySides::default();
 
-        let diff_mode = ConflictDiffMode::Split;
-
         // Build state with core/shared fields; mode-dependent visible state
         // is populated by the rebuild methods below.
         self.conflict_resolver = ConflictResolverUiState {
@@ -1215,8 +1210,6 @@ impl MainPaneView {
             three_way_conflict_ranges: ThreeWaySides::default(),
             conflict_has_base: Vec::new(),
             three_way_word_highlights,
-            diff_word_highlights_split,
-            diff_mode,
             nav_anchor,
             hide_resolved,
             is_binary_conflict: false,
@@ -1378,9 +1371,8 @@ impl MainPaneView {
             conflict_region_indices = applied.block_region_indices;
         }
 
-        let use_streamed_projection = self.conflict_resolved_output_is_streamed()
-            && self.conflict_resolver.is_streamed_large_file()
-            && !marker_segments.is_empty();
+        let use_streamed_projection =
+            self.conflict_resolved_output_is_streamed() && !marker_segments.is_empty();
         let resolved = (!use_streamed_projection).then(|| {
             if marker_segments.is_empty() {
                 if let Some(cur) = file.current.as_deref() {
@@ -1449,24 +1441,6 @@ impl MainPaneView {
         if self.diff_search_active && !self.diff_search_query.as_ref().trim().is_empty() {
             self.diff_search_recompute_matches();
         }
-    }
-
-    pub(in crate::view) fn conflict_resolver_set_mode(
-        &mut self,
-        mode: ConflictDiffMode,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        let _ = mode;
-        let mode = ConflictDiffMode::Split;
-        if self.conflict_resolver.diff_mode == mode {
-            return;
-        }
-        self.conflict_resolver.diff_mode = mode;
-        self.conflict_resolver.nav_anchor = None;
-        if self.diff_search_active && !self.diff_search_query.as_ref().trim().is_empty() {
-            self.diff_search_recompute_matches();
-        }
-        cx.notify();
     }
 
     pub(in crate::view) fn request_conflict_file_load_mode(
@@ -1620,9 +1594,6 @@ impl MainPaneView {
             }
             ResolverPickTarget::TwoWaySplitLine { row_ix, side } => {
                 self.conflict_resolver_append_split_line_to_output(row_ix, side, cx);
-            }
-            ResolverPickTarget::TwoWayInlineLine { row_ix } => {
-                self.conflict_resolver_append_inline_line_to_output(row_ix, cx);
             }
             ResolverPickTarget::Chunk {
                 conflict_ix,
@@ -1908,49 +1879,6 @@ impl MainPaneView {
             return;
         }
         let line_to_append = line.to_string();
-        let theme = self.theme;
-        let mut append_line_ix = 0usize;
-        self.conflict_resolver_input.update(cx, |input, cx| {
-            input.set_theme(theme, cx);
-            let content = input.text();
-            append_line_ix = source_line_count(content);
-            let insertion = append_line_insertion_text(content, line_to_append.as_str());
-            let end = content.len();
-            input.replace_utf8_range(end..end, &insertion, cx);
-        });
-        let next_line_count = self
-            .conflict_resolver_input
-            .read_with(cx, |input, _| split_line_count(input.text()));
-        self.conflict_resolver_scroll_resolved_output_to_line(append_line_ix, next_line_count);
-    }
-
-    /// Immediately append a single line from the two-way inline view to resolved output.
-    pub(in crate::view) fn conflict_resolver_append_inline_line_to_output(
-        &mut self,
-        ix: usize,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        self.ensure_conflict_resolved_output_materialized(cx);
-        let Some(row) = self.conflict_resolver.two_way_inline_row_by_source(ix) else {
-            return;
-        };
-        if row.content.is_empty() {
-            return;
-        }
-        let line_ix = row
-            .new_line
-            .or(row.old_line)
-            .and_then(|n| usize::try_from(n).ok())
-            .and_then(|n| n.checked_sub(1));
-        let choice = match row.side {
-            ConflictPickSide::Ours => conflict_resolver::ConflictChoice::Ours,
-            ConflictPickSide::Theirs => conflict_resolver::ConflictChoice::Theirs,
-        };
-        if let Some(line_ix) = line_ix {
-            self.conflict_resolver_output_replace_line(line_ix, choice, cx);
-            return;
-        }
-        let line_to_append = row.content.clone();
         let theme = self.theme;
         let mut append_line_ix = 0usize;
         self.conflict_resolver_input.update(cx, |input, cx| {

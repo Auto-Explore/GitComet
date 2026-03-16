@@ -206,12 +206,14 @@ impl<'a> ConflictResolverSearchVisibleRows<'a> {
         Self::Projection(conflict_resolver.three_way_visible_projection())
     }
 
+    #[cfg(test)]
     fn len(self) -> usize {
         match self {
             Self::Projection(projection) => projection.len(),
         }
     }
 
+    #[cfg(test)]
     fn get(self, visible_ix: usize) -> Option<conflict_resolver::ThreeWayVisibleItem> {
         match self {
             Self::Projection(projection) => projection.get(visible_ix),
@@ -258,7 +260,6 @@ fn empty_conflict_resolver_search_two_way_rows() -> ConflictResolverSearchTwoWay
 
 struct ConflictResolverSearchContext<'a> {
     view_mode: ConflictResolverViewMode,
-    diff_mode: ConflictDiffMode,
     marker_segments: &'a [conflict_resolver::ConflictSegment],
     three_way_visible: ConflictResolverSearchVisibleRows<'a>,
     three_way_base_text: &'a str,
@@ -284,7 +285,6 @@ impl<'a> ConflictResolverSearchContext<'a> {
             };
         Self {
             view_mode: conflict_resolver.view_mode,
-            diff_mode: conflict_resolver.diff_mode,
             marker_segments: &conflict_resolver.marker_segments,
             three_way_visible: ConflictResolverSearchVisibleRows::from_conflict_resolver(
                 conflict_resolver,
@@ -301,10 +301,12 @@ impl<'a> ConflictResolverSearchContext<'a> {
         }
     }
 
+    #[cfg(test)]
     fn three_way_visible_len(&self) -> usize {
         self.three_way_visible.len()
     }
 
+    #[cfg(test)]
     fn three_way_visible_item(
         &self,
         visible_ix: usize,
@@ -441,6 +443,7 @@ fn conflict_choice_label(choice: conflict_resolver::ConflictChoice) -> &'static 
     }
 }
 
+#[cfg(test)]
 fn three_way_visible_item_matches_query(
     item: conflict_resolver::ThreeWayVisibleItem,
     ctx: &ConflictResolverSearchContext<'_>,
@@ -500,7 +503,7 @@ mod tests {
     };
     use crate::view::conflict_resolver;
     use crate::view::conflict_resolver::{
-        ConflictBlock, ConflictChoice, ConflictDiffMode, ConflictResolverViewMode, ConflictSegment,
+        ConflictBlock, ConflictChoice, ConflictResolverViewMode, ConflictSegment,
         ConflictSplitRowIndex, TwoWaySplitProjection, build_three_way_visible_projection,
     };
     use crate::view::{
@@ -516,7 +519,6 @@ mod tests {
     ) -> ConflictResolverSearchContext<'a> {
         ConflictResolverSearchContext {
             view_mode: ConflictResolverViewMode::ThreeWay,
-            diff_mode: ConflictDiffMode::Split,
             marker_segments,
             three_way_visible: ConflictResolverSearchVisibleRows::Projection(visible),
             three_way_base_text: base.0,
@@ -566,7 +568,6 @@ mod tests {
 
         let three_way_ctx = ConflictResolverSearchContext {
             view_mode: ConflictResolverViewMode::ThreeWay,
-            diff_mode: ConflictDiffMode::Split,
             marker_segments: &marker_segments,
             three_way_visible: ConflictResolverSearchVisibleRows::Projection(
                 &three_way_visible_projection,
@@ -593,7 +594,6 @@ mod tests {
         let projection = TwoWaySplitProjection::new(&index, &marker_segments, false);
         let two_way_ctx = ConflictResolverSearchContext {
             view_mode: ConflictResolverViewMode::TwoWayDiff,
-            diff_mode: ConflictDiffMode::Split,
             marker_segments: &marker_segments,
             three_way_visible: ConflictResolverSearchVisibleRows::Projection(
                 &three_way_visible_projection,
@@ -839,7 +839,6 @@ mod tests {
     fn search_context_from_conflict_resolver_uses_streamed_mode_state() {
         let mut conflict_resolver = ConflictResolverUiState {
             view_mode: ConflictResolverViewMode::TwoWayDiff,
-            diff_mode: ConflictDiffMode::Split,
             mode_state: ConflictModeState::Streamed(StreamedConflictState::default()),
             ..ConflictResolverUiState::default()
         };

@@ -229,139 +229,6 @@ pub(super) fn split_conflict_row_canvas(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn inline_conflict_row_canvas(
-    theme: AppTheme,
-    view: Entity<MainPaneView>,
-    visible_row_ix: usize,
-    row_ix: usize,
-    min_width: Pixels,
-    old_line_no: SharedString,
-    new_line_no: SharedString,
-    prefix: SharedString,
-    bg: gpui::Rgba,
-    fg: gpui::Rgba,
-    text: SharedString,
-    styled: Option<&CachedDiffStyledText>,
-    show_whitespace: bool,
-    chunk_context: Option<ConflictChunkContext>,
-) -> AnyElement {
-    let prepared = prepare_conflict_text_for_canvas(text, styled, show_whitespace);
-
-    keyed_canvas(
-        ("conflict_resolver_inline_row_canvas", visible_row_ix),
-        move |bounds, window, _cx| {
-            let pad = px_2(window);
-            let gap = pad;
-            let text_bounds = inline_text_bounds(bounds, pad, gap);
-            InlineRowPrepaintState {
-                bounds,
-                text_bounds,
-            }
-        },
-        move |bounds, prepaint, window, cx| {
-            let line_metrics = line_metrics(window);
-            let y = center_text_y(bounds, line_metrics.line_height);
-            let pad = px_2(window);
-            let gap = pad;
-            let line_no_width = conflict_line_no_width();
-
-            window.paint_quad(fill(bounds, bg));
-
-            let old_line_x = bounds.left() + pad;
-            let new_line_x = old_line_x + line_no_width + gap;
-            let prefix_x = new_line_x + line_no_width + gap;
-
-            paint_gutter_text(
-                &old_line_no,
-                old_line_x,
-                y,
-                theme.colors.text_muted,
-                line_metrics,
-                window,
-                cx,
-            );
-            paint_gutter_text(
-                &new_line_no,
-                new_line_x,
-                y,
-                theme.colors.text_muted,
-                line_metrics,
-                window,
-                cx,
-            );
-            paint_gutter_text(
-                &prefix,
-                prefix_x,
-                y,
-                theme.colors.text_muted,
-                line_metrics,
-                window,
-                cx,
-            );
-
-            window.paint_layer(prepaint.text_bounds, |window| {
-                paint_conflict_text(
-                    prepaint.text_bounds,
-                    fg,
-                    y,
-                    line_metrics,
-                    &prepared,
-                    window,
-                    cx,
-                );
-            });
-
-            if let Some(chunk_context) = chunk_context.clone() {
-                let clip_bounds = window.content_mask().bounds;
-                let visible_row = prepaint.bounds.intersect(&clip_bounds);
-                window.on_mouse_event({
-                    let view = view.clone();
-                    move |event: &gpui::MouseDownEvent, phase, window, cx| {
-                        if phase != DispatchPhase::Bubble
-                            || event.button != gpui::MouseButton::Right
-                            || !visible_row.contains(&event.position)
-                        {
-                            return;
-                        }
-
-                        let invoker: SharedString = format!(
-                            "resolver_two_way_inline_chunk_menu_{}_{}",
-                            chunk_context.conflict_ix, row_ix
-                        )
-                        .into();
-
-                        let conflict_ix = chunk_context.conflict_ix;
-                        let has_base = chunk_context.has_base;
-                        let selected_choices = chunk_context.selected_choices.clone();
-                        let anchor = event.position;
-                        view.update(cx, |this, cx| {
-                            this.open_conflict_resolver_chunk_context_menu(
-                                invoker,
-                                conflict_ix,
-                                has_base,
-                                false,
-                                selected_choices,
-                                None,
-                                anchor,
-                                window,
-                                cx,
-                            );
-                            cx.notify();
-                        });
-                    }
-                });
-            }
-        },
-    )
-    .h(px(20.0))
-    .min_w(min_width)
-    .w_full()
-    .text_xs()
-    .whitespace_nowrap()
-    .into_any_element()
-}
-
-#[allow(clippy::too_many_arguments)]
 pub(super) fn three_way_conflict_row_canvas(
     theme: AppTheme,
     view: Entity<MainPaneView>,
@@ -615,12 +482,6 @@ struct ThreeWayRowPrepaintState {
 }
 
 #[derive(Clone, Debug)]
-struct InlineRowPrepaintState {
-    bounds: Bounds<Pixels>,
-    text_bounds: Bounds<Pixels>,
-}
-
-#[derive(Clone, Debug)]
 struct PreparedConflictText {
     text: SharedString,
     highlights: HighlightSpans,
@@ -866,22 +727,8 @@ fn split_column_text_bounds(col: Bounds<Pixels>, pad: Pixels, gap: Pixels) -> Bo
     Bounds::new(point(left, col.top()), size(width, col.size.height))
 }
 
-fn inline_text_bounds(bounds: Bounds<Pixels>, pad: Pixels, gap: Pixels) -> Bounds<Pixels> {
-    let line_no_width = conflict_line_no_width();
-    let prefix_width = conflict_inline_prefix_width();
-    let left = bounds.left() + pad + line_no_width + gap + line_no_width + gap + prefix_width + gap;
-    let width =
-        (bounds.size.width - pad * 2.0 - line_no_width - line_no_width - prefix_width - gap * 3.0)
-            .max(px(0.0));
-    Bounds::new(point(left, bounds.top()), size(width, bounds.size.height))
-}
-
 fn conflict_line_no_width() -> Pixels {
     px(38.0)
-}
-
-fn conflict_inline_prefix_width() -> Pixels {
-    px(12.0)
 }
 
 fn paint_gutter_text(

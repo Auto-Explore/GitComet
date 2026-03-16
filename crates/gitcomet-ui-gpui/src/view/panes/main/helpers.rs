@@ -2211,11 +2211,8 @@ pub(in crate::view) struct MainPaneView {
     pub(in crate::view) conflict_canvas_rows_enabled: bool,
     pub(in crate::view) conflict_diff_segments_cache_split:
         HashMap<(usize, ConflictPickSide), CachedDiffStyledText>,
-    pub(in crate::view) conflict_diff_segments_cache_inline: HashMap<usize, CachedDiffStyledText>,
     pub(in crate::view) conflict_diff_query_segments_cache_split:
         HashMap<(usize, ConflictPickSide), CachedDiffStyledText>,
-    pub(in crate::view) conflict_diff_query_segments_cache_inline:
-        HashMap<usize, CachedDiffStyledText>,
     pub(in crate::view) conflict_diff_query_cache_query: SharedString,
     pub(in crate::view) conflict_three_way_segments_cache:
         HashMap<(usize, ThreeWayColumn), CachedDiffStyledText>,

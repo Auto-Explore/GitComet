@@ -246,32 +246,19 @@ fn conflict_split_row_ix(
     side: crate::view::conflict_resolver::ConflictPickSide,
     text: &str,
 ) -> Option<usize> {
-    pane.conflict_resolver
-        .diff_rows()
-        .iter()
-        .position(|row| match side {
+    (0..pane.conflict_resolver.two_way_split_visible_len()).find_map(|visible_ix| {
+        let (source_ix, row, _conflict_ix) = pane
+            .conflict_resolver
+            .two_way_split_visible_row(visible_ix)?;
+        match side {
             crate::view::conflict_resolver::ConflictPickSide::Ours => {
-                row.old.as_deref() == Some(text)
+                (row.old.as_deref() == Some(text)).then_some(source_ix)
             }
             crate::view::conflict_resolver::ConflictPickSide::Theirs => {
-                row.new.as_deref() == Some(text)
+                (row.new.as_deref() == Some(text)).then_some(source_ix)
             }
-        })
-        .or_else(|| {
-            (0..pane.conflict_resolver.two_way_split_visible_len()).find_map(|visible_ix| {
-                let (source_ix, row, _conflict_ix) = pane
-                    .conflict_resolver
-                    .two_way_split_visible_row(visible_ix)?;
-                match side {
-                    crate::view::conflict_resolver::ConflictPickSide::Ours => {
-                        (row.old.as_deref() == Some(text)).then_some(source_ix)
-                    }
-                    crate::view::conflict_resolver::ConflictPickSide::Theirs => {
-                        (row.new.as_deref() == Some(text)).then_some(source_ix)
-                    }
-                }
-            })
-        })
+        }
+    })
 }
 
 fn conflict_split_cached_styled<'a>(
@@ -3648,15 +3635,17 @@ fn large_conflict_bootstrap_trace_records_stage_counts(cx: &mut gpui::TestAppCon
         BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
         |pane| {
             pane.conflict_resolver.path.as_ref() == Some(&fixture.file_rel)
-                && (!pane.conflict_resolver.diff_rows().is_empty()
-                    || pane.conflict_resolver.split_row_index().is_some())
+                && pane.conflict_resolver.split_row_index().is_some()
         },
         |pane| {
             format!(
-                "path={:?} diff_rows={} inline_rows={} resolved_path={:?}",
+                "path={:?} split_rows={} visible_rows={} resolved_path={:?}",
                 pane.conflict_resolver.path.clone(),
-                pane.conflict_resolver.diff_rows().len(),
-                pane.conflict_resolver.inline_rows().len(),
+                pane.conflict_resolver
+                    .split_row_index()
+                    .map(|index| index.total_rows())
+                    .unwrap_or_default(),
+                pane.conflict_resolver.two_way_split_visible_len(),
                 pane.conflict_resolved_preview_path,
             )
         },
@@ -4247,29 +4236,22 @@ fn assert_streamed_whole_file_two_way_state(pane: &MainPaneView, line_count: usi
         pane.conflict_resolver.three_way_len, line_count,
         "three-way line count should still reflect the full document",
     );
-    assert!(
-        pane.conflict_resolver.diff_rows().is_empty(),
-        "streamed whole-file mode should not build eager split rows",
-    );
-    assert!(
-        pane.conflict_resolver.inline_rows().is_empty(),
-        "streamed whole-file mode should keep inline rows disabled",
-    );
-    assert!(
-        pane.conflict_resolver.diff_visible_row_indices().is_empty()
-            && pane
-                .conflict_resolver
-                .inline_visible_row_indices()
-                .is_empty(),
-        "streamed whole-file mode should not keep eager visible-row maps",
-    );
-
     let index = pane
         .conflict_resolver
         .split_row_index()
         .expect("streamed whole-file mode should build a paged split-row index");
-    assert!(
-        pane.conflict_resolver.two_way_split_projection().is_some(),
+    let projection = pane
+        .conflict_resolver
+        .two_way_split_projection()
+        .expect("streamed whole-file mode should expose a split projection");
+    assert_eq!(
+        pane.conflict_resolver.two_way_row_counts(),
+        (index.total_rows(), 0),
+        "streamed whole-file mode should expose paged split rows without inline materialization",
+    );
+    assert_eq!(
+        projection.visible_len(),
+        pane.conflict_resolver.two_way_split_visible_len(),
         "streamed whole-file mode should expose a split projection",
     );
     assert!(
@@ -4313,25 +4295,16 @@ fn assert_streamed_whole_file_three_way_state(pane: &MainPaneView, line_count: u
         "large whole-file three-way mode should expose every visible line",
     );
     assert!(
-        pane.conflict_resolver.three_way_visible_map().is_empty(),
-        "streamed large-file mode should not keep an eager three-way visible map",
+        pane.conflict_resolver.has_three_way_visible_state_ready(),
+        "streamed large-file mode should rebuild the visible three-way projection",
     );
     assert!(
-        pane.conflict_resolver
-            .three_way_line_conflict_map()
-            .base
-            .is_empty()
-            && pane
-                .conflict_resolver
-                .three_way_line_conflict_map()
-                .ours
-                .is_empty()
-            && pane
-                .conflict_resolver
-                .three_way_line_conflict_map()
-                .theirs
-                .is_empty(),
-        "streamed large-file mode should replace eager per-line conflict maps with ranges",
+        !pane
+            .conflict_resolver
+            .three_way_conflict_ranges
+            .ours
+            .is_empty(),
+        "streamed large-file mode should keep conflict ranges for three-way lookups",
     );
 
     let mid_visible_ix = line_count / 2;
@@ -4548,7 +4521,6 @@ fn whole_file_conflict_switch_to_three_way_stays_fully_reviewable(cx: &mut gpui:
         view.update(app, |this, cx| {
             this.main_pane.update(cx, |pane, cx| {
                 pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::TwoWayDiff, cx);
-                pane.conflict_resolver_set_mode(ConflictDiffMode::Split, cx);
                 assert_eq!(
                     pane.conflict_resolver.view_mode,
                     ConflictResolverViewMode::TwoWayDiff,
@@ -4638,9 +4610,12 @@ fn large_conflict_bootstrap_stays_streamed_for_huge_files(cx: &mut gpui::TestApp
         },
         |pane| {
             format!(
-                "path={:?} diff_rows={} split_row_index={} three_way_len={}",
+                "path={:?} split_rows={} split_row_index={} three_way_len={}",
                 pane.conflict_resolver.path.clone(),
-                pane.conflict_resolver.diff_rows().len(),
+                pane.conflict_resolver
+                    .split_row_index()
+                    .map(|index| index.total_rows())
+                    .unwrap_or_default(),
                 pane.conflict_resolver.split_row_index().is_some(),
                 pane.conflict_resolver.three_way_len,
             )
@@ -4655,14 +4630,6 @@ fn large_conflict_bootstrap_stays_streamed_for_huge_files(cx: &mut gpui::TestApp
                     .split_row_index()
                     .expect("huge conflict should stay on streamed split index");
                 assert!(
-                    pane.conflict_resolver.diff_rows().is_empty(),
-                    "streamed huge-file bootstrap should not build eager diff_rows",
-                );
-                assert!(
-                    pane.conflict_resolver.inline_rows().is_empty(),
-                    "streamed huge-file bootstrap should not build eager inline_rows",
-                );
-                assert!(
                     pane
                         .conflict_resolver
                         .three_way_word_highlights
@@ -4671,8 +4638,8 @@ fn large_conflict_bootstrap_stays_streamed_for_huge_files(cx: &mut gpui::TestApp
                     "streamed huge-file bootstrap should skip three-way word diff computation",
                 );
                 assert!(
-                    pane.conflict_resolver.diff_word_highlights_split.is_empty(),
-                    "streamed huge-file bootstrap should skip eager two-way word highlights",
+                    pane.conflict_resolver.two_way_split_word_highlight(0).is_none(),
+                    "streamed huge-file bootstrap should keep two-way word highlights on-demand",
                 );
                 assert!(
                     index.total_rows() > 0,
@@ -4734,42 +4701,27 @@ fn large_conflict_bootstrap_stays_streamed_for_huge_files(cx: &mut gpui::TestApp
                         && first_block.theirs.shares_backing_with(&current),
                     "huge streamed bootstrap should reuse current-text backing for marker block sides",
                 );
-
-                if let Some(index) = pane.conflict_resolver.split_row_index() {
-                    // Giant mode: verify paged index can serve the first conflict row.
-                    let first = index.row_at(
-                        &pane.conflict_resolver.marker_segments,
-                        index.first_row_for_conflict(0).unwrap_or(0),
-                    );
-                    assert!(
-                        first.is_some(),
-                        "paged index should serve the first conflict row",
-                    );
-                } else {
-                    let first_row = &pane.conflict_resolver.diff_rows()[0];
-                    let expected_first_row_line = fixture.first_conflict_line.saturating_sub(
-                        crate::view::conflict_resolver::BLOCK_LOCAL_DIFF_CONTEXT_LINES as u32,
-                    );
-                    assert!(
-                        first_row.old_line == Some(expected_first_row_line)
-                            || first_row.new_line == Some(expected_first_row_line),
-                        "first sparse row should start at the retained leading-context line {}, got old={:?} new={:?}",
-                        expected_first_row_line,
-                        first_row.old_line,
-                        first_row.new_line,
-                    );
-                    assert!(
-                        pane.conflict_resolver
-                            .diff_rows()
-                            .iter()
-                            .any(|row| {
-                                row.old_line == Some(fixture.first_conflict_line)
-                                    || row.new_line == Some(fixture.first_conflict_line)
-                            }),
-                        "block-local rows should still reference the conflict line {}",
-                        fixture.first_conflict_line,
-                    );
-                }
+                let first_row_ix = index
+                    .first_row_for_conflict(0)
+                    .expect("paged index should expose the first conflict row");
+                let first_row = index
+                    .row_at(&pane.conflict_resolver.marker_segments, first_row_ix)
+                    .expect("paged index should serve the first conflict row");
+                let expected_first_row_line = fixture.first_conflict_line;
+                assert!(
+                    first_row.old_line == Some(expected_first_row_line)
+                        || first_row.new_line == Some(expected_first_row_line),
+                    "first streamed conflict row should align to the first conflict line {}, got old={:?} new={:?}",
+                    expected_first_row_line,
+                    first_row.old_line,
+                    first_row.new_line,
+                );
+                assert!(
+                    pane.conflict_resolver
+                        .two_way_visible_ix_for_conflict(0)
+                        .is_some(),
+                    "streamed projection should expose the first conflict in visible space",
+                );
 
                 let _ = cx;
             });
@@ -4780,7 +4732,7 @@ fn large_conflict_bootstrap_stays_streamed_for_huge_files(cx: &mut gpui::TestApp
 }
 
 #[gpui::test]
-fn large_conflict_bootstrap_uses_block_local_diff_for_dense_huge_files(
+fn large_conflict_bootstrap_uses_streamed_split_index_for_dense_huge_files(
     cx: &mut gpui::TestAppContext,
 ) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
@@ -4815,21 +4767,23 @@ fn large_conflict_bootstrap_uses_block_local_diff_for_dense_huge_files(
     wait_for_main_pane_condition_with_timeout(
         cx,
         &view,
-        "dense large conflict block-local diff bootstrap",
+        "dense large conflict streamed split bootstrap",
         BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
         |pane| {
             pane.conflict_resolver.path.as_ref() == Some(&fixture.file_rel)
                 && crate::view::conflict_resolver::conflict_count(
                     &pane.conflict_resolver.marker_segments,
                 ) == fixture.conflict_block_count
-                && (!pane.conflict_resolver.diff_rows().is_empty()
-                    || pane.conflict_resolver.split_row_index().is_some())
+                && pane.conflict_resolver.split_row_index().is_some()
         },
         |pane| {
             format!(
-                "path={:?} diff_rows={} split_row_index={} conflicts={}",
+                "path={:?} split_rows={} split_row_index={} conflicts={}",
                 pane.conflict_resolver.path.clone(),
-                pane.conflict_resolver.diff_rows().len(),
+                pane.conflict_resolver
+                    .split_row_index()
+                    .map(|index| index.total_rows())
+                    .unwrap_or_default(),
                 pane.conflict_resolver.split_row_index().is_some(),
                 crate::view::conflict_resolver::conflict_count(
                     &pane.conflict_resolver.marker_segments
@@ -4847,77 +4801,30 @@ fn large_conflict_bootstrap_uses_block_local_diff_for_dense_huge_files(
                     ),
                     fixture.conflict_block_count,
                 );
-
-                if let Some(index) = pane.conflict_resolver.split_row_index() {
-                    // Giant mode: paged index, no eager diff_rows.
-                    assert!(
-                        pane.conflict_resolver.diff_rows().is_empty(),
-                        "giant mode should not have eager diff_rows",
-                    );
-                    assert!(
-                        index.total_rows() >= fixture.conflict_block_count,
-                        "paged index should have at least one row per conflict block, got {}",
-                        index.total_rows(),
-                    );
-                    assert!(
-                        pane.conflict_resolver.two_way_split_projection().is_some(),
-                        "giant mode should have a split projection",
-                    );
-                } else {
-                    let max_rows_per_block =
-                        (crate::view::conflict_resolver::BLOCK_LOCAL_DIFF_CONTEXT_LINES * 2) + 2;
-                    let diff_row_count = pane.conflict_resolver.diff_rows().len();
-                    assert!(
-                        diff_row_count >= fixture.conflict_block_count
-                            && diff_row_count
-                                <= fixture.conflict_block_count.saturating_mul(max_rows_per_block),
-                        "block-local diff rows should scale with conflict blocks, got {} rows for {} conflicts",
-                        diff_row_count,
-                        fixture.conflict_block_count,
-                    );
-                    assert!(
-                        pane.conflict_resolver.inline_rows().len() >= diff_row_count
-                            && pane.conflict_resolver.inline_rows().len()
-                                <= diff_row_count.saturating_add(fixture.conflict_block_count),
-                        "inline rows should stay proportional to the block-local diff rows",
-                    );
-                    assert_eq!(
-                        pane.conflict_resolver.diff_word_highlights_split.len(),
-                        diff_row_count,
-                        "two-way word highlights should still track each diff row",
-                    );
-                    assert!(
-                        pane.conflict_resolver
-                            .diff_row_conflict_map()
-                            .iter()
-                            .any(|entry| entry.is_none()),
-                        "dense block-local rows should still retain some shared boundary context",
-                    );
-                    assert!(
-                        pane.conflict_resolver
-                            .diff_row_conflict_map()
-                            .iter()
-                            .any(|entry| entry.is_some()),
-                        "dense block-local rows should still include conflict-local rows",
-                    );
-                    for (ix, (row, conflict_ix)) in pane
-                        .conflict_resolver
-                        .diff_rows()
-                        .iter()
-                        .zip(pane.conflict_resolver.diff_row_conflict_map().iter())
-                        .enumerate()
-                    {
-                        if conflict_ix.is_none() {
-                            assert_eq!(
-                                row.kind,
-                                gitcomet_core::file_diff::FileDiffRowKind::Context,
-                                "dense unmapped row {} should be shared context, got {:?}",
-                                ix,
-                                row.kind,
-                            );
-                        }
-                    }
-                }
+                let index = pane
+                    .conflict_resolver
+                    .split_row_index()
+                    .expect("dense huge conflicts should now always use the streamed split index");
+                assert!(
+                    index.total_rows() >= fixture.conflict_block_count,
+                    "paged index should have at least one row per conflict block, got {}",
+                    index.total_rows(),
+                );
+                assert!(
+                    pane.conflict_resolver.two_way_split_projection().is_some(),
+                    "streamed dense conflicts should have a split projection",
+                );
+                assert_eq!(
+                    pane.conflict_resolver.two_way_row_counts().1,
+                    0,
+                    "streamed dense conflicts should not materialize inline rows",
+                );
+                assert!(
+                    pane.conflict_resolver
+                        .two_way_split_word_highlight(0)
+                        .is_none(),
+                    "streamed dense conflicts should keep word highlights on-demand",
+                );
             });
         });
     });
@@ -5265,7 +5172,6 @@ fn large_conflict_two_way_views_upgrade_to_prepared_document_syntax(cx: &mut gpu
         view.update(app, |this, cx| {
             this.main_pane.update(cx, |pane, cx| {
                 pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::TwoWayDiff, cx);
-                pane.conflict_resolver_set_mode(ConflictDiffMode::Split, cx);
                 pane.conflict_resolver_diff_scroll
                     .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
                 cx.notify();
@@ -5359,34 +5265,20 @@ fn large_conflict_two_way_views_upgrade_to_prepared_document_syntax(cx: &mut gpu
     );
 
     cx.update(|_window, app| {
-        view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
-                pane.conflict_resolver_set_mode(ConflictDiffMode::Inline, cx);
-                cx.notify();
-            });
-        });
-    });
-
-    cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
-        assert_eq!(
-            pane.conflict_resolver.diff_mode,
-            ConflictDiffMode::Split,
-            "streamed conflict compare should clamp the unsupported inline mode back to split",
-        );
         let styled = conflict_split_cached_styled(
             &pane,
             crate::view::conflict_resolver::ConflictPickSide::Ours,
             ours_comment_line,
         )
-        .expect("split cache should stay available after an inline-mode toggle attempt");
+        .expect("split cache should stay available after background syntax preparation");
         assert!(
             styled_has_leading_muted_highlight(
                 styled,
                 comment_prefix_end,
                 pane.theme.colors.text_muted.into(),
             ),
-            "prepared syntax should continue to drive split-row styling after inline-mode toggle attempts",
+            "prepared syntax should continue to drive split-row styling after background preparation",
         );
     });
 
@@ -5709,10 +5601,13 @@ fn very_large_whole_file_conflict_bootstrap_manual_regression_stays_streamed(
         },
         |pane| {
             format!(
-                "path={:?} rendering_mode={:?} diff_rows={} split_row_index={} output_projection={} three_way_len={}",
+                "path={:?} rendering_mode={:?} split_rows={} split_row_index={} output_projection={} three_way_len={}",
                 pane.conflict_resolver.path.clone(),
                 pane.conflict_resolver.rendering_mode(),
-                pane.conflict_resolver.diff_rows().len(),
+                pane.conflict_resolver
+                    .split_row_index()
+                    .map(|index| index.total_rows())
+                    .unwrap_or_default(),
                 pane.conflict_resolver.split_row_index().is_some(),
                 pane.conflict_resolved_output_projection.is_some(),
                 pane.conflict_resolver.three_way_len,
@@ -5745,7 +5640,6 @@ fn very_large_whole_file_conflict_bootstrap_manual_regression_stays_streamed(
         view.update(app, |this, cx| {
             this.main_pane.update(cx, |pane, cx| {
                 pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::TwoWayDiff, cx);
-                pane.conflict_resolver_set_mode(ConflictDiffMode::Split, cx);
                 pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::ThreeWay, cx);
                 assert_eq!(
                     pane.conflict_resolver.view_mode,
@@ -5806,9 +5700,12 @@ fn very_large_conflict_bootstrap_manual_regression_stays_sparse(cx: &mut gpui::T
         },
         |pane| {
             format!(
-                "path={:?} diff_rows={} split_row_index={} three_way_len={}",
+                "path={:?} split_rows={} split_row_index={} three_way_len={}",
                 pane.conflict_resolver.path.clone(),
-                pane.conflict_resolver.diff_rows().len(),
+                pane.conflict_resolver
+                    .split_row_index()
+                    .map(|index| index.total_rows())
+                    .unwrap_or_default(),
                 pane.conflict_resolver.split_row_index().is_some(),
                 pane.conflict_resolver.three_way_len,
             )
@@ -5823,14 +5720,6 @@ fn very_large_conflict_bootstrap_manual_regression_stays_sparse(cx: &mut gpui::T
                     .split_row_index()
                     .expect("500k-line manual fixture should use the streamed split index");
                 assert!(
-                    pane.conflict_resolver.diff_rows().is_empty(),
-                    "500k-line manual fixture should not build eager two-way diff rows",
-                );
-                assert!(
-                    pane.conflict_resolver.inline_rows().is_empty(),
-                    "500k-line manual fixture should keep inline rows disabled",
-                );
-                assert!(
                     pane
                         .conflict_resolver
                         .three_way_word_highlights
@@ -5839,8 +5728,8 @@ fn very_large_conflict_bootstrap_manual_regression_stays_sparse(cx: &mut gpui::T
                     "500k-line manual fixture should skip eager three-way word highlights",
                 );
                 assert!(
-                    pane.conflict_resolver.diff_word_highlights_split.is_empty(),
-                    "500k-line manual fixture should skip eager two-way word highlights",
+                    pane.conflict_resolver.two_way_split_word_highlight(0).is_none(),
+                    "500k-line manual fixture should keep two-way word highlights on-demand",
                 );
                 assert!(
                     index.total_rows() > fixture.conflict_block_count,
@@ -6005,9 +5894,12 @@ fn large_conflict_two_way_resolved_outline_uses_indexed_sources_in_streamed_mode
         },
         |pane| {
             format!(
-                "path={:?} diff_rows={} split_row_index={} resolved_meta={}",
+                "path={:?} split_rows={} split_row_index={} resolved_meta={}",
                 pane.conflict_resolver.path.clone(),
-                pane.conflict_resolver.diff_rows().len(),
+                pane.conflict_resolver
+                    .split_row_index()
+                    .map(|index| index.total_rows())
+                    .unwrap_or_default(),
                 pane.conflict_resolver.split_row_index().is_some(),
                 pane.conflict_resolver.resolved_outline.meta.len(),
             )
@@ -6018,7 +5910,6 @@ fn large_conflict_two_way_resolved_outline_uses_indexed_sources_in_streamed_mode
         view.update(app, |this, cx| {
             this.main_pane.update(cx, |pane, cx| {
                 pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::TwoWayDiff, cx);
-                pane.conflict_resolver_set_mode(ConflictDiffMode::Split, cx);
                 pane.recompute_conflict_resolved_outline_for_tests(cx);
             });
         });
@@ -6035,10 +5926,6 @@ fn large_conflict_two_way_resolved_outline_uses_indexed_sources_in_streamed_mode
                     .meta
                     .get(conflict_line_ix)
                     .expect("conflict line metadata");
-                assert!(
-                    pane.conflict_resolver.diff_rows().is_empty(),
-                    "streamed giant mode should keep eager diff_rows empty",
-                );
                 assert_eq!(
                     pane.conflict_resolver.resolved_outline.meta.len(),
                     fixture.fixture_line_count,
@@ -6308,7 +6195,6 @@ fn giant_two_way_paged_provider_generates_rows_on_demand(cx: &mut gpui::TestAppC
         view.update(app, |this, cx| {
             this.main_pane.update(cx, |pane, cx| {
                 pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::TwoWayDiff, cx);
-                pane.conflict_resolver_set_mode(ConflictDiffMode::Split, cx);
                 let total = assert_streamed_whole_file_two_way_state(pane, fixture.line_count);
 
                 // Generate a deep row on demand without touching earlier rows.
@@ -6389,7 +6275,6 @@ fn giant_two_way_search_finds_text_in_middle_of_large_block(cx: &mut gpui::TestA
         view.update(app, |this, cx| {
             this.main_pane.update(cx, |pane, cx| {
                 pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::TwoWayDiff, cx);
-                pane.conflict_resolver_set_mode(ConflictDiffMode::Split, cx);
                 assert_streamed_whole_file_two_way_state(pane, fixture.line_count);
 
                 // The whole-file conflict fixture has lines like 'panel-25000'
@@ -6508,7 +6393,6 @@ fn giant_two_way_resync_rebuilds_split_index_after_manual_session_edit(
         view.update(app, |this, cx| {
             this.main_pane.update(cx, |pane, cx| {
                 pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::TwoWayDiff, cx);
-                pane.conflict_resolver_set_mode(ConflictDiffMode::Split, cx);
                 pane.conflict_resolver.two_way_split_visible_len()
             })
         })
@@ -6602,16 +6486,11 @@ fn giant_two_way_resync_rebuilds_split_index_after_manual_session_edit(
         view.update(app, |this, cx| {
             this.main_pane.update(cx, |pane, cx| {
                 pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::TwoWayDiff, cx);
-                pane.conflict_resolver_set_mode(ConflictDiffMode::Split, cx);
 
                 assert_eq!(
                     pane.conflict_resolver.rendering_mode(),
                     crate::view::conflict_resolver::ConflictRenderingMode::StreamedLargeFile,
                     "large fixture should remain in streamed large-file mode after re-sync",
-                );
-                assert!(
-                    pane.conflict_resolver.diff_rows().is_empty(),
-                    "streamed giant mode should keep eager diff rows empty after re-sync",
                 );
                 assert_eq!(
                     crate::view::conflict_resolver::conflict_count(
@@ -8308,7 +8187,6 @@ fn conflict_markdown_preview_hides_text_controls_and_ignores_text_hotkeys(
         view.update(app, |this, cx| {
             this.main_pane.update(cx, |pane, cx| {
                 pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::TwoWayDiff, cx);
-                pane.conflict_resolver_set_mode(ConflictDiffMode::Split, cx);
                 pane.show_whitespace = false;
                 cx.notify();
             });
@@ -8369,7 +8247,6 @@ fn conflict_markdown_preview_hides_text_controls_and_ignores_text_hotkeys(
             pane.conflict_resolver.view_mode,
             ConflictResolverViewMode::TwoWayDiff
         );
-        assert_eq!(pane.conflict_resolver.diff_mode, ConflictDiffMode::Split);
         assert!(!pane.show_whitespace);
         assert_eq!(pane.conflict_resolver.active_conflict, 0);
         assert!(
@@ -8381,7 +8258,6 @@ fn conflict_markdown_preview_hides_text_controls_and_ignores_text_hotkeys(
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             this.main_pane.update(cx, |pane, cx| {
-                pane.conflict_resolver_set_mode(ConflictDiffMode::Inline, cx);
                 pane.conflict_resolver.resolver_preview_mode = ConflictResolverPreviewMode::Preview;
                 pane.conflict_resolver.active_conflict = 1;
                 cx.notify();
@@ -8402,13 +8278,12 @@ fn conflict_markdown_preview_hides_text_controls_and_ignores_text_hotkeys(
             pane.conflict_resolver.view_mode,
             ConflictResolverViewMode::TwoWayDiff
         );
-        assert_eq!(
-            pane.conflict_resolver.diff_mode,
-            ConflictDiffMode::Split,
-            "streamed conflict markdown preview should ignore unsupported inline-mode toggles",
-        );
         assert!(!pane.show_whitespace);
         assert_eq!(pane.conflict_resolver.active_conflict, 1);
+        assert!(
+            pane.conflict_resolver.nav_anchor.is_none(),
+            "preview hotkeys should not mutate conflict navigation state",
+        );
     });
 
     std::fs::remove_dir_all(&workdir).expect("cleanup conflict hotkey fixture");

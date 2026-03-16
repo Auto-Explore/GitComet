@@ -74,9 +74,7 @@ use caches::{
 use chrome::{
     CLIENT_SIDE_DECORATION_INSET, TitleBarView, cursor_style_for_resize_edge, resize_edge,
 };
-use conflict_resolver::{
-    ConflictDiffMode, ConflictInlineRow, ConflictPickSide, ConflictResolverViewMode,
-};
+use conflict_resolver::{ConflictPickSide, ConflictResolverViewMode};
 #[cfg(test)]
 use date_time::format_datetime_utc;
 use date_time::{DateTimeFormat, Timezone, format_datetime};

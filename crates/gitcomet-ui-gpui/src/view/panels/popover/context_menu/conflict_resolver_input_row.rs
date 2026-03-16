@@ -36,7 +36,10 @@ mod tests {
     fn model_builds_line_and_chunk_entries() {
         let line_label: SharedString = "Select line (12)".into();
         let chunk_label: SharedString = "Select chunk (Ln 10 - 14)".into();
-        let line_target = ResolverPickTarget::TwoWayInlineLine { row_ix: 7 };
+        let line_target = ResolverPickTarget::TwoWaySplitLine {
+            row_ix: 7,
+            side: ConflictPickSide::Ours,
+        };
         let chunk_target = ResolverPickTarget::Chunk {
             conflict_ix: 3,
             choice: conflict_resolver::ConflictChoice::Ours,
@@ -59,7 +62,10 @@ mod tests {
                 assert!(matches!(
                     action.as_ref(),
                     ContextMenuAction::ConflictResolverPick {
-                        target: ResolverPickTarget::TwoWayInlineLine { row_ix: 7 }
+                        target: ResolverPickTarget::TwoWaySplitLine {
+                            row_ix: 7,
+                            side: ConflictPickSide::Ours,
+                        }
                     }
                 ));
             }

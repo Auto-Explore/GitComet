@@ -839,14 +839,6 @@ impl MainPaneView {
                             let has_current = file.current.is_some();
 
                             let view_mode = self.conflict_resolver.view_mode;
-                            let toggle_mode_split =
-                                |this: &mut Self,
-                                 _e: &ClickEvent,
-                                 _w: &mut Window,
-                                 cx: &mut gpui::Context<Self>| {
-                                    this.conflict_resolver_set_mode(ConflictDiffMode::Split, cx);
-                                };
-
                             let set_view_three_way =
                                 |this: &mut Self,
                                  _e: &ClickEvent,
@@ -982,26 +974,6 @@ impl MainPaneView {
                                     self.conflict_resolver.two_way_split_visible_len()
                                 }
                             };
-
-                            let mode_controls = div()
-                                .id("conflict_mode_toggle")
-                                .flex()
-                                .items_center()
-                                .h(px(components::CONTROL_HEIGHT_PX))
-                                .rounded(px(theme.radii.row))
-                                .border_1()
-                                .border_color(view_toggle_border)
-                                .bg(gpui::rgba(0x00000000))
-                                .overflow_hidden()
-                                .p(px(1.0))
-                                .child(
-                                    components::Button::new("conflict_mode_split", "Split")
-                                        .borderless()
-                                        .style(components::ButtonStyle::Subtle)
-                                        .selected(true)
-                                        .selected_bg(view_toggle_selected_bg)
-                                        .on_click(theme, cx, toggle_mode_split),
-                                );
 
                             let conflict_count = self.conflict_resolver_conflict_count();
                             let active_conflict = self.conflict_resolver.active_conflict;
@@ -1221,11 +1193,6 @@ impl MainPaneView {
                                         .gap_2()
                                         .when(!is_rendered_preview_active, |d| {
                                             d.child(show_whitespace_control)
-                                                .when(
-                                                    view_mode
-                                                        == ConflictResolverViewMode::TwoWayDiff,
-                                                    |d| d.child(mode_controls),
-                                                )
                                                 .child(view_mode_controls)
                                         }),
                                 );
@@ -2548,23 +2515,21 @@ impl MainPaneView {
                 if mods.alt && !mods.control && !mods.platform && !mods.function {
                     match key {
                         "i" | "s" => {
-                            let (conflict_mode, diff_mode) = if key == "i" {
-                                (ConflictDiffMode::Inline, DiffViewMode::Inline)
-                            } else {
-                                (ConflictDiffMode::Split, DiffViewMode::Split)
-                            };
                             if conflict_resolver_active {
-                                if !conflict_preview_active {
-                                    this.conflict_resolver_set_mode(conflict_mode, cx);
-                                }
+                                handled = false;
                             } else if this.active_conflict_target().is_some() {
                                 this.diff_view = DiffViewMode::Split;
                                 this.clear_diff_text_style_caches();
+                                handled = true;
                             } else if !markdown_preview_active && !this.is_file_preview_active() {
-                                this.diff_view = diff_mode;
+                                this.diff_view = if key == "i" {
+                                    DiffViewMode::Inline
+                                } else {
+                                    DiffViewMode::Split
+                                };
                                 this.clear_diff_text_style_caches();
+                                handled = true;
                             }
-                            handled = true;
                         }
                         "h" => {
                             let is_file_preview = this.is_file_preview_active();

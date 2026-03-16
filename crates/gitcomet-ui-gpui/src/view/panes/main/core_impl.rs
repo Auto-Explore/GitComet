@@ -900,9 +900,7 @@ impl MainPaneView {
             conflict_diff_split_col_widths: [px(0.0); 2],
             conflict_canvas_rows_enabled: conflict_canvas_rows_enabled_from_env(),
             conflict_diff_segments_cache_split: HashMap::default(),
-            conflict_diff_segments_cache_inline: HashMap::default(),
             conflict_diff_query_segments_cache_split: HashMap::default(),
-            conflict_diff_query_segments_cache_inline: HashMap::default(),
             conflict_diff_query_cache_query: SharedString::default(),
             conflict_three_way_segments_cache: HashMap::default(),
             conflict_three_way_prepared_syntax_documents: ThreeWaySides::default(),
@@ -1366,22 +1364,18 @@ impl MainPaneView {
 
     pub(in crate::view) fn clear_conflict_diff_query_overlay_caches(&mut self) {
         self.conflict_diff_query_segments_cache_split.clear();
-        self.conflict_diff_query_segments_cache_inline.clear();
         self.conflict_diff_query_cache_query = SharedString::default();
     }
 
     pub(in crate::view) fn clear_conflict_diff_style_caches_preserving_query(&mut self) {
         self.conflict_diff_segments_cache_split.clear();
-        self.conflict_diff_segments_cache_inline.clear();
         self.conflict_diff_query_segments_cache_split.clear();
-        self.conflict_diff_query_segments_cache_inline.clear();
     }
 
     pub(in crate::view) fn sync_conflict_diff_query_overlay_caches(&mut self, query: &str) {
         if self.conflict_diff_query_cache_query.as_ref() != query {
             self.conflict_diff_query_cache_query = query.to_string().into();
             self.conflict_diff_query_segments_cache_split.clear();
-            self.conflict_diff_query_segments_cache_inline.clear();
         }
     }
 
@@ -2511,15 +2505,6 @@ impl MainPaneView {
         }
 
         // History caches are now managed by HistoryView.
-    }
-
-    #[cfg(test)]
-    pub(in crate::view) fn apply_state_snapshot_for_tests(
-        &mut self,
-        next: Arc<AppState>,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        self.apply_state_snapshot(next, cx);
     }
 
     pub(in crate::view) fn cached_path_display(&self, path: &std::path::PathBuf) -> SharedString {

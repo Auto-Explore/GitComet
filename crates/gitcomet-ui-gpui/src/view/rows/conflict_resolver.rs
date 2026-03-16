@@ -5,8 +5,6 @@ use super::conflict_canvas::{
 };
 use super::diff_text::*;
 use super::*;
-use gitcomet_core::domain::DiffLineKind;
-
 fn build_conflict_cached_diff_styled_text(
     theme: AppTheme,
     text: &str,
@@ -66,24 +64,6 @@ fn build_conflict_row_base_styled(
         syntax_mode,
         None,
     ))
-}
-
-fn prepared_diff_syntax_line_for_conflict_inline_row(
-    ours_document: Option<PreparedDiffSyntaxDocument>,
-    theirs_document: Option<PreparedDiffSyntaxDocument>,
-    row: &conflict_resolver::ConflictInlineRow,
-) -> PreparedDiffSyntaxLine {
-    match row.kind {
-        DiffLineKind::Remove => {
-            prepared_diff_syntax_line_for_one_based_line(ours_document, row.old_line)
-        }
-        DiffLineKind::Add | DiffLineKind::Context => {
-            prepared_diff_syntax_line_for_one_based_line(theirs_document, row.new_line)
-        }
-        DiffLineKind::Header | DiffLineKind::Hunk => {
-            prepared_diff_syntax_line_for_one_based_line(None, None)
-        }
-    }
 }
 
 fn render_conflict_markdown_preview_rows(
@@ -1508,32 +1488,6 @@ impl MainPaneView {
         )
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn conflict_inline_row_styled(
-        theme: AppTheme,
-        stable_cache: &mut HashMap<usize, CachedDiffStyledText>,
-        query_cache: &mut HashMap<usize, CachedDiffStyledText>,
-        row_ix: usize,
-        text: &str,
-        query: &str,
-        syntax_lang: Option<DiffSyntaxLanguage>,
-        syntax_mode: DiffSyntaxMode,
-        prepared_line: PreparedDiffSyntaxLine,
-    ) -> ConflictRowStyledText {
-        Self::conflict_row_styled(
-            theme,
-            stable_cache,
-            query_cache,
-            row_ix,
-            text,
-            &[],
-            query,
-            syntax_lang,
-            syntax_mode,
-            prepared_line,
-        )
-    }
-
     fn render_conflict_compare_split_row(
         &mut self,
         visible_row_ix: usize,
@@ -1705,103 +1659,6 @@ impl MainPaneView {
                     .child(div().w(px(1.0)).h_full().bg(theme.colors.border)),
             )
             .child(right)
-            .into_any_element()
-    }
-
-    fn render_conflict_compare_inline_row(
-        &mut self,
-        visible_ix: usize,
-        ix: usize,
-        row: ConflictInlineRow,
-        syntax_lang: Option<DiffSyntaxLanguage>,
-        syntax_mode: DiffSyntaxMode,
-        cx: &mut gpui::Context<Self>,
-    ) -> AnyElement {
-        let theme = self.theme;
-        let show_ws = self.show_whitespace;
-
-        let ours_document = self.conflict_three_way_prepared_syntax_documents.ours;
-        let theirs_document = self.conflict_three_way_prepared_syntax_documents.theirs;
-        let query = self.conflict_diff_query_cache_query.as_ref();
-        let styled = Self::conflict_inline_row_styled(
-            theme,
-            &mut self.conflict_diff_segments_cache_inline,
-            &mut self.conflict_diff_query_segments_cache_inline,
-            ix,
-            row.content.as_str(),
-            query,
-            syntax_lang,
-            syntax_mode,
-            prepared_diff_syntax_line_for_conflict_inline_row(ours_document, theirs_document, &row),
-        );
-        if styled.pending {
-            self.ensure_prepared_syntax_chunk_poll(cx);
-        }
-        let styled = styled.styled;
-
-        let bg = inline_row_bg(theme, row.kind, row.side);
-        let prefix: SharedString = match row.kind {
-            DiffLineKind::Add => "+",
-            DiffLineKind::Remove => "-",
-            DiffLineKind::Context => " ",
-            DiffLineKind::Header => " ",
-            DiffLineKind::Hunk => " ",
-        }
-        .into();
-
-        if self.conflict_canvas_rows_enabled {
-            return conflict_canvas::inline_conflict_row_canvas(
-                theme,
-                cx.entity(),
-                visible_ix,
-                ix,
-                px(0.0),
-                line_number_string(row.old_line),
-                line_number_string(row.new_line),
-                prefix.clone(),
-                bg,
-                theme.colors.text,
-                row.content.clone().into(),
-                styled.as_ref(),
-                show_ws,
-                None,
-            );
-        }
-
-        div()
-            .id(("conflict_compare_inline", ix))
-            .h(px(20.0))
-            .px_2()
-            .flex()
-            .items_center()
-            .gap_2()
-            .text_xs()
-            .bg(bg)
-            .text_color(theme.colors.text)
-            .whitespace_nowrap()
-            .child(
-                div()
-                    .w(px(38.0))
-                    .text_color(theme.colors.text_muted)
-                    .child(line_number_string(row.old_line)),
-            )
-            .child(
-                div()
-                    .w(px(38.0))
-                    .text_color(theme.colors.text_muted)
-                    .child(line_number_string(row.new_line)),
-            )
-            .child(
-                div()
-                    .w(px(12.0))
-                    .text_color(theme.colors.text_muted)
-                    .child(prefix),
-            )
-            .child(conflict_diff_text_cell(
-                row.content.clone().into(),
-                styled.as_ref(),
-                show_ws,
-            ))
             .into_any_element()
     }
 
@@ -2094,162 +1951,6 @@ impl MainPaneView {
             .child(right)
             .into_any_element()
     }
-
-    fn render_conflict_resolver_inline_row(
-        &mut self,
-        visible_ix: usize,
-        ix: usize,
-        row: ConflictInlineRow,
-        conflict_ix: Option<usize>,
-        syntax_lang: Option<DiffSyntaxLanguage>,
-        syntax_mode: DiffSyntaxMode,
-        cx: &mut gpui::Context<Self>,
-    ) -> AnyElement {
-        let theme = self.theme;
-        let show_ws = self.show_whitespace;
-
-        let ours_document = self.conflict_three_way_prepared_syntax_documents.ours;
-        let theirs_document = self.conflict_three_way_prepared_syntax_documents.theirs;
-        let query = self.conflict_diff_query_cache_query.as_ref();
-        let styled = Self::conflict_inline_row_styled(
-            theme,
-            &mut self.conflict_diff_segments_cache_inline,
-            &mut self.conflict_diff_query_segments_cache_inline,
-            ix,
-            row.content.as_str(),
-            query,
-            syntax_lang,
-            syntax_mode,
-            prepared_diff_syntax_line_for_conflict_inline_row(ours_document, theirs_document, &row),
-        );
-        if styled.pending {
-            self.ensure_prepared_syntax_chunk_poll(cx);
-        }
-        let styled = styled.styled;
-
-        let bg = inline_row_bg(theme, row.kind, row.side);
-        let prefix: SharedString = match row.kind {
-            DiffLineKind::Add => "+",
-            DiffLineKind::Remove => "-",
-            DiffLineKind::Context => " ",
-            DiffLineKind::Header => " ",
-            DiffLineKind::Hunk => " ",
-        }
-        .into();
-
-        if self.conflict_canvas_rows_enabled {
-            let chunk_context = conflict_ix.map(|conflict_ix| ConflictChunkContext {
-                conflict_ix,
-                has_base: self
-                    .conflict_resolver
-                    .conflict_has_base
-                    .get(conflict_ix)
-                    .copied()
-                    .unwrap_or(false),
-                selected_choices: self
-                    .conflict_resolver_selected_choices_for_conflict_ix(conflict_ix),
-            });
-            return conflict_canvas::inline_conflict_row_canvas(
-                theme,
-                cx.entity(),
-                visible_ix,
-                ix,
-                px(0.0),
-                line_number_string(row.old_line),
-                line_number_string(row.new_line),
-                prefix.clone(),
-                bg,
-                theme.colors.text,
-                row.content.clone().into(),
-                styled.as_ref(),
-                show_ws,
-                chunk_context,
-            );
-        }
-
-        let mut base = div()
-            .id(("conflict_diff_inline", ix))
-            .h(px(20.0))
-            .px_2()
-            .flex()
-            .items_center()
-            .gap_2()
-            .text_xs()
-            .bg(bg)
-            .text_color(theme.colors.text)
-            .whitespace_nowrap()
-            .child(
-                div()
-                    .w(px(38.0))
-                    .text_color(theme.colors.text_muted)
-                    .child(line_number_string(row.old_line)),
-            )
-            .child(
-                div()
-                    .w(px(38.0))
-                    .text_color(theme.colors.text_muted)
-                    .child(line_number_string(row.new_line)),
-            )
-            .child(
-                div()
-                    .w(px(12.0))
-                    .text_color(theme.colors.text_muted)
-                    .child(prefix),
-            )
-            .child(conflict_diff_text_cell(
-                row.content.clone().into(),
-                styled.as_ref(),
-                show_ws,
-            ));
-        if let Some(conflict_ix) = conflict_ix {
-            let has_base = self
-                .conflict_resolver
-                .conflict_has_base
-                .get(conflict_ix)
-                .copied()
-                .unwrap_or(false);
-            let selected_choices =
-                self.conflict_resolver_selected_choices_for_conflict_ix(conflict_ix);
-            let chunk_menu_invoker: SharedString =
-                format!("resolver_two_way_inline_chunk_menu_{}_{}", conflict_ix, ix).into();
-            let input_menu_invoker: SharedString =
-                format!("resolver_two_way_inline_input_menu_{}_{}", conflict_ix, ix).into();
-            let (line_label, line_target, chunk_label, chunk_target) =
-                two_way_inline_input_row_menu_targets(ix, conflict_ix, row.side);
-            base = base.on_mouse_down(
-                MouseButton::Right,
-                cx.listener(move |this, e: &MouseDownEvent, window, cx| {
-                    cx.stop_propagation();
-                    if e.modifiers.shift {
-                        this.open_conflict_resolver_input_row_context_menu(
-                            input_menu_invoker.clone(),
-                            line_label.clone(),
-                            line_target.clone(),
-                            chunk_label.clone(),
-                            chunk_target.clone(),
-                            e.position,
-                            window,
-                            cx,
-                        );
-                    } else {
-                        this.open_conflict_resolver_chunk_context_menu(
-                            chunk_menu_invoker.clone(),
-                            conflict_ix,
-                            has_base,
-                            false,
-                            selected_choices.clone(),
-                            None,
-                            e.position,
-                            window,
-                            cx,
-                        );
-                    }
-                }),
-            );
-        }
-
-        base.into_any_element()
-    }
 }
 
 fn conflict_diff_text_cell(
@@ -2460,30 +2161,6 @@ fn two_way_split_input_row_menu_targets(
     )
 }
 
-fn two_way_inline_input_row_menu_targets(
-    row_ix: usize,
-    conflict_ix: usize,
-    side: ConflictPickSide,
-) -> (
-    SharedString,
-    ResolverPickTarget,
-    SharedString,
-    ResolverPickTarget,
-) {
-    let side_label = two_way_side_label(side);
-    let choice = two_way_choice_for_side(side);
-    (
-        format!("Pick this line ({side_label})").into(),
-        ResolverPickTarget::TwoWayInlineLine { row_ix },
-        format!("Pick this chunk ({side_label})").into(),
-        ResolverPickTarget::Chunk {
-            conflict_ix,
-            choice,
-            output_line_ix: None,
-        },
-    )
-}
-
 fn split_cell_bg(
     theme: AppTheme,
     kind: gitcomet_core::file_diff::FileDiffRowKind,
@@ -2504,22 +2181,6 @@ fn split_cell_bg(
                 if theme.is_dark { 0.10 } else { 0.08 },
             )
         }
-        _ => with_alpha(theme.colors.surface_bg_elevated, 0.0),
-    }
-}
-
-fn inline_row_bg(theme: AppTheme, kind: DiffLineKind, side: ConflictPickSide) -> gpui::Rgba {
-    match (kind, side) {
-        (DiffLineKind::Add, ConflictPickSide::Ours)
-        | (DiffLineKind::Remove, ConflictPickSide::Ours) => with_alpha(
-            theme.colors.warning,
-            if theme.is_dark { 0.10 } else { 0.08 },
-        ),
-        (DiffLineKind::Add, ConflictPickSide::Theirs)
-        | (DiffLineKind::Remove, ConflictPickSide::Theirs) => with_alpha(
-            theme.colors.success,
-            if theme.is_dark { 0.10 } else { 0.08 },
-        ),
         _ => with_alpha(theme.colors.surface_bg_elevated, 0.0),
     }
 }
@@ -2588,27 +2249,6 @@ mod tests {
             ResolverPickTarget::Chunk {
                 conflict_ix: 5,
                 choice: conflict_resolver::ConflictChoice::Ours,
-                output_line_ix: None,
-            }
-        );
-    }
-
-    #[test]
-    fn two_way_inline_input_row_targets_map_side_to_inline_line_and_chunk_choice() {
-        let (line_label, line_target, chunk_label, chunk_target) =
-            two_way_inline_input_row_menu_targets(6, 3, ConflictPickSide::Theirs);
-
-        assert_eq!(line_label.as_ref(), "Pick this line (remote)");
-        assert_eq!(chunk_label.as_ref(), "Pick this chunk (remote)");
-        assert_eq!(
-            line_target,
-            ResolverPickTarget::TwoWayInlineLine { row_ix: 6 }
-        );
-        assert_eq!(
-            chunk_target,
-            ResolverPickTarget::Chunk {
-                conflict_ix: 3,
-                choice: conflict_resolver::ConflictChoice::Theirs,
                 output_line_ix: None,
             }
         );

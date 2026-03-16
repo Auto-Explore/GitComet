@@ -9,12 +9,6 @@ pub enum ConflictChoice {
     Both,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ConflictDiffMode {
-    Split,
-    Inline,
-}
-
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum ConflictResolverViewMode {
     ThreeWay,
@@ -2527,6 +2521,7 @@ pub fn build_two_way_visible_indices(
 /// `visible_row_indices` maps visible list rows to source row indices. This helper
 /// resolves conflict index -> visible row index so callers can scroll/focus a
 /// specific conflict in two-way resolver modes.
+#[cfg(test)]
 pub fn visible_index_for_two_way_conflict(
     row_conflict_map: &[Option<usize>],
     visible_row_indices: &[usize],
@@ -2545,6 +2540,7 @@ pub fn visible_index_for_two_way_conflict(
 ///
 /// Returns visible list indices (not source row indices) in unresolved queue
 /// order so callers can feed them directly into shared diff navigation helpers.
+#[cfg(test)]
 pub fn unresolved_visible_nav_entries_for_two_way(
     segments: &[ConflictSegment],
     row_conflict_map: &[Option<usize>],
@@ -2559,6 +2555,7 @@ pub fn unresolved_visible_nav_entries_for_two_way(
 }
 
 /// Map a two-way visible index back to its conflict index.
+#[cfg(test)]
 pub fn two_way_conflict_index_for_visible_row(
     row_conflict_map: &[Option<usize>],
     visible_row_indices: &[usize],
@@ -2853,6 +2850,7 @@ pub fn build_three_way_visible_map(
 
 /// Find the visible index for the first line of a conflict range, or the
 /// collapsed block entry. Returns `None` if the range is not visible.
+#[cfg(test)]
 pub fn visible_index_for_conflict(
     visible_map: &[ThreeWayVisibleItem],
     conflict_ranges: &[std::ops::Range<usize>],
