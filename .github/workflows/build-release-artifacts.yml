@@ -237,7 +237,7 @@ jobs:
             echo "Description: Fast, resource-efficient Git GUI written in Rust."
           } > "${pkg_root}/DEBIAN/control"
 
-          dpkg-deb --build "${pkg_root}" "dist/gitcomet-v${VERSION}-linux-x86_64.deb"
+          dpkg-deb --build "${pkg_root}" "dist/gitcomet_${VERSION}_amd64.deb"
 
       - name: Package AppImage
         run: |
