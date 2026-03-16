@@ -2307,7 +2307,6 @@ dependencies = [
  "criterion",
  "gitcomet-core",
  "gitcomet-state",
- "gitcomet-ui",
  "gpui",
  "metal 0.33.0",
  "pulldown-cmark",

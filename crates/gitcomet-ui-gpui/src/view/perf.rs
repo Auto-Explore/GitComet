@@ -24,23 +24,23 @@ pub(crate) enum ViewPerfRenderLane {
     MarkdownPreview,
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-#[allow(dead_code)]
 pub(crate) struct SpanStats {
     pub calls: u64,
     pub total_nanos: u64,
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-#[allow(dead_code)]
 pub(crate) struct RowBatchStats {
     pub calls: u64,
     pub requested_rows: u64,
     pub painted_rows: u64,
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-#[allow(dead_code)]
 pub(crate) struct ViewPerfSnapshot {
     pub render_three_way_rows_batch: RowBatchStats,
     pub render_resolver_diff_rows_batch: RowBatchStats,
@@ -108,8 +108,8 @@ pub(crate) fn record_row_batch(
     let _ = (lane, requested_rows, painted_rows);
 }
 
+#[cfg(test)]
 #[inline]
-#[allow(dead_code)]
 pub(crate) fn snapshot() -> ViewPerfSnapshot {
     #[cfg(debug_assertions)]
     {
@@ -135,8 +135,8 @@ pub(crate) fn snapshot() -> ViewPerfSnapshot {
     }
 }
 
+#[cfg(test)]
 #[inline]
-#[allow(dead_code)]
 pub(crate) fn reset() {
     #[cfg(debug_assertions)]
     {
@@ -185,8 +185,8 @@ impl AtomicSpanStats {
         self.total_nanos.fetch_add(elapsed_nanos, Ordering::Relaxed);
     }
 
+    #[cfg(test)]
     #[inline]
-    #[allow(dead_code)]
     fn snapshot(&self) -> SpanStats {
         SpanStats {
             calls: self.calls.load(Ordering::Relaxed),
@@ -194,8 +194,8 @@ impl AtomicSpanStats {
         }
     }
 
+    #[cfg(test)]
     #[inline]
-    #[allow(dead_code)]
     fn reset(&self) {
         self.calls.store(0, Ordering::Relaxed);
         self.total_nanos.store(0, Ordering::Relaxed);
@@ -228,8 +228,8 @@ impl AtomicRowBatchStats {
         self.painted_rows.fetch_add(painted_rows, Ordering::Relaxed);
     }
 
+    #[cfg(test)]
     #[inline]
-    #[allow(dead_code)]
     fn snapshot(&self) -> RowBatchStats {
         RowBatchStats {
             calls: self.calls.load(Ordering::Relaxed),
@@ -238,8 +238,8 @@ impl AtomicRowBatchStats {
         }
     }
 
+    #[cfg(test)]
     #[inline]
-    #[allow(dead_code)]
     fn reset(&self) {
         self.calls.store(0, Ordering::Relaxed);
         self.requested_rows.store(0, Ordering::Relaxed);

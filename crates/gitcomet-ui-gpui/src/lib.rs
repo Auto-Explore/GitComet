@@ -11,6 +11,7 @@ pub use focused_diff::{FocusedDiffConfig, run_focused_diff};
 pub use launch_guard::UiLaunchError;
 pub use view::StartupCrashReport;
 
+#[cfg(feature = "benchmarks")]
 #[doc(hidden)]
 pub mod benchmarks {
     pub use crate::view::rows::benchmarks::*;

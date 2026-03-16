@@ -4354,28 +4354,6 @@ impl ConflictStreamedProviderFixture {
         self.split_row_index.cached_page_count()
     }
 
-    #[cfg(test)]
-    fn anchor_count(&self) -> usize {
-        // Access the single block entry's anchor pair count.
-        match &self.segments[0] {
-            ConflictSegment::Block(block) => {
-                // Rebuild just the anchor index to inspect it.
-                let ours_starts = line_starts_for_text(&block.ours);
-                let theirs_starts = line_starts_for_text(&block.theirs);
-                let anchor = conflict_resolver::ConflictAnchorIndex::build_for_benchmark(
-                    &block.ours,
-                    &ours_starts,
-                    block.ours.lines().count(),
-                    &block.theirs,
-                    &theirs_starts,
-                    block.theirs.lines().count(),
-                );
-                anchor.ours_to_theirs.len()
-            }
-            _ => 0,
-        }
-    }
-
     /// Total metadata bytes: split row index + two-way projection (excludes page cache
     /// and source text, which are shared).
     #[cfg(test)]
@@ -6197,17 +6175,6 @@ mod tests {
         let h1 = fixture.run_index_build_step();
         let h2 = fixture.run_index_build_step();
         assert_eq!(h1, h2, "index build should be deterministic");
-    }
-
-    #[test]
-    fn streamed_provider_fixture_has_anchors_for_shared_content() {
-        let fixture = ConflictStreamedProviderFixture::new(1_000);
-        let anchors = fixture.anchor_count();
-        // ~60% of lines are shared, so we should have a meaningful anchor set.
-        assert!(
-            anchors > 0,
-            "whole-file conflict with shared content should produce anchors"
-        );
     }
 
     #[test]

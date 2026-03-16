@@ -634,6 +634,8 @@ impl ConflictSession {
     ///
     /// This is a convenience for loading a conflicted worktree file where the
     /// merged content still contains conflict markers.
+    // Public for test and benchmark setup only; not called from production code.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn from_merged_text(
         path: PathBuf,
         conflict_kind: FileConflictKind,
@@ -659,6 +661,8 @@ impl ConflictSession {
     /// diff3-style (`|||||||` base section) markers.
     ///
     /// Returns the number of parsed regions.
+    // Public for tests only; thin wrapper around parse_regions_from_shared_text.
+    #[cfg(test)]
     pub fn parse_regions_from_merged_text(&mut self, merged_text: &str) -> usize {
         self.parse_regions_from_shared_text(Arc::<str>::from(merged_text))
     }

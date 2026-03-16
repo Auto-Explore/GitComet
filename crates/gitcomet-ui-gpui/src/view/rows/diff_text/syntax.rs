@@ -114,6 +114,7 @@ struct PreparedSyntaxCacheKey {
     doc_hash: u64,
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum TreesitterParseReuseMode {
     Full,
@@ -128,7 +129,7 @@ struct PreparedSyntaxTreeState {
     source_hash: u64,
     source_version: u64,
     tree: tree_sitter::Tree,
-    #[allow(dead_code)] // read only in #[cfg(test)] via prepared_document_parse_mode()
+    #[cfg(test)]
     parse_mode: TreesitterParseReuseMode,
 }
 
@@ -172,11 +173,13 @@ pub(super) enum PrepareTreesitterDocumentResult {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SyntaxCacheDropMode {
     DeferredWhenLarge,
+    #[cfg(feature = "benchmarks")]
     InlineWhenLarge,
 }
 
 enum SyntaxCacheDropMessage {
     Drop(Vec<Vec<SyntaxToken>>),
+    #[cfg(any(test, feature = "benchmarks"))]
     Flush(mpsc::Sender<()>),
 }
 
@@ -243,6 +246,7 @@ fn syntax_cache_drop_sender() -> Option<&'static mpsc::Sender<SyntaxCacheDropMes
                                 TS_DEFERRED_DROP_COMPLETED
                                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                             }
+                            #[cfg(any(test, feature = "benchmarks"))]
                             SyntaxCacheDropMessage::Flush(ack) => {
                                 let _ = ack.send(());
                             }
@@ -366,6 +370,7 @@ fn tree_state_clone_count() -> usize {
     TS_TREE_STATE_CLONE_COUNT.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+#[cfg(any(test, feature = "benchmarks"))]
 fn flush_deferred_syntax_cache_drop_queue_with_timeout(timeout: Duration) -> bool {
     let Some(sender) = syntax_cache_drop_sender() else {
         return false;
@@ -377,6 +382,7 @@ fn flush_deferred_syntax_cache_drop_queue_with_timeout(timeout: Duration) -> boo
     ack_rx.recv_timeout(timeout).is_ok()
 }
 
+#[cfg(any(test, feature = "benchmarks"))]
 pub(super) fn benchmark_flush_deferred_drop_queue() -> bool {
     flush_deferred_syntax_cache_drop_queue_with_timeout(Duration::from_secs(2))
 }
@@ -410,6 +416,7 @@ struct TreesitterCachedDocument {
 }
 
 impl TreesitterCachedDocument {
+    #[cfg(any(test, feature = "benchmarks"))]
     fn from_line_tokens(
         line_tokens: Vec<Vec<SyntaxToken>>,
         tree_state: Option<PreparedSyntaxTreeState>,
@@ -449,6 +456,7 @@ impl TreesitterCachedDocument {
     }
 }
 
+#[cfg(any(test, feature = "benchmarks"))]
 fn chunk_line_tokens_by_row(
     line_tokens: Vec<Vec<SyntaxToken>>,
 ) -> HashMap<usize, Vec<Vec<SyntaxToken>>> {
@@ -844,18 +852,22 @@ impl TreesitterDocumentCache {
         tree_state
     }
 
+    #[cfg(any(test, feature = "benchmarks"))]
     fn metrics(&self) -> PreparedSyntaxCacheMetrics {
         self.metrics
     }
 
+    #[cfg(feature = "benchmarks")]
     fn reset_metrics(&mut self) {
         self.metrics = PreparedSyntaxCacheMetrics::default();
     }
 
+    #[cfg(any(test, feature = "benchmarks"))]
     fn loaded_chunk_count(&self, cache_key: PreparedSyntaxCacheKey) -> Option<usize> {
         Some(self.by_cache_key.get(&cache_key)?.line_token_chunks.len())
     }
 
+    #[cfg(any(test, feature = "benchmarks"))]
     fn contains_key(&self, cache_key: PreparedSyntaxCacheKey) -> bool {
         self.by_cache_key.contains_key(&cache_key)
     }
@@ -1031,10 +1043,12 @@ struct TreesitterDocumentParseRequest {
     cache_key: PreparedSyntaxCacheKey,
 }
 
+#[cfg(feature = "benchmarks")]
 pub(super) fn benchmark_reset_prepared_syntax_cache_metrics() {
     TS_DOCUMENT_CACHE.with(|cache| cache.borrow_mut().reset_metrics());
 }
 
+#[cfg(any(test, feature = "benchmarks"))]
 pub(super) fn benchmark_prepared_syntax_cache_metrics() -> (u64, u64, u64, u64) {
     TS_DOCUMENT_CACHE.with(|cache| {
         let metrics = cache.borrow().metrics();
@@ -1047,12 +1061,14 @@ pub(super) fn benchmark_prepared_syntax_cache_metrics() -> (u64, u64, u64, u64) 
     })
 }
 
+#[cfg(any(test, feature = "benchmarks"))]
 pub(super) fn benchmark_prepared_syntax_loaded_chunk_count(
     document: PreparedSyntaxDocument,
 ) -> Option<usize> {
     TS_DOCUMENT_CACHE.with(|cache| cache.borrow().loaded_chunk_count(document.cache_key))
 }
 
+#[cfg(feature = "benchmarks")]
 pub(super) fn benchmark_prepared_syntax_cache_contains_document(
     document: PreparedSyntaxDocument,
 ) -> bool {
@@ -1331,6 +1347,7 @@ pub(super) fn prepared_document_source_version(document: PreparedSyntaxDocument)
     })
 }
 
+#[cfg(feature = "benchmarks")]
 pub(super) fn benchmark_cache_replacement_drop_step(
     lines: usize,
     tokens_per_line: usize,
@@ -1363,6 +1380,7 @@ pub(super) fn benchmark_cache_replacement_drop_step(
     h.finish()
 }
 
+#[cfg(feature = "benchmarks")]
 pub(super) fn benchmark_drop_payload_timed_step(
     lines: usize,
     tokens_per_line: usize,
@@ -1380,6 +1398,7 @@ pub(super) fn benchmark_drop_payload_timed_step(
     start.elapsed()
 }
 
+#[cfg(feature = "benchmarks")]
 fn benchmark_line_tokens_payload_batch(
     lines: usize,
     tokens_per_line: usize,
@@ -1400,6 +1419,7 @@ fn benchmark_line_tokens_payload_batch(
     payloads
 }
 
+#[cfg(any(test, feature = "benchmarks"))]
 fn benchmark_line_tokens_payload(
     lines: usize,
     tokens_per_line: usize,
@@ -1463,6 +1483,7 @@ fn parse_treesitter_document_core(
         )
     })?;
 
+    #[cfg(test)]
     let parse_mode = if incremental_seed.is_some() {
         TreesitterParseReuseMode::Incremental
     } else {
@@ -1484,6 +1505,7 @@ fn parse_treesitter_document_core(
             source_hash: request.cache_key.doc_hash,
             source_version,
             tree,
+            #[cfg(test)]
             parse_mode,
         }),
     })

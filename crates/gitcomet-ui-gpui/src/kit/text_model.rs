@@ -267,10 +267,12 @@ impl TextModel {
         self.len() == 0
     }
 
+    #[cfg(feature = "benchmarks")]
     pub fn model_id(&self) -> u64 {
         self.core.model_id
     }
 
+    #[cfg(any(test, feature = "benchmarks"))]
     pub fn revision(&self) -> u64 {
         self.core.revision
     }
@@ -279,6 +281,7 @@ impl TextModel {
         self.core.materialized().as_ref()
     }
 
+    #[cfg(feature = "benchmarks")]
     pub fn as_shared_string(&self) -> SharedString {
         self.core.materialized().clone()
     }
@@ -297,6 +300,7 @@ impl TextModel {
         *self = Self::from_large_text(text);
     }
 
+    #[cfg(any(test, feature = "benchmarks"))]
     pub fn append_large(&mut self, text: &str) -> Range<usize> {
         let start = self.len();
         self.replace_range(start..start, text)
@@ -406,6 +410,7 @@ impl TextModelSnapshot {
         self.core.materialized().clone()
     }
 
+    #[cfg(any(test, feature = "benchmarks"))]
     pub fn line_starts(&self) -> &[usize] {
         self.core.line_index.starts()
     }
@@ -439,6 +444,7 @@ impl TextModelSnapshot {
         false
     }
 
+    #[cfg(any(test, feature = "benchmarks"))]
     pub fn clamp_to_char_boundary(&self, mut offset: usize) -> usize {
         offset = offset.min(self.len());
         while offset > 0 && !self.is_char_boundary(offset) {
@@ -447,6 +453,7 @@ impl TextModelSnapshot {
         offset
     }
 
+    #[cfg(any(test, feature = "benchmarks"))]
     pub fn slice_to_string(&self, range: Range<usize>) -> String {
         let start = self.clamp_to_char_boundary(range.start.min(self.len()));
         let end = self.clamp_to_char_boundary(range.end.min(self.len()));

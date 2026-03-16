@@ -254,7 +254,7 @@ pub fn side_by_side_rows_with_anchors(old: &str, new: &str) -> FileDiffRowsWithA
     FileDiffRowsWithAnchors { rows, anchors }
 }
 
-pub fn compute_row_region_anchors(rows: &[FileDiffRow]) -> FileDiffAnchors {
+pub(crate) fn compute_row_region_anchors(rows: &[FileDiffRow]) -> FileDiffAnchors {
     #[derive(Clone, Copy, Debug)]
     struct ActiveRegion {
         region_id: u32,

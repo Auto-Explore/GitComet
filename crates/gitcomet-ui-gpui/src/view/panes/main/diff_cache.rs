@@ -2782,10 +2782,6 @@ impl MainPaneView {
         .detach();
     }
 
-    fn image_format_for_path(path: &std::path::Path) -> Option<gpui::ImageFormat> {
-        image_format_for_path(path)
-    }
-
     pub(in super::super::super) fn ensure_file_image_diff_cache(
         &mut self,
         cx: &mut gpui::Context<Self>,
@@ -2858,7 +2854,7 @@ impl MainPaneView {
                 };
             };
 
-            let format = Self::image_format_for_path(&file.path);
+            let format = image_format_for_path(&file.path);
             let is_ico = file
                 .path
                 .extension()
@@ -3833,42 +3829,36 @@ mod tests {
     #[test]
     fn image_format_for_path_detects_known_extensions_case_insensitively() {
         assert_eq!(
-            MainPaneView::image_format_for_path(Path::new("x.PNG")),
+            image_format_for_path(Path::new("x.PNG")),
             Some(gpui::ImageFormat::Png)
         );
         assert_eq!(
-            MainPaneView::image_format_for_path(Path::new("x.JpEg")),
+            image_format_for_path(Path::new("x.JpEg")),
             Some(gpui::ImageFormat::Jpeg)
         );
         assert_eq!(
-            MainPaneView::image_format_for_path(Path::new("x.GiF")),
+            image_format_for_path(Path::new("x.GiF")),
             Some(gpui::ImageFormat::Gif)
         );
         assert_eq!(
-            MainPaneView::image_format_for_path(Path::new("x.webp")),
+            image_format_for_path(Path::new("x.webp")),
             Some(gpui::ImageFormat::Webp)
         );
         assert_eq!(
-            MainPaneView::image_format_for_path(Path::new("x.BMP")),
+            image_format_for_path(Path::new("x.BMP")),
             Some(gpui::ImageFormat::Bmp)
         );
         assert_eq!(
-            MainPaneView::image_format_for_path(Path::new("x.TiFf")),
+            image_format_for_path(Path::new("x.TiFf")),
             Some(gpui::ImageFormat::Tiff)
         );
     }
 
     #[test]
     fn image_format_for_path_returns_none_for_unknown_or_missing_extension() {
-        assert_eq!(
-            MainPaneView::image_format_for_path(Path::new("x.heic")),
-            None
-        );
-        assert_eq!(
-            MainPaneView::image_format_for_path(Path::new("x.ico")),
-            None
-        );
-        assert_eq!(MainPaneView::image_format_for_path(Path::new("x")), None);
+        assert_eq!(image_format_for_path(Path::new("x.heic")), None);
+        assert_eq!(image_format_for_path(Path::new("x.ico")), None);
+        assert_eq!(image_format_for_path(Path::new("x")), None);
     }
 
     #[test]

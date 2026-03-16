@@ -12,6 +12,7 @@ use std::process::{Command, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
+// Used by test-only helpers below.
 #[cfg(test)]
 use gitcomet_core::domain::RemoteBranch;
 #[cfg(test)]
@@ -400,6 +401,7 @@ pub(crate) fn path_buf_from_git_bytes(path_bytes: &[u8], context: &str) -> Resul
     }
 }
 
+// Test helper: constructs a git stage:path blob spec for index stage testing.
 #[cfg(test)]
 pub(crate) fn git_stage_blob_spec(stage: u8, path: &Path) -> Result<OsString> {
     git_revision_with_path(&format!(":{stage}:"), path, "build conflict stage revision")
@@ -624,6 +626,7 @@ pub(crate) fn unix_seconds_to_system_time_or_epoch(seconds: i64) -> SystemTime {
     unix_seconds_to_system_time(seconds).unwrap_or(SystemTime::UNIX_EPOCH)
 }
 
+// Test helper: parses `git branch -r` output for remote branch integration tests.
 #[cfg(test)]
 pub(crate) fn parse_remote_branches(output: &str) -> Vec<RemoteBranch> {
     let approx_branches = output

@@ -640,7 +640,6 @@ pub struct DiagnosticEntry {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DiagnosticKind {
     Info,
-    Warning,
     Error,
 }
 

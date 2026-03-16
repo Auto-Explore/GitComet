@@ -36,7 +36,7 @@ pub enum ConflictPickSide {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AutosolveTraceMode {
     Safe,
-    #[allow(dead_code)] // constructed only in tests, but matched in production
+    #[cfg(test)]
     History,
 }
 
@@ -120,7 +120,7 @@ impl ConflictText {
         }
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     pub(in crate::view) fn shares_backing_with(&self, other: &Arc<str>) -> bool {
         match &self.storage {
             ConflictTextStorage::Owned(_) => false,
@@ -218,6 +218,7 @@ pub enum ConflictSegment {
     Block(ConflictBlock),
 }
 
+#[cfg(any(test, feature = "benchmarks"))]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ConflictInlineRow {
     pub side: ConflictPickSide,
@@ -307,10 +308,13 @@ pub(crate) const BLOCK_LOCAL_DIFF_CONTEXT_LINES: usize = 3;
 /// Above this size, one conflict block is effectively the whole document.
 ///
 /// Bootstrap should stay bounded instead of diffing the entire block eagerly.
+#[cfg(any(test, feature = "benchmarks"))]
 pub(crate) const LARGE_CONFLICT_BLOCK_DIFF_MAX_LINES: usize = 20_000;
 /// Head/tail preview rows kept for very large conflict blocks during bootstrap.
+#[cfg(any(test, feature = "benchmarks"))]
 pub(crate) const LARGE_CONFLICT_BLOCK_PREVIEW_LINES: usize = 128;
 /// Word-diff highlighting is optional chrome, so skip giant blocks entirely.
+#[cfg(any(test, feature = "benchmarks"))]
 pub(crate) const LARGE_CONFLICT_BLOCK_WORD_HIGHLIGHT_MAX_LINES: usize = 4_000;
 
 /// Resolve conflict quick-pick keyboard shortcuts to a concrete choice.
@@ -356,6 +360,7 @@ pub fn format_autosolve_trace_summary(
             stats.pass2_split,
             stats.pass1_after_split
         ),
+        #[cfg(test)]
         AutosolveTraceMode::History => format!(
             "Last autosolve (history): resolved {resolved} {blocks_word}, unresolved {} -> {} (history {}).",
             unresolved_before, unresolved_after, stats.history
@@ -709,7 +714,7 @@ pub(in crate::view) fn apply_ordered_region_resolutions(
 /// non-side-pick text into plain `Text` segments when needed.
 ///
 /// Returns how many conflict regions were applied.
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 pub fn apply_session_region_resolutions(
     segments: &mut Vec<ConflictSegment>,
     regions: &[gitcomet_core::conflict_session::ConflictRegion],
@@ -824,7 +829,7 @@ pub fn unresolved_conflict_indices(segments: &[ConflictSegment]) -> Vec<usize> {
 /// 2-way blocks that don't have an ancestor section.
 ///
 /// Returns the number of blocks updated.
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 pub fn apply_choice_to_unresolved_segments(
     segments: &mut [ConflictSegment],
     choice: ConflictChoice,
@@ -863,7 +868,7 @@ pub fn next_unresolved_conflict_index(
 
 /// Find the previous unresolved conflict index before `current`.
 /// Wraps around to the last unresolved conflict.
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 pub fn prev_unresolved_conflict_index(
     segments: &[ConflictSegment],
     current: usize,
@@ -886,7 +891,7 @@ pub fn prev_unresolved_conflict_index(
 /// 4. (if `whitespace_normalize`) whitespace-only difference → pick ours.
 ///
 /// Returns the number of blocks auto-resolved.
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 pub fn auto_resolve_segments(segments: &mut [ConflictSegment]) -> usize {
     auto_resolve_segments_with_options(segments, false)
 }
@@ -930,7 +935,7 @@ pub fn auto_resolve_segments_with_options(
 ///
 /// This mode uses regex normalization rules from core and only performs
 /// side-picks (`Ours` / `Theirs`), never synthetic text rewrites.
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 pub fn auto_resolve_segments_regex(
     segments: &mut [ConflictSegment],
     options: &gitcomet_core::conflict_session::RegexAutosolveOptions,
@@ -972,7 +977,7 @@ pub fn auto_resolve_segments_regex(
 /// segment containing the merged content.
 ///
 /// Returns the number of blocks resolved.
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 pub fn auto_resolve_segments_history(
     segments: &mut Vec<ConflictSegment>,
     options: &gitcomet_core::conflict_session::HistoryAutosolveOptions,
@@ -982,6 +987,7 @@ pub fn auto_resolve_segments_history(
 }
 
 /// Like [`auto_resolve_segments_history`] but keeps block->region mappings in sync.
+#[cfg(test)]
 pub fn auto_resolve_segments_history_with_region_indices(
     segments: &mut Vec<ConflictSegment>,
     options: &gitcomet_core::conflict_session::HistoryAutosolveOptions,
@@ -1038,7 +1044,7 @@ pub fn auto_resolve_segments_history_with_region_indices(
 /// become `Text` segments; remaining conflicts become smaller `Block` segments.
 ///
 /// Returns the number of original blocks that were split.
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 pub fn auto_resolve_segments_pass2(segments: &mut Vec<ConflictSegment>) -> usize {
     let mut block_region_indices = sequential_conflict_region_indices(segments);
     auto_resolve_segments_pass2_with_region_indices(segments, &mut block_region_indices)
@@ -1749,7 +1755,7 @@ impl ResolvedOutputProjection {
 
     /// Approximate heap bytes used by projection metadata, excluding the
     /// underlying segment texts which are shared with the resolver state.
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(all(test, feature = "benchmarks"))]
     pub fn metadata_byte_size(&self) -> usize {
         let fragments = self.fragments.len() * std::mem::size_of::<ResolvedOutputFragment>()
             + self
@@ -1813,6 +1819,7 @@ impl ResolvedOutputProjection {
     }
 }
 
+#[cfg(any(test, feature = "benchmarks"))]
 pub fn build_inline_rows(rows: &[gitcomet_core::file_diff::FileDiffRow]) -> Vec<ConflictInlineRow> {
     use gitcomet_core::domain::DiffLineKind as K;
     use gitcomet_core::file_diff::FileDiffRowKind as RK;
@@ -1863,12 +1870,14 @@ pub fn build_inline_rows(rows: &[gitcomet_core::file_diff::FileDiffRow]) -> Vec<
     out
 }
 
+#[cfg(any(test, feature = "benchmarks"))]
 fn block_max_line_count(block: &ConflictBlock) -> usize {
     text_line_count_usize(block.base.as_deref().unwrap_or_default())
         .max(text_line_count_usize(&block.ours))
         .max(text_line_count_usize(&block.theirs))
 }
 
+#[cfg(any(test, feature = "benchmarks"))]
 fn should_use_large_conflict_block_preview(block: &ConflictBlock) -> bool {
     block_max_line_count(block) > LARGE_CONFLICT_BLOCK_DIFF_MAX_LINES
 }
@@ -1885,10 +1894,12 @@ pub fn select_conflict_rendering_mode(
     }
 }
 
+#[cfg(any(test, feature = "benchmarks"))]
 fn should_skip_large_block_word_highlights(block: &ConflictBlock) -> bool {
     block_max_line_count(block) > LARGE_CONFLICT_BLOCK_WORD_HIGHLIGHT_MAX_LINES
 }
 
+#[cfg(any(test, feature = "benchmarks"))]
 fn preview_line_starts(text: &str) -> Vec<usize> {
     if text.is_empty() {
         return Vec::new();
@@ -1903,6 +1914,7 @@ fn preview_line_starts(text: &str) -> Vec<usize> {
     starts
 }
 
+#[cfg(any(test, feature = "benchmarks"))]
 fn line_slice_text<'a>(
     text: &'a str,
     line_starts: &[usize],
@@ -1941,6 +1953,7 @@ fn line_slice_text<'a>(
     text.get(start_byte..end_byte).unwrap_or("")
 }
 
+#[cfg(any(test, feature = "benchmarks"))]
 fn push_renumbered_block_diff_rows(
     rows: &mut Vec<gitcomet_core::file_diff::FileDiffRow>,
     old_text: &str,
@@ -1973,6 +1986,7 @@ fn push_renumbered_block_diff_rows(
     whole_block_diff_ran
 }
 
+#[cfg(any(test, feature = "benchmarks"))]
 fn push_large_conflict_block_preview_rows(
     rows: &mut Vec<gitcomet_core::file_diff::FileDiffRow>,
     block: &ConflictBlock,
@@ -2058,17 +2072,20 @@ fn push_large_conflict_block_preview_rows(
 /// The output is proportional to total conflict-block size plus a fixed amount
 /// of context per block, making it suitable for very large files where running
 /// Myers on the entire ours/theirs content would be prohibitively expensive.
+#[cfg(any(test, feature = "benchmarks"))]
 pub fn block_local_two_way_diff_rows(
     segments: &[ConflictSegment],
 ) -> Vec<gitcomet_core::file_diff::FileDiffRow> {
     block_local_two_way_diff_rows_with_stats(segments).0
 }
 
+#[cfg(any(test, feature = "benchmarks"))]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct BlockLocalTwoWayDiffStats {
     pub(crate) whole_block_diff_ran: bool,
 }
 
+#[cfg(any(test, feature = "benchmarks"))]
 pub(crate) fn block_local_two_way_diff_rows_with_stats(
     segments: &[ConflictSegment],
 ) -> (
@@ -2078,7 +2095,7 @@ pub(crate) fn block_local_two_way_diff_rows_with_stats(
     block_local_two_way_diff_rows_with_context_and_stats(segments, BLOCK_LOCAL_DIFF_CONTEXT_LINES)
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 fn block_local_two_way_diff_rows_with_context(
     segments: &[ConflictSegment],
     context_lines: usize,
@@ -2086,6 +2103,7 @@ fn block_local_two_way_diff_rows_with_context(
     block_local_two_way_diff_rows_with_context_and_stats(segments, context_lines).0
 }
 
+#[cfg(any(test, feature = "benchmarks"))]
 fn block_local_two_way_diff_rows_with_context_and_stats(
     segments: &[ConflictSegment],
     context_lines: usize,
@@ -2142,6 +2160,7 @@ fn block_local_two_way_diff_rows_with_context_and_stats(
     (rows, stats)
 }
 
+#[cfg(any(test, feature = "benchmarks"))]
 fn push_block_local_boundary_context_rows(
     rows: &mut Vec<gitcomet_core::file_diff::FileDiffRow>,
     segments: &[ConflictSegment],
@@ -2200,6 +2219,7 @@ fn push_block_local_boundary_context_rows(
     line_count
 }
 
+#[cfg(any(test, feature = "benchmarks"))]
 fn push_block_local_context_lines<'a>(
     rows: &mut Vec<gitcomet_core::file_diff::FileDiffRow>,
     lines: impl Iterator<Item = (usize, &'a str)>,
@@ -2222,6 +2242,7 @@ fn push_block_local_context_lines<'a>(
     }
 }
 
+#[cfg(any(test, feature = "benchmarks"))]
 fn text_line_count(text: &str) -> u32 {
     if text.is_empty() {
         return 0;
@@ -2229,6 +2250,7 @@ fn text_line_count(text: &str) -> u32 {
     u32::try_from(text.lines().count()).unwrap_or(u32::MAX)
 }
 
+#[cfg(any(test, feature = "benchmarks"))]
 fn build_two_way_conflict_line_ranges(
     segments: &[ConflictSegment],
 ) -> Vec<(std::ops::Range<u32>, std::ops::Range<u32>)> {
@@ -2258,6 +2280,7 @@ fn build_two_way_conflict_line_ranges(
     ranges
 }
 
+#[cfg(any(test, feature = "benchmarks"))]
 fn row_conflict_index_for_lines(
     old_line: Option<u32>,
     new_line: Option<u32>,
@@ -2433,6 +2456,7 @@ fn build_three_way_conflict_maps_impl(
     maps
 }
 
+#[cfg(any(test, feature = "benchmarks"))]
 pub fn build_three_way_conflict_maps(
     segments: &[ConflictSegment],
     base_line_count: usize,
@@ -2468,6 +2492,7 @@ pub fn build_three_way_conflict_maps_without_line_maps(
 ///
 /// Each output entry is `Some(conflict_index)` when the row belongs to a marker
 /// conflict block, or `None` for non-conflict context rows.
+#[cfg(any(test, feature = "benchmarks"))]
 pub fn map_two_way_rows_to_conflicts(
     segments: &[ConflictSegment],
     diff_rows: &[gitcomet_core::file_diff::FileDiffRow],
@@ -2489,6 +2514,7 @@ pub fn map_two_way_rows_to_conflicts(
 ///
 /// When `hide_resolved` is true, rows belonging to resolved conflict blocks are
 /// removed from the visible list. Non-conflict rows are always kept visible.
+#[cfg(any(test, feature = "benchmarks"))]
 pub fn build_two_way_visible_indices(
     row_conflict_map: &[Option<usize>],
     segments: &[ConflictSegment],
@@ -2695,13 +2721,6 @@ impl ThreeWayVisibleProjection {
     pub fn spans(&self) -> &[ThreeWayVisibleSpan] {
         &self.spans
     }
-
-    /// Approximate heap bytes used by the projection metadata (spans vec).
-    #[cfg(test)]
-    #[allow(dead_code)]
-    pub fn metadata_byte_size(&self) -> usize {
-        self.spans.len() * std::mem::size_of::<ThreeWayVisibleSpan>()
-    }
 }
 
 /// Build a span-based visible projection for three-way views.
@@ -2801,6 +2820,7 @@ pub fn build_three_way_visible_projection(
 ///
 /// When `hide_resolved` is false, every line maps directly.
 /// When true, resolved conflict ranges are collapsed to a single summary row.
+#[cfg(any(test, feature = "benchmarks"))]
 pub fn build_three_way_visible_map(
     total_lines: usize,
     conflict_ranges: &[std::ops::Range<usize>],
@@ -2863,6 +2883,7 @@ pub fn visible_index_for_conflict(
     })
 }
 
+#[cfg(any(test, feature = "benchmarks"))]
 pub fn compute_three_way_word_highlights(
     base_text: &str,
     base_line_starts: &[usize],
@@ -3051,6 +3072,7 @@ pub fn compute_three_way_word_highlights(
     (wh_base, wh_ours, wh_theirs)
 }
 
+#[cfg(any(test, feature = "benchmarks"))]
 fn merge_ranges(
     a: &[std::ops::Range<usize>],
     b: &[std::ops::Range<usize>],
@@ -3077,9 +3099,11 @@ fn merge_ranges(
 }
 
 /// Per-line pair of (old, new) word-highlight ranges for two-way diff.
+#[cfg(feature = "benchmarks")]
 pub type TwoWayWordHighlights =
     Vec<Option<(Vec<std::ops::Range<usize>>, Vec<std::ops::Range<usize>>)>>;
 
+#[cfg(feature = "benchmarks")]
 pub fn compute_two_way_word_highlights(
     diff_rows: &[gitcomet_core::file_diff::FileDiffRow],
 ) -> TwoWayWordHighlights {
@@ -3220,7 +3244,7 @@ pub fn split_output_lines_for_outline(output: &str) -> Vec<String> {
     output.split('\n').map(|line| line.to_string()).collect()
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 pub fn append_lines_to_output(output: &str, lines: &[String]) -> String {
     if lines.is_empty() {
         return output.to_string();
@@ -3252,12 +3276,14 @@ pub fn append_lines_to_output(output: &str, lines: &[String]) -> String {
 ///
 /// In three-way mode: A = Base, B = Ours, C = Theirs.
 /// In two-way mode: A = Ours (old), B = Theirs (new), C is empty.
+#[cfg(any(test, feature = "benchmarks"))]
 pub struct SourceLines<'a> {
     pub a: &'a [gpui::SharedString],
     pub b: &'a [gpui::SharedString],
     pub c: &'a [gpui::SharedString],
 }
 
+#[cfg(any(test, feature = "benchmarks"))]
 fn build_source_line_lookup<'a>(
     sources: &'a SourceLines<'a>,
 ) -> rustc_hash::FxHashMap<&'a str, (ResolvedLineSource, u32)> {
@@ -3320,6 +3346,7 @@ fn compute_resolved_line_provenance_from_iter<'a>(
 /// Each output line is compared (exact text equality) against every source line
 /// in A, B, C. The first match found (priority: A, B, C) wins; if none match
 /// the line is labeled `Manual`.
+#[cfg(any(test, feature = "benchmarks"))]
 pub fn compute_resolved_line_provenance(
     output_lines: &[String],
     sources: &SourceLines<'_>,
@@ -3395,7 +3422,7 @@ pub fn compute_resolved_line_provenance_from_text_two_way_indexed_sources(
 ///
 /// Used to gate the plus-icon: a source row's plus-icon is hidden when its key
 /// is already in this set (preventing duplicate insertion).
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 pub fn build_resolved_output_line_sources_index(
     meta: &[ResolvedLineMeta],
     output_lines: &[String],
@@ -3487,7 +3514,7 @@ impl SparseLineIndex {
         let mut line_count = 1usize;
         for (ix, byte) in bytes.iter().enumerate() {
             if *byte == b'\n' && ix.saturating_add(1) < bytes.len() {
-                if line_count % CONFLICT_SPLIT_LINE_CHECKPOINT_STRIDE == 0 {
+                if line_count.is_multiple_of(CONFLICT_SPLIT_LINE_CHECKPOINT_STRIDE) {
                     checkpoints.push(ix.saturating_add(1));
                 }
                 line_count = line_count.saturating_add(1);
@@ -3586,614 +3613,6 @@ struct SplitLayoutEntry {
     kind: SplitLayoutKind,
 }
 
-#[allow(dead_code)]
-const CONFLICT_ANCHOR_MIN_GAP_LINES: u32 = 64;
-#[allow(dead_code)]
-const CONFLICT_ANCHOR_CHUNK_LINE_WIDTH: usize = 3;
-
-/// Maximum gap size (per side) for which a bounded local diff is computed
-/// to improve alignment quality within anchor gaps.  Gaps larger than this
-/// fall back to simple positional pairing.
-#[allow(dead_code)]
-const CONFLICT_GAP_DIFF_MAX_LINES: usize = 512;
-
-#[allow(dead_code)]
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
-struct LineFingerprint {
-    hash: u64,
-    len: u32,
-}
-
-#[allow(dead_code)]
-#[derive(Clone, Copy, Debug, Default)]
-struct UniqueLineLocation {
-    line_ix: u32,
-    count: u32,
-}
-
-/// Local diff alignment for one gap between consecutive anchors.
-///
-/// Each entry maps a gap-local row to `(Option<ours_offset>, Option<theirs_offset>)`
-/// where offsets are 0-based within the gap.  Row count may exceed
-/// `max(ours_gap, theirs_gap)` because the diff can split Delete+Insert runs
-/// into separate rows.
-#[allow(dead_code)]
-#[derive(Clone, Debug)]
-struct GapDiffAlignment {
-    /// Per-row alignment: (ours 0-based offset in gap, theirs 0-based offset in gap).
-    rows: Vec<(Option<u16>, Option<u16>)>,
-}
-
-#[allow(dead_code)]
-#[derive(Clone, Debug, Default)]
-pub struct ConflictAnchorIndex {
-    pub ours_to_theirs: Vec<(u32, u32)>,
-    anchor_row_starts: Vec<usize>,
-    row_count: usize,
-    /// Per-gap local diff alignments.  Index `i` corresponds to gap `i`
-    /// (gap 0 = before first anchor, gap N = after last anchor).
-    /// `None` entries fall back to positional pairing.
-    gap_alignments: Vec<Option<GapDiffAlignment>>,
-}
-
-#[allow(dead_code)]
-impl ConflictAnchorIndex {
-    /// Public entry point for benchmark/test use only.
-    #[cfg(test)]
-    pub fn build_for_benchmark(
-        ours_text: &str,
-        ours_line_starts: &[usize],
-        ours_count: usize,
-        theirs_text: &str,
-        theirs_line_starts: &[usize],
-        theirs_count: usize,
-    ) -> Self {
-        Self::build(
-            ours_text,
-            ours_line_starts,
-            ours_count,
-            theirs_text,
-            theirs_line_starts,
-            theirs_count,
-        )
-    }
-
-    fn build(
-        ours_text: &str,
-        ours_line_starts: &[usize],
-        ours_count: usize,
-        theirs_text: &str,
-        theirs_line_starts: &[usize],
-        theirs_count: usize,
-    ) -> Self {
-        let ours_to_theirs = Self::build_anchor_pairs(
-            ours_text,
-            ours_line_starts,
-            ours_count,
-            theirs_text,
-            theirs_line_starts,
-            theirs_count,
-        );
-        let gap_count = ours_to_theirs.len().saturating_add(1);
-        let mut anchor_row_starts = Vec::with_capacity(ours_to_theirs.len());
-        let mut gap_alignments: Vec<Option<GapDiffAlignment>> = Vec::with_capacity(gap_count);
-        let mut row_count = 0usize;
-        let mut prev_ours = 0usize;
-        let mut prev_theirs = 0usize;
-
-        for &(ours_line_ix, theirs_line_ix) in &ours_to_theirs {
-            let ours_line_ix = usize::try_from(ours_line_ix)
-                .unwrap_or(usize::MAX)
-                .min(ours_count);
-            let theirs_line_ix = usize::try_from(theirs_line_ix)
-                .unwrap_or(usize::MAX)
-                .min(theirs_count);
-            let ours_gap = ours_line_ix.saturating_sub(prev_ours);
-            let theirs_gap = theirs_line_ix.saturating_sub(prev_theirs);
-
-            let gap_rows = Self::compute_gap(
-                ours_text,
-                ours_line_starts,
-                prev_ours,
-                ours_gap,
-                theirs_text,
-                theirs_line_starts,
-                prev_theirs,
-                theirs_gap,
-                &mut gap_alignments,
-            );
-            row_count = row_count.saturating_add(gap_rows);
-            anchor_row_starts.push(row_count);
-            row_count = row_count.saturating_add(1);
-            prev_ours = ours_line_ix.saturating_add(1);
-            prev_theirs = theirs_line_ix.saturating_add(1);
-        }
-
-        // Trailing gap after last anchor.
-        let trailing_ours = ours_count.saturating_sub(prev_ours);
-        let trailing_theirs = theirs_count.saturating_sub(prev_theirs);
-        let trailing_gap_rows = Self::compute_gap(
-            ours_text,
-            ours_line_starts,
-            prev_ours,
-            trailing_ours,
-            theirs_text,
-            theirs_line_starts,
-            prev_theirs,
-            trailing_theirs,
-            &mut gap_alignments,
-        );
-        row_count = row_count.saturating_add(trailing_gap_rows);
-
-        Self {
-            ours_to_theirs,
-            anchor_row_starts,
-            row_count,
-            gap_alignments,
-        }
-    }
-
-    /// Compute alignment for a single gap, push to `gap_alignments`, return row count.
-    fn compute_gap(
-        ours_text: &str,
-        ours_line_starts: &[usize],
-        ours_start: usize,
-        ours_gap: usize,
-        theirs_text: &str,
-        theirs_line_starts: &[usize],
-        theirs_start: usize,
-        theirs_gap: usize,
-        gap_alignments: &mut Vec<Option<GapDiffAlignment>>,
-    ) -> usize {
-        // Both sides must be non-empty and within the size threshold for a diff
-        // to improve over positional pairing.
-        if ours_gap > 0
-            && theirs_gap > 0
-            && ours_gap <= CONFLICT_GAP_DIFF_MAX_LINES
-            && theirs_gap <= CONFLICT_GAP_DIFF_MAX_LINES
-        {
-            let ours_slice = gap_text_slice(ours_text, ours_line_starts, ours_start, ours_gap);
-            let theirs_slice =
-                gap_text_slice(theirs_text, theirs_line_starts, theirs_start, theirs_gap);
-            let diff_rows = gitcomet_core::file_diff::side_by_side_rows(ours_slice, theirs_slice);
-            // Only use the diff alignment if it found at least one matching
-            // line (Context row).  When all lines differ, positional pairing
-            // is simpler and equally valid.
-            let has_context = diff_rows
-                .iter()
-                .any(|r| r.kind == gitcomet_core::file_diff::FileDiffRowKind::Context);
-            if has_context {
-                let alignment = GapDiffAlignment {
-                    rows: diff_rows
-                        .iter()
-                        .map(|r| {
-                            (
-                                r.old_line.map(|n| n.saturating_sub(1) as u16),
-                                r.new_line.map(|n| n.saturating_sub(1) as u16),
-                            )
-                        })
-                        .collect(),
-                };
-                let row_count = alignment.rows.len();
-                gap_alignments.push(Some(alignment));
-                row_count
-            } else {
-                gap_alignments.push(None);
-                ours_gap.max(theirs_gap)
-            }
-        } else {
-            gap_alignments.push(None);
-            ours_gap.max(theirs_gap)
-        }
-    }
-
-    fn row_count(&self) -> usize {
-        self.row_count
-    }
-
-    fn mapped_lines(
-        &self,
-        row_ix: usize,
-        ours_count: usize,
-        theirs_count: usize,
-    ) -> Option<(Option<usize>, Option<usize>)> {
-        if row_ix >= self.row_count {
-            return None;
-        }
-
-        let anchor_pos = self
-            .anchor_row_starts
-            .partition_point(|&start| start <= row_ix);
-        if let Some(anchor_ix) = anchor_pos.checked_sub(1)
-            && self.anchor_row_starts.get(anchor_ix).copied() == Some(row_ix)
-        {
-            let &(ours_line_ix, theirs_line_ix) = self.ours_to_theirs.get(anchor_ix)?;
-            return Some((
-                Some(
-                    usize::try_from(ours_line_ix)
-                        .unwrap_or(usize::MAX)
-                        .min(ours_count),
-                ),
-                Some(
-                    usize::try_from(theirs_line_ix)
-                        .unwrap_or(usize::MAX)
-                        .min(theirs_count),
-                ),
-            ));
-        }
-
-        let (prev_ours, prev_theirs, gap_row_start, gap_ix) =
-            if let Some(prev_anchor_ix) = anchor_pos.checked_sub(1) {
-                let &(prev_ours, prev_theirs) = self.ours_to_theirs.get(prev_anchor_ix)?;
-                (
-                    usize::try_from(prev_ours)
-                        .unwrap_or(usize::MAX)
-                        .min(ours_count)
-                        .saturating_add(1),
-                    usize::try_from(prev_theirs)
-                        .unwrap_or(usize::MAX)
-                        .min(theirs_count)
-                        .saturating_add(1),
-                    self.anchor_row_starts[prev_anchor_ix].saturating_add(1),
-                    // Gap after anchor `prev_anchor_ix` is gap index `prev_anchor_ix + 1`.
-                    prev_anchor_ix.saturating_add(1),
-                )
-            } else {
-                (0, 0, 0, 0)
-            };
-        let local_row_ix = row_ix.saturating_sub(gap_row_start);
-
-        // If we have a diff-based alignment for this gap, use it.
-        if let Some(Some(alignment)) = self.gap_alignments.get(gap_ix) {
-            let &(ours_offset, theirs_offset) = alignment.rows.get(local_row_ix)?;
-            return Some((
-                ours_offset.map(|o| prev_ours.saturating_add(usize::from(o))),
-                theirs_offset.map(|t| prev_theirs.saturating_add(usize::from(t))),
-            ));
-        }
-
-        // Fallback: positional pairing.
-        let (next_ours, next_theirs) = self
-            .ours_to_theirs
-            .get(anchor_pos)
-            .map(|&(o, t)| {
-                (
-                    usize::try_from(o).unwrap_or(usize::MAX).min(ours_count),
-                    usize::try_from(t).unwrap_or(usize::MAX).min(theirs_count),
-                )
-            })
-            .unwrap_or((ours_count, theirs_count));
-
-        let ours_gap = next_ours.saturating_sub(prev_ours);
-        let theirs_gap = next_theirs.saturating_sub(prev_theirs);
-        let gap_rows = ours_gap.max(theirs_gap);
-        if local_row_ix >= gap_rows {
-            return None;
-        }
-
-        Some((
-            (local_row_ix < ours_gap).then_some(prev_ours.saturating_add(local_row_ix)),
-            (local_row_ix < theirs_gap).then_some(prev_theirs.saturating_add(local_row_ix)),
-        ))
-    }
-
-    fn build_anchor_pairs(
-        ours_text: &str,
-        ours_line_starts: &[usize],
-        ours_count: usize,
-        theirs_text: &str,
-        theirs_line_starts: &[usize],
-        theirs_count: usize,
-    ) -> Vec<(u32, u32)> {
-        if ours_count == 0 || theirs_count == 0 {
-            return Vec::new();
-        }
-
-        let mut candidates = Self::unique_line_anchor_candidates(
-            ours_text,
-            ours_line_starts,
-            ours_count,
-            theirs_text,
-            theirs_line_starts,
-            theirs_count,
-        );
-        Self::extend_unique_chunk_anchor_candidates(
-            ours_text,
-            ours_line_starts,
-            ours_count,
-            theirs_text,
-            theirs_line_starts,
-            theirs_count,
-            CONFLICT_ANCHOR_CHUNK_LINE_WIDTH,
-            &mut candidates,
-        );
-        candidates
-            .sort_unstable_by_key(|&(ours_line_ix, theirs_line_ix)| (ours_line_ix, theirs_line_ix));
-        candidates.dedup();
-        let anchors = Self::longest_increasing_anchor_pairs(&candidates);
-        Self::sparsify_anchor_pairs(&anchors)
-    }
-
-    fn unique_line_anchor_candidates(
-        ours_text: &str,
-        ours_line_starts: &[usize],
-        ours_count: usize,
-        theirs_text: &str,
-        theirs_line_starts: &[usize],
-        theirs_count: usize,
-    ) -> Vec<(u32, u32)> {
-        let ours_unique = Self::unique_line_locations(ours_text, ours_line_starts, ours_count);
-        let theirs_unique =
-            Self::unique_line_locations(theirs_text, theirs_line_starts, theirs_count);
-        let mut candidates = Vec::new();
-
-        for (fingerprint, ours_loc) in &ours_unique {
-            if ours_loc.count != 1 {
-                continue;
-            }
-            let Some(theirs_loc) = theirs_unique.get(fingerprint) else {
-                continue;
-            };
-            if theirs_loc.count != 1 {
-                continue;
-            }
-
-            let ours_line = line_text_from_starts(
-                ours_text,
-                ours_line_starts,
-                usize::try_from(ours_loc.line_ix).unwrap_or(usize::MAX),
-            );
-            let theirs_line = line_text_from_starts(
-                theirs_text,
-                theirs_line_starts,
-                usize::try_from(theirs_loc.line_ix).unwrap_or(usize::MAX),
-            );
-            if ours_line == theirs_line {
-                candidates.push((ours_loc.line_ix, theirs_loc.line_ix));
-            }
-        }
-
-        candidates
-    }
-
-    fn extend_unique_chunk_anchor_candidates(
-        ours_text: &str,
-        ours_line_starts: &[usize],
-        ours_count: usize,
-        theirs_text: &str,
-        theirs_line_starts: &[usize],
-        theirs_count: usize,
-        chunk_width: usize,
-        candidates: &mut Vec<(u32, u32)>,
-    ) {
-        if chunk_width <= 1 || ours_count < chunk_width || theirs_count < chunk_width {
-            return;
-        }
-
-        let ours_unique =
-            Self::unique_chunk_locations(ours_text, ours_line_starts, ours_count, chunk_width);
-        let theirs_unique = Self::unique_chunk_locations(
-            theirs_text,
-            theirs_line_starts,
-            theirs_count,
-            chunk_width,
-        );
-
-        for (fingerprint, ours_loc) in &ours_unique {
-            if ours_loc.count != 1 {
-                continue;
-            }
-            let Some(theirs_loc) = theirs_unique.get(fingerprint) else {
-                continue;
-            };
-            if theirs_loc.count != 1 {
-                continue;
-            }
-
-            let ours_start = usize::try_from(ours_loc.line_ix).unwrap_or(usize::MAX);
-            let theirs_start = usize::try_from(theirs_loc.line_ix).unwrap_or(usize::MAX);
-            let ours_chunk = line_slice_text(
-                ours_text,
-                ours_line_starts,
-                ours_count,
-                ours_start,
-                ours_start.saturating_add(chunk_width),
-            );
-            let theirs_chunk = line_slice_text(
-                theirs_text,
-                theirs_line_starts,
-                theirs_count,
-                theirs_start,
-                theirs_start.saturating_add(chunk_width),
-            );
-            if ours_chunk == theirs_chunk {
-                candidates.push((ours_loc.line_ix, theirs_loc.line_ix));
-            }
-        }
-    }
-
-    fn unique_line_locations(
-        text: &str,
-        line_starts: &[usize],
-        line_count: usize,
-    ) -> rustc_hash::FxHashMap<LineFingerprint, UniqueLineLocation> {
-        let mut locations = rustc_hash::FxHashMap::default();
-        for line_ix in 0..line_count {
-            let fingerprint =
-                Self::line_fingerprint(line_text_from_starts(text, line_starts, line_ix));
-            match locations.entry(fingerprint) {
-                std::collections::hash_map::Entry::Vacant(entry) => {
-                    entry.insert(UniqueLineLocation {
-                        line_ix: u32::try_from(line_ix).unwrap_or(u32::MAX),
-                        count: 1,
-                    });
-                }
-                std::collections::hash_map::Entry::Occupied(mut entry) => {
-                    entry.get_mut().count = entry.get().count.saturating_add(1);
-                }
-            }
-        }
-        locations
-    }
-
-    fn unique_chunk_locations(
-        text: &str,
-        line_starts: &[usize],
-        line_count: usize,
-        chunk_width: usize,
-    ) -> rustc_hash::FxHashMap<LineFingerprint, UniqueLineLocation> {
-        let mut locations = rustc_hash::FxHashMap::default();
-        if chunk_width == 0 || line_count < chunk_width {
-            return locations;
-        }
-
-        let last_start = line_count.saturating_sub(chunk_width);
-        for line_ix in 0..=last_start {
-            let fingerprint =
-                Self::chunk_fingerprint(text, line_starts, line_count, line_ix, chunk_width);
-            match locations.entry(fingerprint) {
-                std::collections::hash_map::Entry::Vacant(entry) => {
-                    entry.insert(UniqueLineLocation {
-                        line_ix: u32::try_from(line_ix).unwrap_or(u32::MAX),
-                        count: 1,
-                    });
-                }
-                std::collections::hash_map::Entry::Occupied(mut entry) => {
-                    entry.get_mut().count = entry.get().count.saturating_add(1);
-                }
-            }
-        }
-        locations
-    }
-
-    fn line_fingerprint(line: &str) -> LineFingerprint {
-        use std::hash::{Hash, Hasher};
-
-        let mut hasher = rustc_hash::FxHasher::default();
-        line.hash(&mut hasher);
-        LineFingerprint {
-            hash: hasher.finish(),
-            len: u32::try_from(line.len()).unwrap_or(u32::MAX),
-        }
-    }
-
-    fn chunk_fingerprint(
-        text: &str,
-        line_starts: &[usize],
-        line_count: usize,
-        start_line_ix: usize,
-        chunk_width: usize,
-    ) -> LineFingerprint {
-        Self::line_fingerprint(line_slice_text(
-            text,
-            line_starts,
-            line_count,
-            start_line_ix,
-            start_line_ix.saturating_add(chunk_width),
-        ))
-    }
-
-    fn longest_increasing_anchor_pairs(candidates: &[(u32, u32)]) -> Vec<(u32, u32)> {
-        if candidates.is_empty() {
-            return Vec::new();
-        }
-
-        let mut tails: Vec<usize> = Vec::new();
-        let mut prev: Vec<Option<usize>> = vec![None; candidates.len()];
-
-        for (ix, &(_, theirs_line_ix)) in candidates.iter().enumerate() {
-            let pos =
-                tails.partition_point(|&candidate_ix| candidates[candidate_ix].1 < theirs_line_ix);
-            if pos > 0 {
-                prev[ix] = tails.get(pos.saturating_sub(1)).copied();
-            }
-            if pos == tails.len() {
-                tails.push(ix);
-            } else {
-                tails[pos] = ix;
-            }
-        }
-
-        let mut anchors = Vec::with_capacity(tails.len());
-        let mut cursor = tails.last().copied();
-        while let Some(ix) = cursor {
-            anchors.push(candidates[ix]);
-            cursor = prev[ix];
-        }
-        anchors.reverse();
-        anchors
-    }
-
-    fn sparsify_anchor_pairs(anchors: &[(u32, u32)]) -> Vec<(u32, u32)> {
-        if anchors.len() <= 2
-            || anchors.len() <= usize::try_from(CONFLICT_ANCHOR_MIN_GAP_LINES).unwrap_or(usize::MAX)
-        {
-            return anchors.to_vec();
-        }
-
-        let last_ix = anchors.len().saturating_sub(1);
-        let mut out = Vec::with_capacity(anchors.len());
-        let mut last_kept: Option<(u32, u32)> = None;
-
-        for (ix, &anchor) in anchors.iter().enumerate() {
-            let keep = match last_kept {
-                None => true,
-                Some((last_ours, last_theirs)) => {
-                    ix == last_ix
-                        || anchor.0.saturating_sub(last_ours) >= CONFLICT_ANCHOR_MIN_GAP_LINES
-                        || anchor.1.saturating_sub(last_theirs) >= CONFLICT_ANCHOR_MIN_GAP_LINES
-                }
-            };
-            if keep {
-                out.push(anchor);
-                last_kept = Some(anchor);
-            }
-        }
-
-        out
-    }
-
-    /// Approximate heap bytes used by the anchor index metadata.
-    #[cfg(test)]
-    pub fn metadata_byte_size(&self) -> usize {
-        let anchors = self.ours_to_theirs.len() * std::mem::size_of::<(u32, u32)>();
-        let row_starts = self.anchor_row_starts.len() * std::mem::size_of::<usize>();
-        let gap_vec = self.gap_alignments.len() * std::mem::size_of::<Option<GapDiffAlignment>>();
-        let gap_rows: usize = self
-            .gap_alignments
-            .iter()
-            .filter_map(|g| g.as_ref())
-            .map(|g| g.rows.len() * std::mem::size_of::<(Option<u16>, Option<u16>)>())
-            .sum();
-        anchors + row_starts + gap_vec + gap_rows
-    }
-}
-
-/// Extract a contiguous range of lines as a `&str` from `text` using `line_starts`.
-#[allow(dead_code)]
-fn gap_text_slice<'a>(
-    text: &'a str,
-    line_starts: &[usize],
-    start_line: usize,
-    line_count: usize,
-) -> &'a str {
-    if line_count == 0 || text.is_empty() {
-        return "";
-    }
-    let text_len = text.len();
-    let start = line_starts
-        .get(start_line)
-        .copied()
-        .unwrap_or(text_len)
-        .min(text_len);
-    let end = line_starts
-        .get(start_line.saturating_add(line_count))
-        .copied()
-        .unwrap_or(text_len)
-        .min(text_len);
-    text.get(start..end).unwrap_or("")
-}
-
 #[derive(Debug, Default)]
 struct ConflictSplitPageCache {
     pages:
@@ -4231,11 +3650,6 @@ impl ConflictSplitPageCache {
             }
         }
         page
-    }
-
-    fn clear(&mut self) {
-        self.pages.clear();
-        self.lru.clear();
     }
 }
 
@@ -4576,13 +3990,15 @@ impl ConflictSplitRowIndex {
         page.get(row_offset).cloned()
     }
 
+    #[cfg(any(test, feature = "benchmarks"))]
     pub(in crate::view) fn clear_cached_pages(&self) {
         if let Ok(mut pages) = self.pages.lock() {
-            pages.clear();
+            pages.pages.clear();
+            pages.lru.clear();
         }
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     pub(in crate::view) fn cached_page_count(&self) -> usize {
         self.pages
             .lock()
@@ -4590,7 +4006,7 @@ impl ConflictSplitRowIndex {
             .unwrap_or(0)
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     pub(in crate::view) fn cached_page_indices(&self) -> Vec<usize> {
         let mut pages = self
             .pages
@@ -4627,14 +4043,14 @@ impl ConflictSplitRowIndex {
     }
 
     /// Look up the conflict index for a given source row.
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     pub fn conflict_ix_for_row(&self, row_ix: usize) -> Option<usize> {
         let (_, entry) = self.entry_for_row(row_ix)?;
         entry.conflict_ix
     }
 
     /// Find the first source row index belonging to a conflict block.
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     pub fn first_row_for_conflict(&self, conflict_ix: usize) -> Option<usize> {
         self.entries
             .iter()
@@ -4698,12 +4114,12 @@ impl ConflictSplitRowIndex {
                         let ours_match = ours_line_ix.is_some_and(|line_ix| {
                             ours_line_index
                                 .line_text(&block.ours, line_ix)
-                                .is_some_and(|line| predicate(line))
+                                .is_some_and(&predicate)
                         });
                         let theirs_match = theirs_line_ix.is_some_and(|line_ix| {
                             theirs_line_index
                                 .line_text(&block.theirs, line_ix)
-                                .is_some_and(|line| predicate(line))
+                                .is_some_and(&predicate)
                         });
                         if ours_match || theirs_match {
                             out.push(entry.row_start + offset);
@@ -4755,19 +4171,10 @@ pub struct TwoWaySplitSpan {
 }
 
 /// Span-based visible projection for the two-way split view in giant mode.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct TwoWaySplitProjection {
     spans: Vec<TwoWaySplitSpan>,
     visible_len: usize,
-}
-
-impl Default for TwoWaySplitProjection {
-    fn default() -> Self {
-        Self {
-            spans: Vec::new(),
-            visible_len: 0,
-        }
-    }
 }
 
 impl TwoWaySplitProjection {
@@ -4789,12 +4196,11 @@ impl TwoWaySplitProjection {
         let mut visible_len = 0usize;
 
         for entry in &index.entries {
-            if hide_resolved {
-                if let Some(ci) = entry.conflict_ix {
-                    if resolved_blocks.get(ci).copied().unwrap_or(false) {
-                        continue;
-                    }
-                }
+            if hide_resolved
+                && let Some(ci) = entry.conflict_ix
+                && resolved_blocks.get(ci).copied().unwrap_or(false)
+            {
+                continue;
             }
             spans.push(TwoWaySplitSpan {
                 visible_start: visible_len,
@@ -4853,7 +4259,7 @@ impl TwoWaySplitProjection {
     }
 
     /// Approximate heap bytes used by the projection metadata (spans vec).
-    #[cfg(test)]
+    #[cfg(all(test, feature = "benchmarks"))]
     pub fn metadata_byte_size(&self) -> usize {
         self.spans.len() * std::mem::size_of::<TwoWaySplitSpan>()
     }

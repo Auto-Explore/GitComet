@@ -10,6 +10,7 @@ pub use text_input::{
     SelectRight, SelectUp, SelectWordLeft, SelectWordRight, TextInput, TextInputOptions, Undo, Up,
     WordLeft, WordRight,
 };
+#[cfg(feature = "benchmarks")]
 pub(crate) use text_input::{
     benchmark_text_input_runs_legacy_visible_window,
     benchmark_text_input_runs_streamed_visible_window,

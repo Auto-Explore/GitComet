@@ -6,7 +6,7 @@
 use std::path::PathBuf;
 
 /// Default short SHA width for marker labels (matches git default behavior).
-pub const DEFAULT_SHORT_SHA_LEN: usize = 7;
+const DEFAULT_SHORT_SHA_LEN: usize = 7;
 
 /// Base-side label scenario used when formatting conflict markers.
 #[derive(Clone, Debug, Eq, PartialEq)]

@@ -1067,7 +1067,7 @@ impl MainPaneView {
 
                     let line_text: SharedString = projection
                         .line_text(&this.conflict_resolver.marker_segments, ix)
-                        .unwrap_or_else(|| std::borrow::Cow::Borrowed(""))
+                        .unwrap_or(std::borrow::Cow::Borrowed(""))
                         .to_string()
                         .into();
 
@@ -1427,11 +1427,11 @@ impl MainPaneView {
         }
 
         if query_active {
-            if !result.pending {
-                if let Some(cached) = query_cache.get(&key) {
-                    result.styled = Some(cached.clone());
-                    return result;
-                }
+            if !result.pending
+                && let Some(cached) = query_cache.get(&key)
+            {
+                result.styled = Some(cached.clone());
+                return result;
             }
 
             let styled =

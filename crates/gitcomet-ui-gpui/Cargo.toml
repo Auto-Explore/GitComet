@@ -10,10 +10,12 @@ rust-version.workspace = true
 [lints]
 workspace = true
 
+[features]
+benchmarks = []
+
 [dependencies]
 gitcomet-core = { workspace = true }
 gitcomet-state = { workspace = true }
-gitcomet-ui = { workspace = true }
 gpui = { workspace = true }
 pulldown-cmark = { workspace = true }
 resvg = { workspace = true }
@@ -42,10 +44,11 @@ zed-reqwest = { workspace = true }
 metal = "0.33"
 
 [dev-dependencies]
+gitcomet-core = { workspace = true, features = ["test-support"] }
 gpui = { workspace = true, features = ["test-support"] }
 criterion = { workspace = true }
-tempfile = { workspace = true }
 
 [[bench]]
 name = "performance"
 harness = false
+required-features = ["benchmarks"]

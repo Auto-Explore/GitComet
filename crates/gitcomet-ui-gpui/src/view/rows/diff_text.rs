@@ -169,6 +169,7 @@ pub(in crate::view) fn prepare_diff_syntax_document_with_budget_reuse_text(
     ))
 }
 
+#[cfg(any(test, feature = "benchmarks"))]
 pub(in crate::view) fn prepare_diff_syntax_document_in_background_text(
     language: DiffSyntaxLanguage,
     syntax_mode: DiffSyntaxMode,
@@ -236,6 +237,7 @@ pub(in crate::view) fn prepared_diff_syntax_source_version(
     syntax::prepared_document_source_version(document.inner)
 }
 
+#[cfg(feature = "benchmarks")]
 pub(in crate::view) fn benchmark_diff_syntax_cache_replacement_drop_step(
     lines: usize,
     tokens_per_line: usize,
@@ -245,6 +247,7 @@ pub(in crate::view) fn benchmark_diff_syntax_cache_replacement_drop_step(
     syntax::benchmark_cache_replacement_drop_step(lines, tokens_per_line, replacements, defer_drop)
 }
 
+#[cfg(feature = "benchmarks")]
 pub(in crate::view) fn benchmark_diff_syntax_cache_drop_payload_timed_step(
     lines: usize,
     tokens_per_line: usize,
@@ -254,10 +257,12 @@ pub(in crate::view) fn benchmark_diff_syntax_cache_drop_payload_timed_step(
     syntax::benchmark_drop_payload_timed_step(lines, tokens_per_line, seed, defer_drop)
 }
 
+#[cfg(feature = "benchmarks")]
 pub(in crate::view) fn benchmark_flush_diff_syntax_deferred_drop_queue() -> bool {
     syntax::benchmark_flush_deferred_drop_queue()
 }
 
+#[cfg(feature = "benchmarks")]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(in crate::view) struct PreparedDiffSyntaxCacheMetrics {
     pub hit: u64,
@@ -266,10 +271,12 @@ pub(in crate::view) struct PreparedDiffSyntaxCacheMetrics {
     pub chunk_build_ms: u64,
 }
 
+#[cfg(feature = "benchmarks")]
 pub(in crate::view) fn benchmark_reset_diff_syntax_prepared_cache_metrics() {
     syntax::benchmark_reset_prepared_syntax_cache_metrics();
 }
 
+#[cfg(feature = "benchmarks")]
 pub(in crate::view) fn benchmark_diff_syntax_prepared_cache_metrics()
 -> PreparedDiffSyntaxCacheMetrics {
     let (hit, miss, evict, chunk_build_ms) = syntax::benchmark_prepared_syntax_cache_metrics();
@@ -281,12 +288,14 @@ pub(in crate::view) fn benchmark_diff_syntax_prepared_cache_metrics()
     }
 }
 
+#[cfg(feature = "benchmarks")]
 pub(in crate::view) fn benchmark_diff_syntax_prepared_loaded_chunk_count(
     document: PreparedDiffSyntaxDocument,
 ) -> Option<usize> {
     syntax::benchmark_prepared_syntax_loaded_chunk_count(document.inner)
 }
 
+#[cfg(feature = "benchmarks")]
 pub(in crate::view) fn benchmark_diff_syntax_prepared_cache_contains_document(
     document: PreparedDiffSyntaxDocument,
 ) -> bool {
@@ -644,6 +653,7 @@ pub(super) enum PreparedDocumentLineStyledText {
 
 impl PreparedDocumentLineStyledText {
     /// Extracts the inner styled text regardless of variant.
+    #[cfg(feature = "benchmarks")]
     pub(super) fn into_inner(self) -> CachedDiffStyledText {
         match self {
             Self::Cacheable(s) | Self::Pending(s) => s,

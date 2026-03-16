@@ -70,6 +70,7 @@ mod history_graph_paint;
 mod sidebar;
 mod status;
 
+#[cfg(feature = "benchmarks")]
 pub(crate) mod benchmarks;
 
 pub(in crate::view) use diff_text::{

@@ -85,6 +85,7 @@ pub(super) struct HistoryStashIdsCache {
 }
 
 impl GitCometView {
+    #[cfg(any(test, feature = "benchmarks"))]
     pub(super) fn branch_sidebar_rows(repo: &RepoState) -> Vec<BranchSidebarRow> {
         branch_sidebar::branch_sidebar_rows(repo)
     }

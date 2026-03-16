@@ -1,7 +1,11 @@
-use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::SystemTime;
+
+#[cfg(test)]
+use std::collections::HashMap;
+#[cfg(test)]
+use std::sync::Mutex;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct RepoSpec {
@@ -233,24 +237,22 @@ pub trait DiffRowProvider {
     fn slice(&self, start: usize, end: usize) -> Self::SliceIter<'_>;
 }
 
+#[cfg(test)]
 #[derive(Debug)]
-pub struct PagedDiffLineProvider {
+pub(crate) struct PagedDiffLineProvider {
     lines: Arc<[DiffLine]>,
     page_size: usize,
     pages: Mutex<HashMap<usize, Arc<[DiffLine]>>>,
 }
 
+#[cfg(test)]
 impl PagedDiffLineProvider {
-    pub fn new(lines: Arc<[DiffLine]>, page_size: usize) -> Self {
+    pub(crate) fn new(lines: Arc<[DiffLine]>, page_size: usize) -> Self {
         Self {
             lines,
             page_size: page_size.max(1),
             pages: Mutex::new(HashMap::new()),
         }
-    }
-
-    pub fn from_vec(lines: Vec<DiffLine>, page_size: usize) -> Self {
-        Self::new(Arc::from(lines), page_size)
     }
 
     pub fn cached_page_count(&self) -> usize {
@@ -283,6 +285,7 @@ impl PagedDiffLineProvider {
     }
 }
 
+#[cfg(test)]
 impl DiffRowProvider for PagedDiffLineProvider {
     type RowRef = DiffLine;
     type SliceIter<'a>
@@ -376,7 +379,8 @@ impl Diff {
         Self { target, lines: out }
     }
 
-    pub fn from_unified_reader<R: std::io::BufRead>(
+    #[cfg(test)]
+    pub(crate) fn from_unified_reader<R: std::io::BufRead>(
         target: DiffTarget,
         mut reader: R,
     ) -> std::io::Result<Self> {
@@ -401,7 +405,8 @@ impl Diff {
         Self::from_unified_iter(target, text.lines())
     }
 
-    pub fn paged_lines(&self, page_size: usize) -> PagedDiffLineProvider {
+    #[cfg(test)]
+    pub(crate) fn paged_lines(&self, page_size: usize) -> PagedDiffLineProvider {
         PagedDiffLineProvider::new(Arc::from(self.lines.clone()), page_size)
     }
 }
@@ -436,9 +441,11 @@ pub struct LogCursor {
 
 #[cfg(test)]
 mod tests {
-    use super::{Diff, DiffArea, DiffLineKind, DiffRowProvider, DiffTarget, SubmoduleStatus};
+    use super::*;
+    use rustc_hash::FxHashSet;
     use std::io::Cursor;
     use std::path::PathBuf;
+    use std::time::{Duration, SystemTime};
 
     #[test]
     fn submodule_status_maps_known_git_markers() {
@@ -552,5 +559,64 @@ diff --git a/src/lib.rs b/src/lib.rs\n\
             .collect::<Vec<_>>();
         assert_eq!(slice, vec!["old1", "-old2", "+new2"]);
         assert_eq!(provider.cached_page_count(), 3);
+    }
+
+    // --- Tests moved from tests/domain_smoke.rs ---
+
+    #[test]
+    fn commit_id_is_hashable() {
+        let mut set = FxHashSet::default();
+        set.insert(CommitId("a".into()));
+        set.insert(CommitId("b".into()));
+        assert!(set.contains(&CommitId("a".into())));
+    }
+
+    #[test]
+    fn log_cursor_roundtrips() {
+        let cursor = LogCursor {
+            last_seen: CommitId("deadbeef".into()),
+        };
+        assert_eq!(cursor.last_seen.0, "deadbeef");
+    }
+
+    #[test]
+    fn commit_struct_is_constructible() {
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1);
+        let commit = Commit {
+            id: CommitId("1".into()),
+            parent_ids: vec![CommitId("0".into())],
+            summary: "test".into(),
+            author: "me".into(),
+            time: now,
+        };
+        assert_eq!(commit.summary, "test");
+    }
+
+    // --- Tests moved from tests/diff_from_unified.rs ---
+
+    #[test]
+    fn diff_from_unified_classifies_lines() {
+        let target = DiffTarget::WorkingTree {
+            path: PathBuf::from("a.txt"),
+            area: DiffArea::Unstaged,
+        };
+
+        let text = "\
+diff --git a/a.txt b/a.txt
+index 0000000..1111111 100644
+--- a/a.txt
++++ b/a.txt
+@@ -0,0 +1,2 @@
++hello
+ world
+-bye
+";
+
+        let diff = Diff::from_unified(target, text);
+        assert!(diff.lines.iter().any(|l| l.kind == DiffLineKind::Header));
+        assert!(diff.lines.iter().any(|l| l.kind == DiffLineKind::Hunk));
+        assert!(diff.lines.iter().any(|l| l.kind == DiffLineKind::Add));
+        assert!(diff.lines.iter().any(|l| l.kind == DiffLineKind::Remove));
+        assert!(diff.lines.iter().any(|l| l.kind == DiffLineKind::Context));
     }
 }

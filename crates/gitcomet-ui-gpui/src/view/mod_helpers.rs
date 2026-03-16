@@ -70,14 +70,6 @@ pub(super) fn is_svg_path(path: &std::path::Path) -> bool {
         .is_some_and(|ext| ext.eq_ignore_ascii_case("svg"))
 }
 
-pub(super) fn is_existing_directory(path: &std::path::Path) -> bool {
-    std::fs::metadata(path).is_ok_and(|meta| meta.is_dir())
-}
-
-pub(super) fn is_existing_regular_file(path: &std::path::Path) -> bool {
-    std::fs::metadata(path).is_ok_and(|meta| meta.is_file())
-}
-
 pub(super) fn should_bypass_text_file_preview_for_path(path: &std::path::Path) -> bool {
     image_format_for_path(path).is_some()
         || path
@@ -365,23 +357,6 @@ mod resize_drag_ghost_tests {
     }
 }
 
-#[cfg(test)]
-mod directory_path_tests {
-    use super::is_existing_directory;
-
-    #[test]
-    fn detects_existing_directory_paths() {
-        let tmp = std::env::temp_dir().join(format!("gitcomet_is_dir_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&tmp);
-        std::fs::create_dir_all(&tmp).expect("create temp directory");
-
-        assert!(is_existing_directory(&tmp));
-        assert!(!is_existing_directory(&tmp.join("missing")));
-
-        std::fs::remove_dir_all(&tmp).expect("cleanup temp directory");
-    }
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub(super) enum DiffTextRegion {
     Inline,
@@ -658,21 +633,11 @@ pub(super) struct ResolvedOutlineData {
 ///
 /// Uses lazy paged access and span-based projections instead of
 /// eagerly materializing all rows.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub(super) struct StreamedConflictState {
     pub(super) three_way_visible_projection: conflict_resolver::ThreeWayVisibleProjection,
     pub(super) split_row_index: conflict_resolver::ConflictSplitRowIndex,
     pub(super) two_way_split_projection: conflict_resolver::TwoWaySplitProjection,
-}
-
-impl Default for StreamedConflictState {
-    fn default() -> Self {
-        Self {
-            three_way_visible_projection: conflict_resolver::ThreeWayVisibleProjection::default(),
-            split_row_index: conflict_resolver::ConflictSplitRowIndex::default(),
-            two_way_split_projection: conflict_resolver::TwoWaySplitProjection::default(),
-        }
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -841,14 +806,12 @@ impl ConflictResolverUiState {
         }
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(super) fn split_row_index(&self) -> Option<&conflict_resolver::ConflictSplitRowIndex> {
         match &self.mode_state {
             ConflictModeState::Streamed(s) => Some(&s.split_row_index),
         }
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(super) fn two_way_split_projection(
         &self,
     ) -> Option<&conflict_resolver::TwoWaySplitProjection> {
@@ -857,7 +820,6 @@ impl ConflictResolverUiState {
         }
     }
 
-    #[allow(dead_code)]
     pub(super) fn three_way_visible_projection(
         &self,
     ) -> &conflict_resolver::ThreeWayVisibleProjection {
@@ -1726,7 +1688,6 @@ pub(super) enum PatchSplitRow {
 pub enum GitCometViewMode {
     #[default]
     Normal,
-    #[allow(dead_code)]
     FocusedMergetool,
 }
 

@@ -19,6 +19,8 @@ pub enum MergetoolTraceStage {
     ParseConflictMarkers,
     GenerateResolvedText,
     SideBySideRows,
+    // Dead variant: never constructed in production. Matched only in test assertions.
+    #[cfg(any(test, feature = "test-support"))]
     BuildInlineRows,
     BuildThreeWayConflictMaps,
     ComputeThreeWayWordHighlights,
@@ -45,13 +47,6 @@ impl MergetoolTraceSideStats {
         Self {
             bytes: text.map(str::len),
             lines: text.map(text_line_count),
-        }
-    }
-
-    pub fn from_bytes(bytes: Option<&[u8]>) -> Self {
-        Self {
-            bytes: bytes.map(<[u8]>::len),
-            lines: None,
         }
     }
 
@@ -166,15 +161,18 @@ impl MergetoolTraceEvent {
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct MergetoolTraceSnapshot {
     pub events: Vec<MergetoolTraceEvent>,
 }
 
+#[cfg(any(test, feature = "test-support"))]
 pub struct MergetoolTraceCaptureGuard {
     previous_enabled: bool,
 }
 
+#[cfg(any(test, feature = "test-support"))]
 impl Drop for MergetoolTraceCaptureGuard {
     fn drop(&mut self) {
         clear();
@@ -182,6 +180,8 @@ impl Drop for MergetoolTraceCaptureGuard {
     }
 }
 
+// Test-only: installs a capture guard that collects trace events for assertion.
+#[cfg(any(test, feature = "test-support"))]
 pub fn capture() -> MergetoolTraceCaptureGuard {
     let previous_enabled = MERGETOOL_TRACE_CAPTURE_ENABLED.swap(true, Ordering::Relaxed);
     clear();
@@ -211,7 +211,8 @@ pub fn record_with(f: impl FnOnce() -> MergetoolTraceEvent) {
     record(f());
 }
 
-#[allow(dead_code)]
+// Used only by tests to observe trace events recorded during mergetool operations.
+#[cfg(any(test, feature = "test-support"))]
 pub fn snapshot() -> MergetoolTraceSnapshot {
     let events = MERGETOOL_TRACE_EVENTS
         .lock()
@@ -220,7 +221,8 @@ pub fn snapshot() -> MergetoolTraceSnapshot {
     MergetoolTraceSnapshot { events }
 }
 
-#[allow(dead_code)]
+// Used internally by `capture()` which is test-only.
+#[cfg(any(test, feature = "test-support"))]
 pub fn clear() {
     if let Ok(mut events) = MERGETOOL_TRACE_EVENTS.lock() {
         events.clear();

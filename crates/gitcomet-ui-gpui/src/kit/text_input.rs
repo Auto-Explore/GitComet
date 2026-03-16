@@ -4288,6 +4288,7 @@ fn runs_for_line(
     runs
 }
 
+#[cfg(feature = "benchmarks")]
 fn hash_text_runs_for_benchmark(runs: &[TextRun], hasher: &mut DefaultHasher) {
     runs.len().hash(hasher);
     let mut total = 0usize;
@@ -4299,6 +4300,7 @@ fn hash_text_runs_for_benchmark(runs: &[TextRun], hasher: &mut DefaultHasher) {
     total.hash(hasher);
 }
 
+#[cfg(feature = "benchmarks")]
 pub(crate) fn benchmark_text_input_runs_legacy_visible_window(
     text: &str,
     line_starts: &[usize],
@@ -4325,6 +4327,7 @@ pub(crate) fn benchmark_text_input_runs_legacy_visible_window(
     hasher.finish()
 }
 
+#[cfg(feature = "benchmarks")]
 pub(crate) fn benchmark_text_input_runs_streamed_visible_window(
     text: &str,
     line_starts: &[usize],

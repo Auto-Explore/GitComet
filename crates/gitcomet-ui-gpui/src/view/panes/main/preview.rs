@@ -47,17 +47,15 @@ impl MainPaneView {
             )
         });
         let has_untracked_preview = self.untracked_worktree_preview_path().is_some_and(|p| {
-            !crate::view::should_bypass_text_file_preview_for_path(&p)
-                && crate::view::is_existing_regular_file(&p)
+            !crate::view::should_bypass_text_file_preview_for_path(&p) && p.is_file()
         });
         let has_added_preview = self.added_file_preview_abs_path().is_some_and(|p| {
             !crate::view::should_bypass_text_file_preview_for_path(&p)
-                && !crate::view::is_existing_directory(&p)
-                && (crate::view::is_existing_regular_file(&p) || is_commit_file_target)
+                && !p.is_dir()
+                && (p.is_file() || is_commit_file_target)
         });
         let has_deleted_preview = self.deleted_file_preview_abs_path().is_some_and(|p| {
-            !crate::view::should_bypass_text_file_preview_for_path(&p)
-                && !crate::view::is_existing_directory(&p)
+            !crate::view::should_bypass_text_file_preview_for_path(&p) && !p.is_dir()
         });
         has_untracked_preview || has_added_preview || has_deleted_preview
     }
@@ -162,7 +160,7 @@ impl MainPaneView {
             } else {
                 repo.spec.workdir.join(path)
             };
-            crate::view::is_existing_directory(&abs_path)
+            abs_path.is_dir()
         })
     }
 
@@ -176,7 +174,7 @@ impl MainPaneView {
         } else {
             repo.spec.workdir.join(path)
         };
-        if !crate::view::is_existing_directory(&abs_path) {
+        if !abs_path.is_dir() {
             return None;
         }
 

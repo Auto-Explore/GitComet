@@ -17,4 +17,5 @@ rustc-hash = { workspace = true }
 tempfile = { workspace = true }
 
 [dev-dependencies]
+gitcomet-core = { workspace = true, features = ["test-support"] }
 syn = { version = "2", features = ["full", "visit"] }

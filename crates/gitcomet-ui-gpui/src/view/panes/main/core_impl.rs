@@ -329,7 +329,7 @@ fn compute_resolved_outline_computation_from_projection(
     for line_ix in 0..output_line_count {
         let line = projection
             .line_text(marker_segments, line_ix)
-            .unwrap_or_else(|| std::borrow::Cow::Borrowed(""));
+            .unwrap_or(std::borrow::Cow::Borrowed(""));
         let (source, input_line) = source_lookup
             .get(line.as_ref())
             .copied()

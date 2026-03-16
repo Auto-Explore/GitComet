@@ -1997,18 +1997,17 @@ impl MainPaneView {
         if self.conflict_resolved_output_is_streamed() {
             let output_path = self.conflict_resolver.path.clone();
             self.refresh_streamed_resolved_output_preview_from_markers(output_path.as_ref());
-            if let Some(conflict_ix) = scroll_to_conflict {
-                if let Some(target_line_ix) = self
+            if let Some(conflict_ix) = scroll_to_conflict
+                && let Some(target_line_ix) = self
                     .conflict_resolved_output_projection
                     .as_ref()
                     .and_then(|projection| projection.conflict_line_range(conflict_ix))
                     .map(|range| range.start)
-                {
-                    self.conflict_resolver_scroll_resolved_output_to_line(
-                        target_line_ix,
-                        self.conflict_resolved_preview_line_count,
-                    );
-                }
+            {
+                self.conflict_resolver_scroll_resolved_output_to_line(
+                    target_line_ix,
+                    self.conflict_resolved_preview_line_count,
+                );
             }
         } else {
             let resolved =
