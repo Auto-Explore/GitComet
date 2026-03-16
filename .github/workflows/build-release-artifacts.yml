@@ -334,17 +334,17 @@ jobs:
       RELEASE_ID: ${{ needs.prepare.outputs.release_id }}
       ENABLE_KEYLESS_SIGNING: ${{ vars.ENABLE_KEYLESS_SIGNING }}
     steps:
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@v8
         with:
           name: windows-release-artifacts
           path: dist/windows
 
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@v8
         with:
           name: linux-release-artifacts
           path: dist/linux
 
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@v8
         with:
           pattern: macos-release-artifacts-*
           path: dist/macos
