@@ -240,8 +240,8 @@ fn binary_conflict_detection_uses_cached_loaded_file_during_loading() {
 fn focused_mergetool_save_payload_rehydrates_unedited_materialized_conflicts() {
     let segments = vec![ConflictSegment::Block(ConflictBlock {
         base: None,
-        ours: "ours\n".to_string(),
-        theirs: "theirs\n".to_string(),
+        ours: "ours\n".to_string().into(),
+        theirs: "theirs\n".to_string().into(),
         choice: ConflictChoice::Ours,
         resolved: false,
     })];
@@ -264,23 +264,23 @@ fn focused_mergetool_save_payload_rehydrates_unedited_materialized_conflicts() {
 #[test]
 fn focused_mergetool_save_payload_keeps_manual_edits_and_unedited_markers() {
     let segments = vec![
-        ConflictSegment::Text("top\n".to_string()),
+        ConflictSegment::Text("top\n".to_string().into()),
         ConflictSegment::Block(ConflictBlock {
             base: None,
-            ours: "ours-1\n".to_string(),
-            theirs: "theirs-1\n".to_string(),
+            ours: "ours-1\n".to_string().into(),
+            theirs: "theirs-1\n".to_string().into(),
             choice: ConflictChoice::Ours,
             resolved: false,
         }),
-        ConflictSegment::Text("middle\n".to_string()),
+        ConflictSegment::Text("middle\n".to_string().into()),
         ConflictSegment::Block(ConflictBlock {
             base: None,
-            ours: "ours-2\n".to_string(),
-            theirs: "theirs-2\n".to_string(),
+            ours: "ours-2\n".to_string().into(),
+            theirs: "theirs-2\n".to_string().into(),
             choice: ConflictChoice::Ours,
             resolved: false,
         }),
-        ConflictSegment::Text("bottom\n".to_string()),
+        ConflictSegment::Text("bottom\n".to_string().into()),
     ];
 
     let payload = build_focused_mergetool_save_payload(
@@ -312,8 +312,8 @@ fn focused_mergetool_save_payload_keeps_manual_edits_and_unedited_markers() {
 fn focused_mergetool_save_payload_marks_manual_output_as_resolved() {
     let segments = vec![ConflictSegment::Block(ConflictBlock {
         base: None,
-        ours: "ours\n".to_string(),
-        theirs: "theirs\n".to_string(),
+        ours: "ours\n".to_string().into(),
+        theirs: "theirs\n".to_string().into(),
         choice: ConflictChoice::Ours,
         resolved: false,
     })];
@@ -492,19 +492,19 @@ fn versioned_diff_style_cache_entry_only_matches_current_epoch() {
 #[test]
 fn resolved_output_conflict_block_ranges_match_point_lookup() {
     let segments = vec![
-        ConflictSegment::Text("top\n".to_string()),
+        ConflictSegment::Text("top\n".to_string().into()),
         ConflictSegment::Block(ConflictBlock {
             base: None,
-            ours: "a\n".to_string(),
-            theirs: "x\n".to_string(),
+            ours: "a\n".to_string().into(),
+            theirs: "x\n".to_string().into(),
             choice: ConflictChoice::Ours,
             resolved: true,
         }),
-        ConflictSegment::Text("mid\n".to_string()),
+        ConflictSegment::Text("mid\n".to_string().into()),
         ConflictSegment::Block(ConflictBlock {
             base: None,
-            ours: "b\nc\n".to_string(),
-            theirs: "y\n".to_string(),
+            ours: "b\nc\n".to_string().into(),
+            theirs: "y\n".to_string().into(),
             choice: ConflictChoice::Ours,
             resolved: true,
         }),
@@ -526,23 +526,23 @@ fn resolved_output_conflict_block_ranges_match_point_lookup() {
 #[test]
 fn output_line_range_for_conflict_block_in_text_maps_middle_blocks_exactly() {
     let segments = vec![
-        ConflictSegment::Text("top\n".to_string()),
+        ConflictSegment::Text("top\n".to_string().into()),
         ConflictSegment::Block(ConflictBlock {
             base: None,
-            ours: "a\n".to_string(),
-            theirs: "x\ny\n".to_string(),
+            ours: "a\n".to_string().into(),
+            theirs: "x\ny\n".to_string().into(),
             choice: ConflictChoice::Ours,
             resolved: true,
         }),
-        ConflictSegment::Text("mid\n".to_string()),
+        ConflictSegment::Text("mid\n".to_string().into()),
         ConflictSegment::Block(ConflictBlock {
             base: None,
-            ours: "b\nc\n".to_string(),
-            theirs: "z\n".to_string(),
+            ours: "b\nc\n".to_string().into(),
+            theirs: "z\n".to_string().into(),
             choice: ConflictChoice::Ours,
             resolved: true,
         }),
-        ConflictSegment::Text("tail\n".to_string()),
+        ConflictSegment::Text("tail\n".to_string().into()),
     ];
 
     let output = conflict_resolver::generate_resolved_text(&segments);
@@ -559,11 +559,11 @@ fn output_line_range_for_conflict_block_in_text_maps_middle_blocks_exactly() {
 #[test]
 fn output_line_range_for_conflict_block_in_text_maps_eof_block_without_newline() {
     let segments = vec![
-        ConflictSegment::Text("top\n".to_string()),
+        ConflictSegment::Text("top\n".to_string().into()),
         ConflictSegment::Block(ConflictBlock {
             base: None,
-            ours: "tail".to_string(),
-            theirs: "other".to_string(),
+            ours: "tail".to_string().into(),
+            theirs: "other".to_string().into(),
             choice: ConflictChoice::Ours,
             resolved: true,
         }),
@@ -579,19 +579,19 @@ fn output_line_range_for_conflict_block_in_text_maps_eof_block_without_newline()
 #[test]
 fn output_line_range_for_conflict_block_in_text_returns_none_when_output_drifts() {
     let segments = vec![
-        ConflictSegment::Text("top\n".to_string()),
+        ConflictSegment::Text("top\n".to_string().into()),
         ConflictSegment::Block(ConflictBlock {
             base: None,
-            ours: "a\n".to_string(),
-            theirs: "x\n".to_string(),
+            ours: "a\n".to_string().into(),
+            theirs: "x\n".to_string().into(),
             choice: ConflictChoice::Ours,
             resolved: true,
         }),
-        ConflictSegment::Text("mid\n".to_string()),
+        ConflictSegment::Text("mid\n".to_string().into()),
         ConflictSegment::Block(ConflictBlock {
             base: None,
-            ours: "b\n".to_string(),
-            theirs: "y\n".to_string(),
+            ours: "b\n".to_string().into(),
+            theirs: "y\n".to_string().into(),
             choice: ConflictChoice::Ours,
             resolved: true,
         }),
@@ -607,23 +607,23 @@ fn output_line_range_for_conflict_block_in_text_returns_none_when_output_drifts(
 #[test]
 fn build_resolved_output_conflict_markers_maps_chunk_boundaries() {
     let segments = vec![
-        ConflictSegment::Text("top\n".to_string()),
+        ConflictSegment::Text("top\n".to_string().into()),
         ConflictSegment::Block(ConflictBlock {
             base: None,
-            ours: "a\n".to_string(),
-            theirs: "x\ny\n".to_string(),
+            ours: "a\n".to_string().into(),
+            theirs: "x\ny\n".to_string().into(),
             choice: ConflictChoice::Ours,
             resolved: true,
         }),
-        ConflictSegment::Text("mid\n".to_string()),
+        ConflictSegment::Text("mid\n".to_string().into()),
         ConflictSegment::Block(ConflictBlock {
             base: None,
-            ours: "b\nc\n".to_string(),
-            theirs: "z\n".to_string(),
+            ours: "b\nc\n".to_string().into(),
+            theirs: "z\n".to_string().into(),
             choice: ConflictChoice::Ours,
             resolved: true,
         }),
-        ConflictSegment::Text("tail\n".to_string()),
+        ConflictSegment::Text("tail\n".to_string().into()),
     ];
 
     let output = conflict_resolver::generate_resolved_text(&segments);
@@ -668,15 +668,15 @@ fn build_resolved_output_conflict_markers_maps_chunk_boundaries() {
 #[test]
 fn build_resolved_output_conflict_markers_anchors_zero_length_ranges() {
     let segments = vec![
-        ConflictSegment::Text("top\n".to_string()),
+        ConflictSegment::Text("top\n".to_string().into()),
         ConflictSegment::Block(ConflictBlock {
-            base: Some(String::new()),
-            ours: String::new(),
-            theirs: "x\n".to_string(),
+            base: Some(String::new().into()),
+            ours: String::new().into(),
+            theirs: "x\n".to_string().into(),
             choice: ConflictChoice::Ours,
             resolved: true,
         }),
-        ConflictSegment::Text("tail\n".to_string()),
+        ConflictSegment::Text("tail\n".to_string().into()),
     ];
 
     let output = conflict_resolver::generate_resolved_text(&segments);
@@ -699,15 +699,15 @@ fn build_resolved_output_conflict_markers_anchors_zero_length_ranges() {
 #[test]
 fn build_resolved_output_conflict_markers_marks_unresolved_blocks() {
     let segments = vec![
-        ConflictSegment::Text("top\n".to_string()),
+        ConflictSegment::Text("top\n".to_string().into()),
         ConflictSegment::Block(ConflictBlock {
             base: None,
-            ours: "a\n".to_string(),
-            theirs: "x\n".to_string(),
+            ours: "a\n".to_string().into(),
+            theirs: "x\n".to_string().into(),
             choice: ConflictChoice::Ours,
             resolved: false,
         }),
-        ConflictSegment::Text("tail\n".to_string()),
+        ConflictSegment::Text("tail\n".to_string().into()),
     ];
 
     let output = conflict_resolver::generate_resolved_text(&segments);
@@ -867,15 +867,15 @@ fn conflict_resolver_output_context_line_prefers_clicked_offset() {
 #[test]
 fn clicked_unresolved_line_maps_to_chunk_marker() {
     let segments = vec![
-        ConflictSegment::Text("top\n".to_string()),
+        ConflictSegment::Text("top\n".to_string().into()),
         ConflictSegment::Block(ConflictBlock {
             base: None,
-            ours: "ours-1\nours-2\n".to_string(),
-            theirs: "theirs-1\ntheirs-2\n".to_string(),
+            ours: "ours-1\nours-2\n".to_string().into(),
+            theirs: "theirs-1\ntheirs-2\n".to_string().into(),
             choice: ConflictChoice::Ours,
             resolved: false,
         }),
-        ConflictSegment::Text("tail\n".to_string()),
+        ConflictSegment::Text("tail\n".to_string().into()),
     ];
     let output = conflict_resolver::generate_resolved_text(&segments);
     let cursor_offset = 0usize;
@@ -890,15 +890,15 @@ fn clicked_unresolved_line_maps_to_chunk_marker() {
 #[test]
 fn build_resolved_output_conflict_markers_splits_unresolved_subchunks() {
     let segments = vec![
-        ConflictSegment::Text("pre\n".to_string()),
+        ConflictSegment::Text("pre\n".to_string().into()),
         ConflictSegment::Block(ConflictBlock {
-            base: Some("a\ncommon\nb\n".to_string()),
-            ours: "ao\ncommon\nbo\n".to_string(),
-            theirs: "at\ncommon\nbt\n".to_string(),
+            base: Some("a\ncommon\nb\n".to_string().into()),
+            ours: "ao\ncommon\nbo\n".to_string().into(),
+            theirs: "at\ncommon\nbt\n".to_string().into(),
             choice: ConflictChoice::Base,
             resolved: false,
         }),
-        ConflictSegment::Text("post\n".to_string()),
+        ConflictSegment::Text("post\n".to_string().into()),
     ];
 
     let output = conflict_resolver::generate_resolved_text(&segments);
@@ -922,12 +922,15 @@ fn build_resolved_output_conflict_markers_splits_method_edit_and_trailing_insert
     let segments = vec![ConflictSegment::Block(ConflictBlock {
             base: Some(
                 "pub fn opposite(self) -> Color {\n    match self {\n        Color::White => Color::Black,\n        Color::Black => Color::White,\n    }\n}\n"
-                    .to_string(),
+                    .to_string()
+                    .into(),
             ),
             ours: "pub fn opposite(self) -> Color {\n    match self {\n        Color::White => Color::Black,\n        Color::Black => Color::White,\n    }\n}\n"
-                .to_string(),
+                .to_string()
+                .into(),
             theirs: "pub fn opposite(self) -> Self {\n    match self {\n        Self::White => Self::Black,\n        Self::Black => Self::White,\n    }\n}\n\npub fn name(self) -> &'static str {\n    match self {\n        Self::White => \"White\",\n        Self::Black => \"Black\",\n    }\n}\n"
-                .to_string(),
+                .to_string()
+                .into(),
             choice: ConflictChoice::Ours,
             resolved: false,
         })];
@@ -1045,15 +1048,15 @@ fn conflict_region_index_is_unique_detects_split_subchunk_duplicates() {
 #[test]
 fn append_choice_after_conflict_block_appends_selected_order_for_single_marker() {
     let mut segments = vec![
-        ConflictSegment::Text("pre\n".to_string()),
+        ConflictSegment::Text("pre\n".to_string().into()),
         ConflictSegment::Block(ConflictBlock {
             base: None,
-            ours: "ours\n".to_string(),
-            theirs: "theirs\n".to_string(),
+            ours: "ours\n".to_string().into(),
+            theirs: "theirs\n".to_string().into(),
             choice: ConflictChoice::Ours,
             resolved: true,
         }),
-        ConflictSegment::Text("post\n".to_string()),
+        ConflictSegment::Text("post\n".to_string().into()),
     ];
     let mut region_indices = vec![0];
 
@@ -1074,15 +1077,15 @@ fn append_choice_after_conflict_block_appends_selected_order_for_single_marker()
 #[test]
 fn append_choice_after_conflict_block_from_same_marker_keeps_single_choice_per_side() {
     let mut segments = vec![
-        ConflictSegment::Text("pre\n".to_string()),
+        ConflictSegment::Text("pre\n".to_string().into()),
         ConflictSegment::Block(ConflictBlock {
-            base: Some("base\n".to_string()),
-            ours: "ours\n".to_string(),
-            theirs: "theirs\n".to_string(),
+            base: Some("base\n".to_string().into()),
+            ours: "ours\n".to_string().into(),
+            theirs: "theirs\n".to_string().into(),
             choice: ConflictChoice::Base,
             resolved: true,
         }),
-        ConflictSegment::Text("post\n".to_string()),
+        ConflictSegment::Text("post\n".to_string().into()),
     ];
     let mut region_indices = vec![0];
 
@@ -1133,23 +1136,23 @@ fn append_choice_after_conflict_block_from_same_marker_keeps_single_choice_per_s
 #[test]
 fn non_contiguous_matching_blocks_do_not_share_choice_group() {
     let mut segments = vec![
-        ConflictSegment::Text("pre\n".to_string()),
+        ConflictSegment::Text("pre\n".to_string().into()),
         ConflictSegment::Block(ConflictBlock {
-            base: Some("base\n".to_string()),
-            ours: "ours\n".to_string(),
-            theirs: "theirs\n".to_string(),
+            base: Some("base\n".to_string().into()),
+            ours: "ours\n".to_string().into(),
+            theirs: "theirs\n".to_string().into(),
             choice: ConflictChoice::Theirs,
             resolved: true,
         }),
-        ConflictSegment::Text("middle\n".to_string()),
+        ConflictSegment::Text("middle\n".to_string().into()),
         ConflictSegment::Block(ConflictBlock {
-            base: Some("base\n".to_string()),
-            ours: "ours\n".to_string(),
-            theirs: "theirs\n".to_string(),
+            base: Some("base\n".to_string().into()),
+            ours: "ours\n".to_string().into(),
+            theirs: "theirs\n".to_string().into(),
             choice: ConflictChoice::Ours,
             resolved: false,
         }),
-        ConflictSegment::Text("post\n".to_string()),
+        ConflictSegment::Text("post\n".to_string().into()),
     ];
     // Simulate subchunk-derived duplicate region ids while preserving a text boundary.
     let mut region_indices = vec![0, 0];
@@ -1170,16 +1173,16 @@ fn non_contiguous_matching_blocks_do_not_share_choice_group() {
 fn adjacent_markers_with_same_text_but_different_regions_do_not_interfere() {
     let mut segments = vec![
         ConflictSegment::Block(ConflictBlock {
-            base: Some("base\n".to_string()),
-            ours: "ours\n".to_string(),
-            theirs: "theirs\n".to_string(),
+            base: Some("base\n".to_string().into()),
+            ours: "ours\n".to_string().into(),
+            theirs: "theirs\n".to_string().into(),
             choice: ConflictChoice::Theirs,
             resolved: true,
         }),
         ConflictSegment::Block(ConflictBlock {
-            base: Some("base\n".to_string()),
-            ours: "ours\n".to_string(),
-            theirs: "theirs\n".to_string(),
+            base: Some("base\n".to_string().into()),
+            ours: "ours\n".to_string().into(),
+            theirs: "theirs\n".to_string().into(),
             choice: ConflictChoice::Ours,
             resolved: false,
         }),
@@ -1215,15 +1218,15 @@ fn adjacent_markers_with_same_text_but_different_regions_do_not_interfere() {
 #[test]
 fn pick_sequence_is_reversible_to_original_unpicked_state() {
     let mut segments = vec![
-        ConflictSegment::Text("pre\n".to_string()),
+        ConflictSegment::Text("pre\n".to_string().into()),
         ConflictSegment::Block(ConflictBlock {
-            base: Some("base\n".to_string()),
-            ours: "ours\n".to_string(),
-            theirs: "theirs\n".to_string(),
+            base: Some("base\n".to_string().into()),
+            ours: "ours\n".to_string().into(),
+            theirs: "theirs\n".to_string().into(),
             choice: ConflictChoice::Ours,
             resolved: false,
         }),
-        ConflictSegment::Text("post\n".to_string()),
+        ConflictSegment::Text("post\n".to_string().into()),
     ];
     let original = segments.clone();
     let mut region_indices = vec![0];
@@ -1292,15 +1295,15 @@ fn pick_sequence_is_reversible_to_original_unpicked_state() {
 fn pick_and_deselect_multiple_orders_always_restore_original_state() {
     fn initial_segments() -> Vec<ConflictSegment> {
         vec![
-            ConflictSegment::Text("pre\n".to_string()),
+            ConflictSegment::Text("pre\n".to_string().into()),
             ConflictSegment::Block(ConflictBlock {
-                base: Some("base\n".to_string()),
-                ours: "ours\n".to_string(),
-                theirs: "theirs\n".to_string(),
+                base: Some("base\n".to_string().into()),
+                ours: "ours\n".to_string().into(),
+                theirs: "theirs\n".to_string().into(),
                 choice: ConflictChoice::Ours,
                 resolved: false,
             }),
-            ConflictSegment::Text("post\n".to_string()),
+            ConflictSegment::Text("post\n".to_string().into()),
         ]
     }
 
@@ -1451,9 +1454,9 @@ fn conflict_choice_hints_override_identical_text_to_selected_source() {
     }
 
     let segments = vec![ConflictSegment::Block(ConflictBlock {
-        base: Some("same\n".to_string()),
-        ours: "same\n".to_string(),
-        theirs: "same\n".to_string(),
+        base: Some("same\n".to_string().into()),
+        ours: "same\n".to_string().into(),
+        theirs: "same\n".to_string().into(),
         choice: ConflictChoice::Ours,
         resolved: true,
     })];
@@ -1487,11 +1490,11 @@ fn empty_base_conflict_hint_overrides_false_a_badge() {
     }
 
     let segments = vec![
-        ConflictSegment::Text("dup\n".to_string()),
+        ConflictSegment::Text("dup\n".to_string().into()),
         ConflictSegment::Block(ConflictBlock {
-            base: Some(String::new()),
-            ours: "dup\n".to_string(),
-            theirs: "other\n".to_string(),
+            base: Some(String::new().into()),
+            ours: "dup\n".to_string().into(),
+            theirs: "other\n".to_string().into(),
             choice: ConflictChoice::Ours,
             resolved: true,
         }),

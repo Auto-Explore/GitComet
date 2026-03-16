@@ -84,6 +84,8 @@ fn conflict_file_loaded_builds_session_with_regions() {
         FileConflictKind::BothModified,
     );
 
+    let current_text: Arc<str> =
+        "a\n<<<<<<< ours\nours\n=======\ntheirs\n>>>>>>> theirs\nb\n".into();
     let file = ConflictFile {
         path: PathBuf::from("file.txt"),
         base_bytes: Some(b"base\n".to_vec().into()),
@@ -97,11 +99,7 @@ fn conflict_file_loaded_builds_session_with_regions() {
         base: Some("base\n".to_string().into()),
         ours: Some("ours\n".to_string().into()),
         theirs: Some("theirs\n".to_string().into()),
-        current: Some(
-            "a\n<<<<<<< ours\nours\n=======\ntheirs\n>>>>>>> theirs\nb\n"
-                .to_string()
-                .into(),
-        ),
+        current: Some(current_text.clone()),
     };
 
     reduce(
@@ -133,6 +131,14 @@ fn conflict_file_loaded_builds_session_with_regions() {
     assert_eq!(session.unsolved_count(), 1);
     assert_eq!(session.regions[0].ours, "ours\n");
     assert_eq!(session.regions[0].theirs, "theirs\n");
+    assert!(
+        session.regions[0].ours.shares_backing_with(&current_text),
+        "current-only reducer bootstrap should retain shared region slices",
+    );
+    assert!(
+        session.regions[0].theirs.shares_backing_with(&current_text),
+        "current-only reducer bootstrap should retain shared region slices",
+    );
 }
 
 #[test]

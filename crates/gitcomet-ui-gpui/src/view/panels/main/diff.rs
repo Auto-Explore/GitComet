@@ -306,6 +306,7 @@ impl MainPaneView {
                         self.maybe_autoscroll_diff_to_first_change();
 
                         if self.diff_word_wrap {
+                            self.ensure_file_diff_inline_text_materialized();
                             let raw = self.file_diff_inline_text.clone();
                             self.diff_raw_input.update(cx, |input, cx| {
                                 input.set_theme(theme, cx);
@@ -329,8 +330,8 @@ impl MainPaneView {
                         }
 
                         let total_len = match self.diff_view {
-                            DiffViewMode::Inline => self.file_diff_inline_cache.len(),
-                            DiffViewMode::Split => self.file_diff_cache_rows.len(),
+                            DiffViewMode::Inline => self.file_diff_inline_row_len(),
+                            DiffViewMode::Split => self.file_diff_split_row_len(),
                         };
                         if total_len == 0 {
                             components::empty_state(theme, "Diff", "Empty file.").into_any_element()

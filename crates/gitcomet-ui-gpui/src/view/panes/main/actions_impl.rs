@@ -306,11 +306,14 @@ impl MainPaneView {
         }
         match self.diff_view {
             DiffViewMode::Inline => {
+                if let Some(provider) = self.file_diff_inline_row_provider.as_ref() {
+                    return provider.change_visible_indices();
+                }
                 diff_navigation::change_block_entries(self.diff_visible_len(), |visible_ix| {
                     let Some(inline_ix) = self.diff_mapped_ix_for_visible_ix(visible_ix) else {
                         return false;
                     };
-                    self.file_diff_inline_cache.get(inline_ix).is_some_and(|l| {
+                    self.file_diff_inline_row(inline_ix).is_some_and(|l| {
                         matches!(
                             l.kind,
                             gitcomet_core::domain::DiffLineKind::Add
@@ -320,11 +323,14 @@ impl MainPaneView {
                 })
             }
             DiffViewMode::Split => {
+                if let Some(provider) = self.file_diff_row_provider.as_ref() {
+                    return provider.change_visible_indices();
+                }
                 diff_navigation::change_block_entries(self.diff_visible_len(), |visible_ix| {
                     let Some(row_ix) = self.diff_mapped_ix_for_visible_ix(visible_ix) else {
                         return false;
                     };
-                    self.file_diff_cache_rows.get(row_ix).is_some_and(|row| {
+                    self.file_diff_split_row(row_ix).is_some_and(|row| {
                         !matches!(row.kind, gitcomet_core::file_diff::FileDiffRowKind::Context)
                     })
                 })
@@ -886,12 +892,18 @@ impl MainPaneView {
         }
 
         let bootstrap_started = Instant::now();
-        let current_text = file.current.as_deref();
+        let current_text = file.current.clone();
+        let current_text_ref = current_text.as_deref();
         let base_text = file.base.as_deref().unwrap_or("");
         let ours_text = file.ours.as_deref().unwrap_or("");
         let theirs_text = file.theirs.as_deref().unwrap_or("");
-        let trace_ctx =
-            MergetoolTraceContext::new(trace_path, base_text, ours_text, theirs_text, current_text);
+        let trace_ctx = MergetoolTraceContext::new(
+            trace_path,
+            base_text,
+            ours_text,
+            theirs_text,
+            current_text_ref,
+        );
         let is_same_conflict = self.conflict_resolver.repo_id == Some(repo_id)
             && self.conflict_resolver.path.as_ref() == Some(&path);
         let three_way_base_len = if base_text.is_empty() {
@@ -914,8 +926,8 @@ impl MainPaneView {
             .max(three_way_theirs_len);
 
         let marker_parse_started = Instant::now();
-        let mut marker_segments = if let Some(cur) = current_text {
-            let segments = conflict_resolver::parse_conflict_markers(cur);
+        let mut marker_segments = if let Some(cur) = current_text.clone() {
+            let segments = conflict_resolver::parse_conflict_markers_shared(cur);
             if conflict_resolver::conflict_count(&segments) > 0 {
                 segments
             } else {
@@ -984,7 +996,7 @@ impl MainPaneView {
                 trace_decisions.full_output_generated = Some(true);
                 (
                     Some(if marker_segments.is_empty() {
-                        if let Some(cur) = current_text {
+                        if let Some(cur) = current_text_ref {
                             cur.to_string()
                         } else if let Some(ours) = file.ours.as_deref() {
                             ours.to_string()
@@ -1338,8 +1350,8 @@ impl MainPaneView {
         };
 
         // Re-parse marker segments from original current text.
-        let mut marker_segments = if let Some(cur) = file.current.as_deref() {
-            let segments = conflict_resolver::parse_conflict_markers(cur);
+        let mut marker_segments = if let Some(cur) = file.current.clone() {
+            let segments = conflict_resolver::parse_conflict_markers_shared(cur);
             if conflict_resolver::conflict_count(&segments) > 0 {
                 segments
             } else {

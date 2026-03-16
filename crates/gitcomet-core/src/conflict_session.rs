@@ -1,4 +1,5 @@
 use crate::domain::FileConflictKind;
+use std::ops::Range;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -14,6 +15,7 @@ use autosolve::{
 };
 #[cfg(test)]
 use history::history_section_suffix;
+#[cfg(test)]
 use marker_parse::parse_conflict_regions_from_markers;
 #[cfg(test)]
 use regex::Regex;
@@ -41,6 +43,132 @@ pub enum ConflictPayload {
     Binary(Arc<[u8]>),
     /// Side is absent (file deleted or not present on this branch).
     Absent,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum ConflictRegionTextStorage {
+    Owned(String),
+    SharedSlice { text: Arc<str>, range: Range<usize> },
+}
+
+#[derive(Clone, Debug)]
+pub struct ConflictRegionText {
+    storage: ConflictRegionTextStorage,
+}
+
+impl ConflictRegionText {
+    pub fn shared(text: Arc<str>) -> Self {
+        let len = text.len();
+        Self {
+            storage: ConflictRegionTextStorage::SharedSlice {
+                text,
+                range: 0..len,
+            },
+        }
+    }
+
+    pub fn shared_slice(text: Arc<str>, range: Range<usize>) -> Self {
+        debug_assert!(
+            text.get(range.clone()).is_some(),
+            "shared conflict region text range should stay within bounds"
+        );
+        Self {
+            storage: ConflictRegionTextStorage::SharedSlice { text, range },
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        match &self.storage {
+            ConflictRegionTextStorage::Owned(text) => text.as_str(),
+            ConflictRegionTextStorage::SharedSlice { text, range } => text
+                .get(range.clone())
+                .expect("shared conflict region text range should stay valid"),
+        }
+    }
+
+    pub fn into_owned_string(self) -> String {
+        match self.storage {
+            ConflictRegionTextStorage::Owned(text) => text,
+            ConflictRegionTextStorage::SharedSlice { text, range } => text
+                .get(range)
+                .expect("shared conflict region text range should stay valid")
+                .to_string(),
+        }
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn shares_backing_with(&self, other: &Arc<str>) -> bool {
+        match &self.storage {
+            ConflictRegionTextStorage::Owned(_) => false,
+            ConflictRegionTextStorage::SharedSlice { text, .. } => Arc::ptr_eq(text, other),
+        }
+    }
+}
+
+impl std::fmt::Display for ConflictRegionText {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::ops::Deref for ConflictRegionText {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        self.as_str()
+    }
+}
+
+impl AsRef<str> for ConflictRegionText {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl From<String> for ConflictRegionText {
+    fn from(value: String) -> Self {
+        Self {
+            storage: ConflictRegionTextStorage::Owned(value),
+        }
+    }
+}
+
+impl From<&str> for ConflictRegionText {
+    fn from(value: &str) -> Self {
+        value.to_string().into()
+    }
+}
+
+impl PartialEq for ConflictRegionText {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_str() == other.as_str()
+    }
+}
+
+impl Eq for ConflictRegionText {}
+
+impl PartialEq<&str> for ConflictRegionText {
+    fn eq(&self, other: &&str) -> bool {
+        self.as_str() == *other
+    }
+}
+
+impl PartialEq<ConflictRegionText> for &str {
+    fn eq(&self, other: &ConflictRegionText) -> bool {
+        *self == other.as_str()
+    }
+}
+
+impl PartialEq<String> for ConflictRegionText {
+    fn eq(&self, other: &String) -> bool {
+        self.as_str() == other.as_str()
+    }
+}
+
+impl PartialEq<ConflictRegionText> for String {
+    fn eq(&self, other: &ConflictRegionText) -> bool {
+        self.as_str() == other.as_str()
+    }
 }
 
 impl ConflictPayload {
@@ -283,11 +411,11 @@ impl RegexAutosolveOptions {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ConflictRegion {
     /// The base (common ancestor) content for this region.
-    pub base: Option<String>,
+    pub base: Option<ConflictRegionText>,
     /// The "ours" (local/HEAD) content.
-    pub ours: String,
+    pub ours: ConflictRegionText,
     /// The "theirs" (remote/incoming) content.
-    pub theirs: String,
+    pub theirs: ConflictRegionText,
     /// Current resolution state.
     pub resolution: ConflictRegionResolution,
 }
@@ -299,19 +427,19 @@ impl ConflictRegion {
         match &self.resolution {
             ConflictRegionResolution::Unresolved => None,
             ConflictRegionResolution::PickBase => self.base.as_deref().or(Some("")),
-            ConflictRegionResolution::PickOurs => Some(&self.ours),
-            ConflictRegionResolution::PickTheirs => Some(&self.theirs),
+            ConflictRegionResolution::PickOurs => Some(self.ours.as_str()),
+            ConflictRegionResolution::PickTheirs => Some(self.theirs.as_str()),
             ConflictRegionResolution::PickBoth => None, // caller must concat ours+theirs
-            ConflictRegionResolution::ManualEdit(text) => Some(text),
-            ConflictRegionResolution::AutoResolved { content, .. } => Some(content),
+            ConflictRegionResolution::ManualEdit(text) => Some(text.as_str()),
+            ConflictRegionResolution::AutoResolved { content, .. } => Some(content.as_str()),
         }
     }
 
     /// Produce the resolved text for "both" picks (ours followed by theirs).
     pub fn resolved_text_both(&self) -> String {
         let mut out = String::with_capacity(self.ours.len() + self.theirs.len());
-        out.push_str(&self.ours);
-        out.push_str(&self.theirs);
+        out.push_str(self.ours.as_str());
+        out.push_str(self.theirs.as_str());
         out
     }
 }
@@ -394,17 +522,17 @@ impl ConflictSession {
         self.strategy == ConflictResolverStrategy::BinarySidePick && self.regions.is_empty()
     }
 
-    fn payload_as_side_text(payload: &ConflictPayload) -> Option<String> {
+    fn payload_as_side_text(payload: &ConflictPayload) -> Option<ConflictRegionText> {
         match payload {
-            ConflictPayload::Text(text) => Some(text.to_string()),
-            ConflictPayload::Absent => Some(String::new()),
+            ConflictPayload::Text(text) => Some(ConflictRegionText::shared(text.clone())),
+            ConflictPayload::Absent => Some(ConflictRegionText::from(String::new())),
             ConflictPayload::Binary(_) => None,
         }
     }
 
-    fn payload_as_base_text(payload: &ConflictPayload) -> Option<Option<String>> {
+    fn payload_as_base_text(payload: &ConflictPayload) -> Option<Option<ConflictRegionText>> {
         match payload {
-            ConflictPayload::Text(text) => Some(Some(text.to_string())),
+            ConflictPayload::Text(text) => Some(Some(ConflictRegionText::shared(text.clone()))),
             ConflictPayload::Absent => Some(None),
             ConflictPayload::Binary(_) => None,
         }
@@ -498,7 +626,7 @@ impl ConflictSession {
             theirs,
             ConflictPayload::Text(merged_text.clone()),
         );
-        session.parse_regions_from_merged_text(merged_text.as_ref());
+        session.parse_regions_from_shared_text(merged_text);
         session
     }
 
@@ -532,7 +660,13 @@ impl ConflictSession {
     ///
     /// Returns the number of parsed regions.
     pub fn parse_regions_from_merged_text(&mut self, merged_text: &str) -> usize {
-        self.regions = parse_conflict_regions_from_markers(merged_text);
+        self.parse_regions_from_shared_text(Arc::<str>::from(merged_text))
+    }
+
+    /// Parse marker-based conflict regions from shared merged text and replace
+    /// the current region list without copying each block payload.
+    pub fn parse_regions_from_shared_text(&mut self, merged_text: Arc<str>) -> usize {
+        self.regions = marker_parse::parse_conflict_regions_from_shared_text(merged_text);
         if self.regions.is_empty()
             && let Some(region) = Self::synthetic_region_for_strategy(
                 self.strategy,
@@ -693,8 +827,8 @@ impl ConflictSession {
                 &compiled,
             ) {
                 let content = match pick {
-                    AutosolvePickSide::Ours => region.ours.clone(),
-                    AutosolvePickSide::Theirs => region.theirs.clone(),
+                    AutosolvePickSide::Ours => region.ours.to_string(),
+                    AutosolvePickSide::Theirs => region.theirs.to_string(),
                 };
                 region.resolution = ConflictRegionResolution::AutoResolved {
                     confidence: rule.confidence(),

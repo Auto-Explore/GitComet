@@ -1,5 +1,6 @@
-use super::{ConflictRegion, ConflictRegionResolution};
+use super::{ConflictRegion, ConflictRegionResolution, ConflictRegionText};
 use std::ops::Range;
+use std::sync::Arc;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ParsedConflictBlock {
@@ -198,17 +199,22 @@ pub fn parse_conflict_marker_segments(text: &str) -> Vec<ParsedConflictSegment> 
 ///
 /// This is a thin wrapper over [`parse_conflict_marker_segments`] that
 /// discards context text and keeps only conflict blocks.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn parse_conflict_regions_from_markers(text: &str) -> Vec<ConflictRegion> {
-    parse_conflict_marker_ranges(text)
+    parse_conflict_regions_from_shared_text(Arc::<str>::from(text))
+}
+
+pub(super) fn parse_conflict_regions_from_shared_text(text: Arc<str>) -> Vec<ConflictRegion> {
+    parse_conflict_marker_ranges(text.as_ref())
         .into_iter()
         .filter_map(|segment| match segment {
             ParsedConflictSegmentRanges::Text(_) => None,
             ParsedConflictSegmentRanges::Conflict(block) => Some(ConflictRegion {
                 base: block
                     .base
-                    .map(|range| text_for_range(text, &range).to_string()),
-                ours: text_for_range(text, &block.ours).to_string(),
-                theirs: text_for_range(text, &block.theirs).to_string(),
+                    .map(|range| ConflictRegionText::shared_slice(Arc::clone(&text), range)),
+                ours: ConflictRegionText::shared_slice(Arc::clone(&text), block.ours),
+                theirs: ConflictRegionText::shared_slice(Arc::clone(&text), block.theirs),
                 resolution: ConflictRegionResolution::Unresolved,
             }),
         })

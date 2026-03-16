@@ -525,7 +525,7 @@ pub(super) fn resolved_output_conflict_block_ranges_in_text(
         match seg {
             conflict_resolver::ConflictSegment::Text(text) => {
                 let tail = output_text.get(cursor..)?;
-                if !tail.starts_with(text) {
+                if !tail.starts_with(text.as_str()) {
                     return None;
                 }
                 cursor = cursor.saturating_add(text.len());
@@ -915,13 +915,14 @@ pub(super) fn build_resolved_output_conflict_markers_from_block_ranges(
 
 pub(super) fn push_conflict_text_segment(
     segments: &mut Vec<conflict_resolver::ConflictSegment>,
-    text: String,
+    text: impl Into<conflict_resolver::ConflictText>,
 ) {
+    let text = text.into();
     if text.is_empty() {
         return;
     }
     if let Some(conflict_resolver::ConflictSegment::Text(prev)) = segments.last_mut() {
-        prev.push_str(&text);
+        prev.push_str(text.as_str());
         return;
     }
     segments.push(conflict_resolver::ConflictSegment::Text(text));
@@ -1080,9 +1081,9 @@ pub(super) fn split_target_conflict_block_into_subchunks(
                                         next_segments.push(
                                             conflict_resolver::ConflictSegment::Block(
                                                 conflict_resolver::ConflictBlock {
-                                                    base: Some(base.clone()),
-                                                    ours: ours.clone(),
-                                                    theirs: theirs.clone(),
+                                                    base: Some(base.clone().into()),
+                                                    ours: ours.clone().into(),
+                                                    theirs: theirs.clone().into(),
                                                     choice: target_block.choice,
                                                     resolved: false,
                                                 },
@@ -1131,8 +1132,8 @@ pub(super) fn split_target_conflict_block_into_subchunks(
                                 next_segments.push(conflict_resolver::ConflictSegment::Block(
                                     conflict_resolver::ConflictBlock {
                                         base: None,
-                                        ours,
-                                        theirs,
+                                        ours: ours.into(),
+                                        theirs: theirs.into(),
                                         choice: target_block.choice,
                                         resolved: false,
                                     },
@@ -2138,6 +2139,7 @@ pub(in crate::view) struct MainPaneView {
     pub(in crate::view) file_diff_cache_path: Option<std::path::PathBuf>,
     pub(in crate::view) file_diff_cache_language: Option<rows::DiffSyntaxLanguage>,
     pub(in crate::view) file_diff_cache_rows: Vec<FileDiffRow>,
+    pub(in crate::view) file_diff_row_provider: Option<Arc<super::diff_cache::PagedFileDiffRows>>,
     /// Real old-side file text used for split and inline syntax projection.
     pub(in crate::view) file_diff_old_text: SharedString,
     pub(in crate::view) file_diff_old_line_starts: Arc<[usize]>,
@@ -2145,6 +2147,8 @@ pub(in crate::view) struct MainPaneView {
     pub(in crate::view) file_diff_new_text: SharedString,
     pub(in crate::view) file_diff_new_line_starts: Arc<[usize]>,
     pub(in crate::view) file_diff_inline_cache: Vec<AnnotatedDiffLine>,
+    pub(in crate::view) file_diff_inline_row_provider:
+        Option<Arc<super::diff_cache::PagedFileDiffInlineRows>>,
     pub(in crate::view) file_diff_inline_text: SharedString,
     pub(in crate::view) file_diff_inline_word_highlights: Vec<Option<Vec<Range<usize>>>>,
     pub(in crate::view) file_diff_split_word_highlights_old: Vec<Option<Vec<Range<usize>>>>,

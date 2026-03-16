@@ -130,27 +130,28 @@ impl MainPaneView {
                         return diff_placeholder_row(("diff_missing", visible_ix), theme);
                     };
 
-                    let word_ranges: &[Range<usize>] = this
-                        .file_diff_inline_word_highlights
-                        .get(inline_ix)
-                        .and_then(|r| r.as_ref().map(Vec::as_slice))
-                        .unwrap_or(&[]);
-
-                    let mut pending_styled = None;
-                    let cache_epoch = match this.file_diff_inline_cache.get(inline_ix) {
-                        Some(line) => this.file_diff_inline_style_cache_epoch(line),
-                        None => {
-                            return diff_placeholder_row(("diff_oob", visible_ix), theme);
-                        }
+                    let Some(line) = this.file_diff_inline_row(inline_ix) else {
+                        return diff_placeholder_row(("diff_oob", visible_ix), theme);
                     };
+                    let mut pending_styled = None;
+                    let cache_epoch = this.file_diff_inline_style_cache_epoch(&line);
                     if this
                         .diff_text_segments_cache_get(inline_ix, cache_epoch)
                         .is_none()
                     {
-                        let Some(line) = this.file_diff_inline_cache.get(inline_ix) else {
-                            return diff_placeholder_row(("diff_oob", visible_ix), theme);
-                        };
-
+                        let word_ranges = this
+                            .file_diff_inline_modify_pair_texts(inline_ix)
+                            .map(|(old, new, kind)| {
+                                let (old_ranges, new_ranges) = capped_word_diff_ranges(old, new);
+                                match kind {
+                                    DiffLineKind::Remove => old_ranges,
+                                    DiffLineKind::Add => new_ranges,
+                                    DiffLineKind::Context
+                                    | DiffLineKind::Header
+                                    | DiffLineKind::Hunk => Vec::new(),
+                                }
+                            })
+                            .unwrap_or_default();
                         let word_color = diff_line_word_color(line.kind, theme);
 
                         let is_content_line = matches!(
@@ -162,14 +163,14 @@ impl MainPaneView {
                         // Project syntax from the correct side's prepared document.
                         // Full-document views always use Auto fallback since prepared
                         // documents handle the heavy lifting.
-                        let projected = this.file_diff_inline_projected_syntax(line);
+                        let projected = this.file_diff_inline_projected_syntax(&line);
                         let syntax_mode = syntax_mode_for_prepared_document(projected.document);
 
                         let (styled, is_pending) =
                             build_cached_diff_styled_text_for_prepared_document_line_nonblocking(
                                 theme,
-                                diff_content_text(line),
-                                word_ranges,
+                                diff_content_text(&line),
+                                word_ranges.as_slice(),
                                 "",
                                 DiffSyntaxConfig {
                                     language: line_language,
@@ -198,9 +199,6 @@ impl MainPaneView {
                         pending_styled.is_some() || styled.is_some(),
                         "diff text segment cache missing for inline row {inline_ix} after populate"
                     );
-                    let Some(line) = this.file_diff_inline_cache.get(inline_ix) else {
-                        return diff_placeholder_row(("diff_oob", visible_ix), theme);
-                    };
 
                     diff_row(
                         theme,
@@ -209,7 +207,7 @@ impl MainPaneView {
                         selected,
                         DiffViewMode::Inline,
                         min_width,
-                        line,
+                        &line,
                         None,
                         None,
                         styled,
@@ -402,18 +400,17 @@ impl MainPaneView {
                             theme,
                         );
                     };
+                    let Some(row) = this.file_diff_split_row(row_ix) else {
+                        return diff_placeholder_row(
+                            (id_oob, visible_ix),
+                            theme,
+                        );
+                    };
                     let key = this.file_diff_split_cache_key(row_ix, region);
                     let mut pending_styled = None;
                     if let Some(key) = key
                         && this.diff_text_segments_cache_get(key, cache_epoch).is_none()
                     {
-                        let Some(row) = this.file_diff_cache_rows.get(row_ix) else {
-                            return diff_placeholder_row(
-                                (id_oob, visible_ix),
-                                theme,
-                            );
-                        };
-
                         let text = if is_left {
                             row.old.as_deref()
                         } else {
@@ -423,20 +420,23 @@ impl MainPaneView {
                             let word_color =
                                 file_diff_split_word_color(column, row.kind, theme);
 
-                            let word_highlights = if is_left {
-                                &this.file_diff_split_word_highlights_old
-                            } else {
-                                &this.file_diff_split_word_highlights_new
-                            };
-                            let word_ranges: &[Range<usize>] = word_highlights
-                                .get(row_ix)
-                                .and_then(|r| r.as_ref().map(Vec::as_slice))
-                                .unwrap_or(&[]);
+                            let word_ranges = this
+                                .file_diff_split_modify_pair_texts(row_ix)
+                                .map(|(old, new)| {
+                                    let (old_ranges, new_ranges) =
+                                        capped_word_diff_ranges(old, new);
+                                    if is_left {
+                                        old_ranges
+                                    } else {
+                                        new_ranges
+                                    }
+                                })
+                                .unwrap_or_default();
 
                             let (styled, is_pending) = build_cached_diff_styled_text_for_prepared_document_line_nonblocking(
                                 theme,
                                 text,
-                                word_ranges,
+                                word_ranges.as_slice(),
                                 "",
                                 DiffSyntaxConfig {
                                     language,
@@ -460,10 +460,11 @@ impl MainPaneView {
                         }
                     }
 
-                    let row_has_content = this
-                        .file_diff_cache_rows
-                        .get(row_ix)
-                        .is_some_and(|row| if is_left { row.old.is_some() } else { row.new.is_some() });
+                    let row_has_content = if is_left {
+                        row.old.is_some()
+                    } else {
+                        row.new.is_some()
+                    };
                     let cached_styled = if row_has_content {
                         key.and_then(|k| {
                             this.diff_text_segments_cache_get_for_query(
@@ -481,19 +482,13 @@ impl MainPaneView {
                         "diff text segment cache missing for split-{column:?} row {row_ix} after populate"
                     );
 
-                    let Some(row) = this.file_diff_cache_rows.get(row_ix) else {
-                        return diff_placeholder_row(
-                            (id_oob, visible_ix),
-                            theme,
-                        );
-                    };
                     patch_split_column_row(
                         theme,
                         column,
                         visible_ix,
                         selected,
                         min_width,
-                        row,
+                        &row,
                         styled,
                         cx,
                     )

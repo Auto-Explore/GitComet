@@ -10,6 +10,9 @@ const IMAGE_DIFF_CACHE_MAX_TOTAL_BYTES: u64 = 256 * 1024 * 1024;
 const IMAGE_DIFF_CACHE_CLEANUP_WRITE_INTERVAL: usize = 16;
 const PREPARED_SYNTAX_DOCUMENT_CACHE_MAX_ENTRIES: usize = 256;
 const PATCH_DIFF_PAGE_SIZE: usize = 256;
+const FILE_DIFF_PAGE_SIZE: usize = 256;
+const FILE_DIFF_MAX_CACHED_PAGES: usize = 64;
+const STREAMED_CACHE_PARTIAL_EVICT_DIVISOR: usize = 8;
 
 static IMAGE_DIFF_CACHE_STARTUP_CLEANUP: std::sync::Once = std::sync::Once::new();
 static IMAGE_DIFF_CACHE_WRITE_COUNT: std::sync::atomic::AtomicUsize =
@@ -70,6 +73,671 @@ fn build_file_diff_document_source(text: Option<&str>) -> (SharedString, Arc<[us
     (text, line_starts)
 }
 
+fn insert_streamed_cache_entry<K, V>(
+    cache: &mut HashMap<K, V>,
+    key: K,
+    value: V,
+    max_entries: usize,
+) where
+    K: Clone + Eq + std::hash::Hash,
+{
+    if max_entries == 0 {
+        return;
+    }
+
+    if !cache.contains_key(&key) && cache.len() >= max_entries {
+        let evict_count = (max_entries / STREAMED_CACHE_PARTIAL_EVICT_DIVISOR).max(1);
+        let target_len = max_entries.saturating_sub(evict_count);
+        let remove_count = cache.len().saturating_sub(target_len);
+        let keys_to_remove: Vec<K> = cache.keys().take(remove_count).cloned().collect();
+        for old_key in keys_to_remove {
+            cache.remove(&old_key);
+        }
+    }
+
+    cache.insert(key, value);
+}
+
+fn line_number(line_ix: usize) -> Option<u32> {
+    line_ix
+        .checked_add(1)
+        .and_then(|line| u32::try_from(line).ok())
+}
+
+fn file_diff_row_flag(kind: gitcomet_core::file_diff::FileDiffRowKind) -> u8 {
+    match kind {
+        gitcomet_core::file_diff::FileDiffRowKind::Context => 0,
+        gitcomet_core::file_diff::FileDiffRowKind::Add => 1,
+        gitcomet_core::file_diff::FileDiffRowKind::Remove => 2,
+        gitcomet_core::file_diff::FileDiffRowKind::Modify => 3,
+    }
+}
+
+fn scrollbar_markers_from_row_ranges(
+    len: usize,
+    ranges: impl IntoIterator<Item = (usize, usize, u8)>,
+) -> Vec<components::ScrollbarMarker> {
+    if len == 0 {
+        return Vec::new();
+    }
+
+    let bucket_count = 240usize.min(len).max(1);
+    let mut buckets = vec![0u8; bucket_count];
+    for (start, end, flag) in ranges {
+        if flag == 0 || start >= end || start >= len {
+            continue;
+        }
+        let clamped_end = end.min(len);
+        if clamped_end <= start {
+            continue;
+        }
+        let bucket_start = (start * bucket_count) / len;
+        let bucket_end = ((clamped_end - 1) * bucket_count) / len;
+        for bucket_ix in bucket_start..=bucket_end.min(bucket_count.saturating_sub(1)) {
+            if let Some(cell) = buckets.get_mut(bucket_ix) {
+                *cell |= flag;
+            }
+        }
+    }
+
+    let mut out = Vec::with_capacity(bucket_count);
+    let mut ix = 0usize;
+    while ix < bucket_count {
+        let flag = buckets[ix];
+        if flag == 0 {
+            ix += 1;
+            continue;
+        }
+
+        let start = ix;
+        ix += 1;
+        while ix < bucket_count && buckets[ix] == flag {
+            ix += 1;
+        }
+
+        let kind = match flag {
+            1 => components::ScrollbarMarkerKind::Add,
+            2 => components::ScrollbarMarkerKind::Remove,
+            _ => components::ScrollbarMarkerKind::Modify,
+        };
+
+        out.push(components::ScrollbarMarker {
+            start: start as f32 / bucket_count as f32,
+            end: ix as f32 / bucket_count as f32,
+            kind,
+        });
+    }
+
+    out
+}
+
+#[derive(Debug)]
+struct StreamedFileDiffSource {
+    plan: Arc<gitcomet_core::file_diff::FileDiffPlan>,
+    old_text: SharedString,
+    old_line_starts: Arc<[usize]>,
+    new_text: SharedString,
+    new_line_starts: Arc<[usize]>,
+    split_run_starts: Vec<usize>,
+    inline_run_starts: Vec<usize>,
+}
+
+impl StreamedFileDiffSource {
+    fn new(
+        plan: Arc<gitcomet_core::file_diff::FileDiffPlan>,
+        old_text: SharedString,
+        old_line_starts: Arc<[usize]>,
+        new_text: SharedString,
+        new_line_starts: Arc<[usize]>,
+    ) -> Self {
+        let mut split_run_starts = Vec::with_capacity(plan.runs.len());
+        let mut inline_run_starts = Vec::with_capacity(plan.runs.len());
+        let mut split_start = 0usize;
+        let mut inline_start = 0usize;
+        for run in &plan.runs {
+            split_run_starts.push(split_start);
+            inline_run_starts.push(inline_start);
+            split_start = split_start.saturating_add(run.row_len());
+            inline_start = inline_start.saturating_add(run.inline_row_len());
+        }
+
+        Self {
+            plan,
+            old_text,
+            old_line_starts,
+            new_text,
+            new_line_starts,
+            split_run_starts,
+            inline_run_starts,
+        }
+    }
+
+    fn split_len(&self) -> usize {
+        self.plan.row_count
+    }
+
+    fn inline_len(&self) -> usize {
+        self.plan.inline_row_count
+    }
+
+    fn old_line_text(&self, line_ix: usize) -> &str {
+        rows::resolved_output_line_text(
+            self.old_text.as_ref(),
+            self.old_line_starts.as_ref(),
+            line_ix,
+        )
+    }
+
+    fn new_line_text(&self, line_ix: usize) -> &str {
+        rows::resolved_output_line_text(
+            self.new_text.as_ref(),
+            self.new_line_starts.as_ref(),
+            line_ix,
+        )
+    }
+
+    fn locate_run(starts: &[usize], total_len: usize, row_ix: usize) -> Option<(usize, usize)> {
+        if row_ix >= total_len || starts.is_empty() {
+            return None;
+        }
+        let run_ix = starts
+            .partition_point(|&start| start <= row_ix)
+            .saturating_sub(1);
+        let run_start = *starts.get(run_ix)?;
+        Some((run_ix, row_ix.saturating_sub(run_start)))
+    }
+
+    fn split_row(&self, row_ix: usize) -> Option<FileDiffRow> {
+        let (run_ix, local_ix) = Self::locate_run(
+            self.split_run_starts.as_slice(),
+            self.plan.row_count,
+            row_ix,
+        )?;
+        let run = self.plan.runs.get(run_ix)?;
+        let mut row = match run {
+            gitcomet_core::file_diff::FileDiffPlanRun::Context {
+                old_start,
+                new_start,
+                ..
+            } => {
+                let old_ix = old_start.saturating_add(local_ix);
+                let new_ix = new_start.saturating_add(local_ix);
+                let text = self.old_line_text(old_ix).to_string();
+                FileDiffRow {
+                    kind: gitcomet_core::file_diff::FileDiffRowKind::Context,
+                    old_line: line_number(old_ix),
+                    new_line: line_number(new_ix),
+                    old: Some(text.clone()),
+                    new: Some(text),
+                    eof_newline: None,
+                }
+            }
+            gitcomet_core::file_diff::FileDiffPlanRun::Remove { old_start, .. } => {
+                let old_ix = old_start.saturating_add(local_ix);
+                FileDiffRow {
+                    kind: gitcomet_core::file_diff::FileDiffRowKind::Remove,
+                    old_line: line_number(old_ix),
+                    new_line: None,
+                    old: Some(self.old_line_text(old_ix).to_string()),
+                    new: None,
+                    eof_newline: None,
+                }
+            }
+            gitcomet_core::file_diff::FileDiffPlanRun::Add { new_start, .. } => {
+                let new_ix = new_start.saturating_add(local_ix);
+                FileDiffRow {
+                    kind: gitcomet_core::file_diff::FileDiffRowKind::Add,
+                    old_line: None,
+                    new_line: line_number(new_ix),
+                    old: None,
+                    new: Some(self.new_line_text(new_ix).to_string()),
+                    eof_newline: None,
+                }
+            }
+            gitcomet_core::file_diff::FileDiffPlanRun::Modify {
+                old_start,
+                new_start,
+                ..
+            } => {
+                let old_ix = old_start.saturating_add(local_ix);
+                let new_ix = new_start.saturating_add(local_ix);
+                FileDiffRow {
+                    kind: gitcomet_core::file_diff::FileDiffRowKind::Modify,
+                    old_line: line_number(old_ix),
+                    new_line: line_number(new_ix),
+                    old: Some(self.old_line_text(old_ix).to_string()),
+                    new: Some(self.new_line_text(new_ix).to_string()),
+                    eof_newline: None,
+                }
+            }
+        };
+
+        if row_ix + 1 == self.plan.row_count {
+            row.eof_newline = self.plan.eof_newline;
+        }
+        Some(row)
+    }
+
+    fn inline_row(&self, inline_ix: usize) -> Option<AnnotatedDiffLine> {
+        let (run_ix, local_ix) = Self::locate_run(
+            self.inline_run_starts.as_slice(),
+            self.plan.inline_row_count,
+            inline_ix,
+        )?;
+        let run = self.plan.runs.get(run_ix)?;
+        match run {
+            gitcomet_core::file_diff::FileDiffPlanRun::Context {
+                old_start,
+                new_start,
+                ..
+            } => {
+                let old_ix = old_start.saturating_add(local_ix);
+                let new_ix = new_start.saturating_add(local_ix);
+                Some(AnnotatedDiffLine {
+                    kind: gitcomet_core::domain::DiffLineKind::Context,
+                    text: format!(" {}", self.old_line_text(old_ix)).into(),
+                    old_line: line_number(old_ix),
+                    new_line: line_number(new_ix),
+                })
+            }
+            gitcomet_core::file_diff::FileDiffPlanRun::Remove { old_start, .. } => {
+                let old_ix = old_start.saturating_add(local_ix);
+                Some(AnnotatedDiffLine {
+                    kind: gitcomet_core::domain::DiffLineKind::Remove,
+                    text: format!("-{}", self.old_line_text(old_ix)).into(),
+                    old_line: line_number(old_ix),
+                    new_line: None,
+                })
+            }
+            gitcomet_core::file_diff::FileDiffPlanRun::Add { new_start, .. } => {
+                let new_ix = new_start.saturating_add(local_ix);
+                Some(AnnotatedDiffLine {
+                    kind: gitcomet_core::domain::DiffLineKind::Add,
+                    text: format!("+{}", self.new_line_text(new_ix)).into(),
+                    old_line: None,
+                    new_line: line_number(new_ix),
+                })
+            }
+            gitcomet_core::file_diff::FileDiffPlanRun::Modify {
+                old_start,
+                new_start,
+                ..
+            } => {
+                let pair_ix = local_ix / 2;
+                let old_ix = old_start.saturating_add(pair_ix);
+                let new_ix = new_start.saturating_add(pair_ix);
+                if local_ix % 2 == 0 {
+                    Some(AnnotatedDiffLine {
+                        kind: gitcomet_core::domain::DiffLineKind::Remove,
+                        text: format!("-{}", self.old_line_text(old_ix)).into(),
+                        old_line: line_number(old_ix),
+                        new_line: None,
+                    })
+                } else {
+                    Some(AnnotatedDiffLine {
+                        kind: gitcomet_core::domain::DiffLineKind::Add,
+                        text: format!("+{}", self.new_line_text(new_ix)).into(),
+                        old_line: None,
+                        new_line: line_number(new_ix),
+                    })
+                }
+            }
+        }
+    }
+
+    fn split_modify_pair_texts(&self, row_ix: usize) -> Option<(&str, &str)> {
+        let (run_ix, local_ix) = Self::locate_run(
+            self.split_run_starts.as_slice(),
+            self.plan.row_count,
+            row_ix,
+        )?;
+        let gitcomet_core::file_diff::FileDiffPlanRun::Modify {
+            old_start,
+            new_start,
+            ..
+        } = self.plan.runs.get(run_ix)?
+        else {
+            return None;
+        };
+        let old_ix = old_start.saturating_add(local_ix);
+        let new_ix = new_start.saturating_add(local_ix);
+        Some((self.old_line_text(old_ix), self.new_line_text(new_ix)))
+    }
+
+    fn inline_modify_pair_texts(
+        &self,
+        inline_ix: usize,
+    ) -> Option<(&str, &str, gitcomet_core::domain::DiffLineKind)> {
+        let (run_ix, local_ix) = Self::locate_run(
+            self.inline_run_starts.as_slice(),
+            self.plan.inline_row_count,
+            inline_ix,
+        )?;
+        let gitcomet_core::file_diff::FileDiffPlanRun::Modify {
+            old_start,
+            new_start,
+            ..
+        } = self.plan.runs.get(run_ix)?
+        else {
+            return None;
+        };
+        let pair_ix = local_ix / 2;
+        let kind = if local_ix % 2 == 0 {
+            gitcomet_core::domain::DiffLineKind::Remove
+        } else {
+            gitcomet_core::domain::DiffLineKind::Add
+        };
+        let old_ix = old_start.saturating_add(pair_ix);
+        let new_ix = new_start.saturating_add(pair_ix);
+        Some((self.old_line_text(old_ix), self.new_line_text(new_ix), kind))
+    }
+
+    fn change_visible_indices_for_runs(&self, inline: bool) -> Vec<usize> {
+        let starts = if inline {
+            self.inline_run_starts.as_slice()
+        } else {
+            self.split_run_starts.as_slice()
+        };
+        let mut out = Vec::new();
+        let mut in_change_block = false;
+
+        for (run_ix, run) in self.plan.runs.iter().enumerate() {
+            let is_change = !matches!(
+                run.kind(),
+                gitcomet_core::file_diff::FileDiffRowKind::Context
+            );
+            if is_change
+                && !in_change_block
+                && let Some(start) = starts.get(run_ix).copied()
+            {
+                out.push(start);
+            }
+            in_change_block = is_change;
+        }
+
+        out
+    }
+
+    fn split_change_visible_indices(&self) -> Vec<usize> {
+        self.change_visible_indices_for_runs(false)
+    }
+
+    fn inline_change_visible_indices(&self) -> Vec<usize> {
+        self.change_visible_indices_for_runs(true)
+    }
+
+    fn split_scrollbar_markers(&self) -> Vec<components::ScrollbarMarker> {
+        scrollbar_markers_from_row_ranges(
+            self.plan.row_count,
+            self.plan.runs.iter().enumerate().map(|(run_ix, run)| {
+                let start = self.split_run_starts.get(run_ix).copied().unwrap_or(0);
+                let end = start.saturating_add(run.row_len());
+                (start, end, file_diff_row_flag(run.kind()))
+            }),
+        )
+    }
+
+    fn inline_scrollbar_markers(&self) -> Vec<components::ScrollbarMarker> {
+        scrollbar_markers_from_row_ranges(
+            self.plan.inline_row_count,
+            self.plan.runs.iter().enumerate().map(|(run_ix, run)| {
+                let start = self.inline_run_starts.get(run_ix).copied().unwrap_or(0);
+                let end = start.saturating_add(run.inline_row_len());
+                let flag = match run.kind() {
+                    gitcomet_core::file_diff::FileDiffRowKind::Context => 0,
+                    gitcomet_core::file_diff::FileDiffRowKind::Add => 1,
+                    gitcomet_core::file_diff::FileDiffRowKind::Remove => 2,
+                    gitcomet_core::file_diff::FileDiffRowKind::Modify => 3,
+                };
+                (start, end, flag)
+            }),
+        )
+    }
+
+    fn build_inline_text(&self) -> SharedString {
+        let total_len = self.inline_len();
+        let mut text = String::new();
+        text.reserve(total_len.saturating_mul(32));
+        for inline_ix in 0..total_len {
+            let Some(line) = self.inline_row(inline_ix) else {
+                continue;
+            };
+            text.push_str(line.text.as_ref());
+            text.push('\n');
+        }
+        SharedString::from(text)
+    }
+}
+
+#[derive(Debug)]
+pub(in crate::view) struct PagedFileDiffRows {
+    source: Arc<StreamedFileDiffSource>,
+    page_size: usize,
+    pages: std::sync::Mutex<HashMap<usize, Arc<[FileDiffRow]>>>,
+}
+
+impl PagedFileDiffRows {
+    fn new(source: Arc<StreamedFileDiffSource>, page_size: usize) -> Self {
+        Self {
+            source,
+            page_size: page_size.max(1),
+            pages: std::sync::Mutex::new(HashMap::default()),
+        }
+    }
+
+    fn page_bounds(&self, page_ix: usize) -> Option<(usize, usize)> {
+        let start = page_ix.saturating_mul(self.page_size);
+        (start < self.source.split_len()).then(|| {
+            let end = start
+                .saturating_add(self.page_size)
+                .min(self.source.split_len());
+            (start, end)
+        })
+    }
+
+    fn build_page(&self, page_ix: usize) -> Option<Arc<[FileDiffRow]>> {
+        let (start, end) = self.page_bounds(page_ix)?;
+        let mut rows = Vec::with_capacity(end.saturating_sub(start));
+        for row_ix in start..end {
+            rows.push(self.source.split_row(row_ix)?);
+        }
+        Some(Arc::from(rows))
+    }
+
+    fn load_page(&self, page_ix: usize) -> Option<Arc<[FileDiffRow]>> {
+        if let Ok(pages) = self.pages.lock()
+            && let Some(page) = pages.get(&page_ix)
+        {
+            return Some(Arc::clone(page));
+        }
+
+        let page = self.build_page(page_ix)?;
+        if let Ok(mut pages) = self.pages.lock() {
+            insert_streamed_cache_entry(
+                &mut pages,
+                page_ix,
+                Arc::clone(&page),
+                FILE_DIFF_MAX_CACHED_PAGES,
+            );
+            return Some(Arc::clone(pages.get(&page_ix).unwrap_or(&page)));
+        }
+        Some(page)
+    }
+
+    fn row_at(&self, row_ix: usize) -> Option<FileDiffRow> {
+        let page_ix = row_ix / self.page_size;
+        let page_row_ix = row_ix % self.page_size;
+        let page = self.load_page(page_ix)?;
+        page.get(page_row_ix).cloned()
+    }
+
+    pub(in crate::view) fn change_visible_indices(&self) -> Vec<usize> {
+        self.source.split_change_visible_indices()
+    }
+
+    pub(in crate::view) fn scrollbar_markers(&self) -> Vec<components::ScrollbarMarker> {
+        self.source.split_scrollbar_markers()
+    }
+
+    pub(in crate::view) fn modify_pair_texts(&self, row_ix: usize) -> Option<(&str, &str)> {
+        self.source.split_modify_pair_texts(row_ix)
+    }
+
+    #[cfg(test)]
+    fn cached_page_count(&self) -> usize {
+        self.pages.lock().map(|pages| pages.len()).unwrap_or(0)
+    }
+}
+
+impl gitcomet_core::domain::DiffRowProvider for PagedFileDiffRows {
+    type RowRef = FileDiffRow;
+    type SliceIter<'a>
+        = std::vec::IntoIter<FileDiffRow>
+    where
+        Self: 'a;
+
+    fn len_hint(&self) -> usize {
+        self.source.split_len()
+    }
+
+    fn row(&self, ix: usize) -> Option<Self::RowRef> {
+        self.row_at(ix)
+    }
+
+    fn slice(&self, start: usize, end: usize) -> Self::SliceIter<'_> {
+        if start >= end || start >= self.source.split_len() {
+            return Vec::new().into_iter();
+        }
+        let end = end.min(self.source.split_len());
+        let mut rows = Vec::with_capacity(end.saturating_sub(start));
+        for row_ix in start..end {
+            let Some(row) = self.row_at(row_ix) else {
+                break;
+            };
+            rows.push(row);
+        }
+        rows.into_iter()
+    }
+}
+
+#[derive(Debug)]
+pub(in crate::view) struct PagedFileDiffInlineRows {
+    source: Arc<StreamedFileDiffSource>,
+    page_size: usize,
+    pages: std::sync::Mutex<HashMap<usize, Arc<[AnnotatedDiffLine]>>>,
+}
+
+impl PagedFileDiffInlineRows {
+    fn new(source: Arc<StreamedFileDiffSource>, page_size: usize) -> Self {
+        Self {
+            source,
+            page_size: page_size.max(1),
+            pages: std::sync::Mutex::new(HashMap::default()),
+        }
+    }
+
+    fn page_bounds(&self, page_ix: usize) -> Option<(usize, usize)> {
+        let start = page_ix.saturating_mul(self.page_size);
+        (start < self.source.inline_len()).then(|| {
+            let end = start
+                .saturating_add(self.page_size)
+                .min(self.source.inline_len());
+            (start, end)
+        })
+    }
+
+    fn build_page(&self, page_ix: usize) -> Option<Arc<[AnnotatedDiffLine]>> {
+        let (start, end) = self.page_bounds(page_ix)?;
+        let mut rows = Vec::with_capacity(end.saturating_sub(start));
+        for inline_ix in start..end {
+            rows.push(self.source.inline_row(inline_ix)?);
+        }
+        Some(Arc::from(rows))
+    }
+
+    fn load_page(&self, page_ix: usize) -> Option<Arc<[AnnotatedDiffLine]>> {
+        if let Ok(pages) = self.pages.lock()
+            && let Some(page) = pages.get(&page_ix)
+        {
+            return Some(Arc::clone(page));
+        }
+
+        let page = self.build_page(page_ix)?;
+        if let Ok(mut pages) = self.pages.lock() {
+            insert_streamed_cache_entry(
+                &mut pages,
+                page_ix,
+                Arc::clone(&page),
+                FILE_DIFF_MAX_CACHED_PAGES,
+            );
+            return Some(Arc::clone(pages.get(&page_ix).unwrap_or(&page)));
+        }
+        Some(page)
+    }
+
+    fn row_at(&self, inline_ix: usize) -> Option<AnnotatedDiffLine> {
+        let page_ix = inline_ix / self.page_size;
+        let page_row_ix = inline_ix % self.page_size;
+        let page = self.load_page(page_ix)?;
+        page.get(page_row_ix).cloned()
+    }
+
+    pub(in crate::view) fn change_visible_indices(&self) -> Vec<usize> {
+        self.source.inline_change_visible_indices()
+    }
+
+    pub(in crate::view) fn scrollbar_markers(&self) -> Vec<components::ScrollbarMarker> {
+        self.source.inline_scrollbar_markers()
+    }
+
+    pub(in crate::view) fn modify_pair_texts(
+        &self,
+        inline_ix: usize,
+    ) -> Option<(&str, &str, gitcomet_core::domain::DiffLineKind)> {
+        self.source.inline_modify_pair_texts(inline_ix)
+    }
+
+    pub(in crate::view) fn build_full_text(&self) -> SharedString {
+        self.source.build_inline_text()
+    }
+
+    #[cfg(test)]
+    fn cached_page_count(&self) -> usize {
+        self.pages.lock().map(|pages| pages.len()).unwrap_or(0)
+    }
+}
+
+impl gitcomet_core::domain::DiffRowProvider for PagedFileDiffInlineRows {
+    type RowRef = AnnotatedDiffLine;
+    type SliceIter<'a>
+        = std::vec::IntoIter<AnnotatedDiffLine>
+    where
+        Self: 'a;
+
+    fn len_hint(&self) -> usize {
+        self.source.inline_len()
+    }
+
+    fn row(&self, ix: usize) -> Option<Self::RowRef> {
+        self.row_at(ix)
+    }
+
+    fn slice(&self, start: usize, end: usize) -> Self::SliceIter<'_> {
+        if start >= end || start >= self.source.inline_len() {
+            return Vec::new().into_iter();
+        }
+        let end = end.min(self.source.inline_len());
+        let mut rows = Vec::with_capacity(end.saturating_sub(start));
+        for row_ix in start..end {
+            let Some(row) = self.row_at(row_ix) else {
+                break;
+            };
+            rows.push(row);
+        }
+        rows.into_iter()
+    }
+}
+
 fn build_single_markdown_preview_document(
     source: &str,
 ) -> Result<Arc<markdown_preview::MarkdownPreviewDocument>, String> {
@@ -101,16 +769,17 @@ struct FileDiffBackgroundPreparedSyntaxDocuments {
 struct FileDiffCacheRebuild {
     file_path: Option<std::path::PathBuf>,
     language: Option<rows::DiffSyntaxLanguage>,
-    rows: Vec<FileDiffRow>,
+    row_provider: Arc<PagedFileDiffRows>,
+    inline_row_provider: Arc<PagedFileDiffInlineRows>,
     old_text: SharedString,
     old_line_starts: Arc<[usize]>,
     new_text: SharedString,
     new_line_starts: Arc<[usize]>,
-    inline_rows: Vec<AnnotatedDiffLine>,
     inline_text: SharedString,
-    inline_word_highlights: Vec<Option<Vec<Range<usize>>>>,
-    split_word_highlights_old: Vec<Option<Vec<Range<usize>>>>,
-    split_word_highlights_new: Vec<Option<Vec<Range<usize>>>>,
+    #[cfg(test)]
+    rows: Vec<FileDiffRow>,
+    #[cfg(test)]
+    inline_rows: Vec<AnnotatedDiffLine>,
 }
 
 fn build_file_diff_cache_rebuild(
@@ -119,7 +788,25 @@ fn build_file_diff_cache_rebuild(
 ) -> FileDiffCacheRebuild {
     let (old_text, old_line_starts) = build_file_diff_document_source(file.old.as_deref());
     let (new_text, new_line_starts) = build_file_diff_document_source(file.new.as_deref());
-    let rows = gitcomet_core::file_diff::side_by_side_rows(old_text.as_ref(), new_text.as_ref());
+    let plan = Arc::new(gitcomet_core::file_diff::side_by_side_plan(
+        old_text.as_ref(),
+        new_text.as_ref(),
+    ));
+    let source = Arc::new(StreamedFileDiffSource::new(
+        Arc::clone(&plan),
+        old_text.clone(),
+        Arc::clone(&old_line_starts),
+        new_text.clone(),
+        Arc::clone(&new_line_starts),
+    ));
+    let row_provider = Arc::new(PagedFileDiffRows::new(
+        Arc::clone(&source),
+        FILE_DIFF_PAGE_SIZE,
+    ));
+    let inline_row_provider = Arc::new(PagedFileDiffInlineRows::new(
+        Arc::clone(&source),
+        FILE_DIFF_PAGE_SIZE,
+    ));
 
     let file_path = Some(if file.path.is_absolute() {
         file.path.clone()
@@ -129,88 +816,31 @@ fn build_file_diff_cache_rebuild(
     let language = file_path
         .as_ref()
         .and_then(rows::diff_syntax_language_for_path);
+    let inline_text = SharedString::default();
 
-    let mut split_word_highlights_old: Vec<Option<Vec<Range<usize>>>> = vec![None; rows.len()];
-    let mut split_word_highlights_new: Vec<Option<Vec<Range<usize>>>> = vec![None; rows.len()];
-    let mut inline_rows: Vec<AnnotatedDiffLine> = Vec::with_capacity(rows.len().saturating_mul(2));
-    let mut inline_word_highlights: Vec<Option<Vec<Range<usize>>>> =
-        Vec::with_capacity(rows.len().saturating_mul(2));
-
-    for (row_ix, row) in rows.iter().enumerate() {
-        use gitcomet_core::file_diff::FileDiffRowKind as K;
-
-        match row.kind {
-            K::Context => {
-                inline_rows.push(AnnotatedDiffLine {
-                    kind: gitcomet_core::domain::DiffLineKind::Context,
-                    text: format!(" {}", row.old.as_deref().unwrap_or("")).into(),
-                    old_line: row.old_line,
-                    new_line: row.new_line,
-                });
-                inline_word_highlights.push(None);
-            }
-            K::Add => {
-                inline_rows.push(AnnotatedDiffLine {
-                    kind: gitcomet_core::domain::DiffLineKind::Add,
-                    text: format!("+{}", row.new.as_deref().unwrap_or("")).into(),
-                    old_line: None,
-                    new_line: row.new_line,
-                });
-                inline_word_highlights.push(None);
-            }
-            K::Remove => {
-                inline_rows.push(AnnotatedDiffLine {
-                    kind: gitcomet_core::domain::DiffLineKind::Remove,
-                    text: format!("-{}", row.old.as_deref().unwrap_or("")).into(),
-                    old_line: row.old_line,
-                    new_line: None,
-                });
-                inline_word_highlights.push(None);
-            }
-            K::Modify => {
-                let old = row.old.as_deref().unwrap_or("");
-                let new = row.new.as_deref().unwrap_or("");
-                let (old_ranges, new_ranges) = capped_word_diff_ranges(old, new);
-                let old_ranges_opt = (!old_ranges.is_empty()).then_some(old_ranges);
-                let new_ranges_opt = (!new_ranges.is_empty()).then_some(new_ranges);
-
-                split_word_highlights_old[row_ix] = old_ranges_opt.clone();
-                split_word_highlights_new[row_ix] = new_ranges_opt.clone();
-
-                inline_rows.push(AnnotatedDiffLine {
-                    kind: gitcomet_core::domain::DiffLineKind::Remove,
-                    text: format!("-{}", old).into(),
-                    old_line: row.old_line,
-                    new_line: None,
-                });
-                inline_word_highlights.push(old_ranges_opt);
-
-                inline_rows.push(AnnotatedDiffLine {
-                    kind: gitcomet_core::domain::DiffLineKind::Add,
-                    text: format!("+{}", new).into(),
-                    old_line: None,
-                    new_line: row.new_line,
-                });
-                inline_word_highlights.push(new_ranges_opt);
-            }
-        }
-    }
-
-    let inline_text = build_inline_text(inline_rows.as_slice());
+    #[cfg(test)]
+    let rows = row_provider
+        .slice(0, row_provider.len_hint())
+        .collect::<Vec<_>>();
+    #[cfg(test)]
+    let inline_rows = inline_row_provider
+        .slice(0, inline_row_provider.len_hint())
+        .collect::<Vec<_>>();
 
     FileDiffCacheRebuild {
         file_path,
         language,
-        rows,
+        row_provider,
+        inline_row_provider,
         old_text,
         old_line_starts,
         new_text,
         new_line_starts,
-        inline_rows,
         inline_text,
-        inline_word_highlights,
-        split_word_highlights_old,
-        split_word_highlights_new,
+        #[cfg(test)]
+        rows,
+        #[cfg(test)]
+        inline_rows,
     }
 }
 
@@ -1068,6 +1698,68 @@ fn diff_syntax_edit_from_text_change(old: &str, new: &str) -> Option<rows::DiffS
 }
 
 impl MainPaneView {
+    pub(in crate::view) fn file_diff_split_row_len(&self) -> usize {
+        self.file_diff_row_provider
+            .as_ref()
+            .map(|provider| provider.len_hint())
+            .unwrap_or_else(|| self.file_diff_cache_rows.len())
+    }
+
+    pub(in crate::view) fn file_diff_split_row(&self, row_ix: usize) -> Option<FileDiffRow> {
+        if let Some(provider) = self.file_diff_row_provider.as_ref() {
+            provider.row(row_ix)
+        } else {
+            self.file_diff_cache_rows.get(row_ix).cloned()
+        }
+    }
+
+    pub(in crate::view) fn file_diff_inline_row_len(&self) -> usize {
+        self.file_diff_inline_row_provider
+            .as_ref()
+            .map(|provider| provider.len_hint())
+            .unwrap_or_else(|| self.file_diff_inline_cache.len())
+    }
+
+    pub(in crate::view) fn file_diff_inline_row(
+        &self,
+        inline_ix: usize,
+    ) -> Option<AnnotatedDiffLine> {
+        if let Some(provider) = self.file_diff_inline_row_provider.as_ref() {
+            provider.row(inline_ix)
+        } else {
+            self.file_diff_inline_cache.get(inline_ix).cloned()
+        }
+    }
+
+    pub(in crate::view) fn file_diff_split_modify_pair_texts(
+        &self,
+        row_ix: usize,
+    ) -> Option<(&str, &str)> {
+        self.file_diff_row_provider
+            .as_ref()
+            .and_then(|provider| provider.modify_pair_texts(row_ix))
+    }
+
+    pub(in crate::view) fn file_diff_inline_modify_pair_texts(
+        &self,
+        inline_ix: usize,
+    ) -> Option<(&str, &str, gitcomet_core::domain::DiffLineKind)> {
+        self.file_diff_inline_row_provider
+            .as_ref()
+            .and_then(|provider| provider.modify_pair_texts(inline_ix))
+    }
+
+    pub(in crate::view) fn ensure_file_diff_inline_text_materialized(&mut self) {
+        if !self.file_diff_inline_text.is_empty() || self.file_diff_inline_row_len() == 0 {
+            return;
+        }
+        if let Some(provider) = self.file_diff_inline_row_provider.as_ref() {
+            self.file_diff_inline_text = provider.build_full_text();
+        } else {
+            self.file_diff_inline_text = build_inline_text(self.file_diff_inline_cache.as_slice());
+        }
+    }
+
     pub(in crate::view) fn patch_diff_row_len(&self) -> usize {
         self.diff_row_provider
             .as_ref()
@@ -1808,11 +2500,13 @@ impl MainPaneView {
         self.file_diff_cache_path = None;
         self.file_diff_cache_language = None;
         self.file_diff_cache_rows.clear();
+        self.file_diff_row_provider = None;
         self.file_diff_old_text = SharedString::default();
         self.file_diff_old_line_starts = Arc::default();
         self.file_diff_new_text = SharedString::default();
         self.file_diff_new_line_starts = Arc::default();
         self.file_diff_inline_cache.clear();
+        self.file_diff_inline_row_provider = None;
         self.file_diff_inline_text = SharedString::default();
         self.file_diff_inline_word_highlights.clear();
         self.file_diff_split_word_highlights_old.clear();
@@ -1919,17 +2613,19 @@ impl MainPaneView {
                     this.file_diff_cache_inflight = None;
                     this.file_diff_cache_path = rebuild.file_path;
                     this.file_diff_cache_language = rebuild.language;
-                    this.file_diff_cache_rows = rebuild.rows;
+                    this.file_diff_row_provider = Some(rebuild.row_provider);
                     this.file_diff_old_text = rebuild.old_text;
                     this.file_diff_old_line_starts = rebuild.old_line_starts;
                     this.file_diff_new_text = rebuild.new_text;
                     this.file_diff_new_line_starts = rebuild.new_line_starts;
-                    this.file_diff_inline_cache = rebuild.inline_rows;
+                    this.file_diff_inline_row_provider = Some(rebuild.inline_row_provider);
                     this.file_diff_inline_text = rebuild.inline_text;
                     this.file_diff_cache_content_signature = Some(content_signature);
-                    this.file_diff_inline_word_highlights = rebuild.inline_word_highlights;
-                    this.file_diff_split_word_highlights_old = rebuild.split_word_highlights_old;
-                    this.file_diff_split_word_highlights_new = rebuild.split_word_highlights_new;
+                    #[cfg(test)]
+                    {
+                        this.file_diff_cache_rows = rebuild.rows;
+                        this.file_diff_inline_cache = rebuild.inline_rows;
+                    }
                     let split_left_edit_hint = previous_old_text.as_ref().and_then(|previous| {
                         diff_syntax_edit_from_text_change(
                             previous.as_ref(),
@@ -2542,6 +3238,9 @@ impl MainPaneView {
 
         match self.diff_view {
             DiffViewMode::Inline => {
+                if let Some(provider) = self.file_diff_inline_row_provider.as_ref() {
+                    return provider.scrollbar_markers();
+                }
                 scrollbar_markers_from_flags(self.diff_visible_len(), |visible_ix| {
                     let Some(inline_ix) = self.diff_mapped_ix_for_visible_ix(visible_ix) else {
                         return 0;
@@ -2557,6 +3256,9 @@ impl MainPaneView {
                 })
             }
             DiffViewMode::Split => {
+                if let Some(provider) = self.file_diff_row_provider.as_ref() {
+                    return provider.scrollbar_markers();
+                }
                 scrollbar_markers_from_flags(self.diff_visible_len(), |visible_ix| {
                     let Some(row_ix) = self.diff_mapped_ix_for_visible_ix(visible_ix) else {
                         return 0;
@@ -2579,8 +3281,8 @@ impl MainPaneView {
         let is_file_view = self.is_file_diff_view_active();
         let current_len = if is_file_view {
             match self.diff_view {
-                DiffViewMode::Inline => self.file_diff_inline_cache.len(),
-                DiffViewMode::Split => self.file_diff_cache_rows.len(),
+                DiffViewMode::Inline => self.file_diff_inline_row_len(),
+                DiffViewMode::Split => self.file_diff_split_row_len(),
             }
         } else {
             match self.diff_view {
@@ -2677,6 +3379,19 @@ mod tests {
         let path = dir.join(name);
         std::fs::write(&path, bytes).expect("write test file");
         path
+    }
+
+    fn streamed_file_diff_source_for_test(old: &str, new: &str) -> Arc<StreamedFileDiffSource> {
+        let (old_text, old_line_starts) = build_file_diff_document_source(Some(old));
+        let (new_text, new_line_starts) = build_file_diff_document_source(Some(new));
+        let plan = Arc::new(gitcomet_core::file_diff::side_by_side_plan(old, new));
+        Arc::new(StreamedFileDiffSource::new(
+            plan,
+            old_text,
+            old_line_starts,
+            new_text,
+            new_line_starts,
+        ))
     }
 
     fn split_visible_meta_for_diff(diff: &Diff) -> PatchSplitVisibleMeta {
@@ -3252,6 +3967,73 @@ index 1111111..2222222 100644\n\
             .collect::<Vec<_>>();
         assert_eq!(slice, vec!["@@ -1,4 +1,4 @@", "old1", "-old2"]);
         assert_eq!(provider.cached_page_count(), 3);
+    }
+
+    #[test]
+    fn paged_file_diff_rows_load_pages_on_demand() {
+        let source = streamed_file_diff_source_for_test(
+            "alpha\nbeta\ngamma\n",
+            "alpha\nbeta changed\ngamma\n",
+        );
+        let provider = PagedFileDiffRows::new(Arc::clone(&source), 1);
+
+        assert_eq!(provider.cached_page_count(), 0);
+        let row = provider.row_at(1).expect("middle row should exist");
+        assert_eq!(row.kind, gitcomet_core::file_diff::FileDiffRowKind::Modify);
+        assert_eq!(row.old.as_deref(), Some("beta"));
+        assert_eq!(row.new.as_deref(), Some("beta changed"));
+        assert_eq!(provider.cached_page_count(), 1);
+
+        let first = provider.row_at(0).expect("first row should exist");
+        assert_eq!(
+            first.kind,
+            gitcomet_core::file_diff::FileDiffRowKind::Context
+        );
+        assert_eq!(provider.cached_page_count(), 2);
+    }
+
+    #[test]
+    fn paged_file_diff_rows_bound_cached_pages() {
+        let line_count = FILE_DIFF_MAX_CACHED_PAGES + 12;
+        let old = (0..line_count)
+            .map(|ix| format!("line-{ix:04}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let new = old.clone();
+        let source = streamed_file_diff_source_for_test(&old, &new);
+        let provider = PagedFileDiffRows::new(Arc::clone(&source), 1);
+
+        for row_ix in 0..line_count {
+            assert!(
+                provider.row_at(row_ix).is_some(),
+                "row {row_ix} should exist"
+            );
+        }
+
+        assert!(
+            provider.cached_page_count() <= FILE_DIFF_MAX_CACHED_PAGES,
+            "cached split pages should stay bounded"
+        );
+    }
+
+    #[test]
+    fn paged_file_diff_inline_rows_load_pages_on_demand() {
+        let source = streamed_file_diff_source_for_test(
+            "alpha\nbeta\ngamma\n",
+            "alpha\nbeta changed\ngamma\n",
+        );
+        let provider = PagedFileDiffInlineRows::new(Arc::clone(&source), 1);
+
+        assert_eq!(provider.cached_page_count(), 0);
+        let remove = provider.row_at(1).expect("modify remove row should exist");
+        assert_eq!(remove.kind, gitcomet_core::domain::DiffLineKind::Remove);
+        assert_eq!(remove.text.as_ref(), "-beta");
+        assert_eq!(provider.cached_page_count(), 1);
+
+        let add = provider.row_at(2).expect("modify add row should exist");
+        assert_eq!(add.kind, gitcomet_core::domain::DiffLineKind::Add);
+        assert_eq!(add.text.as_ref(), "+beta changed");
+        assert_eq!(provider.cached_page_count(), 2);
     }
 
     #[test]

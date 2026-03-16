@@ -60,11 +60,11 @@ fn clean_merge_non_overlapping_changes() {
 
     let result = run_mergetool(&config).expect("mergetool run");
     assert_eq!(result.exit_code, exit_code::SUCCESS);
-    assert!(result.merge_result.as_ref().unwrap().is_clean());
 
     // Verify the merged output was written correctly.
     let merged = fs::read_to_string(&config.merged).unwrap();
     assert_eq!(merged, "LINE1\nline2\nLINE3\n");
+    assert!(!merged.contains("<<<<<<<"));
     assert!(result.stderr.contains("Auto-merged"));
 }
 
@@ -76,10 +76,10 @@ fn clean_merge_identical_files() {
 
     let result = run_mergetool(&config).expect("mergetool run");
     assert_eq!(result.exit_code, exit_code::SUCCESS);
-    assert_eq!(result.merge_result.as_ref().unwrap().conflict_count, 0);
 
     let merged = fs::read_to_string(&config.merged).unwrap();
     assert_eq!(merged, content);
+    assert!(!merged.contains("<<<<<<<"));
 }
 
 // ── Conflicts ────────────────────────────────────────────────────
@@ -97,10 +97,10 @@ fn conflicting_merge_returns_canceled_exit() {
 
     let result = run_mergetool(&config).expect("mergetool run");
     assert_eq!(result.exit_code, exit_code::CANCELED);
-    assert_eq!(result.merge_result.as_ref().unwrap().conflict_count, 1);
 
     // MERGED should contain conflict markers.
     let merged = fs::read_to_string(&config.merged).unwrap();
+    assert_eq!(merged.matches("<<<<<<<").count(), 1);
     assert!(merged.contains("<<<<<<<"));
     assert!(merged.contains("======="));
     assert!(merged.contains(">>>>>>>"));
@@ -231,10 +231,6 @@ fn binary_content_copies_local_and_returns_conflict() {
 
     let result = run_mergetool(&config).expect("mergetool run");
     assert_eq!(result.exit_code, exit_code::CANCELED);
-    assert!(
-        result.merge_result.is_none(),
-        "binary files skip text merge"
-    );
     assert!(result.stderr.contains("binary"));
 
     // MERGED should contain the local bytes.
@@ -275,10 +271,6 @@ fn non_utf8_content_without_nul_is_treated_as_binary_conflict() {
 
     let result = run_mergetool(&config).expect("mergetool run");
     assert_eq!(result.exit_code, exit_code::CANCELED);
-    assert!(
-        result.merge_result.is_none(),
-        "non-UTF-8 inputs should route to binary handling"
-    );
     assert!(result.stderr.contains("binary"));
 
     // Conflict fallback keeps local bytes in MERGED.
@@ -493,10 +485,6 @@ fn null_byte_content_with_single_side_change_auto_merges() {
 
     let result = run_mergetool(&config).expect("mergetool run");
     assert_eq!(result.exit_code, exit_code::SUCCESS);
-    assert!(
-        result.merge_result.is_none(),
-        "binary files skip text merge"
-    );
     assert!(result.stderr.contains("Auto-merged"));
 
     let output = fs::read(&merged_path).unwrap();
@@ -793,7 +781,8 @@ fn multiple_conflicts_reported_correctly() {
 
     let result = run_mergetool(&config).expect("mergetool run");
     assert_eq!(result.exit_code, exit_code::CANCELED);
-    let count = result.merge_result.as_ref().unwrap().conflict_count;
+    let merged = fs::read_to_string(&config.merged).unwrap();
+    let count = merged.matches("<<<<<<<").count();
     assert!(count >= 1, "expected at least 1 conflict, got {count}");
     assert!(result.stderr.contains("conflict(s)"));
 }

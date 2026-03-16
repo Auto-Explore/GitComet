@@ -2,7 +2,7 @@ use crate::cli::{MergetoolConfig, exit_code};
 use gitcomet_core::{
     conflict_labels::{BaseLabelScenario, format_base_label},
     conflict_session::try_autosolve_merged_text,
-    merge::{MergeError, MergeLabels, MergeOptions, MergeResult, merge_file_bytes},
+    merge::{MergeError, MergeLabels, MergeOptions, merge_file_bytes},
 };
 use std::{fs, path::Path};
 
@@ -12,8 +12,6 @@ pub struct MergetoolRunResult {
     pub stdout: String,
     pub stderr: String,
     pub exit_code: i32,
-    /// The merge result details (available when merge was attempted).
-    pub merge_result: Option<MergeResult>,
 }
 
 /// Execute mergetool mode using the built-in 3-way merge algorithm.
@@ -78,7 +76,6 @@ pub fn run_mergetool(config: &MergetoolConfig) -> Result<MergetoolRunResult, Str
             stdout: String::new(),
             stderr: format!("Auto-merged {display_name}\n"),
             exit_code: exit_code::SUCCESS,
-            merge_result: Some(result),
         })
     } else if config.auto {
         // Auto mode: try heuristic passes on conflict blocks.
@@ -90,7 +87,6 @@ pub fn run_mergetool(config: &MergetoolConfig) -> Result<MergetoolRunResult, Str
                 stdout: String::new(),
                 stderr: format!("Auto-resolved {display_name}\n"),
                 exit_code: exit_code::SUCCESS,
-                merge_result: Some(result),
             })
         } else {
             // Some conflicts remain — write original markers.
@@ -102,7 +98,6 @@ pub fn run_mergetool(config: &MergetoolConfig) -> Result<MergetoolRunResult, Str
                      Automatic merge failed; {conflict_count} conflict(s) remain.\n",
                 ),
                 exit_code: exit_code::CANCELED,
-                merge_result: Some(result),
             })
         }
     } else {
@@ -114,7 +109,6 @@ pub fn run_mergetool(config: &MergetoolConfig) -> Result<MergetoolRunResult, Str
                  Automatic merge failed; {conflict_count} conflict(s) remain.\n",
             ),
             exit_code: exit_code::CANCELED,
-            merge_result: Some(result),
         })
     }
 }
@@ -175,7 +169,6 @@ fn handle_binary_merge(
             stdout: String::new(),
             stderr: format!("Auto-merged {filename} (binary identical on both sides)\n"),
             exit_code: exit_code::SUCCESS,
-            merge_result: None,
         });
     }
 
@@ -185,7 +178,6 @@ fn handle_binary_merge(
             stdout: String::new(),
             stderr: format!("Auto-merged {filename} (binary remote changed from base)\n"),
             exit_code: exit_code::SUCCESS,
-            merge_result: None,
         });
     }
 
@@ -195,7 +187,6 @@ fn handle_binary_merge(
             stdout: String::new(),
             stderr: format!("Auto-merged {filename} (binary local changed from base)\n"),
             exit_code: exit_code::SUCCESS,
-            merge_result: None,
         });
     }
 
@@ -210,7 +201,6 @@ fn handle_binary_merge(
              CONFLICT (binary): {filename} — keeping local version.\n"
         ),
         exit_code: exit_code::CANCELED,
-        merge_result: None,
     })
 }
 

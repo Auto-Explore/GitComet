@@ -4493,8 +4493,8 @@ fn build_synthetic_whole_file_conflict_segments(total_lines: usize) -> Vec<Confl
 
     vec![ConflictSegment::Block(ConflictBlock {
         base: None,
-        ours,
-        theirs,
+        ours: ours.into(),
+        theirs: theirs.into(),
         choice: ConflictChoice::Ours,
         resolved: false,
     })]
@@ -5109,7 +5109,7 @@ fn build_synthetic_three_way_segments(
                 text.push_str(&line);
                 text.push('\n');
             }
-            segments.push(ConflictSegment::Text(text));
+            segments.push(ConflictSegment::Text(text.into()));
         }
 
         if slot_ix < conflict_blocks {
@@ -5120,9 +5120,9 @@ fn build_synthetic_three_way_segments(
                 _ => ConflictChoice::Both,
             };
             segments.push(ConflictSegment::Block(ConflictBlock {
-                base: Some(format!("let shared_{slot_ix} = compute_base({slot_ix});\n")),
-                ours: format!("let shared_{slot_ix} = compute_local({slot_ix});\n"),
-                theirs: format!("let shared_{slot_ix} = compute_remote({slot_ix});\n"),
+                base: Some(format!("let shared_{slot_ix} = compute_base({slot_ix});\n").into()),
+                ours: format!("let shared_{slot_ix} = compute_local({slot_ix});\n").into(),
+                theirs: format!("let shared_{slot_ix} = compute_remote({slot_ix});\n").into(),
                 choice,
                 resolved: slot_ix % 5 == 0,
             }));
@@ -5160,7 +5160,7 @@ fn build_synthetic_two_way_segments(
                 text.push_str(&line);
                 text.push('\n');
             }
-            segments.push(ConflictSegment::Text(text));
+            segments.push(ConflictSegment::Text(text.into()));
         }
 
         if slot_ix < conflict_blocks {
@@ -5189,8 +5189,8 @@ fn build_synthetic_two_way_segments(
             };
             segments.push(ConflictSegment::Block(ConflictBlock {
                 base: None,
-                ours,
-                theirs,
+                ours: ours.into(),
+                theirs: theirs.into(),
                 choice,
                 resolved: slot_ix % 7 == 0,
             }));

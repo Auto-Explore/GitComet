@@ -290,14 +290,14 @@ impl MainPaneView {
                 return fallback;
             }
             if self.is_file_diff_view_active() {
-                let Some(line) = self.file_diff_inline_cache.get(mapped_ix) else {
+                let Some(line) = self.file_diff_inline_row(mapped_ix) else {
                     return fallback;
                 };
-                let cache_epoch = self.file_diff_inline_style_cache_epoch(line);
+                let cache_epoch = self.file_diff_inline_style_cache_epoch(&line);
                 if let Some(styled) = self.diff_text_segments_cache_get(mapped_ix, cache_epoch) {
                     return styled.text.clone();
                 }
-                return expand_tabs(diff_content_text(line));
+                return expand_tabs(diff_content_text(&line));
             }
 
             if let Some(styled) = self.diff_text_segments_cache_get(mapped_ix, 0) {
@@ -333,7 +333,7 @@ impl MainPaneView {
             {
                 return styled.text.clone();
             }
-            let Some(row) = self.file_diff_cache_rows.get(mapped_ix) else {
+            let Some(row) = self.file_diff_split_row(mapped_ix) else {
                 return fallback;
             };
             let text = match region {
@@ -556,8 +556,8 @@ impl MainPaneView {
                 let rel_str = file_rel.to_str().map(|text| text.replace('\\', "/"));
 
                 let approx_map_len = match self.diff_view {
-                    DiffViewMode::Inline => self.file_diff_inline_cache.len(),
-                    DiffViewMode::Split => self.file_diff_cache_rows.len(),
+                    DiffViewMode::Inline => self.file_diff_inline_row_len(),
+                    DiffViewMode::Split => self.file_diff_split_row_len(),
                 };
                 let mut add_by_new_line: HashMap<u32, usize> =
                     HashMap::with_capacity_and_hasher(approx_map_len, Default::default());
@@ -614,7 +614,7 @@ impl MainPaneView {
                 };
                 match self.diff_view {
                     DiffViewMode::Inline => {
-                        let Some(line) = self.file_diff_inline_cache.get(mapped_ix) else {
+                        let Some(line) = self.file_diff_inline_row(mapped_ix) else {
                             return Vec::new();
                         };
                         match line.kind {
@@ -638,7 +638,7 @@ impl MainPaneView {
                         }
                     }
                     DiffViewMode::Split => {
-                        let Some(row) = self.file_diff_cache_rows.get(mapped_ix) else {
+                        let Some(row) = self.file_diff_split_row(mapped_ix) else {
                             return Vec::new();
                         };
                         match row.kind {

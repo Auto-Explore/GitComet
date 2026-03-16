@@ -51,9 +51,9 @@ fn try_resolve_single_block(base: Option<&str>, ours: &str, theirs: &str) -> Opt
     // Rule 5: subchunk splitting (requires base).
     if let Some(base) = base {
         let region = ConflictRegion {
-            base: Some(base.to_string()),
-            ours: ours.to_string(),
-            theirs: theirs.to_string(),
+            base: Some(base.into()),
+            ours: ours.into(),
+            theirs: theirs.into(),
             resolution: ConflictRegionResolution::Unresolved,
         };
         if let Some(subchunks) = split_conflict_into_subchunks(base, &region.ours, &region.theirs)
@@ -183,8 +183,8 @@ pub(super) fn safe_auto_resolve(
         whitespace_normalize,
     )?;
     let content = match pick {
-        AutosolvePickSide::Ours => region.ours.clone(),
-        AutosolvePickSide::Theirs => region.theirs.clone(),
+        AutosolvePickSide::Ours => region.ours.to_string(),
+        AutosolvePickSide::Theirs => region.theirs.to_string(),
     };
     Some((rule, content))
 }

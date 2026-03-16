@@ -62,6 +62,36 @@ fn parses_diff3_style_markers() {
 }
 
 #[test]
+fn shared_marker_parse_reuses_original_backing() {
+    let input: std::sync::Arc<str> =
+        std::sync::Arc::from("pre\n<<<<<<< ours\none\n=======\nuno\n>>>>>>> theirs\npost\n");
+    let segments = parse_conflict_markers_shared(input.clone());
+
+    assert_eq!(segments.len(), 3);
+
+    let ConflictSegment::Text(prefix) = &segments[0] else {
+        panic!("expected leading text segment");
+    };
+    assert_eq!(prefix.as_str(), "pre\n");
+    assert!(prefix.shares_backing_with(&input));
+
+    let ConflictSegment::Block(block) = &segments[1] else {
+        panic!("expected conflict block");
+    };
+    assert_eq!(block.base, None);
+    assert_eq!(block.ours, "one\n");
+    assert_eq!(block.theirs, "uno\n");
+    assert!(block.ours.shares_backing_with(&input));
+    assert!(block.theirs.shares_backing_with(&input));
+
+    let ConflictSegment::Text(suffix) = &segments[2] else {
+        panic!("expected trailing text segment");
+    };
+    assert_eq!(suffix.as_str(), "post\n");
+    assert!(suffix.shares_backing_with(&input));
+}
+
+#[test]
 fn generate_with_options_preserves_unresolved_markers_with_labels() {
     let input = "a\n<<<<<<< ours\none\n||||||| base\norig\n=======\nuno\n>>>>>>> theirs\nb\n";
     let segments = parse_conflict_markers(input);
@@ -3533,8 +3563,8 @@ fn projection_matches_visible_map_with_large_block_gap() {
         ConflictSegment::Text("before\n".into()),
         ConflictSegment::Block(ConflictBlock {
             base: None,
-            ours: big_text.clone(),
-            theirs: big_text,
+            ours: big_text.clone().into(),
+            theirs: big_text.into(),
             choice: ConflictChoice::Ours,
             resolved: false,
         }),
@@ -3751,8 +3781,8 @@ fn split_row_index_page_cache_reuses_requested_page() {
     let text: String = (0..line_count).map(|ix| format!("line_{ix}\n")).collect();
     let segments = vec![ConflictSegment::Block(ConflictBlock {
         base: None,
-        ours: text.clone(),
-        theirs: text,
+        ours: text.clone().into(),
+        theirs: text.into(),
         choice: ConflictChoice::Ours,
         resolved: false,
     })];
@@ -3786,8 +3816,8 @@ fn split_row_index_page_cache_stays_bounded() {
     let text: String = (0..line_count).map(|ix| format!("line_{ix}\n")).collect();
     let segments = vec![ConflictSegment::Block(ConflictBlock {
         base: None,
-        ours: text.clone(),
-        theirs: text,
+        ours: text.clone().into(),
+        theirs: text.into(),
         choice: ConflictChoice::Ours,
         resolved: false,
     })];
@@ -3940,8 +3970,8 @@ fn split_row_index_large_block_no_diff_computation() {
     let big_theirs: String = (0..800).map(|i| format!("theirs_line_{i}\n")).collect();
     let segments = vec![ConflictSegment::Block(ConflictBlock {
         base: None,
-        ours: big_ours,
-        theirs: big_theirs,
+        ours: big_ours.into(),
+        theirs: big_theirs.into(),
         choice: ConflictChoice::Ours,
         resolved: false,
     })];
@@ -4447,8 +4477,8 @@ fn search_matching_rows_does_not_materialize_split_pages() {
         .collect();
     let segments = vec![ConflictSegment::Block(ConflictBlock {
         base: None,
-        ours,
-        theirs,
+        ours: ours.into(),
+        theirs: theirs.into(),
         choice: ConflictChoice::Ours,
         resolved: false,
     })];
@@ -4485,8 +4515,8 @@ fn split_row_index_sparse_checkpoint_rows_resolve_far_from_start() {
         .collect();
     let segments = vec![ConflictSegment::Block(ConflictBlock {
         base: None,
-        ours,
-        theirs,
+        ours: ours.into(),
+        theirs: theirs.into(),
         choice: ConflictChoice::Ours,
         resolved: false,
     })];
@@ -4514,8 +4544,8 @@ fn split_row_index_metadata_stays_sparse_for_large_block() {
         .collect();
     let segments = vec![ConflictSegment::Block(ConflictBlock {
         base: None,
-        ours,
-        theirs,
+        ours: ours.into(),
+        theirs: theirs.into(),
         choice: ConflictChoice::Ours,
         resolved: false,
     })];

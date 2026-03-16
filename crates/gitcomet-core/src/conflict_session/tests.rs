@@ -2,9 +2,9 @@ use super::*;
 
 fn make_region(base: Option<&str>, ours: &str, theirs: &str) -> ConflictRegion {
     ConflictRegion {
-        base: base.map(|s| s.to_string()),
-        ours: ours.to_string(),
-        theirs: theirs.to_string(),
+        base: base.map(ConflictRegionText::from),
+        ours: ours.into(),
+        theirs: theirs.into(),
         resolution: ConflictRegionResolution::Unresolved,
     }
 }
@@ -316,6 +316,40 @@ end
     assert_eq!(session.solved_count(), 1);
     assert_eq!(session.unsolved_count(), 1);
     assert_eq!(session.next_unresolved_after(0), Some(1));
+}
+
+#[test]
+fn session_from_merged_shared_text_reuses_region_backing() {
+    let merged: Arc<str> = "\
+start
+<<<<<<< ours
+local one
+=======
+remote one
+>>>>>>> theirs
+end
+"
+    .into();
+    let session = ConflictSession::from_merged_shared_text(
+        PathBuf::from("file.txt"),
+        FileConflictKind::BothModified,
+        ConflictPayload::Text("base\n".into()),
+        ConflictPayload::Text("ours\n".into()),
+        ConflictPayload::Text("theirs\n".into()),
+        merged.clone(),
+    );
+
+    assert_eq!(session.regions.len(), 1);
+    assert_eq!(session.regions[0].ours, "local one\n");
+    assert_eq!(session.regions[0].theirs, "remote one\n");
+    assert!(
+        session.regions[0].ours.shares_backing_with(&merged),
+        "ours slice should point into the original merged buffer",
+    );
+    assert!(
+        session.regions[0].theirs.shares_backing_with(&merged),
+        "theirs slice should point into the original merged buffer",
+    );
 }
 
 #[test]
@@ -1566,9 +1600,9 @@ fn history_merge_session_method() {
     let theirs_text = "# Changelog\n- Original\n- Added by theirs\n";
 
     let mut session = make_session(vec![ConflictRegion {
-        base: Some(base_text.to_string()),
-        ours: ours_text.to_string(),
-        theirs: theirs_text.to_string(),
+        base: Some(base_text.into()),
+        ours: ours_text.into(),
+        theirs: theirs_text.into(),
         resolution: ConflictRegionResolution::Unresolved,
     }]);
 
@@ -1594,9 +1628,9 @@ fn history_merge_session_method() {
 fn history_merge_skips_already_resolved() {
     let options = HistoryAutosolveOptions::bullet_list();
     let mut session = make_session(vec![ConflictRegion {
-        base: Some("# Changelog\n- Original\n".to_string()),
-        ours: "# Changelog\n- Original\n- New\n".to_string(),
-        theirs: "# Changelog\n- Original\n- Other\n".to_string(),
+        base: Some("# Changelog\n- Original\n".into()),
+        ours: "# Changelog\n- Original\n- New\n".into(),
+        theirs: "# Changelog\n- Original\n- Other\n".into(),
         resolution: ConflictRegionResolution::PickOurs,
     }]);
 

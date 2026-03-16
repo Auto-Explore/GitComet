@@ -4713,6 +4713,27 @@ fn large_conflict_bootstrap_stays_streamed_for_huge_files(cx: &mut gpui::TestApp
                     "should have parsed {} conflict block(s)",
                     fixture.conflict_block_count,
                 );
+                let current = pane
+                    .conflict_resolver
+                    .current
+                    .clone()
+                    .expect("huge streamed bootstrap should retain current merged text");
+                let first_block = pane
+                    .conflict_resolver
+                    .marker_segments
+                    .iter()
+                    .find_map(|segment| match segment {
+                        crate::view::conflict_resolver::ConflictSegment::Block(block) => {
+                            Some(block)
+                        }
+                        crate::view::conflict_resolver::ConflictSegment::Text(_) => None,
+                    })
+                    .expect("huge streamed bootstrap should keep a conflict block");
+                assert!(
+                    first_block.ours.shares_backing_with(&current)
+                        && first_block.theirs.shares_backing_with(&current),
+                    "huge streamed bootstrap should reuse current-text backing for marker block sides",
+                );
 
                 if let Some(index) = pane.conflict_resolver.split_row_index() {
                     // Giant mode: verify paged index can serve the first conflict row.
@@ -5774,20 +5795,21 @@ fn very_large_conflict_bootstrap_manual_regression_stays_sparse(cx: &mut gpui::T
     wait_for_main_pane_condition_with_timeout(
         cx,
         &view,
-        "very large conflict block-local diff bootstrap",
+        "very large conflict streamed bootstrap",
         BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
         |pane| {
             pane.conflict_resolver.path.as_ref() == Some(&fixture.file_rel)
                 && crate::view::conflict_resolver::conflict_count(
                     &pane.conflict_resolver.marker_segments,
                 ) == fixture.conflict_block_count
-                && !pane.conflict_resolver.diff_rows().is_empty()
+                && pane.conflict_resolver.split_row_index().is_some()
         },
         |pane| {
             format!(
-                "path={:?} diff_rows={} three_way_len={}",
+                "path={:?} diff_rows={} split_row_index={} three_way_len={}",
                 pane.conflict_resolver.path.clone(),
                 pane.conflict_resolver.diff_rows().len(),
+                pane.conflict_resolver.split_row_index().is_some(),
                 pane.conflict_resolver.three_way_len,
             )
         },
@@ -5796,24 +5818,43 @@ fn very_large_conflict_bootstrap_manual_regression_stays_sparse(cx: &mut gpui::T
     cx.update(|_window, app| {
         view.update(app, |this, _cx| {
             this.main_pane.update(_cx, |pane, _cx| {
-                let max_rows_per_block =
-                    (crate::view::conflict_resolver::BLOCK_LOCAL_DIFF_CONTEXT_LINES * 2) + 2;
+                let index = pane
+                    .conflict_resolver
+                    .split_row_index()
+                    .expect("500k-line manual fixture should use the streamed split index");
                 assert!(
-                    pane.conflict_resolver.diff_rows().len()
-                        <= fixture
-                            .conflict_block_count
-                            .saturating_mul(max_rows_per_block),
-                    "500k-line manual fixture should stay sparse in two-way diff rows",
+                    pane.conflict_resolver.diff_rows().is_empty(),
+                    "500k-line manual fixture should not build eager two-way diff rows",
                 );
-                // Sparse three-way word highlights scale with conflict
-                // lines, not total file lines, so they're safe at 500k.
                 assert!(
-                    !pane
+                    pane.conflict_resolver.inline_rows().is_empty(),
+                    "500k-line manual fixture should keep inline rows disabled",
+                );
+                assert!(
+                    pane
                         .conflict_resolver
                         .three_way_word_highlights
                         .ours
                         .is_empty(),
-                    "500k-line manual fixture should have sparse three-way highlights",
+                    "500k-line manual fixture should skip eager three-way word highlights",
+                );
+                assert!(
+                    pane.conflict_resolver.diff_word_highlights_split.is_empty(),
+                    "500k-line manual fixture should skip eager two-way word highlights",
+                );
+                assert!(
+                    index.total_rows() > fixture.conflict_block_count,
+                    "500k-line manual fixture should expose paged rows for the streamed split view",
+                );
+                let first_row = index
+                    .first_row_for_conflict(0)
+                    .expect("manual streamed fixture should expose a first conflict row");
+                let row = index
+                    .row_at(&pane.conflict_resolver.marker_segments, first_row)
+                    .expect("manual streamed fixture should resolve rows on demand");
+                assert!(
+                    row.old.as_deref().is_some() || row.new.as_deref().is_some(),
+                    "manual streamed fixture should still expose real diff content through the page index",
                 );
             });
         });

@@ -1,3 +1,6 @@
+use std::ops::Range;
+use std::sync::Arc;
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum ConflictChoice {
     Base,
@@ -50,10 +53,165 @@ pub enum ConflictNavDirection {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+enum ConflictTextStorage {
+    Owned(String),
+    SharedSlice { text: Arc<str>, range: Range<usize> },
+}
+
+#[derive(Clone, Debug)]
+pub struct ConflictText {
+    storage: ConflictTextStorage,
+}
+
+impl ConflictText {
+    pub fn shared(text: Arc<str>) -> Self {
+        let len = text.len();
+        Self {
+            storage: ConflictTextStorage::SharedSlice {
+                text,
+                range: 0..len,
+            },
+        }
+    }
+
+    pub fn shared_slice(text: Arc<str>, range: Range<usize>) -> Self {
+        debug_assert!(
+            text.get(range.clone()).is_some(),
+            "shared conflict text range should stay within bounds"
+        );
+        Self {
+            storage: ConflictTextStorage::SharedSlice { text, range },
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        match &self.storage {
+            ConflictTextStorage::Owned(text) => text.as_str(),
+            ConflictTextStorage::SharedSlice { text, range } => text
+                .get(range.clone())
+                .expect("shared conflict text range should stay valid"),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.as_str().is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.as_str().len()
+    }
+
+    pub fn push_str(&mut self, suffix: &str) {
+        if suffix.is_empty() {
+            return;
+        }
+
+        match &mut self.storage {
+            ConflictTextStorage::Owned(text) => text.push_str(suffix),
+            ConflictTextStorage::SharedSlice { .. } => {
+                let mut owned = self.as_str().to_string();
+                owned.push_str(suffix);
+                self.storage = ConflictTextStorage::Owned(owned);
+            }
+        }
+    }
+
+    pub fn into_owned_string(self) -> String {
+        match self.storage {
+            ConflictTextStorage::Owned(text) => text,
+            ConflictTextStorage::SharedSlice { text, range } => text
+                .get(range)
+                .expect("shared conflict text range should stay valid")
+                .to_string(),
+        }
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(in crate::view) fn shares_backing_with(&self, other: &Arc<str>) -> bool {
+        match &self.storage {
+            ConflictTextStorage::Owned(_) => false,
+            ConflictTextStorage::SharedSlice { text, .. } => Arc::ptr_eq(text, other),
+        }
+    }
+}
+
+impl Default for ConflictText {
+    fn default() -> Self {
+        String::new().into()
+    }
+}
+
+impl std::fmt::Display for ConflictText {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::ops::Deref for ConflictText {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        self.as_str()
+    }
+}
+
+impl AsRef<str> for ConflictText {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl From<String> for ConflictText {
+    fn from(value: String) -> Self {
+        Self {
+            storage: ConflictTextStorage::Owned(value),
+        }
+    }
+}
+
+impl From<&str> for ConflictText {
+    fn from(value: &str) -> Self {
+        value.to_string().into()
+    }
+}
+
+impl PartialEq for ConflictText {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_str() == other.as_str()
+    }
+}
+
+impl Eq for ConflictText {}
+
+impl PartialEq<&str> for ConflictText {
+    fn eq(&self, other: &&str) -> bool {
+        self.as_str() == *other
+    }
+}
+
+impl PartialEq<ConflictText> for &str {
+    fn eq(&self, other: &ConflictText) -> bool {
+        *self == other.as_str()
+    }
+}
+
+impl PartialEq<String> for ConflictText {
+    fn eq(&self, other: &String) -> bool {
+        self.as_str() == other.as_str()
+    }
+}
+
+impl PartialEq<ConflictText> for String {
+    fn eq(&self, other: &ConflictText) -> bool {
+        self.as_str() == other.as_str()
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ConflictBlock {
-    pub base: Option<String>,
-    pub ours: String,
-    pub theirs: String,
+    pub base: Option<ConflictText>,
+    pub ours: ConflictText,
+    pub theirs: ConflictText,
     pub choice: ConflictChoice,
     /// Whether this block has been explicitly resolved (by user pick or auto-resolve).
     /// Blocks start unresolved; becomes `true` when the user picks a side or auto-resolve runs.
@@ -62,7 +220,7 @@ pub struct ConflictBlock {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ConflictSegment {
-    Text(String),
+    Text(ConflictText),
     Block(ConflictBlock),
 }
 
@@ -239,17 +397,23 @@ pub fn active_conflict_autosolve_trace_label(
 }
 
 pub fn parse_conflict_markers(text: &str) -> Vec<ConflictSegment> {
-    gitcomet_core::conflict_session::parse_conflict_marker_segments(text)
+    parse_conflict_markers_shared(Arc::<str>::from(text))
+}
+
+pub fn parse_conflict_markers_shared(text: Arc<str>) -> Vec<ConflictSegment> {
+    gitcomet_core::conflict_session::parse_conflict_marker_ranges(text.as_ref())
         .into_iter()
         .map(|segment| match segment {
-            gitcomet_core::conflict_session::ParsedConflictSegment::Text(text) => {
-                ConflictSegment::Text(text)
+            gitcomet_core::conflict_session::ParsedConflictSegmentRanges::Text(range) => {
+                ConflictSegment::Text(ConflictText::shared_slice(Arc::clone(&text), range))
             }
-            gitcomet_core::conflict_session::ParsedConflictSegment::Conflict(block) => {
+            gitcomet_core::conflict_session::ParsedConflictSegmentRanges::Conflict(block) => {
                 ConflictSegment::Block(ConflictBlock {
-                    base: block.base,
-                    ours: block.ours,
-                    theirs: block.theirs,
+                    base: block
+                        .base
+                        .map(|range| ConflictText::shared_slice(Arc::clone(&text), range)),
+                    ours: ConflictText::shared_slice(Arc::clone(&text), block.ours),
+                    theirs: ConflictText::shared_slice(Arc::clone(&text), block.theirs),
                     choice: ConflictChoice::Ours,
                     resolved: false,
                 })
@@ -258,12 +422,13 @@ pub fn parse_conflict_markers(text: &str) -> Vec<ConflictSegment> {
         .collect()
 }
 
-fn append_text_segment(segments: &mut Vec<ConflictSegment>, text: String) {
+fn append_text_segment(segments: &mut Vec<ConflictSegment>, text: impl Into<ConflictText>) {
+    let text = text.into();
     if text.is_empty() {
         return;
     }
     if let Some(ConflictSegment::Text(prev)) = segments.last_mut() {
-        prev.push_str(&text);
+        prev.push_str(text.as_str());
         return;
     }
     segments.push(ConflictSegment::Text(text));
@@ -307,7 +472,7 @@ fn extract_block_contents_from_output(
         match seg {
             ConflictSegment::Text(text) => {
                 let tail = output_text.get(cursor..)?;
-                if !tail.starts_with(text) {
+                if !tail.starts_with(text.as_str()) {
                     return None;
                 }
                 cursor = cursor.saturating_add(text.len());
@@ -855,7 +1020,7 @@ pub fn auto_resolve_segments_history_with_region_indices(
                     if let Some(ConflictSegment::Text(prev)) = new_segments.last_mut() {
                         prev.push_str(&merged);
                     } else {
-                        new_segments.push(ConflictSegment::Text(merged));
+                        new_segments.push(ConflictSegment::Text(merged.into()));
                     }
                     count += 1;
                     continue;
@@ -918,14 +1083,14 @@ pub fn auto_resolve_segments_pass2_with_region_indices(
                                 if let Some(ConflictSegment::Text(prev)) = new_segments.last_mut() {
                                     prev.push_str(&text);
                                 } else {
-                                    new_segments.push(ConflictSegment::Text(text));
+                                    new_segments.push(ConflictSegment::Text(text.into()));
                                 }
                             }
                             Subchunk::Conflict { base, ours, theirs } => {
                                 new_segments.push(ConflictSegment::Block(ConflictBlock {
-                                    base: Some(base),
-                                    ours,
-                                    theirs,
+                                    base: Some(base.into()),
+                                    ours: ours.into(),
+                                    theirs: theirs.into(),
                                     choice: ConflictChoice::Ours,
                                     resolved: false,
                                 }));
@@ -3009,7 +3174,7 @@ pub fn populate_block_bases_from_ancestor(segments: &mut [ConflictSegment], ance
                     .get(text_idx)
                     .map(|r| r.start)
                     .unwrap_or(ancestor_text.len());
-                block.base = Some(ancestor_text[prev_end..next_start].to_string());
+                block.base = Some(ancestor_text[prev_end..next_start].to_string().into());
             }
         }
     }

@@ -12,6 +12,8 @@ const REPLACEMENT_PAIR_BASE_COST: u32 = 80;
 const REPLACEMENT_PAIR_SCALE_COST: u32 = 120;
 const REPLACEMENT_DISSIMILAR_PENALTY_COST: u32 = 40;
 const REPLACEMENT_DISSIMILAR_PENALTY_MIN_LEN: usize = 4;
+const SIDE_BY_SIDE_HISTOGRAM_LINE_THRESHOLD: usize = 4_096;
+const SIDE_BY_SIDE_LINEAR_FALLBACK_LINE_THRESHOLD: usize = 100_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FileDiffEofNewline {
@@ -65,6 +67,69 @@ pub struct FileDiffAnchors {
 pub struct FileDiffRowsWithAnchors {
     pub rows: Vec<FileDiffRow>,
     pub anchors: FileDiffAnchors,
+}
+
+/// Compact plan for a streamed side-by-side diff.
+///
+/// Runs carry only line-index spans into the old/new source documents. UI code
+/// can materialize rows page-by-page without cloning the entire file into a
+/// `Vec<FileDiffRow>`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum FileDiffPlanRun {
+    Context {
+        old_start: usize,
+        new_start: usize,
+        len: usize,
+    },
+    Remove {
+        old_start: usize,
+        len: usize,
+    },
+    Add {
+        new_start: usize,
+        len: usize,
+    },
+    Modify {
+        old_start: usize,
+        new_start: usize,
+        len: usize,
+    },
+}
+
+impl FileDiffPlanRun {
+    pub fn row_len(&self) -> usize {
+        match self {
+            Self::Context { len, .. }
+            | Self::Remove { len, .. }
+            | Self::Add { len, .. }
+            | Self::Modify { len, .. } => *len,
+        }
+    }
+
+    pub fn inline_row_len(&self) -> usize {
+        match self {
+            Self::Modify { len, .. } => len.saturating_mul(2),
+            _ => self.row_len(),
+        }
+    }
+
+    pub fn kind(&self) -> FileDiffRowKind {
+        match self {
+            Self::Context { .. } => FileDiffRowKind::Context,
+            Self::Remove { .. } => FileDiffRowKind::Remove,
+            Self::Add { .. } => FileDiffRowKind::Add,
+            Self::Modify { .. } => FileDiffRowKind::Modify,
+        }
+    }
+}
+
+/// Compact whole-file plan used by the streamed UI runtime.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FileDiffPlan {
+    pub runs: Vec<FileDiffPlanRun>,
+    pub row_count: usize,
+    pub inline_row_count: usize,
+    pub eof_newline: Option<FileDiffEofNewline>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -170,56 +235,17 @@ enum ReplacementAlignStep {
     Insert,
 }
 
+pub fn side_by_side_plan(old: &str, new: &str) -> FileDiffPlan {
+    let old_lines = split_lines(old);
+    let new_lines = split_lines(new);
+    build_side_by_side_plan(old, new, old_lines.as_slice(), new_lines.as_slice())
+}
+
 pub fn side_by_side_rows(old: &str, new: &str) -> Vec<FileDiffRow> {
     let old_lines = split_lines(old);
     let new_lines = split_lines(new);
-    let edits = myers_edits(&old_lines, &new_lines);
-
-    let mut raw = Vec::with_capacity(edits.len());
-    let mut old_ln: u32 = 1;
-    let mut new_ln: u32 = 1;
-
-    for e in edits {
-        match e.kind {
-            EditKind::Equal => {
-                let text = e.old.unwrap_or_default();
-                raw.push(FileDiffRow {
-                    kind: FileDiffRowKind::Context,
-                    old_line: Some(old_ln),
-                    new_line: Some(new_ln),
-                    old: Some(text.to_string()),
-                    new: Some(text.to_string()),
-                    eof_newline: None,
-                });
-                old_ln = old_ln.saturating_add(1);
-                new_ln = new_ln.saturating_add(1);
-            }
-            EditKind::Delete => {
-                raw.push(FileDiffRow {
-                    kind: FileDiffRowKind::Remove,
-                    old_line: Some(old_ln),
-                    new_line: None,
-                    old: Some(e.old.unwrap_or_default().to_string()),
-                    new: None,
-                    eof_newline: None,
-                });
-                old_ln = old_ln.saturating_add(1);
-            }
-            EditKind::Insert => {
-                raw.push(FileDiffRow {
-                    kind: FileDiffRowKind::Add,
-                    old_line: None,
-                    new_line: Some(new_ln),
-                    old: None,
-                    new: Some(e.new.unwrap_or_default().to_string()),
-                    eof_newline: None,
-                });
-                new_ln = new_ln.saturating_add(1);
-            }
-        }
-    }
-
-    annotate_eof_newline(pair_replacements(raw), old, new)
+    let plan = build_side_by_side_plan(old, new, old_lines.as_slice(), new_lines.as_slice());
+    materialize_rows_from_plan(&plan, old_lines.as_slice(), new_lines.as_slice())
 }
 
 pub fn side_by_side_rows_with_anchors(old: &str, new: &str) -> FileDiffRowsWithAnchors {
@@ -335,6 +361,555 @@ pub fn compute_row_region_anchors(rows: &[FileDiffRow]) -> FileDiffAnchors {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PlannedReplacementOp {
+    Pair,
+    Delete,
+    Insert,
+}
+
+fn select_side_by_side_edits<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<Edit<'a>> {
+    let combined = old.len().saturating_add(new.len());
+    if combined >= SIDE_BY_SIDE_LINEAR_FALLBACK_LINE_THRESHOLD {
+        return myers_fallback_edits(old, new);
+    }
+    if combined >= SIDE_BY_SIDE_HISTOGRAM_LINE_THRESHOLD {
+        return histogram_edits(old, new);
+    }
+    myers_edits(old, new)
+}
+
+fn push_plan_run(runs: &mut Vec<FileDiffPlanRun>, run: FileDiffPlanRun) {
+    let len = run.row_len();
+    if len == 0 {
+        return;
+    }
+
+    let merged = match (runs.last_mut(), &run) {
+        (
+            Some(FileDiffPlanRun::Context {
+                old_start: last_old_start,
+                new_start: last_new_start,
+                len: last_len,
+            }),
+            FileDiffPlanRun::Context {
+                old_start,
+                new_start,
+                len,
+            },
+        ) if last_old_start.saturating_add(*last_len) == *old_start
+            && last_new_start.saturating_add(*last_len) == *new_start =>
+        {
+            *last_len = last_len.saturating_add(*len);
+            true
+        }
+        (
+            Some(FileDiffPlanRun::Remove {
+                old_start: last_old_start,
+                len: last_len,
+            }),
+            FileDiffPlanRun::Remove { old_start, len },
+        ) if last_old_start.saturating_add(*last_len) == *old_start => {
+            *last_len = last_len.saturating_add(*len);
+            true
+        }
+        (
+            Some(FileDiffPlanRun::Add {
+                new_start: last_new_start,
+                len: last_len,
+            }),
+            FileDiffPlanRun::Add { new_start, len },
+        ) if last_new_start.saturating_add(*last_len) == *new_start => {
+            *last_len = last_len.saturating_add(*len);
+            true
+        }
+        (
+            Some(FileDiffPlanRun::Modify {
+                old_start: last_old_start,
+                new_start: last_new_start,
+                len: last_len,
+            }),
+            FileDiffPlanRun::Modify {
+                old_start,
+                new_start,
+                len,
+            },
+        ) if last_old_start.saturating_add(*last_len) == *old_start
+            && last_new_start.saturating_add(*last_len) == *new_start =>
+        {
+            *last_len = last_len.saturating_add(*len);
+            true
+        }
+        _ => false,
+    };
+
+    if !merged {
+        runs.push(run);
+    }
+}
+
+fn apply_eof_newline_to_plan(
+    runs: &mut Vec<FileDiffPlanRun>,
+    eof_newline: Option<FileDiffEofNewline>,
+) {
+    if eof_newline.is_none() {
+        return;
+    }
+
+    let Some(last_run) = runs.pop() else {
+        return;
+    };
+    match last_run {
+        FileDiffPlanRun::Context {
+            old_start,
+            new_start,
+            len,
+        } if len > 1 => {
+            runs.push(FileDiffPlanRun::Context {
+                old_start,
+                new_start,
+                len: len.saturating_sub(1),
+            });
+            runs.push(FileDiffPlanRun::Modify {
+                old_start: old_start.saturating_add(len.saturating_sub(1)),
+                new_start: new_start.saturating_add(len.saturating_sub(1)),
+                len: 1,
+            });
+        }
+        FileDiffPlanRun::Context {
+            old_start,
+            new_start,
+            ..
+        } => {
+            runs.push(FileDiffPlanRun::Modify {
+                old_start,
+                new_start,
+                len: 1,
+            });
+        }
+        other => runs.push(other),
+    }
+}
+
+fn push_paired_replacement_runs_by_position_to_plan(
+    old_start: usize,
+    old_len: usize,
+    new_start: usize,
+    new_len: usize,
+    runs: &mut Vec<FileDiffPlanRun>,
+) {
+    let paired = old_len.min(new_len);
+    if paired > 0 {
+        push_plan_run(
+            runs,
+            FileDiffPlanRun::Modify {
+                old_start,
+                new_start,
+                len: paired,
+            },
+        );
+    }
+    if old_len > paired {
+        push_plan_run(
+            runs,
+            FileDiffPlanRun::Remove {
+                old_start: old_start.saturating_add(paired),
+                len: old_len.saturating_sub(paired),
+            },
+        );
+    }
+    if new_len > paired {
+        push_plan_run(
+            runs,
+            FileDiffPlanRun::Add {
+                new_start: new_start.saturating_add(paired),
+                len: new_len.saturating_sub(paired),
+            },
+        );
+    }
+}
+
+fn push_aligned_replacement_runs_to_plan(
+    old_lines: &[&str],
+    new_lines: &[&str],
+    old_start: usize,
+    old_end: usize,
+    new_start: usize,
+    new_end: usize,
+    runs: &mut Vec<FileDiffPlanRun>,
+) {
+    let deletes = &old_lines[old_start..old_end];
+    let inserts = &new_lines[new_start..new_end];
+
+    if deletes.is_empty() {
+        push_plan_run(
+            runs,
+            FileDiffPlanRun::Add {
+                new_start,
+                len: inserts.len(),
+            },
+        );
+        return;
+    }
+    if inserts.is_empty() {
+        push_plan_run(
+            runs,
+            FileDiffPlanRun::Remove {
+                old_start,
+                len: deletes.len(),
+            },
+        );
+        return;
+    }
+
+    if deletes.len().saturating_mul(inserts.len()) > REPLACEMENT_ALIGN_CELL_BUDGET {
+        push_paired_replacement_runs_by_position_to_plan(
+            old_start,
+            deletes.len(),
+            new_start,
+            inserts.len(),
+            runs,
+        );
+        return;
+    }
+
+    let n = deletes.len();
+    let m = inserts.len();
+    let width = m + 1;
+    let mut cost = vec![u32::MAX / 4; (n + 1) * width];
+    let mut step = vec![ReplacementAlignStep::None; (n + 1) * width];
+    cost[0] = 0;
+
+    for i in 1..=n {
+        let idx = i * width;
+        cost[idx] = (i as u32) * REPLACEMENT_GAP_COST;
+        step[idx] = ReplacementAlignStep::Delete;
+    }
+    for j in 1..=m {
+        cost[j] = (j as u32) * REPLACEMENT_GAP_COST;
+        step[j] = ReplacementAlignStep::Insert;
+    }
+
+    for i in 1..=n {
+        for j in 1..=m {
+            let idx = i * width + j;
+            let del_idx = (i - 1) * width + j;
+            let ins_idx = i * width + (j - 1);
+            let pair_idx = (i - 1) * width + (j - 1);
+
+            let pair_cost = cost[pair_idx]
+                .saturating_add(replacement_pair_cost(deletes[i - 1], inserts[j - 1]));
+            let insert_cost = cost[ins_idx].saturating_add(REPLACEMENT_GAP_COST);
+            let delete_cost = cost[del_idx].saturating_add(REPLACEMENT_GAP_COST);
+
+            let mut best_cost = pair_cost;
+            let mut best_step = ReplacementAlignStep::Pair;
+
+            if insert_cost < best_cost {
+                best_cost = insert_cost;
+                best_step = ReplacementAlignStep::Insert;
+            }
+            if delete_cost < best_cost {
+                best_cost = delete_cost;
+                best_step = ReplacementAlignStep::Delete;
+            }
+
+            cost[idx] = best_cost;
+            step[idx] = best_step;
+        }
+    }
+
+    let mut i = n;
+    let mut j = m;
+    let mut aligned_rev = Vec::with_capacity(n + m);
+    while i > 0 || j > 0 {
+        let idx = i * width + j;
+        match step[idx] {
+            ReplacementAlignStep::Pair if i > 0 && j > 0 => {
+                aligned_rev.push(PlannedReplacementOp::Pair);
+                i -= 1;
+                j -= 1;
+            }
+            ReplacementAlignStep::Insert if j > 0 => {
+                aligned_rev.push(PlannedReplacementOp::Insert);
+                j -= 1;
+            }
+            ReplacementAlignStep::Delete if i > 0 => {
+                aligned_rev.push(PlannedReplacementOp::Delete);
+                i -= 1;
+            }
+            _ if j > 0 => {
+                aligned_rev.push(PlannedReplacementOp::Insert);
+                j -= 1;
+            }
+            _ if i > 0 => {
+                aligned_rev.push(PlannedReplacementOp::Delete);
+                i -= 1;
+            }
+            _ => break,
+        }
+    }
+
+    aligned_rev.reverse();
+
+    let mut local_old = 0usize;
+    let mut local_new = 0usize;
+    for op in aligned_rev {
+        match op {
+            PlannedReplacementOp::Pair => {
+                push_plan_run(
+                    runs,
+                    FileDiffPlanRun::Modify {
+                        old_start: old_start.saturating_add(local_old),
+                        new_start: new_start.saturating_add(local_new),
+                        len: 1,
+                    },
+                );
+                local_old += 1;
+                local_new += 1;
+            }
+            PlannedReplacementOp::Delete => {
+                push_plan_run(
+                    runs,
+                    FileDiffPlanRun::Remove {
+                        old_start: old_start.saturating_add(local_old),
+                        len: 1,
+                    },
+                );
+                local_old += 1;
+            }
+            PlannedReplacementOp::Insert => {
+                push_plan_run(
+                    runs,
+                    FileDiffPlanRun::Add {
+                        new_start: new_start.saturating_add(local_new),
+                        len: 1,
+                    },
+                );
+                local_new += 1;
+            }
+        }
+    }
+}
+
+fn build_side_by_side_plan(
+    old_text: &str,
+    new_text: &str,
+    old_lines: &[&str],
+    new_lines: &[&str],
+) -> FileDiffPlan {
+    let edits = select_side_by_side_edits(old_lines, new_lines);
+    let mut runs = Vec::new();
+    let mut old_ix = 0usize;
+    let mut new_ix = 0usize;
+    let mut i = 0usize;
+
+    while i < edits.len() {
+        match edits[i].kind {
+            EditKind::Equal => {
+                let run_old_start = old_ix;
+                let run_new_start = new_ix;
+                while i < edits.len() && edits[i].kind == EditKind::Equal {
+                    old_ix += 1;
+                    new_ix += 1;
+                    i += 1;
+                }
+                push_plan_run(
+                    &mut runs,
+                    FileDiffPlanRun::Context {
+                        old_start: run_old_start,
+                        new_start: run_new_start,
+                        len: old_ix.saturating_sub(run_old_start),
+                    },
+                );
+            }
+            EditKind::Delete => {
+                let delete_start = old_ix;
+                while i < edits.len() && edits[i].kind == EditKind::Delete {
+                    old_ix += 1;
+                    i += 1;
+                }
+
+                let insert_start = new_ix;
+                while i < edits.len() && edits[i].kind == EditKind::Insert {
+                    new_ix += 1;
+                    i += 1;
+                }
+
+                if insert_start == new_ix {
+                    push_plan_run(
+                        &mut runs,
+                        FileDiffPlanRun::Remove {
+                            old_start: delete_start,
+                            len: old_ix.saturating_sub(delete_start),
+                        },
+                    );
+                } else {
+                    push_aligned_replacement_runs_to_plan(
+                        old_lines,
+                        new_lines,
+                        delete_start,
+                        old_ix,
+                        insert_start,
+                        new_ix,
+                        &mut runs,
+                    );
+                }
+            }
+            EditKind::Insert => {
+                let insert_start = new_ix;
+                while i < edits.len() && edits[i].kind == EditKind::Insert {
+                    new_ix += 1;
+                    i += 1;
+                }
+                push_plan_run(
+                    &mut runs,
+                    FileDiffPlanRun::Add {
+                        new_start: insert_start,
+                        len: new_ix.saturating_sub(insert_start),
+                    },
+                );
+            }
+        }
+    }
+
+    let eof_newline = eof_newline_delta(old_text, new_text);
+    apply_eof_newline_to_plan(&mut runs, eof_newline);
+
+    let row_count = runs.iter().map(FileDiffPlanRun::row_len).sum();
+    let inline_row_count = runs.iter().map(FileDiffPlanRun::inline_row_len).sum();
+    FileDiffPlan {
+        runs,
+        row_count,
+        inline_row_count,
+        eof_newline,
+    }
+}
+
+fn one_based_line_number(line_ix: usize) -> Option<u32> {
+    line_ix
+        .checked_add(1)
+        .and_then(|line| u32::try_from(line).ok())
+}
+
+fn materialize_rows_from_plan(
+    plan: &FileDiffPlan,
+    old_lines: &[&str],
+    new_lines: &[&str],
+) -> Vec<FileDiffRow> {
+    let mut rows = Vec::with_capacity(plan.row_count);
+
+    for run in &plan.runs {
+        match run {
+            FileDiffPlanRun::Context {
+                old_start,
+                new_start,
+                len,
+            } => {
+                for offset in 0..*len {
+                    let old_ix = old_start.saturating_add(offset);
+                    let new_ix = new_start.saturating_add(offset);
+                    let text = old_lines.get(old_ix).copied().unwrap_or_default();
+                    rows.push(FileDiffRow {
+                        kind: FileDiffRowKind::Context,
+                        old_line: one_based_line_number(old_ix),
+                        new_line: one_based_line_number(new_ix),
+                        old: Some(text.to_string()),
+                        new: Some(text.to_string()),
+                        eof_newline: None,
+                    });
+                }
+            }
+            FileDiffPlanRun::Remove { old_start, len } => {
+                for offset in 0..*len {
+                    let old_ix = old_start.saturating_add(offset);
+                    rows.push(FileDiffRow {
+                        kind: FileDiffRowKind::Remove,
+                        old_line: one_based_line_number(old_ix),
+                        new_line: None,
+                        old: Some(
+                            old_lines
+                                .get(old_ix)
+                                .copied()
+                                .unwrap_or_default()
+                                .to_string(),
+                        ),
+                        new: None,
+                        eof_newline: None,
+                    });
+                }
+            }
+            FileDiffPlanRun::Add { new_start, len } => {
+                for offset in 0..*len {
+                    let new_ix = new_start.saturating_add(offset);
+                    rows.push(FileDiffRow {
+                        kind: FileDiffRowKind::Add,
+                        old_line: None,
+                        new_line: one_based_line_number(new_ix),
+                        old: None,
+                        new: Some(
+                            new_lines
+                                .get(new_ix)
+                                .copied()
+                                .unwrap_or_default()
+                                .to_string(),
+                        ),
+                        eof_newline: None,
+                    });
+                }
+            }
+            FileDiffPlanRun::Modify {
+                old_start,
+                new_start,
+                len,
+            } => {
+                for offset in 0..*len {
+                    let old_ix = old_start.saturating_add(offset);
+                    let new_ix = new_start.saturating_add(offset);
+                    rows.push(FileDiffRow {
+                        kind: FileDiffRowKind::Modify,
+                        old_line: one_based_line_number(old_ix),
+                        new_line: one_based_line_number(new_ix),
+                        old: Some(
+                            old_lines
+                                .get(old_ix)
+                                .copied()
+                                .unwrap_or_default()
+                                .to_string(),
+                        ),
+                        new: Some(
+                            new_lines
+                                .get(new_ix)
+                                .copied()
+                                .unwrap_or_default()
+                                .to_string(),
+                        ),
+                        eof_newline: None,
+                    });
+                }
+            }
+        }
+    }
+
+    if let Some(marker) = plan.eof_newline {
+        if let Some(last) = rows.last_mut() {
+            last.eof_newline = Some(marker);
+        } else {
+            rows.push(FileDiffRow {
+                kind: FileDiffRowKind::Modify,
+                old_line: None,
+                new_line: None,
+                old: None,
+                new: None,
+                eof_newline: Some(marker),
+            });
+        }
+    }
+
+    rows
+}
+
+#[cfg(test)]
 fn pair_replacements(rows: Vec<FileDiffRow>) -> Vec<FileDiffRow> {
     let mut out = Vec::with_capacity(rows.len());
     let mut ix = 0usize;
@@ -372,6 +947,7 @@ fn pair_replacements(rows: Vec<FileDiffRow>) -> Vec<FileDiffRow> {
     out
 }
 
+#[cfg(test)]
 fn align_replacement_runs(deletes: &[FileDiffRow], inserts: &[FileDiffRow]) -> Vec<FileDiffRow> {
     if deletes.is_empty() {
         return inserts.to_vec();
@@ -467,6 +1043,7 @@ fn align_replacement_runs(deletes: &[FileDiffRow], inserts: &[FileDiffRow]) -> V
     aligned_rev
 }
 
+#[cfg(test)]
 fn pair_replacement_runs_by_position(
     deletes: &[FileDiffRow],
     inserts: &[FileDiffRow],
@@ -486,6 +1063,7 @@ fn pair_replacement_runs_by_position(
     out
 }
 
+#[cfg(test)]
 fn make_modify_row(delete: &FileDiffRow, insert: &FileDiffRow) -> FileDiffRow {
     FileDiffRow {
         kind: FileDiffRowKind::Modify,
@@ -825,36 +1403,6 @@ pub(crate) fn split_lines(text: &str) -> Vec<&str> {
 
     // Keep row tokenization line-oriented; EOF newline deltas are annotated separately.
     text.lines().collect()
-}
-
-fn annotate_eof_newline(
-    mut rows: Vec<FileDiffRow>,
-    old_text: &str,
-    new_text: &str,
-) -> Vec<FileDiffRow> {
-    let Some(marker) = eof_newline_delta(old_text, new_text) else {
-        return rows;
-    };
-
-    if let Some(last) = rows.last_mut() {
-        // EOF newline changes are semantic file changes, even when the text on the
-        // final line is otherwise equal.
-        if last.kind == FileDiffRowKind::Context {
-            last.kind = FileDiffRowKind::Modify;
-        }
-        last.eof_newline = Some(marker);
-        return rows;
-    }
-
-    rows.push(FileDiffRow {
-        kind: FileDiffRowKind::Modify,
-        old_line: None,
-        new_line: None,
-        old: None,
-        new: None,
-        eof_newline: Some(marker),
-    });
-    rows
 }
 
 fn eof_newline_delta(old_text: &str, new_text: &str) -> Option<FileDiffEofNewline> {

@@ -826,23 +826,6 @@ impl DetailsPaneView {
         let icon_color = theme.colors.accent;
         let icon = |path: &'static str| svg_icon(path, icon_color, px(14.0));
         let spinner = |id: (&'static str, u64)| svg_spinner(id, icon_color, px(14.0));
-        if let Some(message) =
-            self.active_repo()
-                .and_then(|repo| match &repo.merge_commit_message {
-                    Loadable::Ready(Some(msg)) => Some(msg.clone()),
-                    _ => None,
-                })
-        {
-            let current = self.commit_message_input.read(cx).text();
-            if current.trim().is_empty() {
-                self.commit_message_programmatic_change = true;
-                self.commit_message_input
-                    .update(cx, |i, cx| i.set_text(message, cx));
-                self.commit_message_scroll
-                    .set_offset(point(px(0.0), px(0.0)));
-            }
-        }
-
         let commit_message = div()
             .id(("commit_message_container", repo_key))
             .relative()

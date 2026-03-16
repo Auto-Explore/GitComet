@@ -121,14 +121,6 @@ fn should_launch_focused_diff_gui(
     config.gui && result.exit_code == exit_code::SUCCESS
 }
 
-#[cfg(any(feature = "ui-gpui", test))]
-fn should_launch_focused_merge_gui(
-    config: &cli::MergetoolConfig,
-    result: &mergetool_mode::MergetoolRunResult,
-) -> bool {
-    config.gui && result.exit_code == exit_code::CANCELED && result.merge_result.is_some()
-}
-
 fn main() {
     let mode = match cli::parse_app_mode() {
         Ok(mode) => mode,
@@ -245,51 +237,25 @@ fn main() {
                 std::process::exit(exit_code::ERROR);
             }
 
-            let result = mergetool_mode::run_mergetool(&config);
-
-            // When UI is available, --gui was requested, and text
-            // conflicts remain unresolved, open the focused GPUI merge
-            // window for interactive resolution.
+            // GUI mergetool must go straight into the streamed focused
+            // resolver. Running the eager headless merge first duplicates
+            // giant conflict payloads and defeats the streamed large-file
+            // path before the window can even open.
             #[cfg(feature = "ui-gpui")]
-            if let Ok(result) = &result
-                && should_launch_focused_merge_gui(&config, result)
-            {
-                let Some(repo_path) = resolve_mergetool_repo_path(&config.merged) else {
-                    eprintln!(
-                        "Failed to locate repository root for merged path {}",
-                        config.merged.display()
-                    );
-                    std::process::exit(exit_code::ERROR);
-                };
-
-                // Determine labels for display.
-                let label_local = config
-                    .label_local
-                    .clone()
-                    .unwrap_or_else(|| path_label(&config.local));
-                let label_remote = config
-                    .label_remote
-                    .clone()
-                    .unwrap_or_else(|| path_label(&config.remote));
-                let label_base = config.label_base.clone().unwrap_or_else(|| {
-                    config
-                        .base
-                        .as_ref()
-                        .map(|p| path_label(p))
-                        .unwrap_or_else(|| "empty tree".to_string())
-                });
-
-                let gui_config = gitcomet_ui_gpui::FocusedMergetoolConfig {
-                    repo_path,
-                    conflicted_file_path: config.merged.clone(),
-                    label_local,
-                    label_remote,
-                    label_base,
+            if config.gui {
+                let gui_config = match build_focused_mergetool_gui_config(&config) {
+                    Ok(gui_config) => gui_config,
+                    Err(msg) => {
+                        eprintln!("{msg}");
+                        std::process::exit(exit_code::ERROR);
+                    }
                 };
                 let backend = build_backend();
                 let code = gitcomet_ui_gpui::run_focused_mergetool(backend, gui_config);
                 std::process::exit(code);
             }
+
+            let result = mergetool_mode::run_mergetool(&config);
 
             run_and_exit(result);
         }
@@ -453,6 +419,38 @@ fn build_backend() -> std::sync::Arc<dyn gitcomet_core::services::GitBackend> {
     }
 }
 
+#[cfg(feature = "ui-gpui")]
+fn build_focused_mergetool_gui_config(
+    config: &cli::MergetoolConfig,
+) -> Result<gitcomet_ui_gpui::FocusedMergetoolConfig, String> {
+    let Some(repo_path) = resolve_mergetool_repo_path(&config.merged) else {
+        return Err(format!(
+            "Failed to locate repository root for merged path {}",
+            config.merged.display()
+        ));
+    };
+
+    Ok(gitcomet_ui_gpui::FocusedMergetoolConfig {
+        repo_path,
+        conflicted_file_path: config.merged.clone(),
+        label_local: config
+            .label_local
+            .clone()
+            .unwrap_or_else(|| path_label(&config.local)),
+        label_remote: config
+            .label_remote
+            .clone()
+            .unwrap_or_else(|| path_label(&config.remote)),
+        label_base: config.label_base.clone().unwrap_or_else(|| {
+            config
+                .base
+                .as_ref()
+                .map(|path| path_label(path))
+                .unwrap_or_else(|| "empty tree".to_string())
+        }),
+    })
+}
+
 /// Extract a filename label from a path.
 #[cfg(feature = "ui-gpui")]
 fn path_label(path: &std::path::Path) -> String {
@@ -491,7 +489,8 @@ fn resolve_mergetool_repo_path(merged_path: &std::path::Path) -> Option<std::pat
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gitcomet_core::merge::{ConflictStyle, DEFAULT_MARKER_SIZE, DiffAlgorithm, MergeResult};
+    use gitcomet_core::merge::{ConflictStyle, DEFAULT_MARKER_SIZE, DiffAlgorithm};
+    use std::fs;
     use std::io::{self, Write};
 
     #[derive(Default)]
@@ -539,27 +538,25 @@ mod tests {
         }
     }
 
-    fn mergetool_config(gui: bool, auto: bool) -> cli::MergetoolConfig {
+    #[cfg(feature = "ui-gpui")]
+    fn mergetool_config(
+        repo_root: &std::path::Path,
+        merged: std::path::PathBuf,
+        base: Option<std::path::PathBuf>,
+    ) -> cli::MergetoolConfig {
         cli::MergetoolConfig {
-            merged: std::path::PathBuf::from("merged.txt"),
-            local: std::path::PathBuf::from("local.txt"),
-            remote: std::path::PathBuf::from("remote.txt"),
-            base: Some(std::path::PathBuf::from("base.txt")),
+            merged,
+            local: repo_root.join("local.txt"),
+            remote: repo_root.join("remote.txt"),
+            base,
             label_base: None,
             label_local: None,
             label_remote: None,
             conflict_style: ConflictStyle::Merge,
             diff_algorithm: DiffAlgorithm::Myers,
             marker_size: DEFAULT_MARKER_SIZE,
-            auto,
-            gui,
-        }
-    }
-
-    fn unresolved_merge_result() -> MergeResult {
-        MergeResult {
-            output: "<<<<<<< ours\nleft\n=======\nright\n>>>>>>> theirs\n".to_string(),
-            conflict_count: 1,
+            auto: false,
+            gui: true,
         }
     }
 
@@ -621,71 +618,56 @@ mod tests {
     }
 
     #[test]
-    fn focused_merge_gui_launches_for_unresolved_text_conflict() {
-        let config = mergetool_config(true, false);
-        let result = mergetool_mode::MergetoolRunResult {
-            stdout: String::new(),
-            stderr: "conflict".to_string(),
-            exit_code: exit_code::CANCELED,
-            merge_result: Some(unresolved_merge_result()),
-        };
+    #[cfg(feature = "ui-gpui")]
+    fn build_focused_mergetool_gui_config_uses_default_labels() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo_root = tmp.path().join("repo");
+        let merged = repo_root.join("src/conflicted.txt");
+        let base = repo_root.join("base.txt");
 
-        assert!(should_launch_focused_merge_gui(&config, &result));
+        fs::create_dir_all(repo_root.join(".git")).unwrap();
+        fs::create_dir_all(merged.parent().unwrap()).unwrap();
+
+        let config = mergetool_config(&repo_root, merged.clone(), Some(base));
+        let gui_config = build_focused_mergetool_gui_config(&config).expect("gui config");
+
+        assert_eq!(gui_config.repo_path, repo_root);
+        assert_eq!(gui_config.conflicted_file_path, merged);
+        assert_eq!(gui_config.label_local, "local.txt");
+        assert_eq!(gui_config.label_remote, "remote.txt");
+        assert_eq!(gui_config.label_base, "base.txt");
     }
 
     #[test]
-    fn focused_merge_gui_launches_after_auto_mode_when_unresolved_conflicts_remain() {
-        let config = mergetool_config(true, true);
-        let result = mergetool_mode::MergetoolRunResult {
-            stdout: String::new(),
-            stderr: "auto could not resolve all conflicts".to_string(),
-            exit_code: exit_code::CANCELED,
-            merge_result: Some(unresolved_merge_result()),
-        };
+    #[cfg(feature = "ui-gpui")]
+    fn build_focused_mergetool_gui_config_uses_empty_tree_without_base() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo_root = tmp.path().join("repo");
+        let merged = repo_root.join("src/conflicted.txt");
 
-        assert!(should_launch_focused_merge_gui(&config, &result));
+        fs::create_dir_all(repo_root.join(".git")).unwrap();
+        fs::create_dir_all(merged.parent().unwrap()).unwrap();
+
+        let config = mergetool_config(&repo_root, merged, None);
+        let gui_config = build_focused_mergetool_gui_config(&config).expect("gui config");
+
+        assert_eq!(gui_config.label_base, "empty tree");
     }
 
     #[test]
-    fn focused_merge_gui_does_not_launch_when_not_requested() {
-        let config = mergetool_config(false, false);
-        let result = mergetool_mode::MergetoolRunResult {
-            stdout: String::new(),
-            stderr: "conflict".to_string(),
-            exit_code: exit_code::CANCELED,
-            merge_result: Some(unresolved_merge_result()),
-        };
+    #[cfg(feature = "ui-gpui")]
+    fn build_focused_mergetool_gui_config_errors_without_repo_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let merged = tmp.path().join("outside-repo/merged.txt");
 
-        assert!(!should_launch_focused_merge_gui(&config, &result));
-    }
+        fs::create_dir_all(merged.parent().unwrap()).unwrap();
 
-    #[test]
-    fn focused_merge_gui_does_not_launch_on_success_exit() {
-        let config = mergetool_config(true, false);
-        let result = mergetool_mode::MergetoolRunResult {
-            stdout: String::new(),
-            stderr: "clean merge".to_string(),
-            exit_code: exit_code::SUCCESS,
-            merge_result: Some(MergeResult {
-                output: "clean\n".to_string(),
-                conflict_count: 0,
-            }),
-        };
+        let config = mergetool_config(tmp.path(), merged.clone(), None);
+        let err =
+            build_focused_mergetool_gui_config(&config).expect_err("expected missing repo root");
 
-        assert!(!should_launch_focused_merge_gui(&config, &result));
-    }
-
-    #[test]
-    fn focused_merge_gui_does_not_launch_for_binary_conflict_without_merge_result() {
-        let config = mergetool_config(true, false);
-        let result = mergetool_mode::MergetoolRunResult {
-            stdout: String::new(),
-            stderr: "binary conflict".to_string(),
-            exit_code: exit_code::CANCELED,
-            merge_result: None,
-        };
-
-        assert!(!should_launch_focused_merge_gui(&config, &result));
+        assert!(err.contains("Failed to locate repository root"));
+        assert!(err.contains(&merged.display().to_string()));
     }
 
     #[test]
