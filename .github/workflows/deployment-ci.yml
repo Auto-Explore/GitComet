@@ -173,6 +173,7 @@ jobs:
       - name: Build signed APT repo
         env:
           GNUPGHOME: ${{ github.workspace }}/dist/apt-ci/gnupg
+          APT_GPG_PASSPHRASE: ${{ secrets.APT_GPG_PASSPHRASE }}
         run: |
           set -euo pipefail
           scripts/build-apt-repo.sh \
@@ -185,7 +186,7 @@ jobs:
             --label GitComet \
             --description "GitComet deployment CI repository" \
             --repo-url https://example.invalid/gitcomet/apt \
-            --gpg-passphrase "deployment-ci-passphrase" \
+            --gpg-passphrase "${APT_GPG_PASSPHRASE}" \
             --signing-key "${APT_TEST_GPG_KEY_ID}"
 
       - name: Validate generated repo
