@@ -115,10 +115,10 @@ pub enum RemoteUrlKind {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BlameLine {
-    pub commit_id: String,
-    pub author: String,
+    pub commit_id: Arc<str>,
+    pub author: Arc<str>,
     pub author_time_unix: Option<i64>,
-    pub summary: String,
+    pub summary: Arc<str>,
     pub line: String,
 }
 
@@ -547,7 +547,10 @@ pub trait GitBackend: Send + Sync {
 
 #[cfg(test)]
 mod tests {
-    use super::{CommandOutput, decode_utf8_optional, validate_conflict_resolution_text};
+    use super::{
+        BlameLine, CommandOutput, decode_utf8_optional, validate_conflict_resolution_text,
+    };
+    use std::sync::Arc;
 
     // ── validate_conflict_resolution_text ────────────────────────────
 
@@ -725,5 +728,22 @@ mod tests {
         let out = CommandOutput::default();
         assert_eq!(out.command, "");
         assert_eq!(out.exit_code, None);
+    }
+
+    #[test]
+    fn blame_line_clone_shares_arc_metadata() {
+        let line = BlameLine {
+            commit_id: "deadbeef".into(),
+            author: "Alice".into(),
+            author_time_unix: Some(1_700_000_000),
+            summary: "Initial import".into(),
+            line: "hello".to_string(),
+        };
+
+        let cloned = line.clone();
+        assert!(Arc::ptr_eq(&line.commit_id, &cloned.commit_id));
+        assert!(Arc::ptr_eq(&line.author, &cloned.author));
+        assert!(Arc::ptr_eq(&line.summary, &cloned.summary));
+        assert_eq!(line.line, cloned.line);
     }
 }

@@ -10,11 +10,12 @@ use rustc_hash::FxHashMap as HashMap;
 use std::fs;
 use std::path::Path;
 use std::rc::Rc;
+use std::sync::Arc;
 
 struct BlameCommitMetadata {
-    author: String,
+    author: Arc<str>,
     author_time_unix: Option<i64>,
-    summary: String,
+    summary: Arc<str>,
 }
 
 fn blame_commit_metadata(
@@ -34,16 +35,17 @@ fn blame_commit_metadata(
 
     let (author, author_time_unix) = match commit.author() {
         Ok(signature) => (
-            bytes_to_text_preserving_utf8(signature.name.as_ref()),
+            bytes_to_text_preserving_utf8(signature.name.as_ref()).into(),
             signature.time().ok().map(|time| time.seconds),
         ),
-        Err(_) => (String::new(), None),
+        Err(_) => (Arc::<str>::default(), None),
     };
     let summary = commit
         .message_raw_sloppy()
         .lines()
         .next()
         .map(bytes_to_text_preserving_utf8)
+        .map(Arc::<str>::from)
         .unwrap_or_default();
 
     let metadata = Rc::new(BlameCommitMetadata {
@@ -85,7 +87,7 @@ impl GixRepo {
         let mut lines = Vec::new();
         for (entry, entry_lines) in outcome.entries_with_lines() {
             let commit_id = entry.commit_id;
-            let commit_id_text = commit_id.to_string();
+            let commit_id_text: Arc<str> = commit_id.to_string().into();
             let metadata = blame_commit_metadata(&repo, &mut metadata_cache, commit_id)?;
             for line in entry_lines {
                 lines.push(BlameLine {

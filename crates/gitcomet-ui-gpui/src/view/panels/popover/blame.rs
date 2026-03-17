@@ -127,7 +127,7 @@ fn render_blame_popover_rows(
         };
         let line_no = ix + 1;
         let sha = line.commit_id.clone();
-        let short = sha.get(0..8).unwrap_or(&sha).to_string();
+        let short = sha.get(0..8).unwrap_or(sha.as_ref()).to_string();
         let author: SharedString = line.author.clone().into();
         let code: SharedString = line.line.clone().into();
         let commit_id = CommitId(sha);

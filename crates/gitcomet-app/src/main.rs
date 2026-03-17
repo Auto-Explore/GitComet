@@ -8,6 +8,16 @@ mod setup_mode;
 
 use cli::{AppMode, exit_code};
 use mimalloc::MiMalloc;
+
+pub(crate) fn hex_encode(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for &byte in bytes {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    out
+}
 use std::io::{self, Write};
 
 #[global_allocator]
@@ -113,7 +123,7 @@ fn run_and_exit<R: AppRunResult>(result: Result<R, String>) -> ! {
     std::process::exit(emit_result(result, &mut stdout, &mut stderr));
 }
 
-#[cfg(any(feature = "ui-gpui", test))]
+#[cfg(any(feature = "ui-gpui-runtime", test))]
 fn should_launch_focused_diff_gui(
     config: &cli::DifftoolConfig,
     result: &difftool_mode::DifftoolRunResult,
@@ -135,7 +145,7 @@ fn main() {
 
     match mode {
         AppMode::Difftool(config) => {
-            #[cfg(not(feature = "ui-gpui"))]
+            #[cfg(not(feature = "ui-gpui-runtime"))]
             if config.gui {
                 eprintln!(
                     "GUI difftool mode is unavailable in this build. Rebuild with `-p gitcomet-app --features ui-gpui`."
@@ -147,7 +157,7 @@ fn main() {
 
             // When UI is available and --gui was requested, open a focused
             // GPUI diff window instead of printing raw text to stdout.
-            #[cfg(feature = "ui-gpui")]
+            #[cfg(feature = "ui-gpui-runtime")]
             if let Ok(result) = &result
                 && should_launch_focused_diff_gui(&config, result)
             {
@@ -175,7 +185,7 @@ fn main() {
         AppMode::Browser { path } => {
             #[cfg(feature = "ui")]
             {
-                #[cfg(all(target_os = "macos", feature = "ui-gpui"))]
+                #[cfg(all(target_os = "macos", feature = "ui-gpui-runtime"))]
                 if maybe_relaunch_browser_from_macos_app_bundle() {
                     std::process::exit(exit_code::SUCCESS);
                 }
@@ -183,8 +193,8 @@ fn main() {
                 let startup_crash_report = crashlog::take_startup_report();
                 let backend = build_backend();
 
-                if cfg!(feature = "ui-gpui") {
-                    #[cfg(feature = "ui-gpui")]
+                if cfg!(feature = "ui-gpui-runtime") {
+                    #[cfg(feature = "ui-gpui-runtime")]
                     {
                         let startup_report = startup_crash_report.clone().map(|report| {
                             gitcomet_ui_gpui::StartupCrashReport {
@@ -206,7 +216,7 @@ fn main() {
                         }
                     }
 
-                    #[cfg(not(feature = "ui-gpui"))]
+                    #[cfg(not(feature = "ui-gpui-runtime"))]
                     {
                         if let Some(report) = startup_crash_report.as_ref() {
                             print_startup_crash_report_hint(report);
@@ -229,7 +239,7 @@ fn main() {
             }
         }
         AppMode::Mergetool(config) => {
-            #[cfg(not(feature = "ui-gpui"))]
+            #[cfg(not(feature = "ui-gpui-runtime"))]
             if config.gui {
                 eprintln!(
                     "GUI mergetool mode is unavailable in this build. Rebuild with `-p gitcomet-app --features ui-gpui`."
@@ -241,7 +251,7 @@ fn main() {
             // resolver. Running the eager headless merge first duplicates
             // giant conflict payloads and defeats the streamed large-file
             // path before the window can even open.
-            #[cfg(feature = "ui-gpui")]
+            #[cfg(feature = "ui-gpui-runtime")]
             if config.gui {
                 let gui_config = match build_focused_mergetool_gui_config(&config) {
                     Ok(gui_config) => gui_config,
@@ -269,12 +279,12 @@ fn main() {
     }
 }
 
-#[cfg(all(target_os = "macos", feature = "ui-gpui"))]
+#[cfg(all(target_os = "macos", feature = "ui-gpui-runtime"))]
 const MACOS_BUNDLE_RELAUNCH_ENV: &str = "GITCOMET_SKIP_APP_BUNDLE_RELAUNCH";
-#[cfg(all(target_os = "macos", feature = "ui-gpui"))]
+#[cfg(all(target_os = "macos", feature = "ui-gpui-runtime"))]
 const MACOS_APP_ICON_PNG: &[u8] = include_bytes!("../../../assets/gitcomet-512.png");
 
-#[cfg(all(target_os = "macos", feature = "ui-gpui"))]
+#[cfg(all(target_os = "macos", feature = "ui-gpui-runtime"))]
 fn maybe_relaunch_browser_from_macos_app_bundle() -> bool {
     if std::env::var_os(MACOS_BUNDLE_RELAUNCH_ENV).is_some() {
         return false;
@@ -314,7 +324,7 @@ fn maybe_relaunch_browser_from_macos_app_bundle() -> bool {
     }
 }
 
-#[cfg(all(target_os = "macos", feature = "ui-gpui"))]
+#[cfg(all(target_os = "macos", feature = "ui-gpui-runtime"))]
 fn ensure_macos_dev_app_bundle(
     current_exe: &std::path::Path,
     app_bundle: &std::path::Path,
@@ -419,7 +429,7 @@ fn build_backend() -> std::sync::Arc<dyn gitcomet_core::services::GitBackend> {
     }
 }
 
-#[cfg(feature = "ui-gpui")]
+#[cfg(feature = "ui-gpui-runtime")]
 fn build_focused_mergetool_gui_config(
     config: &cli::MergetoolConfig,
 ) -> Result<gitcomet_ui_gpui::FocusedMergetoolConfig, String> {
@@ -452,14 +462,14 @@ fn build_focused_mergetool_gui_config(
 }
 
 /// Extract a filename label from a path.
-#[cfg(feature = "ui-gpui")]
+#[cfg(feature = "ui-gpui-runtime")]
 fn path_label(path: &std::path::Path) -> String {
     path.file_name()
         .and_then(|n| n.to_str().map(ToOwned::to_owned))
         .unwrap_or_else(|| format!("{path:?}"))
 }
 
-#[cfg(feature = "ui-gpui")]
+#[cfg(feature = "ui-gpui-runtime")]
 fn resolve_mergetool_repo_path(merged_path: &std::path::Path) -> Option<std::path::PathBuf> {
     let absolute_merged_path = if merged_path.is_absolute() {
         merged_path.to_path_buf()
@@ -538,7 +548,7 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "ui-gpui")]
+    #[cfg(feature = "ui-gpui-runtime")]
     fn mergetool_config(
         repo_root: &std::path::Path,
         merged: std::path::PathBuf,
@@ -618,7 +628,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "ui-gpui")]
+    #[cfg(feature = "ui-gpui-runtime")]
     fn build_focused_mergetool_gui_config_uses_default_labels() {
         let tmp = tempfile::tempdir().unwrap();
         let repo_root = tmp.path().join("repo");
@@ -639,7 +649,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "ui-gpui")]
+    #[cfg(feature = "ui-gpui-runtime")]
     fn build_focused_mergetool_gui_config_uses_empty_tree_without_base() {
         let tmp = tempfile::tempdir().unwrap();
         let repo_root = tmp.path().join("repo");
@@ -655,7 +665,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "ui-gpui")]
+    #[cfg(feature = "ui-gpui-runtime")]
     fn build_focused_mergetool_gui_config_errors_without_repo_root() {
         let tmp = tempfile::tempdir().unwrap();
         let merged = tmp.path().join("outside-repo/merged.txt");

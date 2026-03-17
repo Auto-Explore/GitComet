@@ -1,3 +1,6 @@
+use std::collections::HashMap;
+use std::sync::Arc;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FileDiffRowKind {
     Context,
@@ -26,8 +29,8 @@ pub struct FileDiffRow {
     pub kind: FileDiffRowKind,
     pub old_line: Option<u32>,
     pub new_line: Option<u32>,
-    pub old: Option<String>,
-    pub new: Option<String>,
+    pub old: Option<Arc<str>>,
+    pub new: Option<Arc<str>>,
     pub eof_newline: Option<FileDiffEofNewline>,
 }
 
@@ -235,16 +238,61 @@ enum ReplacementAlignStep {
     Insert,
 }
 
+#[cfg(feature = "benchmarks")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BenchmarkReplacementDistanceBackend {
+    Scratch,
+    Strsim,
+}
+
 pub fn side_by_side_plan(old: &str, new: &str) -> FileDiffPlan {
     let old_lines = split_lines(old);
     let new_lines = split_lines(new);
-    build_side_by_side_plan(old, new, old_lines.as_slice(), new_lines.as_slice())
+    build_side_by_side_plan_with_pair_cost(
+        old,
+        new,
+        old_lines.as_slice(),
+        new_lines.as_slice(),
+        replacement_pair_cost,
+    )
+}
+
+#[cfg(feature = "benchmarks")]
+pub fn benchmark_side_by_side_plan_with_replacement_backend(
+    old: &str,
+    new: &str,
+    backend: BenchmarkReplacementDistanceBackend,
+) -> FileDiffPlan {
+    let old_lines = split_lines(old);
+    let new_lines = split_lines(new);
+    match backend {
+        BenchmarkReplacementDistanceBackend::Scratch => build_side_by_side_plan_with_pair_cost(
+            old,
+            new,
+            old_lines.as_slice(),
+            new_lines.as_slice(),
+            replacement_pair_cost_with_scratch,
+        ),
+        BenchmarkReplacementDistanceBackend::Strsim => build_side_by_side_plan_with_pair_cost(
+            old,
+            new,
+            old_lines.as_slice(),
+            new_lines.as_slice(),
+            replacement_pair_cost,
+        ),
+    }
 }
 
 pub fn side_by_side_rows(old: &str, new: &str) -> Vec<FileDiffRow> {
     let old_lines = split_lines(old);
     let new_lines = split_lines(new);
-    let plan = build_side_by_side_plan(old, new, old_lines.as_slice(), new_lines.as_slice());
+    let plan = build_side_by_side_plan_with_pair_cost(
+        old,
+        new,
+        old_lines.as_slice(),
+        new_lines.as_slice(),
+        replacement_pair_cost,
+    );
     materialize_rows_from_plan(&plan, old_lines.as_slice(), new_lines.as_slice())
 }
 
@@ -254,95 +302,320 @@ pub fn side_by_side_rows_with_anchors(old: &str, new: &str) -> FileDiffRowsWithA
     FileDiffRowsWithAnchors { rows, anchors }
 }
 
+pub fn plan_row_region_anchors(plan: &FileDiffPlan) -> FileDiffAnchors {
+    let mut builder = FileDiffAnchorBuilder::with_capacity(plan.row_count);
+    for_each_plan_row_meta(plan, |row_index, row| builder.push(row_index, row));
+    builder.finish(plan.row_count)
+}
+
+pub fn plan_emitted_line_prefix_counts(plan: &FileDiffPlan) -> (Vec<usize>, Vec<usize>) {
+    let mut old_prefix = Vec::with_capacity(plan.row_count.saturating_add(1));
+    let mut new_prefix = Vec::with_capacity(plan.row_count.saturating_add(1));
+    let mut old_count = 0usize;
+    let mut new_count = 0usize;
+    old_prefix.push(0);
+    new_prefix.push(0);
+
+    for_each_plan_row_meta(plan, |_row_index, row| {
+        if row.old_line.is_some() {
+            old_count = old_count.saturating_add(1);
+        }
+        if row.new_line.is_some() {
+            new_count = new_count.saturating_add(1);
+        }
+        old_prefix.push(old_count);
+        new_prefix.push(new_count);
+    });
+
+    (old_prefix, new_prefix)
+}
+
+pub fn plan_changed_line_masks(
+    plan: &FileDiffPlan,
+    old_line_count: usize,
+    new_line_count: usize,
+) -> (Vec<bool>, Vec<bool>) {
+    let mut old_mask = vec![false; old_line_count];
+    let mut new_mask = vec![false; new_line_count];
+
+    for_each_plan_row_meta(plan, |_row_index, row| match row.kind {
+        FileDiffRowKind::Context => {}
+        FileDiffRowKind::Remove => mark_changed_line(old_mask.as_mut_slice(), row.old_line),
+        FileDiffRowKind::Add => mark_changed_line(new_mask.as_mut_slice(), row.new_line),
+        FileDiffRowKind::Modify => {
+            mark_changed_line(old_mask.as_mut_slice(), row.old_line);
+            mark_changed_line(new_mask.as_mut_slice(), row.new_line);
+        }
+    });
+
+    (old_mask, new_mask)
+}
+
+pub fn plan_line_to_row_maps(
+    plan: &FileDiffPlan,
+    old_line_count: usize,
+    new_line_count: usize,
+) -> (Vec<Option<usize>>, Vec<Option<usize>>) {
+    let mut old_line_to_row = vec![None; old_line_count];
+    let mut new_line_to_row = vec![None; new_line_count];
+
+    for_each_plan_row_meta(plan, |row_index, row| {
+        assign_line_to_row(old_line_to_row.as_mut_slice(), row.old_line, row_index);
+        assign_line_to_row(new_line_to_row.as_mut_slice(), row.new_line, row_index);
+    });
+
+    (old_line_to_row, new_line_to_row)
+}
+
+/// A borrowed view of a single side-by-side diff row.
+///
+/// This is the zero-allocation equivalent of iterating `side_by_side_rows()`:
+/// text references point directly into the source line slices instead of being
+/// cloned into owned `String`s.
+#[derive(Clone, Copy, Debug)]
+pub enum PlanRowView<'a> {
+    Context {
+        old_line: u32,
+        new_line: u32,
+        text: &'a str,
+    },
+    Remove {
+        old_line: u32,
+        text: &'a str,
+    },
+    Add {
+        new_line: u32,
+        text: &'a str,
+    },
+    Modify {
+        old_line: u32,
+        new_line: u32,
+        old_text: &'a str,
+        new_text: &'a str,
+    },
+}
+
+impl PlanRowView<'_> {
+    pub fn kind(&self) -> FileDiffRowKind {
+        match self {
+            Self::Context { .. } => FileDiffRowKind::Context,
+            Self::Remove { .. } => FileDiffRowKind::Remove,
+            Self::Add { .. } => FileDiffRowKind::Add,
+            Self::Modify { .. } => FileDiffRowKind::Modify,
+        }
+    }
+}
+
+/// Iterate over side-by-side diff rows with borrowed text, avoiding the
+/// `Vec<FileDiffRow>` materialization that `side_by_side_rows()` performs.
+///
+/// Internally computes the diff plan and walks it, yielding `PlanRowView`
+/// references into the source texts.
+pub fn for_each_side_by_side_row<'a>(
+    old: &'a str,
+    new: &'a str,
+    mut f: impl FnMut(PlanRowView<'a>),
+) {
+    let old_lines = split_lines(old);
+    let new_lines = split_lines(new);
+    let plan = build_side_by_side_plan_with_pair_cost(
+        old,
+        new,
+        old_lines.as_slice(),
+        new_lines.as_slice(),
+        replacement_pair_cost,
+    );
+
+    for run in &plan.runs {
+        match *run {
+            FileDiffPlanRun::Context {
+                old_start,
+                new_start,
+                len,
+            } => {
+                for offset in 0..len {
+                    let old_ix = old_start.saturating_add(offset);
+                    let new_ix = new_start.saturating_add(offset);
+                    if let (Some(ol), Some(nl)) =
+                        (one_based_line_number(old_ix), one_based_line_number(new_ix))
+                    {
+                        let text = old_lines.get(old_ix).copied().unwrap_or_default();
+                        f(PlanRowView::Context {
+                            old_line: ol,
+                            new_line: nl,
+                            text,
+                        });
+                    }
+                }
+            }
+            FileDiffPlanRun::Remove { old_start, len } => {
+                for offset in 0..len {
+                    let old_ix = old_start.saturating_add(offset);
+                    if let Some(ol) = one_based_line_number(old_ix) {
+                        let text = old_lines.get(old_ix).copied().unwrap_or_default();
+                        f(PlanRowView::Remove { old_line: ol, text });
+                    }
+                }
+            }
+            FileDiffPlanRun::Add { new_start, len } => {
+                for offset in 0..len {
+                    let new_ix = new_start.saturating_add(offset);
+                    if let Some(nl) = one_based_line_number(new_ix) {
+                        let text = new_lines.get(new_ix).copied().unwrap_or_default();
+                        f(PlanRowView::Add { new_line: nl, text });
+                    }
+                }
+            }
+            FileDiffPlanRun::Modify {
+                old_start,
+                new_start,
+                len,
+            } => {
+                for offset in 0..len {
+                    let old_ix = old_start.saturating_add(offset);
+                    let new_ix = new_start.saturating_add(offset);
+                    if let (Some(ol), Some(nl)) =
+                        (one_based_line_number(old_ix), one_based_line_number(new_ix))
+                    {
+                        let old_text = old_lines.get(old_ix).copied().unwrap_or_default();
+                        let new_text = new_lines.get(new_ix).copied().unwrap_or_default();
+                        f(PlanRowView::Modify {
+                            old_line: ol,
+                            new_line: nl,
+                            old_text,
+                            new_text,
+                        });
+                    }
+                }
+            }
+        }
+    }
+}
+
 pub(crate) fn compute_row_region_anchors(rows: &[FileDiffRow]) -> FileDiffAnchors {
-    #[derive(Clone, Copy, Debug)]
-    struct ActiveRegion {
-        region_id: u32,
-        row_start: usize,
-        old_start_line: Option<u32>,
-        old_end_line: Option<u32>,
-        new_start_line: Option<u32>,
-        new_end_line: Option<u32>,
-        next_ordinal: u32,
-    }
-
-    impl ActiveRegion {
-        fn new(region_id: u32, row_start: usize) -> Self {
-            Self {
-                region_id,
-                row_start,
-                old_start_line: None,
-                old_end_line: None,
-                new_start_line: None,
-                new_end_line: None,
-                next_ordinal: 0,
-            }
-        }
-
-        fn update_lines(&mut self, row: &FileDiffRow) {
-            if let Some(old_line) = row.old_line {
-                self.old_start_line = Some(
-                    self.old_start_line
-                        .map_or(old_line, |line| line.min(old_line)),
-                );
-                self.old_end_line = Some(
-                    self.old_end_line
-                        .map_or(old_line, |line| line.max(old_line)),
-                );
-            }
-            if let Some(new_line) = row.new_line {
-                self.new_start_line = Some(
-                    self.new_start_line
-                        .map_or(new_line, |line| line.min(new_line)),
-                );
-                self.new_end_line = Some(
-                    self.new_end_line
-                        .map_or(new_line, |line| line.max(new_line)),
-                );
-            }
-        }
-
-        fn as_region_anchor(self, row_end_exclusive: usize) -> FileDiffRegionAnchor {
-            FileDiffRegionAnchor {
-                region_id: self.region_id,
-                row_start: self.row_start,
-                row_end_exclusive,
-                old_start_line: self.old_start_line,
-                old_end_line: self.old_end_line,
-                new_start_line: self.new_start_line,
-                new_end_line: self.new_end_line,
-            }
-        }
-    }
-
-    let mut row_anchors = Vec::with_capacity(rows.len());
-    let mut region_anchors: Vec<FileDiffRegionAnchor> = Vec::new();
-    let mut active_region: Option<ActiveRegion> = None;
-
+    let mut builder = FileDiffAnchorBuilder::with_capacity(rows.len());
     for (row_index, row) in rows.iter().enumerate() {
+        builder.push(row_index, row.into());
+    }
+    builder.finish(rows.len())
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DiffRowMeta {
+    kind: FileDiffRowKind,
+    old_line: Option<u32>,
+    new_line: Option<u32>,
+}
+
+impl From<&FileDiffRow> for DiffRowMeta {
+    fn from(row: &FileDiffRow) -> Self {
+        Self {
+            kind: row.kind,
+            old_line: row.old_line,
+            new_line: row.new_line,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ActiveRegion {
+    region_id: u32,
+    row_start: usize,
+    old_start_line: Option<u32>,
+    old_end_line: Option<u32>,
+    new_start_line: Option<u32>,
+    new_end_line: Option<u32>,
+    next_ordinal: u32,
+}
+
+impl ActiveRegion {
+    fn new(region_id: u32, row_start: usize) -> Self {
+        Self {
+            region_id,
+            row_start,
+            old_start_line: None,
+            old_end_line: None,
+            new_start_line: None,
+            new_end_line: None,
+            next_ordinal: 0,
+        }
+    }
+
+    fn update_lines(&mut self, row: DiffRowMeta) {
+        if let Some(old_line) = row.old_line {
+            self.old_start_line = Some(
+                self.old_start_line
+                    .map_or(old_line, |line| line.min(old_line)),
+            );
+            self.old_end_line = Some(
+                self.old_end_line
+                    .map_or(old_line, |line| line.max(old_line)),
+            );
+        }
+        if let Some(new_line) = row.new_line {
+            self.new_start_line = Some(
+                self.new_start_line
+                    .map_or(new_line, |line| line.min(new_line)),
+            );
+            self.new_end_line = Some(
+                self.new_end_line
+                    .map_or(new_line, |line| line.max(new_line)),
+            );
+        }
+    }
+
+    fn as_region_anchor(self, row_end_exclusive: usize) -> FileDiffRegionAnchor {
+        FileDiffRegionAnchor {
+            region_id: self.region_id,
+            row_start: self.row_start,
+            row_end_exclusive,
+            old_start_line: self.old_start_line,
+            old_end_line: self.old_end_line,
+            new_start_line: self.new_start_line,
+            new_end_line: self.new_end_line,
+        }
+    }
+}
+
+struct FileDiffAnchorBuilder {
+    row_anchors: Vec<FileDiffRowAnchor>,
+    region_anchors: Vec<FileDiffRegionAnchor>,
+    active_region: Option<ActiveRegion>,
+}
+
+impl FileDiffAnchorBuilder {
+    fn with_capacity(row_count_hint: usize) -> Self {
+        Self {
+            row_anchors: Vec::with_capacity(row_count_hint),
+            region_anchors: Vec::new(),
+            active_region: None,
+        }
+    }
+
+    fn push(&mut self, row_index: usize, row: DiffRowMeta) {
         if row.kind == FileDiffRowKind::Context {
-            if let Some(region) = active_region.take() {
-                region_anchors.push(region.as_region_anchor(row_index));
+            if let Some(region) = self.active_region.take() {
+                self.region_anchors.push(region.as_region_anchor(row_index));
             }
-            row_anchors.push(FileDiffRowAnchor {
+            self.row_anchors.push(FileDiffRowAnchor {
                 row_index,
                 region_id: None,
                 ordinal_in_region: None,
                 old_line: row.old_line,
                 new_line: row.new_line,
             });
-            continue;
+            return;
         }
 
-        let region = active_region.get_or_insert_with(|| {
-            let region_id = region_anchors.len() as u32;
+        let region = self.active_region.get_or_insert_with(|| {
+            let region_id = self.region_anchors.len() as u32;
             ActiveRegion::new(region_id, row_index)
         });
         region.update_lines(row);
         let ordinal_in_region = region.next_ordinal;
         region.next_ordinal = region.next_ordinal.saturating_add(1);
 
-        row_anchors.push(FileDiffRowAnchor {
+        self.row_anchors.push(FileDiffRowAnchor {
             row_index,
             region_id: Some(region.region_id),
             ordinal_in_region: Some(ordinal_in_region),
@@ -351,13 +624,14 @@ pub(crate) fn compute_row_region_anchors(rows: &[FileDiffRow]) -> FileDiffAnchor
         });
     }
 
-    if let Some(region) = active_region.take() {
-        region_anchors.push(region.as_region_anchor(rows.len()));
-    }
-
-    FileDiffAnchors {
-        row_anchors,
-        region_anchors,
+    fn finish(mut self, row_count: usize) -> FileDiffAnchors {
+        if let Some(region) = self.active_region.take() {
+            self.region_anchors.push(region.as_region_anchor(row_count));
+        }
+        FileDiffAnchors {
+            row_anchors: self.row_anchors,
+            region_anchors: self.region_anchors,
+        }
     }
 }
 
@@ -366,6 +640,189 @@ enum PlannedReplacementOp {
     Pair,
     Delete,
     Insert,
+}
+
+struct PreparedReplacementLine<'a> {
+    text: &'a str,
+    chars: Vec<char>,
+}
+
+impl<'a> PreparedReplacementLine<'a> {
+    fn new(text: &'a str) -> Self {
+        Self {
+            text,
+            chars: text.chars().collect(),
+        }
+    }
+}
+
+struct CharSlice<'a>(&'a [char]);
+
+impl<'b> IntoIterator for &CharSlice<'b> {
+    type Item = char;
+    type IntoIter = std::iter::Copied<std::slice::Iter<'b, char>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter().copied()
+    }
+}
+
+#[derive(Default)]
+#[cfg_attr(not(feature = "benchmarks"), allow(dead_code))]
+struct LevenshteinScratch {
+    prev: Vec<usize>,
+    curr: Vec<usize>,
+}
+
+#[cfg_attr(not(feature = "benchmarks"), allow(dead_code))]
+impl LevenshteinScratch {
+    fn distance(&mut self, a: &[char], b: &[char]) -> usize {
+        let (a, b) = if b.len() > a.len() { (b, a) } else { (a, b) };
+        if a == b {
+            return 0;
+        }
+        if a.is_empty() {
+            return b.len();
+        }
+        if b.is_empty() {
+            return a.len();
+        }
+
+        let width = b.len() + 1;
+        self.prev.resize(width, 0);
+        for (ix, slot) in self.prev.iter_mut().enumerate() {
+            *slot = ix;
+        }
+        self.curr.resize(width, 0);
+
+        for (i, a_ch) in a.iter().enumerate() {
+            self.curr[0] = i + 1;
+            for (j, b_ch) in b.iter().enumerate() {
+                let subst = self.prev[j] + usize::from(a_ch != b_ch);
+                let insert = self.curr[j] + 1;
+                let delete = self.prev[j + 1] + 1;
+                self.curr[j + 1] = subst.min(insert).min(delete);
+            }
+            std::mem::swap(&mut self.prev, &mut self.curr);
+        }
+
+        self.prev[b.len()]
+    }
+}
+
+fn prepare_replacement_lines<'a>(lines: &[&'a str]) -> Vec<PreparedReplacementLine<'a>> {
+    lines
+        .iter()
+        .map(|line| PreparedReplacementLine::new(line))
+        .collect()
+}
+
+#[cfg(test)]
+fn replacement_alignment_ops(
+    deletes: &[PreparedReplacementLine<'_>],
+    inserts: &[PreparedReplacementLine<'_>],
+) -> Vec<PlannedReplacementOp> {
+    replacement_alignment_ops_with_pair_cost(deletes, inserts, replacement_pair_cost)
+}
+
+fn replacement_alignment_ops_with_pair_cost<F>(
+    deletes: &[PreparedReplacementLine<'_>],
+    inserts: &[PreparedReplacementLine<'_>],
+    pair_cost_fn: F,
+) -> Vec<PlannedReplacementOp>
+where
+    F: Copy
+        + for<'a> Fn(
+            &PreparedReplacementLine<'a>,
+            &PreparedReplacementLine<'a>,
+            &mut LevenshteinScratch,
+        ) -> u32,
+{
+    let n = deletes.len();
+    let m = inserts.len();
+    let width = m + 1;
+    let mut cost = vec![u32::MAX / 4; (n + 1) * width];
+    let mut step = vec![ReplacementAlignStep::None; (n + 1) * width];
+    let mut scratch = LevenshteinScratch::default();
+    // Cache pair costs by (old_text, new_text) to avoid redundant Levenshtein
+    // computations for duplicate line pairs within the same replacement block.
+    let mut pair_cost_cache: HashMap<(&str, &str), u32> = HashMap::new();
+    cost[0] = 0;
+
+    for i in 1..=n {
+        let idx = i * width;
+        cost[idx] = (i as u32) * REPLACEMENT_GAP_COST;
+        step[idx] = ReplacementAlignStep::Delete;
+    }
+    for j in 1..=m {
+        cost[j] = (j as u32) * REPLACEMENT_GAP_COST;
+        step[j] = ReplacementAlignStep::Insert;
+    }
+
+    for i in 1..=n {
+        for j in 1..=m {
+            let idx = i * width + j;
+            let del_idx = (i - 1) * width + j;
+            let ins_idx = i * width + (j - 1);
+            let pair_idx = (i - 1) * width + (j - 1);
+
+            let cached_pair_cost = *pair_cost_cache
+                .entry((deletes[i - 1].text, inserts[j - 1].text))
+                .or_insert_with(|| pair_cost_fn(&deletes[i - 1], &inserts[j - 1], &mut scratch));
+            let pair_cost = cost[pair_idx].saturating_add(cached_pair_cost);
+            let insert_cost = cost[ins_idx].saturating_add(REPLACEMENT_GAP_COST);
+            let delete_cost = cost[del_idx].saturating_add(REPLACEMENT_GAP_COST);
+
+            let mut best_cost = pair_cost;
+            let mut best_step = ReplacementAlignStep::Pair;
+
+            if insert_cost < best_cost {
+                best_cost = insert_cost;
+                best_step = ReplacementAlignStep::Insert;
+            }
+            if delete_cost < best_cost {
+                best_cost = delete_cost;
+                best_step = ReplacementAlignStep::Delete;
+            }
+
+            cost[idx] = best_cost;
+            step[idx] = best_step;
+        }
+    }
+
+    let mut i = n;
+    let mut j = m;
+    let mut aligned_rev = Vec::with_capacity(n + m);
+    while i > 0 || j > 0 {
+        let idx = i * width + j;
+        match step[idx] {
+            ReplacementAlignStep::Pair if i > 0 && j > 0 => {
+                aligned_rev.push(PlannedReplacementOp::Pair);
+                i -= 1;
+                j -= 1;
+            }
+            ReplacementAlignStep::Insert if j > 0 => {
+                aligned_rev.push(PlannedReplacementOp::Insert);
+                j -= 1;
+            }
+            ReplacementAlignStep::Delete if i > 0 => {
+                aligned_rev.push(PlannedReplacementOp::Delete);
+                i -= 1;
+            }
+            _ if j > 0 => {
+                aligned_rev.push(PlannedReplacementOp::Insert);
+                j -= 1;
+            }
+            _ if i > 0 => {
+                aligned_rev.push(PlannedReplacementOp::Delete);
+                i -= 1;
+            }
+            _ => break,
+        }
+    }
+
+    aligned_rev.reverse();
+    aligned_rev
 }
 
 fn select_side_by_side_edits<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<Edit<'a>> {
@@ -529,7 +986,7 @@ fn push_paired_replacement_runs_by_position_to_plan(
     }
 }
 
-fn push_aligned_replacement_runs_to_plan(
+fn push_aligned_replacement_runs_to_plan_with_pair_cost<F>(
     old_lines: &[&str],
     new_lines: &[&str],
     old_start: usize,
@@ -537,7 +994,15 @@ fn push_aligned_replacement_runs_to_plan(
     new_start: usize,
     new_end: usize,
     runs: &mut Vec<FileDiffPlanRun>,
-) {
+    pair_cost_fn: F,
+) where
+    F: Copy
+        + for<'a> Fn(
+            &PreparedReplacementLine<'a>,
+            &PreparedReplacementLine<'a>,
+            &mut LevenshteinScratch,
+        ) -> u32,
+{
     let deletes = &old_lines[old_start..old_end];
     let inserts = &new_lines[new_start..new_end];
 
@@ -573,88 +1038,12 @@ fn push_aligned_replacement_runs_to_plan(
         return;
     }
 
-    let n = deletes.len();
-    let m = inserts.len();
-    let width = m + 1;
-    let mut cost = vec![u32::MAX / 4; (n + 1) * width];
-    let mut step = vec![ReplacementAlignStep::None; (n + 1) * width];
-    cost[0] = 0;
-
-    for i in 1..=n {
-        let idx = i * width;
-        cost[idx] = (i as u32) * REPLACEMENT_GAP_COST;
-        step[idx] = ReplacementAlignStep::Delete;
-    }
-    for j in 1..=m {
-        cost[j] = (j as u32) * REPLACEMENT_GAP_COST;
-        step[j] = ReplacementAlignStep::Insert;
-    }
-
-    for i in 1..=n {
-        for j in 1..=m {
-            let idx = i * width + j;
-            let del_idx = (i - 1) * width + j;
-            let ins_idx = i * width + (j - 1);
-            let pair_idx = (i - 1) * width + (j - 1);
-
-            let pair_cost = cost[pair_idx]
-                .saturating_add(replacement_pair_cost(deletes[i - 1], inserts[j - 1]));
-            let insert_cost = cost[ins_idx].saturating_add(REPLACEMENT_GAP_COST);
-            let delete_cost = cost[del_idx].saturating_add(REPLACEMENT_GAP_COST);
-
-            let mut best_cost = pair_cost;
-            let mut best_step = ReplacementAlignStep::Pair;
-
-            if insert_cost < best_cost {
-                best_cost = insert_cost;
-                best_step = ReplacementAlignStep::Insert;
-            }
-            if delete_cost < best_cost {
-                best_cost = delete_cost;
-                best_step = ReplacementAlignStep::Delete;
-            }
-
-            cost[idx] = best_cost;
-            step[idx] = best_step;
-        }
-    }
-
-    let mut i = n;
-    let mut j = m;
-    let mut aligned_rev = Vec::with_capacity(n + m);
-    while i > 0 || j > 0 {
-        let idx = i * width + j;
-        match step[idx] {
-            ReplacementAlignStep::Pair if i > 0 && j > 0 => {
-                aligned_rev.push(PlannedReplacementOp::Pair);
-                i -= 1;
-                j -= 1;
-            }
-            ReplacementAlignStep::Insert if j > 0 => {
-                aligned_rev.push(PlannedReplacementOp::Insert);
-                j -= 1;
-            }
-            ReplacementAlignStep::Delete if i > 0 => {
-                aligned_rev.push(PlannedReplacementOp::Delete);
-                i -= 1;
-            }
-            _ if j > 0 => {
-                aligned_rev.push(PlannedReplacementOp::Insert);
-                j -= 1;
-            }
-            _ if i > 0 => {
-                aligned_rev.push(PlannedReplacementOp::Delete);
-                i -= 1;
-            }
-            _ => break,
-        }
-    }
-
-    aligned_rev.reverse();
+    let deletes = prepare_replacement_lines(deletes);
+    let inserts = prepare_replacement_lines(inserts);
 
     let mut local_old = 0usize;
     let mut local_new = 0usize;
-    for op in aligned_rev {
+    for op in replacement_alignment_ops_with_pair_cost(&deletes, &inserts, pair_cost_fn) {
         match op {
             PlannedReplacementOp::Pair => {
                 push_plan_run(
@@ -692,12 +1081,21 @@ fn push_aligned_replacement_runs_to_plan(
     }
 }
 
-fn build_side_by_side_plan(
+fn build_side_by_side_plan_with_pair_cost<F>(
     old_text: &str,
     new_text: &str,
     old_lines: &[&str],
     new_lines: &[&str],
-) -> FileDiffPlan {
+    pair_cost_fn: F,
+) -> FileDiffPlan
+where
+    F: Copy
+        + for<'a> Fn(
+            &PreparedReplacementLine<'a>,
+            &PreparedReplacementLine<'a>,
+            &mut LevenshteinScratch,
+        ) -> u32,
+{
     let edits = select_side_by_side_edits(old_lines, new_lines);
     let mut runs = Vec::new();
     let mut old_ix = 0usize;
@@ -745,7 +1143,7 @@ fn build_side_by_side_plan(
                         },
                     );
                 } else {
-                    push_aligned_replacement_runs_to_plan(
+                    push_aligned_replacement_runs_to_plan_with_pair_cost(
                         old_lines,
                         new_lines,
                         delete_start,
@@ -753,6 +1151,7 @@ fn build_side_by_side_plan(
                         insert_start,
                         new_ix,
                         &mut runs,
+                        pair_cost_fn,
                     );
                 }
             }
@@ -792,6 +1191,103 @@ fn one_based_line_number(line_ix: usize) -> Option<u32> {
         .and_then(|line| u32::try_from(line).ok())
 }
 
+fn mark_changed_line(mask: &mut [bool], line: Option<u32>) {
+    let Some(line) = line else {
+        return;
+    };
+    let line_ix = line.saturating_sub(1) as usize;
+    if let Some(slot) = mask.get_mut(line_ix) {
+        *slot = true;
+    }
+}
+
+fn assign_line_to_row(line_to_row: &mut [Option<usize>], line: Option<u32>, row_index: usize) {
+    let Some(line) = line else {
+        return;
+    };
+    let line_ix = line.saturating_sub(1) as usize;
+    if let Some(slot) = line_to_row.get_mut(line_ix) {
+        *slot = Some(row_index);
+    }
+}
+
+fn for_each_plan_row_meta(plan: &FileDiffPlan, mut f: impl FnMut(usize, DiffRowMeta)) {
+    let mut row_index = 0usize;
+
+    for run in &plan.runs {
+        match *run {
+            FileDiffPlanRun::Context {
+                old_start,
+                new_start,
+                len,
+            } => {
+                for offset in 0..len {
+                    let old_ix = old_start.saturating_add(offset);
+                    let new_ix = new_start.saturating_add(offset);
+                    f(
+                        row_index,
+                        DiffRowMeta {
+                            kind: FileDiffRowKind::Context,
+                            old_line: one_based_line_number(old_ix),
+                            new_line: one_based_line_number(new_ix),
+                        },
+                    );
+                    row_index = row_index.saturating_add(1);
+                }
+            }
+            FileDiffPlanRun::Remove { old_start, len } => {
+                for offset in 0..len {
+                    let old_ix = old_start.saturating_add(offset);
+                    f(
+                        row_index,
+                        DiffRowMeta {
+                            kind: FileDiffRowKind::Remove,
+                            old_line: one_based_line_number(old_ix),
+                            new_line: None,
+                        },
+                    );
+                    row_index = row_index.saturating_add(1);
+                }
+            }
+            FileDiffPlanRun::Add { new_start, len } => {
+                for offset in 0..len {
+                    let new_ix = new_start.saturating_add(offset);
+                    f(
+                        row_index,
+                        DiffRowMeta {
+                            kind: FileDiffRowKind::Add,
+                            old_line: None,
+                            new_line: one_based_line_number(new_ix),
+                        },
+                    );
+                    row_index = row_index.saturating_add(1);
+                }
+            }
+            FileDiffPlanRun::Modify {
+                old_start,
+                new_start,
+                len,
+            } => {
+                for offset in 0..len {
+                    let old_ix = old_start.saturating_add(offset);
+                    let new_ix = new_start.saturating_add(offset);
+                    f(
+                        row_index,
+                        DiffRowMeta {
+                            kind: FileDiffRowKind::Modify,
+                            old_line: one_based_line_number(old_ix),
+                            new_line: one_based_line_number(new_ix),
+                        },
+                    );
+                    row_index = row_index.saturating_add(1);
+                }
+            }
+        }
+    }
+
+    debug_assert_eq!(row_index, plan.row_count);
+}
+
 fn materialize_rows_from_plan(
     plan: &FileDiffPlan,
     old_lines: &[&str],
@@ -809,13 +1305,13 @@ fn materialize_rows_from_plan(
                 for offset in 0..*len {
                     let old_ix = old_start.saturating_add(offset);
                     let new_ix = new_start.saturating_add(offset);
-                    let text = old_lines.get(old_ix).copied().unwrap_or_default();
+                    let text: Arc<str> = old_lines.get(old_ix).copied().unwrap_or_default().into();
                     rows.push(FileDiffRow {
                         kind: FileDiffRowKind::Context,
                         old_line: one_based_line_number(old_ix),
                         new_line: one_based_line_number(new_ix),
-                        old: Some(text.to_string()),
-                        new: Some(text.to_string()),
+                        old: Some(Arc::clone(&text)),
+                        new: Some(text),
                         eof_newline: None,
                     });
                 }
@@ -827,13 +1323,7 @@ fn materialize_rows_from_plan(
                         kind: FileDiffRowKind::Remove,
                         old_line: one_based_line_number(old_ix),
                         new_line: None,
-                        old: Some(
-                            old_lines
-                                .get(old_ix)
-                                .copied()
-                                .unwrap_or_default()
-                                .to_string(),
-                        ),
+                        old: Some(old_lines.get(old_ix).copied().unwrap_or_default().into()),
                         new: None,
                         eof_newline: None,
                     });
@@ -847,13 +1337,7 @@ fn materialize_rows_from_plan(
                         old_line: None,
                         new_line: one_based_line_number(new_ix),
                         old: None,
-                        new: Some(
-                            new_lines
-                                .get(new_ix)
-                                .copied()
-                                .unwrap_or_default()
-                                .to_string(),
-                        ),
+                        new: Some(new_lines.get(new_ix).copied().unwrap_or_default().into()),
                         eof_newline: None,
                     });
                 }
@@ -870,20 +1354,8 @@ fn materialize_rows_from_plan(
                         kind: FileDiffRowKind::Modify,
                         old_line: one_based_line_number(old_ix),
                         new_line: one_based_line_number(new_ix),
-                        old: Some(
-                            old_lines
-                                .get(old_ix)
-                                .copied()
-                                .unwrap_or_default()
-                                .to_string(),
-                        ),
-                        new: Some(
-                            new_lines
-                                .get(new_ix)
-                                .copied()
-                                .unwrap_or_default()
-                                .to_string(),
-                        ),
+                        old: Some(old_lines.get(old_ix).copied().unwrap_or_default().into()),
+                        new: Some(new_lines.get(new_ix).copied().unwrap_or_default().into()),
                         eof_newline: None,
                     });
                 }
@@ -960,87 +1432,37 @@ fn align_replacement_runs(deletes: &[FileDiffRow], inserts: &[FileDiffRow]) -> V
         return pair_replacement_runs_by_position(deletes, inserts);
     }
 
-    let n = deletes.len();
-    let m = inserts.len();
-    let width = m + 1;
-    let mut cost = vec![u32::MAX / 4; (n + 1) * width];
-    let mut step = vec![ReplacementAlignStep::None; (n + 1) * width];
-    cost[0] = 0;
+    let delete_meta: Vec<_> = deletes
+        .iter()
+        .map(|row| PreparedReplacementLine::new(row.old.as_deref().unwrap_or_default()))
+        .collect();
+    let insert_meta: Vec<_> = inserts
+        .iter()
+        .map(|row| PreparedReplacementLine::new(row.new.as_deref().unwrap_or_default()))
+        .collect();
 
-    for i in 1..=n {
-        let idx = i * width;
-        cost[idx] = (i as u32) * REPLACEMENT_GAP_COST;
-        step[idx] = ReplacementAlignStep::Delete;
-    }
-    for j in 1..=m {
-        cost[j] = (j as u32) * REPLACEMENT_GAP_COST;
-        step[j] = ReplacementAlignStep::Insert;
-    }
-
-    for i in 1..=n {
-        for j in 1..=m {
-            let idx = i * width + j;
-            let del_idx = (i - 1) * width + j;
-            let ins_idx = i * width + (j - 1);
-            let pair_idx = (i - 1) * width + (j - 1);
-
-            let pair_cost = cost[pair_idx].saturating_add(replacement_pair_cost(
-                deletes[i - 1].old.as_deref().unwrap_or_default(),
-                inserts[j - 1].new.as_deref().unwrap_or_default(),
-            ));
-            let insert_cost = cost[ins_idx].saturating_add(REPLACEMENT_GAP_COST);
-            let delete_cost = cost[del_idx].saturating_add(REPLACEMENT_GAP_COST);
-
-            let mut best_cost = pair_cost;
-            let mut best_step = ReplacementAlignStep::Pair;
-
-            if insert_cost < best_cost {
-                best_cost = insert_cost;
-                best_step = ReplacementAlignStep::Insert;
+    let mut out = Vec::with_capacity(deletes.len() + inserts.len());
+    let mut delete_ix = 0usize;
+    let mut insert_ix = 0usize;
+    for op in replacement_alignment_ops(&delete_meta, &insert_meta) {
+        match op {
+            PlannedReplacementOp::Pair => {
+                out.push(make_modify_row(&deletes[delete_ix], &inserts[insert_ix]));
+                delete_ix += 1;
+                insert_ix += 1;
             }
-            if delete_cost < best_cost {
-                best_cost = delete_cost;
-                best_step = ReplacementAlignStep::Delete;
+            PlannedReplacementOp::Insert => {
+                out.push(inserts[insert_ix].clone());
+                insert_ix += 1;
             }
-
-            cost[idx] = best_cost;
-            step[idx] = best_step;
+            PlannedReplacementOp::Delete => {
+                out.push(deletes[delete_ix].clone());
+                delete_ix += 1;
+            }
         }
     }
 
-    let mut i = n;
-    let mut j = m;
-    let mut aligned_rev = Vec::with_capacity(n + m);
-    while i > 0 || j > 0 {
-        let idx = i * width + j;
-        match step[idx] {
-            ReplacementAlignStep::Pair if i > 0 && j > 0 => {
-                aligned_rev.push(make_modify_row(&deletes[i - 1], &inserts[j - 1]));
-                i -= 1;
-                j -= 1;
-            }
-            ReplacementAlignStep::Insert if j > 0 => {
-                aligned_rev.push(inserts[j - 1].clone());
-                j -= 1;
-            }
-            ReplacementAlignStep::Delete if i > 0 => {
-                aligned_rev.push(deletes[i - 1].clone());
-                i -= 1;
-            }
-            _ if j > 0 => {
-                aligned_rev.push(inserts[j - 1].clone());
-                j -= 1;
-            }
-            _ if i > 0 => {
-                aligned_rev.push(deletes[i - 1].clone());
-                i -= 1;
-            }
-            _ => break,
-        }
-    }
-
-    aligned_rev.reverse();
-    aligned_rev
+    out
 }
 
 #[cfg(test)]
@@ -1075,15 +1497,55 @@ fn make_modify_row(delete: &FileDiffRow, insert: &FileDiffRow) -> FileDiffRow {
     }
 }
 
-fn replacement_pair_cost(old: &str, new: &str) -> u32 {
-    if old == new {
+fn replacement_pair_cost(
+    old: &PreparedReplacementLine<'_>,
+    new: &PreparedReplacementLine<'_>,
+    _scratch: &mut LevenshteinScratch,
+) -> u32 {
+    replacement_pair_cost_with_distance(old, new, |old_trimmed, new_trimmed| {
+        let old_trimmed_wrapper = CharSlice(old_trimmed);
+        let new_trimmed_wrapper = CharSlice(new_trimmed);
+        u32::try_from(strsim::generic_levenshtein(
+            &old_trimmed_wrapper,
+            &new_trimmed_wrapper,
+        ))
+        .unwrap_or(u32::MAX)
+    })
+}
+
+#[cfg(feature = "benchmarks")]
+fn replacement_pair_cost_with_scratch(
+    old: &PreparedReplacementLine<'_>,
+    new: &PreparedReplacementLine<'_>,
+    scratch: &mut LevenshteinScratch,
+) -> u32 {
+    replacement_pair_cost_with_distance(old, new, |old_trimmed, new_trimmed| {
+        scratch.distance(old_trimmed, new_trimmed) as u32
+    })
+}
+
+fn replacement_pair_cost_with_distance(
+    old: &PreparedReplacementLine<'_>,
+    new: &PreparedReplacementLine<'_>,
+    distance_fn: impl FnOnce(&[char], &[char]) -> u32,
+) -> u32 {
+    if old.text == new.text {
         return 0;
     }
 
-    let max_len_usize = old.chars().count().max(new.chars().count()).max(1);
+    let max_len_usize = old.chars.len().max(new.chars.len()).max(1);
     let max_len = max_len_usize as u32;
-    let distance = levenshtein_distance(old, new) as u32;
-    let (shared_prefix, shared_suffix) = shared_boundary_bytes(old, new);
+    let (shared_prefix, shared_suffix) = shared_boundary_chars(&old.chars, &new.chars);
+    let old_trimmed = &old.chars[shared_prefix..old.chars.len().saturating_sub(shared_suffix)];
+    let new_trimmed = &new.chars[shared_prefix..new.chars.len().saturating_sub(shared_suffix)];
+
+    // Fast path: if either trimmed side is empty, the distance is exactly
+    // the length of the other side — skip the O(n*m) Levenshtein DP.
+    let distance = if old_trimmed.is_empty() || new_trimmed.is_empty() {
+        (old_trimmed.len() + new_trimmed.len()) as u32
+    } else {
+        distance_fn(old_trimmed, new_trimmed)
+    };
 
     let mut cost = REPLACEMENT_PAIR_BASE_COST
         + distance
@@ -1100,55 +1562,19 @@ fn replacement_pair_cost(old: &str, new: &str) -> u32 {
     cost
 }
 
-fn shared_boundary_bytes(a: &str, b: &str) -> (usize, usize) {
-    let a_bytes = a.as_bytes();
-    let b_bytes = b.as_bytes();
+fn shared_boundary_chars(a: &[char], b: &[char]) -> (usize, usize) {
     let mut prefix = 0usize;
-    while prefix < a_bytes.len() && prefix < b_bytes.len() && a_bytes[prefix] == b_bytes[prefix] {
+    while prefix < a.len() && prefix < b.len() && a[prefix] == b[prefix] {
         prefix += 1;
     }
 
-    let max_suffix = a_bytes.len().min(b_bytes.len()).saturating_sub(prefix);
+    let max_suffix = a.len().min(b.len()).saturating_sub(prefix);
     let mut suffix = 0usize;
-    while suffix < max_suffix
-        && a_bytes[a_bytes.len() - 1 - suffix] == b_bytes[b_bytes.len() - 1 - suffix]
-    {
+    while suffix < max_suffix && a[a.len() - 1 - suffix] == b[b.len() - 1 - suffix] {
         suffix += 1;
     }
 
     (prefix, suffix)
-}
-
-fn levenshtein_distance(a: &str, b: &str) -> usize {
-    if a == b {
-        return 0;
-    }
-
-    let a_chars: Vec<char> = a.chars().collect();
-    let b_chars: Vec<char> = b.chars().collect();
-
-    if a_chars.is_empty() {
-        return b_chars.len();
-    }
-    if b_chars.is_empty() {
-        return a_chars.len();
-    }
-
-    let mut prev: Vec<usize> = (0..=b_chars.len()).collect();
-    let mut curr: Vec<usize> = vec![0; b_chars.len() + 1];
-
-    for (i, a_ch) in a_chars.iter().enumerate() {
-        curr[0] = i + 1;
-        for (j, b_ch) in b_chars.iter().enumerate() {
-            let subst = prev[j] + usize::from(a_ch != b_ch);
-            let insert = curr[j] + 1;
-            let delete = prev[j + 1] + 1;
-            curr[j + 1] = subst.min(insert).min(delete);
-        }
-        std::mem::swap(&mut prev, &mut curr);
-    }
-
-    prev[b_chars.len()]
 }
 
 /// Patience/histogram diff algorithm.
@@ -1177,9 +1603,7 @@ fn patience_recurse<'a>(
 ) -> Vec<Edit<'a>> {
     // Fall back to Myers if recursion is too deep.
     if depth >= PATIENCE_MAX_DEPTH {
-        let old_slice: Vec<&str> = old[old_start..old_end].to_vec();
-        let new_slice: Vec<&str> = new[new_start..new_end].to_vec();
-        return myers_edits(&old_slice, &new_slice);
+        return myers_edits(&old[old_start..old_end], &new[new_start..new_end]);
     }
 
     // Strip common prefix.
@@ -1249,9 +1673,10 @@ fn patience_recurse<'a>(
 
         if anchors.is_empty() {
             // No unique anchors — fall back to Myers for this region.
-            let old_slice: Vec<&str> = old[inner_old_start..inner_old_end].to_vec();
-            let new_slice: Vec<&str> = new[inner_new_start..inner_new_end].to_vec();
-            edits.extend(myers_edits(&old_slice, &new_slice));
+            edits.extend(myers_edits(
+                &old[inner_old_start..inner_old_end],
+                &new[inner_new_start..inner_new_end],
+            ));
         } else {
             // Recursively diff between anchors.
             let mut oi = inner_old_start;
@@ -1637,7 +2062,7 @@ mod tests {
             kind: FileDiffRowKind::Remove,
             old_line: Some(old_line),
             new_line: None,
-            old: Some(old.to_string()),
+            old: Some(old.into()),
             new: None,
             eof_newline: None,
         }
@@ -1649,9 +2074,70 @@ mod tests {
             old_line: None,
             new_line: Some(new_line),
             old: None,
-            new: Some(new.to_string()),
+            new: Some(new.into()),
             eof_newline: None,
         }
+    }
+
+    fn changed_line_masks_from_rows(
+        rows: &[FileDiffRow],
+        old_line_count: usize,
+        new_line_count: usize,
+    ) -> (Vec<bool>, Vec<bool>) {
+        let mut old_mask = vec![false; old_line_count];
+        let mut new_mask = vec![false; new_line_count];
+
+        for row in rows {
+            match row.kind {
+                FileDiffRowKind::Context => {}
+                FileDiffRowKind::Remove => mark_changed_line(old_mask.as_mut_slice(), row.old_line),
+                FileDiffRowKind::Add => mark_changed_line(new_mask.as_mut_slice(), row.new_line),
+                FileDiffRowKind::Modify => {
+                    mark_changed_line(old_mask.as_mut_slice(), row.old_line);
+                    mark_changed_line(new_mask.as_mut_slice(), row.new_line);
+                }
+            }
+        }
+
+        (old_mask, new_mask)
+    }
+
+    fn line_to_row_maps_from_rows(
+        rows: &[FileDiffRow],
+        old_line_count: usize,
+        new_line_count: usize,
+    ) -> (Vec<Option<usize>>, Vec<Option<usize>>) {
+        let mut old_line_to_row = vec![None; old_line_count];
+        let mut new_line_to_row = vec![None; new_line_count];
+
+        for (row_index, row) in rows.iter().enumerate() {
+            assign_line_to_row(old_line_to_row.as_mut_slice(), row.old_line, row_index);
+            assign_line_to_row(new_line_to_row.as_mut_slice(), row.new_line, row_index);
+        }
+
+        (old_line_to_row, new_line_to_row)
+    }
+
+    fn emitted_line_prefix_counts_from_rows(rows: &[FileDiffRow]) -> (Vec<usize>, Vec<usize>) {
+        let mut old_prefix = Vec::with_capacity(rows.len().saturating_add(1));
+        let mut new_prefix = Vec::with_capacity(rows.len().saturating_add(1));
+        let mut old_count = 0usize;
+        let mut new_count = 0usize;
+        old_prefix.push(0);
+        new_prefix.push(0);
+
+        for row in rows {
+            if row.old_line.is_some() {
+                old_count = old_count.saturating_add(1);
+            }
+            if row.new_line.is_some() {
+                new_count = new_count.saturating_add(1);
+            }
+            old_prefix.push(old_count);
+            new_prefix.push(new_count);
+        }
+
+        (old_prefix, new_prefix)
     }
 
     #[test]
@@ -1838,6 +2324,33 @@ mod tests {
     }
 
     #[test]
+    fn shared_boundary_counts_unicode_codepoints() {
+        let old = PreparedReplacementLine::new("prefix-é-suffix");
+        let new = PreparedReplacementLine::new("prefix-ê-suffix");
+
+        assert_eq!(
+            shared_boundary_chars(&old.chars, &new.chars),
+            ("prefix-".chars().count(), "-suffix".chars().count())
+        );
+    }
+
+    #[test]
+    fn replacement_pair_cost_reuses_unicode_boundaries() {
+        let old = PreparedReplacementLine::new("prefix-é-suffix");
+        let new = PreparedReplacementLine::new("prefix-ê-suffix");
+        let unrelated = PreparedReplacementLine::new("xxxxxxxxxxxxxxx");
+        let mut scratch = LevenshteinScratch::default();
+
+        let shared_edge_cost = replacement_pair_cost(&old, &new, &mut scratch);
+        let unrelated_cost = replacement_pair_cost(&old, &unrelated, &mut scratch);
+
+        assert!(
+            shared_edge_cost < unrelated_cost,
+            "shared prefix/suffix should keep a unicode substitution cheaper than an unrelated line"
+        );
+    }
+
+    #[test]
     fn side_by_side_aligns_asymmetric_replacement_in_context() {
         let old = "start\nalpha\nbeta\nend\n";
         let new = "start\nintro\nalpha changed\nbeta changed\nend\n";
@@ -1977,6 +2490,129 @@ mod tests {
     }
 
     #[test]
+    fn plan_metadata_helpers_match_materialized_rows() {
+        let old = "keep\nremove only\nbefore change\nshared tail\n";
+        let new = "keep\ninsert only\nafter change\nshared tail\nextra add\n";
+
+        let plan = side_by_side_plan(old, new);
+        let rows = side_by_side_rows(old, new);
+        let old_line_count = old.lines().count();
+        let new_line_count = new.lines().count();
+
+        assert_eq!(plan.row_count, rows.len());
+        assert_eq!(
+            plan_row_region_anchors(&plan),
+            compute_row_region_anchors(&rows)
+        );
+        assert_eq!(
+            plan_changed_line_masks(&plan, old_line_count, new_line_count),
+            changed_line_masks_from_rows(&rows, old_line_count, new_line_count)
+        );
+        assert_eq!(
+            plan_line_to_row_maps(&plan, old_line_count, new_line_count),
+            line_to_row_maps_from_rows(&rows, old_line_count, new_line_count)
+        );
+        assert_eq!(
+            plan_emitted_line_prefix_counts(&plan),
+            emitted_line_prefix_counts_from_rows(&rows)
+        );
+    }
+
+    #[test]
+    fn for_each_side_by_side_row_matches_materialized_rows() {
+        let old = "keep\nremove only\nbefore change\nshared tail\n";
+        let new = "keep\ninsert only\nafter change\nshared tail\nextra add\n";
+
+        type PlanRow = (
+            FileDiffRowKind,
+            Option<u32>,
+            Option<u32>,
+            Option<String>,
+            Option<String>,
+        );
+        let rows = side_by_side_rows(old, new);
+        let mut plan_rows: Vec<PlanRow> = Vec::new();
+        for_each_side_by_side_row(old, new, |view| {
+            let (kind, old_line, new_line, old_text, new_text) = match view {
+                PlanRowView::Context {
+                    old_line,
+                    new_line,
+                    text,
+                } => (
+                    FileDiffRowKind::Context,
+                    Some(old_line),
+                    Some(new_line),
+                    Some(text.to_string()),
+                    Some(text.to_string()),
+                ),
+                PlanRowView::Remove { old_line, text } => (
+                    FileDiffRowKind::Remove,
+                    Some(old_line),
+                    None,
+                    Some(text.to_string()),
+                    None,
+                ),
+                PlanRowView::Add { new_line, text } => (
+                    FileDiffRowKind::Add,
+                    None,
+                    Some(new_line),
+                    None,
+                    Some(text.to_string()),
+                ),
+                PlanRowView::Modify {
+                    old_line,
+                    new_line,
+                    old_text,
+                    new_text,
+                } => (
+                    FileDiffRowKind::Modify,
+                    Some(old_line),
+                    Some(new_line),
+                    Some(old_text.to_string()),
+                    Some(new_text.to_string()),
+                ),
+            };
+            plan_rows.push((kind, old_line, new_line, old_text, new_text));
+        });
+
+        assert_eq!(plan_rows.len(), rows.len());
+        for (i, row) in rows.iter().enumerate() {
+            let (kind, old_line, new_line, old_text, new_text) = &plan_rows[i];
+            assert_eq!(*kind, row.kind, "row {i} kind mismatch");
+            assert_eq!(*old_line, row.old_line, "row {i} old_line mismatch");
+            assert_eq!(*new_line, row.new_line, "row {i} new_line mismatch");
+            assert_eq!(
+                old_text.as_deref(),
+                row.old.as_deref(),
+                "row {i} old text mismatch"
+            );
+            assert_eq!(
+                new_text.as_deref(),
+                row.new.as_deref(),
+                "row {i} new text mismatch"
+            );
+        }
+    }
+
+    #[test]
+    fn for_each_side_by_side_row_empty_inputs() {
+        let mut count = 0;
+        for_each_side_by_side_row("", "", |_| count += 1);
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn for_each_side_by_side_row_replacement_block() {
+        let old = "start\nalpha\nbeta\nend\n";
+        let new = "start\nintro\nalpha changed\nbeta changed\nend\n";
+
+        let rows = side_by_side_rows(old, new);
+        let mut kinds = Vec::new();
+        for_each_side_by_side_row(old, new, |view| kinds.push(view.kind()));
+        assert_eq!(kinds, rows.iter().map(|r| r.kind).collect::<Vec<_>>());
+    }
+
+    #[test]
     fn myers_fallback_preserves_common_prefix_and_suffix() {
         let old = ["keep-1", "keep-2", "old-middle", "keep-3"];
         let new = ["keep-1", "keep-2", "new-middle", "keep-3"];
@@ -2031,5 +2667,46 @@ mod tests {
         assert_eq!(changed[0].new_line, Some((first_change_ix + 1) as u32));
         assert_eq!(changed[1].old_line, Some((second_change_ix + 1) as u32));
         assert_eq!(changed[1].new_line, Some((second_change_ix + 1) as u32));
+    }
+
+    #[cfg(feature = "benchmarks")]
+    #[test]
+    fn benchmark_backends_match_current_plan() {
+        let cases = [
+            (
+                "start\nprefix-only-change\nshared tail\nend\n",
+                "start\nprefix-only-change extended\nshared tail\nend\n",
+            ),
+            (
+                "alpha\nrepeated\nrepeated\nomega\n",
+                "alpha\nrepeated changed\nrepeated changed\nomega\n",
+            ),
+            (
+                "context\nfn café() {\n    return old_value;\n}\n",
+                "context\nfn café() {\n    return new_value;\n}\n",
+            ),
+        ];
+
+        for (old, new) in cases {
+            let current = side_by_side_plan(old, new);
+            let scratch = benchmark_side_by_side_plan_with_replacement_backend(
+                old,
+                new,
+                BenchmarkReplacementDistanceBackend::Scratch,
+            );
+            let strsim = benchmark_side_by_side_plan_with_replacement_backend(
+                old,
+                new,
+                BenchmarkReplacementDistanceBackend::Strsim,
+            );
+            assert_eq!(
+                current, scratch,
+                "scratch backend parity mismatch for old={old:?} new={new:?}"
+            );
+            assert_eq!(
+                current, strsim,
+                "backend parity mismatch for old={old:?} new={new:?}"
+            );
+        }
     }
 }

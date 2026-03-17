@@ -275,6 +275,7 @@ mod conflict_telemetry;
 mod diff_selection;
 mod effects;
 mod external_and_history;
+mod reducer_diagnostics;
 mod repo_management;
 mod repo_monitor;
 mod send_failures;

@@ -1,13 +1,12 @@
 use crate::model::RepoId;
 use crate::msg::{Msg, RepoExternalChange};
+use gix::index::entry::Mode as GitIndexMode;
 use notify::event::{AccessKind, AccessMode};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
-use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
+use rustc_hash::FxHashMap as HashMap;
 use std::any::Any;
 use std::fs;
-use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
@@ -31,6 +30,46 @@ pub(super) enum MonitorFailureKind {
 static REPO_MONITOR_START_FAILURES: AtomicU64 = AtomicU64::new(0);
 static REPO_MONITOR_STOP_FAILURES: AtomicU64 = AtomicU64::new(0);
 static REPO_MONITOR_JOIN_FAILURES: AtomicU64 = AtomicU64::new(0);
+static REPO_MONITOR_IGNORE_LOOKUP_REQUESTS: AtomicU64 = AtomicU64::new(0);
+static REPO_MONITOR_IGNORE_LOOKUP_CACHE_HITS: AtomicU64 = AtomicU64::new(0);
+static REPO_MONITOR_IGNORE_LOOKUP_CACHE_MISSES: AtomicU64 = AtomicU64::new(0);
+static REPO_MONITOR_IGNORE_LOOKUP_FALLBACKS: AtomicU64 = AtomicU64::new(0);
+static REPO_MONITOR_IGNORE_LOOKUP_TOTAL_NANOS: AtomicU64 = AtomicU64::new(0);
+static REPO_MONITOR_IGNORE_LOOKUP_MAX_NANOS: AtomicU64 = AtomicU64::new(0);
+
+fn duration_nanos_saturating(duration: Duration) -> u64 {
+    duration.as_nanos().min(u64::MAX as u128) as u64
+}
+
+fn record_ignore_lookup_cache_outcome(hit: bool) {
+    REPO_MONITOR_IGNORE_LOOKUP_REQUESTS.fetch_add(1, Ordering::Relaxed);
+    if hit {
+        REPO_MONITOR_IGNORE_LOOKUP_CACHE_HITS.fetch_add(1, Ordering::Relaxed);
+    } else {
+        REPO_MONITOR_IGNORE_LOOKUP_CACHE_MISSES.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+fn record_ignore_lookup_latency(duration: Duration, used_fallback: bool) {
+    let nanos = duration_nanos_saturating(duration);
+    REPO_MONITOR_IGNORE_LOOKUP_TOTAL_NANOS.fetch_add(nanos, Ordering::Relaxed);
+    if used_fallback {
+        REPO_MONITOR_IGNORE_LOOKUP_FALLBACKS.fetch_add(1, Ordering::Relaxed);
+    }
+
+    let mut current = REPO_MONITOR_IGNORE_LOOKUP_MAX_NANOS.load(Ordering::Relaxed);
+    while nanos > current {
+        match REPO_MONITOR_IGNORE_LOOKUP_MAX_NANOS.compare_exchange_weak(
+            current,
+            nanos,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => break,
+            Err(observed) => current = observed,
+        }
+    }
+}
 
 fn monitor_failure_counter(kind: MonitorFailureKind) -> &'static AtomicU64 {
     match kind {
@@ -105,6 +144,41 @@ fn join_monitor_or_log(join: thread::JoinHandle<()>, repo_id: RepoId, context: &
 #[cfg(test)]
 pub(super) fn monitor_failure_count(kind: MonitorFailureKind) -> u64 {
     monitor_failure_counter(kind).load(Ordering::Relaxed)
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) struct RepoMonitorIgnoreLookupStats {
+    pub(super) request_count: u64,
+    pub(super) cache_hits: u64,
+    pub(super) cache_misses: u64,
+    pub(super) fallback_count: u64,
+    pub(super) average_lookup_nanos: u64,
+    pub(super) max_lookup_nanos: u64,
+}
+
+#[cfg(test)]
+pub(super) fn repo_monitor_ignore_lookup_stats() -> RepoMonitorIgnoreLookupStats {
+    let request_count = REPO_MONITOR_IGNORE_LOOKUP_REQUESTS.load(Ordering::Relaxed);
+    let cache_hits = REPO_MONITOR_IGNORE_LOOKUP_CACHE_HITS.load(Ordering::Relaxed);
+    let cache_misses = REPO_MONITOR_IGNORE_LOOKUP_CACHE_MISSES.load(Ordering::Relaxed);
+    let fallback_count = REPO_MONITOR_IGNORE_LOOKUP_FALLBACKS.load(Ordering::Relaxed);
+    let total_lookup_nanos = REPO_MONITOR_IGNORE_LOOKUP_TOTAL_NANOS.load(Ordering::Relaxed);
+    let max_lookup_nanos = REPO_MONITOR_IGNORE_LOOKUP_MAX_NANOS.load(Ordering::Relaxed);
+    let average_lookup_nanos = if cache_misses == 0 {
+        0
+    } else {
+        total_lookup_nanos / cache_misses
+    };
+
+    RepoMonitorIgnoreLookupStats {
+        request_count,
+        cache_hits,
+        cache_misses,
+        fallback_count,
+        average_lookup_nanos,
+        max_lookup_nanos,
+    }
 }
 
 #[cfg(test)]
@@ -271,17 +345,73 @@ struct CachedIgnoreResult {
     cached_at: Instant,
 }
 
-#[derive(Clone, Default)]
+struct GitignoreMatcher {
+    repo: gix::Repository,
+    index: gix::worktree::Index,
+    excludes: gix::worktree::Stack,
+}
+
+impl GitignoreMatcher {
+    fn load(workdir: &Path) -> Option<Self> {
+        let repo = gix::open(workdir).ok()?;
+        let worktree = repo.worktree()?;
+        let index = worktree.index().ok()?;
+        let excludes = repo
+            .excludes(
+                &index,
+                None,
+                gix::worktree::stack::state::ignore::Source::WorktreeThenIdMappingIfNotSkipped,
+            )
+            .ok()?
+            .detach();
+        Some(Self {
+            repo,
+            index,
+            excludes,
+        })
+    }
+
+    fn path_is_tracked(&self, rel: &Path, is_dir_hint: Option<bool>) -> bool {
+        let rel = gix::path::to_unix_separators_on_windows(gix::path::into_bstr(rel));
+        if self.index.entry_by_path(rel.as_ref()).is_some() {
+            return true;
+        }
+
+        is_dir_hint == Some(true)
+            && self
+                .index
+                .entry_closest_to_directory_or_directory(rel.as_ref())
+                .is_some()
+    }
+
+    fn is_ignored_rel(&mut self, rel: &Path, is_dir_hint: Option<bool>) -> Option<bool> {
+        if self.path_is_tracked(rel, is_dir_hint) {
+            return Some(false);
+        }
+
+        let mode = match is_dir_hint {
+            Some(true) => Some(GitIndexMode::DIR),
+            Some(false) => Some(GitIndexMode::FILE),
+            None => None,
+        };
+        let platform = self.excludes.at_path(rel, mode, &self.repo.objects).ok()?;
+        Some(platform.is_excluded())
+    }
+}
+
+#[derive(Default)]
 struct GitignoreRules {
     workdir: Option<PathBuf>,
+    matcher: Option<GitignoreMatcher>,
     cache: HashMap<IgnoreCacheKey, CachedIgnoreResult>,
     last_prune_at: Option<Instant>,
 }
 
 impl GitignoreRules {
-    fn load(workdir: &Path, _git_dir: Option<&Path>) -> Self {
+    fn load(workdir: &Path) -> Self {
         Self {
             workdir: Some(workdir.to_path_buf()),
+            matcher: GitignoreMatcher::load(workdir),
             cache: HashMap::default(),
             last_prune_at: None,
         }
@@ -353,10 +483,32 @@ impl GitignoreRules {
         self.prune_cache_if_due(now);
     }
 
-    fn is_ignored_rel(&mut self, rel: &Path, is_dir_hint: Option<bool>) -> bool {
-        let Some(workdir) = self.workdir.clone() else {
-            return false;
+    fn cached_ignore_lookup(&mut self, key: &IgnoreCacheKey, now: Instant) -> Option<bool> {
+        let cached = self.cache_get(key, now);
+        record_ignore_lookup_cache_outcome(cached.is_some());
+        cached
+    }
+
+    fn resolve_uncached_ignore(&mut self, rel: &Path, is_dir_hint: Option<bool>) -> bool {
+        let started_at = Instant::now();
+        let (ignored, matcher_failed) = match self.matcher.as_mut() {
+            Some(matcher) => match matcher.is_ignored_rel(rel, is_dir_hint) {
+                Some(ignored) => (ignored, false),
+                // gix matcher failed — treat as not-ignored (safe: may cause extra
+                // refreshes, but never misses real changes).
+                None => (false, true),
+            },
+            // No matcher available — treat as not-ignored.
+            None => (false, true),
         };
+        record_ignore_lookup_latency(started_at.elapsed(), matcher_failed);
+        ignored
+    }
+
+    fn is_ignored_rel(&mut self, rel: &Path, is_dir_hint: Option<bool>) -> bool {
+        if self.workdir.is_none() {
+            return false;
+        }
 
         let now = Instant::now();
         self.prune_cache_if_due(now);
@@ -365,255 +517,13 @@ impl GitignoreRules {
             rel: rel.to_path_buf(),
             is_dir_hint,
         };
-        if let Some(ignored) = self.cache_get(&key, now) {
+        if let Some(ignored) = self.cached_ignore_lookup(&key, now) {
             return ignored;
         }
 
-        let ignored = query_git_check_ignore(&workdir, rel, is_dir_hint).unwrap_or(false);
+        let ignored = self.resolve_uncached_ignore(rel, is_dir_hint);
         self.cache_insert(key, ignored, now);
         ignored
-    }
-
-    fn prefetch_ignored_rels(&mut self, rels: Vec<PathBuf>, is_dir_hint: Option<bool>) {
-        let Some(workdir) = self.workdir.clone() else {
-            return;
-        };
-        if rels.is_empty() {
-            return;
-        }
-
-        let now = Instant::now();
-        self.prune_cache_if_due(now);
-
-        let mut pending = Vec::new();
-        let mut seen = HashSet::default();
-        for rel in rels {
-            let key = IgnoreCacheKey {
-                rel: rel.clone(),
-                is_dir_hint,
-            };
-            if self.cache_get(&key, now).is_some() || !seen.insert(key.clone()) {
-                continue;
-            }
-            pending.push(key);
-        }
-        if pending.is_empty() {
-            return;
-        }
-
-        let lookup: Vec<PathBuf> = pending.iter().map(|key| key.rel.clone()).collect();
-        if let Some(results) = query_git_check_ignore_batch(&workdir, &lookup, is_dir_hint) {
-            for key in pending {
-                let ignored = results.get(&key.rel).copied().unwrap_or(false);
-                self.cache_insert(key, ignored, now);
-            }
-            return;
-        }
-
-        // Fallback keeps behavior stable if batched lookup fails unexpectedly.
-        for key in pending {
-            let ignored =
-                query_git_check_ignore(&workdir, &key.rel, key.is_dir_hint).unwrap_or(false);
-            self.cache_insert(key, ignored, now);
-        }
-    }
-}
-
-fn query_git_check_ignore(workdir: &Path, rel: &Path, is_dir_hint: Option<bool>) -> Option<bool> {
-    let exact = run_git_check_ignore(workdir, rel)?;
-    if exact {
-        return Some(true);
-    }
-
-    if is_dir_hint != Some(true) {
-        return Some(false);
-    }
-
-    let rel_dir = rel_path_with_trailing_separator(rel);
-    if rel_dir == rel {
-        let rel_child = rel.join(".gitcomet-ignore-probe");
-        return run_git_check_ignore(workdir, &rel_child);
-    }
-    if run_git_check_ignore(workdir, &rel_dir)? {
-        return Some(true);
-    }
-
-    // Directory-only patterns (e.g. `target/`) don't always match the directory
-    // path itself in `git check-ignore`; probing a synthetic child path mirrors
-    // how git applies the rule to contents.
-    let rel_child = rel.join(".gitcomet-ignore-probe");
-    run_git_check_ignore(workdir, &rel_child)
-}
-
-fn query_git_check_ignore_batch(
-    workdir: &Path,
-    rels: &[PathBuf],
-    is_dir_hint: Option<bool>,
-) -> Option<HashMap<PathBuf, bool>> {
-    if rels.is_empty() {
-        return Some(HashMap::default());
-    }
-
-    let exact_ignored = run_git_check_ignore_batch(workdir, rels)?;
-    let mut results = HashMap::default();
-    let mut dir_probe_pending = Vec::new();
-
-    for rel in rels {
-        if exact_ignored.contains(rel) {
-            results.insert(rel.clone(), true);
-            continue;
-        }
-        if is_dir_hint != Some(true) {
-            results.insert(rel.clone(), false);
-            continue;
-        }
-        dir_probe_pending.push(rel.clone());
-    }
-
-    if dir_probe_pending.is_empty() {
-        return Some(results);
-    }
-
-    let mut rel_dir_probes = Vec::new();
-    let mut child_probes = Vec::new();
-
-    for rel in dir_probe_pending {
-        let rel_dir = rel_path_with_trailing_separator(&rel);
-        if rel_dir == rel {
-            child_probes.push((rel.clone(), rel.join(".gitcomet-ignore-probe")));
-        } else {
-            rel_dir_probes.push((rel, rel_dir));
-        }
-    }
-
-    if !rel_dir_probes.is_empty() {
-        let rel_dir_paths: Vec<PathBuf> = rel_dir_probes
-            .iter()
-            .map(|(_, rel_dir_probe)| rel_dir_probe.clone())
-            .collect();
-        let rel_dir_ignored = run_git_check_ignore_batch(workdir, &rel_dir_paths)?;
-
-        for (rel, rel_dir_probe) in rel_dir_probes {
-            if rel_dir_ignored.contains(&rel_dir_probe) {
-                results.insert(rel, true);
-            } else {
-                child_probes.push((rel.clone(), rel.join(".gitcomet-ignore-probe")));
-            }
-        }
-    }
-
-    if child_probes.is_empty() {
-        return Some(results);
-    }
-
-    let child_paths: Vec<PathBuf> = child_probes
-        .iter()
-        .map(|(_, child_probe)| child_probe.clone())
-        .collect();
-    let child_ignored = run_git_check_ignore_batch(workdir, &child_paths)?;
-    for (rel, child_probe) in child_probes {
-        results.insert(rel, child_ignored.contains(&child_probe));
-    }
-
-    Some(results)
-}
-
-fn run_git_check_ignore(workdir: &Path, rel: &Path) -> Option<bool> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(workdir)
-        .arg("check-ignore")
-        .arg("--quiet")
-        .arg("--")
-        .arg(rel)
-        .output()
-        .ok()?;
-
-    match output.status.code() {
-        Some(0) => Some(true),
-        Some(1) => Some(false),
-        _ => None,
-    }
-}
-
-fn run_git_check_ignore_batch(workdir: &Path, rels: &[PathBuf]) -> Option<HashSet<PathBuf>> {
-    if rels.is_empty() {
-        return Some(HashSet::default());
-    }
-
-    let mut child = Command::new("git")
-        .arg("-C")
-        .arg(workdir)
-        .arg("check-ignore")
-        .arg("--stdin")
-        .arg("-z")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
-
-    {
-        let mut stdin = child.stdin.take()?;
-        for rel in rels {
-            #[cfg(unix)]
-            {
-                use std::os::unix::ffi::OsStrExt as _;
-                stdin.write_all(rel.as_os_str().as_bytes()).ok()?;
-            }
-            #[cfg(not(unix))]
-            {
-                let rel_text = rel.to_str()?;
-                stdin.write_all(rel_text.as_bytes()).ok()?;
-            }
-            stdin.write_all(&[0]).ok()?;
-        }
-    }
-
-    let output = child.wait_with_output().ok()?;
-    match output.status.code() {
-        Some(0) | Some(1) => {}
-        _ => return None,
-    }
-
-    let mut ignored = HashSet::default();
-    for raw in output.stdout.split(|b| *b == 0) {
-        if raw.is_empty() {
-            continue;
-        }
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::ffi::OsStringExt as _;
-            ignored.insert(PathBuf::from(std::ffi::OsString::from_vec(raw.to_vec())));
-        }
-        #[cfg(not(unix))]
-        {
-            let path_text = String::from_utf8(raw.to_vec()).ok()?;
-            ignored.insert(PathBuf::from(path_text));
-        }
-    }
-    Some(ignored)
-}
-
-fn rel_path_with_trailing_separator(rel: &Path) -> PathBuf {
-    #[cfg(unix)]
-    {
-        use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
-
-        let mut bytes = rel.as_os_str().as_bytes().to_vec();
-        if bytes.last() == Some(&b'/') {
-            return rel.to_path_buf();
-        }
-        bytes.push(b'/');
-        PathBuf::from(std::ffi::OsString::from_vec(bytes))
-    }
-
-    #[cfg(not(unix))]
-    {
-        let mut rel_with_sep = rel.as_os_str().to_os_string();
-        rel_with_sep.push("/");
-        PathBuf::from(rel_with_sep)
     }
 }
 
@@ -627,7 +537,7 @@ fn repo_monitor_thread(
 ) {
     let workdir = super::canonicalize_path(workdir);
     let git_dir = resolve_git_dir(&workdir);
-    let mut gitignore = GitignoreRules::load(&workdir, git_dir.as_deref());
+    let mut gitignore = GitignoreRules::load(&workdir);
     let callback_enabled = Arc::new(AtomicBool::new(true));
 
     let watcher = notify::recommended_watcher({
@@ -811,7 +721,7 @@ fn classify_repo_event(
         .iter()
         .any(|p| is_gitignore_config_path(workdir, git_dir, p))
     {
-        *gitignore = GitignoreRules::load(workdir, git_dir);
+        *gitignore = GitignoreRules::load(workdir);
         return Some(RepoExternalChange::Worktree);
     }
 
@@ -822,32 +732,6 @@ fn classify_repo_event(
     let mut saw_worktree = false;
     let mut saw_git = false;
     let is_dir_hint = path_dir_hint(event);
-    let mut uncached_worktree_rels = Vec::new();
-
-    for path in &event.paths {
-        if is_git_index_lock_path(workdir, git_dir, path) {
-            // Ignore `.git/index.lock` churn from read-only git commands. These transient
-            // lockfile create/delete events can self-trigger endless refresh loops.
-            continue;
-        }
-        if is_git_related_path(workdir, git_dir, path) {
-            continue;
-        }
-
-        let Ok(rel) = path.strip_prefix(workdir) else {
-            continue;
-        };
-
-        let key = IgnoreCacheKey {
-            rel: rel.to_path_buf(),
-            is_dir_hint,
-        };
-        if gitignore.cache.contains_key(&key) {
-            continue;
-        }
-        uncached_worktree_rels.push(key.rel);
-    }
-    gitignore.prefetch_ignored_rels(uncached_worktree_rels, is_dir_hint);
 
     for path in &event.paths {
         if is_git_index_lock_path(workdir, git_dir, path) {
@@ -930,7 +814,11 @@ fn should_ignore_event_kind(event: &notify::Event) -> bool {
 }
 
 fn is_gitignore_config_path(workdir: &Path, git_dir: Option<&Path>, path: &Path) -> bool {
-    if path == workdir.join(".gitignore") {
+    if path.starts_with(workdir)
+        && path
+            .file_name()
+            .is_some_and(|name| name == std::ffi::OsStr::new(".gitignore"))
+    {
         return true;
     }
     git_dir.is_some_and(|git_dir| path == git_dir.join("info").join("exclude"))
@@ -1000,6 +888,10 @@ mod tests {
         // Keep tests deterministic and independent from host global excludes.
         run_git(workdir, &["config", "core.excludesFile", NULL_DEVICE]);
         run_git(workdir, &["config", "core.fileMode", "false"]);
+        // Create an initial commit so that the index file exists (git init
+        // doesn't create one until the first staging operation, and the gix
+        // excludes stack requires a valid index).
+        run_git(workdir, &["commit", "--allow-empty", "-m", "init"]);
     }
 
     fn unique_temp_dir(prefix: &str) -> PathBuf {
@@ -1331,9 +1223,13 @@ mod tests {
             "info-excluded.gitcomet\n",
         )
         .expect("write .git/info/exclude");
-        fs::create_dir_all(workdir.join("target")).expect("create target directory");
+        fs::create_dir_all(workdir.join("target/debug")).expect("create target/debug directory");
+        // The gix excludes stack traverses directories on disk when processing
+        // path components; intermediate dirs must exist (in production, filesystem
+        // events always reference existing paths).
+        fs::create_dir_all(workdir.join("build")).expect("create build directory");
 
-        let mut rules = GitignoreRules::load(&workdir, git_dir.as_deref());
+        let mut rules = GitignoreRules::load(&workdir);
         assert!(rules.is_ignored_rel(Path::new("target/debug/app"), Some(false)));
         assert!(rules.is_ignored_rel(Path::new("foo.gitcomet-log"), Some(false)));
         assert!(!rules.is_ignored_rel(Path::new("keep.gitcomet-log"), Some(false)));
@@ -1381,7 +1277,7 @@ mod tests {
 
         run_git(&workdir, &["add", "-f", "tracked.tracked-ignore"]);
 
-        let mut rules = GitignoreRules::load(&workdir, git_dir.as_deref());
+        let mut rules = GitignoreRules::load(&workdir);
         assert!(
             !rules.is_ignored_rel(Path::new("tracked.tracked-ignore"), Some(false)),
             "tracked paths must not be treated as ignored"
@@ -1406,6 +1302,38 @@ mod tests {
         assert_eq!(
             classify_repo_event(&workdir, git_dir.as_deref(), &mut rules, &ignored_event),
             None
+        );
+    }
+
+    #[test]
+    fn gitignore_lookup_stats_track_cache_hits_misses_and_matcher_failures() {
+        let before = repo_monitor_ignore_lookup_stats();
+
+        let mut rules = GitignoreRules {
+            workdir: Some(PathBuf::from("/tmp/nonexistent")),
+            ..Default::default()
+        };
+        // No matcher — lookups default to not-ignored and count as matcher failures.
+
+        assert!(!rules.is_ignored_rel(Path::new("sample.ignored"), Some(false)));
+        assert!(!rules.is_ignored_rel(Path::new("sample.ignored"), Some(false)));
+
+        let after = repo_monitor_ignore_lookup_stats();
+        assert!(
+            after.request_count >= before.request_count.saturating_add(2),
+            "one miss and one hit should each count as ignore lookup requests"
+        );
+        assert!(
+            after.cache_misses >= before.cache_misses.saturating_add(1),
+            "the first lookup should miss the cache"
+        );
+        assert!(
+            after.cache_hits >= before.cache_hits.saturating_add(1),
+            "the second lookup should hit the cache"
+        );
+        assert!(
+            after.fallback_count >= before.fallback_count.saturating_add(1),
+            "disabling the matcher should count as matcher failure"
         );
     }
 
@@ -1485,6 +1413,21 @@ mod tests {
             classify_repo_event(&workdir, git_dir.as_deref(), &mut rules, &gitignore_changed),
             Some(RepoExternalChange::Worktree)
         );
+
+        let nested_gitignore_changed = notify::Event {
+            kind: EventKind::Any,
+            paths: vec![workdir.join("nested").join(".gitignore")],
+            attrs: Default::default(),
+        };
+        assert_eq!(
+            classify_repo_event(
+                &workdir,
+                git_dir.as_deref(),
+                &mut rules,
+                &nested_gitignore_changed
+            ),
+            Some(RepoExternalChange::Worktree)
+        );
     }
 
     #[test]
@@ -1537,6 +1480,11 @@ mod tests {
             &workdir,
             Some(&git_dir),
             &workdir.join(".gitignore")
+        ));
+        assert!(is_gitignore_config_path(
+            &workdir,
+            Some(&git_dir),
+            &workdir.join("nested").join(".gitignore")
         ));
 
         let mut rules = GitignoreRules::default();
@@ -1646,6 +1594,6 @@ mod tests {
         let after = super::super::send_diagnostics::send_failure_count(
             super::super::send_diagnostics::SendFailureKind::RepoMonitorMessage,
         );
-        assert!(after >= before + 1);
+        assert!(after > before);
     }
 }

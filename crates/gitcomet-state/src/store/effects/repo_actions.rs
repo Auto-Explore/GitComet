@@ -148,7 +148,7 @@ pub(super) fn schedule_create_branch(
         msg_tx,
         repo_id,
         move |repo| {
-            let target = gitcomet_core::domain::CommitId("HEAD".to_string());
+            let target = gitcomet_core::domain::CommitId("HEAD".into());
             repo.create_branch(&name, &target)
         },
         send_refresh_branches_on_success,
@@ -166,7 +166,7 @@ pub(super) fn schedule_create_branch_and_checkout(
     name: String,
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let target = gitcomet_core::domain::CommitId("HEAD".to_string());
+        let target = gitcomet_core::domain::CommitId("HEAD".into());
         let created = repo.create_branch(&name, &target);
         let refresh = created.is_ok();
         let result = created.and_then(|()| repo.checkout_branch(&name));

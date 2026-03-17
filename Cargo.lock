@@ -2260,7 +2260,9 @@ version = "0.1.0"
 dependencies = [
  "regex",
  "rustc-hash 2.1.1",
+ "strsim",
  "tempfile",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2286,6 +2288,7 @@ name = "gitcomet-state"
 version = "0.1.0"
 dependencies = [
  "gitcomet-core",
+ "gix",
  "notify",
  "rustc-hash 2.1.1",
  "serde",
@@ -2309,6 +2312,7 @@ dependencies = [
  "gitcomet-core",
  "gitcomet-state",
  "gpui",
+ "lru",
  "metal 0.33.0",
  "pulldown-cmark",
  "resvg 0.47.0",
@@ -4302,6 +4306,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0fae87c125b03c1d2c0150c90365d7d6bcc53fb73a9acaef207d2d065860f062"
 dependencies = [
  "imgref",
+]
+
+[[package]]
+name = "lru"
+version = "0.16.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a1dc47f592c06f33f8e3aea9591776ec7c9f9e4124778ff8a3c3b87159f7e593"
+dependencies = [
+ "hashbrown 0.16.1",
 ]
 
 [[package]]

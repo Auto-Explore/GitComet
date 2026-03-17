@@ -29,9 +29,24 @@ mod submodules;
 mod tags;
 mod worktrees;
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct RepoFileStamp {
+    exists: bool,
+    len: u64,
+    modified: Option<std::time::SystemTime>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct GitlinkStatusCapabilityCacheEntry {
+    gitmodules: RepoFileStamp,
+    index: RepoFileStamp,
+    may_have_gitlinks: bool,
+}
+
 pub(crate) struct GixRepo {
     spec: RepoSpec,
     _repo: gix::ThreadSafeRepository,
+    gitlink_status_capability: std::sync::Mutex<Option<GitlinkStatusCapabilityCacheEntry>>,
 }
 
 impl GixRepo {
@@ -39,6 +54,7 @@ impl GixRepo {
         Self {
             spec: RepoSpec { workdir },
             _repo: repo,
+            gitlink_status_capability: std::sync::Mutex::new(None),
         }
     }
 

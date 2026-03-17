@@ -5,6 +5,28 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use tempfile::{Builder, TempDir};
 
+/// Format a `"Failed to {op} {path}: {err}"` message concisely.
+macro_rules! io_err {
+    ($op:literal, $err:expr) => {
+        format!(concat!("Failed to ", $op, ": {}"), $err)
+    };
+    ($op:literal, $path:expr, $err:expr) => {
+        format!(
+            concat!("Failed to ", $op, " {}: {}"),
+            ($path).display(),
+            $err
+        )
+    };
+    ($op:literal, $src:expr, $prep:literal, $dst:expr, $err:expr) => {
+        format!(
+            concat!("Failed to ", $op, " {} ", $prep, " {}: {}"),
+            ($src).display(),
+            ($dst).display(),
+            $err
+        )
+    };
+}
+
 /// Result of running the dedicated difftool mode.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DifftoolRunResult {
@@ -34,7 +56,7 @@ pub fn run_difftool(config: &DifftoolConfig) -> Result<DifftoolRunResult, String
 
     let output = cmd
         .output()
-        .map_err(|e| format!("Failed to launch `git diff --no-index`: {e}"))?;
+        .map_err(|e| io_err!("launch `git diff --no-index`", e))?;
 
     let status_code = output.status.code();
     let mut stdout = bytes_to_text_preserving_utf8(&output.stdout);
@@ -72,7 +94,7 @@ pub fn run_difftool(config: &DifftoolConfig) -> Result<DifftoolRunResult, String
 }
 
 fn bytes_to_text_preserving_utf8(bytes: &[u8]) -> String {
-    use std::fmt::Write as _;
+    const HEX_DIGITS: &[u8; 16] = b"0123456789abcdef";
 
     let mut out = String::with_capacity(bytes.len());
     let mut cursor = 0usize;
@@ -95,8 +117,11 @@ fn bytes_to_text_preserving_utf8(bytes: &[u8]) -> String {
 
                 let invalid_len = err.error_len().unwrap_or(1);
                 let invalid_end = cursor.saturating_add(invalid_len).min(bytes.len());
-                for byte in &bytes[cursor..invalid_end] {
-                    let _ = write!(out, "\\x{byte:02x}");
+                for &byte in &bytes[cursor..invalid_end] {
+                    out.push('\\');
+                    out.push('x');
+                    out.push(HEX_DIGITS[(byte >> 4) as usize] as char);
+                    out.push(HEX_DIGITS[(byte & 0x0f) as usize] as char);
                 }
                 cursor = invalid_end;
             }
@@ -233,7 +258,7 @@ fn prepare_diff_inputs(config: &DifftoolConfig) -> Result<PreparedDiffInputs, St
     let tempdir = Builder::new()
         .prefix("gitcomet-difftool-")
         .tempdir()
-        .map_err(|e| format!("Failed to create temporary directory staging area: {e}"))?;
+        .map_err(|e| io_err!("create temporary directory staging area", e))?;
 
     let staged_local = tempdir.path().join("left");
     let staged_remote = tempdir.path().join("right");
@@ -295,12 +320,8 @@ fn resolve_allowed_staging_roots(local: &Path, remote: &Path) -> Result<Vec<Path
 }
 
 fn directory_tree_contains_symlink(path: &Path) -> Result<bool, String> {
-    let metadata = fs::symlink_metadata(path).map_err(|e| {
-        format!(
-            "Failed to read metadata for directory diff input {}: {e}",
-            path.display()
-        )
-    })?;
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|e| io_err!("read metadata for directory diff input", path, e))?;
     if metadata.file_type().is_symlink() {
         return Ok(true);
     }
@@ -322,12 +343,11 @@ fn directory_tree_contains_symlink_inner(path: &Path, depth: usize) -> Result<bo
         )
     })?;
     for entry in entries {
-        let entry =
-            entry.map_err(|e| format!("Failed to read entry in {}: {e}", path.display()))?;
+        let entry = entry.map_err(|e| io_err!("read entry in", path, e))?;
         let entry_path = entry.path();
         let file_type = entry
             .file_type()
-            .map_err(|e| format!("Failed to read file type for {}: {e}", entry_path.display()))?;
+            .map_err(|e| io_err!("read file type for", entry_path, e))?;
 
         if file_type.is_symlink() {
             return Ok(true);
@@ -387,19 +407,17 @@ fn copy_tree_dereferencing_symlinks_impl(
     staging_state: &mut StagingCopyState,
     depth: usize,
 ) -> Result<(), String> {
-    fs::create_dir_all(dst)
-        .map_err(|e| format!("Failed to create staged directory {}: {e}", dst.display()))?;
+    fs::create_dir_all(dst).map_err(|e| io_err!("create staged directory", dst, e))?;
 
-    let entries = fs::read_dir(src)
-        .map_err(|e| format!("Failed to read directory {}: {e}", src.display()))?;
+    let entries = fs::read_dir(src).map_err(|e| io_err!("read directory", src, e))?;
     for entry in entries {
-        let entry = entry.map_err(|e| format!("Failed to read entry in {}: {e}", src.display()))?;
+        let entry = entry.map_err(|e| io_err!("read entry in", src, e))?;
         let src_path = entry.path();
         let dst_path = dst.join(entry.file_name());
         staging_state.record_entry(&src_path)?;
         let file_type = entry
             .file_type()
-            .map_err(|e| format!("Failed to read file type for {}: {e}", src_path.display()))?;
+            .map_err(|e| io_err!("read file type for", src_path, e))?;
 
         if file_type.is_dir() {
             copy_tree_dereferencing_symlinks_inner(&src_path, &dst_path, staging_state, depth + 1)?;
@@ -414,15 +432,10 @@ fn copy_tree_dereferencing_symlinks_impl(
         if file_type.is_file() {
             let metadata = entry
                 .metadata()
-                .map_err(|e| format!("Failed to read metadata for {}: {e}", src_path.display()))?;
+                .map_err(|e| io_err!("read metadata for", src_path, e))?;
             staging_state.record_staged_file(&src_path, metadata.len())?;
-            fs::copy(&src_path, &dst_path).map_err(|e| {
-                format!(
-                    "Failed to stage file {} to {}: {e}",
-                    src_path.display(),
-                    dst_path.display()
-                )
-            })?;
+            fs::copy(&src_path, &dst_path)
+                .map_err(|e| io_err!("stage file", src_path, "to", dst_path, e))?;
             continue;
         }
 
@@ -441,8 +454,8 @@ fn copy_symlink_target_contents(
     staging_state: &mut StagingCopyState,
     depth: usize,
 ) -> Result<(), String> {
-    let target = fs::read_link(link_path)
-        .map_err(|e| format!("Failed to read symlink target {}: {e}", link_path.display()))?;
+    let target =
+        fs::read_link(link_path).map_err(|e| io_err!("read symlink target", link_path, e))?;
     let resolved_target = if target.is_absolute() {
         target.clone()
     } else {
@@ -458,19 +471,18 @@ fn copy_symlink_target_contents(
             staging_state
                 .record_staged_file(link_path, serialized_symlink_target_byte_len(&target))?;
             write_symlink_target(dst_path, &target).map_err(|e| {
-                format!(
-                    "Failed to materialize unresolved symlink {} into {}: {e}",
-                    link_path.display(),
-                    dst_path.display()
+                io_err!(
+                    "materialize unresolved symlink",
+                    link_path,
+                    "into",
+                    dst_path,
+                    e
                 )
             })?;
             return Ok(());
         }
         Err(e) => {
-            return Err(format!(
-                "Failed to resolve symlink target {}: {e}",
-                link_path.display()
-            ));
+            return Err(io_err!("resolve symlink target", link_path, e));
         }
     };
     staging_state.ensure_within_allowed_roots(&canonical_target, link_path)?;
@@ -479,10 +491,12 @@ fn copy_symlink_target_contents(
         Ok(meta) if meta.is_file() => {
             staging_state.record_staged_file(&canonical_target, meta.len())?;
             fs::copy(&canonical_target, dst_path).map_err(|e| {
-                format!(
-                    "Failed to stage symlink target file {} to {}: {e}",
-                    canonical_target.display(),
-                    dst_path.display()
+                io_err!(
+                    "stage symlink target file",
+                    canonical_target,
+                    "to",
+                    dst_path,
+                    e
                 )
             })?;
         }
@@ -498,10 +512,12 @@ fn copy_symlink_target_contents(
             staging_state
                 .record_staged_file(link_path, serialized_symlink_target_byte_len(&target))?;
             write_symlink_target(dst_path, &target).map_err(|e| {
-                format!(
-                    "Failed to materialize unresolved symlink {} into {}: {e}",
-                    link_path.display(),
-                    dst_path.display()
+                io_err!(
+                    "materialize unresolved symlink",
+                    link_path,
+                    "into",
+                    dst_path,
+                    e
                 )
             })?;
         }
@@ -1146,5 +1162,34 @@ mod tests {
             "directory diff output should mention the changed file: {}",
             result.stdout
         );
+    }
+
+    #[test]
+    fn bytes_to_text_preserving_utf8_handles_pure_ascii() {
+        assert_eq!(bytes_to_text_preserving_utf8(b"hello world"), "hello world");
+    }
+
+    #[test]
+    fn bytes_to_text_preserving_utf8_handles_valid_utf8() {
+        let input = "café ñ 日本語".as_bytes();
+        assert_eq!(bytes_to_text_preserving_utf8(input), "café ñ 日本語");
+    }
+
+    #[test]
+    fn bytes_to_text_preserving_utf8_escapes_invalid_bytes() {
+        let input = b"good\xff\xfebad";
+        let result = bytes_to_text_preserving_utf8(input);
+        assert_eq!(result, "good\\xff\\xfebad");
+    }
+
+    #[test]
+    fn bytes_to_text_preserving_utf8_handles_empty() {
+        assert_eq!(bytes_to_text_preserving_utf8(b""), "");
+    }
+
+    #[test]
+    fn bytes_to_text_preserving_utf8_escapes_leading_invalid() {
+        let result = bytes_to_text_preserving_utf8(b"\x80rest");
+        assert_eq!(result, "\\x80rest");
     }
 }

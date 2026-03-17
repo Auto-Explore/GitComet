@@ -697,7 +697,7 @@ mod tests {
     fn test_branch(name: &str, upstream: Option<Upstream>) -> Branch {
         Branch {
             name: name.to_string(),
-            target: CommitId("deadbeef".to_string()),
+            target: CommitId("deadbeef".into()),
             upstream,
             divergence: None,
         }

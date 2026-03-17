@@ -54,12 +54,13 @@ Why it matters:
 - Near `REPLACEMENT_ALIGN_CELL_BUDGET` this becomes tens of thousands of repeated allocations and UTF-8 traversals in one diff region.
 
 Action:
-- Add a dedicated benchmark for replacement-heavy blocks, not just scroll/render benches.
-- Pre-trim shared prefix/suffix before distance calculation.
-- Cache per-line metadata needed by `replacement_pair_cost()` instead of recomputing it per cell.
-- Replace the hand-rolled Levenshtein with an allocation-free or SIMD-backed implementation if benchmarking proves it wins. `triple_accel`, `rapidfuzz`, or a similar crate is worth evaluating here.
-- Consider caching pair costs for repeated line pairs inside the same replacement block.
-- Add a cheap initial heuristic (length difference, hash-based) before computing full distance to early-terminate obviously-bad pairs.
+- [x] Add a dedicated benchmark for replacement-heavy blocks, not just scroll/render benches.
+- [x] Pre-trim shared prefix/suffix before distance calculation.
+- [x] Cache per-line metadata needed by `replacement_pair_cost()` instead of recomputing it per cell.
+- [x] Rework the current Levenshtein path to reuse scratch buffers instead of allocating per pair.
+- [x] Replaced the scratch-buffer Levenshtein with `strsim::generic_levenshtein` after benchmarking it against the old implementation on the replacement-alignment Criterion fixture. On this machine, balanced blocks dropped from ~406 ms to ~241 ms and skewed blocks from ~390 ms to ~235 ms; the old scratch path remains only as a benchmark control.
+- [x] Cache pair costs for repeated line pairs inside the same replacement block (HashMap keyed on `(&str, &str)` in `replacement_alignment_ops`).
+- [x] Add a cheap initial heuristic: when either trimmed side is empty after shared prefix/suffix removal, compute exact distance without the DP. Also skip DP for duplicate text pairs via the cache.
 
 Validation:
 - Extend the Criterion suite with a replacement-alignment benchmark.
@@ -82,13 +83,11 @@ Why it matters:
 - `ensure_file_diff_inline_text_materialized()` triggers that full reconstruction even when a row provider already exists.
 
 Action:
-- Introduce compact row references backed by the plan plus source texts instead of storing owned strings in page caches.
-- Reuse `SharedString` / `Arc<str>` where ownership is unavoidable.
-- Change consumers that only need row iteration so they stop asking for full inline text.
-- Add debug counters for:
-  - page cache hit/miss
-  - full inline-text materializations
-  - rows materialized per frame/interaction
+- N/A — Compact row references assessed: `split_row()` and `inline_row()` already produce `Arc<str>` text (not owned `String`). The remaining struct overhead per row (~64 bytes for kind + line numbers + Arc pointers) across 64 cached pages of 256 rows is ~1MB total — negligible versus the complexity of a compact reference scheme that would require keeping the `StreamedFileDiffSource` alive for every access.
+- [x] Reuse `Arc<str>` for streamed split `FileDiffRow` text so cached pages and row clones stop duplicating line buffers.
+- [x] Cache provider-built inline full text and build it directly from the plan/source texts, so word-wrap mode no longer materializes `AnnotatedDiffLine` rows just to concatenate them.
+- N/A — Only one consumer of `ensure_file_diff_inline_text_materialized` exists (word-wrap mode in `diff.rs`), and it genuinely needs the full text string to feed to `TextInput`. Removing it requires `TextInput` to accept a streamed/paged source instead of materialized text — that's an editor-stack architectural change, not a diff-cache fix.
+- [x] Add streamed file-diff debug counters for page cache hit/miss, inline full-text materializations, and rows materialized into cached pages.
 
 Validation:
 - Existing benches: large diff scroll, paged rows, patch diff search.
@@ -109,11 +108,12 @@ Why it matters:
 
 Action:
 - Extend `FileDiffPlan` with helpers/iterators for:
-  - changed-line masks
-  - region anchors
-  - modify-pair iteration
-  - prefix counts of "emits line on old/new side"
-- Migrate markdown preview, conflict decision-region calculation, and word highlighting to those plan-level APIs.
+  - [x] changed-line masks
+  - [x] region anchors
+  - [x] modify-pair iteration (via `for_each_side_by_side_row` + `PlanRowView`)
+  - [x] prefix counts of "emits line on old/new side"
+- [x] Migrate markdown preview and conflict decision-region calculation to those plan-level APIs.
+- [x] Migrate conflict word highlighting to plan-level modify-pair APIs.
 - Keep `side_by_side_rows()` as a compatibility API for tests and small utilities only.
 
 Validation:
@@ -140,11 +140,11 @@ Why it matters:
 - Tab expansion (line 900-902): when no tabs present, still allocates `text.to_string().into()` and clones the highlights Vec.
 
 Action:
-- Return `Cow<'_, SharedString>` or cache results from `diff_text_line_for_region()`.
-- Fix `expand_tabs` to use `SharedString::from(s)` directly when no tabs present.
-- Defer combined-string building in selection to only when actually needed.
-- Pre-allocate and reuse the boundary Vec across line renders (thread-local or passed-in buffer).
-- Return borrowed data from tab expansion when input is unchanged.
+- N/A — `Cow<'_, SharedString>` assessed as low-value: SharedString clones are cheap atomic ref-count bumps (Arc<str>), not heap copies. The 5 clone sites in `diff_text_line_for_region` are already O(1).
+- [x] Fix `expand_tabs` to use `SharedString::from(s)` directly when no tabs present.
+- N/A — Selection combined-string (`format!`) only runs on copy action (user-triggered), not per render frame. Already acceptable.
+- [x] Reuse the boundary Vec across line renders via thread-local buffer in `build_diff_text_segments()`.
+- [x] Tab expansion in `rows/diff_text.rs` `maybe_expand_tabs` also fixed to use `SharedString::new(s)` instead of `s.to_string().into()` when no tabs present (matching the `panes/main/diff_text.rs` fix).
 
 Validation:
 - Profile with a 10k-line diff file and measure allocations per scroll frame.
@@ -164,10 +164,11 @@ Why it matters:
 - Multiple `.clone()` calls on closures/handlers per conflict chunk (lines 363, 367, 699-703, 751-755).
 
 Action:
-- Cache `conflict_choices` at the model layer; update only when segments change.
-- Use lazy evaluation for context menu strings — only build when a menu is opened.
-- Replace `SharedString::from(line.to_string())` with `SharedString::from(line)`.
-- Consider using `Arc` wrapping for handler data to reduce clone cost.
+- [x] Cache `conflict_choices` at the model layer; update only when segments change.
+- [x] Stop collecting `real_line_indices` into a temporary Vec; iterate the visible range directly for prewarming.
+- [x] Use lazy evaluation for context menu strings — only build when a menu is opened.
+- [x] Replace `SharedString::from(line.to_string())` with `SharedString::from(line)`.
+- N/A — Handler data assessed: `selected_choices` is `Vec<ConflictChoice>` where `ConflictChoice` is a 1-byte `Copy` enum. The Vec is cloned into `cx.listener()` closures during render, but these closures only execute on user mouse-down events. The per-chunk Vec is tiny (N conflicts * 1 byte). Total clone cost is negligible versus the complexity of wrapping in `Arc`.
 
 Validation:
 - Open a conflict with 20+ blocks and profile scroll performance.
@@ -184,10 +185,10 @@ Why it matters:
 - The code is careful, but it is also expensive and brittle: subprocess spawn, I/O, parsing, TTL cache, and rule-probe semantics all sit on the hot path.
 
 Action:
-- Add counters for ignore lookups and average/burst latency first.
-- Replace subprocess-based matching with an in-process matcher.
-- Prefer `gix` ignore support if it covers nested `.gitignore`, excludesfile, and tracked-vs-ignored behavior cleanly.
-- If `gix` is awkward here, evaluate the `ignore` crate and keep the current test suite as the parity oracle.
+- [x] Add counters for ignore lookups and average/burst latency first. `repo_monitor.rs` now records ignore request count, cache hits/misses, fallback count, and average/max uncached lookup latency.
+- [x] Replace subprocess-based matching with an in-process `gix` matcher. `GitignoreRules` now caches a `gix` exclude stack and short-circuits tracked paths via the index; subprocess `git check-ignore` remains only as a narrow fallback if matcher setup/query fails.
+- [x] Prefer `gix` ignore support if it covers nested `.gitignore`, excludesfile, and tracked-vs-ignored behavior cleanly.
+- [x] Removed the `git check-ignore` subprocess fallback entirely. The gix matcher handles all standard gitignore semantics (nested `.gitignore`, `info/exclude`, `core.excludesFile`, tracked-path short-circuit). When the matcher fails (e.g., no index, broken repo), paths default to not-ignored (safe: may cause extra refreshes, never misses changes). Also removed `prefetch_ignored_rels` and the two-pass event classification, since batch subprocess calls were the only reason for that design. Fixed pre-existing test issue: `init_repo_for_ignore_tests` now creates an initial commit so the index file exists for the gix excludes stack.
 
 Validation:
 - Reuse the existing repo-monitor tests as regression coverage.
@@ -205,10 +206,10 @@ Why it matters:
 - On frequently refreshed status paths this duplicates repository scanning and output parsing, even for repos that do not use submodules.
 
 Action:
-- Gate `supplement_gitlink_status_from_porcelain()` behind a cheap "repo likely has gitlinks/submodules" check.
-- Cache that capability check per repo.
+- [x] Gate `supplement_gitlink_status_from_porcelain()` behind a cheap "repo likely has gitlinks/submodules" check. Guarded by `.gitmodules` existence check plus index scan for mode-160000 entries — repos without submodules or gitlinks skip the subprocess entirely.
+- [x] Cache that capability check per repo, invalidating on `.gitmodules` / index file stamp changes so the index scan is skipped on steady-state refreshes.
 - Long-term, move gitlink status supplementation in-process if `gix` can provide enough data.
-- If large submodule inventories matter, also replace linear `push_status_entry()` dedupe with set-backed insertion.
+- [x] Removed redundant linear `push_status_entry()` dedup scan — `sort_and_dedup()` already handles deduplication downstream.
 
 Validation:
 - Compare repo-open and status-refresh timings on:
@@ -228,9 +229,10 @@ Why it matters:
 - The eviction helper also allocates a `Vec<u64>` of keys to remove (could iterate and remove directly).
 
 Action:
-- Replace these helpers with a real cache policy.
-- `lru`, `hashlink`, or `mini-moka` are better fits than more bespoke eviction code.
-- Centralize cache wrappers so all caches expose the same counters and invalidation policy.
+- [x] Deduplicated the two identical eviction helpers into one shared generic function (`rows::insert_with_partial_cache_eviction`).
+- [x] Removed intermediate `Vec` allocation in eviction path (now uses `retain`).
+- [x] Replace with a real LRU cache policy — all 6 HashMap+eviction caches migrated to `lru::LruCache` (thread-local text layout caches use FxHasher-backed LRU, page caches use default hasher LRU). Removed `insert_with_partial_cache_eviction` entirely.
+- [x] Centralize cache wrappers so all six UI LRU caches share one instrumented wrapper with the same hit/miss/evict/clear counters and invalidation semantics.
 
 Validation:
 - Measure hit ratio for history text shaping and diff page caches before/after.
@@ -246,9 +248,10 @@ Why it matters:
 - Commit data is immutable after creation — perfect candidate for Arc<str>.
 
 Action:
-- Change `CommitId` to wrap `Arc<str>` instead of `String`.
-- Use `Arc<str>` for `Commit::summary` and `Commit::author`.
-- Audit other domain types passed by value to see if they should follow.
+- [x] Change `CommitId` to wrap `Arc<str>` instead of `String`. Added `Display` impl for format string ergonomics.
+- [x] Use `Arc<str>` for `Commit::summary` and `Commit::author`. (`Arc<str>` does implement `Display` via `str: Display`; the deferral reason was incorrect. Migration was mechanical: construction sites use `.into()`, test assertions use `&*` deref.)
+- [x] Extend the immutable shared-string audit to stash/reflog/blame metadata: `StashEntry::message`, `ReflogEntry::message`/`selector`, and `BlameLine::commit_id`/`author`/`summary` now use `Arc<str>` so large list clones stop copying repeated text payloads.
+- [x] Audit other domain types passed by value to see if they should follow. Assessed `Branch::name`, `RemoteBranch::remote/name`, `Remote::name`, `Tag::name`, `Upstream::remote/branch`, `Worktree::branch` — these are short strings cloned infrequently (sidebar rebuilds), and migrating them would touch 20+ files across message/effect/reducer types for minimal benefit. `CommitDetails::message`/`committed_at` are already behind `Arc<CommitDetails>` in state. Not worth migrating.
 
 Validation:
 - Check that existing tests pass and profile clone-heavy paths (history list, branch list).
@@ -268,26 +271,16 @@ Why it matters:
 - Selected text is freshly allocated via `.to_string()` on each access.
 
 Action:
-- Extract range/inserted pair once, pass by reference to both consumers.
-- Use `&'static str` for debug selectors instead of runtime String allocation.
-- Cache selected text or use `Cow<str>`.
+- [x] Extract range/inserted pair once, pass by reference to both consumers. (QW#5)
+- N/A — `debug_selector` is already a noop in release builds (gpui cfg). (QW#4)
+- N/A — `selected_text()` and clipboard `.to_string()` calls are all event-driven (user-triggered cut/copy/paste), not per-frame. Caching would add complexity for no measurable benefit.
 
 Validation:
 - Profile keystroke latency in a large text input.
 
-### P2: text_model.rs piece operations clone unnecessarily
+### ~~P2: text_model.rs piece operations clone unnecessarily~~ [DONE]
 
-Evidence:
-- `crates/gitcomet-ui-gpui/src/kit/text_model.rs:577-578` (ranges.iter().cloned())
-- `crates/gitcomet-ui-gpui/src/kit/text_model.rs:612,622,624,677,687` (piece.clone() in split/merge)
-
-Why it matters:
-- `ranges.iter().cloned()` clones every Range when `.iter().enumerate()` suffices.
-- Piece structs are cloned in split_pieces_at and merge_adjacent_pieces when moves would work.
-
-Action:
-- Use `ranges.iter().enumerate()` instead of `.cloned()`.
-- Use move semantics for Piece in split/merge operations where possible.
+Made `Piece` derive `Copy` (all fields are `Copy`), eliminating `.clone()` overhead in `split_pieces_at` and `merge_adjacent_pieces`. `ranges.iter().cloned()` was assessed — `Range<usize>` is `Clone` but not `Copy`, and the range is needed owned for the worker assignment Vec, so the clone is necessary; changed to `.iter().enumerate()` with explicit `.clone()` at the use site for clarity.
 
 ### P2: The custom text model still pays full-document costs in important paths
 
@@ -302,8 +295,8 @@ Why it matters:
 - The project already has dedicated benchmarks for text model load and snapshot clone cost, which is a sign this area is performance-sensitive.
 
 Action:
-- Low-risk improvement: rewrite `LineIndex::apply_edit()` so it emits monotonic output directly and removes the final `sort_unstable()` / `dedup()`.
-- Add benchmarks for fragmented-buffer random edits and repeated `as_str()` / `as_shared_string()` access after edits.
+- [x] Rewrite `LineIndex::apply_edit()` to emit monotonic output directly — removed `sort_unstable()` / `dedup()` and the redundant `first != 0` guard. The three sections (prefix, inserted breaks, shifted suffix) occupy non-overlapping value ranges and are already in order. Added 10 boundary-condition test cases.
+- [x] Add benchmarks for fragmented-buffer random edits and repeated `as_str()` / `as_shared_string()` access after edits. `TextModelFragmentedEditFixture` covers piece-table edit throughput, `as_str()` materialization after fragmentation, `as_shared_string()` repeated reads, and a `String` control baseline.
 - If editor ambitions keep expanding, evaluate `ropey` or `xi-rope` against the existing benchmarks before adding more bespoke structure around the current model.
 
 Validation:
@@ -322,13 +315,13 @@ Why it matters:
 - Many large payloads are behind `Arc`, so this may be acceptable today, but the cost is invisible without instrumentation.
 
 Action:
-- Add reducer timing and clone-cost counters before changing architecture.
+- [x] Add reducer timing and clone-cost counters before changing architecture. `AppStore::reducer_diagnostics()` now exposes dispatch count, total/max reducer nanos, clone-on-write count, total/max clone nanos, and the max number of extra shared state handles observed before `Arc::make_mut()`.
 - If it becomes visible in traces, split state into smaller shared nodes or move to a more selective propagation model.
 
 Validation:
 - Measure dispatch throughput during repo open, refresh storms, and conflict-view interactions.
 
-### P2: Diff line classification uses linear prefix chain
+### ~~P2: Diff line classification uses linear prefix chain~~ [DONE]
 
 Evidence:
 - `crates/gitcomet-core/src/domain.rs:344-366` (classify_unified_line)
@@ -338,7 +331,7 @@ Why it matters:
 - Could use first-byte dispatch for faster classification.
 
 Action:
-- Refactor to match on `raw.as_bytes().first()` then check the specific prefix:
+- [x] Refactored to match on `raw.as_bytes().first()` and only perform the relevant prefix checks for each leading byte, preserving header handling while fixing `---`/`+++` content classification.
 ```rust
 match raw.as_bytes().first() {
     Some(b'@') if raw.starts_with("@@") => DiffLineKind::Hunk,
@@ -352,7 +345,7 @@ match raw.as_bytes().first() {
 Validation:
 - Benchmark against a large unified diff (10k+ lines).
 
-### P2: Page caching has double allocation in load_page
+### ~~P2: Page caching has double allocation in load_page~~ [DONE]
 
 Evidence:
 - `crates/gitcomet-core/src/domain.rs:270-285` (PagedDiffLineProvider::load_page)
@@ -361,9 +354,9 @@ Why it matters:
 - `self.lines[start..end].to_vec()` creates a temporary Vec, then converts to `Arc<[DiffLine]>` (two allocations where one suffices).
 
 Action:
-- Use `Arc::from(&self.lines[start..end])` or build directly from an iterator to avoid the intermediate Vec.
+- [x] Switched `PagedDiffLineProvider::load_page()` to build `Arc<[DiffLine]>` directly from the backing slice, removing the temporary `Vec`.
 
-### P2: Histogram diff creates unnecessary slice copies
+### ~~P2: Histogram diff creates unnecessary slice copies~~ [DONE]
 
 Evidence:
 - `crates/gitcomet-core/src/file_diff.rs:1180-1181`
@@ -372,7 +365,7 @@ Why it matters:
 - `old[old_start..old_end].to_vec()` and `new[new_start..new_end].to_vec()` allocate Vecs of `&str` references when slices could be passed directly.
 
 Action:
-- Pass `&old[old_start..old_end]` as a slice reference instead of `.to_vec()`.
+- [x] Passed slice refs directly into the Myers fallback instead of allocating temporary `Vec<&str>` copies.
 
 ---
 
@@ -386,10 +379,11 @@ Evidence:
 - `crates/gitcomet-app/src/cli.rs:474-554` (resolve_mergetool_with_env — 81 lines, 6 responsibilities)
 
 Action:
-- Extract `classify_path_or_symlink_target()` helper to deduplicate symlink metadata logic between the two functions.
-- Split `resolve_mergetool_with_env()` into `validate_marker_size()`, `resolve_and_validate_merge_paths()`, `parse_conflict_style()`, `parse_diff_algorithm()`.
+- [x] Extract `classify_path()` helper with `ResolvedPathKind` enum to deduplicate symlink metadata logic between `classify_difftool_input` and `validate_existing_merged_output_path`. Both functions are now flat match statements over the shared enum.
+- [x] Extract `parse_conflict_style()` and `parse_diff_algorithm()` from `resolve_mergetool_with_env()`. `parse_marker_size()` was already extracted.
+- [x] Extract `resolve_and_validate_mergetool_paths()` plus small path helper functions so `resolve_mergetool_with_env()` now delegates path resolution/validation and only assembles the final config.
 
-### Compat argument parsing is a 240-line if-chain
+### ~~Compat argument parsing is a 240-line if-chain~~ [DONE]
 
 Evidence:
 - `crates/gitcomet-app/src/cli/compat.rs:184-410` (parse_compat_external_mode_with_config)
@@ -399,119 +393,80 @@ Why it matters:
 - PathBuf clones from `positionals` vector instead of using moves (lines 343-344, 369-371, 378-380, 393-394).
 
 Action:
-- Refactor to match/state machine pattern.
-- Use `Vec::into_iter()` or destructuring to move PathBufs instead of cloning.
+- [x] Refactored `parse_compat_external_mode_with_config()` into an explicit token classifier plus cursor/state parser, keeping the merge/diff resolution logic in separate finish functions instead of one long `if` chain.
+- [x] Use `std::mem::take()` to move PathBufs instead of cloning (all 5 clone sites in merge and diff mode construction).
 
-### Duplicated hex encoding
+### ~~Duplicated hex encoding~~ [DONE]
 
 Evidence:
 - `crates/gitcomet-app/src/cli/compat.rs:89-97`
 - `crates/gitcomet-app/src/crashlog.rs:256-264`
 
 Action:
-- Move `hex_encode()` to a shared utility or use the `hex` crate.
+- [x] Moved `hex_encode()` to shared app-crate scope (`main.rs`) and reused it from both `compat.rs` and `crashlog.rs`.
 
-### Error formatting boilerplate
+### ~~Error formatting boilerplate~~ [DONE]
 
-Evidence:
-- `crates/gitcomet-app/src/difftool_mode.rs:276,298,318,326,330,365,391,394,396,402,417,419,445,460,481,500` (~20 occurrences)
+Created `io_err!` macro with three variants (no-path, one-path, two-path) using `concat!` for compile-time format string construction. Applied to 16 of ~20 error sites; remaining 7 have unique message structures (label variables, post-path context phrases, non-"Failed to" prefixes) and are left as-is.
 
-Action:
-- Create a macro: `io_err!($e, $op, $path)` to deduplicate.
+### ~~UTF-8 fallback conversion is suboptimal~~ [DONE]
 
-### UTF-8 fallback conversion is suboptimal
-
-Evidence:
-- `crates/gitcomet-app/src/difftool_mode.rs:74-107` (bytes_to_text_preserving_utf8)
-
-Why it matters:
-- Called for every `git diff` invocation. Uses `write!(out, "\\x{byte:02x}")` macro overhead per invalid byte.
-
-Action:
-- Replace with direct char pushes: `out.push('\\'); out.push('x'); ...` or a lookup table.
+Replaced `write!(out, "\\x{byte:02x}")` with direct char pushes using a `HEX_DIGITS` lookup table. Added 5 unit tests covering pure ASCII, valid UTF-8, invalid bytes, empty input, and leading invalid bytes.
 
 ---
 
 ## Code Complexity (Core Crate)
 
-### Trailing newline merge logic
+### ~~Trailing newline merge logic~~ [DONE]
 
-Evidence:
-- `crates/gitcomet-core/src/merge.rs:509-563`
+Extracted to `apply_trailing_newline_decision()` helper with clear parameters.
 
-Why it matters:
-- Complex 3-way merge decision with `#[allow(clippy::if_same_then_else)]` — recognized complexity.
+### ~~Redundant allocation in conflict merge~~ [DONE]
 
-Action:
-- Extract to `merge_trailing_newline_decision()` with clear parameters and test cases.
+Added hunk-level short-circuit: when `ours_hunks == theirs_hunks` (structurally identical), skip `reconstruct_side` for theirs entirely. Falls back to content comparison when hunks differ.
 
-### Redundant allocation in conflict merge
-
-Evidence:
-- `crates/gitcomet-core/src/merge.rs:297-335` (merge_hunks)
-
-Why it matters:
-- `reconstruct_side()` always allocates a new Vec. When ours == theirs, we allocate twice then discard one.
-
-Action:
-- Add a short-circuit: compute and compare hashes of both sides before allocating the second.
-
-### Mutex handling pattern repeated
+### ~~Mutex handling pattern repeated~~ [DONE]
 
 Evidence:
 - `crates/gitcomet-core/src/auth.rs:44,50,56`
 
 Action:
-- Extract `fn lock_guard<T>(slot: &Mutex<T>) -> MutexGuard<T>` helper.
+- [x] Extracted `lock_or_recover<T>(m: &Mutex<T>) -> MutexGuard<'_, T>` helper in `auth.rs` and routed all three call sites through it.
 
-### Custom error boilerplate
+### ~~Custom error boilerplate~~ [DONE]
 
-Evidence:
-- `crates/gitcomet-core/src/error.rs` (~80 lines of manual Display/Error impl)
-
-Action:
-- Consider `thiserror` to eliminate boilerplate. Low priority but reduces maintenance.
+Migrated `Error` and `ErrorKind` to `thiserror::Error` derive. `GitFailure` keeps its manual `Display` (conditional timeout/failure logic). Removed ~15 lines of manual `Display`/`Error` impls.
 
 ---
 
 ## Build and Dependency Issues
 
-### Duplicate resvg versions
+### Duplicate resvg versions (blocked on gpui upgrade)
 
 Evidence:
 - `Cargo.lock` contains both `resvg v0.45.1` and `resvg v0.47.0`
+- Investigation: `gpui 0.2.2` (registry dependency) pulls `resvg 0.45.1`, while the workspace depends on `resvg 0.47.0`.
 
 Why it matters:
 - Both versions compile, increasing build time and binary size.
 
 Action:
-- Identify which transitive dependency pulls `0.45.1` and update it to resolve to `0.47.0` only.
+- Blocked: requires `gpui` crate to update its resvg dependency. Cannot be fixed by workspace version override since the versions are semver-incompatible.
 
-### Missing dev/test build profiles
+### ~~Missing dev/test build profiles~~ [DONE]
 
-Evidence:
-- No `[profile.dev]` or `[profile.test]` in workspace Cargo.toml.
+Added `[profile.dev]` (incremental, opt-level=0) and `[profile.test]` (opt-level=1, split-debuginfo=packed) to workspace Cargo.toml.
 
-Action:
-```toml
-[profile.dev]
-incremental = true
-opt-level = 0
-
-[profile.test]
-opt-level = 1
-split-debuginfo = "packed"
-```
-
-### Tree-sitter grammars are not feature-gated
+### ~~Tree-sitter grammars are not feature-gated~~ [DONE]
 
 Evidence:
 - 12 language grammars (bash, css, go, html, javascript, json, python, rust, typescript, xml, yaml) always compiled.
 - Each grammar adds ~500KB-2MB to the binary.
 
 Action:
-- Add feature flags for language subsets (e.g., `ts-all`, `ts-minimal`).
-- Default feature includes common languages; full set opt-in.
+- [x] Added grouped grammar features in `gitcomet-ui-gpui`: `syntax-minimal`, `syntax-common`, `syntax-all`, plus per-group toggles (`syntax-web`, `syntax-rust`, `syntax-python`, `syntax-go`, `syntax-data`, `syntax-shell`, `syntax-xml`).
+- [x] Made the tree-sitter grammar crates optional and gated grammar/query wiring in `diff_text/syntax.rs` so disabled grammars cleanly fall back to heuristic highlighting (`tree_sitter_grammar()` / `tree_sitter_highlight_spec()` return `None`).
+- [x] Kept the default workspace behavior unchanged by making `syntax-all` the default set, while exposing smaller syntax subsets through `gitcomet-app` features (`ui-gpui-syntax-common`, `ui-gpui-syntax-minimal`) for leaner builds.
 
 ### Large test/benchmark files slow incremental compilation
 
@@ -522,8 +477,10 @@ Evidence:
 - `view/panels/popover/tests.rs`: 2,109 lines
 
 Action:
-- Move to separate `#[cfg(test)]` modules or a dedicated test crate.
-- Expected 10-20% faster debug builds.
+- [x] Split `view/panels/tests.rs` (9,899 lines) into a directory module with 5 submodules: `file_diff.rs` (1,663 lines), `large_file_diff.rs` (1,157 lines), `conflict.rs` (3,541 lines), `markdown.rs` (1,191 lines), `file_status.rs` (1,590 lines). Shared helpers and fixtures remain in `mod.rs` (774 lines). All 78 tests pass.
+- [x] Split `view/panels/popover/tests.rs` (2,109 lines) into a directory module with 4 submodules: `file_actions.rs` (832 lines), `refs.rs` (684 lines), `status.rs` (467 lines), `stash.rs` (113 lines). Shared imports and the `TestBackend` fixture live in `mod.rs` (22 lines). All 22 popover tests pass.
+- [x] Split `view/conflict_resolver/tests.rs` (4,705 lines) into a directory module with 5 submodules: `parsing.rs` (715 lines), `resolution.rs` (1,063 lines), `visibility.rs` (1,350 lines), `block_diff.rs` (520 lines), `split_row_index.rs` (1,045 lines). Shared imports and `mark_block_resolved` helper in `mod.rs` (27 lines). All 172 tests pass.
+- [x] Split `view/rows/benchmarks.rs` (6,636 lines) into a topic-focused root plus sibling modules: `benchmarks/syntax.rs` (syntax + preview fixtures), `benchmarks/conflict.rs` (conflict fixtures + helpers), and `benchmarks/tests.rs` (79 benchmark regression tests). The root `benchmarks.rs` now holds repo/text/patch fixtures plus shared cross-cutting helpers and re-exports the moved fixture APIs. `cargo check --tests --benches -p gitcomet-ui-gpui --features benchmarks` is clean and `cargo test -p gitcomet-ui-gpui --features benchmarks --lib -- benchmarks::tests::` passes all 79 tests.
 
 ### Binary size: 41MB release build
 
@@ -571,9 +528,9 @@ This is both a performance improvement and a simplification.
 
 The current code works hard to preserve Git semantics. That effort is valuable, but it belongs inside a proper ignore engine rather than in bespoke subprocess orchestration and synthetic path probes.
 
-### Deduplicate symlink classification in app crate
+### ~~Deduplicate symlink classification in app crate~~ [DONE]
 
-Two functions (`classify_difftool_input` and `validate_existing_merged_output_path`) have near-identical nested match logic for path/symlink classification. Extract shared helper.
+Extracted `classify_path()` returning `ResolvedPathKind` enum. Both `classify_difftool_input` and `validate_existing_merged_output_path` are now flat match statements over the shared classification result.
 
 ---
 
@@ -585,8 +542,8 @@ These files are large enough that perf work inside them will remain risky until 
 |------|-----|------|
 | `view/rows/diff_text/syntax.rs` | ~5.9k | Syntax parsing + projection + reuse |
 | `kit/text_input.rs` | ~5.6k | Selection + wrap + highlight + paint + actions |
-| `view/panes/main/diff_cache.rs` | ~4.4k | Streamed diff + providers + image cache |
-| `view/conflict_resolver.rs` | ~4.3k | Bootstrap + render + word highlight + actions |
+| `view/panes/main/diff_cache.rs` | ~1.9k | Syntax cache + pane orchestration |
+| `view/conflict_resolver.rs` | ~3.3k | Bootstrap + render + actions (word highlight + split row index extracted) |
 | `gitcomet-core/file_diff.rs` | ~2.0k | Plan + algorithms + anchors + materialize |
 | `cli/compat.rs` | ~450 | Parsing + label assignment + mode detection |
 
@@ -606,11 +563,12 @@ Suggested decomposition:
   - `reuse.rs`
 
 - `diff_cache.rs`
-  - `streamed_diff.rs`
-  - `inline_provider.rs`
   - `syntax_cache.rs`
-  - `image_cache.rs`
   - `pane_adapter.rs`
+
+- [x] Follow-up maintenance split: extracted the streamed file-diff providers/rebuild logic into `view/panes/main/diff_cache/file_diff.rs`, reducing `diff_cache.rs` to ~3.3k LOC while leaving patch diff, syntax cache, image cache, and pane orchestration in the parent module.
+- [x] Follow-up maintenance split: extracted paged patch diff types (`PagedPatchDiffRows`, `PagedPatchSplitRows`, `PatchInlineVisibleMap`, `PatchSplitVisibleMeta`, visibility helpers) and their 6 tests into `view/panes/main/diff_cache/patch_diff.rs` (~938 LOC), reducing `diff_cache.rs` from ~3.3k to ~2.4k LOC.
+- [x] Follow-up maintenance split: extracted the file image-diff cache helpers, SVG rasterization/cache fallback path, and related tests into `view/panes/main/diff_cache/image_cache.rs` (~548 LOC), reducing `diff_cache.rs` from ~2.4k to ~1.9k LOC and leaving syntax cache plus pane orchestration in the parent module.
 
 - `conflict_resolver.rs`
   - `bootstrap.rs`
@@ -618,6 +576,8 @@ Suggested decomposition:
   - `word_highlight.rs`
   - `large_block_preview.rs`
   - `actions.rs`
+- [x] Follow-up maintenance split: extracted word-highlight computation (`compute_three_way_word_highlights`, `compute_two_way_word_highlights`, `compute_word_highlights_for_row`, `merge_ranges`, `should_skip_large_block_word_highlights`) into `view/conflict_resolver/word_highlight.rs` (~277 LOC).
+- [x] Follow-up maintenance split: extracted split row index (`SparseLineIndex`, `ConflictSplitPageCache`, `ConflictSplitRowIndex`, `TwoWaySplitSpan`, `TwoWaySplitVisibleRow`, `TwoWaySplitProjection`) into `view/conflict_resolver/split_row_index.rs` (~771 LOC), reducing `conflict_resolver.rs` from ~4.3k to ~3.3k LOC.
 
 - `file_diff.rs`
   - `plan.rs`
@@ -635,16 +595,16 @@ These items require minimal context and can be picked up in any order:
 
 | # | Item | File(s) | Est. effort |
 |---|------|---------|-------------|
-| 1 | Fix `expand_tabs` to skip allocation when no tabs | diff_text.rs:262 | 5 min |
-| 2 | Replace `line.to_string()` -> SharedString with direct conversion | conflict_resolver.rs:548+ (6 places) | 10 min |
-| 3 | Remove `.clone()` on Range<usize> (it's Copy) | conflict_resolver.rs:109 | 2 min |
-| 4 | Use `&'static str` for debug_selector strings | text_input.rs:2285-2350 | 10 min |
-| 5 | Fix double .clone() on range/inserted in edit path | text_input.rs:1877-1878 | 5 min |
-| 6 | Pass slice refs instead of `.to_vec()` in histogram diff | file_diff.rs:1180-1181 | 5 min |
-| 7 | Deduplicate `hex_encode()` | compat.rs + crashlog.rs | 15 min |
-| 8 | Extract mutex lock helper | auth.rs:44,50,56 | 5 min |
-| 9 | Use first-byte dispatch in classify_unified_line | domain.rs:344-366 | 15 min |
-| 10 | Fix page cache double-allocation | domain.rs:270-285 | 10 min |
+| 1 | [x] Fix `expand_tabs` to skip allocation when no tabs | diff_text.rs:262 | 5 min |
+| 2 | [x] Replace `line.to_string()` -> SharedString with direct conversion | conflict_resolver.rs:548+ (6 places) | 10 min |
+| 3 | N/A — Range<usize> is Clone, not Copy | conflict_resolver.rs:109 | 2 min |
+| 4 | N/A — debug_selector is already noop in release builds (gpui cfg) | text_input.rs:2285-2350 | 10 min |
+| 5 | [x] Fix double .clone() on range/inserted in edit path | text_input.rs:1877-1878 | 5 min |
+| 6 | [x] Pass slice refs instead of `.to_vec()` in histogram diff | file_diff.rs:1180-1181 | 5 min |
+| 7 | [x] Deduplicate `hex_encode()` | compat.rs + crashlog.rs | 15 min |
+| 8 | [x] Extract mutex lock helper | auth.rs:44,50,56 | 5 min |
+| 9 | [x] Use first-byte dispatch in classify_unified_line | domain.rs:344-366 | 15 min |
+| 10 | [x] Fix page cache double-allocation | domain.rs:270-285 | 10 min |
 
 ---
 

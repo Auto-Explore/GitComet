@@ -1221,6 +1221,7 @@ impl MainPaneView {
             three_way_visible_state_ready: false,
             three_way_conflict_ranges: ThreeWaySides::default(),
             conflict_has_base: Vec::new(),
+            conflict_choices: Vec::new(),
             three_way_word_highlights,
             nav_anchor,
             hide_resolved,

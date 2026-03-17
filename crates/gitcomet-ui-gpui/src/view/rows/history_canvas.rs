@@ -3,7 +3,7 @@ use gpui::{
     Bounds, ContentMask, CursorStyle, DispatchPhase, HitboxBehavior, MouseButton, fill, point, px,
     size,
 };
-use rustc_hash::{FxHashMap as HashMap, FxHasher};
+use rustc_hash::FxHasher;
 use std::cell::RefCell;
 
 const HISTORY_TAG_CHIP_HEIGHT_PX: f32 = 18.0;
@@ -13,8 +13,8 @@ const HISTORY_TAG_CHIP_GAP_PX: f32 = 4.0;
 const HISTORY_TEXT_LAYOUT_CACHE_MAX_ENTRIES: usize = 8_192;
 
 thread_local! {
-    static HISTORY_TEXT_LAYOUT_CACHE: RefCell<HashMap<u64, gpui::ShapedLine>> =
-        RefCell::new(HashMap::default());
+    static HISTORY_TEXT_LAYOUT_CACHE: RefCell<FxLruCache<u64, gpui::ShapedLine>> =
+        RefCell::new(new_fx_lru_cache(HISTORY_TEXT_LAYOUT_CACHE_MAX_ENTRIES));
 }
 
 fn shape_truncated_line_cached(
@@ -44,7 +44,8 @@ fn shape_truncated_line_cached(
         hasher.finish()
     };
 
-    if let Some(shaped) = HISTORY_TEXT_LAYOUT_CACHE.with(|cache| cache.borrow().get(&key).cloned())
+    if let Some(shaped) =
+        HISTORY_TEXT_LAYOUT_CACHE.with(|cache| cache.borrow_mut().get(&key).cloned())
     {
         return shaped;
     }
@@ -62,13 +63,7 @@ fn shape_truncated_line_cached(
         .shape_line(truncated, font_size, &runs, None);
 
     HISTORY_TEXT_LAYOUT_CACHE.with(|cache| {
-        let mut cache = cache.borrow_mut();
-        insert_with_partial_cache_eviction(
-            &mut cache,
-            key,
-            shaped.clone(),
-            HISTORY_TEXT_LAYOUT_CACHE_MAX_ENTRIES,
-        );
+        cache.borrow_mut().put(key, shaped.clone());
     });
 
     shaped
@@ -527,7 +522,7 @@ pub(super) fn history_commit_row_canvas(
                             commit_id: commit_id.clone(),
                         });
                         let context_menu_invoker: SharedString =
-                            format!("history_commit_menu_{}_{}", repo_id.0, commit_id.0.as_str())
+                            format!("history_commit_menu_{}_{}", repo_id.0, commit_id.as_ref())
                                 .into();
                         this.activate_context_menu_invoker(context_menu_invoker, cx);
                         let kind = if is_tag {

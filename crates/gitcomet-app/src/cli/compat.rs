@@ -51,50 +51,435 @@ fn parse_attached_numbered_label(token: &str) -> Option<(CompatLabelSlot, String
     None
 }
 
-fn assign_numbered_compat_label(
-    label_l1: &mut Option<String>,
-    label_l2: &mut Option<String>,
-    label_l3: &mut Option<String>,
-    slot: CompatLabelSlot,
-    value: String,
-) {
-    match slot {
-        CompatLabelSlot::L1 => *label_l1 = Some(value),
-        CompatLabelSlot::L2 => *label_l2 = Some(value),
-        CompatLabelSlot::L3 => *label_l3 = Some(value),
+#[derive(Default)]
+struct CompatLabels {
+    l1: Option<String>,
+    l2: Option<String>,
+    l3: Option<String>,
+}
+
+impl CompatLabels {
+    fn assign_numbered(&mut self, slot: CompatLabelSlot, value: String) {
+        match slot {
+            CompatLabelSlot::L1 => self.l1 = Some(value),
+            CompatLabelSlot::L2 => self.l2 = Some(value),
+            CompatLabelSlot::L3 => self.l3 = Some(value),
+        }
+    }
+
+    fn assign_next(&mut self, value: String) -> Result<(), String> {
+        if self.l1.is_none() {
+            self.l1 = Some(value);
+            return Ok(());
+        }
+        if self.l2.is_none() {
+            self.l2 = Some(value);
+            return Ok(());
+        }
+        if self.l3.is_none() {
+            self.l3 = Some(value);
+            return Ok(());
+        }
+        Err("Invalid external invocation: too many label flags; expected at most 3 labels across --L1/--L2/--L3 and -L/--label.".to_string())
     }
 }
 
-fn assign_next_compat_label(
-    label_l1: &mut Option<String>,
-    label_l2: &mut Option<String>,
-    label_l3: &mut Option<String>,
-    value: String,
-) -> Result<(), String> {
-    if label_l1.is_none() {
-        *label_l1 = Some(value);
-        return Ok(());
-    }
-    if label_l2.is_none() {
-        *label_l2 = Some(value);
-        return Ok(());
-    }
-    if label_l3.is_none() {
-        *label_l3 = Some(value);
-        return Ok(());
-    }
-    Err("Invalid external invocation: too many label flags; expected at most 3 labels across --L1/--L2/--L3 and -L/--label.".to_string())
+enum CompatToken<'a> {
+    Auto,
+    AutoMerge,
+    NumberedLabelFlag {
+        slot: CompatLabelSlot,
+        flag: &'a str,
+    },
+    NextLabelFlag {
+        flag: &'a str,
+    },
+    AttachedNumberedLabel {
+        slot: CompatLabelSlot,
+        value: String,
+    },
+    AttachedNextLabel {
+        value: String,
+    },
+    OutputFlag {
+        flag: &'a str,
+    },
+    AttachedOutput {
+        path: PathBuf,
+    },
+    BaseFlag {
+        flag: &'a str,
+    },
+    AttachedBase {
+        path: PathBuf,
+    },
+    DoubleDash,
+    UnknownFlag,
+    Positional,
 }
 
-fn hex_encode(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for &byte in bytes {
-        out.push(HEX[(byte >> 4) as usize] as char);
-        out.push(HEX[(byte & 0x0f) as usize] as char);
+fn classify_compat_token(token: &str) -> CompatToken<'_> {
+    if token == "--auto" {
+        return CompatToken::Auto;
     }
-    out
+
+    if token == "--auto-merge" {
+        return CompatToken::AutoMerge;
+    }
+
+    if let Some(slot) = parse_numbered_label_flag(token) {
+        return CompatToken::NumberedLabelFlag { slot, flag: token };
+    }
+
+    if token == "-L" || token == "--label" {
+        return CompatToken::NextLabelFlag { flag: token };
+    }
+
+    if let Some((slot, value)) = parse_attached_numbered_label(token) {
+        return CompatToken::AttachedNumberedLabel { slot, value };
+    }
+
+    if let Some(value) = token.strip_prefix("--label=") {
+        return CompatToken::AttachedNextLabel {
+            value: value.to_string(),
+        };
+    }
+
+    if token == "-o" || token == "--output" || token == "--out" {
+        return CompatToken::OutputFlag { flag: token };
+    }
+
+    if token == "--base" {
+        return CompatToken::BaseFlag { flag: token };
+    }
+
+    if let Some(value) = token.strip_prefix("--output=") {
+        return CompatToken::AttachedOutput {
+            path: PathBuf::from(value),
+        };
+    }
+    if let Some(value) = token.strip_prefix("--out=") {
+        return CompatToken::AttachedOutput {
+            path: PathBuf::from(value),
+        };
+    }
+    if let Some(value) = token.strip_prefix("--base=") {
+        return CompatToken::AttachedBase {
+            path: PathBuf::from(value),
+        };
+    }
+    if token.starts_with("-o") && token.len() > 2 {
+        return CompatToken::AttachedOutput {
+            path: PathBuf::from(&token[2..]),
+        };
+    }
+    if token.starts_with("-L") && token.len() > 2 {
+        return CompatToken::AttachedNextLabel {
+            value: token[2..].to_string(),
+        };
+    }
+
+    if token == "--" {
+        return CompatToken::DoubleDash;
+    }
+
+    if token.starts_with('-') {
+        return CompatToken::UnknownFlag;
+    }
+
+    CompatToken::Positional
 }
+
+struct CompatArgCursor<'a> {
+    raw_args: &'a [OsString],
+    idx: usize,
+}
+
+impl<'a> CompatArgCursor<'a> {
+    fn new(raw_args: &'a [OsString]) -> Self {
+        Self { raw_args, idx: 0 }
+    }
+
+    fn next(&mut self) -> Option<&'a OsString> {
+        let arg = self.raw_args.get(self.idx)?;
+        self.idx += 1;
+        Some(arg)
+    }
+
+    fn next_value(&mut self, flag: &str) -> Result<&'a OsString, String> {
+        self.next().ok_or_else(|| {
+            format!("Missing value for compatibility flag {flag} in external tool mode")
+        })
+    }
+
+    fn take_remaining_paths(&mut self) -> Vec<PathBuf> {
+        let remaining = self.raw_args[self.idx..]
+            .iter()
+            .map(PathBuf::from)
+            .collect();
+        self.idx = self.raw_args.len();
+        remaining
+    }
+}
+
+#[derive(Default)]
+struct CompatParseState {
+    labels: CompatLabels,
+    base_flag: Option<PathBuf>,
+    merged_output: Option<PathBuf>,
+    positionals: Vec<PathBuf>,
+    has_auto: bool,
+    has_auto_merge: bool,
+    has_kdiff3_label_flags: bool,
+}
+
+fn parse_compat_external_args(raw_args: &[OsString]) -> Result<Option<CompatParseState>, String> {
+    let mut cursor = CompatArgCursor::new(raw_args);
+    let mut state = CompatParseState::default();
+
+    while let Some(arg) = cursor.next() {
+        let Some(token) = arg.to_str() else {
+            state.positionals.push(PathBuf::from(arg));
+            continue;
+        };
+
+        match classify_compat_token(token) {
+            CompatToken::Auto => state.has_auto = true,
+            CompatToken::AutoMerge => state.has_auto_merge = true,
+            CompatToken::NumberedLabelFlag { slot, flag } => {
+                let value = cursor.next_value(flag)?;
+                state
+                    .labels
+                    .assign_numbered(slot, compat_label_arg_text(value, flag)?);
+                state.has_kdiff3_label_flags = true;
+            }
+            CompatToken::NextLabelFlag { flag } => {
+                let value = cursor.next_value(flag)?;
+                state
+                    .labels
+                    .assign_next(compat_label_arg_text(value, flag)?)?;
+            }
+            CompatToken::AttachedNumberedLabel { slot, value } => {
+                state.labels.assign_numbered(slot, value);
+                state.has_kdiff3_label_flags = true;
+            }
+            CompatToken::AttachedNextLabel { value } => state.labels.assign_next(value)?,
+            CompatToken::OutputFlag { flag } => {
+                state.merged_output = Some(PathBuf::from(cursor.next_value(flag)?));
+            }
+            CompatToken::AttachedOutput { path } => state.merged_output = Some(path),
+            CompatToken::BaseFlag { flag } => {
+                state.base_flag = Some(PathBuf::from(cursor.next_value(flag)?));
+            }
+            CompatToken::AttachedBase { path } => state.base_flag = Some(path),
+            CompatToken::DoubleDash => {
+                state.positionals.extend(cursor.take_remaining_paths());
+                break;
+            }
+            CompatToken::UnknownFlag => return Ok(None),
+            CompatToken::Positional => state.positionals.push(PathBuf::from(arg)),
+        }
+    }
+
+    Ok(Some(state))
+}
+
+fn finish_compat_external_mode(
+    mut state: CompatParseState,
+    env: &dyn EnvLookup,
+    git_config: &dyn Fn(&str) -> Option<String>,
+) -> Result<Option<AppMode>, String> {
+    if state.has_auto && state.merged_output.is_none() {
+        return Err(
+            "Invalid external merge invocation: --auto requires -o/--output/--out <MERGED>."
+                .to_string(),
+        );
+    }
+
+    if state.has_auto_merge && state.merged_output.is_none() {
+        return Err(
+            "Invalid external merge invocation: --auto-merge requires -o/--output/--out <MERGED>."
+                .to_string(),
+        );
+    }
+
+    let Some(merged) = state.merged_output.take() else {
+        return finish_compat_diff_mode(state, env);
+    };
+
+    finish_compat_merge_mode(state, merged, env, git_config).map(Some)
+}
+
+fn finish_compat_merge_mode(
+    state: CompatParseState,
+    merged: PathBuf,
+    env: &dyn EnvLookup,
+    git_config: &dyn Fn(&str) -> Option<String>,
+) -> Result<AppMode, String> {
+    let CompatParseState {
+        labels:
+            CompatLabels {
+                l1: label_l1,
+                l2: label_l2,
+                l3: label_l3,
+            },
+        base_flag,
+        merged_output: _,
+        mut positionals,
+        has_auto,
+        has_auto_merge,
+        has_kdiff3_label_flags,
+    } = state;
+
+    let (base, local, remote, label_base, label_local, label_remote) = if let Some(explicit_base) =
+        base_flag
+    {
+        match positionals.as_mut_slice() {
+            [local, remote] => (
+                Some(explicit_base),
+                std::mem::take(local),
+                std::mem::take(remote),
+                label_l1,
+                label_l2,
+                label_l3,
+            ),
+            [] | [_] => {
+                return Err("Invalid external merge invocation: expected exactly 2 positional paths (LOCAL REMOTE) when --base is provided.".to_string());
+            }
+            _ => {
+                return Err("Invalid external merge invocation: --base already supplies BASE; expected exactly 2 positional paths (LOCAL REMOTE).".to_string());
+            }
+        }
+    } else {
+        match positionals.as_mut_slice() {
+            [first, second, third] => {
+                // Ambiguous 3-path merge-mode compatibility input:
+                // - KDiff3 style: BASE LOCAL REMOTE
+                // - Meld style:   LOCAL BASE REMOTE
+                //
+                // Prefer KDiff3 order when KDiff3-specific hints are
+                // present (`--auto`/`--L*`). Otherwise default to Meld's
+                // LOCAL BASE REMOTE ordering for broad path-override
+                // compatibility.
+                if has_auto || has_kdiff3_label_flags {
+                    (
+                        Some(std::mem::take(first)),
+                        std::mem::take(second),
+                        std::mem::take(third),
+                        label_l1,
+                        label_l2,
+                        label_l3,
+                    )
+                } else {
+                    (
+                        Some(std::mem::take(second)),
+                        std::mem::take(first),
+                        std::mem::take(third),
+                        label_l2,
+                        label_l1,
+                        label_l3,
+                    )
+                }
+            }
+            [local, remote] => {
+                if label_l3.is_some() {
+                    return Err("Invalid external merge invocation: --L3 requires BASE input. Provide --base <BASE> or 3 positional paths (BASE LOCAL REMOTE).".to_string());
+                }
+                (
+                    None,
+                    std::mem::take(local),
+                    std::mem::take(remote),
+                    None,
+                    label_l1,
+                    label_l2,
+                )
+            }
+            [] | [_] => {
+                return Err("Invalid external merge invocation: expected 2 positional paths (LOCAL REMOTE) or 3 (BASE LOCAL REMOTE) after -o/--output/--out.".to_string());
+            }
+            _ => {
+                return Err("Invalid external merge invocation: too many positional paths; expected 2 (LOCAL REMOTE) or 3 (BASE LOCAL REMOTE).".to_string());
+            }
+        }
+    };
+
+    let args = MergetoolArgs {
+        merged: Some(merged),
+        local: Some(local),
+        remote: Some(remote),
+        base,
+        label_base,
+        label_local,
+        label_remote,
+        conflict_style: None,
+        diff_algorithm: None,
+        marker_size: None,
+        auto: has_auto || has_auto_merge,
+        gui: false,
+    };
+    resolve_mergetool_with_config(args, env, git_config).map(AppMode::Mergetool)
+}
+
+fn finish_compat_diff_mode(
+    state: CompatParseState,
+    env: &dyn EnvLookup,
+) -> Result<Option<AppMode>, String> {
+    let CompatParseState {
+        labels:
+            CompatLabels {
+                l1: label_l1,
+                l2: label_l2,
+                l3: label_l3,
+            },
+        base_flag,
+        merged_output: _,
+        mut positionals,
+        has_auto: _,
+        has_auto_merge: _,
+        has_kdiff3_label_flags: _,
+    } = state;
+
+    if base_flag.is_some() {
+        return Err(
+            "Invalid external diff invocation: --base is only valid for merge mode with -o/--output/--out."
+                .to_string(),
+        );
+    }
+
+    if label_l3.is_some() {
+        return Err(
+            "Invalid external diff invocation: --L3 is only valid for merge mode with -o/--output/--out."
+                .to_string(),
+        );
+    }
+
+    if positionals.is_empty() && (label_l1.is_some() || label_l2.is_some()) {
+        return Err(
+            "Invalid external diff invocation: expected 2 positional paths (LOCAL REMOTE)."
+                .to_string(),
+        );
+    }
+
+    match positionals.as_mut_slice() {
+        [local, remote] => {
+            let args = DifftoolArgs {
+                local: Some(std::mem::take(local)),
+                remote: Some(std::mem::take(remote)),
+                path: None,
+                label_left: label_l1,
+                label_right: label_l2,
+                gui: false,
+            };
+            resolve_difftool_with_env(args, env)
+                .map(AppMode::Difftool)
+                .map(Some)
+        }
+        [_, _, ..] => Err("Invalid external diff invocation: too many positional paths; expected exactly 2 (LOCAL REMOTE). Use -o/--output/--out for merge mode.".to_string()),
+        _ => Ok(None),
+    }
+}
+
+use crate::hex_encode;
 
 fn compat_log_arg_text(arg: &std::ffi::OsStr) -> String {
     if let Some(text) = arg.to_str() {
@@ -170,301 +555,10 @@ pub(super) fn parse_compat_external_mode_with_config(
     git_config: &dyn Fn(&str) -> Option<String>,
 ) -> Result<Option<AppMode>, String> {
     maybe_record_compat_argv(raw_args, env);
-
-    let mut label_l1: Option<String> = None;
-    let mut label_l2: Option<String> = None;
-    let mut label_l3: Option<String> = None;
-    let mut base_flag: Option<PathBuf> = None;
-    let mut merged_output: Option<PathBuf> = None;
-    let mut positionals: Vec<PathBuf> = Vec::new();
-    let mut has_auto = false;
-    let mut has_auto_merge = false;
-    let mut has_kdiff3_label_flags = false;
-
-    let mut idx = 0usize;
-    while idx < raw_args.len() {
-        let arg = &raw_args[idx];
-        if let Some(token) = arg.to_str() {
-            if token == "--auto" {
-                has_auto = true;
-                idx += 1;
-                continue;
-            }
-
-            if token == "--auto-merge" {
-                has_auto_merge = true;
-                idx += 1;
-                continue;
-            }
-
-            if let Some(slot) = parse_numbered_label_flag(token) {
-                let next_idx = idx + 1;
-                let value = raw_args.get(next_idx).ok_or_else(|| {
-                    format!("Missing value for compatibility flag {token} in external tool mode")
-                })?;
-                assign_numbered_compat_label(
-                    &mut label_l1,
-                    &mut label_l2,
-                    &mut label_l3,
-                    slot,
-                    compat_label_arg_text(value, token)?,
-                );
-                has_kdiff3_label_flags = true;
-                idx += 2;
-                continue;
-            }
-
-            if token == "-L" || token == "--label" {
-                let next_idx = idx + 1;
-                let value = raw_args.get(next_idx).ok_or_else(|| {
-                    format!("Missing value for compatibility flag {token} in external tool mode")
-                })?;
-                assign_next_compat_label(
-                    &mut label_l1,
-                    &mut label_l2,
-                    &mut label_l3,
-                    compat_label_arg_text(value, token)?,
-                )?;
-                idx += 2;
-                continue;
-            }
-
-            if let Some((slot, value)) = parse_attached_numbered_label(token) {
-                assign_numbered_compat_label(
-                    &mut label_l1,
-                    &mut label_l2,
-                    &mut label_l3,
-                    slot,
-                    value,
-                );
-                has_kdiff3_label_flags = true;
-                idx += 1;
-                continue;
-            }
-            if let Some(value) = token.strip_prefix("--label=") {
-                assign_next_compat_label(
-                    &mut label_l1,
-                    &mut label_l2,
-                    &mut label_l3,
-                    value.to_string(),
-                )?;
-                idx += 1;
-                continue;
-            }
-
-            if token == "-o" || token == "--output" || token == "--out" {
-                let next_idx = idx + 1;
-                let value = raw_args.get(next_idx).ok_or_else(|| {
-                    format!("Missing value for compatibility flag {token} in external tool mode")
-                })?;
-                merged_output = Some(PathBuf::from(value));
-                idx += 2;
-                continue;
-            }
-
-            if token == "--base" {
-                let next_idx = idx + 1;
-                let value = raw_args.get(next_idx).ok_or_else(|| {
-                    "Missing value for compatibility flag --base in external tool mode".to_string()
-                })?;
-                base_flag = Some(PathBuf::from(value));
-                idx += 2;
-                continue;
-            }
-
-            if let Some(value) = token.strip_prefix("--output=") {
-                merged_output = Some(PathBuf::from(value));
-                idx += 1;
-                continue;
-            }
-            if let Some(value) = token.strip_prefix("--out=") {
-                merged_output = Some(PathBuf::from(value));
-                idx += 1;
-                continue;
-            }
-            if let Some(value) = token.strip_prefix("--base=") {
-                base_flag = Some(PathBuf::from(value));
-                idx += 1;
-                continue;
-            }
-            if token.starts_with("-o") && token.len() > 2 {
-                merged_output = Some(PathBuf::from(token[2..].to_string()));
-                idx += 1;
-                continue;
-            }
-            if token.starts_with("-L") && token.len() > 2 {
-                assign_next_compat_label(
-                    &mut label_l1,
-                    &mut label_l2,
-                    &mut label_l3,
-                    token[2..].to_string(),
-                )?;
-                idx += 1;
-                continue;
-            }
-
-            if token == "--" {
-                positionals.extend(raw_args[idx + 1..].iter().map(PathBuf::from));
-                idx = raw_args.len();
-                continue;
-            }
-
-            if token.starts_with('-') {
-                return Ok(None);
-            }
-        }
-
-        positionals.push(PathBuf::from(arg));
-        idx += 1;
-    }
-
-    if has_auto && merged_output.is_none() {
-        return Err(
-            "Invalid external merge invocation: --auto requires -o/--output/--out <MERGED>."
-                .to_string(),
-        );
-    }
-
-    if has_auto_merge && merged_output.is_none() {
-        return Err(
-            "Invalid external merge invocation: --auto-merge requires -o/--output/--out <MERGED>."
-                .to_string(),
-        );
-    }
-
-    if let Some(merged) = merged_output {
-        let (base, local, remote, label_base, label_local, label_remote) = if let Some(
-            explicit_base,
-        ) = base_flag
-        {
-            match positionals.len() {
-                2 => (
-                    Some(explicit_base),
-                    positionals[0].clone(),
-                    positionals[1].clone(),
-                    label_l1,
-                    label_l2,
-                    label_l3,
-                ),
-                0 | 1 => {
-                    return Err("Invalid external merge invocation: expected exactly 2 positional paths (LOCAL REMOTE) when --base is provided.".to_string());
-                }
-                _ => {
-                    return Err("Invalid external merge invocation: --base already supplies BASE; expected exactly 2 positional paths (LOCAL REMOTE).".to_string());
-                }
-            }
-        } else {
-            match positionals.len() {
-                3 => {
-                    // Ambiguous 3-path merge-mode compatibility input:
-                    // - KDiff3 style: BASE LOCAL REMOTE
-                    // - Meld style:   LOCAL BASE REMOTE
-                    //
-                    // Prefer KDiff3 order when KDiff3-specific hints are
-                    // present (`--auto`/`--L*`). Otherwise default to Meld's
-                    // LOCAL BASE REMOTE ordering for broad path-override
-                    // compatibility.
-                    if has_auto || has_kdiff3_label_flags {
-                        (
-                            Some(positionals[0].clone()),
-                            positionals[1].clone(),
-                            positionals[2].clone(),
-                            label_l1,
-                            label_l2,
-                            label_l3,
-                        )
-                    } else {
-                        (
-                            Some(positionals[1].clone()),
-                            positionals[0].clone(),
-                            positionals[2].clone(),
-                            label_l2,
-                            label_l1,
-                            label_l3,
-                        )
-                    }
-                }
-                2 => {
-                    if label_l3.is_some() {
-                        return Err("Invalid external merge invocation: --L3 requires BASE input. Provide --base <BASE> or 3 positional paths (BASE LOCAL REMOTE).".to_string());
-                    }
-                    (
-                        None,
-                        positionals[0].clone(),
-                        positionals[1].clone(),
-                        None,
-                        label_l1,
-                        label_l2,
-                    )
-                }
-                0 | 1 => {
-                    return Err("Invalid external merge invocation: expected 2 positional paths (LOCAL REMOTE) or 3 (BASE LOCAL REMOTE) after -o/--output/--out.".to_string());
-                }
-                _ => {
-                    return Err("Invalid external merge invocation: too many positional paths; expected 2 (LOCAL REMOTE) or 3 (BASE LOCAL REMOTE).".to_string());
-                }
-            }
-        };
-
-        let args = MergetoolArgs {
-            merged: Some(merged),
-            local: Some(local),
-            remote: Some(remote),
-            base,
-            label_base,
-            label_local,
-            label_remote,
-            conflict_style: None,
-            diff_algorithm: None,
-            marker_size: None,
-            auto: has_auto || has_auto_merge,
-            gui: false,
-        };
-        return resolve_mergetool_with_config(args, env, git_config)
-            .map(AppMode::Mergetool)
-            .map(Some);
-    }
-
-    if base_flag.is_some() {
-        return Err(
-            "Invalid external diff invocation: --base is only valid for merge mode with -o/--output/--out."
-                .to_string(),
-        );
-    }
-
-    if label_l3.is_some() {
-        return Err(
-            "Invalid external diff invocation: --L3 is only valid for merge mode with -o/--output/--out."
-                .to_string(),
-        );
-    }
-
-    if positionals.is_empty() && (label_l1.is_some() || label_l2.is_some()) {
-        return Err(
-            "Invalid external diff invocation: expected 2 positional paths (LOCAL REMOTE)."
-                .to_string(),
-        );
-    }
-
-    if positionals.len() == 2 {
-        let args = DifftoolArgs {
-            local: Some(positionals[0].clone()),
-            remote: Some(positionals[1].clone()),
-            path: None,
-            label_left: label_l1,
-            label_right: label_l2,
-            gui: false,
-        };
-        return resolve_difftool_with_env(args, env)
-            .map(AppMode::Difftool)
-            .map(Some);
-    }
-
-    if positionals.len() > 2 {
-        return Err("Invalid external diff invocation: too many positional paths; expected exactly 2 (LOCAL REMOTE). Use -o/--output/--out for merge mode.".to_string());
-    }
-
-    Ok(None)
+    let Some(state) = parse_compat_external_args(raw_args)? else {
+        return Ok(None);
+    };
+    finish_compat_external_mode(state, env, git_config)
 }
 
 pub(super) fn normalize_empty_mergetool_base_arg(args: &[OsString]) -> Vec<OsString> {

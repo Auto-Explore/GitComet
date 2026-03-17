@@ -710,55 +710,31 @@ pub(super) fn unresolved_decision_regions_for_block(
         conflict_resolver::ConflictChoice::Theirs => (&block.theirs, &block.ours, false),
         _ => return None,
     };
-    let rows_with_anchors = gitcomet_core::file_diff::side_by_side_rows_with_anchors(left, right);
-    let rows = rows_with_anchors.rows;
-    let regions = rows_with_anchors.anchors.region_anchors;
-    if rows.is_empty() || regions.is_empty() {
+    let plan = gitcomet_core::file_diff::side_by_side_plan(left, right);
+    if plan.row_count == 0 {
         return None;
     }
-
-    let mut selected_prefix = Vec::with_capacity(rows.len().saturating_add(1));
-    selected_prefix.push(0usize);
-    let mut selected_count = 0usize;
-    let mut alternate_prefix = Vec::with_capacity(rows.len().saturating_add(1));
-    alternate_prefix.push(0usize);
-    let mut alternate_count = 0usize;
-    for row in &rows {
-        let selected_emits = if choose_left {
-            row.old.is_some()
-        } else {
-            row.new.is_some()
-        };
-        if selected_emits {
-            selected_count = selected_count.saturating_add(1);
-        }
-        selected_prefix.push(selected_count);
-
-        let alternate_emits = if choose_left {
-            row.new.is_some()
-        } else {
-            row.old.is_some()
-        };
-        if alternate_emits {
-            alternate_count = alternate_count.saturating_add(1);
-        }
-        alternate_prefix.push(alternate_count);
+    let regions = gitcomet_core::file_diff::plan_row_region_anchors(&plan).region_anchors;
+    if regions.is_empty() {
+        return None;
     }
+    let (old_prefix, new_prefix) = gitcomet_core::file_diff::plan_emitted_line_prefix_counts(&plan);
+    let (selected_prefix, alternate_prefix) = if choose_left {
+        (&old_prefix, &new_prefix)
+    } else {
+        (&new_prefix, &old_prefix)
+    };
 
     let mut decision_regions: Vec<UnresolvedDecisionRegion> = Vec::with_capacity(regions.len());
     for region in regions {
-        let row_start = region.row_start.min(rows.len());
-        let row_end = region.row_end_exclusive.min(rows.len());
+        let row_start = region.row_start.min(plan.row_count);
+        let row_end = region.row_end_exclusive.min(plan.row_count).max(row_start);
         let selected_line_range = selected_prefix[row_start]..selected_prefix[row_end];
         let alternate_line_range = alternate_prefix[row_start]..alternate_prefix[row_end];
-        let has_non_emitting_rows = rows[row_start..row_end].iter().any(|row| {
-            let emits = if choose_left {
-                row.old.is_some()
-            } else {
-                row.new.is_some()
-            };
-            !emits
-        });
+        let emitted_rows = selected_line_range
+            .end
+            .saturating_sub(selected_line_range.start);
+        let has_non_emitting_rows = emitted_rows < row_end.saturating_sub(row_start);
 
         if let Some(last) = decision_regions.last_mut()
             && last.selected_line_range == selected_line_range
@@ -2323,5 +2299,24 @@ mod tests {
             ConflictResolverViewMode::TwoWayDiff,
             LARGE_RESOLVED_OUTLINE_TWO_WAY_PROVENANCE_MAX_LINES + 1,
         ));
+    }
+
+    #[test]
+    fn unresolved_decision_regions_track_non_emitting_selected_rows() {
+        let block = conflict_resolver::ConflictBlock {
+            base: None,
+            ours: "".into(),
+            theirs: "added line\n".into(),
+            choice: conflict_resolver::ConflictChoice::Ours,
+            resolved: false,
+        };
+
+        let regions =
+            unresolved_decision_regions_for_block(&block).expect("expected one decision region");
+        assert_eq!(regions.len(), 1);
+        assert_eq!(regions[0].row_range, 0..1);
+        assert_eq!(regions[0].selected_line_range, 0..0);
+        assert_eq!(regions[0].alternate_line_range, 0..1);
+        assert!(regions[0].has_non_emitting_rows);
     }
 }

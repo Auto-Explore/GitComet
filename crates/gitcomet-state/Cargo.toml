@@ -12,6 +12,7 @@ workspace = true
 
 [dependencies]
 gitcomet-core = { workspace = true }
+gix = { workspace = true }
 notify = { workspace = true }
 smol = { workspace = true }
 serde = { workspace = true }

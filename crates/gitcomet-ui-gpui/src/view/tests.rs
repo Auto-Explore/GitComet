@@ -80,17 +80,17 @@ fn remote_rows_groups_and_sorts() {
         RemoteBranch {
             remote: "origin".to_string(),
             name: "b".to_string(),
-            target: CommitId("b0".to_string()),
+            target: CommitId("b0".into()),
         },
         RemoteBranch {
             remote: "origin".to_string(),
             name: "a".to_string(),
-            target: CommitId("a0".to_string()),
+            target: CommitId("a0".into()),
         },
         RemoteBranch {
             remote: "upstream".to_string(),
             name: "main".to_string(),
-            target: CommitId("c0".to_string()),
+            target: CommitId("c0".into()),
         },
     ]));
 
@@ -138,7 +138,7 @@ fn remote_headers_include_remotes_with_no_branches() {
     repo.remote_branches = Loadable::Ready(Arc::new(vec![RemoteBranch {
         remote: "origin".to_string(),
         name: "main".to_string(),
-        target: CommitId("deadbeef".to_string()),
+        target: CommitId("deadbeef".into()),
     }]));
 
     let rows = GitCometView::branch_sidebar_rows(&repo);
@@ -174,7 +174,7 @@ fn remote_upstream_branch_is_marked() {
     repo.head_branch = Loadable::Ready("main".to_string());
     repo.branches = Loadable::Ready(Arc::new(vec![Branch {
         name: "main".to_string(),
-        target: CommitId("deadbeef".to_string()),
+        target: CommitId("deadbeef".into()),
         upstream: Some(Upstream {
             remote: "origin".to_string(),
             branch: "main".to_string(),
@@ -184,7 +184,7 @@ fn remote_upstream_branch_is_marked() {
     repo.remote_branches = Loadable::Ready(Arc::new(vec![RemoteBranch {
         remote: "origin".to_string(),
         name: "main".to_string(),
-        target: CommitId("deadbeef".to_string()),
+        target: CommitId("deadbeef".into()),
     }]));
 
     let rows = GitCometView::branch_sidebar_rows(&repo);
@@ -217,7 +217,7 @@ fn remote_section_includes_tracked_upstream_without_remote_tracking_ref() {
     repo.head_branch = Loadable::Ready("feature".to_string());
     repo.branches = Loadable::Ready(Arc::new(vec![Branch {
         name: "feature".to_string(),
-        target: CommitId("deadbeef".to_string()),
+        target: CommitId("deadbeef".into()),
         upstream: Some(Upstream {
             remote: "origin".to_string(),
             branch: "feature".to_string(),
@@ -443,7 +443,7 @@ fn diff_target_rendered_preview_kind_reads_diff_target_paths() {
     );
 
     let markdown_target = DiffTarget::Commit {
-        commit_id: CommitId("deadbeef".to_string()),
+        commit_id: CommitId("deadbeef".into()),
         path: Some(PathBuf::from("README.md")),
     };
     assert_eq!(
@@ -452,7 +452,7 @@ fn diff_target_rendered_preview_kind_reads_diff_target_paths() {
     );
 
     let no_path_target = DiffTarget::Commit {
-        commit_id: CommitId("deadbeef".to_string()),
+        commit_id: CommitId("deadbeef".into()),
         path: None,
     };
     assert_eq!(

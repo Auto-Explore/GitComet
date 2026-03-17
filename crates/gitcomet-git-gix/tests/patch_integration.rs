@@ -80,7 +80,7 @@ fn export_patch_and_apply_patch_round_trip() {
     let opened = backend.open(repo).expect("open repository");
 
     let export_output = opened
-        .export_patch_with_output(&CommitId(head), &patch_path)
+        .export_patch_with_output(&CommitId(head.into()), &patch_path)
         .expect("export patch");
     assert_eq!(export_output.exit_code, Some(0));
     assert!(patch_path.exists(), "expected patch file to exist");

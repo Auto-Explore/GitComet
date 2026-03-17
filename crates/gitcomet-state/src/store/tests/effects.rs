@@ -1886,8 +1886,8 @@ fn load_stashes_effect_truncates_results_to_limit() {
     let stashes = (0..5)
         .map(|i| StashEntry {
             index: i,
-            id: CommitId(format!("stash-{i}")),
-            message: format!("stash message {i}"),
+            id: CommitId(format!("stash-{i}").into()),
+            message: format!("stash message {i}").into(),
             created_at: None,
         })
         .collect::<Vec<_>>();
@@ -3023,7 +3023,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
         path: PathBuf::from("tracked.txt"),
         area: DiffArea::Unstaged,
     };
-    let commit_id = CommitId("deadbeef".to_string());
+    let commit_id = CommitId("deadbeef".into());
     let effect_specs: Vec<(Effect, usize)> = vec![
         (Effect::LoadBranches { repo_id }, 1),
         (Effect::LoadRemotes { repo_id }, 1),
@@ -3046,7 +3046,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
                 scope: LogScope::AllBranches,
                 limit: 20,
                 cursor: Some(LogCursor {
-                    last_seen: CommitId("cursor".to_string()),
+                    last_seen: CommitId("cursor".into()),
                 }),
             },
             1,

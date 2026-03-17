@@ -643,7 +643,7 @@ fn remote_branches_loaded_sets_state() {
             result: Ok(vec![RemoteBranch {
                 remote: "origin".to_string(),
                 name: "main".to_string(),
-                target: CommitId("deadbeef".to_string()),
+                target: CommitId("deadbeef".into()),
             }]),
         }),
     );

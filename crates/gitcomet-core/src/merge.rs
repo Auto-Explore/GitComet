@@ -296,25 +296,39 @@ fn merge_hunks<'a>(
 
         if ours_involved && theirs_involved {
             // Both sides changed the same region.
-            let ours_content =
-                reconstruct_side(base_lines, change_start, region_end, &ours[oi_start..oi]);
-            let theirs_content =
-                reconstruct_side(base_lines, change_start, region_end, &theirs[ti_start..ti]);
+            let ours_hunks = &ours[oi_start..oi];
+            let theirs_hunks = &theirs[ti_start..ti];
 
-            if ours_content == theirs_content {
-                // Identical change — resolved.
+            if ours_hunks == theirs_hunks {
+                // Identical hunk structure — skip reconstructing theirs entirely.
+                let ours_content =
+                    reconstruct_side(base_lines, change_start, region_end, ours_hunks);
                 result.push(MergedHunk::Resolved {
                     base_start: change_start,
                     base_end: region_end,
                     lines: ours_content,
                 });
             } else {
-                result.push(MergedHunk::Conflict {
-                    base_start: change_start,
-                    base_end: region_end,
-                    ours_lines: ours_content,
-                    theirs_lines: theirs_content,
-                });
+                let ours_content =
+                    reconstruct_side(base_lines, change_start, region_end, ours_hunks);
+                let theirs_content =
+                    reconstruct_side(base_lines, change_start, region_end, theirs_hunks);
+
+                if ours_content == theirs_content {
+                    // Different hunks but same result — resolved.
+                    result.push(MergedHunk::Resolved {
+                        base_start: change_start,
+                        base_end: region_end,
+                        lines: ours_content,
+                    });
+                } else {
+                    result.push(MergedHunk::Conflict {
+                        base_start: change_start,
+                        base_end: region_end,
+                        ours_lines: ours_content,
+                        theirs_lines: theirs_content,
+                    });
+                }
             }
         } else if ours_involved {
             let content =
@@ -506,9 +520,37 @@ fn render_merged(
         line_ending,
     );
 
-    // Trailing-newline handling: determine whether the output should end with
-    // a newline by checking which input(s) contributed the output's last line,
-    // then applying 3-way merge logic to the trailing-LF "bit".
+    apply_trailing_newline_decision(&mut output, base_text, base_lines, ours_text, theirs_text);
+
+    MergeResult {
+        output,
+        conflict_count,
+    }
+}
+
+fn emit_context_lines(
+    output: &mut String,
+    base_lines: &[&str],
+    from: usize,
+    to: usize,
+    line_ending: &str,
+) {
+    for &line in &base_lines[from..to] {
+        output.push_str(line);
+        output.push_str(line_ending);
+    }
+}
+
+/// 3-way merge decision for whether the output should end with a trailing
+/// newline. Checks which input(s) contributed the output's last line, then
+/// applies merge logic to the trailing-LF "bit".
+fn apply_trailing_newline_decision(
+    output: &mut String,
+    base_text: &str,
+    base_lines: &[&str],
+    ours_text: &str,
+    theirs_text: &str,
+) {
     let ours_has_trailing = ours_text.is_empty() || ours_text.ends_with('\n');
     let theirs_has_trailing = theirs_text.is_empty() || theirs_text.ends_with('\n');
     let base_has_trailing = base_text.is_empty() || base_text.ends_with('\n');
@@ -516,7 +558,6 @@ fn render_merged(
     let ours_lines_all = split_lines(ours_text);
     let theirs_lines_all = split_lines(theirs_text);
 
-    // Find the output's last line content (stripped of trailing newline).
     let output_last = output
         .trim_end_matches('\n')
         .trim_end_matches('\r')
@@ -528,8 +569,8 @@ fn render_merged(
     let theirs_last_matches = theirs_lines_all.last().is_some_and(|l| *l == output_last);
     let base_last_matches = base_lines.last().is_some_and(|l| *l == output_last);
 
-    // Each branch of the trailing-LF 3-way merge has distinct semantics even
-    // when the result expression happens to be the same (`ours_has_trailing`):
+    // Each branch has distinct semantics even when the result expression
+    // happens to be the same (`ours_has_trailing`):
     //   - agree    → both match, pick either
     //   - ours-only→ only ours diverged from base, pick ours
     //   - conflict → both diverged, prefer ours
@@ -560,24 +601,6 @@ fn render_merged(
         } else if output.ends_with('\n') {
             output.truncate(output.len() - 1);
         }
-    }
-
-    MergeResult {
-        output,
-        conflict_count,
-    }
-}
-
-fn emit_context_lines(
-    output: &mut String,
-    base_lines: &[&str],
-    from: usize,
-    to: usize,
-    line_ending: &str,
-) {
-    for &line in &base_lines[from..to] {
-        output.push_str(line);
-        output.push_str(line_ending);
     }
 }
 
@@ -1147,5 +1170,25 @@ mod tests {
         let result = merge_file(base, base, theirs, &default_opts());
         assert!(result.is_clean());
         assert_eq!(result.output, "aaa\nTHEIRS\nccc\n");
+    }
+
+    #[test]
+    fn merge_identical_changes_both_sides_resolves_cleanly() {
+        // When ours and theirs make the exact same change, the hunk-level
+        // short-circuit avoids reconstructing the theirs side entirely.
+        let base = "first\nsecond\nthird\n";
+        let both = "first\nreplaced\nthird\n";
+        let result = merge_file(base, both, both, &default_opts());
+        assert!(result.is_clean());
+        assert_eq!(result.output, "first\nreplaced\nthird\n");
+    }
+
+    #[test]
+    fn merge_identical_multi_hunk_changes_resolves_cleanly() {
+        let base = "a\nb\nc\nd\ne\n";
+        let both = "a\nX\nc\nY\ne\n";
+        let result = merge_file(base, both, both, &default_opts());
+        assert!(result.is_clean());
+        assert_eq!(result.output, "a\nX\nc\nY\ne\n");
     }
 }

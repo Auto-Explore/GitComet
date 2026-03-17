@@ -178,9 +178,9 @@ mod tests {
     #[test]
     fn noop_repo_required_methods_return_unsupported() {
         let repo = sample_repo();
-        let commit = CommitId("abc123".to_string());
+        let commit = CommitId("abc123".into());
         let cursor = LogCursor {
-            last_seen: CommitId("deadbeef".to_string()),
+            last_seen: CommitId("deadbeef".into()),
         };
         let diff_target = DiffTarget::WorkingTree {
             path: PathBuf::from("file.txt"),
@@ -220,9 +220,9 @@ mod tests {
     #[test]
     fn noop_repo_default_trait_methods_use_fallback_behavior() {
         let repo = sample_repo();
-        let commit = CommitId("abc123".to_string());
+        let commit = CommitId("abc123".into());
         let cursor = LogCursor {
-            last_seen: CommitId("deadbeef".to_string()),
+            last_seen: CommitId("deadbeef".into()),
         };
         let diff_target = DiffTarget::WorkingTree {
             path: PathBuf::from("file.txt"),

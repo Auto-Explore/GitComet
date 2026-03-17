@@ -1,6 +1,7 @@
 use std::fmt;
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
+#[error("{kind}")]
 pub struct Error {
     kind: ErrorKind,
 }
@@ -14,14 +15,6 @@ impl Error {
         &self.kind
     }
 }
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.kind)
-    }
-}
-
-impl std::error::Error for Error {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GitFailureId {
@@ -101,25 +94,18 @@ impl fmt::Display for GitFailure {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum ErrorKind {
+    #[error("I/O error: {0}")]
     Io(std::io::ErrorKind),
+    #[error("Not a repository")]
     NotARepository,
+    #[error("Unsupported: {0}")]
     Unsupported(&'static str),
+    #[error("{0}")]
     Git(GitFailure),
+    #[error("{0}")]
     Backend(String),
-}
-
-impl fmt::Display for ErrorKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Io(kind) => write!(f, "I/O error: {kind}"),
-            Self::NotARepository => f.write_str("Not a repository"),
-            Self::Unsupported(message) => write!(f, "Unsupported: {message}"),
-            Self::Git(failure) => write!(f, "{failure}"),
-            Self::Backend(message) => f.write_str(message),
-        }
-    }
 }
 
 #[cfg(test)]

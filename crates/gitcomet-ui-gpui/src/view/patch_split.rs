@@ -1,4 +1,5 @@
 use super::*;
+use std::sync::Arc;
 
 pub(super) fn build_patch_split_rows(diff: &[AnnotatedDiffLine]) -> Vec<PatchSplitRow> {
     use gitcomet_core::domain::DiffLineKind as DK;
@@ -33,8 +34,8 @@ pub(super) fn build_patch_split_rows(diff: &[AnnotatedDiffLine]) -> Vec<PatchSpl
                 kind,
                 old_line: left.and_then(|l| l.old_line),
                 new_line: right.and_then(|l| l.new_line),
-                old: left.map(|l| diff_content_text(l).to_string()),
-                new: right.map(|l| diff_content_text(l).to_string()),
+                old: left.map(|l| diff_content_text(l).into()),
+                new: right.map(|l| diff_content_text(l).into()),
                 eof_newline: None,
             };
             out.push(PatchSplitRow::Aligned {
@@ -81,13 +82,13 @@ pub(super) fn build_patch_split_rows(diff: &[AnnotatedDiffLine]) -> Vec<PatchSpl
                 match line.kind {
                     DK::Context => {
                         flush_pending(&mut out, diff, &mut pending_removes, &mut pending_adds);
-                        let text = diff_content_text(line).to_string();
+                        let text: Arc<str> = diff_content_text(line).into();
                         out.push(PatchSplitRow::Aligned {
                             row: FileDiffRow {
                                 kind: K::Context,
                                 old_line: line.old_line,
                                 new_line: line.new_line,
-                                old: Some(text.clone()),
+                                old: Some(Arc::clone(&text)),
                                 new: Some(text),
                                 eof_newline: None,
                             },

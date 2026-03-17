@@ -81,13 +81,13 @@ fn blame_file_reports_head_and_explicit_revision() {
             .collect::<Vec<_>>(),
         vec!["one", "two updated"]
     );
-    assert_eq!(head_blame[0].commit_id, base_id);
-    assert_eq!(head_blame[0].author, "You");
-    assert_eq!(head_blame[0].summary, "base");
+    assert_eq!(&*head_blame[0].commit_id, base_id);
+    assert_eq!(&*head_blame[0].author, "You");
+    assert_eq!(&*head_blame[0].summary, "base");
     assert!(head_blame[0].author_time_unix.is_some());
-    assert_eq!(head_blame[1].commit_id, head_id);
-    assert_eq!(head_blame[1].author, "You");
-    assert_eq!(head_blame[1].summary, "update");
+    assert_eq!(&*head_blame[1].commit_id, head_id);
+    assert_eq!(&*head_blame[1].author, "You");
+    assert_eq!(&*head_blame[1].summary, "update");
     assert!(head_blame[1].author_time_unix.is_some());
 
     let base_blame = opened
@@ -101,9 +101,9 @@ fn blame_file_reports_head_and_explicit_revision() {
             .collect::<Vec<_>>(),
         vec!["one", "two"]
     );
-    assert!(base_blame.iter().all(|line| line.commit_id == base_id));
-    assert!(base_blame.iter().all(|line| line.author == "You"));
-    assert!(base_blame.iter().all(|line| line.summary == "base"));
+    assert!(base_blame.iter().all(|line| &*line.commit_id == base_id));
+    assert!(base_blame.iter().all(|line| &*line.author == "You"));
+    assert!(base_blame.iter().all(|line| &*line.summary == "base"));
     assert!(
         base_blame
             .iter()

@@ -12,10 +12,13 @@ workspace = true
 
 [features]
 test-support = []
+benchmarks = []
 
 [dependencies]
 regex = { workspace = true }
 rustc-hash = { workspace = true }
+strsim = { workspace = true }
+thiserror = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

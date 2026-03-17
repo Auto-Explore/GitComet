@@ -4,7 +4,7 @@ use gpui::{
     App, Bounds, CursorStyle, DispatchPhase, HighlightStyle, Hitbox, HitboxBehavior, Pixels,
     Styled, TextRun, TextStyle, Window, fill, point, px, size,
 };
-use rustc_hash::{FxHashMap as HashMap, FxHasher};
+use rustc_hash::FxHasher;
 use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
@@ -18,8 +18,8 @@ const GUTTER_TEXT_LAYOUT_CACHE_MAX_ENTRIES: usize = 16_384;
 type HighlightSpans = Arc<Vec<(Range<usize>, HighlightStyle)>>;
 
 thread_local! {
-    static GUTTER_TEXT_LAYOUT_CACHE: RefCell<HashMap<u64, gpui::ShapedLine>> =
-        RefCell::new(HashMap::default());
+    static GUTTER_TEXT_LAYOUT_CACHE: RefCell<FxLruCache<u64, gpui::ShapedLine>> =
+        RefCell::new(new_fx_lru_cache(GUTTER_TEXT_LAYOUT_CACHE_MAX_ENTRIES));
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -859,7 +859,7 @@ fn paint_gutter_text(
         hasher.finish()
     };
 
-    let shaped = GUTTER_TEXT_LAYOUT_CACHE.with(|cache| cache.borrow().get(&key).cloned());
+    let shaped = GUTTER_TEXT_LAYOUT_CACHE.with(|cache| cache.borrow_mut().get(&key).cloned());
     let shaped = shaped.unwrap_or_else(|| {
         let run = style.to_run(text.len());
         let shaped = window
@@ -867,13 +867,7 @@ fn paint_gutter_text(
             .shape_line(text.clone(), metrics.font_size, &[run], None);
 
         GUTTER_TEXT_LAYOUT_CACHE.with(|cache| {
-            let mut cache = cache.borrow_mut();
-            insert_with_partial_cache_eviction(
-                &mut cache,
-                key,
-                shaped.clone(),
-                GUTTER_TEXT_LAYOUT_CACHE_MAX_ENTRIES,
-            );
+            cache.borrow_mut().put(key, shaped.clone());
         });
 
         shaped

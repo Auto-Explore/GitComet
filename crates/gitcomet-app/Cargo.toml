@@ -13,7 +13,16 @@ workspace = true
 [features]
 default = ["ui-gpui", "gix"]
 ui = ["dep:gitcomet-ui"]
-ui-gpui = ["ui", "dep:gitcomet-ui-gpui"]
+ui-gpui-runtime = ["ui", "dep:gitcomet-ui-gpui"]
+ui-gpui = ["ui-gpui-runtime", "gitcomet-ui-gpui/syntax-all"]
+ui-gpui-syntax-common = [
+    "ui-gpui-runtime",
+    "gitcomet-ui-gpui/syntax-common",
+]
+ui-gpui-syntax-minimal = [
+    "ui-gpui-runtime",
+    "gitcomet-ui-gpui/syntax-minimal",
+]
 gix = ["dep:gitcomet-git-gix"]
 
 [dependencies]

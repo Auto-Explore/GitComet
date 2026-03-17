@@ -223,7 +223,7 @@ impl GixRepo {
             branches.push(RemoteBranch {
                 remote: remote.to_string(),
                 name: name.to_string(),
-                target: gitcomet_core::domain::CommitId(target.to_string()),
+                target: gitcomet_core::domain::CommitId(target.to_string().into()),
             });
         }
 

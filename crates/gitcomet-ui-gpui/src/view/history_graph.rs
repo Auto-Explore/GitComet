@@ -324,13 +324,10 @@ mod tests {
 
     fn commit(id: &str, parent_ids: Vec<&str>) -> Commit {
         Commit {
-            id: CommitId(id.to_string()),
-            parent_ids: parent_ids
-                .into_iter()
-                .map(|p| CommitId(p.to_string()))
-                .collect(),
-            summary: String::new(),
-            author: String::new(),
+            id: CommitId(id.into()),
+            parent_ids: parent_ids.into_iter().map(|p| CommitId(p.into())).collect(),
+            summary: "".into(),
+            author: "".into(),
             time: SystemTime::UNIX_EPOCH,
         }
     }

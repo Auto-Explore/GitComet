@@ -33,7 +33,7 @@ fn parse_ls_remote_tags(output: &str, remote_name: &str) -> Vec<RemoteTag> {
             Some(RemoteTag {
                 remote: remote_name.to_string(),
                 name: name.to_string(),
-                target: CommitId(object.to_string()),
+                target: CommitId(object.to_string().into()),
             })
         })
         .collect()
@@ -77,7 +77,7 @@ impl GixRepo {
             let reference = reference
                 .map_err(|e| Error::new(ErrorKind::Backend(format!("gix ref iter: {e}"))))?;
             let name = reference.name().shorten().to_str_lossy().into_owned();
-            let target = CommitId(reference.id().detach().to_string());
+            let target = CommitId(reference.id().detach().to_string().into());
             tags.push(Tag { name, target });
         }
 

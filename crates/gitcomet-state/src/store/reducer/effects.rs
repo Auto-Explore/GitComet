@@ -762,7 +762,7 @@ mod tests {
         let mut state = AppState::default();
         let repo_id = RepoId(42);
         let path = PathBuf::from("tracked.txt");
-        let commit_id = CommitId("abc".to_string());
+        let commit_id = CommitId("abc".into());
 
         assert!(
             file_history_loaded(&mut state, repo_id, path.clone(), Ok(empty_log_page())).is_empty()
@@ -1189,8 +1189,8 @@ mod tests {
     fn select_and_clear_commit_selection_cover_all_branches() {
         let repo_id = RepoId(1);
         let mut state = new_state_with_repo(repo_id);
-        let commit_a = CommitId("a".to_string());
-        let commit_b = CommitId("b".to_string());
+        let commit_a = CommitId("a".into());
+        let commit_b = CommitId("b".into());
 
         repo_mut(&mut state, repo_id).set_commit_details(Loadable::Error("old".to_string()));
         let effects = select_commit(&mut state, repo_id, commit_a.clone());
@@ -1587,8 +1587,8 @@ mod tests {
     fn commit_details_loaded_requires_selected_commit_match() {
         let repo_id = RepoId(1);
         let mut state = new_state_with_repo(repo_id);
-        let selected = CommitId("selected".to_string());
-        let other = CommitId("other".to_string());
+        let selected = CommitId("selected".into());
+        let other = CommitId("other".into());
 
         repo_mut(&mut state, repo_id).set_selected_commit(Some(selected.clone()));
         commit_details_loaded(

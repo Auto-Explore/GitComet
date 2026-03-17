@@ -86,7 +86,8 @@ impl GitlinkIndexState {
             self.kind
                 .unwrap_or_else(|| repo.object_hash())
                 .null()
-                .to_string(),
+                .to_string()
+                .into(),
         )
     }
 
@@ -252,5 +253,5 @@ fn pathbuf_from_gix_path(path: &gix::bstr::BStr) -> Result<PathBuf> {
 }
 
 fn object_id_to_commit_id(id: gix::ObjectId) -> CommitId {
-    CommitId(id.to_string())
+    CommitId(id.to_string().into())
 }

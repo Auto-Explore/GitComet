@@ -1874,8 +1874,9 @@ impl TextInput {
         let inserted = self.content.replace_range(range.clone(), new_text);
         self.push_undo_snapshot(undo_snapshot);
         self.pending_text_edit_delta = Some((range.clone(), inserted.clone()));
-        self.mark_wrap_dirty_from_edit(range.clone(), inserted.clone());
-        self.selected_range = inserted.end..inserted.end;
+        let cursor = inserted.end;
+        self.mark_wrap_dirty_from_edit(range, inserted.clone());
+        self.selected_range = cursor..cursor;
         self.selection_reversed = false;
         self.marked_range.take();
         self.vertical_motion_x = None;

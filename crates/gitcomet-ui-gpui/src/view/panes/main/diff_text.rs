@@ -259,7 +259,7 @@ impl MainPaneView {
         let fallback = SharedString::default();
         let expand_tabs = |s: &str| -> SharedString {
             if !s.contains('\t') {
-                return s.to_string().into();
+                return SharedString::new(s);
             }
             let mut out = String::with_capacity(s.len());
             for ch in s.chars() {

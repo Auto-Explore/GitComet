@@ -1,5 +1,6 @@
 use super::{
-    GixRepo, conflict_stages::conflict_kind_from_stage_mask, git_ops::head_upstream_divergence,
+    GitlinkStatusCapabilityCacheEntry, GixRepo, RepoFileStamp,
+    conflict_stages::conflict_kind_from_stage_mask, git_ops::head_upstream_divergence,
 };
 use crate::util::{git_workdir_cmd_for, path_buf_from_git_bytes, run_git_raw_output};
 use gitcomet_core::domain::{
@@ -11,6 +12,45 @@ use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::path::{Path, PathBuf};
 
 impl GixRepo {
+    fn may_have_gitlink_status_supplement(&self, repo: &gix::Repository) -> bool {
+        let gitmodules = repo_file_stamp(self.spec.workdir.join(".gitmodules").as_path());
+        let index = repo_file_stamp(repo.index_path().as_path());
+
+        if let Some(cached) = self
+            .gitlink_status_capability
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_ref()
+            .filter(|cached| cached.gitmodules == gitmodules && cached.index == index)
+            .map(|cached| cached.may_have_gitlinks)
+        {
+            return cached;
+        }
+
+        let may_have_gitlinks = if gitmodules.exists {
+            true
+        } else {
+            let Ok(index_state) = repo.index_or_empty() else {
+                return false;
+            };
+            index_state
+                .entries()
+                .iter()
+                .any(|entry| entry.mode == gix::index::entry::Mode::COMMIT)
+        };
+
+        *self
+            .gitlink_status_capability
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+            Some(GitlinkStatusCapabilityCacheEntry {
+                gitmodules,
+                index,
+                may_have_gitlinks,
+            });
+        may_have_gitlinks
+    }
+
     pub(super) fn status_impl(&self) -> Result<RepoStatus> {
         let repo = self._repo.to_thread_local();
         let platform = repo
@@ -145,7 +185,17 @@ impl GixRepo {
             }
         }
 
-        supplement_gitlink_status_from_porcelain(&self.spec.workdir, &mut staged, &mut unstaged)?;
+        // Only shell out for gitlink/submodule status when the repo is likely
+        // to contain submodules or gitlinks.  This avoids a full `git status`
+        // subprocess on every refresh for the common case.
+        let may_have_gitlinks = self.may_have_gitlink_status_supplement(&repo);
+        if may_have_gitlinks {
+            supplement_gitlink_status_from_porcelain(
+                &self.spec.workdir,
+                &mut staged,
+                &mut unstaged,
+            )?;
+        }
 
         fn kind_priority(kind: FileStatusKind) -> u8 {
             match kind {
@@ -188,6 +238,17 @@ impl GixRepo {
     pub(super) fn upstream_divergence_impl(&self) -> Result<Option<UpstreamDivergence>> {
         let repo = self.reopen_repo()?;
         head_upstream_divergence(&repo)
+    }
+}
+
+fn repo_file_stamp(path: &Path) -> RepoFileStamp {
+    match std::fs::metadata(path) {
+        Ok(metadata) => RepoFileStamp {
+            exists: true,
+            len: metadata.len(),
+            modified: metadata.modified().ok(),
+        },
+        Err(_) => RepoFileStamp::default(),
     }
 }
 
@@ -298,9 +359,7 @@ fn map_porcelain_v2_status_char(ch: char) -> Option<FileStatusKind> {
 }
 
 fn push_status_entry(entries: &mut Vec<FileStatus>, path: PathBuf, kind: FileStatusKind) {
-    if entries.iter().any(|e| e.path == path && e.kind == kind) {
-        return;
-    }
+    // Deduplication is handled by sort_and_dedup() after all entries are collected.
     entries.push(FileStatus {
         path,
         kind,

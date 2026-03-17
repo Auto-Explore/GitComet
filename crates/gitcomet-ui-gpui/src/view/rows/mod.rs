@@ -1,11 +1,114 @@
 use super::*;
-use rustc_hash::FxHashMap as HashMap;
 use std::cell::RefCell;
+use std::hash::BuildHasherDefault;
+use std::num::NonZeroUsize;
 
 pub(in crate::view) const MAX_LINES_FOR_SYNTAX_HIGHLIGHTING: usize = 4_000;
 pub(in crate::view) const MAX_LINES_FOR_PREPARED_CONFLICT_THREE_WAY_SYNTAX: usize = 20_000;
-const TEXT_LAYOUT_CACHE_PARTIAL_EVICT_DIVISOR: usize = 8;
 const MAX_CACHED_LINE_NUMBER: usize = 16_384;
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(in crate::view) struct LruCacheMetrics {
+    pub(in crate::view) hits: u64,
+    pub(in crate::view) misses: u64,
+    pub(in crate::view) evictions: u64,
+    pub(in crate::view) clears: u64,
+}
+
+#[derive(Debug)]
+pub(in crate::view) struct InstrumentedLruCache<
+    K: std::hash::Hash + Eq,
+    V,
+    S: std::hash::BuildHasher = lru::DefaultHasher,
+> {
+    cache: lru::LruCache<K, V, S>,
+    metrics: LruCacheMetrics,
+}
+
+impl<K: std::hash::Hash + Eq, V> InstrumentedLruCache<K, V> {
+    pub(in crate::view) fn new(cap: usize) -> Self {
+        Self {
+            cache: lru::LruCache::new(non_zero_lru_capacity(cap)),
+            metrics: LruCacheMetrics::default(),
+        }
+    }
+}
+
+impl<K: std::hash::Hash + Eq, V, S: std::hash::BuildHasher> InstrumentedLruCache<K, V, S> {
+    pub(in crate::view) fn with_hasher(cap: usize, hash_builder: S) -> Self {
+        Self {
+            cache: lru::LruCache::with_hasher(non_zero_lru_capacity(cap), hash_builder),
+            metrics: LruCacheMetrics::default(),
+        }
+    }
+
+    pub(in crate::view) fn get(&mut self, key: &K) -> Option<&V> {
+        let value = self.cache.get(key);
+        if value.is_some() {
+            self.metrics.hits = self.metrics.hits.saturating_add(1);
+        } else {
+            self.metrics.misses = self.metrics.misses.saturating_add(1);
+        }
+        value
+    }
+
+    #[allow(dead_code)]
+    pub(in crate::view) fn peek(&self, key: &K) -> Option<&V> {
+        self.cache.peek(key)
+    }
+
+    pub(in crate::view) fn put(&mut self, key: K, value: V) -> Option<V> {
+        let will_evict =
+            self.cache.peek(&key).is_none() && self.cache.len() >= self.cache.cap().get();
+        let previous = self.cache.put(key, value);
+        if will_evict {
+            self.metrics.evictions = self.metrics.evictions.saturating_add(1);
+        }
+        previous
+    }
+
+    #[allow(dead_code)]
+    pub(in crate::view) fn len(&self) -> usize {
+        self.cache.len()
+    }
+
+    #[allow(dead_code)]
+    pub(in crate::view) fn clear(&mut self) {
+        self.cache.clear();
+        self.metrics.clears = self.metrics.clears.saturating_add(1);
+    }
+
+    #[allow(dead_code)]
+    pub(in crate::view) fn metrics(&self) -> LruCacheMetrics {
+        self.metrics
+    }
+
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub(in crate::view) fn reset_metrics(&mut self) {
+        self.metrics = LruCacheMetrics::default();
+    }
+}
+
+fn non_zero_lru_capacity(cap: usize) -> NonZeroUsize {
+    NonZeroUsize::new(cap).expect("LRU cache capacity must be > 0")
+}
+
+pub(in crate::view) type LruCache<K, V> = InstrumentedLruCache<K, V>;
+/// LRU cache backed by FxHasher for fast hashing of u64 keys (text layout caches).
+pub(in crate::view) type FxLruCache<K, V> =
+    InstrumentedLruCache<K, V, BuildHasherDefault<rustc_hash::FxHasher>>;
+
+pub(in crate::view) fn new_lru_cache<K: std::hash::Hash + Eq, V>(cap: usize) -> LruCache<K, V> {
+    InstrumentedLruCache::new(cap)
+}
+
+/// Create a new FxHasher-backed LRU cache with the given capacity.
+pub(in crate::view) fn new_fx_lru_cache<K: std::hash::Hash + Eq, V>(
+    cap: usize,
+) -> FxLruCache<K, V> {
+    InstrumentedLruCache::with_hasher(cap, BuildHasherDefault::default())
+}
 
 thread_local! {
     static LINE_NUMBER_STRINGS: RefCell<Vec<SharedString>> =
@@ -31,29 +134,6 @@ fn line_number_string(n: Option<u32>) -> SharedString {
         }
         cache[ix].clone()
     })
-}
-
-fn insert_with_partial_cache_eviction<V>(
-    cache: &mut HashMap<u64, V>,
-    key: u64,
-    value: V,
-    max_entries: usize,
-) {
-    if max_entries == 0 {
-        return;
-    }
-
-    if !cache.contains_key(&key) && cache.len() >= max_entries {
-        let evict_count = (max_entries / TEXT_LAYOUT_CACHE_PARTIAL_EVICT_DIVISOR).max(1);
-        let target_len = max_entries.saturating_sub(evict_count);
-        let remove_count = cache.len().saturating_sub(target_len);
-        let keys_to_remove: Vec<u64> = cache.keys().take(remove_count).copied().collect();
-        for old_key in keys_to_remove {
-            cache.remove(&old_key);
-        }
-    }
-
-    cache.insert(key, value);
 }
 
 mod canvas;
@@ -140,45 +220,97 @@ mod tests {
     }
 
     #[test]
-    fn partial_eviction_keeps_cache_bounded_without_full_clear() {
-        let max_entries = 8usize;
-        let mut cache: HashMap<u64, u64> = HashMap::default();
-        for key in 0..max_entries as u64 {
-            insert_with_partial_cache_eviction(&mut cache, key, key, max_entries);
+    fn lru_cache_evicts_least_recently_used() {
+        let mut cache: FxLruCache<u64, u64> = new_fx_lru_cache(8);
+        for key in 0..8u64 {
+            cache.put(key, key);
         }
+        assert_eq!(cache.len(), 8);
 
-        assert_eq!(cache.len(), max_entries);
-        insert_with_partial_cache_eviction(&mut cache, 999, 999, max_entries);
-
-        assert!(cache.len() > 1);
-        assert!(cache.len() <= max_entries);
-        assert!(cache.contains_key(&999));
+        // Insert a 9th entry — should evict key 0 (LRU)
+        cache.put(999, 999);
+        assert_eq!(cache.len(), 8);
+        assert!(cache.peek(&999).is_some());
+        assert!(cache.peek(&0).is_none(), "LRU entry should be evicted");
+        assert!(cache.peek(&7).is_some(), "MRU entry should remain");
     }
 
     #[test]
-    fn partial_eviction_updates_existing_entry_without_changing_len() {
-        let max_entries = 8usize;
-        let mut cache: HashMap<u64, u64> = HashMap::default();
-        for key in 0..max_entries as u64 {
-            insert_with_partial_cache_eviction(&mut cache, key, key, max_entries);
+    fn lru_cache_promotes_on_get() {
+        let mut cache: FxLruCache<u64, u64> = new_fx_lru_cache(4);
+        for key in 0..4u64 {
+            cache.put(key, key);
         }
 
-        let len_before = cache.len();
-        insert_with_partial_cache_eviction(&mut cache, 3, 300, max_entries);
+        // Access key 0 to promote it to MRU
+        assert_eq!(cache.get(&0), Some(&0));
 
-        assert_eq!(cache.len(), len_before);
-        assert_eq!(cache.get(&3), Some(&300));
+        // Insert 4 more entries — key 0 should survive (was promoted)
+        cache.put(10, 10);
+        cache.put(11, 11);
+        cache.put(12, 12);
+
+        assert!(cache.peek(&0).is_some(), "promoted entry should survive");
+        assert!(
+            cache.peek(&1).is_none(),
+            "unpromoted old entry should be evicted"
+        );
     }
 
     #[test]
-    fn partial_eviction_stays_within_limit_across_many_inserts() {
-        let max_entries = 8usize;
-        let mut cache: HashMap<u64, u64> = HashMap::default();
-        for key in 0..128u64 {
-            insert_with_partial_cache_eviction(&mut cache, key, key, max_entries);
-        }
+    fn lru_cache_metrics_track_hits_misses_evictions_and_clears() {
+        let mut cache: FxLruCache<u64, u64> = new_fx_lru_cache(2);
 
-        assert!(cache.len() <= max_entries);
-        assert!(cache.contains_key(&127));
+        assert_eq!(cache.get(&1), None);
+        assert_eq!(
+            cache.metrics(),
+            LruCacheMetrics {
+                hits: 0,
+                misses: 1,
+                evictions: 0,
+                clears: 0,
+            }
+        );
+
+        cache.put(1, 10);
+        cache.put(2, 20);
+        assert_eq!(cache.get(&1), Some(&10));
+        assert_eq!(
+            cache.metrics(),
+            LruCacheMetrics {
+                hits: 1,
+                misses: 1,
+                evictions: 0,
+                clears: 0,
+            }
+        );
+
+        cache.put(3, 30);
+        assert_eq!(
+            cache.peek(&2),
+            None,
+            "least-recently used entry should evict"
+        );
+        assert_eq!(
+            cache.metrics(),
+            LruCacheMetrics {
+                hits: 1,
+                misses: 1,
+                evictions: 1,
+                clears: 0,
+            }
+        );
+
+        cache.clear();
+        assert_eq!(cache.len(), 0);
+        assert_eq!(
+            cache.metrics(),
+            LruCacheMetrics {
+                hits: 1,
+                misses: 1,
+                evictions: 1,
+                clears: 1,
+            }
+        );
     }
 }

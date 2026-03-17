@@ -5,7 +5,7 @@ use gpui::{
     App, Bounds, DispatchPhase, HighlightStyle, Pixels, Styled, TextRun, TextStyle, Window, fill,
     point, px, size,
 };
-use rustc_hash::{FxHashMap as HashMap, FxHasher};
+use rustc_hash::FxHasher;
 use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
@@ -26,10 +26,10 @@ type ThreeWayColumnBounds = (
 );
 
 thread_local! {
-    static GUTTER_TEXT_LAYOUT_CACHE: RefCell<HashMap<u64, gpui::ShapedLine>> =
-        RefCell::new(HashMap::default());
-    static CONFLICT_TEXT_LAYOUT_CACHE: RefCell<HashMap<u64, gpui::ShapedLine>> =
-        RefCell::new(HashMap::default());
+    static GUTTER_TEXT_LAYOUT_CACHE: RefCell<FxLruCache<u64, gpui::ShapedLine>> =
+        RefCell::new(new_fx_lru_cache(GUTTER_TEXT_LAYOUT_CACHE_MAX_ENTRIES));
+    static CONFLICT_TEXT_LAYOUT_CACHE: RefCell<FxLruCache<u64, gpui::ShapedLine>> =
+        RefCell::new(new_fx_lru_cache(CONFLICT_TEXT_LAYOUT_CACHE_MAX_ENTRIES));
 }
 
 #[derive(Clone, Debug)]
@@ -756,7 +756,7 @@ fn paint_gutter_text(
         hasher.finish()
     };
 
-    let shaped = GUTTER_TEXT_LAYOUT_CACHE.with(|cache| cache.borrow().get(&key).cloned());
+    let shaped = GUTTER_TEXT_LAYOUT_CACHE.with(|cache| cache.borrow_mut().get(&key).cloned());
     let shaped = shaped.unwrap_or_else(|| {
         let run = style.to_run(text.len());
         let shaped = window
@@ -764,13 +764,7 @@ fn paint_gutter_text(
             .shape_line(text.clone(), metrics.font_size, &[run], None);
 
         GUTTER_TEXT_LAYOUT_CACHE.with(|cache| {
-            let mut cache = cache.borrow_mut();
-            insert_with_partial_cache_eviction(
-                &mut cache,
-                key,
-                shaped.clone(),
-                GUTTER_TEXT_LAYOUT_CACHE_MAX_ENTRIES,
-            );
+            cache.borrow_mut().put(key, shaped.clone());
         });
 
         shaped
@@ -815,7 +809,8 @@ fn ensure_layout_cached(
     window: &mut Window,
 ) -> gpui::ShapedLine {
     let key = conflict_layout_key(prepared, base_style, fg, metrics);
-    if let Some(layout) = CONFLICT_TEXT_LAYOUT_CACHE.with(|cache| cache.borrow().get(&key).cloned())
+    if let Some(layout) =
+        CONFLICT_TEXT_LAYOUT_CACHE.with(|cache| cache.borrow_mut().get(&key).cloned())
     {
         return layout;
     }
@@ -837,13 +832,7 @@ fn ensure_layout_cached(
     };
 
     CONFLICT_TEXT_LAYOUT_CACHE.with(|cache| {
-        let mut cache = cache.borrow_mut();
-        insert_with_partial_cache_eviction(
-            &mut cache,
-            key,
-            shaped.clone(),
-            CONFLICT_TEXT_LAYOUT_CACHE_MAX_ENTRIES,
-        );
+        cache.borrow_mut().put(key, shaped.clone());
     });
 
     shaped

@@ -679,10 +679,10 @@ mod tests {
         repo.status = Loadable::Ready(Arc::new(RepoStatus::default()));
         repo.history_state.log = Loadable::Ready(Arc::new(LogPage {
             commits: vec![Commit {
-                id: CommitId("c1".to_string()),
+                id: CommitId("c1".into()),
                 parent_ids: Vec::new(),
-                summary: "s1".to_string(),
-                author: "a".to_string(),
+                summary: "s1".into(),
+                author: "a".into(),
                 time: SystemTime::UNIX_EPOCH,
             }],
             next_cursor: None,
@@ -692,14 +692,14 @@ mod tests {
             next_cursor: None,
         }));
         repo.history_state.blame = Loadable::Ready(Arc::new(vec![BlameLine {
-            commit_id: "c1".to_string(),
-            author: "a".to_string(),
+            commit_id: "c1".into(),
+            author: "a".into(),
             author_time_unix: None,
-            summary: "s1".to_string(),
+            summary: "s1".into(),
             line: "line".to_string(),
         }]));
         repo.history_state.commit_details = Loadable::Ready(Arc::new(CommitDetails {
-            id: CommitId("c1".to_string()),
+            id: CommitId("c1".into()),
             message: "m".to_string(),
             committed_at: "t".to_string(),
             parent_ids: Vec::new(),
@@ -707,7 +707,7 @@ mod tests {
         }));
         repo.diff_state.diff = Loadable::Ready(Arc::new(Diff {
             target: DiffTarget::Commit {
-                commit_id: CommitId("c1".to_string()),
+                commit_id: CommitId("c1".into()),
                 path: None,
             },
             lines: Vec::new(),
@@ -797,7 +797,7 @@ mod tests {
     fn set_selected_commit_bumps_selected_commit_rev() {
         let mut repo = new_repo();
         let before = repo.history_state.selected_commit_rev;
-        repo.set_selected_commit(Some(CommitId("abc".to_string())));
+        repo.set_selected_commit(Some(CommitId("abc".into())));
         assert_eq!(repo.history_state.selected_commit_rev, before + 1);
         repo.set_selected_commit(None);
         assert_eq!(repo.history_state.selected_commit_rev, before + 2);
@@ -952,7 +952,7 @@ mod tests {
     #[test]
     fn set_detached_head_commit_updates_only_on_change() {
         let mut repo = new_repo();
-        let head = CommitId("abc123".to_string());
+        let head = CommitId("abc123".into());
         repo.set_detached_head_commit(Some(head.clone()));
         assert_eq!(repo.detached_head_commit, Some(head.clone()));
 

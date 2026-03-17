@@ -990,7 +990,7 @@ fn diff_file_text_reports_old_and_new_for_working_tree_and_commits() {
 
     let commit = opened
         .diff_file_text(&DiffTarget::Commit {
-            commit_id: gitcomet_core::domain::CommitId(head),
+            commit_id: gitcomet_core::domain::CommitId(head.into()),
             path: Some(PathBuf::from("a.txt")),
         })
         .unwrap()
@@ -1029,7 +1029,7 @@ fn diff_file_text_root_commit_has_no_parent_side() {
     let opened = backend.open(repo).unwrap();
     let commit = opened
         .diff_file_text(&DiffTarget::Commit {
-            commit_id: gitcomet_core::domain::CommitId(head),
+            commit_id: gitcomet_core::domain::CommitId(head.into()),
             path: Some(PathBuf::from("a.txt")),
         })
         .unwrap()
@@ -1189,7 +1189,7 @@ fn diff_file_image_reports_old_and_new_for_working_tree_and_commits() {
 
     let commit = opened
         .diff_file_image(&DiffTarget::Commit {
-            commit_id: gitcomet_core::domain::CommitId(head),
+            commit_id: gitcomet_core::domain::CommitId(head.into()),
             path: Some(PathBuf::from("img.png")),
         })
         .unwrap()
@@ -1377,6 +1377,70 @@ fn committed_gitlink_unstaged_modified_reports_modified_status_and_diff() {
 }
 
 #[test]
+fn status_cache_invalidates_when_gitlink_appears_on_same_repo_instance() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    let nested = repo.join("chess3");
+
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    let initial_status = opened.status().unwrap();
+    assert!(
+        initial_status.staged.is_empty() && initial_status.unstaged.is_empty(),
+        "expected clean repo before adding gitlink; status={initial_status:?}"
+    );
+
+    std::fs::create_dir_all(&nested).expect("create nested repo path");
+    run_git(&nested, &["init"]);
+    run_git(&nested, &["config", "user.email", "you@example.com"]);
+    run_git(&nested, &["config", "user.name", "You"]);
+    run_git(&nested, &["config", "commit.gpgsign", "false"]);
+
+    write(&nested, "file.txt", "one\n");
+    run_git(&nested, &["add", "file.txt"]);
+    run_git(
+        &nested,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "nested c1"],
+    );
+
+    run_git(repo, &["add", "chess3"]);
+
+    let staged_gitlink = opened.status().unwrap();
+    assert!(
+        staged_gitlink
+            .staged
+            .iter()
+            .any(|e| e.path == Path::new("chess3") && e.kind == FileStatusKind::Added),
+        "expected staged Added gitlink entry after cached clean status; status={staged_gitlink:?}"
+    );
+
+    write(&nested, "file.txt", "one\ntwo\n");
+    run_git(&nested, &["add", "file.txt"]);
+    run_git(
+        &nested,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "nested c2"],
+    );
+
+    let advanced_gitlink = opened.status().unwrap();
+    assert!(
+        advanced_gitlink
+            .unstaged
+            .iter()
+            .any(|e| e.path == Path::new("chess3") && e.kind == FileStatusKind::Modified),
+        "expected cached gitlink capability to keep reporting nested repo advances; status={advanced_gitlink:?}"
+    );
+}
+
+#[test]
 fn diff_file_commit_target_without_path_returns_none() {
     if !require_git_shell_for_status_integration_tests() {
         return;
@@ -1398,7 +1462,7 @@ fn diff_file_commit_target_without_path_returns_none() {
 
     let head = run_git_output(repo, &["rev-parse", "HEAD"]);
     let target = DiffTarget::Commit {
-        commit_id: gitcomet_core::domain::CommitId(head),
+        commit_id: gitcomet_core::domain::CommitId(head.into()),
         path: None,
     };
 
@@ -1587,7 +1651,7 @@ fn diff_commit_with_unknown_revision_and_outside_conflict_path_are_handled() {
     let backend = GixBackend;
     let opened = backend.open(&repo).unwrap();
     let unknown_target = DiffTarget::Commit {
-        commit_id: gitcomet_core::domain::CommitId("not-a-real-revision".to_string()),
+        commit_id: gitcomet_core::domain::CommitId("not-a-real-revision".into()),
         path: Some(PathBuf::from("a.txt")),
     };
 
@@ -3805,7 +3869,7 @@ fn revert_commit_creates_new_commit_and_reverts_content() {
     let opened = backend.open(repo).unwrap();
 
     opened
-        .revert(&gitcomet_core::domain::CommitId(c2.clone()))
+        .revert(&gitcomet_core::domain::CommitId(c2.clone().into()))
         .unwrap();
 
     assert_eq!(fs::read_to_string(repo.join("a.txt")).unwrap(), "one\n");
@@ -4528,7 +4592,7 @@ fn create_and_delete_local_branch() {
         .to_owned();
 
     opened
-        .create_branch("feature", &gitcomet_core::domain::CommitId(head))
+        .create_branch("feature", &gitcomet_core::domain::CommitId(head.into()))
         .unwrap();
     run_git(
         repo,
@@ -4570,7 +4634,7 @@ fn create_branch_existing_branch_returns_structured_git_error() {
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
     let err = opened
-        .create_branch("feature", &gitcomet_core::domain::CommitId(head))
+        .create_branch("feature", &gitcomet_core::domain::CommitId(head.into()))
         .expect_err("creating an existing branch should fail");
     assert_git_failure(&err, "git branch", GitFailureId::CommandFailed);
     let ErrorKind::Git(failure) = err.kind() else {
@@ -4596,10 +4660,7 @@ fn create_branch_on_unborn_head_returns_structured_git_error() {
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
     let err = opened
-        .create_branch(
-            "feature",
-            &gitcomet_core::domain::CommitId("HEAD".to_string()),
-        )
+        .create_branch("feature", &gitcomet_core::domain::CommitId("HEAD".into()))
         .expect_err("creating a branch on unborn HEAD should fail");
     assert_git_failure(&err, "git branch", GitFailureId::CommandFailed);
     let ErrorKind::Git(failure) = err.kind() else {
@@ -4652,13 +4713,12 @@ fn create_branch_from_detached_head_using_head_revision() {
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
     opened
-        .checkout_commit(&gitcomet_core::domain::CommitId(first_commit.clone()))
+        .checkout_commit(&gitcomet_core::domain::CommitId(
+            first_commit.clone().into(),
+        ))
         .unwrap();
     opened
-        .create_branch(
-            "rescue",
-            &gitcomet_core::domain::CommitId("HEAD".to_string()),
-        )
+        .create_branch("rescue", &gitcomet_core::domain::CommitId("HEAD".into()))
         .unwrap();
 
     let rescue_target = run_git_output(repo, &["rev-parse", "rescue"]);
@@ -4691,10 +4751,7 @@ fn create_branch_from_annotated_tag_peels_to_commit() {
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
     opened
-        .create_branch(
-            "feature",
-            &gitcomet_core::domain::CommitId("v1".to_string()),
-        )
+        .create_branch("feature", &gitcomet_core::domain::CommitId("v1".into()))
         .unwrap();
 
     let feature_target = run_git_output(repo, &["rev-parse", "feature"]);
@@ -4727,7 +4784,10 @@ fn create_branch_from_blob_target_returns_structured_git_error() {
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
     let err = opened
-        .create_branch("feature", &gitcomet_core::domain::CommitId(blob.clone()))
+        .create_branch(
+            "feature",
+            &gitcomet_core::domain::CommitId(blob.clone().into()),
+        )
         .expect_err("creating a branch from a blob should fail");
     assert_git_failure(&err, "git branch", GitFailureId::CommandFailed);
     let ErrorKind::Git(failure) = err.kind() else {
@@ -4777,10 +4837,7 @@ fn create_branch_head_target_reflects_move_after_backend_open() {
     let second_commit = run_git_output(repo, &["rev-parse", "HEAD"]);
 
     opened
-        .create_branch(
-            "feature",
-            &gitcomet_core::domain::CommitId("HEAD".to_string()),
-        )
+        .create_branch("feature", &gitcomet_core::domain::CommitId("HEAD".into()))
         .unwrap();
 
     let feature_target = run_git_output(repo, &["rev-parse", "feature"]);
@@ -4814,10 +4871,7 @@ fn create_branch_target_branch_created_after_backend_open() {
     run_git(repo, &["branch", "source"]);
 
     opened
-        .create_branch(
-            "feature",
-            &gitcomet_core::domain::CommitId("source".to_string()),
-        )
+        .create_branch("feature", &gitcomet_core::domain::CommitId("source".into()))
         .unwrap();
 
     let feature_target = run_git_output(repo, &["rev-parse", "feature"]);
@@ -4856,7 +4910,7 @@ fn create_branch_succeeds_without_persisted_user_identity() {
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
     opened
-        .create_branch("feature", &gitcomet_core::domain::CommitId(head))
+        .create_branch("feature", &gitcomet_core::domain::CommitId(head.into()))
         .unwrap();
 
     run_git(
@@ -5235,7 +5289,7 @@ fn cherry_pick_applies_commit_onto_current_branch() {
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
     opened
-        .cherry_pick(&gitcomet_core::domain::CommitId(feature_sha))
+        .cherry_pick(&gitcomet_core::domain::CommitId(feature_sha.into()))
         .unwrap();
 
     assert_eq!(fs::read_to_string(repo.join("b.txt")).unwrap(), "feature\n");
@@ -5385,7 +5439,7 @@ fn list_tags_returns_sorted_names_with_commit_targets() {
 
     let names = tags.iter().map(|tag| tag.name.as_str()).collect::<Vec<_>>();
     assert_eq!(names, vec!["a-first", "z-last"]);
-    assert!(tags.iter().all(|tag| tag.target.0 == head));
+    assert!(tags.iter().all(|tag| tag.target.as_ref() == head));
 }
 
 #[test]
@@ -7137,7 +7191,7 @@ fn checkout_commit_detaches_head_at_target() {
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
     opened
-        .checkout_commit(&gitcomet_core::domain::CommitId(sha.clone()))
+        .checkout_commit(&gitcomet_core::domain::CommitId(sha.clone().into()))
         .unwrap();
 
     let head_name = git_command()

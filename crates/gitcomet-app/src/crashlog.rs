@@ -253,15 +253,7 @@ fn read_pending_report_path(marker: &Path) -> Option<PathBuf> {
 }
 
 #[cfg(windows)]
-fn hex_encode(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for &byte in bytes {
-        out.push(HEX[(byte >> 4) as usize] as char);
-        out.push(HEX[(byte & 0x0f) as usize] as char);
-    }
-    out
-}
+use crate::hex_encode;
 
 #[cfg(windows)]
 fn hex_decode(hex: &str) -> Option<Vec<u8>> {

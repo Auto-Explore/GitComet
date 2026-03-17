@@ -659,14 +659,14 @@ fn load_more_history_emits_paginated_load_log_effect() {
     repo_state.history_state.history_scope = LogScope::CurrentBranch;
     repo_state.log = Loadable::Ready(Arc::new(LogPage {
         commits: vec![Commit {
-            id: CommitId("c1".to_string()),
+            id: CommitId("c1".into()),
             parent_ids: Vec::new(),
-            summary: "s1".to_string(),
-            author: "a".to_string(),
+            summary: "s1".into(),
+            author: "a".into(),
             time: SystemTime::UNIX_EPOCH,
         }],
         next_cursor: Some(LogCursor {
-            last_seen: CommitId("c1".to_string()),
+            last_seen: CommitId("c1".into()),
         }),
     }));
     repo_state.history_state.log_loading_more = false;
@@ -756,10 +756,10 @@ fn load_more_history_noops_when_no_next_cursor() {
     let repo_state = &mut state.repos[0];
     repo_state.log = Loadable::Ready(Arc::new(LogPage {
         commits: vec![Commit {
-            id: CommitId("c1".to_string()),
+            id: CommitId("c1".into()),
             parent_ids: Vec::new(),
-            summary: "s1".to_string(),
-            author: "a".to_string(),
+            summary: "s1".into(),
+            author: "a".into(),
             time: SystemTime::UNIX_EPOCH,
         }],
         next_cursor: None,
@@ -794,14 +794,14 @@ fn log_loaded_appends_when_loading_more() {
     repo_state.history_state.history_scope = LogScope::CurrentBranch;
     repo_state.log = Loadable::Ready(Arc::new(LogPage {
         commits: vec![Commit {
-            id: CommitId("c1".to_string()),
+            id: CommitId("c1".into()),
             parent_ids: Vec::new(),
-            summary: "s1".to_string(),
-            author: "a".to_string(),
+            summary: "s1".into(),
+            author: "a".into(),
             time: SystemTime::UNIX_EPOCH,
         }],
         next_cursor: Some(LogCursor {
-            last_seen: CommitId("c1".to_string()),
+            last_seen: CommitId("c1".into()),
         }),
     }));
     repo_state.history_state.log_loading_more = true;
@@ -814,14 +814,14 @@ fn log_loaded_appends_when_loading_more() {
             repo_id: RepoId(1),
             scope: LogScope::CurrentBranch,
             cursor: Some(LogCursor {
-                last_seen: CommitId("c1".to_string()),
+                last_seen: CommitId("c1".into()),
             }),
             result: Ok(LogPage {
                 commits: vec![Commit {
-                    id: CommitId("c2".to_string()),
+                    id: CommitId("c2".into()),
                     parent_ids: Vec::new(),
-                    summary: "s2".to_string(),
-                    author: "a".to_string(),
+                    summary: "s2".into(),
+                    author: "a".into(),
                     time: SystemTime::UNIX_EPOCH,
                 }],
                 next_cursor: None,
@@ -869,10 +869,10 @@ fn log_loaded_bumps_log_rev() {
             cursor: None,
             result: Ok(LogPage {
                 commits: vec![Commit {
-                    id: CommitId("c1".to_string()),
+                    id: CommitId("c1".into()),
                     parent_ids: Vec::new(),
-                    summary: "s1".to_string(),
-                    author: "a".to_string(),
+                    summary: "s1".into(),
+                    author: "a".into(),
                     time: SystemTime::UNIX_EPOCH,
                 }],
                 next_cursor: None,
@@ -922,17 +922,17 @@ fn detached_head_target_tracks_current_branch_log_head() {
             result: Ok(LogPage {
                 commits: vec![
                     Commit {
-                        id: CommitId("c1".to_string()),
-                        parent_ids: vec![CommitId("c0".to_string())],
-                        summary: "s1".to_string(),
-                        author: "a".to_string(),
+                        id: CommitId("c1".into()),
+                        parent_ids: vec![CommitId("c0".into())],
+                        summary: "s1".into(),
+                        author: "a".into(),
                         time: SystemTime::UNIX_EPOCH,
                     },
                     Commit {
-                        id: CommitId("c0".to_string()),
+                        id: CommitId("c0".into()),
                         parent_ids: Vec::new(),
-                        summary: "s0".to_string(),
-                        author: "a".to_string(),
+                        summary: "s0".into(),
+                        author: "a".into(),
                         time: SystemTime::UNIX_EPOCH,
                     },
                 ],
@@ -943,7 +943,7 @@ fn detached_head_target_tracks_current_branch_log_head() {
 
     assert_eq!(
         state.repos[0].detached_head_commit,
-        Some(CommitId("c1".to_string()))
+        Some(CommitId("c1".into()))
     );
 }
 

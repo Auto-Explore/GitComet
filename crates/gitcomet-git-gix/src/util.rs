@@ -596,14 +596,14 @@ pub(crate) fn parse_git_log_pretty_records(output: &str) -> LogPage {
 
         let parent_ids = parents
             .split_whitespace()
-            .map(|p| CommitId(p.to_string()))
+            .map(|p| CommitId(p.into()))
             .collect::<Vec<_>>();
 
         commits.push(Commit {
-            id: CommitId(id),
+            id: CommitId(id.into()),
             parent_ids,
-            summary,
-            author,
+            summary: summary.into(),
+            author: author.into(),
             time,
         });
     }
@@ -657,7 +657,7 @@ pub(crate) fn parse_remote_branches(output: &str) -> Vec<RemoteBranch> {
         branches.push(RemoteBranch {
             remote: remote.to_string(),
             name: name.to_string(),
-            target: CommitId(sha.to_string()),
+            target: CommitId(sha.into()),
         });
     }
     branches.sort_by(|a, b| a.remote.cmp(&b.remote).then_with(|| a.name.cmp(&b.name)));
@@ -892,12 +892,12 @@ mod tests {
                 RemoteBranch {
                     remote: "origin".to_string(),
                     name: "main".to_string(),
-                    target: CommitId("1111111".to_string())
+                    target: CommitId("1111111".into())
                 },
                 RemoteBranch {
                     remote: "upstream".to_string(),
                     name: "feature/foo".to_string(),
-                    target: CommitId("2222222".to_string())
+                    target: CommitId("2222222".into())
                 },
             ]
         );
@@ -932,7 +932,7 @@ mod tests {
         assert_eq!(branches.len(), 1);
         assert_eq!(branches[0].remote, "origin");
         assert_eq!(branches[0].name, "refactoring/feature1");
-        assert_eq!(branches[0].target, CommitId(oid.to_string()));
+        assert_eq!(branches[0].target, CommitId(oid.to_string().into()));
     }
 
     #[test]
@@ -945,16 +945,14 @@ mod tests {
         let commit = &page.commits[0];
         assert_eq!(
             commit.id,
-            CommitId("4c8124ffcf4039d292442eeccabdeca5af5c5017".to_string())
+            CommitId("4c8124ffcf4039d292442eeccabdeca5af5c5017".into())
         );
         assert_eq!(
             commit.parent_ids,
-            vec![CommitId(
-                "634396b2f541a9f2d58b00be1a07f0c358b999b3".to_string()
-            )]
+            vec![CommitId("634396b2f541a9f2d58b00be1a07f0c358b999b3".into())]
         );
-        assert_eq!(commit.author, "Tom Preston-Werner");
-        assert_eq!(commit.summary, "implement Grit#heads");
+        assert_eq!(&*commit.author, "Tom Preston-Werner");
+        assert_eq!(&*commit.summary, "implement Grit#heads");
         assert_eq!(
             commit.time,
             SystemTime::UNIX_EPOCH + Duration::from_secs(1_191_999_972)
@@ -975,11 +973,11 @@ mod tests {
 
         assert_eq!(
             page.commits[1].id,
-            CommitId("634396b2f541a9f2d58b00be1a07f0c358b999b3".to_string())
+            CommitId("634396b2f541a9f2d58b00be1a07f0c358b999b3".into())
         );
         assert!(page.commits[1].parent_ids.is_empty());
-        assert_eq!(page.commits[1].author, "Tom Preston-Werner");
-        assert_eq!(page.commits[1].summary, "initial grit setup");
+        assert_eq!(&*page.commits[1].author, "Tom Preston-Werner");
+        assert_eq!(&*page.commits[1].summary, "initial grit setup");
         assert_eq!(
             page.commits[1].time,
             SystemTime::UNIX_EPOCH + Duration::from_secs(1_191_997_100)
@@ -1010,7 +1008,7 @@ mod tests {
         assert_eq!(branches.len(), 6);
         assert_eq!(
             branches[0].target,
-            CommitId("c2e3c20affa3e2b61a05fdc9ee3061dd416d915e".to_string())
+            CommitId("c2e3c20affa3e2b61a05fdc9ee3061dd416d915e".into())
         );
     }
 

@@ -1,4 +1,4 @@
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
 pub const GITCOMET_AUTH_KIND_ENV: &str = "GITCOMET_AUTH_KIND";
 pub const GITCOMET_AUTH_USERNAME_ENV: &str = "GITCOMET_AUTH_USERNAME";
@@ -39,21 +39,23 @@ fn staged_git_auth_slot() -> &'static Mutex<Option<StagedGitAuth>> {
     SLOT.get_or_init(|| Mutex::new(None))
 }
 
+/// Lock a mutex, recovering from poison if a prior holder panicked.
+fn lock_or_recover<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 pub fn clear_staged_git_auth() {
-    let slot = staged_git_auth_slot();
-    let mut guard = slot.lock().unwrap_or_else(|e| e.into_inner());
+    let mut guard = lock_or_recover(staged_git_auth_slot());
     *guard = None;
 }
 
 pub fn stage_git_auth(auth: StagedGitAuth) {
-    let slot = staged_git_auth_slot();
-    let mut guard = slot.lock().unwrap_or_else(|e| e.into_inner());
+    let mut guard = lock_or_recover(staged_git_auth_slot());
     *guard = Some(auth);
 }
 
 pub fn take_staged_git_auth() -> Option<StagedGitAuth> {
-    let slot = staged_git_auth_slot();
-    let mut guard = slot.lock().unwrap_or_else(|e| e.into_inner());
+    let mut guard = lock_or_recover(staged_git_auth_slot());
     guard.take()
 }
 

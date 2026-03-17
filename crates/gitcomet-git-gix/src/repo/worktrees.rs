@@ -78,7 +78,7 @@ fn parse_git_worktree_list_porcelain_z(output: &[u8]) -> Result<Vec<Worktree>> {
 
         if let Some(rest) = field.strip_prefix(b"HEAD ") {
             if !rest.is_empty() {
-                wt.head = Some(CommitId(String::from_utf8_lossy(rest).into_owned()));
+                wt.head = Some(CommitId(String::from_utf8_lossy(rest).into_owned().into()));
             }
         } else if let Some(rest) = field.strip_prefix(b"branch ") {
             let branch = String::from_utf8_lossy(rest);

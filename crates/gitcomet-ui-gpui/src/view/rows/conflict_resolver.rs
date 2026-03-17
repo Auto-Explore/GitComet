@@ -164,28 +164,6 @@ impl MainPaneView {
         let show_ws = this.show_whitespace;
         let [col_a_w, col_b_w, col_c_w] = this.conflict_three_way_col_widths;
 
-        // Build per-conflict choice lookup so we can highlight the selected column.
-        let conflict_choices: Vec<conflict_resolver::ConflictChoice> = this
-            .conflict_resolver
-            .marker_segments
-            .iter()
-            .filter_map(|seg| match seg {
-                conflict_resolver::ConflictSegment::Block(b) => Some(b.choice),
-                _ => None,
-            })
-            .collect();
-
-        // Collect the real line indices we need to render (from visible map).
-        let real_line_indices: Vec<usize> = range
-            .clone()
-            .filter_map(
-                |vi| match this.conflict_resolver.three_way_visible_item(vi) {
-                    Some(conflict_resolver::ThreeWayVisibleItem::Line(ix)) => Some(ix),
-                    _ => None,
-                },
-            )
-            .collect();
-
         let word_hl_color = Some(theme.colors.warning);
         let syntax_lang = this.conflict_row_syntax_language();
         let prepared_docs = &this.conflict_three_way_prepared_syntax_documents;
@@ -194,7 +172,12 @@ impl MainPaneView {
         // When a prepared syntax document exists for a side, use document-based
         // highlighting. Otherwise fall back to per-line heuristics.
         let mut needs_chunk_poll = false;
-        for &ix in &real_line_indices {
+        for vi in range.clone() {
+            let Some(conflict_resolver::ThreeWayVisibleItem::Line(ix)) =
+                this.conflict_resolver.three_way_visible_item(vi)
+            else {
+                continue;
+            };
             for (col, highlights_vec, prepared_doc) in [
                 (
                     ThreeWayColumn::Base,
@@ -281,6 +264,7 @@ impl MainPaneView {
 
         // Background for the selected (chosen) column in a conflict range.
         let chosen_bg = with_alpha(theme.colors.accent, if theme.is_dark { 0.16 } else { 0.12 });
+        let conflict_choices = this.conflict_resolver.conflict_choices.as_slice();
 
         let mut elements = Vec::with_capacity(range.len());
         for vi in range {
@@ -353,14 +337,15 @@ impl MainPaneView {
                         .unwrap_or(false);
                     let selected_choices =
                         this.conflict_resolver_selected_choices_for_conflict_ix(range_ix);
-                    let context_menu_invoker: SharedString =
-                        format!("resolver_three_way_collapsed_chunk_menu_{}", range_ix).into();
                     collapsed = collapsed.on_mouse_down(
                         MouseButton::Right,
                         cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                             cx.stop_propagation();
+                            let context_menu_invoker: SharedString =
+                                format!("resolver_three_way_collapsed_chunk_menu_{}", range_ix)
+                                    .into();
                             this.open_conflict_resolver_chunk_context_menu(
-                                context_menu_invoker.clone(),
+                                context_menu_invoker,
                                 range_ix,
                                 has_base,
                                 true,
@@ -544,17 +529,13 @@ impl MainPaneView {
                                 line_no: base_line_no,
                                 bg: if base_is_chosen { chosen_bg } else { base_bg },
                                 fg: base_fg,
-                                text: base_line
-                                    .map(|line| SharedString::from(line.to_string()))
-                                    .unwrap_or_default(),
+                                text: base_line.map(SharedString::new).unwrap_or_default(),
                             },
                             ThreeWayCanvasColumn {
                                 line_no: ours_line_no,
                                 bg: if ours_is_chosen { chosen_bg } else { ours_bg },
                                 fg: ours_fg,
-                                text: ours_line
-                                    .map(|line| SharedString::from(line.to_string()))
-                                    .unwrap_or_default(),
+                                text: ours_line.map(SharedString::new).unwrap_or_default(),
                             },
                             ThreeWayCanvasColumn {
                                 line_no: theirs_line_no,
@@ -564,9 +545,7 @@ impl MainPaneView {
                                     theirs_bg
                                 },
                                 fg: theirs_fg,
-                                text: theirs_line
-                                    .map(|line| SharedString::from(line.to_string()))
-                                    .unwrap_or_default(),
+                                text: theirs_line.map(SharedString::new).unwrap_or_default(),
                             },
                             base_styled,
                             ours_styled,
@@ -603,9 +582,7 @@ impl MainPaneView {
                                 .child(base_line_no),
                         )
                         .child(conflict_diff_text_cell(
-                            base_line
-                                .map(|line| SharedString::from(line.to_string()))
-                                .unwrap_or_default(),
+                            base_line.map(SharedString::new).unwrap_or_default(),
                             base_styled,
                             show_ws,
                         ));
@@ -632,9 +609,7 @@ impl MainPaneView {
                                 .child(ours_line_no),
                         )
                         .child(conflict_diff_text_cell(
-                            ours_line
-                                .map(|line| SharedString::from(line.to_string()))
-                                .unwrap_or_default(),
+                            ours_line.map(SharedString::new).unwrap_or_default(),
                             ours_styled,
                             show_ws,
                         ));
@@ -662,9 +637,7 @@ impl MainPaneView {
                                 .child(theirs_line_no),
                         )
                         .child(conflict_diff_text_cell(
-                            theirs_line
-                                .map(|line| SharedString::from(line.to_string()))
-                                .unwrap_or_default(),
+                            theirs_line.map(SharedString::new).unwrap_or_default(),
                             theirs_styled,
                             show_ws,
                         ));
@@ -678,12 +651,6 @@ impl MainPaneView {
                             .unwrap_or(false);
                         let selected_choices =
                             this.conflict_resolver_selected_choices_for_conflict_ix(conflict_ix);
-                        let chunk_menu_invoker: SharedString =
-                            format!("resolver_three_way_base_chunk_menu_{}_{}", conflict_ix, ix)
-                                .into();
-                        let input_menu_invoker: SharedString =
-                            format!("resolver_three_way_base_input_menu_{}_{}", conflict_ix, ix)
-                                .into();
                         let (line_label, line_target, chunk_label, chunk_target) =
                             three_way_input_row_menu_targets(
                                 ix,
@@ -695,8 +662,13 @@ impl MainPaneView {
                             cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                                 cx.stop_propagation();
                                 if e.modifiers.shift {
+                                    let input_menu_invoker: SharedString = format!(
+                                        "resolver_three_way_base_input_menu_{}_{}",
+                                        conflict_ix, ix
+                                    )
+                                    .into();
                                     this.open_conflict_resolver_input_row_context_menu(
-                                        input_menu_invoker.clone(),
+                                        input_menu_invoker,
                                         line_label.clone(),
                                         line_target.clone(),
                                         chunk_label.clone(),
@@ -706,8 +678,13 @@ impl MainPaneView {
                                         cx,
                                     );
                                 } else {
+                                    let chunk_menu_invoker: SharedString = format!(
+                                        "resolver_three_way_base_chunk_menu_{}_{}",
+                                        conflict_ix, ix
+                                    )
+                                    .into();
                                     this.open_conflict_resolver_chunk_context_menu(
-                                        chunk_menu_invoker.clone(),
+                                        chunk_menu_invoker,
                                         conflict_ix,
                                         has_base,
                                         true,
@@ -730,12 +707,6 @@ impl MainPaneView {
                             .unwrap_or(false);
                         let selected_choices =
                             this.conflict_resolver_selected_choices_for_conflict_ix(conflict_ix);
-                        let chunk_menu_invoker: SharedString =
-                            format!("resolver_three_way_ours_chunk_menu_{}_{}", conflict_ix, ix)
-                                .into();
-                        let input_menu_invoker: SharedString =
-                            format!("resolver_three_way_ours_input_menu_{}_{}", conflict_ix, ix)
-                                .into();
                         let (line_label, line_target, chunk_label, chunk_target) =
                             three_way_input_row_menu_targets(
                                 ix,
@@ -747,8 +718,13 @@ impl MainPaneView {
                             cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                                 cx.stop_propagation();
                                 if e.modifiers.shift {
+                                    let input_menu_invoker: SharedString = format!(
+                                        "resolver_three_way_ours_input_menu_{}_{}",
+                                        conflict_ix, ix
+                                    )
+                                    .into();
                                     this.open_conflict_resolver_input_row_context_menu(
-                                        input_menu_invoker.clone(),
+                                        input_menu_invoker,
                                         line_label.clone(),
                                         line_target.clone(),
                                         chunk_label.clone(),
@@ -758,8 +734,13 @@ impl MainPaneView {
                                         cx,
                                     );
                                 } else {
+                                    let chunk_menu_invoker: SharedString = format!(
+                                        "resolver_three_way_ours_chunk_menu_{}_{}",
+                                        conflict_ix, ix
+                                    )
+                                    .into();
                                     this.open_conflict_resolver_chunk_context_menu(
-                                        chunk_menu_invoker.clone(),
+                                        chunk_menu_invoker,
                                         conflict_ix,
                                         has_base,
                                         true,
@@ -782,16 +763,6 @@ impl MainPaneView {
                             .unwrap_or(false);
                         let selected_choices =
                             this.conflict_resolver_selected_choices_for_conflict_ix(conflict_ix);
-                        let chunk_menu_invoker: SharedString = format!(
-                            "resolver_three_way_theirs_chunk_menu_{}_{}",
-                            conflict_ix, ix
-                        )
-                        .into();
-                        let input_menu_invoker: SharedString = format!(
-                            "resolver_three_way_theirs_input_menu_{}_{}",
-                            conflict_ix, ix
-                        )
-                        .into();
                         let (line_label, line_target, chunk_label, chunk_target) =
                             three_way_input_row_menu_targets(
                                 ix,
@@ -803,8 +774,13 @@ impl MainPaneView {
                             cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                                 cx.stop_propagation();
                                 if e.modifiers.shift {
+                                    let input_menu_invoker: SharedString = format!(
+                                        "resolver_three_way_theirs_input_menu_{}_{}",
+                                        conflict_ix, ix
+                                    )
+                                    .into();
                                     this.open_conflict_resolver_input_row_context_menu(
-                                        input_menu_invoker.clone(),
+                                        input_menu_invoker,
                                         line_label.clone(),
                                         line_target.clone(),
                                         chunk_label.clone(),
@@ -814,8 +790,13 @@ impl MainPaneView {
                                         cx,
                                     );
                                 } else {
+                                    let chunk_menu_invoker: SharedString = format!(
+                                        "resolver_three_way_theirs_chunk_menu_{}_{}",
+                                        conflict_ix, ix
+                                    )
+                                    .into();
                                     this.open_conflict_resolver_chunk_context_menu(
-                                        chunk_menu_invoker.clone(),
+                                        chunk_menu_invoker,
                                         conflict_ix,
                                         has_base,
                                         true,
@@ -1505,8 +1486,8 @@ impl MainPaneView {
         let theme = self.theme;
         let show_ws = self.show_whitespace;
 
-        let left_text: SharedString = row.old.clone().unwrap_or_default().into();
-        let right_text: SharedString = row.new.clone().unwrap_or_default().into();
+        let left_text = SharedString::new(row.old.as_deref().unwrap_or_default());
+        let right_text = SharedString::new(row.new.as_deref().unwrap_or_default());
         let ours_document = self.conflict_three_way_prepared_syntax_documents.ours;
         let theirs_document = self.conflict_three_way_prepared_syntax_documents.theirs;
 
@@ -1685,8 +1666,8 @@ impl MainPaneView {
         let theme = self.theme;
         let show_ws = self.show_whitespace;
 
-        let left_text: SharedString = row.old.clone().unwrap_or_default().into();
-        let right_text: SharedString = row.new.clone().unwrap_or_default().into();
+        let left_text = SharedString::new(row.old.as_deref().unwrap_or_default());
+        let right_text = SharedString::new(row.new.as_deref().unwrap_or_default());
         let ours_document = self.conflict_three_way_prepared_syntax_documents.ours;
         let theirs_document = self.conflict_three_way_prepared_syntax_documents.theirs;
 

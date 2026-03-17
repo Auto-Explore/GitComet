@@ -1,6 +1,7 @@
 use super::super::perf::{self, ViewPerfSpan};
 use super::*;
 use rustc_hash::FxHasher;
+use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, OnceLock};
 
@@ -326,7 +327,7 @@ pub(in crate::view) fn has_pending_prepared_diff_syntax_chunk_builds_for_documen
 
 fn maybe_expand_tabs(s: &str) -> SharedString {
     if !s.contains('\t') {
-        return s.to_string().into();
+        return SharedString::new(s);
     }
 
     let mut out = String::with_capacity(s.len());
@@ -397,68 +398,70 @@ fn build_diff_text_segments(
         Default::default()
     };
 
-    let mut boundaries: Vec<usize> = Vec::with_capacity(
-        2 + word_ranges.len() * 2 + query_ranges.len() * 2 + syntax_tokens.len() * 2,
-    );
-    boundaries.push(0);
-    boundaries.push(text.len());
-    for r in word_ranges {
-        boundaries.push(r.start.min(text.len()));
-        boundaries.push(r.end.min(text.len()));
+    thread_local! {
+        static BOUNDARY_BUF: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
     }
-    for r in &query_ranges {
-        boundaries.push(r.start);
-        boundaries.push(r.end);
-    }
-    for t in &syntax_tokens {
-        boundaries.push(t.range.start.min(text.len()));
-        boundaries.push(t.range.end.min(text.len()));
-    }
-    boundaries.sort_unstable();
-    boundaries.dedup();
 
-    let mut token_ix = 0usize;
-    let mut word_ix = 0usize;
-    let mut query_ix = 0usize;
-    let mut segments = Vec::with_capacity(boundaries.len().saturating_sub(1));
-    for w in boundaries.windows(2) {
-        let (a, b) = (w[0], w[1]);
-        if a >= b || a >= text.len() {
-            continue;
+    BOUNDARY_BUF.with_borrow_mut(|boundaries| {
+        boundaries.clear();
+        boundaries.push(0);
+        boundaries.push(text.len());
+        for r in word_ranges {
+            boundaries.push(r.start.min(text.len()));
+            boundaries.push(r.end.min(text.len()));
         }
-        let b = b.min(text.len());
-        let Some(seg) = text.get(a..b) else {
-            // Defensive fallback: if any boundary isn't a UTF-8 char boundary, avoid panicking and
-            // render the whole line without highlights.
-            return vec![CachedDiffTextSegment {
-                text: maybe_expand_tabs(text),
-                in_word: false,
-                in_query: false,
-                syntax: SyntaxTokenKind::None,
-            }];
-        };
-
-        while token_ix < syntax_tokens.len() && syntax_tokens[token_ix].range.end <= a {
-            token_ix += 1;
+        for r in &query_ranges {
+            boundaries.push(r.start);
+            boundaries.push(r.end);
         }
-        let syntax = syntax_tokens
-            .get(token_ix)
-            .filter(|t| t.range.start <= a && t.range.end >= b)
-            .map(|t| t.kind)
-            .unwrap_or(SyntaxTokenKind::None);
+        for t in &syntax_tokens {
+            boundaries.push(t.range.start.min(text.len()));
+            boundaries.push(t.range.end.min(text.len()));
+        }
+        boundaries.sort_unstable();
+        boundaries.dedup();
 
-        let in_word = segment_overlaps_sorted_ranges(a, b, word_ranges, &mut word_ix);
-        let in_query = segment_overlaps_sorted_ranges(a, b, &query_ranges, &mut query_ix);
+        let mut token_ix = 0usize;
+        let mut word_ix = 0usize;
+        let mut query_ix = 0usize;
+        let mut segments = Vec::with_capacity(boundaries.len().saturating_sub(1));
+        for w in boundaries.windows(2) {
+            let (a, b) = (w[0], w[1]);
+            if a >= b || a >= text.len() {
+                continue;
+            }
+            let b = b.min(text.len());
+            let Some(seg) = text.get(a..b) else {
+                return vec![CachedDiffTextSegment {
+                    text: maybe_expand_tabs(text),
+                    in_word: false,
+                    in_query: false,
+                    syntax: SyntaxTokenKind::None,
+                }];
+            };
 
-        segments.push(CachedDiffTextSegment {
-            text: maybe_expand_tabs(seg),
-            in_word,
-            in_query,
-            syntax,
-        });
-    }
+            while token_ix < syntax_tokens.len() && syntax_tokens[token_ix].range.end <= a {
+                token_ix += 1;
+            }
+            let syntax = syntax_tokens
+                .get(token_ix)
+                .filter(|t| t.range.start <= a && t.range.end >= b)
+                .map(|t| t.kind)
+                .unwrap_or(SyntaxTokenKind::None);
 
-    segments
+            let in_word = segment_overlaps_sorted_ranges(a, b, word_ranges, &mut word_ix);
+            let in_query = segment_overlaps_sorted_ranges(a, b, &query_ranges, &mut query_ix);
+
+            segments.push(CachedDiffTextSegment {
+                text: maybe_expand_tabs(seg),
+                in_word,
+                in_query,
+                syntax,
+            });
+        }
+
+        segments
+    })
 }
 
 pub(super) fn selectable_cached_diff_text(
@@ -894,7 +897,7 @@ fn expanded_text_and_remapped_relative_highlights(
     highlights: &[(Range<usize>, gpui::HighlightStyle)],
 ) -> (SharedString, Vec<(Range<usize>, gpui::HighlightStyle)>) {
     if !text.contains('\t') {
-        return (text.to_string().into(), highlights.to_vec());
+        return (SharedString::new(text), highlights.to_vec());
     }
 
     let mut out = String::with_capacity(text.len());
@@ -2151,8 +2154,10 @@ mod tests {
         let mut text_hasher = FxHasher::default();
         text.as_ref().hash(&mut text_hasher);
         let text_hash = text_hasher.finish();
-        let mut style = gpui::HighlightStyle::default();
-        style.color = Some(theme.colors.text.into());
+        let style = gpui::HighlightStyle {
+            color: Some(theme.colors.text.into()),
+            ..Default::default()
+        };
         let base = CachedDiffStyledText {
             text,
             highlights: Arc::new(vec![(0..6, style)]),
@@ -2176,8 +2181,10 @@ mod tests {
         let mut text_hasher = FxHasher::default();
         text.as_ref().hash(&mut text_hasher);
         let text_hash = text_hasher.finish();
-        let mut style = gpui::HighlightStyle::default();
-        style.color = Some(theme.colors.warning.into());
+        let style = gpui::HighlightStyle {
+            color: Some(theme.colors.warning.into()),
+            ..Default::default()
+        };
         let base = CachedDiffStyledText {
             text,
             highlights: Arc::new(vec![(0..6, style)]),

@@ -37,7 +37,7 @@ impl<'a> CursorGate<'a> {
             return false;
         };
 
-        if cursor.last_seen.0 == id {
+        if cursor.last_seen.as_ref() == id {
             self.started = true;
         }
 
@@ -101,8 +101,8 @@ pub(super) fn stash_reflog_entries(repo: &gix::Repository) -> Result<Vec<StashEn
             let created_at = unix_seconds_to_system_time(line.signature.time.seconds);
             Ok(StashEntry {
                 index,
-                id: CommitId(line.new_oid.to_string()),
-                message: bytes_to_text_preserving_utf8(line.message.as_ref()),
+                id: CommitId(line.new_oid.to_string().into()),
+                message: bytes_to_text_preserving_utf8(line.message.as_ref()).into(),
                 created_at,
             })
         })
@@ -163,14 +163,14 @@ fn commit_from_walk_info<'repo>(
 
     let parent_ids = info
         .parent_ids()
-        .map(|parent_id| CommitId(parent_id.detach().to_string()))
+        .map(|parent_id| CommitId(parent_id.detach().to_string().into()))
         .collect::<Vec<_>>();
 
     Ok(Commit {
-        id: CommitId(id),
+        id: CommitId(id.into()),
         parent_ids,
-        summary,
-        author,
+        summary: summary.into(),
+        author: author.into(),
         time,
     })
 }
@@ -497,7 +497,7 @@ impl GixRepo {
             .collect::<Vec<_>>();
         let parent_ids = parent_oids
             .iter()
-            .map(|parent| CommitId(parent.to_string()))
+            .map(|parent| CommitId(parent.to_string().into()))
             .collect::<Vec<_>>();
         let files = commit_file_changes(&repo, &commit, &parent_oids)?;
 
@@ -530,10 +530,10 @@ impl GixRepo {
             .map(|(index, line)| {
                 Ok(ReflogEntry {
                     index,
-                    new_id: CommitId(line.new_oid.to_string()),
-                    message: bytes_to_text_preserving_utf8(line.message.as_ref()),
+                    new_id: CommitId(line.new_oid.to_string().into()),
+                    message: bytes_to_text_preserving_utf8(line.message.as_ref()).into(),
                     time: unix_seconds_to_system_time(line.signature.time.seconds),
-                    selector: format!("HEAD@{{{index}}}"),
+                    selector: format!("HEAD@{{{index}}}").into(),
                 })
             })
             .collect()
@@ -547,7 +547,7 @@ mod tests {
     #[test]
     fn cursor_gate_skips_until_after_last_seen() {
         let cursor = LogCursor {
-            last_seen: CommitId("c2".to_string()),
+            last_seen: CommitId("c2".into()),
         };
         let mut gate = CursorGate::new(Some(&cursor));
 

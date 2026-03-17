@@ -65,7 +65,7 @@ impl GixRepo {
 
             branches.push(Branch {
                 name,
-                target: CommitId(target.to_string()),
+                target: CommitId(target.to_string().into()),
                 upstream,
                 divergence,
             });

@@ -680,6 +680,9 @@ pub(super) struct ConflictResolverUiState {
     /// legacy three-way visible projections.
     pub(super) three_way_conflict_ranges: ThreeWaySides<Vec<Range<usize>>>,
     pub(super) conflict_has_base: Vec<bool>,
+    /// Current choice for each conflict block, cached to avoid rebuilding it
+    /// from `marker_segments` on every render.
+    pub(super) conflict_choices: Vec<conflict_resolver::ConflictChoice>,
     pub(super) three_way_word_highlights: ThreeWaySides<conflict_resolver::WordHighlights>,
     pub(super) nav_anchor: Option<usize>,
     pub(super) hide_resolved: bool,
@@ -728,6 +731,7 @@ impl Default for ConflictResolverUiState {
             three_way_visible_state_ready: false,
             three_way_conflict_ranges: ThreeWaySides::default(),
             conflict_has_base: Vec::new(),
+            conflict_choices: Vec::new(),
             three_way_word_highlights: ThreeWaySides::default(),
             nav_anchor: None,
             hide_resolved: false,
@@ -1100,6 +1104,7 @@ impl ConflictResolverUiState {
             theirs: theirs_ranges,
         };
         self.conflict_has_base = maps.conflict_has_base;
+        self.refresh_conflict_choices_from_segments();
     }
 
     pub(super) fn refresh_conflict_has_base_from_segments(&mut self) {
@@ -1111,6 +1116,18 @@ impl ConflictResolverUiState {
                 conflict_resolver::ConflictSegment::Text(_) => None,
             })
             .collect();
+        self.refresh_conflict_choices_from_segments();
+    }
+
+    pub(super) fn refresh_conflict_choices_from_segments(&mut self) {
+        self.conflict_choices = self
+            .marker_segments
+            .iter()
+            .filter_map(|segment| match segment {
+                conflict_resolver::ConflictSegment::Block(block) => Some(block.choice),
+                conflict_resolver::ConflictSegment::Text(_) => None,
+            })
+            .collect();
     }
 
     pub(super) fn has_three_way_visible_state_ready(&self) -> bool {
@@ -1119,6 +1136,7 @@ impl ConflictResolverUiState {
 }
 
 #[cfg(test)]
+#[allow(clippy::field_reassign_with_default, clippy::single_range_in_vec_init)]
 mod conflict_resolver_ui_state_tests {
     use super::{ConflictResolverUiState, Loadable, ThreeWayColumn, ThreeWaySides};
     use crate::view::conflict_resolver::{
@@ -1182,8 +1200,10 @@ mod conflict_resolver_ui_state_tests {
 
     #[test]
     fn source_line_text_for_choice_reads_two_way_inputs_from_indexed_text() {
-        let mut state = ConflictResolverUiState::default();
-        state.view_mode = ConflictResolverViewMode::TwoWayDiff;
+        let mut state = ConflictResolverUiState {
+            view_mode: ConflictResolverViewMode::TwoWayDiff,
+            ..Default::default()
+        };
         state.three_way_text.ours = "o0\no1\n".into();
         state.three_way_text.theirs = "t0\nt1\n".into();
         state.three_way_line_starts.ours = vec![0, 3].into();
@@ -1209,8 +1229,10 @@ mod conflict_resolver_ui_state_tests {
 
     #[test]
     fn source_line_text_for_choice_reads_base_only_in_three_way_mode() {
-        let mut state = ConflictResolverUiState::default();
-        state.view_mode = ConflictResolverViewMode::ThreeWay;
+        let mut state = ConflictResolverUiState {
+            view_mode: ConflictResolverViewMode::ThreeWay,
+            ..Default::default()
+        };
         state.three_way_text.base = "b0\nb1\n".into();
         state.three_way_text.ours = "o0\no1\n".into();
         state.three_way_text.theirs = "t0\nt1\n".into();
@@ -1235,6 +1257,13 @@ mod conflict_resolver_ui_state_tests {
     #[test]
     fn apply_three_way_conflict_maps_distributes_ranges_and_flags() {
         let mut state = ConflictResolverUiState::default();
+        state.marker_segments = vec![ConflictSegment::Block(ConflictBlock {
+            base: Some("base\n".into()),
+            ours: "ours\n".into(),
+            theirs: "theirs\n".into(),
+            choice: ConflictChoice::Theirs,
+            resolved: true,
+        })];
         let maps = conflict_resolver::ThreeWayConflictMaps {
             conflict_ranges: [vec![0..3], vec![0..5], vec![0..4]],
             line_conflict_maps: [vec![Some(0); 3], vec![Some(0); 5], vec![Some(0); 4]],
@@ -1255,6 +1284,37 @@ mod conflict_resolver_ui_state_tests {
             maps.conflict_ranges[2]
         );
         assert_eq!(state.conflict_has_base, maps.conflict_has_base);
+        assert_eq!(state.conflict_choices, vec![ConflictChoice::Theirs]);
+    }
+
+    #[test]
+    fn refresh_conflict_has_base_from_segments_refreshes_choice_cache() {
+        let mut state = ConflictResolverUiState::default();
+        state.marker_segments = vec![
+            ConflictSegment::Text("ctx\n".into()),
+            ConflictSegment::Block(ConflictBlock {
+                base: None,
+                ours: "ours\n".into(),
+                theirs: "theirs\n".into(),
+                choice: ConflictChoice::Ours,
+                resolved: false,
+            }),
+            ConflictSegment::Block(ConflictBlock {
+                base: Some("base\n".into()),
+                ours: "ours2\n".into(),
+                theirs: "theirs2\n".into(),
+                choice: ConflictChoice::Both,
+                resolved: true,
+            }),
+        ];
+
+        state.refresh_conflict_has_base_from_segments();
+
+        assert_eq!(state.conflict_has_base, vec![false, true]);
+        assert_eq!(
+            state.conflict_choices,
+            vec![ConflictChoice::Ours, ConflictChoice::Both]
+        );
     }
 
     #[test]

@@ -1300,7 +1300,7 @@ fn history_table_row(
     cx: &mut gpui::Context<HistoryView>,
 ) -> AnyElement {
     let context_menu_invoker: SharedString =
-        format!("history_commit_menu_{}_{}", repo_id.0, commit.id.0.as_str()).into();
+        format!("history_commit_menu_{}_{}", repo_id.0, commit.id.as_ref()).into();
     let context_menu_active = active_context_menu_invoker == Some(&context_menu_invoker);
     let commit_row = history_canvas::history_commit_row_canvas(
         theme,

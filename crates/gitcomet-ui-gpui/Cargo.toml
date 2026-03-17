@@ -11,12 +11,29 @@ rust-version.workspace = true
 workspace = true
 
 [features]
-benchmarks = []
+default = ["syntax-all"]
+benchmarks = ["gitcomet-core/benchmarks"]
+syntax-minimal = ["syntax-rust", "syntax-data", "syntax-shell"]
+syntax-common = ["syntax-minimal", "syntax-web", "syntax-python"]
+syntax-all = ["syntax-common", "syntax-go", "syntax-xml"]
+syntax-web = [
+    "dep:tree-sitter-css",
+    "dep:tree-sitter-html",
+    "dep:tree-sitter-javascript",
+    "dep:tree-sitter-typescript",
+]
+syntax-rust = ["dep:tree-sitter-rust"]
+syntax-python = ["dep:tree-sitter-python"]
+syntax-go = ["dep:tree-sitter-go"]
+syntax-data = ["dep:tree-sitter-json", "dep:tree-sitter-yaml"]
+syntax-shell = ["dep:tree-sitter-bash"]
+syntax-xml = ["dep:tree-sitter-xml"]
 
 [dependencies]
 gitcomet-core = { workspace = true }
 gitcomet-state = { workspace = true }
 gpui = { workspace = true }
+lru = { workspace = true }
 pulldown-cmark = { workspace = true }
 resvg = { workspace = true }
 rustc-hash = { workspace = true }
@@ -26,17 +43,17 @@ serde_json = { workspace = true }
 smol = { workspace = true }
 tempfile = { workspace = true }
 tree-sitter = { workspace = true }
-tree-sitter-bash = { workspace = true }
-tree-sitter-css = { workspace = true }
-tree-sitter-go = { workspace = true }
-tree-sitter-html = { workspace = true }
-tree-sitter-javascript = { workspace = true }
-tree-sitter-json = { workspace = true }
-tree-sitter-python = { workspace = true }
-tree-sitter-rust = { workspace = true }
-tree-sitter-typescript = { workspace = true }
-tree-sitter-xml = { workspace = true }
-tree-sitter-yaml = { workspace = true }
+tree-sitter-bash = { workspace = true, optional = true }
+tree-sitter-css = { workspace = true, optional = true }
+tree-sitter-go = { workspace = true, optional = true }
+tree-sitter-html = { workspace = true, optional = true }
+tree-sitter-javascript = { workspace = true, optional = true }
+tree-sitter-json = { workspace = true, optional = true }
+tree-sitter-python = { workspace = true, optional = true }
+tree-sitter-rust = { workspace = true, optional = true }
+tree-sitter-typescript = { workspace = true, optional = true }
+tree-sitter-xml = { workspace = true, optional = true }
+tree-sitter-yaml = { workspace = true, optional = true }
 unicode-segmentation = { workspace = true }
 zed-reqwest = { workspace = true }
 

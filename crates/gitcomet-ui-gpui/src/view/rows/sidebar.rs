@@ -981,7 +981,7 @@ impl DetailsPaneView {
                 let context_menu_invoker: SharedString = format!(
                     "commit_file_menu_{}_{}_{}",
                     repo_id.0,
-                    commit_id.0.as_str(),
+                    commit_id.as_ref(),
                     path.display()
                 )
                 .into();

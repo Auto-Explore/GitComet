@@ -450,7 +450,7 @@ fn revert_commit_emits_effect() {
         &mut state,
         Msg::RevertCommit {
             repo_id: RepoId(1),
-            commit_id: gitcomet_core::domain::CommitId("deadbeef".to_string()),
+            commit_id: gitcomet_core::domain::CommitId("deadbeef".into()),
         },
     );
 
@@ -975,7 +975,7 @@ fn checkout_commit_emits_effect() {
     ));
     state.active_repo = Some(RepoId(1));
 
-    let commit_id = gitcomet_core::domain::CommitId("deadbeef".to_string());
+    let commit_id = gitcomet_core::domain::CommitId("deadbeef".into());
     let effects = reduce(
         &mut repos,
         &id_alloc,
@@ -1612,7 +1612,7 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
         &mut state,
         Msg::CherryPickCommit {
             repo_id,
-            commit_id: CommitId("deadbeef".to_string()),
+            commit_id: CommitId("deadbeef".into()),
         },
     );
     assert!(matches!(
@@ -1702,7 +1702,7 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
         &mut state,
         Msg::ExportPatch {
             repo_id,
-            commit_id: CommitId("cafebabe".to_string()),
+            commit_id: CommitId("cafebabe".into()),
             dest: PathBuf::from("out.patch"),
         },
     );
@@ -1990,7 +1990,7 @@ fn repo_command_finished_error_summaries_cover_additional_labels() {
         ),
         (
             RepoCommandKind::ExportPatch {
-                commit_id: CommitId("deadbeef".to_string()),
+                commit_id: CommitId("deadbeef".into()),
                 dest: PathBuf::from("out.patch"),
             },
             "Patch",
@@ -2096,7 +2096,7 @@ fn repo_command_finished_success_summaries_cover_additional_commands() {
         ),
         (
             RepoCommandKind::ExportPatch {
-                commit_id: CommitId("deadbeef".to_string()),
+                commit_id: CommitId("deadbeef".into()),
                 dest: PathBuf::from("out.patch"),
             },
             "Patch exported → out.patch",
@@ -2250,7 +2250,7 @@ fn checkout_branch_and_submodule_messages_emit_effects() {
         },
     ));
     if let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == RepoId(1)) {
-        repo.set_detached_head_commit(Some(CommitId("deadbeef".to_string())));
+        repo.set_detached_head_commit(Some(CommitId("deadbeef".into())));
     }
     state.active_repo = Some(RepoId(1));
 
@@ -2588,7 +2588,7 @@ fn stage_hunk_command_finished_reloads_commit_png_image_preview_only() {
     let mut state = AppState::default();
     let repo_id = RepoId(1);
     let target = DiffTarget::Commit {
-        commit_id: CommitId("abc123".to_string()),
+        commit_id: CommitId("abc123".into()),
         path: Some(PathBuf::from("assets/icon.png")),
     };
     let mut repo_state = RepoState::new_opening(

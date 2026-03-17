@@ -142,13 +142,13 @@ fn log_all_branches_includes_remote_tracking_branches() {
 
     let head = opened.log_head_page(200, None).unwrap();
     assert!(
-        !head.commits.iter().any(|c| c.id.0 == feature_tip),
+        !head.commits.iter().any(|c| c.id.as_ref() == feature_tip),
         "head log unexpectedly contains feature commit"
     );
 
     let all = opened.log_all_branches_page(200, None).unwrap();
     assert!(
-        all.commits.iter().any(|c| c.id.0 == feature_tip),
+        all.commits.iter().any(|c| c.id.as_ref() == feature_tip),
         "all-branches log should include remote-tracking branch commit"
     );
 }
@@ -188,7 +188,7 @@ fn log_all_branches_includes_nonstandard_ref_namespaces() {
     let opened = backend.open(repo).unwrap();
     let all = opened.log_all_branches_page(200, None).unwrap();
     assert!(
-        all.commits.iter().any(|c| c.id.0 == feature_tip),
+        all.commits.iter().any(|c| c.id.as_ref() == feature_tip),
         "all-branches log should include commits reachable from refs outside refs/heads and refs/remotes"
     );
 }
@@ -233,7 +233,7 @@ fn log_all_branches_does_not_include_tag_only_tips() {
     let opened = backend.open(repo).unwrap();
     let all = opened.log_all_branches_page(200, None).unwrap();
     assert!(
-        !all.commits.iter().any(|c| c.id.0 == tag_only_tip),
+        !all.commits.iter().any(|c| c.id.as_ref() == tag_only_tip),
         "all-branches log should not be expanded by tag-only tips"
     );
 }
@@ -261,8 +261,8 @@ fn log_all_branches_ignores_non_commit_refs() {
     let all = opened.log_all_branches_page(200, None).unwrap();
 
     assert_eq!(all.commits.len(), 1);
-    assert_eq!(all.commits[0].id.0, head);
-    assert_eq!(all.commits[0].summary, "A");
+    assert_eq!(all.commits[0].id.as_ref(), head);
+    assert_eq!(&*all.commits[0].summary, "A");
 }
 
 #[test]
@@ -329,13 +329,13 @@ fn log_head_page_limit_sets_next_cursor_and_supports_pagination() {
 
     let first = opened.log_head_page(1, None).unwrap();
     assert_eq!(first.commits.len(), 1);
-    let first_id = first.commits[0].id.0.clone();
+    let first_id = first.commits[0].id.as_ref().to_string();
     let cursor = first.next_cursor.as_ref().expect("next cursor");
 
     let second = opened.log_head_page(10, Some(cursor)).unwrap();
     assert!(!second.commits.is_empty());
     assert!(
-        second.commits.iter().all(|c| c.id.0 != first_id),
+        second.commits.iter().all(|c| c.id.as_ref() != first_id),
         "paginated page should skip last-seen commit"
     );
 }
@@ -451,7 +451,7 @@ fn log_file_page_follows_renames() {
     let page = opened
         .log_file_page(Path::new("docs/new name.txt"), 10, None)
         .unwrap();
-    let summaries: Vec<&str> = page.commits.iter().map(|c| c.summary.as_str()).collect();
+    let summaries: Vec<&str> = page.commits.iter().map(|c| &*c.summary).collect();
 
     assert_eq!(
         summaries,
@@ -531,7 +531,7 @@ fn log_file_page_cursor_paginates_rename_follow_history() {
     let first = opened
         .log_file_page(Path::new("docs/new name.txt"), 2, None)
         .unwrap();
-    let first_summaries: Vec<&str> = first.commits.iter().map(|c| c.summary.as_str()).collect();
+    let first_summaries: Vec<&str> = first.commits.iter().map(|c| &*c.summary).collect();
     assert_eq!(
         first_summaries,
         vec!["update history file twice", "update history file once"]
@@ -541,7 +541,7 @@ fn log_file_page_cursor_paginates_rename_follow_history() {
     let second = opened
         .log_file_page(Path::new("docs/new name.txt"), 2, Some(cursor))
         .unwrap();
-    let second_summaries: Vec<&str> = second.commits.iter().map(|c| c.summary.as_str()).collect();
+    let second_summaries: Vec<&str> = second.commits.iter().map(|c| &*c.summary).collect();
     assert_eq!(
         second_summaries,
         vec!["rename history file", "add history file"]
@@ -618,13 +618,13 @@ fn commit_details_reports_merge_parents_and_file_changes() {
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
     let merge_details = opened
-        .commit_details(&CommitId(merge_id.clone()))
+        .commit_details(&CommitId(merge_id.clone().into()))
         .expect("commit details");
     let feature_details = opened
-        .commit_details(&CommitId(feature_id))
+        .commit_details(&CommitId(feature_id.into()))
         .expect("feature commit details");
 
-    assert_eq!(merge_details.id, CommitId(merge_id));
+    assert_eq!(merge_details.id, CommitId(merge_id.into()));
     assert_eq!(merge_details.message, "merge feature branch");
     assert!(
         !merge_details.committed_at.is_empty(),
@@ -672,13 +672,13 @@ fn commit_details_reports_root_and_rename_file_changes() {
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
     let root_details = opened
-        .commit_details(&CommitId(root_id.clone()))
+        .commit_details(&CommitId(root_id.clone().into()))
         .expect("root commit details");
     let rename_details = opened
-        .commit_details(&CommitId(rename_id.clone()))
+        .commit_details(&CommitId(rename_id.clone().into()))
         .expect("rename commit details");
 
-    assert_eq!(root_details.id, CommitId(root_id));
+    assert_eq!(root_details.id, CommitId(root_id.into()));
     assert_eq!(root_details.message, "root commit");
     assert_eq!(root_details.parent_ids, Vec::<CommitId>::new());
     assert_eq!(
@@ -689,7 +689,7 @@ fn commit_details_reports_root_and_rename_file_changes() {
         }]
     );
 
-    assert_eq!(rename_details.id, CommitId(rename_id));
+    assert_eq!(rename_details.id, CommitId(rename_id.into()));
     assert_eq!(rename_details.message, "rename file");
     assert_eq!(rename_details.parent_ids.len(), 1);
     assert_eq!(
@@ -724,8 +724,8 @@ fn reflog_head_returns_recent_entries_with_indices() {
     let reflog = opened.reflog_head(2).unwrap();
 
     assert_eq!(reflog.len(), 2);
-    assert_eq!(reflog[0].selector, "HEAD@{0}");
-    assert_eq!(reflog[1].selector, "HEAD@{1}");
+    assert_eq!(&*reflog[0].selector, "HEAD@{0}");
+    assert_eq!(&*reflog[1].selector, "HEAD@{1}");
     assert_eq!(reflog[0].index, 0);
     assert_eq!(reflog[1].index, 1);
     assert!(reflog.iter().all(|entry| !entry.new_id.0.is_empty()));
@@ -801,11 +801,11 @@ fn log_all_branches_includes_older_stash_reflog_entries() {
     let all = opened.log_all_branches_page(200, None).unwrap();
 
     assert!(
-        all.commits.iter().any(|c| c.id.0 == stash_ids[0]),
+        all.commits.iter().any(|c| c.id.as_ref() == stash_ids[0]),
         "expected all-branches log to include stash tip"
     );
     assert!(
-        all.commits.iter().any(|c| c.id.0 == stash_ids[1]),
+        all.commits.iter().any(|c| c.id.as_ref() == stash_ids[1]),
         "expected all-branches log to include older stash reflog commit"
     );
 }

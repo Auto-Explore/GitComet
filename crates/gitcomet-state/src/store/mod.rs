@@ -7,10 +7,12 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, RwLock, mpsc};
 use std::thread;
+use std::time::Instant;
 
 mod effects;
 mod executor;
 mod reducer;
+mod reducer_diagnostics;
 mod repo_monitor;
 mod send_diagnostics;
 
@@ -19,6 +21,8 @@ use executor::{TaskExecutor, default_worker_threads};
 use reducer::reduce;
 use repo_monitor::RepoMonitorManager;
 use send_diagnostics::{SendFailureKind, send_or_log, try_send_state_changed_or_log};
+
+pub use reducer_diagnostics::StoreReducerDiagnostics;
 
 fn canonicalize_path(path: PathBuf) -> PathBuf {
     strip_windows_verbatim_prefix(std::fs::canonicalize(&path).unwrap_or(path))
@@ -56,6 +60,18 @@ fn strip_windows_verbatim_prefix(path: PathBuf) -> PathBuf {
     path
 }
 
+fn make_mut_state_with_diagnostics(state: &mut Arc<AppState>) -> &mut AppState {
+    let shared_state_handles = Arc::strong_count(state).saturating_sub(1);
+    if shared_state_handles > 0 {
+        let clone_started = Instant::now();
+        let state = Arc::make_mut(state);
+        reducer_diagnostics::record_clone_on_write(shared_state_handles, clone_started.elapsed());
+        state
+    } else {
+        Arc::make_mut(state)
+    }
+}
+
 pub struct AppStore {
     state: Arc<RwLock<Arc<AppState>>>,
     msg_tx: mpsc::Sender<Msg>,
@@ -71,6 +87,10 @@ impl Clone for AppStore {
 }
 
 impl AppStore {
+    pub fn reducer_diagnostics() -> StoreReducerDiagnostics {
+        reducer_diagnostics::snapshot()
+    }
+
     pub fn new(backend: Arc<dyn GitBackend>) -> (Self, smol::channel::Receiver<StoreEvent>) {
         let state = Arc::new(RwLock::new(Arc::new(AppState::default())));
         let (msg_tx, msg_rx) = mpsc::channel::<Msg>();
@@ -97,8 +117,11 @@ impl AppStore {
 
                 let effects = {
                     let mut app_state = thread_state.write().unwrap_or_else(|e| e.into_inner());
-                    let app_state = Arc::make_mut(&mut app_state);
-                    reduce(&mut repos, &id_alloc, app_state, msg)
+                    let app_state = make_mut_state_with_diagnostics(&mut app_state);
+                    let reduce_started = Instant::now();
+                    let effects = reduce(&mut repos, &id_alloc, app_state, msg);
+                    reducer_diagnostics::record_reducer_pass(reduce_started.elapsed());
+                    effects
                 };
 
                 let active_value = thread_state

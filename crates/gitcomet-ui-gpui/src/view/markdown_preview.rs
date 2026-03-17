@@ -250,19 +250,20 @@ pub(super) fn build_markdown_diff_preview(
     new_source: &str,
 ) -> Option<MarkdownPreviewDiff> {
     let (mut old, mut new) = parse_markdown_diff(old_source, new_source)?;
-    let diff_rows = gitcomet_core::file_diff::side_by_side_rows(old_source, new_source);
-    let (old_mask, new_mask) = build_changed_line_masks(
-        &diff_rows,
-        old_source.lines().count(),
-        new_source.lines().count(),
-    );
+    let plan = gitcomet_core::file_diff::side_by_side_plan(old_source, new_source);
+    let old_line_count = old_source.lines().count();
+    let new_line_count = new_source.lines().count();
+    let (old_mask, new_mask) =
+        gitcomet_core::file_diff::plan_changed_line_masks(&plan, old_line_count, new_line_count);
     annotate_change_hints(&mut old, &mut new, &old_mask, &new_mask);
+    let (old_line_to_diff_row, new_line_to_diff_row) =
+        gitcomet_core::file_diff::plan_line_to_row_maps(&plan, old_line_count, new_line_count);
     align_markdown_diff_rows(
         &mut old,
         &mut new,
-        &diff_rows,
-        old_source.lines().count(),
-        new_source.lines().count(),
+        old_line_to_diff_row.as_slice(),
+        new_line_to_diff_row.as_slice(),
+        plan.row_count,
     )?;
     let inline = build_inline_markdown_diff_document(&old, &new);
     Some(MarkdownPreviewDiff { old, new, inline })
@@ -298,63 +299,25 @@ fn annotate_change_hints(
     }
 }
 
-/// Build changed-line boolean vectors from `FileDiffRow` data.
-fn build_changed_line_masks(
-    diff_rows: &[gitcomet_core::file_diff::FileDiffRow],
-    old_line_count: usize,
-    new_line_count: usize,
-) -> (Vec<bool>, Vec<bool>) {
-    use gitcomet_core::file_diff::FileDiffRowKind;
-
-    let mut old_mask = vec![false; old_line_count];
-    let mut new_mask = vec![false; new_line_count];
-
-    let mark = |mask: &mut [bool], line: Option<u32>| {
-        if let Some(l) = line {
-            let ix = l.saturating_sub(1) as usize;
-            if ix < mask.len() {
-                mask[ix] = true;
-            }
-        }
-    };
-
-    for row in diff_rows {
-        match row.kind {
-            FileDiffRowKind::Context => {}
-            FileDiffRowKind::Remove => mark(&mut old_mask, row.old_line),
-            FileDiffRowKind::Add => mark(&mut new_mask, row.new_line),
-            FileDiffRowKind::Modify => {
-                mark(&mut old_mask, row.old_line);
-                mark(&mut new_mask, row.new_line);
-            }
-        }
-    }
-
-    (old_mask, new_mask)
-}
-
 fn align_markdown_diff_rows(
     old_doc: &mut MarkdownPreviewDocument,
     new_doc: &mut MarkdownPreviewDocument,
-    diff_rows: &[gitcomet_core::file_diff::FileDiffRow],
-    old_line_count: usize,
-    new_line_count: usize,
+    old_line_to_diff_row: &[Option<usize>],
+    new_line_to_diff_row: &[Option<usize>],
+    diff_row_count: usize,
 ) -> Option<()> {
-    let old_line_to_diff_row = build_line_to_diff_row_map(diff_rows, old_line_count, true);
-    let new_line_to_diff_row = build_line_to_diff_row_map(diff_rows, new_line_count, false);
-
     let old_rows = std::mem::take(&mut old_doc.rows);
     let new_rows = std::mem::take(&mut new_doc.rows);
 
     let (mut old_groups, old_trailing) =
-        markdown_rows_grouped_by_diff_anchor(old_rows, &old_line_to_diff_row, diff_rows.len());
+        markdown_rows_grouped_by_diff_anchor(old_rows, old_line_to_diff_row, diff_row_count);
     let (mut new_groups, new_trailing) =
-        markdown_rows_grouped_by_diff_anchor(new_rows, &new_line_to_diff_row, diff_rows.len());
+        markdown_rows_grouped_by_diff_anchor(new_rows, new_line_to_diff_row, diff_row_count);
 
     let mut old_aligned = Vec::new();
     let mut new_aligned = Vec::new();
 
-    for diff_ix in 0..diff_rows.len() {
+    for diff_ix in 0..diff_row_count {
         let old_group = std::mem::take(&mut old_groups[diff_ix]);
         let new_group = std::mem::take(&mut new_groups[diff_ix]);
         push_aligned_markdown_row_groups(&mut old_aligned, &mut new_aligned, old_group, new_group)?;
@@ -370,27 +333,6 @@ fn align_markdown_diff_rows(
     old_doc.rows = old_aligned;
     new_doc.rows = new_aligned;
     Some(())
-}
-
-fn build_line_to_diff_row_map(
-    diff_rows: &[gitcomet_core::file_diff::FileDiffRow],
-    line_count: usize,
-    old_side: bool,
-) -> Vec<Option<usize>> {
-    let mut line_to_diff_row = vec![None; line_count];
-
-    for (diff_ix, row) in diff_rows.iter().enumerate() {
-        let line = if old_side { row.old_line } else { row.new_line };
-        let Some(line) = line else {
-            continue;
-        };
-        let line_ix = line.saturating_sub(1) as usize;
-        if let Some(anchor_ix) = line_to_diff_row.get_mut(line_ix) {
-            *anchor_ix = Some(diff_ix);
-        }
-    }
-
-    line_to_diff_row
 }
 
 fn markdown_rows_grouped_by_diff_anchor(
@@ -2788,40 +2730,34 @@ mod tests {
         assert_ne!(new_table_rows[2].change_hint, MarkdownChangeHint::None);
     }
 
-    // ── build_changed_line_masks ─────────────────────────────────────────
+    // ── plan_changed_line_masks ──────────────────────────────────────────
 
     #[test]
-    fn build_changed_line_masks_from_diff_rows() {
-        use gitcomet_core::file_diff::{FileDiffRow, FileDiffRowKind};
+    fn plan_changed_line_masks_from_plan_rows() {
+        use gitcomet_core::file_diff::{FileDiffPlan, FileDiffPlanRun};
 
-        let diff_rows = vec![
-            FileDiffRow {
-                kind: FileDiffRowKind::Context,
-                old_line: Some(1),
-                new_line: Some(1),
-                old: Some("same".into()),
-                new: Some("same".into()),
-                eof_newline: None,
-            },
-            FileDiffRow {
-                kind: FileDiffRowKind::Remove,
-                old_line: Some(2),
-                new_line: None,
-                old: Some("old".into()),
-                new: None,
-                eof_newline: None,
-            },
-            FileDiffRow {
-                kind: FileDiffRowKind::Add,
-                old_line: None,
-                new_line: Some(2),
-                old: None,
-                new: Some("new".into()),
-                eof_newline: None,
-            },
-        ];
+        let plan = FileDiffPlan {
+            runs: vec![
+                FileDiffPlanRun::Context {
+                    old_start: 0,
+                    new_start: 0,
+                    len: 1,
+                },
+                FileDiffPlanRun::Remove {
+                    old_start: 1,
+                    len: 1,
+                },
+                FileDiffPlanRun::Add {
+                    new_start: 1,
+                    len: 1,
+                },
+            ],
+            row_count: 3,
+            inline_row_count: 3,
+            eof_newline: None,
+        };
 
-        let (old_mask, new_mask) = build_changed_line_masks(&diff_rows, 3, 3);
+        let (old_mask, new_mask) = gitcomet_core::file_diff::plan_changed_line_masks(&plan, 3, 3);
         assert!(!old_mask[0]); // context line
         assert!(old_mask[1]); // removed line
         assert!(!new_mask[0]); // context line
@@ -3020,19 +2956,21 @@ code line
     // ── Modify-kind mask coverage ────────────────────────────────────────
 
     #[test]
-    fn build_changed_line_masks_handles_modify_kind() {
-        use gitcomet_core::file_diff::{FileDiffRow, FileDiffRowKind};
+    fn plan_changed_line_masks_handles_modify_kind() {
+        use gitcomet_core::file_diff::{FileDiffPlan, FileDiffPlanRun};
 
-        let diff_rows = vec![FileDiffRow {
-            kind: FileDiffRowKind::Modify,
-            old_line: Some(1),
-            new_line: Some(1),
-            old: Some("before".into()),
-            new: Some("after".into()),
+        let plan = FileDiffPlan {
+            runs: vec![FileDiffPlanRun::Modify {
+                old_start: 0,
+                new_start: 0,
+                len: 1,
+            }],
+            row_count: 1,
+            inline_row_count: 2,
             eof_newline: None,
-        }];
+        };
 
-        let (old_mask, new_mask) = build_changed_line_masks(&diff_rows, 2, 2);
+        let (old_mask, new_mask) = gitcomet_core::file_diff::plan_changed_line_masks(&plan, 2, 2);
         assert!(old_mask[0]); // modify marks old side
         assert!(!old_mask[1]);
         assert!(new_mask[0]); // modify marks new side

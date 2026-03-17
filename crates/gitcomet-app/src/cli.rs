@@ -286,6 +286,51 @@ impl DifftoolInputKind {
     }
 }
 
+/// Result of probing a filesystem path, distinguishing regular files, directories,
+/// symlinks, and absent paths without repeating metadata lookup logic.
+enum ResolvedPathKind {
+    File,
+    Directory,
+    /// Exists but is neither file nor directory (e.g. socket, FIFO).
+    /// `is_symlink` is true when the path itself is a symlink to such an entry.
+    Special {
+        is_symlink: bool,
+    },
+    /// Symlink whose target does not exist.
+    BrokenSymlink,
+    /// Path does not exist (not even as a symlink).
+    NotFound,
+    /// Failed to read metadata.
+    Error(std::io::Error),
+}
+
+/// Probe a filesystem path once, returning a high-level classification.
+/// Follows symlinks via `fs::metadata` first, then falls back to
+/// `fs::symlink_metadata` when the target is missing or special.
+fn classify_path(path: &Path) -> ResolvedPathKind {
+    match std::fs::metadata(path) {
+        Ok(meta) if meta.is_file() => ResolvedPathKind::File,
+        Ok(meta) if meta.is_dir() => ResolvedPathKind::Directory,
+        Ok(_) => {
+            let is_symlink = std::fs::symlink_metadata(path)
+                .map(|m| m.file_type().is_symlink())
+                .unwrap_or(false);
+            ResolvedPathKind::Special { is_symlink }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            match std::fs::symlink_metadata(path) {
+                Ok(m) if m.file_type().is_symlink() => ResolvedPathKind::BrokenSymlink,
+                Ok(m) if m.is_dir() => ResolvedPathKind::Directory,
+                Ok(m) if m.is_file() => ResolvedPathKind::File,
+                Ok(_) => ResolvedPathKind::Special { is_symlink: false },
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => ResolvedPathKind::NotFound,
+                Err(e) => ResolvedPathKind::Error(e),
+            }
+        }
+        Err(e) => ResolvedPathKind::Error(e),
+    }
+}
+
 /// Classify a difftool path as directory or file-like.
 ///
 /// Symlink handling rules:
@@ -296,55 +341,29 @@ pub(crate) fn classify_difftool_input(
     path: &Path,
     role_name: &str,
 ) -> Result<DifftoolInputKind, String> {
-    match std::fs::metadata(path) {
-        Ok(metadata) if metadata.is_dir() => Ok(DifftoolInputKind::Directory),
-        Ok(metadata) if metadata.is_file() => Ok(DifftoolInputKind::FileLike),
-        Ok(_) => {
-            if let Ok(link_meta) = std::fs::symlink_metadata(path)
-                && link_meta.file_type().is_symlink()
-            {
-                return Err(format!(
-                    "{role_name} path symlink target must resolve to a regular file or directory: {}",
-                    path.display()
-                ));
-            }
-            Err(format!(
-                "{role_name} path must be a regular file or directory: {}",
-                path.display()
-            ))
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            match std::fs::symlink_metadata(path) {
-                Ok(link_meta) if link_meta.file_type().is_symlink() => {
-                    Ok(DifftoolInputKind::FileLike)
-                }
-                Ok(link_meta) if link_meta.is_dir() => Ok(DifftoolInputKind::Directory),
-                Ok(link_meta) if link_meta.is_file() => Ok(DifftoolInputKind::FileLike),
-                Ok(_) => Err(format!(
-                    "{role_name} path must be a regular file or directory: {}",
-                    path.display()
-                )),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(format!(
-                    "{role_name} path does not exist: {}",
-                    path.display()
-                )),
-                Err(e) => Err(format!(
-                    "Failed to read metadata for {role_name} path {}: {e}",
-                    path.display()
-                )),
-            }
-        }
-        Err(e) => Err(format!(
+    match classify_path(path) {
+        ResolvedPathKind::File | ResolvedPathKind::BrokenSymlink => Ok(DifftoolInputKind::FileLike),
+        ResolvedPathKind::Directory => Ok(DifftoolInputKind::Directory),
+        ResolvedPathKind::Special { is_symlink: true } => Err(format!(
+            "{role_name} path symlink target must resolve to a regular file or directory: {}",
+            path.display()
+        )),
+        ResolvedPathKind::Special { is_symlink: false } => Err(format!(
+            "{role_name} path must be a regular file or directory: {}",
+            path.display()
+        )),
+        ResolvedPathKind::NotFound => Err(format!(
+            "{role_name} path does not exist: {}",
+            path.display()
+        )),
+        ResolvedPathKind::Error(e) => Err(format!(
             "Failed to read metadata for {role_name} path {}: {e}",
             path.display()
         )),
     }
 }
 
-fn resolve_regular_file_metadata(
-    path: &Path,
-    role_name: &str,
-) -> Result<std::fs::Metadata, String> {
+fn validate_regular_file_path(path: &Path, role_name: &str) -> Result<(), String> {
     let metadata = std::fs::metadata(path).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             format!("{role_name} path does not exist: {}", path.display())
@@ -357,7 +376,7 @@ fn resolve_regular_file_metadata(
     })?;
 
     if metadata.is_file() {
-        Ok(metadata)
+        Ok(())
     } else if metadata.is_dir() {
         Err(format!(
             "{role_name} path must be a file, not a directory: {}",
@@ -371,39 +390,84 @@ fn resolve_regular_file_metadata(
     }
 }
 
+struct MergetoolPathArgs {
+    merged: Option<PathBuf>,
+    local: Option<PathBuf>,
+    remote: Option<PathBuf>,
+    base: Option<PathBuf>,
+}
+
+struct ResolvedMergetoolPaths {
+    merged: PathBuf,
+    local: PathBuf,
+    remote: PathBuf,
+    base: Option<PathBuf>,
+}
+
+fn resolve_required_mergetool_path(
+    flag: Option<PathBuf>,
+    flag_name: &'static str,
+    env_key: &'static str,
+    env: &dyn EnvLookup,
+) -> Result<PathBuf, String> {
+    let path = resolve_path(flag, env_key, env).ok_or_else(|| {
+        format!("Missing required input: --{flag_name} flag or {env_key} environment variable")
+    })?;
+    require_non_empty_path(path, flag_name)
+}
+
+fn resolve_optional_base_path(base: Option<PathBuf>, env: &dyn EnvLookup) -> Option<PathBuf> {
+    // Treat an empty BASE value as "no base" for compatibility with
+    // shell-expanded custom tool commands like `--base "$BASE"`.
+    match resolve_path(base, "BASE", env) {
+        Some(path) if is_empty_path(&path) => None,
+        other => other,
+    }
+}
+
+fn resolve_and_validate_mergetool_paths(
+    args: MergetoolPathArgs,
+    env: &dyn EnvLookup,
+) -> Result<ResolvedMergetoolPaths, String> {
+    let paths = ResolvedMergetoolPaths {
+        merged: resolve_required_mergetool_path(args.merged, "merged", "MERGED", env)?,
+        local: resolve_required_mergetool_path(args.local, "local", "LOCAL", env)?,
+        remote: resolve_required_mergetool_path(args.remote, "remote", "REMOTE", env)?,
+        base: resolve_optional_base_path(args.base, env),
+    };
+
+    // MERGED is an output target and may not exist yet (e.g. standalone
+    // --output/--out usage). If it already exists, it must resolve to a
+    // regular file target.
+    validate_existing_merged_output_path(&paths.merged)?;
+    validate_regular_file_path(&paths.local, "Local")?;
+    validate_regular_file_path(&paths.remote, "Remote")?;
+
+    // Base is allowed to be missing (add/add conflicts have no base).
+    // But if explicitly provided, it must resolve to a regular file.
+    if let Some(base_path) = paths.base.as_deref() {
+        validate_regular_file_path(base_path, "Base")?;
+    }
+
+    Ok(paths)
+}
+
 fn validate_existing_merged_output_path(path: &Path) -> Result<(), String> {
-    match std::fs::metadata(path) {
-        Ok(followed) if followed.is_dir() => Err(format!(
+    match classify_path(path) {
+        ResolvedPathKind::File | ResolvedPathKind::NotFound => Ok(()),
+        ResolvedPathKind::Directory => Err(format!(
             "Merged path must be a file path, not a directory: {}",
             path.display()
         )),
-        Ok(followed) if followed.is_file() => Ok(()),
-        Ok(_) => Err(format!(
+        ResolvedPathKind::BrokenSymlink => Err(format!(
+            "Merged path must resolve to an existing file target: {}",
+            path.display()
+        )),
+        ResolvedPathKind::Special { .. } => Err(format!(
             "Merged path must be a regular file path: {}",
             path.display()
         )),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            match std::fs::symlink_metadata(path) {
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-                Ok(link_meta) if link_meta.file_type().is_symlink() => Err(format!(
-                    "Merged path must resolve to an existing file target: {}",
-                    path.display()
-                )),
-                Ok(link_meta) if link_meta.is_dir() => Err(format!(
-                    "Merged path must be a file path, not a directory: {}",
-                    path.display()
-                )),
-                Ok(_) => Err(format!(
-                    "Merged path must be a regular file path: {}",
-                    path.display()
-                )),
-                Err(e) => Err(format!(
-                    "Failed to read metadata for merged path {}: {e}",
-                    path.display()
-                )),
-            }
-        }
-        Err(e) => Err(format!(
+        ResolvedPathKind::Error(e) => Err(format!(
             "Failed to read metadata for merged path {}: {e}",
             path.display()
         )),
@@ -467,6 +531,27 @@ fn parse_marker_size(marker_size: Option<usize>) -> Result<usize, String> {
     }
 }
 
+fn parse_conflict_style(value: Option<&str>) -> Result<ConflictStyle, String> {
+    match value {
+        None | Some("merge") => Ok(ConflictStyle::Merge),
+        Some("diff3") => Ok(ConflictStyle::Diff3),
+        Some("zdiff3") => Ok(ConflictStyle::Zdiff3),
+        Some(other) => Err(format!(
+            "Unknown conflict style '{other}': expected merge, diff3, or zdiff3"
+        )),
+    }
+}
+
+fn parse_diff_algorithm(value: Option<&str>) -> Result<DiffAlgorithm, String> {
+    match value {
+        None | Some("myers") => Ok(DiffAlgorithm::Myers),
+        Some("histogram") => Ok(DiffAlgorithm::Histogram),
+        Some(other) => Err(format!(
+            "Unknown diff algorithm '{other}': expected myers or histogram"
+        )),
+    }
+}
+
 /// Resolve and validate mergetool arguments.
 ///
 /// Priority: explicit flags, then env vars (MERGED, LOCAL, REMOTE, BASE).
@@ -475,81 +560,51 @@ fn resolve_mergetool_with_env(
     args: MergetoolArgs,
     env: &dyn EnvLookup,
 ) -> Result<MergetoolConfig, String> {
-    let marker_size = parse_marker_size(args.marker_size)?;
-
-    let merged = require_non_empty_path(
-        resolve_path(args.merged, "MERGED", env)
-            .ok_or("Missing required input: --merged flag or MERGED environment variable")?,
-        "merged",
+    let MergetoolArgs {
+        merged,
+        local,
+        remote,
+        base,
+        label_base,
+        label_local,
+        label_remote,
+        conflict_style,
+        diff_algorithm,
+        marker_size,
+        auto,
+        gui,
+    } = args;
+    let marker_size = parse_marker_size(marker_size)?;
+    let ResolvedMergetoolPaths {
+        merged,
+        local,
+        remote,
+        base,
+    } = resolve_and_validate_mergetool_paths(
+        MergetoolPathArgs {
+            merged,
+            local,
+            remote,
+            base,
+        },
+        env,
     )?;
-
-    let local = require_non_empty_path(
-        resolve_path(args.local, "LOCAL", env)
-            .ok_or("Missing required input: --local flag or LOCAL environment variable")?,
-        "local",
-    )?;
-
-    let remote = require_non_empty_path(
-        resolve_path(args.remote, "REMOTE", env)
-            .ok_or("Missing required input: --remote flag or REMOTE environment variable")?,
-        "remote",
-    )?;
-
-    // Treat an empty BASE value as "no base" for compatibility with
-    // shell-expanded custom tool commands like `--base "$BASE"`.
-    let base = match resolve_path(args.base, "BASE", env) {
-        Some(path) if is_empty_path(&path) => None,
-        other => other,
-    };
-
-    // MERGED is an output target and may not exist yet (e.g. standalone
-    // --output/--out usage). If it already exists, it must resolve to a
-    // regular file target.
-    validate_existing_merged_output_path(&merged)?;
-
-    resolve_regular_file_metadata(&local, "Local")?;
-    resolve_regular_file_metadata(&remote, "Remote")?;
-
-    // Base is allowed to be missing (add/add conflicts have no base).
-    // But if explicitly provided, it must resolve to a regular file.
-    if let Some(ref base_path) = base {
-        resolve_regular_file_metadata(base_path, "Base")?;
-    }
-
-    let conflict_style = match args.conflict_style.as_deref() {
-        None | Some("merge") => ConflictStyle::Merge,
-        Some("diff3") => ConflictStyle::Diff3,
-        Some("zdiff3") => ConflictStyle::Zdiff3,
-        Some(other) => {
-            return Err(format!(
-                "Unknown conflict style '{other}': expected merge, diff3, or zdiff3"
-            ));
-        }
-    };
-
-    let diff_algorithm = match args.diff_algorithm.as_deref() {
-        None | Some("myers") => DiffAlgorithm::Myers,
-        Some("histogram") => DiffAlgorithm::Histogram,
-        Some(other) => {
-            return Err(format!(
-                "Unknown diff algorithm '{other}': expected myers or histogram"
-            ));
-        }
-    };
+    let conflict_style = parse_conflict_style(conflict_style.as_deref())?;
+    let diff_algorithm = parse_diff_algorithm(diff_algorithm.as_deref())?;
 
     Ok(MergetoolConfig {
         merged,
         local,
         remote,
         base,
-        label_base: args.label_base,
-        label_local: args.label_local,
-        label_remote: args.label_remote,
+        label_base,
+        label_local,
+        label_remote,
         conflict_style,
         diff_algorithm,
         marker_size,
-        auto: args.auto,
-        gui: args.gui,
+        auto,
+        gui,
     })
 }
 

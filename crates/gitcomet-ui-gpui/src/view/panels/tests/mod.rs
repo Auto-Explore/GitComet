@@ -1,0 +1,773 @@
+pub(super) use super::main::{
+    next_conflict_diff_split_ratio, show_conflict_save_stage_action,
+    show_external_mergetool_actions,
+};
+pub(super) use super::*;
+pub(super) use crate::test_support::{lock_clipboard_test, lock_visual_test};
+pub(super) use crate::view::panes::main::PreparedSyntaxViewMode;
+pub(super) use gitcomet_core::error::{Error, ErrorKind};
+pub(super) use gitcomet_core::services::{GitBackend, GitRepository, Result};
+pub(super) use gitcomet_state::store::AppStore;
+pub(super) use gpui::{Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, px};
+pub(super) use std::path::Path;
+pub(super) use std::sync::Arc;
+pub(super) use std::sync::atomic::{AtomicUsize, Ordering};
+
+const _: () = {
+    assert!(COMMIT_DETAILS_MESSAGE_MAX_HEIGHT_PX > 0.0);
+    assert!(COMMIT_DETAILS_MESSAGE_MAX_HEIGHT_PX <= 400.0);
+};
+
+#[test]
+fn shows_external_mergetool_actions_only_in_normal_mode() {
+    assert!(show_external_mergetool_actions(GitCometViewMode::Normal));
+    assert!(!show_external_mergetool_actions(
+        GitCometViewMode::FocusedMergetool
+    ));
+}
+
+#[test]
+fn shows_save_stage_action_only_in_normal_mode() {
+    assert!(show_conflict_save_stage_action(GitCometViewMode::Normal));
+    assert!(!show_conflict_save_stage_action(
+        GitCometViewMode::FocusedMergetool
+    ));
+}
+
+#[test]
+fn next_conflict_diff_split_ratio_returns_none_when_main_width_is_not_positive() {
+    let state = ConflictDiffSplitResizeState {
+        start_x: px(10.0),
+        start_ratio: 0.5,
+    };
+    let ratio = next_conflict_diff_split_ratio(state, px(20.0), [px(-4.0), px(-4.0)]);
+    assert!(ratio.is_none());
+}
+
+#[test]
+fn next_conflict_diff_split_ratio_applies_drag_delta() {
+    let state = ConflictDiffSplitResizeState {
+        start_x: px(100.0),
+        start_ratio: 0.5,
+    };
+    let ratio = next_conflict_diff_split_ratio(state, px(160.0), [px(300.0), px(300.0)]).unwrap();
+
+    let expected = (0.5 + (60.0 / (300.0 + 300.0 + super::PANE_RESIZE_HANDLE_PX))).clamp(0.1, 0.9);
+    assert!((ratio - expected).abs() < 0.0001);
+}
+
+#[test]
+fn next_conflict_diff_split_ratio_clamps_to_expected_bounds() {
+    let state = ConflictDiffSplitResizeState {
+        start_x: px(100.0),
+        start_ratio: 0.5,
+    };
+    let min_ratio =
+        next_conflict_diff_split_ratio(state, px(-10_000.0), [px(240.0), px(240.0)]).unwrap();
+    let max_ratio =
+        next_conflict_diff_split_ratio(state, px(10_000.0), [px(240.0), px(240.0)]).unwrap();
+    assert_eq!(min_ratio, 0.1);
+    assert_eq!(max_ratio, 0.9);
+}
+
+#[test]
+fn conflict_resolver_strategy_maps_conflict_kinds() {
+    use gitcomet_core::conflict_session::ConflictResolverStrategy as S;
+    use gitcomet_core::domain::FileConflictKind as K;
+
+    assert_eq!(
+        MainPaneView::conflict_resolver_strategy(Some(K::BothModified), false),
+        Some(S::FullTextResolver),
+    );
+    assert_eq!(
+        MainPaneView::conflict_resolver_strategy(Some(K::BothAdded), false),
+        Some(S::FullTextResolver),
+    );
+    assert_eq!(
+        MainPaneView::conflict_resolver_strategy(Some(K::AddedByUs), false),
+        Some(S::TwoWayKeepDelete),
+    );
+    assert_eq!(
+        MainPaneView::conflict_resolver_strategy(Some(K::AddedByThem), false),
+        Some(S::TwoWayKeepDelete),
+    );
+    assert_eq!(
+        MainPaneView::conflict_resolver_strategy(Some(K::DeletedByUs), false),
+        Some(S::TwoWayKeepDelete),
+    );
+    assert_eq!(
+        MainPaneView::conflict_resolver_strategy(Some(K::DeletedByThem), false),
+        Some(S::TwoWayKeepDelete),
+    );
+    assert_eq!(
+        MainPaneView::conflict_resolver_strategy(Some(K::BothDeleted), false),
+        Some(S::DecisionOnly),
+    );
+    assert_eq!(MainPaneView::conflict_resolver_strategy(None, false), None);
+
+    // Binary flag overrides any conflict kind to BinarySidePick.
+    assert_eq!(
+        MainPaneView::conflict_resolver_strategy(Some(K::BothModified), true),
+        Some(S::BinarySidePick),
+    );
+    assert_eq!(
+        MainPaneView::conflict_resolver_strategy(Some(K::DeletedByUs), true),
+        Some(S::BinarySidePick),
+    );
+}
+
+pub(super) struct TestBackend;
+
+impl GitBackend for TestBackend {
+    fn open(&self, _workdir: &Path) -> Result<Arc<dyn GitRepository>> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "Test backend does not open repositories",
+        )))
+    }
+}
+
+pub(super) fn set_ready_worktree_preview(
+    pane: &mut MainPaneView,
+    path: std::path::PathBuf,
+    lines: Arc<Vec<String>>,
+    source_len: usize,
+    cx: &mut gpui::Context<MainPaneView>,
+) {
+    pane.set_worktree_preview_ready_rows(path, lines.as_ref(), source_len, cx);
+    pane.worktree_preview_scroll
+        .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
+    cx.notify();
+}
+
+pub(super) fn highlights_include_range(
+    highlights: &[(std::ops::Range<usize>, gpui::HighlightStyle)],
+    target: std::ops::Range<usize>,
+) -> bool {
+    highlights.iter().any(|(range, _)| *range == target)
+}
+
+pub(super) fn styled_debug_info(
+    styled: &super::CachedDiffStyledText,
+) -> (gpui::SharedString, Vec<std::ops::Range<usize>>) {
+    (
+        styled.text.clone(),
+        styled
+            .highlights
+            .iter()
+            .map(|(range, _)| range.clone())
+            .collect(),
+    )
+}
+
+pub(super) fn styled_debug_info_with_styles(
+    styled: &super::CachedDiffStyledText,
+) -> (
+    gpui::SharedString,
+    Vec<(
+        std::ops::Range<usize>,
+        Option<gpui::Hsla>,
+        Option<gpui::Hsla>,
+    )>,
+) {
+    (
+        styled.text.clone(),
+        styled
+            .highlights
+            .iter()
+            .map(|(range, style)| (range.clone(), style.color, style.background_color))
+            .collect(),
+    )
+}
+
+pub(super) fn file_diff_split_row_ix(
+    pane: &MainPaneView,
+    region: DiffTextRegion,
+    text: &str,
+) -> Option<usize> {
+    pane.file_diff_cache_rows
+        .iter()
+        .position(|row| match region {
+            DiffTextRegion::SplitLeft => row.old.as_deref() == Some(text),
+            DiffTextRegion::SplitRight => row.new.as_deref() == Some(text),
+            DiffTextRegion::Inline => false,
+        })
+}
+
+pub(super) fn file_diff_split_cached_styled<'a>(
+    pane: &'a MainPaneView,
+    region: DiffTextRegion,
+    text: &str,
+) -> Option<&'a super::CachedDiffStyledText> {
+    let row_ix = file_diff_split_row_ix(pane, region, text)?;
+    let key = pane.file_diff_split_cache_key(row_ix, region)?;
+    let epoch = pane.file_diff_split_style_cache_epoch(region);
+    pane.diff_text_segments_cache_get(key, epoch)
+}
+
+pub(super) fn file_diff_split_cached_debug(
+    pane: &MainPaneView,
+    region: DiffTextRegion,
+    text: &str,
+) -> Option<(gpui::SharedString, Vec<std::ops::Range<usize>>)> {
+    file_diff_split_cached_styled(pane, region, text).map(styled_debug_info)
+}
+
+pub(super) fn file_diff_inline_ix(
+    pane: &MainPaneView,
+    kind: gitcomet_core::domain::DiffLineKind,
+    text: &str,
+) -> Option<usize> {
+    pane.file_diff_inline_cache
+        .iter()
+        .position(|line| line.kind == kind && line.text.as_ref() == text)
+}
+
+pub(super) fn file_diff_inline_cached_styled<'a>(
+    pane: &'a MainPaneView,
+    kind: gitcomet_core::domain::DiffLineKind,
+    text: &str,
+) -> Option<&'a super::CachedDiffStyledText> {
+    let inline_ix = file_diff_inline_ix(pane, kind, text)?;
+    let line = pane.file_diff_inline_cache.get(inline_ix)?;
+    let epoch = pane.file_diff_inline_style_cache_epoch(line);
+    pane.diff_text_segments_cache_get(inline_ix, epoch)
+}
+
+pub(super) fn file_diff_inline_cached_debug(
+    pane: &MainPaneView,
+    kind: gitcomet_core::domain::DiffLineKind,
+    text: &str,
+) -> Option<(gpui::SharedString, Vec<std::ops::Range<usize>>)> {
+    file_diff_inline_cached_styled(pane, kind, text).map(styled_debug_info)
+}
+
+pub(super) fn conflict_split_row_ix(
+    pane: &MainPaneView,
+    side: crate::view::conflict_resolver::ConflictPickSide,
+    text: &str,
+) -> Option<usize> {
+    (0..pane.conflict_resolver.two_way_split_visible_len()).find_map(|visible_ix| {
+        let crate::view::conflict_resolver::TwoWaySplitVisibleRow {
+            source_row_ix: source_ix,
+            row,
+            conflict_ix: _conflict_ix,
+        } = pane
+            .conflict_resolver
+            .two_way_split_visible_row(visible_ix)?;
+        match side {
+            crate::view::conflict_resolver::ConflictPickSide::Ours => {
+                (row.old.as_deref() == Some(text)).then_some(source_ix)
+            }
+            crate::view::conflict_resolver::ConflictPickSide::Theirs => {
+                (row.new.as_deref() == Some(text)).then_some(source_ix)
+            }
+        }
+    })
+}
+
+pub(super) fn conflict_split_cached_styled<'a>(
+    pane: &'a MainPaneView,
+    side: crate::view::conflict_resolver::ConflictPickSide,
+    text: &str,
+) -> Option<&'a super::CachedDiffStyledText> {
+    let row_ix = conflict_split_row_ix(pane, side, text)?;
+    pane.conflict_diff_segments_cache_split.get(&(row_ix, side))
+}
+
+pub(super) fn styled_has_leading_muted_highlight(
+    styled: &super::CachedDiffStyledText,
+    comment_prefix_end: usize,
+    muted: gpui::Hsla,
+) -> bool {
+    let has_muted_prefix_start = styled
+        .highlights
+        .iter()
+        .any(|(range, style)| range.start == 0 && style.color == Some(muted));
+    let max_muted_end = styled
+        .highlights
+        .iter()
+        .filter(|(range, style)| range.start < comment_prefix_end && style.color == Some(muted))
+        .map(|(range, _)| range.end)
+        .max()
+        .unwrap_or(0);
+    has_muted_prefix_start && max_muted_end >= comment_prefix_end
+}
+
+pub(super) fn seed_file_diff_state(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    repo_id: gitcomet_state::model::RepoId,
+    workdir: &std::path::Path,
+    path: &std::path::Path,
+    old_text: &str,
+    new_text: &str,
+) {
+    seed_file_diff_state_with_rev(cx, view, repo_id, workdir, path, 1, old_text, new_text);
+}
+
+pub(super) fn seed_file_diff_state_with_rev(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    repo_id: gitcomet_state::model::RepoId,
+    workdir: &std::path::Path,
+    path: &std::path::Path,
+    diff_file_rev: u64,
+    old_text: &str,
+    new_text: &str,
+) {
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, workdir);
+            set_test_file_status(
+                &mut repo,
+                path.to_path_buf(),
+                gitcomet_core::domain::FileStatusKind::Modified,
+                gitcomet_core::domain::DiffArea::Unstaged,
+            );
+            repo.diff_state.diff_file_rev = diff_file_rev;
+            repo.diff_state.diff_file = gitcomet_state::model::Loadable::Ready(Some(Arc::new(
+                gitcomet_core::domain::FileDiffText {
+                    path: path.to_path_buf(),
+                    old: Some(old_text.to_string()),
+                    new: Some(new_text.to_string()),
+                },
+            )));
+
+            let next_state = app_state_with_repo(repo, repo_id);
+
+            push_test_state(this, next_state, cx);
+        });
+    });
+}
+
+pub(super) fn conflict_compare_repo_state(
+    repo_id: gitcomet_state::model::RepoId,
+    workdir: &std::path::Path,
+    file_rel: &std::path::Path,
+    base_text: &str,
+    ours_text: &str,
+    theirs_text: &str,
+    current_text: &str,
+) -> gitcomet_state::model::RepoState {
+    let mut repo = opening_repo_state(repo_id, workdir);
+    set_test_file_status(
+        &mut repo,
+        file_rel.to_path_buf(),
+        gitcomet_core::domain::FileStatusKind::Conflicted,
+        gitcomet_core::domain::DiffArea::Unstaged,
+    );
+    set_test_conflict_file(
+        &mut repo,
+        file_rel,
+        base_text,
+        ours_text,
+        theirs_text,
+        current_text,
+    );
+    repo
+}
+
+pub(super) fn assert_file_preview_ctrl_a_ctrl_c_copies_all(
+    cx: &mut gpui::TestAppContext,
+    repo_id: gitcomet_state::model::RepoId,
+    workdir: std::path::PathBuf,
+    file_rel: std::path::PathBuf,
+    status_kind: gitcomet_core::domain::FileStatusKind,
+    lines: Arc<Vec<String>>,
+) {
+    let _clipboard_guard = lock_clipboard_test();
+    let expected = lines.join("\n");
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    // Create the file on disk so is_file_preview_active() can detect it.
+    let _ = std::fs::create_dir_all(&workdir);
+    std::fs::write(workdir.join(&file_rel), lines.join("\n")).expect("write preview fixture file");
+
+    // Push state through the model first; the observer will clear stale
+    // worktree_preview on diff-target change.
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            set_test_file_status(
+                &mut repo,
+                file_rel.clone(),
+                status_kind.clone(),
+                gitcomet_core::domain::DiffArea::Staged,
+            );
+
+            let next_state = app_state_with_repo(repo, repo_id);
+
+            push_test_state(this, Arc::clone(&next_state), cx);
+        });
+    });
+
+    // Set preview data in a separate update so it runs after the observer
+    // has cleared the stale preview state.
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let workdir = workdir.clone();
+            let file_rel = file_rel.clone();
+            let lines = Arc::clone(&lines);
+            this.main_pane.update(cx, |pane, cx| {
+                set_ready_worktree_preview(
+                    pane,
+                    workdir.join(&file_rel),
+                    lines,
+                    expected.len(),
+                    cx,
+                );
+            });
+        });
+    });
+
+    cx.update(|window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        let focus = main_pane.read(app).diff_panel_focus_handle.clone();
+        window.focus(&focus);
+        let _ = window.draw(app);
+    });
+
+    cx.simulate_keystrokes("ctrl-a ctrl-c");
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|item| item.text()),
+        Some(expected.into())
+    );
+
+    let _ = std::fs::remove_dir_all(&workdir);
+}
+
+pub(super) fn assert_markdown_file_preview_toggle_visible(
+    cx: &mut gpui::TestAppContext,
+    repo_id: gitcomet_state::model::RepoId,
+    workdir: std::path::PathBuf,
+    file_rel: std::path::PathBuf,
+    status_kind: gitcomet_core::domain::FileStatusKind,
+    old_text: Option<&str>,
+    new_text: Option<&str>,
+    create_worktree_file: bool,
+) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    disable_view_poller_for_test(cx, &view);
+
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(&workdir).expect("create markdown preview workdir");
+    if create_worktree_file {
+        let contents = new_text.or(old_text).unwrap_or_default();
+        std::fs::write(workdir.join(&file_rel), contents).expect("write markdown preview fixture");
+    }
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            set_test_file_status(
+                &mut repo,
+                file_rel.clone(),
+                status_kind,
+                gitcomet_core::domain::DiffArea::Staged,
+            );
+            repo.diff_state.diff_file = gitcomet_state::model::Loadable::Ready(Some(Arc::new(
+                gitcomet_core::domain::FileDiffText {
+                    path: file_rel.clone(),
+                    old: old_text.map(|text| text.to_string()),
+                    new: new_text.map(|text| text.to_string()),
+                },
+            )));
+
+            let next_state = app_state_with_repo(repo, repo_id);
+
+            push_test_state(this, Arc::clone(&next_state), cx);
+        });
+    });
+
+    for _ in 0..3 {
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+    }
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "markdown file preview activation",
+        |pane| {
+            let rendered_preview_kind = crate::view::diff_target_rendered_preview_kind(
+                pane.active_repo()
+                    .and_then(|repo| repo.diff_state.diff_target.as_ref()),
+            );
+            let toggle_kind = crate::view::main_diff_rendered_preview_toggle_kind(
+                false,
+                pane.is_file_preview_active(),
+                rendered_preview_kind,
+            );
+            pane.is_file_preview_active()
+                && toggle_kind == Some(RenderedPreviewKind::Markdown)
+                && pane
+                    .rendered_preview_modes
+                    .get(RenderedPreviewKind::Markdown)
+                    == RenderedPreviewMode::Rendered
+        },
+        |pane| {
+            let rendered_preview_kind = crate::view::diff_target_rendered_preview_kind(
+                pane.active_repo()
+                    .and_then(|repo| repo.diff_state.diff_target.as_ref()),
+            );
+            let toggle_kind = crate::view::main_diff_rendered_preview_toggle_kind(
+                false,
+                pane.is_file_preview_active(),
+                rendered_preview_kind,
+            );
+            format!(
+                "active_repo={:?} diff_target={:?} is_file_preview_active={} toggle_kind={toggle_kind:?} markdown_mode={:?}",
+                pane.active_repo().map(|repo| repo.id),
+                pane.active_repo()
+                    .and_then(|repo| repo.diff_state.diff_target.clone()),
+                pane.is_file_preview_active(),
+                pane.rendered_preview_modes
+                    .get(RenderedPreviewKind::Markdown),
+            )
+        },
+    );
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let rendered_preview_kind = crate::view::diff_target_rendered_preview_kind(
+            pane.active_repo()
+                .and_then(|repo| repo.diff_state.diff_target.as_ref()),
+        );
+        let toggle_kind = crate::view::main_diff_rendered_preview_toggle_kind(
+            false,
+            pane.is_file_preview_active(),
+            rendered_preview_kind,
+        );
+        assert!(
+            pane.is_file_preview_active(),
+            "expected markdown {status_kind:?} target to use single-file preview mode"
+        );
+        assert_eq!(
+            toggle_kind,
+            Some(RenderedPreviewKind::Markdown),
+            "expected markdown {status_kind:?} target to request the main preview toggle"
+        );
+        assert_eq!(
+            pane.rendered_preview_modes
+                .get(RenderedPreviewKind::Markdown),
+            RenderedPreviewMode::Rendered,
+            "expected markdown {status_kind:?} target to default to Preview mode"
+        );
+    });
+    assert!(
+        cx.debug_bounds("markdown_diff_view_toggle").is_some(),
+        "expected markdown Preview/Text toggle for {status_kind:?} file preview"
+    );
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup markdown preview fixture");
+}
+
+pub(super) fn app_state_with_repo(
+    repo: gitcomet_state::model::RepoState,
+    repo_id: gitcomet_state::model::RepoId,
+) -> Arc<AppState> {
+    Arc::new(AppState {
+        repos: vec![repo],
+        active_repo: Some(repo_id),
+        ..Default::default()
+    })
+}
+
+pub(super) fn opening_repo_state(
+    repo_id: gitcomet_state::model::RepoId,
+    workdir: &Path,
+) -> gitcomet_state::model::RepoState {
+    gitcomet_state::model::RepoState::new_opening(
+        repo_id,
+        gitcomet_core::domain::RepoSpec {
+            workdir: workdir.to_path_buf(),
+        },
+    )
+}
+
+pub(super) fn push_test_state(
+    this: &super::super::GitCometView,
+    state: Arc<AppState>,
+    cx: &mut impl gpui::AppContext,
+) {
+    this._ui_model.update(cx, |model, cx| {
+        model.set_state(state, cx);
+    });
+}
+
+/// Sets `repo.status` with a single file and `repo.diff_state.diff_target` in one call.
+/// Covers `Staged` (file in `staged`, empty `unstaged`) and `Unstaged` (reverse).
+pub(super) fn set_test_file_status(
+    repo: &mut gitcomet_state::model::RepoState,
+    path: impl Into<std::path::PathBuf>,
+    kind: gitcomet_core::domain::FileStatusKind,
+    area: gitcomet_core::domain::DiffArea,
+) {
+    set_test_file_status_with_conflict(repo, path, kind, None, area);
+}
+
+/// Like `set_test_file_status` but for conflicted files with `BothModified` conflict kind.
+pub(super) fn set_test_conflict_status(
+    repo: &mut gitcomet_state::model::RepoState,
+    path: impl Into<std::path::PathBuf>,
+    area: gitcomet_core::domain::DiffArea,
+) {
+    set_test_file_status_with_conflict(
+        repo,
+        path,
+        gitcomet_core::domain::FileStatusKind::Conflicted,
+        Some(gitcomet_core::domain::FileConflictKind::BothModified),
+        area,
+    );
+}
+
+pub(super) fn set_test_file_status_with_conflict(
+    repo: &mut gitcomet_state::model::RepoState,
+    path: impl Into<std::path::PathBuf>,
+    kind: gitcomet_core::domain::FileStatusKind,
+    conflict: Option<gitcomet_core::domain::FileConflictKind>,
+    area: gitcomet_core::domain::DiffArea,
+) {
+    let path = path.into();
+    let file_status = gitcomet_core::domain::FileStatus {
+        path: path.clone(),
+        kind,
+        conflict,
+    };
+    let (staged, unstaged) = match area {
+        gitcomet_core::domain::DiffArea::Staged => (vec![file_status], vec![]),
+        gitcomet_core::domain::DiffArea::Unstaged => (vec![], vec![file_status]),
+    };
+    repo.status = gitcomet_state::model::Loadable::Ready(
+        gitcomet_core::domain::RepoStatus { staged, unstaged }.into(),
+    );
+    repo.diff_state.diff_target =
+        Some(gitcomet_core::domain::DiffTarget::WorkingTree { path, area });
+}
+
+/// Sets `repo.conflict_state.conflict_file_path` and `repo.conflict_state.conflict_file`.
+pub(super) fn set_test_conflict_file(
+    repo: &mut gitcomet_state::model::RepoState,
+    path: impl Into<std::path::PathBuf>,
+    base: impl Into<String>,
+    ours: impl Into<String>,
+    theirs: impl Into<String>,
+    current: impl Into<String>,
+) {
+    let path = path.into();
+    repo.conflict_state.conflict_file_path = Some(path.clone());
+    repo.conflict_state.conflict_file =
+        gitcomet_state::model::Loadable::Ready(Some(gitcomet_state::model::ConflictFile {
+            path,
+            base_bytes: None,
+            ours_bytes: None,
+            theirs_bytes: None,
+            current_bytes: None,
+            base: Some(base.into().into()),
+            ours: Some(ours.into().into()),
+            theirs: Some(theirs.into().into()),
+            current: Some(current.into().into()),
+        }));
+}
+
+pub(super) fn focus_diff_panel(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+) {
+    cx.update(|window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        let focus = main_pane.read(app).diff_panel_focus_handle.clone();
+        window.focus(&focus);
+        let _ = window.draw(app);
+    });
+}
+
+pub(super) fn disable_view_poller_for_test(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+) {
+    cx.update(|_window, app| {
+        view.update(app, |this, _cx| this.disable_poller_for_tests());
+    });
+}
+
+pub(super) const DEFAULT_MAIN_PANE_WAIT_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_secs(12);
+pub(super) const BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_secs(20);
+
+pub(super) fn wait_for_main_pane_condition<T, Ready, Snapshot>(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    description: &str,
+    is_ready: Ready,
+    snapshot: Snapshot,
+) where
+    T: std::fmt::Debug,
+    Ready: Fn(&MainPaneView) -> bool,
+    Snapshot: Fn(&MainPaneView) -> T,
+{
+    wait_for_main_pane_condition_with_timeout(
+        cx,
+        view,
+        description,
+        DEFAULT_MAIN_PANE_WAIT_TIMEOUT,
+        is_ready,
+        snapshot,
+    );
+}
+
+pub(super) fn wait_for_main_pane_condition_with_timeout<T, Ready, Snapshot>(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    description: &str,
+    timeout: std::time::Duration,
+    is_ready: Ready,
+    snapshot: Snapshot,
+) where
+    T: std::fmt::Debug,
+    Ready: Fn(&MainPaneView) -> bool,
+    Snapshot: Fn(&MainPaneView) -> T,
+{
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+
+        let ready = cx.update(|_window, app| {
+            let pane = view.read(app).main_pane.read(app);
+            is_ready(&pane)
+        });
+        if ready {
+            return;
+        }
+        if std::time::Instant::now() >= deadline {
+            let snapshot = cx.update(|_window, app| {
+                let pane = view.read(app).main_pane.read(app);
+                snapshot(&pane)
+            });
+            panic!("timed out waiting for {description}: {snapshot:?}");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+mod conflict;
+mod file_diff;
+mod file_status;
+mod large_file_diff;
+mod markdown;

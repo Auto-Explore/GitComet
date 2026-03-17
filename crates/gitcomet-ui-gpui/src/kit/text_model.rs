@@ -16,7 +16,7 @@ enum BufferId {
     Add,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Piece {
     buffer: BufferId,
     chunk_index: usize,
@@ -113,11 +113,12 @@ impl LineIndex {
             updated.push(shifted);
         }
 
-        updated.sort_unstable();
-        updated.dedup();
-        if updated.first().copied() != Some(0) {
-            updated.insert(0, 0);
-        }
+        // The three sections (prefix, inserted breaks, shifted suffix) are
+        // already in strictly increasing order with non-overlapping ranges:
+        //   prefix values        ≤ range.start
+        //   inserted break values ∈ (range.start, range.start + new_len]
+        //   shifted suffix values > range.start + new_len
+        // so sort/dedup is unnecessary.
         self.starts = Arc::<[usize]>::from(updated);
         debug_assert_eq!(self.starts.as_ref().first().copied(), Some(0));
         debug_assert!(
@@ -574,8 +575,8 @@ fn prepare_chunks_parallel(text: &str, ranges: &[Range<usize>]) -> Vec<Arc<str>>
     }
 
     let mut assignments = vec![Vec::<(usize, Range<usize>)>::new(); thread_count];
-    for (ix, range) in ranges.iter().cloned().enumerate() {
-        assignments[ix % thread_count].push((ix, range));
+    for (ix, range) in ranges.iter().enumerate() {
+        assignments[ix % thread_count].push((ix, range.clone()));
     }
 
     let mut worker_results = vec![Vec::<(usize, Arc<str>)>::new(); thread_count];
@@ -619,9 +620,9 @@ fn split_pieces_at(pieces: &[Piece], offset: usize) -> (Vec<Piece>, Vec<Piece>) 
     for piece in pieces {
         let piece_end = consumed.saturating_add(piece.len);
         if piece_end <= offset {
-            left.push(piece.clone());
+            left.push(*piece);
         } else if consumed >= offset {
-            right.push(piece.clone());
+            right.push(*piece);
         } else {
             let split_at = offset.saturating_sub(consumed).min(piece.len);
             if let Some(prefix) = piece.prefix(split_at) {
@@ -674,7 +675,7 @@ fn merge_adjacent_pieces(pieces: &mut Vec<Piece>) {
     }
 
     let mut merged = Vec::with_capacity(pieces.len());
-    let mut current = pieces[0].clone();
+    let mut current = pieces[0];
     for piece in pieces.iter().skip(1) {
         let contiguous = current.buffer == piece.buffer
             && current.chunk_index == piece.chunk_index
@@ -684,7 +685,7 @@ fn merge_adjacent_pieces(pieces: &mut Vec<Piece>) {
             continue;
         }
         merged.push(current);
-        current = piece.clone();
+        current = *piece;
     }
     merged.push(current);
     *pieces = merged;
@@ -885,6 +886,46 @@ mod tests {
         assert_eq!(inserted, 1..3);
         assert_eq!(model.as_str(), "a\n\nb");
         assert_eq!(model.line_starts(), &[0, 2, 3]);
+    }
+
+    #[test]
+    fn apply_edit_at_line_boundaries_stays_monotonic() {
+        // Exercises boundary conditions around the monotonic-output guarantee:
+        // edits exactly at newline offsets, multi-newline inserts replacing
+        // multi-newline ranges, and empty-range inserts at every line start.
+        let cases: &[(&str, Range<usize>, &str)] = &[
+            // Delete a newline exactly between two line starts.
+            ("a\nb\nc", 1..2, ""),
+            // Replace across multiple newlines with multiple newlines.
+            ("a\nb\nc\nd", 2..5, "X\nY\nZ"),
+            // Insert newlines at position 0.
+            ("abc", 0..0, "\n\n"),
+            // Insert at end after trailing newline.
+            ("a\n", 2..2, "b\nc"),
+            // Replace entire content.
+            ("old\ntext", 0..8, "new\n\nlines\n"),
+            // Delete range that spans from before a newline to after it.
+            ("ab\ncd\nef", 2..5, ""),
+            // Insert at every line start in a multi-line doc.
+            ("a\nb\nc\n", 0..0, "X"),
+            ("a\nb\nc\n", 2..2, "X"),
+            ("a\nb\nc\n", 4..4, "X"),
+            // Replace newline with newlines.
+            ("a\nb", 1..2, "\n\n"),
+        ];
+        for (text, range, inserted) in cases {
+            let mut model = TextModel::from_large_text(text);
+            model.replace_range(range.clone(), inserted);
+            let mut control = text.to_string();
+            replace_control(&mut control, range.clone(), inserted);
+            assert_eq!(model.as_str(), control, "text mismatch for edit {text:?}");
+            let expected_starts = line_starts_for_text(&control);
+            assert_eq!(
+                model.line_starts(),
+                expected_starts.as_slice(),
+                "line starts mismatch for edit on {text:?} [{range:?} -> {inserted:?}]"
+            );
+        }
     }
 
     #[test]

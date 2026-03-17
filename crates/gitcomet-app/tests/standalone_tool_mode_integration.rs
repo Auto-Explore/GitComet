@@ -616,7 +616,7 @@ fn standalone_mergetool_invalid_path_exits_two() {
     );
 }
 
-#[cfg(not(feature = "ui-gpui"))]
+#[cfg(not(feature = "ui-gpui-runtime"))]
 #[test]
 fn standalone_mergetool_gui_flag_without_ui_feature_exits_two() {
     let dir = tempfile::tempdir().unwrap();
@@ -1472,7 +1472,7 @@ fn standalone_difftool_rejects_fifo_input_exits_two() {
     );
 }
 
-#[cfg(not(feature = "ui-gpui"))]
+#[cfg(not(feature = "ui-gpui-runtime"))]
 #[test]
 fn standalone_difftool_gui_flag_without_ui_feature_exits_two() {
     let dir = tempfile::tempdir().unwrap();
