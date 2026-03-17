@@ -191,7 +191,8 @@ jobs:
           cp dist/gitcomet.rb tap-repo/Formula/gitcomet.rb
 
           pushd tap-repo >/dev/null
-          if git diff --quiet -- Formula/gitcomet.rb; then
+          git add Formula/gitcomet.rb
+          if git diff --cached --quiet -- Formula/gitcomet.rb; then
             echo "No formula changes detected; tap already up to date."
             popd >/dev/null
             exit 0
@@ -199,7 +200,6 @@ jobs:
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Formula/gitcomet.rb
           git commit -m "gitcomet ${TAG}"
           git push origin "HEAD:${TAP_BRANCH}"
           popd >/dev/null
