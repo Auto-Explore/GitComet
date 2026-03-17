@@ -295,6 +295,35 @@ fn is_macos_app_bundle_executable(path: &std::path::Path) -> bool {
 }
 
 #[cfg(all(target_os = "macos", feature = "ui-gpui-runtime"))]
+fn macos_user_app_bundle_path_with_home(home: Option<&std::path::Path>) -> std::path::PathBuf {
+    let base_dir = home
+        .map(|value| value.join("Library/Application Support/GitComet"))
+        .unwrap_or_else(|| std::env::temp_dir().join("GitComet"));
+    base_dir.join("GitComet.app")
+}
+
+#[cfg(all(target_os = "macos", feature = "ui-gpui-runtime"))]
+fn macos_user_app_bundle_path() -> std::path::PathBuf {
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    macos_user_app_bundle_path_with_home(home.as_deref())
+}
+
+#[cfg(all(target_os = "macos", feature = "ui-gpui-runtime"))]
+fn candidate_macos_app_bundle_paths(resolved_exe: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut candidates = Vec::with_capacity(2);
+    if let Some(bin_dir) = resolved_exe.parent() {
+        candidates.push(bin_dir.join("GitComet.app"));
+    }
+
+    let fallback = macos_user_app_bundle_path();
+    if !candidates.iter().any(|candidate| candidate == &fallback) {
+        candidates.push(fallback);
+    }
+
+    candidates
+}
+
+#[cfg(all(target_os = "macos", feature = "ui-gpui-runtime"))]
 fn maybe_relaunch_browser_from_macos_app_bundle() -> bool {
     if std::env::var_os(MACOS_BUNDLE_RELAUNCH_ENV).is_some() {
         return false;
@@ -308,16 +337,28 @@ fn maybe_relaunch_browser_from_macos_app_bundle() -> bool {
         return false;
     }
 
-    let Some(bin_dir) = resolved_exe.parent() else {
-        return false;
-    };
-    let app_bundle = bin_dir.join("GitComet.app");
-    let app_exe = match ensure_macos_dev_app_bundle(&resolved_exe, &app_bundle) {
-        Ok(path) => path,
-        Err(err) => {
-            eprintln!("Failed to prepare macOS app bundle: {err}");
-            return false;
+    let mut prep_errors = Vec::new();
+    let mut app_exe = None;
+    for app_bundle in candidate_macos_app_bundle_paths(&resolved_exe) {
+        match ensure_macos_dev_app_bundle(&resolved_exe, &app_bundle) {
+            Ok(path) => {
+                app_exe = Some(path);
+                break;
+            }
+            Err(err) => {
+                prep_errors.push(format!("{}: {err}", app_bundle.display()));
+            }
         }
+    }
+
+    let Some(app_exe) = app_exe else {
+        let details = if prep_errors.is_empty() {
+            "no app bundle destination available".to_string()
+        } else {
+            prep_errors.join("; ")
+        };
+        eprintln!("Failed to prepare macOS app bundle: {details}");
+        return false;
     };
 
     let mut relaunch = std::process::Command::new(app_exe);
@@ -717,8 +758,35 @@ mod tests {
         assert!(!is_macos_app_bundle_executable(&symlink_path));
 
         let resolved = resolve_executable_path_for_bundle_detection(&symlink_path);
-        assert_eq!(resolved, app_exe);
+        let expected = app_exe.canonicalize().unwrap();
+        assert_eq!(resolved, expected);
         assert!(is_macos_app_bundle_executable(&resolved));
+    }
+
+    #[test]
+    #[cfg(all(feature = "ui-gpui-runtime", target_os = "macos"))]
+    fn macos_user_app_bundle_path_uses_home_directory_when_available() {
+        let home = std::path::Path::new("/Users/example");
+        let bundle = macos_user_app_bundle_path_with_home(Some(home));
+        assert_eq!(
+            bundle,
+            std::path::PathBuf::from(
+                "/Users/example/Library/Application Support/GitComet/GitComet.app"
+            )
+        );
+    }
+
+    #[test]
+    #[cfg(all(feature = "ui-gpui-runtime", target_os = "macos"))]
+    fn candidate_macos_app_bundle_paths_include_executable_dir_and_fallback() {
+        let exe = std::path::Path::new("/opt/homebrew/bin/gitcomet");
+        let candidates = candidate_macos_app_bundle_paths(exe);
+
+        assert_eq!(
+            candidates.first(),
+            Some(&std::path::PathBuf::from("/opt/homebrew/bin/GitComet.app"))
+        );
+        assert_eq!(candidates.last(), Some(&macos_user_app_bundle_path()));
     }
 
     #[test]

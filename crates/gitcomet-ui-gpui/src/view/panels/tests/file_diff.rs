@@ -46,6 +46,7 @@ fn file_preview_renders_scrollable_syntax_highlighted_rows(cx: &mut gpui::TestAp
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
+    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(1);
     let workdir = std::env::temp_dir().join(format!("gitcomet_ui_test_{}", std::process::id()));
@@ -104,32 +105,40 @@ fn file_preview_renders_scrollable_syntax_highlighted_rows(cx: &mut gpui::TestAp
         let _ = window.draw(app);
     });
 
-    cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        let pane = main_pane.read(app);
-        let max_offset = pane
-            .worktree_preview_scroll
-            .0
-            .borrow()
-            .base_handle
-            .max_offset();
-        assert!(
-            max_offset.height > px(0.0),
-            "expected file preview to overflow and be scrollable"
-        );
-        assert!(
-            max_offset.width > px(0.0),
-            "expected file preview to overflow horizontally"
-        );
-
-        let Some(styled) = pane.worktree_preview_segments_cache_get(0) else {
-            panic!("expected first visible preview row to populate segment cache");
-        };
-        assert!(
-            !styled.highlights.is_empty(),
-            "expected syntax highlighting highlights for preview row"
-        );
-    });
+    wait_for_main_pane_condition_with_timeout(
+        cx,
+        &view,
+        "file preview first visible row syntax cache",
+        BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
+        |pane| {
+            let max_offset = pane
+                .worktree_preview_scroll
+                .0
+                .borrow()
+                .base_handle
+                .max_offset();
+            max_offset.height > px(0.0)
+                && max_offset.width > px(0.0)
+                && pane
+                    .worktree_preview_segments_cache_get(0)
+                    .is_some_and(|styled| !styled.highlights.is_empty())
+        },
+        |pane| {
+            let max_offset = pane
+                .worktree_preview_scroll
+                .0
+                .borrow()
+                .base_handle
+                .max_offset();
+            let row_cache = pane
+                .worktree_preview_segments_cache_get(0)
+                .map(styled_debug_info_with_styles);
+            format!(
+                "max_offset={max_offset:?} style_epoch={} cache_path={:?} row_cache={row_cache:?}",
+                pane.worktree_preview_style_cache_epoch, pane.worktree_preview_segments_cache_path,
+            )
+        },
+    );
 
     let _ = std::fs::remove_dir_all(&workdir);
 }

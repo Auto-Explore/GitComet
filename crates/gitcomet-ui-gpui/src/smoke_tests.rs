@@ -1601,6 +1601,11 @@ fn popover_closes_when_clicking_outside(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn titlebar_window_controls_update_tooltip_on_hover(cx: &mut gpui::TestAppContext) {
+    if cfg!(target_os = "macos") {
+        // The custom Min/Max/Close controls are only rendered on non-macOS.
+        return;
+    }
+
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         crate::view::GitCometView::new(store, events, None, window, cx)

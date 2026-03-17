@@ -1437,14 +1437,7 @@ fn mergetool_env_only_resolution_without_base() {
 #[test]
 fn clap_parses_difftool_subcommand() {
     let cli = Cli::try_parse_from([
-        "gitcomet",
-        "difftool",
-        "--local",
-        "/tmp/a",
-        "--remote",
-        "/tmp/b",
-        "--path",
-        "foo.txt",
+        "gitcomet", "difftool", "--local", "/tmp/a", "--remote", "/tmp/b", "--path", "foo.txt",
     ])
     .unwrap();
 

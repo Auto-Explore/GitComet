@@ -95,6 +95,8 @@ jobs:
           grep -q "gitcomet-v0.0.0-ci-linux-x86_64.tar.gz" dist/deployment-ci/gitcomet.rb
           grep -q 'libexec.install "GitComet.app"' dist/deployment-ci/gitcomet.rb
           grep -q 'bin.install_symlink libexec/"GitComet.app/Contents/MacOS/gitcomet"' dist/deployment-ci/gitcomet.rb
+          grep -q "def post_install" dist/deployment-ci/gitcomet.rb
+          grep -q 'launcher_link = apps_dir/"GitComet.app"' dist/deployment-ci/gitcomet.rb
           grep -q 'bin.install "gitcomet"' dist/deployment-ci/gitcomet.rb
 
       - name: Validate Homebrew tap initial publish detection

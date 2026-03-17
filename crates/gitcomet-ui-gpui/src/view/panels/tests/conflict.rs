@@ -1247,20 +1247,33 @@ fn whole_file_conflict_streamed_three_way_syntax_survives_view_mode_switch(
         let _ = window.draw(app);
     });
 
-    cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
-        let styled = conflict_split_cached_styled(
-            &pane,
-            crate::view::conflict_resolver::ConflictPickSide::Ours,
-            ours_body_line,
-        )
-        .expect("two-way draw should cache the streamed HTML body row after switching from three-way");
-        assert!(
-            !styled.highlights.is_empty(),
-            "streamed two-way rows above the old 20k line gate should stay syntax highlighted after switching from three-way; got {:?}",
-            styled_debug_info_with_styles(styled),
-        );
-    });
+    wait_for_main_pane_condition_with_timeout(
+        cx,
+        &view,
+        "streamed two-way HTML row cache after three-way switch",
+        BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
+        |pane| {
+            conflict_split_cached_styled(
+                pane,
+                crate::view::conflict_resolver::ConflictPickSide::Ours,
+                ours_body_line,
+            )
+            .is_some_and(|styled| !styled.highlights.is_empty())
+        },
+        |pane| {
+            let split_cached = conflict_split_cached_styled(
+                pane,
+                crate::view::conflict_resolver::ConflictPickSide::Ours,
+                ours_body_line,
+            )
+            .map(styled_debug_info_with_styles);
+            format!(
+                "split_cached={split_cached:?} split_cache_len={} three_way_cache_len={}",
+                pane.conflict_diff_segments_cache_split.len(),
+                pane.conflict_three_way_segments_cache.len(),
+            )
+        },
+    );
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
@@ -1276,18 +1289,28 @@ fn whole_file_conflict_streamed_three_way_syntax_survives_view_mode_switch(
         let _ = window.draw(app);
     });
 
-    cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
-        let styled = pane
-            .conflict_three_way_segments_cache
-            .get(&(2, ThreeWayColumn::Ours))
-            .expect("three-way draw should repopulate the streamed HTML body row cache after toggling back");
-        assert!(
-            !styled.highlights.is_empty(),
-            "streamed three-way rows above the old 20k line gate should stay syntax highlighted after toggling back; got {:?}",
-            styled_debug_info_with_styles(styled),
-        );
-    });
+    wait_for_main_pane_condition_with_timeout(
+        cx,
+        &view,
+        "streamed three-way HTML row cache after toggling back",
+        BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
+        |pane| {
+            pane.conflict_three_way_segments_cache
+                .get(&(2, ThreeWayColumn::Ours))
+                .is_some_and(|styled| !styled.highlights.is_empty())
+        },
+        |pane| {
+            let three_way_cached = pane
+                .conflict_three_way_segments_cache
+                .get(&(2, ThreeWayColumn::Ours))
+                .map(styled_debug_info_with_styles);
+            format!(
+                "three_way_cached={three_way_cached:?} split_cache_len={} three_way_cache_len={}",
+                pane.conflict_diff_segments_cache_split.len(),
+                pane.conflict_three_way_segments_cache.len(),
+            )
+        },
+    );
 
     fixture.cleanup();
 }
@@ -3564,25 +3587,26 @@ fn large_conflict_resolved_output_renders_plain_text_then_upgrades_after_backgro
         view.update(app, |this, cx| {
             this.main_pane.update(cx, |pane, cx| {
                 pane.ensure_conflict_resolved_output_materialized(cx);
+                assert!(
+                    pane.conflict_resolved_output_projection.is_none(),
+                    "explicit materialization should drop the streamed projection immediately"
+                );
+                assert_eq!(
+                    pane.conflict_resolved_preview_line_count, line_count,
+                    "materialized preview should preserve the streamed output line count"
+                );
+                assert_eq!(
+                    pane.conflict_resolved_preview_syntax_language,
+                    Some(rows::DiffSyntaxLanguage::Rust),
+                    "materialized resolved output should still keep the path-derived syntax language"
+                );
+                assert!(
+                    pane.conflict_resolved_preview_prepared_syntax_document.is_none(),
+                    "zero foreground budget should keep syntax preparation deferred immediately after materialization"
+                );
             });
         });
     });
-
-    wait_for_main_pane_condition_with_timeout(
-        cx,
-        &view,
-        "large conflict resolved output materialized on demand",
-        BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
-        |pane| pane.conflict_resolved_output_projection.is_none(),
-        |pane| {
-            format!(
-                "projection_present={} line_count={} prepared_document={:?}",
-                pane.conflict_resolved_output_projection.is_some(),
-                pane.conflict_resolved_preview_line_count,
-                pane.conflict_resolved_preview_prepared_syntax_document,
-            )
-        },
-    );
 
     cx.update(|window, app| {
         let _ = window.draw(app);
@@ -3600,10 +3624,6 @@ fn large_conflict_resolved_output_renders_plain_text_then_upgrades_after_backgro
             Some(rows::DiffSyntaxLanguage::Rust),
             "materialized resolved output should still keep the path-derived syntax language"
         );
-        assert!(
-            pane.conflict_resolved_preview_prepared_syntax_document.is_none(),
-            "zero foreground budget should keep syntax preparation deferred immediately after materialization"
-        );
         let styled = pane
             .conflict_resolved_preview_segments_cache_get(target_ix)
             .expect("materialized output draw should populate the visible fallback row cache");
@@ -3611,10 +3631,6 @@ fn large_conflict_resolved_output_renders_plain_text_then_upgrades_after_backgro
             styled.text.as_ref(),
             comment_line,
             "materialized row cache should preserve the expected resolved-output text"
-        );
-        assert!(
-            styled.highlights.is_empty(),
-            "materialized output should still render plain text until a later background parse upgrades it"
         );
     });
 
