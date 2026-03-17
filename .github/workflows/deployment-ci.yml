@@ -6,15 +6,21 @@ on:
     paths:
       - ".github/workflows/build-release-artifacts.yml"
       - ".github/workflows/deploy-homebrew-tap.yml"
+      - ".github/workflows/deploy-apt-repo.yml"
+      - ".github/workflows/release-manual-main.yml"
       - "scripts/package-macos.sh"
       - "scripts/generate-homebrew-formula.sh"
+      - "scripts/build-apt-repo.sh"
   push:
     branches: ["main"]
     paths:
       - ".github/workflows/build-release-artifacts.yml"
       - ".github/workflows/deploy-homebrew-tap.yml"
+      - ".github/workflows/deploy-apt-repo.yml"
+      - ".github/workflows/release-manual-main.yml"
       - "scripts/package-macos.sh"
       - "scripts/generate-homebrew-formula.sh"
+      - "scripts/build-apt-repo.sh"
   workflow_dispatch:
 
 permissions:
@@ -25,7 +31,7 @@ env:
 
 jobs:
   formula-script-validation:
-    name: Validate Homebrew formula generation script
+    name: Validate release helper scripts and workflow YAML
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -35,6 +41,16 @@ jobs:
         run: |
           bash -n scripts/package-macos.sh
           bash -n scripts/generate-homebrew-formula.sh
+          bash -n scripts/build-apt-repo.sh
+
+      - name: Validate workflow YAML
+        run: |
+          ruby -e 'require "yaml"; %w[
+            .github/workflows/build-release-artifacts.yml
+            .github/workflows/deploy-homebrew-tap.yml
+            .github/workflows/deploy-apt-repo.yml
+            .github/workflows/release-manual-main.yml
+          ].each { |path| YAML.load_file(path) }'
 
       - name: Generate formula from synthetic artifacts
         run: |
@@ -55,6 +71,96 @@ jobs:
           ruby -c dist/deployment-ci/gitcomet.rb
           grep -q "on_linux do" dist/deployment-ci/gitcomet.rb
           grep -q "gitcomet-v0.0.0-ci-linux-x86_64.tar.gz" dist/deployment-ci/gitcomet.rb
+
+  apt-repo-generation-smoke:
+    name: Validate APT repo generation script
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Debian repo tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dpkg-dev gnupg
+
+      - name: Build synthetic .deb
+        run: |
+          set -euo pipefail
+          pkg_root="dist/apt-ci/pkg"
+          mkdir -p "${pkg_root}/DEBIAN" "${pkg_root}/usr/bin"
+
+          printf '%s\n' '#!/usr/bin/env bash' 'echo "GitComet CI"' > "${pkg_root}/usr/bin/gitcomet-app"
+          chmod +x "${pkg_root}/usr/bin/gitcomet-app"
+
+          {
+            echo "Package: gitcomet"
+            echo "Version: 0.0.0~ci1"
+            echo "Architecture: amd64"
+            echo "Maintainer: GitComet CI <ci@example.invalid>"
+            echo "Description: Synthetic GitComet package for deployment CI."
+          } > "${pkg_root}/DEBIAN/control"
+
+          dpkg-deb --build "${pkg_root}" "dist/apt-ci/gitcomet_0.0.0~ci1_amd64.deb"
+
+      - name: Generate temporary signing key
+        env:
+          GNUPGHOME: ${{ github.workspace }}/dist/apt-ci/gnupg
+        run: |
+          set -euo pipefail
+          mkdir -p "$GNUPGHOME"
+          chmod 700 "$GNUPGHOME"
+
+          {
+            echo "Key-Type: RSA"
+            echo "Key-Length: 3072"
+            echo "Name-Real: GitComet CI"
+            echo "Name-Email: ci@example.invalid"
+            echo "Expire-Date: 0"
+            echo "%no-protection"
+            echo "%commit"
+          } > dist/apt-ci/ci-gpg.batch
+
+          gpg --batch --generate-key dist/apt-ci/ci-gpg.batch
+          key_id="$(gpg --batch --list-secret-keys --with-colons | awk -F: '$1 == "sec" { print $5; exit }')"
+          echo "APT_TEST_GPG_KEY_ID=$key_id" >> "$GITHUB_ENV"
+
+      - name: Build signed APT repo
+        env:
+          GNUPGHOME: ${{ github.workspace }}/dist/apt-ci/gnupg
+        run: |
+          set -euo pipefail
+          scripts/build-apt-repo.sh \
+            --repo-dir dist/apt-ci/repo \
+            --deb dist/apt-ci/gitcomet_0.0.0~ci1_amd64.deb \
+            --distribution stable \
+            --component main \
+            --architecture amd64 \
+            --origin GitComet \
+            --label GitComet \
+            --description "GitComet deployment CI repository" \
+            --repo-url https://example.invalid/gitcomet/apt \
+            --signing-key "${APT_TEST_GPG_KEY_ID}"
+
+      - name: Validate generated repo
+        env:
+          GNUPGHOME: ${{ github.workspace }}/dist/apt-ci/verify-gnupg
+        run: |
+          set -euo pipefail
+          test -f dist/apt-ci/repo/dists/stable/main/binary-amd64/Packages
+          test -f dist/apt-ci/repo/dists/stable/main/binary-amd64/Packages.gz
+          test -f dist/apt-ci/repo/dists/stable/InRelease
+          test -f dist/apt-ci/repo/dists/stable/Release.gpg
+          test -f dist/apt-ci/repo/gitcomet-archive-keyring.gpg
+          test -f dist/apt-ci/repo/gitcomet.sources
+
+          grep -q "^Package: gitcomet$" dist/apt-ci/repo/dists/stable/main/binary-amd64/Packages
+          grep -q "^Filename: pool/main/g/gitcomet/gitcomet_0.0.0~ci1_amd64.deb$" dist/apt-ci/repo/dists/stable/main/binary-amd64/Packages
+          grep -q "^URIs: https://example.invalid/gitcomet/apt$" dist/apt-ci/repo/gitcomet.sources
+
+          mkdir -p "$GNUPGHOME"
+          chmod 700 "$GNUPGHOME"
+          gpg --batch --no-default-keyring --keyring dist/apt-ci/repo/gitcomet-archive-keyring.gpg --verify dist/apt-ci/repo/dists/stable/InRelease >/dev/null
 
   macos-packaging-smoke:
     name: macOS packaging smoke (${{ matrix.arch }})

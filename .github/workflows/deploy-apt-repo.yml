@@ -1,0 +1,587 @@
+name: Deploy APT Repository
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+      version:
+        required: true
+        type: string
+      storage_account:
+        required: false
+        type: string
+        default: ""
+      storage_container:
+        required: false
+        type: string
+        default: "apt"
+      storage_prefix:
+        required: false
+        type: string
+        default: ""
+      repo_base_url:
+        required: false
+        type: string
+        default: ""
+      distribution:
+        required: false
+        type: string
+        default: "stable"
+      component:
+        required: false
+        type: string
+        default: "main"
+      architecture:
+        required: false
+        type: string
+        default: "amd64"
+      repo_origin:
+        required: false
+        type: string
+        default: "GitComet"
+      repo_label:
+        required: false
+        type: string
+        default: "GitComet"
+      repo_description:
+        required: false
+        type: string
+        default: "GitComet APT repository"
+      container_public_access:
+        required: false
+        type: string
+        default: "blob"
+      dry_run:
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      APT_GPG_PRIVATE_KEY:
+        required: false
+      APT_GPG_PASSPHRASE:
+        required: false
+      AZURE_CLIENT_ID:
+        required: false
+      AZURE_TENANT_ID:
+        required: false
+      AZURE_SUBSCRIPTION_ID:
+        required: false
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (e.g. 0.2.0 or v0.2.0)"
+        required: true
+        type: string
+      tag:
+        description: "Optional tag override (e.g. v0.2.0). Defaults to v<version>."
+        required: false
+        type: string
+      storage_account:
+        description: "Azure Storage account name"
+        required: false
+        default: ""
+        type: string
+      storage_container:
+        description: "Azure Blob container that holds the APT repository"
+        required: false
+        default: "apt"
+        type: string
+      storage_prefix:
+        description: "Optional blob prefix within the container"
+        required: false
+        default: ""
+        type: string
+      repo_base_url:
+        description: "Public HTTPS base URL for the APT repo root"
+        required: false
+        default: ""
+        type: string
+      distribution:
+        description: "APT suite/codename"
+        required: false
+        default: "stable"
+        type: string
+      component:
+        description: "APT component"
+        required: false
+        default: "main"
+        type: string
+      architecture:
+        description: "APT architecture"
+        required: false
+        default: "amd64"
+        type: string
+      repo_origin:
+        description: "Origin metadata in Release file"
+        required: false
+        default: "GitComet"
+        type: string
+      repo_label:
+        description: "Label metadata in Release file"
+        required: false
+        default: "GitComet"
+        type: string
+      repo_description:
+        description: "Description metadata in Release file"
+        required: false
+        default: "GitComet APT repository"
+        type: string
+      container_public_access:
+        description: "Public access used only when the blob container must be created"
+        required: false
+        default: "blob"
+        type: choice
+        options:
+          - blob
+          - container
+          - off
+      dry_run:
+        description: "Build the signed repo locally without uploading to Azure"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-apt-repo-${{ inputs.tag || github.event.inputs.tag || inputs.version || github.event.inputs.version || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Publish .deb to Azure-hosted APT repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Normalize inputs
+        id: norm
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          DISPATCH_TAG: ${{ github.event.inputs.tag }}
+          INPUT_VERSION: ${{ inputs.version }}
+          DISPATCH_VERSION: ${{ github.event.inputs.version }}
+          INPUT_STORAGE_ACCOUNT: ${{ inputs.storage_account }}
+          DISPATCH_STORAGE_ACCOUNT: ${{ github.event.inputs.storage_account }}
+          INPUT_STORAGE_CONTAINER: ${{ inputs.storage_container }}
+          DISPATCH_STORAGE_CONTAINER: ${{ github.event.inputs.storage_container }}
+          INPUT_STORAGE_PREFIX: ${{ inputs.storage_prefix }}
+          DISPATCH_STORAGE_PREFIX: ${{ github.event.inputs.storage_prefix }}
+          INPUT_REPO_BASE_URL: ${{ inputs.repo_base_url }}
+          DISPATCH_REPO_BASE_URL: ${{ github.event.inputs.repo_base_url }}
+          INPUT_DISTRIBUTION: ${{ inputs.distribution }}
+          DISPATCH_DISTRIBUTION: ${{ github.event.inputs.distribution }}
+          INPUT_COMPONENT: ${{ inputs.component }}
+          DISPATCH_COMPONENT: ${{ github.event.inputs.component }}
+          INPUT_ARCHITECTURE: ${{ inputs.architecture }}
+          DISPATCH_ARCHITECTURE: ${{ github.event.inputs.architecture }}
+          INPUT_REPO_ORIGIN: ${{ inputs.repo_origin }}
+          DISPATCH_REPO_ORIGIN: ${{ github.event.inputs.repo_origin }}
+          INPUT_REPO_LABEL: ${{ inputs.repo_label }}
+          DISPATCH_REPO_LABEL: ${{ github.event.inputs.repo_label }}
+          INPUT_REPO_DESCRIPTION: ${{ inputs.repo_description }}
+          DISPATCH_REPO_DESCRIPTION: ${{ github.event.inputs.repo_description }}
+          INPUT_CONTAINER_PUBLIC_ACCESS: ${{ inputs.container_public_access }}
+          DISPATCH_CONTAINER_PUBLIC_ACCESS: ${{ github.event.inputs.container_public_access }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+          DISPATCH_DRY_RUN: ${{ github.event.inputs.dry_run }}
+        run: |
+          set -euo pipefail
+
+          tag="${INPUT_TAG:-${DISPATCH_TAG:-}}"
+          version="${INPUT_VERSION:-${DISPATCH_VERSION:-}}"
+          storage_account="${INPUT_STORAGE_ACCOUNT:-${DISPATCH_STORAGE_ACCOUNT:-}}"
+          storage_container="${INPUT_STORAGE_CONTAINER:-${DISPATCH_STORAGE_CONTAINER:-apt}}"
+          storage_prefix="${INPUT_STORAGE_PREFIX:-${DISPATCH_STORAGE_PREFIX:-}}"
+          repo_base_url="${INPUT_REPO_BASE_URL:-${DISPATCH_REPO_BASE_URL:-}}"
+          distribution="${INPUT_DISTRIBUTION:-${DISPATCH_DISTRIBUTION:-stable}}"
+          component="${INPUT_COMPONENT:-${DISPATCH_COMPONENT:-main}}"
+          architecture="${INPUT_ARCHITECTURE:-${DISPATCH_ARCHITECTURE:-amd64}}"
+          repo_origin="${INPUT_REPO_ORIGIN:-${DISPATCH_REPO_ORIGIN:-GitComet}}"
+          repo_label="${INPUT_REPO_LABEL:-${DISPATCH_REPO_LABEL:-GitComet}}"
+          repo_description="${INPUT_REPO_DESCRIPTION:-${DISPATCH_REPO_DESCRIPTION:-GitComet APT repository}}"
+          container_public_access="${INPUT_CONTAINER_PUBLIC_ACCESS:-${DISPATCH_CONTAINER_PUBLIC_ACCESS:-blob}}"
+          dry_run="${INPUT_DRY_RUN:-${DISPATCH_DRY_RUN:-false}}"
+
+          tag="$(echo "$tag" | tr -d '[:space:]')"
+          version="$(echo "$version" | tr -d '[:space:]')"
+          storage_account="$(echo "$storage_account" | tr -d '[:space:]')"
+          storage_container="$(echo "$storage_container" | tr -d '[:space:]')"
+          storage_prefix="$(echo "$storage_prefix" | sed 's#^/*##;s#/*$##')"
+          repo_base_url="$(echo "$repo_base_url" | sed 's#[[:space:]]##g;s#/*$##')"
+          distribution="$(echo "$distribution" | tr -d '[:space:]')"
+          component="$(echo "$component" | tr -d '[:space:]')"
+          architecture="$(echo "$architecture" | tr -d '[:space:]')"
+          container_public_access="$(echo "$container_public_access" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
+          dry_run="$(echo "$dry_run" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
+
+          if [ -z "$version" ]; then
+            echo "::error title=Missing version::Version is required."
+            exit 1
+          fi
+
+          version="${version#v}"
+          if [ -z "$tag" ]; then
+            tag="v${version}"
+          fi
+
+          if [[ "$tag" != v* ]]; then
+            tag="v${tag}"
+          fi
+
+          if [ "$tag" != "v${version}" ]; then
+            echo "::error title=Tag/version mismatch::Tag '$tag' does not match version '$version'."
+            exit 1
+          fi
+
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]]; then
+            echo "::error title=Invalid version::Expected semver like 1.2.3 or 1.2.3-rc.1."
+            exit 1
+          fi
+
+          if ! [[ "$distribution" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+            echo "::error title=Invalid distribution::distribution '$distribution' is not a valid APT suite/codename."
+            exit 1
+          fi
+
+          if ! [[ "$component" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+            echo "::error title=Invalid component::component '$component' is not valid."
+            exit 1
+          fi
+
+          if ! [[ "$architecture" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+            echo "::error title=Invalid architecture::architecture '$architecture' is not valid."
+            exit 1
+          fi
+
+          case "$container_public_access" in
+            blob|container|off) ;;
+            *)
+              echo "::error title=Invalid public access::container_public_access must be one of blob, container, or off."
+              exit 1
+              ;;
+          esac
+
+          if [[ "$dry_run" != "true" && "$dry_run" != "false" ]]; then
+            echo "::error title=Invalid dry_run::dry_run must be true or false."
+            exit 1
+          fi
+
+          if [ "$dry_run" != "true" ] && [ -z "$storage_account" ]; then
+            echo "::error title=Missing storage account::storage_account is required for live publication."
+            exit 1
+          fi
+
+          if [ -z "$repo_base_url" ] && [ -n "$storage_account" ] && [ "$storage_container" != '$web' ]; then
+            repo_base_url="https://${storage_account}.blob.core.windows.net/${storage_container}"
+            if [ -n "$storage_prefix" ]; then
+              repo_base_url="${repo_base_url}/${storage_prefix}"
+            fi
+          fi
+
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "storage_account=$storage_account" >> "$GITHUB_OUTPUT"
+          echo "storage_container=$storage_container" >> "$GITHUB_OUTPUT"
+          echo "storage_prefix=$storage_prefix" >> "$GITHUB_OUTPUT"
+          echo "repo_base_url=$repo_base_url" >> "$GITHUB_OUTPUT"
+          echo "distribution=$distribution" >> "$GITHUB_OUTPUT"
+          echo "component=$component" >> "$GITHUB_OUTPUT"
+          echo "architecture=$architecture" >> "$GITHUB_OUTPUT"
+          echo "repo_origin=$repo_origin" >> "$GITHUB_OUTPUT"
+          echo "repo_label=$repo_label" >> "$GITHUB_OUTPUT"
+          echo "repo_description=$repo_description" >> "$GITHUB_OUTPUT"
+          echo "container_public_access=$container_public_access" >> "$GITHUB_OUTPUT"
+          echo "dry_run=$dry_run" >> "$GITHUB_OUTPUT"
+
+      - name: Validate live publish secrets
+        if: ${{ steps.norm.outputs.dry_run != 'true' }}
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          APT_GPG_PRIVATE_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${AZURE_CLIENT_ID:-}" ] || [ -z "${AZURE_TENANT_ID:-}" ] || [ -z "${AZURE_SUBSCRIPTION_ID:-}" ]; then
+            echo "::error title=Missing Azure OIDC secrets::Set AZURE_CLIENT_ID, AZURE_TENANT_ID, and AZURE_SUBSCRIPTION_ID."
+            exit 1
+          fi
+          if [ -z "${APT_GPG_PRIVATE_KEY:-}" ]; then
+            echo "::error title=Missing APT signing key::Set APT_GPG_PRIVATE_KEY for live APT publication."
+            exit 1
+          fi
+
+      - name: Download .deb from GitHub release
+        id: deb
+        run: |
+          set -euo pipefail
+          mkdir -p dist/apt-release
+          gh release view "${{ steps.norm.outputs.tag }}" --repo "$GITHUB_REPOSITORY" >/dev/null
+          gh release download "${{ steps.norm.outputs.tag }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "gitcomet_*_${{ steps.norm.outputs.architecture }}.deb" \
+            --dir dist/apt-release \
+            --clobber
+
+          mapfile -t debs < <(find dist/apt-release -maxdepth 1 -type f -name "gitcomet_*_${{ steps.norm.outputs.architecture }}.deb" | LC_ALL=C sort)
+          if [ "${#debs[@]}" -ne 1 ]; then
+            echo "::error title=Unexpected .deb asset count::Expected exactly one Debian package for architecture '${{ steps.norm.outputs.architecture }}'."
+            ls -lah dist/apt-release >&2 || true
+            exit 1
+          fi
+
+          echo "path=${debs[0]}" >> "$GITHUB_OUTPUT"
+          echo "name=$(basename "${debs[0]}")" >> "$GITHUB_OUTPUT"
+
+      - name: Install APT repository tooling
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y dpkg-dev gnupg
+
+      - name: Prepare signing key
+        id: gpg
+        env:
+          APT_GPG_PRIVATE_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+
+          export GNUPGHOME="${RUNNER_TEMP}/gnupg"
+          mkdir -p "$GNUPGHOME"
+          chmod 700 "$GNUPGHOME"
+
+          if [ -n "${APT_GPG_PRIVATE_KEY:-}" ]; then
+            key_file="${RUNNER_TEMP}/apt-private-key.asc"
+            if printf '%s' "$APT_GPG_PRIVATE_KEY" | grep -q "BEGIN PGP PRIVATE KEY BLOCK"; then
+              printf '%s' "$APT_GPG_PRIVATE_KEY" > "$key_file"
+            else
+              printf '%s' "$APT_GPG_PRIVATE_KEY" | base64 -d > "$key_file"
+            fi
+            gpg --batch --import "$key_file"
+          else
+            {
+              echo "Key-Type: RSA"
+              echo "Key-Length: 3072"
+              echo "Name-Real: GitComet APT Dry Run"
+              echo "Name-Email: ci@example.invalid"
+              echo "Expire-Date: 0"
+              echo "%no-protection"
+              echo "%commit"
+            } > "${RUNNER_TEMP}/apt-dry-run-key.batch"
+            gpg --batch --generate-key "${RUNNER_TEMP}/apt-dry-run-key.batch"
+          fi
+
+          signing_key="$(gpg --batch --list-secret-keys --with-colons | awk -F: '$1 == "sec" { print $5; exit }')"
+          if [ -z "$signing_key" ]; then
+            echo "::error title=Missing signing key::No secret key available after import/generation."
+            exit 1
+          fi
+
+          echo "gnupghome=$GNUPGHOME" >> "$GITHUB_OUTPUT"
+          echo "signing_key=$signing_key" >> "$GITHUB_OUTPUT"
+
+      - name: Login to Azure
+        if: ${{ steps.norm.outputs.dry_run != 'true' }}
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Download existing repository snapshot
+        if: ${{ steps.norm.outputs.dry_run != 'true' }}
+        env:
+          AZURE_CONFIG_DIR: ${{ runner.temp }}/azure-config
+          STORAGE_ACCOUNT: ${{ steps.norm.outputs.storage_account }}
+          STORAGE_CONTAINER: ${{ steps.norm.outputs.storage_container }}
+          STORAGE_PREFIX: ${{ steps.norm.outputs.storage_prefix }}
+          CONTAINER_PUBLIC_ACCESS: ${{ steps.norm.outputs.container_public_access }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p "$AZURE_CONFIG_DIR"
+          mkdir -p dist/apt-repo
+          : > dist/apt-existing-blobs.txt
+
+          exists="$(az storage container exists \
+            --auth-mode login \
+            --account-name "$STORAGE_ACCOUNT" \
+            --name "$STORAGE_CONTAINER" \
+            --query exists \
+            -o tsv)"
+
+          if [ "$exists" != "true" ]; then
+            az storage container create \
+              --auth-mode login \
+              --account-name "$STORAGE_ACCOUNT" \
+              --name "$STORAGE_CONTAINER" \
+              --public-access "$CONTAINER_PUBLIC_ACCESS" \
+              --output none
+          fi
+
+          blob_prefix="$STORAGE_PREFIX"
+          if [ -n "$blob_prefix" ]; then
+            blob_prefix="${blob_prefix}/"
+          fi
+
+          mapfile -t existing_blobs < <(
+            az storage blob list \
+              --auth-mode login \
+              --account-name "$STORAGE_ACCOUNT" \
+              --container-name "$STORAGE_CONTAINER" \
+              --prefix "$blob_prefix" \
+              --num-results "*" \
+              --query "[].name" \
+              -o tsv
+          )
+
+          if [ "${#existing_blobs[@]}" -eq 0 ]; then
+            exit 0
+          fi
+
+          printf '%s\n' "${existing_blobs[@]}" > dist/apt-existing-blobs.txt
+
+          for blob in "${existing_blobs[@]}"; do
+            rel_path="${blob#$blob_prefix}"
+            target_path="dist/apt-repo/${rel_path}"
+            mkdir -p "$(dirname "$target_path")"
+            az storage blob download \
+              --auth-mode login \
+              --account-name "$STORAGE_ACCOUNT" \
+              --container-name "$STORAGE_CONTAINER" \
+              --name "$blob" \
+              --file "$target_path" \
+              --overwrite true \
+              --no-progress \
+              --output none
+          done
+
+      - name: Start with an empty repository tree
+        if: ${{ steps.norm.outputs.dry_run == 'true' }}
+        run: mkdir -p dist/apt-repo
+
+      - name: Build signed APT repository
+        env:
+          GNUPGHOME: ${{ steps.gpg.outputs.gnupghome }}
+          APT_GPG_PASSPHRASE: ${{ secrets.APT_GPG_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          args=(
+            scripts/build-apt-repo.sh
+            --repo-dir dist/apt-repo
+            --deb "${{ steps.deb.outputs.path }}"
+            --distribution "${{ steps.norm.outputs.distribution }}"
+            --component "${{ steps.norm.outputs.component }}"
+            --architecture "${{ steps.norm.outputs.architecture }}"
+            --origin "${{ steps.norm.outputs.repo_origin }}"
+            --label "${{ steps.norm.outputs.repo_label }}"
+            --description "${{ steps.norm.outputs.repo_description }}"
+            --signing-key "${{ steps.gpg.outputs.signing_key }}"
+          )
+
+          if [ -n "${{ steps.norm.outputs.repo_base_url }}" ]; then
+            args+=(--repo-url "${{ steps.norm.outputs.repo_base_url }}")
+          fi
+
+          if [ -n "${APT_GPG_PASSPHRASE:-}" ]; then
+            args+=(--gpg-passphrase "$APT_GPG_PASSPHRASE")
+          fi
+
+          "${args[@]}"
+
+      - name: Upload APT repository to Azure Blob Storage
+        if: ${{ steps.norm.outputs.dry_run != 'true' }}
+        env:
+          AZURE_CONFIG_DIR: ${{ runner.temp }}/azure-config
+          STORAGE_ACCOUNT: ${{ steps.norm.outputs.storage_account }}
+          STORAGE_CONTAINER: ${{ steps.norm.outputs.storage_container }}
+          STORAGE_PREFIX: ${{ steps.norm.outputs.storage_prefix }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p "$AZURE_CONFIG_DIR"
+          : > dist/apt-uploaded-blobs.txt
+
+          while IFS= read -r -d '' file_path; do
+            rel_path="${file_path#dist/apt-repo/}"
+            blob_name="$rel_path"
+            if [ -n "$STORAGE_PREFIX" ]; then
+              blob_name="${STORAGE_PREFIX}/${rel_path}"
+            fi
+
+            az storage blob upload \
+              --auth-mode login \
+              --account-name "$STORAGE_ACCOUNT" \
+              --container-name "$STORAGE_CONTAINER" \
+              --name "$blob_name" \
+              --file "$file_path" \
+              --overwrite true \
+              --no-progress \
+              --output none
+
+            printf '%s\n' "$blob_name" >> dist/apt-uploaded-blobs.txt
+          done < <(find dist/apt-repo -type f -print0 | sort -z)
+
+      - name: Delete stale blobs removed from the repo tree
+        if: ${{ steps.norm.outputs.dry_run != 'true' }}
+        env:
+          AZURE_CONFIG_DIR: ${{ runner.temp }}/azure-config
+          STORAGE_ACCOUNT: ${{ steps.norm.outputs.storage_account }}
+          STORAGE_CONTAINER: ${{ steps.norm.outputs.storage_container }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p "$AZURE_CONFIG_DIR"
+          touch dist/apt-existing-blobs.txt dist/apt-uploaded-blobs.txt
+
+          sort -u dist/apt-existing-blobs.txt > "${RUNNER_TEMP}/apt-existing.txt"
+          sort -u dist/apt-uploaded-blobs.txt > "${RUNNER_TEMP}/apt-uploaded.txt"
+          comm -23 "${RUNNER_TEMP}/apt-existing.txt" "${RUNNER_TEMP}/apt-uploaded.txt" > "${RUNNER_TEMP}/apt-stale.txt" || true
+
+          if [ ! -s "${RUNNER_TEMP}/apt-stale.txt" ]; then
+            exit 0
+          fi
+
+          while IFS= read -r blob_name; do
+            [ -n "$blob_name" ] || continue
+            az storage blob delete \
+              --auth-mode login \
+              --account-name "$STORAGE_ACCOUNT" \
+              --container-name "$STORAGE_CONTAINER" \
+              --name "$blob_name" \
+              --delete-snapshots include \
+              --output none
+          done < "${RUNNER_TEMP}/apt-stale.txt"
+
+      - name: Emit deployment summary
+        run: |
+          set -euo pipefail
+          uploaded="yes"
+          if [ "${{ steps.norm.outputs.dry_run }}" = "true" ]; then
+            uploaded="no (dry run)"
+          fi
+
+          {
+            echo "### APT repository deployment"
+            echo ""
+            echo "- Release: \`${{ steps.norm.outputs.tag }}\`"
+            echo "- Debian package: \`${{ steps.deb.outputs.name }}\`"
+            echo "- Distribution: \`${{ steps.norm.outputs.distribution }}\`"
+            echo "- Component: \`${{ steps.norm.outputs.component }}\`"
+            echo "- Architecture: \`${{ steps.norm.outputs.architecture }}\`"
+            echo "- Azure target: \`${{ steps.norm.outputs.storage_account }}/${{ steps.norm.outputs.storage_container }}\`"
+            echo "- Prefix: \`${{ steps.norm.outputs.storage_prefix }}\`"
+            echo "- Public repo URL: \`${{ steps.norm.outputs.repo_base_url }}\`"
+            echo "- Uploaded: \`${uploaded}\`"
+            echo ""
+            echo "Generated files:"
+            find dist/apt-repo -type f | sed 's#^dist/apt-repo/#- `#;s#$#`#'
+          } >> "$GITHUB_STEP_SUMMARY"
