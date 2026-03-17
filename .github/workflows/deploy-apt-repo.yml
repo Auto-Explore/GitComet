@@ -64,12 +64,6 @@ on:
         required: false
       AZURE_STORAGE_ACCOUNT_KEY:
         required: false
-      AZURE_CLIENT_ID:
-        required: false
-      AZURE_TENANT_ID:
-        required: false
-      AZURE_SUBSCRIPTION_ID:
-        required: false
   workflow_dispatch:
     inputs:
       version:
@@ -147,7 +141,6 @@ on:
 
 permissions:
   contents: read
-  id-token: write
 
 concurrency:
   group: deploy-apt-repo-${{ inputs.tag || github.event.inputs.tag || inputs.version || github.event.inputs.version || github.run_id }}
@@ -305,23 +298,13 @@ jobs:
 
       - name: Validate live publish credentials
         if: ${{ steps.norm.outputs.dry_run != 'true' }}
-        id: auth
         env:
           AZURE_STORAGE_ACCOUNT_KEY: ${{ secrets.AZURE_STORAGE_ACCOUNT_KEY }}
-          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
           APT_GPG_PRIVATE_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
         run: |
           set -euo pipefail
-          auth_mode=""
-
-          if [ -n "${AZURE_STORAGE_ACCOUNT_KEY:-}" ]; then
-            auth_mode="account-key"
-          elif [ -n "${AZURE_CLIENT_ID:-}" ] && [ -n "${AZURE_TENANT_ID:-}" ] && [ -n "${AZURE_SUBSCRIPTION_ID:-}" ]; then
-            auth_mode="oidc"
-          else
-            echo "::error title=Missing Azure publish credentials::Set AZURE_STORAGE_ACCOUNT_KEY, or set AZURE_CLIENT_ID, AZURE_TENANT_ID, and AZURE_SUBSCRIPTION_ID."
+          if [ -z "${AZURE_STORAGE_ACCOUNT_KEY:-}" ]; then
+            echo "::error title=Missing Azure publish credentials::Set AZURE_STORAGE_ACCOUNT_KEY for Azure Blob Storage publication."
             exit 1
           fi
 
@@ -329,8 +312,6 @@ jobs:
             echo "::error title=Missing APT signing key::Set APT_GPG_PRIVATE_KEY for live APT publication."
             exit 1
           fi
-
-          echo "mode=$auth_mode" >> "$GITHUB_OUTPUT"
 
       - name: Download .deb from GitHub release
         id: deb
@@ -401,14 +382,6 @@ jobs:
           echo "gnupghome=$GNUPGHOME" >> "$GITHUB_OUTPUT"
           echo "signing_key=$signing_key" >> "$GITHUB_OUTPUT"
 
-      - name: Login to Azure
-        if: ${{ steps.norm.outputs.dry_run != 'true' && steps.auth.outputs.mode == 'oidc' }}
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
       - name: Download existing repository snapshot
         if: ${{ steps.norm.outputs.dry_run != 'true' }}
         env:
@@ -425,15 +398,10 @@ jobs:
           mkdir -p dist/apt-repo
           : > dist/apt-existing-blobs.txt
 
-          auth_args=(--auth-mode login)
-          if [ -n "${AZURE_STORAGE_ACCOUNT_KEY:-}" ]; then
-            auth_args=(--account-key "$AZURE_STORAGE_ACCOUNT_KEY")
-          fi
-
           exists="$(az storage container exists \
             --account-name "$STORAGE_ACCOUNT" \
             --name "$STORAGE_CONTAINER" \
-            "${auth_args[@]}" \
+            --account-key "$AZURE_STORAGE_ACCOUNT_KEY" \
             --query exists \
             -o tsv)"
 
@@ -441,7 +409,7 @@ jobs:
             az storage container create \
               --account-name "$STORAGE_ACCOUNT" \
               --name "$STORAGE_CONTAINER" \
-              "${auth_args[@]}" \
+              --account-key "$AZURE_STORAGE_ACCOUNT_KEY" \
               --public-access "$CONTAINER_PUBLIC_ACCESS" \
               --output none
           fi
@@ -455,7 +423,7 @@ jobs:
             az storage blob list \
               --account-name "$STORAGE_ACCOUNT" \
               --container-name "$STORAGE_CONTAINER" \
-              "${auth_args[@]}" \
+              --account-key "$AZURE_STORAGE_ACCOUNT_KEY" \
               --prefix "$blob_prefix" \
               --num-results "*" \
               --query "[].name" \
@@ -475,7 +443,7 @@ jobs:
             az storage blob download \
               --account-name "$STORAGE_ACCOUNT" \
               --container-name "$STORAGE_CONTAINER" \
-              "${auth_args[@]}" \
+              --account-key "$AZURE_STORAGE_ACCOUNT_KEY" \
               --name "$blob" \
               --file "$target_path" \
               --overwrite true \
@@ -530,11 +498,6 @@ jobs:
           mkdir -p "$AZURE_CONFIG_DIR"
           : > dist/apt-uploaded-blobs.txt
 
-          auth_args=(--auth-mode login)
-          if [ -n "${AZURE_STORAGE_ACCOUNT_KEY:-}" ]; then
-            auth_args=(--account-key "$AZURE_STORAGE_ACCOUNT_KEY")
-          fi
-
           while IFS= read -r -d '' file_path; do
             rel_path="${file_path#dist/apt-repo/}"
             blob_name="$rel_path"
@@ -545,7 +508,7 @@ jobs:
             az storage blob upload \
               --account-name "$STORAGE_ACCOUNT" \
               --container-name "$STORAGE_CONTAINER" \
-              "${auth_args[@]}" \
+              --account-key "$AZURE_STORAGE_ACCOUNT_KEY" \
               --name "$blob_name" \
               --file "$file_path" \
               --overwrite true \
@@ -568,11 +531,6 @@ jobs:
           mkdir -p "$AZURE_CONFIG_DIR"
           touch dist/apt-existing-blobs.txt dist/apt-uploaded-blobs.txt
 
-          auth_args=(--auth-mode login)
-          if [ -n "${AZURE_STORAGE_ACCOUNT_KEY:-}" ]; then
-            auth_args=(--account-key "$AZURE_STORAGE_ACCOUNT_KEY")
-          fi
-
           sort -u dist/apt-existing-blobs.txt > "${RUNNER_TEMP}/apt-existing.txt"
           sort -u dist/apt-uploaded-blobs.txt > "${RUNNER_TEMP}/apt-uploaded.txt"
           comm -23 "${RUNNER_TEMP}/apt-existing.txt" "${RUNNER_TEMP}/apt-uploaded.txt" > "${RUNNER_TEMP}/apt-stale.txt" || true
@@ -586,7 +544,7 @@ jobs:
             az storage blob delete \
               --account-name "$STORAGE_ACCOUNT" \
               --container-name "$STORAGE_CONTAINER" \
-              "${auth_args[@]}" \
+              --account-key "$AZURE_STORAGE_ACCOUNT_KEY" \
               --name "$blob_name" \
               --delete-snapshots include \
               --output none
