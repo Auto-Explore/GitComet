@@ -747,7 +747,8 @@ where
     let width = m + 1;
     let mut cost = vec![u32::MAX / 4; (n + 1) * width];
     let mut step = vec![ReplacementAlignStep::None; (n + 1) * width];
-    let mut scratch = LevenshteinScratch;
+    #[allow(clippy::default_constructed_unit_structs)]
+    let mut scratch = LevenshteinScratch::default();
     // Cache pair costs by (old_text, new_text) to avoid redundant Levenshtein
     // computations for duplicate line pairs within the same replacement block.
     let mut pair_cost_cache: HashMap<(&str, &str), u32> = HashMap::new();
