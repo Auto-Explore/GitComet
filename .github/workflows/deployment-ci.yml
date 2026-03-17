@@ -49,6 +49,7 @@ jobs:
             .github/workflows/build-release-artifacts.yml
             .github/workflows/deploy-homebrew-tap.yml
             .github/workflows/deploy-apt-repo.yml
+            .github/workflows/deployment-ci.yml
             .github/workflows/release-manual-main.yml
           ].each { |path| YAML.load_file(path) }'
 
