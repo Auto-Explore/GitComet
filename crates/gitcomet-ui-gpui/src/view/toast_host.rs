@@ -74,7 +74,7 @@ impl ToastHost {
         let _ = self.push_toast_inner(kind, message, None, Some(ttl), cx);
     }
 
-    #[cfg_attr(test, allow(dead_code))]
+    #[cfg(not(test))]
     pub(super) fn push_toast_with_link(
         &mut self,
         kind: components::ToastKind,

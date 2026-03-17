@@ -4,9 +4,11 @@ use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{
     CommandOutput, MergetoolResult, Result, validate_conflict_resolution_text,
 };
+use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{Mutex, OnceLock};
 
 impl GixRepo {
     /// Launch an external mergetool for a conflicted file.
@@ -179,8 +181,7 @@ fn env_has_display() -> bool {
     std::env::var_os("DISPLAY").is_some() || std::env::var_os("WAYLAND_DISPLAY").is_some()
 }
 
-#[cfg(windows)]
-#[allow(dead_code)]
+#[cfg(all(windows, test))]
 fn shell_command(custom_cmd: &str) -> Command {
     let mut command = Command::new("cmd");
     command.arg("/C").arg(custom_cmd);
@@ -355,6 +356,9 @@ fn resolve_mergetool_command_with_trust_mode(
 fn repo_local_mergetool_command_allowed(repo: &gix::Repository, tool_name: &str) -> Result<bool> {
     let consent_key =
         repo_local_mergetool_command_consent_key(repo_workdir_for_mergetool(repo), tool_name);
+    if test_repo_local_mergetool_command_allowed(&consent_key) {
+        return Ok(true);
+    }
     Ok(
         git_config_get_bool_with_scope(repo, &consent_key, GitConfigScope::Global)?
             .unwrap_or(false),
@@ -368,6 +372,29 @@ fn repo_workdir_for_mergetool(repo: &gix::Repository) -> &Path {
 fn repo_local_mergetool_command_consent_key(workdir: &Path, tool_name: &str) -> String {
     let repo_tool_fingerprint = stable_repo_tool_fingerprint(workdir, tool_name);
     format!("gitcomet.mergetool.allowrepolocalcmd-{repo_tool_fingerprint}")
+}
+
+static TEST_ALLOWED_REPO_LOCAL_MERGETOOL_COMMANDS: OnceLock<Mutex<HashSet<String>>> =
+    OnceLock::new();
+
+pub(crate) fn allow_test_repo_local_mergetool_command(workdir: &Path, tool_name: &str) {
+    let consent_key = repo_local_mergetool_command_consent_key(workdir, tool_name);
+    let allowed =
+        TEST_ALLOWED_REPO_LOCAL_MERGETOOL_COMMANDS.get_or_init(|| Mutex::new(HashSet::new()));
+    allowed
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .insert(consent_key);
+}
+
+fn test_repo_local_mergetool_command_allowed(consent_key: &str) -> bool {
+    let Some(allowed) = TEST_ALLOWED_REPO_LOCAL_MERGETOOL_COMMANDS.get() else {
+        return false;
+    };
+    allowed
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .contains(consent_key)
 }
 
 fn stable_path_bytes(path: &Path) -> Vec<u8> {

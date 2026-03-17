@@ -1,3 +1,4 @@
+#[cfg(test)]
 use gitcomet_core::domain::*;
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{GitBackend, GitRepository, Result};
@@ -16,17 +17,12 @@ impl GitBackend for NoopBackend {
     }
 }
 
+#[cfg(test)]
 pub(crate) struct NoopRepo {
     spec: RepoSpec,
 }
 
-impl NoopRepo {
-    #[allow(dead_code)]
-    pub fn new(spec: RepoSpec) -> Self {
-        Self { spec }
-    }
-}
-
+#[cfg(test)]
 impl GitRepository for NoopRepo {
     fn spec(&self) -> &RepoSpec {
         &self.spec
@@ -155,9 +151,11 @@ mod tests {
     }
 
     fn sample_repo() -> NoopRepo {
-        NoopRepo::new(RepoSpec {
-            workdir: PathBuf::from("/tmp/noop-repo"),
-        })
+        NoopRepo {
+            spec: RepoSpec {
+                workdir: PathBuf::from("/tmp/noop-repo"),
+            },
+        }
     }
 
     #[test]

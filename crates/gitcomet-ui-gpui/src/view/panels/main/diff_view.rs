@@ -2596,27 +2596,6 @@ impl MainPaneView {
                 }
 
                 if !handled
-                    && this.diff_search_active
-                    && key == "enter"
-                    && !mods.control
-                    && !mods.alt
-                    && !mods.platform
-                    && !mods.function
-                    && this
-                        .diff_search_input
-                        .read(cx)
-                        .focus_handle()
-                        .is_focused(window)
-                {
-                    if mods.shift {
-                        this.diff_search_prev_match();
-                    } else {
-                        this.diff_search_next_match();
-                    }
-                    handled = true;
-                }
-
-                if !handled
                     && key == "space"
                     && !mods.control
                     && !mods.alt

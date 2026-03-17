@@ -740,7 +740,6 @@ impl PagedFileDiffRows {
     }
 
     #[cfg(test)]
-    #[allow(dead_code)]
     fn page_cache_metrics(&self) -> rows::LruCacheMetrics {
         self.pages
             .lock()
@@ -871,7 +870,6 @@ impl PagedFileDiffInlineRows {
     }
 
     #[cfg(test)]
-    #[allow(dead_code)]
     fn page_cache_metrics(&self) -> rows::LruCacheMetrics {
         self.pages
             .lock()
@@ -1292,6 +1290,48 @@ mod tests {
                 hits: 1,
                 misses: line_count as u64,
                 evictions: line_count.saturating_sub(FILE_DIFF_MAX_CACHED_PAGES) as u64,
+                clears: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn paged_file_diff_inline_rows_expose_shared_lru_metrics() {
+        let line_count = FILE_DIFF_MAX_CACHED_PAGES + 2;
+        let old = (0..line_count)
+            .map(|ix| format!("line-{ix:04}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let source = streamed_file_diff_source_for_test(&old, &old);
+        let provider = PagedFileDiffInlineRows::new(Arc::clone(&source), 1);
+        let row_count = provider.len_hint();
+
+        assert_eq!(
+            provider.page_cache_metrics(),
+            rows::LruCacheMetrics::default()
+        );
+
+        assert!(
+            provider.row_at(0).is_some(),
+            "first page should miss and load"
+        );
+        assert!(
+            provider.row_at(0).is_some(),
+            "same page should hit after load"
+        );
+        for row_ix in 1..row_count {
+            assert!(
+                provider.row_at(row_ix).is_some(),
+                "row {row_ix} should exist"
+            );
+        }
+
+        assert_eq!(
+            provider.page_cache_metrics(),
+            rows::LruCacheMetrics {
+                hits: 1,
+                misses: row_count as u64,
+                evictions: row_count.saturating_sub(FILE_DIFF_MAX_CACHED_PAGES) as u64,
                 clears: 0,
             }
         );

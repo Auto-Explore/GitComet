@@ -868,6 +868,10 @@ mod tests {
 
     fn run_git(repo: &Path, args: &[&str]) {
         let output = Command::new("git")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", NULL_DEVICE)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("GCM_INTERACTIVE", "Never")
             .arg("-C")
             .arg(repo)
             .args(args)
@@ -888,6 +892,9 @@ mod tests {
         // Keep tests deterministic and independent from host global excludes.
         run_git(workdir, &["config", "core.excludesFile", NULL_DEVICE]);
         run_git(workdir, &["config", "core.fileMode", "false"]);
+        run_git(workdir, &["config", "user.email", "you@example.com"]);
+        run_git(workdir, &["config", "user.name", "You"]);
+        run_git(workdir, &["config", "commit.gpgsign", "false"]);
         // Create an initial commit so that the index file exists (git init
         // doesn't create one until the first staging operation, and the gix
         // excludes stack requires a valid index).

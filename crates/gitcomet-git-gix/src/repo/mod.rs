@@ -72,6 +72,10 @@ impl GixRepo {
     }
 }
 
+pub(crate) fn allow_test_repo_local_mergetool_command(workdir: &Path, tool_name: &str) {
+    mergetool::allow_test_repo_local_mergetool_command(workdir, tool_name);
+}
+
 impl GitRepository for GixRepo {
     fn spec(&self) -> &RepoSpec {
         &self.spec

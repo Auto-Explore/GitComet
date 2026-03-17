@@ -324,7 +324,6 @@ pub(crate) const BLOCK_LOCAL_DIFF_CONTEXT_LINES: usize = 3;
 /// Above this size, one conflict block is effectively the whole document.
 ///
 /// Bootstrap should stay bounded instead of diffing the entire block eagerly.
-#[cfg(any(test, feature = "benchmarks"))]
 pub(crate) const LARGE_CONFLICT_BLOCK_DIFF_MAX_LINES: usize = 20_000;
 /// Head/tail preview rows kept for very large conflict blocks during bootstrap.
 #[cfg(any(test, feature = "benchmarks"))]

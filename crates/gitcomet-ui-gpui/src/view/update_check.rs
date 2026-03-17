@@ -30,7 +30,6 @@ struct GitHubTag {
     name: String,
 }
 
-#[cfg_attr(test, allow(dead_code))]
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct GitHubRepo {
     owner: String,

@@ -738,6 +738,13 @@ impl MainPaneView {
             )
         });
         let diff_search_subscription = cx.observe(&diff_search_input, |this, input, cx| {
+            if input.update(cx, |input, _| input.take_enter_pressed()) {
+                if this.diff_search_active {
+                    this.diff_search_next_match();
+                    cx.notify();
+                }
+                return;
+            }
             let next: SharedString = input.read(cx).text().to_string().into();
             if this.diff_search_query != next {
                 this.diff_search_query = next;

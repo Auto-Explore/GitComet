@@ -534,7 +534,7 @@ impl DeferredLineStarts {
         self.line_count
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     pub(super) fn is_empty(&self) -> bool {
         self.line_count == 0
     }
@@ -798,13 +798,13 @@ impl ConflictResolverUiState {
     // ----- Mode accessors -----
 
     /// Return the rendering mode enum (for tracing / external APIs that expect it).
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     pub(super) fn rendering_mode(&self) -> conflict_resolver::ConflictRenderingMode {
         conflict_resolver::ConflictRenderingMode::StreamedLargeFile
     }
 
     /// Access the streamed conflict state.
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     #[track_caller]
     pub(super) fn streamed(&self) -> &StreamedConflictState {
         match &self.mode_state {
@@ -813,7 +813,7 @@ impl ConflictResolverUiState {
     }
 
     /// Mutably access the streamed conflict state.
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     #[track_caller]
     pub(super) fn streamed_mut(&mut self) -> &mut StreamedConflictState {
         match &mut self.mode_state {

@@ -199,7 +199,7 @@ pub fn parse_conflict_marker_segments(text: &str) -> Vec<ParsedConflictSegment> 
 ///
 /// This is a thin wrapper over [`parse_conflict_marker_segments`] that
 /// discards context text and keeps only conflict blocks.
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 pub(super) fn parse_conflict_regions_from_markers(text: &str) -> Vec<ConflictRegion> {
     parse_conflict_regions_from_shared_text(Arc::<str>::from(text))
 }

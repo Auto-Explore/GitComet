@@ -99,7 +99,6 @@ impl ConflictRegionText {
         }
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
     pub fn shares_backing_with(&self, other: &Arc<str>) -> bool {
         match &self.storage {
             ConflictRegionTextStorage::Owned(_) => false,

@@ -438,6 +438,7 @@ pub struct TextInput {
     cursor_blink_task: Option<gpui::Task<()>>,
     highlight_provider_poll_task: Option<gpui::Task<()>>,
     undo_stack: Vec<UndoSnapshot>,
+    enter_pressed: bool,
 }
 
 impl TextInput {
@@ -494,6 +495,7 @@ impl TextInput {
             cursor_blink_task: None,
             highlight_provider_poll_task: None,
             undo_stack: Vec::new(),
+            enter_pressed: false,
         }
     }
 
@@ -549,6 +551,7 @@ impl TextInput {
             cursor_blink_task: None,
             highlight_provider_poll_task: None,
             undo_stack: Vec::new(),
+            enter_pressed: false,
         }
     }
 
@@ -732,6 +735,10 @@ impl TextInput {
     fn effective_line_height(&self, window: &Window) -> Pixels {
         self.line_height_override
             .unwrap_or_else(|| window.line_height())
+    }
+
+    pub fn take_enter_pressed(&mut self) -> bool {
+        std::mem::take(&mut self.enter_pressed)
     }
 
     pub fn set_read_only(&mut self, read_only: bool, cx: &mut Context<Self>) {
@@ -1792,6 +1799,8 @@ impl TextInput {
 
     fn enter(&mut self, _: &Enter, window: &mut Window, cx: &mut Context<Self>) {
         if self.read_only || !self.multiline {
+            self.enter_pressed = true;
+            cx.notify();
             return;
         }
         self.queue_cursor_autoscroll();
@@ -3012,8 +3021,15 @@ impl Element for TextElement {
                     let (line_ix, local_ix) = line_for_offset(&line_starts, &lines, cursor);
                     let x = lines[line_ix].x_for_index(local_ix) - scroll_x;
                     let caret_inset_y = px(3.0);
-                    let caret_h = (line_height - caret_inset_y * 2.0).max(px(2.0));
-                    let top = bounds.top() + line_height * line_ix as f32 + caret_inset_y;
+                    let caret_h = if !input.multiline && !input.chromeless {
+                        // Cap caret to fit within the fixed-height container
+                        // (CONTROL_HEIGHT_PX minus 2px border minus insets).
+                        (px(CONTROL_HEIGHT_PX) - px(2.0) - caret_inset_y * 2.0).max(px(2.0))
+                    } else {
+                        (line_height - caret_inset_y * 2.0).max(px(2.0))
+                    };
+                    let caret_top_inset = (line_height - caret_h) / 2.0;
+                    let top = bounds.top() + line_height * line_ix as f32 + caret_top_inset;
                     Some(fill(
                         Bounds::new(point(bounds.left() + x, top), size(px(1.0), caret_h)),
                         style_colors.cursor,

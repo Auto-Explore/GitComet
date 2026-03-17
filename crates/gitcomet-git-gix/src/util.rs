@@ -9,6 +9,7 @@ use gitcomet_core::services::{CommandOutput, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::sync::OnceLock;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -22,6 +23,16 @@ const GIT_COMMAND_TIMEOUT_ENV: &str = "GITCOMET_GIT_COMMAND_TIMEOUT_SECS";
 const GIT_COMMAND_TIMEOUT_DEFAULT_SECS: u64 = 300;
 const GIT_COMMAND_WAIT_POLL: Duration = Duration::from_millis(100);
 const GITCOMET_ASKPASS_PROMPT_LOG_ENV: &str = "GITCOMET_ASKPASS_PROMPT_LOG";
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct TestGitCommandEnvironment {
+    pub(crate) global_config: PathBuf,
+    pub(crate) home_dir: PathBuf,
+    pub(crate) xdg_config_home: PathBuf,
+    pub(crate) gnupg_home: PathBuf,
+}
+
+static TEST_GIT_COMMAND_ENVIRONMENT: OnceLock<TestGitCommandEnvironment> = OnceLock::new();
 
 struct AskPassScript {
     _dir: tempfile::TempDir,
@@ -59,8 +70,33 @@ fn configure_non_interactive_git(cmd: &mut Command) {
     cmd.stdin(Stdio::null());
 }
 
+pub(crate) fn install_test_git_command_environment(env: TestGitCommandEnvironment) {
+    if let Some(existing) = TEST_GIT_COMMAND_ENVIRONMENT.get() {
+        assert_eq!(
+            existing, &env,
+            "test git command environment already initialized"
+        );
+        return;
+    }
+    let _ = TEST_GIT_COMMAND_ENVIRONMENT.set(env);
+}
+
+fn apply_test_git_command_environment(cmd: &mut Command) {
+    let Some(env) = TEST_GIT_COMMAND_ENVIRONMENT.get() else {
+        return;
+    };
+
+    cmd.env("GIT_CONFIG_NOSYSTEM", "1");
+    cmd.env("GIT_CONFIG_GLOBAL", &env.global_config);
+    cmd.env("HOME", &env.home_dir);
+    cmd.env("XDG_CONFIG_HOME", &env.xdg_config_home);
+    cmd.env("GNUPGHOME", &env.gnupg_home);
+    cmd.env("GIT_ALLOW_PROTOCOL", "file");
+}
+
 pub(crate) fn git_workdir_cmd_for(workdir: &Path) -> Command {
     let mut cmd = Command::new("git");
+    apply_test_git_command_environment(&mut cmd);
     cmd.arg("-C").arg(workdir);
     cmd
 }

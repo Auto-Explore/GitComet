@@ -667,14 +667,18 @@ impl<'b> IntoIterator for &CharSlice<'b> {
     }
 }
 
+#[cfg(feature = "benchmarks")]
 #[derive(Default)]
-#[cfg_attr(not(feature = "benchmarks"), allow(dead_code))]
 struct LevenshteinScratch {
     prev: Vec<usize>,
     curr: Vec<usize>,
 }
 
-#[cfg_attr(not(feature = "benchmarks"), allow(dead_code))]
+#[cfg(not(feature = "benchmarks"))]
+#[derive(Default)]
+struct LevenshteinScratch;
+
+#[cfg(feature = "benchmarks")]
 impl LevenshteinScratch {
     fn distance(&mut self, a: &[char], b: &[char]) -> usize {
         let (a, b) = if b.len() > a.len() { (b, a) } else { (a, b) };
@@ -743,7 +747,7 @@ where
     let width = m + 1;
     let mut cost = vec![u32::MAX / 4; (n + 1) * width];
     let mut step = vec![ReplacementAlignStep::None; (n + 1) * width];
-    let mut scratch = LevenshteinScratch::default();
+    let mut scratch = LevenshteinScratch;
     // Cache pair costs by (old_text, new_text) to avoid redundant Levenshtein
     // computations for duplicate line pairs within the same replacement block.
     let mut pair_cost_cache: HashMap<(&str, &str), u32> = HashMap::new();

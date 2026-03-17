@@ -8,8 +8,6 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::Mutex;
-#[cfg(windows)]
 use std::sync::OnceLock;
 #[cfg(windows)]
 use std::thread;
@@ -18,10 +16,48 @@ use std::time::{Duration, Instant};
 #[cfg(unix)]
 use std::{fs::Permissions, os::unix::fs::PermissionsExt};
 
-#[cfg(windows)]
-const NULL_DEVICE: &str = "NUL";
-#[cfg(not(windows))]
-const NULL_DEVICE: &str = "/dev/null";
+struct TestGitEnv {
+    _root: tempfile::TempDir,
+    global_config: PathBuf,
+    home_dir: PathBuf,
+    xdg_config_home: PathBuf,
+    gnupg_home: PathBuf,
+}
+
+fn ensure_isolated_git_test_env() -> &'static TestGitEnv {
+    static ENV: OnceLock<TestGitEnv> = OnceLock::new();
+    ENV.get_or_init(|| {
+        let root = tempfile::tempdir().expect("test git env tempdir");
+        let home_dir = root.path().join("home");
+        let xdg_config_home = root.path().join("xdg");
+        let gnupg_home = root.path().join("gnupg");
+        let global_config = root.path().join("gitconfig");
+
+        fs::create_dir_all(&home_dir).expect("test git home");
+        fs::create_dir_all(&xdg_config_home).expect("test git xdg config home");
+        fs::create_dir_all(&gnupg_home).expect("test gnupg home");
+        fs::write(&global_config, b"").expect("test global git config");
+
+        #[cfg(unix)]
+        fs::set_permissions(&gnupg_home, Permissions::from_mode(0o700))
+            .expect("test gnupg home permissions");
+
+        gitcomet_git_gix::install_test_git_command_environment(
+            global_config.clone(),
+            home_dir.clone(),
+            xdg_config_home.clone(),
+            gnupg_home.clone(),
+        );
+
+        TestGitEnv {
+            _root: root,
+            global_config,
+            home_dir,
+            xdg_config_home,
+            gnupg_home,
+        }
+    })
+}
 
 fn git_path_arg(path: &Path) -> String {
     path.to_str()
@@ -33,71 +69,9 @@ fn git_remote_url(path: &Path) -> String {
     git_path_arg(path)
 }
 
-fn fnv1a_64(bytes: &[u8]) -> u64 {
-    let mut hash = 0xcbf29ce484222325u64;
-    for byte in bytes {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x100000001b3);
-    }
-    hash
-}
-
-fn repo_local_mergetool_consent_key(repo: &Path, tool_name: &str) -> String {
-    let repo_path = fs::canonicalize(repo).unwrap_or_else(|_| repo.to_path_buf());
-    let mut bytes = stable_path_bytes(&repo_path);
-    bytes.push(0);
-    bytes.extend_from_slice(tool_name.as_bytes());
-    format!(
-        "gitcomet.mergetool.allowrepolocalcmd-{:016x}",
-        fnv1a_64(&bytes)
-    )
-}
-
-fn stable_path_bytes(path: &Path) -> Vec<u8> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::ffi::OsStrExt as _;
-
-        return path.as_os_str().as_bytes().to_vec();
-    }
-
-    #[cfg(windows)]
-    {
-        use std::os::windows::ffi::OsStrExt as _;
-
-        let mut bytes = Vec::new();
-        for unit in path.as_os_str().encode_wide() {
-            bytes.extend_from_slice(&unit.to_le_bytes());
-        }
-        return bytes;
-    }
-
-    #[cfg(not(any(unix, windows)))]
-    {
-        path.to_str()
-            .map(|text| text.as_bytes().to_vec())
-            .unwrap_or_else(|| format!("{path:?}").into_bytes())
-    }
-}
-
 fn allow_repo_local_mergetool_cmd(repo: &Path, tool_name: &str) {
-    static GLOBAL_CONFIG_WRITE_LOCK: Mutex<()> = Mutex::new(());
-    let _guard = GLOBAL_CONFIG_WRITE_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-
-    let consent_key = repo_local_mergetool_consent_key(repo, tool_name);
-    let status = Command::new("git")
-        .arg("-C")
-        .arg(repo)
-        .args(["config", "--global", &consent_key, "true"])
-        .status()
-        .expect("git config --global to run");
-    assert!(
-        status.success(),
-        "git config --global {} true failed",
-        consent_key
-    );
+    let _ = ensure_isolated_git_test_env();
+    gitcomet_git_gix::allow_test_repo_local_mergetool_command(repo, tool_name);
 }
 
 fn set_repo_local_mergetool_cmd_with_consent(repo: &Path, tool_name: &str, command: &str) {
@@ -280,6 +254,7 @@ fn git_local_push_available_for_status_integration_tests() -> bool {
 }
 
 fn require_git_shell_for_status_integration_tests() -> bool {
+    let _ = ensure_isolated_git_test_env();
     #[cfg(windows)]
     {
         if !git_shell_available_for_status_integration_tests() {
@@ -298,10 +273,14 @@ fn require_git_shell_for_status_integration_tests() -> bool {
     true
 }
 fn git_command() -> Command {
+    let env = ensure_isolated_git_test_env();
     let mut cmd = Command::new("git");
     // Keep integration tests deterministic by isolating from host git config.
     cmd.env("GIT_CONFIG_NOSYSTEM", "1");
-    cmd.env("GIT_CONFIG_GLOBAL", NULL_DEVICE);
+    cmd.env("GIT_CONFIG_GLOBAL", &env.global_config);
+    cmd.env("HOME", &env.home_dir);
+    cmd.env("XDG_CONFIG_HOME", &env.xdg_config_home);
+    cmd.env("GNUPGHOME", &env.gnupg_home);
     cmd.env("GIT_TERMINAL_PROMPT", "0");
     cmd.env("GCM_INTERACTIVE", "Never");
     // Some scenarios clone local file:// remotes (submodules, temp-origin repos).

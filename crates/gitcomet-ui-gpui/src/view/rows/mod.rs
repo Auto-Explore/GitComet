@@ -51,7 +51,7 @@ impl<K: std::hash::Hash + Eq, V, S: std::hash::BuildHasher> InstrumentedLruCache
         value
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(in crate::view) fn peek(&self, key: &K) -> Option<&V> {
         self.cache.peek(key)
     }
@@ -66,26 +66,20 @@ impl<K: std::hash::Hash + Eq, V, S: std::hash::BuildHasher> InstrumentedLruCache
         previous
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(in crate::view) fn len(&self) -> usize {
         self.cache.len()
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(in crate::view) fn clear(&mut self) {
         self.cache.clear();
         self.metrics.clears = self.metrics.clears.saturating_add(1);
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(in crate::view) fn metrics(&self) -> LruCacheMetrics {
         self.metrics
-    }
-
-    #[cfg(test)]
-    #[allow(dead_code)]
-    pub(in crate::view) fn reset_metrics(&mut self) {
-        self.metrics = LruCacheMetrics::default();
     }
 }
 

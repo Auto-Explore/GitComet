@@ -1153,7 +1153,7 @@ impl GitCometView {
             .update(cx, |host, cx| host.push_toast(kind, message, cx));
     }
 
-    #[cfg_attr(test, allow(dead_code))]
+    #[cfg(not(test))]
     fn push_toast_with_link(
         &mut self,
         kind: components::ToastKind,
