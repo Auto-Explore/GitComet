@@ -2240,7 +2240,7 @@ dependencies = [
 
 [[package]]
 name = "gitcomet-app"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "clap",
  "embed-resource",
@@ -2256,7 +2256,7 @@ dependencies = [
 
 [[package]]
 name = "gitcomet-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "regex",
  "rustc-hash 2.1.1",
@@ -2267,14 +2267,14 @@ dependencies = [
 
 [[package]]
 name = "gitcomet-git"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "gitcomet-core",
 ]
 
 [[package]]
 name = "gitcomet-git-gix"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "gitcomet-core",
  "gix",
@@ -2285,7 +2285,7 @@ dependencies = [
 
 [[package]]
 name = "gitcomet-state"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "gitcomet-core",
  "gix",
@@ -2299,14 +2299,14 @@ dependencies = [
 
 [[package]]
 name = "gitcomet-ui"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "gitcomet-core",
 ]
 
 [[package]]
 name = "gitcomet-ui-gpui"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "criterion",
  "gitcomet-core",
