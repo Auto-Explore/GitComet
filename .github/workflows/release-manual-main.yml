@@ -82,10 +82,10 @@ jobs:
       - name: Verify crate version matches release version
         run: |
           set -euo pipefail
-          crate_version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' crates/gitcomet-app/Cargo.toml | head -n1)"
+          crate_version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n1)"
           wanted="${{ steps.norm.outputs.version }}"
           if [ "$crate_version" != "$wanted" ]; then
-            echo "::error title=Version mismatch::crates/gitcomet-app/Cargo.toml version '$crate_version' does not match requested release '$wanted'."
+            echo "::error title=Version mismatch::Cargo.toml version '$crate_version' does not match requested release '$wanted'."
             exit 1
           fi
 
