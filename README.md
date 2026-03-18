@@ -84,7 +84,7 @@ Measured on Linux 6.19.6-zen (x64), Ryzen 5950x, 128GB DDR4. Detailed test steps
   - Code test coverage workflows
   - GitHub and Azure DevOps integrations
   - Priority improvements during early access
-- Join waitlist: [gitcomet.com/#pricing](https://gitcomet.com/#pricing)
+- Join waitlist: [gitcomet.dev/#pricing](https://gitcomet.dev/#pricing)
 
 ### Build from source
 
