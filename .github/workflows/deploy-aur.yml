@@ -1,0 +1,268 @@
+name: Deploy AUR Mirror
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+      version:
+        required: true
+        type: string
+      aur_repo:
+        required: false
+        type: string
+        default: ""
+      aur_branch:
+        required: false
+        type: string
+        default: "main"
+      dry_run:
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      AUR_REPO_TOKEN:
+        required: false
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (e.g. 0.2.0 or v0.2.0)"
+        required: true
+        type: string
+      tag:
+        description: "Optional tag override (e.g. v0.2.0). Defaults to v<version>."
+        required: false
+        type: string
+      aur_repo:
+        description: "Target GitHub repo in OWNER/REPO form (e.g. Auto-Explore/aur-gitcomet). Defaults to AUR_GITHUB_REPO when omitted."
+        required: false
+        default: ""
+        type: string
+      aur_branch:
+        description: "Target branch in aur repo. Defaults to AUR_GITHUB_BRANCH when omitted."
+        required: false
+        default: "main"
+        type: string
+      dry_run:
+        description: "Validate and print PKGBUILD/.SRCINFO without pushing"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-aur-${{ inputs.tag || github.event.inputs.tag || inputs.version || github.event.inputs.version || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Publish PKGBUILD and .SRCINFO to AUR mirror repo
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container:
+      image: archlinux:base-devel
+    steps:
+      - name: Install Arch packaging tooling
+        run: |
+          set -euo pipefail
+          pacman -Sy --noconfirm --needed ca-certificates ca-certificates-utils curl git perl shadow
+
+      - uses: actions/checkout@v6
+
+      - name: Normalize inputs
+        id: norm
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          DISPATCH_TAG: ${{ github.event.inputs.tag }}
+          INPUT_VERSION: ${{ inputs.version }}
+          DISPATCH_VERSION: ${{ github.event.inputs.version }}
+          INPUT_AUR_REPO: ${{ inputs.aur_repo }}
+          DISPATCH_AUR_REPO: ${{ github.event.inputs.aur_repo }}
+          VAR_AUR_REPO: ${{ vars.AUR_GITHUB_REPO }}
+          INPUT_AUR_BRANCH: ${{ inputs.aur_branch }}
+          DISPATCH_AUR_BRANCH: ${{ github.event.inputs.aur_branch }}
+          VAR_AUR_BRANCH: ${{ vars.AUR_GITHUB_BRANCH }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+          DISPATCH_DRY_RUN: ${{ github.event.inputs.dry_run }}
+          REPO_OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+
+          tag="${INPUT_TAG:-${DISPATCH_TAG:-}}"
+          version="${INPUT_VERSION:-${DISPATCH_VERSION:-}}"
+          aur_repo="${INPUT_AUR_REPO:-${DISPATCH_AUR_REPO:-${VAR_AUR_REPO:-}}}"
+          aur_branch="${INPUT_AUR_BRANCH:-${DISPATCH_AUR_BRANCH:-${VAR_AUR_BRANCH:-main}}}"
+          dry_run="${INPUT_DRY_RUN:-${DISPATCH_DRY_RUN:-false}}"
+
+          tag="$(echo "$tag" | tr -d '[:space:]')"
+          version="$(echo "$version" | tr -d '[:space:]')"
+          aur_repo="$(echo "$aur_repo" | tr -d '[:space:]')"
+          aur_branch="$(echo "$aur_branch" | tr -d '[:space:]')"
+          dry_run="$(echo "$dry_run" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
+
+          if [ -z "$version" ]; then
+            echo "::error title=Missing version::Version is required."
+            exit 1
+          fi
+
+          version="${version#v}"
+          if [ -z "$tag" ]; then
+            tag="v${version}"
+          fi
+
+          if [[ "$tag" != v* ]]; then
+            tag="v${tag}"
+          fi
+
+          if [ "$tag" != "v${version}" ]; then
+            echo "::error title=Tag/version mismatch::Tag '$tag' does not match version '$version'."
+            exit 1
+          fi
+
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]]; then
+            echo "::error title=Invalid version::Expected semver like 1.2.3 or 1.2.3-rc.1."
+            exit 1
+          fi
+
+          if [ -z "$aur_repo" ]; then
+            aur_repo="${REPO_OWNER}/aur-gitcomet"
+          fi
+
+          if ! [[ "$aur_repo" =~ ^[^/]+/[^/]+$ ]]; then
+            echo "::error title=Invalid AUR repo::aur_repo must be OWNER/REPO."
+            exit 1
+          fi
+
+          if [ -z "$aur_branch" ]; then
+            echo "::error title=Missing AUR branch::aur_branch must not be empty."
+            exit 1
+          fi
+
+          if [[ "$dry_run" != "true" && "$dry_run" != "false" ]]; then
+            echo "::error title=Invalid dry_run::dry_run must be true or false."
+            exit 1
+          fi
+
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "aur_repo=$aur_repo" >> "$GITHUB_OUTPUT"
+          echo "aur_branch=$aur_branch" >> "$GITHUB_OUTPUT"
+          echo "dry_run=$dry_run" >> "$GITHUB_OUTPUT"
+
+      - name: Create non-root packaging user
+        run: |
+          set -euo pipefail
+          id -u builder >/dev/null 2>&1 || useradd -m builder
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+
+      - name: Download release archives referenced by PKGBUILD
+        env:
+          TAG: ${{ steps.norm.outputs.tag }}
+          VERSION: ${{ steps.norm.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist/aur
+          binary_name="gitcomet-v${VERSION}-linux-x86_64.tar.gz"
+          source_name="gitcomet-source-v${VERSION}.tar.gz"
+
+          curl -fL --retry 3 --retry-all-errors \
+            "https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${binary_name}" \
+            -o "dist/aur/${binary_name}"
+
+          curl -fL --retry 3 --retry-all-errors \
+            "https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/${TAG}.tar.gz" \
+            -o "dist/aur/${source_name}"
+
+      - name: Clone AUR mirror repository
+        env:
+          AUR_REPO: ${{ steps.norm.outputs.aur_repo }}
+          AUR_BRANCH: ${{ steps.norm.outputs.aur_branch }}
+          DRY_RUN: ${{ steps.norm.outputs.dry_run }}
+          AUR_TOKEN: ${{ secrets.AUR_REPO_TOKEN }}
+        run: |
+          set -euo pipefail
+          clone_url="https://github.com/${AUR_REPO}.git"
+
+          if [ "$DRY_RUN" != "true" ]; then
+            if [ -z "${AUR_TOKEN:-}" ]; then
+              echo "::error title=Missing secret::Set AUR_REPO_TOKEN to push to ${AUR_REPO}."
+              exit 1
+            fi
+            clone_url="https://x-access-token:${AUR_TOKEN}@github.com/${AUR_REPO}.git"
+          fi
+
+          rm -rf aur-repo
+          git clone --depth 1 --branch "$AUR_BRANCH" --single-branch "$clone_url" aur-repo
+          chown -R builder:builder aur-repo dist
+
+      - name: Update PKGBUILD and regenerate .SRCINFO
+        env:
+          VERSION: ${{ steps.norm.outputs.version }}
+        run: |
+          set -euo pipefail
+          su builder -c "cd '$GITHUB_WORKSPACE' && scripts/update-aur.sh \
+            --aur-dir '$GITHUB_WORKSPACE/aur-repo' \
+            --version '$VERSION' \
+            --binary-tar '$GITHUB_WORKSPACE/dist/aur/gitcomet-v${VERSION}-linux-x86_64.tar.gz' \
+            --source-tar '$GITHUB_WORKSPACE/dist/aur/gitcomet-source-v${VERSION}.tar.gz' \
+            --verify-source"
+
+      - name: Emit dry-run summary
+        if: ${{ steps.norm.outputs.dry_run == 'true' }}
+        run: |
+          set -euo pipefail
+          {
+            echo "### AUR deployment dry run"
+            echo ""
+            echo "- Source release: \`${{ steps.norm.outputs.tag }}\`"
+            echo "- Target repo: \`${{ steps.norm.outputs.aur_repo }}\`"
+            echo "- Target branch: \`${{ steps.norm.outputs.aur_branch }}\`"
+            echo ""
+            echo "PKGBUILD preview:"
+            echo '```bash'
+            cat aur-repo/PKGBUILD
+            echo '```'
+            echo ""
+            echo ".SRCINFO preview:"
+            echo '```ini'
+            cat aur-repo/.SRCINFO
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish metadata to AUR mirror repo
+        if: ${{ steps.norm.outputs.dry_run != 'true' }}
+        env:
+          AUR_BRANCH: ${{ steps.norm.outputs.aur_branch }}
+          TAG: ${{ steps.norm.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git config --global --add safe.directory "$GITHUB_WORKSPACE/aur-repo"
+
+          pushd aur-repo >/dev/null
+          git add PKGBUILD .SRCINFO
+          if git diff --cached --quiet -- PKGBUILD .SRCINFO; then
+            echo "No AUR metadata changes detected; mirror repo is already up to date."
+            popd >/dev/null
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "gitcomet ${TAG}"
+          git push origin "HEAD:${AUR_BRANCH}"
+          popd >/dev/null
+
+      - name: Emit deployment summary
+        run: |
+          set -euo pipefail
+          {
+            echo "### AUR mirror deployment"
+            echo ""
+            echo "- Release: \`${{ steps.norm.outputs.tag }}\`"
+            echo "- Target repo: \`${{ steps.norm.outputs.aur_repo }}\`"
+            echo "- Target branch: \`${{ steps.norm.outputs.aur_branch }}\`"
+            echo "- Dry run: \`${{ steps.norm.outputs.dry_run }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

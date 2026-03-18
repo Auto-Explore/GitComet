@@ -5,9 +5,11 @@ on:
     branches: ["main"]
     paths:
       - ".github/workflows/build-release-artifacts.yml"
+      - ".github/workflows/deploy-aur.yml"
       - ".github/workflows/deploy-homebrew-tap.yml"
       - ".github/workflows/deploy-apt-repo.yml"
       - ".github/workflows/release-manual-main.yml"
+      - "scripts/update-aur.sh"
       - "scripts/package-macos.sh"
       - "scripts/generate-homebrew-formula.sh"
       - "scripts/build-apt-repo.sh"
@@ -15,9 +17,11 @@ on:
     branches: ["main"]
     paths:
       - ".github/workflows/build-release-artifacts.yml"
+      - ".github/workflows/deploy-aur.yml"
       - ".github/workflows/deploy-homebrew-tap.yml"
       - ".github/workflows/deploy-apt-repo.yml"
       - ".github/workflows/release-manual-main.yml"
+      - "scripts/update-aur.sh"
       - "scripts/package-macos.sh"
       - "scripts/generate-homebrew-formula.sh"
       - "scripts/build-apt-repo.sh"
@@ -39,6 +43,7 @@ jobs:
 
       - name: Validate shell scripts syntax
         run: |
+          bash -n scripts/update-aur.sh
           bash -n scripts/package-macos.sh
           bash -n scripts/generate-homebrew-formula.sh
           bash -n scripts/build-apt-repo.sh
@@ -47,6 +52,7 @@ jobs:
         run: |
           ruby -e 'require "yaml"; %w[
             .github/workflows/build-release-artifacts.yml
+            .github/workflows/deploy-aur.yml
             .github/workflows/deploy-homebrew-tap.yml
             .github/workflows/deploy-apt-repo.yml
             .github/workflows/deployment-ci.yml
@@ -56,6 +62,8 @@ jobs:
       - name: Validate deployment workflow config keys
         run: |
           set -euo pipefail
+          grep -Fq 'vars.AUR_GITHUB_REPO' .github/workflows/release-manual-main.yml
+          grep -Fq 'vars.AUR_GITHUB_BRANCH' .github/workflows/release-manual-main.yml
           grep -Fq 'vars.APT_STORAGE_ACCOUNT' .github/workflows/release-manual-main.yml
           grep -Fq 'vars.APT_STORAGE_CONTAINER' .github/workflows/release-manual-main.yml
           grep -Fq 'vars.APT_REPO_DISTRIBUTION' .github/workflows/release-manual-main.yml
@@ -72,6 +80,9 @@ jobs:
           grep -Fq 'vars.APT_REPO_LABEL' .github/workflows/deploy-apt-repo.yml
           grep -Fq 'vars.APT_REPO_DESCRIPTION' .github/workflows/deploy-apt-repo.yml
           grep -Fq 'vars.APT_STORAGE_PUBLIC_ACCESS' .github/workflows/deploy-apt-repo.yml
+          grep -Fq 'vars.AUR_GITHUB_REPO' .github/workflows/deploy-aur.yml
+          grep -Fq 'vars.AUR_GITHUB_BRANCH' .github/workflows/deploy-aur.yml
+          grep -Fq 'AUR_REPO_TOKEN' .github/workflows/deploy-aur.yml
           grep -Fq 'HOMEBREW_TAP_TOKEN' .github/workflows/deploy-homebrew-tap.yml
 
       - name: Generate formula from synthetic artifacts
@@ -121,6 +132,86 @@ jobs:
             exit 1
           fi
           popd >/dev/null
+
+  aur-metadata-smoke:
+    name: Validate AUR metadata update script
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    container:
+      image: archlinux:base-devel
+    steps:
+      - name: Install Arch packaging tooling
+        run: |
+          set -euo pipefail
+          pacman -Sy --noconfirm --needed perl shadow
+
+      - uses: actions/checkout@v6
+
+      - name: Create non-root packaging user
+        run: |
+          set -euo pipefail
+          id -u builder >/dev/null 2>&1 || useradd -m builder
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+
+      - name: Prepare synthetic AUR repo and assets
+        run: |
+          set -euo pipefail
+          mkdir -p dist/aur-ci/repo
+          cat > dist/aur-ci/repo/PKGBUILD <<'EOF'
+          pkgname=gitcomet-bin
+          pkgver=0.0.0
+          pkgrel=1
+          pkgdesc="Fast, resource-efficient Git GUI written in Rust"
+          arch=('x86_64')
+          url="https://gitcomet.dev/"
+          license=('AGPL-3.0-only')
+          provides=("${pkgname%-bin}")
+          conflicts=(
+            "${pkgname%-bin}"
+            'gitcomet-git'
+          )
+          depends=(
+            'fontconfig'
+            'freetype2'
+            'git'
+            'libx11'
+            'libxcb'
+            'libxkbcommon'
+            'wayland'
+          )
+          source=(
+            "gitcomet-v$pkgver-linux-x86_64.tar.gz::https://example.invalid/gitcomet-v$pkgver-linux-x86_64.tar.gz"
+            "gitcomet-source-v$pkgver.tar.gz::https://example.invalid/gitcomet-source-v$pkgver.tar.gz"
+          )
+          sha256sums=('oldbinary'
+                      'oldsource')
+
+          package() {
+            install -D -m755 "gitcomet-v$pkgver-linux-x86_64/gitcomet" "$pkgdir/usr/bin/gitcomet"
+          }
+          EOF
+
+          printf 'synthetic-binary' > dist/aur-ci/gitcomet-v0.0.0-linux-x86_64.tar.gz
+          printf 'synthetic-source' > dist/aur-ci/gitcomet-source-v0.0.0.tar.gz
+          chown -R builder:builder dist
+
+      - name: Run update-aur.sh
+        run: |
+          set -euo pipefail
+          su builder -c "cd '$GITHUB_WORKSPACE' && scripts/update-aur.sh \
+            --aur-dir '$GITHUB_WORKSPACE/dist/aur-ci/repo' \
+            --version 0.0.0 \
+            --binary-tar '$GITHUB_WORKSPACE/dist/aur-ci/gitcomet-v0.0.0-linux-x86_64.tar.gz' \
+            --source-tar '$GITHUB_WORKSPACE/dist/aur-ci/gitcomet-source-v0.0.0.tar.gz' \
+            --verify-source"
+
+      - name: Validate generated PKGBUILD and .SRCINFO
+        run: |
+          set -euo pipefail
+          test -f dist/aur-ci/repo/.SRCINFO
+          grep -q '^pkgver=0.0.0$' dist/aur-ci/repo/PKGBUILD
+          grep -q 'source = gitcomet-v0.0.0-linux-x86_64.tar.gz::https://example.invalid/gitcomet-v0.0.0-linux-x86_64.tar.gz$' dist/aur-ci/repo/.SRCINFO
+          grep -q 'source = gitcomet-source-v0.0.0.tar.gz::https://example.invalid/gitcomet-source-v0.0.0.tar.gz$' dist/aur-ci/repo/.SRCINFO
 
   apt-repo-generation-smoke:
     name: Validate APT repo generation script

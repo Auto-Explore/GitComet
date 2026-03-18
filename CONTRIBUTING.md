@@ -106,3 +106,24 @@ This release flow will:
 - call `.github/workflows/deploy-homebrew-tap.yml` to update `Formula/gitcomet.rb` in the tap repo
 
 You can also run `.github/workflows/deploy-homebrew-tap.yml` manually for backfills or dry-runs.
+
+### AUR mirror deployment
+
+To push `PKGBUILD` and `.SRCINFO` into a GitHub-hosted AUR mirror repo automatically on release:
+
+1. Create the target repository (default expected name: `OWNER/aur-gitcomet`).
+2. In this repo, configure:
+   - secret `AUR_REPO_TOKEN`: GitHub token with `contents:write` access to the AUR mirror repository.
+   - optional variable `AUR_GITHUB_REPO`: target repository in `OWNER/REPO` form.
+   - optional variable `AUR_GITHUB_BRANCH`: target branch (default `main`).
+3. Run `.github/workflows/release-manual-main.yml` with `draft=false`.
+
+This release flow will:
+
+- download the published Linux release tarball and source tarball
+- update `PKGBUILD` `pkgver` and `sha256sums`
+- regenerate `.SRCINFO`
+- validate sources with `makepkg --verifysource`
+- push the updated metadata into the configured AUR mirror repository
+
+You can also run `.github/workflows/deploy-aur.yml` manually for backfills or dry-runs.
