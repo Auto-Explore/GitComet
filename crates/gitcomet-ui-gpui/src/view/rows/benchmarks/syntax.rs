@@ -1045,8 +1045,6 @@ impl MarkdownPreviewFixture {
                 theme: self.theme,
                 bar_color: None,
                 min_width: px(0.0),
-                row_id_prefix: "benchmark_markdown_preview",
-                horizontal_scroll_handle: None,
                 view: None,
                 text_region: DiffTextRegion::Inline,
             },

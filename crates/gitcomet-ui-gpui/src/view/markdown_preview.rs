@@ -293,9 +293,15 @@ fn annotate_change_hints(
     changed_new_lines: &[bool],
 ) {
     for row in &mut old_doc.rows {
+        if matches!(row.kind, MarkdownPreviewRowKind::Spacer) {
+            continue;
+        }
         row.change_hint = line_range_change_hint(&row.source_line_range, changed_old_lines, true);
     }
     for row in &mut new_doc.rows {
+        if matches!(row.kind, MarkdownPreviewRowKind::Spacer) {
+            continue;
+        }
         row.change_hint = line_range_change_hint(&row.source_line_range, changed_new_lines, false);
     }
 }
@@ -397,13 +403,17 @@ fn push_aligned_markdown_row_groups(
 }
 
 fn markdown_preview_spacer_row() -> MarkdownPreviewRow {
+    markdown_preview_spacer_row_with_range(0..0)
+}
+
+fn markdown_preview_spacer_row_with_range(source_line_range: Range<usize>) -> MarkdownPreviewRow {
     MarkdownPreviewRow {
         kind: MarkdownPreviewRowKind::Spacer,
         text: SharedString::from(""),
         inline_spans: Arc::new(Vec::new()),
         code_language: None,
         code_block_horizontal_scroll_hint: false,
-        source_line_range: 0..0,
+        source_line_range,
         change_hint: MarkdownChangeHint::None,
         indent_level: 0,
         blockquote_level: 0,
@@ -1207,7 +1217,55 @@ fn flatten_to_rows(source: &str, line_starts: &[usize]) -> Option<Vec<MarkdownPr
     }
 
     align_table_columns(&mut rows);
+    insert_top_level_heading_spacer_rows(&mut rows);
     Some(rows)
+}
+
+fn insert_top_level_heading_spacer_rows(rows: &mut Vec<MarkdownPreviewRow>) {
+    if rows.len() < 2 {
+        return;
+    }
+
+    let mut spaced_rows = Vec::with_capacity(rows.len() + rows.len() / 4);
+    let mut pending_gap_after_heading: Option<Range<usize>> = None;
+
+    for row in rows.drain(..) {
+        let is_top_level_heading = markdown_row_is_top_level_heading(&row);
+        if let Some(source_line_range) = pending_gap_after_heading.take()
+            && !is_top_level_heading
+        {
+            spaced_rows.push(markdown_preview_spacer_row_with_range(source_line_range));
+        }
+
+        if is_top_level_heading {
+            let has_content_before_heading = matches!(
+                spaced_rows.last(),
+                Some(previous_row)
+                    if !matches!(
+                        previous_row.kind,
+                        MarkdownPreviewRowKind::Spacer | MarkdownPreviewRowKind::Heading { .. }
+                    )
+            );
+
+            if has_content_before_heading {
+                spaced_rows.push(markdown_preview_spacer_row_with_range(
+                    row.source_line_range.clone(),
+                ));
+            } else {
+                pending_gap_after_heading = Some(row.source_line_range.clone());
+            }
+        }
+
+        spaced_rows.push(row);
+    }
+
+    *rows = spaced_rows;
+}
+
+fn markdown_row_is_top_level_heading(row: &MarkdownPreviewRow) -> bool {
+    matches!(row.kind, MarkdownPreviewRowKind::Heading { .. })
+        && row.indent_level == 0
+        && row.blockquote_level == 0
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1926,6 +1984,61 @@ mod tests {
             ]
         );
         assert_eq!(row_texts(&doc), vec!["H1", "H2", "H3", "H4", "H5", "H6"]);
+    }
+
+    #[test]
+    fn top_level_heading_inserts_section_spacer_before_following_content() {
+        let doc = parse("# Title\n\nParagraph\n");
+
+        assert_eq!(doc.rows.len(), 3);
+        assert_eq!(
+            doc.rows[0].kind,
+            MarkdownPreviewRowKind::Heading { level: 1 }
+        );
+        assert_eq!(doc.rows[1].kind, MarkdownPreviewRowKind::Spacer);
+        assert_eq!(doc.rows[1].change_hint, MarkdownChangeHint::None);
+        assert_eq!(doc.rows[2].kind, MarkdownPreviewRowKind::Paragraph);
+    }
+
+    #[test]
+    fn content_before_top_level_heading_gets_section_spacer_before_heading() {
+        let doc = parse("Paragraph\n\n# Title\n");
+
+        assert_eq!(doc.rows.len(), 3);
+        assert_eq!(doc.rows[0].kind, MarkdownPreviewRowKind::Paragraph);
+        assert_eq!(doc.rows[1].kind, MarkdownPreviewRowKind::Spacer);
+        assert_eq!(
+            doc.rows[2].kind,
+            MarkdownPreviewRowKind::Heading { level: 1 }
+        );
+    }
+
+    #[test]
+    fn consecutive_headings_do_not_insert_spacers_between_heading_rows() {
+        let doc = parse("# Title\n## Subtitle\n");
+
+        assert_eq!(
+            row_kinds(&doc),
+            vec![
+                &MarkdownPreviewRowKind::Heading { level: 1 },
+                &MarkdownPreviewRowKind::Heading { level: 2 },
+            ]
+        );
+    }
+
+    #[test]
+    fn middle_heading_uses_a_single_section_spacer_before_the_heading() {
+        let doc = parse("Intro\n\n# Title\n\nBody\n");
+
+        assert_eq!(
+            row_kinds(&doc),
+            vec![
+                &MarkdownPreviewRowKind::Paragraph,
+                &MarkdownPreviewRowKind::Spacer,
+                &MarkdownPreviewRowKind::Heading { level: 1 },
+                &MarkdownPreviewRowKind::Paragraph,
+            ]
+        );
     }
 
     // ── Paragraph tests ─────────────────────────────────────────────────
@@ -2666,6 +2779,29 @@ mod tests {
     }
 
     #[test]
+    fn heading_spacing_rows_do_not_receive_change_hints() {
+        let preview =
+            build_markdown_diff_preview("# Title\n\nOld paragraph\n", "# Title\n\nNew paragraph\n")
+                .unwrap();
+
+        let old_spacer = preview
+            .old
+            .rows
+            .iter()
+            .find(|row| matches!(row.kind, MarkdownPreviewRowKind::Spacer))
+            .expect("expected heading spacer row on old side");
+        let new_spacer = preview
+            .new
+            .rows
+            .iter()
+            .find(|row| matches!(row.kind, MarkdownPreviewRowKind::Spacer))
+            .expect("expected heading spacer row on new side");
+
+        assert_eq!(old_spacer.change_hint, MarkdownChangeHint::None);
+        assert_eq!(new_spacer.change_hint, MarkdownChangeHint::None);
+    }
+
+    #[test]
     fn partial_change_ranges_use_modified_hint() {
         let (mut old_doc, mut new_doc) =
             parse_markdown_diff("line one\nline two\n", "line one\nline two\n").unwrap();
@@ -3091,17 +3227,18 @@ code line
 ";
         let doc = parse(src);
 
-        // Should have: Heading, Paragraph, ListItem, ListItem, CodeLine, ThematicBreak
+        // Should have: Heading, Spacer, Paragraph, ListItem, ListItem, CodeLine, ThematicBreak
         assert!(
-            doc.rows.len() >= 6,
-            "expected at least 6 rows, got {}",
+            doc.rows.len() >= 7,
+            "expected at least 7 rows, got {}",
             doc.rows.len()
         );
         assert!(matches!(
             doc.rows[0].kind,
             MarkdownPreviewRowKind::Heading { level: 1 }
         ));
-        assert_eq!(doc.rows[1].kind, MarkdownPreviewRowKind::Paragraph);
+        assert_eq!(doc.rows[1].kind, MarkdownPreviewRowKind::Spacer);
+        assert_eq!(doc.rows[2].kind, MarkdownPreviewRowKind::Paragraph);
     }
 
     // ── Internal helpers ────────────────────────────────────────────────
@@ -3163,25 +3300,27 @@ code line
     #[test]
     fn custom_anchor_tags_are_hidden_from_preview() {
         let doc = parse("# Section Heading\n\n<a name=\"my-custom-anchor-point\"></a>\nVisible\n");
-        assert_eq!(doc.rows.len(), 2);
+        assert_eq!(doc.rows.len(), 3);
         assert_eq!(
             doc.rows[0].kind,
             MarkdownPreviewRowKind::Heading { level: 1 }
         );
         assert_eq!(doc.rows[0].text.as_ref(), "Section Heading");
-        assert_eq!(doc.rows[1].text.as_ref(), "Visible");
+        assert_eq!(doc.rows[1].kind, MarkdownPreviewRowKind::Spacer);
+        assert_eq!(doc.rows[2].text.as_ref(), "Visible");
     }
 
     #[test]
     fn custom_anchor_id_tags_are_hidden_from_preview() {
         let doc = parse("# Section Heading\n\n<a id=\"jump-target\"></a>\nVisible\n");
-        assert_eq!(doc.rows.len(), 2);
+        assert_eq!(doc.rows.len(), 3);
         assert_eq!(
             doc.rows[0].kind,
             MarkdownPreviewRowKind::Heading { level: 1 }
         );
         assert_eq!(doc.rows[0].text.as_ref(), "Section Heading");
-        assert_eq!(doc.rows[1].text.as_ref(), "Visible");
+        assert_eq!(doc.rows[1].kind, MarkdownPreviewRowKind::Spacer);
+        assert_eq!(doc.rows[2].text.as_ref(), "Visible");
     }
 
     #[test]
