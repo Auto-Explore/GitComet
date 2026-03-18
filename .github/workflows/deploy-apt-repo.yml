@@ -21,10 +21,6 @@ on:
         required: false
         type: string
         default: ""
-      repo_base_url:
-        required: false
-        type: string
-        default: ""
       distribution:
         required: false
         type: string
@@ -86,11 +82,6 @@ on:
         type: string
       storage_prefix:
         description: "Optional blob prefix within the container. Defaults to APT_STORAGE_PREFIX when omitted."
-        required: false
-        default: ""
-        type: string
-      repo_base_url:
-        description: "Public HTTPS base URL for the APT repo root. Defaults to APT_REPO_BASE_URL when omitted."
         required: false
         default: ""
         type: string
@@ -172,9 +163,6 @@ jobs:
           INPUT_STORAGE_PREFIX: ${{ inputs.storage_prefix }}
           DISPATCH_STORAGE_PREFIX: ${{ github.event.inputs.storage_prefix }}
           VAR_STORAGE_PREFIX: ${{ vars.APT_STORAGE_PREFIX }}
-          INPUT_REPO_BASE_URL: ${{ inputs.repo_base_url }}
-          DISPATCH_REPO_BASE_URL: ${{ github.event.inputs.repo_base_url }}
-          VAR_REPO_BASE_URL: ${{ vars.APT_REPO_BASE_URL }}
           INPUT_DISTRIBUTION: ${{ inputs.distribution }}
           DISPATCH_DISTRIBUTION: ${{ github.event.inputs.distribution }}
           VAR_DISTRIBUTION: ${{ vars.APT_REPO_DISTRIBUTION }}
@@ -205,7 +193,6 @@ jobs:
           storage_account="${INPUT_STORAGE_ACCOUNT:-${DISPATCH_STORAGE_ACCOUNT:-${VAR_STORAGE_ACCOUNT:-}}}"
           storage_container="${INPUT_STORAGE_CONTAINER:-${DISPATCH_STORAGE_CONTAINER:-${VAR_STORAGE_CONTAINER:-apt}}}"
           storage_prefix="${INPUT_STORAGE_PREFIX:-${DISPATCH_STORAGE_PREFIX:-${VAR_STORAGE_PREFIX:-}}}"
-          repo_base_url="${INPUT_REPO_BASE_URL:-${DISPATCH_REPO_BASE_URL:-${VAR_REPO_BASE_URL:-}}}"
           distribution="${INPUT_DISTRIBUTION:-${DISPATCH_DISTRIBUTION:-${VAR_DISTRIBUTION:-stable}}}"
           component="${INPUT_COMPONENT:-${DISPATCH_COMPONENT:-${VAR_COMPONENT:-main}}}"
           architecture="${INPUT_ARCHITECTURE:-${DISPATCH_ARCHITECTURE:-amd64}}"
@@ -220,7 +207,6 @@ jobs:
           storage_account="$(echo "$storage_account" | tr -d '[:space:]')"
           storage_container="$(echo "$storage_container" | tr -d '[:space:]')"
           storage_prefix="$(echo "$storage_prefix" | sed 's#^/*##;s#/*$##')"
-          repo_base_url="$(echo "$repo_base_url" | sed 's#[[:space:]]##g;s#/*$##')"
           distribution="$(echo "$distribution" | tr -d '[:space:]')"
           component="$(echo "$component" | tr -d '[:space:]')"
           architecture="$(echo "$architecture" | tr -d '[:space:]')"
@@ -284,7 +270,8 @@ jobs:
             exit 1
           fi
 
-          if [ -z "$repo_base_url" ] && [ -n "$storage_account" ] && [ "$storage_container" != '$web' ]; then
+          repo_base_url=""
+          if [ -n "$storage_account" ] && [ "$storage_container" != '$web' ]; then
             repo_base_url="https://${storage_account}.blob.core.windows.net/${storage_container}"
             if [ -n "$storage_prefix" ]; then
               repo_base_url="${repo_base_url}/${storage_prefix}"
@@ -559,28 +546,3 @@ jobs:
               --delete-snapshots include \
               --output none
           done < "${RUNNER_TEMP}/apt-stale.txt"
-
-      - name: Emit deployment summary
-        run: |
-          set -euo pipefail
-          uploaded="yes"
-          if [ "${{ steps.norm.outputs.dry_run }}" = "true" ]; then
-            uploaded="no (dry run)"
-          fi
-
-          {
-            echo "### APT repository deployment"
-            echo ""
-            echo "- Release: \`${{ steps.norm.outputs.tag }}\`"
-            echo "- Debian package: \`${{ steps.deb.outputs.name }}\`"
-            echo "- Distribution: \`${{ steps.norm.outputs.distribution }}\`"
-            echo "- Component: \`${{ steps.norm.outputs.component }}\`"
-            echo "- Architecture: \`${{ steps.norm.outputs.architecture }}\`"
-            echo "- Azure target: \`${{ steps.norm.outputs.storage_account }}/${{ steps.norm.outputs.storage_container }}\`"
-            echo "- Prefix: \`${{ steps.norm.outputs.storage_prefix }}\`"
-            echo "- Public repo URL: \`${{ steps.norm.outputs.repo_base_url }}\`"
-            echo "- Uploaded: \`${uploaded}\`"
-            echo ""
-            echo "Generated files:"
-            find dist/apt-repo -type f | sed 's#^dist/apt-repo/#- `#;s#$#`#'
-          } >> "$GITHUB_STEP_SUMMARY"
