@@ -65,8 +65,8 @@ jobs:
       - name: Validate deployment workflow config keys
         run: |
           set -euo pipefail
-          grep -Fq 'vars.AUR_GITHUB_REPO' .github/workflows/release-manual-main.yml
-          grep -Fq 'vars.AUR_GITHUB_BRANCH' .github/workflows/release-manual-main.yml
+          grep -Fq 'vars.AUR_GIT_REPOSITORY' .github/workflows/release-manual-main.yml
+          grep -Fq 'vars.AUR_GIT_BRANCH' .github/workflows/release-manual-main.yml
           grep -Fq 'vars.APT_STORAGE_ACCOUNT' .github/workflows/release-manual-main.yml
           grep -Fq 'vars.APT_STORAGE_CONTAINER' .github/workflows/release-manual-main.yml
           grep -Fq 'vars.APT_REPO_DISTRIBUTION' .github/workflows/release-manual-main.yml
@@ -83,8 +83,8 @@ jobs:
           grep -Fq 'vars.APT_REPO_LABEL' .github/workflows/deploy-apt-repo.yml
           grep -Fq 'vars.APT_REPO_DESCRIPTION' .github/workflows/deploy-apt-repo.yml
           grep -Fq 'vars.APT_STORAGE_PUBLIC_ACCESS' .github/workflows/deploy-apt-repo.yml
-          grep -Fq 'vars.AUR_GITHUB_REPO' .github/workflows/deploy-aur.yml
-          grep -Fq 'vars.AUR_GITHUB_BRANCH' .github/workflows/deploy-aur.yml
+          grep -Fq 'vars.AUR_GIT_REPOSITORY' .github/workflows/deploy-aur.yml
+          grep -Fq 'vars.AUR_GIT_BRANCH' .github/workflows/deploy-aur.yml
           grep -Fq 'AUR_PRIVATE_SSH_KEY' .github/workflows/deploy-aur.yml
           grep -Fq 'AUR_PRIVATE_SSH_KEY_PASSPHRASE' .github/workflows/deploy-aur.yml
           grep -Fq 'ssh://aur@aur.archlinux.org/gitcomet.git' .github/workflows/deploy-aur.yml

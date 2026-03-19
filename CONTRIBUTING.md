@@ -116,8 +116,8 @@ To push `PKGBUILD` and `.SRCINFO` into the live AUR repository automatically on 
 2. In this repo, configure:
    - secret `AUR_SSH_PRIVATE_KEY`: the AUR-authorized SSH private key.
    - secret `AUR_SSH_PASSPHRASE`: the passphrase for that SSH key.
-   - optional variable `AUR_GITHUB_REPO`: GitHub remote in `OWNER/REPO` form (default: `OWNER/aur-gitcomet`).
-   - optional variable `AUR_GITHUB_BRANCH`: GitHub branch for that remote (default `main`).
+   - optional variable `AUR_GIT_REPOSITORY`: GitHub remote in `OWNER/REPO` form (default: `OWNER/aur-gitcomet`).
+   - optional variable `AUR_GIT_BRANCH`: GitHub branch for that remote (default `main`).
 3. Run `.github/workflows/release-manual-main.yml` with `draft=false`.
 
 This release flow will:
@@ -127,7 +127,7 @@ This release flow will:
 - regenerate `.SRCINFO`
 - validate sources with `makepkg --verifysource`
 - clone `https://aur.archlinux.org/gitcomet.git`
-- configure a `github` remote from `AUR_GITHUB_REPO`
+- configure a `github` remote from `AUR_GIT_REPOSITORY`
 - push the updated metadata into AUR over SSH using the configured key
 
 The previous `AUR_REPO_TOKEN` secret is no longer used.

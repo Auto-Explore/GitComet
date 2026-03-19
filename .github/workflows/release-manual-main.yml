@@ -195,8 +195,8 @@ jobs:
     with:
       tag: ${{ needs.validate.outputs.tag }}
       version: ${{ needs.validate.outputs.version }}
-      aur_repo: ${{ vars.AUR_GITHUB_REPO }}
-      aur_branch: ${{ vars.AUR_GITHUB_BRANCH }}
+      aur_repo: ${{ vars.AUR_GIT_REPOSITORY }}
+      aur_branch: ${{ vars.AUR_GIT_BRANCH }}
       dry_run: false
     secrets: inherit
 
