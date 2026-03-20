@@ -11,7 +11,7 @@ pub(super) fn model(this: &PopoverHost) -> ContextMenuModel {
         ContextMenuItem::Entry {
             label: "Push".into(),
             icon: Some("↑".into()),
-            shortcut: Some("Enter".into()),
+            shortcut: None,
             disabled,
             action: Box::new(ContextMenuAction::Push { repo_id }),
         },

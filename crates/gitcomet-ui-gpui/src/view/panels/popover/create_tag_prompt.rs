@@ -1,12 +1,22 @@
 use super::*;
 
+fn hotkey_hint(theme: AppTheme, debug_selector: &'static str, label: &'static str) -> gpui::Div {
+    div()
+        .debug_selector(move || debug_selector.to_string())
+        .font_family("monospace")
+        .text_xs()
+        .text_color(theme.colors.text_muted)
+        .child(label)
+}
+
 pub(super) fn panel(
     this: &mut PopoverHost,
-    repo_id: RepoId,
+    _repo_id: RepoId,
     target: String,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
     let theme = this.theme;
+    let can_create = this.can_submit_create_tag(cx);
 
     div()
         .flex()
@@ -47,36 +57,19 @@ pub(super) fn panel(
                 .justify_between()
                 .child(
                     components::Button::new("create_tag_cancel", "Cancel")
+                        .separated_end_slot(hotkey_hint(theme, "create_tag_cancel_hint", "Esc"))
                         .style(components::ButtonStyle::Outlined)
                         .on_click(theme, cx, |this, _e, _w, cx| {
-                            this.popover = None;
-                            this.popover_anchor = None;
-                            cx.notify();
+                            this.close_popover(cx);
                         }),
                 )
                 .child(
                     components::Button::new("create_tag_go", "Create")
+                        .separated_end_slot(hotkey_hint(theme, "create_tag_go_hint", "Enter"))
                         .style(components::ButtonStyle::Filled)
-                        .on_click(theme, cx, move |this, _e, _w, cx| {
-                            let name = this
-                                .create_tag_input
-                                .read_with(cx, |i, _| i.text().trim().to_string());
-                            if name.is_empty() {
-                                this.push_toast(
-                                    components::ToastKind::Error,
-                                    "Tag: name is required".to_string(),
-                                    cx,
-                                );
-                                return;
-                            }
-                            this.store.dispatch(Msg::CreateTag {
-                                repo_id,
-                                name,
-                                target: target.clone(),
-                            });
-                            this.popover = None;
-                            this.popover_anchor = None;
-                            cx.notify();
+                        .disabled(!can_create)
+                        .on_click(theme, cx, |this, _e, _w, cx| {
+                            this.submit_create_tag(cx);
                         }),
                 ),
         )

@@ -22,7 +22,25 @@ impl PopoverHost {
                 )
             })
         });
+        if self._repo_picker_search_input_subscription.is_none() {
+            self._repo_picker_search_input_subscription =
+                Some(cx.observe(input, |this, input, cx| {
+                    let escape_pressed = input.update(cx, |input, _| input.take_escape_pressed());
+
+                    if !matches!(this.popover, Some(PopoverKind::RepoPicker)) {
+                        return;
+                    }
+
+                    if escape_pressed {
+                        this.close_popover(cx);
+                        return;
+                    }
+
+                    cx.notify();
+                }));
+        }
         input.update(cx, |input, cx| {
+            input.clear_transient_key_presses();
             input.set_theme(theme, cx);
             input.set_text("", cx);
         });
@@ -86,7 +104,25 @@ impl PopoverHost {
                 )
             })
         });
+        if self._branch_picker_search_input_subscription.is_none() {
+            self._branch_picker_search_input_subscription =
+                Some(cx.observe(input, |this, input, cx| {
+                    let escape_pressed = input.update(cx, |input, _| input.take_escape_pressed());
+
+                    if !matches!(this.popover, Some(PopoverKind::BranchPicker)) {
+                        return;
+                    }
+
+                    if escape_pressed {
+                        this.close_popover(cx);
+                        return;
+                    }
+
+                    cx.notify();
+                }));
+        }
         input.update(cx, |input, cx| {
+            input.clear_transient_key_presses();
             input.set_theme(theme, cx);
             input.set_text("", cx);
         });

@@ -18,7 +18,7 @@ fn model_for_section(repo_id: RepoId, section: BranchSection) -> ContextMenuMode
     items.push(ContextMenuItem::Entry {
         label: "Switch branch".into(),
         icon: Some("⎇".into()),
-        shortcut: Some("Enter".into()),
+        shortcut: None,
         disabled: false,
         action: Box::new(ContextMenuAction::OpenPopover {
             kind: PopoverKind::BranchPicker,

@@ -11,6 +11,7 @@ on:
       - ".github/workflows/release-manual-main.yml"
       - "scripts/update-aur.sh"
       - "scripts/package-macos.sh"
+      - "scripts/macos-cargo-config.sh"
       - "scripts/generate-homebrew-formula.sh"
       - "scripts/generate-homebrew-cask.sh"
       - "scripts/build-apt-repo.sh"
@@ -24,6 +25,7 @@ on:
       - ".github/workflows/release-manual-main.yml"
       - "scripts/update-aur.sh"
       - "scripts/package-macos.sh"
+      - "scripts/macos-cargo-config.sh"
       - "scripts/generate-homebrew-formula.sh"
       - "scripts/generate-homebrew-cask.sh"
       - "scripts/build-apt-repo.sh"
@@ -47,6 +49,7 @@ jobs:
         run: |
           bash -n scripts/update-aur.sh
           bash -n scripts/package-macos.sh
+          bash -n scripts/macos-cargo-config.sh
           bash -n scripts/generate-homebrew-formula.sh
           bash -n scripts/generate-homebrew-cask.sh
           bash -n scripts/build-apt-repo.sh
@@ -65,8 +68,8 @@ jobs:
       - name: Validate deployment workflow config keys
         run: |
           set -euo pipefail
-          grep -Fq 'vars.AUR_GITHUB_REPO' .github/workflows/release-manual-main.yml
-          grep -Fq 'vars.AUR_GITHUB_BRANCH' .github/workflows/release-manual-main.yml
+          grep -Fq 'vars.AUR_GIT_REPOSITORY' .github/workflows/release-manual-main.yml
+          grep -Fq 'vars.AUR_GIT_BRANCH' .github/workflows/release-manual-main.yml
           grep -Fq 'vars.APT_STORAGE_ACCOUNT' .github/workflows/release-manual-main.yml
           grep -Fq 'vars.APT_STORAGE_CONTAINER' .github/workflows/release-manual-main.yml
           grep -Fq 'vars.APT_REPO_DISTRIBUTION' .github/workflows/release-manual-main.yml
@@ -83,9 +86,11 @@ jobs:
           grep -Fq 'vars.APT_REPO_LABEL' .github/workflows/deploy-apt-repo.yml
           grep -Fq 'vars.APT_REPO_DESCRIPTION' .github/workflows/deploy-apt-repo.yml
           grep -Fq 'vars.APT_STORAGE_PUBLIC_ACCESS' .github/workflows/deploy-apt-repo.yml
-          grep -Fq 'vars.AUR_GITHUB_REPO' .github/workflows/deploy-aur.yml
-          grep -Fq 'vars.AUR_GITHUB_BRANCH' .github/workflows/deploy-aur.yml
-          grep -Fq 'AUR_REPO_TOKEN' .github/workflows/deploy-aur.yml
+          grep -Fq 'vars.AUR_GIT_REPOSITORY' .github/workflows/deploy-aur.yml
+          grep -Fq 'vars.AUR_GIT_BRANCH' .github/workflows/deploy-aur.yml
+          grep -Fq 'AUR_PRIVATE_SSH_KEY' .github/workflows/deploy-aur.yml
+          grep -Fq 'AUR_PRIVATE_SSH_KEY_PASSPHRASE' .github/workflows/deploy-aur.yml
+          grep -Fq 'ssh://aur@aur.archlinux.org/gitcomet.git' .github/workflows/deploy-aur.yml
           grep -Fq 'HOMEBREW_TAP_TOKEN' .github/workflows/deploy-homebrew-tap.yml
 
       - name: Generate Homebrew cask and formula from synthetic artifacts
@@ -382,7 +387,17 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Build release binary
-        run: cargo build -p gitcomet --release --locked --features ui-gpui,gix --bins
+        run: |
+          set -euo pipefail
+          cargo_config_output="$(scripts/macos-cargo-config.sh "${{ matrix.arch }}" release)"
+          set --
+          if [[ -n "$cargo_config_output" ]]; then
+            while IFS= read -r arg; do
+              set -- "$@" "$arg"
+            done <<<"$cargo_config_output"
+          fi
+          set -- "$@" -p gitcomet --release --locked --features ui-gpui,gix --bins
+          cargo build "$@"
 
       - name: Package macOS artifacts
         run: |

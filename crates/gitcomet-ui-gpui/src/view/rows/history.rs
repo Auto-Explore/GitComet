@@ -1252,7 +1252,7 @@ impl HistoryView {
             .filter(|c| c.request.repo_id == repo.id);
         let worktree_node_color = cache
             .and_then(|c| c.graph_rows.first())
-            .and_then(|row| row.lanes_now.get(row.node_col).map(|l| l.color))
+            .and_then(|row| row.lanes_now.first().map(|l| l.color))
             .unwrap_or(theme.colors.accent);
 
         range
@@ -1287,7 +1287,8 @@ impl HistoryView {
                 let commit = page.commits.get(commit_ix)?;
                 let graph_row = cache.graph_rows.get(visible_ix)?;
                 let row_vm = cache.commit_row_vms.get(visible_ix)?;
-                let connect_incoming_node = show_working_tree_summary_row && visible_ix == 0;
+                let connect_from_top_col =
+                    (show_working_tree_summary_row && visible_ix == 0).then_some(0);
                 let selected = repo.history_state.selected_commit.as_ref() == Some(&commit.id);
                 let show_graph_color_marker = repo.history_state.history_scope
                     == gitcomet_core::domain::LogScope::AllBranches;
@@ -1311,7 +1312,7 @@ impl HistoryView {
                     repo.id,
                     commit,
                     Arc::clone(graph_row),
-                    connect_incoming_node,
+                    connect_from_top_col,
                     Arc::clone(&row_vm.tag_names),
                     row_vm.branches_text.clone(),
                     row_vm.author.clone(),
@@ -1347,7 +1348,7 @@ fn history_table_row(
     repo_id: RepoId,
     commit: &Commit,
     graph_row: Arc<history_graph::GraphRow>,
-    connect_incoming_node: bool,
+    connect_from_top_col: Option<usize>,
     tag_names: Arc<[SharedString]>,
     branches_text: SharedString,
     author: SharedString,
@@ -1379,7 +1380,7 @@ fn history_table_row(
         show_sha,
         show_graph_color_marker,
         is_stash_node,
-        connect_incoming_node,
+        connect_from_top_col,
         graph_row,
         tag_names,
         branches_text,

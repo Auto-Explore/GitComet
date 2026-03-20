@@ -1,7 +1,17 @@
 use super::*;
 
+fn hotkey_hint(theme: AppTheme, debug_selector: &'static str, label: &'static str) -> gpui::Div {
+    div()
+        .debug_selector(move || debug_selector.to_string())
+        .font_family("monospace")
+        .text_xs()
+        .text_color(theme.colors.text_muted)
+        .child(label)
+}
+
 pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>) -> gpui::Div {
     let theme = this.theme;
+    let can_clone = this.can_submit_clone_repo(cx);
 
     div()
         .flex()
@@ -100,38 +110,19 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                 .justify_between()
                 .child(
                     components::Button::new("clone_repo_cancel", "Cancel")
+                        .separated_end_slot(hotkey_hint(theme, "clone_repo_cancel_hint", "Esc"))
                         .style(components::ButtonStyle::Outlined)
                         .on_click(theme, cx, |this, _e, _w, cx| {
-                            this.popover = None;
-                            this.popover_anchor = None;
-                            cx.notify();
+                            this.close_popover(cx);
                         }),
                 )
                 .child(
                     components::Button::new("clone_repo_go", "Clone")
+                        .separated_end_slot(hotkey_hint(theme, "clone_repo_go_hint", "Enter"))
                         .style(components::ButtonStyle::Filled)
+                        .disabled(!can_clone)
                         .on_click(theme, cx, |this, _e, _w, cx| {
-                            let url = this
-                                .clone_repo_url_input
-                                .read_with(cx, |i, _| i.text().trim().to_string());
-                            let parent = this
-                                .clone_repo_parent_dir_input
-                                .read_with(cx, |i, _| i.text().trim().to_string());
-                            if url.is_empty() || parent.is_empty() {
-                                this.push_toast(
-                                    components::ToastKind::Error,
-                                    "Clone: URL and destination are required".to_string(),
-                                    cx,
-                                );
-                                return;
-                            }
-
-                            let repo_name = clone_repo_name_from_url(&url);
-                            let dest = std::path::PathBuf::from(parent).join(repo_name);
-                            this.store.dispatch(Msg::CloneRepo { url, dest });
-                            this.popover = None;
-                            this.popover_anchor = None;
-                            cx.notify();
+                            this.submit_clone_repo(cx);
                         }),
                 ),
         )

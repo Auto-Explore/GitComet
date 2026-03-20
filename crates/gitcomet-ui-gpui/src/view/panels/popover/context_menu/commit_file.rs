@@ -22,7 +22,7 @@ pub(super) fn model(
     items.push(ContextMenuItem::Entry {
         label: "Open diff".into(),
         icon: Some("↗".into()),
-        shortcut: Some("Enter".into()),
+        shortcut: None,
         disabled: false,
         action: Box::new(ContextMenuAction::SelectDiff {
             repo_id,

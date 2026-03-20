@@ -20,6 +20,15 @@ fn shortcut_entry<'a>(
     model: &'a ContextMenuModel,
     shortcut: &str,
 ) -> (&'a ContextMenuAction, usize) {
+    if shortcut == "Enter" {
+        let ix = runtime_entry_ix_for_shortcut(model, shortcut)
+            .unwrap_or_else(|| panic!("expected shortcut `{shortcut}` to resolve at runtime"));
+        return match model.items.get(ix) {
+            Some(ContextMenuItem::Entry { action, .. }) => (action.as_ref(), ix),
+            _ => panic!("expected runtime shortcut `{shortcut}` to target an entry"),
+        };
+    }
+
     model
         .items
         .iter()
@@ -306,7 +315,7 @@ fn repo_operation_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::T
 
     let pull_model =
         cx.update(|_window, app| context_menu_model_for(&view, app, PopoverKind::PullPicker));
-    assert_declared_shortcuts(&pull_model, &["Enter", "F", "O", "R", "A"]);
+    assert_declared_shortcuts(&pull_model, &["F", "O", "R", "A"]);
     assert_shortcut_action!(
         pull_model,
         "Enter",
@@ -347,7 +356,7 @@ fn repo_operation_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::T
 
     let push_model =
         cx.update(|_window, app| context_menu_model_for(&view, app, PopoverKind::PushPicker));
-    assert_declared_shortcuts(&push_model, &["Enter", "F"]);
+    assert_declared_shortcuts(&push_model, &["F"]);
     assert_shortcut_action!(
         push_model,
         "Enter",
@@ -371,7 +380,7 @@ fn repo_operation_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::T
             },
         )
     });
-    assert_declared_shortcuts(&branch_section_model, &["Enter", "F"]);
+    assert_declared_shortcuts(&branch_section_model, &["F"]);
     assert_shortcut_action!(
         branch_section_model,
         "Enter",
@@ -397,7 +406,7 @@ fn repo_operation_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::T
             },
         )
     });
-    assert_declared_shortcuts(&local_branch_model, &["Enter", "P", "M", "S"]);
+    assert_declared_shortcuts(&local_branch_model, &["P", "M", "S"]);
     assert_shortcut_action!(
         local_branch_model,
         "Enter",
@@ -441,7 +450,7 @@ fn repo_operation_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::T
             },
         )
     });
-    assert_declared_shortcuts(&remote_branch_model, &["Enter", "P", "M", "S", "F"]);
+    assert_declared_shortcuts(&remote_branch_model, &["P", "M", "S", "F"]);
     assert_shortcut_action!(
         remote_branch_model,
         "Enter",
@@ -603,7 +612,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
             },
         )
     });
-    assert_declared_shortcuts(&commit_model, &["Enter", "T", "D", "P", "R"]);
+    assert_declared_shortcuts(&commit_model, &["T", "D", "P", "R"]);
     assert_shortcut_action!(
         commit_model,
         "Enter",
@@ -658,7 +667,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
             },
         )
     });
-    assert_declared_shortcuts(&commit_file_model, &["Enter", "H", "C"]);
+    assert_declared_shortcuts(&commit_file_model, &["H", "C"]);
     assert_shortcut_action!(
         commit_file_model,
         "Enter",
@@ -694,7 +703,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
             },
         )
     });
-    assert_declared_shortcuts(&unstaged_status_model, &["Enter", "H", "S", "D", "C"]);
+    assert_declared_shortcuts(&unstaged_status_model, &["H", "S", "D", "C"]);
     assert_shortcut_action!(
         unstaged_status_model,
         "Enter",
@@ -745,7 +754,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
             },
         )
     });
-    assert_declared_shortcuts(&staged_status_model, &["Enter", "H", "U", "D", "C"]);
+    assert_declared_shortcuts(&staged_status_model, &["H", "U", "D", "C"]);
     assert_shortcut_action!(
         staged_status_model,
         "Enter",
@@ -798,7 +807,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
     });
     assert_declared_shortcuts(
         &conflicted_status_model,
-        &["Enter", "H", "O", "T", "M", "D", "C"],
+        &["H", "O", "T", "M", "D", "C"],
     );
     assert_shortcut_action!(
         conflicted_status_model,

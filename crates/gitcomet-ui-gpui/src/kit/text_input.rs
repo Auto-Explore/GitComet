@@ -441,6 +441,7 @@ pub struct TextInput {
     undo_stack: Vec<UndoSnapshot>,
     redo_stack: Vec<UndoSnapshot>,
     enter_pressed: bool,
+    escape_pressed: bool,
 }
 
 impl TextInput {
@@ -499,6 +500,7 @@ impl TextInput {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             enter_pressed: false,
+            escape_pressed: false,
         }
     }
 
@@ -556,6 +558,7 @@ impl TextInput {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             enter_pressed: false,
+            escape_pressed: false,
         }
     }
 
@@ -744,6 +747,15 @@ impl TextInput {
 
     pub fn take_enter_pressed(&mut self) -> bool {
         std::mem::take(&mut self.enter_pressed)
+    }
+
+    pub fn take_escape_pressed(&mut self) -> bool {
+        std::mem::take(&mut self.escape_pressed)
+    }
+
+    pub fn clear_transient_key_presses(&mut self) {
+        self.enter_pressed = false;
+        self.escape_pressed = false;
     }
 
     pub fn set_read_only(&mut self, read_only: bool, cx: &mut Context<Self>) {
@@ -2214,6 +2226,22 @@ impl TextInput {
         }
     }
 
+    fn on_key_down(
+        &mut self,
+        event: &gpui::KeyDownEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if event.keystroke.modifiers.modified() {
+            return;
+        }
+
+        if event.keystroke.key.as_str() == "escape" {
+            self.escape_pressed = true;
+            cx.notify();
+        }
+    }
+
     fn on_mouse_down_right(
         &mut self,
         event: &MouseDownEvent,
@@ -3640,6 +3668,7 @@ impl Render for TextInput {
             .track_focus(&focus)
             .key_context("TextInput")
             .cursor(CursorStyle::IBeam)
+            .on_key_down(cx.listener(Self::on_key_down))
             .on_action(cx.listener(Self::backspace))
             .on_action(cx.listener(Self::delete))
             .on_action(cx.listener(Self::delete_word_left))

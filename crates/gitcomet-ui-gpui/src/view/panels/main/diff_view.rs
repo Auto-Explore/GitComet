@@ -196,7 +196,7 @@ impl MainPaneView {
 
                     d.child(
                         components::Button::new("conflict_prev", "Prev")
-                            .end_slot(Self::diff_nav_hotkey_hint(theme, "F2"))
+                            .separated_end_slot(Self::diff_nav_hotkey_hint(theme, "F2"))
                             .style(components::ButtonStyle::Outlined)
                             .disabled(!can_nav_prev)
                             .on_click(theme, cx, |this, _e, _w, cx| {
@@ -206,7 +206,7 @@ impl MainPaneView {
                     )
                     .child(
                         components::Button::new("conflict_next", "Next")
-                            .end_slot(Self::diff_nav_hotkey_hint(theme, "F3"))
+                            .separated_end_slot(Self::diff_nav_hotkey_hint(theme, "F3"))
                             .style(components::ButtonStyle::Outlined)
                             .disabled(!can_nav_next)
                             .on_click(theme, cx, |this, _e, _w, cx| {
@@ -325,7 +325,7 @@ impl MainPaneView {
                     diff_navigation::diff_nav_next_target(&nav_entries, current_nav_ix).is_some();
 
                 let prev_hunk_btn = components::Button::new("diff_prev_hunk", "Prev")
-                    .end_slot(Self::diff_nav_hotkey_hint(theme, "F2"))
+                    .separated_end_slot(Self::diff_nav_hotkey_hint(theme, "F2"))
                     .style(components::ButtonStyle::Outlined)
                     .disabled(!can_nav_prev)
                     .on_click(theme, cx, |this, _e, _w, cx| {
@@ -346,7 +346,7 @@ impl MainPaneView {
                     }));
 
                 let next_hunk_btn = components::Button::new("diff_next_hunk", "Next")
-                    .end_slot(Self::diff_nav_hotkey_hint(theme, "F3"))
+                    .separated_end_slot(Self::diff_nav_hotkey_hint(theme, "F3"))
                     .style(components::ButtonStyle::Outlined)
                     .disabled(!can_nav_next)
                     .on_click(theme, cx, |this, _e, _w, cx| {

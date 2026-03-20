@@ -114,7 +114,7 @@ pub(super) fn history_commit_row_canvas(
     show_sha: bool,
     show_graph_color_marker: bool,
     is_stash_node: bool,
-    connect_incoming_node: bool,
+    connect_from_top_col: Option<usize>,
     graph_row: Arc<history_graph::GraphRow>,
     tag_names: Arc<[SharedString]>,
     branches_text: SharedString,
@@ -228,7 +228,7 @@ pub(super) fn history_commit_row_canvas(
                         super::history_graph_paint::paint_history_graph(
                             theme,
                             &graph_row,
-                            connect_incoming_node,
+                            connect_from_top_col,
                             is_stash_node,
                             graph_bounds,
                             window,

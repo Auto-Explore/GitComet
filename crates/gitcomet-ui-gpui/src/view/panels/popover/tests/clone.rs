@@ -1,0 +1,219 @@
+use super::*;
+
+fn click_debug_selector(cx: &mut gpui::VisualTestContext, selector: &'static str) {
+    let center = cx
+        .debug_bounds(selector)
+        .unwrap_or_else(|| panic!("expected {selector} in debug bounds"))
+        .center();
+    cx.simulate_mouse_move(center, None, gpui::Modifiers::default());
+    cx.simulate_mouse_down(center, gpui::MouseButton::Left, gpui::Modifiers::default());
+    cx.simulate_mouse_up(center, gpui::MouseButton::Left, gpui::Modifiers::default());
+    cx.run_until_parked();
+}
+
+fn unique_parent_dir(label: &str) -> std::path::PathBuf {
+    let suffix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!(
+        "gitcomet-ui-clone-popover-{label}-{}-{suffix}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&path).expect("test parent directory to be created");
+    path
+}
+
+#[gpui::test]
+fn clone_repo_popover_renders_shortcut_hints_and_separators(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    cx.update(|window, app| {
+        view.update(app, |this, _cx| this.disable_poller_for_tests());
+        let _ = window.draw(app);
+    });
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                host.open_popover_at(
+                    PopoverKind::CloneRepo,
+                    gpui::point(gpui::px(120.0), gpui::px(72.0)),
+                    window,
+                    cx,
+                );
+            });
+        });
+    });
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    cx.debug_bounds("clone_repo_cancel_hint")
+        .expect("expected clone Cancel shortcut hint");
+    cx.debug_bounds("clone_repo_go_hint")
+        .expect("expected clone shortcut hint");
+    cx.debug_bounds("clone_repo_cancel_end_slot_separator")
+        .expect("expected clone Cancel shortcut separator");
+    cx.debug_bounds("clone_repo_go_end_slot_separator")
+        .expect("expected clone shortcut separator");
+}
+
+#[gpui::test]
+fn clone_repo_popover_escape_closes_from_parent_input(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    cx.update(|window, app| {
+        view.update(app, |this, _cx| this.disable_poller_for_tests());
+        let _ = window.draw(app);
+    });
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                host.open_popover_at(
+                    PopoverKind::CloneRepo,
+                    gpui::point(gpui::px(120.0), gpui::px(72.0)),
+                    window,
+                    cx,
+                );
+                let focus = host
+                    .clone_repo_parent_dir_input
+                    .read_with(cx, |input, _| input.focus_handle());
+                window.focus(&focus);
+            });
+        });
+    });
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    let is_open = cx.update(|_window, app| view.read(app).popover_host.read(app).is_open());
+    assert!(!is_open, "expected Escape to close clone popover");
+    assert!(
+        store.snapshot().clone.is_none(),
+        "expected Escape to avoid starting a clone"
+    );
+}
+
+#[gpui::test]
+fn clone_repo_popover_enter_from_parent_input_submits_and_closes(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+    let url = "http://example.com/org/repo.git";
+    let parent = unique_parent_dir("enter");
+    let expected_dest = parent.join("repo");
+
+    cx.update(|window, app| {
+        app.bind_keys([gpui::KeyBinding::new(
+            "enter",
+            crate::kit::Enter,
+            Some("TextInput"),
+        )]);
+        view.update(app, |this, _cx| this.disable_poller_for_tests());
+        let _ = window.draw(app);
+    });
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                host.open_popover_at(
+                    PopoverKind::CloneRepo,
+                    gpui::point(gpui::px(120.0), gpui::px(72.0)),
+                    window,
+                    cx,
+                );
+                host.clone_repo_url_input
+                    .update(cx, |input, cx| input.set_text(url, cx));
+                host.clone_repo_parent_dir_input.update(cx, |input, cx| {
+                    input.set_text(parent.display().to_string(), cx);
+                });
+                let focus = host
+                    .clone_repo_parent_dir_input
+                    .read_with(cx, |input, _| input.focus_handle());
+                window.focus(&focus);
+            });
+        });
+    });
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    let is_open = cx.update(|_window, app| view.read(app).popover_host.read(app).is_open());
+    assert!(!is_open, "expected Enter to close clone popover");
+
+    let snapshot = store.snapshot();
+    let op = snapshot
+        .clone
+        .as_ref()
+        .expect("expected clone op to be recorded");
+    assert_eq!(op.url, url);
+    assert_eq!(op.dest, expected_dest);
+}
+
+#[gpui::test]
+fn clone_repo_popover_clone_button_requires_parent_path(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+    let url = "http://example.com/org/repo.git";
+
+    cx.update(|window, app| {
+        view.update(app, |this, _cx| this.disable_poller_for_tests());
+        let _ = window.draw(app);
+    });
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                host.open_popover_at(
+                    PopoverKind::CloneRepo,
+                    gpui::point(gpui::px(120.0), gpui::px(72.0)),
+                    window,
+                    cx,
+                );
+                host.clone_repo_url_input
+                    .update(cx, |input, cx| input.set_text(url, cx));
+            });
+        });
+    });
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    click_debug_selector(cx, "clone_repo_go_hint");
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    let is_open = cx.update(|_window, app| view.read(app).popover_host.read(app).is_open());
+    assert!(
+        is_open,
+        "expected incomplete clone form to keep the popover open"
+    );
+    assert!(
+        store.snapshot().clone.is_none(),
+        "expected missing parent path to keep Clone disabled"
+    );
+}

@@ -28,7 +28,7 @@ pub(super) fn model(
     items.push(ContextMenuItem::Entry {
         label: "Checkout".into(),
         icon: Some("⎇".into()),
-        shortcut: Some("Enter".into()),
+        shortcut: None,
         disabled: false,
         action: Box::new(match section {
             BranchSection::Local => ContextMenuAction::CheckoutBranch {

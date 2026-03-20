@@ -86,7 +86,7 @@ pub(super) fn model(
     items.push(ContextMenuItem::Entry {
         label: "Open diff".into(),
         icon: Some("↗".into()),
-        shortcut: Some("Enter".into()),
+        shortcut: None,
         disabled: false,
         action: if area == DiffArea::Unstaged && is_unstaged_conflicted {
             Box::new(ContextMenuAction::SelectConflictDiff {

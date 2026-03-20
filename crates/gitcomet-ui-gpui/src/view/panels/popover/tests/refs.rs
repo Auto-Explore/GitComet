@@ -1,4 +1,16 @@
+use super::branch::{create_tracking_store, wait_until};
 use super::*;
+
+fn click_debug_selector(cx: &mut gpui::VisualTestContext, selector: &'static str) {
+    let center = cx
+        .debug_bounds(selector)
+        .unwrap_or_else(|| panic!("expected {selector} in debug bounds"))
+        .center();
+    cx.simulate_mouse_move(center, None, gpui::Modifiers::default());
+    cx.simulate_mouse_down(center, gpui::MouseButton::Left, gpui::Modifiers::default());
+    cx.simulate_mouse_up(center, gpui::MouseButton::Left, gpui::Modifiers::default());
+    cx.run_until_parked();
+}
 
 #[gpui::test]
 fn tag_menu_lists_delete_entries_for_commit_tags(cx: &mut gpui::TestAppContext) {
@@ -231,6 +243,399 @@ fn tag_menu_lists_remote_push_and_delete_entries(cx: &mut gpui::TestAppContext) 
             "did not expect delete remote tag action for upstream without tag"
         );
     });
+}
+
+#[gpui::test]
+fn create_tag_prompt_escape_cancels(cx: &mut gpui::TestAppContext) {
+    let (store, events, repo, _workdir) = create_tracking_store("create-tag-escape");
+    let repo_id = store.snapshot().active_repo.expect("expected active repo");
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    cx.update(|window, app| {
+        app.bind_keys([gpui::KeyBinding::new(
+            "enter",
+            crate::kit::Enter,
+            Some("TextInput"),
+        )]);
+        view.update(app, |this, _cx| this.disable_poller_for_tests());
+        let _ = window.draw(app);
+    });
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                host.open_popover_at(
+                    PopoverKind::CreateTagPrompt {
+                        repo_id,
+                        target: "HEAD".to_string(),
+                    },
+                    gpui::point(gpui::px(120.0), gpui::px(72.0)),
+                    window,
+                    cx,
+                );
+            });
+        });
+    });
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    let is_open = cx.update(|_window, app| view.read(app).popover_host.read(app).is_open());
+    assert!(!is_open, "expected Escape to close create-tag popover");
+    assert!(
+        repo.actions().is_empty(),
+        "expected Escape to cancel without creating a tag"
+    );
+}
+
+#[gpui::test]
+fn create_tag_prompt_renders_shortcut_hints_and_separators(cx: &mut gpui::TestAppContext) {
+    let (store, events, _repo, _workdir) = create_tracking_store("create-tag-shortcuts");
+    let repo_id = store.snapshot().active_repo.expect("expected active repo");
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    cx.update(|window, app| {
+        view.update(app, |this, _cx| this.disable_poller_for_tests());
+        let _ = window.draw(app);
+    });
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                host.open_popover_at(
+                    PopoverKind::CreateTagPrompt {
+                        repo_id,
+                        target: "HEAD".to_string(),
+                    },
+                    gpui::point(gpui::px(120.0), gpui::px(72.0)),
+                    window,
+                    cx,
+                );
+            });
+        });
+    });
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    cx.debug_bounds("create_tag_cancel_hint")
+        .expect("expected create-tag Cancel shortcut hint");
+    cx.debug_bounds("create_tag_go_hint")
+        .expect("expected create-tag Create shortcut hint");
+    cx.debug_bounds("create_tag_cancel_end_slot_separator")
+        .expect("expected create-tag Cancel shortcut separator");
+    cx.debug_bounds("create_tag_go_end_slot_separator")
+        .expect("expected create-tag Create shortcut separator");
+}
+
+#[gpui::test]
+fn create_tag_prompt_cancel_button_closes(cx: &mut gpui::TestAppContext) {
+    let (store, events, repo, _workdir) = create_tracking_store("create-tag-cancel-click");
+    let repo_id = store.snapshot().active_repo.expect("expected active repo");
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    cx.update(|window, app| {
+        view.update(app, |this, _cx| this.disable_poller_for_tests());
+        let _ = window.draw(app);
+    });
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                host.open_popover_at(
+                    PopoverKind::CreateTagPrompt {
+                        repo_id,
+                        target: "HEAD".to_string(),
+                    },
+                    gpui::point(gpui::px(120.0), gpui::px(72.0)),
+                    window,
+                    cx,
+                );
+            });
+        });
+    });
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    click_debug_selector(cx, "create_tag_cancel_hint");
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    let is_open = cx.update(|_window, app| view.read(app).popover_host.read(app).is_open());
+    assert!(
+        !is_open,
+        "expected clicking Cancel to close create-tag popover"
+    );
+    assert!(
+        repo.actions().is_empty(),
+        "expected clicking Cancel to avoid tag creation"
+    );
+}
+
+#[gpui::test]
+fn create_tag_prompt_create_button_click_creates_and_closes(cx: &mut gpui::TestAppContext) {
+    let (store, events, repo, _workdir) = create_tracking_store("create-tag-create-click");
+    let repo_id = store.snapshot().active_repo.expect("expected active repo");
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    cx.update(|window, app| {
+        view.update(app, |this, _cx| this.disable_poller_for_tests());
+        let _ = window.draw(app);
+    });
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                host.open_popover_at(
+                    PopoverKind::CreateTagPrompt {
+                        repo_id,
+                        target: "HEAD".to_string(),
+                    },
+                    gpui::point(gpui::px(120.0), gpui::px(72.0)),
+                    window,
+                    cx,
+                );
+            });
+        });
+    });
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                host.create_tag_input
+                    .update(cx, |input, cx| input.set_text("v2.0.0", cx));
+            });
+        });
+    });
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    click_debug_selector(cx, "create_tag_go_hint");
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    let is_open = cx.update(|_window, app| view.read(app).popover_host.read(app).is_open());
+    assert!(
+        !is_open,
+        "expected clicking Create to close create-tag popover"
+    );
+
+    wait_until("create-tag click repo actions", || {
+        repo.actions() == vec!["tag:v2.0.0:HEAD".to_string()]
+    });
+}
+
+#[gpui::test]
+fn create_tag_prompt_create_button_click_with_empty_input_does_not_close_or_create(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events, repo, _workdir) = create_tracking_store("create-tag-empty-click");
+    let repo_id = store.snapshot().active_repo.expect("expected active repo");
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    cx.update(|window, app| {
+        view.update(app, |this, _cx| this.disable_poller_for_tests());
+        let _ = window.draw(app);
+    });
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                host.open_popover_at(
+                    PopoverKind::CreateTagPrompt {
+                        repo_id,
+                        target: "HEAD".to_string(),
+                    },
+                    gpui::point(gpui::px(120.0), gpui::px(72.0)),
+                    window,
+                    cx,
+                );
+            });
+        });
+    });
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    click_debug_selector(cx, "create_tag_go_hint");
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    let is_open = cx.update(|_window, app| view.read(app).popover_host.read(app).is_open());
+    assert!(
+        is_open,
+        "expected clicking disabled Create to keep create-tag popover open"
+    );
+
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    assert!(
+        repo.actions().is_empty(),
+        "expected clicking disabled Create to avoid tag creation"
+    );
+}
+
+#[gpui::test]
+fn create_tag_prompt_enter_creates_and_closes(cx: &mut gpui::TestAppContext) {
+    let (store, events, repo, _workdir) = create_tracking_store("create-tag-enter");
+    let repo_id = store.snapshot().active_repo.expect("expected active repo");
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    cx.update(|window, app| {
+        app.bind_keys([gpui::KeyBinding::new(
+            "enter",
+            crate::kit::Enter,
+            Some("TextInput"),
+        )]);
+        view.update(app, |this, _cx| this.disable_poller_for_tests());
+        let _ = window.draw(app);
+    });
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                host.open_popover_at(
+                    PopoverKind::CreateTagPrompt {
+                        repo_id,
+                        target: "HEAD".to_string(),
+                    },
+                    gpui::point(gpui::px(120.0), gpui::px(72.0)),
+                    window,
+                    cx,
+                );
+            });
+        });
+    });
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                assert!(
+                    !host.can_submit_create_tag(cx),
+                    "expected empty create-tag input to disable Create"
+                );
+                host.create_tag_input
+                    .update(cx, |input, cx| input.set_text("v1.0.0", cx));
+                assert!(
+                    host.can_submit_create_tag(cx),
+                    "expected non-empty create-tag input to enable Create"
+                );
+            });
+        });
+    });
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    let is_open = cx.update(|_window, app| view.read(app).popover_host.read(app).is_open());
+    assert!(!is_open, "expected Enter to close create-tag popover");
+
+    wait_until("create-tag repo actions", || {
+        repo.actions() == vec!["tag:v1.0.0:HEAD".to_string()]
+    });
+}
+
+#[gpui::test]
+fn create_tag_prompt_enter_with_empty_input_does_not_close_or_create(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events, repo, _workdir) = create_tracking_store("create-tag-empty-enter");
+    let repo_id = store.snapshot().active_repo.expect("expected active repo");
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    cx.update(|window, app| {
+        app.bind_keys([gpui::KeyBinding::new(
+            "enter",
+            crate::kit::Enter,
+            Some("TextInput"),
+        )]);
+        view.update(app, |this, _cx| this.disable_poller_for_tests());
+        let _ = window.draw(app);
+    });
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                host.open_popover_at(
+                    PopoverKind::CreateTagPrompt {
+                        repo_id,
+                        target: "HEAD".to_string(),
+                    },
+                    gpui::point(gpui::px(120.0), gpui::px(72.0)),
+                    window,
+                    cx,
+                );
+            });
+        });
+    });
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                assert!(
+                    !host.can_submit_create_tag(cx),
+                    "expected empty create-tag input to disable Create"
+                );
+            });
+        });
+    });
+
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    let is_open = cx.update(|_window, app| view.read(app).popover_host.read(app).is_open());
+    assert!(
+        is_open,
+        "expected Enter to respect the disabled Create action when the tag name is empty"
+    );
+
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    assert!(
+        repo.actions().is_empty(),
+        "expected empty create-tag input to avoid tag creation"
+    );
 }
 
 #[gpui::test]

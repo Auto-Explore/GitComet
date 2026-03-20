@@ -73,7 +73,7 @@ impl OpenRepoFixture {
 
         // History graph is the main "long history" transformation.
         let branch_heads = HashSet::default();
-        let graph = history_graph::compute_graph(&self.commits, self.theme, &branch_heads);
+        let graph = history_graph::compute_graph(&self.commits, self.theme, &branch_heads, None);
 
         let mut h = FxHasher::default();
         rows.len().hash(&mut h);
@@ -233,7 +233,7 @@ impl HistoryGraphFixture {
             }
         }
 
-        let graph = history_graph::compute_graph(&self.commits, self.theme, &branch_heads);
+        let graph = history_graph::compute_graph(&self.commits, self.theme, &branch_heads, None);
         let mut h = FxHasher::default();
         graph.len().hash(&mut h);
         graph

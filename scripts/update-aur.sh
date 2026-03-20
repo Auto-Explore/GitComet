@@ -10,7 +10,7 @@ Usage: scripts/update-aur.sh \
   --source-tar PATH \
   [--verify-source]
 
-Updates PKGBUILD metadata for the GitHub-hosted AUR mirror repo, regenerates
+Updates PKGBUILD metadata for an AUR package repo checkout, regenerates
 .SRCINFO, and optionally verifies the referenced sources with makepkg.
 USAGE
 }

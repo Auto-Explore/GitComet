@@ -64,6 +64,10 @@ fn builds_pure_components_without_panics() {
                 .style(components::ButtonStyle::Outlined)
                 .disabled(true)
                 .render(theme);
+            let _ = components::Button::new("z5", "Create")
+                .style(components::ButtonStyle::Filled)
+                .separated_end_slot(div().text_xs().child("Enter"))
+                .render(theme);
         });
 
         assert_no_panic("components::SplitButton", || {

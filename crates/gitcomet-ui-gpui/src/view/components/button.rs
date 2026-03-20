@@ -30,6 +30,7 @@ pub struct Button {
     suppress_hover_border: bool,
     start_slot: Option<AnyElement>,
     end_slot: Option<AnyElement>,
+    separate_end_slot: bool,
 }
 
 impl Button {
@@ -45,6 +46,7 @@ impl Button {
             suppress_hover_border: false,
             start_slot: None,
             end_slot: None,
+            separate_end_slot: false,
         }
     }
 
@@ -75,6 +77,13 @@ impl Button {
 
     pub fn end_slot(mut self, slot: impl IntoElement) -> Self {
         self.end_slot = Some(slot.into_any_element());
+        self.separate_end_slot = false;
+        self
+    }
+
+    pub fn separated_end_slot(mut self, slot: impl IntoElement) -> Self {
+        self.end_slot = Some(slot.into_any_element());
+        self.separate_end_slot = true;
         self
     }
 
@@ -132,6 +141,20 @@ impl Button {
     }
 
     pub fn render(self, theme: AppTheme) -> Stateful<Div> {
+        let Self {
+            id,
+            label,
+            style,
+            disabled,
+            selected,
+            selected_bg,
+            borderless,
+            suppress_hover_border,
+            start_slot,
+            end_slot,
+            separate_end_slot,
+        } = self;
+
         let transparent = gpui::rgba(0x00000000);
         let outlined_border = with_alpha(
             theme.colors.text_muted,
@@ -143,8 +166,7 @@ impl Button {
             with_alpha(theme.colors.text, if theme.is_dark { 0.05 } else { 0.04 });
         let active_overlay_muted =
             with_alpha(theme.colors.text, if theme.is_dark { 0.08 } else { 0.06 });
-        let (bg, hover_bg, active_bg, border, hover_border, active_border, text) = match self.style
-        {
+        let (bg, hover_bg, active_bg, border, hover_border, active_border, text) = match style {
             ButtonStyle::Filled => (
                 transparent,
                 hover_overlay,
@@ -241,26 +263,49 @@ impl Button {
             ),
         };
 
-        let label = self.label.to_string();
+        let separator_color = with_alpha(
+            theme.colors.text_muted,
+            if theme.is_dark { 0.34 } else { 0.26 },
+        );
+        let label = label.to_string();
+        let separator_debug_selector = format!("{}_end_slot_separator", id.as_ref());
         let icon_only = looks_like_icon_button(&label);
-        let selected = self.selected;
-        let selected_bg_override = self.selected_bg;
-        let borderless = self.borderless;
-        let suppress_hover_border = self.suppress_hover_border || borderless;
+        let selected_bg_override = selected_bg;
+        let suppress_hover_border = suppress_hover_border || borderless;
 
-        let mut inner = div().flex().items_center().gap_1();
-        if let Some(start_slot) = self.start_slot {
-            inner = inner.child(start_slot);
+        let mut leading = div().flex().items_center().gap_1();
+        if let Some(start_slot) = start_slot {
+            leading = leading.child(start_slot);
         }
         if !label.is_empty() {
-            inner = inner.child(label);
+            leading = leading.child(label);
         }
-        if let Some(end_slot) = self.end_slot {
-            inner = inner.child(end_slot);
-        }
+        let inner = match (separate_end_slot, end_slot) {
+            (true, Some(end_slot)) => div()
+                .flex()
+                .items_center()
+                .h_full()
+                .child(leading.pr(px(6.0)))
+                .child(
+                    div()
+                        .debug_selector({
+                            let separator_debug_selector = separator_debug_selector.clone();
+                            move || separator_debug_selector.clone()
+                        })
+                        .flex()
+                        .items_center()
+                        .h_full()
+                        .pl(px(6.0))
+                        .border_l_1()
+                        .border_color(separator_color)
+                        .child(end_slot),
+                ),
+            (_, Some(end_slot)) => leading.child(end_slot),
+            (_, None) => leading,
+        };
 
         let mut base = div()
-            .id(self.id.clone())
+            .id(id.clone())
             .tab_index(0)
             .h(px(CONTROL_HEIGHT_PX))
             .px(px(if icon_only {
@@ -291,7 +336,7 @@ impl Button {
             }
         });
 
-        if self.disabled {
+        if disabled {
             base = base.opacity(0.5).cursor(CursorStyle::Arrow);
         } else if selected {
             let selected_bg = selected_bg_override.unwrap_or(theme.colors.active);

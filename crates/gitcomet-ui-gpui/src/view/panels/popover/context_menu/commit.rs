@@ -24,7 +24,7 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
     items.push(ContextMenuItem::Entry {
         label: "Open diff".into(),
         icon: Some("↗".into()),
-        shortcut: Some("Enter".into()),
+        shortcut: None,
         disabled: false,
         action: Box::new(ContextMenuAction::SelectDiff {
             repo_id,

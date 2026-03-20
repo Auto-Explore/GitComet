@@ -108,15 +108,16 @@ This release flow will:
 
 You can also run `.github/workflows/deploy-homebrew-tap.yml` manually for backfills or dry-runs.
 
-### AUR mirror deployment
+### AUR deployment
 
-To push `PKGBUILD` and `.SRCINFO` into a GitHub-hosted AUR mirror repo automatically on release:
+To push `PKGBUILD` and `.SRCINFO` into the live AUR repository automatically on release:
 
-1. Create the target repository (default expected name: `OWNER/aur-gitcomet`).
+1. Ensure the `gitcomet` AUR package repository exists and, if you keep a GitHub mirror, note its `OWNER/REPO`.
 2. In this repo, configure:
-   - secret `AUR_REPO_TOKEN`: GitHub token with `contents:write` access to the AUR mirror repository.
-   - optional variable `AUR_GITHUB_REPO`: target repository in `OWNER/REPO` form.
-   - optional variable `AUR_GITHUB_BRANCH`: target branch (default `main`).
+   - secret `AUR_SSH_PRIVATE_KEY`: the AUR-authorized SSH private key.
+   - secret `AUR_SSH_PASSPHRASE`: the passphrase for that SSH key.
+   - optional variable `AUR_GIT_REPOSITORY`: GitHub remote in `OWNER/REPO` form (default: `OWNER/aur-gitcomet`).
+   - optional variable `AUR_GIT_BRANCH`: GitHub branch for that remote (default `main`).
 3. Run `.github/workflows/release-manual-main.yml` with `draft=false`.
 
 This release flow will:
@@ -125,6 +126,10 @@ This release flow will:
 - update `PKGBUILD` `pkgver` and `sha256sums`
 - regenerate `.SRCINFO`
 - validate sources with `makepkg --verifysource`
-- push the updated metadata into the configured AUR mirror repository
+- clone `https://aur.archlinux.org/gitcomet.git`
+- configure a `github` remote from `AUR_GIT_REPOSITORY`
+- push the updated metadata into AUR over SSH using the configured key
+
+The previous `AUR_REPO_TOKEN` secret is no longer used.
 
 You can also run `.github/workflows/deploy-aur.yml` manually for backfills or dry-runs.

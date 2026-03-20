@@ -1,4 +1,4 @@
-name: Deploy AUR Mirror
+name: Deploy AUR
 
 on:
   workflow_call:
@@ -22,7 +22,9 @@ on:
         type: boolean
         default: false
     secrets:
-      AUR_REPO_TOKEN:
+      AUR_PRIVATE_SSH_KEY:
+        required: false
+      AUR_PRIVATE_SSH_KEY_PASSPHRASE:
         required: false
   workflow_dispatch:
     inputs:
@@ -35,12 +37,12 @@ on:
         required: false
         type: string
       aur_repo:
-        description: "Target GitHub repo in OWNER/REPO form (e.g. Auto-Explore/aur-gitcomet). Defaults to AUR_GITHUB_REPO when omitted."
+        description: "Defaults to AUR_GIT_REPOSITORY when omitted."
         required: false
         default: ""
         type: string
       aur_branch:
-        description: "Target branch in aur repo. Defaults to AUR_GITHUB_BRANCH when omitted."
+        description: "Defaults to AUR_GIT_REPOSITORY when omitted."
         required: false
         default: "main"
         type: string
@@ -59,7 +61,7 @@ concurrency:
 
 jobs:
   deploy:
-    name: Publish PKGBUILD and .SRCINFO to AUR mirror repo
+    name: Publish PKGBUILD and .SRCINFO to AUR
     runs-on: ubuntu-latest
     timeout-minutes: 30
     container:
@@ -68,7 +70,7 @@ jobs:
       - name: Install Arch packaging tooling
         run: |
           set -euo pipefail
-          pacman -Sy --noconfirm --needed ca-certificates ca-certificates-utils curl git perl shadow
+          pacman -Sy --noconfirm --needed ca-certificates ca-certificates-utils curl expect git openssh perl shadow
 
       - uses: actions/checkout@v6
 
@@ -81,10 +83,10 @@ jobs:
           DISPATCH_VERSION: ${{ github.event.inputs.version }}
           INPUT_AUR_REPO: ${{ inputs.aur_repo }}
           DISPATCH_AUR_REPO: ${{ github.event.inputs.aur_repo }}
-          VAR_AUR_REPO: ${{ vars.AUR_GITHUB_REPO }}
+          VAR_AUR_REPO: ${{ vars.AUR_GIT_REPOSITORY }}
           INPUT_AUR_BRANCH: ${{ inputs.aur_branch }}
           DISPATCH_AUR_BRANCH: ${{ github.event.inputs.aur_branch }}
-          VAR_AUR_BRANCH: ${{ vars.AUR_GITHUB_BRANCH }}
+          VAR_AUR_BRANCH: ${{ vars.AUR_GIT_BRANCH }}
           INPUT_DRY_RUN: ${{ inputs.dry_run }}
           DISPATCH_DRY_RUN: ${{ github.event.inputs.dry_run }}
           REPO_OWNER: ${{ github.repository_owner }}
@@ -132,12 +134,12 @@ jobs:
           fi
 
           if ! [[ "$aur_repo" =~ ^[^/]+/[^/]+$ ]]; then
-            echo "::error title=Invalid AUR repo::aur_repo must be OWNER/REPO."
+            echo "::error title=Invalid GitHub remote::aur_repo must be OWNER/REPO."
             exit 1
           fi
 
           if [ -z "$aur_branch" ]; then
-            echo "::error title=Missing AUR branch::aur_branch must not be empty."
+            echo "::error title=Missing GitHub branch::aur_branch must not be empty."
             exit 1
           fi
 
@@ -176,26 +178,15 @@ jobs:
             "https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/${TAG}.tar.gz" \
             -o "dist/aur/${source_name}"
 
-      - name: Clone AUR mirror repository
+      - name: Clone AUR repository and configure GitHub remote
         env:
           AUR_REPO: ${{ steps.norm.outputs.aur_repo }}
           AUR_BRANCH: ${{ steps.norm.outputs.aur_branch }}
-          DRY_RUN: ${{ steps.norm.outputs.dry_run }}
-          AUR_TOKEN: ${{ secrets.AUR_REPO_TOKEN }}
+          AUR_PACKAGE: gitcomet
         run: |
           set -euo pipefail
-          clone_url="https://github.com/${AUR_REPO}.git"
-
-          if [ "$DRY_RUN" != "true" ]; then
-            if [ -z "${AUR_TOKEN:-}" ]; then
-              echo "::error title=Missing secret::Set AUR_REPO_TOKEN to push to ${AUR_REPO}."
-              exit 1
-            fi
-            clone_url="https://x-access-token:${AUR_TOKEN}@github.com/${AUR_REPO}.git"
-          fi
-
           rm -rf aur-repo
-          git clone --depth 1 --branch "$AUR_BRANCH" --single-branch "$clone_url" aur-repo
+          git clone --depth 1 "https://aur.archlinux.org/${AUR_PACKAGE}.git" aur-repo
           chown -R builder:builder aur-repo dist
 
       - name: Update PKGBUILD and regenerate .SRCINFO
@@ -218,8 +209,9 @@ jobs:
             echo "### AUR deployment dry run"
             echo ""
             echo "- Source release: \`${{ steps.norm.outputs.tag }}\`"
-            echo "- Target repo: \`${{ steps.norm.outputs.aur_repo }}\`"
-            echo "- Target branch: \`${{ steps.norm.outputs.aur_branch }}\`"
+            echo "- AUR push remote: \`ssh://aur@aur.archlinux.org/gitcomet.git\`"
+            echo "- GitHub remote: \`${{ steps.norm.outputs.aur_repo }}\`"
+            echo "- GitHub branch: \`${{ steps.norm.outputs.aur_branch }}\`"
             echo ""
             echo "PKGBUILD preview:"
             echo '```bash'
@@ -232,19 +224,27 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Publish metadata to AUR mirror repo
+      - name: Publish metadata to AUR
         if: ${{ steps.norm.outputs.dry_run != 'true' }}
         env:
-          AUR_BRANCH: ${{ steps.norm.outputs.aur_branch }}
           TAG: ${{ steps.norm.outputs.tag }}
+          AUR_PACKAGE: gitcomet
+          AUR_PRIVATE_SSH_KEY: ${{ secrets.AUR_PRIVATE_SSH_KEY }}
+          AUR_PRIVATE_SSH_KEY_PASSPHRASE: ${{ secrets.AUR_PRIVATE_SSH_KEY_PASSPHRASE }}
         run: |
           set -euo pipefail
+
+          if [ -z "${AUR_PRIVATE_SSH_KEY:-}" ] || [ -z "${AUR_PRIVATE_SSH_KEY_PASSPHRASE:-}" ]; then
+            echo "::error title=Missing secret::Set AUR_PRIVATE_SSH_KEY and AUR_PRIVATE_SSH_KEY_PASSPHRASE to push to AUR."
+            exit 1
+          fi
+
           git config --global --add safe.directory "$GITHUB_WORKSPACE/aur-repo"
 
           pushd aur-repo >/dev/null
           git add PKGBUILD .SRCINFO
           if git diff --cached --quiet -- PKGBUILD .SRCINFO; then
-            echo "No AUR metadata changes detected; mirror repo is already up to date."
+            echo "No AUR metadata changes detected; repository is already up to date."
             popd >/dev/null
             exit 0
           fi
@@ -252,17 +252,55 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -m "gitcomet ${TAG}"
-          git push origin "HEAD:${AUR_BRANCH}"
+
+          install -d -m 700 "$HOME/.ssh"
+          key_path="$HOME/.ssh/aur"
+          printf '%s\n' "$AUR_PRIVATE_SSH_KEY" > "$key_path"
+          chmod 600 "$key_path"
+          touch "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+          ssh-keyscan -H aur.archlinux.org >> "$HOME/.ssh/known_hosts" 2>/dev/null
+
+          eval "$(ssh-agent -s)"
+          cleanup() {
+            rm -f "$key_path"
+            if [ -n "${SSH_AGENT_PID:-}" ]; then
+              ssh-agent -k >/dev/null
+            fi
+          }
+          trap cleanup EXIT
+
+          export KEY_PATH="$key_path"
+          export AUR_PRIVATE_SSH_KEY_PASSPHRASE
+          expect <<'EOF'
+          set timeout 30
+          log_user 0
+          spawn ssh-add "$env(KEY_PATH)"
+          expect {
+            "Enter passphrase for*" {
+              send -- "$env(AUR_PRIVATE_SSH_KEY_PASSPHRASE)\r"
+              exp_continue
+            }
+            eof
+          }
+          catch wait result
+          exit [lindex $result 3]
+          EOF
+
+          aur_branch="$(git branch --show-current)"
+          git remote set-url --push origin "ssh://aur@aur.archlinux.org/${AUR_PACKAGE}.git"
+          git push origin "HEAD:${aur_branch}"
           popd >/dev/null
 
       - name: Emit deployment summary
         run: |
           set -euo pipefail
           {
-            echo "### AUR mirror deployment"
+            echo "### AUR deployment"
             echo ""
             echo "- Release: \`${{ steps.norm.outputs.tag }}\`"
-            echo "- Target repo: \`${{ steps.norm.outputs.aur_repo }}\`"
-            echo "- Target branch: \`${{ steps.norm.outputs.aur_branch }}\`"
+            echo "- AUR push remote: \`ssh://aur@aur.archlinux.org/gitcomet.git\`"
+            echo "- GitHub remote: \`${{ steps.norm.outputs.aur_repo }}\`"
+            echo "- GitHub branch: \`${{ steps.norm.outputs.aur_branch }}\`"
             echo "- Dry run: \`${{ steps.norm.outputs.dry_run }}\`"
           } >> "$GITHUB_STEP_SUMMARY"

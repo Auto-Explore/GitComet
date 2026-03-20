@@ -67,6 +67,11 @@ pub(in super::super) struct PopoverHost {
     settings_submenu_max_h: Option<Pixels>,
     settings_runtime_info: settings::SettingsRuntimeInfo,
     _ui_model_subscription: gpui::Subscription,
+    _clone_repo_url_input_subscription: gpui::Subscription,
+    _clone_repo_parent_dir_input_subscription: gpui::Subscription,
+    _create_tag_input_subscription: gpui::Subscription,
+    _repo_picker_search_input_subscription: Option<gpui::Subscription>,
+    _branch_picker_search_input_subscription: Option<gpui::Subscription>,
     _create_branch_input_subscription: gpui::Subscription,
     _stash_message_input_subscription: gpui::Subscription,
     notify_fingerprint: u64,
@@ -197,6 +202,50 @@ impl PopoverHost {
             )
         });
 
+        let clone_repo_url_input_subscription =
+            cx.observe(&clone_repo_url_input, |this, input, cx| {
+                let enter_pressed = input.update(cx, |input, _| input.take_enter_pressed());
+                let escape_pressed = input.update(cx, |input, _| input.take_escape_pressed());
+
+                if !matches!(this.popover, Some(PopoverKind::CloneRepo)) {
+                    return;
+                }
+
+                if escape_pressed {
+                    this.close_popover(cx);
+                    return;
+                }
+
+                if enter_pressed {
+                    this.submit_clone_repo(cx);
+                    return;
+                }
+
+                cx.notify();
+            });
+
+        let clone_repo_parent_dir_input_subscription =
+            cx.observe(&clone_repo_parent_dir_input, |this, input, cx| {
+                let enter_pressed = input.update(cx, |input, _| input.take_enter_pressed());
+                let escape_pressed = input.update(cx, |input, _| input.take_escape_pressed());
+
+                if !matches!(this.popover, Some(PopoverKind::CloneRepo)) {
+                    return;
+                }
+
+                if escape_pressed {
+                    this.close_popover(cx);
+                    return;
+                }
+
+                if enter_pressed {
+                    this.submit_clone_repo(cx);
+                    return;
+                }
+
+                cx.notify();
+            });
+
         let rebase_onto_input = cx.new(|cx| {
             components::TextInput::new(
                 components::TextInputOptions {
@@ -295,17 +344,70 @@ impl PopoverHost {
             )
         });
 
-        let create_branch_input_subscription = cx.observe(&create_branch_input, |this, _, cx| {
-            if matches!(this.popover, Some(PopoverKind::CreateBranch)) {
-                cx.notify();
+        let create_tag_input_subscription = cx.observe(&create_tag_input, |this, input, cx| {
+            let enter_pressed = input.update(cx, |input, _| input.take_enter_pressed());
+            let escape_pressed = input.update(cx, |input, _| input.take_escape_pressed());
+
+            if !matches!(this.popover, Some(PopoverKind::CreateTagPrompt { .. })) {
+                return;
             }
+
+            if escape_pressed {
+                this.close_popover(cx);
+                return;
+            }
+
+            if enter_pressed {
+                this.submit_create_tag(cx);
+                return;
+            }
+
+            cx.notify();
         });
 
-        let stash_message_input_subscription = cx.observe(&stash_message_input, |this, _, cx| {
-            if matches!(this.popover, Some(PopoverKind::StashPrompt)) {
+        let create_branch_input_subscription =
+            cx.observe_in(&create_branch_input, window, |this, input, window, cx| {
+                let enter_pressed = input.update(cx, |input, _| input.take_enter_pressed());
+                let escape_pressed = input.update(cx, |input, _| input.take_escape_pressed());
+
+                if !matches!(this.popover, Some(PopoverKind::CreateBranch)) {
+                    return;
+                }
+
+                if escape_pressed {
+                    this.dismiss_inline_popover(window, cx);
+                    return;
+                }
+
+                if enter_pressed {
+                    this.submit_create_branch(window, cx);
+                    return;
+                }
+
                 cx.notify();
-            }
-        });
+            });
+
+        let stash_message_input_subscription =
+            cx.observe_in(&stash_message_input, window, |this, input, window, cx| {
+                let enter_pressed = input.update(cx, |input, _| input.take_enter_pressed());
+                let escape_pressed = input.update(cx, |input, _| input.take_escape_pressed());
+
+                if !matches!(this.popover, Some(PopoverKind::StashPrompt)) {
+                    return;
+                }
+
+                if escape_pressed {
+                    this.dismiss_inline_popover(window, cx);
+                    return;
+                }
+
+                if enter_pressed {
+                    this.submit_stash(window, cx);
+                    return;
+                }
+
+                cx.notify();
+            });
 
         let push_upstream_branch_input = cx.new(|cx| {
             components::TextInput::new(
@@ -394,6 +496,11 @@ impl PopoverHost {
             settings_submenu_max_h: None,
             settings_runtime_info: settings::SettingsRuntimeInfo::detect(),
             _ui_model_subscription: subscription,
+            _clone_repo_url_input_subscription: clone_repo_url_input_subscription,
+            _clone_repo_parent_dir_input_subscription: clone_repo_parent_dir_input_subscription,
+            _create_tag_input_subscription: create_tag_input_subscription,
+            _repo_picker_search_input_subscription: None,
+            _branch_picker_search_input_subscription: None,
             _create_branch_input_subscription: create_branch_input_subscription,
             _stash_message_input_subscription: stash_message_input_subscription,
             notify_fingerprint: 0,
@@ -516,6 +623,122 @@ impl PopoverHost {
         self.popover.is_some()
     }
 
+    fn dismiss_inline_popover(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
+        self.popover = None;
+        self.popover_anchor = None;
+        self.clear_active_context_menu_invoker(cx);
+        let focus = self.main_pane.read(cx).diff_panel_focus_handle.clone();
+        window.focus(&focus);
+        cx.notify();
+    }
+
+    fn can_submit_create_tag(&self, cx: &mut gpui::Context<Self>) -> bool {
+        matches!(self.popover, Some(PopoverKind::CreateTagPrompt { .. }))
+            && self
+                .create_tag_input
+                .read_with(cx, |input, _| !input.text().trim().is_empty())
+    }
+
+    fn can_submit_clone_repo(&self, cx: &mut gpui::Context<Self>) -> bool {
+        matches!(self.popover, Some(PopoverKind::CloneRepo))
+            && self
+                .clone_repo_url_input
+                .read_with(cx, |input, _| !input.text().trim().is_empty())
+            && self
+                .clone_repo_parent_dir_input
+                .read_with(cx, |input, _| !input.text().trim().is_empty())
+    }
+
+    fn submit_create_tag(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(PopoverKind::CreateTagPrompt { repo_id, target }) = self.popover.clone() else {
+            return;
+        };
+
+        let name = self
+            .create_tag_input
+            .read_with(cx, |input, _| input.text().trim().to_string());
+        if name.is_empty() {
+            return;
+        }
+
+        self.store.dispatch(Msg::CreateTag {
+            repo_id,
+            name,
+            target,
+        });
+        self.close_popover(cx);
+    }
+
+    fn submit_clone_repo(&mut self, cx: &mut gpui::Context<Self>) {
+        if !matches!(self.popover, Some(PopoverKind::CloneRepo)) {
+            return;
+        }
+
+        let url = self
+            .clone_repo_url_input
+            .read_with(cx, |input, _| input.text().trim().to_string());
+        let parent = self
+            .clone_repo_parent_dir_input
+            .read_with(cx, |input, _| input.text().trim().to_string());
+        if url.is_empty() || parent.is_empty() {
+            return;
+        }
+
+        let repo_name = clone_repo_name_from_url(&url);
+        let dest = std::path::PathBuf::from(parent).join(repo_name);
+        self.store.dispatch(Msg::CloneRepo { url, dest });
+        self.close_popover(cx);
+    }
+
+    fn can_submit_create_branch(&self, cx: &mut gpui::Context<Self>) -> bool {
+        self.active_repo_id().is_some()
+            && self
+                .create_branch_input
+                .read_with(cx, |input, _| !input.text().trim().is_empty())
+    }
+
+    fn submit_create_branch(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
+        let Some(repo_id) = self.active_repo_id() else {
+            return;
+        };
+        let name = self
+            .create_branch_input
+            .read_with(cx, |input, _| input.text().trim().to_string());
+        if name.is_empty() {
+            return;
+        }
+
+        self.store
+            .dispatch(Msg::CreateBranchAndCheckout { repo_id, name });
+        self.dismiss_inline_popover(window, cx);
+    }
+
+    fn can_submit_stash(&self, cx: &mut gpui::Context<Self>) -> bool {
+        self.active_repo_id().is_some()
+            && self
+                .stash_message_input
+                .read_with(cx, |input, _| !input.text().trim().is_empty())
+    }
+
+    fn submit_stash(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
+        let Some(repo_id) = self.active_repo_id() else {
+            return;
+        };
+        let message = self
+            .stash_message_input
+            .read_with(cx, |input, _| input.text().trim().to_string());
+        if message.is_empty() {
+            return;
+        }
+
+        self.store.dispatch(Msg::Stash {
+            repo_id,
+            message,
+            include_untracked: true,
+        });
+        self.dismiss_inline_popover(window, cx);
+    }
+
     pub(in super::super) fn open_popover_at(
         &mut self,
         kind: PopoverKind,
@@ -619,6 +842,7 @@ impl PopoverHost {
                 PopoverKind::CreateBranch => {
                     let theme = self.theme;
                     self.create_branch_input.update(cx, |input, cx| {
+                        input.clear_transient_key_presses();
                         input.set_theme(theme, cx);
                         input.set_text("", cx);
                         cx.notify();
@@ -631,6 +855,7 @@ impl PopoverHost {
                 PopoverKind::CheckoutRemoteBranchPrompt { branch, .. } => {
                     let theme = self.theme;
                     self.create_branch_input.update(cx, |input, cx| {
+                        input.clear_transient_key_presses();
                         input.set_theme(theme, cx);
                         input.set_text(branch.clone(), cx);
                         cx.notify();
@@ -643,6 +868,7 @@ impl PopoverHost {
                 PopoverKind::StashPrompt => {
                     let theme = self.theme;
                     self.stash_message_input.update(cx, |input, cx| {
+                        input.clear_transient_key_presses();
                         input.set_theme(theme, cx);
                         input.set_text("", cx);
                         cx.notify();
@@ -661,11 +887,13 @@ impl PopoverHost {
                         .clone_repo_parent_dir_input
                         .read_with(cx, |i, _| i.text().to_string());
                     self.clone_repo_url_input.update(cx, |input, cx| {
+                        input.clear_transient_key_presses();
                         input.set_theme(theme, cx);
                         input.set_text(url_text, cx);
                         cx.notify();
                     });
                     self.clone_repo_parent_dir_input.update(cx, |input, cx| {
+                        input.clear_transient_key_presses();
                         input.set_theme(theme, cx);
                         input.set_text(parent_text, cx);
                         cx.notify();
@@ -678,6 +906,7 @@ impl PopoverHost {
                 PopoverKind::CreateTagPrompt { .. } => {
                     let theme = self.theme;
                     self.create_tag_input.update(cx, |input, cx| {
+                        input.clear_transient_key_presses();
                         input.set_theme(theme, cx);
                         input.set_text("", cx);
                         cx.notify();

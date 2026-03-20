@@ -20,7 +20,7 @@ Available for Linux, Windows, and macOS.
 
 Download the latest prebuilt binaries/installers from [GitHub Releases](https://github.com/Auto-Explore/GitComet/releases).
 
-#### Homebrew
+#### Homebrew (macOs / Linux)
 
 install app from tap (recommended):
 
@@ -42,6 +42,32 @@ optional CLI install:
 brew install gitcomet-cli
 ```
 
+#### AUR (Arch Linux)
+
+```bash
+git clone https://aur.archlinux.org/gitcomet.git
+cd gitcomet && makepkg -si
+```
+
+#### GURU (Gentoo Linux)
+
+```bash
+emerge --ask dev-vcs/gitcomet
+```
+
+#### apt (Debian/Ubuntu)
+
+```bash
+curl -fsSL https://apt.gitcomet.dev/gitcomet-archive-keyring.gpg | sudo tee /usr/share/keyrings/gitcomet-archive-keyring.gpg >/dev/null
+curl -fsSL https://apt.gitcomet.dev/gitcomet.sources | sudo tee /etc/apt/sources.list.d/gitcomet.sources >/dev/null
+sudo apt update
+sudo apt install gitcomet
+```
+
+### Requirements
+
+GitComet requires a local Git installation of `2.50` or newer.
+
 ### Fast, Free, Familiar
 
 - **Fast**: Built end-to-end in Rust for speed and efficiency using [smol](https://github.com/smol-rs/smol), [gix](https://github.com/GitoxideLabs/gitoxide), and [gpui](https://www.gpui.rs/).
@@ -58,6 +84,7 @@ GitComet started from frustration with existing tools on huge codebases like Chr
 | --- | --- | ---: | ---: |
 | GitComet | v0.2.0 | 1s | 265MB |
 | GitFiend | v0.45.3 | 1s | 289MB |
+| SourceGit | v2026.6 | 3.5s | 301MB |
 | SmartGit | v25.1.110 | 18s | 4.8GB |
 | GitKraken | v11.10.0 | 25s | 2GB |
 | Megit | v0.10.0 | 29s | 14.4GB |
