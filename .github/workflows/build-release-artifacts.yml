@@ -346,29 +346,49 @@ jobs:
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
 
-      - name: Prepare macOS signing and notarization credentials
-        id: macos_signing
+      - name: Determine macOS signing mode
+        id: macos_signing_mode
         run: |
           set -euo pipefail
 
+          required=(
+            MACOS_SIGNING_IDENTITY
+            MACOS_SIGNING_CERT_BASE64
+            MACOS_SIGNING_CERT_PASSWORD
+            MACOS_NOTARY_KEY_ID
+            MACOS_NOTARY_ISSUER_ID
+            MACOS_NOTARY_API_KEY_P8
+          )
+          present=()
           missing=()
-          for name in \
-            MACOS_SIGNING_IDENTITY \
-            MACOS_SIGNING_CERT_BASE64 \
-            MACOS_SIGNING_CERT_PASSWORD \
-            MACOS_NOTARY_KEY_ID \
-            MACOS_NOTARY_ISSUER_ID \
-            MACOS_NOTARY_API_KEY_P8; do
-            if [ -z "${!name:-}" ]; then
+
+          for name in "${required[@]}"; do
+            if [ -n "${!name:-}" ]; then
+              present+=("$name")
+            else
               missing+=("$name")
             fi
           done
 
+          if [ "${#present[@]}" -eq 0 ]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "macOS signing is not configured; building unsigned macOS artifacts."
+            exit 0
+          fi
+
           if [ "${#missing[@]}" -gt 0 ]; then
-            echo "::error title=Missing macOS signing configuration::Missing required secret(s): ${missing[*]}"
-            echo "::error title=Required secrets::Set MACOS_SIGNING_IDENTITY, MACOS_SIGNING_CERT_BASE64, MACOS_SIGNING_CERT_PASSWORD, MACOS_NOTARY_KEY_ID, MACOS_NOTARY_ISSUER_ID, and MACOS_NOTARY_API_KEY_P8."
+            echo "::error title=Incomplete macOS signing configuration::Missing required secret(s): ${missing[*]}"
+            echo "::error title=Partial macOS signing configuration::Either provide all macOS signing and notarization secrets or leave them all unset to build unsigned artifacts."
             exit 1
           fi
+
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare macOS signing and notarization credentials
+        if: ${{ steps.macos_signing_mode.outputs.enabled == 'true' }}
+        id: macos_signing
+        run: |
+          set -euo pipefail
 
           keychain_path="${RUNNER_TEMP}/gitcomet-signing.keychain-db"
           keychain_password="$(openssl rand -hex 24)"
@@ -405,15 +425,26 @@ jobs:
       - name: Package macOS release assets
         run: |
           set -euo pipefail
-          scripts/package-macos.sh \
-            --version "${VERSION}" \
-            --arch "${ARCH}" \
-            --release \
-            --out-dir dist \
-            --codesign-identity "${MACOS_SIGNING_IDENTITY}" \
-            --codesign-keychain "${{ steps.macos_signing.outputs.keychain_path }}"
+          package_args=(
+            --version "${VERSION}"
+            --arch "${ARCH}"
+            --release
+            --out-dir dist
+          )
+
+          if [ "${{ steps.macos_signing_mode.outputs.enabled }}" = "true" ]; then
+            package_args+=(
+              --codesign-identity "${MACOS_SIGNING_IDENTITY}"
+              --codesign-keychain "${{ steps.macos_signing.outputs.keychain_path }}"
+            )
+          else
+            echo "Building unsigned macOS artifacts because signing is not configured."
+          fi
+
+          scripts/package-macos.sh "${package_args[@]}"
 
       - name: Notarize and verify macOS artifacts
+        if: ${{ steps.macos_signing_mode.outputs.enabled == 'true' }}
         run: |
           set -euo pipefail
 
@@ -444,7 +475,7 @@ jobs:
           spctl --assess --type open --context context:primary-signature --verbose=4 "$dmg_path"
 
       - name: Cleanup macOS signing keychain
-        if: ${{ always() }}
+        if: ${{ always() && steps.macos_signing_mode.outputs.enabled == 'true' }}
         env:
           KEYCHAIN_PATH: ${{ steps.macos_signing.outputs.keychain_path }}
           DEFAULT_KEYCHAIN_PATH: ${{ steps.macos_signing.outputs.default_keychain }}
