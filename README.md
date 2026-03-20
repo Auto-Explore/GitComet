@@ -49,6 +49,12 @@ git clone https://aur.archlinux.org/gitcomet.git
 cd gitcomet && makepkg -si
 ```
 
+#### GURU (Gentoo Linux)
+
+```bash
+emerge --ask dev-vcs/gitcomet
+```
+
 #### apt (Debian/Ubuntu)
 
 ```bash
