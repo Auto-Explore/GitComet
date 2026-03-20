@@ -78,6 +78,7 @@ GitComet started from frustration with existing tools on huge codebases like Chr
 | --- | --- | ---: | ---: |
 | GitComet | v0.2.0 | 1s | 265MB |
 | GitFiend | v0.45.3 | 1s | 289MB |
+| SourceGit | v2026.6 | 3.5s | 301MB |
 | SmartGit | v25.1.110 | 18s | 4.8GB |
 | GitKraken | v11.10.0 | 25s | 2GB |
 | Megit | v0.10.0 | 29s | 14.4GB |
