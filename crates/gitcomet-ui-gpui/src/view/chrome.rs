@@ -9,8 +9,54 @@ const MACOS_TRAFFIC_LIGHTS_SAFE_INSET: Pixels = px(78.0);
 pub(super) struct TitleBarView {
     theme: AppTheme,
     root_view: WeakEntity<GitCometView>,
-    title_should_move: bool,
+    title_drag_state: TitleBarDragState,
     app_menu_open: bool,
+}
+
+#[derive(Debug, Default, Clone, Copy, Eq, PartialEq)]
+struct TitleBarDragState {
+    should_move: bool,
+}
+
+impl TitleBarDragState {
+    fn on_left_mouse_down(&mut self, click_count: usize) {
+        self.should_move = click_count < 2;
+    }
+
+    fn clear(&mut self) {
+        self.should_move = false;
+    }
+
+    fn take_move_request(&mut self) -> bool {
+        let should_move = self.should_move;
+        self.should_move = false;
+        should_move
+    }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum TitleBarDoubleClickAction {
+    PlatformDefault,
+    ToggleZoom,
+}
+
+fn should_handle_titlebar_double_click(click_count: usize, standard_click: bool) -> bool {
+    standard_click && click_count == 2
+}
+
+fn titlebar_double_click_action() -> TitleBarDoubleClickAction {
+    if cfg!(target_os = "macos") {
+        TitleBarDoubleClickAction::PlatformDefault
+    } else {
+        TitleBarDoubleClickAction::ToggleZoom
+    }
+}
+
+fn handle_titlebar_double_click(window: &mut Window) {
+    match titlebar_double_click_action() {
+        TitleBarDoubleClickAction::PlatformDefault => window.titlebar_double_click(),
+        TitleBarDoubleClickAction::ToggleZoom => window.zoom_window(),
+    }
 }
 
 pub(in crate::view) fn window_top_left_corner(window: &Window) -> Point<Pixels> {
@@ -173,7 +219,7 @@ impl TitleBarView {
         Self {
             theme,
             root_view,
-            title_should_move: false,
+            title_drag_state: TitleBarDragState::default(),
             app_menu_open: false,
         }
     }
@@ -317,6 +363,7 @@ impl Render for TitleBarView {
 
         let drag_region = div()
             .id("title_drag")
+            .debug_selector(|| "titlebar_drag".to_string())
             .flex_1()
             .h_full()
             .flex()
@@ -324,30 +371,38 @@ impl Render for TitleBarView {
             .min_w(px(0.0))
             .px_2()
             .window_control_area(WindowControlArea::Drag)
+            .on_click(cx.listener(|this, e: &ClickEvent, window, cx| {
+                if !should_handle_titlebar_double_click(e.click_count(), e.standard_click()) {
+                    return;
+                }
+                this.title_drag_state.clear();
+                cx.stop_propagation();
+                handle_titlebar_double_click(window);
+                cx.notify();
+            }))
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|this, _e, _w, cx| {
-                    this.title_should_move = true;
+                cx.listener(|this, e: &MouseDownEvent, _w, cx| {
+                    this.title_drag_state.on_left_mouse_down(e.click_count);
                     cx.notify();
                 }),
             )
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|this, _e, _w, cx| {
-                    this.title_should_move = false;
+                    this.title_drag_state.clear();
                     cx.notify();
                 }),
             )
             .on_mouse_up_out(
                 MouseButton::Left,
                 cx.listener(|this, _e, _w, cx| {
-                    this.title_should_move = false;
+                    this.title_drag_state.clear();
                     cx.notify();
                 }),
             )
             .on_mouse_move(cx.listener(|this, _e, window, _cx| {
-                if this.title_should_move {
-                    this.title_should_move = false;
+                if this.title_drag_state.take_move_request() {
                     window.start_window_move();
                 }
             }));
@@ -567,5 +622,53 @@ mod tests {
             })
             .is_ok()
         );
+    }
+
+    #[test]
+    fn titlebar_drag_state_tracks_single_clicks_and_suppresses_double_click_drags() {
+        let mut state = TitleBarDragState::default();
+
+        state.on_left_mouse_down(1);
+        assert!(state.should_move, "single click should arm a window move");
+
+        state.on_left_mouse_down(2);
+        assert!(
+            !state.should_move,
+            "double click should suppress drag tracking so it can toggle zoom instead"
+        );
+    }
+
+    #[test]
+    fn titlebar_drag_state_move_request_is_consumed_once() {
+        let mut state = TitleBarDragState::default();
+        state.on_left_mouse_down(1);
+
+        assert!(
+            state.take_move_request(),
+            "the first mouse move after pressing the title bar should start a window move"
+        );
+        assert!(
+            !state.take_move_request(),
+            "move tracking should clear after the move request is consumed"
+        );
+    }
+
+    #[test]
+    fn titlebar_double_click_requires_standard_double_click() {
+        assert!(should_handle_titlebar_double_click(2, true));
+        assert!(!should_handle_titlebar_double_click(1, true));
+        assert!(!should_handle_titlebar_double_click(3, true));
+        assert!(!should_handle_titlebar_double_click(2, false));
+    }
+
+    #[test]
+    fn titlebar_double_click_action_matches_platform_convention() {
+        let expected = if cfg!(target_os = "macos") {
+            TitleBarDoubleClickAction::PlatformDefault
+        } else {
+            TitleBarDoubleClickAction::ToggleZoom
+        };
+
+        assert_eq!(titlebar_double_click_action(), expected);
     }
 }
