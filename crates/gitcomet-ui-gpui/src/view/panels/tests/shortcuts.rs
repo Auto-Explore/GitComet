@@ -805,10 +805,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
             },
         )
     });
-    assert_declared_shortcuts(
-        &conflicted_status_model,
-        &["H", "O", "T", "M", "D", "C"],
-    );
+    assert_declared_shortcuts(&conflicted_status_model, &["H", "O", "T", "M", "D", "C"]);
     assert_shortcut_action!(
         conflicted_status_model,
         "Enter",

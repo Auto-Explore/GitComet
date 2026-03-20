@@ -135,6 +135,19 @@ impl GitCometView {
         }
         self.drive_focused_mergetool_bootstrap();
 
+        #[cfg(target_os = "macos")]
+        crate::app::sync_gitcomet_window_state(
+            cx,
+            self.window_handle,
+            cx.weak_entity(),
+            self.view_mode,
+            self.state
+                .repos
+                .iter()
+                .map(|repo| repo.spec.workdir.clone())
+                .collect(),
+        );
+
         prev_error != next_error || prev_auth_prompt != self.state.auth_prompt
     }
 }

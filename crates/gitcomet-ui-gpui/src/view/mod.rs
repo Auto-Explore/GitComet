@@ -533,6 +533,7 @@ impl GitCometView {
 
         let mut view = Self {
             state: Arc::clone(&initial_state),
+            window_handle: window.window_handle(),
             _ui_model: ui_model,
             store,
             _poller: poller,
@@ -593,6 +594,19 @@ impl GitCometView {
 
         view.drive_focused_mergetool_bootstrap();
         view.maybe_check_for_updates_on_startup(cx);
+
+        #[cfg(target_os = "macos")]
+        crate::app::sync_gitcomet_window_state(
+            cx,
+            view.window_handle,
+            cx.weak_entity(),
+            view.view_mode,
+            view.state
+                .repos
+                .iter()
+                .map(|repo| repo.spec.workdir.clone())
+                .collect(),
+        );
 
         view
     }

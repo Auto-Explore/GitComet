@@ -266,7 +266,12 @@ pub(super) fn create_tracking_store(
         let snapshot = store.snapshot();
         snapshot
             .active_repo
-            .and_then(|repo_id| snapshot.repos.iter().find(|repo_state| repo_state.id == repo_id))
+            .and_then(|repo_id| {
+                snapshot
+                    .repos
+                    .iter()
+                    .find(|repo_state| repo_state.id == repo_id)
+            })
             .is_some_and(|repo_state| {
                 repo_state.spec.workdir == expected_workdir
                     && matches!(repo_state.open, Loadable::Ready(()))

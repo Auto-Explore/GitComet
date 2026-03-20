@@ -41,10 +41,6 @@ fn adjacent_repo_tab_id(
 }
 
 impl GitCometView {
-    pub(crate) fn is_normal_window(&self) -> bool {
-        self.view_mode == GitCometViewMode::Normal
-    }
-
     pub(crate) fn open_recent_repository_picker(
         &mut self,
         window: &mut Window,
@@ -61,10 +57,6 @@ impl GitCometView {
             window,
             cx,
         );
-    }
-
-    pub(crate) fn contains_repo_path(&self, path: &std::path::Path) -> bool {
-        self.repo_id_for_path(path).is_some()
     }
 
     pub(crate) fn activate_repo_path(
