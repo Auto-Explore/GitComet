@@ -58,6 +58,10 @@ sudo apt update
 sudo apt install gitcomet
 ```
 
+### Requirements
+
+GitComet requires a local Git installation of `2.50` or newer.
+
 ### Fast, Free, Familiar
 
 - **Fast**: Built end-to-end in Rust for speed and efficiency using [smol](https://github.com/smol-rs/smol), [gix](https://github.com/GitoxideLabs/gitoxide), and [gpui](https://www.gpui.rs/).
