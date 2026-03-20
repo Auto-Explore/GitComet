@@ -66,6 +66,8 @@ pub(in super::super) struct PopoverHost {
     settings_submenu_max_h: Option<Pixels>,
     settings_runtime_info: settings::SettingsRuntimeInfo,
     _ui_model_subscription: gpui::Subscription,
+    _clone_repo_url_input_subscription: gpui::Subscription,
+    _clone_repo_parent_dir_input_subscription: gpui::Subscription,
     _create_tag_input_subscription: gpui::Subscription,
     _repo_picker_search_input_subscription: Option<gpui::Subscription>,
     _branch_picker_search_input_subscription: Option<gpui::Subscription>,
@@ -197,6 +199,50 @@ impl PopoverHost {
                 cx,
             )
         });
+
+        let clone_repo_url_input_subscription =
+            cx.observe(&clone_repo_url_input, |this, input, cx| {
+                let enter_pressed = input.update(cx, |input, _| input.take_enter_pressed());
+                let escape_pressed = input.update(cx, |input, _| input.take_escape_pressed());
+
+                if !matches!(this.popover, Some(PopoverKind::CloneRepo)) {
+                    return;
+                }
+
+                if escape_pressed {
+                    this.close_popover(cx);
+                    return;
+                }
+
+                if enter_pressed {
+                    this.submit_clone_repo(cx);
+                    return;
+                }
+
+                cx.notify();
+            });
+
+        let clone_repo_parent_dir_input_subscription =
+            cx.observe(&clone_repo_parent_dir_input, |this, input, cx| {
+                let enter_pressed = input.update(cx, |input, _| input.take_enter_pressed());
+                let escape_pressed = input.update(cx, |input, _| input.take_escape_pressed());
+
+                if !matches!(this.popover, Some(PopoverKind::CloneRepo)) {
+                    return;
+                }
+
+                if escape_pressed {
+                    this.close_popover(cx);
+                    return;
+                }
+
+                if enter_pressed {
+                    this.submit_clone_repo(cx);
+                    return;
+                }
+
+                cx.notify();
+            });
 
         let rebase_onto_input = cx.new(|cx| {
             components::TextInput::new(
@@ -448,6 +494,8 @@ impl PopoverHost {
             settings_submenu_max_h: None,
             settings_runtime_info: settings::SettingsRuntimeInfo::detect(),
             _ui_model_subscription: subscription,
+            _clone_repo_url_input_subscription: clone_repo_url_input_subscription,
+            _clone_repo_parent_dir_input_subscription: clone_repo_parent_dir_input_subscription,
             _create_tag_input_subscription: create_tag_input_subscription,
             _repo_picker_search_input_subscription: None,
             _branch_picker_search_input_subscription: None,
@@ -580,6 +628,16 @@ impl PopoverHost {
                 .read_with(cx, |input, _| !input.text().trim().is_empty())
     }
 
+    fn can_submit_clone_repo(&self, cx: &mut gpui::Context<Self>) -> bool {
+        matches!(self.popover, Some(PopoverKind::CloneRepo))
+            && self
+                .clone_repo_url_input
+                .read_with(cx, |input, _| !input.text().trim().is_empty())
+            && self
+                .clone_repo_parent_dir_input
+                .read_with(cx, |input, _| !input.text().trim().is_empty())
+    }
+
     fn submit_create_tag(&mut self, cx: &mut gpui::Context<Self>) {
         let Some(PopoverKind::CreateTagPrompt { repo_id, target }) = self.popover.clone() else {
             return;
@@ -597,6 +655,27 @@ impl PopoverHost {
             name,
             target,
         });
+        self.close_popover(cx);
+    }
+
+    fn submit_clone_repo(&mut self, cx: &mut gpui::Context<Self>) {
+        if !matches!(self.popover, Some(PopoverKind::CloneRepo)) {
+            return;
+        }
+
+        let url = self
+            .clone_repo_url_input
+            .read_with(cx, |input, _| input.text().trim().to_string());
+        let parent = self
+            .clone_repo_parent_dir_input
+            .read_with(cx, |input, _| input.text().trim().to_string());
+        if url.is_empty() || parent.is_empty() {
+            return;
+        }
+
+        let repo_name = clone_repo_name_from_url(&url);
+        let dest = std::path::PathBuf::from(parent).join(repo_name);
+        self.store.dispatch(Msg::CloneRepo { url, dest });
         self.close_popover(cx);
     }
 
@@ -794,11 +873,13 @@ impl PopoverHost {
                         .clone_repo_parent_dir_input
                         .read_with(cx, |i, _| i.text().to_string());
                     self.clone_repo_url_input.update(cx, |input, cx| {
+                        input.clear_transient_key_presses();
                         input.set_theme(theme, cx);
                         input.set_text(url_text, cx);
                         cx.notify();
                     });
                     self.clone_repo_parent_dir_input.update(cx, |input, cx| {
+                        input.clear_transient_key_presses();
                         input.set_theme(theme, cx);
                         input.set_text(parent_text, cx);
                         cx.notify();

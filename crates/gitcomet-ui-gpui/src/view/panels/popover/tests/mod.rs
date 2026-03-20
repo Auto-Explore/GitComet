@@ -17,6 +17,7 @@ impl GitBackend for TestBackend {
 }
 
 mod branch;
+mod clone;
 mod context_shortcuts;
 mod file_actions;
 mod picker;
