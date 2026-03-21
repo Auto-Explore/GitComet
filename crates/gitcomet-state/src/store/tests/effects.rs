@@ -3162,6 +3162,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
             Effect::CreateBranch {
                 repo_id,
                 name: "topic".to_string(),
+                target: "HEAD".to_string(),
             },
             1,
         ),
@@ -3169,6 +3170,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
             Effect::CreateBranchAndCheckout {
                 repo_id,
                 name: "topic2".to_string(),
+                target: "HEAD".to_string(),
             },
             1,
         ),
@@ -3380,6 +3382,21 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
                 remote: "origin".to_string(),
                 branch: "main".to_string(),
                 auth: None,
+            },
+            1,
+        ),
+        (
+            Effect::SetUpstreamBranch {
+                repo_id,
+                branch: "main".to_string(),
+                upstream: "origin/main".to_string(),
+            },
+            1,
+        ),
+        (
+            Effect::UnsetUpstreamBranch {
+                repo_id,
+                branch: "main".to_string(),
             },
             1,
         ),

@@ -239,11 +239,11 @@ impl GitRepository for GixRepo {
     }
 
     fn fetch_all(&self) -> Result<()> {
-        self.fetch_all_impl(false)
+        self.fetch_all_impl(true)
     }
 
     fn fetch_all_with_output(&self) -> Result<CommandOutput> {
-        self.fetch_all_with_output_impl(false)
+        self.fetch_all_with_output_impl(true)
     }
 
     fn fetch_all_with_output_prune(&self, prune: bool) -> Result<CommandOutput> {
@@ -349,6 +349,18 @@ impl GitRepository for GixRepo {
 
     fn push_set_upstream_with_output(&self, remote: &str, branch: &str) -> Result<CommandOutput> {
         self.push_set_upstream_with_output_impl(remote, branch)
+    }
+
+    fn set_upstream_branch_with_output(
+        &self,
+        branch: &str,
+        upstream: &str,
+    ) -> Result<CommandOutput> {
+        self.set_upstream_branch_with_output_impl(branch, upstream)
+    }
+
+    fn unset_upstream_branch_with_output(&self, branch: &str) -> Result<CommandOutput> {
+        self.unset_upstream_branch_with_output_impl(branch)
     }
 
     fn delete_remote_branch_with_output(

@@ -860,6 +860,22 @@ fn local_branch_menu_has_pull_merge_and_squash_actions(cx: &mut gpui::TestAppCon
             _ => panic!("expected Squash into current entry with SquashRef action"),
         }
 
+        let create_entry = model.items.iter().find_map(|item| match item {
+            ContextMenuItem::Entry { label, action, .. } if label.as_ref() == "Create branch" => {
+                Some((**action).clone())
+            }
+            _ => None,
+        });
+        assert!(matches!(
+            create_entry,
+            Some(ContextMenuAction::OpenPopover {
+                kind: PopoverKind::CreateBranchFromRefPrompt {
+                    repo_id: rid,
+                    target
+                }
+            }) if rid == repo_id && target == branch_name
+        ));
+
         let has_pull_into_current = model.items.iter().any(|item| match item {
             ContextMenuItem::Entry { label, .. } => label.as_ref() == "Pull into current",
             _ => false,
@@ -995,6 +1011,383 @@ fn remote_branch_menu_has_pull_merge_and_squash_actions(cx: &mut gpui::TestAppCo
             }
             _ => panic!("expected Squash into current entry with SquashRef action"),
         }
+
+        let create_entry = model.items.iter().find_map(|item| match item {
+            ContextMenuItem::Entry { label, action, .. } if label.as_ref() == "Create branch" => {
+                Some((**action).clone())
+            }
+            _ => None,
+        });
+        assert!(matches!(
+            create_entry,
+            Some(ContextMenuAction::OpenPopover {
+                kind: PopoverKind::CreateBranchFromRefPrompt {
+                    repo_id: rid,
+                    target
+                }
+            }) if rid == repo_id && target == branch_name
+        ));
+    });
+}
+
+#[gpui::test]
+fn remote_branch_menu_only_enables_unlink_for_active_branch_upstream(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    let repo_id = RepoId(230);
+    let enabled_name = "origin/feature/awesome".to_string();
+    let disabled_name = "origin/main".to_string();
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_remote_branch_menu_unlink",
+        std::process::id()
+    ));
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = RepoState::new_opening(
+                repo_id,
+                gitcomet_core::domain::RepoSpec {
+                    workdir: workdir.clone(),
+                },
+            );
+            repo.head_branch = Loadable::Ready("feature/local".to_string());
+            repo.branches = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Branch {
+                name: "feature/local".to_string(),
+                target: CommitId("deadbeef".into()),
+                upstream: Some(gitcomet_core::domain::Upstream {
+                    remote: "origin".to_string(),
+                    branch: "feature/awesome".to_string(),
+                }),
+                divergence: None,
+            }]));
+
+            let state = Arc::new(AppState {
+                repos: vec![repo],
+                active_repo: Some(repo_id),
+                ..Default::default()
+            });
+            this.state = Arc::clone(&state);
+            this._ui_model
+                .update(cx, |model, cx| model.set_state(state, cx));
+            cx.notify();
+        });
+    });
+
+    cx.update(|_window, app| {
+        let enabled_model = view
+            .update(app, |this, cx| {
+                this.popover_host.update(cx, |host, cx| {
+                    host.context_menu_model(
+                        &PopoverKind::BranchMenu {
+                            repo_id,
+                            section: BranchSection::Remote,
+                            name: enabled_name.clone(),
+                        },
+                        cx,
+                    )
+                })
+            })
+            .expect("expected enabled remote branch context menu model");
+
+        let enabled_entry = enabled_model.items.iter().find_map(|item| match item {
+            ContextMenuItem::Entry {
+                label,
+                action,
+                disabled,
+                ..
+            } if label.as_ref() == "Unlink upstream branch" => {
+                Some(((**action).clone(), *disabled))
+            }
+            _ => None,
+        });
+
+        match enabled_entry {
+            Some((
+                ContextMenuAction::UnsetUpstreamBranch {
+                    repo_id: rid,
+                    branch,
+                },
+                disabled,
+            )) => {
+                assert_eq!(rid, repo_id);
+                assert_eq!(branch, "feature/local");
+                assert!(!disabled);
+            }
+            _ => panic!("expected enabled UnsetUpstreamBranch entry"),
+        }
+
+        let disabled_model = view
+            .update(app, |this, cx| {
+                this.popover_host.update(cx, |host, cx| {
+                    host.context_menu_model(
+                        &PopoverKind::BranchMenu {
+                            repo_id,
+                            section: BranchSection::Remote,
+                            name: disabled_name.clone(),
+                        },
+                        cx,
+                    )
+                })
+            })
+            .expect("expected disabled remote branch context menu model");
+
+        let disabled_entry = disabled_model.items.iter().find_map(|item| match item {
+            ContextMenuItem::Entry {
+                label,
+                action,
+                disabled,
+                ..
+            } if label.as_ref() == "Unlink upstream branch" => {
+                Some(((**action).clone(), *disabled))
+            }
+            _ => None,
+        });
+
+        match disabled_entry {
+            Some((
+                ContextMenuAction::UnsetUpstreamBranch {
+                    repo_id: rid,
+                    branch,
+                },
+                disabled,
+            )) => {
+                assert_eq!(rid, repo_id);
+                assert_eq!(branch, "feature/local");
+                assert!(disabled);
+            }
+            _ => panic!("expected disabled UnsetUpstreamBranch entry"),
+        }
+    });
+}
+
+#[gpui::test]
+fn remote_branch_menu_offers_set_tracking_upstream_only_without_current_upstream(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    let repo_id = RepoId(231);
+    let branch_name = "origin/feature/awesome".to_string();
+    let branch_name_with_upstream = "origin/main".to_string();
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_remote_branch_menu_set_tracking_upstream",
+        std::process::id()
+    ));
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = RepoState::new_opening(
+                repo_id,
+                gitcomet_core::domain::RepoSpec {
+                    workdir: workdir.clone(),
+                },
+            );
+            repo.head_branch = Loadable::Ready("feature/local".to_string());
+            repo.branches = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Branch {
+                name: "feature/local".to_string(),
+                target: CommitId("deadbeef".into()),
+                upstream: None,
+                divergence: None,
+            }]));
+
+            let state = Arc::new(AppState {
+                repos: vec![repo],
+                active_repo: Some(repo_id),
+                ..Default::default()
+            });
+            this.state = Arc::clone(&state);
+            this._ui_model
+                .update(cx, |model, cx| model.set_state(state, cx));
+            cx.notify();
+        });
+    });
+
+    cx.update(|_window, app| {
+        let model = view
+            .update(app, |this, cx| {
+                this.popover_host.update(cx, |host, cx| {
+                    host.context_menu_model(
+                        &PopoverKind::BranchMenu {
+                            repo_id,
+                            section: BranchSection::Remote,
+                            name: branch_name.clone(),
+                        },
+                        cx,
+                    )
+                })
+            })
+            .expect("expected remote branch context menu model");
+
+        let set_entry = model.items.iter().find_map(|item| match item {
+            ContextMenuItem::Entry {
+                label,
+                action,
+                disabled,
+                ..
+            } if label.as_ref() == "Set as tracking upstream" => {
+                Some(((**action).clone(), *disabled))
+            }
+            _ => None,
+        });
+
+        match set_entry {
+            Some((
+                ContextMenuAction::SetUpstreamBranch {
+                    repo_id: rid,
+                    branch,
+                    upstream,
+                },
+                disabled,
+            )) => {
+                assert_eq!(rid, repo_id);
+                assert_eq!(branch, "feature/local");
+                assert_eq!(upstream, "origin/feature/awesome");
+                assert!(!disabled);
+            }
+            _ => panic!("expected enabled SetUpstreamBranch entry"),
+        }
+
+        let unlink_entry = model.items.iter().find_map(|item| match item {
+            ContextMenuItem::Entry {
+                label, disabled, ..
+            } if label.as_ref() == "Unlink upstream branch" => Some(*disabled),
+            _ => None,
+        });
+        assert_eq!(unlink_entry, None);
+    });
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = RepoState::new_opening(
+                repo_id,
+                gitcomet_core::domain::RepoSpec {
+                    workdir: workdir.clone(),
+                },
+            );
+            repo.head_branch = Loadable::Ready("feature/local".to_string());
+            repo.branches = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Branch {
+                name: "feature/local".to_string(),
+                target: CommitId("deadbeef".into()),
+                upstream: Some(gitcomet_core::domain::Upstream {
+                    remote: "origin".to_string(),
+                    branch: "main".to_string(),
+                }),
+                divergence: None,
+            }]));
+            let state = Arc::new(AppState {
+                repos: vec![repo],
+                active_repo: Some(repo_id),
+                ..Default::default()
+            });
+            this.state = Arc::clone(&state);
+            this._ui_model
+                .update(cx, |model, cx| model.set_state(state, cx));
+            cx.notify();
+        });
+    });
+
+    cx.update(|_window, app| {
+        let model_with_upstream = view
+            .update(app, |this, cx| {
+                this.popover_host.update(cx, |host, cx| {
+                    host.context_menu_model(
+                        &PopoverKind::BranchMenu {
+                            repo_id,
+                            section: BranchSection::Remote,
+                            name: branch_name_with_upstream.clone(),
+                        },
+                        cx,
+                    )
+                })
+            })
+            .expect("expected remote branch context menu model after upstream update");
+
+        let has_set_entry = model_with_upstream.items.iter().any(|item| match item {
+            ContextMenuItem::Entry { label, .. } => label.as_ref() == "Set as tracking upstream",
+            _ => false,
+        });
+        assert!(
+            !has_set_entry,
+            "did not expect Set as tracking upstream when current branch already tracks a remote"
+        );
+    });
+}
+
+#[gpui::test]
+fn pull_and_push_picker_headers_include_tracking_branch_name(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    let repo_id = RepoId(401);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_pull_push_picker_header_branch_name",
+        std::process::id()
+    ));
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = RepoState::new_opening(
+                repo_id,
+                gitcomet_core::domain::RepoSpec {
+                    workdir: workdir.clone(),
+                },
+            );
+            repo.head_branch = Loadable::Ready("feature/local".to_string());
+            repo.branches = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Branch {
+                name: "feature/local".to_string(),
+                target: CommitId("deadbeef".into()),
+                upstream: Some(gitcomet_core::domain::Upstream {
+                    remote: "origin".to_string(),
+                    branch: "feature/awesome".to_string(),
+                }),
+                divergence: None,
+            }]));
+
+            let state = Arc::new(AppState {
+                repos: vec![repo],
+                active_repo: Some(repo_id),
+                ..Default::default()
+            });
+            this.state = Arc::clone(&state);
+            this._ui_model
+                .update(cx, |model, cx| model.set_state(state, cx));
+            cx.notify();
+        });
+    });
+
+    cx.update(|_window, app| {
+        let pull_model = view
+            .update(app, |this, cx| {
+                this.popover_host.update(cx, |host, cx| {
+                    host.context_menu_model(&PopoverKind::PullPicker, cx)
+                })
+            })
+            .expect("expected pull context menu model");
+        let push_model = view
+            .update(app, |this, cx| {
+                this.popover_host.update(cx, |host, cx| {
+                    host.context_menu_model(&PopoverKind::PushPicker, cx)
+                })
+            })
+            .expect("expected push context menu model");
+
+        assert!(matches!(
+            pull_model.items.first(),
+            Some(ContextMenuItem::Header(title))
+                if title.as_ref() == "Pull origin/feature/awesome"
+        ));
+        assert!(matches!(
+            push_model.items.first(),
+            Some(ContextMenuItem::Header(title))
+                if title.as_ref() == "Push origin/feature/awesome"
+        ));
     });
 }
 

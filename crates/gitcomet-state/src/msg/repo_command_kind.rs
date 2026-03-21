@@ -26,6 +26,13 @@ pub enum RepoCommandKind {
         remote: String,
         branch: String,
     },
+    SetUpstreamBranch {
+        branch: String,
+        upstream: String,
+    },
+    UnsetUpstreamBranch {
+        branch: String,
+    },
     DeleteRemoteBranch {
         remote: String,
         branch: String,

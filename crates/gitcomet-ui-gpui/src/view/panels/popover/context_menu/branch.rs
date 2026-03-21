@@ -14,16 +14,29 @@ pub(super) fn model(
     items.push(ContextMenuItem::Label(name.clone().into()));
     items.push(ContextMenuItem::Separator);
 
-    let is_current_branch = this
-        .state
-        .repos
-        .iter()
-        .find(|r| r.id == repo_id)
-        .and_then(|r| match &r.head_branch {
-            Loadable::Ready(b) => Some(b == name),
-            _ => None,
-        })
-        .unwrap_or(false);
+    let repo = this.state.repos.iter().find(|r| r.id == repo_id);
+
+    let active_branch_name = repo.and_then(|r| match &r.head_branch {
+        Loadable::Ready(branch) => Some(branch.clone()),
+        _ => None,
+    });
+    let active_branch = repo.and_then(|r| match (&r.branches, active_branch_name.as_ref()) {
+        (Loadable::Ready(branches), Some(head)) => {
+            branches.iter().find(|branch| branch.name == *head)
+        }
+        _ => None,
+    });
+    let active_upstream_full = active_branch.and_then(|branch| {
+        branch
+            .upstream
+            .as_ref()
+            .map(|upstream| format!("{}/{}", upstream.remote, upstream.branch))
+    });
+    let active_branch_has_no_upstream =
+        active_branch.is_some_and(|branch| branch.upstream.is_none());
+    let is_current_branch = active_branch_name
+        .as_ref()
+        .is_some_and(|branch| branch == name);
 
     items.push(ContextMenuItem::Entry {
         label: "Checkout".into(),
@@ -51,6 +64,18 @@ pub(super) fn model(
                     }
                 }
             }
+        }),
+    });
+    items.push(ContextMenuItem::Entry {
+        label: "Create branch".into(),
+        icon: Some("+".into()),
+        shortcut: None,
+        disabled: false,
+        action: Box::new(ContextMenuAction::OpenPopover {
+            kind: PopoverKind::CreateBranchFromRefPrompt {
+                repo_id,
+                target: name.clone(),
+            },
         }),
     });
     if section == BranchSection::Local {
@@ -150,6 +175,34 @@ pub(super) fn model(
                     ),
                 }),
             });
+            if active_branch_has_no_upstream
+                && let Some(active_branch_name) = active_branch_name.clone()
+                && name.split_once('/').is_some()
+            {
+                items.push(ContextMenuItem::Entry {
+                    label: "Set as tracking upstream".into(),
+                    icon: Some("link".into()),
+                    shortcut: None,
+                    disabled: false,
+                    action: Box::new(ContextMenuAction::SetUpstreamBranch {
+                        repo_id,
+                        branch: active_branch_name,
+                        upstream: name.clone(),
+                    }),
+                });
+            }
+            if active_upstream_full.is_some() {
+                items.push(ContextMenuItem::Entry {
+                    label: "Unlink upstream branch".into(),
+                    icon: Some("unlink".into()),
+                    shortcut: None,
+                    disabled: active_upstream_full.as_deref() != Some(name.as_str()),
+                    action: Box::new(ContextMenuAction::UnsetUpstreamBranch {
+                        repo_id,
+                        branch: active_branch_name.unwrap_or_default(),
+                    }),
+                });
+            }
             items.push(ContextMenuItem::Separator);
         }
         items.push(ContextMenuItem::Entry {

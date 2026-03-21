@@ -193,10 +193,12 @@ pub enum Msg {
     CreateBranch {
         repo_id: RepoId,
         name: String,
+        target: String,
     },
     CreateBranchAndCheckout {
         repo_id: RepoId,
         name: String,
+        target: String,
     },
     DeleteBranch {
         repo_id: RepoId,
@@ -317,6 +319,15 @@ pub enum Msg {
     PushSetUpstream {
         repo_id: RepoId,
         remote: String,
+        branch: String,
+    },
+    SetUpstreamBranch {
+        repo_id: RepoId,
+        branch: String,
+        upstream: String,
+    },
+    UnsetUpstreamBranch {
+        repo_id: RepoId,
         branch: String,
     },
     DeleteRemoteBranch {

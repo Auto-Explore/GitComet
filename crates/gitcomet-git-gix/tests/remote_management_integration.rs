@@ -518,7 +518,7 @@ fn prune_merged_branches_with_output_reports_noop_when_nothing_to_prune() {
 }
 
 #[test]
-fn fetch_all_variants_without_prune_succeed() {
+fn fetch_all_variants_prune_deleted_remote_tracking_branches() {
     let _guard = remote_management_test_lock();
     if !require_git_local_push_for_remote_management_tests() {
         return;
@@ -545,13 +545,64 @@ fn fetch_all_variants_without_prune_succeed() {
     );
     run_git(&work_repo, &["push", "-u", "origin", "HEAD"]);
 
+    run_git(&work_repo, &["checkout", "-b", "feature"]);
+    fs::write(work_repo.join("feature.txt"), "feature\n").expect("write feature file");
+    run_git(&work_repo, &["add", "feature.txt"]);
+    run_git(
+        &work_repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "feature"],
+    );
+    run_git(&work_repo, &["push", "-u", "origin", "feature"]);
+
+    let feature_commit = run_git_capture(&work_repo, &["rev-parse", "HEAD"])
+        .trim()
+        .to_string();
+
+    let tracking_ref = "refs/remotes/origin/feature";
+    let tracking_ref_present = || {
+        run_git_status(
+            &work_repo,
+            &["show-ref", "--verify", "--quiet", tracking_ref],
+        )
+    };
+
+    assert!(
+        tracking_ref_present().success(),
+        "expected local tracking ref to exist before remote deletion"
+    );
+
+    run_git(&remote_repo, &["update-ref", "-d", "refs/heads/feature"]);
+    assert!(
+        tracking_ref_present().success(),
+        "expected local tracking ref to remain stale until fetch --prune"
+    );
+
     let backend = GixBackend;
     let opened = backend.open(&work_repo).expect("open work repo");
-    opened.fetch_all().expect("fetch all");
     let output = opened
         .fetch_all_with_output()
         .expect("fetch all with output");
     assert_eq!(output.exit_code, Some(0));
+    assert_eq!(output.command, "git fetch --all --prune");
+    assert!(
+        !tracking_ref_present().success(),
+        "expected fetch_all_with_output to prune stale remote-tracking refs"
+    );
+
+    run_git(
+        &work_repo,
+        &["update-ref", tracking_ref, feature_commit.as_str()],
+    );
+    assert!(
+        tracking_ref_present().success(),
+        "expected stale tracking ref recreation to succeed"
+    );
+
+    opened.fetch_all().expect("fetch all");
+    assert!(
+        !tracking_ref_present().success(),
+        "expected fetch_all to prune stale remote-tracking refs"
+    );
 }
 
 #[test]

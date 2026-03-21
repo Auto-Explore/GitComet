@@ -488,6 +488,8 @@ fn summarize_command(
             RepoCommandKind::Push => "Push",
             RepoCommandKind::ForcePush => "Force push",
             RepoCommandKind::PushSetUpstream { .. } => "Push",
+            RepoCommandKind::SetUpstreamBranch { .. } => "Set as tracking upstream",
+            RepoCommandKind::UnsetUpstreamBranch { .. } => "Unlink upstream branch",
             RepoCommandKind::DeleteRemoteBranch { .. } => "Delete remote branch",
             RepoCommandKind::PushTag { .. } => "Push tag",
             RepoCommandKind::DeleteRemoteTag { .. } => "Delete remote tag",
@@ -623,6 +625,12 @@ fn summarize_command(
                 "Completed"
             };
             format!("Push -u {remote}/{branch}: {base}")
+        }
+        RepoCommandKind::SetUpstreamBranch { branch, upstream } => {
+            format!("Branch {branch}: Upstream set to {upstream}")
+        }
+        RepoCommandKind::UnsetUpstreamBranch { branch } => {
+            format!("Branch {branch}: Upstream unlinked")
         }
         RepoCommandKind::DeleteRemoteBranch { remote, branch } => {
             format!("Remote branch {remote}/{branch}: Deleted")
@@ -1184,6 +1192,19 @@ mod tests {
                 "Push",
             ),
             (
+                RepoCommandKind::SetUpstreamBranch {
+                    branch: "main".into(),
+                    upstream: "origin/main".into(),
+                },
+                "Set as tracking upstream",
+            ),
+            (
+                RepoCommandKind::UnsetUpstreamBranch {
+                    branch: "main".into(),
+                },
+                "Unlink upstream branch",
+            ),
+            (
                 RepoCommandKind::DeleteRemoteBranch {
                     remote: "origin".into(),
                     branch: "old".into(),
@@ -1377,6 +1398,34 @@ mod tests {
             push_upstream_uptodate,
             "Push -u origin/main: Everything up-to-date"
         );
+
+        let (_, set_upstream_summary) = summarize_command(
+            &RepoCommandKind::SetUpstreamBranch {
+                branch: "feature".into(),
+                upstream: "origin/feature".into(),
+            },
+            &command_output(
+                "git branch --set-upstream-to origin/feature feature",
+                "",
+                "",
+            ),
+            true,
+            None,
+        );
+        assert_eq!(
+            set_upstream_summary,
+            "Branch feature: Upstream set to origin/feature"
+        );
+
+        let (_, unset_upstream_summary) = summarize_command(
+            &RepoCommandKind::UnsetUpstreamBranch {
+                branch: "feature".into(),
+            },
+            &command_output("git branch --unset-upstream feature", "", ""),
+            true,
+            None,
+        );
+        assert_eq!(unset_upstream_summary, "Branch feature: Upstream unlinked");
 
         let (_, push_tag_uptodate) = summarize_command(
             &RepoCommandKind::PushTag {

@@ -4,9 +4,13 @@ pub(super) fn model(this: &PopoverHost) -> ContextMenuModel {
     let active_repo_id = this.active_repo_id();
     let disabled = active_repo_id.is_none();
     let repo_id = active_repo_id.unwrap_or(RepoId(0));
+    let tracking_branch_name = super::active_branch_tracking_upstream_name(this);
 
     ContextMenuModel::new(vec![
-        ContextMenuItem::Header("Pull".into()),
+        ContextMenuItem::Header(super::action_menu_title(
+            "Pull",
+            tracking_branch_name.as_deref(),
+        )),
         ContextMenuItem::Separator,
         ContextMenuItem::Entry {
             label: "Pull (default)".into(),

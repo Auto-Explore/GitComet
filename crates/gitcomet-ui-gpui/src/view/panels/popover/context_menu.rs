@@ -44,6 +44,30 @@ pub(super) fn path_text_for_copy(path: &std::path::Path) -> String {
         .to_string()
 }
 
+fn active_branch_tracking_upstream_name(host: &PopoverHost) -> Option<String> {
+    let repo_id = host.active_repo_id()?;
+    let repo = host.state.repos.iter().find(|repo| repo.id == repo_id)?;
+    let Loadable::Ready(head) = &repo.head_branch else {
+        return None;
+    };
+    let Loadable::Ready(branches) = &repo.branches else {
+        return None;
+    };
+
+    branches
+        .iter()
+        .find(|branch| branch.name == *head)
+        .and_then(|branch| branch.upstream.as_ref())
+        .map(|upstream| format!("{}/{}", upstream.remote, upstream.branch))
+}
+
+fn action_menu_title(base: &'static str, tracking_branch_name: Option<&str>) -> SharedString {
+    match tracking_branch_name {
+        Some(name) => format!("{base} {name}").into(),
+        None => base.into(),
+    }
+}
+
 fn context_menu_entry_debug_selector(label: &str) -> String {
     let mut slug = String::with_capacity(label.len());
     let mut previous_was_separator = true;
@@ -742,6 +766,21 @@ impl PopoverHost {
             }
             ContextMenuAction::Push { repo_id } => {
                 self.store.dispatch(Msg::Push { repo_id });
+            }
+            ContextMenuAction::SetUpstreamBranch {
+                repo_id,
+                branch,
+                upstream,
+            } => {
+                self.store.dispatch(Msg::SetUpstreamBranch {
+                    repo_id,
+                    branch,
+                    upstream,
+                });
+            }
+            ContextMenuAction::UnsetUpstreamBranch { repo_id, branch } => {
+                self.store
+                    .dispatch(Msg::UnsetUpstreamBranch { repo_id, branch });
             }
             ContextMenuAction::OpenPopover { kind } => {
                 let anchor = self

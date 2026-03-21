@@ -530,6 +530,49 @@ pub(super) fn schedule_push_set_upstream(
     );
 }
 
+pub(super) fn schedule_set_upstream_branch(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: mpsc::Sender<Msg>,
+    repo_id: RepoId,
+    branch: String,
+    upstream: String,
+) {
+    let command_branch = branch.clone();
+    let command_upstream = upstream.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::SetUpstreamBranch {
+            branch: command_branch,
+            upstream: command_upstream,
+        },
+        move |repo| repo.set_upstream_branch_with_output(&branch, &upstream),
+    );
+}
+
+pub(super) fn schedule_unset_upstream_branch(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: mpsc::Sender<Msg>,
+    repo_id: RepoId,
+    branch: String,
+) {
+    let command_branch = branch.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::UnsetUpstreamBranch {
+            branch: command_branch,
+        },
+        move |repo| repo.unset_upstream_branch_with_output(&branch),
+    );
+}
+
 pub(super) fn schedule_delete_remote_branch(
     executor: &TaskExecutor,
     repos: &RepoMap,

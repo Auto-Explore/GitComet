@@ -20,6 +20,9 @@ pub fn context_menu_header(theme: AppTheme, title: impl Into<SharedString>) -> D
         .px_2()
         .py_1()
         .text_xs()
+        .line_clamp(1)
+        .whitespace_nowrap()
+        .overflow_hidden()
         .text_color(theme.colors.text_muted)
         .child(title.into())
 }
@@ -181,6 +184,8 @@ fn context_menu_icon_color(
 fn context_menu_icon_path(icon: &str, label: &str) -> Option<&'static str> {
     let trimmed = icon.trim();
     let by_icon = match trimmed {
+        "link" => Some("icons/link.svg"),
+        "unlink" => Some("icons/unlink.svg"),
         "+" => Some("icons/plus.svg"),
         "-" => Some("icons/minus.svg"),
         "?" => Some("icons/question.svg"),
@@ -275,6 +280,18 @@ mod tests {
         assert_eq!(
             context_menu_icon_path("🗑", "Delete branch"),
             Some("icons/trash.svg")
+        );
+    }
+
+    #[test]
+    fn context_menu_icon_path_maps_named_link_icons() {
+        assert_eq!(
+            context_menu_icon_path("link", "test"),
+            Some("icons/link.svg")
+        );
+        assert_eq!(
+            context_menu_icon_path("unlink", "test"),
+            Some("icons/unlink.svg")
         );
     }
 

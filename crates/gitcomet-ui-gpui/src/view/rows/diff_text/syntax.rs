@@ -20,23 +20,23 @@ const TS_DEFERRED_DROP_MIN_BYTES: usize = 256 * 1024;
 const TS_INCREMENTAL_REPARSE_ENABLE_ENV: &str = "GITCOMET_DIFF_SYNTAX_INCREMENTAL_REPARSE";
 const TS_INCREMENTAL_REPARSE_MAX_CHANGED_BYTES: usize = 64 * 1024;
 const TS_INCREMENTAL_REPARSE_MAX_CHANGED_PERCENT: usize = 35;
-#[cfg(feature = "syntax-web")]
+#[cfg(any(test, feature = "syntax-web"))]
 const HTML_HIGHLIGHTS_QUERY: &str = include_str!("queries/html_highlights.scm");
-#[cfg(feature = "syntax-web")]
+#[cfg(any(test, feature = "syntax-web"))]
 const HTML_INJECTIONS_QUERY: &str = include_str!("queries/html_injections.scm");
-#[cfg(feature = "syntax-web")]
+#[cfg(any(test, feature = "syntax-web"))]
 const CSS_HIGHLIGHTS_QUERY: &str = tree_sitter_css::HIGHLIGHTS_QUERY;
-#[cfg(feature = "syntax-web")]
+#[cfg(any(test, feature = "syntax-web"))]
 const JAVASCRIPT_HIGHLIGHTS_QUERY: &str = include_str!("queries/javascript_highlights.scm");
-#[cfg(feature = "syntax-web")]
+#[cfg(any(test, feature = "syntax-web"))]
 const TYPESCRIPT_HIGHLIGHTS_QUERY: &str = include_str!("queries/typescript_highlights.scm");
-#[cfg(feature = "syntax-web")]
+#[cfg(any(test, feature = "syntax-web"))]
 const TSX_HIGHLIGHTS_QUERY: &str = include_str!("queries/tsx_highlights.scm");
-#[cfg(feature = "syntax-rust")]
+#[cfg(any(test, feature = "syntax-rust"))]
 const RUST_HIGHLIGHTS_QUERY: &str = include_str!("queries/rust_highlights.scm");
-#[cfg(feature = "syntax-rust")]
+#[cfg(any(test, feature = "syntax-rust"))]
 const RUST_INJECTIONS_QUERY: &str = include_str!("queries/rust_injections.scm");
-#[cfg(feature = "syntax-xml")]
+#[cfg(any(test, feature = "syntax-xml"))]
 const XML_HIGHLIGHTS_QUERY: &str = tree_sitter_xml::XML_HIGHLIGHT_QUERY;
 
 /// Maximum injection nesting depth. Root document = 0, first injection = 1.
@@ -2722,62 +2722,62 @@ fn tree_sitter_grammar(
     language: DiffSyntaxLanguage,
 ) -> Option<(tree_sitter::Language, TreesitterQueryAsset)> {
     match language {
-        #[cfg(feature = "syntax-web")]
+        #[cfg(any(test, feature = "syntax-web"))]
         DiffSyntaxLanguage::Html => Some((
             tree_sitter_html::LANGUAGE.into(),
             TreesitterQueryAsset::with_injections(HTML_HIGHLIGHTS_QUERY, HTML_INJECTIONS_QUERY),
         )),
-        #[cfg(feature = "syntax-web")]
+        #[cfg(any(test, feature = "syntax-web"))]
         DiffSyntaxLanguage::Css => Some((
             tree_sitter_css::LANGUAGE.into(),
             TreesitterQueryAsset::highlights(CSS_HIGHLIGHTS_QUERY),
         )),
-        #[cfg(feature = "syntax-rust")]
+        #[cfg(any(test, feature = "syntax-rust"))]
         DiffSyntaxLanguage::Rust => Some((
             tree_sitter_rust::LANGUAGE.into(),
             TreesitterQueryAsset::with_injections(RUST_HIGHLIGHTS_QUERY, RUST_INJECTIONS_QUERY),
         )),
-        #[cfg(feature = "syntax-python")]
+        #[cfg(any(test, feature = "syntax-python"))]
         DiffSyntaxLanguage::Python => Some((
             tree_sitter_python::LANGUAGE.into(),
             TreesitterQueryAsset::highlights(tree_sitter_python::HIGHLIGHTS_QUERY),
         )),
-        #[cfg(feature = "syntax-go")]
+        #[cfg(any(test, feature = "syntax-go"))]
         DiffSyntaxLanguage::Go => Some((
             tree_sitter_go::LANGUAGE.into(),
             TreesitterQueryAsset::highlights(tree_sitter_go::HIGHLIGHTS_QUERY),
         )),
-        #[cfg(feature = "syntax-data")]
+        #[cfg(any(test, feature = "syntax-data"))]
         DiffSyntaxLanguage::Json => Some((
             tree_sitter_json::LANGUAGE.into(),
             TreesitterQueryAsset::highlights(tree_sitter_json::HIGHLIGHTS_QUERY),
         )),
-        #[cfg(feature = "syntax-data")]
+        #[cfg(any(test, feature = "syntax-data"))]
         DiffSyntaxLanguage::Yaml => Some((
             tree_sitter_yaml::LANGUAGE.into(),
             TreesitterQueryAsset::highlights(tree_sitter_yaml::HIGHLIGHTS_QUERY),
         )),
-        #[cfg(feature = "syntax-web")]
+        #[cfg(any(test, feature = "syntax-web"))]
         DiffSyntaxLanguage::TypeScript => Some((
             tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
             TreesitterQueryAsset::highlights(TYPESCRIPT_HIGHLIGHTS_QUERY),
         )),
-        #[cfg(feature = "syntax-web")]
+        #[cfg(any(test, feature = "syntax-web"))]
         DiffSyntaxLanguage::Tsx => Some((
             tree_sitter_typescript::LANGUAGE_TSX.into(),
             TreesitterQueryAsset::highlights(TSX_HIGHLIGHTS_QUERY),
         )),
-        #[cfg(feature = "syntax-web")]
+        #[cfg(any(test, feature = "syntax-web"))]
         DiffSyntaxLanguage::JavaScript => Some((
             tree_sitter_javascript::LANGUAGE.into(),
             TreesitterQueryAsset::highlights(JAVASCRIPT_HIGHLIGHTS_QUERY),
         )),
-        #[cfg(feature = "syntax-shell")]
+        #[cfg(any(test, feature = "syntax-shell"))]
         DiffSyntaxLanguage::Bash => Some((
             tree_sitter_bash::LANGUAGE.into(),
             TreesitterQueryAsset::highlights(tree_sitter_bash::HIGHLIGHT_QUERY),
         )),
-        #[cfg(feature = "syntax-xml")]
+        #[cfg(any(test, feature = "syntax-xml"))]
         DiffSyntaxLanguage::Xml => Some((
             tree_sitter_xml::LANGUAGE_XML.into(),
             TreesitterQueryAsset::highlights(XML_HIGHLIGHTS_QUERY),
@@ -2820,29 +2820,29 @@ fn tree_sitter_highlight_spec(
     language: DiffSyntaxLanguage,
 ) -> Option<&'static TreesitterHighlightSpec> {
     match language {
-        #[cfg(feature = "syntax-web")]
+        #[cfg(any(test, feature = "syntax-web"))]
         DiffSyntaxLanguage::Html => highlight_spec_entry!(Html),
-        #[cfg(feature = "syntax-web")]
+        #[cfg(any(test, feature = "syntax-web"))]
         DiffSyntaxLanguage::Css => highlight_spec_entry!(Css),
-        #[cfg(feature = "syntax-rust")]
+        #[cfg(any(test, feature = "syntax-rust"))]
         DiffSyntaxLanguage::Rust => highlight_spec_entry!(Rust),
-        #[cfg(feature = "syntax-python")]
+        #[cfg(any(test, feature = "syntax-python"))]
         DiffSyntaxLanguage::Python => highlight_spec_entry!(Python),
-        #[cfg(feature = "syntax-go")]
+        #[cfg(any(test, feature = "syntax-go"))]
         DiffSyntaxLanguage::Go => highlight_spec_entry!(Go),
-        #[cfg(feature = "syntax-data")]
+        #[cfg(any(test, feature = "syntax-data"))]
         DiffSyntaxLanguage::Json => highlight_spec_entry!(Json),
-        #[cfg(feature = "syntax-data")]
+        #[cfg(any(test, feature = "syntax-data"))]
         DiffSyntaxLanguage::Yaml => highlight_spec_entry!(Yaml),
-        #[cfg(feature = "syntax-web")]
+        #[cfg(any(test, feature = "syntax-web"))]
         DiffSyntaxLanguage::TypeScript => highlight_spec_entry!(TypeScript),
-        #[cfg(feature = "syntax-web")]
+        #[cfg(any(test, feature = "syntax-web"))]
         DiffSyntaxLanguage::Tsx => highlight_spec_entry!(Tsx),
-        #[cfg(feature = "syntax-web")]
+        #[cfg(any(test, feature = "syntax-web"))]
         DiffSyntaxLanguage::JavaScript => highlight_spec_entry!(JavaScript),
-        #[cfg(feature = "syntax-shell")]
+        #[cfg(any(test, feature = "syntax-shell"))]
         DiffSyntaxLanguage::Bash => highlight_spec_entry!(Bash),
-        #[cfg(feature = "syntax-xml")]
+        #[cfg(any(test, feature = "syntax-xml"))]
         DiffSyntaxLanguage::Xml => highlight_spec_entry!(Xml),
         _ => None,
     }
@@ -5398,7 +5398,7 @@ mod tests {
         assert_eq!(syntax_kind_from_capture_name("text.jsx"), None);
     }
 
-    #[cfg(feature = "syntax-rust")]
+    #[cfg(any(test, feature = "syntax-rust"))]
     #[test]
     fn vendored_rust_query_compiles() {
         let lang: tree_sitter::Language = tree_sitter_rust::LANGUAGE.into();
@@ -5407,7 +5407,7 @@ mod tests {
             .expect("vendored Rust highlights.scm should compile");
     }
 
-    #[cfg(feature = "syntax-web")]
+    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn vendored_css_query_compiles() {
         let lang: tree_sitter::Language = tree_sitter_css::LANGUAGE.into();
@@ -5415,7 +5415,7 @@ mod tests {
         tree_sitter::Query::new(&lang, source).expect("vendored CSS highlights.scm should compile");
     }
 
-    #[cfg(feature = "syntax-web")]
+    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn vendored_html_query_compiles() {
         let lang: tree_sitter::Language = tree_sitter_html::LANGUAGE.into();
@@ -5424,7 +5424,7 @@ mod tests {
             .expect("vendored HTML highlights.scm should compile");
     }
 
-    #[cfg(feature = "syntax-web")]
+    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn vendored_html_injections_query_compiles() {
         let lang: tree_sitter::Language = tree_sitter_html::LANGUAGE.into();
@@ -5432,7 +5432,7 @@ mod tests {
             .expect("vendored HTML injections.scm should compile");
     }
 
-    #[cfg(feature = "syntax-web")]
+    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn vendored_javascript_query_compiles() {
         let lang: tree_sitter::Language = tree_sitter_javascript::LANGUAGE.into();
@@ -5440,7 +5440,7 @@ mod tests {
             .expect("vendored JavaScript highlights.scm should compile against JS grammar");
     }
 
-    #[cfg(feature = "syntax-web")]
+    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn vendored_typescript_query_compiles() {
         let lang: tree_sitter::Language = tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into();
@@ -5448,7 +5448,7 @@ mod tests {
             .expect("vendored TypeScript highlights.scm should compile");
     }
 
-    #[cfg(feature = "syntax-web")]
+    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn vendored_tsx_query_compiles() {
         let lang: tree_sitter::Language = tree_sitter_typescript::LANGUAGE_TSX.into();
@@ -5456,7 +5456,7 @@ mod tests {
             .expect("vendored TSX highlights.scm should compile");
     }
 
-    #[cfg(feature = "syntax-xml")]
+    #[cfg(any(test, feature = "syntax-xml"))]
     #[test]
     fn vendored_xml_query_compiles() {
         let lang: tree_sitter::Language = tree_sitter_xml::LANGUAGE_XML.into();
@@ -5464,7 +5464,7 @@ mod tests {
             .expect("XML highlights.scm should compile against XML grammar");
     }
 
-    #[cfg(feature = "syntax-xml")]
+    #[cfg(any(test, feature = "syntax-xml"))]
     #[test]
     fn xml_treesitter_captures_tag_and_attribute() {
         let text = r#"<root attr="value">text</root>"#;
@@ -5483,7 +5483,7 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "syntax-xml")]
+    #[cfg(any(test, feature = "syntax-xml"))]
     #[test]
     fn xml_treesitter_captures_comment() {
         let text = "<!-- a comment -->";
@@ -5494,7 +5494,7 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "syntax-web")]
+    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn javascript_treesitter_captures_function_and_keyword() {
         let text = "function foo() { return 42; }";
@@ -5517,7 +5517,7 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "syntax-web")]
+    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn html_highlight_spec_compiles_injection_query() {
         let spec = tree_sitter_highlight_spec(DiffSyntaxLanguage::Html)
@@ -5551,41 +5551,41 @@ mod tests {
 
     #[test]
     fn vendored_capture_names_are_supported_or_ignored() {
-        #[cfg(feature = "syntax-rust")]
+        #[cfg(any(test, feature = "syntax-rust"))]
         assert_capture_names_are_supported(
             tree_sitter_rust::LANGUAGE.into(),
             RUST_HIGHLIGHTS_QUERY,
         );
-        #[cfg(feature = "syntax-web")]
+        #[cfg(any(test, feature = "syntax-web"))]
         assert_capture_names_are_supported(
             tree_sitter_html::LANGUAGE.into(),
             HTML_HIGHLIGHTS_QUERY,
         );
-        #[cfg(feature = "syntax-web")]
+        #[cfg(any(test, feature = "syntax-web"))]
         assert_capture_names_are_supported(tree_sitter_css::LANGUAGE.into(), CSS_HIGHLIGHTS_QUERY);
-        #[cfg(feature = "syntax-web")]
+        #[cfg(any(test, feature = "syntax-web"))]
         assert_capture_names_are_supported(
             tree_sitter_javascript::LANGUAGE.into(),
             JAVASCRIPT_HIGHLIGHTS_QUERY,
         );
-        #[cfg(feature = "syntax-web")]
+        #[cfg(any(test, feature = "syntax-web"))]
         assert_capture_names_are_supported(
             tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
             TYPESCRIPT_HIGHLIGHTS_QUERY,
         );
-        #[cfg(feature = "syntax-web")]
+        #[cfg(any(test, feature = "syntax-web"))]
         assert_capture_names_are_supported(
             tree_sitter_typescript::LANGUAGE_TSX.into(),
             TSX_HIGHLIGHTS_QUERY,
         );
-        #[cfg(feature = "syntax-xml")]
+        #[cfg(any(test, feature = "syntax-xml"))]
         assert_capture_names_are_supported(
             tree_sitter_xml::LANGUAGE_XML.into(),
             XML_HIGHLIGHTS_QUERY,
         );
     }
 
-    #[cfg(feature = "syntax-rust")]
+    #[cfg(any(test, feature = "syntax-rust"))]
     #[test]
     fn rust_treesitter_captures_variable_parameter() {
         let text = "fn foo(bar: u32) {}";
@@ -5598,7 +5598,7 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "syntax-rust")]
+    #[cfg(any(test, feature = "syntax-rust"))]
     #[test]
     fn rust_treesitter_captures_type_builtin() {
         let text = "let x: u32 = 0;";
@@ -5611,7 +5611,7 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "syntax-rust")]
+    #[cfg(any(test, feature = "syntax-rust"))]
     #[test]
     fn rust_treesitter_captures_macro_as_function_special() {
         let text = "println!(\"hello\");";
@@ -5624,7 +5624,7 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "syntax-web")]
+    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn tsx_treesitter_highlights_jsx_tag_and_attribute() {
         let text = "const node = <button disabled />;";
@@ -5639,7 +5639,7 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "syntax-web")]
+    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn css_treesitter_captures_property_and_keyword() {
         let text = "@media screen { .foo { color: red; } }";
@@ -5709,7 +5709,7 @@ mod tests {
         }
     }
 
-    #[cfg(not(feature = "syntax-web"))]
+    #[cfg(not(any(test, feature = "syntax-web")))]
     #[test]
     fn disabled_web_grammars_fall_back_to_none() {
         assert!(tree_sitter_grammar(DiffSyntaxLanguage::Html).is_none());
@@ -5718,14 +5718,14 @@ mod tests {
         assert!(tree_sitter_highlight_spec(DiffSyntaxLanguage::JavaScript).is_none());
     }
 
-    #[cfg(not(feature = "syntax-xml"))]
+    #[cfg(not(any(test, feature = "syntax-xml")))]
     #[test]
     fn disabled_xml_grammar_falls_back_to_none() {
         assert!(tree_sitter_grammar(DiffSyntaxLanguage::Xml).is_none());
         assert!(tree_sitter_highlight_spec(DiffSyntaxLanguage::Xml).is_none());
     }
 
-    #[cfg(feature = "syntax-rust")]
+    #[cfg(any(test, feature = "syntax-rust"))]
     #[test]
     fn highlight_spec_exposes_ts_language() {
         let spec = tree_sitter_highlight_spec(DiffSyntaxLanguage::Rust)
@@ -5739,7 +5739,7 @@ mod tests {
         });
     }
 
-    #[cfg(feature = "syntax-rust")]
+    #[cfg(any(test, feature = "syntax-rust"))]
     #[test]
     #[ignore]
     fn perf_treesitter_tokenization_smoke() {

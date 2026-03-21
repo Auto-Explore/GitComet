@@ -359,6 +359,22 @@ pub trait GitRepository: Send + Sync {
         )))
     }
 
+    fn set_upstream_branch_with_output(
+        &self,
+        _branch: &str,
+        _upstream: &str,
+    ) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "setting a branch upstream is not implemented for this backend",
+        )))
+    }
+
+    fn unset_upstream_branch_with_output(&self, _branch: &str) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "unsetting a branch upstream is not implemented for this backend",
+        )))
+    }
+
     fn delete_remote_branch_with_output(
         &self,
         _remote: &str,

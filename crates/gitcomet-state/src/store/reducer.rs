@@ -155,6 +155,14 @@ fn retry_msg_for_repo_command(repo_id: RepoId, command: RepoCommandKind) -> Opti
             remote,
             branch,
         },
+        RepoCommandKind::SetUpstreamBranch { branch, upstream } => Msg::SetUpstreamBranch {
+            repo_id,
+            branch,
+            upstream,
+        },
+        RepoCommandKind::UnsetUpstreamBranch { branch } => {
+            Msg::UnsetUpstreamBranch { repo_id, branch }
+        }
         RepoCommandKind::DeleteRemoteBranch { remote, branch } => Msg::DeleteRemoteBranch {
             repo_id,
             remote,
@@ -430,16 +438,24 @@ pub(super) fn reduce(
             begin_local_action(state, repo_id);
             actions_emit_effects::revert_commit(repo_id, commit_id)
         }
-        Msg::CreateBranch { repo_id, name } => {
+        Msg::CreateBranch {
+            repo_id,
+            name,
+            target,
+        } => {
             begin_local_action(state, repo_id);
-            actions_emit_effects::create_branch(repo_id, name)
+            actions_emit_effects::create_branch(repo_id, name, target)
         }
-        Msg::CreateBranchAndCheckout { repo_id, name } => {
+        Msg::CreateBranchAndCheckout {
+            repo_id,
+            name,
+            target,
+        } => {
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
                 repo_state.set_detached_head_commit(None);
             }
             begin_local_action(state, repo_id);
-            actions_emit_effects::create_branch_and_checkout(repo_id, name)
+            actions_emit_effects::create_branch_and_checkout(repo_id, name, target)
         }
         Msg::DeleteBranch { repo_id, name } => {
             begin_local_action(state, repo_id);
@@ -602,6 +618,18 @@ pub(super) fn reduce(
             remote,
             branch,
         } => actions_emit_effects::push_set_upstream(repos, state, repo_id, remote, branch),
+        Msg::SetUpstreamBranch {
+            repo_id,
+            branch,
+            upstream,
+        } => {
+            begin_local_action(state, repo_id);
+            actions_emit_effects::set_upstream_branch(repo_id, branch, upstream)
+        }
+        Msg::UnsetUpstreamBranch { repo_id, branch } => {
+            begin_local_action(state, repo_id);
+            actions_emit_effects::unset_upstream_branch(repo_id, branch)
+        }
         Msg::DeleteRemoteBranch {
             repo_id,
             remote,

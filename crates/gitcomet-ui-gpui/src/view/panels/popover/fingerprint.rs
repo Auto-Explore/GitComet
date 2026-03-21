@@ -90,7 +90,8 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::ConflictResolverOutputMenu { .. } => state.active_repo,
 
         // Popovers that carry an explicit repo id.
-        PopoverKind::ResetPrompt { repo_id, .. }
+        PopoverKind::CreateBranchFromRefPrompt { repo_id, .. }
+        | PopoverKind::ResetPrompt { repo_id, .. }
         | PopoverKind::CheckoutRemoteBranchPrompt { repo_id, .. }
         | PopoverKind::StashDropConfirm { repo_id, .. }
         | PopoverKind::StashMenu { repo_id, .. }
@@ -125,6 +126,7 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
     match popover {
         PopoverKind::BranchPicker
         | PopoverKind::CreateBranch
+        | PopoverKind::CreateBranchFromRefPrompt { .. }
         | PopoverKind::BranchMenu { .. }
         | PopoverKind::BranchSectionMenu { .. }
         | PopoverKind::ForceDeleteBranchConfirm { .. }
@@ -204,6 +206,7 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         | PopoverKind::PullReconcilePrompt { .. }
         | PopoverKind::ForcePushConfirm { .. } => {
             repo.head_branch_rev.hash(hasher);
+            repo.branches_rev.hash(hasher);
             repo.remotes_rev.hash(hasher);
             repo.remote_branches_rev.hash(hasher);
         }
@@ -246,6 +249,11 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
         PopoverKind::RecentRepositoryPicker => 65u8.hash(hasher),
         PopoverKind::BranchPicker => 1u8.hash(hasher),
         PopoverKind::CreateBranch => 2u8.hash(hasher),
+        PopoverKind::CreateBranchFromRefPrompt { repo_id, target } => {
+            66u8.hash(hasher);
+            repo_id.hash(hasher);
+            target.hash(hasher);
+        }
         PopoverKind::CheckoutRemoteBranchPrompt {
             repo_id,
             remote,
@@ -597,9 +605,11 @@ fn hash_reset_mode<H: Hasher>(mode: ResetMode, hasher: &mut H) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gitcomet_core::domain::{Branch, CommitId, Upstream};
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::process::Command;
+    use std::sync::Arc;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     const SESSION_FILE_ENV: &str = "GITCOMET_SESSION_FILE";
@@ -677,6 +687,37 @@ mod tests {
         let resolved = repo_for_popover(&state, &popover).expect("expected repo lookup to work");
 
         assert_eq!(resolved.id, repo_id);
+    }
+
+    #[test]
+    fn pull_picker_fingerprint_changes_when_branches_rev_changes() {
+        let repo_id = RepoId(9);
+        let mut repo = RepoState::new_opening(
+            repo_id,
+            gitcomet_core::domain::RepoSpec {
+                workdir: std::env::temp_dir().join("gitcomet_pull_picker_fingerprint"),
+            },
+        );
+        repo.head_branch = Loadable::Ready("main".to_string());
+        repo.branches = Loadable::Ready(Arc::new(vec![Branch {
+            name: "main".to_string(),
+            target: CommitId("deadbeef".into()),
+            upstream: Some(Upstream {
+                remote: "origin".to_string(),
+                branch: "main".to_string(),
+            }),
+            divergence: None,
+        }]));
+
+        let mut state = AppState::default();
+        state.active_repo = Some(repo_id);
+        state.repos.push(repo);
+
+        let before = notify_fingerprint(&state, &PopoverKind::PullPicker);
+        state.repos[0].branches_rev = state.repos[0].branches_rev.wrapping_add(1);
+        let after = notify_fingerprint(&state, &PopoverKind::PullPicker);
+
+        assert_ne!(before, after);
     }
 
     #[test]

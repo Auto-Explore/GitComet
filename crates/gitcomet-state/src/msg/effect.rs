@@ -129,10 +129,12 @@ pub enum Effect {
     CreateBranch {
         repo_id: RepoId,
         name: String,
+        target: String,
     },
     CreateBranchAndCheckout {
         repo_id: RepoId,
         name: String,
+        target: String,
     },
     DeleteBranch {
         repo_id: RepoId,
@@ -273,6 +275,15 @@ pub enum Effect {
         remote: String,
         branch: String,
         auth: Option<StagedGitAuth>,
+    },
+    SetUpstreamBranch {
+        repo_id: RepoId,
+        branch: String,
+        upstream: String,
+    },
+    UnsetUpstreamBranch {
+        repo_id: RepoId,
+        branch: String,
     },
     DeleteRemoteBranch {
         repo_id: RepoId,

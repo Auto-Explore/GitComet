@@ -8,16 +8,38 @@ fn head_branch_has_tracking_upstream(
     head_branch: &Loadable<String>,
     branches: &Loadable<Arc<Vec<Branch>>>,
 ) -> bool {
+    head_branch_tracking_upstream_name(head_branch, branches).is_some()
+}
+
+fn head_branch_tracking_upstream_name(
+    head_branch: &Loadable<String>,
+    branches: &Loadable<Arc<Vec<Branch>>>,
+) -> Option<String> {
     let Loadable::Ready(head) = head_branch else {
-        return false;
+        return None;
     };
     let Loadable::Ready(branches) = branches else {
-        return false;
+        return None;
     };
     branches
         .iter()
         .find(|branch| branch.name == *head)
-        .is_some_and(|branch| branch.upstream.is_some())
+        .and_then(|branch| branch.upstream.as_ref())
+        .map(|upstream| format!("{}/{}", upstream.remote, upstream.branch))
+}
+
+fn pull_tooltip_text(pull_count: usize, tracking_branch_name: Option<&str>) -> SharedString {
+    match tracking_branch_name {
+        Some(name) => format!("Pull {pull_count} behind\n{name}").into(),
+        None => format!("Pull {pull_count} behind").into(),
+    }
+}
+
+fn push_tooltip_text(push_count: usize, tracking_branch_name: Option<&str>) -> SharedString {
+    match tracking_branch_name {
+        Some(name) => format!("Push {push_count} ahead\n{name}").into(),
+        None => format!("Push {push_count} ahead").into(),
+    }
 }
 
 pub(in super::super) struct ActionBarView {
@@ -231,6 +253,9 @@ impl Render for ActionBarView {
             .active_repo()
             .map(|r| (r.pull_in_flight > 0, r.push_in_flight > 0))
             .unwrap_or((false, false));
+        let tracking_branch_name = self
+            .active_repo()
+            .and_then(|repo| head_branch_tracking_upstream_name(&repo.head_branch, &repo.branches));
         let active_repo_key = self.active_repo_id().map(|id| id.0).unwrap_or(0);
         let pull_default_enabled = self.active_repo().is_some_and(|repo| {
             head_branch_has_tracking_upstream(&repo.head_branch, &repo.branches)
@@ -376,6 +401,7 @@ impl Render for ActionBarView {
             .active_context_menu_invoker
             .as_ref()
             .is_some_and(|id| id.as_ref() == pull_picker_invoker.as_ref());
+        let pull_tracking_branch_name = tracking_branch_name.clone();
         let pull_menu_icon_color = if pull_picker_active {
             theme.colors.accent
         } else {
@@ -419,7 +445,7 @@ impl Render for ActionBarView {
                 .render(theme),
             )
             .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
-                let text: SharedString = format!("Pull ({pull_count} behind)").into();
+                let text = pull_tooltip_text(pull_count, pull_tracking_branch_name.as_deref());
                 if *hovering {
                     this.set_tooltip_text_if_changed(Some(text), cx);
                 } else {
@@ -449,6 +475,7 @@ impl Render for ActionBarView {
             .active_context_menu_invoker
             .as_ref()
             .is_some_and(|id| id.as_ref() == push_picker_invoker.as_ref());
+        let push_tracking_branch_name = tracking_branch_name.clone();
         let push_menu_icon_color = if push_picker_active {
             theme.colors.accent
         } else {
@@ -539,7 +566,7 @@ impl Render for ActionBarView {
                 .render(theme),
             )
             .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
-                let text: SharedString = format!("Push ({push_count} ahead)").into();
+                let text = push_tooltip_text(push_count, push_tracking_branch_name.as_deref());
                 if *hovering {
                     this.set_tooltip_text_if_changed(Some(text), cx);
                 } else {
@@ -734,6 +761,41 @@ mod tests {
             }),
         )]));
         assert!(!head_branch_has_tracking_upstream(&head_branch, &branches));
+    }
+
+    #[test]
+    fn head_branch_tracking_upstream_name_returns_remote_tracking_name() {
+        let head_branch = Loadable::Ready("main".to_string());
+        let branches = Loadable::Ready(Arc::new(vec![test_branch(
+            "main",
+            Some(Upstream {
+                remote: "origin".to_string(),
+                branch: "feature/tooltip".to_string(),
+            }),
+        )]));
+
+        assert_eq!(
+            head_branch_tracking_upstream_name(&head_branch, &branches).as_deref(),
+            Some("origin/feature/tooltip")
+        );
+    }
+
+    #[test]
+    fn pull_tooltip_text_includes_tracking_branch_on_second_line() {
+        assert_eq!(
+            pull_tooltip_text(3, Some("origin/main")).as_ref(),
+            "Pull 3 behind\norigin/main"
+        );
+        assert_eq!(pull_tooltip_text(0, None).as_ref(), "Pull 0 behind");
+    }
+
+    #[test]
+    fn push_tooltip_text_includes_tracking_branch_on_second_line() {
+        assert_eq!(
+            push_tooltip_text(2, Some("origin/main")).as_ref(),
+            "Push 2 ahead\norigin/main"
+        );
+        assert_eq!(push_tooltip_text(0, None).as_ref(), "Push 0 ahead");
     }
 
     #[test]
