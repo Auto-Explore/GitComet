@@ -1,21 +1,16 @@
 use gitcomet_core::services::GitBackend;
 use gitcomet_git_gix::GixBackend;
+mod test_git_env;
 use std::path::Path;
 use std::process::Command;
 
-#[cfg(windows)]
-const NULL_DEVICE: &str = "NUL";
-#[cfg(not(windows))]
-const NULL_DEVICE: &str = "/dev/null";
-
 fn run_git(repo: &Path, args: &[&str]) {
-    let status = Command::new("git")
+    let mut cmd = Command::new("git");
+    test_git_env::apply(&mut cmd);
+    let status = cmd
         .arg("-C")
         .arg(repo)
         .args(args)
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", NULL_DEVICE)
-        .env("GIT_CONFIG_SYSTEM", NULL_DEVICE)
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_EDITOR", "true")
         .env("EDITOR", "true")
@@ -26,13 +21,12 @@ fn run_git(repo: &Path, args: &[&str]) {
 }
 
 fn git_stdout(repo: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
+    let mut cmd = Command::new("git");
+    test_git_env::apply(&mut cmd);
+    let output = cmd
         .arg("-C")
         .arg(repo)
         .args(args)
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", NULL_DEVICE)
-        .env("GIT_CONFIG_SYSTEM", NULL_DEVICE)
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_EDITOR", "true")
         .env("EDITOR", "true")
