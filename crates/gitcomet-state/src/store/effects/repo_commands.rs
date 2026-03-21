@@ -1,4 +1,7 @@
 use crate::msg::{Msg, RepoCommandKind};
+use gitcomet_core::auth::{
+    StagedGitAuth, clear_staged_git_auth, stage_git_auth_for_current_thread,
+};
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{
     CommandOutput, ConflictSide, GitRepository, PullMode, RemoteUrlKind, ResetMode,
@@ -59,6 +62,20 @@ fn normalize_worktree_relative_path(path: &Path) -> Result<PathBuf, Error> {
         )));
     }
     Ok(normalized)
+}
+
+fn run_with_git_auth<R>(
+    auth: Option<StagedGitAuth>,
+    run: impl FnOnce() -> Result<R, Error>,
+) -> Result<R, Error> {
+    if let Some(auth) = auth {
+        stage_git_auth_for_current_thread(auth);
+        let result = run();
+        clear_staged_git_auth();
+        result
+    } else {
+        run()
+    }
 }
 
 pub(super) fn schedule_save_worktree_file(
@@ -215,6 +232,7 @@ pub(super) fn schedule_add_submodule(
     repo_id: RepoId,
     url: String,
     path: PathBuf,
+    auth: Option<StagedGitAuth>,
 ) {
     let command_url = url.clone();
     let command_path = path.clone();
@@ -227,7 +245,7 @@ pub(super) fn schedule_add_submodule(
             url: command_url,
             path: command_path,
         },
-        move |repo| repo.add_submodule_with_output(&url, &path),
+        move |repo| run_with_git_auth(auth, || repo.add_submodule_with_output(&url, &path)),
     );
 }
 
@@ -236,6 +254,7 @@ pub(super) fn schedule_update_submodules(
     repos: &RepoMap,
     msg_tx: mpsc::Sender<Msg>,
     repo_id: RepoId,
+    auth: Option<StagedGitAuth>,
 ) {
     schedule_repo_command(
         executor,
@@ -243,7 +262,7 @@ pub(super) fn schedule_update_submodules(
         msg_tx,
         repo_id,
         RepoCommandKind::UpdateSubmodules,
-        |repo| repo.update_submodules_with_output(),
+        move |repo| run_with_git_auth(auth, || repo.update_submodules_with_output()),
     );
 }
 
@@ -323,6 +342,7 @@ pub(super) fn schedule_fetch_all(
     msg_tx: mpsc::Sender<Msg>,
     repo_id: RepoId,
     prune: bool,
+    auth: Option<StagedGitAuth>,
 ) {
     schedule_repo_command(
         executor,
@@ -330,7 +350,7 @@ pub(super) fn schedule_fetch_all(
         msg_tx,
         repo_id,
         RepoCommandKind::FetchAll,
-        move |repo| repo.fetch_all_with_output_prune(prune),
+        move |repo| run_with_git_auth(auth, || repo.fetch_all_with_output_prune(prune)),
     );
 }
 
@@ -372,6 +392,7 @@ pub(super) fn schedule_pull(
     msg_tx: mpsc::Sender<Msg>,
     repo_id: RepoId,
     mode: PullMode,
+    auth: Option<StagedGitAuth>,
 ) {
     schedule_repo_command(
         executor,
@@ -379,7 +400,7 @@ pub(super) fn schedule_pull(
         msg_tx,
         repo_id,
         RepoCommandKind::Pull { mode },
-        move |repo| repo.pull_with_output(mode),
+        move |repo| run_with_git_auth(auth, || repo.pull_with_output(mode)),
     );
 }
 
@@ -390,6 +411,7 @@ pub(super) fn schedule_pull_branch(
     repo_id: RepoId,
     remote: String,
     branch: String,
+    auth: Option<StagedGitAuth>,
 ) {
     let command_remote = remote.clone();
     let command_branch = branch.clone();
@@ -402,7 +424,7 @@ pub(super) fn schedule_pull_branch(
             remote: command_remote,
             branch: command_branch,
         },
-        move |repo| repo.pull_branch_with_output(&remote, &branch),
+        move |repo| run_with_git_auth(auth, || repo.pull_branch_with_output(&remote, &branch)),
     );
 }
 
@@ -451,6 +473,7 @@ pub(super) fn schedule_push(
     repos: &RepoMap,
     msg_tx: mpsc::Sender<Msg>,
     repo_id: RepoId,
+    auth: Option<StagedGitAuth>,
 ) {
     schedule_repo_command(
         executor,
@@ -458,7 +481,7 @@ pub(super) fn schedule_push(
         msg_tx,
         repo_id,
         RepoCommandKind::Push,
-        |repo| repo.push_with_output(),
+        move |repo| run_with_git_auth(auth, || repo.push_with_output()),
     );
 }
 
@@ -467,6 +490,7 @@ pub(super) fn schedule_force_push(
     repos: &RepoMap,
     msg_tx: mpsc::Sender<Msg>,
     repo_id: RepoId,
+    auth: Option<StagedGitAuth>,
 ) {
     schedule_repo_command(
         executor,
@@ -474,7 +498,7 @@ pub(super) fn schedule_force_push(
         msg_tx,
         repo_id,
         RepoCommandKind::ForcePush,
-        |repo| repo.push_force_with_output(),
+        move |repo| run_with_git_auth(auth, || repo.push_force_with_output()),
     );
 }
 
@@ -485,6 +509,7 @@ pub(super) fn schedule_push_set_upstream(
     repo_id: RepoId,
     remote: String,
     branch: String,
+    auth: Option<StagedGitAuth>,
 ) {
     let command_remote = remote.clone();
     let command_branch = branch.clone();
@@ -497,7 +522,11 @@ pub(super) fn schedule_push_set_upstream(
             remote: command_remote,
             branch: command_branch,
         },
-        move |repo| repo.push_set_upstream_with_output(&remote, &branch),
+        move |repo| {
+            run_with_git_auth(auth, || {
+                repo.push_set_upstream_with_output(&remote, &branch)
+            })
+        },
     );
 }
 
@@ -508,6 +537,7 @@ pub(super) fn schedule_delete_remote_branch(
     repo_id: RepoId,
     remote: String,
     branch: String,
+    auth: Option<StagedGitAuth>,
 ) {
     let command_remote = remote.clone();
     let command_branch = branch.clone();
@@ -520,7 +550,11 @@ pub(super) fn schedule_delete_remote_branch(
             remote: command_remote,
             branch: command_branch,
         },
-        move |repo| repo.delete_remote_branch_with_output(&remote, &branch),
+        move |repo| {
+            run_with_git_auth(auth, || {
+                repo.delete_remote_branch_with_output(&remote, &branch)
+            })
+        },
     );
 }
 
@@ -660,6 +694,7 @@ pub(super) fn schedule_push_tag(
     repo_id: RepoId,
     remote: String,
     name: String,
+    auth: Option<StagedGitAuth>,
 ) {
     let command_remote = remote.clone();
     let command_name = name.clone();
@@ -672,7 +707,7 @@ pub(super) fn schedule_push_tag(
             remote: command_remote,
             name: command_name,
         },
-        move |repo| repo.push_tag_with_output(&remote, &name),
+        move |repo| run_with_git_auth(auth, || repo.push_tag_with_output(&remote, &name)),
     );
 }
 
@@ -683,6 +718,7 @@ pub(super) fn schedule_delete_remote_tag(
     repo_id: RepoId,
     remote: String,
     name: String,
+    auth: Option<StagedGitAuth>,
 ) {
     let command_remote = remote.clone();
     let command_name = name.clone();
@@ -695,7 +731,7 @@ pub(super) fn schedule_delete_remote_tag(
             remote: command_remote,
             name: command_name,
         },
-        move |repo| repo.delete_remote_tag_with_output(&remote, &name),
+        move |repo| run_with_git_auth(auth, || repo.delete_remote_tag_with_output(&remote, &name)),
     );
 }
 

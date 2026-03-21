@@ -4,7 +4,9 @@ use crate::model::{
     RepoState,
 };
 use crate::msg::{ConflictAutosolveMode, ConflictAutosolveStats, Effect, RepoCommandKind};
-use gitcomet_core::auth::{GitAuthKind, StagedGitAuth, clear_staged_git_auth, stage_git_auth};
+#[cfg(test)]
+use gitcomet_core::auth::stage_git_auth;
+use gitcomet_core::auth::{GitAuthKind, StagedGitAuth, clear_staged_git_auth};
 use gitcomet_core::domain::{DiffArea, DiffTarget, FileStatusKind};
 use gitcomet_core::error::{Error, ErrorKind, GitFailure};
 use gitcomet_core::services::CommandOutput;
@@ -783,11 +785,11 @@ pub(super) fn clear_staged_git_auth_env() {
     clear_staged_git_auth();
 }
 
-pub(super) fn stage_git_auth_env(
+pub(super) fn prepare_staged_git_auth(
     kind: AuthPromptKind,
     username: Option<&str>,
     secret: &str,
-) -> Result<(), Error> {
+) -> Result<StagedGitAuth, Error> {
     let normalized_secret = match kind {
         AuthPromptKind::HostVerification => {
             let trimmed = secret.trim();
@@ -811,7 +813,7 @@ pub(super) fn stage_git_auth_env(
         )));
     }
 
-    stage_git_auth(StagedGitAuth {
+    Ok(StagedGitAuth {
         kind: match kind {
             AuthPromptKind::UsernamePassword => GitAuthKind::UsernamePassword,
             AuthPromptKind::Passphrase => GitAuthKind::Passphrase,
@@ -819,7 +821,16 @@ pub(super) fn stage_git_auth_env(
         },
         username: username.map(ToOwned::to_owned),
         secret: normalized_secret,
-    });
+    })
+}
+
+#[cfg(test)]
+pub(super) fn stage_git_auth_env(
+    kind: AuthPromptKind,
+    username: Option<&str>,
+    secret: &str,
+) -> Result<(), Error> {
+    stage_git_auth(prepare_staged_git_auth(kind, username, secret)?);
     Ok(())
 }
 

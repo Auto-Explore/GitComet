@@ -302,7 +302,11 @@ pub(super) fn clone_repo(state: &mut AppState, url: String, dest: PathBuf) -> Ve
         seq: 0,
         output_tail: Vec::new(),
     });
-    vec![Effect::CloneRepo { url, dest }]
+    vec![Effect::CloneRepo {
+        url,
+        dest,
+        auth: None,
+    }]
 }
 
 pub(super) fn clone_repo_progress(

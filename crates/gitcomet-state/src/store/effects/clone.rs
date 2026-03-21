@@ -285,6 +285,7 @@ pub(super) fn schedule_clone_repo(
     msg_tx: mpsc::Sender<Msg>,
     url: String,
     dest: PathBuf,
+    auth: Option<StagedGitAuth>,
 ) {
     executor.spawn(move || {
         if let Err(err) = validate_clone_url(&url) {
@@ -313,7 +314,7 @@ pub(super) fn schedule_clone_repo(
             .env("GIT_TERMINAL_PROMPT", "0");
 
         let askpass_script = match (|| {
-            let auth = take_pending_git_auth();
+            let auth = auth.or_else(take_pending_git_auth);
             let script = create_askpass_script()?;
             configure_clone_auth_prompt(&mut cmd, auth.as_ref(), &script);
             Ok::<AskPassScript, Error>(script)

@@ -27,6 +27,26 @@ fn setup_open_repo(
     (repos, state)
 }
 
+fn effect_git_auth(effect: &Effect) -> Option<&StagedGitAuth> {
+    match effect {
+        Effect::CloneRepo { auth, .. }
+        | Effect::AddSubmodule { auth, .. }
+        | Effect::UpdateSubmodules { auth, .. }
+        | Effect::Commit { auth, .. }
+        | Effect::CommitAmend { auth, .. }
+        | Effect::FetchAll { auth, .. }
+        | Effect::Pull { auth, .. }
+        | Effect::PullBranch { auth, .. }
+        | Effect::Push { auth, .. }
+        | Effect::ForcePush { auth, .. }
+        | Effect::PushSetUpstream { auth, .. }
+        | Effect::DeleteRemoteBranch { auth, .. }
+        | Effect::PushTag { auth, .. }
+        | Effect::DeleteRemoteTag { auth, .. } => auth.as_ref(),
+        _ => None,
+    }
+}
+
 #[test]
 fn repo_command_finished_auth_error_sets_username_password_prompt() {
     let repo_id = RepoId(1);
@@ -377,17 +397,16 @@ fn submit_auth_prompt_replays_repo_command_and_stages_trimmed_credentials() {
             repo_id: RepoId(1),
             remote,
             branch,
+            ..
         }] if remote == "origin" && branch == "main"
     ));
     assert!(state.auth_prompt.is_none());
     assert_eq!(state.repos[0].push_in_flight, 1);
 
-    let staged = take_staged_git_auth().expect("staged auth should be present");
+    let staged = effect_git_auth(&effects[0]).expect("staged auth should be present");
     assert_eq!(staged.kind, GitAuthKind::UsernamePassword);
     assert_eq!(staged.username.as_deref(), Some("alice"));
     assert_eq!(staged.secret, "token-123");
-
-    clear_staged_git_auth();
 }
 
 #[test]
@@ -422,8 +441,12 @@ fn submit_auth_prompt_replays_commit_and_commit_amend() {
         [Effect::Commit {
             repo_id: RepoId(1),
             message,
+            ..
         }] if message == "first"
     ));
+    let commit_auth = effect_git_auth(&commit_effects[0]).expect("commit auth should be present");
+    assert_eq!(commit_auth.kind, GitAuthKind::Passphrase);
+    assert_eq!(commit_auth.secret, "passphrase");
     assert_eq!(
         state.repos[0].pending_commit_retry,
         Some(PendingCommitRetry {
@@ -431,7 +454,6 @@ fn submit_auth_prompt_replays_commit_and_commit_amend() {
             amend: false,
         })
     );
-    clear_staged_git_auth();
 
     state.auth_prompt = Some(AuthPromptState {
         kind: AuthPromptKind::Passphrase,
@@ -456,8 +478,12 @@ fn submit_auth_prompt_replays_commit_and_commit_amend() {
         [Effect::CommitAmend {
             repo_id: RepoId(1),
             message,
+            ..
         }] if message == "second"
     ));
+    let amend_auth = effect_git_auth(&amend_effects[0]).expect("amend auth should be present");
+    assert_eq!(amend_auth.kind, GitAuthKind::Passphrase);
+    assert_eq!(amend_auth.secret, "passphrase");
     assert_eq!(
         state.repos[0].pending_commit_retry,
         Some(PendingCommitRetry {
@@ -465,8 +491,6 @@ fn submit_auth_prompt_replays_commit_and_commit_amend() {
             amend: true,
         })
     );
-
-    clear_staged_git_auth();
 }
 
 #[test]
@@ -503,11 +527,13 @@ fn submit_auth_prompt_replays_clone_operation() {
         [Effect::CloneRepo {
             url: effect_url,
             dest: effect_dest,
+            ..
         }] if effect_url == &url && effect_dest == &dest
     ));
     assert!(state.auth_prompt.is_none());
-
-    clear_staged_git_auth();
+    let staged = effect_git_auth(&effects[0]).expect("clone auth should be present");
+    assert_eq!(staged.kind, GitAuthKind::Passphrase);
+    assert_eq!(staged.secret, "passphrase");
 }
 
 #[test]
@@ -542,15 +568,14 @@ fn submit_auth_prompt_host_verification_replays_repo_command_and_stages_confirma
         [Effect::FetchAll {
             repo_id: RepoId(1),
             prune: _,
+            ..
         }]
     ));
     assert!(state.auth_prompt.is_none());
 
-    let staged = take_staged_git_auth().expect("staged auth should be present");
+    let staged = effect_git_auth(&effects[0]).expect("staged auth should be present");
     assert_eq!(staged.kind, GitAuthKind::HostVerification);
     assert_eq!(staged.secret, "yes");
-
-    clear_staged_git_auth();
 }
 
 #[test]
@@ -681,6 +706,7 @@ fn submit_auth_prompt_replays_expected_repo_command_mappings() {
         [Effect::FetchAll {
             repo_id: RepoId(1),
             prune: _,
+            ..
         }]
     ));
 
@@ -694,6 +720,7 @@ fn submit_auth_prompt_replays_expected_repo_command_mappings() {
             repo_id: RepoId(1),
             remote,
             branch,
+            ..
         }] if remote == "origin" && branch == "main"
     ));
 

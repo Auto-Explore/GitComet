@@ -8,6 +8,7 @@ mod util;
 
 use crate::model::{AppState, AuthPromptState, AuthRetryOperation, PendingCommitRetry, RepoId};
 use crate::msg::{Effect, Msg, RepoCommandKind};
+use gitcomet_core::auth::StagedGitAuth;
 use gitcomet_core::services::GitRepository;
 use rustc_hash::FxHashMap as HashMap;
 use std::sync::Arc;
@@ -228,6 +229,34 @@ fn retry_msg_for_repo_command(repo_id: RepoId, command: RepoCommandKind) -> Opti
     })
 }
 
+fn attach_git_auth_to_effects(mut effects: Vec<Effect>, auth: StagedGitAuth) -> Vec<Effect> {
+    let Some(first) = effects.first_mut() else {
+        return effects;
+    };
+
+    match first {
+        Effect::CloneRepo { auth: slot, .. }
+        | Effect::AddSubmodule { auth: slot, .. }
+        | Effect::UpdateSubmodules { auth: slot, .. }
+        | Effect::Commit { auth: slot, .. }
+        | Effect::CommitAmend { auth: slot, .. }
+        | Effect::FetchAll { auth: slot, .. }
+        | Effect::Pull { auth: slot, .. }
+        | Effect::PullBranch { auth: slot, .. }
+        | Effect::Push { auth: slot, .. }
+        | Effect::ForcePush { auth: slot, .. }
+        | Effect::PushSetUpstream { auth: slot, .. }
+        | Effect::DeleteRemoteBranch { auth: slot, .. }
+        | Effect::PushTag { auth: slot, .. }
+        | Effect::DeleteRemoteTag { auth: slot, .. } => {
+            *slot = Some(auth);
+        }
+        _ => {}
+    }
+
+    effects
+}
+
 fn submit_auth_prompt(
     repos: &mut HashMap<RepoId, Arc<dyn GitRepository>>,
     id_alloc: &AtomicU64,
@@ -242,25 +271,28 @@ fn submit_auth_prompt(
     let username = username
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty());
-    if let Err(err) = util::stage_git_auth_env(prompt.kind, username.as_deref(), &secret) {
-        state.auth_prompt = Some(prompt);
-        return if let Some(repo_state) = state
-            .active_repo
-            .and_then(|repo_id| state.repos.iter_mut().find(|r| r.id == repo_id))
-        {
-            util::push_diagnostic(
-                repo_state,
-                crate::model::DiagnosticKind::Error,
-                util::format_error_for_user(&err),
-            );
-            Vec::new()
-        } else {
-            Vec::new()
-        };
-    }
+    let auth = match util::prepare_staged_git_auth(prompt.kind, username.as_deref(), &secret) {
+        Ok(auth) => auth,
+        Err(err) => {
+            state.auth_prompt = Some(prompt);
+            return if let Some(repo_state) = state
+                .active_repo
+                .and_then(|repo_id| state.repos.iter_mut().find(|r| r.id == repo_id))
+            {
+                util::push_diagnostic(
+                    repo_state,
+                    crate::model::DiagnosticKind::Error,
+                    util::format_error_for_user(&err),
+                );
+                Vec::new()
+            } else {
+                Vec::new()
+            };
+        }
+    };
 
     match retry_msg_for_auth_operation(prompt.operation) {
-        Some(msg) => reduce(repos, id_alloc, state, msg),
+        Some(msg) => attach_git_auth_to_effects(reduce(repos, id_alloc, state, msg), auth),
         None => Vec::new(),
     }
 }

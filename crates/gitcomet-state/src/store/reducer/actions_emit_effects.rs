@@ -105,11 +105,19 @@ pub(super) fn force_remove_worktree(repo_id: RepoId, path: PathBuf) -> Vec<Effec
 }
 
 pub(super) fn add_submodule(repo_id: RepoId, url: String, path: PathBuf) -> Vec<Effect> {
-    vec![Effect::AddSubmodule { repo_id, url, path }]
+    vec![Effect::AddSubmodule {
+        repo_id,
+        url,
+        path,
+        auth: None,
+    }]
 }
 
 pub(super) fn update_submodules(repo_id: RepoId) -> Vec<Effect> {
-    vec![Effect::UpdateSubmodules { repo_id }]
+    vec![Effect::UpdateSubmodules {
+        repo_id,
+        auth: None,
+    }]
 }
 
 pub(super) fn remove_submodule(repo_id: RepoId, path: PathBuf) -> Vec<Effect> {
@@ -155,11 +163,19 @@ pub(super) fn save_worktree_file(
 }
 
 pub(super) fn commit(repo_id: RepoId, message: String) -> Vec<Effect> {
-    vec![Effect::Commit { repo_id, message }]
+    vec![Effect::Commit {
+        repo_id,
+        message,
+        auth: None,
+    }]
 }
 
 pub(super) fn commit_amend(repo_id: RepoId, message: String) -> Vec<Effect> {
-    vec![Effect::CommitAmend { repo_id, message }]
+    vec![Effect::CommitAmend {
+        repo_id,
+        message,
+        auth: None,
+    }]
 }
 
 enum InFlightKind {
@@ -200,7 +216,11 @@ pub(super) fn fetch_all(
         .find(|r| r.id == repo_id)
         .is_some_and(|repo_state| repo_state.fetch_prune_deleted_remote_tracking_branches);
     bump_in_flight(repos, state, repo_id, InFlightKind::Pull);
-    vec![Effect::FetchAll { repo_id, prune }]
+    vec![Effect::FetchAll {
+        repo_id,
+        prune,
+        auth: None,
+    }]
 }
 
 pub(super) fn prune_merged_branches(
@@ -228,7 +248,11 @@ pub(super) fn pull(
     mode: PullMode,
 ) -> Vec<Effect> {
     bump_in_flight(repos, state, repo_id, InFlightKind::Pull);
-    vec![Effect::Pull { repo_id, mode }]
+    vec![Effect::Pull {
+        repo_id,
+        mode,
+        auth: None,
+    }]
 }
 
 pub(super) fn pull_branch(
@@ -243,6 +267,7 @@ pub(super) fn pull_branch(
         repo_id,
         remote,
         branch,
+        auth: None,
     }]
 }
 
@@ -260,7 +285,10 @@ pub(super) fn push(
     repo_id: RepoId,
 ) -> Vec<Effect> {
     bump_in_flight(repos, state, repo_id, InFlightKind::Push);
-    vec![Effect::Push { repo_id }]
+    vec![Effect::Push {
+        repo_id,
+        auth: None,
+    }]
 }
 
 pub(super) fn force_push(
@@ -269,7 +297,10 @@ pub(super) fn force_push(
     repo_id: RepoId,
 ) -> Vec<Effect> {
     bump_in_flight(repos, state, repo_id, InFlightKind::Push);
-    vec![Effect::ForcePush { repo_id }]
+    vec![Effect::ForcePush {
+        repo_id,
+        auth: None,
+    }]
 }
 
 pub(super) fn push_set_upstream(
@@ -284,6 +315,7 @@ pub(super) fn push_set_upstream(
         repo_id,
         remote,
         branch,
+        auth: None,
     }]
 }
 
@@ -299,6 +331,7 @@ pub(super) fn delete_remote_branch(
         repo_id,
         remote,
         branch,
+        auth: None,
     }]
 }
 
@@ -350,6 +383,7 @@ pub(super) fn push_tag(
         repo_id,
         remote,
         name,
+        auth: None,
     }]
 }
 
@@ -365,6 +399,7 @@ pub(super) fn delete_remote_tag(
         repo_id,
         remote,
         name,
+        auth: None,
     }]
 }
 
