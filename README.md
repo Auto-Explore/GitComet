@@ -1,4 +1,4 @@
-## GitComet
+## <img alt="GitComet logo" src="assets/gitcomet_logo.svg" width="26" /> GitComet 
 
 [![Build Status](https://github.com/Auto-Explore/GitComet/actions/workflows/rust.yml/badge.svg?branch=main)](https://github.com/Auto-Explore/GitComet/actions/workflows/rust.yml)
 [![Discord](https://img.shields.io/badge/Discord-Join%20chat-5865F2?logo=discord&logoColor=white)](https://discord.gg/2ufDGP8RnA)
