@@ -4,6 +4,11 @@
 <?else ?>
     <?define PlatformProgramFilesFolder = "ProgramFilesFolder" ?>
 <?endif ?>
+<?if $(sys.BUILDARCH) = arm64 ?>
+    <?define PlatformInstallerVersion = "500" ?>
+<?else ?>
+    <?define PlatformInstallerVersion = "450" ?>
+<?endif ?>
 
 <Wix xmlns='http://schemas.microsoft.com/wix/2006/wi'>
     <Product
@@ -20,7 +25,7 @@
             Keywords='Installer'
             Description='GitComet desktop application'
             Manufacturer='AutoExplore Oy'
-            InstallerVersion='450'
+            InstallerVersion='$(var.PlatformInstallerVersion)'
             Languages='1033'
             Compressed='yes'
             InstallScope='perMachine'
@@ -131,4 +136,3 @@
         </UI>
     </Product>
 </Wix>
-

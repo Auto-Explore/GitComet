@@ -213,7 +213,7 @@ jobs:
       storage_prefix: ${{ vars.APT_STORAGE_PREFIX }}
       distribution: ${{ vars.APT_REPO_DISTRIBUTION }}
       component: ${{ vars.APT_REPO_COMPONENT }}
-      architecture: "amd64"
+      architecture: "amd64,arm64"
       repo_origin: ${{ vars.APT_REPO_ORIGIN }}
       repo_label: ${{ vars.APT_REPO_LABEL }}
       repo_description: ${{ vars.APT_REPO_DESCRIPTION }}

@@ -1,21 +1,16 @@
 use gitcomet_core::domain::SubmoduleStatus;
 use gitcomet_core::services::GitBackend;
 use gitcomet_git_gix::GixBackend;
+mod test_git_env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 #[cfg(windows)]
 use std::sync::OnceLock;
 
-#[cfg(windows)]
-const NULL_DEVICE: &str = "NUL";
-#[cfg(not(windows))]
-const NULL_DEVICE: &str = "/dev/null";
-
 fn git_command() -> Command {
     let mut cmd = Command::new("git");
-    cmd.env("GIT_CONFIG_NOSYSTEM", "1");
-    cmd.env("GIT_CONFIG_GLOBAL", NULL_DEVICE);
+    test_git_env::apply(&mut cmd);
     cmd
 }
 

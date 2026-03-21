@@ -857,19 +857,52 @@ mod tests {
     use super::*;
     use notify::EventKind;
     use notify::event::{AccessKind, AccessMode, CreateKind, RemoveKind};
+    use std::fs;
     use std::process::Command;
-    use std::sync::{atomic::AtomicBool, mpsc};
+    use std::sync::{OnceLock, atomic::AtomicBool, mpsc};
     use std::time::SystemTime;
 
-    #[cfg(windows)]
-    const NULL_DEVICE: &str = "NUL";
-    #[cfg(not(windows))]
-    const NULL_DEVICE: &str = "/dev/null";
+    struct IsolatedGitConfigEnv {
+        _root: tempfile::TempDir,
+        home_dir: PathBuf,
+        xdg_config_home: PathBuf,
+        global_config: PathBuf,
+        excludes_file: PathBuf,
+    }
+
+    fn isolated_git_config_env() -> &'static IsolatedGitConfigEnv {
+        static ENV: OnceLock<IsolatedGitConfigEnv> = OnceLock::new();
+        ENV.get_or_init(|| {
+            let root = tempfile::tempdir().expect("create isolated git config tempdir");
+            let home_dir = root.path().join("home");
+            let xdg_config_home = root.path().join("xdg");
+            let global_config = root.path().join("global.gitconfig");
+            let excludes_file = root.path().join("global-excludes");
+
+            fs::create_dir_all(&home_dir).expect("create isolated HOME directory");
+            fs::create_dir_all(&xdg_config_home)
+                .expect("create isolated XDG_CONFIG_HOME directory");
+            fs::write(&global_config, "").expect("create isolated global git config file");
+            fs::write(&excludes_file, "").expect("create isolated excludes file");
+
+            IsolatedGitConfigEnv {
+                _root: root,
+                home_dir,
+                xdg_config_home,
+                global_config,
+                excludes_file,
+            }
+        })
+    }
 
     fn run_git(repo: &Path, args: &[&str]) {
+        let env = isolated_git_config_env();
         let output = Command::new("git")
             .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("GIT_CONFIG_GLOBAL", NULL_DEVICE)
+            .env("GIT_CONFIG_GLOBAL", &env.global_config)
+            .env("HOME", &env.home_dir)
+            .env("XDG_CONFIG_HOME", &env.xdg_config_home)
+            .env_remove("GIT_CONFIG_SYSTEM")
             .env("GIT_TERMINAL_PROMPT", "0")
             .env("GCM_INTERACTIVE", "Never")
             .arg("-C")
@@ -890,7 +923,11 @@ mod tests {
         let _ = fs::create_dir_all(workdir);
         run_git(workdir, &["init"]);
         // Keep tests deterministic and independent from host global excludes.
-        run_git(workdir, &["config", "core.excludesFile", NULL_DEVICE]);
+        let excludes_file = isolated_git_config_env()
+            .excludes_file
+            .to_string_lossy()
+            .into_owned();
+        run_git(workdir, &["config", "core.excludesFile", &excludes_file]);
         run_git(workdir, &["config", "core.fileMode", "false"]);
         run_git(workdir, &["config", "user.email", "you@example.com"]);
         run_git(workdir, &["config", "user.name", "You"]);

@@ -32,7 +32,7 @@ on:
       architecture:
         required: false
         type: string
-        default: "amd64"
+        default: "amd64,arm64"
       repo_origin:
         required: false
         type: string
@@ -96,9 +96,9 @@ on:
         default: "main"
         type: string
       architecture:
-        description: "APT architecture"
+        description: "APT architectures as a comma- or space-separated list"
         required: false
-        default: "amd64"
+        default: "amd64,arm64"
         type: string
       repo_origin:
         description: "Origin metadata in Release file. Defaults to APT_REPO_ORIGIN when omitted."
@@ -195,7 +195,7 @@ jobs:
           storage_prefix="${INPUT_STORAGE_PREFIX:-${DISPATCH_STORAGE_PREFIX:-${VAR_STORAGE_PREFIX:-}}}"
           distribution="${INPUT_DISTRIBUTION:-${DISPATCH_DISTRIBUTION:-${VAR_DISTRIBUTION:-stable}}}"
           component="${INPUT_COMPONENT:-${DISPATCH_COMPONENT:-${VAR_COMPONENT:-main}}}"
-          architecture="${INPUT_ARCHITECTURE:-${DISPATCH_ARCHITECTURE:-amd64}}"
+          architecture_input="${INPUT_ARCHITECTURE:-${DISPATCH_ARCHITECTURE:-amd64,arm64}}"
           repo_origin="${INPUT_REPO_ORIGIN:-${DISPATCH_REPO_ORIGIN:-${VAR_REPO_ORIGIN:-GitComet}}}"
           repo_label="${INPUT_REPO_LABEL:-${DISPATCH_REPO_LABEL:-${VAR_REPO_LABEL:-GitComet}}}"
           repo_description="${INPUT_REPO_DESCRIPTION:-${DISPATCH_REPO_DESCRIPTION:-${VAR_REPO_DESCRIPTION:-GitComet APT repository.}}}"
@@ -209,7 +209,6 @@ jobs:
           storage_prefix="$(echo "$storage_prefix" | sed 's#^/*##;s#/*$##')"
           distribution="$(echo "$distribution" | tr -d '[:space:]')"
           component="$(echo "$component" | tr -d '[:space:]')"
-          architecture="$(echo "$architecture" | tr -d '[:space:]')"
           container_public_access="$(echo "$container_public_access" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
           dry_run="$(echo "$dry_run" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
 
@@ -247,10 +246,36 @@ jobs:
             exit 1
           fi
 
-          if ! [[ "$architecture" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
-            echo "::error title=Invalid architecture::architecture '$architecture' is not valid."
+          declare -a architectures=()
+          architecture_tokens="${architecture_input//,/ }"
+          for architecture in $architecture_tokens; do
+            architecture="$(echo "$architecture" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
+            if [ -z "$architecture" ]; then
+              continue
+            fi
+            if ! [[ "$architecture" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+              echo "::error title=Invalid architecture::architecture '$architecture' is not valid."
+              exit 1
+            fi
+
+            duplicate=0
+            for existing_architecture in "${architectures[@]}"; do
+              if [ "$existing_architecture" = "$architecture" ]; then
+                duplicate=1
+                break
+              fi
+            done
+            if [ "$duplicate" -eq 0 ]; then
+              architectures+=("$architecture")
+            fi
+          done
+
+          if [ "${#architectures[@]}" -eq 0 ]; then
+            echo "::error title=Missing architecture::At least one APT architecture is required."
             exit 1
           fi
+
+          architectures_csv="$(IFS=,; echo "${architectures[*]}")"
 
           case "$container_public_access" in
             blob|container|off) ;;
@@ -286,7 +311,7 @@ jobs:
           echo "repo_base_url=$repo_base_url" >> "$GITHUB_OUTPUT"
           echo "distribution=$distribution" >> "$GITHUB_OUTPUT"
           echo "component=$component" >> "$GITHUB_OUTPUT"
-          echo "architecture=$architecture" >> "$GITHUB_OUTPUT"
+          echo "architectures=$architectures_csv" >> "$GITHUB_OUTPUT"
           echo "repo_origin=$repo_origin" >> "$GITHUB_OUTPUT"
           echo "repo_label=$repo_label" >> "$GITHUB_OUTPUT"
           echo "repo_description=$repo_description" >> "$GITHUB_OUTPUT"
@@ -310,27 +335,27 @@ jobs:
             exit 1
           fi
 
-      - name: Download .deb from GitHub release
-        id: deb
+      - name: Download .debs from GitHub release
         run: |
           set -euo pipefail
           mkdir -p dist/apt-release
           gh release view "${{ steps.norm.outputs.tag }}" --repo "$GITHUB_REPOSITORY" >/dev/null
-          gh release download "${{ steps.norm.outputs.tag }}" \
-            --repo "$GITHUB_REPOSITORY" \
-            --pattern "gitcomet_*_${{ steps.norm.outputs.architecture }}.deb" \
-            --dir dist/apt-release \
-            --clobber
+          IFS=',' read -r -a architectures <<< "${{ steps.norm.outputs.architectures }}"
 
-          mapfile -t debs < <(find dist/apt-release -maxdepth 1 -type f -name "gitcomet_*_${{ steps.norm.outputs.architecture }}.deb" | LC_ALL=C sort)
-          if [ "${#debs[@]}" -ne 1 ]; then
-            echo "::error title=Unexpected .deb asset count::Expected exactly one Debian package for architecture '${{ steps.norm.outputs.architecture }}'."
-            ls -lah dist/apt-release >&2 || true
-            exit 1
-          fi
+          for architecture in "${architectures[@]}"; do
+            gh release download "${{ steps.norm.outputs.tag }}" \
+              --repo "$GITHUB_REPOSITORY" \
+              --pattern "gitcomet_*_${architecture}.deb" \
+              --dir dist/apt-release \
+              --clobber
 
-          echo "path=${debs[0]}" >> "$GITHUB_OUTPUT"
-          echo "name=$(basename "${debs[0]}")" >> "$GITHUB_OUTPUT"
+            mapfile -t debs < <(find dist/apt-release -maxdepth 1 -type f -name "gitcomet_*_${architecture}.deb" | LC_ALL=C sort)
+            if [ "${#debs[@]}" -ne 1 ]; then
+              echo "::error title=Unexpected .deb asset count::Expected exactly one Debian package for architecture '${architecture}'."
+              ls -lah dist/apt-release >&2 || true
+              exit 1
+            fi
+          done
 
       - name: Install APT repository tooling
         run: |
@@ -461,16 +486,23 @@ jobs:
           args=(
             scripts/build-apt-repo.sh
             --repo-dir dist/apt-repo
-            --deb "${{ steps.deb.outputs.path }}"
             --distribution "${{ steps.norm.outputs.distribution }}"
             --component "${{ steps.norm.outputs.component }}"
-            --architecture "${{ steps.norm.outputs.architecture }}"
             --origin "${{ steps.norm.outputs.repo_origin }}"
             --label "${{ steps.norm.outputs.repo_label }}"
             --description "${{ steps.norm.outputs.repo_description }}"
             --signing-key "${{ steps.gpg.outputs.signing_key }}"
             --repo-url "https://apt.gitcomet.dev"
           )
+
+          IFS=',' read -r -a architectures <<< "${{ steps.norm.outputs.architectures }}"
+          for architecture in "${architectures[@]}"; do
+            args+=(--architecture "$architecture")
+          done
+
+          while IFS= read -r -d '' deb_path; do
+            args+=(--deb "$deb_path")
+          done < <(find dist/apt-release -maxdepth 1 -type f -name '*.deb' -print0 | sort -z)
 
           if [ -n "${{ steps.norm.outputs.repo_base_url }}" ]; then
             args+=(--repo-url "${{ steps.norm.outputs.repo_base_url }}")

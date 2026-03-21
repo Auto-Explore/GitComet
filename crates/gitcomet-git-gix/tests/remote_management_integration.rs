@@ -1,20 +1,15 @@
 use gitcomet_core::services::{GitBackend, PullMode, RemoteUrlKind};
 use gitcomet_git_gix::GixBackend;
+mod test_git_env;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
-#[cfg(windows)]
-const NULL_DEVICE: &str = "NUL";
-#[cfg(not(windows))]
-const NULL_DEVICE: &str = "/dev/null";
-
 fn git_command() -> Command {
     let mut cmd = Command::new("git");
     // Keep tests deterministic by isolating from host git config.
-    cmd.env("GIT_CONFIG_NOSYSTEM", "1");
-    cmd.env("GIT_CONFIG_GLOBAL", NULL_DEVICE);
+    test_git_env::apply(&mut cmd);
     // Local bare remotes require file protocol to be permitted.
     cmd.env("GIT_ALLOW_PROTOCOL", "file");
     cmd

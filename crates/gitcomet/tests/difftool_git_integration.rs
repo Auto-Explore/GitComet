@@ -1,19 +1,14 @@
 use gitcomet_core::process::background_command as no_window_command;
+mod test_git_env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 #[cfg(windows)]
 use std::sync::OnceLock;
 
-#[cfg(windows)]
-const NULL_DEVICE: &str = "NUL";
-#[cfg(not(windows))]
-const NULL_DEVICE: &str = "/dev/null";
-
 fn apply_isolated_git_config_env(cmd: &mut Command) {
     // Keep integration tests deterministic by ignoring host git config.
-    cmd.env("GIT_CONFIG_NOSYSTEM", "1");
-    cmd.env("GIT_CONFIG_GLOBAL", NULL_DEVICE);
+    test_git_env::apply(cmd);
     // Force deterministic git output for string assertions in tests.
     cmd.env("LC_ALL", "C");
     cmd.env("LANG", "C");

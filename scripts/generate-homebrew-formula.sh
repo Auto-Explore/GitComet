@@ -8,7 +8,8 @@ Usage: scripts/generate-homebrew-formula.sh \
   --github-repo OWNER/REPO \
   --arm-tar PATH \
   --intel-tar PATH \
-  --linux-tar PATH \
+  --linux-arm-tar PATH \
+  --linux-intel-tar PATH \
   --output PATH
 
 Generates a Homebrew formula for GitComet from macOS + Linux tarball artifacts.
@@ -19,7 +20,8 @@ version=""
 github_repo=""
 arm_tar=""
 intel_tar=""
-linux_tar=""
+linux_arm_tar=""
+linux_intel_tar=""
 out_path=""
 
 while [[ $# -gt 0 ]]; do
@@ -40,8 +42,12 @@ while [[ $# -gt 0 ]]; do
       intel_tar="${2:-}"
       shift 2
       ;;
-    --linux-tar)
-      linux_tar="${2:-}"
+    --linux-arm-tar)
+      linux_arm_tar="${2:-}"
+      shift 2
+      ;;
+    --linux-intel-tar)
+      linux_intel_tar="${2:-}"
       shift 2
       ;;
     --output)
@@ -60,7 +66,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ -z "$version" || -z "$github_repo" || -z "$arm_tar" || -z "$intel_tar" || -z "$linux_tar" || -z "$out_path" ]]; then
+if [[ -z "$version" || -z "$github_repo" || -z "$arm_tar" || -z "$intel_tar" || -z "$linux_arm_tar" || -z "$linux_intel_tar" || -z "$out_path" ]]; then
   echo "All arguments are required." >&2
   usage
   exit 2
@@ -81,8 +87,13 @@ if [[ ! -f "$intel_tar" ]]; then
   exit 1
 fi
 
-if [[ ! -f "$linux_tar" ]]; then
-  echo "linux tarball not found: $linux_tar" >&2
+if [[ ! -f "$linux_arm_tar" ]]; then
+  echo "linux arm tarball not found: $linux_arm_tar" >&2
+  exit 1
+fi
+
+if [[ ! -f "$linux_intel_tar" ]]; then
+  echo "linux intel tarball not found: $linux_intel_tar" >&2
   exit 1
 fi
 
@@ -102,10 +113,12 @@ sha256_file() {
 
 arm_sha="$(sha256_file "$arm_tar")"
 intel_sha="$(sha256_file "$intel_tar")"
-linux_sha="$(sha256_file "$linux_tar")"
+linux_arm_sha="$(sha256_file "$linux_arm_tar")"
+linux_intel_sha="$(sha256_file "$linux_intel_tar")"
 arm_name="$(basename "$arm_tar")"
 intel_name="$(basename "$intel_tar")"
-linux_name="$(basename "$linux_tar")"
+linux_arm_name="$(basename "$linux_arm_tar")"
+linux_intel_name="$(basename "$linux_intel_tar")"
 
 mkdir -p "$(dirname "$out_path")"
 
@@ -129,9 +142,14 @@ class GitcometCli < Formula
   end
 
   on_linux do
+    on_arm do
+      url "https://github.com/${github_repo}/releases/download/v${version}/${linux_arm_name}"
+      sha256 "${linux_arm_sha}"
+    end
+
     on_intel do
-      url "https://github.com/${github_repo}/releases/download/v${version}/${linux_name}"
-      sha256 "${linux_sha}"
+      url "https://github.com/${github_repo}/releases/download/v${version}/${linux_intel_name}"
+      sha256 "${linux_intel_sha}"
     end
   end
 
