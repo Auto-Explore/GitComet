@@ -181,7 +181,7 @@ pub(super) fn model(
             {
                 items.push(ContextMenuItem::Entry {
                     label: "Set as tracking upstream".into(),
-                    icon: Some("⛓".into()),
+                    icon: Some("link".into()),
                     shortcut: None,
                     disabled: false,
                     action: Box::new(ContextMenuAction::SetUpstreamBranch {
@@ -191,16 +191,18 @@ pub(super) fn model(
                     }),
                 });
             }
-            items.push(ContextMenuItem::Entry {
-                label: "Unlink upstream branch".into(),
-                icon: Some("⛓".into()),
-                shortcut: None,
-                disabled: active_upstream_full.as_deref() != Some(name.as_str()),
-                action: Box::new(ContextMenuAction::UnsetUpstreamBranch {
-                    repo_id,
-                    branch: active_branch_name.unwrap_or_default(),
-                }),
-            });
+            if active_upstream_full.is_some() {
+                items.push(ContextMenuItem::Entry {
+                    label: "Unlink upstream branch".into(),
+                    icon: Some("unlink".into()),
+                    shortcut: None,
+                    disabled: active_upstream_full.as_deref() != Some(name.as_str()),
+                    action: Box::new(ContextMenuAction::UnsetUpstreamBranch {
+                        repo_id,
+                        branch: active_branch_name.unwrap_or_default(),
+                    }),
+                });
+            }
             items.push(ContextMenuItem::Separator);
         }
         items.push(ContextMenuItem::Entry {

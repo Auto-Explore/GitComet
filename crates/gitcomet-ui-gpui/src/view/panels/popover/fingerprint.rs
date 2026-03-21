@@ -199,6 +199,7 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         | PopoverKind::PullReconcilePrompt { .. }
         | PopoverKind::ForcePushConfirm { .. } => {
             repo.head_branch_rev.hash(hasher);
+            repo.branches_rev.hash(hasher);
             repo.remotes_rev.hash(hasher);
             repo.remote_branches_rev.hash(hasher);
         }
@@ -595,6 +596,8 @@ fn hash_reset_mode<H: Hasher>(mode: ResetMode, hasher: &mut H) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gitcomet_core::domain::{Branch, CommitId, Upstream};
+    use std::sync::Arc;
 
     fn hash_kind(kind: PopoverKind) -> u64 {
         let mut hasher = FxHasher::default();
@@ -640,5 +643,36 @@ mod tests {
         let resolved = repo_for_popover(&state, &popover).expect("expected repo lookup to work");
 
         assert_eq!(resolved.id, repo_id);
+    }
+
+    #[test]
+    fn pull_picker_fingerprint_changes_when_branches_rev_changes() {
+        let repo_id = RepoId(9);
+        let mut repo = RepoState::new_opening(
+            repo_id,
+            gitcomet_core::domain::RepoSpec {
+                workdir: std::env::temp_dir().join("gitcomet_pull_picker_fingerprint"),
+            },
+        );
+        repo.head_branch = Loadable::Ready("main".to_string());
+        repo.branches = Loadable::Ready(Arc::new(vec![Branch {
+            name: "main".to_string(),
+            target: CommitId("deadbeef".into()),
+            upstream: Some(Upstream {
+                remote: "origin".to_string(),
+                branch: "main".to_string(),
+            }),
+            divergence: None,
+        }]));
+
+        let mut state = AppState::default();
+        state.active_repo = Some(repo_id);
+        state.repos.push(repo);
+
+        let before = notify_fingerprint(&state, &PopoverKind::PullPicker);
+        state.repos[0].branches_rev = state.repos[0].branches_rev.wrapping_add(1);
+        let after = notify_fingerprint(&state, &PopoverKind::PullPicker);
+
+        assert_ne!(before, after);
     }
 }

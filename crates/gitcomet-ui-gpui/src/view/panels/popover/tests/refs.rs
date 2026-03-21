@@ -854,7 +854,7 @@ fn remote_branch_menu_offers_set_tracking_upstream_only_without_current_upstream
             } if label.as_ref() == "Unlink upstream branch" => Some(*disabled),
             _ => None,
         });
-        assert_eq!(unlink_entry, Some(true));
+        assert_eq!(unlink_entry, None);
     });
 
     cx.update(|_window, app| {
@@ -911,6 +911,78 @@ fn remote_branch_menu_offers_set_tracking_upstream_only_without_current_upstream
             !has_set_entry,
             "did not expect Set as tracking upstream when current branch already tracks a remote"
         );
+    });
+}
+
+#[gpui::test]
+fn pull_and_push_picker_headers_include_tracking_branch_name(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    let repo_id = RepoId(401);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_pull_push_picker_header_branch_name",
+        std::process::id()
+    ));
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = RepoState::new_opening(
+                repo_id,
+                gitcomet_core::domain::RepoSpec {
+                    workdir: workdir.clone(),
+                },
+            );
+            repo.head_branch = Loadable::Ready("feature/local".to_string());
+            repo.branches = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Branch {
+                name: "feature/local".to_string(),
+                target: CommitId("deadbeef".into()),
+                upstream: Some(gitcomet_core::domain::Upstream {
+                    remote: "origin".to_string(),
+                    branch: "feature/awesome".to_string(),
+                }),
+                divergence: None,
+            }]));
+
+            let state = Arc::new(AppState {
+                repos: vec![repo],
+                active_repo: Some(repo_id),
+                ..Default::default()
+            });
+            this.state = Arc::clone(&state);
+            this._ui_model
+                .update(cx, |model, cx| model.set_state(state, cx));
+            cx.notify();
+        });
+    });
+
+    cx.update(|_window, app| {
+        let pull_model = view
+            .update(app, |this, cx| {
+                this.popover_host.update(cx, |host, cx| {
+                    host.context_menu_model(&PopoverKind::PullPicker, cx)
+                })
+            })
+            .expect("expected pull context menu model");
+        let push_model = view
+            .update(app, |this, cx| {
+                this.popover_host.update(cx, |host, cx| {
+                    host.context_menu_model(&PopoverKind::PushPicker, cx)
+                })
+            })
+            .expect("expected push context menu model");
+
+        assert!(matches!(
+            pull_model.items.first(),
+            Some(ContextMenuItem::Header(title))
+                if title.as_ref() == "Pull origin/feature/awesome"
+        ));
+        assert!(matches!(
+            push_model.items.first(),
+            Some(ContextMenuItem::Header(title))
+                if title.as_ref() == "Push origin/feature/awesome"
+        ));
     });
 }
 
