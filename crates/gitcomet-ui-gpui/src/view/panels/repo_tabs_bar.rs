@@ -59,6 +59,7 @@ impl RepoTabsBarView {
         for repo in &state.repos {
             repo.id.hash(&mut hasher);
             repo.spec.workdir.hash(&mut hasher);
+            repo.missing_on_disk.hash(&mut hasher);
         }
         if let Some(repo_id) = state.active_repo
             && let Some(repo) = state.repos.iter().find(|r| r.id == repo_id)
@@ -86,6 +87,22 @@ impl RepoTabsBarView {
             || repo.local_actions_in_flight > 0
             || repo.pull_in_flight > 0
             || repo.push_in_flight > 0
+    }
+
+    fn repo_tab_tooltip(repo: &RepoState) -> SharedString {
+        if repo.missing_on_disk {
+            return format!(
+                "Repository not found!\n{}",
+                path_display::path_display_string(&repo.spec.workdir)
+            )
+            .into();
+        }
+
+        path_display::path_display_shared(&repo.spec.workdir)
+    }
+
+    fn repo_tab_shows_missing_warning(repo: &RepoState, show_spinner: bool) -> bool {
+        repo.missing_on_disk && !show_spinner
     }
 
     pub(in super::super) fn new(
@@ -272,7 +289,7 @@ impl Render for RepoTabsBarView {
                 components::TabPosition::Middle(ordering)
             };
 
-            let tooltip = path_display::path_display_shared(&repo.spec.workdir);
+            let tooltip = Self::repo_tab_tooltip(repo);
             let close_tooltip: SharedString = "Close repository".into();
 
             let close_button = div()
@@ -319,6 +336,7 @@ impl Render for RepoTabsBarView {
                 tab = tab.end_slot(close_button);
             }
 
+            let show_missing_warning = Self::repo_tab_shows_missing_warning(repo, show_spinner);
             let tab_label = div()
                 .flex()
                 .items_center()
@@ -342,6 +360,13 @@ impl Render for RepoTabsBarView {
                                 )
                                 .into_any_element(),
                             )
+                        })
+                        .when(show_missing_warning, |d| {
+                            d.child(svg_icon(
+                                "icons/warning.svg",
+                                theme.colors.warning,
+                                px(12.0),
+                            ))
                         }),
                 )
                 .child(
@@ -515,4 +540,52 @@ fn repo_tab_insert_before_for_drop(
     }
 
     Some(repos.get(target_ix + 1).map(|r| r.id))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RepoTabsBarView;
+    use gitcomet_core::domain::RepoSpec;
+    use gitcomet_state::model::{RepoId, RepoState};
+    use std::path::PathBuf;
+
+    fn repo_state(path: &str) -> RepoState {
+        RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: PathBuf::from(path),
+            },
+        )
+    }
+
+    #[test]
+    fn repo_tab_tooltip_defaults_to_repo_path() {
+        let repo = repo_state("/tmp/repo");
+        assert_eq!(
+            RepoTabsBarView::repo_tab_tooltip(&repo).as_ref(),
+            "/tmp/repo"
+        );
+    }
+
+    #[test]
+    fn repo_tab_tooltip_reports_missing_repository() {
+        let mut repo = repo_state("/tmp/missing-repo");
+        repo.missing_on_disk = true;
+        assert_eq!(
+            RepoTabsBarView::repo_tab_tooltip(&repo).as_ref(),
+            "Repository not found!\n/tmp/missing-repo"
+        );
+    }
+
+    #[test]
+    fn missing_repo_warning_icon_yields_to_spinner() {
+        let mut repo = repo_state("/tmp/missing-repo");
+        repo.missing_on_disk = true;
+        assert!(RepoTabsBarView::repo_tab_shows_missing_warning(
+            &repo, false
+        ));
+        assert!(!RepoTabsBarView::repo_tab_shows_missing_warning(
+            &repo, true
+        ));
+    }
 }

@@ -17,6 +17,13 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+fn is_missing_repo_error(error: &Error) -> bool {
+    matches!(
+        error.kind(),
+        gitcomet_core::error::ErrorKind::Io(std::io::ErrorKind::NotFound)
+    )
+}
+
 fn persist_session_effect(
     state: &AppState,
     repo_id: Option<RepoId>,
@@ -376,6 +383,7 @@ pub(super) fn repo_opened_ok(
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         repo_state.spec = spec;
         repo_state.set_open(Loadable::Ready(()));
+        repo_state.missing_on_disk = false;
         repo_state.set_head_branch(Loadable::Loading);
         repo_state.set_detached_head_commit(None);
         repo_state.set_upstream_divergence(Loadable::Loading);
@@ -466,8 +474,13 @@ pub(super) fn repo_opened_err(
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         repo_state.spec = spec;
         repo_state.set_open(Loadable::Error(error.to_string()));
-        repo_state.last_error = Some(error.to_string());
-        push_diagnostic(repo_state, DiagnosticKind::Error, error.to_string());
+        repo_state.missing_on_disk = is_missing_repo_error(&error);
+        if repo_state.missing_on_disk {
+            repo_state.last_error = None;
+        } else {
+            repo_state.last_error = Some(error.to_string());
+            push_diagnostic(repo_state, DiagnosticKind::Error, error.to_string());
+        }
     }
     Vec::new()
 }
