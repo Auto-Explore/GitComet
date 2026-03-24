@@ -101,7 +101,7 @@ pub use mod_helpers::{
     GitCometViewMode, StartupCrashReport,
 };
 use panels::{ActionBarView, PopoverHost, RepoTabsBarView};
-use panes::{DetailsPaneView, HistoryView, MainPaneView, SidebarPaneView};
+use panes::{DetailsPaneInit, DetailsPaneView, HistoryView, MainPaneView, SidebarPaneView};
 pub(crate) use settings_window::open_settings_window;
 use toast_host::ToastHost;
 use tooltip_host::TooltipHost;
@@ -295,6 +295,13 @@ impl GitCometView {
             .and_then(Timezone::from_key)
             .unwrap_or_default();
         let show_timezone = ui_session.show_timezone.unwrap_or(true);
+        let change_tracking_view = ui_session
+            .change_tracking_view
+            .as_deref()
+            .and_then(ChangeTrackingView::from_key)
+            .unwrap_or_default();
+        let restored_change_tracking_height = ui_session.change_tracking_height;
+        let restored_untracked_height = ui_session.untracked_height;
 
         let history_show_author = ui_session.history_show_author.unwrap_or(true);
         let history_show_date = ui_session.history_show_date.unwrap_or(true);
@@ -407,9 +414,14 @@ impl GitCometView {
             DetailsPaneView::new(
                 Arc::clone(&store),
                 ui_model.clone(),
-                initial_theme,
-                weak_view.clone(),
-                tooltip_host.downgrade(),
+                DetailsPaneInit {
+                    theme: initial_theme,
+                    change_tracking_view,
+                    change_tracking_height: restored_change_tracking_height,
+                    untracked_height: restored_untracked_height,
+                    root_view: weak_view.clone(),
+                    tooltip_host: tooltip_host.downgrade(),
+                },
                 window,
                 cx,
             )
@@ -424,6 +436,7 @@ impl GitCometView {
                 date_time_format,
                 timezone,
                 show_timezone,
+                change_tracking_view,
                 weak_view.clone(),
                 main_pane.clone(),
                 details_pane.clone(),
@@ -560,6 +573,7 @@ impl GitCometView {
             date_time_format,
             timezone,
             show_timezone,
+            change_tracking_view,
             open_repo_panel: false,
             open_repo_input,
             hover_resize_edge: None,
@@ -654,6 +668,23 @@ impl GitCometView {
 
         self.theme_mode = mode;
         self.set_theme(mode.resolve_theme(appearance), cx);
+        self.schedule_ui_settings_persist(cx);
+    }
+
+    pub(in crate::view) fn set_change_tracking_view(
+        &mut self,
+        next: ChangeTrackingView,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.change_tracking_view == next {
+            return;
+        }
+
+        self.change_tracking_view = next;
+        self.details_pane
+            .update(cx, |pane, cx| pane.set_change_tracking_view(next, cx));
+        self.popover_host
+            .update(cx, |host, cx| host.sync_change_tracking_view(next, cx));
         self.schedule_ui_settings_persist(cx);
     }
 
@@ -1206,6 +1237,11 @@ impl GitCometView {
     #[cfg(test)]
     pub(crate) fn show_timezone_for_test(&self) -> bool {
         self.show_timezone
+    }
+
+    #[cfg(test)]
+    pub(in crate::view) fn change_tracking_view_for_test(&self) -> ChangeTrackingView {
+        self.change_tracking_view
     }
 }
 

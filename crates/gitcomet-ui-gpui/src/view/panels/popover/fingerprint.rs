@@ -45,6 +45,7 @@ pub(super) fn notify_fingerprint(state: &AppState, popover: &PopoverKind) -> u64
         | PopoverKind::SettingsThemeMenu
         | PopoverKind::SettingsDateFormatMenu
         | PopoverKind::SettingsTimezoneMenu
+        | PopoverKind::ChangeTrackingSettings
         | PopoverKind::OpenSourceLicenses
         | PopoverKind::AppMenu => {
             // Mostly local UI state; depend only on whether a repo is active/open.
@@ -74,6 +75,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::SettingsThemeMenu
         | PopoverKind::SettingsDateFormatMenu
         | PopoverKind::SettingsTimezoneMenu
+        | PopoverKind::ChangeTrackingSettings
         | PopoverKind::OpenSourceLicenses => None,
 
         // Popovers that implicitly use the currently active repo.
@@ -228,6 +230,7 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         | PopoverKind::CommitFileMenu { .. }
         | PopoverKind::StatusFileMenu { .. }
         | PopoverKind::HistoryColumnSettings
+        | PopoverKind::ChangeTrackingSettings
         | PopoverKind::ConflictResolverInputRowMenu { .. }
         | PopoverKind::ConflictResolverChunkMenu { .. }
         | PopoverKind::ConflictResolverOutputMenu { .. }
@@ -290,6 +293,7 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
         PopoverKind::SettingsThemeMenu => 62u8.hash(hasher),
         PopoverKind::SettingsDateFormatMenu => 63u8.hash(hasher),
         PopoverKind::SettingsTimezoneMenu => 64u8.hash(hasher),
+        PopoverKind::ChangeTrackingSettings => 66u8.hash(hasher),
         PopoverKind::OpenSourceLicenses => 60u8.hash(hasher),
 
         PopoverKind::ResetPrompt {

@@ -12,10 +12,7 @@ pub(super) fn model(
         let selection = pane
             .status_multi_selection
             .get(&repo_id)
-            .map(|sel| match area {
-                DiffArea::Unstaged => sel.unstaged.as_slice(),
-                DiffArea::Staged => sel.staged.as_slice(),
-            })
+            .map(|sel| sel.selected_paths_for_area(area))
             .unwrap_or(&[]);
 
         let use_selection = selection.len() > 1 && selection.iter().any(|p| p == path);

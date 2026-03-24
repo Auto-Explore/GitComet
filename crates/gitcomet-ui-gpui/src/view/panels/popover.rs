@@ -61,6 +61,7 @@ pub(in super::super) struct PopoverHost {
     date_time_format: DateTimeFormat,
     timezone: Timezone,
     show_timezone: bool,
+    change_tracking_view: ChangeTrackingView,
     settings_submenu: Option<SettingsSubmenu>,
     settings_submenu_top: Option<Pixels>,
     settings_submenu_left: Option<Pixels>,
@@ -155,6 +156,7 @@ impl PopoverHost {
         date_time_format: DateTimeFormat,
         timezone: Timezone,
         show_timezone: bool,
+        change_tracking_view: ChangeTrackingView,
         root_view: WeakEntity<GitCometView>,
         main_pane: Entity<MainPaneView>,
         details_pane: Entity<DetailsPaneView>,
@@ -496,6 +498,7 @@ impl PopoverHost {
             date_time_format,
             timezone,
             show_timezone,
+            change_tracking_view,
             settings_submenu: None,
             settings_submenu_top: None,
             settings_submenu_left: None,
@@ -819,6 +822,7 @@ impl PopoverHost {
                 | PopoverKind::PushPicker
                 | PopoverKind::HistoryBranchFilter { .. }
                 | PopoverKind::HistoryColumnSettings
+                | PopoverKind::ChangeTrackingSettings
                 | PopoverKind::SettingsThemeMenu
                 | PopoverKind::SettingsDateFormatMenu
                 | PopoverKind::SettingsTimezoneMenu
@@ -1221,6 +1225,21 @@ impl PopoverHost {
         .detach();
     }
 
+    pub(in super::super) fn sync_change_tracking_view(
+        &mut self,
+        next: ChangeTrackingView,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.change_tracking_view == next {
+            return;
+        }
+
+        self.change_tracking_view = next;
+        if matches!(self.popover, Some(PopoverKind::ChangeTrackingSettings)) {
+            cx.notify();
+        }
+    }
+
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     fn install_linux_desktop_integration(&mut self, cx: &mut gpui::Context<Self>) {
         let _ = self.root_view.update(cx, |root, cx| {
@@ -1311,6 +1330,7 @@ impl PopoverHost {
                 | PopoverKind::PushPicker
                 | PopoverKind::HistoryBranchFilter { .. }
                 | PopoverKind::HistoryColumnSettings
+                | PopoverKind::ChangeTrackingSettings
                 | PopoverKind::DiffHunkMenu { .. }
                 | PopoverKind::DiffEditorMenu { .. }
                 | PopoverKind::ConflictResolverInputRowMenu { .. }
@@ -1389,6 +1409,7 @@ impl PopoverHost {
             | PopoverKind::PullReconcilePrompt { .. }
             | PopoverKind::HistoryBranchFilter { .. }
             | PopoverKind::HistoryColumnSettings
+            | PopoverKind::ChangeTrackingSettings
             | PopoverKind::SettingsThemeMenu
             | PopoverKind::SettingsDateFormatMenu
             | PopoverKind::SettingsTimezoneMenu => Corner::TopRight,
@@ -1581,6 +1602,10 @@ impl PopoverHost {
                 .context_menu_view(PopoverKind::HistoryColumnSettings, cx)
                 .min_w(px(160.0))
                 .max_w(px(220.0)),
+            PopoverKind::ChangeTrackingSettings => self
+                .context_menu_view(PopoverKind::ChangeTrackingSettings, cx)
+                .min_w(px(220.0))
+                .max_w(px(320.0)),
             PopoverKind::SettingsThemeMenu => self
                 .context_menu_view(PopoverKind::SettingsThemeMenu, cx)
                 .min_w(px(180.0))

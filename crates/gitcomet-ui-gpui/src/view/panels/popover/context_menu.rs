@@ -2,6 +2,7 @@ use super::*;
 
 mod branch;
 mod branch_section;
+mod change_tracking_settings;
 mod commit;
 mod commit_file;
 mod conflict_resolver_chunk;
@@ -265,10 +266,7 @@ impl PopoverHost {
             let selection = pane
                 .status_multi_selection
                 .get(&repo_id)
-                .map(|sel| match area {
-                    DiffArea::Unstaged => sel.unstaged.as_slice(),
-                    DiffArea::Staged => sel.staged.as_slice(),
-                })
+                .map(|sel| sel.selected_paths_for_area(area))
                 .unwrap_or(&[]);
 
             let use_selection = selection.len() > 1 && selection.iter().any(|p| p == clicked_path);
@@ -278,10 +276,7 @@ impl PopoverHost {
 
             let sel = pane.status_multi_selection.remove(&repo_id)?;
             cx.notify();
-            Some(match area {
-                DiffArea::Unstaged => sel.unstaged,
-                DiffArea::Staged => sel.staged,
-            })
+            Some(sel.take_selected_paths_for_area(area))
         });
 
         match selection {
@@ -417,6 +412,7 @@ impl PopoverHost {
                 Some(history_branch_filter::model(*repo_id))
             }
             PopoverKind::HistoryColumnSettings => Some(history_column_settings::model(self, cx)),
+            PopoverKind::ChangeTrackingSettings => Some(change_tracking_settings::model(self)),
             _ => None,
         }
     }
@@ -607,6 +603,15 @@ impl PopoverHost {
                 self.settings_submenu_width = None;
                 self.settings_submenu_max_h = None;
                 close_after_action = false;
+            }
+            ContextMenuAction::SetChangeTrackingView { view } => {
+                self.change_tracking_view = view;
+                let root_view = self.root_view.clone();
+                cx.defer(move |cx| {
+                    let _ = root_view.update(cx, |root, cx| {
+                        root.set_change_tracking_view(view, cx);
+                    });
+                });
             }
             ContextMenuAction::StageSelectionOrPath {
                 repo_id,
@@ -922,10 +927,7 @@ impl PopoverHost {
                     let selection = pane
                         .status_multi_selection
                         .get(&repo_id)
-                        .map(|sel| match area {
-                            DiffArea::Unstaged => sel.unstaged.as_slice(),
-                            DiffArea::Staged => sel.staged.as_slice(),
-                        })
+                        .map(|sel| sel.selected_paths_for_area(area))
                         .unwrap_or(&[]);
 
                     let use_selection =
@@ -936,10 +938,7 @@ impl PopoverHost {
 
                     let sel = pane.status_multi_selection.remove(&repo_id)?;
                     cx.notify();
-                    Some(match area {
-                        DiffArea::Unstaged => sel.unstaged,
-                        DiffArea::Staged => sel.staged,
-                    })
+                    Some(sel.take_selected_paths_for_area(area))
                 });
 
                 match selection {
@@ -953,10 +952,7 @@ impl PopoverHost {
                     .update(cx, |pane, cx| {
                         let sel = pane.status_multi_selection.remove(&repo_id)?;
                         cx.notify();
-                        Some(match area {
-                            DiffArea::Unstaged => sel.unstaged,
-                            DiffArea::Staged => sel.staged,
-                        })
+                        Some(sel.take_selected_paths_for_area(area))
                     })
                     .unwrap_or_default();
                 if paths.is_empty() {

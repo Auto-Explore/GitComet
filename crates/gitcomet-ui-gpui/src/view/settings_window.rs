@@ -19,6 +19,7 @@ enum SettingsSection {
     Theme,
     DateFormat,
     Timezone,
+    ChangeTracking,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -60,6 +61,7 @@ pub(crate) struct SettingsWindowView {
     date_time_format: DateTimeFormat,
     timezone: Timezone,
     show_timezone: bool,
+    change_tracking_view: ChangeTrackingView,
     current_view: SettingsView,
     open_source_licenses_scroll: UniformListScrollHandle,
     runtime_info: SettingsRuntimeInfo,
@@ -136,6 +138,11 @@ impl SettingsWindowView {
             .and_then(Timezone::from_key)
             .unwrap_or_default();
         let show_timezone = ui_session.show_timezone.unwrap_or(true);
+        let change_tracking_view = ui_session
+            .change_tracking_view
+            .as_deref()
+            .and_then(ChangeTrackingView::from_key)
+            .unwrap_or_default();
         let theme = theme_mode.resolve_theme(window.appearance());
 
         let appearance_subscription = {
@@ -163,6 +170,7 @@ impl SettingsWindowView {
             date_time_format,
             timezone,
             show_timezone,
+            change_tracking_view,
             current_view: SettingsView::Root,
             open_source_licenses_scroll: UniformListScrollHandle::default(),
             runtime_info: SettingsRuntimeInfo::detect(),
@@ -192,6 +200,9 @@ impl SettingsWindowView {
             date_time_format: Some(self.date_time_format.key().to_string()),
             timezone: Some(self.timezone.key()),
             show_timezone: Some(self.show_timezone),
+            change_tracking_view: Some(self.change_tracking_view.key().to_string()),
+            change_tracking_height: None,
+            untracked_height: None,
             history_show_author: None,
             history_show_date: None,
             history_show_sha: None,
@@ -310,6 +321,20 @@ impl SettingsWindowView {
             view.popover_host.update(cx, |host, cx| {
                 host.set_show_timezone(enabled, cx);
             });
+        });
+        cx.notify();
+    }
+
+    fn set_change_tracking_view(&mut self, next: ChangeTrackingView, cx: &mut gpui::Context<Self>) {
+        if self.change_tracking_view == next {
+            return;
+        }
+
+        self.change_tracking_view = next;
+        self.expanded_section = None;
+        self.persist_preferences(cx);
+        self.update_main_windows(cx, move |view, _window, cx| {
+            view.set_change_tracking_view(next, cx);
         });
         cx.notify();
     }
@@ -834,6 +859,18 @@ impl Render for SettingsWindowView {
                         this.set_show_timezone(!this.show_timezone, cx);
                     }));
 
+                let change_tracking_row = self
+                    .summary_row(
+                        "settings_window_change_tracking",
+                        "Untracked files",
+                        self.change_tracking_view.settings_label().into(),
+                        self.expanded_section == Some(SettingsSection::ChangeTracking),
+                        theme,
+                    )
+                    .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                        this.toggle_section(SettingsSection::ChangeTracking, cx);
+                    }));
+
                 let mut general_card = self
                     .card("settings_window_general", "General", theme)
                     .child(theme_row);
@@ -907,6 +944,44 @@ impl Render for SettingsWindowView {
                 }
 
                 general_card = general_card.child(show_timezone_row);
+
+                let mut change_tracking_card = self
+                    .card(
+                        "settings_window_change_tracking_card",
+                        "Change tracking",
+                        theme,
+                    )
+                    .child(change_tracking_row);
+
+                if self.expanded_section == Some(SettingsSection::ChangeTracking) {
+                    for (id, option, detail) in [
+                        (
+                            "settings_window_change_tracking_combined",
+                            ChangeTrackingView::Combined,
+                            "Keep untracked files inside the Unstaged section",
+                        ),
+                        (
+                            "settings_window_change_tracking_split_untracked",
+                            ChangeTrackingView::SplitUntracked,
+                            "Show an Untracked block above Unstaged",
+                        ),
+                    ] {
+                        change_tracking_card = change_tracking_card.child(
+                            self.option_row(
+                                id,
+                                option.label(),
+                                Some(detail.into()),
+                                self.change_tracking_view == option,
+                                theme,
+                            )
+                            .on_click(cx.listener(
+                                move |this, _e: &ClickEvent, _window, cx| {
+                                    this.set_change_tracking_view(option, cx);
+                                },
+                            )),
+                        );
+                    }
+                }
 
                 let min_git_version = format!("{MIN_GIT_MAJOR}.{MIN_GIT_MINOR}");
                 let (git_icon_path, git_icon_color, git_status_text): (
@@ -1031,6 +1106,7 @@ impl Render for SettingsWindowView {
                     .gap_3()
                     .p_3()
                     .child(general_card)
+                    .child(change_tracking_card)
                     .child(environment_card)
                     .child(links_card)
             }
@@ -1760,6 +1836,66 @@ mod tests {
                     .read_with(app, |settings, _cx| settings.show_timezone)
                     .expect("settings window should remain readable"),
                 next_show_timezone
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn change_tracking_setting_defers_main_window_update(cx: &mut gpui::TestAppContext) {
+        let _visual_guard = lock_visual_test();
+        let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+        let (main_view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+            open_settings_window(app);
+        });
+        cx.run_until_parked();
+
+        let settings_window = cx.update(|_window, app| {
+            app.windows()
+                .into_iter()
+                .find_map(|window| window.downcast::<SettingsWindowView>())
+                .expect("settings window should be open")
+        });
+
+        let next_view = cx.update(|_window, app| {
+            let current = settings_window
+                .read_with(app, |settings, _cx| settings.change_tracking_view)
+                .expect("settings window should be readable");
+            match current {
+                ChangeTrackingView::Combined => ChangeTrackingView::SplitUntracked,
+                ChangeTrackingView::SplitUntracked => ChangeTrackingView::Combined,
+            }
+        });
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            cx.update(|_window, app| {
+                main_view.update(app, |_view, cx| {
+                    let _ = settings_window.update(cx, |settings, _window, cx| {
+                        settings.set_change_tracking_view(next_view, cx);
+                    });
+                });
+            });
+        }));
+        assert!(
+            result.is_ok(),
+            "change tracking update should not re-enter GitCometView updates"
+        );
+
+        cx.run_until_parked();
+
+        cx.update(|_window, app| {
+            assert_eq!(
+                main_view.read(app).change_tracking_view_for_test(),
+                next_view
+            );
+            assert_eq!(
+                settings_window
+                    .read_with(app, |settings, _cx| settings.change_tracking_view)
+                    .expect("settings window should remain readable"),
+                next_view
             );
         });
     }

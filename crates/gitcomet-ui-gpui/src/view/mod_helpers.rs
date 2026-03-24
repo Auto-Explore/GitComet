@@ -308,6 +308,22 @@ pub(super) struct ConflictVSplitResizeState {
 pub(super) use ResizeDragGhost as ConflictVSplitResizeDragGhost;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum StatusSectionResizeHandle {
+    ChangeTrackingAndStaged,
+    UntrackedAndUnstaged,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct StatusSectionResizeState {
+    pub(super) handle: StatusSectionResizeHandle,
+    pub(super) start_y: Pixels,
+    pub(super) start_height: Pixels,
+}
+
+#[allow(unused_imports)]
+pub(super) use ResizeDragGhost as StatusSectionResizeDragGhost;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum ConflictHSplitResizeHandle {
     First,
     Second,
@@ -340,7 +356,7 @@ mod resize_drag_ghost_tests {
     use super::{
         ConflictDiffSplitResizeDragGhost, ConflictHSplitResizeDragGhost,
         ConflictVSplitResizeDragGhost, DiffSplitResizeDragGhost, HistoryColResizeDragGhost,
-        PaneResizeDragGhost, ResizeDragGhost,
+        PaneResizeDragGhost, ResizeDragGhost, StatusSectionResizeDragGhost,
     };
     use std::any::TypeId;
 
@@ -352,6 +368,7 @@ mod resize_drag_ghost_tests {
         assert_eq!(TypeId::of::<PaneResizeDragGhost>(), shared);
         assert_eq!(TypeId::of::<DiffSplitResizeDragGhost>(), shared);
         assert_eq!(TypeId::of::<ConflictVSplitResizeDragGhost>(), shared);
+        assert_eq!(TypeId::of::<StatusSectionResizeDragGhost>(), shared);
         assert_eq!(TypeId::of::<ConflictHSplitResizeDragGhost>(), shared);
         assert_eq!(TypeId::of::<ConflictDiffSplitResizeDragGhost>(), shared);
     }
@@ -410,22 +427,101 @@ pub(super) struct CommitDetailsDelayState {
     pub(super) show_loading: bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum StatusSection {
+    CombinedUnstaged,
+    Untracked,
+    Unstaged,
+    Staged,
+}
+
+impl StatusSection {
+    pub(super) const fn diff_area(self) -> DiffArea {
+        match self {
+            Self::CombinedUnstaged | Self::Untracked | Self::Unstaged => DiffArea::Unstaged,
+            Self::Staged => DiffArea::Staged,
+        }
+    }
+
+    pub(super) const fn id_label(self) -> &'static str {
+        match self {
+            Self::CombinedUnstaged | Self::Unstaged => "unstaged",
+            Self::Untracked => "untracked",
+            Self::Staged => "staged",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub(super) struct StatusMultiSelection {
+    pub(super) untracked: Vec<std::path::PathBuf>,
+    pub(super) untracked_anchor: Option<std::path::PathBuf>,
     pub(super) unstaged: Vec<std::path::PathBuf>,
     pub(super) unstaged_anchor: Option<std::path::PathBuf>,
     pub(super) staged: Vec<std::path::PathBuf>,
     pub(super) staged_anchor: Option<std::path::PathBuf>,
 }
 
+impl StatusMultiSelection {
+    pub(super) fn selected_paths_for_area(&self, area: DiffArea) -> &[std::path::PathBuf] {
+        match area {
+            DiffArea::Unstaged => {
+                if !self.unstaged.is_empty() {
+                    self.unstaged.as_slice()
+                } else {
+                    self.untracked.as_slice()
+                }
+            }
+            DiffArea::Staged => self.staged.as_slice(),
+        }
+    }
+
+    pub(super) fn selected_count_for_area(&self, area: DiffArea) -> usize {
+        self.selected_paths_for_area(area).len()
+    }
+
+    pub(super) fn first_selected_for_area(&self, area: DiffArea) -> Option<&std::path::PathBuf> {
+        self.selected_paths_for_area(area).first()
+    }
+
+    pub(super) fn take_selected_paths_for_area(self, area: DiffArea) -> Vec<std::path::PathBuf> {
+        match area {
+            DiffArea::Unstaged => {
+                if !self.unstaged.is_empty() {
+                    self.unstaged
+                } else {
+                    self.untracked
+                }
+            }
+            DiffArea::Staged => self.staged,
+        }
+    }
+}
+
 pub(super) fn reconcile_status_multi_selection(
     selection: &mut StatusMultiSelection,
     status: &RepoStatus,
 ) {
+    let mut untracked_paths: HashSet<&std::path::Path> =
+        HashSet::with_capacity_and_hasher(status.unstaged.len(), Default::default());
     let mut unstaged_paths: HashSet<&std::path::Path> =
         HashSet::with_capacity_and_hasher(status.unstaged.len(), Default::default());
     for entry in &status.unstaged {
         unstaged_paths.insert(entry.path.as_path());
+        if entry.kind == FileStatusKind::Untracked {
+            untracked_paths.insert(entry.path.as_path());
+        }
+    }
+
+    selection
+        .untracked
+        .retain(|p| untracked_paths.contains(&p.as_path()));
+    if selection
+        .untracked_anchor
+        .as_ref()
+        .is_some_and(|a| !untracked_paths.contains(&a.as_path()))
+    {
+        selection.untracked_anchor = None;
     }
 
     selection
@@ -1891,6 +1987,7 @@ pub(super) enum PopoverKind {
         repo_id: RepoId,
     },
     HistoryColumnSettings,
+    ChangeTrackingSettings,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -2225,6 +2322,51 @@ impl ThemeMode {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) enum ChangeTrackingView {
+    #[default]
+    Combined,
+    SplitUntracked,
+}
+
+impl ChangeTrackingView {
+    pub(super) const fn key(self) -> &'static str {
+        match self {
+            Self::Combined => "combined",
+            Self::SplitUntracked => "split_untracked",
+        }
+    }
+
+    pub(super) fn from_key(raw: &str) -> Option<Self> {
+        match raw {
+            "combined" => Some(Self::Combined),
+            "split_untracked" => Some(Self::SplitUntracked),
+            _ => None,
+        }
+    }
+
+    pub(super) const fn label(self) -> &'static str {
+        match self {
+            Self::Combined => "Combined with Unstaged",
+            Self::SplitUntracked => "Separate section",
+        }
+    }
+
+    pub(super) const fn menu_label(self) -> &'static str {
+        match self {
+            Self::Combined => "Combine with Unstaged",
+            Self::SplitUntracked => "Show separate Untracked block",
+        }
+    }
+
+    pub(super) const fn settings_label(self) -> &'static str {
+        match self {
+            Self::Combined => "Combined",
+            Self::SplitUntracked => "Separate section",
+        }
+    }
+}
+
 pub struct GitCometView {
     pub(super) store: Arc<AppStore>,
     pub(super) state: Arc<AppState>,
@@ -2255,6 +2397,7 @@ pub struct GitCometView {
     pub(super) date_time_format: DateTimeFormat,
     pub(super) timezone: Timezone,
     pub(super) show_timezone: bool,
+    pub(super) change_tracking_view: ChangeTrackingView,
 
     pub(super) open_repo_panel: bool,
     pub(super) open_repo_input: Entity<components::TextInput>,

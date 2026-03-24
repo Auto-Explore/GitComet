@@ -54,6 +54,8 @@ fn reconcile_status_multi_selection_prunes_missing_paths_and_anchors() {
     };
 
     let mut selection = StatusMultiSelection {
+        untracked: vec![],
+        untracked_anchor: None,
         unstaged: vec![a.clone(), b.clone()],
         unstaged_anchor: Some(b),
         staged: vec![c.clone()],

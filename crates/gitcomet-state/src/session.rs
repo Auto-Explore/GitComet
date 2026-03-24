@@ -21,6 +21,9 @@ pub struct UiSession {
     pub date_time_format: Option<String>,
     pub timezone: Option<String>,
     pub show_timezone: Option<bool>,
+    pub change_tracking_view: Option<String>,
+    pub change_tracking_height: Option<u32>,
+    pub untracked_height: Option<u32>,
     pub history_show_author: Option<bool>,
     pub history_show_date: Option<bool>,
     pub history_show_sha: Option<bool>,
@@ -72,6 +75,9 @@ struct UiSessionFileV2 {
     date_time_format: Option<String>,
     timezone: Option<String>,
     show_timezone: Option<bool>,
+    change_tracking_view: Option<String>,
+    change_tracking_height: Option<u32>,
+    untracked_height: Option<u32>,
     history_show_author: Option<bool>,
     history_show_date: Option<bool>,
     history_show_sha: Option<bool>,
@@ -118,6 +124,9 @@ pub fn load_from_path(path: &Path) -> UiSession {
         date_time_format: file.date_time_format,
         timezone: file.timezone,
         show_timezone: file.show_timezone,
+        change_tracking_view: file.change_tracking_view,
+        change_tracking_height: file.change_tracking_height,
+        untracked_height: file.untracked_height,
         history_show_author: file.history_show_author,
         history_show_date: file.history_show_date,
         history_show_sha: file.history_show_sha,
@@ -237,6 +246,9 @@ pub struct UiSettings {
     pub date_time_format: Option<String>,
     pub timezone: Option<String>,
     pub show_timezone: Option<bool>,
+    pub change_tracking_view: Option<String>,
+    pub change_tracking_height: Option<u32>,
+    pub untracked_height: Option<u32>,
     pub history_show_author: Option<bool>,
     pub history_show_date: Option<bool>,
     pub history_show_sha: Option<bool>,
@@ -273,6 +285,15 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
     }
     if let Some(value) = settings.show_timezone {
         file.show_timezone = Some(value);
+    }
+    if let Some(value) = settings.change_tracking_view {
+        file.change_tracking_view = Some(value);
+    }
+    if let Some(value) = settings.change_tracking_height {
+        file.change_tracking_height = Some(value);
+    }
+    if let Some(value) = settings.untracked_height {
+        file.untracked_height = Some(value);
     }
     if let Some(value) = settings.history_show_author {
         file.history_show_author = Some(value);
@@ -1066,6 +1087,9 @@ mod tests {
                 date_time_format: Some("ymd_hm_utc".to_string()),
                 timezone: None,
                 show_timezone: None,
+                change_tracking_view: None,
+                change_tracking_height: None,
+                untracked_height: None,
                 history_show_author: None,
                 history_show_date: None,
                 history_show_sha: None,
@@ -1112,6 +1136,9 @@ mod tests {
                 date_time_format: None,
                 timezone: None,
                 show_timezone: Some(false),
+                change_tracking_view: None,
+                change_tracking_height: None,
+                untracked_height: None,
                 history_show_author: None,
                 history_show_date: None,
                 history_show_sha: None,
@@ -1122,6 +1149,108 @@ mod tests {
 
         let loaded = load_from_path(&path);
         assert_eq!(loaded.show_timezone, Some(false));
+    }
+
+    #[test]
+    fn persist_ui_settings_round_trips_change_tracking_view() {
+        let dir = env::temp_dir().join(format!(
+            "gitcomet-ui-settings-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("session.json");
+
+        persist_to_path(
+            &path,
+            &UiSessionFileV2 {
+                version: CURRENT_SESSION_FILE_VERSION,
+                open_repos: Vec::new(),
+                active_repo: None,
+                ..UiSessionFileV2::default()
+            },
+        )
+        .expect("seed session file");
+
+        persist_ui_settings_to_path(
+            UiSettings {
+                window_width: None,
+                window_height: None,
+                sidebar_width: None,
+                details_width: None,
+                theme_mode: None,
+                date_time_format: None,
+                timezone: None,
+                show_timezone: None,
+                change_tracking_view: Some("split_untracked".to_string()),
+                change_tracking_height: None,
+                untracked_height: None,
+                history_show_author: None,
+                history_show_date: None,
+                history_show_sha: None,
+            },
+            &path,
+        )
+        .expect("persist ui settings");
+
+        let loaded = load_from_path(&path);
+        assert_eq!(
+            loaded.change_tracking_view.as_deref(),
+            Some("split_untracked")
+        );
+    }
+
+    #[test]
+    fn persist_ui_settings_round_trips_change_tracking_heights() {
+        let dir = env::temp_dir().join(format!(
+            "gitcomet-ui-settings-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("session.json");
+
+        persist_to_path(
+            &path,
+            &UiSessionFileV2 {
+                version: CURRENT_SESSION_FILE_VERSION,
+                open_repos: Vec::new(),
+                active_repo: None,
+                ..UiSessionFileV2::default()
+            },
+        )
+        .expect("seed session file");
+
+        persist_ui_settings_to_path(
+            UiSettings {
+                window_width: None,
+                window_height: None,
+                sidebar_width: None,
+                details_width: None,
+                theme_mode: None,
+                date_time_format: None,
+                timezone: None,
+                show_timezone: None,
+                change_tracking_view: None,
+                change_tracking_height: Some(222),
+                untracked_height: Some(111),
+                history_show_author: None,
+                history_show_date: None,
+                history_show_sha: None,
+            },
+            &path,
+        )
+        .expect("persist ui settings");
+
+        let loaded = load_from_path(&path);
+        assert_eq!(loaded.change_tracking_height, Some(222));
+        assert_eq!(loaded.untracked_height, Some(111));
     }
 
     #[test]
@@ -1158,6 +1287,9 @@ mod tests {
                 date_time_format: None,
                 timezone: None,
                 show_timezone: None,
+                change_tracking_view: None,
+                change_tracking_height: None,
+                untracked_height: None,
                 history_show_author: None,
                 history_show_date: None,
                 history_show_sha: None,

@@ -300,6 +300,25 @@ fn settings_and_history_context_menu_shortcuts_match_expected_actions(
         "R",
         ContextMenuAction::ResetHistoryColumnWidths
     );
+
+    let change_tracking_model = cx.update(|_window, app| {
+        context_menu_model_for(&view, app, PopoverKind::ChangeTrackingSettings)
+    });
+    assert_declared_shortcuts(&change_tracking_model, &["C", "S"]);
+    assert_shortcut_action!(
+        change_tracking_model,
+        "C",
+        ContextMenuAction::SetChangeTrackingView {
+            view: ChangeTrackingView::Combined
+        }
+    );
+    assert_shortcut_action!(
+        change_tracking_model,
+        "S",
+        ContextMenuAction::SetChangeTrackingView {
+            view: ChangeTrackingView::SplitUntracked
+        }
+    );
 }
 
 #[gpui::test]

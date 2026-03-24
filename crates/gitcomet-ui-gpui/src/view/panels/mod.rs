@@ -67,6 +67,9 @@ enum ContextMenuAction {
     SetTimezone {
         timezone: Timezone,
     },
+    SetChangeTrackingView {
+        view: ChangeTrackingView,
+    },
     StageSelectionOrPath {
         repo_id: RepoId,
         area: DiffArea,

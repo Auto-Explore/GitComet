@@ -51,6 +51,8 @@ fn status_file_menu_uses_multi_selection_for_stage(cx: &mut gpui::TestAppContext
                 pane.status_multi_selection.insert(
                     repo_id,
                     StatusMultiSelection {
+                        untracked: vec![],
+                        untracked_anchor: None,
                         unstaged: vec![a.clone(), b.clone()],
                         unstaged_anchor: Some(a.clone()),
                         staged: vec![],
@@ -152,6 +154,8 @@ fn status_file_menu_uses_multi_selection_for_unstage(cx: &mut gpui::TestAppConte
                 pane.status_multi_selection.insert(
                     repo_id,
                     StatusMultiSelection {
+                        untracked: vec![],
+                        untracked_anchor: None,
                         unstaged: vec![],
                         unstaged_anchor: None,
                         staged: vec![a.clone(), b.clone()],
