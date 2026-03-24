@@ -1481,6 +1481,75 @@ mod tests {
     }
 
     #[gpui::test]
+    fn close_button_closes_only_the_clicked_window_after_opening_a_new_window(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        if cfg!(target_os = "macos") {
+            // The custom Min/Max/Close controls are only rendered on non-macOS.
+            return;
+        }
+
+        let _visual_guard = lock_visual_test();
+        let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
+        let (store, events) = AppStore::new(Arc::clone(&backend));
+        let (_view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        let first_window_id = cx.update(|window, app| {
+            install_app_shortcuts_for_test(app, Arc::clone(&backend));
+            let _ = window.draw(app);
+            window.activate_window();
+            window.window_handle().window_id()
+        });
+
+        cx.simulate_keystrokes("secondary-n");
+        cx.run_until_parked();
+
+        let second_window_id = cx.cx.update(|app| {
+            assert_eq!(app.windows().len(), 2, "expected two GitComet windows");
+            app.windows()
+                .into_iter()
+                .map(|window| window.window_id())
+                .find(|window_id| *window_id != first_window_id)
+                .expect("expected the new window to remain open")
+        });
+
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+
+        let close_bounds = cx
+            .debug_bounds("titlebar_win_close")
+            .expect("expected titlebar close control bounds");
+        cx.simulate_mouse_move(close_bounds.center(), None, gpui::Modifiers::default());
+        cx.simulate_mouse_down(
+            close_bounds.center(),
+            gpui::MouseButton::Left,
+            gpui::Modifiers::default(),
+        );
+        cx.simulate_mouse_up(
+            close_bounds.center(),
+            gpui::MouseButton::Left,
+            gpui::Modifiers::default(),
+        );
+        cx.run_until_parked();
+
+        cx.cx.update(|app| {
+            let remaining_windows = app.windows();
+            assert_eq!(
+                remaining_windows.len(),
+                1,
+                "expected the close control to remove only the clicked window"
+            );
+            assert_eq!(
+                remaining_windows[0].window_id(),
+                second_window_id,
+                "expected the new window to remain open after closing the original window"
+            );
+        });
+    }
+
+    #[gpui::test]
     fn close_shortcut_closes_the_active_window_when_no_repo_tab_can_close(
         cx: &mut gpui::TestAppContext,
     ) {

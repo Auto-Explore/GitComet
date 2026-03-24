@@ -514,9 +514,9 @@ impl Render for TitleBarView {
         .id("win_close")
         .debug_selector(|| "titlebar_win_close".to_string())
         .window_control_area(WindowControlArea::Close)
-        .on_click(cx.listener(|_this, _e: &ClickEvent, _window, cx| {
+        .on_click(cx.listener(|_this, _e: &ClickEvent, window, cx| {
             cx.stop_propagation();
-            cx.quit();
+            window.remove_window();
         }))
         .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
             let changed = if *hovering {
