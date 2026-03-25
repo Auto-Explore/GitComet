@@ -418,9 +418,15 @@ impl MainPaneView {
                                         gpui::ListHorizontalSizingBehavior::Unconstrained,
                                     );
 
+                                    let scrollbar_gutter = components::Scrollbar::visible_gutter(
+                                        self.diff_scroll.clone(),
+                                        components::ScrollbarAxis::Vertical,
+                                    );
                                     let handle_w = px(PANE_RESIZE_HANDLE_PX);
                                     let min_col_w = px(DIFF_SPLIT_COL_MIN_PX);
-                                    let main_w = self.main_pane_content_width(cx);
+                                    let main_w = (self.main_pane_content_width(cx)
+                                        - scrollbar_gutter)
+                                        .max(px(0.0));
                                     let available = (main_w - handle_w).max(px(0.0));
                                     let left_w = if available <= min_col_w * 2.0 {
                                         available * 0.5
@@ -486,8 +492,14 @@ impl MainPaneView {
                                                         return;
                                                     }
 
-                                                    let main_w =
-                                                        this.main_pane_content_width(cx);
+                                                    let scrollbar_gutter =
+                                                        components::Scrollbar::visible_gutter(
+                                                            this.diff_scroll.clone(),
+                                                            components::ScrollbarAxis::Vertical,
+                                                        );
+                                                    let main_w = (this.main_pane_content_width(cx)
+                                                        - scrollbar_gutter)
+                                                        .max(px(0.0));
                                                     let available =
                                                         (main_w - handle_w).max(px(0.0));
                                                     if available <= min_col_w * 2.0 {
@@ -576,10 +588,7 @@ impl MainPaneView {
                                             .bg(theme.colors.window_bg)
                                             .child(
                                                 div()
-                                                    .pr(components::Scrollbar::visible_gutter(
-                                                        self.diff_scroll.clone(),
-                                                        components::ScrollbarAxis::Vertical,
-                                                    ))
+                                                    .pr(scrollbar_gutter)
                                                     .flex()
                                                     .flex_col()
                                                     .h_full()

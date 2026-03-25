@@ -66,6 +66,7 @@ struct ScrollbarInteractionState {
     showing: bool,
     hide_task: Option<gpui::Task<()>>,
     last_scroll: Pixels,
+    thumb_visible: bool,
     /// Some GPUI scroll surfaces report positive offsets while others report negative offsets.
     /// Track the observed sign so the thumb moves/drag-scrolls in the correct direction.
     offset_sign: i8,
@@ -78,6 +79,7 @@ impl Default for ScrollbarInteractionState {
             showing: false,
             hide_task: None,
             last_scroll: px(0.0),
+            thumb_visible: false,
             offset_sign: -1,
         }
     }
@@ -267,15 +269,23 @@ impl Scrollbar {
                 })
             },
             move |bounds, prepaint, window, cx| {
-                let Some(prepaint) = prepaint else {
-                    return;
-                };
-
                 let interaction = window.use_keyed_state(
                     (id.clone(), "scrollbar_interaction"),
                     cx,
                     |_window, _cx| ScrollbarInteractionState::default(),
                 );
+                let thumb_visible = prepaint.is_some();
+                let visibility_changed = interaction.read(cx).thumb_visible != thumb_visible;
+                if visibility_changed {
+                    interaction.update(cx, |interaction, cx| {
+                        interaction.thumb_visible = thumb_visible;
+                        cx.notify();
+                    });
+                }
+
+                let Some(prepaint) = prepaint else {
+                    return;
+                };
                 let capture_phase = if interaction.read(cx).drag_offset.is_some() {
                     DispatchPhase::Capture
                 } else {
