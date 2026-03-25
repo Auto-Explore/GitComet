@@ -15,6 +15,7 @@ on:
       - "scripts/generate-homebrew-formula.sh"
       - "scripts/generate-homebrew-cask.sh"
       - "scripts/build-apt-repo.sh"
+      - "scripts/windows/verify-signed-artifact.ps1"
   push:
     branches: ["main"]
     paths:
@@ -29,6 +30,7 @@ on:
       - "scripts/generate-homebrew-formula.sh"
       - "scripts/generate-homebrew-cask.sh"
       - "scripts/build-apt-repo.sh"
+      - "scripts/windows/verify-signed-artifact.ps1"
   workflow_dispatch:
 
 permissions:
@@ -53,6 +55,17 @@ jobs:
           bash -n scripts/generate-homebrew-formula.sh
           bash -n scripts/generate-homebrew-cask.sh
           bash -n scripts/build-apt-repo.sh
+
+      - name: Validate Windows PowerShell helper syntax
+        run: |
+          pwsh -NoLogo -NoProfile -Command '
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile("scripts/windows/verify-signed-artifact.ps1", [ref]$null, [ref]$errors) | Out-Null
+            if ($errors.Count -gt 0) {
+              $errors | ForEach-Object { Write-Error $_.Message }
+              exit 1
+            }
+          '
 
       - name: Validate workflow YAML
         run: |
@@ -88,6 +101,18 @@ jobs:
           grep -Fq 'vars.APT_STORAGE_PUBLIC_ACCESS' .github/workflows/deploy-apt-repo.yml
           grep -Fq 'vars.AUR_GIT_REPOSITORY' .github/workflows/deploy-aur.yml
           grep -Fq 'vars.AUR_GIT_BRANCH' .github/workflows/deploy-aur.yml
+          grep -Fq 'vars.WINDOWS_SIGNING_ENDPOINT' .github/workflows/build-release-artifacts.yml
+          grep -Fq 'vars.WINDOWS_SIGNING_ACCOUNT_NAME' .github/workflows/build-release-artifacts.yml
+          grep -Fq 'AZURE_CREDENTIALS' .github/workflows/build-release-artifacts.yml
+          grep -Fq 'gitcomet-windows-test' .github/workflows/build-release-artifacts.yml
+          grep -Fq 'gitcomet-windows-release' .github/workflows/build-release-artifacts.yml
+          grep -Fq 'azure/login@' .github/workflows/build-release-artifacts.yml
+          grep -Fq 'artifact-signing-action@' .github/workflows/build-release-artifacts.yml
+          grep -Fq 'file-digest:' .github/workflows/build-release-artifacts.yml
+          grep -Fq 'timestamp-rfc3161:' .github/workflows/build-release-artifacts.yml
+          grep -Fq 'timestamp-digest:' .github/workflows/build-release-artifacts.yml
+          grep -Fq 'append-signature:' .github/workflows/build-release-artifacts.yml
+          grep -Fq 'verify-signed-artifact.ps1' .github/workflows/build-release-artifacts.yml
           grep -Fq 'AUR_PRIVATE_SSH_KEY' .github/workflows/deploy-aur.yml
           grep -Fq 'AUR_PRIVATE_SSH_KEY_PASSPHRASE' .github/workflows/deploy-aur.yml
           grep -Fq 'ssh://aur@aur.archlinux.org/gitcomet.git' .github/workflows/deploy-aur.yml
