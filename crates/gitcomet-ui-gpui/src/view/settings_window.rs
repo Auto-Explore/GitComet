@@ -98,12 +98,7 @@ pub(crate) fn open_settings_window(cx: &mut App) {
                 px(SETTINGS_WINDOW_MIN_WIDTH_PX),
                 px(SETTINGS_WINDOW_MIN_HEIGHT_PX),
             )),
-            titlebar: Some(TitlebarOptions {
-                title: Some(SETTINGS_WINDOW_TITLE.into()),
-                appears_transparent: cfg!(target_os = "macos"),
-                traffic_light_position: cfg!(target_os = "macos")
-                    .then_some(point(px(9.0), px(9.0))),
-            }),
+            titlebar: Some(settings_window_titlebar_options()),
             app_id: Some("gitcomet-settings".into()),
             window_decorations: Some(WindowDecorations::Client),
             is_movable: true,
@@ -115,6 +110,36 @@ pub(crate) fn open_settings_window(cx: &mut App) {
     .expect("failed to open settings window");
 
     cx.activate(true);
+}
+
+fn settings_window_titlebar_options() -> TitlebarOptions {
+    TitlebarOptions {
+        title: Some(SETTINGS_WINDOW_TITLE.into()),
+        // Windows needs a transparent native titlebar to avoid rendering its own
+        // caption on top of the custom settings header.
+        appears_transparent: cfg!(any(target_os = "macos", target_os = "windows")),
+        traffic_light_position: cfg!(target_os = "macos").then_some(point(px(9.0), px(9.0))),
+    }
+}
+
+fn settings_window_client_inset() -> Pixels {
+    if cfg!(target_os = "windows") {
+        px(0.0)
+    } else {
+        chrome::CLIENT_SIDE_DECORATION_INSET
+    }
+}
+
+fn settings_window_frame(
+    theme: AppTheme,
+    decorations: Decorations,
+    content: AnyElement,
+) -> AnyElement {
+    if cfg!(target_os = "windows") {
+        content
+    } else {
+        window_frame(theme, decorations, content)
+    }
 }
 
 impl SettingsWindowView {
@@ -650,7 +675,7 @@ impl Render for SettingsWindowView {
         let theme = self.theme;
         let decorations = effective_window_decorations(window);
         let (tiling, client_inset) = match decorations {
-            Decorations::Client { tiling } => (Some(tiling), chrome::CLIENT_SIDE_DECORATION_INSET),
+            Decorations::Client { tiling } => (Some(tiling), settings_window_client_inset()),
             Decorations::Server => (None, px(0.0)),
         };
         window.set_client_inset(client_inset);
@@ -1316,7 +1341,11 @@ impl Render for SettingsWindowView {
             self.hover_resize_edge = None;
         }
 
-        root.child(window_frame(theme, decorations, body.into_any_element()))
+        root.child(settings_window_frame(
+            theme,
+            decorations,
+            body.into_any_element(),
+        ))
     }
 }
 
@@ -1545,6 +1574,37 @@ mod tests {
             major: MIN_GIT_MAJOR + 1,
             minor: 0,
         }));
+    }
+
+    #[test]
+    fn settings_window_titlebar_options_match_platform_chrome_strategy() {
+        let options = settings_window_titlebar_options();
+        assert_eq!(
+            options.appears_transparent,
+            cfg!(any(target_os = "macos", target_os = "windows")),
+            "settings window titlebar transparency should match the platform chrome strategy"
+        );
+        assert_eq!(
+            options.title.as_ref().map(ToString::to_string),
+            Some(SETTINGS_WINDOW_TITLE.to_string()),
+            "settings window titlebar should keep the OS-visible title"
+        );
+    }
+
+    #[test]
+    fn settings_window_frame_strategy_matches_platform_chrome() {
+        #[cfg(target_os = "windows")]
+        {
+            assert_eq!(settings_window_client_inset(), px(0.0));
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            assert_eq!(
+                settings_window_client_inset(),
+                chrome::CLIENT_SIDE_DECORATION_INSET
+            );
+        }
     }
 
     #[gpui::test]
