@@ -7,6 +7,12 @@ impl SidebarPaneView {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
+        const BRANCH_TREE_BASE_PAD_PX: f32 = 8.0;
+        const BRANCH_TREE_DEPTH_STEP_PX: f32 = 10.0;
+        const BRANCH_TREE_TOGGLE_SLOT_PX: f32 = 12.0;
+        const BRANCH_TREE_ICON_SLOT_PX: f32 = 16.0;
+        const BRANCH_TREE_GAP_PX: f32 = 6.0;
+
         let Some(repo_id) = this.active_repo_id() else {
             return Vec::new();
         };
@@ -34,6 +40,30 @@ impl SidebarPaneView {
                 icon_muted,
                 10.0,
             )
+        };
+        let tree_toggle_slot = |collapsed: Option<bool>| {
+            div()
+                .w(px(BRANCH_TREE_TOGGLE_SLOT_PX))
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .when_some(collapsed, |this, collapsed| {
+                    this.child(svg_collapse(collapsed))
+                })
+        };
+        let tree_icon_slot = |path: &'static str, color: gpui::Rgba, size_px: f32| {
+            div()
+                .w(px(BRANCH_TREE_ICON_SLOT_PX))
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(svg_icon(path, color, size_px))
+        };
+        let branch_tree_color = |section: BranchSection| match section {
+            BranchSection::Local => theme.colors.text,
+            BranchSection::Remote => theme.colors.text_muted,
         };
         let context_menu_indicator_icon =
             with_alpha(theme.colors.text, if theme.is_dark { 0.80 } else { 0.66 });
@@ -64,7 +94,28 @@ impl SidebarPaneView {
         };
 
         fn indent_px(depth: usize) -> Pixels {
-            px(6.0 + depth as f32 * 10.0)
+            px(BRANCH_TREE_BASE_PAD_PX + depth as f32 * BRANCH_TREE_DEPTH_STEP_PX)
+        }
+
+        fn left_divider(color: gpui::Rgba, radius: Pixels) -> gpui::Div {
+            div()
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .left_0()
+                .w(px(2.0))
+                .rounded_l(radius)
+                .bg(color)
+        }
+
+        fn top_divider(color: gpui::Rgba) -> gpui::Div {
+            div()
+                .absolute()
+                .top_0()
+                .left_0()
+                .right_0()
+                .h(px(1.0))
+                .bg(color)
         }
 
         range
@@ -96,13 +147,15 @@ impl SidebarPaneView {
 
                     div()
                         .id(("branch_section", ix))
+                        .relative()
                         .h(px(24.0))
                         .w_full()
-                        .px_2()
+                        .pl(indent_px(0))
+                        .pr_2()
                         .group(row_group.clone())
                         .flex()
                         .items_center()
-                        .gap_1()
+                        .gap(px(BRANCH_TREE_GAP_PX))
                         .bg(theme.colors.surface_bg_elevated)
                         .cursor(CursorStyle::PointingHand)
                         .when(context_menu_active, |d| d.bg(theme.colors.active))
@@ -114,15 +167,16 @@ impl SidebarPaneView {
                             }
                         })
                         .active(move |s| s.bg(theme.colors.active))
-                        .when(top_border, |d| {
-                            d.border_t_1().border_color(theme.colors.border)
-                        })
-                        .child(svg_collapse(collapsed))
-                        .child(svg_icon(icon_path, icon_primary, 14.0))
+                        .when(top_border, |d| d.child(top_divider(theme.colors.border)))
+                        .child(tree_toggle_slot(Some(collapsed)))
+                        .child(tree_icon_slot(icon_path, icon_primary, 14.0))
                         .child(
                             div()
                                 .flex_1()
+                                .min_w(px(0.0))
                                 .text_sm()
+                                .line_clamp(1)
+                                .whitespace_nowrap()
                                 .font_weight(FontWeight::BOLD)
                                 .text_color(theme.colors.text)
                                 .child(label),
@@ -216,13 +270,15 @@ impl SidebarPaneView {
 
                     div()
                         .id(("stash_section", ix))
+                        .relative()
                         .h(px(24.0))
                         .w_full()
-                        .px_2()
+                        .pl(indent_px(0))
+                        .pr_2()
                         .group(row_group.clone())
                         .flex()
                         .items_center()
-                        .gap_1()
+                        .gap(px(BRANCH_TREE_GAP_PX))
                         .bg(theme.colors.surface_bg_elevated)
                         .cursor(CursorStyle::PointingHand)
                         .when(context_menu_active, |d| d.bg(theme.colors.active))
@@ -234,15 +290,16 @@ impl SidebarPaneView {
                             }
                         })
                         .active(move |s| s.bg(theme.colors.active))
-                        .when(top_border, |d| {
-                            d.border_t_1().border_color(theme.colors.border)
-                        })
-                        .child(svg_collapse(collapsed))
-                        .child(svg_icon("icons/box.svg", icon_primary, 14.0))
+                        .when(top_border, |d| d.child(top_divider(theme.colors.border)))
+                        .child(tree_toggle_slot(Some(collapsed)))
+                        .child(tree_icon_slot("icons/box.svg", icon_primary, 14.0))
                         .child(
                             div()
                                 .flex_1()
+                                .min_w(px(0.0))
                                 .text_sm()
+                                .line_clamp(1)
+                                .whitespace_nowrap()
                                 .font_weight(FontWeight::BOLD)
                                 .text_color(theme.colors.text)
                                 .child("Stash"),
@@ -342,14 +399,21 @@ impl SidebarPaneView {
                     let context_menu_active =
                         this.active_context_menu_invoker.as_ref() == Some(&context_menu_invoker);
                     let context_menu_invoker_for_right_click = context_menu_invoker.clone();
+                    let context_menu_invoker_for_indicator = context_menu_invoker.clone();
                     let stash_message_for_right_click = stash_message_for_menu.clone();
+                    let stash_message_for_indicator = stash_message_for_menu.clone();
+                    let row_group: SharedString =
+                        format!("stash_row_{}_{}", repo_id.0, index).into();
 
                     div()
                         .id(("stash_sidebar_row", index))
+                        .relative()
+                        .group(row_group.clone())
                         .flex()
                         .items_center()
-                        .gap_2()
-                        .px_2()
+                        .gap(px(BRANCH_TREE_GAP_PX))
+                        .pl(indent_px(0))
+                        .pr_2()
                         .h(px(24.0))
                         .w_full()
                         .rounded(px(theme.radii.row))
@@ -362,7 +426,8 @@ impl SidebarPaneView {
                             }
                         })
                         .active(move |s| s.bg(theme.colors.active))
-                        .child(svg_icon("icons/box.svg", icon_primary, 12.0))
+                        .child(tree_toggle_slot(None))
+                        .child(tree_icon_slot("icons/box.svg", icon_primary, 12.0))
                         .child(
                             div()
                                 .flex_1()
@@ -371,6 +436,35 @@ impl SidebarPaneView {
                                 .line_clamp(1)
                                 .whitespace_nowrap()
                                 .child(message.clone()),
+                        )
+                        .child(
+                            context_menu_indicator(
+                                format!("stash_menu_indicator_{}_{}", repo_id.0, index).into(),
+                                row_group.clone(),
+                                context_menu_active,
+                            )
+                            .on_click(cx.listener(
+                                move |this, e: &ClickEvent, window, cx| {
+                                    if !e.standard_click() || e.click_count() != 1 {
+                                        return;
+                                    }
+                                    cx.stop_propagation();
+                                    this.activate_context_menu_invoker(
+                                        context_menu_invoker_for_indicator.clone(),
+                                        cx,
+                                    );
+                                    this.open_popover_at(
+                                        PopoverKind::StashMenu {
+                                            repo_id,
+                                            index,
+                                            message: stash_message_for_indicator.clone(),
+                                        },
+                                        e.position(),
+                                        window,
+                                        cx,
+                                    );
+                                },
+                            )),
                         )
                         .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
                             if !e.standard_click() || e.click_count() < 2 {
@@ -446,13 +540,15 @@ impl SidebarPaneView {
 
                     div()
                         .id(("worktrees_section", ix))
+                        .relative()
                         .h(px(24.0))
                         .w_full()
-                        .px_2()
+                        .pl(indent_px(0))
+                        .pr_2()
                         .group(row_group.clone())
                         .flex()
                         .items_center()
-                        .gap_1()
+                        .gap(px(BRANCH_TREE_GAP_PX))
                         .bg(theme.colors.surface_bg_elevated)
                         .cursor(CursorStyle::PointingHand)
                         .when(context_menu_active, |d| d.bg(theme.colors.active))
@@ -464,15 +560,16 @@ impl SidebarPaneView {
                             }
                         })
                         .active(move |s| s.bg(theme.colors.active))
-                        .when(top_border, |d| {
-                            d.border_t_1().border_color(theme.colors.border)
-                        })
-                        .child(svg_collapse(collapsed))
-                        .child(svg_icon("icons/folder.svg", icon_primary, 14.0))
+                        .when(top_border, |d| d.child(top_divider(theme.colors.border)))
+                        .child(tree_toggle_slot(Some(collapsed)))
+                        .child(tree_icon_slot("icons/folder.svg", icon_primary, 14.0))
                         .child(
                             div()
                                 .flex_1()
+                                .min_w(px(0.0))
                                 .text_sm()
+                                .line_clamp(1)
+                                .whitespace_nowrap()
                                 .font_weight(FontWeight::BOLD)
                                 .text_color(theme.colors.text)
                                 .child("Worktrees"),
@@ -582,15 +679,21 @@ impl SidebarPaneView {
                     let context_menu_active =
                         this.active_context_menu_invoker.as_ref() == Some(&context_menu_invoker);
                     let context_menu_invoker_for_right_click = context_menu_invoker.clone();
+                    let context_menu_invoker_for_indicator = context_menu_invoker.clone();
+                    let path_for_indicator = path.clone();
+                    let row_group: SharedString =
+                        format!("worktree_row_{}_{}", repo_id.0, ix).into();
 
                     div()
                         .id(("worktree_item", ix))
+                        .relative()
                         .h(px(22.0))
                         .w_full()
+                        .group(row_group.clone())
                         .flex()
                         .items_center()
-                        .gap_2()
-                        .pl(indent_px(1))
+                        .gap(px(BRANCH_TREE_GAP_PX))
+                        .pl(indent_px(0))
                         .pr_2()
                         .rounded(px(theme.radii.row))
                         .when(is_active, |d| {
@@ -598,8 +701,10 @@ impl SidebarPaneView {
                                 theme.colors.accent,
                                 if theme.is_dark { 0.18 } else { 0.12 },
                             ))
-                            .border_1()
-                            .border_color(with_alpha(theme.colors.accent, 0.90))
+                            .child(left_divider(
+                                with_alpha(theme.colors.accent, 0.90),
+                                px(theme.radii.row),
+                            ))
                         })
                         .when(context_menu_active, |d| d.bg(theme.colors.active))
                         .hover(move |s| {
@@ -610,7 +715,8 @@ impl SidebarPaneView {
                             }
                         })
                         .active(move |s| s.bg(theme.colors.active))
-                        .child(svg_icon("icons/folder.svg", icon_primary, 12.0))
+                        .child(tree_toggle_slot(None))
+                        .child(tree_icon_slot("icons/folder.svg", icon_primary, 12.0))
                         .child(
                             div()
                                 .flex_1()
@@ -619,6 +725,36 @@ impl SidebarPaneView {
                                 .line_clamp(1)
                                 .whitespace_nowrap()
                                 .child(label),
+                        )
+                        .child(
+                            context_menu_indicator(
+                                format!("worktree_menu_indicator_{}_{}", repo_id.0, ix).into(),
+                                row_group.clone(),
+                                context_menu_active,
+                            )
+                            .on_click(cx.listener(
+                                move |this, e: &ClickEvent, window, cx| {
+                                    if !e.standard_click() || e.click_count() != 1 {
+                                        return;
+                                    }
+                                    cx.stop_propagation();
+                                    this.activate_context_menu_invoker(
+                                        context_menu_invoker_for_indicator.clone(),
+                                        cx,
+                                    );
+                                    this.open_popover_at(
+                                        PopoverKind::worktree(
+                                            repo_id,
+                                            WorktreePopoverKind::Menu {
+                                                path: path_for_indicator.clone(),
+                                            },
+                                        ),
+                                        e.position(),
+                                        window,
+                                        cx,
+                                    );
+                                },
+                            )),
                         )
                         .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
                             if !e.standard_click() || e.click_count() < 2 {
@@ -682,13 +818,15 @@ impl SidebarPaneView {
 
                     div()
                         .id(("submodules_section", ix))
+                        .relative()
                         .h(px(24.0))
                         .w_full()
-                        .px_2()
+                        .pl(indent_px(0))
+                        .pr_2()
                         .group(row_group.clone())
                         .flex()
                         .items_center()
-                        .gap_1()
+                        .gap(px(BRANCH_TREE_GAP_PX))
                         .bg(theme.colors.surface_bg_elevated)
                         .cursor(CursorStyle::PointingHand)
                         .when(context_menu_active, |d| d.bg(theme.colors.active))
@@ -700,15 +838,16 @@ impl SidebarPaneView {
                             }
                         })
                         .active(move |s| s.bg(theme.colors.active))
-                        .when(top_border, |d| {
-                            d.border_t_1().border_color(theme.colors.border)
-                        })
-                        .child(svg_collapse(collapsed))
-                        .child(svg_icon("icons/box.svg", icon_primary, 14.0))
+                        .when(top_border, |d| d.child(top_divider(theme.colors.border)))
+                        .child(tree_toggle_slot(Some(collapsed)))
+                        .child(tree_icon_slot("icons/box.svg", icon_primary, 14.0))
                         .child(
                             div()
                                 .flex_1()
+                                .min_w(px(0.0))
                                 .text_sm()
+                                .line_clamp(1)
+                                .whitespace_nowrap()
                                 .font_weight(FontWeight::BOLD)
                                 .text_color(theme.colors.text)
                                 .child("Submodules"),
@@ -818,15 +957,21 @@ impl SidebarPaneView {
                     let context_menu_active =
                         this.active_context_menu_invoker.as_ref() == Some(&context_menu_invoker);
                     let context_menu_invoker_for_right_click = context_menu_invoker.clone();
+                    let context_menu_invoker_for_indicator = context_menu_invoker.clone();
+                    let path_for_indicator = path.clone();
+                    let row_group: SharedString =
+                        format!("submodule_row_{}_{}", repo_id.0, ix).into();
 
                     div()
                         .id(("submodule_item", ix))
+                        .relative()
                         .h(px(22.0))
                         .w_full()
+                        .group(row_group.clone())
                         .flex()
                         .items_center()
-                        .gap_2()
-                        .pl(indent_px(1))
+                        .gap(px(BRANCH_TREE_GAP_PX))
+                        .pl(indent_px(0))
                         .pr_2()
                         .rounded(px(theme.radii.row))
                         .when(context_menu_active, |d| d.bg(theme.colors.active))
@@ -838,7 +983,8 @@ impl SidebarPaneView {
                             }
                         })
                         .active(move |s| s.bg(theme.colors.active))
-                        .child(svg_icon("icons/box.svg", icon_primary, 12.0))
+                        .child(tree_toggle_slot(None))
+                        .child(tree_icon_slot("icons/box.svg", icon_primary, 12.0))
                         .child(
                             div()
                                 .flex_1()
@@ -847,6 +993,36 @@ impl SidebarPaneView {
                                 .line_clamp(1)
                                 .whitespace_nowrap()
                                 .child(label),
+                        )
+                        .child(
+                            context_menu_indicator(
+                                format!("submodule_menu_indicator_{}_{}", repo_id.0, ix).into(),
+                                row_group.clone(),
+                                context_menu_active,
+                            )
+                            .on_click(cx.listener(
+                                move |this, e: &ClickEvent, window, cx| {
+                                    if !e.standard_click() || e.click_count() != 1 {
+                                        return;
+                                    }
+                                    cx.stop_propagation();
+                                    this.activate_context_menu_invoker(
+                                        context_menu_invoker_for_indicator.clone(),
+                                        cx,
+                                    );
+                                    this.open_popover_at(
+                                        PopoverKind::submodule(
+                                            repo_id,
+                                            SubmodulePopoverKind::Menu {
+                                                path: path_for_indicator.clone(),
+                                            },
+                                        ),
+                                        e.position(),
+                                        window,
+                                        cx,
+                                    );
+                                },
+                            )),
                         )
                         .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
                             if !e.standard_click() || e.click_count() < 2 {
@@ -899,6 +1075,7 @@ impl SidebarPaneView {
                     collapsed,
                     collapse_key,
                 } => {
+                    let remote_color = branch_tree_color(BranchSection::Remote);
                     let remote_name: String = name.as_ref().to_owned();
                     let context_menu_invoker: SharedString =
                         format!("remote_menu_{}_{}", repo_id.0, remote_name).into();
@@ -916,11 +1093,12 @@ impl SidebarPaneView {
                         .relative()
                         .h(px(24.0))
                         .w_full()
-                        .px_2()
+                        .pl(indent_px(0))
+                        .pr_2()
                         .group(row_group.clone())
                         .flex()
                         .items_center()
-                        .gap_2()
+                        .gap(px(BRANCH_TREE_GAP_PX))
                         .rounded(px(theme.radii.row))
                         .cursor(CursorStyle::PointingHand)
                         .when(context_menu_active, |d| d.bg(theme.colors.active))
@@ -934,9 +1112,9 @@ impl SidebarPaneView {
                         .active(move |s| s.bg(theme.colors.active))
                         .text_sm()
                         .font_weight(FontWeight::BOLD)
-                        .text_color(theme.colors.text)
-                        .child(svg_collapse(collapsed))
-                        .child(svg_icon("icons/folder.svg", icon_primary, 14.0))
+                        .text_color(remote_color)
+                        .child(tree_toggle_slot(Some(collapsed)))
+                        .child(tree_icon_slot("icons/folder.svg", remote_color, 14.0))
                         .child(div().flex_1().min_w(px(0.0)).line_clamp(1).child(name))
                         .child(
                             context_menu_indicator(
@@ -999,35 +1177,50 @@ impl SidebarPaneView {
                 }
                 BranchSidebarRow::GroupHeader {
                     label,
+                    section,
                     depth,
                     collapsed,
                     collapse_key,
-                } => div()
-                    .id(("branch_group", ix))
-                    .h(px(22.0))
-                    .w_full()
-                    .pl(indent_px(depth))
-                    .pr_2()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .rounded(px(theme.radii.row))
-                    .cursor(CursorStyle::PointingHand)
-                    .hover(move |s| s.bg(theme.colors.hover))
-                    .active(move |s| s.bg(theme.colors.active))
-                    .text_xs()
-                    .font_weight(FontWeight::BOLD)
-                    .text_color(theme.colors.text_muted)
-                    .child(svg_collapse(collapsed))
-                    .child(svg_icon("icons/folder.svg", icon_primary, 14.0))
-                    .child(label)
-                    .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
-                        if !e.standard_click() || e.click_count() != 1 {
-                            return;
-                        }
-                        this.toggle_active_repo_collapse_key(collapse_key.clone(), cx);
-                    }))
-                    .into_any_element(),
+                } => {
+                    let group_text_color = branch_tree_color(section);
+                    let group_icon_color = match section {
+                        BranchSection::Local => icon_primary,
+                        BranchSection::Remote => theme.colors.text_muted,
+                    };
+                    div()
+                        .id(("branch_group", ix))
+                        .h(px(22.0))
+                        .w_full()
+                        .pl(indent_px(depth))
+                        .pr_2()
+                        .flex()
+                        .items_center()
+                        .gap(px(BRANCH_TREE_GAP_PX))
+                        .rounded(px(theme.radii.row))
+                        .cursor(CursorStyle::PointingHand)
+                        .hover(move |s| s.bg(theme.colors.hover))
+                        .active(move |s| s.bg(theme.colors.active))
+                        .text_xs()
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(group_text_color)
+                        .child(tree_toggle_slot(Some(collapsed)))
+                        .child(tree_icon_slot("icons/folder.svg", group_icon_color, 14.0))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w(px(0.0))
+                                .line_clamp(1)
+                                .whitespace_nowrap()
+                                .child(label),
+                        )
+                        .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
+                            if !e.standard_click() || e.click_count() != 1 {
+                                return;
+                            }
+                            this.toggle_active_repo_collapse_key(collapse_key.clone(), cx);
+                        }))
+                        .into_any_element()
+                }
                 BranchSidebarRow::Branch {
                     label,
                     name,
@@ -1060,9 +1253,24 @@ impl SidebarPaneView {
                     let context_menu_invoker_for_indicator = context_menu_invoker.clone();
                     let full_name_for_indicator: SharedString = name.clone();
                     let row_group: SharedString = format!("branch_row_{}_{}", repo_id.0, ix).into();
-                    let branch_icon_color = if muted { icon_muted } else { icon_primary };
+                    let branch_text_color = if muted {
+                        theme.colors.text_muted
+                    } else {
+                        branch_tree_color(section)
+                    };
+                    let branch_icon_color = match section {
+                        BranchSection::Local => {
+                            if muted {
+                                icon_muted
+                            } else {
+                                icon_primary
+                            }
+                        }
+                        BranchSection::Remote => theme.colors.text_muted,
+                    };
                     let mut row = div()
                         .id(("branch_item", ix))
+                        .relative()
                         .h(if section == BranchSection::Local {
                             px(24.0)
                         } else {
@@ -1072,7 +1280,7 @@ impl SidebarPaneView {
                         .group(row_group.clone())
                         .flex()
                         .items_center()
-                        .gap_2()
+                        .gap(px(BRANCH_TREE_GAP_PX))
                         .pl(indent_px(depth))
                         .pr_2()
                         .rounded(px(theme.radii.row))
@@ -1081,8 +1289,10 @@ impl SidebarPaneView {
                                 theme.colors.accent,
                                 if theme.is_dark { 0.18 } else { 0.12 },
                             ))
-                            .border_1()
-                            .border_color(with_alpha(theme.colors.accent, 0.90))
+                            .child(left_divider(
+                                with_alpha(theme.colors.accent, 0.90),
+                                px(theme.radii.row),
+                            ))
                         })
                         .when(context_menu_active, |d| d.bg(theme.colors.active))
                         .hover(move |s| {
@@ -1093,8 +1303,13 @@ impl SidebarPaneView {
                             }
                         })
                         .active(move |s| s.bg(theme.colors.active))
-                        .when(muted, |d| d.text_color(theme.colors.text_muted))
-                        .child(svg_icon("icons/git_branch.svg", branch_icon_color, 12.0))
+                        .text_color(branch_text_color)
+                        .child(tree_toggle_slot(None))
+                        .child(tree_icon_slot(
+                            "icons/git_branch.svg",
+                            branch_icon_color,
+                            12.0,
+                        ))
                         .child(
                             div()
                                 .flex_1()

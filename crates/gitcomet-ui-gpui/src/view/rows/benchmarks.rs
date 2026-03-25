@@ -151,10 +151,16 @@ impl BranchSidebarFixture {
                 }
                 BranchSidebarRow::GroupHeader {
                     label,
+                    section,
                     depth,
                     collapsed,
                     ..
                 } => {
+                    match section {
+                        BranchSection::Local => 0u8,
+                        BranchSection::Remote => 1u8,
+                    }
+                    .hash(&mut h);
                     label.len().hash(&mut h);
                     depth.hash(&mut h);
                     collapsed.hash(&mut h);

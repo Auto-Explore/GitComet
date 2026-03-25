@@ -66,6 +66,7 @@ pub(super) enum BranchSidebarRow {
     },
     GroupHeader {
         label: SharedString,
+        section: BranchSection,
         depth: usize,
         collapsed: bool,
         collapse_key: SharedString,
@@ -576,7 +577,13 @@ fn push_slash_tree_rows(
     collapsed_items: &BTreeSet<String>,
 ) {
     let mut children = tree.children.iter().collect::<Vec<_>>();
-    children.sort_by(|(left, _), (right, _)| cmp_case_insensitive_then_case_sensitive(left, right));
+    children.sort_by(|(left_label, left_node), (right_label, right_node)| {
+        let left_is_group = !left_node.children.is_empty();
+        let right_is_group = !right_node.children.is_empty();
+        right_is_group
+            .cmp(&left_is_group)
+            .then_with(|| cmp_case_insensitive_then_case_sensitive(left_label, right_label))
+    });
 
     for (label, node) in children {
         if node.children.is_empty() {
@@ -605,6 +612,7 @@ fn push_slash_tree_rows(
         let group_collapsed = is_collapsed(collapsed_items, &collapse_key);
         out.push(BranchSidebarRow::GroupHeader {
             label: format!("{label}/").into(),
+            section,
             depth,
             collapsed: group_collapsed,
             collapse_key: collapse_key.into(),
