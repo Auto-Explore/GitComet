@@ -884,6 +884,7 @@ fn ensure_graphics_device_available(_context: &'static str) -> Result<(), UiLaun
 fn bind_text_input_keys(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("backspace", crate::kit::Backspace, Some("TextInput")),
+        KeyBinding::new("shift-backspace", crate::kit::Backspace, Some("TextInput")),
         KeyBinding::new("delete", crate::kit::Delete, Some("TextInput")),
         KeyBinding::new(
             "ctrl-backspace",
@@ -1159,6 +1160,7 @@ mod tests {
 
         let cases: Vec<(&str, &'static str)> = vec![
             ("backspace", crate::kit::Backspace.name()),
+            ("shift-backspace", crate::kit::Backspace.name()),
             ("delete", crate::kit::Delete.name()),
             ("ctrl-backspace", crate::kit::DeleteWordLeft.name()),
             ("ctrl-delete", crate::kit::DeleteWordRight.name()),

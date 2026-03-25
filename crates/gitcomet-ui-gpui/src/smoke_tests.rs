@@ -444,6 +444,46 @@ fn text_input_supports_basic_clipboard_and_word_shortcuts(cx: &mut gpui::TestApp
 }
 
 #[gpui::test]
+fn text_input_shift_backspace_deletes_like_backspace(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = cx.add_window_view(SmokeView::new);
+
+    cx.update(|window, app| {
+        app.bind_keys([
+            KeyBinding::new("backspace", crate::kit::Backspace, Some("TextInput")),
+            KeyBinding::new("shift-backspace", crate::kit::Backspace, Some("TextInput")),
+        ]);
+
+        let focus = view.update(app, |this, cx| this.input.read(cx).focus_handle());
+        window.focus(&focus);
+
+        view.update(app, |this, cx| {
+            this.input
+                .update(cx, |input, cx| input.set_text("hello", cx));
+        });
+    });
+
+    cx.simulate_keystrokes("backspace");
+    let plain_backspace =
+        cx.update(|_window, app| view.read(app).input.read(app).text().to_string());
+    assert_eq!(plain_backspace, "hell");
+
+    cx.update(|window, app| {
+        let focus = view.update(app, |this, cx| this.input.read(cx).focus_handle());
+        window.focus(&focus);
+
+        view.update(app, |this, cx| {
+            this.input
+                .update(cx, |input, cx| input.set_text("hello", cx));
+        });
+    });
+
+    cx.simulate_keystrokes("shift-backspace");
+    let shift_backspace =
+        cx.update(|_window, app| view.read(app).input.read(app).text().to_string());
+    assert_eq!(shift_backspace, plain_backspace);
+}
+
+#[gpui::test]
 fn multiline_text_input_cursor_navigation_keeps_scroll_in_view(cx: &mut gpui::TestAppContext) {
     let (view, cx) = cx.add_window_view(TextInputCursorScrollView::new);
 
