@@ -233,7 +233,16 @@ impl SidebarPaneView {
         .h_full()
         .min_h(px(0.0))
         .track_scroll(self.branches_scroll.clone());
-        let list = div().flex_1().min_h(px(0.0)).px(px(2.0)).child(list);
+        let scrollbar_gutter = components::Scrollbar::visible_gutter(
+            self.branches_scroll.clone(),
+            components::ScrollbarAxis::Vertical,
+        );
+        let list = div()
+            .flex_1()
+            .min_h(px(0.0))
+            .pl(px(2.0))
+            .pr(px(2.0) + scrollbar_gutter)
+            .child(list);
         let panel_body: AnyElement = div()
             .id("branch_sidebar_scroll_container")
             .relative()

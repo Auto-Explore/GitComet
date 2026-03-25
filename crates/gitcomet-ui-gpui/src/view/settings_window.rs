@@ -1176,7 +1176,17 @@ impl Render for SettingsWindowView {
                     .relative()
                     .flex_1()
                     .min_h(px(0.0))
-                    .child(div().flex_1().h_full().min_h(px(0.0)).child(list))
+                    .child(
+                        div()
+                            .flex_1()
+                            .h_full()
+                            .min_h(px(0.0))
+                            .pr(components::Scrollbar::visible_gutter(
+                                self.open_source_licenses_scroll.clone(),
+                                components::ScrollbarAxis::Vertical,
+                            ))
+                            .child(list),
+                    )
                     .child(
                         {
                             let scrollbar = components::Scrollbar::new(

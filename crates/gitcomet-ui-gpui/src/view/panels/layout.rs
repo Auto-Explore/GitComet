@@ -426,6 +426,10 @@ impl DetailsPaneView {
                                 .flex_1()
                                 .min_h(px(0.0))
                                 .track_scroll(self.commit_files_scroll.clone());
+                                let files_scrollbar_gutter = components::Scrollbar::visible_gutter(
+                                    self.commit_files_scroll.clone(),
+                                    components::ScrollbarAxis::Vertical,
+                                );
 
                                 div()
                                     .id(("commit_details_files_container", repo_id.0))
@@ -436,7 +440,14 @@ impl DetailsPaneView {
                                     .h_full()
                                     .min_h(px(0.0))
                                     .w_full()
-                                    .child(list)
+                                    .child(
+                                        div()
+                                            .w_full()
+                                            .flex_1()
+                                            .min_h(px(0.0))
+                                            .pr(files_scrollbar_gutter)
+                                            .child(list),
+                                    )
                                     .child(
                                         components::Scrollbar::new(
                                             ("commit_details_files_scrollbar", repo_id.0),
@@ -482,6 +493,10 @@ impl DetailsPaneView {
                                         .w_full()
                                         .min_w(px(0.0))
                                         .max_h(px(COMMIT_DETAILS_MESSAGE_MAX_HEIGHT_PX))
+                                        .pr(components::Scrollbar::visible_gutter(
+                                            self.commit_scroll.clone(),
+                                            components::ScrollbarAxis::Vertical,
+                                        ))
                                         .overflow_y_scroll()
                                         .track_scroll(&self.commit_scroll)
                                         .child(self.commit_details_message_input.clone()),
@@ -567,6 +582,10 @@ impl DetailsPaneView {
                             .flex_1()
                             .min_h(px(0.0))
                             .track_scroll(self.commit_files_scroll.clone());
+                            let files_scrollbar_gutter = components::Scrollbar::visible_gutter(
+                                self.commit_files_scroll.clone(),
+                                components::ScrollbarAxis::Vertical,
+                            );
 
                             div()
                                 .id(("commit_details_files_container", repo_id.0))
@@ -577,7 +596,14 @@ impl DetailsPaneView {
                                 .h_full()
                                 .min_h(px(0.0))
                                 .w_full()
-                                .child(list)
+                                .child(
+                                    div()
+                                        .w_full()
+                                        .flex_1()
+                                        .min_h(px(0.0))
+                                        .pr(files_scrollbar_gutter)
+                                        .child(list),
+                                )
                                 .child(
                                     components::Scrollbar::new(
                                         ("commit_details_files_scrollbar", repo_id.0),
@@ -623,6 +649,10 @@ impl DetailsPaneView {
                                     .w_full()
                                     .min_w(px(0.0))
                                     .max_h(px(COMMIT_DETAILS_MESSAGE_MAX_HEIGHT_PX))
+                                    .pr(components::Scrollbar::visible_gutter(
+                                        self.commit_scroll.clone(),
+                                        components::ScrollbarAxis::Vertical,
+                                    ))
                                     .overflow_y_scroll()
                                     .track_scroll(&self.commit_scroll)
                                     .child(self.commit_details_message_input.clone()),
@@ -1583,7 +1613,15 @@ impl DetailsPaneView {
                         .h_full()
                         .min_h(px(0.0))
                         .track_scroll(self.unstaged_scroll.clone());
-                let list = div().flex_1().h_full().min_h(px(0.0)).child(list);
+                let list = div()
+                    .flex_1()
+                    .h_full()
+                    .min_h(px(0.0))
+                    .pr(components::Scrollbar::visible_gutter(
+                        self.unstaged_scroll.clone(),
+                        components::ScrollbarAxis::Vertical,
+                    ))
+                    .child(list);
                 div()
                     .id("unstaged_scroll_container")
                     .relative()
@@ -1612,7 +1650,15 @@ impl DetailsPaneView {
                 .h_full()
                 .min_h(px(0.0))
                 .track_scroll(self.untracked_scroll.clone());
-                let list = div().flex_1().h_full().min_h(px(0.0)).child(list);
+                let list = div()
+                    .flex_1()
+                    .h_full()
+                    .min_h(px(0.0))
+                    .pr(components::Scrollbar::visible_gutter(
+                        self.untracked_scroll.clone(),
+                        components::ScrollbarAxis::Vertical,
+                    ))
+                    .child(list);
                 div()
                     .id("untracked_scroll_container")
                     .relative()
@@ -1641,7 +1687,15 @@ impl DetailsPaneView {
                 .h_full()
                 .min_h(px(0.0))
                 .track_scroll(self.unstaged_scroll.clone());
-                let list = div().flex_1().h_full().min_h(px(0.0)).child(list);
+                let list = div()
+                    .flex_1()
+                    .h_full()
+                    .min_h(px(0.0))
+                    .pr(components::Scrollbar::visible_gutter(
+                        self.unstaged_scroll.clone(),
+                        components::ScrollbarAxis::Vertical,
+                    ))
+                    .child(list);
                 div()
                     .id("split_unstaged_scroll_container")
                     .relative()
@@ -1666,7 +1720,15 @@ impl DetailsPaneView {
                     .h_full()
                     .min_h(px(0.0))
                     .track_scroll(self.staged_scroll.clone());
-                let list = div().flex_1().h_full().min_h(px(0.0)).child(list);
+                let list = div()
+                    .flex_1()
+                    .h_full()
+                    .min_h(px(0.0))
+                    .pr(components::Scrollbar::visible_gutter(
+                        self.staged_scroll.clone(),
+                        components::ScrollbarAxis::Vertical,
+                    ))
+                    .child(list);
                 div()
                     .id("staged_scroll_container")
                     .relative()
@@ -1709,6 +1771,10 @@ impl DetailsPaneView {
                     .w_full()
                     .min_w(px(0.0))
                     .max_h(px(COMMIT_MESSAGE_INPUT_MAX_HEIGHT_PX))
+                    .pr(components::Scrollbar::visible_gutter(
+                        self.commit_message_scroll.clone(),
+                        components::ScrollbarAxis::Vertical,
+                    ))
                     .overflow_y_scroll()
                     .track_scroll(&self.commit_message_scroll)
                     .child(self.commit_message_input.clone()),

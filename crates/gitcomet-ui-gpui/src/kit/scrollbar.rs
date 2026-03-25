@@ -7,6 +7,8 @@ use gpui::{
 };
 use std::time::Duration;
 
+pub const SCROLLBAR_GUTTER_PX: f32 = 16.0;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ScrollbarMarkerKind {
     Add,
@@ -552,7 +554,7 @@ impl Scrollbar {
                 .top_0()
                 .right_0()
                 .bottom_0()
-                .w(px(16.0))
+                .w(px(SCROLLBAR_GUTTER_PX))
                 .child(paint),
             ScrollbarAxis::Horizontal => div()
                 .id(self.id)
@@ -560,7 +562,7 @@ impl Scrollbar {
                 .left_0()
                 .right_0()
                 .bottom_0()
-                .h(px(16.0))
+                .h(px(SCROLLBAR_GUTTER_PX))
                 .child(paint),
         };
 
@@ -571,6 +573,15 @@ impl Scrollbar {
         };
 
         base
+    }
+
+    pub fn visible_gutter(handle: impl Into<ScrollbarHandle>, axis: ScrollbarAxis) -> Pixels {
+        let handle: ScrollbarHandle = handle.into();
+        if handle.max_offset(axis) > px(0.0) {
+            px(SCROLLBAR_GUTTER_PX)
+        } else {
+            px(0.0)
+        }
     }
 }
 

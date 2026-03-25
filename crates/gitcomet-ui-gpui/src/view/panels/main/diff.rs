@@ -354,13 +354,23 @@ impl MainPaneView {
                                     .with_horizontal_sizing_behavior(
                                         gpui::ListHorizontalSizingBehavior::Unconstrained,
                                     );
+                                    let scrollbar_gutter = components::Scrollbar::visible_gutter(
+                                        self.diff_scroll.clone(),
+                                        components::ScrollbarAxis::Vertical,
+                                    );
                                     div()
                                         .id("diff_scroll_container")
                                         .relative()
                                         .h_full()
                                         .min_h(px(0.0))
                                         .bg(theme.colors.window_bg)
-                                        .child(list)
+                                        .child(
+                                            div()
+                                                .h_full()
+                                                .min_h(px(0.0))
+                                                .pr(scrollbar_gutter)
+                                                .child(list),
+                                        )
                                         .child(
                                             components::Scrollbar::new(
                                                 "diff_scrollbar",
@@ -557,59 +567,70 @@ impl MainPaneView {
                                         );
 
                                     div()
-                                        .id("diff_split_scroll_container")
-                                        .relative()
-                                        .h_full()
-                                        .min_h(px(0.0))
-                                        .flex()
-                                        .flex_col()
-                                        .bg(theme.colors.window_bg)
-                                        .child(columns_header)
-                                        .child(
-                                            div()
-                                                .flex_1()
-                                                .min_h(px(0.0))
-                                                .flex()
-                                                .child(
-                                                    div()
-                                                        .relative()
-                                                        .w(left_w)
-                                                        .min_w(px(0.0))
-                                                        .h_full()
-                                                        .child(left)
-                                                        .child(
-                                                            components::Scrollbar::horizontal(
-                                                                "diff_split_left_hscrollbar",
-                                                                scroll_handle.clone(),
+                                            .id("diff_split_scroll_container")
+                                            .relative()
+                                            .h_full()
+                                            .min_h(px(0.0))
+                                            .flex()
+                                            .flex_col()
+                                            .bg(theme.colors.window_bg)
+                                            .child(
+                                                div()
+                                                    .pr(components::Scrollbar::visible_gutter(
+                                                        self.diff_scroll.clone(),
+                                                        components::ScrollbarAxis::Vertical,
+                                                    ))
+                                                    .flex()
+                                                    .flex_col()
+                                                    .h_full()
+                                                    .min_h(px(0.0))
+                                                    .child(columns_header)
+                                                    .child(
+                                                        div()
+                                                            .flex_1()
+                                                            .min_h(px(0.0))
+                                                            .flex()
+                                                            .child(
+                                                                div()
+                                                                    .relative()
+                                                                    .w(left_w)
+                                                                    .min_w(px(0.0))
+                                                                    .h_full()
+                                                                    .child(left)
+                                                                    .child(
+                                                                        components::Scrollbar::horizontal(
+                                                                            "diff_split_left_hscrollbar",
+                                                                            scroll_handle.clone(),
+                                                                        )
+                                                                        .always_visible()
+                                                                        .render(theme),
+                                                                    ),
                                                             )
-                                                            .always_visible()
-                                                            .render(theme),
-                                                        ),
-                                                )
-                                                .child(resize_handle(
-                                                    "diff_split_resize_handle_body",
-                                                ))
-                                                .child(
-                                                    div()
-                                                        .relative()
-                                                        .w(right_w)
-                                                        .min_w(px(0.0))
-                                                        .h_full()
-                                                        .child(right)
-                                                        .child(
-                                                            components::Scrollbar::horizontal(
-                                                                "diff_split_right_hscrollbar",
-                                                                right_scroll_handle,
-                                                            )
-                                                            .always_visible()
-                                                            .render(theme),
-                                                        ),
-                                                ),
-                                        )
-                                        .child(
-                                            components::Scrollbar::new(
-                                                "diff_scrollbar",
-                                                self.diff_scroll.clone(),
+                                                            .child(resize_handle(
+                                                                "diff_split_resize_handle_body",
+                                                            ))
+                                                            .child(
+                                                                div()
+                                                                    .relative()
+                                                                    .w(right_w)
+                                                                    .min_w(px(0.0))
+                                                                    .h_full()
+                                                                    .child(right)
+                                                                    .child(
+                                                                        components::Scrollbar::horizontal(
+                                                                            "diff_split_right_hscrollbar",
+                                                                            right_scroll_handle,
+                                                                        )
+                                                                        .always_visible()
+                                                                        .render(theme),
+                                                                    ),
+                                                            ),
+                                                    ),
+                                            )
+                                            .child(
+                                                components::Scrollbar::new(
+                                                    "diff_scrollbar",
+                                                    self.diff_scroll.clone(),
                                             )
                                             .markers(markers)
                                             .always_visible()
@@ -728,7 +749,16 @@ impl MainPaneView {
                         .relative()
                         .flex_1()
                         .min_h(px(0.0))
-                        .child(list)
+                        .child(
+                            div()
+                                .h_full()
+                                .min_h(px(0.0))
+                                .pr(components::Scrollbar::visible_gutter(
+                                    self.diff_scroll.clone(),
+                                    components::ScrollbarAxis::Vertical,
+                                ))
+                                .child(list),
+                        )
                         .child(
                             components::Scrollbar::horizontal(
                                 "diff_markdown_preview_inline_hscrollbar",
@@ -832,19 +862,30 @@ impl MainPaneView {
             .flex()
             .flex_col()
             .bg(theme.colors.window_bg)
-            .child(components::split_columns_header(
-                theme,
-                "A (before)",
-                "B (after)",
-            ))
             .child(
                 div()
-                    .flex_1()
-                    .min_h(px(0.0))
+                    .pr(components::Scrollbar::visible_gutter(
+                        vertical_scroll_handle.clone(),
+                        components::ScrollbarAxis::Vertical,
+                    ))
                     .flex()
-                    .child(left_column)
-                    .child(div().w(px(1.0)).h_full().bg(theme.colors.border))
-                    .child(right_column),
+                    .flex_col()
+                    .h_full()
+                    .min_h(px(0.0))
+                    .child(components::split_columns_header(
+                        theme,
+                        "A (before)",
+                        "B (after)",
+                    ))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_h(px(0.0))
+                            .flex()
+                            .child(left_column)
+                            .child(div().w(px(1.0)).h_full().bg(theme.colors.border))
+                            .child(right_column),
+                    ),
             )
             .child(
                 components::Scrollbar::new(

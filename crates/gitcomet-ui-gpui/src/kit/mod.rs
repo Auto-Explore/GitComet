@@ -2,7 +2,7 @@ mod scrollbar;
 mod text_input;
 pub(crate) mod text_model;
 
-pub use scrollbar::{Scrollbar, ScrollbarMarker, ScrollbarMarkerKind};
+pub use scrollbar::{Scrollbar, ScrollbarAxis, ScrollbarMarker, ScrollbarMarkerKind};
 pub use text_input::{
     Backspace, Copy, Cut, Delete, DeleteWordLeft, DeleteWordRight, Down, End, Enter,
     HighlightProvider, HighlightProviderResult, Home, Left, PageDown, PageUp, Paste, Redo, Right,

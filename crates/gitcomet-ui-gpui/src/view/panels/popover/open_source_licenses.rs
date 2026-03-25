@@ -72,11 +72,16 @@ pub(super) fn panel(this: &mut PopoverHost, _cx: &mut gpui::Context<PopoverHost>
         }
     }
 
+    let scrollbar_gutter = components::Scrollbar::visible_gutter(
+        this.open_source_licenses_scroll.clone(),
+        components::ScrollbarAxis::Vertical,
+    );
     let rows_scroll_surface = div()
         .id("open_source_licenses_scroll_surface")
         .relative()
         .w_full()
         .max_h(px(420.0))
+        .pr(scrollbar_gutter)
         .overflow_y_scroll()
         .track_scroll(&this.open_source_licenses_scroll)
         .child(rows_content);

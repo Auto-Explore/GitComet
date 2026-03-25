@@ -1,5 +1,5 @@
 use super::CONTROL_HEIGHT_MD_PX;
-use crate::kit::{Scrollbar, TextInput};
+use crate::kit::{Scrollbar, ScrollbarAxis, TextInput};
 use crate::theme::AppTheme;
 use gpui::prelude::*;
 use gpui::{
@@ -118,6 +118,9 @@ impl PickerPrompt {
             }
         }
 
+        let scrollbar_gutter =
+            Scrollbar::visible_gutter(scroll_handle.clone(), ScrollbarAxis::Vertical);
+        let list = list.pr(scrollbar_gutter);
         let scrollbar = {
             let scrollbar = Scrollbar::new("picker_prompt_scrollbar", scroll_handle);
             #[cfg(test)]

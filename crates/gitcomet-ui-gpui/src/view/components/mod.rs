@@ -26,5 +26,5 @@ pub use toast::{ToastKind, toast};
 pub use tokens::*;
 
 pub use crate::kit::{
-    Scrollbar, ScrollbarMarker, ScrollbarMarkerKind, TextInput, TextInputOptions,
+    Scrollbar, ScrollbarAxis, ScrollbarMarker, ScrollbarMarkerKind, TextInput, TextInputOptions,
 };

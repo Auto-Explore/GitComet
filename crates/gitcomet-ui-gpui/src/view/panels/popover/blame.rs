@@ -74,16 +74,20 @@ pub(super) fn panel(
             )
             .h(px(360.0))
             .track_scroll(this.blame_scroll.clone());
+            let scrollbar_gutter = components::Scrollbar::visible_gutter(
+                this.blame_scroll.clone(),
+                components::ScrollbarAxis::Vertical,
+            );
 
             div()
                 .relative()
-                .child(list)
+                .child(div().h(px(360.0)).pr(scrollbar_gutter).child(list))
                 .child(
                     components::Scrollbar::new(
                         "blame_popover_scrollbar",
                         this.blame_scroll.clone(),
                     )
-                        .render(theme),
+                    .render(theme),
                 )
                 .into_any_element()
         }

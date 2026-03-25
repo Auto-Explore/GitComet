@@ -72,11 +72,21 @@ impl HistoryView {
             if should_load_more && let Some(repo_id) = self.active_repo_id() {
                 self.store.dispatch(Msg::LoadMoreHistory { repo_id });
             }
+            let scrollbar_gutter = components::Scrollbar::visible_gutter(
+                self.history_scroll.clone(),
+                components::ScrollbarAxis::Vertical,
+            );
             div()
                 .id("history_main_scroll_container")
                 .relative()
                 .h_full()
-                .child(list)
+                .child(
+                    div()
+                        .h_full()
+                        .min_h(px(0.0))
+                        .pr(scrollbar_gutter)
+                        .child(list),
+                )
                 .child(
                     components::Scrollbar::new(
                         "history_main_scrollbar",
