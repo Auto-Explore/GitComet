@@ -395,7 +395,6 @@ mod tests {
         repo.stashes = Loadable::NotLoaded;
 
         let collapsed = BTreeSet::from([
-            branch_sidebar::branches_section_storage_key().to_string(),
             branch_sidebar::submodules_section_storage_key().to_string(),
             branch_sidebar::expanded_default_section_storage_key(
                 branch_sidebar::stash_section_storage_key(),

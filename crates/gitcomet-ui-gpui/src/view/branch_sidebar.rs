@@ -1,7 +1,6 @@
 use super::*;
 use std::collections::BTreeSet;
 
-const BRANCHES_SECTION_KEY: &str = "section:branches";
 const LOCAL_SECTION_KEY: &str = "section:branches/local";
 const REMOTE_SECTION_KEY: &str = "section:branches/remote";
 const WORKTREES_SECTION_KEY: &str = "section:worktrees";
@@ -13,10 +12,6 @@ const EXPANDED_DEFAULT_SECTION_PREFIX: &str = "expanded:";
 pub(super) enum BranchSection {
     Local,
     Remote,
-}
-
-pub(super) const fn branches_section_storage_key() -> &'static str {
-    BRANCHES_SECTION_KEY
 }
 
 pub(super) const fn local_section_storage_key() -> &'static str {
@@ -53,10 +48,6 @@ pub(super) fn remote_group_storage_key(remote: &str, path: &str) -> String {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum BranchSidebarRow {
-    BranchesHeader {
-        collapsed: bool,
-        collapse_key: SharedString,
-    },
     SectionHeader {
         section: BranchSection,
         top_border: bool,
@@ -190,7 +181,7 @@ pub(super) fn branch_sidebar_rows(
     collapsed_items: &BTreeSet<String>,
 ) -> Vec<BranchSidebarRow> {
     let approx_rows =
-        17 + match &repo.branches {
+        16 + match &repo.branches {
             Loadable::Ready(branches) => branches.len(),
             _ => 0,
         } + match &repo.remote_branches {
@@ -216,178 +207,169 @@ pub(super) fn branch_sidebar_rows(
         _ => None,
     };
 
-    let branches_collapsed = is_collapsed(collapsed_items, branches_section_storage_key());
-    rows.push(BranchSidebarRow::BranchesHeader {
-        collapsed: branches_collapsed,
-        collapse_key: branches_section_storage_key().into(),
+    let local_collapsed = is_collapsed(collapsed_items, local_section_storage_key());
+    rows.push(BranchSidebarRow::SectionHeader {
+        section: BranchSection::Local,
+        top_border: false,
+        collapsed: local_collapsed,
+        collapse_key: local_section_storage_key().into(),
     });
 
-    if !branches_collapsed {
-        let local_collapsed = is_collapsed(collapsed_items, local_section_storage_key());
-        rows.push(BranchSidebarRow::SectionHeader {
-            section: BranchSection::Local,
-            top_border: false,
-            collapsed: local_collapsed,
-            collapse_key: local_section_storage_key().into(),
-        });
-
-        if !local_collapsed {
-            match &repo.branches {
-                Loadable::Ready(branches) if branches.is_empty() => {
-                    rows.push(BranchSidebarRow::Placeholder {
-                        section: BranchSection::Local,
-                        message: "No branches".into(),
-                    });
+    if !local_collapsed {
+        match &repo.branches {
+            Loadable::Ready(branches) if branches.is_empty() => {
+                rows.push(BranchSidebarRow::Placeholder {
+                    section: BranchSection::Local,
+                    message: "No branches".into(),
+                });
+            }
+            Loadable::Ready(branches) => {
+                let head = match &repo.head_branch {
+                    Loadable::Ready(h) => Some(h.as_str()),
+                    _ => None,
+                };
+                let mut local_meta: HashMap<String, (Option<UpstreamDivergence>, bool)> =
+                    HashMap::default();
+                local_meta.reserve(branches.len());
+                for branch in branches.iter() {
+                    local_meta.insert(
+                        branch.name.clone(),
+                        (branch.divergence, head.is_some_and(|h| h == branch.name)),
+                    );
                 }
-                Loadable::Ready(branches) => {
-                    let head = match &repo.head_branch {
-                        Loadable::Ready(h) => Some(h.as_str()),
-                        _ => None,
-                    };
-                    let mut local_meta: HashMap<String, (Option<UpstreamDivergence>, bool)> =
-                        HashMap::default();
-                    local_meta.reserve(branches.len());
-                    for branch in branches.iter() {
-                        local_meta.insert(
-                            branch.name.clone(),
-                            (branch.divergence, head.is_some_and(|h| h == branch.name)),
-                        );
+
+                let mut tree = SlashTree::default();
+                for branch in branches.iter() {
+                    tree.insert(&branch.name);
+                }
+                push_slash_tree_rows(
+                    &tree,
+                    &mut rows,
+                    Some(&local_meta),
+                    head_upstream_full.as_deref(),
+                    0,
+                    false,
+                    BranchSection::Local,
+                    "",
+                    "",
+                    None,
+                    collapsed_items,
+                );
+            }
+            Loadable::Loading => rows.push(BranchSidebarRow::Placeholder {
+                section: BranchSection::Local,
+                message: "Loading".into(),
+            }),
+            Loadable::NotLoaded => rows.push(BranchSidebarRow::Placeholder {
+                section: BranchSection::Local,
+                message: "Not loaded".into(),
+            }),
+            Loadable::Error(e) => rows.push(BranchSidebarRow::Placeholder {
+                section: BranchSection::Local,
+                message: e.clone().into(),
+            }),
+        }
+    }
+
+    rows.push(BranchSidebarRow::SectionSpacer);
+
+    let remote_collapsed = is_collapsed(collapsed_items, remote_section_storage_key());
+    rows.push(BranchSidebarRow::SectionHeader {
+        section: BranchSection::Remote,
+        top_border: true,
+        collapsed: remote_collapsed,
+        collapse_key: remote_section_storage_key().into(),
+    });
+
+    if !remote_collapsed {
+        let mut remotes: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        let mut remote_section_is_loading_or_error = false;
+        match &repo.remote_branches {
+            Loadable::Ready(branches) => {
+                for branch in branches.iter() {
+                    remotes
+                        .entry(branch.remote.clone())
+                        .or_default()
+                        .push(branch.name.clone());
+                }
+            }
+            Loadable::Loading => {
+                rows.push(BranchSidebarRow::Placeholder {
+                    section: BranchSection::Remote,
+                    message: "Loading".into(),
+                });
+                remote_section_is_loading_or_error = true;
+            }
+            Loadable::Error(e) => {
+                rows.push(BranchSidebarRow::Placeholder {
+                    section: BranchSection::Remote,
+                    message: e.clone().into(),
+                });
+                remote_section_is_loading_or_error = true;
+            }
+            Loadable::NotLoaded => {}
+        }
+
+        if !remote_section_is_loading_or_error {
+            if let Loadable::Ready(local_branches) = &repo.branches {
+                // Some repos have upstream tracking configured before any local
+                // remote-tracking refs are present. Surface those upstreams so the
+                // Remote section still reflects tracked branches.
+                for local in local_branches.iter() {
+                    if let Some(upstream) = &local.upstream {
+                        remotes
+                            .entry(upstream.remote.clone())
+                            .or_default()
+                            .push(upstream.branch.clone());
+                    }
+                }
+            }
+            if let Loadable::Ready(known) = &repo.remotes {
+                // Ensure remotes with no local remote-tracking branches are still visible
+                // (e.g. newly added remotes before an initial fetch).
+                for remote in known.iter() {
+                    remotes.entry(remote.name.clone()).or_default();
+                }
+            }
+            if remotes.is_empty() {
+                rows.push(BranchSidebarRow::Placeholder {
+                    section: BranchSection::Remote,
+                    message: "No remotes".into(),
+                });
+            } else {
+                for (remote, mut branches) in remotes {
+                    branches.sort_unstable();
+                    branches.dedup();
+
+                    let remote_collapse_key = remote_header_storage_key(&remote);
+                    let remote_is_collapsed = is_collapsed(collapsed_items, &remote_collapse_key);
+                    rows.push(BranchSidebarRow::RemoteHeader {
+                        name: remote.clone().into(),
+                        collapsed: remote_is_collapsed,
+                        collapse_key: remote_collapse_key.into(),
+                    });
+                    if branches.is_empty() || remote_is_collapsed {
+                        continue;
                     }
 
                     let mut tree = SlashTree::default();
-                    for branch in branches.iter() {
-                        tree.insert(&branch.name);
+                    for branch in branches {
+                        tree.insert(&branch);
                     }
+                    let name_prefix = format!("{remote}/");
                     push_slash_tree_rows(
                         &tree,
                         &mut rows,
-                        Some(&local_meta),
-                        head_upstream_full.as_deref(),
-                        0,
-                        false,
-                        BranchSection::Local,
-                        "",
-                        "",
                         None,
+                        head_upstream_full.as_deref(),
+                        1,
+                        true,
+                        BranchSection::Remote,
+                        &name_prefix,
+                        "",
+                        Some(remote.as_str()),
                         collapsed_items,
                     );
-                }
-                Loadable::Loading => rows.push(BranchSidebarRow::Placeholder {
-                    section: BranchSection::Local,
-                    message: "Loading".into(),
-                }),
-                Loadable::NotLoaded => rows.push(BranchSidebarRow::Placeholder {
-                    section: BranchSection::Local,
-                    message: "Not loaded".into(),
-                }),
-                Loadable::Error(e) => rows.push(BranchSidebarRow::Placeholder {
-                    section: BranchSection::Local,
-                    message: e.clone().into(),
-                }),
-            }
-        }
-
-        rows.push(BranchSidebarRow::SectionSpacer);
-
-        let remote_collapsed = is_collapsed(collapsed_items, remote_section_storage_key());
-        rows.push(BranchSidebarRow::SectionHeader {
-            section: BranchSection::Remote,
-            top_border: true,
-            collapsed: remote_collapsed,
-            collapse_key: remote_section_storage_key().into(),
-        });
-
-        if !remote_collapsed {
-            let mut remotes: BTreeMap<String, Vec<String>> = BTreeMap::new();
-            let mut remote_section_is_loading_or_error = false;
-            match &repo.remote_branches {
-                Loadable::Ready(branches) => {
-                    for branch in branches.iter() {
-                        remotes
-                            .entry(branch.remote.clone())
-                            .or_default()
-                            .push(branch.name.clone());
-                    }
-                }
-                Loadable::Loading => {
-                    rows.push(BranchSidebarRow::Placeholder {
-                        section: BranchSection::Remote,
-                        message: "Loading".into(),
-                    });
-                    remote_section_is_loading_or_error = true;
-                }
-                Loadable::Error(e) => {
-                    rows.push(BranchSidebarRow::Placeholder {
-                        section: BranchSection::Remote,
-                        message: e.clone().into(),
-                    });
-                    remote_section_is_loading_or_error = true;
-                }
-                Loadable::NotLoaded => {}
-            }
-
-            if !remote_section_is_loading_or_error {
-                if let Loadable::Ready(local_branches) = &repo.branches {
-                    // Some repos have upstream tracking configured before any local
-                    // remote-tracking refs are present. Surface those upstreams so the
-                    // Remote section still reflects tracked branches.
-                    for local in local_branches.iter() {
-                        if let Some(upstream) = &local.upstream {
-                            remotes
-                                .entry(upstream.remote.clone())
-                                .or_default()
-                                .push(upstream.branch.clone());
-                        }
-                    }
-                }
-                if let Loadable::Ready(known) = &repo.remotes {
-                    // Ensure remotes with no local remote-tracking branches are still visible
-                    // (e.g. newly added remotes before an initial fetch).
-                    for remote in known.iter() {
-                        remotes.entry(remote.name.clone()).or_default();
-                    }
-                }
-                if remotes.is_empty() {
-                    rows.push(BranchSidebarRow::Placeholder {
-                        section: BranchSection::Remote,
-                        message: "No remotes".into(),
-                    });
-                } else {
-                    for (remote, mut branches) in remotes {
-                        branches.sort_unstable();
-                        branches.dedup();
-
-                        let remote_collapse_key = remote_header_storage_key(&remote);
-                        let remote_is_collapsed =
-                            is_collapsed(collapsed_items, &remote_collapse_key);
-                        rows.push(BranchSidebarRow::RemoteHeader {
-                            name: remote.clone().into(),
-                            collapsed: remote_is_collapsed,
-                            collapse_key: remote_collapse_key.into(),
-                        });
-                        if branches.is_empty() || remote_is_collapsed {
-                            continue;
-                        }
-
-                        let mut tree = SlashTree::default();
-                        for branch in branches {
-                            tree.insert(&branch);
-                        }
-                        let name_prefix = format!("{remote}/");
-                        push_slash_tree_rows(
-                            &tree,
-                            &mut rows,
-                            None,
-                            head_upstream_full.as_deref(),
-                            1,
-                            true,
-                            BranchSection::Remote,
-                            &name_prefix,
-                            "",
-                            Some(remote.as_str()),
-                            collapsed_items,
-                        );
-                    }
                 }
             }
         }

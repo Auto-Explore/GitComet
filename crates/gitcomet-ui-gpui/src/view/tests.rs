@@ -364,7 +364,7 @@ fn branch_sidebar_defaults_secondary_sections_to_collapsed() {
 }
 
 #[test]
-fn branch_sidebar_includes_top_level_branches_header() {
+fn branch_sidebar_starts_with_local_and_remote_branch_sections() {
     let repo = RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -374,13 +374,29 @@ fn branch_sidebar_includes_top_level_branches_header() {
 
     let rows = GitCometView::branch_sidebar_rows(&repo);
     assert!(
-        matches!(rows.first(), Some(BranchSidebarRow::BranchesHeader { .. })),
-        "expected Branches header to be the first sidebar row"
+        matches!(
+            rows.first(),
+            Some(BranchSidebarRow::SectionHeader {
+                section: BranchSection::Local,
+                ..
+            })
+        ),
+        "expected Local Branches header to be the first sidebar row"
+    );
+    assert!(
+        rows.iter().any(|row| matches!(
+            row,
+            BranchSidebarRow::SectionHeader {
+                section: BranchSection::Remote,
+                ..
+            }
+        )),
+        "expected Remote branches header to be present"
     );
 }
 
 #[test]
-fn branch_sidebar_collapses_top_level_sections() {
+fn branch_sidebar_collapses_branch_sections_without_hiding_other_sections() {
     let mut repo = RepoState::new_opening(
         RepoId(1),
         RepoSpec {
@@ -419,7 +435,8 @@ fn branch_sidebar_collapses_top_level_sections() {
     let rows = GitCometView::branch_sidebar_rows_with_collapsed(
         &repo,
         &[
-            branch_sidebar::branches_section_storage_key(),
+            branch_sidebar::local_section_storage_key(),
+            branch_sidebar::remote_section_storage_key(),
             branch_sidebar::worktrees_section_storage_key(),
             branch_sidebar::submodules_section_storage_key(),
             branch_sidebar::stash_section_storage_key(),
@@ -429,30 +446,36 @@ fn branch_sidebar_collapses_top_level_sections() {
     assert!(
         rows.iter().any(|row| matches!(
             row,
-            BranchSidebarRow::BranchesHeader {
+            BranchSidebarRow::SectionHeader {
+                section: BranchSection::Local,
                 collapsed: true,
                 ..
             }
         )),
-        "expected collapsed Branches header"
+        "expected collapsed Local Branches header"
     );
     assert!(
-        !rows
-            .iter()
-            .any(|row| matches!(row, BranchSidebarRow::SectionHeader { .. })),
-        "expected Local/Remote rows to be hidden when Branches is collapsed"
+        rows.iter().any(|row| matches!(
+            row,
+            BranchSidebarRow::SectionHeader {
+                section: BranchSection::Remote,
+                collapsed: true,
+                ..
+            }
+        )),
+        "expected collapsed Remote branches header"
     );
     assert!(
         !rows
             .iter()
             .any(|row| matches!(row, BranchSidebarRow::Branch { .. })),
-        "expected branch rows to be hidden when Branches is collapsed"
+        "expected branch rows to be hidden when Local and Remote sections are collapsed"
     );
     assert!(
         !rows
             .iter()
             .any(|row| matches!(row, BranchSidebarRow::RemoteHeader { .. })),
-        "expected remote headers to be hidden when Branches is collapsed"
+        "expected remote headers to be hidden when Remote branches is collapsed"
     );
     assert!(
         rows.iter().any(|row| matches!(
@@ -726,15 +749,6 @@ fn branch_sidebar_exposes_stable_collapse_keys_for_persistence() {
     }]));
 
     let rows = GitCometView::branch_sidebar_rows(&repo);
-
-    let branches_key = rows.iter().find_map(|row| match row {
-        BranchSidebarRow::BranchesHeader { collapse_key, .. } => Some(collapse_key.as_ref()),
-        _ => None,
-    });
-    assert_eq!(
-        branches_key,
-        Some(branch_sidebar::branches_section_storage_key())
-    );
 
     let local_key = rows.iter().find_map(|row| match row {
         BranchSidebarRow::SectionHeader {

@@ -43,51 +43,17 @@ impl SidebarPaneView {
         range
             .filter_map(|ix| rows.get(ix).cloned().map(|r| (ix, r)))
             .map(|(ix, row)| match row {
-                BranchSidebarRow::BranchesHeader {
-                    collapsed,
-                    collapse_key,
-                } => div()
-                    .id(("branches_section", ix))
-                    .h(px(26.0))
-                    .w_full()
-                    .px_2()
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .bg(theme.colors.surface_bg_elevated)
-                    .cursor(CursorStyle::PointingHand)
-                    .hover(move |s| s.bg(theme.colors.hover))
-                    .active(move |s| s.bg(theme.colors.active))
-                    .child(svg_collapse(collapsed))
-                    .child(svg_icon("icons/git_branch.svg", icon_primary, 14.0))
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(theme.colors.text)
-                            .child("Branches"),
-                    )
-                    .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
-                        if !e.standard_click() || e.click_count() != 1 {
-                            return;
-                        }
-                        this.toggle_active_repo_collapse_key(collapse_key.clone(), cx);
-                    }))
-                    .into_any_element(),
                 BranchSidebarRow::SectionHeader {
                     section,
                     top_border,
                     collapsed,
                     collapse_key,
                 } => {
-                    let (icon_path, label) = match section {
-                        BranchSection::Local => ("icons/computer.svg", "Local"),
-                        BranchSection::Remote => ("icons/cloud.svg", "Remote"),
+                    let (icon_path, label): (&'static str, SharedString) = match section {
+                        BranchSection::Local => ("icons/computer.svg", "Local Branches".into()),
+                        BranchSection::Remote => ("icons/cloud.svg", "Remote branches".into()),
                     };
-                    let tooltip: SharedString = match section {
-                        BranchSection::Local => "Local branches".into(),
-                        BranchSection::Remote => "Remote branches".into(),
-                    };
+                    let tooltip = label.clone();
                     let section_key = match section {
                         BranchSection::Local => "local",
                         BranchSection::Remote => "remote",
@@ -100,11 +66,7 @@ impl SidebarPaneView {
 
                     div()
                         .id(("branch_section", ix))
-                        .h(if section == BranchSection::Local {
-                            px(26.0)
-                        } else {
-                            px(24.0)
-                        })
+                        .h(px(24.0))
                         .w_full()
                         .px_2()
                         .flex()

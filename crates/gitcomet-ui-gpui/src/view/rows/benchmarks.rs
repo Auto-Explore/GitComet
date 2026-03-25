@@ -121,9 +121,6 @@ impl BranchSidebarFixture {
         for row in rows.iter().take(256) {
             std::mem::discriminant(row).hash(&mut h);
             match row {
-                BranchSidebarRow::BranchesHeader { collapsed, .. } => {
-                    collapsed.hash(&mut h);
-                }
                 BranchSidebarRow::SectionHeader {
                     section,
                     top_border,
