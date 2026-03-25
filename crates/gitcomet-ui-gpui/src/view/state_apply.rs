@@ -6,12 +6,9 @@ impl GitCometView {
         next: Arc<AppState>,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
-        let prev_error = self.active_repo().and_then(|repo| repo.last_error.clone());
+        let prev_banner_error = self.state.banner_error.clone();
         let prev_auth_prompt = self.state.auth_prompt.clone();
-        let next_error = next
-            .active_repo
-            .and_then(|repo_id| next.repos.iter().find(|repo| repo.id == repo_id))
-            .and_then(|repo| repo.last_error.clone());
+        let next_banner_error = next.banner_error.clone();
 
         let old_notification_len = self.state.notifications.len();
         let new_notifications = next
@@ -22,10 +19,13 @@ impl GitCometView {
             .collect::<Vec<_>>();
         for notification in new_notifications {
             let kind = match notification.kind {
-                AppNotificationKind::Error => components::ToastKind::Error,
                 AppNotificationKind::Warning => components::ToastKind::Warning,
                 AppNotificationKind::Info | AppNotificationKind::Success => {
                     components::ToastKind::Success
+                }
+                AppNotificationKind::Error => {
+                    self.show_error_banner(None, notification.message);
+                    continue;
                 }
             };
             self.push_toast(kind, notification.message, cx);
@@ -53,7 +53,7 @@ impl GitCometView {
                 {
                     self.pending_force_delete_branch_prompt = Some((next_repo.id, name));
                 }
-                self.push_toast(components::ToastKind::Error, msg, cx);
+                self.show_error_banner(Some(next_repo.id), msg);
             }
 
             let new_command_entries = next_repo
@@ -80,15 +80,11 @@ impl GitCometView {
                     continue;
                 }
 
-                self.push_toast(
-                    if entry.ok {
-                        components::ToastKind::Success
-                    } else {
-                        components::ToastKind::Error
-                    },
-                    entry.summary.clone(),
-                    cx,
-                );
+                if entry.ok {
+                    self.push_toast(components::ToastKind::Success, entry.summary.clone(), cx);
+                } else {
+                    self.show_error_banner(Some(next_repo.id), entry.summary.clone());
+                }
             }
 
             if self.pending_pull_reconcile_prompt.is_none()
@@ -147,7 +143,7 @@ impl GitCometView {
                 .collect(),
         );
 
-        prev_error != next_error || prev_auth_prompt != self.state.auth_prompt
+        prev_banner_error != next_banner_error || prev_auth_prompt != self.state.auth_prompt
     }
 }
 

@@ -596,7 +596,6 @@ impl GitCometView {
             #[cfg(target_os = "macos")]
             recent_repos_menu_fingerprint: ui_session.recent_repos.clone(),
             error_banner_input,
-            transient_error_banner: None,
             auth_prompt_username_input,
             auth_prompt_secret_input,
             auth_prompt_key: None,
@@ -1113,29 +1112,22 @@ impl GitCometView {
         rows
     }
 
-    fn set_transient_error_banner(&mut self, message: String, cx: &mut gpui::Context<Self>) {
+    fn show_error_banner(&mut self, repo_id: Option<RepoId>, message: String) {
         if message.trim().is_empty() {
             return;
         }
 
         if self
-            .active_repo()
-            .and_then(|repo| repo.last_error.as_deref())
-            == Some(message.as_str())
-        {
-            return;
-        }
-
-        if self
-            .transient_error_banner
+            .state
+            .banner_error
             .as_ref()
-            .is_some_and(|banner| banner.as_ref() == message.as_str())
+            .is_some_and(|banner| banner.repo_id == repo_id && banner.message == message)
         {
             return;
         }
 
-        self.transient_error_banner = Some(message.into());
-        cx.notify();
+        self.store
+            .dispatch(Msg::ShowBannerError { repo_id, message });
     }
 
     fn split_error_banner_message(err_text: &str) -> (Option<SharedString>, SharedString) {
@@ -1195,7 +1187,7 @@ impl GitCometView {
         cx: &mut gpui::Context<Self>,
     ) {
         if matches!(kind, components::ToastKind::Error) {
-            self.set_transient_error_banner(message, cx);
+            self.show_error_banner(self.active_repo_id(), message);
             return;
         }
         self.toast_host
@@ -1212,7 +1204,7 @@ impl GitCometView {
         cx: &mut gpui::Context<Self>,
     ) {
         if matches!(kind, components::ToastKind::Error) {
-            self.set_transient_error_banner(message, cx);
+            self.show_error_banner(self.active_repo_id(), message);
             return;
         }
         self.toast_host.update(cx, |host, cx| {
@@ -1670,23 +1662,16 @@ impl Render for GitCometView {
             self.auth_prompt_key = None;
         }
 
-        let repo_error = self
-            .active_repo_id()
-            .and_then(|repo_id| {
-                self.active_repo()
-                    .and_then(|repo| repo.last_error.as_ref().map(|err| (repo_id, err.clone())))
-            })
-            .map(|(repo_id, err)| (Some(repo_id), err.into()));
         let banner_error =
             if Self::should_render_generic_error_banner(self.state.auth_prompt.is_some()) {
-                self.transient_error_banner
-                    .clone()
-                    .map(|err| (None, err))
-                    .or(repo_error)
+                self.state
+                    .banner_error
+                    .as_ref()
+                    .map(|banner| banner.message.clone())
             } else {
                 None
             };
-        if let Some((dismiss_repo_id, err_text)) = banner_error {
+        if let Some(err_text) = banner_error {
             let (error_command, display_error) =
                 Self::split_error_banner_message(err_text.as_ref());
             self.error_banner_input.update(cx, |input, cx| {
@@ -1702,16 +1687,8 @@ impl Render for GitCometView {
                     px(12.0),
                 ))
                 .style(components::ButtonStyle::Transparent)
-                .on_click(theme, cx, move |this, _e, _w, cx| {
-                    if this.transient_error_banner.take().is_some() {
-                        cx.notify();
-                        return;
-                    }
-
-                    if let Some(repo_id) = dismiss_repo_id {
-                        this.store.dispatch(Msg::DismissRepoError { repo_id });
-                    }
-                    cx.notify();
+                .on_click(theme, cx, move |this, _e, _w, _cx| {
+                    this.store.dispatch(Msg::DismissBannerError);
                 });
 
             let command_block = error_command.as_ref().map(|command| {

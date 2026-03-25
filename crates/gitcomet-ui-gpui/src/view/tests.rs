@@ -29,6 +29,19 @@ fn pump_for(cx: &mut gpui::VisualTestContext, duration: Duration) {
     }
 }
 
+fn wait_until(description: &str, ready: impl Fn() -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        if ready() {
+            return;
+        }
+        if Instant::now() >= deadline {
+            panic!("timed out waiting for {description}");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
 #[test]
 fn toast_total_lifetime_includes_fade_in_and_out() {
     let ttl = Duration::from_secs(6);
@@ -686,4 +699,52 @@ fn auth_prompt_banner_colors_use_accent_palette() {
 
     assert_eq!(bg, with_alpha(theme.colors.accent, 0.15));
     assert_eq!(border, with_alpha(theme.colors.accent, 0.3));
+}
+
+#[gpui::test]
+fn apply_state_snapshot_routes_command_errors_into_store_backed_banner(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_assert = store.clone();
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    let repo_id = RepoId(1);
+    let error = "Fetch failed".to_string();
+    let mut next = AppState::default();
+    let mut repo = RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("repo"),
+        },
+    );
+    repo.last_error = Some(error.clone());
+    repo.command_log
+        .push(gitcomet_state::model::CommandLogEntry {
+            time: std::time::SystemTime::now(),
+            ok: false,
+            command: "git fetch".to_string(),
+            summary: error.clone(),
+            stdout: String::new(),
+            stderr: "fatal: test".to_string(),
+        });
+    next.active_repo = Some(repo_id);
+    next.repos.push(repo);
+    let next = Arc::new(next);
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+        view.update(app, |this, cx| {
+            this.apply_state_snapshot(Arc::clone(&next), cx);
+        });
+    });
+
+    wait_until("store-backed banner error", || {
+        let snapshot = store_for_assert.snapshot();
+        snapshot
+            .banner_error
+            .as_ref()
+            .is_some_and(|banner| banner.repo_id == Some(repo_id) && banner.message == error)
+    });
 }

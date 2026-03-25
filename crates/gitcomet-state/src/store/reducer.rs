@@ -6,7 +6,9 @@ mod external_and_history;
 mod repo_management;
 mod util;
 
-use crate::model::{AppState, AuthPromptState, AuthRetryOperation, PendingCommitRetry, RepoId};
+use crate::model::{
+    AppState, AuthPromptState, AuthRetryOperation, BannerErrorState, PendingCommitRetry, RepoId,
+};
 use crate::msg::{Effect, Msg, RepoCommandKind};
 use gitcomet_core::auth::StagedGitAuth;
 use gitcomet_core::services::GitRepository;
@@ -318,10 +320,21 @@ pub(super) fn reduce(
             active_repo,
         } => repo_management::restore_session(repos, id_alloc, state, open_repos, active_repo),
         Msg::CloseRepo { repo_id } => repo_management::close_repo(repos, state, repo_id),
+        Msg::ShowBannerError { repo_id, message } => {
+            if !message.trim().is_empty() {
+                state.banner_error = Some(BannerErrorState { repo_id, message });
+            }
+            Vec::new()
+        }
+        Msg::DismissBannerError => {
+            state.banner_error = None;
+            Vec::new()
+        }
         Msg::DismissRepoError { repo_id } => {
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
                 repo_state.last_error = None;
             }
+            util::clear_banner_error_for_repo(state, repo_id);
             Vec::new()
         }
         Msg::SubmitAuthPrompt { username, secret } => {

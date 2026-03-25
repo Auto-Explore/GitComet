@@ -1,7 +1,8 @@
 use super::util::{
-    diff_reload_effects, diff_target_is_svg, diff_target_wants_image_preview,
-    format_failure_summary, push_action_log, push_command_log, refresh_full_effects,
-    refresh_primary_effects, selected_conflict_target_path, start_conflict_target_reload,
+    clear_banner_error_for_repo, diff_reload_effects, diff_target_is_svg,
+    diff_target_wants_image_preview, format_failure_summary, push_action_log, push_command_log,
+    refresh_full_effects, refresh_primary_effects, selected_conflict_target_path,
+    start_conflict_target_reload,
 };
 use crate::model::{AppState, Loadable, RepoId, RepoState};
 use crate::msg::{Effect, RepoCommandKind};
@@ -502,6 +503,7 @@ pub(super) fn commit_finished(
     repo_id: RepoId,
     result: std::result::Result<(), Error>,
 ) -> Vec<Effect> {
+    let mut clear_banner = false;
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
     };
@@ -511,6 +513,7 @@ pub(super) fn commit_finished(
     match result {
         Ok(()) => {
             repo_state.last_error = None;
+            clear_banner = true;
             repo_state.diff_state.diff_target = None;
             repo_state.diff_state.diff = Loadable::NotLoaded;
             repo_state.diff_state.diff_file = Loadable::NotLoaded;
@@ -530,6 +533,17 @@ pub(super) fn commit_finished(
             push_action_log(repo_state, false, "Commit".to_string(), summary, Some(&e));
         }
     }
+    if clear_banner {
+        let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+            return Vec::new();
+        };
+        let effects = refresh_primary_effects(repo_state);
+        clear_banner_error_for_repo(state, repo_id);
+        return effects;
+    }
+    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
     refresh_primary_effects(repo_state)
 }
 
@@ -538,6 +552,7 @@ pub(super) fn commit_amend_finished(
     repo_id: RepoId,
     result: std::result::Result<(), Error>,
 ) -> Vec<Effect> {
+    let mut clear_banner = false;
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
     };
@@ -547,6 +562,7 @@ pub(super) fn commit_amend_finished(
     match result {
         Ok(()) => {
             repo_state.last_error = None;
+            clear_banner = true;
             repo_state.diff_state.diff_target = None;
             repo_state.diff_state.diff = Loadable::NotLoaded;
             repo_state.diff_state.diff_file = Loadable::NotLoaded;
@@ -566,6 +582,17 @@ pub(super) fn commit_amend_finished(
             push_action_log(repo_state, false, "Amend".to_string(), summary, Some(&e));
         }
     }
+    if clear_banner {
+        let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+            return Vec::new();
+        };
+        let effects = refresh_primary_effects(repo_state);
+        clear_banner_error_for_repo(state, repo_id);
+        return effects;
+    }
+    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
     refresh_primary_effects(repo_state)
 }
 
@@ -621,6 +648,7 @@ pub(super) fn repo_command_finished(
             | RepoCommandKind::RemoveSubmodule { .. }
     ) && result.is_ok();
     let command_succeeded = result.is_ok();
+    let mut clear_banner = false;
 
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
@@ -661,6 +689,7 @@ pub(super) fn repo_command_finished(
     match result {
         Ok(output) => {
             repo_state.last_error = None;
+            clear_banner = true;
             if matches!(
                 &command,
                 RepoCommandKind::Reset { .. }
@@ -740,6 +769,9 @@ pub(super) fn repo_command_finished(
     }
     let mut effects = refresh_full_effects(repo_state);
     effects.extend(extra_effects);
+    if clear_banner {
+        clear_banner_error_for_repo(state, repo_id);
+    }
     effects
 }
 

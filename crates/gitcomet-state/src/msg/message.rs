@@ -74,6 +74,11 @@ pub enum Msg {
     CloseRepo {
         repo_id: RepoId,
     },
+    ShowBannerError {
+        repo_id: Option<RepoId>,
+        message: String,
+    },
+    DismissBannerError,
     DismissRepoError {
         repo_id: RepoId,
     },

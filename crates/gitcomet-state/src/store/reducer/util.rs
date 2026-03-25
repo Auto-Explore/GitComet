@@ -321,6 +321,16 @@ pub(super) fn push_notification(state: &mut AppState, kind: AppNotificationKind,
     }
 }
 
+pub(super) fn clear_banner_error_for_repo(state: &mut AppState, repo_id: RepoId) {
+    if state
+        .banner_error
+        .as_ref()
+        .is_some_and(|banner| banner.repo_id == Some(repo_id))
+    {
+        state.banner_error = None;
+    }
+}
+
 pub(super) fn push_diagnostic(repo_state: &mut RepoState, kind: DiagnosticKind, message: String) {
     const MAX_DIAGNOSTICS: usize = 200;
     repo_state.diagnostics.push(DiagnosticEntry {

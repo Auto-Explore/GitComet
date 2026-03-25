@@ -1,5 +1,5 @@
 use super::util::{
-    dedup_paths_in_order, diff_reload_effects, format_failure_summary,
+    clear_banner_error_for_repo, dedup_paths_in_order, diff_reload_effects, format_failure_summary,
     handle_session_persist_result, normalize_repo_path, push_diagnostic, push_notification,
     refresh_full_effects, refresh_primary_effects, selected_conflict_target_path,
     start_conflict_target_reload,
@@ -167,6 +167,7 @@ pub(super) fn close_repo(
     state: &mut AppState,
     repo_id: RepoId,
 ) -> Vec<Effect> {
+    clear_banner_error_for_repo(state, repo_id);
     let removed_repo_ix = state.repos.iter().position(|repo| repo.id == repo_id);
     state.repos.retain(|r| r.id != repo_id);
     repos.remove(&repo_id);
@@ -380,6 +381,7 @@ pub(super) fn repo_opened_ok(
     let spec = RepoSpec {
         workdir: normalize_repo_path(spec.workdir),
     };
+    let mut clear_banner = false;
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         repo_state.spec = spec;
         repo_state.set_open(Loadable::Ready(()));
@@ -414,7 +416,14 @@ pub(super) fn repo_opened_ok(
         repo_state.diff_state.diff_file_image = Loadable::NotLoaded;
         repo_state.bump_diff_state_rev();
         repo_state.last_error = None;
+        clear_banner = true;
+    }
 
+    if clear_banner {
+        clear_banner_error_for_repo(state, repo_id);
+    }
+
+    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         return refresh_full_effects(repo_state);
     }
 
@@ -435,6 +444,7 @@ pub(super) fn repo_opened_err(
         error.kind(),
         gitcomet_core::error::ErrorKind::NotARepository
     ) {
+        clear_banner_error_for_repo(state, repo_id);
         push_notification(
             state,
             AppNotificationKind::Error,
@@ -471,16 +481,21 @@ pub(super) fn repo_opened_err(
         return Vec::new();
     }
 
+    let mut clear_banner = false;
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         repo_state.spec = spec;
         repo_state.set_open(Loadable::Error(error.to_string()));
         repo_state.missing_on_disk = is_missing_repo_error(&error);
         if repo_state.missing_on_disk {
             repo_state.last_error = None;
+            clear_banner = true;
         } else {
             repo_state.last_error = Some(error.to_string());
             push_diagnostic(repo_state, DiagnosticKind::Error, error.to_string());
         }
+    }
+    if clear_banner {
+        clear_banner_error_for_repo(state, repo_id);
     }
     Vec::new()
 }

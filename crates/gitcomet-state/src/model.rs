@@ -139,7 +139,14 @@ pub struct AppState {
     pub active_repo: Option<RepoId>,
     pub clone: Option<CloneOpState>,
     pub notifications: Vec<AppNotification>,
+    pub banner_error: Option<BannerErrorState>,
     pub auth_prompt: Option<AuthPromptState>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BannerErrorState {
+    pub repo_id: Option<RepoId>,
+    pub message: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
