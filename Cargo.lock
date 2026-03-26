@@ -2309,6 +2309,7 @@ name = "gitcomet-ui-gpui"
 version = "0.1.7"
 dependencies = [
  "criterion",
+ "fontdb 0.23.0",
  "gitcomet-core",
  "gitcomet-state",
  "gitcomet-win32-window-utils",

@@ -8,6 +8,7 @@ use crate::view::markdown_preview::{
     MarkdownPreviewRow, MarkdownPreviewRowKind,
 };
 use crate::view::perf::{self, ViewPerfRenderLane, ViewPerfSpan};
+use rustc_hash::FxHasher;
 
 impl MainPaneView {
     pub(in super::super) fn render_worktree_preview_rows(
@@ -100,6 +101,7 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
         let theme = this.theme;
+        let editor_font_family = crate::font_preferences::current_editor_font_family(cx);
         let Loadable::Ready(document) = &this.worktree_markdown_preview else {
             return Vec::new();
         };
@@ -118,6 +120,7 @@ impl MainPaneView {
             document.as_ref(),
             range.clone(),
             bar_color,
+            editor_font_family.as_str(),
             window,
             cx,
         );
@@ -128,6 +131,7 @@ impl MainPaneView {
                 theme,
                 bar_color,
                 min_width: this.diff_horizontal_min_width.max(viewport_width),
+                editor_font_family,
                 view: Some(cx.entity().clone()),
                 text_region: DiffTextRegion::Inline,
             },
@@ -141,6 +145,7 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
         let theme = this.theme;
+        let editor_font_family = crate::font_preferences::current_editor_font_family(cx);
         let Loadable::Ready(preview) = &this.file_markdown_preview else {
             return Vec::new();
         };
@@ -158,6 +163,7 @@ impl MainPaneView {
             &preview.old,
             range.clone(),
             None,
+            editor_font_family.as_str(),
             window,
             cx,
         );
@@ -172,6 +178,7 @@ impl MainPaneView {
                 theme,
                 bar_color: None,
                 min_width: this.diff_horizontal_min_width.max(viewport_width),
+                editor_font_family,
                 view: Some(cx.entity().clone()),
                 text_region: region,
             },
@@ -185,6 +192,7 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
         let theme = this.theme;
+        let editor_font_family = crate::font_preferences::current_editor_font_family(cx);
         let Loadable::Ready(preview) = &this.file_markdown_preview else {
             return Vec::new();
         };
@@ -202,6 +210,7 @@ impl MainPaneView {
             &preview.inline,
             range.clone(),
             None,
+            editor_font_family.as_str(),
             window,
             cx,
         );
@@ -212,6 +221,7 @@ impl MainPaneView {
                 theme,
                 bar_color: None,
                 min_width: this.diff_horizontal_min_width.max(viewport_width),
+                editor_font_family,
                 view: Some(cx.entity().clone()),
                 text_region: DiffTextRegion::Inline,
             },
@@ -225,6 +235,7 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
         let theme = this.theme;
+        let editor_font_family = crate::font_preferences::current_editor_font_family(cx);
         let Loadable::Ready(preview) = &this.file_markdown_preview else {
             return Vec::new();
         };
@@ -242,6 +253,7 @@ impl MainPaneView {
             &preview.new,
             range.clone(),
             None,
+            editor_font_family.as_str(),
             window,
             cx,
         );
@@ -252,6 +264,7 @@ impl MainPaneView {
                 theme,
                 bar_color: None,
                 min_width: this.diff_horizontal_min_width.max(viewport_width),
+                editor_font_family,
                 view: Some(cx.entity().clone()),
                 text_region: DiffTextRegion::SplitRight,
             },
@@ -263,12 +276,19 @@ impl MainPaneView {
         document: &MarkdownPreviewDocument,
         range: Range<usize>,
         bar_color: Option<gpui::Rgba>,
+        editor_font_family: &str,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
         let mut min_width = self.diff_horizontal_min_width;
         for row in range.filter_map(|ix| document.rows.get(ix)) {
-            let required = markdown_preview_row_required_width(window, self.theme, row, bar_color);
+            let required = markdown_preview_row_required_width(
+                window,
+                self.theme,
+                row,
+                bar_color,
+                editor_font_family,
+            );
             if required > min_width {
                 min_width = required;
             }
@@ -303,7 +323,7 @@ struct MarkdownPreviewRowTypography {
     font_size: f32,
     line_height: f32,
     font_weight: Option<FontWeight>,
-    font_family: Option<&'static str>,
+    font_family: Option<String>,
     text_color: gpui::Rgba,
 }
 
@@ -323,6 +343,7 @@ pub(super) struct MarkdownPreviewRenderContext {
     pub(super) theme: AppTheme,
     pub(super) bar_color: Option<gpui::Rgba>,
     pub(super) min_width: Pixels,
+    pub(super) editor_font_family: String,
     pub(super) view: Option<Entity<MainPaneView>>,
     pub(super) text_region: DiffTextRegion,
 }
@@ -368,7 +389,8 @@ fn markdown_preview_row_element(
     }
 
     let row_layout = markdown_preview_row_layout(row);
-    let typography = markdown_preview_row_typography(theme, row);
+    let typography =
+        markdown_preview_row_typography(theme, row, context.editor_font_family.as_str());
     let (display, highlights) = markdown_preview_display_and_highlights(theme, row);
     let horizontal_padding = markdown_preview_row_horizontal_padding(row);
     let row_text = row.text.clone();
@@ -392,7 +414,7 @@ fn markdown_preview_row_element(
     if let Some(font_weight) = typography.font_weight {
         content = content.font_weight(font_weight);
     }
-    if let Some(font_family) = typography.font_family {
+    if let Some(font_family) = typography.font_family.clone() {
         content = content.font_family(font_family);
     }
     if let Some(view) = context.view.clone() {
@@ -663,13 +685,24 @@ fn markdown_preview_row_required_width(
     theme: AppTheme,
     row: &MarkdownPreviewRow,
     bar_color: Option<gpui::Rgba>,
+    editor_font_family: &str,
 ) -> Pixels {
     if matches!(row.kind, MarkdownPreviewRowKind::Spacer) {
         return px(0.0);
     }
 
-    let base_width = row.measured_width_px.get_or_init(|| {
-        let typography = markdown_preview_row_typography(theme, row);
+    let typography = markdown_preview_row_typography(theme, row, editor_font_family);
+    let default_font_family = window.text_style().font_family.clone();
+    let resolved_font_family = typography
+        .font_family
+        .clone()
+        .unwrap_or_else(|| default_font_family.to_string());
+    let cache_key = markdown_preview_row_width_cache_key(
+        typography.font_size,
+        typography.font_weight.unwrap_or(FontWeight::NORMAL),
+        resolved_font_family.as_str(),
+    );
+    let base_width = row.measured_width_px.get_or_init(cache_key, || {
         let base_font_weight = typography.font_weight.unwrap_or(FontWeight::NORMAL);
         let text_width = if matches!(row.kind, MarkdownPreviewRowKind::ThematicBreak) {
             px(0.0)
@@ -680,7 +713,7 @@ fn markdown_preview_row_required_width(
                 row.text.clone(),
                 typography.font_size,
                 base_font_weight,
-                typography.font_family,
+                typography.font_family.as_deref(),
                 &highlights,
             )
         };
@@ -744,6 +777,20 @@ fn markdown_preview_row_required_width(
     width
 }
 
+fn markdown_preview_row_width_cache_key(
+    font_size: f32,
+    font_weight: FontWeight,
+    font_family: &str,
+) -> u64 {
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = FxHasher::default();
+    font_size.to_bits().hash(&mut hasher);
+    font_weight.hash(&mut hasher);
+    font_family.hash(&mut hasher);
+    hasher.finish()
+}
+
 fn markdown_preview_width_affecting_highlights(
     theme: AppTheme,
     row: &MarkdownPreviewRow,
@@ -763,7 +810,7 @@ fn markdown_preview_shape_text_width(
     text: impl Into<SharedString>,
     font_size_px: f32,
     font_weight: FontWeight,
-    font_family: Option<&'static str>,
+    font_family: Option<&str>,
     highlights: &[(Range<usize>, gpui::HighlightStyle)],
 ) -> Pixels {
     let text: SharedString = text.into();
@@ -774,7 +821,7 @@ fn markdown_preview_shape_text_width(
     let mut style = window.text_style();
     style.font_weight = font_weight;
     if let Some(font_family) = font_family {
-        style.font_family = font_family.into();
+        style.font_family = font_family.to_string().into();
     }
 
     let runs = if highlights.is_empty() {
@@ -1061,6 +1108,7 @@ fn markdown_preview_row_layout(row: &MarkdownPreviewRow) -> MarkdownPreviewRowLa
 fn markdown_preview_row_typography(
     theme: AppTheme,
     row: &MarkdownPreviewRow,
+    editor_font_family: &str,
 ) -> MarkdownPreviewRowTypography {
     let text_color = markdown_preview_row_text_color(theme, row);
     match row.kind {
@@ -1124,21 +1172,21 @@ fn markdown_preview_row_typography(
             font_size: 12.0,
             line_height: 18.0,
             font_weight: None,
-            font_family: Some(UI_MONOSPACE_FONT_FAMILY),
+            font_family: Some(editor_font_family.to_string()),
             text_color,
         },
         MarkdownPreviewRowKind::TableRow { is_header } => MarkdownPreviewRowTypography {
             font_size: 12.0,
             line_height: 18.0,
             font_weight: is_header.then_some(FontWeight::BOLD),
-            font_family: Some(UI_MONOSPACE_FONT_FAMILY),
+            font_family: Some(editor_font_family.to_string()),
             text_color,
         },
         MarkdownPreviewRowKind::PlainFallback => MarkdownPreviewRowTypography {
             font_size: 12.0,
             line_height: 18.0,
             font_weight: None,
-            font_family: Some(UI_MONOSPACE_FONT_FAMILY),
+            font_family: Some(editor_font_family.to_string()),
             text_color,
         },
         _ => MarkdownPreviewRowTypography {
@@ -1651,11 +1699,9 @@ mod tests {
         markdown_preview_row_horizontal_padding, markdown_preview_row_layout,
         markdown_preview_row_marker, markdown_preview_row_typography,
     };
+    use crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY;
     use crate::view::markdown_preview::MarkdownInlineSpan;
-    use crate::view::{
-        AppTheme, DateTimeFormat, Timezone, UI_MONOSPACE_FONT_FAMILY, format_datetime,
-        format_datetime_utc,
-    };
+    use crate::view::{AppTheme, DateTimeFormat, Timezone, format_datetime, format_datetime_utc};
     use gpui::{FontWeight, SharedString};
     use std::sync::Arc;
     use std::time::{Duration, UNIX_EPOCH};
@@ -1802,10 +1848,14 @@ mod tests {
             ..paragraph.clone()
         };
 
-        let body_typography = markdown_preview_row_typography(theme, &paragraph);
-        let h1_typography = markdown_preview_row_typography(theme, &h1);
-        let h2_typography = markdown_preview_row_typography(theme, &h2);
-        let h6_typography = markdown_preview_row_typography(theme, &h6);
+        let body_typography =
+            markdown_preview_row_typography(theme, &paragraph, EDITOR_MONOSPACE_FONT_FAMILY);
+        let h1_typography =
+            markdown_preview_row_typography(theme, &h1, EDITOR_MONOSPACE_FONT_FAMILY);
+        let h2_typography =
+            markdown_preview_row_typography(theme, &h2, EDITOR_MONOSPACE_FONT_FAMILY);
+        let h6_typography =
+            markdown_preview_row_typography(theme, &h6, EDITOR_MONOSPACE_FONT_FAMILY);
 
         assert!(h1_typography.font_size > h2_typography.font_size);
         assert!(h2_typography.font_size > body_typography.font_size);
@@ -1821,8 +1871,10 @@ mod tests {
         let paragraph = markdown_row(MarkdownPreviewRowKind::Paragraph);
         let list_item = markdown_row(MarkdownPreviewRowKind::ListItem { number: None });
 
-        let paragraph_typography = markdown_preview_row_typography(theme, &paragraph);
-        let list_typography = markdown_preview_row_typography(theme, &list_item);
+        let paragraph_typography =
+            markdown_preview_row_typography(theme, &paragraph, EDITOR_MONOSPACE_FONT_FAMILY);
+        let list_typography =
+            markdown_preview_row_typography(theme, &list_item, EDITOR_MONOSPACE_FONT_FAMILY);
         let paragraph_layout = markdown_preview_row_layout(&paragraph);
         let list_layout = markdown_preview_row_layout(&list_item);
 
@@ -1838,7 +1890,7 @@ mod tests {
         let theme = AppTheme::zed_one_light();
         let row = markdown_row(MarkdownPreviewRowKind::DetailsSummary);
 
-        let typography = markdown_preview_row_typography(theme, &row);
+        let typography = markdown_preview_row_typography(theme, &row, EDITOR_MONOSPACE_FONT_FAMILY);
 
         assert_eq!(typography.font_weight, Some(FontWeight::BOLD));
         assert_eq!(
@@ -2098,14 +2150,19 @@ mod tests {
         let header = markdown_row(MarkdownPreviewRowKind::TableRow { is_header: true });
         let body = markdown_row(MarkdownPreviewRowKind::TableRow { is_header: false });
 
-        let header_typography = markdown_preview_row_typography(theme, &header);
-        let body_typography = markdown_preview_row_typography(theme, &body);
+        let header_typography =
+            markdown_preview_row_typography(theme, &header, EDITOR_MONOSPACE_FONT_FAMILY);
+        let body_typography =
+            markdown_preview_row_typography(theme, &body, EDITOR_MONOSPACE_FONT_FAMILY);
 
         assert_eq!(
             header_typography.font_family,
-            Some(UI_MONOSPACE_FONT_FAMILY)
+            Some(EDITOR_MONOSPACE_FONT_FAMILY.to_string())
         );
-        assert_eq!(body_typography.font_family, Some(UI_MONOSPACE_FONT_FAMILY));
+        assert_eq!(
+            body_typography.font_family,
+            Some(EDITOR_MONOSPACE_FONT_FAMILY.to_string())
+        );
         assert_eq!(header_typography.font_weight, Some(FontWeight::BOLD));
         assert_eq!(body_typography.font_weight, None);
         assert_eq!(header_typography.font_size, body_typography.font_size);

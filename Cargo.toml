@@ -41,6 +41,7 @@ gitcomet-ui-gpui = { path = "crates/gitcomet-ui-gpui", default-features = false 
 # External crates
 clap = { version = "4.6.0", features = ["derive"] }
 criterion = "0.8.2"
+fontdb = "0.23.0"
 gix = { version = "0.81.0", default-features = false, features = ["max-performance-safe", "comfort", "basic", "auto-chain-error", "status", "blame", "sha1"] }
 gpui = { version = "0.2.2" }
 lru = "0.16"

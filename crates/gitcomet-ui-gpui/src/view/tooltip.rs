@@ -30,6 +30,7 @@ impl GitCometView {
                             this.details_pane.read(cx).saved_status_section_heights();
                         let repo_sidebar_collapsed_items =
                             this.sidebar_pane.read(cx).saved_sidebar_collapsed_items();
+                        let font_preferences = crate::font_preferences::current(cx);
 
                         let settings = session::UiSettings {
                             window_width,
@@ -40,6 +41,8 @@ impl GitCometView {
                                 .then_some(details_width as u32),
                             repo_sidebar_collapsed_items: Some(repo_sidebar_collapsed_items),
                             theme_mode: Some(this.theme_mode.key().to_string()),
+                            ui_font_family: Some(font_preferences.ui_font_family),
+                            editor_font_family: Some(font_preferences.editor_font_family),
                             date_time_format: Some(this.date_time_format.key().to_string()),
                             timezone: Some(this.timezone.key()),
                             show_timezone: Some(this.show_timezone),

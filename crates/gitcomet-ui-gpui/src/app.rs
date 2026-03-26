@@ -227,6 +227,9 @@ fn run_windowed_app(backend: Arc<dyn GitBackend>, launch: WindowLaunchConfig) {
     }
 
     application.run(move |cx: &mut App| {
+        if let Err(err) = crate::bundled_fonts::register(cx) {
+            eprintln!("Failed to register bundled fonts: {err:#}");
+        }
         bind_text_input_keys(cx);
         if quit_when_all_windows_closed {
             cx.on_window_closed(|cx| {
@@ -1490,6 +1493,60 @@ mod tests {
         cx.simulate_keystrokes("secondary-,");
         cx.run_until_parked();
         assert_eq!(cx.update(|_window, app| app.windows().len()), 2);
+    }
+
+    #[gpui::test]
+    fn settings_shortcut_reuses_existing_window_and_activates_it(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let _visual_guard = lock_visual_test();
+        let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
+        let (store, events) = AppStore::new(Arc::clone(&backend));
+        let (_view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        let main_window = cx.update(|window, app| {
+            install_app_shortcuts_for_test(app, Arc::clone(&backend));
+            let _ = window.draw(app);
+            window.activate_window();
+            window.window_handle()
+        });
+        let main_window_id = main_window.window_id();
+
+        cx.simulate_keystrokes("secondary-,");
+        cx.run_until_parked();
+
+        let settings_window_id = cx.cx.update(|app| {
+            assert_eq!(app.windows().len(), 2);
+            app.windows()
+                .into_iter()
+                .map(|window| window.window_id())
+                .find(|window_id| *window_id != main_window_id)
+                .expect("expected the settings window to be open")
+        });
+
+        cx.cx.update(|app| {
+            let _ = main_window.update(app, |_, window, _cx| {
+                window.activate_window();
+            });
+            assert_eq!(
+                app.active_window().map(|window| window.window_id()),
+                Some(main_window_id),
+                "expected the main window to become active before reopening settings"
+            );
+        });
+
+        cx.simulate_keystrokes("secondary-,");
+        cx.run_until_parked();
+
+        cx.cx.update(|app| {
+            assert_eq!(app.windows().len(), 2);
+            assert_eq!(
+                app.active_window().map(|window| window.window_id()),
+                Some(settings_window_id),
+                "expected reopening settings to activate the existing settings window"
+            );
+        });
     }
 
     #[gpui::test]

@@ -42,6 +42,7 @@ impl MainPaneView {
     pub(in crate::view) fn diff_view(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
         let theme = self.theme;
         let repo_id = self.active_repo_id();
+        let editor_font_family = crate::font_preferences::current_editor_font_family(cx);
 
         // Intentionally no outer panel header; keep diff controls in the inner header.
 
@@ -727,6 +728,7 @@ impl MainPaneView {
                         div()
                             .id("worktree_preview_error_scroll")
                             .bg(theme.colors.window_bg)
+                            .font_family(editor_font_family.clone())
                             .flex()
                             .flex_col()
                             .flex_1()
@@ -764,6 +766,7 @@ impl MainPaneView {
                                 .h_full()
                                 .min_h(px(0.0))
                                 .bg(theme.colors.window_bg)
+                                .font_family(editor_font_family.clone())
                                 .child(
                                     div()
                                         .h_full()
@@ -1634,6 +1637,7 @@ impl MainPaneView {
                                             .flex_1()
                                             .min_h(px(0.0))
                                             .bg(theme.colors.window_bg)
+                                            .font_family(editor_font_family.clone())
                                             .flex()
                                             .child(
                                                 div()
@@ -1762,6 +1766,7 @@ impl MainPaneView {
                                             .flex_1()
                                             .min_h(px(0.0))
                                             .bg(theme.colors.window_bg)
+                                            .font_family(editor_font_family.clone())
                                             .flex()
                                             .child(
                                                 div()
@@ -2001,7 +2006,7 @@ impl MainPaneView {
                                                                 .h_full()
                                                                 .min_h(px(0.0))
                                                                 .p_2()
-                                                                .font_family("monospace")
+                                                                .font_family(editor_font_family.clone())
                                                                 .when(
                                                                     !self
                                                                         .conflict_resolved_output_is_streamed(),
@@ -2186,6 +2191,7 @@ impl MainPaneView {
                                     .h_full()
                                     .min_h(px(0.0))
                                     .bg(theme.colors.window_bg)
+                                    .font_family(editor_font_family.clone())
                                     .child(columns_header)
                                     .child(
                                         div()
@@ -2248,6 +2254,7 @@ impl MainPaneView {
                         });
                         div()
                             .id("diff_error_scroll")
+                            .font_family(editor_font_family.clone())
                             .flex()
                             .flex_col()
                             .flex_1()
@@ -2280,6 +2287,7 @@ impl MainPaneView {
                                 div()
                                     .id("diff_word_wrap_scroll")
                                     .bg(theme.colors.window_bg)
+                                    .font_family(editor_font_family.clone())
                                     .flex()
                                     .flex_col()
                                     .flex_1()
@@ -2327,6 +2335,7 @@ impl MainPaneView {
                                                 .h_full()
                                                 .min_h(px(0.0))
                                                 .bg(theme.colors.window_bg)
+                                                .font_family(editor_font_family.clone())
                                                 .child(
                                                     div()
                                                         .h_full()
@@ -2558,6 +2567,7 @@ impl MainPaneView {
                                                 .flex()
                                                 .flex_col()
                                                 .bg(theme.colors.window_bg)
+                                                .font_family(editor_font_family.clone())
                                                 .child(
                                                     div()
                                                         .pr(scrollbar_gutter)

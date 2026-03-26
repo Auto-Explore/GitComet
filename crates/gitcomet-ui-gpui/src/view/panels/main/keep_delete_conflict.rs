@@ -100,6 +100,7 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         let spec = keep_delete_conflict_spec(conflict_kind);
+        let editor_font_family = crate::font_preferences::current_editor_font_family(cx);
 
         let keep_available = conflict_side_has_payload(file, spec.keep_side);
         let surviving_text: Option<&str> = conflict_side_text(file, spec.keep_side);
@@ -261,7 +262,7 @@ impl MainPaneView {
                                 div()
                                     .mt_1()
                                     .text_sm()
-                                    .font_family("monospace")
+                                    .font_family(editor_font_family.clone())
                                     .text_color(theme.colors.text_muted)
                                     .whitespace_nowrap()
                                     .child("(file deleted)"),
@@ -278,7 +279,7 @@ impl MainPaneView {
                                 div()
                                     .mt_1()
                                     .text_sm()
-                                    .font_family("monospace")
+                                    .font_family(editor_font_family)
                                     .text_color(theme.colors.text)
                                     .whitespace_nowrap()
                                     .child(surviving_text),

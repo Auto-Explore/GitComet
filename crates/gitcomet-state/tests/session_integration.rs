@@ -292,6 +292,8 @@ fn persist_ui_settings_to_path_updates_optional_fields_and_requires_both_window_
             details_width: Some(84),
             repo_sidebar_collapsed_items: None,
             theme_mode: Some("light".to_string()),
+            ui_font_family: Some(".SystemUIFont".to_string()),
+            editor_font_family: Some("JetBrains Mono".to_string()),
             date_time_format: Some("ymd_hm_utc".to_string()),
             timezone: Some("UTC".to_string()),
             show_timezone: Some(true),
@@ -312,6 +314,8 @@ fn persist_ui_settings_to_path_updates_optional_fields_and_requires_both_window_
     assert_eq!(loaded.sidebar_width, Some(42));
     assert_eq!(loaded.details_width, Some(84));
     assert_eq!(loaded.theme_mode.as_deref(), Some("light"));
+    assert_eq!(loaded.ui_font_family.as_deref(), Some(".SystemUIFont"));
+    assert_eq!(loaded.editor_font_family.as_deref(), Some("JetBrains Mono"));
     assert_eq!(loaded.date_time_format.as_deref(), Some("ymd_hm_utc"));
     assert_eq!(loaded.timezone.as_deref(), Some("UTC"));
     assert_eq!(loaded.show_timezone, Some(true));

@@ -1,6 +1,8 @@
 mod app;
 mod assets;
+mod bundled_fonts;
 pub mod focused_diff;
+mod font_preferences;
 mod kit;
 mod launch_guard;
 mod theme;

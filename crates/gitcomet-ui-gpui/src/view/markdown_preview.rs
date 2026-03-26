@@ -1,6 +1,6 @@
 use gpui::SharedString;
 use std::ops::Range;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex};
 
 /// Maximum source size (bytes) for a single markdown preview document.
 pub(super) const MAX_PREVIEW_SOURCE_BYTES: usize = 1_024 * 1_024; // 1 MiB
@@ -169,11 +169,23 @@ struct MarkdownPreviewRowDecoration {
 }
 
 #[derive(Clone, Debug, Default)]
-pub(super) struct MarkdownPreviewRowWidthCache(OnceLock<u32>);
+pub(super) struct MarkdownPreviewRowWidthCache(Arc<Mutex<Option<(u64, u32)>>>);
 
 impl MarkdownPreviewRowWidthCache {
-    pub(super) fn get_or_init(&self, compute: impl FnOnce() -> u32) -> u32 {
-        *self.0.get_or_init(compute)
+    pub(super) fn get_or_init(&self, key: u64, compute: impl FnOnce() -> u32) -> u32 {
+        let mut cached = match self.0.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if let Some((cached_key, value)) = *cached
+            && cached_key == key
+        {
+            return value;
+        }
+
+        let value = compute();
+        *cached = Some((key, value));
+        value
     }
 }
 
@@ -2547,7 +2559,7 @@ mod tests {
         let cached = parse("Paragraph\n").rows.remove(0);
         let fresh = parse("Paragraph\n").rows.remove(0);
 
-        cached.measured_width_px.get_or_init(|| 123);
+        cached.measured_width_px.get_or_init(1, || 123);
 
         assert_eq!(cached, fresh);
     }

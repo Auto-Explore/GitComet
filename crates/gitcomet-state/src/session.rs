@@ -19,6 +19,8 @@ pub struct UiSession {
     pub sidebar_width: Option<u32>,
     pub details_width: Option<u32>,
     pub theme_mode: Option<String>,
+    pub ui_font_family: Option<String>,
+    pub editor_font_family: Option<String>,
     pub date_time_format: Option<String>,
     pub timezone: Option<String>,
     pub show_timezone: Option<bool>,
@@ -74,6 +76,8 @@ struct UiSessionFileV2 {
     sidebar_width: Option<u32>,
     details_width: Option<u32>,
     theme_mode: Option<String>,
+    ui_font_family: Option<String>,
+    editor_font_family: Option<String>,
     date_time_format: Option<String>,
     timezone: Option<String>,
     show_timezone: Option<bool>,
@@ -126,6 +130,8 @@ pub fn load_from_path(path: &Path) -> UiSession {
         sidebar_width: file.sidebar_width,
         details_width: file.details_width,
         theme_mode: file.theme_mode,
+        ui_font_family: file.ui_font_family,
+        editor_font_family: file.editor_font_family,
         date_time_format: file.date_time_format,
         timezone: file.timezone,
         show_timezone: file.show_timezone,
@@ -249,6 +255,8 @@ pub struct UiSettings {
     pub details_width: Option<u32>,
     pub repo_sidebar_collapsed_items: Option<BTreeMap<PathBuf, BTreeSet<String>>>,
     pub theme_mode: Option<String>,
+    pub ui_font_family: Option<String>,
+    pub editor_font_family: Option<String>,
     pub date_time_format: Option<String>,
     pub timezone: Option<String>,
     pub show_timezone: Option<bool>,
@@ -286,6 +294,12 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
     }
     if let Some(theme_mode) = settings.theme_mode {
         file.theme_mode = Some(theme_mode);
+    }
+    if let Some(font_family) = settings.ui_font_family {
+        file.ui_font_family = Some(font_family);
+    }
+    if let Some(font_family) = settings.editor_font_family {
+        file.editor_font_family = Some(font_family);
     }
     if let Some(fmt) = settings.date_time_format {
         file.date_time_format = Some(fmt);
@@ -1154,6 +1168,8 @@ mod tests {
                 details_width: None,
                 repo_sidebar_collapsed_items: Some(repo_sidebar_collapsed_items.clone()),
                 theme_mode: None,
+                ui_font_family: None,
+                editor_font_family: None,
                 date_time_format: None,
                 timezone: None,
                 show_timezone: None,
@@ -1207,6 +1223,8 @@ mod tests {
                 details_width: None,
                 repo_sidebar_collapsed_items: None,
                 theme_mode: None,
+                ui_font_family: None,
+                editor_font_family: None,
                 date_time_format: Some("ymd_hm_utc".to_string()),
                 timezone: None,
                 show_timezone: None,
@@ -1257,6 +1275,8 @@ mod tests {
                 details_width: None,
                 repo_sidebar_collapsed_items: None,
                 theme_mode: None,
+                ui_font_family: None,
+                editor_font_family: None,
                 date_time_format: None,
                 timezone: None,
                 show_timezone: Some(false),
@@ -1307,6 +1327,8 @@ mod tests {
                 details_width: None,
                 repo_sidebar_collapsed_items: None,
                 theme_mode: None,
+                ui_font_family: None,
+                editor_font_family: None,
                 date_time_format: None,
                 timezone: None,
                 show_timezone: None,
@@ -1360,6 +1382,8 @@ mod tests {
                 details_width: None,
                 repo_sidebar_collapsed_items: None,
                 theme_mode: None,
+                ui_font_family: None,
+                editor_font_family: None,
                 date_time_format: None,
                 timezone: None,
                 show_timezone: None,
@@ -1411,6 +1435,8 @@ mod tests {
                 details_width: None,
                 repo_sidebar_collapsed_items: None,
                 theme_mode: Some("dark".to_string()),
+                ui_font_family: None,
+                editor_font_family: None,
                 date_time_format: None,
                 timezone: None,
                 show_timezone: None,

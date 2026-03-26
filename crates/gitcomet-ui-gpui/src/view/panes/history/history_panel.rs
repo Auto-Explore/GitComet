@@ -606,7 +606,6 @@ impl HistoryView {
                     .flex()
                     .justify_center()
                     .px(cell_pad)
-                    .font_family(".SystemUIFont")
                     .whitespace_nowrap()
                     .overflow_hidden()
                     .child("GRAPH"),

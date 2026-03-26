@@ -1,11 +1,18 @@
 use super::*;
 use gitcomet_core::process::configure_background_command;
 use gpui::{Stateful, TitlebarOptions, WindowBounds, WindowDecorations, WindowOptions};
+use std::sync::Arc;
 
 const SETTINGS_WINDOW_MIN_WIDTH_PX: f32 = 620.0;
 const SETTINGS_WINDOW_MIN_HEIGHT_PX: f32 = 460.0;
 const SETTINGS_WINDOW_DEFAULT_WIDTH_PX: f32 = 720.0;
 const SETTINGS_WINDOW_DEFAULT_HEIGHT_PX: f32 = 620.0;
+const SETTINGS_DROPDOWN_LIST_MAX_HEIGHT_PX: f32 = 224.0;
+const SETTINGS_DROPDOWN_COMPACT_ROW_HEIGHT_PX: f32 = 28.0;
+const SETTINGS_DROPDOWN_COMPACT_LIST_EXTRA_HEIGHT_PX: f32 = 20.0;
+const SETTINGS_DROPDOWN_DETAIL_ROW_HEIGHT_PX: f32 = 42.0;
+const SETTINGS_DROPDOWN_DETAIL_LIST_EXTRA_HEIGHT_PX: f32 = 24.0;
+const SETTINGS_DROPDOWN_DENSE_DETAIL_ROW_HEIGHT_PX: f32 = 28.0;
 const SETTINGS_WINDOW_TITLE: &str = "Settings: GitComet";
 const SETTINGS_TRAFFIC_LIGHTS_SAFE_INSET: Pixels = px(78.0);
 const MIN_GIT_MAJOR: u32 = 2;
@@ -14,9 +21,25 @@ const GITHUB_URL: &str = "https://github.com/Auto-Explore/GitComet";
 const LICENSE_URL: &str = "https://github.com/Auto-Explore/GitComet/blob/main/LICENSE-AGPL-3.0";
 const LICENSE_NAME: &str = "AGPL-3.0";
 
+const THEME_MODE_OPTIONS: &[ThemeMode] = &[ThemeMode::Automatic, ThemeMode::Light, ThemeMode::Dark];
+const CHANGE_TRACKING_OPTIONS: &[(&str, ChangeTrackingView, &str)] = &[
+    (
+        "settings_window_change_tracking_combined",
+        ChangeTrackingView::Combined,
+        "Keep untracked files inside the Unstaged section",
+    ),
+    (
+        "settings_window_change_tracking_split_untracked",
+        ChangeTrackingView::SplitUntracked,
+        "Show an Untracked block above Unstaged",
+    ),
+];
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SettingsSection {
     Theme,
+    UiFont,
+    EditorFont,
     DateFormat,
     Timezone,
     ChangeTracking,
@@ -58,6 +81,17 @@ struct GitVersion {
 pub(crate) struct SettingsWindowView {
     theme_mode: ThemeMode,
     theme: AppTheme,
+    ui_font_family: String,
+    editor_font_family: String,
+    ui_font_options: Arc<[String]>,
+    editor_font_options: Arc<[String]>,
+    settings_window_scroll: ScrollHandle,
+    theme_scroll: UniformListScrollHandle,
+    ui_font_scroll: UniformListScrollHandle,
+    editor_font_scroll: UniformListScrollHandle,
+    date_format_scroll: UniformListScrollHandle,
+    timezone_scroll: UniformListScrollHandle,
+    change_tracking_scroll: UniformListScrollHandle,
     date_time_format: DateTimeFormat,
     timezone: Timezone,
     show_timezone: bool,
@@ -80,6 +114,7 @@ pub(crate) fn open_settings_window(cx: &mut App) {
         let _ = window.update(cx, |_view, window, _cx| {
             window.activate_window();
         });
+        cx.activate(true);
         return;
     }
 
@@ -142,11 +177,107 @@ fn settings_window_frame(
     }
 }
 
+fn uniform_list_vertical_wheel_delta(event: &gpui::ScrollWheelEvent, window: &Window) -> Pixels {
+    let pixel_delta = event.delta.pixel_delta(window.line_height());
+    if !pixel_delta.y.is_zero() {
+        pixel_delta.y
+    } else {
+        pixel_delta.x
+    }
+}
+
+fn normalize_scroll_offset(raw_offset: Pixels, max_offset: Pixels) -> Pixels {
+    if max_offset <= px(0.0) {
+        return px(0.0);
+    }
+
+    if raw_offset < px(0.0) {
+        (-raw_offset).max(px(0.0)).min(max_offset)
+    } else {
+        raw_offset.max(px(0.0)).min(max_offset)
+    }
+}
+
+fn uniform_list_vertical_scroll_metrics(
+    handle: &UniformListScrollHandle,
+) -> (Pixels, Pixels, Pixels) {
+    let state = handle.0.borrow();
+    let max_offset = state
+        .last_item_size
+        .map(|size| (size.contents.height - size.item.height).max(px(0.0)))
+        .unwrap_or_else(|| state.base_handle.max_offset().height.max(px(0.0)));
+    let raw_offset = state.base_handle.offset().y;
+    let scroll_offset = normalize_scroll_offset(raw_offset, max_offset);
+    (raw_offset, scroll_offset, max_offset)
+}
+
+fn uniform_list_should_stop_scroll_propagation(
+    handle: &UniformListScrollHandle,
+    event: &gpui::ScrollWheelEvent,
+    window: &Window,
+) -> bool {
+    let delta_y = uniform_list_vertical_wheel_delta(event, window);
+    if delta_y.is_zero() {
+        return false;
+    }
+
+    let (raw_offset_after, _scroll_offset_after, max_offset) =
+        uniform_list_vertical_scroll_metrics(handle);
+    if max_offset <= px(0.0) {
+        return false;
+    }
+
+    // This runs after the list's built-in wheel scroll listener, so reconstruct the pre-scroll
+    // position before deciding whether to keep the event inside the dropdown.
+    let raw_offset_before = raw_offset_after - delta_y;
+    let scroll_offset_before = normalize_scroll_offset(raw_offset_before, max_offset);
+    if delta_y < px(0.0) {
+        scroll_offset_before < max_offset
+    } else {
+        scroll_offset_before > px(0.0)
+    }
+}
+
+fn mix_color(a: gpui::Rgba, b: gpui::Rgba, t: f32) -> gpui::Rgba {
+    let t = t.clamp(0.0, 1.0);
+    gpui::Rgba {
+        r: a.r + (b.r - a.r) * t,
+        g: a.g + (b.g - a.g) * t,
+        b: a.b + (b.b - a.b) * t,
+        a: a.a + (b.a - a.a) * t,
+    }
+}
+
+fn settings_dropdown_background(theme: AppTheme) -> gpui::Rgba {
+    if theme.is_dark {
+        mix_color(
+            theme.colors.surface_bg_elevated,
+            theme.colors.window_bg,
+            0.58,
+        )
+    } else {
+        mix_color(theme.colors.surface_bg_elevated, theme.colors.border, 0.55)
+    }
+}
+
+fn settings_dropdown_height(
+    item_count: usize,
+    estimated_row_height_px: f32,
+    extra_height_px: f32,
+) -> Pixels {
+    px(
+        (((item_count.max(1) as f32) * estimated_row_height_px) + extra_height_px)
+            .min(SETTINGS_DROPDOWN_LIST_MAX_HEIGHT_PX),
+    )
+}
+
 impl SettingsWindowView {
     fn new(window: &mut Window, cx: &mut gpui::Context<Self>) -> Self {
         window.set_window_title(SETTINGS_WINDOW_TITLE);
 
         let ui_session = session::load();
+        let font_preferences =
+            crate::font_preferences::current_or_initialize_from_session(window, &ui_session, cx);
         let theme_mode = ui_session
             .theme_mode
             .as_deref()
@@ -192,6 +323,17 @@ impl SettingsWindowView {
         Self {
             theme_mode,
             theme,
+            ui_font_family: font_preferences.ui_font_family,
+            editor_font_family: font_preferences.editor_font_family,
+            ui_font_options: crate::font_preferences::ui_font_options(window),
+            editor_font_options: crate::font_preferences::editor_font_options(window),
+            settings_window_scroll: ScrollHandle::default(),
+            theme_scroll: UniformListScrollHandle::default(),
+            ui_font_scroll: UniformListScrollHandle::default(),
+            editor_font_scroll: UniformListScrollHandle::default(),
+            date_format_scroll: UniformListScrollHandle::default(),
+            timezone_scroll: UniformListScrollHandle::default(),
+            change_tracking_scroll: UniformListScrollHandle::default(),
             date_time_format,
             timezone,
             show_timezone,
@@ -223,6 +365,8 @@ impl SettingsWindowView {
             details_width: None,
             repo_sidebar_collapsed_items: None,
             theme_mode: Some(self.theme_mode.key().to_string()),
+            ui_font_family: Some(self.ui_font_family.clone()),
+            editor_font_family: Some(self.editor_font_family.clone()),
             date_time_format: Some(self.date_time_format.key().to_string()),
             timezone: Some(self.timezone.key()),
             show_timezone: Some(self.show_timezone),
@@ -282,6 +426,37 @@ impl SettingsWindowView {
         .detach();
     }
 
+    fn font_option_detail(&self, family: &str) -> Option<SharedString> {
+        match family {
+            crate::font_preferences::UI_SYSTEM_FONT_FAMILY => {
+                Some("Use GitComet's best match for the operating system UI font stack".into())
+            }
+            _ => None,
+        }
+    }
+
+    fn font_options_hint(&self, family: &str) -> SharedString {
+        self.font_option_detail(family)
+            .unwrap_or_else(|| "Choose from installed system fonts".into())
+    }
+
+    fn font_option_row_for_family(
+        &self,
+        id_prefix: &'static str,
+        ix: usize,
+        family: &str,
+        selected: bool,
+        theme: AppTheme,
+    ) -> Stateful<gpui::Div> {
+        self.option_row(
+            format!("{id_prefix}_{ix}"),
+            crate::font_preferences::display_label(family),
+            None,
+            selected,
+            theme,
+        )
+    }
+
     fn set_theme_mode(
         &mut self,
         mode: ThemeMode,
@@ -300,6 +475,44 @@ impl SettingsWindowView {
             view.popover_host.update(cx, |host, cx| {
                 host.set_theme_mode(mode, root_window.appearance(), cx);
             });
+        });
+        cx.notify();
+    }
+
+    fn set_ui_font_family(&mut self, family: String, cx: &mut gpui::Context<Self>) {
+        if self.ui_font_family == family {
+            return;
+        }
+
+        self.ui_font_family = family;
+        self.expanded_section = None;
+        crate::font_preferences::set_current(
+            cx,
+            self.ui_font_family.clone(),
+            self.editor_font_family.clone(),
+        );
+        self.persist_preferences(cx);
+        self.update_main_windows(cx, move |view, _window, cx| {
+            view.notify_font_preferences_changed(cx);
+        });
+        cx.notify();
+    }
+
+    fn set_editor_font_family(&mut self, family: String, cx: &mut gpui::Context<Self>) {
+        if self.editor_font_family == family {
+            return;
+        }
+
+        self.editor_font_family = family;
+        self.expanded_section = None;
+        crate::font_preferences::set_current(
+            cx,
+            self.ui_font_family.clone(),
+            self.editor_font_family.clone(),
+        );
+        self.persist_preferences(cx);
+        self.update_main_windows(cx, move |view, _window, cx| {
+            view.notify_font_preferences_changed(cx);
         });
         cx.notify();
     }
@@ -439,9 +652,161 @@ impl SettingsWindowView {
                             div()
                                 .text_xs()
                                 .text_color(theme.colors.text_muted)
+                                .line_clamp(1)
+                                .whitespace_nowrap()
+                                .overflow_hidden()
                                 .child(detail),
                         )
                     }),
+            )
+    }
+
+    fn dense_detail_option_row(
+        &self,
+        id: impl Into<SharedString>,
+        label: impl Into<SharedString>,
+        detail: impl Into<SharedString>,
+        selected: bool,
+        theme: AppTheme,
+    ) -> Stateful<gpui::Div> {
+        let id: SharedString = id.into();
+        let debug_id = id.clone();
+        let text_color = if selected {
+            theme.colors.text
+        } else {
+            theme.colors.text_muted
+        };
+        let selected_bg = with_alpha(theme.colors.accent, if theme.is_dark { 0.16 } else { 0.10 });
+        let hover_bg = with_alpha(theme.colors.text, if theme.is_dark { 0.08 } else { 0.05 });
+        let active_bg = with_alpha(theme.colors.text, if theme.is_dark { 0.12 } else { 0.08 });
+
+        div()
+            .id(id)
+            .debug_selector(move || debug_id.to_string())
+            .w_full()
+            .min_h(px(SETTINGS_DROPDOWN_DENSE_DETAIL_ROW_HEIGHT_PX))
+            .px_2()
+            .py(px(2.0))
+            .flex()
+            .items_center()
+            .gap_2()
+            .rounded(px(theme.radii.row))
+            .cursor(CursorStyle::PointingHand)
+            .bg(if selected {
+                selected_bg
+            } else {
+                gpui::rgba(0x00000000)
+            })
+            .hover(move |s| {
+                if selected {
+                    s.bg(selected_bg)
+                } else {
+                    s.bg(hover_bg)
+                }
+            })
+            .active(move |s| {
+                if selected {
+                    s.bg(selected_bg)
+                } else {
+                    s.bg(active_bg)
+                }
+            })
+            .child(
+                div()
+                    .w(px(16.0))
+                    .text_sm()
+                    .font_family(UI_MONOSPACE_FONT_FAMILY)
+                    .text_color(if selected {
+                        theme.colors.accent
+                    } else {
+                        theme.colors.text_muted
+                    })
+                    .child(if selected { ">" } else { " " }),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(text_color)
+                            .line_clamp(1)
+                            .whitespace_nowrap()
+                            .overflow_hidden()
+                            .child(label.into()),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .text_xs()
+                            .text_color(theme.colors.text_muted)
+                            .line_clamp(1)
+                            .whitespace_nowrap()
+                            .overflow_hidden()
+                            .child(detail.into()),
+                    ),
+            )
+    }
+
+    fn empty_dropdown_list(&self, message: &'static str, theme: AppTheme) -> AnyElement {
+        div()
+            .h_full()
+            .min_h(px(0.0))
+            .px_2()
+            .py_1()
+            .text_sm()
+            .text_color(theme.colors.text_muted)
+            .child(message)
+            .into_any_element()
+    }
+
+    fn dropdown_list_container(
+        &self,
+        container_id: &'static str,
+        scrollbar_id: &'static str,
+        scroll: UniformListScrollHandle,
+        item_count: usize,
+        estimated_row_height_px: f32,
+        extra_height_px: f32,
+        list: AnyElement,
+        theme: AppTheme,
+    ) -> Stateful<gpui::Div> {
+        let height = settings_dropdown_height(item_count, estimated_row_height_px, extra_height_px);
+
+        div()
+            .id(container_id)
+            .debug_selector(move || container_id.to_string())
+            .relative()
+            .h(height)
+            .min_h(height)
+            .rounded(px(theme.radii.row))
+            .border_1()
+            .border_color(if theme.is_dark {
+                with_alpha(theme.colors.border, 0.98)
+            } else {
+                theme.colors.border
+            })
+            .bg(settings_dropdown_background(theme))
+            .overflow_hidden()
+            .child(
+                div()
+                    .h_full()
+                    .min_h(px(0.0))
+                    .pr(components::Scrollbar::visible_gutter(
+                        scroll.clone(),
+                        components::ScrollbarAxis::Vertical,
+                    ))
+                    .child(list),
+            )
+            .child(
+                components::Scrollbar::new(scrollbar_id, scroll)
+                    .always_visible()
+                    .render(theme),
             )
     }
 
@@ -642,6 +1007,185 @@ impl SettingsWindowView {
             .map(|(ix, row)| {
                 this.open_source_license_row(ix, row, theme)
                     .into_any_element()
+            })
+            .collect()
+    }
+
+    fn render_ui_font_option_rows(
+        this: &mut Self,
+        range: Range<usize>,
+        _window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> Vec<AnyElement> {
+        let theme = this.theme;
+        range
+            .filter_map(|ix| {
+                this.ui_font_options
+                    .get(ix)
+                    .cloned()
+                    .map(|family| (ix, family))
+            })
+            .map(|(ix, family)| {
+                this.font_option_row_for_family(
+                    "settings_window_ui_font",
+                    ix,
+                    family.as_str(),
+                    this.ui_font_family == family,
+                    theme,
+                )
+                .on_click(cx.listener(move |this, _e: &ClickEvent, _window, cx| {
+                    this.set_ui_font_family(family.clone(), cx);
+                }))
+                .into_any_element()
+            })
+            .collect()
+    }
+
+    fn render_theme_option_rows(
+        this: &mut Self,
+        range: Range<usize>,
+        _window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> Vec<AnyElement> {
+        let theme = this.theme;
+        range
+            .filter_map(|ix| THEME_MODE_OPTIONS.get(ix).copied().map(|mode| (ix, mode)))
+            .map(|(_ix, mode)| {
+                this.option_row(
+                    match mode {
+                        ThemeMode::Automatic => "settings_window_theme_auto",
+                        ThemeMode::Light => "settings_window_theme_light",
+                        ThemeMode::Dark => "settings_window_theme_dark",
+                    },
+                    mode.label(),
+                    None,
+                    this.theme_mode == mode,
+                    theme,
+                )
+                .on_click(cx.listener(move |this, _e: &ClickEvent, window, cx| {
+                    this.set_theme_mode(mode, window, cx);
+                }))
+                .into_any_element()
+            })
+            .collect()
+    }
+
+    fn render_editor_font_option_rows(
+        this: &mut Self,
+        range: Range<usize>,
+        _window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> Vec<AnyElement> {
+        let theme = this.theme;
+        range
+            .filter_map(|ix| {
+                this.editor_font_options
+                    .get(ix)
+                    .cloned()
+                    .map(|family| (ix, family))
+            })
+            .map(|(ix, family)| {
+                this.font_option_row_for_family(
+                    "settings_window_editor_font",
+                    ix,
+                    family.as_str(),
+                    this.editor_font_family == family,
+                    theme,
+                )
+                .on_click(cx.listener(move |this, _e: &ClickEvent, _window, cx| {
+                    this.set_editor_font_family(family.clone(), cx);
+                }))
+                .into_any_element()
+            })
+            .collect()
+    }
+
+    fn render_date_format_option_rows(
+        this: &mut Self,
+        range: Range<usize>,
+        _window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> Vec<AnyElement> {
+        let theme = this.theme;
+        range
+            .filter_map(|ix| {
+                DateTimeFormat::all()
+                    .get(ix)
+                    .copied()
+                    .map(|format| (ix, format))
+            })
+            .map(|(_ix, format)| {
+                this.option_row(
+                    match format {
+                        DateTimeFormat::YmdHm => "settings_window_date_format_ymd_hm",
+                        DateTimeFormat::YmdHms => "settings_window_date_format_ymd_hms",
+                        DateTimeFormat::DmyHm => "settings_window_date_format_dmy_hm",
+                        DateTimeFormat::MdyHm => "settings_window_date_format_mdy_hm",
+                    },
+                    format.label(),
+                    None,
+                    this.date_time_format == format,
+                    theme,
+                )
+                .on_click(cx.listener(move |this, _e: &ClickEvent, _window, cx| {
+                    this.set_date_time_format(format, cx);
+                }))
+                .into_any_element()
+            })
+            .collect()
+    }
+
+    fn render_timezone_option_rows(
+        this: &mut Self,
+        range: Range<usize>,
+        _window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> Vec<AnyElement> {
+        let theme = this.theme;
+        range
+            .filter_map(|ix| {
+                Timezone::all()
+                    .get(ix)
+                    .copied()
+                    .map(|timezone| (ix, timezone))
+            })
+            .map(|(_ix, timezone)| {
+                this.dense_detail_option_row(
+                    format!("settings_window_timezone_{}", timezone.key()),
+                    timezone.label(),
+                    timezone.cities(),
+                    this.timezone == timezone,
+                    theme,
+                )
+                .on_click(cx.listener(move |this, _e: &ClickEvent, _window, cx| {
+                    this.set_timezone(timezone, cx);
+                }))
+                .into_any_element()
+            })
+            .collect()
+    }
+
+    fn render_change_tracking_option_rows(
+        this: &mut Self,
+        range: Range<usize>,
+        _window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> Vec<AnyElement> {
+        let theme = this.theme;
+        range
+            .filter_map(|ix| CHANGE_TRACKING_OPTIONS.get(ix).copied())
+            .map(|(id, option, detail)| {
+                this.option_row(
+                    id,
+                    option.label(),
+                    Some(detail.into()),
+                    this.change_tracking_view == option,
+                    theme,
+                )
+                .on_click(cx.listener(move |this, _e: &ClickEvent, _window, cx| {
+                    this.set_change_tracking_view(option, cx);
+                }))
+                .into_any_element()
             })
             .collect()
     }
@@ -862,6 +1406,30 @@ impl Render for SettingsWindowView {
                         this.toggle_section(SettingsSection::DateFormat, cx);
                     }));
 
+                let ui_font_row = self
+                    .summary_row(
+                        "settings_window_ui_font",
+                        "UI Font",
+                        crate::font_preferences::display_label(&self.ui_font_family).into(),
+                        self.expanded_section == Some(SettingsSection::UiFont),
+                        theme,
+                    )
+                    .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                        this.toggle_section(SettingsSection::UiFont, cx);
+                    }));
+
+                let editor_font_row = self
+                    .summary_row(
+                        "settings_window_editor_font",
+                        "Editor Font",
+                        crate::font_preferences::display_label(&self.editor_font_family).into(),
+                        self.expanded_section == Some(SettingsSection::EditorFont),
+                        theme,
+                    )
+                    .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                        this.toggle_section(SettingsSection::EditorFont, cx);
+                    }));
+
                 let timezone_row = self
                     .summary_row(
                         "settings_window_timezone",
@@ -902,71 +1470,187 @@ impl Render for SettingsWindowView {
                     .child(theme_row);
 
                 if self.expanded_section == Some(SettingsSection::Theme) {
-                    for option in [ThemeMode::Automatic, ThemeMode::Light, ThemeMode::Dark] {
-                        general_card = general_card.child(
-                            self.option_row(
-                                match option {
-                                    ThemeMode::Automatic => "settings_window_theme_auto",
-                                    ThemeMode::Light => "settings_window_theme_light",
-                                    ThemeMode::Dark => "settings_window_theme_dark",
-                                },
-                                option.label(),
-                                None,
-                                self.theme_mode == option,
-                                theme,
-                            )
-                            .on_click(cx.listener(
-                                move |this, _e: &ClickEvent, window, cx| {
-                                    this.set_theme_mode(option, window, cx);
-                                },
-                            )),
-                        );
-                    }
+                    let list = uniform_list(
+                        "settings_window_theme_list",
+                        THEME_MODE_OPTIONS.len(),
+                        cx.processor(Self::render_theme_option_rows),
+                    )
+                    .h_full()
+                    .min_h(px(0.0))
+                    .track_scroll(self.theme_scroll.clone())
+                    .on_scroll_wheel({
+                        let scroll = self.theme_scroll.clone();
+                        move |event, window, cx| {
+                            if uniform_list_should_stop_scroll_propagation(&scroll, event, window) {
+                                cx.stop_propagation();
+                            }
+                        }
+                    })
+                    .into_any_element();
+                    general_card = general_card.child(self.dropdown_list_container(
+                        "settings_window_theme_list_container",
+                        "settings_window_theme_scrollbar",
+                        self.theme_scroll.clone(),
+                        THEME_MODE_OPTIONS.len(),
+                        SETTINGS_DROPDOWN_COMPACT_ROW_HEIGHT_PX,
+                        SETTINGS_DROPDOWN_COMPACT_LIST_EXTRA_HEIGHT_PX,
+                        list,
+                        theme,
+                    ));
+                }
+
+                general_card = general_card.child(ui_font_row);
+                if self.expanded_section == Some(SettingsSection::UiFont) {
+                    let list = if self.ui_font_options.is_empty() {
+                        self.empty_dropdown_list("No fonts available.", theme)
+                    } else {
+                        uniform_list(
+                            "settings_window_ui_font_list",
+                            self.ui_font_options.len(),
+                            cx.processor(Self::render_ui_font_option_rows),
+                        )
+                        .h_full()
+                        .min_h(px(0.0))
+                        .track_scroll(self.ui_font_scroll.clone())
+                        .on_scroll_wheel({
+                            let scroll = self.ui_font_scroll.clone();
+                            move |event, window, cx| {
+                                if uniform_list_should_stop_scroll_propagation(
+                                    &scroll, event, window,
+                                ) {
+                                    cx.stop_propagation();
+                                }
+                            }
+                        })
+                        .into_any_element()
+                    };
+                    general_card = general_card
+                        .child(
+                            div()
+                                .px_2()
+                                .pb_1()
+                                .text_xs()
+                                .text_color(theme.colors.text_muted)
+                                .child(self.font_options_hint(self.ui_font_family.as_str())),
+                        )
+                        .child(self.dropdown_list_container(
+                            "settings_window_ui_font_list_container",
+                            "settings_window_ui_font_scrollbar",
+                            self.ui_font_scroll.clone(),
+                            self.ui_font_options.len(),
+                            SETTINGS_DROPDOWN_COMPACT_ROW_HEIGHT_PX,
+                            0.0,
+                            list,
+                            theme,
+                        ));
+                }
+
+                general_card = general_card.child(editor_font_row);
+                if self.expanded_section == Some(SettingsSection::EditorFont) {
+                    let list = if self.editor_font_options.is_empty() {
+                        self.empty_dropdown_list("No fonts available.", theme)
+                    } else {
+                        uniform_list(
+                            "settings_window_editor_font_list",
+                            self.editor_font_options.len(),
+                            cx.processor(Self::render_editor_font_option_rows),
+                        )
+                        .h_full()
+                        .min_h(px(0.0))
+                        .track_scroll(self.editor_font_scroll.clone())
+                        .on_scroll_wheel({
+                            let scroll = self.editor_font_scroll.clone();
+                            move |event, window, cx| {
+                                if uniform_list_should_stop_scroll_propagation(
+                                    &scroll, event, window,
+                                ) {
+                                    cx.stop_propagation();
+                                }
+                            }
+                        })
+                        .into_any_element()
+                    };
+                    general_card = general_card
+                        .child(
+                            div()
+                                .px_2()
+                                .pb_1()
+                                .text_xs()
+                                .text_color(theme.colors.text_muted)
+                                .child(self.font_options_hint(self.editor_font_family.as_str())),
+                        )
+                        .child(self.dropdown_list_container(
+                            "settings_window_editor_font_list_container",
+                            "settings_window_editor_font_scrollbar",
+                            self.editor_font_scroll.clone(),
+                            self.editor_font_options.len(),
+                            SETTINGS_DROPDOWN_COMPACT_ROW_HEIGHT_PX,
+                            0.0,
+                            list,
+                            theme,
+                        ));
                 }
 
                 general_card = general_card.child(date_format_row);
                 if self.expanded_section == Some(SettingsSection::DateFormat) {
-                    for format in DateTimeFormat::all().iter().copied() {
-                        general_card = general_card.child(
-                            self.option_row(
-                                match format {
-                                    DateTimeFormat::YmdHm => "settings_window_date_format_ymd_hm",
-                                    DateTimeFormat::YmdHms => "settings_window_date_format_ymd_hms",
-                                    DateTimeFormat::DmyHm => "settings_window_date_format_dmy_hm",
-                                    DateTimeFormat::MdyHm => "settings_window_date_format_mdy_hm",
-                                },
-                                format.label(),
-                                None,
-                                self.date_time_format == format,
-                                theme,
-                            )
-                            .on_click(cx.listener(
-                                move |this, _e: &ClickEvent, _window, cx| {
-                                    this.set_date_time_format(format, cx);
-                                },
-                            )),
-                        );
-                    }
+                    let list = uniform_list(
+                        "settings_window_date_format_list",
+                        DateTimeFormat::all().len(),
+                        cx.processor(Self::render_date_format_option_rows),
+                    )
+                    .h_full()
+                    .min_h(px(0.0))
+                    .track_scroll(self.date_format_scroll.clone())
+                    .on_scroll_wheel({
+                        let scroll = self.date_format_scroll.clone();
+                        move |event, window, cx| {
+                            if uniform_list_should_stop_scroll_propagation(&scroll, event, window) {
+                                cx.stop_propagation();
+                            }
+                        }
+                    })
+                    .into_any_element();
+                    general_card = general_card.child(self.dropdown_list_container(
+                        "settings_window_date_format_list_container",
+                        "settings_window_date_format_scrollbar",
+                        self.date_format_scroll.clone(),
+                        DateTimeFormat::all().len(),
+                        SETTINGS_DROPDOWN_COMPACT_ROW_HEIGHT_PX,
+                        SETTINGS_DROPDOWN_COMPACT_LIST_EXTRA_HEIGHT_PX,
+                        list,
+                        theme,
+                    ));
                 }
 
                 general_card = general_card.child(timezone_row);
                 if self.expanded_section == Some(SettingsSection::Timezone) {
-                    for timezone in Timezone::all().iter().copied() {
-                        general_card = general_card.child(
-                            self.option_row(
-                                format!("settings_window_timezone_{}", timezone.key()),
-                                timezone.label(),
-                                Some(timezone.cities().into()),
-                                self.timezone == timezone,
-                                theme,
-                            )
-                            .on_click(cx.listener(
-                                move |this, _e: &ClickEvent, _window, cx| {
-                                    this.set_timezone(timezone, cx);
-                                },
-                            )),
-                        );
-                    }
+                    let list = uniform_list(
+                        "settings_window_timezone_list",
+                        Timezone::all().len(),
+                        cx.processor(Self::render_timezone_option_rows),
+                    )
+                    .h_full()
+                    .min_h(px(0.0))
+                    .track_scroll(self.timezone_scroll.clone())
+                    .on_scroll_wheel({
+                        let scroll = self.timezone_scroll.clone();
+                        move |event, window, cx| {
+                            if uniform_list_should_stop_scroll_propagation(&scroll, event, window) {
+                                cx.stop_propagation();
+                            }
+                        }
+                    })
+                    .into_any_element();
+                    general_card = general_card.child(self.dropdown_list_container(
+                        "settings_window_timezone_list_container",
+                        "settings_window_timezone_scrollbar",
+                        self.timezone_scroll.clone(),
+                        Timezone::all().len(),
+                        SETTINGS_DROPDOWN_DENSE_DETAIL_ROW_HEIGHT_PX,
+                        0.0,
+                        list,
+                        theme,
+                    ));
                 }
 
                 general_card = general_card.child(show_timezone_row);
@@ -980,33 +1664,34 @@ impl Render for SettingsWindowView {
                     .child(change_tracking_row);
 
                 if self.expanded_section == Some(SettingsSection::ChangeTracking) {
-                    for (id, option, detail) in [
-                        (
-                            "settings_window_change_tracking_combined",
-                            ChangeTrackingView::Combined,
-                            "Keep untracked files inside the Unstaged section",
-                        ),
-                        (
-                            "settings_window_change_tracking_split_untracked",
-                            ChangeTrackingView::SplitUntracked,
-                            "Show an Untracked block above Unstaged",
-                        ),
-                    ] {
-                        change_tracking_card = change_tracking_card.child(
-                            self.option_row(
-                                id,
-                                option.label(),
-                                Some(detail.into()),
-                                self.change_tracking_view == option,
-                                theme,
-                            )
-                            .on_click(cx.listener(
-                                move |this, _e: &ClickEvent, _window, cx| {
-                                    this.set_change_tracking_view(option, cx);
-                                },
-                            )),
-                        );
-                    }
+                    let list = uniform_list(
+                        "settings_window_change_tracking_list",
+                        CHANGE_TRACKING_OPTIONS.len(),
+                        cx.processor(Self::render_change_tracking_option_rows),
+                    )
+                    .h_full()
+                    .min_h(px(0.0))
+                    .track_scroll(self.change_tracking_scroll.clone())
+                    .on_scroll_wheel({
+                        let scroll = self.change_tracking_scroll.clone();
+                        move |event, window, cx| {
+                            if uniform_list_should_stop_scroll_propagation(&scroll, event, window) {
+                                cx.stop_propagation();
+                            }
+                        }
+                    })
+                    .into_any_element();
+                    change_tracking_card =
+                        change_tracking_card.child(self.dropdown_list_container(
+                            "settings_window_change_tracking_list_container",
+                            "settings_window_change_tracking_scrollbar",
+                            self.change_tracking_scroll.clone(),
+                            CHANGE_TRACKING_OPTIONS.len(),
+                            SETTINGS_DROPDOWN_DETAIL_ROW_HEIGHT_PX,
+                            SETTINGS_DROPDOWN_DETAIL_LIST_EXTRA_HEIGHT_PX,
+                            list,
+                            theme,
+                        ));
                 }
 
                 let min_git_version = format!("{MIN_GIT_MAJOR}.{MIN_GIT_MINOR}");
@@ -1127,6 +1812,7 @@ impl Render for SettingsWindowView {
                     .id("settings_window_scroll")
                     .flex_1()
                     .overflow_y_scroll()
+                    .track_scroll(&self.settings_window_scroll)
                     .flex()
                     .flex_col()
                     .gap_3()
@@ -1281,6 +1967,9 @@ impl Render for SettingsWindowView {
             .flex()
             .flex_col()
             .bg(theme.colors.window_bg)
+            .font_family(crate::font_preferences::applied_ui_font_family(
+                &self.ui_font_family,
+            ))
             .text_color(theme.colors.text)
             .child(header)
             .child(content);
@@ -1509,7 +2198,7 @@ mod tests {
     use crate::test_support::lock_visual_test;
     use gitcomet_core::error::{Error, ErrorKind};
     use gitcomet_core::services::{GitBackend, GitRepository, Result};
-    use gpui::Modifiers;
+    use gpui::{Modifiers, ScrollDelta, ScrollWheelEvent};
     use std::ops::Deref;
     use std::path::Path;
 
@@ -1607,6 +2296,27 @@ mod tests {
         }
     }
 
+    #[test]
+    fn settings_dropdown_background_is_darker_than_card_surface() {
+        fn brightness(color: gpui::Rgba) -> f32 {
+            color.r + color.g + color.b
+        }
+
+        let dark = AppTheme::zed_ayu_dark();
+        assert!(
+            brightness(settings_dropdown_background(dark))
+                < brightness(dark.colors.surface_bg_elevated),
+            "dark dropdown surface should be darker than the card surface"
+        );
+
+        let light = AppTheme::zed_one_light();
+        assert!(
+            brightness(settings_dropdown_background(light))
+                < brightness(light.colors.surface_bg_elevated),
+            "light dropdown surface should still read darker than the card surface"
+        );
+    }
+
     #[gpui::test]
     fn settings_window_sets_platform_title(cx: &mut gpui::TestAppContext) {
         let _visual_guard = lock_visual_test();
@@ -1635,6 +2345,135 @@ mod tests {
             Some(SETTINGS_WINDOW_TITLE),
             "expected settings window to expose the native OS title"
         );
+    }
+
+    #[gpui::test]
+    fn expanded_settings_sections_render_scrollable_list_containers(cx: &mut gpui::TestAppContext) {
+        let _visual_guard = lock_visual_test();
+        let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+        let (_main_view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+            open_settings_window(app);
+        });
+        cx.run_until_parked();
+
+        let settings_window = cx.update(|_window, app| {
+            app.windows()
+                .into_iter()
+                .find_map(|window| window.downcast::<SettingsWindowView>())
+                .expect("settings window should be open")
+        });
+
+        let mut settings_cx = gpui::VisualTestContext::from_window(*settings_window.deref(), cx);
+        settings_cx.run_until_parked();
+        settings_cx.simulate_resize(size(px(SETTINGS_WINDOW_DEFAULT_WIDTH_PX), px(1200.0)));
+        settings_cx.run_until_parked();
+
+        for (section, selector) in [
+            (
+                SettingsSection::Theme,
+                "settings_window_theme_list_container",
+            ),
+            (
+                SettingsSection::DateFormat,
+                "settings_window_date_format_list_container",
+            ),
+            (
+                SettingsSection::UiFont,
+                "settings_window_ui_font_list_container",
+            ),
+            (
+                SettingsSection::EditorFont,
+                "settings_window_editor_font_list_container",
+            ),
+            (
+                SettingsSection::Timezone,
+                "settings_window_timezone_list_container",
+            ),
+            (
+                SettingsSection::ChangeTracking,
+                "settings_window_change_tracking_list_container",
+            ),
+        ] {
+            let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
+                settings.expanded_section = Some(section);
+                cx.notify();
+            });
+            settings_cx.run_until_parked();
+            settings_cx.update(|window, app| {
+                let _ = window.draw(app);
+            });
+
+            assert!(
+                settings_cx.debug_bounds(selector).is_some(),
+                "expected `{selector}` to be rendered for the expanded section"
+            );
+        }
+    }
+
+    #[gpui::test]
+    fn settings_dropdowns_fit_without_inner_scroll(cx: &mut gpui::TestAppContext) {
+        let _visual_guard = lock_visual_test();
+        let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+        let (_main_view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+            open_settings_window(app);
+        });
+        cx.run_until_parked();
+
+        let settings_window = cx.update(|_window, app| {
+            app.windows()
+                .into_iter()
+                .find_map(|window| window.downcast::<SettingsWindowView>())
+                .expect("settings window should be open")
+        });
+
+        let mut settings_cx = gpui::VisualTestContext::from_window(*settings_window.deref(), cx);
+        settings_cx.run_until_parked();
+        settings_cx.simulate_resize(size(px(SETTINGS_WINDOW_DEFAULT_WIDTH_PX), px(1200.0)));
+        settings_cx.run_until_parked();
+
+        for (section, label) in [
+            (SettingsSection::Theme, "Theme"),
+            (SettingsSection::DateFormat, "Date time format"),
+            (SettingsSection::ChangeTracking, "Untracked files"),
+        ] {
+            let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
+                settings.expanded_section = Some(section);
+                cx.notify();
+            });
+            settings_cx.run_until_parked();
+            settings_cx.update(|window, app| {
+                let _ = window.draw(app);
+            });
+
+            let max_offset = settings_window
+                .update(&mut settings_cx, |settings, _window, _cx| match section {
+                    SettingsSection::Theme => {
+                        uniform_list_vertical_scroll_metrics(&settings.theme_scroll).2
+                    }
+                    SettingsSection::DateFormat => {
+                        uniform_list_vertical_scroll_metrics(&settings.date_format_scroll).2
+                    }
+                    SettingsSection::ChangeTracking => {
+                        uniform_list_vertical_scroll_metrics(&settings.change_tracking_scroll).2
+                    }
+                    _ => px(0.0),
+                })
+                .expect("settings window should remain readable");
+
+            assert_eq!(
+                max_offset,
+                px(0.0),
+                "expected the {label} dropdown to fit without inner scroll"
+            );
+        }
     }
 
     #[gpui::test]
@@ -1969,5 +2808,161 @@ mod tests {
                 next_view
             );
         });
+    }
+
+    #[gpui::test]
+    fn ui_font_dropdown_wheel_scrolls_inner_list_before_outer_window(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let _visual_guard = lock_visual_test();
+        let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+        let (_main_view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+            open_settings_window(app);
+        });
+        cx.run_until_parked();
+
+        let settings_window = cx.update(|_window, app| {
+            app.windows()
+                .into_iter()
+                .find_map(|window| window.downcast::<SettingsWindowView>())
+                .expect("settings window should be open")
+        });
+
+        let synthetic_fonts: Arc<[String]> = (0..200)
+            .map(|ix| format!("Test UI Font {ix:03}"))
+            .collect::<Vec<_>>()
+            .into();
+
+        cx.update(|_window, app| {
+            let _ = settings_window.update(app, |settings, _window, cx| {
+                settings.ui_font_options = synthetic_fonts.clone();
+                settings.ui_font_family = synthetic_fonts[0].clone();
+                settings.expanded_section = Some(SettingsSection::UiFont);
+                settings.settings_window_scroll = ScrollHandle::default();
+                settings.ui_font_scroll = UniformListScrollHandle::default();
+                cx.notify();
+            });
+        });
+
+        let mut settings_cx = gpui::VisualTestContext::from_window(*settings_window.deref(), cx);
+        settings_cx.run_until_parked();
+        settings_cx.simulate_resize(size(px(SETTINGS_WINDOW_DEFAULT_WIDTH_PX), px(460.0)));
+        settings_cx.run_until_parked();
+        settings_cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+
+        let list_bounds = settings_cx
+            .debug_bounds("settings_window_ui_font_list_container")
+            .expect("expected UI font list bounds");
+
+        let (outer_before, inner_before, outer_max, inner_max) = settings_window
+            .update(&mut settings_cx, |settings, _window, _cx| {
+                (
+                    absolute_scroll_y(&settings.settings_window_scroll),
+                    uniform_list_vertical_scroll_metrics(&settings.ui_font_scroll).1,
+                    settings
+                        .settings_window_scroll
+                        .max_offset()
+                        .height
+                        .max(px(0.0)),
+                    uniform_list_vertical_scroll_metrics(&settings.ui_font_scroll).2,
+                )
+            })
+            .expect("settings window should remain readable");
+        assert!(
+            outer_max > px(0.0),
+            "expected the settings page to be scrollable during the test"
+        );
+        assert!(
+            inner_max > px(0.0),
+            "expected the UI font list to be scrollable during the test"
+        );
+
+        settings_cx.simulate_mouse_move(list_bounds.center(), None, Modifiers::default());
+        settings_cx.simulate_event(ScrollWheelEvent {
+            position: list_bounds.center(),
+            delta: ScrollDelta::Pixels(point(px(0.0), px(-120.0))),
+            ..Default::default()
+        });
+        settings_cx.run_until_parked();
+
+        settings_cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        let (outer_after_inner_scroll, inner_after_inner_scroll) = settings_window
+            .update(&mut settings_cx, |settings, _window, _cx| {
+                (
+                    absolute_scroll_y(&settings.settings_window_scroll),
+                    uniform_list_vertical_scroll_metrics(&settings.ui_font_scroll).1,
+                )
+            })
+            .expect("settings window should remain readable");
+
+        assert!(
+            inner_after_inner_scroll > inner_before + px(0.5),
+            "expected the UI font list to consume wheel scroll first"
+        );
+        assert!(
+            (outer_after_inner_scroll - outer_before).abs() <= px(0.5),
+            "expected the outer settings page to stay still while the UI font list can still scroll"
+        );
+
+        settings_cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
+            let (raw_offset, _scroll_offset, max_offset) =
+                uniform_list_vertical_scroll_metrics(&settings.ui_font_scroll);
+            let current_x = settings.ui_font_scroll.0.borrow().base_handle.offset().x;
+            let target_y = if raw_offset > px(0.0) {
+                max_offset
+            } else {
+                -max_offset
+            };
+            settings
+                .ui_font_scroll
+                .0
+                .borrow()
+                .base_handle
+                .set_offset(point(current_x, target_y));
+            cx.notify();
+        });
+        settings_cx.run_until_parked();
+
+        settings_cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        let outer_before_boundary_handoff = settings_window
+            .update(&mut settings_cx, |settings, _window, _cx| {
+                absolute_scroll_y(&settings.settings_window_scroll)
+            })
+            .expect("settings window should remain readable");
+
+        settings_cx.simulate_mouse_move(list_bounds.center(), None, Modifiers::default());
+        settings_cx.simulate_event(ScrollWheelEvent {
+            position: list_bounds.center(),
+            delta: ScrollDelta::Pixels(point(px(0.0), px(-120.0))),
+            ..Default::default()
+        });
+        settings_cx.run_until_parked();
+
+        settings_cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        let outer_after_boundary_handoff = settings_window
+            .update(&mut settings_cx, |settings, _window, _cx| {
+                absolute_scroll_y(&settings.settings_window_scroll)
+            })
+            .expect("settings window should remain readable");
+
+        assert!(
+            outer_after_boundary_handoff > outer_before_boundary_handoff + px(0.5),
+            "expected wheel scrolling to bubble to the outer settings page once the UI font list reaches its boundary"
+        );
     }
 }

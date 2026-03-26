@@ -1038,6 +1038,14 @@ impl MainPaneView {
         cx.notify();
     }
 
+    pub(in crate::view) fn invalidate_font_metrics(&mut self, cx: &mut gpui::Context<Self>) {
+        self.diff_horizontal_min_width = px(0.0);
+        self.diff_text_hitboxes.clear();
+        self.diff_text_layout_cache_epoch = self.diff_text_layout_cache_epoch.wrapping_add(1);
+        self.diff_text_layout_cache.clear();
+        cx.notify();
+    }
+
     pub(in crate::view) fn conflict_resolved_output_is_streamed(&self) -> bool {
         self.conflict_resolved_output_projection.is_some()
     }
