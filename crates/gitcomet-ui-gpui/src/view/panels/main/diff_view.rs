@@ -856,9 +856,6 @@ impl MainPaneView {
                                 self.render_decision_conflict_resolver(theme, repo_id, path, &file, cx)
                             }
                             RenderableConflictFile::File(file) => {
-                            let base = file.base.clone().unwrap_or_default();
-                            let local = file.ours.clone().unwrap_or_default();
-                            let remote = file.theirs.clone().unwrap_or_default();
                             let has_current = file.current.is_some();
 
                             let view_mode = self.conflict_resolver.view_mode;
@@ -1554,9 +1551,7 @@ impl MainPaneView {
                             } else if is_rendered_preview_active {
                                 match preview_kind {
                                     Some(RenderedPreviewKind::Svg) => self
-                                        .render_conflict_resolver_svg_preview(
-                                            theme, &base, &local, &remote,
-                                        ),
+                                        .render_conflict_resolver_svg_preview(theme, cx),
                                     Some(RenderedPreviewKind::Markdown) => self
                                         .render_conflict_resolver_markdown_preview(theme, cx),
                                     None => components::empty_state(
@@ -2988,73 +2983,94 @@ impl MainPaneView {
     }
 
     fn render_conflict_resolver_svg_preview(
-        &self,
+        &mut self,
         theme: AppTheme,
-        base: &str,
-        local: &str,
-        remote: &str,
+        cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
-        let svg_image = |text: &str| -> Option<Arc<gpui::Image>> {
-            if text.is_empty() {
-                return None;
-            }
-            rasterize_svg_preview_image(text.as_bytes()).or_else(|| {
-                Some(Arc::new(gpui::Image::from_bytes(
-                    gpui::ImageFormat::Svg,
-                    text.as_bytes().to_vec(),
-                )))
-            })
-        };
-        let base_img = svg_image(base);
-        let ours_img = svg_image(local);
-        let theirs_img = svg_image(remote);
+        self.ensure_conflict_image_preview_cache(cx);
 
-        let preview_cell =
-            |id: &'static str, label: &'static str, img: Option<Arc<gpui::Image>>| {
-                div()
-                    .id(id)
-                    .flex_1()
-                    .min_w(px(0.0))
-                    .h_full()
-                    .border_1()
-                    .border_color(theme.colors.border)
-                    .rounded(px(theme.radii.row))
-                    .overflow_hidden()
-                    .flex()
-                    .flex_col()
-                    .child(
-                        div()
-                            .h(px(24.0))
-                            .px_2()
-                            .flex()
-                            .items_center()
-                            .bg(theme.colors.surface_bg_elevated)
-                            .text_xs()
-                            .text_color(theme.colors.text_muted)
-                            .child(label),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_h(px(0.0))
-                            .bg(theme.colors.window_bg)
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .child(match img {
-                                Some(data) => gpui::img(data)
-                                    .w_full()
-                                    .h_full()
-                                    .object_fit(gpui::ObjectFit::Contain)
-                                    .into_any_element(),
-                                None => div()
-                                    .text_xs()
-                                    .text_color(theme.colors.text_muted)
-                                    .child("(empty)")
-                                    .into_any_element(),
-                            }),
-                    )
-            };
+        let base_has_source = !self.conflict_resolver.three_way_text.base.is_empty();
+        let ours_has_source = !self.conflict_resolver.three_way_text.ours.is_empty();
+        let theirs_has_source = !self.conflict_resolver.three_way_text.theirs.is_empty();
+        let base_img = self
+            .conflict_resolver
+            .image_preview
+            .image(ThreeWayColumn::Base)
+            .clone();
+        let ours_img = self
+            .conflict_resolver
+            .image_preview
+            .image(ThreeWayColumn::Ours)
+            .clone();
+        let theirs_img = self
+            .conflict_resolver
+            .image_preview
+            .image(ThreeWayColumn::Theirs)
+            .clone();
+
+        let preview_cell = |id: &'static str,
+                            label: &'static str,
+                            image: Loadable<Option<Arc<gpui::Image>>>,
+                            has_source: bool| {
+            div()
+                .id(id)
+                .flex_1()
+                .min_w(px(0.0))
+                .h_full()
+                .border_1()
+                .border_color(theme.colors.border)
+                .rounded(px(theme.radii.row))
+                .overflow_hidden()
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .h(px(24.0))
+                        .px_2()
+                        .flex()
+                        .items_center()
+                        .bg(theme.colors.surface_bg_elevated)
+                        .text_xs()
+                        .text_color(theme.colors.text_muted)
+                        .child(label),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_h(px(0.0))
+                        .bg(theme.colors.window_bg)
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(match image {
+                            Loadable::Ready(Some(data)) => gpui::img(data)
+                                .w_full()
+                                .h_full()
+                                .object_fit(gpui::ObjectFit::Contain)
+                                .into_any_element(),
+                            Loadable::NotLoaded | Loadable::Loading if has_source => div()
+                                .text_xs()
+                                .text_color(theme.colors.text_muted)
+                                .child("Processing preview...")
+                                .into_any_element(),
+                            Loadable::Error(error) => div()
+                                .text_xs()
+                                .text_color(theme.colors.text_muted)
+                                .child(error)
+                                .into_any_element(),
+                            Loadable::Ready(None) if has_source => div()
+                                .text_xs()
+                                .text_color(theme.colors.text_muted)
+                                .child("Preview unavailable.")
+                                .into_any_element(),
+                            _ => div()
+                                .text_xs()
+                                .text_color(theme.colors.text_muted)
+                                .child("(empty)")
+                                .into_any_element(),
+                        }),
+                )
+        };
 
         div()
             .id("conflict_resolver_preview")
@@ -3065,12 +3081,23 @@ impl MainPaneView {
             .gap_2()
             .p_2()
             .bg(theme.colors.window_bg)
-            .child(preview_cell("conflict_preview_base", "Base (A)", base_img))
-            .child(preview_cell("conflict_preview_ours", "Local (B)", ours_img))
+            .child(preview_cell(
+                "conflict_preview_base",
+                "Base (A)",
+                base_img,
+                base_has_source,
+            ))
+            .child(preview_cell(
+                "conflict_preview_ours",
+                "Local (B)",
+                ours_img,
+                ours_has_source,
+            ))
             .child(preview_cell(
                 "conflict_preview_theirs",
                 "Remote (C)",
                 theirs_img,
+                theirs_has_source,
             ))
             .into_any_element()
     }

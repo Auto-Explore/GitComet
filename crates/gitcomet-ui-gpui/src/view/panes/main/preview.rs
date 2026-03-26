@@ -20,6 +20,79 @@ impl ReadyWorktreePreview {
     }
 }
 
+type ConflictPreviewImagePayload = (gpui::ImageFormat, Vec<u8>);
+
+fn conflict_preview_side_bytes(
+    file: Option<&gitcomet_state::model::ConflictFile>,
+    side: ThreeWayColumn,
+    fallback_text: &SharedString,
+) -> Option<Vec<u8>> {
+    let file_bytes = file.and_then(|file| match side {
+        ThreeWayColumn::Base => file.base_bytes.as_deref(),
+        ThreeWayColumn::Ours => file.ours_bytes.as_deref(),
+        ThreeWayColumn::Theirs => file.theirs_bytes.as_deref(),
+    });
+    if let Some(bytes) = file_bytes
+        && !bytes.is_empty()
+    {
+        return Some(bytes.to_vec());
+    }
+
+    let file_text = file.and_then(|file| match side {
+        ThreeWayColumn::Base => file.base.as_deref(),
+        ThreeWayColumn::Ours => file.ours.as_deref(),
+        ThreeWayColumn::Theirs => file.theirs.as_deref(),
+    });
+    if let Some(text) = file_text
+        && !text.is_empty()
+    {
+        return Some(text.as_bytes().to_vec());
+    }
+
+    (!fallback_text.is_empty()).then(|| fallback_text.as_ref().as_bytes().to_vec())
+}
+
+fn ready_conflict_preview_image_from_bytes(
+    format: gpui::ImageFormat,
+    bytes: Option<Vec<u8>>,
+) -> LoadableImagePreview {
+    match bytes {
+        Some(bytes) => Loadable::Ready(Some(Arc::new(gpui::Image::from_bytes(format, bytes)))),
+        None => Loadable::Ready(None),
+    }
+}
+
+fn loading_conflict_preview_image(has_source: bool) -> LoadableImagePreview {
+    if has_source {
+        Loadable::Loading
+    } else {
+        Loadable::Ready(None)
+    }
+}
+
+fn rasterize_conflict_preview_svg_payload(
+    svg_bytes: Option<Vec<u8>>,
+) -> Option<ConflictPreviewImagePayload> {
+    let svg_bytes = svg_bytes?;
+    if let Some(png) = crate::view::diff_utils::rasterize_svg_preview_png(&svg_bytes) {
+        return Some((gpui::ImageFormat::Png, png));
+    }
+    Some((gpui::ImageFormat::Svg, svg_bytes))
+}
+
+fn loadable_conflict_preview_svg_image(
+    payload: Option<ConflictPreviewImagePayload>,
+    had_source: bool,
+) -> LoadableImagePreview {
+    match payload {
+        Some((format, bytes)) => {
+            Loadable::Ready(Some(Arc::new(gpui::Image::from_bytes(format, bytes))))
+        }
+        None if had_source => Loadable::Error("Preview unavailable.".into()),
+        None => Loadable::Ready(None),
+    }
+}
+
 impl MainPaneView {
     /// Clears worktree preview source text, line starts, and the segments
     /// cache. Use this when the preview content is invalidated but the caller
@@ -147,6 +220,107 @@ impl MainPaneView {
                 &self.conflict_resolver.three_way_text,
             ),
         };
+    }
+
+    pub(in crate::view) fn ensure_conflict_image_preview_cache(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let Some(source_hash) = self.conflict_resolver.source_hash else {
+            self.conflict_resolver.image_preview = ConflictResolverImagePreviewState::default();
+            return;
+        };
+        let Some(path) = self.conflict_resolver.path.clone() else {
+            self.conflict_resolver.image_preview = ConflictResolverImagePreviewState::default();
+            return;
+        };
+        let Some(format) = crate::view::diff_utils::image_format_for_path(&path) else {
+            self.conflict_resolver.image_preview = ConflictResolverImagePreviewState::default();
+            return;
+        };
+
+        let previews = &self.conflict_resolver.image_preview;
+        let cache_ready = previews.source_hash == Some(source_hash)
+            && previews.path.as_ref() == Some(&path)
+            && !matches!(previews.images.base, Loadable::NotLoaded)
+            && !matches!(previews.images.ours, Loadable::NotLoaded)
+            && !matches!(previews.images.theirs, Loadable::NotLoaded);
+        if cache_ready {
+            return;
+        }
+
+        let loaded_file = self.conflict_resolver.loaded_file.as_ref();
+        let base_bytes = conflict_preview_side_bytes(
+            loaded_file,
+            ThreeWayColumn::Base,
+            &self.conflict_resolver.three_way_text.base,
+        );
+        let ours_bytes = conflict_preview_side_bytes(
+            loaded_file,
+            ThreeWayColumn::Ours,
+            &self.conflict_resolver.three_way_text.ours,
+        );
+        let theirs_bytes = conflict_preview_side_bytes(
+            loaded_file,
+            ThreeWayColumn::Theirs,
+            &self.conflict_resolver.three_way_text.theirs,
+        );
+
+        if format != gpui::ImageFormat::Svg {
+            self.conflict_resolver.image_preview = ConflictResolverImagePreviewState {
+                source_hash: Some(source_hash),
+                path: Some(path),
+                images: ThreeWaySides {
+                    base: ready_conflict_preview_image_from_bytes(format, base_bytes),
+                    ours: ready_conflict_preview_image_from_bytes(format, ours_bytes),
+                    theirs: ready_conflict_preview_image_from_bytes(format, theirs_bytes),
+                },
+            };
+            return;
+        }
+
+        let base_has_source = base_bytes.is_some();
+        let ours_has_source = ours_bytes.is_some();
+        let theirs_has_source = theirs_bytes.is_some();
+        self.conflict_resolver.image_preview = ConflictResolverImagePreviewState {
+            source_hash: Some(source_hash),
+            path: Some(path.clone()),
+            images: ThreeWaySides {
+                base: loading_conflict_preview_image(base_has_source),
+                ours: loading_conflict_preview_image(ours_has_source),
+                theirs: loading_conflict_preview_image(theirs_has_source),
+            },
+        };
+
+        cx.spawn(
+            async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
+                let (base_payload, ours_payload, theirs_payload) = smol::unblock(move || {
+                    (
+                        rasterize_conflict_preview_svg_payload(base_bytes),
+                        rasterize_conflict_preview_svg_payload(ours_bytes),
+                        rasterize_conflict_preview_svg_payload(theirs_bytes),
+                    )
+                })
+                .await;
+
+                let _ = view.update(cx, |this, cx| {
+                    if this.conflict_resolver.image_preview.source_hash != Some(source_hash)
+                        || this.conflict_resolver.image_preview.path.as_ref() != Some(&path)
+                    {
+                        return;
+                    }
+
+                    this.conflict_resolver.image_preview.images.base =
+                        loadable_conflict_preview_svg_image(base_payload, base_has_source);
+                    this.conflict_resolver.image_preview.images.ours =
+                        loadable_conflict_preview_svg_image(ours_payload, ours_has_source);
+                    this.conflict_resolver.image_preview.images.theirs =
+                        loadable_conflict_preview_svg_image(theirs_payload, theirs_has_source);
+                    cx.notify();
+                });
+            },
+        )
+        .detach();
     }
 
     pub(in crate::view) fn is_worktree_target_directory(&self) -> bool {

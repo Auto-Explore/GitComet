@@ -6,6 +6,7 @@ impl GitCometView {
         next: Arc<AppState>,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
+        let prev_had_repos = !self.state.repos.is_empty();
         let prev_banner_error = self.state.banner_error.clone();
         let prev_auth_prompt = self.state.auth_prompt.clone();
         let next_banner_error = next.banner_error.clone();
@@ -126,9 +127,18 @@ impl GitCometView {
         }
 
         self.state = next;
+        if !self.state.repos.is_empty() {
+            self.startup_repo_bootstrap_pending = false;
+        }
         if prev_auth_prompt != self.state.auth_prompt {
             self.auth_prompt_key = None;
         }
+        if prev_had_repos && self.state.repos.is_empty() {
+            self.popover_host
+                .update(cx, |host, cx| host.close_popover(cx));
+            self.open_repo_panel = false;
+        }
+        self.sync_title_bar_workspace_actions(cx);
         self.drive_focused_mergetool_bootstrap();
 
         crate::app::sync_gitcomet_window_state(

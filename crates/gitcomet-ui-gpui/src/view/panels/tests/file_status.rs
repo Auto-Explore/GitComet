@@ -1400,6 +1400,94 @@ fn commit_details_metadata_fields_are_selectable(cx: &mut gpui::TestAppContext) 
 }
 
 #[gpui::test]
+fn commit_details_file_list_keeps_visible_viewport_when_overflowing(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    disable_view_poller_for_test(cx, &view);
+
+    let repo_id = gitcomet_state::model::RepoId(61);
+    let commit_sha = "0123456789abcdef0123456789abcdef01234567".to_string();
+    let files = (0..48)
+        .map(|ix| gitcomet_core::domain::CommitFileChange {
+            path: std::path::PathBuf::from(format!("src/commit_details/dir_{ix}/file_{ix}.rs")),
+            kind: gitcomet_core::domain::FileStatusKind::Modified,
+        })
+        .collect::<Vec<_>>();
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, Path::new("/tmp/repo-commit-files-list"));
+            repo.history_state.selected_commit =
+                Some(gitcomet_core::domain::CommitId(commit_sha.clone().into()));
+            repo.history_state.commit_details = gitcomet_state::model::Loadable::Ready(Arc::new(
+                gitcomet_core::domain::CommitDetails {
+                    id: gitcomet_core::domain::CommitId(commit_sha.clone().into()),
+                    message: "subject".to_string(),
+                    committed_at: "2026-03-08 12:34:56 +0200".to_string(),
+                    parent_ids: vec![gitcomet_core::domain::CommitId(
+                        "89abcdef0123456789abcdef0123456789abcdef".into(),
+                    )],
+                    files,
+                },
+            ));
+
+            let next_state = app_state_with_repo(repo, repo_id);
+
+            push_test_state(this, next_state, cx);
+        });
+    });
+
+    cx.update(|window, app| {
+        window.refresh();
+        let _ = window.draw(app);
+    });
+
+    cx.update(|window, app| {
+        window.refresh();
+        let _ = window.draw(app);
+    });
+
+    cx.simulate_resize(gpui::size(px(1024.0), px(420.0)));
+
+    cx.update(|window, app| {
+        window.refresh();
+        let _ = window.draw(app);
+    });
+
+    cx.update(|window, app| {
+        window.refresh();
+        let _ = window.draw(app);
+    });
+
+    let mut viewport_height = 0.0f32;
+    let mut contents_height = 0.0f32;
+    cx.update(|_window, app| {
+        let details_pane = view.read(app).details_pane.clone();
+        let pane = details_pane.read(app);
+        let item_size = pane
+            .commit_files_scroll
+            .0
+            .borrow()
+            .last_item_size
+            .expect("expected commit details files list to report its measured viewport");
+        viewport_height = item_size.item.height.into();
+        contents_height = item_size.contents.height.into();
+    });
+
+    assert!(
+        contents_height > viewport_height,
+        "expected commit details file list to overflow so the scrollbar has content to represent (viewport_height={viewport_height}, contents_height={contents_height})",
+    );
+    assert!(
+        viewport_height >= 24.0,
+        "expected commit details file list to keep at least one visible row when overflowing (viewport_height={viewport_height}, contents_height={contents_height})",
+    );
+}
+
+#[gpui::test]
 fn switching_active_repo_restores_commit_message_draft_per_repo(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {

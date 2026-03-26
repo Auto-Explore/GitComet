@@ -1008,6 +1008,269 @@ fn file_diff_cache_does_not_rebuild_when_rev_changes_with_identical_payload(
 }
 
 #[gpui::test]
+fn file_image_diff_cache_does_not_rebuild_when_rev_changes_with_identical_payload(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    disable_view_poller_for_test(cx, &view);
+
+    let repo_id = gitcomet_state::model::RepoId(147);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_image_diff_rev_stability",
+        std::process::id()
+    ));
+    let path = std::path::PathBuf::from("assets/gitcomet.png");
+    let image_bytes =
+        include_bytes!("../../../../../../assets/linux/hicolor/32x32/apps/gitcomet.png").to_vec();
+
+    seed_file_image_diff_state_with_rev(
+        cx,
+        &view,
+        repo_id,
+        &workdir,
+        &path,
+        1,
+        Some(image_bytes.as_slice()),
+        Some(image_bytes.as_slice()),
+    );
+    wait_for_file_image_diff_cache(cx, &view, "initial image diff cache build", |_| true);
+
+    let baseline_seq =
+        cx.update(|_window, app| view.read(app).main_pane.read(app).file_image_diff_cache_seq);
+
+    for rev in 2..=6 {
+        seed_file_image_diff_state_with_rev(
+            cx,
+            &view,
+            repo_id,
+            &workdir,
+            &path,
+            rev,
+            Some(image_bytes.as_slice()),
+            Some(image_bytes.as_slice()),
+        );
+        draw_and_drain_test_window(cx);
+
+        cx.update(|_window, app| {
+            let pane = view.read(app).main_pane.read(app);
+            assert_eq!(
+                pane.file_image_diff_cache_seq, baseline_seq,
+                "identical image diff payload should not trigger cache rebuild when diff_file_rev changes"
+            );
+            assert!(
+                pane.file_image_diff_cache_inflight.is_none(),
+                "image diff cache should remain ready with no background rebuild for identical payload refreshes"
+            );
+            assert_eq!(
+                pane.file_image_diff_cache_rev, rev,
+                "identical payload refresh should still advance the image diff cache rev marker"
+            );
+            assert!(
+                pane.is_file_image_diff_view_active(),
+                "image diff preview should remain active across rev-only refreshes"
+            );
+        });
+    }
+}
+
+#[gpui::test]
+fn file_image_diff_cache_keeps_valid_svg_on_render_fast_path_across_rev_refreshes(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    disable_view_poller_for_test(cx, &view);
+
+    let repo_id = gitcomet_state::model::RepoId(148);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_svg_image_diff_rev_stability",
+        std::process::id()
+    ));
+    let path = std::path::PathBuf::from("assets/diagram.svg");
+    let svg_bytes = image_diff_svg_fixture(4096, 2048, "#00aaff");
+
+    seed_file_image_diff_state_with_rev(
+        cx,
+        &view,
+        repo_id,
+        &workdir,
+        &path,
+        1,
+        Some(svg_bytes.as_slice()),
+        Some(svg_bytes.as_slice()),
+    );
+    wait_for_file_image_diff_cache(cx, &view, "initial svg image diff cache build", |pane| {
+        pane.file_image_diff_cache_old.is_some()
+            && pane.file_image_diff_cache_new.is_some()
+            && pane.file_image_diff_cache_old_svg_path.is_none()
+            && pane.file_image_diff_cache_new_svg_path.is_none()
+    });
+
+    let baseline_seq =
+        cx.update(|_window, app| view.read(app).main_pane.read(app).file_image_diff_cache_seq);
+
+    for rev in 2..=6 {
+        seed_file_image_diff_state_with_rev(
+            cx,
+            &view,
+            repo_id,
+            &workdir,
+            &path,
+            rev,
+            Some(svg_bytes.as_slice()),
+            Some(svg_bytes.as_slice()),
+        );
+        draw_and_drain_test_window(cx);
+
+        cx.update(|_window, app| {
+            let pane = view.read(app).main_pane.read(app);
+            assert_eq!(
+                pane.file_image_diff_cache_seq, baseline_seq,
+                "identical svg image diff payload should not trigger cache rebuild when diff_file_rev changes"
+            );
+            assert!(
+                pane.file_image_diff_cache_inflight.is_none(),
+                "svg image diff cache should remain ready with no background rebuild for identical payload refreshes"
+            );
+            assert_eq!(
+                pane.file_image_diff_cache_rev, rev,
+                "identical svg payload refresh should still advance the image diff cache rev marker"
+            );
+            assert!(
+                pane.file_image_diff_cache_old.is_some() && pane.file_image_diff_cache_new.is_some(),
+                "valid svg payload should stay on the rasterized render-image path"
+            );
+            assert!(
+                pane.file_image_diff_cache_old_svg_path.is_none()
+                    && pane.file_image_diff_cache_new_svg_path.is_none(),
+                "valid svg payload should not fall back to cached svg file paths"
+            );
+            assert!(
+                pane.is_file_image_diff_view_active(),
+                "svg image diff preview should remain active across rev-only refreshes"
+            );
+        });
+    }
+}
+
+#[gpui::test]
+fn file_image_diff_cache_keeps_distinct_valid_svg_sides_on_render_fast_path(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    disable_view_poller_for_test(cx, &view);
+
+    let repo_id = gitcomet_state::model::RepoId(149);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_svg_image_diff_distinct",
+        std::process::id()
+    ));
+    let path = std::path::PathBuf::from("assets/diagram.svg");
+    let old_svg = image_diff_svg_fixture(4096, 2048, "#00aaff");
+    let new_svg = image_diff_svg_fixture(2048, 4096, "#ffaa00");
+
+    seed_file_image_diff_state_with_rev(
+        cx,
+        &view,
+        repo_id,
+        &workdir,
+        &path,
+        1,
+        Some(old_svg.as_slice()),
+        Some(new_svg.as_slice()),
+    );
+    wait_for_file_image_diff_cache(
+        cx,
+        &view,
+        "distinct svg image diff render cache build",
+        |pane| {
+            pane.file_image_diff_cache_old.is_some()
+                && pane.file_image_diff_cache_new.is_some()
+                && pane.file_image_diff_cache_old_svg_path.is_none()
+                && pane.file_image_diff_cache_new_svg_path.is_none()
+        },
+    );
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let old = pane
+            .file_image_diff_cache_old
+            .as_ref()
+            .expect("old render image");
+        let new = pane
+            .file_image_diff_cache_new
+            .as_ref()
+            .expect("new render image");
+        assert_eq!(old.size(0).width.0, 1024);
+        assert_eq!(old.size(0).height.0, 512);
+        assert_eq!(new.size(0).width.0, 512);
+        assert_eq!(new.size(0).height.0, 1024);
+    });
+}
+
+#[gpui::test]
+fn file_image_diff_cache_falls_back_to_cached_svg_paths_for_invalid_svg_payloads(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    disable_view_poller_for_test(cx, &view);
+
+    let repo_id = gitcomet_state::model::RepoId(150);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_svg_image_diff_invalid",
+        std::process::id()
+    ));
+    let path = std::path::PathBuf::from("assets/diagram.svg");
+
+    seed_file_image_diff_state_with_rev(
+        cx,
+        &view,
+        repo_id,
+        &workdir,
+        &path,
+        1,
+        Some(&b"<not-valid-svg-old>"[..]),
+        Some(&b"<not-valid-svg-new>"[..]),
+    );
+    wait_for_file_image_diff_cache(
+        cx,
+        &view,
+        "invalid svg image diff fallback cache build",
+        |pane| {
+            pane.file_image_diff_cache_old.is_none()
+                && pane.file_image_diff_cache_new.is_none()
+                && pane.file_image_diff_cache_old_svg_path.is_some()
+                && pane.file_image_diff_cache_new_svg_path.is_some()
+        },
+    );
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert!(
+            pane.file_image_diff_cache_old_svg_path
+                .as_ref()
+                .is_some_and(|path| path.exists())
+        );
+        assert!(
+            pane.file_image_diff_cache_new_svg_path
+                .as_ref()
+                .is_some_and(|path| path.exists())
+        );
+    });
+}
+
+#[gpui::test]
 fn file_diff_view_renders_split_and_inline_syntax_from_real_documents(
     cx: &mut gpui::TestAppContext,
 ) {
