@@ -1,7 +1,6 @@
 use super::*;
-use crate::view::diff_utils::{
-    image_format_for_path, rasterize_svg_preview_image, rasterize_svg_preview_png,
-};
+use crate::view::diff_utils::image_format_for_path;
+use std::hash::Hasher;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 const IMAGE_DIFF_CACHE_FILE_PREFIX: &str = "gitcomet-image-diff-";
@@ -120,9 +119,6 @@ fn decode_file_image_diff_bytes(
 ) -> Option<Arc<gpui::Image>> {
     match format {
         gpui::ImageFormat::Svg => {
-            if let Some(image) = rasterize_svg_preview_image(bytes) {
-                return Some(image);
-            }
             if let Some(path) = cached_path {
                 *path = Some(cached_image_diff_path(bytes, "svg")?);
             }
@@ -132,34 +128,43 @@ fn decode_file_image_diff_bytes(
     }
 }
 
-fn rasterize_svg_preview_png_or_cached_path(
-    svg_bytes: &[u8],
-) -> (Option<Vec<u8>>, Option<std::path::PathBuf>) {
-    if let Some(png) = rasterize_svg_preview_png(svg_bytes) {
-        return (Some(png), None);
-    }
-    (None, cached_image_diff_path(svg_bytes, "svg"))
-}
-
 fn cached_image_diff_path(bytes: &[u8], extension: &str) -> Option<std::path::PathBuf> {
     use std::io::Write;
 
     cleanup_image_diff_cache_startup_once();
-    maybe_cleanup_image_diff_cache_on_write();
 
-    let suffix = format!(".{extension}");
+    let mut hasher = rustc_hash::FxHasher::default();
+    hasher.write(bytes);
+    hasher.write(extension.as_bytes());
+    let path = std::env::temp_dir().join(format!(
+        "{IMAGE_DIFF_CACHE_FILE_PREFIX}{:016x}-{}.{}",
+        hasher.finish(),
+        bytes.len(),
+        extension
+    ));
+    if path.is_file() {
+        return Some(path);
+    }
+
     let mut file = tempfile::Builder::new()
         .prefix(IMAGE_DIFF_CACHE_FILE_PREFIX)
-        .suffix(&suffix)
-        .tempfile()
+        .suffix(".tmp")
+        .tempfile_in(std::env::temp_dir())
         .ok()?;
     file.as_file_mut().write_all(bytes).ok()?;
-    let (_, path) = file.keep().ok()?;
-    Some(path)
+
+    match file.persist_noclobber(&path) {
+        Ok(_) => {
+            maybe_cleanup_image_diff_cache_on_write();
+            Some(path)
+        }
+        Err(err) if err.error.kind() == std::io::ErrorKind::AlreadyExists => Some(path),
+        Err(_) => None,
+    }
 }
 
 impl MainPaneView {
-    pub(in crate::view) fn ensure_file_image_diff_cache(&mut self, cx: &mut gpui::Context<Self>) {
+    pub(in crate::view) fn ensure_file_image_diff_cache(&mut self, _cx: &mut gpui::Context<Self>) {
         struct Rebuild {
             repo_id: RepoId,
             diff_file_rev: u64,
@@ -171,15 +176,6 @@ impl MainPaneView {
             new_svg_path: Option<std::path::PathBuf>,
         }
 
-        struct RebuildSvgAsync {
-            repo_id: RepoId,
-            diff_file_rev: u64,
-            diff_target: Option<DiffTarget>,
-            file_path: Option<std::path::PathBuf>,
-            old_svg_bytes: Option<Vec<u8>>,
-            new_svg_bytes: Option<Vec<u8>>,
-        }
-
         enum Action {
             Clear,
             Noop,
@@ -189,7 +185,6 @@ impl MainPaneView {
                 diff_target: Option<DiffTarget>,
             },
             Rebuild(Rebuild),
-            RebuildSvgAsync(RebuildSvgAsync),
         }
 
         let action = (|| {
@@ -240,17 +235,6 @@ impl MainPaneView {
             } else {
                 workdir.join(&file.path)
             });
-
-            if !is_ico && format == Some(gpui::ImageFormat::Svg) {
-                return Action::RebuildSvgAsync(RebuildSvgAsync {
-                    repo_id,
-                    diff_file_rev,
-                    diff_target,
-                    file_path,
-                    old_svg_bytes: file.old.clone(),
-                    new_svg_bytes: file.new.clone(),
-                });
-            }
 
             let mut old_svg_path = None;
             let mut new_svg_path = None;
@@ -323,62 +307,6 @@ impl MainPaneView {
                 self.file_image_diff_cache_old_svg_path = rebuild.old_svg_path;
                 self.file_image_diff_cache_new_svg_path = rebuild.new_svg_path;
             }
-            Action::RebuildSvgAsync(rebuild) => {
-                self.file_image_diff_cache_repo_id = Some(rebuild.repo_id);
-                self.file_image_diff_cache_rev = rebuild.diff_file_rev;
-                self.file_image_diff_cache_target = rebuild.diff_target.clone();
-                self.file_image_diff_cache_path = rebuild.file_path.clone();
-                self.file_image_diff_cache_old = None;
-                self.file_image_diff_cache_new = None;
-                self.file_image_diff_cache_old_svg_path = None;
-                self.file_image_diff_cache_new_svg_path = None;
-
-                let repo_id = rebuild.repo_id;
-                let diff_file_rev = rebuild.diff_file_rev;
-                let diff_target_for_task = rebuild.diff_target.clone();
-                let file_path_for_task = rebuild.file_path;
-                let old_svg_bytes = rebuild.old_svg_bytes;
-                let new_svg_bytes = rebuild.new_svg_bytes;
-
-                cx.spawn(
-                    async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
-                        let (old_png, old_svg_path, new_png, new_svg_path) =
-                            smol::unblock(move || {
-                                let (old_png, old_svg_path) = old_svg_bytes
-                                    .as_deref()
-                                    .map(rasterize_svg_preview_png_or_cached_path)
-                                    .unwrap_or((None, None));
-                                let (new_png, new_svg_path) = new_svg_bytes
-                                    .as_deref()
-                                    .map(rasterize_svg_preview_png_or_cached_path)
-                                    .unwrap_or((None, None));
-                                (old_png, old_svg_path, new_png, new_svg_path)
-                            })
-                            .await;
-
-                        let _ = view.update(cx, |this, cx| {
-                            if this.file_image_diff_cache_repo_id != Some(repo_id)
-                                || this.file_image_diff_cache_rev != diff_file_rev
-                                || this.file_image_diff_cache_target != diff_target_for_task
-                            {
-                                return;
-                            }
-
-                            this.file_image_diff_cache_path = file_path_for_task;
-                            this.file_image_diff_cache_old = old_png.map(|png| {
-                                Arc::new(gpui::Image::from_bytes(gpui::ImageFormat::Png, png))
-                            });
-                            this.file_image_diff_cache_new = new_png.map(|png| {
-                                Arc::new(gpui::Image::from_bytes(gpui::ImageFormat::Png, png))
-                            });
-                            this.file_image_diff_cache_old_svg_path = old_svg_path;
-                            this.file_image_diff_cache_new_svg_path = new_svg_path;
-                            cx.notify();
-                        });
-                    },
-                )
-                .detach();
-            }
         }
     }
 }
@@ -442,15 +370,16 @@ mod tests {
     }
 
     #[test]
-    fn decode_file_image_diff_bytes_rasterizes_svg_to_png() {
+    fn decode_file_image_diff_bytes_uses_cached_svg_file_for_valid_svg() {
         let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
 <rect width="16" height="16" fill="#00aaff"/>
 </svg>"##;
         let mut svg_path = None;
         let image = decode_file_image_diff_bytes(gpui::ImageFormat::Svg, svg, Some(&mut svg_path));
-        let image = image.expect("svg should rasterize to image");
-        assert_eq!(image.format(), gpui::ImageFormat::Png);
-        assert!(svg_path.is_none());
+        assert!(image.is_none());
+        let svg_path = svg_path.expect("svg should produce a cached file path");
+        assert!(svg_path.exists());
+        assert_eq!(svg_path.extension().and_then(|s| s.to_str()), Some("svg"));
     }
 
     #[test]
@@ -467,31 +396,12 @@ mod tests {
     }
 
     #[test]
-    fn rasterize_svg_preview_png_or_cached_path_returns_png_for_valid_svg() {
-        let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 8">
-<circle cx="4" cy="4" r="3" fill="#55aa00"/>
-</svg>"##;
-        let (png, svg_path) = rasterize_svg_preview_png_or_cached_path(svg);
-        let png = png.expect("svg should rasterize to png bytes");
-        assert!(svg_path.is_none());
-        assert!(png.len() >= 8);
-        assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
-    }
-
-    #[test]
-    fn rasterize_svg_preview_png_or_cached_path_falls_back_to_svg_file_for_invalid_svg() {
-        let (png, svg_path) = rasterize_svg_preview_png_or_cached_path(b"<not-valid-svg>");
-        assert!(png.is_none());
-        let svg_path = svg_path.expect("invalid svg should produce fallback path");
-        assert!(svg_path.exists());
-        assert_eq!(svg_path.extension().and_then(|s| s.to_str()), Some("svg"));
-    }
-
-    #[test]
     fn cached_image_diff_path_writes_ico_cache_file() {
         let bytes = [0_u8, 0, 1, 0, 1, 0, 16, 16];
         let path = cached_image_diff_path(&bytes, "ico").expect("cached path");
+        let same_path = cached_image_diff_path(&bytes, "ico").expect("second cached path");
         assert!(path.exists());
+        assert_eq!(path, same_path);
         assert_eq!(path.extension().and_then(|s| s.to_str()), Some("ico"));
     }
 

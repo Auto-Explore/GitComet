@@ -2488,6 +2488,7 @@ pub struct GitCometView {
     pub(super) focused_mergetool_bootstrap: Option<FocusedMergetoolBootstrap>,
     pub(super) startup_repo_bootstrap_pending: bool,
     pub(super) splash_backdrop_image: Option<Arc<gpui::Image>>,
+    pub(super) splash_backdrop_loading: bool,
 
     pub(super) last_window_size: Size<Pixels>,
     pub(super) ui_window_size_last_seen: Size<Pixels>,

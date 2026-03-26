@@ -153,14 +153,6 @@ pub(super) fn rasterize_svg_preview_png(svg_bytes: &[u8]) -> Option<Vec<u8>> {
     )
 }
 
-pub(super) fn rasterize_svg_preview_image(svg_bytes: &[u8]) -> Option<Arc<gpui::Image>> {
-    rasterize_svg_image(
-        svg_bytes,
-        SVG_PREVIEW_MIN_RASTER_WIDTH_PX,
-        SVG_PREVIEW_MAX_RASTER_EDGE_PX,
-    )
-}
-
 pub(super) fn parse_diff_git_header_path(text: &str) -> Option<String> {
     let text = text.strip_prefix("diff --git ")?;
     let mut parts = text.split_whitespace();

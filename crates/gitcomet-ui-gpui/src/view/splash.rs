@@ -1,42 +1,53 @@
 use super::*;
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::OnceLock;
 
-const SPLASH_BACKDROP_RASTER_WIDTH_PX: f32 = 1280.0;
-const SPLASH_BACKDROP_MAX_EDGE_PX: f32 = 1600.0;
+const SPLASH_BACKDROP_RASTER_WIDTH_PX: f32 = 960.0;
+const SPLASH_BACKDROP_MAX_EDGE_PX: f32 = 1024.0;
+static SPLASH_BACKDROP_IMAGE_CACHE: OnceLock<Option<Arc<gpui::Image>>> = OnceLock::new();
 
 pub(in crate::view) fn rasterize_splash_backdrop_image() -> Option<Arc<gpui::Image>> {
-    super::diff_utils::rasterize_svg_image(
-        include_bytes!("../../../../assets/splash_backdrop.svg"),
-        SPLASH_BACKDROP_RASTER_WIDTH_PX,
-        SPLASH_BACKDROP_MAX_EDGE_PX,
-    )
+    SPLASH_BACKDROP_IMAGE_CACHE
+        .get_or_init(|| {
+            super::diff_utils::rasterize_svg_image(
+                include_bytes!("../../../../assets/splash_backdrop.svg"),
+                SPLASH_BACKDROP_RASTER_WIDTH_PX,
+                SPLASH_BACKDROP_MAX_EDGE_PX,
+            )
+        })
+        .clone()
 }
 
 impl GitCometView {
     pub(in crate::view) fn maybe_load_splash_backdrop(&mut self, cx: &mut gpui::Context<Self>) {
-        if self.splash_backdrop_image.is_some() {
+        if self.splash_backdrop_image.is_some() || self.splash_backdrop_loading {
             return;
         }
 
         #[cfg(test)]
         {
             let _ = cx;
+            return;
         }
 
         #[cfg(not(test))]
-        cx.spawn(
-            async move |view: WeakEntity<GitCometView>, cx: &mut gpui::AsyncApp| {
-                let image = smol::unblock(rasterize_splash_backdrop_image).await;
-                let _ = view.update(cx, |this, cx| {
-                    if this.splash_backdrop_image.is_none() {
-                        this.splash_backdrop_image = image;
-                        cx.notify();
-                    }
-                });
-            },
-        )
-        .detach();
+        {
+            self.splash_backdrop_loading = true;
+            cx.spawn(
+                async move |view: WeakEntity<GitCometView>, cx: &mut gpui::AsyncApp| {
+                    let image = smol::unblock(rasterize_splash_backdrop_image).await;
+                    let _ = view.update(cx, |this, cx| {
+                        this.splash_backdrop_loading = false;
+                        if this.splash_backdrop_image.is_none() {
+                            this.splash_backdrop_image = image;
+                            cx.notify();
+                        }
+                    });
+                },
+            )
+            .detach();
+        }
     }
 
     fn splash_backdrop_base() -> gpui::Background {
@@ -547,10 +558,12 @@ impl GitCometView {
         let theme = self.theme;
 
         if self.is_startup_repository_loading_screen_active() {
+            self.maybe_load_splash_backdrop(cx);
             return self.startup_repository_loading_screen();
         }
 
         if self.is_splash_screen_active() {
+            self.maybe_load_splash_backdrop(cx);
             return self.splash_screen(cx);
         }
 

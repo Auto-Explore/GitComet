@@ -584,6 +584,7 @@ impl GitCometView {
             focused_mergetool_bootstrap,
             startup_repo_bootstrap_pending,
             splash_backdrop_image: None,
+            splash_backdrop_loading: false,
             last_window_size: size(px(0.0), px(0.0)),
             ui_window_size_last_seen: size(px(0.0), px(0.0)),
             ui_settings_persist_seq: 0,
@@ -624,7 +625,6 @@ impl GitCometView {
         #[cfg(any(target_os = "linux", target_os = "freebsd"))]
         view.maybe_auto_install_linux_desktop_integration(cx);
 
-        view.maybe_load_splash_backdrop(cx);
         view.drive_focused_mergetool_bootstrap();
         view.maybe_check_for_updates_on_startup(cx);
 

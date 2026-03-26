@@ -133,6 +133,7 @@ impl MainPaneView {
                             });
 
                         let cell = |id: &'static str, image: Option<CachedDiffImageSource>| {
+                            let muted = theme.colors.text_muted;
                             div()
                                 .id(id)
                                 .flex_1()
@@ -156,6 +157,20 @@ impl MainPaneView {
                                             } else {
                                                 gpui::ObjectFit::Contain
                                             })
+                                            .with_loading(move || {
+                                                div()
+                                                    .text_sm()
+                                                    .text_color(muted)
+                                                    .child("Processing image...")
+                                                    .into_any_element()
+                                            })
+                                            .with_fallback(move || {
+                                                div()
+                                                    .text_sm()
+                                                    .text_color(muted)
+                                                    .child("Preview unavailable.")
+                                                    .into_any_element()
+                                            })
                                             .into_any_element()
                                     }
                                     Some(CachedDiffImageSource::Image(img_data)) => {
@@ -163,6 +178,20 @@ impl MainPaneView {
                                             .w_full()
                                             .h_full()
                                             .object_fit(gpui::ObjectFit::Contain)
+                                            .with_loading(move || {
+                                                div()
+                                                    .text_sm()
+                                                    .text_color(muted)
+                                                    .child("Processing image...")
+                                                    .into_any_element()
+                                            })
+                                            .with_fallback(move || {
+                                                div()
+                                                    .text_sm()
+                                                    .text_color(muted)
+                                                    .child("Preview unavailable.")
+                                                    .into_any_element()
+                                            })
                                             .into_any_element()
                                     }
                                     None => div()
