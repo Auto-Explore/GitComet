@@ -10,6 +10,7 @@ pub(super) struct TitleBarView {
     root_view: WeakEntity<GitCometView>,
     title_drag_state: TitleBarDragState,
     app_menu_open: bool,
+    workspace_actions_enabled: bool,
 }
 
 #[derive(Debug, Default, Clone, Copy, Eq, PartialEq)]
@@ -227,12 +228,17 @@ pub(super) fn resize_edge(
 }
 
 impl TitleBarView {
-    pub(super) fn new(theme: AppTheme, root_view: WeakEntity<GitCometView>) -> Self {
+    pub(super) fn new(
+        theme: AppTheme,
+        root_view: WeakEntity<GitCometView>,
+        workspace_actions_enabled: bool,
+    ) -> Self {
         Self {
             theme,
             root_view,
             title_drag_state: TitleBarDragState::default(),
             app_menu_open: false,
+            workspace_actions_enabled,
         }
     }
 
@@ -246,6 +252,21 @@ impl TitleBarView {
             return;
         }
         self.app_menu_open = open;
+        cx.notify();
+    }
+
+    pub(super) fn set_workspace_actions_enabled(
+        &mut self,
+        enabled: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.workspace_actions_enabled == enabled {
+            return;
+        }
+        self.workspace_actions_enabled = enabled;
+        if !enabled {
+            self.app_menu_open = false;
+        }
         cx.notify();
     }
 
@@ -293,6 +314,7 @@ impl Render for TitleBarView {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let is_macos = cfg!(target_os = "macos");
+        let workspace_actions_enabled = self.workspace_actions_enabled;
         let app_menu_open = self.app_menu_open;
         let app_menu_open_bg =
             with_alpha(theme.colors.accent, if theme.is_dark { 0.30 } else { 0.24 });
@@ -363,31 +385,33 @@ impl Render for TitleBarView {
                 }),
             );
 
-        let windows_brand = div()
-            .id("titlebar_brand")
-            .debug_selector(|| "titlebar_brand".to_string())
-            .h_full()
-            .flex()
-            .items_center()
-            .child(
-                div()
-                    .h(px(26.0))
-                    .px_2()
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .child(titlebar_app_icon(theme))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .text_sm()
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(theme.colors.text)
-                            .whitespace_nowrap()
-                            .child("GITCOMET"),
-                    ),
-            );
+        let windows_brand = || {
+            div()
+                .id("titlebar_brand")
+                .debug_selector(|| "titlebar_brand".to_string())
+                .h_full()
+                .flex()
+                .items_center()
+                .child(
+                    div()
+                        .h(px(26.0))
+                        .px_2()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .child(titlebar_app_icon(theme))
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .text_sm()
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(theme.colors.text)
+                                .whitespace_nowrap()
+                                .child("GITCOMET"),
+                        ),
+                )
+        };
 
         let drag_region = div()
             .id("title_drag")
@@ -596,7 +620,12 @@ impl Render for TitleBarView {
                     .gap_0p5()
                     .when(is_macos, |d| d.pl(MACOS_TRAFFIC_LIGHTS_SAFE_INSET))
                     .when(is_macos, |d| d.child(macos_brand))
-                    .when(!is_macos, |d| d.child(menu_toggle).child(windows_brand)),
+                    .when(!is_macos && workspace_actions_enabled, |d| {
+                        d.child(menu_toggle).child(windows_brand())
+                    })
+                    .when(!is_macos && !workspace_actions_enabled, |d| {
+                        d.child(windows_brand())
+                    }),
             )
             .child(drag_region)
             .child(

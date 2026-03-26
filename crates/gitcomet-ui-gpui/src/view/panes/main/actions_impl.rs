@@ -1236,6 +1236,7 @@ impl MainPaneView {
             resolver_pending_recompute_seq: 0,
             resolved_outline: ResolvedOutlineData::default(),
             markdown_preview: ConflictResolverMarkdownPreviewState::default(),
+            image_preview: ConflictResolverImagePreviewState::default(),
             resolver_preview_mode,
         };
         // Populate mode-dependent visible state using the same code path as

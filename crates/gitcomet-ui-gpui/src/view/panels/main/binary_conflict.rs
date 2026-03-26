@@ -1,20 +1,6 @@
 use super::*;
 use gitcomet_core::services::ConflictSide;
 
-fn conflict_side_image(path: &std::path::Path, bytes: Option<&[u8]>) -> Option<Arc<gpui::Image>> {
-    let format = crate::view::diff_utils::image_format_for_path(path)?;
-    let bytes = bytes?;
-    if matches!(format, gpui::ImageFormat::Svg) {
-        return crate::view::rasterize_svg_preview_image(bytes).or_else(|| {
-            Some(Arc::new(gpui::Image::from_bytes(
-                gpui::ImageFormat::Svg,
-                bytes.to_vec(),
-            )))
-        });
-    }
-    Some(Arc::new(gpui::Image::from_bytes(format, bytes.to_vec())))
-}
-
 impl MainPaneView {
     /// Render the binary/non-UTF8 conflict resolver panel.
     ///
@@ -101,9 +87,6 @@ impl MainPaneView {
         let has_ours = file.ours_bytes.is_some();
         let has_theirs = file.theirs_bytes.is_some();
         let has_image_preview = crate::view::diff_utils::image_format_for_path(&path).is_some();
-        let base_image = conflict_side_image(&path, file.base_bytes.as_deref());
-        let ours_image = conflict_side_image(&path, file.ours_bytes.as_deref());
-        let theirs_image = conflict_side_image(&path, file.theirs_bytes.as_deref());
 
         let action_section = div()
             .flex()
@@ -160,53 +143,87 @@ impl MainPaneView {
             });
 
         let image_preview = has_image_preview.then(|| {
-            let image_cell =
-                |id: &'static str, label: &'static str, image: Option<Arc<gpui::Image>>| {
-                    div()
-                        .id(id)
-                        .flex_1()
-                        .min_w(px(0.0))
-                        .h_full()
-                        .border_1()
-                        .border_color(theme.colors.border)
-                        .rounded(px(theme.radii.row))
-                        .overflow_hidden()
-                        .flex()
-                        .flex_col()
-                        .child(
-                            div()
-                                .h(px(24.0))
-                                .px_2()
-                                .flex()
-                                .items_center()
-                                .justify_between()
-                                .bg(theme.colors.surface_bg_elevated)
-                                .text_xs()
-                                .text_color(theme.colors.text_muted)
-                                .child(label),
-                        )
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_h(px(0.0))
-                                .bg(theme.colors.window_bg)
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .child(match image {
-                                    Some(img_data) => gpui::img(img_data)
-                                        .w_full()
-                                        .h_full()
-                                        .object_fit(gpui::ObjectFit::Contain)
-                                        .into_any_element(),
-                                    None => div()
-                                        .text_xs()
-                                        .text_color(theme.colors.text_muted)
-                                        .child("No image")
-                                        .into_any_element(),
-                                }),
-                        )
-                };
+            self.ensure_conflict_image_preview_cache(cx);
+            let base_image = self
+                .conflict_resolver
+                .image_preview
+                .image(ThreeWayColumn::Base)
+                .clone();
+            let ours_image = self
+                .conflict_resolver
+                .image_preview
+                .image(ThreeWayColumn::Ours)
+                .clone();
+            let theirs_image = self
+                .conflict_resolver
+                .image_preview
+                .image(ThreeWayColumn::Theirs)
+                .clone();
+
+            let image_cell = |id: &'static str,
+                              label: &'static str,
+                              image: Loadable<Option<Arc<gpui::Image>>>,
+                              has_source: bool| {
+                div()
+                    .id(id)
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .h_full()
+                    .border_1()
+                    .border_color(theme.colors.border)
+                    .rounded(px(theme.radii.row))
+                    .overflow_hidden()
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div()
+                            .h(px(24.0))
+                            .px_2()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .bg(theme.colors.surface_bg_elevated)
+                            .text_xs()
+                            .text_color(theme.colors.text_muted)
+                            .child(label),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_h(px(0.0))
+                            .bg(theme.colors.window_bg)
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(match image {
+                                Loadable::Ready(Some(img_data)) => gpui::img(img_data)
+                                    .w_full()
+                                    .h_full()
+                                    .object_fit(gpui::ObjectFit::Contain)
+                                    .into_any_element(),
+                                Loadable::NotLoaded | Loadable::Loading if has_source => div()
+                                    .text_xs()
+                                    .text_color(theme.colors.text_muted)
+                                    .child("Processing image...")
+                                    .into_any_element(),
+                                Loadable::Error(error) => div()
+                                    .text_xs()
+                                    .text_color(theme.colors.text_muted)
+                                    .child(error)
+                                    .into_any_element(),
+                                Loadable::Ready(None) if has_source => div()
+                                    .text_xs()
+                                    .text_color(theme.colors.text_muted)
+                                    .child("Preview unavailable.")
+                                    .into_any_element(),
+                                _ => div()
+                                    .text_xs()
+                                    .text_color(theme.colors.text_muted)
+                                    .child("No image")
+                                    .into_any_element(),
+                            }),
+                    )
+            };
 
             div()
                 .w_full()
@@ -229,16 +246,19 @@ impl MainPaneView {
                             "binary_conflict_preview_base",
                             "Base (A)",
                             base_image,
+                            has_base,
                         ))
                         .child(image_cell(
                             "binary_conflict_preview_ours",
                             "Ours (B)",
                             ours_image,
+                            has_ours,
                         ))
                         .child(image_cell(
                             "binary_conflict_preview_theirs",
                             "Theirs (C)",
                             theirs_image,
+                            has_theirs,
                         )),
                 )
         });
@@ -307,27 +327,5 @@ impl MainPaneView {
                     .child(action_section),
             )
             .into_any_element()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::conflict_side_image;
-
-    #[test]
-    fn conflict_side_image_requires_supported_path_extension() {
-        let bytes = [1_u8, 2, 3, 4];
-        assert!(conflict_side_image("file.bin".as_ref(), Some(&bytes)).is_none());
-    }
-
-    #[test]
-    fn conflict_side_image_requires_bytes() {
-        assert!(conflict_side_image("file.png".as_ref(), None).is_none());
-    }
-
-    #[test]
-    fn conflict_side_image_builds_for_image_path_and_bytes() {
-        let bytes = [1_u8, 2, 3, 4];
-        assert!(conflict_side_image("file.png".as_ref(), Some(&bytes)).is_some());
     }
 }

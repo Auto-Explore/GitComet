@@ -55,6 +55,44 @@ fn toast_total_lifetime_includes_fade_in_and_out() {
 }
 
 #[test]
+fn restore_session_mode_does_not_seed_empty_session_from_initial_repository() {
+    assert!(!should_seed_initial_repository_from_session(
+        GitCometViewMode::Normal,
+        Some(Path::new("/repo")),
+        InitialRepositoryLaunchMode::RestoreSession,
+        false,
+    ));
+}
+
+#[test]
+fn restore_session_mode_keeps_initial_repository_when_session_has_saved_repos() {
+    assert!(should_seed_initial_repository_from_session(
+        GitCometViewMode::Normal,
+        Some(Path::new("/repo")),
+        InitialRepositoryLaunchMode::RestoreSession,
+        true,
+    ));
+}
+
+#[test]
+fn explicit_initial_repository_mode_seeds_empty_session() {
+    assert!(should_seed_initial_repository_from_session(
+        GitCometViewMode::Normal,
+        Some(Path::new("/repo")),
+        InitialRepositoryLaunchMode::OpenExplicitly,
+        false,
+    ));
+}
+
+#[test]
+fn splash_backdrop_svg_rasterizes_via_resvg() {
+    assert!(
+        super::splash::rasterize_splash_backdrop_image().is_some(),
+        "expected splash backdrop SVG to rasterize via resvg"
+    );
+}
+
+#[test]
 fn reconcile_status_multi_selection_prunes_missing_paths_and_anchors() {
     let a = PathBuf::from("a.txt");
     let b = PathBuf::from("b.txt");
@@ -1283,6 +1321,41 @@ fn focused_mergetool_mode_hides_full_chrome() {
 }
 
 #[test]
+fn repository_entry_interstitial_helpers_distinguish_loading_and_splash() {
+    assert!(repository_entry_interstitial_active(
+        GitCometViewMode::Normal,
+        false
+    ));
+    assert!(should_show_startup_repository_loading_screen(
+        GitCometViewMode::Normal,
+        false,
+        true
+    ));
+    assert!(!should_show_splash_screen(
+        GitCometViewMode::Normal,
+        false,
+        true
+    ));
+    assert!(should_show_splash_screen(
+        GitCometViewMode::Normal,
+        false,
+        false
+    ));
+    assert!(!repository_entry_interstitial_active(
+        GitCometViewMode::Normal,
+        true
+    ));
+    assert!(titlebar_workspace_actions_enabled(
+        GitCometViewMode::FocusedMergetool,
+        false
+    ));
+    assert!(!titlebar_workspace_actions_enabled(
+        GitCometViewMode::Normal,
+        false
+    ));
+}
+
+#[test]
 fn ease_out_cubic_hits_expected_anchor_points() {
     assert_eq!(GitCometView::ease_out_cubic(0.0), 0.0);
     assert_eq!(GitCometView::ease_out_cubic(1.0), 1.0);
@@ -1325,6 +1398,129 @@ fn sidebar_expand_after_collapse_does_not_reenter_root_update(cx: &mut gpui::Tes
     cx.update(|_window, app| {
         assert!(!view.read(app).sidebar_collapsed);
     });
+}
+
+#[gpui::test]
+fn splash_screen_renders_when_no_repositories_are_open(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    cx.update(|window, app| {
+        view.update(app, |this, _cx| this.disable_poller_for_tests());
+        let _ = window.draw(app);
+    });
+
+    cx.debug_bounds("repository_entry_screen")
+        .expect("expected repository entry splash screen");
+    cx.debug_bounds("splash_open_repo_action")
+        .expect("expected splash open repository button");
+    cx.debug_bounds("splash_clone_repo_action")
+        .expect("expected splash clone repository button");
+
+    #[cfg(not(target_os = "macos"))]
+    assert!(
+        cx.debug_bounds("app_menu").is_none(),
+        "expected app menu button to be hidden on the splash screen"
+    );
+
+    let splash_active = cx.update(|_window, app| view.read(app).is_splash_screen_active());
+    assert!(splash_active, "expected splash screen to be active");
+}
+
+#[gpui::test]
+fn splash_backdrop_renders_native_layers(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    cx.update(|window, app| {
+        view.update(app, |this, _cx| this.disable_poller_for_tests());
+        let _ = window.draw(app);
+    });
+
+    cx.debug_bounds("splash_backdrop_native")
+        .expect("expected native splash backdrop root");
+    cx.debug_bounds("splash_backdrop_image")
+        .expect("expected SVG-backed splash image layer");
+    assert!(
+        cx.debug_bounds("splash_backdrop_glow_layer").is_none(),
+        "expected legacy procedural glow layer to be removed"
+    );
+    assert!(
+        cx.debug_bounds("splash_backdrop_star_layer").is_none(),
+        "expected animated star overlay to be removed"
+    );
+    assert!(
+        cx.debug_bounds("splash_backdrop_center").is_none(),
+        "expected legacy centered backdrop container to be removed"
+    );
+
+    let splash_active = cx.update(|_window, app| view.read(app).is_splash_screen_active());
+    assert!(splash_active, "expected splash screen to remain active");
+}
+
+#[gpui::test]
+fn closing_last_repository_tab_returns_to_splash_screen(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_assert = store.clone();
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    store_for_assert.dispatch(Msg::OpenRepo(PathBuf::from(
+        "/tmp/repository-entry-screen-test",
+    )));
+    wait_until("repository tab to be added", || {
+        !store_for_assert.snapshot().repos.is_empty()
+    });
+    pump_for(cx, Duration::from_millis(120));
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    let splash_active = cx.update(|_window, app| view.read(app).is_splash_screen_active());
+    assert!(
+        !splash_active,
+        "expected splash screen to disappear after opening a repo"
+    );
+
+    #[cfg(not(target_os = "macos"))]
+    assert!(
+        cx.debug_bounds("app_menu").is_some(),
+        "expected app menu button to be visible once a repo tab exists"
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            assert!(
+                this.close_active_repo_tab(cx),
+                "expected the active repo tab to close"
+            );
+        });
+    });
+
+    wait_until("last repository tab to close", || {
+        store_for_assert.snapshot().repos.is_empty()
+    });
+    pump_for(cx, Duration::from_millis(120));
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    cx.debug_bounds("repository_entry_screen")
+        .expect("expected splash screen after closing the last repo");
+
+    let splash_active = cx.update(|_window, app| view.read(app).is_splash_screen_active());
+    assert!(
+        splash_active,
+        "expected splash screen to return after closing the last repo"
+    );
 }
 
 #[test]

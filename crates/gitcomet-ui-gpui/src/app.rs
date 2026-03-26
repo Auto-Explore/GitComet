@@ -2,7 +2,7 @@ use crate::assets::GitCometAssets;
 use crate::launch_guard::{UiLaunchError, run_with_panic_guard};
 use crate::view::{
     FocusedMergetoolLabels, FocusedMergetoolViewConfig, GitCometView, GitCometViewConfig,
-    GitCometViewMode, StartupCrashReport,
+    GitCometViewMode, InitialRepositoryLaunchMode, StartupCrashReport,
 };
 use gitcomet_core::services::GitBackend;
 use gitcomet_state::session;
@@ -117,10 +117,26 @@ fn normal_launch_config(
     initial_path: Option<PathBuf>,
     startup_crash_report: Option<StartupCrashReport>,
 ) -> WindowLaunchConfig {
+    let mut view_config = GitCometViewConfig::normal(startup_crash_report);
+    view_config.initial_path = initial_path;
     WindowLaunchConfig {
         title: "GitComet".to_string(),
         app_id: "gitcomet".to_string(),
-        view_config: GitCometViewConfig::normal(initial_path, startup_crash_report),
+        view_config,
+    }
+}
+
+fn normal_launch_config_with_initial_repository(
+    initial_path: PathBuf,
+    startup_crash_report: Option<StartupCrashReport>,
+) -> WindowLaunchConfig {
+    WindowLaunchConfig {
+        title: "GitComet".to_string(),
+        app_id: "gitcomet".to_string(),
+        view_config: GitCometViewConfig::normal_with_initial_repository(
+            initial_path,
+            startup_crash_report,
+        ),
     }
 }
 
@@ -133,6 +149,7 @@ fn focused_mergetool_launch_config(
         app_id: "gitcomet-mergetool".to_string(),
         view_config: GitCometViewConfig {
             initial_path: Some(config.repo_path.clone()),
+            initial_repository_launch_mode: InitialRepositoryLaunchMode::RestoreSession,
             view_mode: GitCometViewMode::FocusedMergetool,
             focused_mergetool: Some(FocusedMergetoolViewConfig {
                 repo_path: config.repo_path.clone(),
@@ -318,7 +335,12 @@ fn install_app_actions(cx: &mut App, backend: Arc<dyn GitBackend>) {
     });
 
     cx.on_action(|_: &OpenSettings, cx| {
-        cx.defer(crate::view::open_settings_window);
+        cx.defer(|cx| {
+            if active_normal_gitcomet_window_blocks_non_repository_actions(cx) {
+                return;
+            }
+            crate::view::open_settings_window(cx);
+        });
     });
 
     let repo_backend = Arc::clone(&backend);
@@ -333,6 +355,9 @@ fn install_app_actions(cx: &mut App, backend: Arc<dyn GitBackend>) {
     cx.on_action(move |_: &OpenRecentPicker, cx| {
         let backend = Arc::clone(&recent_picker_backend);
         cx.defer(move |cx| {
+            if active_normal_gitcomet_window_blocks_non_repository_actions(cx) {
+                return;
+            }
             open_recent_repository_picker_in_existing_or_new_window(cx, backend);
         });
     });
@@ -649,6 +674,11 @@ fn update_active_normal_gitcomet_window<R>(
     window.view.update(cx, f).ok()
 }
 
+fn active_normal_gitcomet_window_blocks_non_repository_actions(cx: &mut App) -> bool {
+    update_active_normal_gitcomet_window(cx, |view, _cx| view.blocks_non_repository_actions())
+        .unwrap_or(false)
+}
+
 fn close_active_window(cx: &mut App) {
     if let Some(window) = cx.active_window() {
         let _ = window.update(cx, |_root, window, _cx| {
@@ -820,7 +850,7 @@ fn open_repositories_in_existing_or_new_window(
             continue;
         }
 
-        let launch = normal_launch_config(Some(path), None);
+        let launch = normal_launch_config_with_initial_repository(path, None);
         let window = open_gitcomet_window(cx, Arc::clone(&backend), &launch);
         activate_gitcomet_window(cx, window.into());
         target_window = find_normal_gitcomet_window(cx);
@@ -1390,6 +1420,34 @@ mod tests {
         #[cfg(not(target_os = "macos"))]
         assert!(should_quit_when_all_windows_closed(&normal));
         assert!(should_quit_when_all_windows_closed(&focused));
+    }
+
+    #[test]
+    fn normal_launch_config_keeps_startup_paths_in_restore_session_mode() {
+        let launch = normal_launch_config(Some(PathBuf::from("/repo")), None);
+
+        assert_eq!(
+            launch.view_config.initial_path,
+            Some(PathBuf::from("/repo"))
+        );
+        assert_eq!(
+            launch.view_config.initial_repository_launch_mode,
+            InitialRepositoryLaunchMode::RestoreSession
+        );
+    }
+
+    #[test]
+    fn explicit_repository_launch_config_marks_initial_path_as_explicit() {
+        let launch = normal_launch_config_with_initial_repository(PathBuf::from("/repo"), None);
+
+        assert_eq!(
+            launch.view_config.initial_path,
+            Some(PathBuf::from("/repo"))
+        );
+        assert_eq!(
+            launch.view_config.initial_repository_launch_mode,
+            InitialRepositoryLaunchMode::OpenExplicitly
+        );
     }
 
     #[test]

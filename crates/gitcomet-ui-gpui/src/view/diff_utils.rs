@@ -94,7 +94,11 @@ pub(super) fn image_format_for_path(path: &std::path::Path) -> Option<gpui::Imag
 const SVG_PREVIEW_MIN_RASTER_WIDTH_PX: f32 = 2048.0;
 const SVG_PREVIEW_MAX_RASTER_EDGE_PX: f32 = 4096.0;
 
-pub(super) fn rasterize_svg_preview_png(svg_bytes: &[u8]) -> Option<Vec<u8>> {
+pub(in crate::view) fn rasterize_svg_png(
+    svg_bytes: &[u8],
+    target_width_px: f32,
+    max_edge_px: f32,
+) -> Option<Vec<u8>> {
     let tree = resvg::usvg::Tree::from_data(svg_bytes, &resvg::usvg::Options::default()).ok()?;
     let svg_size = tree.size();
     let svg_width = svg_size.width();
@@ -103,16 +107,16 @@ pub(super) fn rasterize_svg_preview_png(svg_bytes: &[u8]) -> Option<Vec<u8>> {
         return None;
     }
 
-    let upscale = if svg_width < SVG_PREVIEW_MIN_RASTER_WIDTH_PX {
-        SVG_PREVIEW_MIN_RASTER_WIDTH_PX / svg_width
+    let upscale = if svg_width < target_width_px {
+        target_width_px / svg_width
     } else {
         1.0
     };
     let mut raster_width = (svg_width * upscale).round();
     let mut raster_height = (svg_height * upscale).round();
     let max_edge = raster_width.max(raster_height);
-    if max_edge > SVG_PREVIEW_MAX_RASTER_EDGE_PX {
-        let downscale = SVG_PREVIEW_MAX_RASTER_EDGE_PX / max_edge;
+    if max_edge > max_edge_px {
+        let downscale = max_edge_px / max_edge;
         raster_width = (raster_width * downscale).round();
         raster_height = (raster_height * downscale).round();
     }
@@ -129,12 +133,32 @@ pub(super) fn rasterize_svg_preview_png(svg_bytes: &[u8]) -> Option<Vec<u8>> {
     pixmap.encode_png().ok()
 }
 
-pub(super) fn rasterize_svg_preview_image(svg_bytes: &[u8]) -> Option<Arc<gpui::Image>> {
-    let png = rasterize_svg_preview_png(svg_bytes)?;
+pub(in crate::view) fn rasterize_svg_image(
+    svg_bytes: &[u8],
+    target_width_px: f32,
+    max_edge_px: f32,
+) -> Option<Arc<gpui::Image>> {
+    let png = rasterize_svg_png(svg_bytes, target_width_px, max_edge_px)?;
     Some(Arc::new(gpui::Image::from_bytes(
         gpui::ImageFormat::Png,
         png,
     )))
+}
+
+pub(super) fn rasterize_svg_preview_png(svg_bytes: &[u8]) -> Option<Vec<u8>> {
+    rasterize_svg_png(
+        svg_bytes,
+        SVG_PREVIEW_MIN_RASTER_WIDTH_PX,
+        SVG_PREVIEW_MAX_RASTER_EDGE_PX,
+    )
+}
+
+pub(super) fn rasterize_svg_preview_image(svg_bytes: &[u8]) -> Option<Arc<gpui::Image>> {
+    rasterize_svg_image(
+        svg_bytes,
+        SVG_PREVIEW_MIN_RASTER_WIDTH_PX,
+        SVG_PREVIEW_MAX_RASTER_EDGE_PX,
+    )
 }
 
 pub(super) fn parse_diff_git_header_path(text: &str) -> Option<String> {
