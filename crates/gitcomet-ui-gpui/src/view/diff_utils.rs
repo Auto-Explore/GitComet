@@ -133,18 +133,6 @@ pub(in crate::view) fn rasterize_svg_png(
     pixmap.encode_png().ok()
 }
 
-pub(in crate::view) fn rasterize_svg_image(
-    svg_bytes: &[u8],
-    target_width_px: f32,
-    max_edge_px: f32,
-) -> Option<Arc<gpui::Image>> {
-    let png = rasterize_svg_png(svg_bytes, target_width_px, max_edge_px)?;
-    Some(Arc::new(gpui::Image::from_bytes(
-        gpui::ImageFormat::Png,
-        png,
-    )))
-}
-
 pub(super) fn rasterize_svg_preview_png(svg_bytes: &[u8]) -> Option<Vec<u8>> {
     rasterize_svg_png(
         svg_bytes,

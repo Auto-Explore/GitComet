@@ -1057,7 +1057,9 @@ mod tests {
     use crate::test_support::lock_visual_test;
     use gitcomet_core::error::{Error, ErrorKind};
     use gitcomet_core::services::{GitRepository, Result};
+    use gitcomet_state::msg::Msg;
     use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
 
     struct TestBackend;
 
@@ -1066,6 +1068,33 @@ mod tests {
             Err(Error::new(ErrorKind::Unsupported(
                 "test backend does not open repositories",
             )))
+        }
+    }
+
+    fn seed_workspace_repo(
+        cx: &mut gpui::VisualTestContext,
+        store: &AppStore,
+        view: gpui::Entity<GitCometView>,
+    ) {
+        store.dispatch(Msg::OpenRepo(PathBuf::from("/tmp/gitcomet-app-test-repo")));
+
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            cx.update(|window, app| {
+                let _ = window.draw(app);
+            });
+            cx.run_until_parked();
+
+            let ready = cx.update(|_window, app| !view.read(app).blocks_non_repository_actions());
+            if ready {
+                return;
+            }
+
+            if Instant::now() >= deadline {
+                panic!("timed out waiting for the workspace view to leave the splash state");
+            }
+
+            std::thread::sleep(Duration::from_millis(10));
         }
     }
 
@@ -1535,14 +1564,17 @@ mod tests {
         let _visual_guard = lock_visual_test();
         let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
         let (store, events) = AppStore::new(Arc::clone(&backend));
-        let (_view, cx) =
-            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+        let store_for_view = store.clone();
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            GitCometView::new(store_for_view, events, None, window, cx)
+        });
 
         cx.update(|window, app| {
             install_app_shortcuts_for_test(app, Arc::clone(&backend));
             let _ = window.draw(app);
             window.activate_window();
         });
+        seed_workspace_repo(cx, &store, view);
 
         assert_eq!(cx.update(|_window, app| app.windows().len()), 1);
         cx.simulate_keystrokes("secondary-,");
@@ -1555,14 +1587,17 @@ mod tests {
         let _visual_guard = lock_visual_test();
         let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
         let (store, events) = AppStore::new(Arc::clone(&backend));
-        let (_view, cx) =
-            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+        let store_for_view = store.clone();
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            GitCometView::new(store_for_view, events, None, window, cx)
+        });
 
         cx.update(|window, app| {
             install_app_shortcuts_for_test(app, Arc::clone(&backend));
             let _ = window.draw(app);
             window.activate_window();
         });
+        seed_workspace_repo(cx, &store, view);
 
         cx.simulate_keystrokes("secondary-shift-o");
         cx.update(|window, app| {

@@ -85,10 +85,11 @@ fn explicit_initial_repository_mode_seeds_empty_session() {
 }
 
 #[test]
-fn splash_backdrop_svg_rasterizes_via_resvg() {
-    assert!(
-        super::splash::rasterize_splash_backdrop_image().is_some(),
-        "expected splash backdrop SVG to rasterize via resvg"
+fn splash_backdrop_embedded_png_decodes() {
+    assert_eq!(
+        super::splash::load_splash_backdrop_image().format(),
+        gpui::ImageFormat::Png,
+        "expected splash backdrop image to decode from embedded PNG bytes"
     );
 }
 
@@ -1413,6 +1414,8 @@ fn splash_screen_renders_when_no_repositories_are_open(cx: &mut gpui::TestAppCon
 
     cx.debug_bounds("repository_entry_screen")
         .expect("expected repository entry splash screen");
+    cx.debug_bounds("splash_headline")
+        .expect("expected splash headline");
     cx.debug_bounds("splash_open_repo_action")
         .expect("expected splash open repository button");
     cx.debug_bounds("splash_clone_repo_action")
@@ -1443,6 +1446,13 @@ fn splash_backdrop_renders_native_layers(cx: &mut gpui::TestAppContext) {
         .expect("expected native splash backdrop root");
     cx.debug_bounds("splash_backdrop_image")
         .expect("expected SVG-backed splash image layer");
+    cx.update(|_window, app| {
+        assert_eq!(
+            view.read(app).splash_backdrop_image.format(),
+            gpui::ImageFormat::Png,
+            "expected splash backdrop to be preloaded before the first draw"
+        );
+    });
     assert!(
         cx.debug_bounds("splash_backdrop_glow_layer").is_none(),
         "expected legacy procedural glow layer to be removed"
@@ -1458,6 +1468,48 @@ fn splash_backdrop_renders_native_layers(cx: &mut gpui::TestAppContext) {
 
     let splash_active = cx.update(|_window, app| view.read(app).is_splash_screen_active());
     assert!(splash_active, "expected splash screen to remain active");
+}
+
+#[gpui::test]
+fn splash_screen_buttons_publish_expected_tooltips(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    cx.update(|window, app| {
+        view.update(app, |this, _cx| this.disable_poller_for_tests());
+        let _ = window.draw(app);
+    });
+
+    let open_center = cx
+        .debug_bounds("splash_open_repo_action")
+        .expect("expected splash open repository button")
+        .center();
+    cx.simulate_mouse_move(open_center, None, gpui::Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|_window, app| {
+        assert_eq!(
+            view.read(app)
+                .tooltip_text_for_test(app)
+                .map(|text| text.to_string()),
+            Some("Open repository".to_string())
+        );
+    });
+
+    let clone_center = cx
+        .debug_bounds("splash_clone_repo_action")
+        .expect("expected splash clone repository button")
+        .center();
+    cx.simulate_mouse_move(clone_center, None, gpui::Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|_window, app| {
+        assert_eq!(
+            view.read(app)
+                .tooltip_text_for_test(app)
+                .map(|text| text.to_string()),
+            Some("Clone repository".to_string())
+        );
+    });
 }
 
 #[gpui::test]
@@ -1521,6 +1573,66 @@ fn closing_last_repository_tab_returns_to_splash_screen(cx: &mut gpui::TestAppCo
         splash_active,
         "expected splash screen to return after closing the last repo"
     );
+}
+
+#[gpui::test]
+fn splash_screen_clears_stale_close_repository_tooltip(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_assert = store.clone();
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    store_for_assert.dispatch(Msg::OpenRepo(PathBuf::from(
+        "/tmp/splash-tooltip-clear-test",
+    )));
+    wait_until("repository tab to be added", || {
+        !store_for_assert.snapshot().repos.is_empty()
+    });
+    pump_for(cx, Duration::from_millis(120));
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let _ = this.tooltip_host.update(cx, |host, cx| {
+                host.set_tooltip_text_if_changed(Some("Close repository".into()), cx);
+            });
+        });
+        assert_eq!(
+            view.read(app)
+                .tooltip_text_for_test(app)
+                .map(|text| text.to_string()),
+            Some("Close repository".to_string())
+        );
+    });
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            assert!(
+                this.close_active_repo_tab(cx),
+                "expected the active repo tab to close"
+            );
+        });
+    });
+
+    wait_until("last repository tab to close", || {
+        store_for_assert.snapshot().repos.is_empty()
+    });
+    pump_for(cx, Duration::from_millis(120));
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    cx.update(|_window, app| {
+        assert_eq!(
+            view.read(app).tooltip_text_for_test(app),
+            None,
+            "expected splash transition to clear stale repository-close tooltip text"
+        );
+    });
 }
 
 #[test]

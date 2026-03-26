@@ -2149,10 +2149,13 @@ pub(in crate::view) struct MainPaneView {
 
     pub(in crate::view) file_image_diff_cache_repo_id: Option<RepoId>,
     pub(in crate::view) file_image_diff_cache_rev: u64,
+    pub(in crate::view) file_image_diff_cache_content_signature: Option<u64>,
     pub(in crate::view) file_image_diff_cache_target: Option<DiffTarget>,
+    pub(in crate::view) file_image_diff_cache_seq: u64,
+    pub(in crate::view) file_image_diff_cache_inflight: Option<u64>,
     pub(in crate::view) file_image_diff_cache_path: Option<std::path::PathBuf>,
-    pub(in crate::view) file_image_diff_cache_old: Option<Arc<gpui::Image>>,
-    pub(in crate::view) file_image_diff_cache_new: Option<Arc<gpui::Image>>,
+    pub(in crate::view) file_image_diff_cache_old: Option<Arc<gpui::RenderImage>>,
+    pub(in crate::view) file_image_diff_cache_new: Option<Arc<gpui::RenderImage>>,
     pub(in crate::view) file_image_diff_cache_old_svg_path: Option<std::path::PathBuf>,
     pub(in crate::view) file_image_diff_cache_new_svg_path: Option<std::path::PathBuf>,
 

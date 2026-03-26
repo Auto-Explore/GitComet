@@ -3,53 +3,35 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::OnceLock;
 
-const SPLASH_BACKDROP_RASTER_WIDTH_PX: f32 = 960.0;
-const SPLASH_BACKDROP_MAX_EDGE_PX: f32 = 1024.0;
-static SPLASH_BACKDROP_IMAGE_CACHE: OnceLock<Option<Arc<gpui::Image>>> = OnceLock::new();
+const SPLASH_BACKDROP_PNG_BYTES: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/splash_backdrop.png"));
+static SPLASH_BACKDROP_IMAGE_CACHE: OnceLock<Arc<gpui::Image>> = OnceLock::new();
 
-pub(in crate::view) fn rasterize_splash_backdrop_image() -> Option<Arc<gpui::Image>> {
+struct SplashInteractiveColors {
+    base: gpui::Rgba,
+    hover: gpui::Rgba,
+    active: gpui::Rgba,
+}
+
+struct SplashCtaButtonColors {
+    icon: gpui::Rgba,
+    text: gpui::Rgba,
+    background: SplashInteractiveColors,
+    border: SplashInteractiveColors,
+}
+
+pub(in crate::view) fn load_splash_backdrop_image() -> Arc<gpui::Image> {
     SPLASH_BACKDROP_IMAGE_CACHE
         .get_or_init(|| {
-            super::diff_utils::rasterize_svg_image(
-                include_bytes!("../../../../assets/splash_backdrop.svg"),
-                SPLASH_BACKDROP_RASTER_WIDTH_PX,
-                SPLASH_BACKDROP_MAX_EDGE_PX,
-            )
+            Arc::new(gpui::Image::from_bytes(
+                gpui::ImageFormat::Png,
+                SPLASH_BACKDROP_PNG_BYTES.to_vec(),
+            ))
         })
         .clone()
 }
 
 impl GitCometView {
-    pub(in crate::view) fn maybe_load_splash_backdrop(&mut self, cx: &mut gpui::Context<Self>) {
-        if self.splash_backdrop_image.is_some() || self.splash_backdrop_loading {
-            return;
-        }
-
-        #[cfg(test)]
-        {
-            let _ = cx;
-            return;
-        }
-
-        #[cfg(not(test))]
-        {
-            self.splash_backdrop_loading = true;
-            cx.spawn(
-                async move |view: WeakEntity<GitCometView>, cx: &mut gpui::AsyncApp| {
-                    let image = smol::unblock(rasterize_splash_backdrop_image).await;
-                    let _ = view.update(cx, |this, cx| {
-                        this.splash_backdrop_loading = false;
-                        if this.splash_backdrop_image.is_none() {
-                            this.splash_backdrop_image = image;
-                            cx.notify();
-                        }
-                    });
-                },
-            )
-            .detach();
-        }
-    }
-
     fn splash_backdrop_base() -> gpui::Background {
         gpui::linear_gradient(
             180.0,
@@ -66,15 +48,14 @@ impl GitCometView {
             .size_full()
             .id("splash_backdrop_image")
             .debug_selector(|| "splash_backdrop_image".to_string())
-            .children(self.splash_backdrop_image.clone().map(|image| {
-                gpui::img(image)
+            .child(
+                gpui::img(self.splash_backdrop_image.clone())
                     .absolute()
                     .top_0()
                     .left_0()
                     .size_full()
-                    .object_fit(gpui::ObjectFit::Fill)
-                    .into_any_element()
-            }))
+                    .object_fit(gpui::ObjectFit::Fill),
+            )
             .into_any_element()
     }
 
@@ -108,6 +89,23 @@ impl GitCometView {
             .update(cx, |bar, cx| bar.set_workspace_actions_enabled(enabled, cx));
     }
 
+    fn set_tooltip_text_if_changed(
+        &mut self,
+        next: Option<SharedString>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let _ = self
+            .tooltip_host
+            .update(cx, |host, cx| host.set_tooltip_text_if_changed(next, cx));
+    }
+
+    fn clear_tooltip_if_matches(&mut self, tooltip: &SharedString, cx: &mut gpui::Context<Self>) {
+        let tooltip = tooltip.clone();
+        let _ = self
+            .tooltip_host
+            .update(cx, |host, cx| host.clear_tooltip_if_matches(&tooltip, cx));
+    }
+
     fn interstitial_logo(_theme: AppTheme, size: Pixels) -> AnyElement {
         div()
             .id("repository_entry_logo")
@@ -134,16 +132,25 @@ impl GitCometView {
         id: &'static str,
         label: &'static str,
         icon_path: &'static str,
-        icon_color: gpui::Rgba,
-        text_color: gpui::Rgba,
-        bg: gpui::Rgba,
-        hover_bg: gpui::Rgba,
-        active_bg: gpui::Rgba,
-        border: gpui::Rgba,
-        hover_border: gpui::Rgba,
-        active_border: gpui::Rgba,
+        colors: SplashCtaButtonColors,
     ) -> gpui::Stateful<gpui::Div> {
         let focus_ring = gpui::rgba(0x79d0ffeb);
+        let SplashCtaButtonColors {
+            icon: icon_color,
+            text: text_color,
+            background,
+            border: border_colors,
+        } = colors;
+        let SplashInteractiveColors {
+            base: bg,
+            hover: hover_bg,
+            active: active_bg,
+        } = background;
+        let SplashInteractiveColors {
+            base: border,
+            hover: hover_border,
+            active: active_border,
+        } = border_colors;
 
         div()
             .id(id)
@@ -159,11 +166,11 @@ impl GitCometView {
             .border_color(border)
             .bg(bg)
             .text_size(px(13.0))
-            .font_weight(FontWeight::SEMIBOLD)
+            .font_weight(FontWeight::BOLD)
             .text_color(text_color)
             .cursor(CursorStyle::PointingHand)
             .whitespace_nowrap()
-            .child(svg_icon(icon_path, icon_color, px(13.0)))
+            .child(svg_icon(icon_path, icon_color, px(14.0)))
             .child(label)
             .focus(move |s| s.border_color(focus_ring))
             .hover(move |s| s.bg(hover_bg).border_color(hover_border))
@@ -270,29 +277,62 @@ impl GitCometView {
         let primary_hover = gpui::rgba(0x72c7ffff);
         let primary_active = gpui::rgba(0x48b6eeff);
         let primary_text = gpui::rgba(0x04172bff);
+        let primary_button_colors = SplashCtaButtonColors {
+            icon: primary_text,
+            text: primary_text,
+            background: SplashInteractiveColors {
+                base: primary_bg,
+                hover: primary_hover,
+                active: primary_active,
+            },
+            border: SplashInteractiveColors {
+                base: primary_bg,
+                hover: primary_hover,
+                active: primary_active,
+            },
+        };
         let secondary_bg = gpui::rgba(0xffffff26);
         let secondary_hover = gpui::rgba(0xffffff33);
         let secondary_active = gpui::rgba(0xffffff40);
         let secondary_border = gpui::rgba(0xffffff47);
         let secondary_hover_border = gpui::rgba(0xffffff66);
         let secondary_active_border = gpui::rgba(0xffffff80);
+        let secondary_button_colors = SplashCtaButtonColors {
+            icon: hero_text,
+            text: hero_text,
+            background: SplashInteractiveColors {
+                base: secondary_bg,
+                hover: secondary_hover,
+                active: secondary_active,
+            },
+            border: SplashInteractiveColors {
+                base: secondary_border,
+                hover: secondary_hover_border,
+                active: secondary_active_border,
+            },
+        };
         let panel_shadow = gpui::rgba(0x00000059);
+        let open_tooltip: SharedString = "Open repository".into();
+        let clone_tooltip: SharedString = "Clone repository".into();
 
         let open_button = Self::splash_cta_button(
             "splash_open_repo",
             "Open Repository",
             "icons/folder.svg",
-            primary_text,
-            primary_text,
-            primary_bg,
-            primary_hover,
-            primary_active,
-            primary_bg,
-            primary_hover,
-            primary_active,
+            primary_button_colors,
         )
         .on_click(cx.listener(|this, _e, window, cx| {
             this.prompt_open_repo(window, cx);
+        }))
+        .on_hover(cx.listener({
+            let open_tooltip = open_tooltip.clone();
+            move |this, hovering: &bool, _w, cx| {
+                if *hovering {
+                    this.set_tooltip_text_if_changed(Some(open_tooltip.clone()), cx);
+                } else {
+                    this.clear_tooltip_if_matches(&open_tooltip, cx);
+                }
+            }
         }));
 
         let clone_button = {
@@ -304,19 +344,22 @@ impl GitCometView {
                 "splash_clone_repo",
                 "Clone Repository",
                 "icons/cloud.svg",
-                hero_text,
-                hero_text,
-                secondary_bg,
-                secondary_hover,
-                secondary_active,
-                secondary_border,
-                secondary_hover_border,
-                secondary_active_border,
+                secondary_button_colors,
             )
             .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
                 let bounds = (*last_bounds_for_click.borrow())
                     .unwrap_or_else(|| Bounds::new(e.position(), size(px(0.0), px(0.0))));
                 this.open_popover_for_bounds(PopoverKind::CloneRepo, bounds, window, cx);
+            }))
+            .on_hover(cx.listener({
+                let clone_tooltip = clone_tooltip.clone();
+                move |this, hovering: &bool, _w, cx| {
+                    if *hovering {
+                        this.set_tooltip_text_if_changed(Some(clone_tooltip.clone()), cx);
+                    } else {
+                        this.clear_tooltip_if_matches(&clone_tooltip, cx);
+                    }
+                }
             }));
 
             div()
@@ -404,6 +447,8 @@ impl GitCometView {
                                 .gap(px(12.0))
                                 .child(
                                     div()
+                                        .id("splash_headline")
+                                        .debug_selector(|| "splash_headline".to_string())
                                         .max_w(px(560.0))
                                         .flex()
                                         .flex_col()
@@ -556,14 +601,13 @@ impl GitCometView {
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         let theme = self.theme;
+        let _ = cx;
 
         if self.is_startup_repository_loading_screen_active() {
-            self.maybe_load_splash_backdrop(cx);
             return self.startup_repository_loading_screen();
         }
 
         if self.is_splash_screen_active() {
-            self.maybe_load_splash_backdrop(cx);
             return self.splash_screen(cx);
         }
 

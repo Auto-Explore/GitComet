@@ -2313,6 +2313,7 @@ dependencies = [
  "gitcomet-state",
  "gitcomet-win32-window-utils",
  "gpui",
+ "image",
  "lru",
  "metal 0.33.0",
  "pulldown-cmark",

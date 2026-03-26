@@ -110,7 +110,7 @@ impl MainPaneView {
                     } else {
                         enum CachedDiffImageSource {
                             Path(std::path::PathBuf),
-                            Image(Arc<gpui::Image>),
+                            Render(Arc<gpui::RenderImage>),
                         }
 
                         let old = self
@@ -120,7 +120,7 @@ impl MainPaneView {
                             .or_else(|| {
                                 self.file_image_diff_cache_old
                                     .clone()
-                                    .map(CachedDiffImageSource::Image)
+                                    .map(CachedDiffImageSource::Render)
                             });
                         let new = self
                             .file_image_diff_cache_new_svg_path
@@ -129,7 +129,7 @@ impl MainPaneView {
                             .or_else(|| {
                                 self.file_image_diff_cache_new
                                     .clone()
-                                    .map(CachedDiffImageSource::Image)
+                                    .map(CachedDiffImageSource::Render)
                             });
 
                         let cell = |id: &'static str, image: Option<CachedDiffImageSource>| {
@@ -173,7 +173,7 @@ impl MainPaneView {
                                             })
                                             .into_any_element()
                                     }
-                                    Some(CachedDiffImageSource::Image(img_data)) => {
+                                    Some(CachedDiffImageSource::Render(img_data)) => {
                                         gpui::img(img_data)
                                             .w_full()
                                             .h_full()

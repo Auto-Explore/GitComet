@@ -129,6 +129,11 @@ impl RepoTabsBarView {
                 this.hovered_repo_tab = None;
             }
 
+            if this.state.repos.is_empty() {
+                let close_tooltip: SharedString = "Close repository".into();
+                this.clear_tooltip_if_matches(&close_tooltip, cx);
+            }
+
             if next_fingerprint != this.notify_fingerprint {
                 this.notify_fingerprint = next_fingerprint;
                 cx.notify();
