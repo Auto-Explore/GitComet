@@ -1,27 +1,17 @@
-; Vendored from Zed (zed/extensions/html/languages/html/highlights.scm)
+; Derived from
+; gpui-component/crates/ui/src/highlighter/languages/html/highlights.scm
+; (Apache-2.0).
 
 (tag_name) @tag
-
-(doctype) @tag.doctype
-
+(erroneous_end_tag_name) @tag.error
+(doctype) @constant
 (attribute_name) @attribute
-
-[
-  "\""
-  "'"
-  (attribute_value)
-] @string
-
+(attribute_value) @string
 (comment) @comment
-
-(entity) @string.special
-
-"=" @punctuation.delimiter
 
 [
   "<"
   ">"
-  "<!"
   "</"
   "/>"
 ] @punctuation.bracket

@@ -49,6 +49,7 @@ mod icons;
 mod linux_desktop_integration;
 mod markdown_preview;
 mod mod_helpers;
+mod open_source_licenses_data;
 mod panels;
 mod panes;
 mod patch_split;
@@ -58,6 +59,8 @@ pub(super) mod platform_open;
 mod poller;
 mod repo_open;
 pub(crate) mod rows;
+mod settings_window;
+mod splash;
 mod state_apply;
 mod toast_host;
 mod tooltip;
@@ -90,16 +93,17 @@ use diff_utils::{
     build_unified_patch_for_selected_lines_across_hunks_for_worktree_discard,
     compute_diff_file_for_src_ix, compute_diff_file_stats,
     context_menu_selection_range_from_diff_text, diff_content_text, image_format_for_path,
-    parse_diff_git_header_path, parse_unified_hunk_header_for_display, rasterize_svg_preview_image,
+    parse_diff_git_header_path, parse_unified_hunk_header_for_display,
     scrollbar_markers_from_flags,
 };
 use mod_helpers::*;
 pub use mod_helpers::{
     FocusedMergetoolLabels, FocusedMergetoolViewConfig, GitCometView, GitCometViewConfig,
-    GitCometViewMode, StartupCrashReport,
+    GitCometViewMode, InitialRepositoryLaunchMode, StartupCrashReport,
 };
 use panels::{ActionBarView, PopoverHost, RepoTabsBarView};
-use panes::{DetailsPaneView, HistoryView, MainPaneView, SidebarPaneView};
+use panes::{DetailsPaneInit, DetailsPaneView, HistoryView, MainPaneView, SidebarPaneView};
+pub(crate) use settings_window::open_settings_window;
 use toast_host::ToastHost;
 use tooltip_host::TooltipHost;
 
@@ -144,19 +148,7 @@ const TOAST_FADE_IN_MS: u64 = 180;
 const TOAST_FADE_OUT_MS: u64 = 220;
 const TOAST_SLIDE_PX: f32 = 12.0;
 
-#[cfg(target_os = "windows")]
-pub(crate) const UI_MONOSPACE_FONT_FAMILY: &str = "Consolas";
-#[cfg(target_os = "macos")]
-pub(crate) const UI_MONOSPACE_FONT_FAMILY: &str = "Menlo";
-#[cfg(any(target_os = "linux", target_os = "freebsd"))]
-pub(crate) const UI_MONOSPACE_FONT_FAMILY: &str = "DejaVu Sans Mono";
-#[cfg(not(any(
-    target_os = "windows",
-    target_os = "macos",
-    target_os = "linux",
-    target_os = "freebsd"
-)))]
-pub(crate) const UI_MONOSPACE_FONT_FAMILY: &str = "monospace";
+pub(crate) const UI_MONOSPACE_FONT_FAMILY: &str = crate::bundled_fonts::LILEX_FONT_FAMILY;
 
 impl GitCometView {
     #[cfg(test)]
@@ -227,13 +219,11 @@ impl GitCometView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Self {
-        Self::new_with_config(
-            store,
-            events,
-            GitCometViewConfig::normal(initial_path, None),
-            window,
-            cx,
-        )
+        let config = match initial_path {
+            Some(path) => GitCometViewConfig::normal_with_initial_repository(path, None),
+            None => GitCometViewConfig::normal(None),
+        };
+        Self::new_with_config(store, events, config, window, cx)
     }
 
     pub fn new_with_config(
@@ -245,6 +235,7 @@ impl GitCometView {
     ) -> Self {
         let GitCometViewConfig {
             mut initial_path,
+            initial_repository_launch_mode,
             view_mode,
             focused_mergetool,
             focused_mergetool_exit_code,
@@ -264,8 +255,14 @@ impl GitCometView {
         let store = Arc::new(store);
 
         let mut ui_session = session::load();
-        if view_mode == GitCometViewMode::Normal
-            && let Some(path) = initial_path.as_ref()
+        let _font_preferences =
+            crate::font_preferences::current_or_initialize_from_session(window, &ui_session, cx);
+        if should_seed_initial_repository_from_session(
+            view_mode,
+            initial_path.as_deref(),
+            initial_repository_launch_mode,
+            !ui_session.open_repos.is_empty(),
+        ) && let Some(path) = initial_path.as_ref()
         {
             if !ui_session.open_repos.iter().any(|p| p == path) {
                 ui_session.open_repos.push(path.clone());
@@ -292,10 +289,18 @@ impl GitCometView {
             .and_then(Timezone::from_key)
             .unwrap_or_default();
         let show_timezone = ui_session.show_timezone.unwrap_or(true);
+        let change_tracking_view = ui_session
+            .change_tracking_view
+            .as_deref()
+            .and_then(ChangeTrackingView::from_key)
+            .unwrap_or_default();
+        let restored_change_tracking_height = ui_session.change_tracking_height;
+        let restored_untracked_height = ui_session.untracked_height;
 
         let history_show_author = ui_session.history_show_author.unwrap_or(true);
         let history_show_date = ui_session.history_show_date.unwrap_or(true);
         let history_show_sha = ui_session.history_show_sha.unwrap_or(false);
+        let mut startup_repo_bootstrap_pending = false;
 
         // Only auto-restore/open on startup if the store hasn't already been preloaded.
         // This avoids re-opening repos (and changing RepoIds) when the UI is attached to an
@@ -320,8 +325,7 @@ impl GitCometView {
                     open_repos: ui_session.open_repos,
                     active_repo: ui_session.active_repo,
                 });
-            } else if let Ok(path) = std::env::current_dir() {
-                store.dispatch(Msg::OpenRepo(path));
+                startup_repo_bootstrap_pending = true;
             }
         } else if store_preloaded {
             if let Some(path) = initial_path.as_ref() {
@@ -329,9 +333,13 @@ impl GitCometView {
             }
         } else if let Some(path) = initial_path.as_ref() {
             store.dispatch(Msg::OpenRepo(path.clone()));
+            startup_repo_bootstrap_pending = true;
         }
 
         let initial_state = store.snapshot();
+        if !initial_state.repos.is_empty() {
+            startup_repo_bootstrap_pending = false;
+        }
         let ui_model = cx.new(|_cx| AppUiModel::new(Arc::clone(&initial_state)));
 
         let ui_model_subscription = cx.observe(&ui_model, |this, model, cx| {
@@ -345,7 +353,13 @@ impl GitCometView {
         let weak_view = cx.weak_entity();
         let poller = Poller::start(Arc::clone(&store), events, ui_model.downgrade(), window, cx);
 
-        let title_bar = cx.new(|_cx| TitleBarView::new(initial_theme, weak_view.clone()));
+        let title_bar = cx.new(|_cx| {
+            TitleBarView::new(
+                initial_theme,
+                weak_view.clone(),
+                titlebar_workspace_actions_enabled(view_mode, !initial_state.repos.is_empty()),
+            )
+        });
         let tooltip_host = cx.new(|_cx| TooltipHost::new(initial_theme));
         let toast_host = cx
             .new(|_cx| ToastHost::new(initial_theme, tooltip_host.downgrade(), weak_view.clone()));
@@ -375,6 +389,7 @@ impl GitCometView {
                 Arc::clone(&store),
                 ui_model.clone(),
                 initial_theme,
+                ui_session.repo_sidebar_collapsed_items.clone(),
                 weak_view.clone(),
                 tooltip_host.downgrade(),
                 cx,
@@ -404,9 +419,14 @@ impl GitCometView {
             DetailsPaneView::new(
                 Arc::clone(&store),
                 ui_model.clone(),
-                initial_theme,
-                weak_view.clone(),
-                tooltip_host.downgrade(),
+                DetailsPaneInit {
+                    theme: initial_theme,
+                    change_tracking_view,
+                    change_tracking_height: restored_change_tracking_height,
+                    untracked_height: restored_untracked_height,
+                    root_view: weak_view.clone(),
+                    tooltip_host: tooltip_host.downgrade(),
+                },
                 window,
                 cx,
             )
@@ -421,6 +441,7 @@ impl GitCometView {
                 date_time_format,
                 timezone,
                 show_timezone,
+                change_tracking_view,
                 weak_view.clone(),
                 main_pane.clone(),
                 details_pane.clone(),
@@ -531,6 +552,7 @@ impl GitCometView {
 
         let mut view = Self {
             state: Arc::clone(&initial_state),
+            window_handle: window.window_handle(),
             _ui_model: ui_model,
             store,
             _poller: poller,
@@ -550,12 +572,15 @@ impl GitCometView {
             toast_host,
             popover_host,
             focused_mergetool_bootstrap,
+            startup_repo_bootstrap_pending,
+            splash_backdrop_image: splash::load_splash_backdrop_image(),
             last_window_size: size(px(0.0), px(0.0)),
             ui_window_size_last_seen: size(px(0.0), px(0.0)),
             ui_settings_persist_seq: 0,
             date_time_format,
             timezone,
             show_timezone,
+            change_tracking_view,
             open_repo_panel: false,
             open_repo_input,
             hover_resize_edge: None,
@@ -575,8 +600,9 @@ impl GitCometView {
             pending_force_delete_branch_prompt: None,
             pending_force_remove_worktree_prompt: None,
             startup_crash_report,
+            #[cfg(target_os = "macos")]
+            recent_repos_menu_fingerprint: ui_session.recent_repos.clone(),
             error_banner_input,
-            transient_error_banner: None,
             auth_prompt_username_input,
             auth_prompt_secret_input,
             auth_prompt_key: None,
@@ -590,6 +616,18 @@ impl GitCometView {
 
         view.drive_focused_mergetool_bootstrap();
         view.maybe_check_for_updates_on_startup(cx);
+
+        crate::app::sync_gitcomet_window_state(
+            cx,
+            view.window_handle,
+            cx.weak_entity(),
+            view.view_mode,
+            view.state
+                .repos
+                .iter()
+                .map(|repo| repo.spec.workdir.clone())
+                .collect(),
+        );
 
         view
     }
@@ -624,6 +662,26 @@ impl GitCometView {
             .update(cx, |input, cx| input.set_theme(theme, cx));
     }
 
+    fn notify_font_preferences_changed(&mut self, cx: &mut gpui::Context<Self>) {
+        self.title_bar.update(cx, |_bar, cx| cx.notify());
+        self.sidebar_pane.update(cx, |_pane, cx| cx.notify());
+        self.main_pane
+            .update(cx, |pane, cx| pane.invalidate_font_metrics(cx));
+        self.details_pane.update(cx, |_pane, cx| cx.notify());
+        self.repo_tabs_bar.update(cx, |_bar, cx| cx.notify());
+        self.action_bar.update(cx, |_bar, cx| cx.notify());
+        self.tooltip_host.update(cx, |_host, cx| cx.notify());
+        self.toast_host.update(cx, |_host, cx| cx.notify());
+        self.popover_host.update(cx, |_host, cx| cx.notify());
+        self.open_repo_input.update(cx, |_input, cx| cx.notify());
+        self.error_banner_input.update(cx, |_input, cx| cx.notify());
+        self.auth_prompt_username_input
+            .update(cx, |_input, cx| cx.notify());
+        self.auth_prompt_secret_input
+            .update(cx, |_input, cx| cx.notify());
+        cx.notify();
+    }
+
     fn set_theme_mode(
         &mut self,
         mode: ThemeMode,
@@ -636,6 +694,23 @@ impl GitCometView {
 
         self.theme_mode = mode;
         self.set_theme(mode.resolve_theme(appearance), cx);
+        self.schedule_ui_settings_persist(cx);
+    }
+
+    pub(in crate::view) fn set_change_tracking_view(
+        &mut self,
+        next: ChangeTrackingView,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.change_tracking_view == next {
+            return;
+        }
+
+        self.change_tracking_view = next;
+        self.details_pane
+            .update(cx, |pane, cx| pane.set_change_tracking_view(next, cx));
+        self.popover_host
+            .update(cx, |host, cx| host.sync_change_tracking_view(next, cx));
         self.schedule_ui_settings_persist(cx);
     }
 
@@ -1064,29 +1139,22 @@ impl GitCometView {
         rows
     }
 
-    fn set_transient_error_banner(&mut self, message: String, cx: &mut gpui::Context<Self>) {
+    fn show_error_banner(&mut self, repo_id: Option<RepoId>, message: String) {
         if message.trim().is_empty() {
             return;
         }
 
         if self
-            .active_repo()
-            .and_then(|repo| repo.last_error.as_deref())
-            == Some(message.as_str())
-        {
-            return;
-        }
-
-        if self
-            .transient_error_banner
+            .state
+            .banner_error
             .as_ref()
-            .is_some_and(|banner| banner.as_ref() == message.as_str())
+            .is_some_and(|banner| banner.repo_id == repo_id && banner.message == message)
         {
             return;
         }
 
-        self.transient_error_banner = Some(message.into());
-        cx.notify();
+        self.store
+            .dispatch(Msg::ShowBannerError { repo_id, message });
     }
 
     fn split_error_banner_message(err_text: &str) -> (Option<SharedString>, SharedString) {
@@ -1146,7 +1214,7 @@ impl GitCometView {
         cx: &mut gpui::Context<Self>,
     ) {
         if matches!(kind, components::ToastKind::Error) {
-            self.set_transient_error_banner(message, cx);
+            self.show_error_banner(self.active_repo_id(), message);
             return;
         }
         self.toast_host
@@ -1163,7 +1231,7 @@ impl GitCometView {
         cx: &mut gpui::Context<Self>,
     ) {
         if matches!(kind, components::ToastKind::Error) {
-            self.set_transient_error_banner(message, cx);
+            self.show_error_banner(self.active_repo_id(), message);
             return;
         }
         self.toast_host.update(cx, |host, cx| {
@@ -1184,11 +1252,22 @@ impl GitCometView {
     pub(crate) fn tooltip_text_for_test(&self, app: &App) -> Option<SharedString> {
         self.tooltip_host.read(app).tooltip_text_for_test()
     }
+
+    #[cfg(test)]
+    pub(crate) fn show_timezone_for_test(&self) -> bool {
+        self.show_timezone
+    }
+
+    #[cfg(test)]
+    pub(in crate::view) fn change_tracking_view_for_test(&self) -> ChangeTrackingView {
+        self.change_tracking_view
+    }
 }
 
 impl Render for GitCometView {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         let theme = self.theme;
+        let font_preferences = crate::font_preferences::current(cx);
         debug_assert!(matches!(
             self.view_mode,
             GitCometViewMode::Normal | GitCometViewMode::FocusedMergetool
@@ -1245,138 +1324,15 @@ impl Render for GitCometView {
             .map(cursor_style_for_resize_edge)
             .unwrap_or(CursorStyle::Arrow);
 
-        let center_content = if renders_full_chrome(self.view_mode) {
-            div()
-                .flex()
-                .flex_col()
-                .flex_1()
-                .min_h(px(0.0))
-                .child(self.repo_tabs_bar.clone())
-                .child(self.open_repo_panel(cx))
-                .child(self.action_bar.clone())
-                .child(
-                    div()
-                        .flex()
-                        .flex_row()
-                        .flex_1()
-                        .min_h(px(0.0))
-                        .child(
-                            div()
-                                .id("sidebar_pane")
-                                .relative()
-                                .w(self.sidebar_render_width)
-                                .min_h(px(0.0))
-                                .bg(theme.colors.surface_bg)
-                                .when(self.sidebar_collapsed, |d| {
-                                    d.border_r_1().border_color(theme.colors.border)
-                                })
-                                .when(!self.sidebar_collapsed, |d| {
-                                    d.child(self.sidebar_pane.clone())
-                                })
-                                .child(
-                                    div().absolute().bottom(px(6.0)).right(px(6.0)).child(
-                                        components::Button::new("sidebar_toggle", "")
-                                            .start_slot(svg_icon(
-                                                if self.sidebar_collapsed {
-                                                    "icons/arrow_right.svg"
-                                                } else {
-                                                    "icons/arrow_left.svg"
-                                                },
-                                                theme.colors.text_muted,
-                                                px(12.0),
-                                            ))
-                                            .style(components::ButtonStyle::Transparent)
-                                            .on_click(theme, cx, |this, _e, _w, cx| {
-                                                this.set_sidebar_collapsed(
-                                                    !this.sidebar_collapsed,
-                                                    cx,
-                                                );
-                                            }),
-                                    ),
-                                ),
-                        )
-                        .child(self.pane_resize_handle(
-                            theme,
-                            "pane_resize_sidebar",
-                            PaneResizeHandle::Sidebar,
-                            cx,
-                        ))
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w(px(0.0))
-                                .min_h(px(0.0))
-                                .child(self.main_pane.clone()),
-                        )
-                        .child(self.pane_resize_handle(
-                            theme,
-                            "pane_resize_details",
-                            PaneResizeHandle::Details,
-                            cx,
-                        ))
-                        .child(
-                            div()
-                                .id("details_pane")
-                                .relative()
-                                .w(self.details_render_width)
-                                .min_h(px(0.0))
-                                .flex()
-                                .flex_col()
-                                .when(self.details_collapsed, |d| {
-                                    d.border_l_1().border_color(theme.colors.border)
-                                })
-                                .when(!self.details_collapsed, |d| {
-                                    d.child(
-                                        div()
-                                            .flex_1()
-                                            .min_h(px(0.0))
-                                            .child(self.details_pane.clone()),
-                                    )
-                                })
-                                .child(
-                                    div().absolute().bottom(px(6.0)).left(px(6.0)).child(
-                                        components::Button::new("details_toggle", "")
-                                            .start_slot(svg_icon(
-                                                if self.details_collapsed {
-                                                    "icons/arrow_left.svg"
-                                                } else {
-                                                    "icons/arrow_right.svg"
-                                                },
-                                                theme.colors.text_muted,
-                                                px(12.0),
-                                            ))
-                                            .style(components::ButtonStyle::Transparent)
-                                            .on_click(theme, cx, |this, _e, _w, cx| {
-                                                this.set_details_collapsed(
-                                                    !this.details_collapsed,
-                                                    cx,
-                                                );
-                                            }),
-                                    ),
-                                ),
-                        ),
-                )
-                .into_any_element()
-        } else {
-            div()
-                .flex()
-                .flex_col()
-                .flex_1()
-                .min_h(px(0.0))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w(px(0.0))
-                        .min_h(px(0.0))
-                        .child(self.main_pane.clone()),
-                )
-                .into_any_element()
-        };
+        let center_content = self.center_content(window, cx);
 
         let mut body = div()
             .flex()
             .flex_col()
             .size_full()
+            .font_family(crate::font_preferences::applied_ui_font_family(
+                &font_preferences.ui_font_family,
+            ))
             .text_color(theme.colors.text)
             .child(self.title_bar.clone())
             .child(center_content);
@@ -1611,23 +1567,16 @@ impl Render for GitCometView {
             self.auth_prompt_key = None;
         }
 
-        let repo_error = self
-            .active_repo_id()
-            .and_then(|repo_id| {
-                self.active_repo()
-                    .and_then(|repo| repo.last_error.as_ref().map(|err| (repo_id, err.clone())))
-            })
-            .map(|(repo_id, err)| (Some(repo_id), err.into()));
         let banner_error =
             if Self::should_render_generic_error_banner(self.state.auth_prompt.is_some()) {
-                self.transient_error_banner
-                    .clone()
-                    .map(|err| (None, err))
-                    .or(repo_error)
+                self.state
+                    .banner_error
+                    .as_ref()
+                    .map(|banner| banner.message.clone())
             } else {
                 None
             };
-        if let Some((dismiss_repo_id, err_text)) = banner_error {
+        if let Some(err_text) = banner_error {
             let (error_command, display_error) =
                 Self::split_error_banner_message(err_text.as_ref());
             self.error_banner_input.update(cx, |input, cx| {
@@ -1643,16 +1592,8 @@ impl Render for GitCometView {
                     px(12.0),
                 ))
                 .style(components::ButtonStyle::Transparent)
-                .on_click(theme, cx, move |this, _e, _w, cx| {
-                    if this.transient_error_banner.take().is_some() {
-                        cx.notify();
-                        return;
-                    }
-
-                    if let Some(repo_id) = dismiss_repo_id {
-                        this.store.dispatch(Msg::DismissRepoError { repo_id });
-                    }
-                    cx.notify();
+                .on_click(theme, cx, move |this, _e, _w, _cx| {
+                    this.store.dispatch(Msg::DismissBannerError);
                 });
 
             let command_block = error_command.as_ref().map(|command| {

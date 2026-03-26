@@ -6,12 +6,10 @@ impl GitCometView {
         next: Arc<AppState>,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
-        let prev_error = self.active_repo().and_then(|repo| repo.last_error.clone());
+        let prev_had_repos = !self.state.repos.is_empty();
+        let prev_banner_error = self.state.banner_error.clone();
         let prev_auth_prompt = self.state.auth_prompt.clone();
-        let next_error = next
-            .active_repo
-            .and_then(|repo_id| next.repos.iter().find(|repo| repo.id == repo_id))
-            .and_then(|repo| repo.last_error.clone());
+        let next_banner_error = next.banner_error.clone();
 
         let old_notification_len = self.state.notifications.len();
         let new_notifications = next
@@ -22,10 +20,13 @@ impl GitCometView {
             .collect::<Vec<_>>();
         for notification in new_notifications {
             let kind = match notification.kind {
-                AppNotificationKind::Error => components::ToastKind::Error,
                 AppNotificationKind::Warning => components::ToastKind::Warning,
                 AppNotificationKind::Info | AppNotificationKind::Success => {
                     components::ToastKind::Success
+                }
+                AppNotificationKind::Error => {
+                    self.show_error_banner(None, notification.message);
+                    continue;
                 }
             };
             self.push_toast(kind, notification.message, cx);
@@ -53,7 +54,7 @@ impl GitCometView {
                 {
                     self.pending_force_delete_branch_prompt = Some((next_repo.id, name));
                 }
-                self.push_toast(components::ToastKind::Error, msg, cx);
+                self.show_error_banner(Some(next_repo.id), msg);
             }
 
             let new_command_entries = next_repo
@@ -80,15 +81,11 @@ impl GitCometView {
                     continue;
                 }
 
-                self.push_toast(
-                    if entry.ok {
-                        components::ToastKind::Success
-                    } else {
-                        components::ToastKind::Error
-                    },
-                    entry.summary.clone(),
-                    cx,
-                );
+                if entry.ok {
+                    self.push_toast(components::ToastKind::Success, entry.summary.clone(), cx);
+                } else {
+                    self.show_error_banner(Some(next_repo.id), entry.summary.clone());
+                }
             }
 
             if self.pending_pull_reconcile_prompt.is_none()
@@ -117,14 +114,65 @@ impl GitCometView {
             host.sync_clone_progress(next.clone.as_ref(), cx)
         });
 
+        #[cfg(target_os = "macos")]
+        if self.view_mode == GitCometViewMode::Normal {
+            for path in newly_opened_repo_paths(&self.state, next.as_ref()) {
+                cx.add_recent_document(&path);
+            }
+            let recent_repos = session::load().recent_repos;
+            if self.recent_repos_menu_fingerprint != recent_repos {
+                self.recent_repos_menu_fingerprint = recent_repos;
+                crate::app::refresh_macos_app_menus(cx);
+            }
+        }
+
         self.state = next;
+        if !self.state.repos.is_empty() {
+            self.startup_repo_bootstrap_pending = false;
+        }
         if prev_auth_prompt != self.state.auth_prompt {
             self.auth_prompt_key = None;
         }
+        if prev_had_repos && self.state.repos.is_empty() {
+            self.popover_host
+                .update(cx, |host, cx| host.close_popover(cx));
+            self.open_repo_panel = false;
+        }
+        self.sync_title_bar_workspace_actions(cx);
         self.drive_focused_mergetool_bootstrap();
 
-        prev_error != next_error || prev_auth_prompt != self.state.auth_prompt
+        crate::app::sync_gitcomet_window_state(
+            cx,
+            self.window_handle,
+            cx.weak_entity(),
+            self.view_mode,
+            self.state
+                .repos
+                .iter()
+                .map(|repo| repo.spec.workdir.clone())
+                .collect(),
+        );
+
+        prev_banner_error != next_banner_error || prev_auth_prompt != self.state.auth_prompt
     }
+}
+
+#[cfg(target_os = "macos")]
+fn newly_opened_repo_paths(prev: &AppState, next: &AppState) -> Vec<std::path::PathBuf> {
+    next.repos
+        .iter()
+        .filter_map(|next_repo| {
+            if !matches!(next_repo.open, Loadable::Ready(())) {
+                return None;
+            }
+            let was_ready = prev
+                .repos
+                .iter()
+                .find(|repo| repo.id == next_repo.id)
+                .is_some_and(|repo| matches!(repo.open, Loadable::Ready(())));
+            (!was_ready).then(|| next_repo.spec.workdir.clone())
+        })
+        .collect()
 }
 
 fn parse_force_delete_branch_name(message: &str) -> Option<String> {
@@ -179,6 +227,20 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
+    #[cfg(target_os = "macos")]
+    fn repo_with_open_state(repo_id: RepoId, path: &str, ready: bool) -> RepoState {
+        let mut repo = RepoState::new_opening(
+            repo_id,
+            gitcomet_core::domain::RepoSpec {
+                workdir: PathBuf::from(path),
+            },
+        );
+        if ready {
+            repo.open = Loadable::Ready(());
+        }
+        repo
+    }
+
     #[test]
     fn parse_force_remove_worktree_path_prefers_fatal_path() {
         let command = "git worktree remove /tmp/from-command";
@@ -211,5 +273,48 @@ mod tests {
         let command = "git worktree remove --force /tmp/worktree";
         let stderr = "contains modified or untracked files, use --force to delete it";
         assert_eq!(parse_force_remove_worktree_path(command, stderr), None);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn newly_opened_repo_paths_returns_only_repos_that_become_ready() {
+        let prev = AppState {
+            repos: vec![
+                repo_with_open_state(RepoId(1), "/tmp/repo-a", false),
+                repo_with_open_state(RepoId(2), "/tmp/repo-b", true),
+            ],
+            ..Default::default()
+        };
+        let next = AppState {
+            repos: vec![
+                repo_with_open_state(RepoId(1), "/tmp/repo-a", true),
+                repo_with_open_state(RepoId(2), "/tmp/repo-b", true),
+                repo_with_open_state(RepoId(3), "/tmp/repo-c", false),
+            ],
+            ..Default::default()
+        };
+
+        assert_eq!(
+            newly_opened_repo_paths(&prev, &next),
+            vec![PathBuf::from("/tmp/repo-a")]
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn newly_opened_repo_paths_includes_brand_new_ready_repos_and_ignores_loading_ones() {
+        let prev = AppState::default();
+        let next = AppState {
+            repos: vec![
+                repo_with_open_state(RepoId(10), "/tmp/repo-new", true),
+                repo_with_open_state(RepoId(11), "/tmp/repo-loading", false),
+            ],
+            ..Default::default()
+        };
+
+        assert_eq!(
+            newly_opened_repo_paths(&prev, &next),
+            vec![PathBuf::from("/tmp/repo-new")]
+        );
     }
 }

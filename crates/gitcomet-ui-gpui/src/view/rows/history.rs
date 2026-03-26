@@ -8,6 +8,7 @@ use crate::view::markdown_preview::{
     MarkdownPreviewRow, MarkdownPreviewRowKind,
 };
 use crate::view::perf::{self, ViewPerfRenderLane, ViewPerfSpan};
+use rustc_hash::FxHasher;
 
 impl MainPaneView {
     pub(in super::super) fn render_worktree_preview_rows(
@@ -100,16 +101,26 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
         let theme = this.theme;
+        let editor_font_family = crate::font_preferences::current_editor_font_family(cx);
         let Loadable::Ready(document) = &this.worktree_markdown_preview else {
             return Vec::new();
         };
         let document = Arc::clone(document);
         let bar_color = worktree_preview_bar_color(this, theme);
-        let horizontal_scroll_handle = this.worktree_preview_scroll.0.borrow().base_handle.clone();
+        let viewport_width = this
+            .worktree_preview_scroll
+            .0
+            .borrow()
+            .base_handle
+            .bounds()
+            .size
+            .width
+            .max(px(0.0));
         this.update_markdown_preview_horizontal_min_width(
             document.as_ref(),
             range.clone(),
             bar_color,
+            editor_font_family.as_str(),
             window,
             cx,
         );
@@ -119,9 +130,8 @@ impl MainPaneView {
             &MarkdownPreviewRenderContext {
                 theme,
                 bar_color,
-                min_width: this.diff_horizontal_min_width,
-                row_id_prefix: "worktree_markdown_preview",
-                horizontal_scroll_handle: Some(horizontal_scroll_handle),
+                min_width: this.diff_horizontal_min_width.max(viewport_width),
+                editor_font_family,
                 view: Some(cx.entity().clone()),
                 text_region: DiffTextRegion::Inline,
             },
@@ -135,15 +145,25 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
         let theme = this.theme;
+        let editor_font_family = crate::font_preferences::current_editor_font_family(cx);
         let Loadable::Ready(preview) = &this.file_markdown_preview else {
             return Vec::new();
         };
         let preview = Arc::clone(preview);
-        let horizontal_scroll_handle = this.diff_scroll.0.borrow().base_handle.clone();
+        let viewport_width = this
+            .diff_scroll
+            .0
+            .borrow()
+            .base_handle
+            .bounds()
+            .size
+            .width
+            .max(px(0.0));
         this.update_markdown_preview_horizontal_min_width(
             &preview.old,
             range.clone(),
             None,
+            editor_font_family.as_str(),
             window,
             cx,
         );
@@ -157,9 +177,8 @@ impl MainPaneView {
             &MarkdownPreviewRenderContext {
                 theme,
                 bar_color: None,
-                min_width: this.diff_horizontal_min_width,
-                row_id_prefix: "diff_markdown_preview_left",
-                horizontal_scroll_handle: Some(horizontal_scroll_handle),
+                min_width: this.diff_horizontal_min_width.max(viewport_width),
+                editor_font_family,
                 view: Some(cx.entity().clone()),
                 text_region: region,
             },
@@ -173,15 +192,25 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
         let theme = this.theme;
+        let editor_font_family = crate::font_preferences::current_editor_font_family(cx);
         let Loadable::Ready(preview) = &this.file_markdown_preview else {
             return Vec::new();
         };
         let preview = Arc::clone(preview);
-        let horizontal_scroll_handle = this.diff_scroll.0.borrow().base_handle.clone();
+        let viewport_width = this
+            .diff_scroll
+            .0
+            .borrow()
+            .base_handle
+            .bounds()
+            .size
+            .width
+            .max(px(0.0));
         this.update_markdown_preview_horizontal_min_width(
             &preview.inline,
             range.clone(),
             None,
+            editor_font_family.as_str(),
             window,
             cx,
         );
@@ -191,9 +220,8 @@ impl MainPaneView {
             &MarkdownPreviewRenderContext {
                 theme,
                 bar_color: None,
-                min_width: this.diff_horizontal_min_width,
-                row_id_prefix: "diff_markdown_preview_inline",
-                horizontal_scroll_handle: Some(horizontal_scroll_handle),
+                min_width: this.diff_horizontal_min_width.max(viewport_width),
+                editor_font_family,
                 view: Some(cx.entity().clone()),
                 text_region: DiffTextRegion::Inline,
             },
@@ -207,15 +235,25 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
         let theme = this.theme;
+        let editor_font_family = crate::font_preferences::current_editor_font_family(cx);
         let Loadable::Ready(preview) = &this.file_markdown_preview else {
             return Vec::new();
         };
         let preview = Arc::clone(preview);
-        let horizontal_scroll_handle = this.diff_split_right_scroll.0.borrow().base_handle.clone();
+        let viewport_width = this
+            .diff_split_right_scroll
+            .0
+            .borrow()
+            .base_handle
+            .bounds()
+            .size
+            .width
+            .max(px(0.0));
         this.update_markdown_preview_horizontal_min_width(
             &preview.new,
             range.clone(),
             None,
+            editor_font_family.as_str(),
             window,
             cx,
         );
@@ -225,9 +263,8 @@ impl MainPaneView {
             &MarkdownPreviewRenderContext {
                 theme,
                 bar_color: None,
-                min_width: this.diff_horizontal_min_width,
-                row_id_prefix: "diff_markdown_preview_right",
-                horizontal_scroll_handle: Some(horizontal_scroll_handle),
+                min_width: this.diff_horizontal_min_width.max(viewport_width),
+                editor_font_family,
                 view: Some(cx.entity().clone()),
                 text_region: DiffTextRegion::SplitRight,
             },
@@ -239,12 +276,19 @@ impl MainPaneView {
         document: &MarkdownPreviewDocument,
         range: Range<usize>,
         bar_color: Option<gpui::Rgba>,
+        editor_font_family: &str,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
         let mut min_width = self.diff_horizontal_min_width;
         for row in range.filter_map(|ix| document.rows.get(ix)) {
-            let required = markdown_preview_row_required_width(window, self.theme, row, bar_color);
+            let required = markdown_preview_row_required_width(
+                window,
+                self.theme,
+                row,
+                bar_color,
+                editor_font_family,
+            );
             if required > min_width {
                 min_width = required;
             }
@@ -257,10 +301,11 @@ impl MainPaneView {
     }
 }
 
-const MARKDOWN_PREVIEW_ROW_HEIGHT_PX: f32 = 44.0;
+const MARKDOWN_PREVIEW_ROW_HEIGHT_PX: f32 = 28.0;
 const MARKDOWN_PREVIEW_BASE_FONT_PX: f32 = 13.0;
-const MARKDOWN_PREVIEW_BASE_LINE_HEIGHT_PX: f32 = 22.0;
+const MARKDOWN_PREVIEW_BASE_LINE_HEIGHT_PX: f32 = 20.0;
 const MARKDOWN_PREVIEW_CONTENT_PAD_X_PX: f32 = 18.0;
+const MARKDOWN_PREVIEW_BOXED_EDGE_GAP_PX: f32 = 8.0;
 const MARKDOWN_PREVIEW_INDENT_STEP_PX: f32 = 24.0;
 const MARKDOWN_PREVIEW_CHANGE_BAR_WIDTH_PX: f32 = 3.0;
 const MARKDOWN_PREVIEW_BLOCKQUOTE_BAR_WIDTH_PX: f32 = 4.0;
@@ -273,13 +318,12 @@ const MARKDOWN_PREVIEW_ALERT_BADGE_PAD_X_PX: f32 = 6.0;
 const MARKDOWN_PREVIEW_ALERT_BADGE_GAP_PX: f32 = 10.0;
 const MARKDOWN_PREVIEW_SHELL_PAD_X_PX: f32 = 12.0;
 const MARKDOWN_PREVIEW_CODE_BORDER_PX: f32 = 1.0;
-const MARKDOWN_PREVIEW_CODE_SCROLLBAR_PAD_BOTTOM_PX: f32 = 16.0;
 
 struct MarkdownPreviewRowTypography {
     font_size: f32,
     line_height: f32,
     font_weight: Option<FontWeight>,
-    font_family: Option<&'static str>,
+    font_family: Option<String>,
     text_color: gpui::Rgba,
 }
 
@@ -287,7 +331,6 @@ struct MarkdownPreviewRowTypography {
 struct MarkdownPreviewRowLayout {
     top_inset_px: f32,
     bottom_inset_px: f32,
-    shell_bottom_inset_px: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -300,8 +343,7 @@ pub(super) struct MarkdownPreviewRenderContext {
     pub(super) theme: AppTheme,
     pub(super) bar_color: Option<gpui::Rgba>,
     pub(super) min_width: Pixels,
-    pub(super) row_id_prefix: &'static str,
-    pub(super) horizontal_scroll_handle: Option<gpui::ScrollHandle>,
+    pub(super) editor_font_family: String,
     pub(super) view: Option<Entity<MainPaneView>>,
     pub(super) text_region: DiffTextRegion,
 }
@@ -334,7 +376,6 @@ fn markdown_preview_row_element(
     let theme = context.theme;
     let bar_color = context.bar_color;
     let min_width = context.min_width;
-    let row_id_prefix = context.row_id_prefix;
     let text_region = context.text_region;
     let _perf_scope = perf::span(ViewPerfSpan::MarkdownPreviewStyledRowBuild);
     if matches!(row.kind, MarkdownPreviewRowKind::Spacer) {
@@ -342,38 +383,60 @@ fn markdown_preview_row_element(
             .relative()
             .h(px(MARKDOWN_PREVIEW_ROW_HEIGHT_PX))
             .min_h(px(MARKDOWN_PREVIEW_ROW_HEIGHT_PX))
-            .w_full()
+            .w(min_width)
             .min_w(min_width)
             .into_any_element();
     }
 
     let row_layout = markdown_preview_row_layout(row);
-    let typography = markdown_preview_row_typography(theme, row);
+    let typography =
+        markdown_preview_row_typography(theme, row, context.editor_font_family.as_str());
     let (display, highlights) = markdown_preview_display_and_highlights(theme, row);
     let horizontal_padding = markdown_preview_row_horizontal_padding(row);
+    let row_text = row.text.clone();
 
     let mut content = div()
-        .flex_1()
+        .relative()
+        .flex_grow()
         .min_w(px(0.0))
         .w_full()
-        .h_full()
+        .h(px(typography.line_height))
+        .min_h(px(typography.line_height))
         .flex()
         .items_center()
+        .overflow_hidden()
         .whitespace_nowrap()
         .text_size(px(typography.font_size))
         .line_height(px(typography.line_height))
-        .text_color(typography.text_color);
+        .text_color(typography.text_color)
+        .debug_selector(|| format!("markdown_preview_text_box_{row_ix}"));
 
     if let Some(font_weight) = typography.font_weight {
         content = content.font_weight(font_weight);
     }
-    if let Some(font_family) = typography.font_family {
+    if let Some(font_family) = typography.font_family.clone() {
         content = content.font_family(font_family);
+    }
+    if let Some(view) = context.view.clone() {
+        content = content.child(
+            div()
+                .absolute()
+                .top_0()
+                .left_0()
+                .right_0()
+                .bottom_0()
+                .child(DiffTextSelectionOverlay {
+                    view,
+                    visible_ix: row_ix,
+                    region: text_region,
+                    text: row_text.clone(),
+                }),
+        );
     }
 
     let body = match row.kind {
         MarkdownPreviewRowKind::ThematicBreak => div()
-            .flex_1()
+            .flex_grow()
             .min_w(px(0.0))
             .w_full()
             .h_full()
@@ -394,7 +457,7 @@ fn markdown_preview_row_element(
             };
 
             let mut line = div()
-                .flex_1()
+                .flex_grow()
                 .min_w(px(0.0))
                 .w_full()
                 .h_full()
@@ -440,7 +503,7 @@ fn markdown_preview_row_element(
     };
 
     let mut content_shell = div()
-        .flex_1()
+        .flex_grow()
         .min_w(px(0.0))
         .w_full()
         .h_full()
@@ -467,7 +530,7 @@ fn markdown_preview_row_element(
                 shell = shell.border_t_1();
             }
             if is_last {
-                shell = shell.border_b_1().pb(px(row_layout.shell_bottom_inset_px));
+                shell = shell.border_b_1();
             }
             shell
         }
@@ -499,21 +562,20 @@ fn markdown_preview_row_element(
         _ => content_shell,
     };
     content_shell = content_shell.child(body);
-    if matches!(
-        row.kind,
-        MarkdownPreviewRowKind::CodeLine { is_last: true, .. }
-    ) && row.code_block_horizontal_scroll_hint
-        && let Some(scroll_handle) = context.horizontal_scroll_handle.clone()
-    {
-        content_shell = content_shell.child(
-            components::Scrollbar::horizontal((row_id_prefix, row_ix), scroll_handle).render(theme),
-        );
+    if matches!(row.kind, MarkdownPreviewRowKind::CodeLine { .. }) {
+        content_shell =
+            content_shell.debug_selector(|| format!("markdown_preview_code_shell_{row_ix}"));
     }
 
+    let row_content_width = if bar_color.is_some() {
+        (min_width - px(MARKDOWN_PREVIEW_CHANGE_BAR_WIDTH_PX)).max(px(0.0))
+    } else {
+        min_width
+    };
     let mut row_content = div()
-        .flex_1()
+        .flex_grow()
         .min_w(px(0.0))
-        .w_full()
+        .w(row_content_width)
         .h_full()
         .flex()
         .items_center()
@@ -526,16 +588,15 @@ fn markdown_preview_row_element(
     }
     row_content = row_content.child(content_shell);
 
-    let row_text = row.text.clone();
-
     if let Some(view) = context.view.clone() {
         // Interactive markdown preview row with text selection + context menu.
-        div()
+        let row_container = div()
             .id(("md_preview_row", row_ix))
+            .debug_selector(|| format!("markdown_preview_row_box_{row_ix}"))
             .relative()
             .h(px(MARKDOWN_PREVIEW_ROW_HEIGHT_PX))
             .min_h(px(MARKDOWN_PREVIEW_ROW_HEIGHT_PX))
-            .w_full()
+            .w(min_width)
             .flex()
             .items_center()
             .pt(px(row_layout.top_inset_px))
@@ -552,7 +613,6 @@ fn markdown_preview_row_element(
                 )
             })
             .min_w(min_width)
-            .child(row_content)
             .on_mouse_down(gpui::MouseButton::Left, {
                 let view = view.clone();
                 move |event, window, cx| {
@@ -589,20 +649,16 @@ fn markdown_preview_row_element(
                     });
                 }
             })
-            .child(DiffTextSelectionOverlay {
-                view,
-                visible_ix: row_ix,
-                region: text_region,
-                text: row_text,
-            })
-            .into_any_element()
+            .child(row_content);
+        row_container.into_any_element()
     } else {
         // Non-interactive markdown preview row (benchmarks, conflict resolver).
-        div()
+        let row_container = div()
+            .debug_selector(|| format!("markdown_preview_row_box_{row_ix}"))
             .relative()
             .h(px(MARKDOWN_PREVIEW_ROW_HEIGHT_PX))
             .min_h(px(MARKDOWN_PREVIEW_ROW_HEIGHT_PX))
-            .w_full()
+            .w(min_width)
             .flex()
             .items_center()
             .pt(px(row_layout.top_inset_px))
@@ -619,8 +675,8 @@ fn markdown_preview_row_element(
                 )
             })
             .min_w(min_width)
-            .child(row_content)
-            .into_any_element()
+            .child(row_content);
+        row_container.into_any_element()
     }
 }
 
@@ -629,13 +685,24 @@ fn markdown_preview_row_required_width(
     theme: AppTheme,
     row: &MarkdownPreviewRow,
     bar_color: Option<gpui::Rgba>,
+    editor_font_family: &str,
 ) -> Pixels {
     if matches!(row.kind, MarkdownPreviewRowKind::Spacer) {
         return px(0.0);
     }
 
-    let base_width = row.measured_width_px.get_or_init(|| {
-        let typography = markdown_preview_row_typography(theme, row);
+    let typography = markdown_preview_row_typography(theme, row, editor_font_family);
+    let default_font_family = window.text_style().font_family.clone();
+    let resolved_font_family = typography
+        .font_family
+        .clone()
+        .unwrap_or_else(|| default_font_family.to_string());
+    let cache_key = markdown_preview_row_width_cache_key(
+        typography.font_size,
+        typography.font_weight.unwrap_or(FontWeight::NORMAL),
+        resolved_font_family.as_str(),
+    );
+    let base_width = row.measured_width_px.get_or_init(cache_key, || {
         let base_font_weight = typography.font_weight.unwrap_or(FontWeight::NORMAL);
         let text_width = if matches!(row.kind, MarkdownPreviewRowKind::ThematicBreak) {
             px(0.0)
@@ -646,7 +713,7 @@ fn markdown_preview_row_required_width(
                 row.text.clone(),
                 typography.font_size,
                 base_font_weight,
-                typography.font_family,
+                typography.font_family.as_deref(),
                 &highlights,
             )
         };
@@ -710,6 +777,20 @@ fn markdown_preview_row_required_width(
     width
 }
 
+fn markdown_preview_row_width_cache_key(
+    font_size: f32,
+    font_weight: FontWeight,
+    font_family: &str,
+) -> u64 {
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = FxHasher::default();
+    font_size.to_bits().hash(&mut hasher);
+    font_weight.hash(&mut hasher);
+    font_family.hash(&mut hasher);
+    hasher.finish()
+}
+
 fn markdown_preview_width_affecting_highlights(
     theme: AppTheme,
     row: &MarkdownPreviewRow,
@@ -729,7 +810,7 @@ fn markdown_preview_shape_text_width(
     text: impl Into<SharedString>,
     font_size_px: f32,
     font_weight: FontWeight,
-    font_family: Option<&'static str>,
+    font_family: Option<&str>,
     highlights: &[(Range<usize>, gpui::HighlightStyle)],
 ) -> Pixels {
     let text: SharedString = text.into();
@@ -740,7 +821,7 @@ fn markdown_preview_shape_text_width(
     let mut style = window.text_style();
     style.font_weight = font_weight;
     if let Some(font_family) = font_family {
-        style.font_family = font_family.into();
+        style.font_family = font_family.to_string().into();
     }
 
     let runs = if highlights.is_empty() {
@@ -976,59 +1057,49 @@ fn markdown_preview_row_text_color(theme: AppTheme, row: &MarkdownPreviewRow) ->
 fn markdown_preview_row_layout(row: &MarkdownPreviewRow) -> MarkdownPreviewRowLayout {
     match row.kind {
         MarkdownPreviewRowKind::Heading { level: 1 | 2 } => MarkdownPreviewRowLayout {
-            top_inset_px: 4.0,
-            bottom_inset_px: 8.0,
-            shell_bottom_inset_px: 0.0,
+            top_inset_px: 0.0,
+            bottom_inset_px: 0.0,
+        },
+        MarkdownPreviewRowKind::Heading { level: 3 } => MarkdownPreviewRowLayout {
+            top_inset_px: 2.0,
+            bottom_inset_px: 4.0,
         },
         MarkdownPreviewRowKind::Heading { .. } => MarkdownPreviewRowLayout {
-            top_inset_px: 3.0,
-            bottom_inset_px: 7.0,
-            shell_bottom_inset_px: 0.0,
-        },
-        MarkdownPreviewRowKind::DetailsSummary => MarkdownPreviewRowLayout {
             top_inset_px: 2.0,
             bottom_inset_px: 6.0,
-            shell_bottom_inset_px: 0.0,
+        },
+        MarkdownPreviewRowKind::DetailsSummary => MarkdownPreviewRowLayout {
+            top_inset_px: 0.0,
+            bottom_inset_px: 0.0,
         },
         MarkdownPreviewRowKind::Paragraph => MarkdownPreviewRowLayout {
-            top_inset_px: 3.0,
-            bottom_inset_px: 7.0,
-            shell_bottom_inset_px: 0.0,
+            top_inset_px: 2.0,
+            bottom_inset_px: 6.0,
         },
         MarkdownPreviewRowKind::BlockquoteLine => MarkdownPreviewRowLayout {
             top_inset_px: 2.0,
             bottom_inset_px: 6.0,
-            shell_bottom_inset_px: 0.0,
         },
         MarkdownPreviewRowKind::ListItem { .. } => MarkdownPreviewRowLayout {
             top_inset_px: 0.0,
             bottom_inset_px: 0.0,
-            shell_bottom_inset_px: 0.0,
         },
         MarkdownPreviewRowKind::CodeLine { is_first, is_last } => MarkdownPreviewRowLayout {
-            top_inset_px: if is_first { 4.0 } else { 0.0 },
-            bottom_inset_px: if is_last { 4.0 } else { 0.0 },
-            shell_bottom_inset_px: if is_last {
-                MARKDOWN_PREVIEW_CODE_SCROLLBAR_PAD_BOTTOM_PX
-            } else {
-                0.0
-            },
+            top_inset_px: if is_first { 5.0 } else { 0.0 },
+            bottom_inset_px: if is_last { 5.0 } else { 0.0 },
         },
         MarkdownPreviewRowKind::ThematicBreak => MarkdownPreviewRowLayout {
             top_inset_px: 6.0,
             bottom_inset_px: 6.0,
-            shell_bottom_inset_px: 0.0,
         },
         MarkdownPreviewRowKind::Spacer => MarkdownPreviewRowLayout {
             top_inset_px: 0.0,
             bottom_inset_px: 0.0,
-            shell_bottom_inset_px: 0.0,
         },
         MarkdownPreviewRowKind::TableRow { .. } | MarkdownPreviewRowKind::PlainFallback => {
             MarkdownPreviewRowLayout {
                 top_inset_px: 2.0,
                 bottom_inset_px: 2.0,
-                shell_bottom_inset_px: 0.0,
             }
         }
     }
@@ -1037,84 +1108,85 @@ fn markdown_preview_row_layout(row: &MarkdownPreviewRow) -> MarkdownPreviewRowLa
 fn markdown_preview_row_typography(
     theme: AppTheme,
     row: &MarkdownPreviewRow,
+    editor_font_family: &str,
 ) -> MarkdownPreviewRowTypography {
     let text_color = markdown_preview_row_text_color(theme, row);
     match row.kind {
         MarkdownPreviewRowKind::Heading { level: 1 } => MarkdownPreviewRowTypography {
             font_size: 28.0,
-            line_height: 32.0,
+            line_height: 28.0,
             font_weight: Some(FontWeight::BOLD),
             font_family: None,
             text_color,
         },
         MarkdownPreviewRowKind::Heading { level: 2 } => MarkdownPreviewRowTypography {
             font_size: 24.0,
-            line_height: 28.0,
+            line_height: 24.0,
             font_weight: Some(FontWeight::BOLD),
             font_family: None,
             text_color,
         },
         MarkdownPreviewRowKind::Heading { level: 3 } => MarkdownPreviewRowTypography {
             font_size: 20.0,
-            line_height: 24.0,
+            line_height: 22.0,
             font_weight: Some(FontWeight::BOLD),
             font_family: None,
             text_color,
         },
         MarkdownPreviewRowKind::Heading { level: 4 } => MarkdownPreviewRowTypography {
             font_size: 18.0,
-            line_height: 22.0,
+            line_height: 20.0,
             font_weight: Some(FontWeight::BOLD),
             font_family: None,
             text_color,
         },
         MarkdownPreviewRowKind::Heading { level: 5 } => MarkdownPreviewRowTypography {
             font_size: 16.0,
-            line_height: 20.0,
+            line_height: 18.0,
             font_weight: Some(FontWeight::BOLD),
             font_family: None,
             text_color,
         },
         MarkdownPreviewRowKind::Heading { level: 6 } => MarkdownPreviewRowTypography {
             font_size: 14.0,
-            line_height: 18.0,
+            line_height: 16.0,
             font_weight: Some(FontWeight::BOLD),
             font_family: None,
             text_color,
         },
         MarkdownPreviewRowKind::DetailsSummary => MarkdownPreviewRowTypography {
             font_size: MARKDOWN_PREVIEW_BASE_FONT_PX,
-            line_height: 32.0,
+            line_height: 28.0,
             font_weight: Some(FontWeight::BOLD),
             font_family: None,
             text_color,
         },
         MarkdownPreviewRowKind::ListItem { .. } => MarkdownPreviewRowTypography {
             font_size: MARKDOWN_PREVIEW_BASE_FONT_PX,
-            line_height: 36.0,
+            line_height: MARKDOWN_PREVIEW_BASE_LINE_HEIGHT_PX,
             font_weight: None,
             font_family: None,
             text_color,
         },
         MarkdownPreviewRowKind::CodeLine { .. } => MarkdownPreviewRowTypography {
             font_size: 12.0,
-            line_height: 20.0,
+            line_height: 18.0,
             font_weight: None,
-            font_family: Some(UI_MONOSPACE_FONT_FAMILY),
+            font_family: Some(editor_font_family.to_string()),
             text_color,
         },
         MarkdownPreviewRowKind::TableRow { is_header } => MarkdownPreviewRowTypography {
             font_size: 12.0,
-            line_height: 20.0,
+            line_height: 18.0,
             font_weight: is_header.then_some(FontWeight::BOLD),
-            font_family: Some(UI_MONOSPACE_FONT_FAMILY),
+            font_family: Some(editor_font_family.to_string()),
             text_color,
         },
         MarkdownPreviewRowKind::PlainFallback => MarkdownPreviewRowTypography {
             font_size: 12.0,
-            line_height: 20.0,
+            line_height: 18.0,
             font_weight: None,
-            font_family: Some(UI_MONOSPACE_FONT_FAMILY),
+            font_family: Some(editor_font_family.to_string()),
             text_color,
         },
         _ => MarkdownPreviewRowTypography {
@@ -1143,15 +1215,11 @@ fn markdown_preview_row_horizontal_padding(
         MARKDOWN_PREVIEW_CONTENT_PAD_X_PX + indent_steps * MARKDOWN_PREVIEW_INDENT_STEP_PX;
 
     match row.kind {
-        MarkdownPreviewRowKind::CodeLine { .. } if row.indent_level == 0 => {
-            MarkdownPreviewRowHorizontalPadding {
-                left_px: 0.0,
-                right_px: 0.0,
-            }
-        }
         MarkdownPreviewRowKind::CodeLine { .. } => MarkdownPreviewRowHorizontalPadding {
-            left_px: default_left_px,
-            right_px: 0.0,
+            // Fenced code blocks ignore surrounding list indentation but keep
+            // a small edge gap so the boxed shell does not touch the preview edge.
+            left_px: MARKDOWN_PREVIEW_BOXED_EDGE_GAP_PX,
+            right_px: MARKDOWN_PREVIEW_BOXED_EDGE_GAP_PX,
         },
         _ => MarkdownPreviewRowHorizontalPadding {
             left_px: default_left_px,
@@ -1232,7 +1300,7 @@ impl HistoryView {
             .filter(|c| c.request.repo_id == repo.id);
         let worktree_node_color = cache
             .and_then(|c| c.graph_rows.first())
-            .and_then(|row| row.lanes_now.get(row.node_col).map(|l| l.color))
+            .and_then(|row| row.lanes_now.first().map(|l| l.color))
             .unwrap_or(theme.colors.accent);
 
         range
@@ -1267,7 +1335,8 @@ impl HistoryView {
                 let commit = page.commits.get(commit_ix)?;
                 let graph_row = cache.graph_rows.get(visible_ix)?;
                 let row_vm = cache.commit_row_vms.get(visible_ix)?;
-                let connect_incoming_node = show_working_tree_summary_row && visible_ix == 0;
+                let connect_from_top_col =
+                    (show_working_tree_summary_row && visible_ix == 0).then_some(0);
                 let selected = repo.history_state.selected_commit.as_ref() == Some(&commit.id);
                 let show_graph_color_marker = repo.history_state.history_scope
                     == gitcomet_core::domain::LogScope::AllBranches;
@@ -1291,7 +1360,7 @@ impl HistoryView {
                     repo.id,
                     commit,
                     Arc::clone(graph_row),
-                    connect_incoming_node,
+                    connect_from_top_col,
                     Arc::clone(&row_vm.tag_names),
                     row_vm.branches_text.clone(),
                     row_vm.author.clone(),
@@ -1327,7 +1396,7 @@ fn history_table_row(
     repo_id: RepoId,
     commit: &Commit,
     graph_row: Arc<history_graph::GraphRow>,
-    connect_incoming_node: bool,
+    connect_from_top_col: Option<usize>,
     tag_names: Arc<[SharedString]>,
     branches_text: SharedString,
     author: SharedString,
@@ -1359,7 +1428,7 @@ fn history_table_row(
         show_sha,
         show_graph_color_marker,
         is_stash_node,
-        connect_incoming_node,
+        connect_from_top_col,
         graph_row,
         tag_names,
         branches_text,
@@ -1630,11 +1699,9 @@ mod tests {
         markdown_preview_row_horizontal_padding, markdown_preview_row_layout,
         markdown_preview_row_marker, markdown_preview_row_typography,
     };
+    use crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY;
     use crate::view::markdown_preview::MarkdownInlineSpan;
-    use crate::view::{
-        AppTheme, DateTimeFormat, Timezone, UI_MONOSPACE_FONT_FAMILY, format_datetime,
-        format_datetime_utc,
-    };
+    use crate::view::{AppTheme, DateTimeFormat, Timezone, format_datetime, format_datetime_utc};
     use gpui::{FontWeight, SharedString};
     use std::sync::Arc;
     use std::time::{Duration, UNIX_EPOCH};
@@ -1781,10 +1848,14 @@ mod tests {
             ..paragraph.clone()
         };
 
-        let body_typography = markdown_preview_row_typography(theme, &paragraph);
-        let h1_typography = markdown_preview_row_typography(theme, &h1);
-        let h2_typography = markdown_preview_row_typography(theme, &h2);
-        let h6_typography = markdown_preview_row_typography(theme, &h6);
+        let body_typography =
+            markdown_preview_row_typography(theme, &paragraph, EDITOR_MONOSPACE_FONT_FAMILY);
+        let h1_typography =
+            markdown_preview_row_typography(theme, &h1, EDITOR_MONOSPACE_FONT_FAMILY);
+        let h2_typography =
+            markdown_preview_row_typography(theme, &h2, EDITOR_MONOSPACE_FONT_FAMILY);
+        let h6_typography =
+            markdown_preview_row_typography(theme, &h6, EDITOR_MONOSPACE_FONT_FAMILY);
 
         assert!(h1_typography.font_size > h2_typography.font_size);
         assert!(h2_typography.font_size > body_typography.font_size);
@@ -1795,17 +1866,22 @@ mod tests {
     }
 
     #[test]
-    fn markdown_preview_list_rows_tighten_line_height_relative_to_paragraphs() {
+    fn markdown_preview_list_rows_match_body_line_height_and_keep_tighter_layout() {
         let theme = AppTheme::zed_one_light();
         let paragraph = markdown_row(MarkdownPreviewRowKind::Paragraph);
         let list_item = markdown_row(MarkdownPreviewRowKind::ListItem { number: None });
 
-        let paragraph_typography = markdown_preview_row_typography(theme, &paragraph);
-        let list_typography = markdown_preview_row_typography(theme, &list_item);
+        let paragraph_typography =
+            markdown_preview_row_typography(theme, &paragraph, EDITOR_MONOSPACE_FONT_FAMILY);
+        let list_typography =
+            markdown_preview_row_typography(theme, &list_item, EDITOR_MONOSPACE_FONT_FAMILY);
         let paragraph_layout = markdown_preview_row_layout(&paragraph);
         let list_layout = markdown_preview_row_layout(&list_item);
 
-        assert!(list_typography.line_height > paragraph_typography.line_height);
+        assert_eq!(
+            list_typography.line_height,
+            paragraph_typography.line_height
+        );
         assert!(paragraph_layout.bottom_inset_px > list_layout.bottom_inset_px);
     }
 
@@ -1814,7 +1890,7 @@ mod tests {
         let theme = AppTheme::zed_one_light();
         let row = markdown_row(MarkdownPreviewRowKind::DetailsSummary);
 
-        let typography = markdown_preview_row_typography(theme, &row);
+        let typography = markdown_preview_row_typography(theme, &row, EDITOR_MONOSPACE_FONT_FAMILY);
 
         assert_eq!(typography.font_weight, Some(FontWeight::BOLD));
         assert_eq!(
@@ -1826,33 +1902,35 @@ mod tests {
     }
 
     #[test]
-    fn markdown_preview_code_rows_reserve_bottom_space_for_local_scrollbar() {
-        let row = markdown_row(MarkdownPreviewRowKind::CodeLine {
+    fn markdown_preview_code_rows_do_not_reserve_bottom_space_for_local_scrollbar() {
+        let first_row = markdown_row(MarkdownPreviewRowKind::CodeLine {
+            is_first: true,
+            is_last: false,
+        });
+        let last_row = markdown_row(MarkdownPreviewRowKind::CodeLine {
             is_first: false,
             is_last: true,
         });
 
-        let layout = markdown_preview_row_layout(&row);
+        let first_layout = markdown_preview_row_layout(&first_row);
+        let last_layout = markdown_preview_row_layout(&last_row);
 
-        assert_eq!(
-            layout.shell_bottom_inset_px,
-            super::MARKDOWN_PREVIEW_CODE_SCROLLBAR_PAD_BOTTOM_PX
-        );
-        assert_eq!(layout.bottom_inset_px, 4.0);
+        assert_eq!(first_layout.top_inset_px, 5.0);
+        assert_eq!(last_layout.bottom_inset_px, 5.0);
     }
 
     #[test]
-    fn markdown_preview_top_level_code_rows_drop_outer_horizontal_padding() {
+    fn markdown_preview_nested_code_rows_keep_small_outer_edge_gap() {
         let mut row = markdown_row(MarkdownPreviewRowKind::CodeLine {
             is_first: true,
             is_last: false,
         });
-        row.indent_level = 0;
+        row.indent_level = 3;
 
         let padding = markdown_preview_row_horizontal_padding(&row);
 
-        assert_eq!(padding.left_px, 0.0);
-        assert_eq!(padding.right_px, 0.0);
+        assert_eq!(padding.left_px, super::MARKDOWN_PREVIEW_BOXED_EDGE_GAP_PX);
+        assert_eq!(padding.right_px, super::MARKDOWN_PREVIEW_BOXED_EDGE_GAP_PX);
     }
 
     #[test]
@@ -2072,14 +2150,19 @@ mod tests {
         let header = markdown_row(MarkdownPreviewRowKind::TableRow { is_header: true });
         let body = markdown_row(MarkdownPreviewRowKind::TableRow { is_header: false });
 
-        let header_typography = markdown_preview_row_typography(theme, &header);
-        let body_typography = markdown_preview_row_typography(theme, &body);
+        let header_typography =
+            markdown_preview_row_typography(theme, &header, EDITOR_MONOSPACE_FONT_FAMILY);
+        let body_typography =
+            markdown_preview_row_typography(theme, &body, EDITOR_MONOSPACE_FONT_FAMILY);
 
         assert_eq!(
             header_typography.font_family,
-            Some(UI_MONOSPACE_FONT_FAMILY)
+            Some(EDITOR_MONOSPACE_FONT_FAMILY.to_string())
         );
-        assert_eq!(body_typography.font_family, Some(UI_MONOSPACE_FONT_FAMILY));
+        assert_eq!(
+            body_typography.font_family,
+            Some(EDITOR_MONOSPACE_FONT_FAMILY.to_string())
+        );
         assert_eq!(header_typography.font_weight, Some(FontWeight::BOLD));
         assert_eq!(body_typography.font_weight, None);
         assert_eq!(header_typography.font_size, body_typography.font_size);
@@ -2125,7 +2208,6 @@ mod tests {
 
         assert_eq!(layout.top_inset_px, 0.0);
         assert_eq!(layout.bottom_inset_px, 0.0);
-        assert_eq!(layout.shell_bottom_inset_px, 0.0);
         assert_eq!(markdown_preview_row_background(theme, &row), None);
         assert_eq!(markdown_preview_row_marker(&row), None);
     }

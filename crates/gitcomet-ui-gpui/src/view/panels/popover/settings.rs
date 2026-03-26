@@ -1,7 +1,8 @@
 use super::*;
+use gitcomet_core::process::configure_background_command;
 
 const MIN_GIT_MAJOR: u32 = 2;
-const MIN_GIT_MINOR: u32 = 53;
+const MIN_GIT_MINOR: u32 = 50;
 const GITHUB_URL: &str = "https://github.com/Auto-Explore/GitComet";
 const LICENSE_URL: &str = "https://github.com/Auto-Explore/GitComet/blob/main/LICENSE-AGPL-3.0";
 const LICENSE_NAME: &str = "AGPL-3.0";
@@ -99,7 +100,9 @@ fn detect_git_runtime_info() -> GitRuntimeInfo {
          Please use Git {MIN_GIT_MAJOR}.{MIN_GIT_MINOR} or newer."
     );
 
-    match std::process::Command::new("git").arg("--version").output() {
+    let mut command = std::process::Command::new("git");
+    configure_background_command(&mut command);
+    match command.arg("--version").output() {
         Ok(output) if output.status.success() => {
             let version_output = if !output.stdout.is_empty() {
                 bytes_to_text_preserving_utf8(&output.stdout)
@@ -225,11 +228,15 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                     .text_sm()
                     .text_color(theme.colors.text_muted)
                     .child(value)
-                    .child(
-                        div()
-                            .font_family("monospace")
-                            .child(if open { "▴" } else { "▾" }),
-                    ),
+                    .child(crate::view::icons::svg_icon(
+                        if open {
+                            "icons/arrow_down.svg"
+                        } else {
+                            "icons/arrow_right.svg"
+                        },
+                        theme.colors.text_muted,
+                        px(12.0),
+                    )),
             )
     };
 
@@ -544,11 +551,24 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
         .text_color(theme.colors.text_muted)
         .child("Environment");
 
-    let (git_icon, git_icon_color, git_status_text): (&'static str, gpui::Rgba, SharedString) =
+    let min_git_version = format!("{MIN_GIT_MAJOR}.{MIN_GIT_MINOR}");
+    let (git_icon_path, git_icon_color, git_status_text): (&'static str, gpui::Rgba, SharedString) =
         match runtime.git.compatibility {
-            GitCompatibility::Supported => ("✓", theme.colors.success, "Git >= 2.53".into()),
-            GitCompatibility::TooOld => ("⚠", theme.colors.warning, "Git < 2.53".into()),
-            GitCompatibility::Unknown => ("⚠", theme.colors.warning, "Git version unknown".into()),
+            GitCompatibility::Supported => (
+                "icons/check.svg",
+                theme.colors.success,
+                format!("Git >= {min_git_version}").into(),
+            ),
+            GitCompatibility::TooOld => (
+                "icons/warning.svg",
+                theme.colors.warning,
+                format!("Git < {min_git_version}").into(),
+            ),
+            GitCompatibility::Unknown => (
+                "icons/warning.svg",
+                theme.colors.warning,
+                "Git version unknown".into(),
+            ),
         };
 
     let git_row = div()
@@ -565,13 +585,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                 .flex()
                 .items_center()
                 .gap_2()
-                .child(
-                    div()
-                        .font_family("monospace")
-                        .text_sm()
-                        .text_color(git_icon_color)
-                        .child(git_icon),
-                )
+                .child(svg_icon(git_icon_path, git_icon_color, px(14.0)))
                 .child(
                     div()
                         .font_family("monospace")
@@ -586,6 +600,14 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                         .child(git_status_text),
                 ),
         );
+    let git_detail_row = runtime.git.detail.clone().map(|detail| {
+        div()
+            .px_2()
+            .pb_1()
+            .text_xs()
+            .text_color(theme.colors.warning)
+            .child(detail)
+    });
 
     let app_version_row = info_row(
         "settings_app_version",
@@ -617,7 +639,11 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                 .text_sm()
                 .text_color(theme.colors.accent)
                 .child(runtime.github_url.clone())
-                .child(div().font_family("monospace").child("↗")),
+                .child(crate::view::icons::svg_icon(
+                    "icons/open_external.svg",
+                    theme.colors.accent,
+                    px(12.0),
+                )),
         )
         .on_click(cx.listener(|this, _e: &ClickEvent, _w, cx| {
             let url = this.settings_runtime_info.github_url.clone().to_string();
@@ -656,7 +682,11 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                 .text_sm()
                 .text_color(theme.colors.accent)
                 .child(LICENSE_NAME)
-                .child(div().font_family("monospace").child("↗")),
+                .child(crate::view::icons::svg_icon(
+                    "icons/open_external.svg",
+                    theme.colors.accent,
+                    px(12.0),
+                )),
         )
         .on_click(cx.listener(|this, _e: &ClickEvent, _w, cx| {
             let url = this.settings_runtime_info.license_url.clone().to_string();
@@ -695,7 +725,11 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                 .text_sm()
                 .text_color(theme.colors.accent)
                 .child("Show")
-                .child(div().font_family("monospace").child("↗")),
+                .child(crate::view::icons::svg_icon(
+                    "icons/open_external.svg",
+                    theme.colors.accent,
+                    px(12.0),
+                )),
         )
         .on_click(cx.listener(|this, _e: &ClickEvent, window, cx| {
             this.open_popover_at(
@@ -715,22 +749,12 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
             .gap_1()
             .child(app_version_row)
             .child(git_row)
+            .when_some(git_detail_row, |this, row| this.child(row))
             .child(os_row)
             .child(github_row)
             .child(license_row)
             .child(open_source_licenses_row),
     );
-
-    if let Some(detail) = runtime.git.detail.clone() {
-        content = content.child(
-            div()
-                .px_2()
-                .pb_1()
-                .text_xs()
-                .text_color(theme.colors.warning)
-                .child(detail),
-        );
-    }
 
     let content_bounds_for_prepaint = std::rc::Rc::clone(&content_bounds);
     let mut panel = div()
@@ -806,12 +830,12 @@ mod tests {
 
     #[test]
     fn parse_git_version_extracts_semver_from_standard_output() {
-        let parsed = parse_git_version("git version 2.53.1").expect("parsed");
+        let parsed = parse_git_version("git version 2.50.1").expect("parsed");
         assert_eq!(
             parsed,
             GitVersion {
                 major: 2,
-                minor: 53,
+                minor: 50,
                 patch: Some(1)
             }
         );
@@ -831,10 +855,15 @@ mod tests {
     }
 
     #[test]
-    fn supported_version_requires_minimum_2_53() {
+    fn supported_version_requires_minimum_2_50() {
         assert!(is_supported_git_version(GitVersion {
             major: MIN_GIT_MAJOR,
             minor: MIN_GIT_MINOR,
+            patch: Some(0)
+        }));
+        assert!(is_supported_git_version(GitVersion {
+            major: MIN_GIT_MAJOR,
+            minor: MIN_GIT_MINOR + 1,
             patch: Some(0)
         }));
         assert!(!is_supported_git_version(GitVersion {

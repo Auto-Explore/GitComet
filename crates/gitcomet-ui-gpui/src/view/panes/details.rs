@@ -7,13 +7,22 @@ pub(in super::super) struct DetailsPaneView {
     pub(in super::super) store: Arc<AppStore>,
     state: Arc<AppState>,
     pub(in super::super) theme: AppTheme,
+    pub(in super::super) change_tracking_view: ChangeTrackingView,
     _ui_model_subscription: gpui::Subscription,
     _commit_message_input_subscription: gpui::Subscription,
     root_view: WeakEntity<GitCometView>,
     tooltip_host: WeakEntity<TooltipHost>,
     notify_fingerprint: u64,
     pub(in super::super) active_context_menu_invoker: Option<SharedString>,
+    pub(in super::super) change_tracking_height: Option<Pixels>,
+    pub(in super::super) untracked_height: Option<Pixels>,
+    pub(in super::super) status_sections_bounds_ref:
+        std::rc::Rc<std::cell::RefCell<Option<Bounds<Pixels>>>>,
+    pub(in super::super) change_tracking_stack_bounds_ref:
+        std::rc::Rc<std::cell::RefCell<Option<Bounds<Pixels>>>>,
+    pub(in super::super) status_section_resize: Option<StatusSectionResizeState>,
 
+    pub(in super::super) untracked_scroll: UniformListScrollHandle,
     pub(in super::super) unstaged_scroll: UniformListScrollHandle,
     pub(in super::super) staged_scroll: UniformListScrollHandle,
     pub(in super::super) commit_files_scroll: UniformListScrollHandle,
@@ -39,6 +48,108 @@ pub(in super::super) struct DetailsPaneView {
     path_display_cache: std::cell::RefCell<HashMap<std::path::PathBuf, SharedString>>,
 }
 
+pub(in super::super) struct DetailsPaneInit {
+    pub(in super::super) theme: AppTheme,
+    pub(in super::super) change_tracking_view: ChangeTrackingView,
+    pub(in super::super) change_tracking_height: Option<u32>,
+    pub(in super::super) untracked_height: Option<u32>,
+    pub(in super::super) root_view: WeakEntity<GitCometView>,
+    pub(in super::super) tooltip_host: WeakEntity<TooltipHost>,
+}
+
+pub(in super::super) struct StatusSectionResizeTracker {
+    pub(in super::super) view: Entity<DetailsPaneView>,
+}
+
+impl IntoElement for StatusSectionResizeTracker {
+    type Element = Self;
+
+    fn into_element(self) -> Self::Element {
+        self
+    }
+}
+
+impl Element for StatusSectionResizeTracker {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, Self::RequestLayoutState) {
+        let mut style = Style::default();
+        style.size.width = px(0.0).into();
+        style.size.height = px(0.0).into();
+        (window.request_layout(style, [], cx), ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        _bounds: Bounds<Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        _window: &mut Window,
+        _cx: &mut App,
+    ) -> Self::PrepaintState {
+    }
+
+    fn paint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        _bounds: Bounds<Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        _prepaint: &mut Self::PrepaintState,
+        window: &mut Window,
+        _cx: &mut App,
+    ) {
+        let pane = self.view.clone();
+        window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
+            if phase != gpui::DispatchPhase::Capture {
+                return;
+            }
+
+            let active = pane.update(cx, |this, cx| {
+                if this.status_section_resize.is_some() {
+                    this.update_status_section_resize(event.position.y, cx);
+                    true
+                } else {
+                    false
+                }
+            });
+            if active {
+                window.refresh();
+                cx.stop_propagation();
+            }
+        });
+
+        let pane = self.view.clone();
+        window.on_mouse_event(move |event: &MouseUpEvent, phase, window, cx| {
+            if phase != gpui::DispatchPhase::Capture || event.button != MouseButton::Left {
+                return;
+            }
+
+            let finished = pane.update(cx, |this, cx| this.finish_status_section_resize(cx));
+            if finished {
+                window.refresh();
+                cx.stop_propagation();
+            }
+        });
+    }
+}
+
 impl DetailsPaneView {
     fn notify_fingerprint(state: &AppState) -> u64 {
         let mut hasher = FxHasher::default();
@@ -60,12 +171,18 @@ impl DetailsPaneView {
     pub(in super::super) fn new(
         store: Arc<AppStore>,
         ui_model: Entity<AppUiModel>,
-        theme: AppTheme,
-        root_view: WeakEntity<GitCometView>,
-        tooltip_host: WeakEntity<TooltipHost>,
+        init: DetailsPaneInit,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Self {
+        let DetailsPaneInit {
+            theme,
+            change_tracking_view,
+            change_tracking_height,
+            untracked_height,
+            root_view,
+            tooltip_host,
+        } = init;
         let state = Arc::clone(&ui_model.read(cx).state);
         let initial_fingerprint = Self::notify_fingerprint(&state);
         let subscription = cx.observe(&ui_model, |this, model, cx| {
@@ -172,12 +289,22 @@ impl DetailsPaneView {
             store,
             state,
             theme,
+            change_tracking_view,
             _ui_model_subscription: subscription,
             _commit_message_input_subscription: commit_message_subscription,
             root_view,
             tooltip_host,
             notify_fingerprint: initial_fingerprint,
             active_context_menu_invoker: None,
+            change_tracking_height: Self::sanitized_restored_change_tracking_height(
+                change_tracking_view,
+                change_tracking_height,
+            ),
+            untracked_height: Self::sanitized_restored_untracked_height(untracked_height),
+            status_sections_bounds_ref: std::rc::Rc::new(std::cell::RefCell::new(None)),
+            change_tracking_stack_bounds_ref: std::rc::Rc::new(std::cell::RefCell::new(None)),
+            status_section_resize: None,
+            untracked_scroll: UniformListScrollHandle::default(),
             unstaged_scroll: UniformListScrollHandle::default(),
             staged_scroll: UniformListScrollHandle::default(),
             commit_files_scroll: UniformListScrollHandle::default(),
@@ -202,6 +329,14 @@ impl DetailsPaneView {
         pane
     }
 
+    pub(in super::super) fn current_status_sections_bounds(&self) -> Option<Bounds<Pixels>> {
+        *self.status_sections_bounds_ref.borrow()
+    }
+
+    pub(in super::super) fn current_change_tracking_stack_bounds(&self) -> Option<Bounds<Pixels>> {
+        *self.change_tracking_stack_bounds_ref.borrow()
+    }
+
     pub(in super::super) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
         self.theme = theme;
         self.commit_message_input
@@ -215,6 +350,32 @@ impl DetailsPaneView {
         self.commit_details_parent_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
         cx.notify();
+    }
+
+    pub(in super::super) fn set_change_tracking_view(
+        &mut self,
+        next: ChangeTrackingView,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.change_tracking_view == next {
+            return;
+        }
+
+        self.change_tracking_view = next;
+        self.status_section_resize = None;
+        self.status_multi_selection.clear();
+        cx.notify();
+    }
+
+    pub(in super::super) fn saved_status_section_heights(&self) -> (Option<u32>, Option<u32>) {
+        let to_u32 = |value: Option<Pixels>| {
+            let px_value: f32 = value.unwrap_or(px(0.0)).round().into();
+            (px_value.is_finite() && px_value >= 1.0).then_some(px_value as u32)
+        };
+        (
+            to_u32(self.change_tracking_height),
+            to_u32(self.untracked_height),
+        )
     }
 
     pub(in super::super) fn set_active_context_menu_invoker(
@@ -506,6 +667,12 @@ impl DetailsPaneView {
         });
     }
 
+    pub(in super::super) fn schedule_ui_settings_persist(&mut self, cx: &mut gpui::Context<Self>) {
+        let _ = self.root_view.update(cx, |root, cx| {
+            root.schedule_ui_settings_persist(cx);
+        });
+    }
+
     pub(in super::super) fn focus_diff_panel(
         &mut self,
         window: &mut Window,
@@ -520,6 +687,9 @@ impl DetailsPaneView {
 
 impl Render for DetailsPaneView {
     fn render(&mut self, _window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
-        self.commit_details_view(cx)
+        div()
+            .size_full()
+            .child(self.commit_details_view(cx))
+            .child(StatusSectionResizeTracker { view: cx.entity() })
     }
 }

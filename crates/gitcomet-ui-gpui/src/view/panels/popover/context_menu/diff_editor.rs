@@ -28,8 +28,8 @@ pub(super) fn model(
     items.push(ContextMenuItem::Separator);
 
     let (line_label, line_icon, line_shortcut, line_reverse) = match area {
-        DiffArea::Unstaged => ("Stage line", "+", Some("S"), false),
-        DiffArea::Staged => ("Unstage line", "−", Some("U"), true),
+        DiffArea::Unstaged => ("Stage line", "icons/plus.svg", Some("S"), false),
+        DiffArea::Staged => ("Unstage line", "icons/minus.svg", Some("U"), true),
     };
     items.push(ContextMenuItem::Entry {
         label: if lines_count > 1 {
@@ -54,7 +54,7 @@ pub(super) fn model(
             } else {
                 "Discard line".into()
             },
-            icon: Some("↺".into()),
+            icon: Some("icons/refresh.svg".into()),
             shortcut: Some("D".into()),
             disabled: discard_lines_patch.is_none(),
             action: Box::new(ContextMenuAction::ApplyWorktreePatch {
@@ -68,8 +68,8 @@ pub(super) fn model(
     items.push(ContextMenuItem::Separator);
 
     let (hunk_label, hunk_icon, hunk_reverse) = match area {
-        DiffArea::Unstaged => ("Stage hunk", "+", false),
-        DiffArea::Staged => ("Unstage hunk", "−", true),
+        DiffArea::Unstaged => ("Stage hunk", "icons/plus.svg", false),
+        DiffArea::Staged => ("Unstage hunk", "icons/minus.svg", true),
     };
     items.push(ContextMenuItem::Entry {
         label: if hunks_count > 1 {
@@ -94,7 +94,7 @@ pub(super) fn model(
             } else {
                 "Discard hunk".into()
             },
-            icon: Some("↺".into()),
+            icon: Some("icons/refresh.svg".into()),
             shortcut: None,
             disabled: hunk_patch.is_none(),
             action: Box::new(ContextMenuAction::ApplyWorktreePatch {
@@ -109,7 +109,7 @@ pub(super) fn model(
     if let Some(path) = path {
         items.push(ContextMenuItem::Entry {
             label: "Open file".into(),
-            icon: Some("🗎".into()),
+            icon: Some("icons/file.svg".into()),
             shortcut: None,
             disabled: false,
             action: Box::new(ContextMenuAction::OpenFile {
@@ -119,7 +119,7 @@ pub(super) fn model(
         });
         items.push(ContextMenuItem::Entry {
             label: "Open file location".into(),
-            icon: Some("📂".into()),
+            icon: Some("icons/folder.svg".into()),
             shortcut: None,
             disabled: false,
             action: Box::new(ContextMenuAction::OpenFileLocation {
@@ -131,7 +131,7 @@ pub(super) fn model(
     }
     items.push(ContextMenuItem::Entry {
         label: "Copy".into(),
-        icon: Some("⧉".into()),
+        icon: Some("icons/copy.svg".into()),
         shortcut: Some("C".into()),
         disabled: copy_text
             .as_ref()

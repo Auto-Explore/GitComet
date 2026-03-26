@@ -5,7 +5,7 @@ pub(super) fn model(repo_id: RepoId) -> ContextMenuModel {
     items.push(ContextMenuItem::Separator);
     items.push(ContextMenuItem::Entry {
         label: "Add submodule…".into(),
-        icon: Some("+".into()),
+        icon: Some("icons/plus.svg".into()),
         shortcut: None,
         disabled: false,
         action: Box::new(ContextMenuAction::OpenPopover {
@@ -14,14 +14,14 @@ pub(super) fn model(repo_id: RepoId) -> ContextMenuModel {
     });
     items.push(ContextMenuItem::Entry {
         label: "Update submodules".into(),
-        icon: Some("↻".into()),
+        icon: Some("icons/refresh.svg".into()),
         shortcut: None,
         disabled: false,
         action: Box::new(ContextMenuAction::UpdateSubmodules { repo_id }),
     });
     items.push(ContextMenuItem::Entry {
         label: "Open submodule…".into(),
-        icon: Some("↗".into()),
+        icon: Some("icons/open_external.svg".into()),
         shortcut: None,
         disabled: false,
         action: Box::new(ContextMenuAction::OpenPopover {
@@ -30,7 +30,7 @@ pub(super) fn model(repo_id: RepoId) -> ContextMenuModel {
     });
     items.push(ContextMenuItem::Entry {
         label: "Remove submodule…".into(),
-        icon: Some("🗑".into()),
+        icon: Some("icons/trash.svg".into()),
         shortcut: None,
         disabled: false,
         action: Box::new(ContextMenuAction::OpenPopover {

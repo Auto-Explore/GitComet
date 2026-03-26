@@ -1,0 +1,15 @@
+[package]
+name = "gitcomet-win32-window-utils"
+version = "0.1.7"
+edition = "2024"
+authors = ["AutoExplore Oy <info@autoexplore.ai>"]
+license = "AGPL-3.0-only"
+repository = "https://github.com/Auto-Explore/GitComet"
+rust-version = "1.94.0"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+windows = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }

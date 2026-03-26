@@ -2,7 +2,7 @@
 Type=Application
 Name=GitComet
 Comment=Git UI built with GPUI
-Exec=gitcomet-app
+Exec=gitcomet
 Icon=dev.gitcomet.GitComet
 StartupWMClass=dev.gitcomet.GitComet
 Terminal=false

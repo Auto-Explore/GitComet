@@ -1,4 +1,7 @@
 use crate::msg::Msg;
+use gitcomet_core::auth::{
+    StagedGitAuth, clear_staged_git_auth, stage_git_auth_for_current_thread,
+};
 use gitcomet_core::error::Error;
 use gitcomet_core::services::GitRepository;
 use std::path::{Path, PathBuf};
@@ -63,6 +66,20 @@ fn dedup_paths(mut paths: Vec<PathBuf>) -> Vec<PathBuf> {
     paths.sort();
     paths.dedup();
     paths
+}
+
+fn run_with_git_auth<R>(
+    auth: Option<StagedGitAuth>,
+    run: impl FnOnce() -> Result<R, Error>,
+) -> Result<R, Error> {
+    if let Some(auth) = auth {
+        stage_git_auth_for_current_thread(auth);
+        let result = run();
+        clear_staged_git_auth();
+        result
+    } else {
+        run()
+    }
 }
 
 pub(super) fn schedule_checkout_branch(
@@ -141,6 +158,7 @@ pub(super) fn schedule_create_branch(
     msg_tx: mpsc::Sender<Msg>,
     repo_id: RepoId,
     name: String,
+    target: String,
 ) {
     schedule_repo_action_with_hook(
         executor,
@@ -148,7 +166,7 @@ pub(super) fn schedule_create_branch(
         msg_tx,
         repo_id,
         move |repo| {
-            let target = gitcomet_core::domain::CommitId("HEAD".into());
+            let target = gitcomet_core::domain::CommitId(target.into());
             repo.create_branch(&name, &target)
         },
         send_refresh_branches_on_success,
@@ -164,9 +182,10 @@ pub(super) fn schedule_create_branch_and_checkout(
     msg_tx: mpsc::Sender<Msg>,
     repo_id: RepoId,
     name: String,
+    target: String,
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let target = gitcomet_core::domain::CommitId("HEAD".into());
+        let target = gitcomet_core::domain::CommitId(target.into());
         let created = repo.create_branch(&name, &target);
         let refresh = created.is_ok();
         let result = created.and_then(|()| repo.checkout_branch(&name));
@@ -307,13 +326,14 @@ pub(super) fn schedule_commit(
     msg_tx: mpsc::Sender<Msg>,
     repo_id: RepoId,
     message: String,
+    auth: Option<StagedGitAuth>,
 ) {
     schedule_repo_action_with_hook(
         executor,
         repos,
         msg_tx,
         repo_id,
-        move |repo| repo.commit(&message),
+        move |repo| run_with_git_auth(auth, || repo.commit(&message)),
         |_msg_tx, _repo_id, _result| {},
         |repo_id, result| {
             Msg::Internal(crate::msg::InternalMsg::CommitFinished { repo_id, result })
@@ -327,13 +347,14 @@ pub(super) fn schedule_commit_amend(
     msg_tx: mpsc::Sender<Msg>,
     repo_id: RepoId,
     message: String,
+    auth: Option<StagedGitAuth>,
 ) {
     schedule_repo_action_with_hook(
         executor,
         repos,
         msg_tx,
         repo_id,
-        move |repo| repo.commit_amend(&message),
+        move |repo| run_with_git_auth(auth, || repo.commit_amend(&message)),
         |_msg_tx, _repo_id, _result| {},
         |repo_id, result| {
             Msg::Internal(crate::msg::InternalMsg::CommitAmendFinished { repo_id, result })

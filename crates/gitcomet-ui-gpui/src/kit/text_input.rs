@@ -49,6 +49,7 @@ actions!(
         Cut,
         Copy,
         Undo,
+        Redo,
         ShowCharacterPalette,
     ]
 );
@@ -438,7 +439,9 @@ pub struct TextInput {
     cursor_blink_task: Option<gpui::Task<()>>,
     highlight_provider_poll_task: Option<gpui::Task<()>>,
     undo_stack: Vec<UndoSnapshot>,
+    redo_stack: Vec<UndoSnapshot>,
     enter_pressed: bool,
+    escape_pressed: bool,
 }
 
 impl TextInput {
@@ -495,7 +498,9 @@ impl TextInput {
             cursor_blink_task: None,
             highlight_provider_poll_task: None,
             undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
             enter_pressed: false,
+            escape_pressed: false,
         }
     }
 
@@ -551,7 +556,9 @@ impl TextInput {
             cursor_blink_task: None,
             highlight_provider_poll_task: None,
             undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
             enter_pressed: false,
+            escape_pressed: false,
         }
     }
 
@@ -659,6 +666,7 @@ impl TextInput {
         self.selected_range = self.content.len()..self.content.len();
         self.selection_reversed = false;
         self.undo_stack.clear();
+        self.redo_stack.clear();
         self.cursor_blink_visible = true;
         self.scroll_x = px(0.0);
         self.invalidate_layout_caches();
@@ -739,6 +747,15 @@ impl TextInput {
 
     pub fn take_enter_pressed(&mut self) -> bool {
         std::mem::take(&mut self.enter_pressed)
+    }
+
+    pub fn take_escape_pressed(&mut self) -> bool {
+        std::mem::take(&mut self.escape_pressed)
+    }
+
+    pub fn clear_transient_key_presses(&mut self) {
+        self.enter_pressed = false;
+        self.escape_pressed = false;
     }
 
     pub fn set_read_only(&mut self, read_only: bool, cx: &mut Context<Self>) {
@@ -1851,6 +1868,18 @@ impl TextInput {
         let Some(snapshot) = self.undo_stack.pop() else {
             return;
         };
+        self.push_redo_snapshot(self.current_undo_snapshot());
+        self.restore_undo_snapshot(snapshot, cx);
+    }
+
+    fn redo(&mut self, _: &Redo, _: &mut Window, cx: &mut Context<Self>) {
+        if self.read_only {
+            return;
+        }
+        let Some(snapshot) = self.redo_stack.pop() else {
+            return;
+        };
+        self.push_undo_snapshot(self.current_undo_snapshot());
         self.restore_undo_snapshot(snapshot, cx);
     }
 
@@ -1883,6 +1912,7 @@ impl TextInput {
         let range = self.normalized_utf8_range(range);
         let inserted = self.content.replace_range(range.clone(), new_text);
         self.push_undo_snapshot(undo_snapshot);
+        self.redo_stack.clear();
         self.pending_text_edit_delta = Some((range.clone(), inserted.clone()));
         let cursor = inserted.end;
         self.mark_wrap_dirty_from_edit(range, inserted.clone());
@@ -2002,13 +2032,21 @@ impl TextInput {
     }
 
     fn push_undo_snapshot(&mut self, snapshot: UndoSnapshot) {
-        if self.undo_stack.last() == Some(&snapshot) {
+        Self::push_history_snapshot(&mut self.undo_stack, snapshot);
+    }
+
+    fn push_redo_snapshot(&mut self, snapshot: UndoSnapshot) {
+        Self::push_history_snapshot(&mut self.redo_stack, snapshot);
+    }
+
+    fn push_history_snapshot(stack: &mut Vec<UndoSnapshot>, snapshot: UndoSnapshot) {
+        if stack.last() == Some(&snapshot) {
             return;
         }
-        if self.undo_stack.len() >= MAX_UNDO_STEPS {
-            let _ = self.undo_stack.remove(0);
+        if stack.len() >= MAX_UNDO_STEPS {
+            let _ = stack.remove(0);
         }
-        self.undo_stack.push(snapshot);
+        stack.push(snapshot);
     }
 
     fn restore_undo_snapshot(&mut self, snapshot: UndoSnapshot, cx: &mut Context<Self>) {
@@ -2188,6 +2226,22 @@ impl TextInput {
         }
     }
 
+    fn on_key_down(
+        &mut self,
+        event: &gpui::KeyDownEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if event.keystroke.modifiers.modified() {
+            return;
+        }
+
+        if event.keystroke.key.as_str() == "escape" {
+            self.escape_pressed = true;
+            cx.notify();
+        }
+    }
+
     fn on_mouse_down_right(
         &mut self,
         event: &MouseDownEvent,
@@ -2268,6 +2322,7 @@ impl TextInput {
     ) -> Div {
         let primary = primary_modifier_label();
         let undo_disabled = self.read_only || self.undo_stack.is_empty();
+        let redo_disabled = self.read_only || self.redo_stack.is_empty();
         let cut_disabled = self.read_only || self.selected_range.is_empty();
         let copy_disabled = self.selected_range.is_empty();
         let paste_disabled = self.read_only || !state.can_paste;
@@ -2283,6 +2338,20 @@ impl TextInput {
                     cx.stop_propagation();
                     this.context_menu = None;
                     this.undo(&Undo, window, cx);
+                    cx.notify();
+                }),
+            );
+        }
+
+        let mut redo_row =
+            self.context_menu_entry_row("Redo", format!("{primary}+Shift+Z").into(), redo_disabled);
+        if !redo_disabled {
+            redo_row = redo_row.on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _e: &MouseDownEvent, window, cx| {
+                    cx.stop_propagation();
+                    this.context_menu = None;
+                    this.redo(&Redo, window, cx);
                     cx.notify();
                 }),
             );
@@ -2394,6 +2463,7 @@ impl TextInput {
                 }),
             )
             .child(undo_row)
+            .child(redo_row)
             .child(
                 div()
                     .h(px(1.0))
@@ -3598,6 +3668,7 @@ impl Render for TextInput {
             .track_focus(&focus)
             .key_context("TextInput")
             .cursor(CursorStyle::IBeam)
+            .on_key_down(cx.listener(Self::on_key_down))
             .on_action(cx.listener(Self::backspace))
             .on_action(cx.listener(Self::delete))
             .on_action(cx.listener(Self::delete_word_left))
@@ -3628,6 +3699,7 @@ impl Render for TextInput {
             .on_action(cx.listener(Self::cut))
             .on_action(cx.listener(Self::copy))
             .on_action(cx.listener(Self::undo))
+            .on_action(cx.listener(Self::redo))
             .on_action(cx.listener(Self::show_character_palette))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
@@ -5434,6 +5506,102 @@ mod tests {
                     "after undo, the provider should be asked for a fresh range"
                 );
                 assert_eq!(resolved.highlights[0].1.color, Some(dp.first_color));
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn redo_restores_text_after_undo(cx: &mut gpui::TestAppContext) {
+        let (input, cx) = cx.add_window_view(|window, cx| {
+            TextInput::new(
+                TextInputOptions {
+                    multiline: false,
+                    ..Default::default()
+                },
+                window,
+                cx,
+            )
+        });
+
+        cx.update(|window, app| {
+            input.update(app, |input, cx| {
+                input.set_text("alpha", cx);
+                let inserted = input.replace_utf8_range(0..5, "beta", cx);
+                assert_eq!(inserted, 0..4);
+                assert_eq!(input.text(), "beta");
+
+                input.undo(&Undo, window, cx);
+                assert_eq!(input.text(), "alpha");
+
+                input.redo(&Redo, window, cx);
+                assert_eq!(input.text(), "beta");
+                assert!(input.redo_stack.is_empty());
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn redo_is_cleared_by_a_new_edit_after_undo(cx: &mut gpui::TestAppContext) {
+        let (input, cx) = cx.add_window_view(|window, cx| {
+            TextInput::new(
+                TextInputOptions {
+                    multiline: false,
+                    ..Default::default()
+                },
+                window,
+                cx,
+            )
+        });
+
+        cx.update(|window, app| {
+            input.update(app, |input, cx| {
+                input.set_text("alpha", cx);
+                let inserted = input.replace_utf8_range(0..5, "beta", cx);
+                assert_eq!(inserted, 0..4);
+
+                input.undo(&Undo, window, cx);
+                assert_eq!(input.text(), "alpha");
+                assert_eq!(input.redo_stack.len(), 1);
+
+                let inserted = input.replace_utf8_range(0..5, "gamma", cx);
+                assert_eq!(inserted, 0..5);
+                assert_eq!(input.text(), "gamma");
+                assert!(input.redo_stack.is_empty());
+
+                input.redo(&Redo, window, cx);
+                assert_eq!(input.text(), "gamma");
+                assert!(input.redo_stack.is_empty());
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn redo_is_noop_when_input_is_read_only(cx: &mut gpui::TestAppContext) {
+        let (input, cx) = cx.add_window_view(|window, cx| {
+            TextInput::new(
+                TextInputOptions {
+                    multiline: false,
+                    ..Default::default()
+                },
+                window,
+                cx,
+            )
+        });
+
+        cx.update(|window, app| {
+            input.update(app, |input, cx| {
+                input.set_text("alpha", cx);
+                let inserted = input.replace_utf8_range(0..5, "beta", cx);
+                assert_eq!(inserted, 0..4);
+
+                input.undo(&Undo, window, cx);
+                assert_eq!(input.text(), "alpha");
+                assert_eq!(input.redo_stack.len(), 1);
+
+                input.set_read_only(true, cx);
+                input.redo(&Redo, window, cx);
+                assert_eq!(input.text(), "alpha");
+                assert_eq!(input.redo_stack.len(), 1);
             });
         });
     }

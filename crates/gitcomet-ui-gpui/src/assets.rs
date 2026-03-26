@@ -6,11 +6,14 @@ pub struct GitCometAssets;
 impl GitCometAssets {
     fn load_static(path: &str) -> Option<Cow<'static, [u8]>> {
         match path {
-            "gitcomet-512.svg" => Some(Cow::Borrowed(include_bytes!(
-                "../../../assets/gitcomet-512.svg"
+            "gitcomet-window-icon.png" => Some(Cow::Borrowed(include_bytes!(
+                "../../../assets/gitcomet-window-icon.png"
             ))),
-            "gitcomet_logo_window.svg" => Some(Cow::Borrowed(include_bytes!(
-                "../../../assets/gitcomet_logo_window.svg"
+            "gitcomet-512.png" => Some(Cow::Borrowed(include_bytes!(
+                "../../../assets/gitcomet-512.png"
+            ))),
+            "gitcomet_logo.svg" => Some(Cow::Borrowed(include_bytes!(
+                "../../../assets/gitcomet_logo.svg"
             ))),
             "icons/arrow_down.svg" => Some(Cow::Borrowed(include_bytes!(
                 "../assets/icons/arrow_down.svg"
@@ -56,6 +59,8 @@ impl GitCometAssets {
             "icons/arrow_right.svg" => Some(Cow::Borrowed(include_bytes!(
                 "../assets/icons/arrow_right.svg"
             ))),
+            "icons/link.svg" => Some(Cow::Borrowed(include_bytes!("../assets/icons/link.svg"))),
+            "icons/unlink.svg" => Some(Cow::Borrowed(include_bytes!("../assets/icons/unlink.svg"))),
             "icons/cloud.svg" => Some(Cow::Borrowed(include_bytes!("../assets/icons/cloud.svg"))),
             "icons/cog.svg" => Some(Cow::Borrowed(include_bytes!("../assets/icons/cog.svg"))),
             "icons/computer.svg" => Some(Cow::Borrowed(include_bytes!(
@@ -92,8 +97,9 @@ impl GitCometAssets {
     fn list_static(dir: &str) -> Vec<SharedString> {
         match dir.trim_end_matches('/') {
             "" => vec![
-                "gitcomet-512.svg".into(),
-                "gitcomet_logo_window.svg".into(),
+                "gitcomet-window-icon.png".into(),
+                "gitcomet-512.png".into(),
+                "gitcomet_logo.svg".into(),
                 "icons".into(),
             ],
             "icons" => vec![
@@ -119,6 +125,8 @@ impl GitCometAssets {
                 "icons/infinity.svg".into(),
                 "icons/arrow_left.svg".into(),
                 "icons/arrow_right.svg".into(),
+                "icons/link.svg".into(),
+                "icons/unlink.svg".into(),
                 "icons/cloud.svg".into(),
                 "icons/cog.svg".into(),
                 "icons/computer.svg".into(),

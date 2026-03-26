@@ -340,6 +340,78 @@ pub(super) fn seed_file_diff_state_with_rev(
     });
 }
 
+pub(super) fn seed_file_image_diff_state_with_rev(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    repo_id: gitcomet_state::model::RepoId,
+    workdir: &std::path::Path,
+    path: &std::path::Path,
+    diff_file_rev: u64,
+    old: Option<&[u8]>,
+    new: Option<&[u8]>,
+) {
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, workdir);
+            set_test_file_status(
+                &mut repo,
+                path.to_path_buf(),
+                gitcomet_core::domain::FileStatusKind::Modified,
+                gitcomet_core::domain::DiffArea::Unstaged,
+            );
+            repo.diff_state.diff_file_rev = diff_file_rev;
+            repo.diff_state.diff_file_image = gitcomet_state::model::Loadable::Ready(Some(
+                Arc::new(gitcomet_core::domain::FileDiffImage {
+                    path: path.to_path_buf(),
+                    old: old.map(|bytes| bytes.to_vec()),
+                    new: new.map(|bytes| bytes.to_vec()),
+                }),
+            ));
+
+            let next_state = app_state_with_repo(repo, repo_id);
+
+            push_test_state(this, next_state, cx);
+        });
+    });
+}
+
+pub(super) fn image_diff_svg_fixture(width: u32, height: u32, fill: &str) -> Vec<u8> {
+    format!(
+        r##"<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">
+<rect width="{width}" height="{height}" fill="{fill}"/>
+</svg>"##
+    )
+    .into_bytes()
+}
+
+pub(super) fn file_image_diff_cache_debug_snapshot(pane: &MainPaneView) -> String {
+    format!(
+        "seq={} inflight={:?} repo_id={:?} cache_rev={} signature={:?} cache_target={:?} cache_path={:?} old_ready={} new_ready={} old_svg={:?} new_svg={:?} active_diff_file_rev={:?} active_diff_target={:?} active={}",
+        pane.file_image_diff_cache_seq,
+        pane.file_image_diff_cache_inflight,
+        pane.file_image_diff_cache_repo_id,
+        pane.file_image_diff_cache_rev,
+        pane.file_image_diff_cache_content_signature,
+        pane.file_image_diff_cache_target,
+        pane.file_image_diff_cache_path,
+        pane.file_image_diff_cache_old.is_some(),
+        pane.file_image_diff_cache_new.is_some(),
+        pane.file_image_diff_cache_old_svg_path,
+        pane.file_image_diff_cache_new_svg_path,
+        pane.active_repo().map(|repo| repo.diff_state.diff_file_rev),
+        pane.active_repo()
+            .and_then(|repo| repo.diff_state.diff_target.clone()),
+        pane.is_file_image_diff_view_active(),
+    )
+}
+
+pub(super) fn draw_and_drain_test_window(cx: &mut gpui::VisualTestContext) {
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    cx.run_until_parked();
+}
+
 pub(super) fn conflict_compare_repo_state(
     repo_id: gitcomet_state::model::RepoId,
     workdir: &std::path::Path,
@@ -766,8 +838,30 @@ pub(super) fn wait_for_main_pane_condition_with_timeout<T, Ready, Snapshot>(
     }
 }
 
+pub(super) fn wait_for_file_image_diff_cache<Ready>(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    description: &str,
+    is_ready: Ready,
+) where
+    Ready: Fn(&MainPaneView) -> bool,
+{
+    wait_for_main_pane_condition(
+        cx,
+        view,
+        description,
+        |pane| {
+            pane.file_image_diff_cache_inflight.is_none()
+                && pane.is_file_image_diff_view_active()
+                && is_ready(pane)
+        },
+        file_image_diff_cache_debug_snapshot,
+    );
+}
+
 mod conflict;
 mod file_diff;
 mod file_status;
 mod large_file_diff;
 mod markdown;
+mod shortcuts;

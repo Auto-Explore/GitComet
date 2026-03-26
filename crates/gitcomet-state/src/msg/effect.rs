@@ -1,5 +1,6 @@
 use crate::model::{ConflictFileLoadMode, RepoId};
 use crate::session::SessionReposSnapshot;
+use gitcomet_core::auth::StagedGitAuth;
 use gitcomet_core::domain::*;
 use gitcomet_core::services::{ConflictSide, PullMode, RemoteUrlKind, ResetMode};
 use std::path::PathBuf;
@@ -128,10 +129,12 @@ pub enum Effect {
     CreateBranch {
         repo_id: RepoId,
         name: String,
+        target: String,
     },
     CreateBranchAndCheckout {
         repo_id: RepoId,
         name: String,
+        target: String,
     },
     DeleteBranch {
         repo_id: RepoId,
@@ -144,6 +147,7 @@ pub enum Effect {
     CloneRepo {
         url: String,
         dest: PathBuf,
+        auth: Option<StagedGitAuth>,
     },
     ExportPatch {
         repo_id: RepoId,
@@ -171,9 +175,11 @@ pub enum Effect {
         repo_id: RepoId,
         url: String,
         path: PathBuf,
+        auth: Option<StagedGitAuth>,
     },
     UpdateSubmodules {
         repo_id: RepoId,
+        auth: Option<StagedGitAuth>,
     },
     RemoveSubmodule {
         repo_id: RepoId,
@@ -219,14 +225,17 @@ pub enum Effect {
     Commit {
         repo_id: RepoId,
         message: String,
+        auth: Option<StagedGitAuth>,
     },
     CommitAmend {
         repo_id: RepoId,
         message: String,
+        auth: Option<StagedGitAuth>,
     },
     FetchAll {
         repo_id: RepoId,
         prune: bool,
+        auth: Option<StagedGitAuth>,
     },
     PruneMergedBranches {
         repo_id: RepoId,
@@ -237,11 +246,13 @@ pub enum Effect {
     Pull {
         repo_id: RepoId,
         mode: PullMode,
+        auth: Option<StagedGitAuth>,
     },
     PullBranch {
         repo_id: RepoId,
         remote: String,
         branch: String,
+        auth: Option<StagedGitAuth>,
     },
     MergeRef {
         repo_id: RepoId,
@@ -253,19 +264,32 @@ pub enum Effect {
     },
     Push {
         repo_id: RepoId,
+        auth: Option<StagedGitAuth>,
     },
     ForcePush {
         repo_id: RepoId,
+        auth: Option<StagedGitAuth>,
     },
     PushSetUpstream {
         repo_id: RepoId,
         remote: String,
+        branch: String,
+        auth: Option<StagedGitAuth>,
+    },
+    SetUpstreamBranch {
+        repo_id: RepoId,
+        branch: String,
+        upstream: String,
+    },
+    UnsetUpstreamBranch {
+        repo_id: RepoId,
         branch: String,
     },
     DeleteRemoteBranch {
         repo_id: RepoId,
         remote: String,
         branch: String,
+        auth: Option<StagedGitAuth>,
     },
     Reset {
         repo_id: RepoId,
@@ -298,11 +322,13 @@ pub enum Effect {
         repo_id: RepoId,
         remote: String,
         name: String,
+        auth: Option<StagedGitAuth>,
     },
     DeleteRemoteTag {
         repo_id: RepoId,
         remote: String,
         name: String,
+        auth: Option<StagedGitAuth>,
     },
     AddRemote {
         repo_id: RepoId,

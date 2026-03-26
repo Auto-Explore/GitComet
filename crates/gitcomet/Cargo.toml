@@ -1,0 +1,40 @@
+[package]
+name = "gitcomet"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = ["ui-gpui", "gix"]
+ui = ["dep:gitcomet-ui"]
+ui-gpui-runtime = ["ui", "dep:gitcomet-ui-gpui"]
+ui-gpui = ["ui-gpui-runtime", "gitcomet-ui-gpui/syntax-all"]
+ui-gpui-syntax-common = [
+    "ui-gpui-runtime",
+    "gitcomet-ui-gpui/syntax-common",
+]
+ui-gpui-syntax-minimal = [
+    "ui-gpui-runtime",
+    "gitcomet-ui-gpui/syntax-minimal",
+]
+gix = ["dep:gitcomet-git-gix"]
+
+[dependencies]
+clap = { workspace = true }
+gitcomet-core = { workspace = true }
+gitcomet-git = { workspace = true }
+gitcomet-git-gix = { workspace = true, optional = true }
+gitcomet-ui = { workspace = true, optional = true }
+gitcomet-ui-gpui = { workspace = true, optional = true }
+mimalloc = { workspace = true }
+rustc-hash = { workspace = true }
+tempfile = { workspace = true }
+
+[target.'cfg(target_os = "windows")'.build-dependencies]
+embed-resource = "3"

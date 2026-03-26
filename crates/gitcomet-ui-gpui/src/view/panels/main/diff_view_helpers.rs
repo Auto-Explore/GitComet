@@ -85,6 +85,7 @@ impl MainPaneView {
 
     pub(super) fn diff_nav_hotkey_hint(theme: AppTheme, label: &'static str) -> gpui::Div {
         div()
+            .font_family("monospace")
             .text_xs()
             .text_color(theme.colors.text_muted)
             .child(label)
@@ -123,7 +124,7 @@ impl MainPaneView {
             let next_tooltip: SharedString = "Next file (F4)".into();
 
             let prev_btn = components::Button::new("diff_prev_file", "Prev file")
-                .end_slot(Self::diff_nav_hotkey_hint(theme, "F1"))
+                .separated_end_slot(Self::diff_nav_hotkey_hint(theme, "F1"))
                 .style(components::ButtonStyle::Outlined)
                 .disabled(prev_disabled)
                 .on_click(theme, cx, move |this, _e, window, cx| {
@@ -145,7 +146,7 @@ impl MainPaneView {
                 .into_any_element();
 
             let next_btn = components::Button::new("diff_next_file", "Next file")
-                .end_slot(Self::diff_nav_hotkey_hint(theme, "F4"))
+                .separated_end_slot(Self::diff_nav_hotkey_hint(theme, "F4"))
                 .style(components::ButtonStyle::Outlined)
                 .disabled(next_disabled)
                 .on_click(theme, cx, move |this, _e, window, cx| {

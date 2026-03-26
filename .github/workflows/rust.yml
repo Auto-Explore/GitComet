@@ -18,7 +18,7 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  # Build gitcomet-app in headless mode (no GPUI system deps required).
+  # Build gitcomet in headless mode (no GPUI system deps required).
   # The UI-only code paths are behind #[cfg(feature = "ui-gpui")] guards.
   APP_FEATURES: "--no-default-features --features gix"
 
@@ -77,7 +77,7 @@ jobs:
         echo "Skipping cargo clippy -p gitcomet-ui-gpui in this job."
         echo "Reason: GPUI requires native windowing/system dependencies that are not available in headless CI."
     - name: Clippy (app — headless)
-      run: cargo clippy -p gitcomet-app $APP_FEATURES -- -D warnings
+      run: cargo clippy -p gitcomet $APP_FEATURES -- -D warnings
 
   build:
     name: Build
@@ -92,7 +92,7 @@ jobs:
     - name: Build (core + state + backend)
       run: cargo build -p gitcomet-core -p gitcomet-state -p gitcomet-git-gix --verbose
     - name: Build (app — headless)
-      run: cargo build -p gitcomet-app $APP_FEATURES --verbose
+      run: cargo build -p gitcomet $APP_FEATURES --verbose
 
   # Core merge algorithm correctness — Phase 1A/1B/1C portability tests
   merge-algorithm:
@@ -148,16 +148,16 @@ jobs:
       uses: dtolnay/rust-toolchain@stable
     - name: Cache Rust artifacts
       uses: Swatinem/rust-cache@v2
-    - name: Build gitcomet-app binary (headless)
-      run: cargo build -p gitcomet-app $APP_FEATURES
+    - name: Build gitcomet binary (headless)
+      run: cargo build -p gitcomet $APP_FEATURES
     - name: Git mergetool E2E (Phase 4A — t7610 parity)
-      run: cargo test -p gitcomet-app $APP_FEATURES --test mergetool_git_integration --verbose
+      run: cargo test -p gitcomet $APP_FEATURES --test mergetool_git_integration --verbose
     - name: Git difftool E2E (Phase 4B — t7800 parity)
-      run: cargo test -p gitcomet-app $APP_FEATURES --test difftool_git_integration --verbose
+      run: cargo test -p gitcomet $APP_FEATURES --test difftool_git_integration --verbose
     - name: Standalone tool-mode E2E (exit codes + validation)
-      run: cargo test -p gitcomet-app $APP_FEATURES --test standalone_tool_mode_integration --verbose
+      run: cargo test -p gitcomet $APP_FEATURES --test standalone_tool_mode_integration --verbose
     - name: Mergetool/difftool runtime unit tests (bin target)
-      run: cargo test -p gitcomet-app $APP_FEATURES --bin gitcomet-app --verbose
+      run: cargo test -p gitcomet $APP_FEATURES --bin gitcomet --verbose
 
   # Backend integration — mergetool launcher, status, conflict checkout
   backend-integration:

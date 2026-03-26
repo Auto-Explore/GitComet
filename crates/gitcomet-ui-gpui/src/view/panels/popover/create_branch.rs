@@ -1,10 +1,17 @@
 use super::*;
 
+fn hotkey_hint(theme: AppTheme, debug_selector: &'static str, label: &'static str) -> gpui::Div {
+    div()
+        .debug_selector(move || debug_selector.to_string())
+        .font_family("monospace")
+        .text_xs()
+        .text_color(theme.colors.text_muted)
+        .child(label)
+}
+
 pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>) -> gpui::Div {
     let theme = this.theme;
-    let is_empty = this
-        .create_branch_input
-        .read_with(cx, |i, _| i.text().trim().is_empty());
+    let can_create = this.can_submit_create_branch(cx);
 
     div()
         .flex()
@@ -36,30 +43,19 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                 .justify_between()
                 .child(
                     components::Button::new("create_branch_cancel", "Cancel")
+                        .separated_end_slot(hotkey_hint(theme, "create_branch_cancel_hint", "Esc"))
                         .style(components::ButtonStyle::Outlined)
-                        .on_click(theme, cx, |this, _e, _w, cx| {
-                            this.popover = None;
-                            this.popover_anchor = None;
-                            cx.notify();
+                        .on_click(theme, cx, |this, _e, window, cx| {
+                            this.dismiss_inline_popover(window, cx);
                         }),
                 )
                 .child(
                     components::Button::new("create_branch_go", "Create")
+                        .separated_end_slot(hotkey_hint(theme, "create_branch_go_hint", "Enter"))
                         .style(components::ButtonStyle::Filled)
-                        .disabled(is_empty)
-                        .on_click(theme, cx, |this, _e, _w, cx| {
-                            let name = this
-                                .create_branch_input
-                                .read_with(cx, |i, _| i.text().trim().to_string());
-                            if let Some(repo_id) = this.active_repo_id()
-                                && !name.is_empty()
-                            {
-                                this.store
-                                    .dispatch(Msg::CreateBranchAndCheckout { repo_id, name });
-                            }
-                            this.popover = None;
-                            this.popover_anchor = None;
-                            cx.notify();
+                        .disabled(!can_create)
+                        .on_click(theme, cx, |this, _e, window, cx| {
+                            this.submit_create_branch(window, cx);
                         }),
                 ),
         )

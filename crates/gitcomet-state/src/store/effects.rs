@@ -153,12 +153,20 @@ pub(super) fn schedule_effect(
         Effect::RevertCommit { repo_id, commit_id } => {
             repo_actions::schedule_revert_commit(executor, repos, msg_tx, repo_id, commit_id);
         }
-        Effect::CreateBranch { repo_id, name } => {
-            repo_actions::schedule_create_branch(executor, repos, msg_tx, repo_id, name);
+        Effect::CreateBranch {
+            repo_id,
+            name,
+            target,
+        } => {
+            repo_actions::schedule_create_branch(executor, repos, msg_tx, repo_id, name, target);
         }
-        Effect::CreateBranchAndCheckout { repo_id, name } => {
+        Effect::CreateBranchAndCheckout {
+            repo_id,
+            name,
+            target,
+        } => {
             repo_actions::schedule_create_branch_and_checkout(
-                executor, repos, msg_tx, repo_id, name,
+                executor, repos, msg_tx, repo_id, name, target,
             );
         }
         Effect::DeleteBranch { repo_id, name } => {
@@ -167,7 +175,9 @@ pub(super) fn schedule_effect(
         Effect::ForceDeleteBranch { repo_id, name } => {
             repo_actions::schedule_force_delete_branch(executor, repos, msg_tx, repo_id, name);
         }
-        Effect::CloneRepo { url, dest } => clone::schedule_clone_repo(executor, msg_tx, url, dest),
+        Effect::CloneRepo { url, dest, auth } => {
+            clone::schedule_clone_repo(executor, msg_tx, url, dest, auth)
+        }
         Effect::ExportPatch {
             repo_id,
             commit_id,
@@ -191,11 +201,18 @@ pub(super) fn schedule_effect(
         Effect::ForceRemoveWorktree { repo_id, path } => {
             repo_commands::schedule_force_remove_worktree(executor, repos, msg_tx, repo_id, path);
         }
-        Effect::AddSubmodule { repo_id, url, path } => {
-            repo_commands::schedule_add_submodule(executor, repos, msg_tx, repo_id, url, path);
+        Effect::AddSubmodule {
+            repo_id,
+            url,
+            path,
+            auth,
+        } => {
+            repo_commands::schedule_add_submodule(
+                executor, repos, msg_tx, repo_id, url, path, auth,
+            );
         }
-        Effect::UpdateSubmodules { repo_id } => {
-            repo_commands::schedule_update_submodules(executor, repos, msg_tx, repo_id);
+        Effect::UpdateSubmodules { repo_id, auth } => {
+            repo_commands::schedule_update_submodules(executor, repos, msg_tx, repo_id, auth);
         }
         Effect::RemoveSubmodule { repo_id, path } => {
             repo_commands::schedule_remove_submodule(executor, repos, msg_tx, repo_id, path);
@@ -235,52 +252,81 @@ pub(super) fn schedule_effect(
                 executor, repos, msg_tx, repo_id, paths,
             )
         }
-        Effect::Commit { repo_id, message } => {
-            repo_actions::schedule_commit(executor, repos, msg_tx, repo_id, message);
+        Effect::Commit {
+            repo_id,
+            message,
+            auth,
+        } => {
+            repo_actions::schedule_commit(executor, repos, msg_tx, repo_id, message, auth);
         }
-        Effect::CommitAmend { repo_id, message } => {
-            repo_actions::schedule_commit_amend(executor, repos, msg_tx, repo_id, message);
+        Effect::CommitAmend {
+            repo_id,
+            message,
+            auth,
+        } => {
+            repo_actions::schedule_commit_amend(executor, repos, msg_tx, repo_id, message, auth);
         }
-        Effect::FetchAll { repo_id, prune } => {
-            repo_commands::schedule_fetch_all(executor, repos, msg_tx, repo_id, prune)
-        }
+        Effect::FetchAll {
+            repo_id,
+            prune,
+            auth,
+        } => repo_commands::schedule_fetch_all(executor, repos, msg_tx, repo_id, prune, auth),
         Effect::PruneMergedBranches { repo_id } => {
             repo_commands::schedule_prune_merged_branches(executor, repos, msg_tx, repo_id)
         }
         Effect::PruneLocalTags { repo_id } => {
             repo_commands::schedule_prune_local_tags(executor, repos, msg_tx, repo_id)
         }
-        Effect::Pull { repo_id, mode } => {
-            repo_commands::schedule_pull(executor, repos, msg_tx, repo_id, mode)
-        }
+        Effect::Pull {
+            repo_id,
+            mode,
+            auth,
+        } => repo_commands::schedule_pull(executor, repos, msg_tx, repo_id, mode, auth),
         Effect::PullBranch {
             repo_id,
             remote,
             branch,
-        } => repo_commands::schedule_pull_branch(executor, repos, msg_tx, repo_id, remote, branch),
+            auth,
+        } => repo_commands::schedule_pull_branch(
+            executor, repos, msg_tx, repo_id, remote, branch, auth,
+        ),
         Effect::MergeRef { repo_id, reference } => {
             repo_commands::schedule_merge_ref(executor, repos, msg_tx, repo_id, reference);
         }
         Effect::SquashRef { repo_id, reference } => {
             repo_commands::schedule_squash_ref(executor, repos, msg_tx, repo_id, reference);
         }
-        Effect::Push { repo_id } => repo_commands::schedule_push(executor, repos, msg_tx, repo_id),
-        Effect::ForcePush { repo_id } => {
-            repo_commands::schedule_force_push(executor, repos, msg_tx, repo_id)
+        Effect::Push { repo_id, auth } => {
+            repo_commands::schedule_push(executor, repos, msg_tx, repo_id, auth)
+        }
+        Effect::ForcePush { repo_id, auth } => {
+            repo_commands::schedule_force_push(executor, repos, msg_tx, repo_id, auth)
         }
         Effect::PushSetUpstream {
             repo_id,
             remote,
             branch,
+            auth,
         } => repo_commands::schedule_push_set_upstream(
-            executor, repos, msg_tx, repo_id, remote, branch,
+            executor, repos, msg_tx, repo_id, remote, branch, auth,
         ),
+        Effect::SetUpstreamBranch {
+            repo_id,
+            branch,
+            upstream,
+        } => repo_commands::schedule_set_upstream_branch(
+            executor, repos, msg_tx, repo_id, branch, upstream,
+        ),
+        Effect::UnsetUpstreamBranch { repo_id, branch } => {
+            repo_commands::schedule_unset_upstream_branch(executor, repos, msg_tx, repo_id, branch)
+        }
         Effect::DeleteRemoteBranch {
             repo_id,
             remote,
             branch,
+            auth,
         } => repo_commands::schedule_delete_remote_branch(
-            executor, repos, msg_tx, repo_id, remote, branch,
+            executor, repos, msg_tx, repo_id, remote, branch, auth,
         ),
         Effect::Reset {
             repo_id,
@@ -311,13 +357,15 @@ pub(super) fn schedule_effect(
             repo_id,
             remote,
             name,
-        } => repo_commands::schedule_push_tag(executor, repos, msg_tx, repo_id, remote, name),
+            auth,
+        } => repo_commands::schedule_push_tag(executor, repos, msg_tx, repo_id, remote, name, auth),
         Effect::DeleteRemoteTag {
             repo_id,
             remote,
             name,
+            auth,
         } => repo_commands::schedule_delete_remote_tag(
-            executor, repos, msg_tx, repo_id, remote, name,
+            executor, repos, msg_tx, repo_id, remote, name, auth,
         ),
         Effect::AddRemote { repo_id, name, url } => {
             repo_commands::schedule_add_remote(executor, repos, msg_tx, repo_id, name, url);

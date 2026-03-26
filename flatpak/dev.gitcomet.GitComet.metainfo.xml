@@ -10,7 +10,7 @@
   </developer>
   <launchable type="desktop-id">dev.gitcomet.GitComet.desktop</launchable>
   <provides>
-    <binary>gitcomet-app</binary>
+    <binary>gitcomet</binary>
   </provides>
   <description>
     <p>GitComet is a fast Git GUI built for large repositories, familiar history browsing, local-first privacy, and drop-in difftool and mergetool workflows.</p>

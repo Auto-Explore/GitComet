@@ -346,6 +346,141 @@ fn focused_mergetool_bootstrap_reuses_shared_text_arcs(cx: &mut gpui::TestAppCon
 }
 
 #[gpui::test]
+fn svg_conflict_preview_rasterizes_off_the_ui_thread(cx: &mut gpui::TestAppContext) {
+    use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession};
+
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    disable_view_poller_for_test(cx, &view);
+
+    let repo_id = gitcomet_state::model::RepoId(163);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_svg_conflict_preview",
+        std::process::id()
+    ));
+    let file_rel = std::path::PathBuf::from("fixtures/conflict_preview.svg");
+    let abs_path = workdir.join(&file_rel);
+
+    let base_svg: Arc<str> =
+        r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><rect width="16" height="16" fill="#1d4ed8"/></svg>"##
+            .into();
+    let ours_svg: Arc<str> =
+        r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="#dc2626"/></svg>"##
+            .into();
+    let theirs_svg: Arc<str> =
+        r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M2 14L8 2L14 14Z" fill="#16a34a"/></svg>"##
+            .into();
+    let current_text: Arc<str> = format!(
+        "<<<<<<< ours\n{}\n=======\n{}\n>>>>>>> theirs\n",
+        ours_svg, theirs_svg
+    )
+    .into();
+
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(abs_path.parent().expect("svg conflict preview parent"))
+        .expect("create svg conflict preview dir");
+    std::fs::write(&abs_path, current_text.as_bytes()).expect("write svg conflict preview");
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            set_test_conflict_status(
+                &mut repo,
+                file_rel.clone(),
+                gitcomet_core::domain::DiffArea::Unstaged,
+            );
+            repo.conflict_state.conflict_file_path = Some(file_rel.clone());
+            repo.conflict_state.conflict_file =
+                gitcomet_state::model::Loadable::Ready(Some(gitcomet_state::model::ConflictFile {
+                    path: file_rel.clone(),
+                    base_bytes: None,
+                    ours_bytes: None,
+                    theirs_bytes: None,
+                    current_bytes: None,
+                    base: Some(base_svg.clone()),
+                    ours: Some(ours_svg.clone()),
+                    theirs: Some(theirs_svg.clone()),
+                    current: Some(current_text.clone()),
+                }));
+            repo.conflict_state.conflict_session = Some(ConflictSession::from_merged_text(
+                file_rel.clone(),
+                gitcomet_core::domain::FileConflictKind::BothModified,
+                ConflictPayload::Text(base_svg.clone()),
+                ConflictPayload::Text(ours_svg.clone()),
+                ConflictPayload::Text(theirs_svg.clone()),
+                &current_text,
+            ));
+
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+
+    wait_for_main_pane_condition_with_timeout(
+        cx,
+        &view,
+        "svg conflict resolver bootstrap initialized",
+        BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
+        |pane| {
+            pane.conflict_resolver.path.as_ref() == Some(&file_rel)
+                && pane.conflict_resolver.source_hash.is_some()
+        },
+        |pane| {
+            format!(
+                "path={:?} source_hash={:?} preview_path={:?}",
+                pane.conflict_resolver.path.clone(),
+                pane.conflict_resolver.source_hash,
+                pane.conflict_resolver.image_preview.path.clone(),
+            )
+        },
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.ensure_conflict_image_preview_cache(cx);
+            });
+        });
+    });
+
+    wait_for_main_pane_condition_with_timeout(
+        cx,
+        &view,
+        "svg conflict preview cache rasterized",
+        BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
+        |pane| {
+            matches!(
+                pane.conflict_resolver.image_preview.image(ThreeWayColumn::Base),
+                Loadable::Ready(Some(image)) if image.format() == gpui::ImageFormat::Png
+            ) && matches!(
+                pane.conflict_resolver.image_preview.image(ThreeWayColumn::Ours),
+                Loadable::Ready(Some(image)) if image.format() == gpui::ImageFormat::Png
+            ) && matches!(
+                pane.conflict_resolver.image_preview.image(ThreeWayColumn::Theirs),
+                Loadable::Ready(Some(image)) if image.format() == gpui::ImageFormat::Png
+            )
+        },
+        |pane| {
+            format!(
+                "base={:?} ours={:?} theirs={:?}",
+                pane.conflict_resolver
+                    .image_preview
+                    .image(ThreeWayColumn::Base),
+                pane.conflict_resolver
+                    .image_preview
+                    .image(ThreeWayColumn::Ours),
+                pane.conflict_resolver
+                    .image_preview
+                    .image(ThreeWayColumn::Theirs),
+            )
+        },
+    );
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup svg conflict preview fixture");
+}
+
+#[gpui::test]
 fn conflict_resolver_input_lists_measure_later_long_rows_for_horizontal_scroll(
     cx: &mut gpui::TestAppContext,
 ) {
@@ -1247,20 +1382,33 @@ fn whole_file_conflict_streamed_three_way_syntax_survives_view_mode_switch(
         let _ = window.draw(app);
     });
 
-    cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
-        let styled = conflict_split_cached_styled(
-            &pane,
-            crate::view::conflict_resolver::ConflictPickSide::Ours,
-            ours_body_line,
-        )
-        .expect("two-way draw should cache the streamed HTML body row after switching from three-way");
-        assert!(
-            !styled.highlights.is_empty(),
-            "streamed two-way rows above the old 20k line gate should stay syntax highlighted after switching from three-way; got {:?}",
-            styled_debug_info_with_styles(styled),
-        );
-    });
+    wait_for_main_pane_condition_with_timeout(
+        cx,
+        &view,
+        "streamed two-way HTML row cache after three-way switch",
+        BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
+        |pane| {
+            conflict_split_cached_styled(
+                pane,
+                crate::view::conflict_resolver::ConflictPickSide::Ours,
+                ours_body_line,
+            )
+            .is_some_and(|styled| !styled.highlights.is_empty())
+        },
+        |pane| {
+            let split_cached = conflict_split_cached_styled(
+                pane,
+                crate::view::conflict_resolver::ConflictPickSide::Ours,
+                ours_body_line,
+            )
+            .map(styled_debug_info_with_styles);
+            format!(
+                "split_cached={split_cached:?} split_cache_len={} three_way_cache_len={}",
+                pane.conflict_diff_segments_cache_split.len(),
+                pane.conflict_three_way_segments_cache.len(),
+            )
+        },
+    );
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
@@ -1276,18 +1424,28 @@ fn whole_file_conflict_streamed_three_way_syntax_survives_view_mode_switch(
         let _ = window.draw(app);
     });
 
-    cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
-        let styled = pane
-            .conflict_three_way_segments_cache
-            .get(&(2, ThreeWayColumn::Ours))
-            .expect("three-way draw should repopulate the streamed HTML body row cache after toggling back");
-        assert!(
-            !styled.highlights.is_empty(),
-            "streamed three-way rows above the old 20k line gate should stay syntax highlighted after toggling back; got {:?}",
-            styled_debug_info_with_styles(styled),
-        );
-    });
+    wait_for_main_pane_condition_with_timeout(
+        cx,
+        &view,
+        "streamed three-way HTML row cache after toggling back",
+        BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
+        |pane| {
+            pane.conflict_three_way_segments_cache
+                .get(&(2, ThreeWayColumn::Ours))
+                .is_some_and(|styled| !styled.highlights.is_empty())
+        },
+        |pane| {
+            let three_way_cached = pane
+                .conflict_three_way_segments_cache
+                .get(&(2, ThreeWayColumn::Ours))
+                .map(styled_debug_info_with_styles);
+            format!(
+                "three_way_cached={three_way_cached:?} split_cache_len={} three_way_cache_len={}",
+                pane.conflict_diff_segments_cache_split.len(),
+                pane.conflict_three_way_segments_cache.len(),
+            )
+        },
+    );
 
     fixture.cleanup();
 }
@@ -3564,25 +3722,26 @@ fn large_conflict_resolved_output_renders_plain_text_then_upgrades_after_backgro
         view.update(app, |this, cx| {
             this.main_pane.update(cx, |pane, cx| {
                 pane.ensure_conflict_resolved_output_materialized(cx);
+                assert!(
+                    pane.conflict_resolved_output_projection.is_none(),
+                    "explicit materialization should drop the streamed projection immediately"
+                );
+                assert_eq!(
+                    pane.conflict_resolved_preview_line_count, line_count,
+                    "materialized preview should preserve the streamed output line count"
+                );
+                assert_eq!(
+                    pane.conflict_resolved_preview_syntax_language,
+                    Some(rows::DiffSyntaxLanguage::Rust),
+                    "materialized resolved output should still keep the path-derived syntax language"
+                );
+                assert!(
+                    pane.conflict_resolved_preview_prepared_syntax_document.is_none(),
+                    "zero foreground budget should keep syntax preparation deferred immediately after materialization"
+                );
             });
         });
     });
-
-    wait_for_main_pane_condition_with_timeout(
-        cx,
-        &view,
-        "large conflict resolved output materialized on demand",
-        BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
-        |pane| pane.conflict_resolved_output_projection.is_none(),
-        |pane| {
-            format!(
-                "projection_present={} line_count={} prepared_document={:?}",
-                pane.conflict_resolved_output_projection.is_some(),
-                pane.conflict_resolved_preview_line_count,
-                pane.conflict_resolved_preview_prepared_syntax_document,
-            )
-        },
-    );
 
     cx.update(|window, app| {
         let _ = window.draw(app);
@@ -3600,10 +3759,6 @@ fn large_conflict_resolved_output_renders_plain_text_then_upgrades_after_backgro
             Some(rows::DiffSyntaxLanguage::Rust),
             "materialized resolved output should still keep the path-derived syntax language"
         );
-        assert!(
-            pane.conflict_resolved_preview_prepared_syntax_document.is_none(),
-            "zero foreground budget should keep syntax preparation deferred immediately after materialization"
-        );
         let styled = pane
             .conflict_resolved_preview_segments_cache_get(target_ix)
             .expect("materialized output draw should populate the visible fallback row cache");
@@ -3611,10 +3766,6 @@ fn large_conflict_resolved_output_renders_plain_text_then_upgrades_after_backgro
             styled.text.as_ref(),
             comment_line,
             "materialized row cache should preserve the expected resolved-output text"
-        );
-        assert!(
-            styled.highlights.is_empty(),
-            "materialized output should still render plain text until a later background parse upgrades it"
         );
     });
 

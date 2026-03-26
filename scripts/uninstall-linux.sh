@@ -20,6 +20,7 @@ icon_sizes=(32 48 128 256 512)
 desktop_files=("dev.gitcomet.GitComet.desktop" "gitcomet.desktop")
 icon_names=("dev.gitcomet.GitComet" "gitcomet")
 
+rm -f "${bindir}/gitcomet"
 rm -f "${bindir}/gitcomet-app"
 for desktop_file in "${desktop_files[@]}"; do
   rm -f "${appdir}/${desktop_file}"

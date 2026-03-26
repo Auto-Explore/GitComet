@@ -5,6 +5,7 @@
 //! into production code so it can be reused outside ad-hoc test harnesses.
 
 use crate::merge::{MergeOptions, merge_file};
+use crate::process::configure_background_command;
 use rustc_hash::FxHashSet as HashSet;
 use std::collections::BTreeSet;
 use std::fmt;
@@ -525,7 +526,9 @@ fn read_blob_bytes_optional(
 }
 
 fn run_git(repo: &Path, args: &[&str]) -> Result<Output, MergeExtractionError> {
-    Command::new("git")
+    let mut command = Command::new("git");
+    configure_background_command(&mut command);
+    command
         .args(args)
         .current_dir(repo)
         .output()

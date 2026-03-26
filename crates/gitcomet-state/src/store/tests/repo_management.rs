@@ -167,6 +167,7 @@ fn open_repo_refreshes_when_repo_is_already_active() {
         &mut state,
         Msg::OpenRepo(PathBuf::from("/tmp/repo")),
     );
+    state.repos[0].missing_on_disk = true;
 
     let effects = reduce(
         &mut repos,
@@ -444,6 +445,56 @@ fn close_repo_removes_and_moves_active() {
     ));
     assert_eq!(state.repos.len(), 1);
     assert_eq!(state.active_repo, Some(RepoId(10)));
+}
+
+#[test]
+fn close_repo_selects_right_neighbor_when_closing_first_active_tab() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(20);
+    let mut state = AppState::default();
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo1")),
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo2")),
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo3")),
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SetActiveRepo {
+            repo_id: RepoId(20),
+        },
+    );
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::CloseRepo {
+            repo_id: RepoId(20),
+        },
+    );
+
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::PersistSession { .. }]
+    ));
+    assert_eq!(state.repos.len(), 2);
+    assert_eq!(state.active_repo, Some(RepoId(21)));
 }
 
 #[test]
@@ -1028,6 +1079,7 @@ fn repo_opened_ok_sets_loading_and_emits_refresh_effects() {
         &mut state,
         Msg::OpenRepo(PathBuf::from("/tmp/repo")),
     );
+    state.repos[0].missing_on_disk = true;
 
     let effects = reduce(
         &mut repos,
@@ -1044,6 +1096,7 @@ fn repo_opened_ok_sets_loading_and_emits_refresh_effects() {
 
     let repo_state = state.repos.first().unwrap();
     assert!(matches!(repo_state.open, Loadable::Ready(())));
+    assert!(!repo_state.missing_on_disk);
     assert!(repo_state.head_branch.is_loading());
     assert!(repo_state.branches.is_loading());
     assert!(repo_state.tags.is_loading());
@@ -1052,7 +1105,7 @@ fn repo_opened_ok_sets_loading_and_emits_refresh_effects() {
     assert!(repo_state.remote_branches.is_loading());
     assert!(repo_state.status.is_loading());
     assert!(repo_state.log.is_loading());
-    assert!(repo_state.stashes.is_loading());
+    assert!(matches!(repo_state.stashes, Loadable::NotLoaded));
     assert!(matches!(repo_state.reflog, Loadable::NotLoaded));
     assert!(repo_state.upstream_divergence.is_loading());
     assert!(repo_state.rebase_in_progress.is_loading());
@@ -1077,7 +1130,6 @@ fn repo_opened_ok_sets_loading_and_emits_refresh_effects() {
             Effect::LoadRemoteTags { .. },
             Effect::LoadRemotes { .. },
             Effect::LoadRemoteBranches { .. },
-            Effect::LoadStashes { .. },
             Effect::LoadRebaseState { .. },
             Effect::LoadMergeCommitMessage { .. },
         ]
@@ -1097,6 +1149,10 @@ fn repo_action_finished_clears_error_and_refreshes() {
     ));
     state.active_repo = Some(RepoId(1));
     state.repos[0].last_error = Some("boom".to_string());
+    state.banner_error = Some(crate::model::BannerErrorState {
+        repo_id: Some(RepoId(1)),
+        message: "boom".to_string(),
+    });
 
     let effects = reduce(
         &mut repos,
@@ -1109,6 +1165,7 @@ fn repo_action_finished_clears_error_and_refreshes() {
     );
 
     assert!(state.repos[0].last_error.is_none());
+    assert!(state.banner_error.is_none());
     assert!(
         effects
             .iter()
@@ -1195,6 +1252,41 @@ fn repo_opened_err_records_diagnostic() {
             .iter()
             .any(|d| d.message.contains("nope"))
     );
+    assert!(!repo_state.missing_on_disk);
+}
+
+#[test]
+fn repo_opened_err_not_found_marks_repo_missing_without_banner_error() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/missing-repo")),
+    );
+
+    let error = Error::new(ErrorKind::Io(std::io::ErrorKind::NotFound));
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoOpenedErr {
+            repo_id: RepoId(1),
+            spec: RepoSpec {
+                workdir: PathBuf::from("/tmp/missing-repo"),
+            },
+            error,
+        }),
+    );
+
+    let repo_state = &state.repos[0];
+    assert!(repo_state.missing_on_disk);
+    assert!(repo_state.last_error.is_none());
+    assert!(repo_state.diagnostics.is_empty());
+    assert!(matches!(repo_state.open, Loadable::Error(_)));
 }
 
 #[test]

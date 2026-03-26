@@ -308,6 +308,22 @@ pub(super) struct ConflictVSplitResizeState {
 pub(super) use ResizeDragGhost as ConflictVSplitResizeDragGhost;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum StatusSectionResizeHandle {
+    ChangeTrackingAndStaged,
+    UntrackedAndUnstaged,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct StatusSectionResizeState {
+    pub(super) handle: StatusSectionResizeHandle,
+    pub(super) start_y: Pixels,
+    pub(super) start_height: Pixels,
+}
+
+#[allow(unused_imports)]
+pub(super) use ResizeDragGhost as StatusSectionResizeDragGhost;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum ConflictHSplitResizeHandle {
     First,
     Second,
@@ -340,7 +356,7 @@ mod resize_drag_ghost_tests {
     use super::{
         ConflictDiffSplitResizeDragGhost, ConflictHSplitResizeDragGhost,
         ConflictVSplitResizeDragGhost, DiffSplitResizeDragGhost, HistoryColResizeDragGhost,
-        PaneResizeDragGhost, ResizeDragGhost,
+        PaneResizeDragGhost, ResizeDragGhost, StatusSectionResizeDragGhost,
     };
     use std::any::TypeId;
 
@@ -352,6 +368,7 @@ mod resize_drag_ghost_tests {
         assert_eq!(TypeId::of::<PaneResizeDragGhost>(), shared);
         assert_eq!(TypeId::of::<DiffSplitResizeDragGhost>(), shared);
         assert_eq!(TypeId::of::<ConflictVSplitResizeDragGhost>(), shared);
+        assert_eq!(TypeId::of::<StatusSectionResizeDragGhost>(), shared);
         assert_eq!(TypeId::of::<ConflictHSplitResizeDragGhost>(), shared);
         assert_eq!(TypeId::of::<ConflictDiffSplitResizeDragGhost>(), shared);
     }
@@ -410,22 +427,101 @@ pub(super) struct CommitDetailsDelayState {
     pub(super) show_loading: bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum StatusSection {
+    CombinedUnstaged,
+    Untracked,
+    Unstaged,
+    Staged,
+}
+
+impl StatusSection {
+    pub(super) const fn diff_area(self) -> DiffArea {
+        match self {
+            Self::CombinedUnstaged | Self::Untracked | Self::Unstaged => DiffArea::Unstaged,
+            Self::Staged => DiffArea::Staged,
+        }
+    }
+
+    pub(super) const fn id_label(self) -> &'static str {
+        match self {
+            Self::CombinedUnstaged | Self::Unstaged => "unstaged",
+            Self::Untracked => "untracked",
+            Self::Staged => "staged",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub(super) struct StatusMultiSelection {
+    pub(super) untracked: Vec<std::path::PathBuf>,
+    pub(super) untracked_anchor: Option<std::path::PathBuf>,
     pub(super) unstaged: Vec<std::path::PathBuf>,
     pub(super) unstaged_anchor: Option<std::path::PathBuf>,
     pub(super) staged: Vec<std::path::PathBuf>,
     pub(super) staged_anchor: Option<std::path::PathBuf>,
 }
 
+impl StatusMultiSelection {
+    pub(super) fn selected_paths_for_area(&self, area: DiffArea) -> &[std::path::PathBuf] {
+        match area {
+            DiffArea::Unstaged => {
+                if !self.unstaged.is_empty() {
+                    self.unstaged.as_slice()
+                } else {
+                    self.untracked.as_slice()
+                }
+            }
+            DiffArea::Staged => self.staged.as_slice(),
+        }
+    }
+
+    pub(super) fn selected_count_for_area(&self, area: DiffArea) -> usize {
+        self.selected_paths_for_area(area).len()
+    }
+
+    pub(super) fn first_selected_for_area(&self, area: DiffArea) -> Option<&std::path::PathBuf> {
+        self.selected_paths_for_area(area).first()
+    }
+
+    pub(super) fn take_selected_paths_for_area(self, area: DiffArea) -> Vec<std::path::PathBuf> {
+        match area {
+            DiffArea::Unstaged => {
+                if !self.unstaged.is_empty() {
+                    self.unstaged
+                } else {
+                    self.untracked
+                }
+            }
+            DiffArea::Staged => self.staged,
+        }
+    }
+}
+
 pub(super) fn reconcile_status_multi_selection(
     selection: &mut StatusMultiSelection,
     status: &RepoStatus,
 ) {
+    let mut untracked_paths: HashSet<&std::path::Path> =
+        HashSet::with_capacity_and_hasher(status.unstaged.len(), Default::default());
     let mut unstaged_paths: HashSet<&std::path::Path> =
         HashSet::with_capacity_and_hasher(status.unstaged.len(), Default::default());
     for entry in &status.unstaged {
         unstaged_paths.insert(entry.path.as_path());
+        if entry.kind == FileStatusKind::Untracked {
+            untracked_paths.insert(entry.path.as_path());
+        }
+    }
+
+    selection
+        .untracked
+        .retain(|p| untracked_paths.contains(&p.as_path()));
+    if selection
+        .untracked_anchor
+        .as_ref()
+        .is_some_and(|a| !untracked_paths.contains(&a.as_path()))
+    {
+        selection.untracked_anchor = None;
     }
 
     selection
@@ -587,6 +683,8 @@ pub(super) type LoadableMarkdownDoc =
 pub(super) type LoadableMarkdownDiff =
     Loadable<Arc<crate::view::markdown_preview::MarkdownPreviewDiff>>;
 
+pub(super) type LoadableImagePreview = Loadable<Option<Arc<gpui::Image>>>;
+
 #[derive(Clone, Debug)]
 pub(super) struct ConflictResolverMarkdownPreviewState {
     pub(super) source_hash: Option<u64>,
@@ -609,6 +707,33 @@ impl Default for ConflictResolverMarkdownPreviewState {
 impl ConflictResolverMarkdownPreviewState {
     pub(super) fn document(&self, side: ThreeWayColumn) -> &LoadableMarkdownDoc {
         &self.documents[side]
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct ConflictResolverImagePreviewState {
+    pub(super) source_hash: Option<u64>,
+    pub(super) path: Option<std::path::PathBuf>,
+    pub(super) images: ThreeWaySides<LoadableImagePreview>,
+}
+
+impl Default for ConflictResolverImagePreviewState {
+    fn default() -> Self {
+        Self {
+            source_hash: None,
+            path: None,
+            images: ThreeWaySides {
+                base: Loadable::NotLoaded,
+                ours: Loadable::NotLoaded,
+                theirs: Loadable::NotLoaded,
+            },
+        }
+    }
+}
+
+impl ConflictResolverImagePreviewState {
+    pub(super) fn image(&self, side: ThreeWayColumn) -> &LoadableImagePreview {
+        &self.images[side]
     }
 }
 
@@ -715,6 +840,8 @@ pub(super) struct ConflictResolverUiState {
     pub(super) resolved_outline: ResolvedOutlineData,
     /// Cached rendered markdown previews for the merge-input sides.
     pub(super) markdown_preview: ConflictResolverMarkdownPreviewState,
+    /// Cached image previews for the merge-input sides.
+    pub(super) image_preview: ConflictResolverImagePreviewState,
     /// Preview mode for the merge-input pane (Text vs rendered Preview).
     pub(super) resolver_preview_mode: ConflictResolverPreviewMode,
 }
@@ -755,6 +882,7 @@ impl Default for ConflictResolverUiState {
             resolver_pending_recompute_seq: 0,
             resolved_outline: ResolvedOutlineData::default(),
             markdown_preview: ConflictResolverMarkdownPreviewState::default(),
+            image_preview: ConflictResolverImagePreviewState::default(),
             resolver_preview_mode: ConflictResolverPreviewMode::default(),
         }
     }
@@ -1741,8 +1869,13 @@ pub(super) enum ResolverPickTarget {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum PopoverKind {
     RepoPicker,
+    RecentRepositoryPicker,
     BranchPicker,
     CreateBranch,
+    CreateBranchFromRefPrompt {
+        repo_id: RepoId,
+        target: String,
+    },
     CheckoutRemoteBranchPrompt {
         repo_id: RepoId,
         remote: String,
@@ -1760,6 +1893,7 @@ pub(super) enum PopoverKind {
         message: String,
     },
     CloneRepo,
+    #[allow(dead_code)]
     Settings,
     SettingsThemeMenu,
     SettingsDateFormatMenu,
@@ -1885,6 +2019,7 @@ pub(super) enum PopoverKind {
         repo_id: RepoId,
     },
     HistoryColumnSettings,
+    ChangeTrackingSettings,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1980,9 +2115,17 @@ pub enum GitCometViewMode {
     FocusedMergetool,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum InitialRepositoryLaunchMode {
+    #[default]
+    RestoreSession,
+    OpenExplicitly,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct GitCometViewConfig {
     pub initial_path: Option<std::path::PathBuf>,
+    pub initial_repository_launch_mode: InitialRepositoryLaunchMode,
     pub view_mode: GitCometViewMode,
     pub focused_mergetool: Option<FocusedMergetoolViewConfig>,
     pub focused_mergetool_exit_code: Option<Arc<AtomicI32>>,
@@ -1990,12 +2133,24 @@ pub struct GitCometViewConfig {
 }
 
 impl GitCometViewConfig {
-    pub fn normal(
-        initial_path: Option<std::path::PathBuf>,
+    pub fn normal(startup_crash_report: Option<StartupCrashReport>) -> Self {
+        Self {
+            initial_path: None,
+            initial_repository_launch_mode: InitialRepositoryLaunchMode::RestoreSession,
+            view_mode: GitCometViewMode::Normal,
+            focused_mergetool: None,
+            focused_mergetool_exit_code: None,
+            startup_crash_report,
+        }
+    }
+
+    pub fn normal_with_initial_repository(
+        initial_path: std::path::PathBuf,
         startup_crash_report: Option<StartupCrashReport>,
     ) -> Self {
         Self {
-            initial_path,
+            initial_path: Some(initial_path),
+            initial_repository_launch_mode: InitialRepositoryLaunchMode::OpenExplicitly,
             view_mode: GitCometViewMode::Normal,
             focused_mergetool: None,
             focused_mergetool_exit_code: None,
@@ -2176,6 +2331,51 @@ pub(super) fn renders_full_chrome(view_mode: GitCometViewMode) -> bool {
     matches!(view_mode, GitCometViewMode::Normal)
 }
 
+pub(super) fn should_seed_initial_repository_from_session(
+    view_mode: GitCometViewMode,
+    initial_path: Option<&std::path::Path>,
+    initial_repository_launch_mode: InitialRepositoryLaunchMode,
+    has_saved_open_repos: bool,
+) -> bool {
+    matches!(view_mode, GitCometViewMode::Normal)
+        && initial_path.is_some()
+        && (matches!(
+            initial_repository_launch_mode,
+            InitialRepositoryLaunchMode::OpenExplicitly
+        ) || has_saved_open_repos)
+}
+
+pub(super) fn repository_entry_interstitial_active(
+    view_mode: GitCometViewMode,
+    has_repo_tabs: bool,
+) -> bool {
+    matches!(view_mode, GitCometViewMode::Normal) && !has_repo_tabs
+}
+
+pub(super) fn should_show_startup_repository_loading_screen(
+    view_mode: GitCometViewMode,
+    has_repo_tabs: bool,
+    startup_repo_bootstrap_pending: bool,
+) -> bool {
+    repository_entry_interstitial_active(view_mode, has_repo_tabs) && startup_repo_bootstrap_pending
+}
+
+pub(super) fn should_show_splash_screen(
+    view_mode: GitCometViewMode,
+    has_repo_tabs: bool,
+    startup_repo_bootstrap_pending: bool,
+) -> bool {
+    repository_entry_interstitial_active(view_mode, has_repo_tabs)
+        && !startup_repo_bootstrap_pending
+}
+
+pub(super) fn titlebar_workspace_actions_enabled(
+    view_mode: GitCometViewMode,
+    has_repo_tabs: bool,
+) -> bool {
+    !repository_entry_interstitial_active(view_mode, has_repo_tabs)
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(super) enum ThemeMode {
     #[default]
@@ -2219,9 +2419,55 @@ impl ThemeMode {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) enum ChangeTrackingView {
+    #[default]
+    Combined,
+    SplitUntracked,
+}
+
+impl ChangeTrackingView {
+    pub(super) const fn key(self) -> &'static str {
+        match self {
+            Self::Combined => "combined",
+            Self::SplitUntracked => "split_untracked",
+        }
+    }
+
+    pub(super) fn from_key(raw: &str) -> Option<Self> {
+        match raw {
+            "combined" => Some(Self::Combined),
+            "split_untracked" => Some(Self::SplitUntracked),
+            _ => None,
+        }
+    }
+
+    pub(super) const fn label(self) -> &'static str {
+        match self {
+            Self::Combined => "Combined with Unstaged",
+            Self::SplitUntracked => "Separate section",
+        }
+    }
+
+    pub(super) const fn menu_label(self) -> &'static str {
+        match self {
+            Self::Combined => "Combine with Unstaged",
+            Self::SplitUntracked => "Show separate Untracked block",
+        }
+    }
+
+    pub(super) const fn settings_label(self) -> &'static str {
+        match self {
+            Self::Combined => "Combined",
+            Self::SplitUntracked => "Separate section",
+        }
+    }
+}
+
 pub struct GitCometView {
     pub(super) store: Arc<AppStore>,
     pub(super) state: Arc<AppState>,
+    pub(super) window_handle: gpui::AnyWindowHandle,
     pub(super) _ui_model: Entity<AppUiModel>,
     pub(super) _poller: Poller,
     pub(super) _ui_model_subscription: gpui::Subscription,
@@ -2240,6 +2486,8 @@ pub struct GitCometView {
     pub(super) toast_host: Entity<ToastHost>,
     pub(super) popover_host: Entity<PopoverHost>,
     pub(super) focused_mergetool_bootstrap: Option<FocusedMergetoolBootstrap>,
+    pub(super) startup_repo_bootstrap_pending: bool,
+    pub(super) splash_backdrop_image: Arc<gpui::Image>,
 
     pub(super) last_window_size: Size<Pixels>,
     pub(super) ui_window_size_last_seen: Size<Pixels>,
@@ -2248,6 +2496,7 @@ pub struct GitCometView {
     pub(super) date_time_format: DateTimeFormat,
     pub(super) timezone: Timezone,
     pub(super) show_timezone: bool,
+    pub(super) change_tracking_view: ChangeTrackingView,
 
     pub(super) open_repo_panel: bool,
     pub(super) open_repo_input: Entity<components::TextInput>,
@@ -2271,9 +2520,10 @@ pub struct GitCometView {
     pub(super) pending_force_delete_branch_prompt: Option<(RepoId, String)>,
     pub(super) pending_force_remove_worktree_prompt: Option<(RepoId, std::path::PathBuf)>,
     pub(super) startup_crash_report: Option<StartupCrashReport>,
+    #[cfg(target_os = "macos")]
+    pub(super) recent_repos_menu_fingerprint: Vec<std::path::PathBuf>,
 
     pub(super) error_banner_input: Entity<components::TextInput>,
-    pub(super) transient_error_banner: Option<SharedString>,
     pub(super) auth_prompt_username_input: Entity<components::TextInput>,
     pub(super) auth_prompt_secret_input: Entity<components::TextInput>,
     pub(super) auth_prompt_key: Option<String>,

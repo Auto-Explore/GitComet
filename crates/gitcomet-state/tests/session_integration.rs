@@ -2,6 +2,7 @@ use gitcomet_core::domain::{LogScope, RepoSpec};
 use gitcomet_state::model::{AppState, RepoId, RepoState};
 use gitcomet_state::session::{self, UiSession, UiSettings};
 use serde_json::json;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -289,10 +290,16 @@ fn persist_ui_settings_to_path_updates_optional_fields_and_requires_both_window_
             window_height: None,
             sidebar_width: Some(42),
             details_width: Some(84),
+            repo_sidebar_collapsed_items: None,
             theme_mode: Some("light".to_string()),
+            ui_font_family: Some(".SystemUIFont".to_string()),
+            editor_font_family: Some("JetBrains Mono".to_string()),
             date_time_format: Some("ymd_hm_utc".to_string()),
             timezone: Some("UTC".to_string()),
             show_timezone: Some(true),
+            change_tracking_view: Some("split_untracked".to_string()),
+            change_tracking_height: Some(222),
+            untracked_height: Some(111),
             history_show_author: Some(false),
             history_show_date: Some(true),
             history_show_sha: Some(false),
@@ -307,9 +314,17 @@ fn persist_ui_settings_to_path_updates_optional_fields_and_requires_both_window_
     assert_eq!(loaded.sidebar_width, Some(42));
     assert_eq!(loaded.details_width, Some(84));
     assert_eq!(loaded.theme_mode.as_deref(), Some("light"));
+    assert_eq!(loaded.ui_font_family.as_deref(), Some(".SystemUIFont"));
+    assert_eq!(loaded.editor_font_family.as_deref(), Some("JetBrains Mono"));
     assert_eq!(loaded.date_time_format.as_deref(), Some("ymd_hm_utc"));
     assert_eq!(loaded.timezone.as_deref(), Some("UTC"));
     assert_eq!(loaded.show_timezone, Some(true));
+    assert_eq!(
+        loaded.change_tracking_view.as_deref(),
+        Some("split_untracked")
+    );
+    assert_eq!(loaded.change_tracking_height, Some(222));
+    assert_eq!(loaded.untracked_height, Some(111));
     assert_eq!(loaded.history_show_author, Some(false));
     assert_eq!(loaded.history_show_date, Some(true));
     assert_eq!(loaded.history_show_sha, Some(false));
@@ -327,6 +342,43 @@ fn persist_ui_settings_to_path_updates_optional_fields_and_requires_both_window_
     let loaded = session::load_from_path(&session_file);
     assert_eq!(loaded.window_width, Some(640));
     assert_eq!(loaded.window_height, Some(480));
+}
+
+#[test]
+fn sidebar_collapse_state_round_trips_via_ui_settings() {
+    let dir = unique_temp_dir("sidebar-collapse");
+    let session_file = dir.join("session.json");
+    let repo_a = dir.join("repo-a");
+    let repo_b = dir.join("repo-b");
+
+    let mut repo_sidebar_collapsed_items = BTreeMap::new();
+    repo_sidebar_collapsed_items.insert(
+        repo_a.clone(),
+        BTreeSet::from([
+            "section:branches".to_string(),
+            "section:worktrees".to_string(),
+            "group:local:feature".to_string(),
+        ]),
+    );
+    repo_sidebar_collapsed_items.insert(
+        repo_b.clone(),
+        BTreeSet::from(["group:remote:origin:release".to_string()]),
+    );
+
+    session::persist_ui_settings_to_path(
+        UiSettings {
+            repo_sidebar_collapsed_items: Some(repo_sidebar_collapsed_items.clone()),
+            ..UiSettings::default()
+        },
+        &session_file,
+    )
+    .expect("persist sidebar collapse state");
+
+    let loaded = session::load_from_path(&session_file);
+    assert_eq!(
+        loaded.repo_sidebar_collapsed_items,
+        repo_sidebar_collapsed_items
+    );
 }
 
 #[test]

@@ -14,14 +14,14 @@ pub(super) fn model(repo_id: RepoId, index: usize, message: &str) -> ContextMenu
         ContextMenuItem::Separator,
         ContextMenuItem::Entry {
             label: "Apply stash".into(),
-            icon: Some("↺".into()),
+            icon: Some("icons/refresh.svg".into()),
             shortcut: Some("A".into()),
             disabled: false,
             action: Box::new(ContextMenuAction::ApplyStash { repo_id, index }),
         },
         ContextMenuItem::Entry {
             label: "Pop stash".into(),
-            icon: Some("⇡".into()),
+            icon: Some("icons/arrow_up.svg".into()),
             shortcut: Some("P".into()),
             disabled: false,
             action: Box::new(ContextMenuAction::PopStash { repo_id, index }),
@@ -29,7 +29,7 @@ pub(super) fn model(repo_id: RepoId, index: usize, message: &str) -> ContextMenu
         ContextMenuItem::Separator,
         ContextMenuItem::Entry {
             label: "Drop stash…".into(),
-            icon: Some("🗑".into()),
+            icon: Some("icons/trash.svg".into()),
             shortcut: None,
             disabled: false,
             action: Box::new(ContextMenuAction::DropStashConfirm {

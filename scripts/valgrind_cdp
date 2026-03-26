@@ -7,7 +7,7 @@ Usage: scripts/valgrind_cdp <run|on|off|open> [path]
 
 Commands:
   run [binary]    Run a binary under callgrind.
-                  Default: ./target/release-with-debug/gitcomet-app
+                  Default: ./target/release-with-debug/gitcomet
   on              Enable callgrind instrumentation.
   off             Disable callgrind instrumentation.
   open [outfile]  Open a callgrind output file in kcachegrind.
@@ -18,7 +18,7 @@ EOF
 cmd="${1:-run}"
 case "$cmd" in
   run)
-    binary="${2:-./target/release-with-debug/gitcomet-app}"
+    binary="${2:-./target/release-with-debug/gitcomet}"
     valgrind \
       --tool=callgrind \
       --callgrind-out-file=callgrind.out \

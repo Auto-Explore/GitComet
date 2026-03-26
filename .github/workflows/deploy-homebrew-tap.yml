@@ -35,17 +35,17 @@ on:
         required: false
         type: string
       tap_repo:
-        description: "Target tap repository in OWNER/REPO form (e.g. Auto-Explore/homebrew-gitcomet)"
+        description: "Target tap repository in OWNER/REPO form (e.g. Auto-Explore/homebrew-gitcomet). Defaults to HOMEBREW_TAP_REPO when omitted."
         required: false
         default: ""
         type: string
       tap_branch:
-        description: "Target branch in tap repo"
+        description: "Target branch in tap repo. Defaults to HOMEBREW_TAP_BRANCH when omitted."
         required: false
         default: "main"
         type: string
       dry_run:
-        description: "Validate and print formula without pushing to tap"
+        description: "Validate and print cask/formula without pushing to tap"
         required: true
         default: false
         type: boolean
@@ -59,7 +59,7 @@ concurrency:
 
 jobs:
   deploy:
-    name: Publish formula to Homebrew tap
+    name: Publish Homebrew cask and formula
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -74,8 +74,10 @@ jobs:
           DISPATCH_VERSION: ${{ github.event.inputs.version }}
           INPUT_TAP_REPO: ${{ inputs.tap_repo }}
           DISPATCH_TAP_REPO: ${{ github.event.inputs.tap_repo }}
+          VAR_TAP_REPO: ${{ vars.HOMEBREW_TAP_REPO }}
           INPUT_TAP_BRANCH: ${{ inputs.tap_branch }}
           DISPATCH_TAP_BRANCH: ${{ github.event.inputs.tap_branch }}
+          VAR_TAP_BRANCH: ${{ vars.HOMEBREW_TAP_BRANCH }}
           INPUT_DRY_RUN: ${{ inputs.dry_run }}
           DISPATCH_DRY_RUN: ${{ github.event.inputs.dry_run }}
           REPO_OWNER: ${{ github.repository_owner }}
@@ -84,8 +86,8 @@ jobs:
 
           tag="${INPUT_TAG:-${DISPATCH_TAG:-}}"
           version="${INPUT_VERSION:-${DISPATCH_VERSION:-}}"
-          tap_repo="${INPUT_TAP_REPO:-${DISPATCH_TAP_REPO:-}}"
-          tap_branch="${INPUT_TAP_BRANCH:-${DISPATCH_TAP_BRANCH:-main}}"
+          tap_repo="${INPUT_TAP_REPO:-${DISPATCH_TAP_REPO:-${VAR_TAP_REPO:-}}}"
+          tap_branch="${INPUT_TAP_BRANCH:-${DISPATCH_TAP_BRANCH:-${VAR_TAP_BRANCH:-main}}}"
           dry_run="${INPUT_DRY_RUN:-${DISPATCH_DRY_RUN:-false}}"
 
           tag="$(echo "$tag" | tr -d '[:space:]')"
@@ -138,7 +140,7 @@ jobs:
           echo "tap_branch=$tap_branch" >> "$GITHUB_OUTPUT"
           echo "dry_run=$dry_run" >> "$GITHUB_OUTPUT"
 
-      - name: Download formula from release assets
+      - name: Download cask and formula from release assets
         run: |
           set -euo pipefail
           mkdir -p dist
@@ -146,12 +148,17 @@ jobs:
           gh release download "${{ steps.norm.outputs.tag }}" \
             --repo "$GITHUB_REPOSITORY" \
             --pattern "gitcomet.rb" \
+            --pattern "gitcomet-cli.rb" \
             --dir dist \
             --clobber
           test -f dist/gitcomet.rb
+          test -f dist/gitcomet-cli.rb
 
-      - name: Validate formula syntax
-        run: ruby -c dist/gitcomet.rb
+      - name: Validate cask and formula syntax
+        run: |
+          set -euo pipefail
+          ruby -c dist/gitcomet.rb
+          ruby -c dist/gitcomet-cli.rb
 
       - name: Emit dry-run summary
         if: ${{ steps.norm.outputs.dry_run == 'true' }}
@@ -164,13 +171,18 @@ jobs:
             echo "- Target tap: \`${{ steps.norm.outputs.tap_repo }}\`"
             echo "- Target branch: \`${{ steps.norm.outputs.tap_branch }}\`"
             echo ""
-            echo "Formula preview:"
+            echo "Cask preview (Casks/gitcomet.rb):"
             echo '```ruby'
             cat dist/gitcomet.rb
             echo '```'
+            echo ""
+            echo "Formula preview (Formula/gitcomet-cli.rb):"
+            echo '```ruby'
+            cat dist/gitcomet-cli.rb
+            echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Publish formula to tap repository
+      - name: Publish cask and formula to tap repository
         if: ${{ steps.norm.outputs.dry_run != 'true' }}
         env:
           TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
@@ -187,19 +199,24 @@ jobs:
 
           rm -rf tap-repo
           git clone "https://x-access-token:${TAP_TOKEN}@github.com/${TAP_REPO}.git" tap-repo
-          mkdir -p tap-repo/Formula
-          cp dist/gitcomet.rb tap-repo/Formula/gitcomet.rb
+          mkdir -p tap-repo/Casks tap-repo/Formula
+          cp dist/gitcomet.rb tap-repo/Casks/gitcomet.rb
+          cp dist/gitcomet-cli.rb tap-repo/Formula/gitcomet-cli.rb
 
           pushd tap-repo >/dev/null
-          if git diff --quiet -- Formula/gitcomet.rb; then
-            echo "No formula changes detected; tap already up to date."
+          git add Casks/gitcomet.rb Formula/gitcomet-cli.rb
+          if git ls-files --error-unmatch Formula/gitcomet.rb >/dev/null 2>&1; then
+            git rm -f Formula/gitcomet.rb
+          fi
+
+          if git diff --cached --quiet -- Casks/gitcomet.rb Formula/gitcomet-cli.rb Formula/gitcomet.rb; then
+            echo "No Homebrew cask/formula changes detected; tap already up to date."
             popd >/dev/null
             exit 0
           fi
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Formula/gitcomet.rb
           git commit -m "gitcomet ${TAG}"
           git push origin "HEAD:${TAP_BRANCH}"
           popd >/dev/null

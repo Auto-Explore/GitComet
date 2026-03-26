@@ -887,7 +887,10 @@ impl MainPaneView {
             file_markdown_preview_inflight: None,
             file_image_diff_cache_repo_id: None,
             file_image_diff_cache_rev: 0,
+            file_image_diff_cache_content_signature: None,
             file_image_diff_cache_target: None,
+            file_image_diff_cache_seq: 0,
+            file_image_diff_cache_inflight: None,
             file_image_diff_cache_path: None,
             file_image_diff_cache_old: None,
             file_image_diff_cache_new: None,
@@ -1035,6 +1038,14 @@ impl MainPaneView {
         }
         self.history_view
             .update(cx, |view, cx| view.set_theme(theme, cx));
+        cx.notify();
+    }
+
+    pub(in crate::view) fn invalidate_font_metrics(&mut self, cx: &mut gpui::Context<Self>) {
+        self.diff_horizontal_min_width = px(0.0);
+        self.diff_text_hitboxes.clear();
+        self.diff_text_layout_cache_epoch = self.diff_text_layout_cache_epoch.wrapping_add(1);
+        self.diff_text_layout_cache.clear();
         cx.notify();
     }
 
@@ -2525,6 +2536,7 @@ impl MainPaneView {
         self.state = next;
 
         self.sync_conflict_resolver(cx);
+        self.ensure_file_image_diff_cache(cx);
 
         if prev_active_repo_id != next_repo_id {
             self.history_view.update(cx, |view, _| {

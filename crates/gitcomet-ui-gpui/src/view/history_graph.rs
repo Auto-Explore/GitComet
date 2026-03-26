@@ -44,6 +44,7 @@ pub fn compute_graph(
     commits: &[Commit],
     theme: AppTheme,
     branch_heads: &HashSet<&str>,
+    active_head_target: Option<&str>,
 ) -> Vec<GraphRow> {
     let mut palette: Vec<Rgba> = Vec::with_capacity(LANE_COLOR_PALETTE_SIZE);
     for i in 0..LANE_COLOR_PALETTE_SIZE {
@@ -55,12 +56,14 @@ pub fn compute_graph(
 
     let known: HashSet<&str> = commits.iter().map(|c| c.id.as_ref()).collect();
     let by_id: HashMap<&str, &Commit> = commits.iter().map(|c| (c.id.as_ref(), c)).collect();
+    let main_target = active_head_target
+        .filter(|id| known.contains(*id))
+        .or_else(|| commits.first().map(|c| c.id.as_ref()));
 
-    // Approximate the "main line" as the first-parent chain from the first commit in the list,
-    // which is typically the checked-out branch HEAD in our log view.
+    // Follow the checked-out branch's first-parent chain when we know its target; otherwise fall
+    // back to the first visible commit.
     let mut head_chain: HashSet<&str> = HashSet::default();
-    if let Some(first) = commits.first() {
-        let mut cur: &str = first.id.as_ref();
+    if let Some(mut cur) = main_target {
         loop {
             if !head_chain.insert(cur) {
                 break;
@@ -85,6 +88,20 @@ pub fn compute_graph(
     let mut lanes: Vec<LaneState<'_>> = Vec::new();
     let mut rows: Vec<GraphRow> = Vec::with_capacity(commits.len());
     let mut main_lane_id: Option<LaneId> = None;
+    let mut seeded_main_lane_pending = false;
+
+    if let Some(main_target) = main_target {
+        let id = LaneId(next_id);
+        next_id += 1;
+        lanes.push(LaneState {
+            id,
+            color: palette[0],
+            target: main_target,
+        });
+        main_lane_id = Some(id);
+        next_color = 1;
+        seeded_main_lane_pending = true;
+    }
 
     let mut pick_lane_color = |lanes: &[LaneState]| -> Rgba {
         let start = next_color;
@@ -101,7 +118,19 @@ pub fn compute_graph(
     };
 
     for commit in commits.iter() {
-        let incoming_ids = lanes.iter().map(|l| l.id).collect::<HashSet<_>>();
+        let incoming_ids = lanes
+            .iter()
+            .filter_map(|lane| {
+                if seeded_main_lane_pending
+                    && Some(lane.id) == main_lane_id
+                    && main_target == Some(commit.id.as_ref())
+                {
+                    None
+                } else {
+                    Some(lane.id)
+                }
+            })
+            .collect::<HashSet<_>>();
 
         let mut hits = lanes
             .iter()
@@ -117,6 +146,7 @@ pub fn compute_graph(
             .map(|p| p.as_ref())
             .filter(|p| known.contains(p))
             .collect::<Vec<_>>();
+        let is_on_main_chain = head_chain.contains(commit.id.as_ref());
 
         if hits.is_empty() {
             let id = LaneId(next_id);
@@ -136,13 +166,16 @@ pub fn compute_graph(
         //
         // We currently only do this for non-merge commits to avoid interfering with merge-parent
         // lane assignment.
+        let only_hit_is_main_lane = hits.len() == 1
+            && main_lane_id.is_some_and(|id| lanes.get(hits[0]).is_some_and(|lane| lane.id == id));
         let force_branch_head_lane = had_hit_lanes
             && hits.len() == 1
             && branch_heads.contains(commit.id.as_ref())
-            && parent_ids.len() <= 1;
+            && parent_ids.len() <= 1
+            && !(main_target == Some(commit.id.as_ref()) && only_hit_is_main_lane);
 
         let mut node_col = if let Some(main_lane_id) = main_lane_id
-            && head_chain.contains(commit.id.as_ref())
+            && is_on_main_chain
         {
             hits.iter()
                 .copied()
@@ -153,19 +186,23 @@ pub fn compute_graph(
             hits.first().copied().unwrap_or(0)
         };
 
+        let keep_main_lane_as_node =
+            force_branch_head_lane && is_on_main_chain && only_hit_is_main_lane;
         let mut swap_node_into_col: Option<usize> = None;
         if force_branch_head_lane {
             let id = LaneId(next_id);
             next_id += 1;
             let color = pick_lane_color(&lanes);
-            swap_node_into_col = Some(node_col);
-            node_col = lanes.len();
+            if !keep_main_lane_as_node {
+                swap_node_into_col = Some(node_col);
+                node_col = lanes.len();
+            }
             lanes.push(LaneState {
                 id,
                 color,
                 target: commit.id.as_ref(),
             });
-            hits.push(node_col);
+            hits.push(lanes.len() - 1);
         }
 
         // Snapshot of lanes used for drawing this row (including any lanes that have converged
@@ -189,13 +226,6 @@ pub fn compute_graph(
 
         // Ensure the node lane is the first hit lane for the parent assignment logic below.
         node_col = hits.first().copied().unwrap_or(node_col);
-
-        let node_id = lanes[node_col].id;
-        if main_lane_id.is_none()
-            || (force_branch_head_lane && head_chain.contains(commit.id.as_ref()))
-        {
-            main_lane_id = Some(node_id);
-        }
 
         // Incoming join edges: other lanes that were targeting this commit join into the node.
         let mut joins_in = Vec::with_capacity(hits.len().saturating_sub(1));
@@ -311,6 +341,8 @@ pub fn compute_graph(
             node_col,
             is_merge,
         });
+
+        seeded_main_lane_pending = false;
     }
 
     rows
@@ -358,7 +390,7 @@ mod tests {
         commits.push(commit("p1", Vec::new()));
 
         let branch_heads = HashSet::default();
-        let graph = compute_graph(&commits, theme, &branch_heads);
+        let graph = compute_graph(&commits, theme, &branch_heads, None);
 
         let head1_ix = LANE_COLOR_PALETTE_SIZE + 1 + (LANE_COLOR_PALETTE_SIZE - 1);
         let row = &graph[head1_ix];
@@ -382,21 +414,18 @@ mod tests {
         branch_heads.insert("new1");
         branch_heads.insert("base");
 
-        let graph = compute_graph(&commits, theme, &branch_heads);
+        let graph = compute_graph(&commits, theme, &branch_heads, None);
 
         let base_row = &graph[1];
         assert_eq!(base_row.lanes_now.len(), 2);
         assert_eq!(base_row.incoming_mask, vec![true, false]);
         assert_eq!(base_row.joins_in.len(), 1);
-        assert_eq!(base_row.node_col, 1);
+        assert_eq!(base_row.node_col, 0);
         assert_ne!(base_row.lanes_now[0].color, base_row.lanes_now[1].color);
 
         assert_eq!(base_row.lanes_next.len(), 1);
-        assert_eq!(
-            base_row.lanes_next[0].id,
-            base_row.lanes_now[base_row.node_col].id
-        );
-        assert_eq!(base_row.next_from_cols, vec![Some(1)]);
+        assert_eq!(base_row.lanes_next[0].id, base_row.lanes_now[0].id);
+        assert_eq!(base_row.next_from_cols, vec![Some(0)]);
     }
 
     #[test]
@@ -413,7 +442,7 @@ mod tests {
         branch_heads.insert("top1");
         branch_heads.insert("base");
 
-        let graph = compute_graph(&commits, theme, &branch_heads);
+        let graph = compute_graph(&commits, theme, &branch_heads, None);
 
         let base_row = &graph[2];
         assert_eq!(base_row.lanes_now.len(), 2);
@@ -421,5 +450,31 @@ mod tests {
         assert_eq!(base_row.node_col, 0);
         assert_eq!(base_row.lanes_next.len(), 1);
         assert_eq!(base_row.next_from_cols, vec![Some(0)]);
+    }
+
+    #[test]
+    fn active_head_lane_stays_leftmost_even_when_head_commit_appears_later() {
+        let theme = AppTheme::zed_ayu_dark();
+        let commits = vec![
+            commit("feature2", vec!["base"]),
+            commit("main2", vec!["base"]),
+            commit("base", vec!["root"]),
+            commit("root", Vec::new()),
+        ];
+
+        let mut branch_heads = HashSet::default();
+        branch_heads.insert("feature2");
+        branch_heads.insert("main2");
+
+        let graph = compute_graph(&commits, theme, &branch_heads, Some("main2"));
+
+        let seeded_lane = graph[0].lanes_now[0].id;
+        assert_eq!(graph[0].lanes_now.len(), 2);
+        assert_eq!(graph[0].incoming_mask, vec![true, false]);
+        assert_eq!(graph[0].node_col, 1);
+        assert_eq!(graph[1].node_col, 0);
+        assert_eq!(graph[2].node_col, 0);
+        assert_eq!(graph[1].lanes_now[0].id, seeded_lane);
+        assert_eq!(graph[2].lanes_now[0].id, seeded_lane);
     }
 }

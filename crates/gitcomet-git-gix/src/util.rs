@@ -6,6 +6,7 @@ use gitcomet_core::auth::{
 use gitcomet_core::domain::{Commit, CommitId, LogPage};
 use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
 use gitcomet_core::platform::host_tempdir;
+use gitcomet_core::process::configure_background_command;
 use gitcomet_core::services::{CommandOutput, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -97,6 +98,7 @@ fn apply_test_git_command_environment(cmd: &mut Command) {
 
 pub(crate) fn git_workdir_cmd_for(workdir: &Path) -> Command {
     let mut cmd = Command::new("git");
+    configure_background_command(&mut cmd);
     apply_test_git_command_environment(&mut cmd);
     cmd.arg("-C").arg(workdir);
     cmd
@@ -314,6 +316,7 @@ pub(crate) fn git_command_failed_error(label: &str, output: Output) -> Error {
 }
 
 fn run_command_with_timeout(mut cmd: Command, label: &str, timeout: Duration) -> Result<Output> {
+    configure_background_command(&mut cmd);
     configure_non_interactive_git(&mut cmd);
     let askpass_script = if command_may_require_auth(&cmd) {
         let auth = take_pending_git_auth();

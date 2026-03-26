@@ -35,13 +35,22 @@ jobs:
         run: cargo fmt --all --check
 
   linux-ubuntu:
-    name: Linux Headless Suite (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+    name: Linux Headless Suite (${{ matrix.name }})
+    runs-on: ${{ matrix.runs_on }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04, ubuntu-24.04]
+        include:
+          - name: x86_64-linux / ubuntu-22.04
+            target_platform: x86_64-linux
+            runs_on: ubuntu-22.04
+          - name: x86_64-linux / ubuntu-24.04
+            target_platform: x86_64-linux
+            runs_on: ubuntu-24.04
+          - name: aarch64-linux / ubuntu-24.04-arm
+            target_platform: aarch64-linux
+            runs_on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v6
       - name: Show Git version
@@ -163,22 +172,24 @@ jobs:
           echo "XDG_CURRENT_DESKTOP=${XDG_CURRENT_DESKTOP:-<unset>}"
       - name: Run display-selection integration tests
         run: |
-          cargo test -p gitcomet-app $APP_FEATURES --test mergetool_git_integration gui_default --verbose
-          cargo test -p gitcomet-app $APP_FEATURES --test difftool_git_integration gui_default --verbose
+          cargo test -p gitcomet $APP_FEATURES --test mergetool_git_integration gui_default --verbose
+          cargo test -p gitcomet $APP_FEATURES --test difftool_git_integration gui_default --verbose
       - name: Run UI smoke test under selected profile
         run: cargo test -p gitcomet-ui-gpui smoke_tests::smoke_view_renders_without_panicking -- --exact
 
   macos-tests:
-    name: macOS Tests (${{ matrix.name }})
+    name: macOS Tests (${{ matrix.target_platform }})
     runs-on: ${{ matrix.runs_on }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         include:
-          - name: apple-silicon (macos-latest)
+          - target_platform: aarch64-darwin
+            name: apple-silicon (macos-latest)
             runs_on: macos-latest
-          - name: intel (macos-15-intel)
+          - target_platform: x86_64-darwin
+            name: intel (macos-15-intel)
             runs_on: macos-15-intel
     steps:
       - uses: actions/checkout@v6
@@ -200,14 +211,29 @@ jobs:
             --verbose
       - name: Gatekeeper and code-signing check (informational)
         run: |
-          cargo build -p gitcomet-app $APP_FEATURES --release --locked
-          codesign --verify --verbose target/release/gitcomet-app || true
-          spctl --assess --type execute --verbose target/release/gitcomet-app || true
+          set -euo pipefail
+          cargo_config_output="$(scripts/macos-cargo-config.sh "$(uname -m)" release)"
+          set --
+          if [[ -n "$cargo_config_output" ]]; then
+            while IFS= read -r arg; do
+              set -- "$@" "$arg"
+            done <<<"$cargo_config_output"
+          fi
+          set -- "$@" -p gitcomet $APP_FEATURES --release --locked
+          cargo build "$@"
+          codesign --verify --verbose target/release/gitcomet || true
+          spctl --assess --type execute --verbose target/release/gitcomet || true
 
   windows-tests:
-    name: Windows Tests (PowerShell + CMD)
-    runs-on: windows-latest
+    name: Windows Tests (${{ matrix.target_platform }})
+    runs-on: ${{ matrix.runs_on }}
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target_platform: x86_64-windows
+            runs_on: windows-latest
     steps:
       - uses: actions/checkout@v6
       - name: Show Git version
@@ -235,7 +261,7 @@ jobs:
             --verbose
       - name: Run standalone smoke test in CMD
         shell: cmd
-        run: cargo test -p gitcomet-app --no-default-features --features gix --test standalone_tool_mode_integration help_flag_exits_zero -- --exact
+        run: cargo test -p gitcomet --no-default-features --features gix --test standalone_tool_mode_integration help_flag_exits_zero -- --exact
       - name: Show path behavior (CMD + Git Bash)
         shell: cmd
         run: |

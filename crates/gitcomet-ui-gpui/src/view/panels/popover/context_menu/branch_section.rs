@@ -17,8 +17,8 @@ fn model_for_section(repo_id: RepoId, section: BranchSection) -> ContextMenuMode
     items.push(ContextMenuItem::Separator);
     items.push(ContextMenuItem::Entry {
         label: "Switch branch".into(),
-        icon: Some("⎇".into()),
-        shortcut: Some("Enter".into()),
+        icon: Some("icons/git_branch.svg".into()),
+        shortcut: None,
         disabled: false,
         action: Box::new(ContextMenuAction::OpenPopover {
             kind: PopoverKind::BranchPicker,
@@ -28,7 +28,7 @@ fn model_for_section(repo_id: RepoId, section: BranchSection) -> ContextMenuMode
     if section == BranchSection::Remote {
         items.push(ContextMenuItem::Entry {
             label: "Add remote…".into(),
-            icon: Some("+".into()),
+            icon: Some("icons/plus.svg".into()),
             shortcut: None,
             disabled: false,
             action: Box::new(ContextMenuAction::OpenPopover {
@@ -37,21 +37,21 @@ fn model_for_section(repo_id: RepoId, section: BranchSection) -> ContextMenuMode
         });
         items.push(ContextMenuItem::Entry {
             label: "Fetch all".into(),
-            icon: Some("↓".into()),
+            icon: Some("icons/arrow_down.svg".into()),
             shortcut: Some("F".into()),
             disabled: false,
             action: Box::new(ContextMenuAction::FetchAll { repo_id }),
         });
         items.push(ContextMenuItem::Entry {
             label: "Prune merged branches".into(),
-            icon: Some("🧹".into()),
+            icon: Some("icons/broom.svg".into()),
             shortcut: None,
             disabled: false,
             action: Box::new(ContextMenuAction::PruneMergedBranches { repo_id }),
         });
         items.push(ContextMenuItem::Entry {
             label: "Prune local tags".into(),
-            icon: Some("🏷".into()),
+            icon: Some("icons/tag.svg".into()),
             shortcut: None,
             disabled: false,
             action: Box::new(ContextMenuAction::PruneLocalTags { repo_id }),

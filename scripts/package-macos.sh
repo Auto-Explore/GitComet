@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat <<'USAGE'
-Usage: scripts/package-macos.sh --version VERSION [--arch arm64|x86_64] [--release|--debug] [--no-build] [--skip-dmg] [--out-dir PATH]
+Usage: scripts/package-macos.sh --version VERSION [--arch arm64|x86_64] [--release|--debug] [--no-build] [--skip-dmg] [--out-dir PATH] [--codesign-identity NAME] [--codesign-keychain PATH]
 
 Builds a macOS app bundle and release artifacts:
   - gitcomet-v<VERSION>-macos-<ARCH>.tar.gz
@@ -11,6 +11,10 @@ Builds a macOS app bundle and release artifacts:
 
 Defaults:
   --release, build if needed, output to ./dist
+
+Environment:
+  GITCOMET_MACOS_X86_RELEASE_LTO=thin|fat|false|off|inherit
+    Overrides release LTO for Intel macOS builds. Default: thin.
 USAGE
 }
 
@@ -20,6 +24,8 @@ mode="release"
 build=1
 create_dmg=1
 out_dir="dist"
+codesign_identity=""
+codesign_keychain=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -49,6 +55,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --out-dir)
       out_dir="${2:-}"
+      shift 2
+      ;;
+    --codesign-identity)
+      codesign_identity="${2:-}"
+      shift 2
+      ;;
+    --codesign-keychain)
+      codesign_keychain="${2:-}"
       shift 2
       ;;
     -h|--help)
@@ -94,14 +108,25 @@ if [[ "$arch" != "$host_arch" ]]; then
 fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-bin_src="${repo_root}/target/${mode}/gitcomet-app"
+bin_src="${repo_root}/target/${mode}/gitcomet"
 
 if [[ $build -eq 1 && ! -x "$bin_src" ]]; then
-  cargo_mode_flag=()
-  if [[ "$mode" == "release" ]]; then
-    cargo_mode_flag=(--release)
-  fi
-  (cd "$repo_root" && cargo build -p gitcomet-app "${cargo_mode_flag[@]}" --locked --features ui-gpui,gix --bins)
+  cargo_config_output=""
+  cargo_config_output="$("${repo_root}/scripts/macos-cargo-config.sh" "$arch" "$mode")"
+  (
+    cd "$repo_root"
+    set --
+    if [[ -n "$cargo_config_output" ]]; then
+      while IFS= read -r arg; do
+        set -- "$@" "$arg"
+      done <<<"$cargo_config_output"
+    fi
+    if [[ "$mode" == "release" ]]; then
+      set -- "$@" --release
+    fi
+    set -- "$@" -p gitcomet --locked --features ui-gpui,gix --bins
+    cargo build "$@"
+  )
 fi
 
 if [[ ! -x "$bin_src" ]]; then
@@ -129,8 +154,8 @@ resources_dir="${contents_dir}/Resources"
 rm -rf "$release_dir"
 mkdir -p "$macos_dir" "$resources_dir"
 
-install -m755 "$bin_src" "${macos_dir}/gitcomet-app"
-install -m755 "$bin_src" "${release_dir}/gitcomet-app"
+install -m755 "$bin_src" "${macos_dir}/gitcomet"
+install -m755 "$bin_src" "${release_dir}/gitcomet"
 install -m644 "${repo_root}/README.md" "${release_dir}/README.md"
 install -m644 "${repo_root}/LICENSE-AGPL-3.0" "${release_dir}/LICENSE-AGPL-3.0"
 install -m644 "${repo_root}/NOTICE" "${release_dir}/NOTICE"
@@ -158,7 +183,7 @@ cat > "${contents_dir}/Info.plist" <<PLIST
   <key>CFBundleDisplayName</key>
   <string>GitComet</string>
   <key>CFBundleExecutable</key>
-  <string>gitcomet-app</string>
+  <string>gitcomet</string>
   <key>CFBundleIdentifier</key>
   <string>dev.gitcomet.GitComet</string>
   <key>CFBundleIconFile</key>
@@ -180,6 +205,26 @@ cat > "${contents_dir}/Info.plist" <<PLIST
 </dict>
 </plist>
 PLIST
+
+if [[ -n "$codesign_identity" ]]; then
+  if ! command -v codesign >/dev/null 2>&1; then
+    echo "codesign is required when --codesign-identity is set." >&2
+    exit 1
+  fi
+
+  sign_args=(--force --timestamp --options runtime --sign "$codesign_identity")
+  if [[ -n "$codesign_keychain" ]]; then
+    sign_args+=(--keychain "$codesign_keychain")
+  fi
+
+  echo "Signing macOS artifacts with identity: $codesign_identity"
+  codesign "${sign_args[@]}" "${macos_dir}/gitcomet"
+  codesign "${sign_args[@]}" "${release_dir}/gitcomet"
+  codesign "${sign_args[@]}" "$app_bundle"
+
+  codesign --verify --strict --verbose=2 "${release_dir}/gitcomet"
+  codesign --verify --strict --verbose=2 "$app_bundle"
+fi
 
 # Create a deterministic tarball root directory per version/arch.
 tarball_path="${out_abs}/${release_root}.tar.gz"

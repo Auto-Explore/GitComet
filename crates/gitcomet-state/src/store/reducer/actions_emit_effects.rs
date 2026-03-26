@@ -1,7 +1,8 @@
 use super::util::{
-    diff_reload_effects, diff_target_is_svg, diff_target_wants_image_preview,
-    format_failure_summary, push_action_log, push_command_log, refresh_full_effects,
-    refresh_primary_effects, selected_conflict_target_path, start_conflict_target_reload,
+    clear_banner_error_for_repo, diff_reload_effects, diff_target_is_svg,
+    diff_target_wants_image_preview, format_failure_summary, push_action_log, push_command_log,
+    refresh_full_effects, refresh_primary_effects, selected_conflict_target_path,
+    start_conflict_target_reload,
 };
 use crate::model::{AppState, Loadable, RepoId, RepoState};
 use crate::msg::{Effect, RepoCommandKind};
@@ -52,12 +53,24 @@ pub(super) fn revert_commit(
     vec![Effect::RevertCommit { repo_id, commit_id }]
 }
 
-pub(super) fn create_branch(repo_id: RepoId, name: String) -> Vec<Effect> {
-    vec![Effect::CreateBranch { repo_id, name }]
+pub(super) fn create_branch(repo_id: RepoId, name: String, target: String) -> Vec<Effect> {
+    vec![Effect::CreateBranch {
+        repo_id,
+        name,
+        target,
+    }]
 }
 
-pub(super) fn create_branch_and_checkout(repo_id: RepoId, name: String) -> Vec<Effect> {
-    vec![Effect::CreateBranchAndCheckout { repo_id, name }]
+pub(super) fn create_branch_and_checkout(
+    repo_id: RepoId,
+    name: String,
+    target: String,
+) -> Vec<Effect> {
+    vec![Effect::CreateBranchAndCheckout {
+        repo_id,
+        name,
+        target,
+    }]
 }
 
 pub(super) fn delete_branch(repo_id: RepoId, name: String) -> Vec<Effect> {
@@ -105,11 +118,19 @@ pub(super) fn force_remove_worktree(repo_id: RepoId, path: PathBuf) -> Vec<Effec
 }
 
 pub(super) fn add_submodule(repo_id: RepoId, url: String, path: PathBuf) -> Vec<Effect> {
-    vec![Effect::AddSubmodule { repo_id, url, path }]
+    vec![Effect::AddSubmodule {
+        repo_id,
+        url,
+        path,
+        auth: None,
+    }]
 }
 
 pub(super) fn update_submodules(repo_id: RepoId) -> Vec<Effect> {
-    vec![Effect::UpdateSubmodules { repo_id }]
+    vec![Effect::UpdateSubmodules {
+        repo_id,
+        auth: None,
+    }]
 }
 
 pub(super) fn remove_submodule(repo_id: RepoId, path: PathBuf) -> Vec<Effect> {
@@ -155,11 +176,19 @@ pub(super) fn save_worktree_file(
 }
 
 pub(super) fn commit(repo_id: RepoId, message: String) -> Vec<Effect> {
-    vec![Effect::Commit { repo_id, message }]
+    vec![Effect::Commit {
+        repo_id,
+        message,
+        auth: None,
+    }]
 }
 
 pub(super) fn commit_amend(repo_id: RepoId, message: String) -> Vec<Effect> {
-    vec![Effect::CommitAmend { repo_id, message }]
+    vec![Effect::CommitAmend {
+        repo_id,
+        message,
+        auth: None,
+    }]
 }
 
 enum InFlightKind {
@@ -200,7 +229,11 @@ pub(super) fn fetch_all(
         .find(|r| r.id == repo_id)
         .is_some_and(|repo_state| repo_state.fetch_prune_deleted_remote_tracking_branches);
     bump_in_flight(repos, state, repo_id, InFlightKind::Pull);
-    vec![Effect::FetchAll { repo_id, prune }]
+    vec![Effect::FetchAll {
+        repo_id,
+        prune,
+        auth: None,
+    }]
 }
 
 pub(super) fn prune_merged_branches(
@@ -228,7 +261,11 @@ pub(super) fn pull(
     mode: PullMode,
 ) -> Vec<Effect> {
     bump_in_flight(repos, state, repo_id, InFlightKind::Pull);
-    vec![Effect::Pull { repo_id, mode }]
+    vec![Effect::Pull {
+        repo_id,
+        mode,
+        auth: None,
+    }]
 }
 
 pub(super) fn pull_branch(
@@ -243,6 +280,7 @@ pub(super) fn pull_branch(
         repo_id,
         remote,
         branch,
+        auth: None,
     }]
 }
 
@@ -260,7 +298,10 @@ pub(super) fn push(
     repo_id: RepoId,
 ) -> Vec<Effect> {
     bump_in_flight(repos, state, repo_id, InFlightKind::Push);
-    vec![Effect::Push { repo_id }]
+    vec![Effect::Push {
+        repo_id,
+        auth: None,
+    }]
 }
 
 pub(super) fn force_push(
@@ -269,7 +310,10 @@ pub(super) fn force_push(
     repo_id: RepoId,
 ) -> Vec<Effect> {
     bump_in_flight(repos, state, repo_id, InFlightKind::Push);
-    vec![Effect::ForcePush { repo_id }]
+    vec![Effect::ForcePush {
+        repo_id,
+        auth: None,
+    }]
 }
 
 pub(super) fn push_set_upstream(
@@ -284,7 +328,24 @@ pub(super) fn push_set_upstream(
         repo_id,
         remote,
         branch,
+        auth: None,
     }]
+}
+
+pub(super) fn set_upstream_branch(
+    repo_id: RepoId,
+    branch: String,
+    upstream: String,
+) -> Vec<Effect> {
+    vec![Effect::SetUpstreamBranch {
+        repo_id,
+        branch,
+        upstream,
+    }]
+}
+
+pub(super) fn unset_upstream_branch(repo_id: RepoId, branch: String) -> Vec<Effect> {
+    vec![Effect::UnsetUpstreamBranch { repo_id, branch }]
 }
 
 pub(super) fn delete_remote_branch(
@@ -299,6 +360,7 @@ pub(super) fn delete_remote_branch(
         repo_id,
         remote,
         branch,
+        auth: None,
     }]
 }
 
@@ -350,6 +412,7 @@ pub(super) fn push_tag(
         repo_id,
         remote,
         name,
+        auth: None,
     }]
 }
 
@@ -365,6 +428,7 @@ pub(super) fn delete_remote_tag(
         repo_id,
         remote,
         name,
+        auth: None,
     }]
 }
 
@@ -439,6 +503,7 @@ pub(super) fn commit_finished(
     repo_id: RepoId,
     result: std::result::Result<(), Error>,
 ) -> Vec<Effect> {
+    let mut clear_banner = false;
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
     };
@@ -448,6 +513,7 @@ pub(super) fn commit_finished(
     match result {
         Ok(()) => {
             repo_state.last_error = None;
+            clear_banner = true;
             repo_state.diff_state.diff_target = None;
             repo_state.diff_state.diff = Loadable::NotLoaded;
             repo_state.diff_state.diff_file = Loadable::NotLoaded;
@@ -467,6 +533,17 @@ pub(super) fn commit_finished(
             push_action_log(repo_state, false, "Commit".to_string(), summary, Some(&e));
         }
     }
+    if clear_banner {
+        let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+            return Vec::new();
+        };
+        let effects = refresh_primary_effects(repo_state);
+        clear_banner_error_for_repo(state, repo_id);
+        return effects;
+    }
+    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
     refresh_primary_effects(repo_state)
 }
 
@@ -475,6 +552,7 @@ pub(super) fn commit_amend_finished(
     repo_id: RepoId,
     result: std::result::Result<(), Error>,
 ) -> Vec<Effect> {
+    let mut clear_banner = false;
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
     };
@@ -484,6 +562,7 @@ pub(super) fn commit_amend_finished(
     match result {
         Ok(()) => {
             repo_state.last_error = None;
+            clear_banner = true;
             repo_state.diff_state.diff_target = None;
             repo_state.diff_state.diff = Loadable::NotLoaded;
             repo_state.diff_state.diff_file = Loadable::NotLoaded;
@@ -503,6 +582,17 @@ pub(super) fn commit_amend_finished(
             push_action_log(repo_state, false, "Amend".to_string(), summary, Some(&e));
         }
     }
+    if clear_banner {
+        let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+            return Vec::new();
+        };
+        let effects = refresh_primary_effects(repo_state);
+        clear_banner_error_for_repo(state, repo_id);
+        return effects;
+    }
+    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
     refresh_primary_effects(repo_state)
 }
 
@@ -521,6 +611,8 @@ fn tracks_local_actions_in_flight(command: &RepoCommandKind) -> bool {
             | RepoCommandKind::AddRemote { .. }
             | RepoCommandKind::RemoveRemote { .. }
             | RepoCommandKind::SetRemoteUrl { .. }
+            | RepoCommandKind::SetUpstreamBranch { .. }
+            | RepoCommandKind::UnsetUpstreamBranch { .. }
             | RepoCommandKind::CheckoutConflict { .. }
             | RepoCommandKind::AcceptConflictDeletion { .. }
             | RepoCommandKind::CheckoutConflictBase { .. }
@@ -556,6 +648,7 @@ pub(super) fn repo_command_finished(
             | RepoCommandKind::RemoveSubmodule { .. }
     ) && result.is_ok();
     let command_succeeded = result.is_ok();
+    let mut clear_banner = false;
 
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
@@ -596,6 +689,7 @@ pub(super) fn repo_command_finished(
     match result {
         Ok(output) => {
             repo_state.last_error = None;
+            clear_banner = true;
             if matches!(
                 &command,
                 RepoCommandKind::Reset { .. }
@@ -675,6 +769,9 @@ pub(super) fn repo_command_finished(
     }
     let mut effects = refresh_full_effects(repo_state);
     effects.extend(extra_effects);
+    if clear_banner {
+        clear_banner_error_for_repo(state, repo_id);
+    }
     effects
 }
 

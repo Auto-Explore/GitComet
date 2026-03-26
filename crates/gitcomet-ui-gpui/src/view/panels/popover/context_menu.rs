@@ -2,6 +2,7 @@ use super::*;
 
 mod branch;
 mod branch_section;
+mod change_tracking_settings;
 mod commit;
 mod commit_file;
 mod conflict_resolver_chunk;
@@ -44,6 +45,30 @@ pub(super) fn path_text_for_copy(path: &std::path::Path) -> String {
         .to_string()
 }
 
+fn active_branch_tracking_upstream_name(host: &PopoverHost) -> Option<String> {
+    let repo_id = host.active_repo_id()?;
+    let repo = host.state.repos.iter().find(|repo| repo.id == repo_id)?;
+    let Loadable::Ready(head) = &repo.head_branch else {
+        return None;
+    };
+    let Loadable::Ready(branches) = &repo.branches else {
+        return None;
+    };
+
+    branches
+        .iter()
+        .find(|branch| branch.name == *head)
+        .and_then(|branch| branch.upstream.as_ref())
+        .map(|upstream| format!("{}/{}", upstream.remote, upstream.branch))
+}
+
+fn action_menu_title(base: &'static str, tracking_branch_name: Option<&str>) -> SharedString {
+    match tracking_branch_name {
+        Some(name) => format!("{base} {name}").into(),
+        None => base.into(),
+    }
+}
+
 fn context_menu_entry_debug_selector(label: &str) -> String {
     let mut slug = String::with_capacity(label.len());
     let mut previous_was_separator = true;
@@ -69,9 +94,48 @@ fn context_menu_entry_debug_selector(label: &str) -> String {
     }
 }
 
+fn context_menu_entry_action_at(model: &ContextMenuModel, ix: usize) -> Option<ContextMenuAction> {
+    match model.items.get(ix) {
+        Some(ContextMenuItem::Entry { action, .. }) => Some((**action).clone()),
+        _ => None,
+    }
+}
+
+pub(in super::super) fn context_menu_activate_entry_ix(
+    model: &ContextMenuModel,
+    selected_ix: Option<usize>,
+) -> Option<usize> {
+    selected_ix
+        .filter(|&ix| model.is_selectable(ix))
+        .or_else(|| model.first_selectable())
+}
+
+pub(in super::super) fn context_menu_shortcut_entry_ix(
+    model: &ContextMenuModel,
+    key: &str,
+) -> Option<usize> {
+    if key.chars().count() != 1 {
+        return None;
+    }
+
+    model.items.iter().enumerate().find_map(|(ix, item)| {
+        let ContextMenuItem::Entry {
+            shortcut, disabled, ..
+        } = item
+        else {
+            return None;
+        };
+        if *disabled {
+            return None;
+        }
+        let shortcut = shortcut.as_ref()?;
+        shortcut.as_ref().eq_ignore_ascii_case(key).then_some(ix)
+    })
+}
+
 fn settings_theme_model(host: &PopoverHost) -> ContextMenuModel {
     let selected = host.theme_mode;
-    let check = |enabled: bool| enabled.then_some("✓".into());
+    let check = |enabled: bool| enabled.then_some("icons/check.svg".into());
 
     ContextMenuModel::new(vec![
         ContextMenuItem::Header("Theme".into()),
@@ -108,7 +172,7 @@ fn settings_theme_model(host: &PopoverHost) -> ContextMenuModel {
 
 fn settings_date_format_model(host: &PopoverHost) -> ContextMenuModel {
     let selected = host.date_time_format;
-    let check = |enabled: bool| enabled.then_some("✓".into());
+    let check = |enabled: bool| enabled.then_some("icons/check.svg".into());
     let mut items = vec![
         ContextMenuItem::Header("Date format".into()),
         ContextMenuItem::Separator,
@@ -130,7 +194,7 @@ fn settings_date_format_model(host: &PopoverHost) -> ContextMenuModel {
 
 fn settings_timezone_model(host: &PopoverHost) -> ContextMenuModel {
     let selected = host.timezone;
-    let check = |enabled: bool| enabled.then_some("✓".into());
+    let check = |enabled: bool| enabled.then_some("icons/check.svg".into());
     let mut items = vec![
         ContextMenuItem::Header("Date timezone".into()),
         ContextMenuItem::Separator,
@@ -202,10 +266,7 @@ impl PopoverHost {
             let selection = pane
                 .status_multi_selection
                 .get(&repo_id)
-                .map(|sel| match area {
-                    DiffArea::Unstaged => sel.unstaged.as_slice(),
-                    DiffArea::Staged => sel.staged.as_slice(),
-                })
+                .map(|sel| sel.selected_paths_for_area(area))
                 .unwrap_or(&[]);
 
             let use_selection = selection.len() > 1 && selection.iter().any(|p| p == clicked_path);
@@ -215,10 +276,7 @@ impl PopoverHost {
 
             let sel = pane.status_multi_selection.remove(&repo_id)?;
             cx.notify();
-            Some(match area {
-                DiffArea::Unstaged => sel.unstaged,
-                DiffArea::Staged => sel.staged,
-            })
+            Some(sel.take_selected_paths_for_area(area))
         });
 
         match selection {
@@ -227,7 +285,7 @@ impl PopoverHost {
         }
     }
 
-    pub(super) fn context_menu_model(
+    pub(in super::super) fn context_menu_model(
         &self,
         kind: &PopoverKind,
         cx: &gpui::Context<Self>,
@@ -354,6 +412,7 @@ impl PopoverHost {
                 Some(history_branch_filter::model(*repo_id))
             }
             PopoverKind::HistoryColumnSettings => Some(history_column_settings::model(self, cx)),
+            PopoverKind::ChangeTrackingSettings => Some(change_tracking_settings::model(self)),
             _ => None,
         }
     }
@@ -545,6 +604,15 @@ impl PopoverHost {
                 self.settings_submenu_max_h = None;
                 close_after_action = false;
             }
+            ContextMenuAction::SetChangeTrackingView { view } => {
+                self.change_tracking_view = view;
+                let root_view = self.root_view.clone();
+                cx.defer(move |cx| {
+                    let _ = root_view.update(cx, |root, cx| {
+                        root.set_change_tracking_view(view, cx);
+                    });
+                });
+            }
             ContextMenuAction::StageSelectionOrPath {
                 repo_id,
                 area,
@@ -704,6 +772,21 @@ impl PopoverHost {
             ContextMenuAction::Push { repo_id } => {
                 self.store.dispatch(Msg::Push { repo_id });
             }
+            ContextMenuAction::SetUpstreamBranch {
+                repo_id,
+                branch,
+                upstream,
+            } => {
+                self.store.dispatch(Msg::SetUpstreamBranch {
+                    repo_id,
+                    branch,
+                    upstream,
+                });
+            }
+            ContextMenuAction::UnsetUpstreamBranch { repo_id, branch } => {
+                self.store
+                    .dispatch(Msg::UnsetUpstreamBranch { repo_id, branch });
+            }
             ContextMenuAction::OpenPopover { kind } => {
                 let anchor = self
                     .popover_anchor
@@ -844,10 +927,7 @@ impl PopoverHost {
                     let selection = pane
                         .status_multi_selection
                         .get(&repo_id)
-                        .map(|sel| match area {
-                            DiffArea::Unstaged => sel.unstaged.as_slice(),
-                            DiffArea::Staged => sel.staged.as_slice(),
-                        })
+                        .map(|sel| sel.selected_paths_for_area(area))
                         .unwrap_or(&[]);
 
                     let use_selection =
@@ -858,10 +938,7 @@ impl PopoverHost {
 
                     let sel = pane.status_multi_selection.remove(&repo_id)?;
                     cx.notify();
-                    Some(match area {
-                        DiffArea::Unstaged => sel.unstaged,
-                        DiffArea::Staged => sel.staged,
-                    })
+                    Some(sel.take_selected_paths_for_area(area))
                 });
 
                 match selection {
@@ -875,10 +952,7 @@ impl PopoverHost {
                     .update(cx, |pane, cx| {
                         let sel = pane.status_multi_selection.remove(&repo_id)?;
                         cx.notify();
-                        Some(match area {
-                            DiffArea::Unstaged => sel.unstaged,
-                            DiffArea::Staged => sel.staged,
-                        })
+                        Some(sel.take_selected_paths_for_area(area))
                     })
                     .unwrap_or_default();
                 if paths.is_empty() {
@@ -1016,45 +1090,25 @@ impl PopoverHost {
                                 cx.notify();
                             }
                             "enter" => {
-                                let Some(ix) = this
-                                    .context_menu_selected_ix
-                                    .filter(|&ix| model_for_keys.is_selectable(ix))
-                                    .or_else(|| model_for_keys.first_selectable())
-                                else {
+                                let Some(ix) = context_menu_activate_entry_ix(
+                                    &model_for_keys,
+                                    this.context_menu_selected_ix,
+                                ) else {
                                     return;
                                 };
-                                if let Some(ContextMenuItem::Entry { action, .. }) =
-                                    model_for_keys.items.get(ix).cloned()
+                                if let Some(action) =
+                                    context_menu_entry_action_at(&model_for_keys, ix)
                                 {
-                                    this.context_menu_activate_action(*action, window, cx);
+                                    this.context_menu_activate_action(action, window, cx);
                                 }
                             }
                             _ => {
-                                if key.chars().count() == 1 {
-                                    let needle = key.to_ascii_uppercase();
-                                    let hit = model_for_keys.items.iter().enumerate().find_map(
-                                        |(ix, item)| {
-                                            let ContextMenuItem::Entry {
-                                                shortcut, disabled, ..
-                                            } = item
-                                            else {
-                                                return None;
-                                            };
-                                            if *disabled {
-                                                return None;
-                                            }
-                                            let shortcut =
-                                                shortcut.as_ref()?.as_ref().to_ascii_uppercase();
-                                            (shortcut == needle).then_some(ix)
-                                        },
-                                    );
-
-                                    if let Some(ix) = hit
-                                        && let Some(ContextMenuItem::Entry { action, .. }) =
-                                            model_for_keys.items.get(ix).cloned()
-                                    {
-                                        this.context_menu_activate_action(*action, window, cx);
-                                    }
+                                if let Some(ix) =
+                                    context_menu_shortcut_entry_ix(&model_for_keys, key)
+                                    && let Some(action) =
+                                        context_menu_entry_action_at(&model_for_keys, ix)
+                                {
+                                    this.context_menu_activate_action(action, window, cx);
                                 }
                             }
                         }
@@ -1134,5 +1188,84 @@ impl PopoverHost {
                 }))
                 .into_any_element(),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn context_menu_shortcut_entry_ix_matches_first_enabled_single_character_entry() {
+        let model = ContextMenuModel::new(vec![
+            ContextMenuItem::Header("Test".into()),
+            ContextMenuItem::Entry {
+                label: "Disabled A".into(),
+                icon: None,
+                shortcut: Some("A".into()),
+                disabled: true,
+                action: Box::new(ContextMenuAction::FetchAll { repo_id: RepoId(1) }),
+            },
+            ContextMenuItem::Entry {
+                label: "Enter".into(),
+                icon: None,
+                shortcut: Some("Enter".into()),
+                disabled: false,
+                action: Box::new(ContextMenuAction::FetchAll { repo_id: RepoId(2) }),
+            },
+            ContextMenuItem::Entry {
+                label: "Ctrl Copy".into(),
+                icon: None,
+                shortcut: Some("Ctrl+C".into()),
+                disabled: false,
+                action: Box::new(ContextMenuAction::FetchAll { repo_id: RepoId(3) }),
+            },
+            ContextMenuItem::Entry {
+                label: "Enabled A".into(),
+                icon: None,
+                shortcut: Some("A".into()),
+                disabled: false,
+                action: Box::new(ContextMenuAction::FetchAll { repo_id: RepoId(4) }),
+            },
+        ]);
+
+        assert_eq!(context_menu_shortcut_entry_ix(&model, "a"), Some(4));
+        assert_eq!(context_menu_shortcut_entry_ix(&model, "A"), Some(4));
+        assert_eq!(context_menu_shortcut_entry_ix(&model, "c"), None);
+        assert_eq!(context_menu_shortcut_entry_ix(&model, "e"), None);
+        assert_eq!(context_menu_shortcut_entry_ix(&model, "enter"), None);
+    }
+
+    #[test]
+    fn context_menu_activate_entry_ix_prefers_selected_entry_and_falls_back_to_first_selectable() {
+        let model = ContextMenuModel::new(vec![
+            ContextMenuItem::Header("Test".into()),
+            ContextMenuItem::Entry {
+                label: "Disabled".into(),
+                icon: None,
+                shortcut: Some("D".into()),
+                disabled: true,
+                action: Box::new(ContextMenuAction::FetchAll { repo_id: RepoId(1) }),
+            },
+            ContextMenuItem::Entry {
+                label: "First".into(),
+                icon: None,
+                shortcut: Some("Enter".into()),
+                disabled: false,
+                action: Box::new(ContextMenuAction::FetchAll { repo_id: RepoId(2) }),
+            },
+            ContextMenuItem::Entry {
+                label: "Second".into(),
+                icon: None,
+                shortcut: Some("S".into()),
+                disabled: false,
+                action: Box::new(ContextMenuAction::FetchAll { repo_id: RepoId(3) }),
+            },
+        ]);
+
+        assert_eq!(context_menu_activate_entry_ix(&model, None), Some(2));
+        assert_eq!(context_menu_activate_entry_ix(&model, Some(3)), Some(3));
+        assert_eq!(context_menu_activate_entry_ix(&model, Some(1)), Some(2));
+        assert_eq!(context_menu_activate_entry_ix(&model, Some(99)), Some(2));
     }
 }

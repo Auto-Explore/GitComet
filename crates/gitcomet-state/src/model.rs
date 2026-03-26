@@ -139,7 +139,14 @@ pub struct AppState {
     pub active_repo: Option<RepoId>,
     pub clone: Option<CloneOpState>,
     pub notifications: Vec<AppNotification>,
+    pub banner_error: Option<BannerErrorState>,
     pub auth_prompt: Option<AuthPromptState>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BannerErrorState {
+    pub repo_id: Option<RepoId>,
+    pub message: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -362,6 +369,7 @@ pub struct RepoState {
     pub open_rev: u64,
     pub ops_rev: u64,
 
+    pub missing_on_disk: bool,
     pub last_error: Option<String>,
     pub diagnostics: Vec<DiagnosticEntry>,
 
@@ -417,6 +425,7 @@ impl RepoState {
             conflict_state: ConflictState::default(),
             open_rev: 0,
             ops_rev: 0,
+            missing_on_disk: false,
             last_error: None,
             diagnostics: Vec::new(),
             command_log: Vec::new(),

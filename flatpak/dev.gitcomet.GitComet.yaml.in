@@ -4,7 +4,7 @@ runtime-version: "24.08"
 sdk: org.freedesktop.Sdk
 sdk-extensions:
   - org.freedesktop.Sdk.Extension.rust-stable
-command: gitcomet-app
+command: gitcomet
 finish-args:
   - --device=dri
   - --share=ipc
@@ -27,8 +27,8 @@ modules:
         CARGO_NET_OFFLINE: "true"
     build-commands:
       - cargo --offline fetch --manifest-path Cargo.toml --locked --verbose
-      - cargo build --offline --release --locked -p gitcomet-app --features ui-gpui,gix
-      - install -Dm755 target/release/gitcomet-app ${FLATPAK_DEST}/bin/gitcomet-app
+      - cargo build --offline --release --locked -p gitcomet --features ui-gpui,gix
+      - install -Dm755 target/release/gitcomet ${FLATPAK_DEST}/bin/gitcomet
       - install -Dm755 flatpak/git-wrapper.sh ${FLATPAK_DEST}/bin/git
       - install -Dm644 assets/linux/dev.gitcomet.GitComet.desktop ${FLATPAK_DEST}/share/applications/dev.gitcomet.GitComet.desktop
       - install -Dm644 flatpak/dev.gitcomet.GitComet.metainfo.xml ${FLATPAK_DEST}/share/metainfo/dev.gitcomet.GitComet.metainfo.xml

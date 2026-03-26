@@ -1,4 +1,5 @@
 use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::thread::ThreadId;
 
 pub const GITCOMET_AUTH_KIND_ENV: &str = "GITCOMET_AUTH_KIND";
 pub const GITCOMET_AUTH_USERNAME_ENV: &str = "GITCOMET_AUTH_USERNAME";
@@ -22,6 +23,12 @@ pub struct StagedGitAuth {
     pub secret: String,
 }
 
+#[derive(Clone, Eq, PartialEq)]
+struct PendingStagedGitAuth {
+    auth: StagedGitAuth,
+    owner_thread: Option<ThreadId>,
+}
+
 impl std::fmt::Debug for StagedGitAuth {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         const REDACTED: &str = "<redacted>";
@@ -34,8 +41,8 @@ impl std::fmt::Debug for StagedGitAuth {
     }
 }
 
-fn staged_git_auth_slot() -> &'static Mutex<Option<StagedGitAuth>> {
-    static SLOT: OnceLock<Mutex<Option<StagedGitAuth>>> = OnceLock::new();
+fn staged_git_auth_slot() -> &'static Mutex<Option<PendingStagedGitAuth>> {
+    static SLOT: OnceLock<Mutex<Option<PendingStagedGitAuth>>> = OnceLock::new();
     SLOT.get_or_init(|| Mutex::new(None))
 }
 
@@ -51,12 +58,31 @@ pub fn clear_staged_git_auth() {
 
 pub fn stage_git_auth(auth: StagedGitAuth) {
     let mut guard = lock_or_recover(staged_git_auth_slot());
-    *guard = Some(auth);
+    *guard = Some(PendingStagedGitAuth {
+        auth,
+        owner_thread: None,
+    });
+}
+
+pub fn stage_git_auth_for_current_thread(auth: StagedGitAuth) {
+    let mut guard = lock_or_recover(staged_git_auth_slot());
+    *guard = Some(PendingStagedGitAuth {
+        auth,
+        owner_thread: Some(std::thread::current().id()),
+    });
 }
 
 pub fn take_staged_git_auth() -> Option<StagedGitAuth> {
     let mut guard = lock_or_recover(staged_git_auth_slot());
-    guard.take()
+    let current = std::thread::current().id();
+    match guard.as_ref() {
+        Some(pending)
+            if pending.owner_thread.is_none() || pending.owner_thread == Some(current) =>
+        {
+            guard.take().map(|pending| pending.auth)
+        }
+        _ => None,
+    }
 }
 
 #[cfg(test)]

@@ -84,7 +84,7 @@ fn conflict_display_text(
 fn conflict_row_text_width(
     window: &mut Window,
     text: &SharedString,
-    font_family: Option<&'static str>,
+    font_family: Option<&str>,
 ) -> Pixels {
     if text.is_empty() {
         return px(0.0);
@@ -93,7 +93,7 @@ fn conflict_row_text_width(
     let mut style = window.text_style();
     style.font_weight = FontWeight::NORMAL;
     if let Some(font_family) = font_family {
-        style.font_family = font_family.into();
+        style.font_family = font_family.to_string().into();
     }
 
     let font_size = style.font_size.to_pixels(window.rem_size()) * CONFLICT_ROW_FONT_SCALE;
@@ -122,22 +122,30 @@ fn conflict_row_text_width(
         .unwrap_or(px(0.0))
 }
 
-fn conflict_input_row_min_width(window: &mut Window, text: &SharedString) -> Pixels {
+fn conflict_input_row_min_width(
+    window: &mut Window,
+    text: &SharedString,
+    editor_font_family: &str,
+) -> Pixels {
     let pad = window.rem_size() * 0.5;
     let line_no_width = px(38.0);
     let gap = pad;
     let row_extra = pad * 2.0 + line_no_width + gap;
     (row_extra
-        + conflict_row_text_width(window, text, None)
+        + conflict_row_text_width(window, text, Some(editor_font_family))
         + px(CONFLICT_ROW_TEXT_TRAILING_PADDING_PX))
     .round()
 }
 
-fn conflict_resolved_output_row_min_width(window: &mut Window, text: &SharedString) -> Pixels {
+fn conflict_resolved_output_row_min_width(
+    window: &mut Window,
+    text: &SharedString,
+    editor_font_family: &str,
+) -> Pixels {
     let pad = window.rem_size() * 0.5;
     let row_extra = pad * 2.0;
     (row_extra
-        + conflict_row_text_width(window, text, Some(crate::view::UI_MONOSPACE_FONT_FAMILY))
+        + conflict_row_text_width(window, text, Some(editor_font_family))
         + px(CONFLICT_ROW_TEXT_TRAILING_PADDING_PX))
     .round()
 }
@@ -150,40 +158,46 @@ fn render_conflict_markdown_preview_rows(
     cx: &mut gpui::Context<MainPaneView>,
 ) -> Vec<AnyElement> {
     let theme = this.theme;
+    let editor_font_family = crate::font_preferences::current_editor_font_family(cx);
     let Loadable::Ready(document) = this.conflict_resolver.markdown_preview.document(side) else {
         return Vec::new();
     };
     let document = Arc::clone(document);
-    let (row_id_prefix, horizontal_scroll_handle) = match side {
-        ThreeWayColumn::Base => (
-            "conflict_markdown_preview_base",
+    let viewport_width = match side {
+        ThreeWayColumn::Base => {
             this.conflict_resolver_diff_scroll
                 .0
                 .borrow()
                 .base_handle
-                .clone(),
-        ),
-        ThreeWayColumn::Ours => (
-            "conflict_markdown_preview_ours",
+                .bounds()
+                .size
+                .width
+        }
+        ThreeWayColumn::Ours => {
             this.conflict_preview_ours_scroll
                 .0
                 .borrow()
                 .base_handle
-                .clone(),
-        ),
-        ThreeWayColumn::Theirs => (
-            "conflict_markdown_preview_theirs",
+                .bounds()
+                .size
+                .width
+        }
+        ThreeWayColumn::Theirs => {
             this.conflict_preview_theirs_scroll
                 .0
                 .borrow()
                 .base_handle
-                .clone(),
-        ),
-    };
+                .bounds()
+                .size
+                .width
+        }
+    }
+    .max(px(0.0));
     this.update_markdown_preview_horizontal_min_width(
         document.as_ref(),
         range.clone(),
         None,
+        editor_font_family.as_str(),
         window,
         cx,
     );
@@ -193,9 +207,8 @@ fn render_conflict_markdown_preview_rows(
         &super::history::MarkdownPreviewRenderContext {
             theme,
             bar_color: None,
-            min_width: this.diff_horizontal_min_width,
-            row_id_prefix,
-            horizontal_scroll_handle: Some(horizontal_scroll_handle),
+            min_width: this.diff_horizontal_min_width.max(viewport_width),
+            editor_font_family,
             view: None,
             text_region: DiffTextRegion::Inline,
         },
@@ -268,6 +281,7 @@ impl MainPaneView {
     ) -> Vec<AnyElement> {
         let _perf_scope = perf::span(ViewPerfSpan::RenderThreeWayRows);
         let theme = this.theme;
+        let editor_font_family = crate::font_preferences::current_editor_font_family(cx);
         let show_ws = this.show_whitespace;
         let word_hl_color = Some(theme.colors.warning);
         let syntax_lang = this.conflict_row_syntax_language();
@@ -510,7 +524,11 @@ impl MainPaneView {
                     );
                     let line_text = line_text.map(SharedString::new).unwrap_or_default();
                     let display_text = conflict_display_text(&line_text, styled, show_ws);
-                    let min_width = conflict_input_row_min_width(window, &display_text);
+                    let min_width = conflict_input_row_min_width(
+                        window,
+                        &display_text,
+                        editor_font_family.as_str(),
+                    );
 
                     if this.conflict_canvas_rows_enabled {
                         let chunk_context = range_ix.map(|conflict_ix| ConflictChunkContext {
@@ -656,6 +674,7 @@ impl MainPaneView {
         let syntax_lang = this.conflict_row_syntax_language();
         let syntax_mode = DiffSyntaxMode::Auto;
         let theme = this.theme;
+        let editor_font_family = crate::font_preferences::current_editor_font_family(cx);
         let show_ws = this.show_whitespace;
 
         let (div_id_prefix, canvas_id_prefix, chunk_menu_prefix, input_menu_prefix) = match side {
@@ -749,7 +768,11 @@ impl MainPaneView {
                     theme.colors.text_muted
                 };
                 let display_text = conflict_display_text(&text, styled.as_ref(), show_ws);
-                let min_width = conflict_input_row_min_width(window, &display_text);
+                let min_width = conflict_input_row_min_width(
+                    window,
+                    &display_text,
+                    editor_font_family.as_str(),
+                );
 
                 if this.conflict_canvas_rows_enabled {
                     let chunk_context_data = conflict_ix.map(|conflict_ix| ConflictChunkContext {
@@ -870,6 +893,7 @@ impl MainPaneView {
         let _perf_scope = perf::span(ViewPerfSpan::RenderResolvedPreviewRows);
         let requested_rows = range.len();
         let theme = this.theme;
+        let editor_font_family = crate::font_preferences::current_editor_font_family(cx);
 
         let elements: Vec<AnyElement> = range
             .map(|ix| {
@@ -957,7 +981,7 @@ impl MainPaneView {
                     .items_center()
                     .gap_2()
                     .text_xs()
-                    .font_family("monospace")
+                    .font_family(editor_font_family.clone())
                     .text_color(theme.colors.text)
                     .when(
                         source == conflict_resolver::ResolvedLineSource::Manual
@@ -1045,6 +1069,7 @@ impl MainPaneView {
         let _perf_scope = perf::span(ViewPerfSpan::RenderResolvedPreviewRows);
         let requested_rows = range.len();
         let theme = this.theme;
+        let editor_font_family = crate::font_preferences::current_editor_font_family(cx);
         if let Some(projection) = this.conflict_resolved_output_projection.as_ref() {
             let unresolved_row_bg =
                 with_alpha(theme.colors.danger, if theme.is_dark { 0.18 } else { 0.10 });
@@ -1071,7 +1096,11 @@ impl MainPaneView {
                         .unwrap_or(std::borrow::Cow::Borrowed(""))
                         .to_string()
                         .into();
-                    let min_width = conflict_resolved_output_row_min_width(window, &line_text);
+                    let min_width = conflict_resolved_output_row_min_width(
+                        window,
+                        &line_text,
+                        editor_font_family.as_str(),
+                    );
 
                     let conflict_marker = this
                         .conflict_resolver
@@ -1097,7 +1126,7 @@ impl MainPaneView {
                         .flex()
                         .items_center()
                         .text_xs()
-                        .font_family("monospace")
+                        .font_family(editor_font_family.clone())
                         .text_color(theme.colors.text)
                         .whitespace_nowrap()
                         .when_some(row_bg, |d, bg| d.bg(bg))
@@ -1183,7 +1212,11 @@ impl MainPaneView {
                         .child("")
                         .into_any_element();
                 }
-                let min_width = conflict_resolved_output_row_min_width(window, &line_text);
+                let min_width = conflict_resolved_output_row_min_width(
+                    window,
+                    &line_text,
+                    editor_font_family.as_str(),
+                );
 
                 let row_content = if syntax_language.is_some() && !line_text.is_empty() {
                     let prepared_line_highlight = prepared_line_highlights
@@ -1273,7 +1306,7 @@ impl MainPaneView {
                     .flex()
                     .items_center()
                     .text_xs()
-                    .font_family("monospace")
+                    .font_family(editor_font_family.clone())
                     .text_color(theme.colors.text)
                     .whitespace_nowrap()
                     .when_some(row_bg, |d, bg| d.bg(bg))

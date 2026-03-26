@@ -1,5 +1,6 @@
-; Vendored from Zed (zed/crates/languages/src/rust/highlights.scm)
-; Provides richer capture semantics than tree-sitter-rust crate defaults.
+; Derived from
+; gpui-component/crates/ui/src/highlighter/languages/rust/highlights.scm
+; (Apache-2.0). Local additions preserve GitComet's richer diff token classes.
 
 (identifier) @variable
 
@@ -32,6 +33,39 @@
 (trait_bounds
   (type_identifier) @type.interface)
 
+; Identifier conventions
+((identifier) @constant
+  (#match? @constant "^_*[A-Z][A-Z\\d_]*$"))
+
+((identifier) @type
+  (#match? @type "^[A-Z]"))
+
+((scoped_identifier
+  path: (identifier) @type)
+  (#match? @type "^[A-Z]"))
+
+((scoped_identifier
+  path: (scoped_identifier
+    name: (identifier) @type))
+  (#match? @type "^[A-Z]"))
+
+((scoped_type_identifier
+  path: (identifier) @type)
+  (#match? @type "^[A-Z]"))
+
+((scoped_type_identifier
+  path: (scoped_identifier
+    name: (identifier) @type))
+  (#match? @type "^[A-Z]"))
+
+(struct_pattern
+  type: (scoped_type_identifier
+    name: (type_identifier) @type))
+
+(enum_variant
+  name: (identifier) @type)
+
+; Function calls
 (call_expression
   function: [
     (identifier) @function
@@ -50,12 +84,14 @@
       field: (field_identifier) @function.method)
   ])
 
+; Function definitions
 (function_item
   name: (identifier) @function.definition)
 
 (function_signature_item
   name: (identifier) @function.definition)
 
+; Macros
 (macro_invocation
   macro: [
     (identifier) @function.special
@@ -69,18 +105,17 @@
 (macro_definition
   name: (identifier) @function.special.definition)
 
-; Identifier conventions
-; Assume uppercase names are types/enum-constructors
-((identifier) @type
-  (#match? @type "^[A-Z]"))
+[
+  (line_comment)
+  (block_comment)
+] @comment
 
-; Assume all-caps names are constants
-((identifier) @constant
-  (#match? @constant "^_*[A-Z][A-Z\\d_]*$"))
-
-; Ensure enum variants are highlighted correctly regardless of naming convention
-(enum_variant
-  name: (identifier) @type)
+[
+  (line_comment
+    (doc_comment))
+  (block_comment
+    (doc_comment))
+] @comment.doc
 
 [
   "("
@@ -91,8 +126,11 @@
   "]"
 ] @punctuation.bracket
 
-(_
-  .
+(type_arguments
+  "<" @punctuation.bracket
+  ">" @punctuation.bracket)
+
+(type_parameters
   "<" @punctuation.bracket
   ">" @punctuation.bracket)
 
@@ -169,18 +207,6 @@
 (boolean_literal) @boolean
 
 [
-  (line_comment)
-  (block_comment)
-] @comment
-
-[
-  (line_comment
-    (doc_comment))
-  (block_comment
-    (doc_comment))
-] @comment.doc
-
-[
   "!="
   "%"
   "%="
@@ -219,7 +245,6 @@
   "?"
 ] @operator
 
-; Avoid highlighting these as operators when used in doc comments.
 (unary_expression
   "!" @operator)
 
@@ -232,32 +257,6 @@ operator: "/" @operator
 (parameter
   (identifier) @variable.parameter)
 
-(attribute_item
-  (attribute
-    [
-      (identifier) @attribute
-      (scoped_identifier
-        name: (identifier) @attribute)
-      (token_tree
-        (identifier) @attribute
-        (#match? @attribute "^[a-z\\d_]*$"))
-      (token_tree
-        (identifier) @none
-        "::"
-        (#match? @none "^[a-z\\d_]*$"))
-    ]))
+(attribute_item) @attribute
 
-(inner_attribute_item
-  (attribute
-    [
-      (identifier) @attribute
-      (scoped_identifier
-        name: (identifier) @attribute)
-      (token_tree
-        (identifier) @attribute
-        (#match? @attribute "^[a-z\\d_]*$"))
-      (token_tree
-        (identifier) @none
-        "::"
-        (#match? @none "^[a-z\\d_]*$"))
-    ]))
+(inner_attribute_item) @attribute

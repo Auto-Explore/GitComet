@@ -6,6 +6,7 @@ on:
     paths:
       - ".github/workflows/build-release-artifacts.yml"
       - ".github/workflows/deployment-ci.yml"
+      - ".github/workflows/deploy-aur.yml"
       - ".github/workflows/deploy-homebrew-tap.yml"
       - ".github/workflows/deploy-flathub.yml"
       - ".github/workflows/deploy-apt-repo.yml"
@@ -14,14 +15,19 @@ on:
       - "flatpak/**"
       - "scripts/generate-flatpak-cargo-sources.py"
       - "scripts/render-flathub-manifest.sh"
+      - "scripts/update-aur.sh"
       - "scripts/package-macos.sh"
+      - "scripts/macos-cargo-config.sh"
       - "scripts/generate-homebrew-formula.sh"
+      - "scripts/generate-homebrew-cask.sh"
       - "scripts/build-apt-repo.sh"
+      - "scripts/windows/verify-signed-artifact.ps1"
   push:
     branches: ["main"]
     paths:
       - ".github/workflows/build-release-artifacts.yml"
       - ".github/workflows/deployment-ci.yml"
+      - ".github/workflows/deploy-aur.yml"
       - ".github/workflows/deploy-homebrew-tap.yml"
       - ".github/workflows/deploy-flathub.yml"
       - ".github/workflows/deploy-apt-repo.yml"
@@ -30,9 +36,13 @@ on:
       - "flatpak/**"
       - "scripts/generate-flatpak-cargo-sources.py"
       - "scripts/render-flathub-manifest.sh"
+      - "scripts/update-aur.sh"
       - "scripts/package-macos.sh"
+      - "scripts/macos-cargo-config.sh"
       - "scripts/generate-homebrew-formula.sh"
+      - "scripts/generate-homebrew-cask.sh"
       - "scripts/build-apt-repo.sh"
+      - "scripts/windows/verify-signed-artifact.ps1"
   workflow_dispatch:
 
 permissions:
@@ -51,41 +61,233 @@ jobs:
 
       - name: Validate shell scripts syntax
         run: |
+          bash -n scripts/update-aur.sh
           bash -n scripts/package-macos.sh
+          bash -n scripts/macos-cargo-config.sh
           bash -n scripts/generate-homebrew-formula.sh
+          bash -n scripts/generate-homebrew-cask.sh
           bash -n scripts/build-apt-repo.sh
           bash -n scripts/render-flathub-manifest.sh
+
+      - name: Validate Windows PowerShell helper syntax
+        run: |
+          pwsh -NoLogo -NoProfile -Command '
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile("scripts/windows/verify-signed-artifact.ps1", [ref]$null, [ref]$errors) | Out-Null
+            if ($errors.Count -gt 0) {
+              $errors | ForEach-Object { Write-Error $_.Message }
+              exit 1
+            }
+          '
 
       - name: Validate workflow YAML
         run: |
           ruby -e 'require "yaml"; %w[
             .github/workflows/build-release-artifacts.yml
             .github/workflows/deploy-flathub.yml
+            .github/workflows/deploy-aur.yml
             .github/workflows/deploy-homebrew-tap.yml
             .github/workflows/deploy-apt-repo.yml
             .github/workflows/deployment-ci.yml
             .github/workflows/release-manual-main.yml
           ].each { |path| YAML.load_file(path) }'
 
-      - name: Generate formula from synthetic artifacts
+      - name: Validate deployment workflow config keys
+        run: |
+          set -euo pipefail
+          grep -Fq 'vars.AUR_GIT_REPOSITORY' .github/workflows/release-manual-main.yml
+          grep -Fq 'vars.AUR_GIT_BRANCH' .github/workflows/release-manual-main.yml
+          grep -Fq 'vars.FLATHUB_REPO' .github/workflows/release-manual-main.yml
+          grep -Fq 'vars.FLATHUB_BRANCH' .github/workflows/release-manual-main.yml
+          grep -Fq 'vars.FLATHUB_MODE' .github/workflows/release-manual-main.yml
+          grep -Fq 'vars.APT_STORAGE_ACCOUNT' .github/workflows/release-manual-main.yml
+          grep -Fq 'vars.APT_STORAGE_CONTAINER' .github/workflows/release-manual-main.yml
+          grep -Fq 'vars.APT_REPO_DISTRIBUTION' .github/workflows/release-manual-main.yml
+          grep -Fq 'vars.APT_REPO_COMPONENT' .github/workflows/release-manual-main.yml
+          grep -Fq 'vars.APT_REPO_ORIGIN' .github/workflows/release-manual-main.yml
+          grep -Fq 'vars.APT_REPO_LABEL' .github/workflows/release-manual-main.yml
+          grep -Fq 'vars.APT_REPO_DESCRIPTION' .github/workflows/release-manual-main.yml
+          grep -Fq 'vars.APT_STORAGE_PUBLIC_ACCESS' .github/workflows/release-manual-main.yml
+          grep -Fq 'vars.APT_STORAGE_ACCOUNT' .github/workflows/deploy-apt-repo.yml
+          grep -Fq 'vars.APT_STORAGE_CONTAINER' .github/workflows/deploy-apt-repo.yml
+          grep -Fq 'vars.APT_REPO_DISTRIBUTION' .github/workflows/deploy-apt-repo.yml
+          grep -Fq 'vars.APT_REPO_COMPONENT' .github/workflows/deploy-apt-repo.yml
+          grep -Fq 'vars.APT_REPO_ORIGIN' .github/workflows/deploy-apt-repo.yml
+          grep -Fq 'vars.APT_REPO_LABEL' .github/workflows/deploy-apt-repo.yml
+          grep -Fq 'vars.APT_REPO_DESCRIPTION' .github/workflows/deploy-apt-repo.yml
+          grep -Fq 'vars.APT_STORAGE_PUBLIC_ACCESS' .github/workflows/deploy-apt-repo.yml
+          grep -Fq 'vars.AUR_GIT_REPOSITORY' .github/workflows/deploy-aur.yml
+          grep -Fq 'vars.AUR_GIT_BRANCH' .github/workflows/deploy-aur.yml
+          grep -Fq 'FLATHUB_TOKEN' .github/workflows/deploy-flathub.yml
+          grep -Fq 'flathub/dev.gitcomet.GitComet' .github/workflows/deploy-flathub.yml
+          grep -Fq 'vars.WINDOWS_SIGNING_ENDPOINT' .github/workflows/build-release-artifacts.yml
+          grep -Fq 'vars.WINDOWS_SIGNING_ACCOUNT_NAME' .github/workflows/build-release-artifacts.yml
+          grep -Fq 'AZURE_CREDENTIALS' .github/workflows/build-release-artifacts.yml
+          grep -Fq 'gitcomet-windows-test' .github/workflows/build-release-artifacts.yml
+          grep -Fq 'gitcomet-windows-release' .github/workflows/build-release-artifacts.yml
+          grep -Fq 'azure/login@' .github/workflows/build-release-artifacts.yml
+          grep -Fq 'artifact-signing-action@' .github/workflows/build-release-artifacts.yml
+          grep -Fq 'file-digest:' .github/workflows/build-release-artifacts.yml
+          grep -Fq 'timestamp-rfc3161:' .github/workflows/build-release-artifacts.yml
+          grep -Fq 'timestamp-digest:' .github/workflows/build-release-artifacts.yml
+          grep -Fq 'append-signature:' .github/workflows/build-release-artifacts.yml
+          grep -Fq 'verify-signed-artifact.ps1' .github/workflows/build-release-artifacts.yml
+          grep -Fq 'AUR_PRIVATE_SSH_KEY' .github/workflows/deploy-aur.yml
+          grep -Fq 'AUR_PRIVATE_SSH_KEY_PASSPHRASE' .github/workflows/deploy-aur.yml
+          grep -Fq 'ssh://aur@aur.archlinux.org/gitcomet.git' .github/workflows/deploy-aur.yml
+          grep -Fq 'HOMEBREW_TAP_TOKEN' .github/workflows/deploy-homebrew-tap.yml
+
+      - name: Generate Homebrew cask and formula from synthetic artifacts
         run: |
           set -euo pipefail
           mkdir -p dist/deployment-ci
           printf 'arm64-test' > dist/deployment-ci/gitcomet-v0.0.0-ci-macos-arm64.tar.gz
           printf 'intel-test' > dist/deployment-ci/gitcomet-v0.0.0-ci-macos-x86_64.tar.gz
+          printf 'linux-arm-test' > dist/deployment-ci/gitcomet-v0.0.0-ci-linux-arm64.tar.gz
           printf 'linux-test' > dist/deployment-ci/gitcomet-v0.0.0-ci-linux-x86_64.tar.gz
+          printf 'arm64-dmg-test' > dist/deployment-ci/gitcomet-v0.0.0-ci-macos-arm64.dmg
+          printf 'intel-dmg-test' > dist/deployment-ci/gitcomet-v0.0.0-ci-macos-x86_64.dmg
 
           scripts/generate-homebrew-formula.sh \
             --version "0.0.0-ci" \
             --github-repo "Auto-Explore/GitComet" \
             --arm-tar "dist/deployment-ci/gitcomet-v0.0.0-ci-macos-arm64.tar.gz" \
             --intel-tar "dist/deployment-ci/gitcomet-v0.0.0-ci-macos-x86_64.tar.gz" \
-            --linux-tar "dist/deployment-ci/gitcomet-v0.0.0-ci-linux-x86_64.tar.gz" \
+            --linux-arm-tar "dist/deployment-ci/gitcomet-v0.0.0-ci-linux-arm64.tar.gz" \
+            --linux-intel-tar "dist/deployment-ci/gitcomet-v0.0.0-ci-linux-x86_64.tar.gz" \
+            --output "dist/deployment-ci/gitcomet-cli.rb"
+
+          scripts/generate-homebrew-cask.sh \
+            --version "0.0.0-ci" \
+            --github-repo "Auto-Explore/GitComet" \
+            --arm-dmg "dist/deployment-ci/gitcomet-v0.0.0-ci-macos-arm64.dmg" \
+            --intel-dmg "dist/deployment-ci/gitcomet-v0.0.0-ci-macos-x86_64.dmg" \
             --output "dist/deployment-ci/gitcomet.rb"
 
           ruby -c dist/deployment-ci/gitcomet.rb
-          grep -q "on_linux do" dist/deployment-ci/gitcomet.rb
-          grep -q "gitcomet-v0.0.0-ci-linux-x86_64.tar.gz" dist/deployment-ci/gitcomet.rb
+          ruby -c dist/deployment-ci/gitcomet-cli.rb
+          grep -q 'cask "gitcomet" do' dist/deployment-ci/gitcomet.rb
+          grep -q 'app "GitComet.app"' dist/deployment-ci/gitcomet.rb
+          grep -q 'brew install gitcomet-cli' dist/deployment-ci/gitcomet.rb
+          grep -q 'class GitcometCli < Formula' dist/deployment-ci/gitcomet-cli.rb
+          grep -q "on_linux do" dist/deployment-ci/gitcomet-cli.rb
+          grep -q 'gitcomet-v0.0.0-ci-linux-arm64.tar.gz' dist/deployment-ci/gitcomet-cli.rb
+          grep -q 'gitcomet-v0.0.0-ci-linux-x86_64.tar.gz' dist/deployment-ci/gitcomet-cli.rb
+          grep -q 'bin.install "gitcomet"' dist/deployment-ci/gitcomet-cli.rb
+
+      - name: Validate Homebrew tap publish detection
+        run: |
+          set -euo pipefail
+          rm -rf dist/deployment-ci/tap-repo
+          git init --initial-branch=main dist/deployment-ci/tap-repo
+
+          pushd dist/deployment-ci/tap-repo >/dev/null
+          git config user.name "GitComet CI"
+          git config user.email "ci@autoexplore.ai"
+          echo "# Homebrew Tap" > README.md
+          mkdir -p Formula
+          cat > Formula/gitcomet.rb <<'RUBY'
+          class Gitcomet < Formula
+            desc "Legacy GitComet formula"
+            homepage "https://example.com"
+            url "https://example.com/gitcomet.tar.gz"
+            sha256 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            version "0.0.0"
+          end
+          RUBY
+
+          git add README.md Formula/gitcomet.rb
+          git commit -m "Initial tap repo"
+
+          mkdir -p Casks Formula
+          cp ../gitcomet.rb Casks/gitcomet.rb
+          cp ../gitcomet-cli.rb Formula/gitcomet-cli.rb
+
+          git add Casks/gitcomet.rb Formula/gitcomet-cli.rb
+          if git ls-files --error-unmatch Formula/gitcomet.rb >/dev/null 2>&1; then
+            git rm -f Formula/gitcomet.rb
+          fi
+
+          if git diff --cached --quiet -- Casks/gitcomet.rb Formula/gitcomet-cli.rb Formula/gitcomet.rb; then
+            echo "Expected Homebrew cask/formula publish to be detected as a change."
+            exit 1
+          fi
+          popd >/dev/null
+
+  aur-metadata-smoke:
+    name: Validate AUR metadata update script
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    container:
+      image: archlinux:base-devel
+    steps:
+      - name: Install Arch packaging tooling
+        run: |
+          set -euo pipefail
+          pacman -Sy --noconfirm --needed perl shadow
+
+      - uses: actions/checkout@v6
+
+      - name: Create non-root packaging user
+        run: |
+          set -euo pipefail
+          id -u builder >/dev/null 2>&1 || useradd -m builder
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+
+      - name: Prepare synthetic AUR repo and assets
+        run: |
+          set -euo pipefail
+          mkdir -p dist/aur-ci/repo
+          cat > dist/aur-ci/repo/PKGBUILD <<'EOF'
+          pkgname=gitcomet
+          pkgver=0.0.0
+          pkgrel=1
+          pkgdesc="Fast, resource-efficient Git GUI written in Rust"
+          arch=('x86_64')
+          url="https://gitcomet.dev/"
+          license=('AGPL-3.0-only')
+          depends=(
+            'fontconfig'
+            'freetype2'
+            'git'
+            'libx11'
+            'libxcb'
+            'libxkbcommon'
+            'wayland'
+          )
+          source=(
+            "gitcomet-v$pkgver-linux-x86_64.tar.gz::https://example.invalid/gitcomet-v$pkgver-linux-x86_64.tar.gz"
+            "gitcomet-source-v$pkgver.tar.gz::https://example.invalid/gitcomet-source-v$pkgver.tar.gz"
+          )
+          sha256sums=('oldbinary'
+                      'oldsource')
+
+          package() {
+            install -D -m755 "gitcomet-v$pkgver-linux-x86_64/gitcomet" "$pkgdir/usr/bin/gitcomet"
+          }
+          EOF
+
+          printf 'synthetic-binary' > dist/aur-ci/gitcomet-v0.0.0-linux-x86_64.tar.gz
+          printf 'synthetic-source' > dist/aur-ci/gitcomet-source-v0.0.0.tar.gz
+          chown -R builder:builder dist
+
+      - name: Run update-aur.sh
+        run: |
+          set -euo pipefail
+          su builder -c "cd '$GITHUB_WORKSPACE' && scripts/update-aur.sh \
+            --aur-dir '$GITHUB_WORKSPACE/dist/aur-ci/repo' \
+            --version 0.0.0 \
+            --binary-tar '$GITHUB_WORKSPACE/dist/aur-ci/gitcomet-v0.0.0-linux-x86_64.tar.gz' \
+            --source-tar '$GITHUB_WORKSPACE/dist/aur-ci/gitcomet-source-v0.0.0.tar.gz' \
+            --verify-source"
+
+      - name: Validate generated PKGBUILD and .SRCINFO
+        run: |
+          set -euo pipefail
+          test -f dist/aur-ci/repo/.SRCINFO
+          grep -q '^pkgver=0.0.0$' dist/aur-ci/repo/PKGBUILD
+          grep -q 'source = gitcomet-v0.0.0-linux-x86_64.tar.gz::https://example.invalid/gitcomet-v0.0.0-linux-x86_64.tar.gz$' dist/aur-ci/repo/.SRCINFO
+          grep -q 'source = gitcomet-source-v0.0.0.tar.gz::https://example.invalid/gitcomet-source-v0.0.0.tar.gz$' dist/aur-ci/repo/.SRCINFO
 
   apt-repo-generation-smoke:
     name: Validate APT repo generation script
@@ -99,24 +301,26 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y dpkg-dev gnupg
 
-      - name: Build synthetic .deb
+      - name: Build synthetic .debs
         run: |
           set -euo pipefail
-          pkg_root="dist/apt-ci/pkg"
-          mkdir -p "${pkg_root}/DEBIAN" "${pkg_root}/usr/bin"
+          for architecture in amd64 arm64; do
+            pkg_root="dist/apt-ci/pkg-${architecture}"
+            mkdir -p "${pkg_root}/DEBIAN" "${pkg_root}/usr/bin"
 
-          printf '%s\n' '#!/usr/bin/env bash' 'echo "GitComet CI"' > "${pkg_root}/usr/bin/gitcomet-app"
-          chmod +x "${pkg_root}/usr/bin/gitcomet-app"
+            printf '%s\n' '#!/usr/bin/env bash' "echo \"GitComet CI ${architecture}\"" > "${pkg_root}/usr/bin/gitcomet"
+            chmod +x "${pkg_root}/usr/bin/gitcomet"
 
-          {
-            echo "Package: gitcomet"
-            echo "Version: 0.0.0~ci1"
-            echo "Architecture: amd64"
-            echo "Maintainer: GitComet CI <ci@example.invalid>"
-            echo "Description: Synthetic GitComet package for deployment CI."
-          } > "${pkg_root}/DEBIAN/control"
+            {
+              echo "Package: gitcomet"
+              echo "Version: 0.0.0~ci1"
+              echo "Architecture: ${architecture}"
+              echo "Maintainer: GitComet CI <ci@autoexplore.ai>"
+              echo "Description: Synthetic GitComet package for deployment CI."
+            } > "${pkg_root}/DEBIAN/control"
 
-          dpkg-deb --build "${pkg_root}" "dist/apt-ci/gitcomet_0.0.0~ci1_amd64.deb"
+            dpkg-deb --build "${pkg_root}" "dist/apt-ci/gitcomet_0.0.0~ci1_${architecture}.deb"
+          done
 
       - name: Generate temporary signing key
         env:
@@ -130,7 +334,7 @@ jobs:
             echo "Key-Type: RSA"
             echo "Key-Length: 3072"
             echo "Name-Real: GitComet CI"
-            echo "Name-Email: ci@example.invalid"
+            echo "Name-Email: ci@autoexplore.ai"
             echo "Expire-Date: 0"
             echo "%no-protection"
             echo "%commit"
@@ -143,18 +347,22 @@ jobs:
       - name: Build signed APT repo
         env:
           GNUPGHOME: ${{ github.workspace }}/dist/apt-ci/gnupg
+          APT_GPG_PASSPHRASE: ${{ secrets.APT_GPG_PASSPHRASE }}
         run: |
           set -euo pipefail
           scripts/build-apt-repo.sh \
             --repo-dir dist/apt-ci/repo \
             --deb dist/apt-ci/gitcomet_0.0.0~ci1_amd64.deb \
+            --deb dist/apt-ci/gitcomet_0.0.0~ci1_arm64.deb \
             --distribution stable \
             --component main \
             --architecture amd64 \
+            --architecture arm64 \
             --origin GitComet \
             --label GitComet \
             --description "GitComet deployment CI repository" \
             --repo-url https://example.invalid/gitcomet/apt \
+            --gpg-passphrase "${APT_GPG_PASSPHRASE}" \
             --signing-key "${APT_TEST_GPG_KEY_ID}"
 
       - name: Validate generated repo
@@ -164,6 +372,8 @@ jobs:
           set -euo pipefail
           test -f dist/apt-ci/repo/dists/stable/main/binary-amd64/Packages
           test -f dist/apt-ci/repo/dists/stable/main/binary-amd64/Packages.gz
+          test -f dist/apt-ci/repo/dists/stable/main/binary-arm64/Packages
+          test -f dist/apt-ci/repo/dists/stable/main/binary-arm64/Packages.gz
           test -f dist/apt-ci/repo/dists/stable/InRelease
           test -f dist/apt-ci/repo/dists/stable/Release.gpg
           test -f dist/apt-ci/repo/gitcomet-archive-keyring.gpg
@@ -171,23 +381,62 @@ jobs:
 
           grep -q "^Package: gitcomet$" dist/apt-ci/repo/dists/stable/main/binary-amd64/Packages
           grep -q "^Filename: pool/main/g/gitcomet/gitcomet_0.0.0~ci1_amd64.deb$" dist/apt-ci/repo/dists/stable/main/binary-amd64/Packages
+          grep -q "^Package: gitcomet$" dist/apt-ci/repo/dists/stable/main/binary-arm64/Packages
+          grep -q "^Filename: pool/main/g/gitcomet/gitcomet_0.0.0~ci1_arm64.deb$" dist/apt-ci/repo/dists/stable/main/binary-arm64/Packages
+          grep -q "^Architectures: amd64 arm64$" dist/apt-ci/repo/dists/stable/Release
           grep -q "^URIs: https://example.invalid/gitcomet/apt$" dist/apt-ci/repo/gitcomet.sources
+          grep -q "^Architectures: amd64 arm64$" dist/apt-ci/repo/gitcomet.sources
+          grep -q '^deb \[arch=amd64,arm64 signed-by=/usr/share/keyrings/gitcomet-archive-keyring.gpg\] https://example.invalid/gitcomet/apt stable main$' dist/apt-ci/repo/gitcomet.list
 
           mkdir -p "$GNUPGHOME"
           chmod 700 "$GNUPGHOME"
           gpg --batch --no-default-keyring --keyring dist/apt-ci/repo/gitcomet-archive-keyring.gpg --verify dist/apt-ci/repo/dists/stable/InRelease >/dev/null
 
+      - name: Verify generated repo with apt-secure
+        run: |
+          set -euo pipefail
+
+          repo_root="$(pwd)/dist/apt-ci/repo"
+          source_dir="${RUNNER_TEMP}/gitcomet-apt-sources.d"
+          lists_dir="${RUNNER_TEMP}/gitcomet-apt-lists"
+
+          mkdir -p "$source_dir"
+          sudo mkdir -p "${lists_dir}/partial"
+
+          cat > "${source_dir}/gitcomet-ci.sources" <<EOF
+          Types: deb
+          URIs: file://${repo_root}
+          Suites: stable
+          Components: main
+          Architectures: amd64
+          Signed-By: ${repo_root}/gitcomet-archive-keyring.gpg
+          EOF
+
+          sudo apt-get update \
+            -o Dir::Etc::sourcelist=/dev/null \
+            -o Dir::Etc::sourceparts="${source_dir}" \
+            -o Dir::State::lists="${lists_dir}" \
+            -o APT::Get::List-Cleanup=0
+
+          apt-cache policy gitcomet \
+            -o Dir::Etc::sourcelist=/dev/null \
+            -o Dir::Etc::sourceparts="${source_dir}" \
+            -o Dir::State::lists="${lists_dir}" \
+            | grep -q '0.0.0~ci1'
+
   macos-packaging-smoke:
-    name: macOS packaging smoke (${{ matrix.arch }})
+    name: macOS packaging smoke (${{ matrix.target_platform }})
     runs-on: ${{ matrix.runs_on }}
     timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
         include:
-          - arch: arm64
+          - target_platform: aarch64-darwin
+            arch: arm64
             runs_on: macos-latest
-          - arch: x86_64
+          - target_platform: x86_64-darwin
+            arch: x86_64
             runs_on: macos-15-intel
     steps:
       - uses: actions/checkout@v6
@@ -199,7 +448,17 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Build release binary
-        run: cargo build -p gitcomet-app --release --locked --features ui-gpui,gix --bins
+        run: |
+          set -euo pipefail
+          cargo_config_output="$(scripts/macos-cargo-config.sh "${{ matrix.arch }}" release)"
+          set --
+          if [[ -n "$cargo_config_output" ]]; then
+            while IFS= read -r arg; do
+              set -- "$@" "$arg"
+            done <<<"$cargo_config_output"
+          fi
+          set -- "$@" -p gitcomet --release --locked --features ui-gpui,gix --bins
+          cargo build "$@"
 
       - name: Package macOS artifacts
         run: |
@@ -216,7 +475,7 @@ jobs:
           set -euo pipefail
           tarball="dist/gitcomet-v0.0.0-ci-macos-${{ matrix.arch }}.tar.gz"
           test -f "$tarball"
-          tar -tzf "$tarball" | grep -q "GitComet.app/Contents/MacOS/gitcomet-app$"
+          tar -tzf "$tarball" | grep -q "GitComet.app/Contents/MacOS/gitcomet$"
 
       - name: Verify DMG launches binary
         run: |
@@ -230,7 +489,7 @@ jobs:
             exit 1
           fi
 
-          "${mount_point}/GitComet.app/Contents/MacOS/gitcomet-app" --help >/dev/null
+          "${mount_point}/GitComet.app/Contents/MacOS/gitcomet" --help >/dev/null
           hdiutil detach "$mount_point"
 
   flatpak-packaging-smoke:

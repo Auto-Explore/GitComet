@@ -3,43 +3,13 @@ use std::sync::Arc;
 
 const STATUS_ROW_HEIGHT_PX: f32 = 24.0;
 
-fn status_selection_slices_mut(
-    selection: &mut StatusMultiSelection,
-    area: DiffArea,
-) -> (
-    &mut Vec<std::path::PathBuf>,
-    &mut Option<std::path::PathBuf>,
-    &mut Vec<std::path::PathBuf>,
-    &mut Option<std::path::PathBuf>,
-) {
-    match area {
-        DiffArea::Unstaged => (
-            &mut selection.unstaged,
-            &mut selection.unstaged_anchor,
-            &mut selection.staged,
-            &mut selection.staged_anchor,
-        ),
-        DiffArea::Staged => (
-            &mut selection.staged,
-            &mut selection.staged_anchor,
-            &mut selection.unstaged,
-            &mut selection.unstaged_anchor,
-        ),
-    }
-}
-
-fn apply_status_multi_selection_click(
-    selection: &mut StatusMultiSelection,
-    area: DiffArea,
+fn apply_status_multi_selection_to_slice(
+    selected: &mut Vec<std::path::PathBuf>,
+    anchor: &mut Option<std::path::PathBuf>,
     clicked_path: std::path::PathBuf,
     modifiers: gpui::Modifiers,
     entries: Option<&[std::path::PathBuf]>,
 ) {
-    let (selected, anchor, other_selected, other_anchor) =
-        status_selection_slices_mut(selection, area);
-    other_selected.clear();
-    *other_anchor = None;
-
     if modifiers.shift {
         let Some(entries) = entries else {
             *selected = vec![clicked_path.clone()];
@@ -85,6 +55,83 @@ fn apply_status_multi_selection_click(
     *anchor = Some(clicked_path);
 }
 
+fn apply_status_multi_selection_click(
+    selection: &mut StatusMultiSelection,
+    section: StatusSection,
+    clicked_path: std::path::PathBuf,
+    modifiers: gpui::Modifiers,
+    entries: Option<&[std::path::PathBuf]>,
+) {
+    match section {
+        StatusSection::CombinedUnstaged | StatusSection::Unstaged => {
+            selection.untracked.clear();
+            selection.untracked_anchor = None;
+            selection.staged.clear();
+            selection.staged_anchor = None;
+            apply_status_multi_selection_to_slice(
+                &mut selection.unstaged,
+                &mut selection.unstaged_anchor,
+                clicked_path,
+                modifiers,
+                entries,
+            );
+        }
+        StatusSection::Untracked => {
+            selection.unstaged.clear();
+            selection.unstaged_anchor = None;
+            selection.staged.clear();
+            selection.staged_anchor = None;
+            apply_status_multi_selection_to_slice(
+                &mut selection.untracked,
+                &mut selection.untracked_anchor,
+                clicked_path,
+                modifiers,
+                entries,
+            );
+        }
+        StatusSection::Staged => {
+            selection.untracked.clear();
+            selection.untracked_anchor = None;
+            selection.unstaged.clear();
+            selection.unstaged_anchor = None;
+            apply_status_multi_selection_to_slice(
+                &mut selection.staged,
+                &mut selection.staged_anchor,
+                clicked_path,
+                modifiers,
+                entries,
+            );
+        }
+    }
+}
+
+fn status_entries_for_section(status: &RepoStatus, section: StatusSection) -> Vec<&FileStatus> {
+    match section {
+        StatusSection::CombinedUnstaged => status.unstaged.iter().collect(),
+        StatusSection::Untracked => status
+            .unstaged
+            .iter()
+            .filter(|entry| entry.kind == FileStatusKind::Untracked)
+            .collect(),
+        StatusSection::Unstaged => status
+            .unstaged
+            .iter()
+            .filter(|entry| entry.kind != FileStatusKind::Untracked)
+            .collect(),
+        StatusSection::Staged => status.staged.iter().collect(),
+    }
+}
+
+fn status_paths_for_section(
+    status: &RepoStatus,
+    section: StatusSection,
+) -> Vec<std::path::PathBuf> {
+    status_entries_for_section(status, section)
+        .into_iter()
+        .map(|entry| entry.path.clone())
+        .collect()
+}
+
 impl DetailsPaneView {
     fn clear_status_multi_selection(&mut self, repo_id: RepoId) {
         self.status_multi_selection.remove(&repo_id);
@@ -106,10 +153,7 @@ impl DetailsPaneView {
             .status_multi_selection
             .remove(&repo_id)
             .unwrap_or_default();
-        let paths = match area {
-            DiffArea::Unstaged => sel.unstaged,
-            DiffArea::Staged => sel.staged,
-        };
+        let paths = sel.take_selected_paths_for_area(area);
         if paths.is_empty() {
             (vec![clicked_path.clone()], false)
         } else {
@@ -132,22 +176,19 @@ impl DetailsPaneView {
         let Some(sel) = self.status_multi_selection.get(&repo_id) else {
             return &[];
         };
-        match area {
-            DiffArea::Unstaged => sel.unstaged.as_slice(),
-            DiffArea::Staged => sel.staged.as_slice(),
-        }
+        sel.selected_paths_for_area(area)
     }
 
     fn status_selection_apply_click(
         &mut self,
         repo_id: RepoId,
-        area: DiffArea,
+        section: StatusSection,
         clicked_path: std::path::PathBuf,
         modifiers: gpui::Modifiers,
         entries: Option<&[std::path::PathBuf]>,
     ) {
         let sel = self.status_multi_selection_for_repo_mut(repo_id);
-        apply_status_multi_selection_click(sel, area, clicked_path, modifiers, entries);
+        apply_status_multi_selection_click(sel, section, clicked_path, modifiers, entries);
     }
 
     pub(in super::super) fn render_unstaged_rows(
@@ -156,44 +197,25 @@ impl DetailsPaneView {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
-        let Some(repo) = this.active_repo() else {
-            return Vec::new();
-        };
-        let Loadable::Ready(status) = &repo.status else {
-            return Vec::new();
-        };
-        let unstaged = &status.unstaged;
-        let selected = repo.diff_state.diff_target.as_ref();
-        let selected_paths = this.status_selected_paths_for_area(repo.id, DiffArea::Unstaged);
-        let multi_select_active = !selected_paths.is_empty();
-        let theme = this.theme;
-        range
-            .filter_map(|ix| unstaged.get(ix).map(|e| (ix, e)))
-            .map(|(ix, entry)| {
-                let path_display = this.cached_path_display(&entry.path);
-                let is_selected = if multi_select_active {
-                    selected_paths.iter().any(|p| p == &entry.path)
-                } else {
-                    selected.is_some_and(|t| match t {
-                        DiffTarget::WorkingTree { path, area } => {
-                            *area == DiffArea::Unstaged && path == &entry.path
-                        }
-                        _ => false,
-                    })
-                };
-                status_row(
-                    theme,
-                    ix,
-                    entry,
-                    path_display,
-                    DiffArea::Unstaged,
-                    repo.id,
-                    is_selected,
-                    this.active_context_menu_invoker.as_ref(),
-                    cx,
-                )
-            })
-            .collect()
+        render_status_rows_for_section(this, range, StatusSection::CombinedUnstaged, cx)
+    }
+
+    pub(in super::super) fn render_untracked_rows(
+        this: &mut Self,
+        range: Range<usize>,
+        _window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> Vec<AnyElement> {
+        render_status_rows_for_section(this, range, StatusSection::Untracked, cx)
+    }
+
+    pub(in super::super) fn render_split_unstaged_rows(
+        this: &mut Self,
+        range: Range<usize>,
+        _window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> Vec<AnyElement> {
+        render_status_rows_for_section(this, range, StatusSection::Unstaged, cx)
     }
 
     pub(in super::super) fn render_staged_rows(
@@ -202,45 +224,54 @@ impl DetailsPaneView {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
-        let Some(repo) = this.active_repo() else {
-            return Vec::new();
-        };
-        let Loadable::Ready(status) = &repo.status else {
-            return Vec::new();
-        };
-        let staged = &status.staged;
-        let selected = repo.diff_state.diff_target.as_ref();
-        let selected_paths = this.status_selected_paths_for_area(repo.id, DiffArea::Staged);
-        let multi_select_active = !selected_paths.is_empty();
-        let theme = this.theme;
-        range
-            .filter_map(|ix| staged.get(ix).map(|e| (ix, e)))
-            .map(|(ix, entry)| {
-                let path_display = this.cached_path_display(&entry.path);
-                let is_selected = if multi_select_active {
-                    selected_paths.iter().any(|p| p == &entry.path)
-                } else {
-                    selected.is_some_and(|t| match t {
-                        DiffTarget::WorkingTree { path, area } => {
-                            *area == DiffArea::Staged && path == &entry.path
-                        }
-                        _ => false,
-                    })
-                };
-                status_row(
-                    theme,
-                    ix,
-                    entry,
-                    path_display,
-                    DiffArea::Staged,
-                    repo.id,
-                    is_selected,
-                    this.active_context_menu_invoker.as_ref(),
-                    cx,
-                )
-            })
-            .collect()
+        render_status_rows_for_section(this, range, StatusSection::Staged, cx)
     }
+}
+
+fn render_status_rows_for_section(
+    this: &mut DetailsPaneView,
+    range: Range<usize>,
+    section: StatusSection,
+    cx: &mut gpui::Context<DetailsPaneView>,
+) -> Vec<AnyElement> {
+    let Some(repo) = this.active_repo() else {
+        return Vec::new();
+    };
+    let Loadable::Ready(status) = &repo.status else {
+        return Vec::new();
+    };
+    let entries = status_entries_for_section(status, section);
+    let selected = repo.diff_state.diff_target.as_ref();
+    let selected_paths = this.status_selected_paths_for_area(repo.id, section.diff_area());
+    let multi_select_active = !selected_paths.is_empty();
+    let theme = this.theme;
+    range
+        .filter_map(|ix| entries.get(ix).copied().map(|entry| (ix, entry)))
+        .map(|(ix, entry)| {
+            let path_display = this.cached_path_display(&entry.path);
+            let is_selected = if multi_select_active {
+                selected_paths.iter().any(|p| p == &entry.path)
+            } else {
+                selected.is_some_and(|t| match t {
+                    DiffTarget::WorkingTree { path, area } => {
+                        *area == section.diff_area() && path == &entry.path
+                    }
+                    _ => false,
+                })
+            };
+            status_row(
+                theme,
+                ix,
+                entry,
+                path_display,
+                section,
+                repo.id,
+                is_selected,
+                this.active_context_menu_invoker.as_ref(),
+                cx,
+            )
+        })
+        .collect()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -249,12 +280,13 @@ fn status_row(
     ix: usize,
     entry: &FileStatus,
     path_display: SharedString,
-    area: DiffArea,
+    section: StatusSection,
     repo_id: RepoId,
     selected: bool,
     active_context_menu_invoker: Option<&SharedString>,
     cx: &mut gpui::Context<DetailsPaneView>,
 ) -> AnyElement {
+    let area = section.diff_area();
     let (icon, color) = match entry.kind {
         FileStatusKind::Untracked => match area {
             DiffArea::Unstaged => ("icons/plus.svg", theme.colors.success),
@@ -289,14 +321,10 @@ fn status_row(
         _ => format!("{stage_label} file").into(),
     };
     let context_menu_invoker: SharedString = {
-        let area_label = match area {
-            DiffArea::Unstaged => "unstaged",
-            DiffArea::Staged => "staged",
-        };
         format!(
             "status_file_menu_{}_{}_{}",
             repo_id.0,
-            area_label,
+            section.id_label(),
             entry.path.display()
         )
         .into()
@@ -304,13 +332,8 @@ fn status_row(
     let context_menu_active = active_context_menu_invoker == Some(&context_menu_invoker);
     let context_menu_invoker_for_stage = context_menu_invoker.clone();
     let context_menu_invoker_for_row = context_menu_invoker.clone();
-    let row_group: SharedString = {
-        let area_label = match area {
-            DiffArea::Unstaged => "unstaged",
-            DiffArea::Staged => "staged",
-        };
-        format!("status_row_{}_{}_{}", repo_id.0, area_label, ix).into()
-    };
+    let row_group: SharedString =
+        format!("status_row_{}_{}_{}", repo_id.0, section.id_label(), ix).into();
 
     let stage_button = components::Button::new(format!("stage_btn_{ix}"), stage_label)
         .style(components::ButtonStyle::Solid)
@@ -425,7 +448,7 @@ fn status_row(
                 if !clicked_in_multiselect {
                     this.status_selection_apply_click(
                         repo_id,
-                        area,
+                        section,
                         clicked_path.clone(),
                         gpui::Modifiers::default(),
                         None,
@@ -496,18 +519,12 @@ fn status_row(
                 this.active_repo()
                     .filter(|r| r.id == repo_id)
                     .and_then(|repo| match &repo.status {
-                        Loadable::Ready(status) => {
-                            let src = match area {
-                                DiffArea::Unstaged => status.unstaged.as_slice(),
-                                DiffArea::Staged => status.staged.as_slice(),
-                            };
-                            Some(src.iter().map(|e| e.path.clone()).collect::<Vec<_>>())
-                        }
+                        Loadable::Ready(status) => Some(status_paths_for_section(status, section)),
                         _ => None,
                     });
             this.status_selection_apply_click(
                 repo_id,
-                area,
+                section,
                 (*path_for_row).clone(),
                 modifiers,
                 entries.as_deref(),
@@ -544,7 +561,7 @@ mod tests {
         let mut sel = StatusMultiSelection::default();
         apply_status_multi_selection_click(
             &mut sel,
-            DiffArea::Unstaged,
+            StatusSection::CombinedUnstaged,
             pb("a"),
             gpui::Modifiers {
                 control: true,
@@ -556,7 +573,7 @@ mod tests {
 
         apply_status_multi_selection_click(
             &mut sel,
-            DiffArea::Unstaged,
+            StatusSection::CombinedUnstaged,
             pb("b"),
             gpui::Modifiers {
                 control: true,
@@ -568,7 +585,7 @@ mod tests {
 
         apply_status_multi_selection_click(
             &mut sel,
-            DiffArea::Unstaged,
+            StatusSection::CombinedUnstaged,
             pb("a"),
             gpui::Modifiers {
                 control: true,
@@ -586,7 +603,7 @@ mod tests {
 
         apply_status_multi_selection_click(
             &mut sel,
-            DiffArea::Unstaged,
+            StatusSection::CombinedUnstaged,
             pb("b"),
             gpui::Modifiers::default(),
             Some(&entries),
@@ -595,7 +612,7 @@ mod tests {
 
         apply_status_multi_selection_click(
             &mut sel,
-            DiffArea::Unstaged,
+            StatusSection::CombinedUnstaged,
             pb("d"),
             gpui::Modifiers {
                 shift: true,
@@ -604,5 +621,25 @@ mod tests {
             Some(&entries),
         );
         assert_eq!(sel.unstaged, vec![pb("b"), pb("c"), pb("d")]);
+    }
+
+    #[test]
+    fn split_untracked_selection_clears_tracked_selection() {
+        let mut sel = StatusMultiSelection {
+            unstaged: vec![pb("tracked.txt")],
+            unstaged_anchor: Some(pb("tracked.txt")),
+            ..Default::default()
+        };
+
+        apply_status_multi_selection_click(
+            &mut sel,
+            StatusSection::Untracked,
+            pb("new.txt"),
+            gpui::Modifiers::default(),
+            None,
+        );
+
+        assert!(sel.unstaged.is_empty());
+        assert_eq!(sel.untracked, vec![pb("new.txt")]);
     }
 }

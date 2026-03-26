@@ -1,4 +1,4 @@
-//! Focused diff window for standalone `gitcomet-app difftool` invocation.
+//! Focused diff window for standalone `gitcomet difftool` invocation.
 //!
 //! Opens a GPUI window that displays a unified diff with color-coded lines.
 //! The user reviews the diff and closes the window (exit 0).
@@ -7,6 +7,7 @@ use crate::assets::GitCometAssets;
 use crate::launch_guard::run_with_panic_guard;
 use crate::theme::{AppTheme, with_alpha};
 use gitcomet_core::platform::APP_ID;
+use gitcomet_state::session;
 use gpui::prelude::*;
 use gpui::{
     App, Application, Bounds, FocusHandle, Focusable, FontWeight, KeyBinding, Render, ScrollHandle,
@@ -42,6 +43,8 @@ struct FocusedDiffView {
     focus_handle: FocusHandle,
     scroll_handle: ScrollHandle,
     theme: AppTheme,
+    ui_font_family: String,
+    editor_font_family: String,
 }
 
 #[derive(Clone, Debug)]
@@ -72,6 +75,9 @@ impl FocusedDiffView {
             .unwrap_or_else(|| format!("{} vs {}", config.label_left, config.label_right));
 
         let theme = AppTheme::default_for_window_appearance(window.appearance());
+        let ui_session = session::load();
+        let font_preferences =
+            crate::font_preferences::current_or_initialize_from_session(window, &ui_session, cx);
 
         Self {
             lines,
@@ -80,6 +86,12 @@ impl FocusedDiffView {
             focus_handle: cx.focus_handle(),
             scroll_handle: ScrollHandle::new(),
             theme,
+            ui_font_family: crate::font_preferences::applied_ui_font_family(
+                &font_preferences.ui_font_family,
+            ),
+            editor_font_family: crate::font_preferences::applied_editor_font_family(
+                &font_preferences.editor_font_family,
+            ),
         }
     }
 
@@ -134,7 +146,7 @@ impl Render for FocusedDiffView {
             .size_full()
             .bg(theme.colors.window_bg)
             .text_color(theme.colors.text)
-            .font_family("monospace")
+            .font_family(self.ui_font_family.clone())
             .text_size(px(13.0))
             .flex()
             .flex_col()
@@ -187,6 +199,7 @@ impl Render for FocusedDiffView {
                     .flex_grow()
                     .overflow_y_scroll()
                     .track_scroll(&self.scroll_handle)
+                    .font_family(self.editor_font_family.clone())
                     .px(px(16.0))
                     .py(px(4.0))
                     .children(
@@ -242,6 +255,15 @@ fn render_diff_line(index: usize, line: &DiffLine, theme: &AppTheme) -> impl Int
     el
 }
 
+fn bind_focused_diff_keys(cx: &mut App) {
+    cx.bind_keys([
+        KeyBinding::new("escape", Close, Some("FocusedDiff")),
+        KeyBinding::new("q", Close, Some("FocusedDiff")),
+        KeyBinding::new("ctrl-w", Close, Some("FocusedDiff")),
+        KeyBinding::new("cmd-w", Close, Some("FocusedDiff")),
+    ]);
+}
+
 // ── Public entry point ───────────────────────────────────────────────
 
 /// Launch a focused GPUI diff window.
@@ -266,6 +288,9 @@ pub fn run_focused_diff(config: FocusedDiffConfig) -> i32 {
         Application::new()
             .with_assets(GitCometAssets)
             .run(move |cx: &mut App| {
+                if let Err(err) = crate::bundled_fonts::register(cx) {
+                    eprintln!("Failed to register bundled fonts: {err:#}");
+                }
                 cx.on_window_closed(|cx| {
                     if cx.windows().is_empty() {
                         cx.quit();
@@ -273,12 +298,7 @@ pub fn run_focused_diff(config: FocusedDiffConfig) -> i32 {
                 })
                 .detach();
 
-                cx.bind_keys([
-                    KeyBinding::new("escape", Close, Some("FocusedDiff")),
-                    KeyBinding::new("q", Close, Some("FocusedDiff")),
-                    KeyBinding::new("ctrl-w", Close, Some("FocusedDiff")),
-                    KeyBinding::new("cmd-w", Close, Some("FocusedDiff")),
-                ]);
+                bind_focused_diff_keys(cx);
 
                 let exit_code_clone = exit_code_for_app.clone();
                 let bounds = Bounds::centered(None, size(px(900.0), px(650.0)), cx);
@@ -323,6 +343,47 @@ pub fn run_focused_diff(config: FocusedDiffConfig) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gpui::{
+        Action, Context, FocusHandle, InteractiveElement, IntoElement, Render, Styled, Window, div,
+    };
+    use std::sync::{Arc, Mutex};
+
+    struct FocusedDiffKeyProbe {
+        focus_handle: FocusHandle,
+        observed_actions: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl FocusedDiffKeyProbe {
+        fn new(observed_actions: Arc<Mutex<Vec<String>>>, cx: &mut Context<Self>) -> Self {
+            Self {
+                focus_handle: cx.focus_handle().tab_index(0).tab_stop(true),
+                observed_actions,
+            }
+        }
+
+        fn focus_handle(&self) -> FocusHandle {
+            self.focus_handle.clone()
+        }
+
+        fn record_action(&self, action_name: &str) {
+            self.observed_actions
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(action_name.to_string());
+        }
+    }
+
+    impl Render for FocusedDiffKeyProbe {
+        fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .size_full()
+                .key_context("FocusedDiff")
+                .track_focus(&self.focus_handle)
+                .on_action(cx.listener(|this, _: &Close, _window, _cx| {
+                    this.record_action(Close.name());
+                }))
+        }
+    }
 
     #[test]
     fn parse_diff_lines_classifies_correctly() {
@@ -358,5 +419,40 @@ index 1234567..abcdef0 100644
     fn parse_no_diff_only_context() {
         let lines = parse_diff_lines("hello\nworld\n");
         assert!(lines.iter().all(|l| l.kind == DiffLineKind::Context));
+    }
+
+    #[gpui::test]
+    fn focused_diff_keybindings_dispatch_close(cx: &mut gpui::TestAppContext) {
+        let observed_actions: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let (view, cx) = cx.add_window_view(|_window, cx| {
+            FocusedDiffKeyProbe::new(Arc::clone(&observed_actions), cx)
+        });
+
+        cx.update(|window, app| {
+            app.clear_key_bindings();
+            bind_focused_diff_keys(app);
+            let focus = view.update(app, |view, _cx| view.focus_handle());
+            window.focus(&focus);
+            let _ = window.draw(app);
+        });
+
+        for keystroke in ["escape", "q", "ctrl-w", "cmd-w"] {
+            observed_actions
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clear();
+            cx.simulate_keystrokes(keystroke);
+            let actual_action = observed_actions
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .last()
+                .cloned();
+            assert_eq!(
+                actual_action.as_deref(),
+                Some(Close.name()),
+                "expected `{keystroke}` to resolve to `{}`",
+                Close.name(),
+            );
+        }
     }
 }

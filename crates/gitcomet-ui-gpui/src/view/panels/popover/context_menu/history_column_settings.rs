@@ -10,7 +10,7 @@ pub(super) fn model(host: &PopoverHost, cx: &gpui::Context<PopoverHost>) -> Cont
 }
 
 fn model_for_preferences(show_author: bool, show_date: bool, show_sha: bool) -> ContextMenuModel {
-    let check = |enabled: bool| enabled.then_some("✓".into());
+    let check = |enabled: bool| enabled.then_some("icons/check.svg".into());
 
     ContextMenuModel::new(vec![
         ContextMenuItem::Header("History columns".into()),
@@ -50,7 +50,7 @@ fn model_for_preferences(show_author: bool, show_date: bool, show_sha: bool) -> 
         },
         ContextMenuItem::Entry {
             label: "Reset column widths".into(),
-            icon: Some("↺".into()),
+            icon: Some("icons/refresh.svg".into()),
             shortcut: Some("R".into()),
             disabled: false,
             action: Box::new(ContextMenuAction::ResetHistoryColumnWidths),

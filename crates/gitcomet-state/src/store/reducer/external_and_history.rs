@@ -1,6 +1,7 @@
 use super::util::{
-    diff_reload_effects, handle_session_persist_result, push_diagnostic, refresh_full_effects,
-    refresh_primary_effects, selected_conflict_target_path, start_conflict_target_reload,
+    clear_banner_error_for_repo, diff_reload_effects, handle_session_persist_result,
+    push_diagnostic, refresh_full_effects, refresh_primary_effects, selected_conflict_target_path,
+    start_conflict_target_reload,
 };
 use crate::model::{AppState, DiagnosticKind, Loadable, RepoLoadsInFlight};
 use crate::msg::{Effect, RepoExternalChange};
@@ -24,7 +25,7 @@ pub(super) fn reload_repo(state: &mut AppState, repo_id: crate::model::RepoId) -
     repo_state.set_status(Loadable::Loading);
     repo_state.set_log(Loadable::Loading);
     repo_state.set_log_loading_more(false);
-    repo_state.set_stashes(Loadable::Loading);
+    repo_state.set_stashes(Loadable::NotLoaded);
     repo_state.reflog = Loadable::NotLoaded;
     repo_state.set_rebase_in_progress(Loadable::Loading);
     repo_state.set_merge_commit_message(Loadable::Loading);
@@ -301,16 +302,23 @@ pub(super) fn repo_action_finished(
     repo_id: crate::model::RepoId,
     result: std::result::Result<(), Error>,
 ) -> Vec<Effect> {
+    let mut clear_banner = false;
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         repo_state.local_actions_in_flight = repo_state.local_actions_in_flight.saturating_sub(1);
         repo_state.bump_ops_rev();
         match result {
-            Ok(()) => repo_state.last_error = None,
+            Ok(()) => {
+                repo_state.last_error = None;
+                clear_banner = true;
+            }
             Err(e) => {
                 repo_state.last_error = Some(e.to_string());
                 push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
             }
         }
+    }
+    if clear_banner {
+        clear_banner_error_for_repo(state, repo_id);
     }
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();

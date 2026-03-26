@@ -325,6 +325,333 @@ fn ctrl_f_from_markdown_file_preview_switches_back_to_text_search(cx: &mut gpui:
 }
 
 #[gpui::test]
+fn split_markdown_diff_uses_preview_level_horizontal_overflow_without_local_code_scrollbar(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    disable_view_poller_for_test(cx, &view);
+
+    let repo_id = gitcomet_state::model::RepoId(71);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_markdown_code_block_scrollbar",
+        std::process::id()
+    ));
+    let file_rel = std::path::PathBuf::from("docs/overflow.md");
+    let long_code = "0123456789".repeat(8);
+    let old_text = "# Guide\n\n```rust\nlet value = 1;\n}\n```\n".to_string();
+    let new_text = format!("# Guide\n\n```rust\n{long_code}\n}}\n```\n");
+    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
+        path: file_rel.clone(),
+        area: gitcomet_core::domain::DiffArea::Unstaged,
+    };
+
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(&workdir).expect("create markdown code block diff workdir");
+
+    seed_file_diff_state(
+        cx, &view, repo_id, &workdir, &file_rel, &old_text, &new_text,
+    );
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "markdown code block diff target activation",
+        |pane| {
+            pane.active_repo()
+                .and_then(|repo| repo.diff_state.diff_target.clone())
+                == Some(target.clone())
+        },
+        |pane| {
+            format!(
+                "active_repo={:?} diff_target={:?}",
+                pane.active_repo().map(|repo| repo.id),
+                pane.active_repo()
+                    .and_then(|repo| repo.diff_state.diff_target.clone()),
+            )
+        },
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.diff_view = DiffViewMode::Split;
+                pane.rendered_preview_modes
+                    .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Rendered);
+                pane.file_markdown_preview_cache_repo_id = Some(repo_id);
+                pane.file_markdown_preview_cache_rev = 1;
+                pane.file_markdown_preview_cache_target = Some(target.clone());
+                pane.file_markdown_preview = gitcomet_state::model::Loadable::Ready(Arc::new(
+                    crate::view::markdown_preview::build_markdown_diff_preview(
+                        &old_text, &new_text,
+                    )
+                    .expect("markdown diff preview with overflowing code block should parse"),
+                ));
+                pane.file_markdown_preview_inflight = None;
+                cx.notify();
+            });
+        });
+    });
+
+    for _ in 0..3 {
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+    }
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert!(pane.is_markdown_preview_active());
+        assert!(
+            pane.diff_split_right_scroll
+                .0
+                .borrow()
+                .base_handle
+                .max_offset()
+                .width
+                > px(0.0),
+            "expected split markdown preview to overflow horizontally for the 80-character code line"
+        );
+    });
+    assert!(
+        cx.debug_bounds("markdown_preview_code_block_hscrollbar")
+            .is_none(),
+        "expected overflowing markdown preview code blocks to rely on preview-level horizontal scrolling, not a local code-block scrollbar"
+    );
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup markdown code block diff workdir");
+}
+
+#[gpui::test]
+fn worktree_markdown_preview_short_code_block_shell_spans_preview_width(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    disable_view_poller_for_test(cx, &view);
+
+    let repo_id = gitcomet_state::model::RepoId(72);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_markdown_code_block_width",
+        std::process::id()
+    ));
+    let file_rel = std::path::PathBuf::from("docs/snippet.md");
+    let abs_path = workdir.join(&file_rel);
+    let source = "```sh\necho hi\n```\n";
+    let preview_lines = Arc::new(source.lines().map(ToOwned::to_owned).collect::<Vec<_>>());
+    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
+        path: file_rel.clone(),
+        area: gitcomet_core::domain::DiffArea::Unstaged,
+    };
+
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(abs_path.parent().expect("fixture parent dir"))
+        .expect("create markdown code block width workdir");
+    std::fs::write(&abs_path, source).expect("write markdown code block width fixture");
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            set_test_file_status(
+                &mut repo,
+                file_rel.clone(),
+                gitcomet_core::domain::FileStatusKind::Untracked,
+                gitcomet_core::domain::DiffArea::Unstaged,
+            );
+
+            let next_state = app_state_with_repo(repo, repo_id);
+
+            push_test_state(this, next_state, cx);
+        });
+    });
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "worktree markdown code block width target activation",
+        |pane| {
+            pane.active_repo()
+                .and_then(|repo| repo.diff_state.diff_target.clone())
+                == Some(target.clone())
+        },
+        |pane| {
+            format!(
+                "active_repo={:?} diff_target={:?}",
+                pane.active_repo().map(|repo| repo.id),
+                pane.active_repo()
+                    .and_then(|repo| repo.diff_state.diff_target.clone()),
+            )
+        },
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                set_ready_worktree_preview(
+                    pane,
+                    abs_path.clone(),
+                    Arc::clone(&preview_lines),
+                    source.len(),
+                    cx,
+                );
+                pane.rendered_preview_modes
+                    .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Rendered);
+                pane.worktree_markdown_preview_path = Some(abs_path.clone());
+                pane.worktree_markdown_preview_source_rev = pane.worktree_preview_content_rev;
+                pane.worktree_markdown_preview = gitcomet_state::model::Loadable::Ready(Arc::new(
+                    crate::view::markdown_preview::parse_markdown(source)
+                        .expect("short fenced markdown preview should parse"),
+                ));
+                pane.worktree_markdown_preview_inflight = None;
+                cx.notify();
+            });
+        });
+    });
+
+    for _ in 0..3 {
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+    }
+
+    let container_bounds = cx
+        .debug_bounds("worktree_markdown_preview_scroll_container")
+        .expect("expected worktree markdown preview container bounds");
+    let code_shell_bounds = cx
+        .debug_bounds("markdown_preview_code_shell_0")
+        .expect("expected code shell bounds for the first markdown preview row");
+    let width_ratio = code_shell_bounds.size.width / container_bounds.size.width;
+    assert!(
+        width_ratio >= 0.95,
+        "expected short fenced code block shell to span preview width; ratio={width_ratio}, shell={code_shell_bounds:?}, container={container_bounds:?}"
+    );
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup markdown code block width workdir");
+}
+
+#[gpui::test]
+fn worktree_markdown_preview_list_text_box_stays_shorter_than_row_shell(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    disable_view_poller_for_test(cx, &view);
+
+    let repo_id = gitcomet_state::model::RepoId(73);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_markdown_list_selection_box",
+        std::process::id()
+    ));
+    let file_rel = std::path::PathBuf::from("docs/list.md");
+    let abs_path = workdir.join(&file_rel);
+    let source = "- first item\n";
+    let preview_lines = Arc::new(source.lines().map(ToOwned::to_owned).collect::<Vec<_>>());
+    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
+        path: file_rel.clone(),
+        area: gitcomet_core::domain::DiffArea::Unstaged,
+    };
+
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(abs_path.parent().expect("fixture parent dir"))
+        .expect("create markdown list workdir");
+    std::fs::write(&abs_path, source).expect("write markdown list fixture");
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            set_test_file_status(
+                &mut repo,
+                file_rel.clone(),
+                gitcomet_core::domain::FileStatusKind::Untracked,
+                gitcomet_core::domain::DiffArea::Unstaged,
+            );
+
+            let next_state = app_state_with_repo(repo, repo_id);
+
+            push_test_state(this, next_state, cx);
+        });
+    });
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "worktree markdown list target activation",
+        |pane| {
+            pane.active_repo()
+                .and_then(|repo| repo.diff_state.diff_target.clone())
+                == Some(target.clone())
+        },
+        |pane| {
+            format!(
+                "active_repo={:?} diff_target={:?}",
+                pane.active_repo().map(|repo| repo.id),
+                pane.active_repo()
+                    .and_then(|repo| repo.diff_state.diff_target.clone()),
+            )
+        },
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                set_ready_worktree_preview(
+                    pane,
+                    abs_path.clone(),
+                    Arc::clone(&preview_lines),
+                    source.len(),
+                    cx,
+                );
+                pane.rendered_preview_modes
+                    .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Rendered);
+                pane.worktree_markdown_preview_path = Some(abs_path.clone());
+                pane.worktree_markdown_preview_source_rev = pane.worktree_preview_content_rev;
+                pane.worktree_markdown_preview = gitcomet_state::model::Loadable::Ready(Arc::new(
+                    crate::view::markdown_preview::parse_markdown(source)
+                        .expect("markdown list preview should parse"),
+                ));
+                pane.worktree_markdown_preview_inflight = None;
+                cx.notify();
+            });
+        });
+    });
+
+    for _ in 0..3 {
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+    }
+
+    let row_bounds = cx
+        .debug_bounds("markdown_preview_row_box_0")
+        .expect("expected list row shell bounds");
+    let text_bounds = cx
+        .debug_bounds("markdown_preview_text_box_0")
+        .expect("expected list row text box bounds");
+    assert!(
+        text_bounds.size.height < row_bounds.size.height,
+        "expected markdown list text box to stay shorter than its row shell so selection matches the text height; text={text_bounds:?}, row={row_bounds:?}"
+    );
+    assert!(
+        row_bounds.size.height <= text_bounds.size.height + px(12.0),
+        "expected markdown list rows to keep only a small vertical gap around the text; text={text_bounds:?}, row={row_bounds:?}"
+    );
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup markdown list fixture");
+}
+
+#[gpui::test]
 fn ctrl_f_from_conflict_markdown_preview_switches_back_to_text_search(
     cx: &mut gpui::TestAppContext,
 ) {

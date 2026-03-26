@@ -60,9 +60,15 @@ fn ensure_isolated_git_test_env() -> &'static TestGitEnv {
 }
 
 fn git_path_arg(path: &Path) -> String {
-    path.to_str()
-        .expect("test path should be unicode")
-        .to_string()
+    let path = path.to_str().expect("test path should be unicode");
+    #[cfg(windows)]
+    {
+        path.replace('\\', "/")
+    }
+    #[cfg(not(windows))]
+    {
+        path.to_string()
+    }
 }
 
 fn git_remote_url(path: &Path) -> String {

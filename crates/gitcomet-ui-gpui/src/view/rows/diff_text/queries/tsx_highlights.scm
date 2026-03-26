@@ -1,3 +1,8 @@
+; Derived from
+; gpui-component/crates/ui/src/highlighter/languages/typescript/highlights.scm
+; (Apache-2.0). Local additions preserve JSX and richer TypeScript diff
+; highlighting in GitComet.
+
 ; Variables
 (identifier) @variable
 
@@ -155,6 +160,14 @@
   (shorthand_property_identifier_pattern)
 ] @constant
   (#match? @constant "^_*[A-Z_][A-Z\\d_]*$"))
+
+((identifier) @variable.special
+  (#match? @variable.special "^(arguments|module|console|window|document)$")
+  (#is-not? local))
+
+((identifier) @function.special
+  (#eq? @function.special "require")
+  (#is-not? local))
 
 ; Literals
 (this) @variable.special

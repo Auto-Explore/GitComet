@@ -73,7 +73,7 @@ impl OpenRepoFixture {
 
         // History graph is the main "long history" transformation.
         let branch_heads = HashSet::default();
-        let graph = history_graph::compute_graph(&self.commits, self.theme, &branch_heads);
+        let graph = history_graph::compute_graph(&self.commits, self.theme, &branch_heads, None);
 
         let mut h = FxHasher::default();
         rows.len().hash(&mut h);
@@ -124,6 +124,8 @@ impl BranchSidebarFixture {
                 BranchSidebarRow::SectionHeader {
                     section,
                     top_border,
+                    collapsed,
+                    ..
                 } => {
                     match section {
                         BranchSection::Local => 0u8,
@@ -131,6 +133,7 @@ impl BranchSidebarFixture {
                     }
                     .hash(&mut h);
                     top_border.hash(&mut h);
+                    collapsed.hash(&mut h);
                 }
                 BranchSidebarRow::Placeholder { section, message } => {
                     match section {
@@ -140,10 +143,27 @@ impl BranchSidebarFixture {
                     .hash(&mut h);
                     message.len().hash(&mut h);
                 }
-                BranchSidebarRow::RemoteHeader { name } => name.len().hash(&mut h),
-                BranchSidebarRow::GroupHeader { label, depth } => {
+                BranchSidebarRow::RemoteHeader {
+                    name, collapsed, ..
+                } => {
+                    name.len().hash(&mut h);
+                    collapsed.hash(&mut h);
+                }
+                BranchSidebarRow::GroupHeader {
+                    label,
+                    section,
+                    depth,
+                    collapsed,
+                    ..
+                } => {
+                    match section {
+                        BranchSection::Local => 0u8,
+                        BranchSection::Remote => 1u8,
+                    }
+                    .hash(&mut h);
                     label.len().hash(&mut h);
                     depth.hash(&mut h);
+                    collapsed.hash(&mut h);
                 }
                 BranchSidebarRow::Branch {
                     label,
@@ -233,7 +253,7 @@ impl HistoryGraphFixture {
             }
         }
 
-        let graph = history_graph::compute_graph(&self.commits, self.theme, &branch_heads);
+        let graph = history_graph::compute_graph(&self.commits, self.theme, &branch_heads, None);
         let mut h = FxHasher::default();
         graph.len().hash(&mut h);
         graph

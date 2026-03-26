@@ -207,7 +207,6 @@ impl Render for TooltipHost {
                     .offset(point(px(0.0), px(0.0)))
                     .child(
                         div()
-                            .occlude()
                             .px_2()
                             .py_1()
                             .bg(tooltip_bg)

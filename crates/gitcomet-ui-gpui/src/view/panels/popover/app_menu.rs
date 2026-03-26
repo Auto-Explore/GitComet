@@ -76,13 +76,9 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
         .child(section_label("app_menu_app_section", "Application"))
         .child(
             entry("app_menu_settings", "Settings…".into(), false).on_click(cx.listener(
-                |this, _e: &ClickEvent, window, cx| {
-                    this.open_popover_at(
-                        PopoverKind::Settings,
-                        crate::view::chrome::window_top_left_corner(window),
-                        window,
-                        cx,
-                    );
+                |this, _e: &ClickEvent, _window, cx| {
+                    cx.defer(crate::view::open_settings_window);
+                    this.close_popover(cx);
                 },
             )),
         )

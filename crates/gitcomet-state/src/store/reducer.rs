@@ -6,8 +6,11 @@ mod external_and_history;
 mod repo_management;
 mod util;
 
-use crate::model::{AppState, AuthPromptState, AuthRetryOperation, PendingCommitRetry, RepoId};
+use crate::model::{
+    AppState, AuthPromptState, AuthRetryOperation, BannerErrorState, PendingCommitRetry, RepoId,
+};
 use crate::msg::{Effect, Msg, RepoCommandKind};
+use gitcomet_core::auth::StagedGitAuth;
 use gitcomet_core::services::GitRepository;
 use rustc_hash::FxHashMap as HashMap;
 use std::sync::Arc;
@@ -154,6 +157,14 @@ fn retry_msg_for_repo_command(repo_id: RepoId, command: RepoCommandKind) -> Opti
             remote,
             branch,
         },
+        RepoCommandKind::SetUpstreamBranch { branch, upstream } => Msg::SetUpstreamBranch {
+            repo_id,
+            branch,
+            upstream,
+        },
+        RepoCommandKind::UnsetUpstreamBranch { branch } => {
+            Msg::UnsetUpstreamBranch { repo_id, branch }
+        }
         RepoCommandKind::DeleteRemoteBranch { remote, branch } => Msg::DeleteRemoteBranch {
             repo_id,
             remote,
@@ -228,6 +239,34 @@ fn retry_msg_for_repo_command(repo_id: RepoId, command: RepoCommandKind) -> Opti
     })
 }
 
+fn attach_git_auth_to_effects(mut effects: Vec<Effect>, auth: StagedGitAuth) -> Vec<Effect> {
+    let Some(first) = effects.first_mut() else {
+        return effects;
+    };
+
+    match first {
+        Effect::CloneRepo { auth: slot, .. }
+        | Effect::AddSubmodule { auth: slot, .. }
+        | Effect::UpdateSubmodules { auth: slot, .. }
+        | Effect::Commit { auth: slot, .. }
+        | Effect::CommitAmend { auth: slot, .. }
+        | Effect::FetchAll { auth: slot, .. }
+        | Effect::Pull { auth: slot, .. }
+        | Effect::PullBranch { auth: slot, .. }
+        | Effect::Push { auth: slot, .. }
+        | Effect::ForcePush { auth: slot, .. }
+        | Effect::PushSetUpstream { auth: slot, .. }
+        | Effect::DeleteRemoteBranch { auth: slot, .. }
+        | Effect::PushTag { auth: slot, .. }
+        | Effect::DeleteRemoteTag { auth: slot, .. } => {
+            *slot = Some(auth);
+        }
+        _ => {}
+    }
+
+    effects
+}
+
 fn submit_auth_prompt(
     repos: &mut HashMap<RepoId, Arc<dyn GitRepository>>,
     id_alloc: &AtomicU64,
@@ -242,25 +281,28 @@ fn submit_auth_prompt(
     let username = username
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty());
-    if let Err(err) = util::stage_git_auth_env(prompt.kind, username.as_deref(), &secret) {
-        state.auth_prompt = Some(prompt);
-        return if let Some(repo_state) = state
-            .active_repo
-            .and_then(|repo_id| state.repos.iter_mut().find(|r| r.id == repo_id))
-        {
-            util::push_diagnostic(
-                repo_state,
-                crate::model::DiagnosticKind::Error,
-                util::format_error_for_user(&err),
-            );
-            Vec::new()
-        } else {
-            Vec::new()
-        };
-    }
+    let auth = match util::prepare_staged_git_auth(prompt.kind, username.as_deref(), &secret) {
+        Ok(auth) => auth,
+        Err(err) => {
+            state.auth_prompt = Some(prompt);
+            return if let Some(repo_state) = state
+                .active_repo
+                .and_then(|repo_id| state.repos.iter_mut().find(|r| r.id == repo_id))
+            {
+                util::push_diagnostic(
+                    repo_state,
+                    crate::model::DiagnosticKind::Error,
+                    util::format_error_for_user(&err),
+                );
+                Vec::new()
+            } else {
+                Vec::new()
+            };
+        }
+    };
 
     match retry_msg_for_auth_operation(prompt.operation) {
-        Some(msg) => reduce(repos, id_alloc, state, msg),
+        Some(msg) => attach_git_auth_to_effects(reduce(repos, id_alloc, state, msg), auth),
         None => Vec::new(),
     }
 }
@@ -278,10 +320,21 @@ pub(super) fn reduce(
             active_repo,
         } => repo_management::restore_session(repos, id_alloc, state, open_repos, active_repo),
         Msg::CloseRepo { repo_id } => repo_management::close_repo(repos, state, repo_id),
+        Msg::ShowBannerError { repo_id, message } => {
+            if !message.trim().is_empty() {
+                state.banner_error = Some(BannerErrorState { repo_id, message });
+            }
+            Vec::new()
+        }
+        Msg::DismissBannerError => {
+            state.banner_error = None;
+            Vec::new()
+        }
         Msg::DismissRepoError { repo_id } => {
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
                 repo_state.last_error = None;
             }
+            util::clear_banner_error_for_repo(state, repo_id);
             Vec::new()
         }
         Msg::SubmitAuthPrompt { username, secret } => {
@@ -398,16 +451,24 @@ pub(super) fn reduce(
             begin_local_action(state, repo_id);
             actions_emit_effects::revert_commit(repo_id, commit_id)
         }
-        Msg::CreateBranch { repo_id, name } => {
+        Msg::CreateBranch {
+            repo_id,
+            name,
+            target,
+        } => {
             begin_local_action(state, repo_id);
-            actions_emit_effects::create_branch(repo_id, name)
+            actions_emit_effects::create_branch(repo_id, name, target)
         }
-        Msg::CreateBranchAndCheckout { repo_id, name } => {
+        Msg::CreateBranchAndCheckout {
+            repo_id,
+            name,
+            target,
+        } => {
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
                 repo_state.set_detached_head_commit(None);
             }
             begin_local_action(state, repo_id);
-            actions_emit_effects::create_branch_and_checkout(repo_id, name)
+            actions_emit_effects::create_branch_and_checkout(repo_id, name, target)
         }
         Msg::DeleteBranch { repo_id, name } => {
             begin_local_action(state, repo_id);
@@ -570,6 +631,18 @@ pub(super) fn reduce(
             remote,
             branch,
         } => actions_emit_effects::push_set_upstream(repos, state, repo_id, remote, branch),
+        Msg::SetUpstreamBranch {
+            repo_id,
+            branch,
+            upstream,
+        } => {
+            begin_local_action(state, repo_id);
+            actions_emit_effects::set_upstream_branch(repo_id, branch, upstream)
+        }
+        Msg::UnsetUpstreamBranch { repo_id, branch } => {
+            begin_local_action(state, repo_id);
+            actions_emit_effects::unset_upstream_branch(repo_id, branch)
+        }
         Msg::DeleteRemoteBranch {
             repo_id,
             remote,

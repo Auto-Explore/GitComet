@@ -12,6 +12,22 @@ fn history_columns_available_width(window_width: Pixels) -> Pixels {
     available.max(px(0.0))
 }
 
+fn graph_branch_heads<'a>(
+    history_scope: LogScope,
+    branches: &'a [Branch],
+    remote_branches: &'a [RemoteBranch],
+) -> HashSet<&'a str> {
+    if history_scope == LogScope::CurrentBranch {
+        HashSet::default()
+    } else {
+        branches
+            .iter()
+            .map(|b| b.target.as_ref())
+            .chain(remote_branches.iter().map(|b| b.target.as_ref()))
+            .collect()
+    }
+}
+
 fn history_column_static_bounds(handle: HistoryColResizeHandle) -> (Pixels, Pixels) {
     match handle {
         HistoryColResizeHandle::Branch => {
@@ -812,22 +828,6 @@ impl HistoryView {
                         .filter_map(|ix| page.commits.get(*ix).cloned())
                         .collect::<Vec<_>>();
 
-                    let branch_heads: HashSet<&str> = branches
-                        .iter()
-                        .map(|b| b.target.as_ref())
-                        .chain(remote_branches.iter().map(|b| b.target.as_ref()))
-                        .collect();
-                    let graph_rows: Vec<Arc<history_graph::GraphRow>> =
-                        history_graph::compute_graph(&visible_commits, theme, &branch_heads)
-                            .into_iter()
-                            .map(Arc::new)
-                            .collect();
-                    let max_lanes = graph_rows
-                        .iter()
-                        .map(|r| r.lanes_now.len().max(r.lanes_next.len()))
-                        .max()
-                        .unwrap_or(1);
-
                     let head_target = match head_branch.as_deref() {
                         Some("HEAD") => request_for_build
                             .detached_head_commit
@@ -844,6 +844,27 @@ impl HistoryView {
                             .map(|b| b.target.as_ref()),
                         None => None,
                     };
+
+                    let branch_heads = graph_branch_heads(
+                        request_for_build.history_scope,
+                        branches.as_ref(),
+                        remote_branches.as_ref(),
+                    );
+                    let graph_rows: Vec<Arc<history_graph::GraphRow>> =
+                        history_graph::compute_graph(
+                            &visible_commits,
+                            theme,
+                            &branch_heads,
+                            head_target,
+                        )
+                        .into_iter()
+                        .map(Arc::new)
+                        .collect();
+                    let max_lanes = graph_rows
+                        .iter()
+                        .map(|r| r.lanes_now.len().max(r.lanes_next.len()))
+                        .max()
+                        .unwrap_or(1);
 
                     let mut branch_names_by_target: HashMap<&str, Vec<String>> =
                         HashMap::with_capacity_and_hasher(
@@ -1075,6 +1096,23 @@ mod tests {
         }
     }
 
+    fn branch(name: &str, target: &str) -> Branch {
+        Branch {
+            name: name.into(),
+            target: CommitId(target.into()),
+            upstream: None,
+            divergence: None,
+        }
+    }
+
+    fn remote_branch(remote: &str, name: &str, target: &str) -> RemoteBranch {
+        RemoteBranch {
+            remote: remote.into(),
+            name: name.into(),
+            target: CommitId(target.into()),
+        }
+    }
+
     #[test]
     fn stash_tip_detection_requires_stash_like_message_and_multiple_parents() {
         assert!(is_probable_stash_tip(&commit(
@@ -1110,6 +1148,22 @@ mod tests {
             Some("keep this")
         );
         assert_eq!(stash_summary_from_log_summary("no delimiter"), None);
+    }
+
+    #[test]
+    fn graph_branch_heads_are_hidden_for_current_branch_scope() {
+        let branches = vec![branch("main", "local-head")];
+        let remote_branches = vec![remote_branch("origin", "feature/x", "remote-head")];
+
+        let current_branch_heads =
+            graph_branch_heads(LogScope::CurrentBranch, &branches, &remote_branches);
+        assert!(current_branch_heads.is_empty());
+
+        let all_branch_heads =
+            graph_branch_heads(LogScope::AllBranches, &branches, &remote_branches);
+        assert_eq!(all_branch_heads.len(), 2);
+        assert!(all_branch_heads.contains("local-head"));
+        assert!(all_branch_heads.contains("remote-head"));
     }
 
     #[test]

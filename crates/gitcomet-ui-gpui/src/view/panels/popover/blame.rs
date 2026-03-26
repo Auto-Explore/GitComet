@@ -74,16 +74,20 @@ pub(super) fn panel(
             )
             .h(px(360.0))
             .track_scroll(this.blame_scroll.clone());
+            let scrollbar_gutter = components::Scrollbar::visible_gutter(
+                this.blame_scroll.clone(),
+                components::ScrollbarAxis::Vertical,
+            );
 
             div()
                 .relative()
-                .child(list)
+                .child(div().h(px(360.0)).pr(scrollbar_gutter).child(list))
                 .child(
                     components::Scrollbar::new(
                         "blame_popover_scrollbar",
                         this.blame_scroll.clone(),
                     )
-                        .render(theme),
+                    .render(theme),
                 )
                 .into_any_element()
         }
@@ -105,6 +109,7 @@ fn render_blame_popover_rows(
     _window: &mut Window,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> Vec<AnyElement> {
+    let editor_font_family = crate::font_preferences::current_editor_font_family(cx);
     let Some((repo_id, path)) = this.popover.as_ref().and_then(|k| match k {
         PopoverKind::Blame { repo_id, path, .. } => Some((*repo_id, path.clone())),
         _ => None,
@@ -173,7 +178,7 @@ fn render_blame_popover_rows(
                         .flex_1()
                         .min_w(px(0.0))
                         .text_xs()
-                        .font_family("monospace")
+                        .font_family(editor_font_family.clone())
                         .line_clamp(1)
                         .whitespace_nowrap()
                         .overflow_hidden()

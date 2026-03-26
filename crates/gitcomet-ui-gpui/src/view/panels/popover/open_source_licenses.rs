@@ -1,41 +1,8 @@
 use super::*;
-use std::sync::OnceLock;
-
-#[derive(Clone, Copy, Debug)]
-struct OpenSourceLicenseRow {
-    crate_name: &'static str,
-    version: &'static str,
-    license: &'static str,
-}
-
-fn open_source_license_rows() -> &'static [OpenSourceLicenseRow] {
-    static ROWS: OnceLock<Vec<OpenSourceLicenseRow>> = OnceLock::new();
-    ROWS.get_or_init(|| {
-        include_str!("../../../../assets/open_source_licenses.tsv")
-            .lines()
-            .filter_map(|line| {
-                let line = line.trim();
-                if line.is_empty() || line.starts_with('#') {
-                    return None;
-                }
-
-                let mut fields = line.splitn(3, '\t');
-                let crate_name = fields.next()?;
-                let version = fields.next()?;
-                let license = fields.next()?;
-                Some(OpenSourceLicenseRow {
-                    crate_name,
-                    version,
-                    license,
-                })
-            })
-            .collect()
-    })
-}
 
 pub(super) fn panel(this: &mut PopoverHost, _cx: &mut gpui::Context<PopoverHost>) -> gpui::Div {
     let theme = this.theme;
-    let rows = open_source_license_rows();
+    let rows = crate::view::open_source_licenses_data::open_source_license_rows();
 
     let mut rows_content = div()
         .id("open_source_licenses_list")
@@ -105,11 +72,16 @@ pub(super) fn panel(this: &mut PopoverHost, _cx: &mut gpui::Context<PopoverHost>
         }
     }
 
+    let scrollbar_gutter = components::Scrollbar::visible_gutter(
+        this.open_source_licenses_scroll.clone(),
+        components::ScrollbarAxis::Vertical,
+    );
     let rows_scroll_surface = div()
         .id("open_source_licenses_scroll_surface")
         .relative()
         .w_full()
         .max_h(px(420.0))
+        .pr(scrollbar_gutter)
         .overflow_y_scroll()
         .track_scroll(&this.open_source_licenses_scroll)
         .child(rows_content);

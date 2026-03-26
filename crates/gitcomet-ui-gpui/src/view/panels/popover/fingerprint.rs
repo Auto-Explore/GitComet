@@ -25,6 +25,12 @@ pub(super) fn notify_fingerprint(state: &AppState, popover: &PopoverKind) -> u64
                 }
             }
         },
+        PopoverKind::RecentRepositoryPicker => {
+            state.active_repo.hash(&mut hasher);
+            for path in session::load().recent_repos {
+                path.hash(&mut hasher);
+            }
+        }
         PopoverKind::RepoPicker => {
             state.active_repo.hash(&mut hasher);
             state.repos.len().hash(&mut hasher);
@@ -39,6 +45,7 @@ pub(super) fn notify_fingerprint(state: &AppState, popover: &PopoverKind) -> u64
         | PopoverKind::SettingsThemeMenu
         | PopoverKind::SettingsDateFormatMenu
         | PopoverKind::SettingsTimezoneMenu
+        | PopoverKind::ChangeTrackingSettings
         | PopoverKind::OpenSourceLicenses
         | PopoverKind::AppMenu => {
             // Mostly local UI state; depend only on whether a repo is active/open.
@@ -62,11 +69,13 @@ pub(super) fn notify_fingerprint(state: &AppState, popover: &PopoverKind) -> u64
 fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'a RepoState> {
     let repo_id = match popover {
         PopoverKind::RepoPicker
+        | PopoverKind::RecentRepositoryPicker
         | PopoverKind::CloneRepo
         | PopoverKind::Settings
         | PopoverKind::SettingsThemeMenu
         | PopoverKind::SettingsDateFormatMenu
         | PopoverKind::SettingsTimezoneMenu
+        | PopoverKind::ChangeTrackingSettings
         | PopoverKind::OpenSourceLicenses => None,
 
         // Popovers that implicitly use the currently active repo.
@@ -83,7 +92,8 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::ConflictResolverOutputMenu { .. } => state.active_repo,
 
         // Popovers that carry an explicit repo id.
-        PopoverKind::ResetPrompt { repo_id, .. }
+        PopoverKind::CreateBranchFromRefPrompt { repo_id, .. }
+        | PopoverKind::ResetPrompt { repo_id, .. }
         | PopoverKind::CheckoutRemoteBranchPrompt { repo_id, .. }
         | PopoverKind::StashDropConfirm { repo_id, .. }
         | PopoverKind::StashMenu { repo_id, .. }
@@ -118,6 +128,7 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
     match popover {
         PopoverKind::BranchPicker
         | PopoverKind::CreateBranch
+        | PopoverKind::CreateBranchFromRefPrompt { .. }
         | PopoverKind::BranchMenu { .. }
         | PopoverKind::BranchSectionMenu { .. }
         | PopoverKind::ForceDeleteBranchConfirm { .. }
@@ -197,6 +208,7 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         | PopoverKind::PullReconcilePrompt { .. }
         | PopoverKind::ForcePushConfirm { .. } => {
             repo.head_branch_rev.hash(hasher);
+            repo.branches_rev.hash(hasher);
             repo.remotes_rev.hash(hasher);
             repo.remote_branches_rev.hash(hasher);
         }
@@ -218,6 +230,7 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         | PopoverKind::CommitFileMenu { .. }
         | PopoverKind::StatusFileMenu { .. }
         | PopoverKind::HistoryColumnSettings
+        | PopoverKind::ChangeTrackingSettings
         | PopoverKind::ConflictResolverInputRowMenu { .. }
         | PopoverKind::ConflictResolverChunkMenu { .. }
         | PopoverKind::ConflictResolverOutputMenu { .. }
@@ -228,6 +241,7 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         | PopoverKind::SettingsTimezoneMenu
         | PopoverKind::OpenSourceLicenses
         | PopoverKind::RepoPicker
+        | PopoverKind::RecentRepositoryPicker
         | PopoverKind::CloneRepo => {}
     }
 }
@@ -235,8 +249,14 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
 fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
     match kind {
         PopoverKind::RepoPicker => 0u8.hash(hasher),
+        PopoverKind::RecentRepositoryPicker => 65u8.hash(hasher),
         PopoverKind::BranchPicker => 1u8.hash(hasher),
         PopoverKind::CreateBranch => 2u8.hash(hasher),
+        PopoverKind::CreateBranchFromRefPrompt { repo_id, target } => {
+            66u8.hash(hasher);
+            repo_id.hash(hasher);
+            target.hash(hasher);
+        }
         PopoverKind::CheckoutRemoteBranchPrompt {
             repo_id,
             remote,
@@ -273,6 +293,7 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
         PopoverKind::SettingsThemeMenu => 62u8.hash(hasher),
         PopoverKind::SettingsDateFormatMenu => 63u8.hash(hasher),
         PopoverKind::SettingsTimezoneMenu => 64u8.hash(hasher),
+        PopoverKind::ChangeTrackingSettings => 66u8.hash(hasher),
         PopoverKind::OpenSourceLicenses => 60u8.hash(hasher),
 
         PopoverKind::ResetPrompt {
@@ -588,11 +609,48 @@ fn hash_reset_mode<H: Hasher>(mode: ResetMode, hasher: &mut H) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gitcomet_core::domain::{Branch, CommitId, Upstream};
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+    use std::sync::Arc;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    const SESSION_FILE_ENV: &str = "GITCOMET_SESSION_FILE";
 
     fn hash_kind(kind: PopoverKind) -> u64 {
         let mut hasher = FxHasher::default();
         hash_popover_kind(&kind, &mut hasher);
         hasher.finish()
+    }
+
+    fn unique_temp_dir(label: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "gitcomet-ui-popover-fingerprint-{label}-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).expect("create temp dir");
+        dir
+    }
+
+    fn run_subtest_with_session_env(filter: &str, session_file: &Path) {
+        let current_exe = std::env::current_exe().expect("locate current test binary");
+        let output = Command::new(current_exe)
+            .arg(filter)
+            .arg("--nocapture")
+            .env(SESSION_FILE_ENV, session_file)
+            .output()
+            .expect("spawn subtest process");
+        assert!(
+            output.status.success(),
+            "subtest {filter} failed:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     #[test]
@@ -633,5 +691,83 @@ mod tests {
         let resolved = repo_for_popover(&state, &popover).expect("expected repo lookup to work");
 
         assert_eq!(resolved.id, repo_id);
+    }
+
+    #[test]
+    fn pull_picker_fingerprint_changes_when_branches_rev_changes() {
+        let repo_id = RepoId(9);
+        let mut repo = RepoState::new_opening(
+            repo_id,
+            gitcomet_core::domain::RepoSpec {
+                workdir: std::env::temp_dir().join("gitcomet_pull_picker_fingerprint"),
+            },
+        );
+        repo.head_branch = Loadable::Ready("main".to_string());
+        repo.branches = Loadable::Ready(Arc::new(vec![Branch {
+            name: "main".to_string(),
+            target: CommitId("deadbeef".into()),
+            upstream: Some(Upstream {
+                remote: "origin".to_string(),
+                branch: "main".to_string(),
+            }),
+            divergence: None,
+        }]));
+
+        let mut state = AppState::default();
+        state.active_repo = Some(repo_id);
+        state.repos.push(repo);
+
+        let before = notify_fingerprint(&state, &PopoverKind::PullPicker);
+        state.repos[0].branches_rev = state.repos[0].branches_rev.wrapping_add(1);
+        let after = notify_fingerprint(&state, &PopoverKind::PullPicker);
+
+        assert_ne!(before, after);
+    }
+
+    #[test]
+    fn recent_repository_picker_fingerprint_changes_with_active_repo() {
+        let base = AppState::default();
+        let with_active_repo = AppState {
+            active_repo: Some(RepoId(99)),
+            ..Default::default()
+        };
+
+        let before = notify_fingerprint(&base, &PopoverKind::RecentRepositoryPicker);
+        let after = notify_fingerprint(&with_active_repo, &PopoverKind::RecentRepositoryPicker);
+
+        assert_ne!(before, after);
+    }
+
+    #[test]
+    fn recent_repository_picker_fingerprint_changes_with_recent_repos_wrapper() {
+        if std::env::var_os(SESSION_FILE_ENV).is_some() {
+            return;
+        }
+
+        let dir = unique_temp_dir("recent-repo-wrapper");
+        let session_file = dir.join("session.json");
+        session::persist_recent_repo_to_path(Path::new("/tmp/repo-a"), &session_file)
+            .expect("seed recent repo session");
+
+        run_subtest_with_session_env(
+            "recent_repository_picker_fingerprint_changes_with_recent_repos_subprocess",
+            &session_file,
+        );
+    }
+
+    #[test]
+    fn recent_repository_picker_fingerprint_changes_with_recent_repos_subprocess() {
+        if std::env::var_os(SESSION_FILE_ENV).is_none() {
+            return;
+        }
+
+        let before = notify_fingerprint(&AppState::default(), &PopoverKind::RecentRepositoryPicker);
+        let session_file =
+            PathBuf::from(std::env::var_os(SESSION_FILE_ENV).expect("session file env"));
+        session::persist_recent_repo_to_path(Path::new("/tmp/repo-b"), &session_file)
+            .expect("append recent repo");
+        let after = notify_fingerprint(&AppState::default(), &PopoverKind::RecentRepositoryPicker);
+
+        assert_ne!(before, after);
     }
 }

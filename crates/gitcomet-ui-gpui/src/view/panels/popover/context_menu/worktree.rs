@@ -6,7 +6,7 @@ pub(super) fn model(repo_id: RepoId, path: &std::path::Path) -> ContextMenuModel
     items.push(ContextMenuItem::Separator);
     items.push(ContextMenuItem::Entry {
         label: "Open in new tab".into(),
-        icon: Some("↗".into()),
+        icon: Some("icons/open_external.svg".into()),
         shortcut: None,
         disabled: false,
         action: Box::new(ContextMenuAction::OpenRepo {
@@ -16,7 +16,7 @@ pub(super) fn model(repo_id: RepoId, path: &std::path::Path) -> ContextMenuModel
     items.push(ContextMenuItem::Separator);
     items.push(ContextMenuItem::Entry {
         label: "Remove…".into(),
-        icon: Some("🗑".into()),
+        icon: Some("icons/trash.svg".into()),
         shortcut: None,
         disabled: false,
         action: Box::new(ContextMenuAction::OpenPopover {

@@ -17,7 +17,7 @@ Usage: scripts/build-apt-repo.sh \
   [--repo-url URL]
 
 Builds and signs a simple APT repository tree rooted at PATH.
-Repeated --deb arguments are allowed.
+Repeated --deb and --architecture arguments are allowed.
 USAGE
 }
 
@@ -32,7 +32,6 @@ require_tool() {
 repo_dir=""
 distribution="stable"
 component="main"
-architecture="amd64"
 origin="GitComet"
 label="GitComet"
 description="GitComet APT repository"
@@ -40,6 +39,19 @@ signing_key=""
 gpg_passphrase=""
 repo_url=""
 declare -a deb_files=()
+declare -a architectures=()
+
+add_architectures() {
+  local raw="${1:-}"
+  raw="${raw//,/ }"
+
+  for arch in $raw; do
+    arch="$(echo "$arch" | tr -d '[:space:]')"
+    if [[ -n "$arch" ]]; then
+      architectures+=("$arch")
+    fi
+  done
+}
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -60,7 +72,7 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --architecture)
-      architecture="${2:-}"
+      add_architectures "${2:-}"
       shift 2
       ;;
     --origin)
@@ -105,6 +117,21 @@ if [[ -z "$repo_dir" || -z "$signing_key" || ${#deb_files[@]} -eq 0 ]]; then
   exit 2
 fi
 
+if [[ ${#architectures[@]} -eq 0 ]]; then
+  architectures=("amd64")
+fi
+
+declare -A seen_architectures=()
+deduped_architectures=()
+for architecture in "${architectures[@]}"; do
+  if [[ -n "${seen_architectures[$architecture]:-}" ]]; then
+    continue
+  fi
+  seen_architectures["$architecture"]=1
+  deduped_architectures+=("$architecture")
+done
+architectures=("${deduped_architectures[@]}")
+
 if ! [[ "$distribution" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
   echo "Invalid --distribution '$distribution'." >&2
   exit 2
@@ -115,10 +142,12 @@ if ! [[ "$component" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
   exit 2
 fi
 
-if ! [[ "$architecture" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
-  echo "Invalid --architecture '$architecture'." >&2
-  exit 2
-fi
+for architecture in "${architectures[@]}"; do
+  if ! [[ "$architecture" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+    echo "Invalid --architecture '$architecture'." >&2
+    exit 2
+  fi
+done
 
 require_tool dpkg-deb
 require_tool dpkg-scanpackages
@@ -131,6 +160,9 @@ require_tool sha512sum
 mkdir -p "$repo_dir"
 repo_dir="$(cd "$repo_dir" && pwd)"
 repo_url="${repo_url%/}"
+architectures_release="$(printf '%s ' "${architectures[@]}")"
+architectures_release="${architectures_release% }"
+architectures_csv="$(IFS=,; echo "${architectures[*]}")"
 
 for deb in "${deb_files[@]}"; do
   if [[ ! -f "$deb" ]]; then
@@ -143,9 +175,19 @@ for deb in "${deb_files[@]}"; do
   package_name="$(dpkg-deb -f "$deb" Package)"
   package_arch="$(dpkg-deb -f "$deb" Architecture)"
 
-  if [[ "$package_arch" != "$architecture" && "$package_arch" != "all" ]]; then
-    echo "Package '$deb' has architecture '$package_arch', expected '$architecture' or 'all'." >&2
-    exit 1
+  if [[ "$package_arch" != "all" ]]; then
+    package_arch_supported=0
+    for architecture in "${architectures[@]}"; do
+      if [[ "$package_arch" == "$architecture" ]]; then
+        package_arch_supported=1
+        break
+      fi
+    done
+
+    if [[ "$package_arch_supported" -ne 1 ]]; then
+      echo "Package '$deb' has architecture '$package_arch', expected one of '${architectures_csv}' or 'all'." >&2
+      exit 1
+    fi
   fi
 
   package_letter="$(printf '%s' "$package_name" | cut -c1 | tr '[:upper:]' '[:lower:]')"
@@ -159,22 +201,24 @@ for deb in "${deb_files[@]}"; do
 done
 
 dist_dir="${repo_dir}/dists/${distribution}"
-binary_dir="${dist_dir}/${component}/binary-${architecture}"
 
 rm -rf "$dist_dir"
-mkdir -p "$binary_dir"
+for architecture in "${architectures[@]}"; do
+  binary_dir="${dist_dir}/${component}/binary-${architecture}"
+  mkdir -p "$binary_dir"
 
-(
-  cd "$repo_dir"
-  dpkg-scanpackages --multiversion pool /dev/null > "${binary_dir#${repo_dir}/}/Packages"
-)
+  (
+    cd "$repo_dir"
+    dpkg-scanpackages --multiversion -a "$architecture" pool /dev/null > "${binary_dir#${repo_dir}/}/Packages"
+  )
 
-if ! grep -q '^Package:' "${binary_dir}/Packages"; then
-  echo "Generated Packages index is empty." >&2
-  exit 1
-fi
+  if ! grep -q '^Package:' "${binary_dir}/Packages"; then
+    echo "Generated Packages index is empty for architecture '$architecture'." >&2
+    exit 1
+  fi
 
-gzip -9 -n -c "${binary_dir}/Packages" > "${binary_dir}/Packages.gz"
+  gzip -9 -n -c "${binary_dir}/Packages" > "${binary_dir}/Packages.gz"
+done
 
 release_file="${dist_dir}/Release"
 
@@ -199,19 +243,19 @@ write_release_checksums() {
       -printf '%P\n' \
       | LC_ALL=C sort
   )
-  echo ""
 }
 
+# `Release` is parsed as a single deb822 paragraph. Blank lines would split
+# the checksum stanzas into separate paragraphs and make APT ignore them.
 {
   echo "Origin: ${origin}"
   echo "Label: ${label}"
   echo "Suite: ${distribution}"
   echo "Codename: ${distribution}"
   echo "Date: $(LC_ALL=C date -Ru)"
-  echo "Architectures: ${architecture}"
+  echo "Architectures: ${architectures_release}"
   echo "Components: ${component}"
   echo "Description: ${description}"
-  echo ""
   write_release_checksums "MD5Sum" md5sum
   write_release_checksums "SHA256" sha256sum
   write_release_checksums "SHA512" sha512sum
@@ -220,12 +264,11 @@ write_release_checksums() {
 run_gpg() {
   local -a args
   args=(--batch --yes --pinentry-mode loopback --local-user "$signing_key")
-  args+=("$@")
 
   if [[ -n "$gpg_passphrase" ]]; then
-    gpg "${args[@]}" --passphrase-fd 0 <<<"$gpg_passphrase"
+    gpg "${args[@]}" --passphrase-fd 0 "$@" <<<"$gpg_passphrase"
   else
-    gpg "${args[@]}"
+    gpg "${args[@]}" "$@"
   fi
 }
 
@@ -241,12 +284,12 @@ Types: deb
 URIs: ${repo_url}
 Suites: ${distribution}
 Components: ${component}
-Architectures: ${architecture}
+Architectures: ${architectures_release}
 Signed-By: /usr/share/keyrings/gitcomet-archive-keyring.gpg
 EOF
 
   cat > "${repo_dir}/gitcomet.list" <<EOF
-deb [arch=${architecture} signed-by=/usr/share/keyrings/gitcomet-archive-keyring.gpg] ${repo_url} ${distribution} ${component}
+deb [arch=${architectures_csv} signed-by=/usr/share/keyrings/gitcomet-archive-keyring.gpg] ${repo_url} ${distribution} ${component}
 EOF
 
   cat > "${repo_dir}/README.txt" <<EOF
@@ -262,6 +305,8 @@ fi
 
 echo "Built APT repository:"
 echo "  ${repo_dir}"
-echo "  ${binary_dir}/Packages"
+for architecture in "${architectures[@]}"; do
+  echo "  ${dist_dir}/${component}/binary-${architecture}/Packages"
+done
 echo "  ${dist_dir}/InRelease"
 echo "  ${repo_dir}/gitcomet-archive-keyring.gpg"

@@ -1,10 +1,17 @@
 use super::*;
 
+fn hotkey_hint(theme: AppTheme, debug_selector: &'static str, label: &'static str) -> gpui::Div {
+    div()
+        .debug_selector(move || debug_selector.to_string())
+        .font_family("monospace")
+        .text_xs()
+        .text_color(theme.colors.text_muted)
+        .child(label)
+}
+
 pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>) -> gpui::Div {
     let theme = this.theme;
-    let is_empty = this
-        .stash_message_input
-        .read_with(cx, |i, _| i.text().trim().is_empty());
+    let can_stash = this.can_submit_stash(cx);
 
     div()
         .flex()
@@ -36,31 +43,19 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                 .justify_between()
                 .child(
                     components::Button::new("stash_cancel", "Cancel")
+                        .separated_end_slot(hotkey_hint(theme, "stash_cancel_hint", "Esc"))
                         .style(components::ButtonStyle::Outlined)
-                        .on_click(theme, cx, |this, _e, _w, cx| {
-                            this.popover = None;
-                            this.popover_anchor = None;
-                            cx.notify();
+                        .on_click(theme, cx, |this, _e, window, cx| {
+                            this.dismiss_inline_popover(window, cx);
                         }),
                 )
                 .child(
                     components::Button::new("stash_go", "Stash")
+                        .separated_end_slot(hotkey_hint(theme, "stash_go_hint", "Enter"))
                         .style(components::ButtonStyle::Filled)
-                        .disabled(is_empty)
-                        .on_click(theme, cx, |this, _e, _w, cx| {
-                            let message = this
-                                .stash_message_input
-                                .read_with(cx, |i, _| i.text().trim().to_string());
-                            if let Some(repo_id) = this.active_repo_id() {
-                                this.store.dispatch(Msg::Stash {
-                                    repo_id,
-                                    message,
-                                    include_untracked: true,
-                                });
-                            }
-                            this.popover = None;
-                            this.popover_anchor = None;
-                            cx.notify();
+                        .disabled(!can_stash)
+                        .on_click(theme, cx, |this, _e, window, cx| {
+                            this.submit_stash(window, cx);
                         }),
                 ),
         )

@@ -1,11 +1,12 @@
 [package]
 name = "gitcomet-ui-gpui"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+build = "build.rs"
 
 [lints]
 workspace = true
@@ -30,14 +31,17 @@ syntax-shell = ["dep:tree-sitter-bash"]
 syntax-xml = ["dep:tree-sitter-xml"]
 
 [dependencies]
+fontdb = { workspace = true }
 gitcomet-core = { workspace = true }
 gitcomet-state = { workspace = true }
 gpui = { workspace = true }
+image = { workspace = true }
 lru = { workspace = true }
 pulldown-cmark = { workspace = true }
 resvg = { workspace = true }
 rustc-hash = { workspace = true }
 semver = { workspace = true }
+schemars = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 smol = { workspace = true }
@@ -55,15 +59,34 @@ tree-sitter-typescript = { workspace = true, optional = true }
 tree-sitter-xml = { workspace = true, optional = true }
 tree-sitter-yaml = { workspace = true, optional = true }
 unicode-segmentation = { workspace = true }
+url = { workspace = true }
 zed-reqwest = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 metal = "0.33"
 
+[target.'cfg(target_os = "windows")'.dependencies]
+gitcomet-win32-window-utils = { path = "../win32-window-utils" }
+raw-window-handle = { workspace = true }
+
 [dev-dependencies]
 gitcomet-core = { workspace = true, features = ["test-support"] }
 gpui = { workspace = true, features = ["test-support"] }
 criterion = { workspace = true }
+tree-sitter-bash = { workspace = true }
+tree-sitter-css = { workspace = true }
+tree-sitter-go = { workspace = true }
+tree-sitter-html = { workspace = true }
+tree-sitter-javascript = { workspace = true }
+tree-sitter-json = { workspace = true }
+tree-sitter-python = { workspace = true }
+tree-sitter-rust = { workspace = true }
+tree-sitter-typescript = { workspace = true }
+tree-sitter-xml = { workspace = true }
+tree-sitter-yaml = { workspace = true }
+
+[build-dependencies]
+resvg = { workspace = true }
 
 [[bench]]
 name = "performance"

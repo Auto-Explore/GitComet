@@ -6,7 +6,7 @@ usage() {
 Usage: scripts/install-linux.sh [--release|--debug] [--prefix PATH] [--no-build]
 
 Installs:
-  - binary to <prefix>/bin/gitcomet-app
+  - binary to <prefix>/bin/gitcomet
   - desktop entry to ~/.local/share/applications/dev.gitcomet.GitComet.desktop
   - icons to ~/.local/share/icons/hicolor/<size>x<size>/apps/dev.gitcomet.GitComet.png
     sizes: 32, 48, 128, 256, 512
@@ -32,14 +32,14 @@ while [[ $# -gt 0 ]]; do
 done
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-bin_src="${repo_root}/target/${mode}/gitcomet-app"
+bin_src="${repo_root}/target/${mode}/gitcomet"
 
 if [[ $build -eq 1 && ! -x "$bin_src" ]]; then
   cargo_mode_flag=()
   if [[ "$mode" == "release" ]]; then
     cargo_mode_flag=(--release)
   fi
-  (cd "$repo_root" && cargo build -p gitcomet-app "${cargo_mode_flag[@]}")
+  (cd "$repo_root" && cargo build -p gitcomet "${cargo_mode_flag[@]}")
 fi
 
 if [[ ! -x "$bin_src" ]]; then
@@ -55,12 +55,13 @@ icon_sizes=(32 48 128 256 512)
 desktop_file="dev.gitcomet.GitComet.desktop"
 icon_name="dev.gitcomet.GitComet"
 
-install -Dm755 "$bin_src" "${bindir}/gitcomet-app"
+install -Dm755 "$bin_src" "${bindir}/gitcomet"
+rm -f "${bindir}/gitcomet-app"
 
 # Install desktop file with absolute Exec path so it works even if ~/.local/bin isn't on PATH.
 tmp_desktop="$(mktemp)"
 trap 'rm -f "$tmp_desktop"' EXIT
-sed "s|^Exec=.*$|Exec=${bindir}/gitcomet-app|g" \
+sed "s|^Exec=.*$|Exec=${bindir}/gitcomet|g" \
   "${repo_root}/assets/linux/${desktop_file}" >"$tmp_desktop"
 install -Dm644 "$tmp_desktop" "${appdir}/${desktop_file}"
 
@@ -78,7 +79,7 @@ command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$
 command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache "${iconsroot}" >/dev/null 2>&1 || true
 
 echo "Installed GitComet:"
-echo "  ${bindir}/gitcomet-app"
+echo "  ${bindir}/gitcomet"
 echo "  ${appdir}/${desktop_file}"
 for size in "${icon_sizes[@]}"; do
   echo "  ${iconsroot}/${size}x${size}/apps/${icon_name}.png"

@@ -9,7 +9,7 @@ pub(super) fn model(
     ContextMenuModel::new(vec![
         ContextMenuItem::Entry {
             label: line_label.clone(),
-            icon: Some("+".into()),
+            icon: Some("icons/plus.svg".into()),
             shortcut: None,
             disabled: false,
             action: Box::new(ContextMenuAction::ConflictResolverPick {
@@ -18,7 +18,7 @@ pub(super) fn model(
         },
         ContextMenuItem::Entry {
             label: chunk_label.clone(),
-            icon: Some("▣".into()),
+            icon: Some("icons/box.svg".into()),
             shortcut: None,
             disabled: false,
             action: Box::new(ContextMenuAction::ConflictResolverPick {

@@ -18,7 +18,7 @@ pub(super) fn model(
     let open_disabled = open_path.is_none();
     items.push(ContextMenuItem::Entry {
         label: "Open".into(),
-        icon: Some("↗".into()),
+        icon: Some("icons/open_external.svg".into()),
         shortcut: None,
         disabled: open_disabled,
         action: Box::new(ContextMenuAction::OpenRepo {
@@ -29,7 +29,7 @@ pub(super) fn model(
     items.push(ContextMenuItem::Separator);
     items.push(ContextMenuItem::Entry {
         label: "Remove…".into(),
-        icon: Some("🗑".into()),
+        icon: Some("icons/trash.svg".into()),
         shortcut: None,
         disabled: false,
         action: Box::new(ContextMenuAction::OpenPopover {

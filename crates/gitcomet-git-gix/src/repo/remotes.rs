@@ -3,7 +3,7 @@ use crate::util::{
     bytes_to_text_preserving_utf8, run_git_capture, run_git_simple, run_git_with_output,
     validate_ref_like_arg,
 };
-use gitcomet_core::domain::{Remote, RemoteBranch};
+use gitcomet_core::domain::{Remote, RemoteBranch, Upstream};
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{CommandOutput, PullMode, RemoteUrlKind, Result};
 use gix::bstr::ByteSlice as _;
@@ -147,22 +147,38 @@ impl GixRepo {
         Ok(Some(head.to_string()))
     }
 
-    fn branch_has_upstream(&self, branch: &str) -> Result<bool> {
-        validate_ref_like_arg(branch, "branch name")?;
+    fn branch_upstream(&self, branch_name: &str) -> Result<Option<Upstream>> {
+        validate_ref_like_arg(branch_name, "branch name")?;
 
         let repo = self.reopen_repo()?;
-        let ref_name = format!("refs/heads/{branch}");
+        let ref_name = format!("refs/heads/{branch_name}");
         let Some(reference) = repo
             .try_find_reference(ref_name.as_str())
             .map_err(|e| Error::new(ErrorKind::Backend(format!("gix try_find_reference: {e}"))))?
         else {
-            return Ok(false);
+            return Ok(None);
         };
 
-        Ok(matches!(
-            reference.remote_tracking_ref_name(gix::remote::Direction::Fetch),
-            Some(Ok(_))
-        ))
+        let tracking_ref_name =
+            match reference.remote_tracking_ref_name(gix::remote::Direction::Fetch) {
+                Some(Ok(name)) => name,
+                Some(Err(_)) | None => return Ok(None),
+            };
+
+        let upstream_short = tracking_ref_name.shorten().to_str_lossy().into_owned();
+        let Some((remote, upstream_branch)) = parse_short_remote_branch_name(&upstream_short)
+        else {
+            return Ok(None);
+        };
+
+        Ok(Some(Upstream {
+            remote: remote.to_string(),
+            branch: upstream_branch.to_string(),
+        }))
+    }
+
+    fn branch_has_upstream(&self, branch: &str) -> Result<bool> {
+        Ok(self.branch_upstream(branch)?.is_some())
     }
 
     pub(super) fn list_remotes_impl(&self) -> Result<Vec<Remote>> {
@@ -350,16 +366,51 @@ impl GixRepo {
         run_git_command_with_optional_output(cmd, &command_label, capture_output)
     }
 
+    fn push_head_to_branch_with_optional_output_impl(
+        &self,
+        remote: &str,
+        branch: &str,
+        force_with_lease: bool,
+        capture_output: bool,
+    ) -> Result<CommandOutput> {
+        validate_ref_like_arg(remote, "remote name")?;
+        validate_ref_like_arg(branch, "branch name")?;
+
+        let command_label = if force_with_lease {
+            format!("git push --force-with-lease {remote} HEAD:refs/heads/{branch}")
+        } else {
+            format!("git push {remote} HEAD:refs/heads/{branch}")
+        };
+
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("push");
+        if force_with_lease {
+            cmd.arg("--force-with-lease");
+        }
+        cmd.arg("--")
+            .arg(remote)
+            .arg(format!("HEAD:refs/heads/{branch}"));
+        run_git_command_with_optional_output(cmd, &command_label, capture_output)
+    }
+
     fn push_with_optional_output_impl(&self, capture_output: bool) -> Result<CommandOutput> {
-        if let Some(branch) = self.current_branch_name()?
-            && !self.branch_has_upstream(&branch)?
-            && let Some(remote) = self.preferred_remote_name()?
-        {
-            return self.push_set_upstream_with_optional_output_impl(
-                &remote,
-                &branch,
-                capture_output,
-            );
+        if let Some(branch) = self.current_branch_name()? {
+            if let Some(upstream) = self.branch_upstream(&branch)? {
+                return self.push_head_to_branch_with_optional_output_impl(
+                    &upstream.remote,
+                    &upstream.branch,
+                    false,
+                    capture_output,
+                );
+            }
+
+            if let Some(remote) = self.preferred_remote_name()? {
+                return self.push_set_upstream_with_optional_output_impl(
+                    &remote,
+                    &branch,
+                    capture_output,
+                );
+            }
         }
 
         let mut cmd = self.git_workdir_cmd();
@@ -376,6 +427,17 @@ impl GixRepo {
     }
 
     fn push_force_with_optional_output_impl(&self, capture_output: bool) -> Result<CommandOutput> {
+        if let Some(branch) = self.current_branch_name()?
+            && let Some(upstream) = self.branch_upstream(&branch)?
+        {
+            return self.push_head_to_branch_with_optional_output_impl(
+                &upstream.remote,
+                &upstream.branch,
+                true,
+                capture_output,
+            );
+        }
+
         let mut cmd = self.git_workdir_cmd();
         cmd.arg("push").arg("--force-with-lease");
         run_git_command_with_optional_output(cmd, "git push --force-with-lease", capture_output)
@@ -498,6 +560,45 @@ impl GixRepo {
         branch: &str,
     ) -> Result<CommandOutput> {
         self.push_set_upstream_with_optional_output_impl(remote, branch, true)
+    }
+
+    pub(super) fn set_upstream_branch_with_output_impl(
+        &self,
+        branch: &str,
+        upstream: &str,
+    ) -> Result<CommandOutput> {
+        validate_ref_like_arg(branch, "branch name")?;
+        let Some((remote, upstream_branch)) = parse_short_remote_branch_name(upstream) else {
+            return Err(Error::new(ErrorKind::Backend(
+                "invalid upstream: expected remote/branch".to_string(),
+            )));
+        };
+        validate_ref_like_arg(remote, "remote name")?;
+        validate_ref_like_arg(upstream_branch, "branch name")?;
+
+        let label = format!("git branch --set-upstream-to {upstream} {branch}");
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("branch")
+            .arg("--set-upstream-to")
+            .arg(upstream)
+            .arg("--")
+            .arg(branch);
+        run_git_with_output(cmd, &label)
+    }
+
+    pub(super) fn unset_upstream_branch_with_output_impl(
+        &self,
+        branch: &str,
+    ) -> Result<CommandOutput> {
+        validate_ref_like_arg(branch, "branch name")?;
+
+        let label = format!("git branch --unset-upstream {branch}");
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("branch")
+            .arg("--unset-upstream")
+            .arg("--")
+            .arg(branch);
+        run_git_with_output(cmd, &label)
     }
 
     pub(super) fn delete_remote_branch_with_output_impl(

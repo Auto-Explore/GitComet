@@ -12,10 +12,7 @@ pub(super) fn panel(
         let pane = this.details_pane.read(cx);
         pane.status_multi_selection
             .get(&repo_id)
-            .map(|sel| match area {
-                DiffArea::Unstaged => sel.unstaged.len(),
-                DiffArea::Staged => sel.staged.len(),
-            })
+            .map(|sel| sel.selected_count_for_area(area))
             .unwrap_or(0)
     };
 
@@ -26,10 +23,7 @@ pub(super) fn panel(
                 let selection = pane
                     .status_multi_selection
                     .get(&repo_id)
-                    .map(|sel| match area {
-                        DiffArea::Unstaged => sel.unstaged.as_slice(),
-                        DiffArea::Staged => sel.staged.as_slice(),
-                    })
+                    .map(|sel| sel.selected_paths_for_area(area))
                     .unwrap_or(&[]);
 
                 let use_selection =
@@ -54,10 +48,7 @@ pub(super) fn panel(
                     .read(cx)
                     .status_multi_selection
                     .get(&repo_id)
-                    .and_then(|sel| match area {
-                        DiffArea::Unstaged => sel.unstaged.first(),
-                        DiffArea::Staged => sel.staged.first(),
-                    })
+                    .and_then(|sel| sel.first_selected_for_area(area))
                     .map(|p| p.display().to_string())
                     .unwrap_or_else(|| "file".to_string());
                 (1, selected_path, true)

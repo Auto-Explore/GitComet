@@ -1,5 +1,6 @@
 use super::super::caches::BranchSidebarFingerprint;
 use super::super::*;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub(in super::super) struct SidebarPaneView {
     pub(in super::super) store: Arc<AppStore>,
@@ -8,6 +9,7 @@ pub(in super::super) struct SidebarPaneView {
     _ui_model_subscription: gpui::Subscription,
     branches_scroll: UniformListScrollHandle,
     branch_sidebar_cache: Option<BranchSidebarCache>,
+    sidebar_collapsed_items_by_repo: BTreeMap<std::path::PathBuf, BTreeSet<String>>,
     root_view: WeakEntity<GitCometView>,
     tooltip_host: WeakEntity<TooltipHost>,
     notify_fingerprint: SidebarNotifyFingerprint,
@@ -18,6 +20,13 @@ pub(in super::super) struct SidebarPaneView {
 struct SidebarNotifyFingerprint {
     active_repo_id: Option<RepoId>,
     repo_fingerprint: Option<BranchSidebarFingerprint>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct SidebarLazyLoadPlan {
+    worktrees: bool,
+    submodules: bool,
+    stashes: bool,
 }
 
 impl SidebarNotifyFingerprint {
@@ -38,6 +47,7 @@ impl SidebarPaneView {
         store: Arc<AppStore>,
         ui_model: Entity<AppUiModel>,
         theme: AppTheme,
+        sidebar_collapsed_items_by_repo: BTreeMap<std::path::PathBuf, BTreeSet<String>>,
         root_view: WeakEntity<GitCometView>,
         tooltip_host: WeakEntity<TooltipHost>,
         cx: &mut gpui::Context<Self>,
@@ -64,6 +74,7 @@ impl SidebarPaneView {
             _ui_model_subscription: subscription,
             branches_scroll: UniformListScrollHandle::default(),
             branch_sidebar_cache: None,
+            sidebar_collapsed_items_by_repo,
             root_view,
             tooltip_host,
             notify_fingerprint: initial_fingerprint,
@@ -97,6 +108,51 @@ impl SidebarPaneView {
         self.state.repos.iter().find(|r| r.id == repo_id)
     }
 
+    pub(in super::super) fn saved_sidebar_collapsed_items(
+        &self,
+    ) -> BTreeMap<std::path::PathBuf, BTreeSet<String>> {
+        self.sidebar_collapsed_items_by_repo
+            .iter()
+            .filter(|&(_repo, items)| !items.is_empty())
+            .map(|(repo, items)| (repo.clone(), items.clone()))
+            .collect()
+    }
+
+    fn schedule_ui_settings_persist(&mut self, cx: &mut gpui::Context<Self>) {
+        let _ = self.root_view.update(cx, |root, cx| {
+            root.schedule_ui_settings_persist(cx);
+        });
+    }
+
+    pub(in super::super) fn toggle_active_repo_collapse_key(
+        &mut self,
+        collapse_key: SharedString,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let Some(repo) = self.active_repo() else {
+            return;
+        };
+
+        let repo_path = repo.spec.workdir.clone();
+        let collapse_key = collapse_key.as_ref().trim();
+        if collapse_key.is_empty() {
+            return;
+        }
+
+        let items = self
+            .sidebar_collapsed_items_by_repo
+            .entry(repo_path.clone())
+            .or_default();
+        branch_sidebar::toggle_collapse_state(items, collapse_key);
+        if items.is_empty() {
+            self.sidebar_collapsed_items_by_repo.remove(&repo_path);
+        }
+
+        self.branch_sidebar_cache = None;
+        self.schedule_ui_settings_persist(cx);
+        cx.notify();
+    }
+
     pub(in super::super) fn branch_sidebar_rows_cached(
         &mut self,
     ) -> Option<Arc<[BranchSidebarRow]>> {
@@ -107,12 +163,22 @@ impl SidebarPaneView {
         }
 
         if let Some(repo) = repo {
-            if matches!(repo.worktrees, Loadable::NotLoaded) {
+            let empty = BTreeSet::new();
+            let collapsed_items = self
+                .sidebar_collapsed_items_by_repo
+                .get(&repo.spec.workdir)
+                .unwrap_or(&empty);
+            let lazy_loads = pending_sidebar_lazy_loads(repo, collapsed_items);
+
+            if lazy_loads.worktrees {
                 self.store.dispatch(Msg::LoadWorktrees { repo_id: repo.id });
             }
-            if matches!(repo.submodules, Loadable::NotLoaded) {
+            if lazy_loads.submodules {
                 self.store
                     .dispatch(Msg::LoadSubmodules { repo_id: repo.id });
+            }
+            if lazy_loads.stashes {
+                self.store.dispatch(Msg::LoadStashes { repo_id: repo.id });
             }
         }
 
@@ -126,7 +192,13 @@ impl SidebarPaneView {
                 return Some(Arc::clone(&cache.rows));
             }
 
-            let rows: Arc<[BranchSidebarRow]> = branch_sidebar::branch_sidebar_rows(repo).into();
+            let empty = BTreeSet::new();
+            let collapsed_items = self
+                .sidebar_collapsed_items_by_repo
+                .get(&repo.spec.workdir)
+                .unwrap_or(&empty);
+            let rows: Arc<[BranchSidebarRow]> =
+                branch_sidebar::branch_sidebar_rows(repo, collapsed_items).into();
             (repo.id, fingerprint, rows)
         };
 
@@ -139,6 +211,8 @@ impl SidebarPaneView {
     }
 
     pub(in super::super) fn sidebar(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
+        const SIDEBAR_TOP_INSET_PX: f32 = 2.0;
+
         let theme = self.theme;
         let Some(rows) = self.branch_sidebar_rows_cached() else {
             return div()
@@ -162,7 +236,17 @@ impl SidebarPaneView {
         .h_full()
         .min_h(px(0.0))
         .track_scroll(self.branches_scroll.clone());
-        let list = div().flex_1().min_h(px(0.0)).px(px(2.0)).child(list);
+        let scrollbar_gutter = components::Scrollbar::visible_gutter(
+            self.branches_scroll.clone(),
+            components::ScrollbarAxis::Vertical,
+        );
+        let list = div()
+            .flex_1()
+            .min_h(px(0.0))
+            .pt(px(SIDEBAR_TOP_INSET_PX))
+            .pl(px(2.0))
+            .pr(px(2.0) + scrollbar_gutter)
+            .child(list);
         let panel_body: AnyElement = div()
             .id("branch_sidebar_scroll_container")
             .relative()
@@ -246,5 +330,137 @@ impl SidebarPaneView {
 impl Render for SidebarPaneView {
     fn render(&mut self, _window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         self.sidebar(cx)
+    }
+}
+
+fn pending_sidebar_lazy_loads(
+    repo: &RepoState,
+    collapsed_items: &BTreeSet<String>,
+) -> SidebarLazyLoadPlan {
+    SidebarLazyLoadPlan {
+        worktrees: !branch_sidebar::is_collapsed(
+            collapsed_items,
+            branch_sidebar::worktrees_section_storage_key(),
+        ) && matches!(repo.worktrees, Loadable::NotLoaded),
+        submodules: !branch_sidebar::is_collapsed(
+            collapsed_items,
+            branch_sidebar::submodules_section_storage_key(),
+        ) && matches!(repo.submodules, Loadable::NotLoaded),
+        stashes: !branch_sidebar::is_collapsed(
+            collapsed_items,
+            branch_sidebar::stash_section_storage_key(),
+        ) && matches!(repo.stashes, Loadable::NotLoaded),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn pending_sidebar_lazy_loads_defaults_secondary_sections_to_closed() {
+        let repo = RepoState::new_opening(
+            RepoId(1),
+            gitcomet_core::domain::RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+        );
+
+        let expanded = pending_sidebar_lazy_loads(&repo, &BTreeSet::new());
+        assert_eq!(expanded, SidebarLazyLoadPlan::default());
+
+        let expanded = BTreeSet::from([
+            branch_sidebar::expanded_default_section_storage_key(
+                branch_sidebar::worktrees_section_storage_key(),
+            )
+            .expect("worktrees should support explicit expansion"),
+            branch_sidebar::expanded_default_section_storage_key(
+                branch_sidebar::submodules_section_storage_key(),
+            )
+            .expect("submodules should support explicit expansion"),
+            branch_sidebar::expanded_default_section_storage_key(
+                branch_sidebar::stash_section_storage_key(),
+            )
+            .expect("stash should support explicit expansion"),
+        ]);
+        let expanded = pending_sidebar_lazy_loads(&repo, &expanded);
+        assert_eq!(
+            expanded,
+            SidebarLazyLoadPlan {
+                worktrees: true,
+                submodules: true,
+                stashes: true,
+            }
+        );
+    }
+
+    #[test]
+    fn pending_sidebar_lazy_loads_handles_mixed_repo_state() {
+        let mut repo = RepoState::new_opening(
+            RepoId(1),
+            gitcomet_core::domain::RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+        );
+        repo.worktrees = Loadable::Ready(Arc::new(Vec::new()));
+        repo.submodules = Loadable::Loading;
+        repo.stashes = Loadable::NotLoaded;
+
+        let collapsed = BTreeSet::from([
+            branch_sidebar::submodules_section_storage_key().to_string(),
+            branch_sidebar::expanded_default_section_storage_key(
+                branch_sidebar::stash_section_storage_key(),
+            )
+            .expect("stash should support explicit expansion"),
+        ]);
+        let plan = pending_sidebar_lazy_loads(&repo, &collapsed);
+        assert_eq!(
+            plan,
+            SidebarLazyLoadPlan {
+                worktrees: false,
+                submodules: false,
+                stashes: true,
+            }
+        );
+    }
+
+    #[test]
+    fn toggling_default_closed_sections_persists_expanded_overrides() {
+        let mut collapsed_items = BTreeSet::new();
+
+        branch_sidebar::toggle_collapse_state(
+            &mut collapsed_items,
+            branch_sidebar::worktrees_section_storage_key(),
+        );
+
+        assert!(
+            !branch_sidebar::is_collapsed(
+                &collapsed_items,
+                branch_sidebar::worktrees_section_storage_key(),
+            ),
+            "opening a default-closed section should persist an expanded override"
+        );
+        assert_eq!(
+            collapsed_items,
+            BTreeSet::from([branch_sidebar::expanded_default_section_storage_key(
+                branch_sidebar::worktrees_section_storage_key(),
+            )
+            .expect("worktrees should support explicit expansion")])
+        );
+
+        branch_sidebar::toggle_collapse_state(
+            &mut collapsed_items,
+            branch_sidebar::worktrees_section_storage_key(),
+        );
+
+        assert!(
+            branch_sidebar::is_collapsed(
+                &collapsed_items,
+                branch_sidebar::worktrees_section_storage_key(),
+            ),
+            "closing a default-closed section should drop the override"
+        );
+        assert!(collapsed_items.is_empty());
     }
 }

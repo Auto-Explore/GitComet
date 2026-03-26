@@ -1,11 +1,14 @@
-## GitComet
+## <img alt="GitComet logo" src="assets/gitcomet_logo.svg" width="26" /> GitComet
 
 [![Build Status](https://github.com/Auto-Explore/GitComet/actions/workflows/rust.yml/badge.svg?branch=main)](https://github.com/Auto-Explore/GitComet/actions/workflows/rust.yml)
 [![Discord](https://img.shields.io/badge/Discord-Join%20chat-5865F2?logo=discord&logoColor=white)](https://discord.gg/2ufDGP8RnA)
 [![Website](https://img.shields.io/badge/Website-gitcomet.dev-0A66C2?logo=googlechrome&logoColor=white)](https://gitcomet.dev)
 [![AutoExplore](https://img.shields.io/badge/AutoExplore-autoexplore.ai-0B7A75?logo=safari&logoColor=white)](https://autoexplore.ai)
+[![license](https://img.shields.io/github/license/Auto-Explore/gitcomet.svg)](LICENSE)
+[![latest](https://img.shields.io/github/v/release/Auto-Explore/gitcomet.svg)](https://github.com/Auto-Explore/gitcomet/releases/latest)
+[![downloads](https://img.shields.io/github/downloads/Auto-Explore/gitcomet/total)](https://github.com/Auto-Explore/gitcomet/releases)
 
-**Speed is a feature.**
+**Fastest Open Source Git GUI**
 
 GitComet is built for teams that want fast Git operations with local-first privacy, familiar workflows, and open source freedom.
 
@@ -17,13 +20,25 @@ Available for Linux, Windows, and macOS.
 
 Download the latest prebuilt binaries/installers from [GitHub Releases](https://github.com/Auto-Explore/GitComet/releases).
 
-#### Homebrew
+#### Homebrew (macOS / Linux)
 
-install from tap:
+install app from tap (recommended):
 
 ```bash
 brew tap auto-explore/gitcomet
-brew install gitcomet
+brew install --cask gitcomet
+```
+
+**macOS Troubleshooting:** If you downloaded the app manually and macOS reports that GitComet *"is damaged and can't be opened"*, this is due to Apple's Gatekeeper quarantine for apps downloaded outside the App Store. To resolve this, run the following command in your terminal to remove the quarantine attribute:
+
+```bash
+xattr -d com.apple.quarantine /Applications/GitComet.app
+```
+
+optional CLI install:
+
+```bash
+brew install gitcomet-cli
 ```
 
 #### Flatpak / Flathub
@@ -34,6 +49,32 @@ GitHub releases also publish:
 - a source tarball for Flathub: `gitcomet-v<VERSION>-source.tar.gz`
 - the rendered Flathub manifest: `dev.gitcomet.GitComet.yaml`
 - the pinned Cargo source list: `cargo-sources.json`
+
+#### AUR (Arch Linux)
+
+```bash
+git clone https://aur.archlinux.org/gitcomet.git
+cd gitcomet && makepkg -si
+```
+
+#### GURU (Gentoo Linux)
+
+```bash
+emerge --ask dev-vcs/gitcomet
+```
+
+#### apt (Debian/Ubuntu)
+
+```bash
+curl -fsSL https://apt.gitcomet.dev/gitcomet-archive-keyring.gpg | sudo tee /usr/share/keyrings/gitcomet-archive-keyring.gpg >/dev/null
+curl -fsSL https://apt.gitcomet.dev/gitcomet.sources | sudo tee /etc/apt/sources.list.d/gitcomet.sources >/dev/null
+sudo apt update
+sudo apt install gitcomet
+```
+
+### Requirements
+
+GitComet requires a local Git installation of `2.50` or newer.
 
 ### Fast, Free, Familiar
 
@@ -51,6 +92,7 @@ GitComet started from frustration with existing tools on huge codebases like Chr
 | --- | --- | ---: | ---: |
 | GitComet | v0.2.0 | 1s | 265MB |
 | GitFiend | v0.45.3 | 1s | 289MB |
+| SourceGit | v2026.6 | 3.5s | 301MB |
 | SmartGit | v25.1.110 | 18s | 4.8GB |
 | GitKraken | v11.10.0 | 25s | 2GB |
 | Megit | v0.10.0 | 29s | 14.4GB |
@@ -80,13 +122,13 @@ Measured on Linux 6.19.6-zen (x64), Ryzen 5950x, 128GB DDR4. Detailed test steps
   - Code test coverage workflows
   - GitHub and Azure DevOps integrations
   - Priority improvements during early access
-- Join waitlist: [gitcomet.com/#pricing](https://gitcomet.com/#pricing)
+- Join waitlist: [gitcomet.dev/#pricing](https://gitcomet.dev/#pricing)
 
 ### Build from source
 
 ```bash
-cargo build -p gitcomet-app --features ui-gpui,gix
-cargo run -p gitcomet-app --features ui-gpui,gix -- /path/to/repo
+cargo build -p gitcomet --features ui-gpui,gix
+cargo run -p gitcomet --features ui-gpui,gix -- /path/to/repo
 ```
 
 ### Contributing
@@ -101,10 +143,10 @@ GitComet can be used as a standalone diff and merge tool invoked by `git difftoo
 
 ```bash
 # Configure Git globally to use GitComet for both difftool + mergetool
-gitcomet-app setup
+gitcomet setup
 
 # Remove GitComet integration safely
-gitcomet-app uninstall
+gitcomet uninstall
 ```
 
 - Use `--local` to target only the current repository instead of global config.
@@ -119,7 +161,7 @@ This setup registers both headless and GUI variants with `guiDefault=auto`, so G
 Built-in `setup` writes these Git config entries:
 
 ```bash
-GITCOMET_BIN="/absolute/path/to/gitcomet-app"
+GITCOMET_BIN="/absolute/path/to/gitcomet"
 
 # Headless tool: algorithm-only merge/diff for CI, scripts, and no-display environments
 git config --global merge.tool gitcomet
@@ -162,7 +204,7 @@ Built-in `uninstall` restores those backups only when the key still has the setu
 **Difftool:**
 
 ```bash
-gitcomet-app difftool --local <path> --remote <path> [--path <display_name>] [--label-left <label>] [--label-right <label>]
+gitcomet difftool --local <path> --remote <path> [--path <display_name>] [--label-left <label>] [--label-right <label>]
 ```
 
 Also reads `LOCAL`/`REMOTE` from environment as a fallback when invoked by Git.
@@ -170,7 +212,7 @@ Also reads `LOCAL`/`REMOTE` from environment as a fallback when invoked by Git.
 **Mergetool:**
 
 ```bash
-gitcomet-app mergetool --local <path> --remote <path> --merged <path> [--base <path>] [--label-local <label>] [--label-remote <label>] [--label-base <label>]
+gitcomet mergetool --local <path> --remote <path> --merged <path> [--base <path>] [--label-local <label>] [--label-remote <label>] [--label-base <label>]
 ```
 
 Also reads `LOCAL`/`REMOTE`/`MERGED`/`BASE` from environment. Base is optional for add/add conflicts.
@@ -196,6 +238,10 @@ panic details, and a trimmed backtrace.
 SourceTree, GitKraken, Zed, GPUI, KDiff3, Meld, Github Desktop, Git, Gix, Rust, Smol, and many more.
 
 This project has been created with the help of AI tools, including OpenAI Codex and Claude Code.
+
+### Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=Auto-Explore/gitcomet&type=Date)](https://star-history.com/#Auto-Explore/gitcomet&Date)
 
 ### License
 

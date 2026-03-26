@@ -1,8 +1,10 @@
-use crate::test_support::lock_clipboard_test;
+use crate::test_support::{lock_clipboard_test, lock_visual_test};
 use crate::view::components;
 use crate::{theme::AppTheme, view};
+use gitcomet_core::domain::*;
 use gitcomet_core::error::{Error, ErrorKind};
-use gitcomet_core::services::{GitBackend, GitRepository, Result};
+use gitcomet_core::services::{GitBackend, GitRepository, PullMode, Result};
+use gitcomet_state::model::Loadable;
 use gitcomet_state::model::RepoId;
 use gitcomet_state::msg::Msg;
 use gitcomet_state::store::AppStore;
@@ -63,6 +65,10 @@ fn builds_pure_components_without_panics() {
             let _ = components::Button::new("z4", "Disabled")
                 .style(components::ButtonStyle::Outlined)
                 .disabled(true)
+                .render(theme);
+            let _ = components::Button::new("z5", "Create")
+                .style(components::ButtonStyle::Filled)
+                .separated_end_slot(div().text_xs().child("Enter"))
                 .render(theme);
         });
 
@@ -437,6 +443,46 @@ fn text_input_supports_basic_clipboard_and_word_shortcuts(cx: &mut gpui::TestApp
     cx.simulate_keystrokes("ctrl-left ctrl-delete");
     let text = cx.update(|_window, app| view.read(app).input.read(app).text().to_string());
     assert_eq!(text, "hello brave ");
+}
+
+#[gpui::test]
+fn text_input_shift_backspace_deletes_like_backspace(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = cx.add_window_view(SmokeView::new);
+
+    cx.update(|window, app| {
+        app.bind_keys([
+            KeyBinding::new("backspace", crate::kit::Backspace, Some("TextInput")),
+            KeyBinding::new("shift-backspace", crate::kit::Backspace, Some("TextInput")),
+        ]);
+
+        let focus = view.update(app, |this, cx| this.input.read(cx).focus_handle());
+        window.focus(&focus);
+
+        view.update(app, |this, cx| {
+            this.input
+                .update(cx, |input, cx| input.set_text("hello", cx));
+        });
+    });
+
+    cx.simulate_keystrokes("backspace");
+    let plain_backspace =
+        cx.update(|_window, app| view.read(app).input.read(app).text().to_string());
+    assert_eq!(plain_backspace, "hell");
+
+    cx.update(|window, app| {
+        let focus = view.update(app, |this, cx| this.input.read(cx).focus_handle());
+        window.focus(&focus);
+
+        view.update(app, |this, cx| {
+            this.input
+                .update(cx, |input, cx| input.set_text("hello", cx));
+        });
+    });
+
+    cx.simulate_keystrokes("shift-backspace");
+    let shift_backspace =
+        cx.update(|_window, app| view.read(app).input.read(app).text().to_string());
+    assert_eq!(shift_backspace, plain_backspace);
 }
 
 #[gpui::test]
@@ -990,12 +1036,155 @@ impl GitBackend for TestBackend {
     }
 }
 
+struct SlowStashBackend;
+
+impl GitBackend for SlowStashBackend {
+    fn open(&self, workdir: &Path) -> Result<Arc<dyn GitRepository>> {
+        Ok(Arc::new(SlowStashRepo {
+            spec: RepoSpec {
+                workdir: workdir.to_path_buf(),
+            },
+        }))
+    }
+}
+
+struct SlowStashRepo {
+    spec: RepoSpec,
+}
+
+impl SlowStashRepo {
+    fn unsupported<T>() -> Result<T> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "Slow stash test repo does not implement this operation",
+        )))
+    }
+}
+
+impl GitRepository for SlowStashRepo {
+    fn spec(&self) -> &RepoSpec {
+        &self.spec
+    }
+
+    fn log_head_page(&self, _limit: usize, _cursor: Option<&LogCursor>) -> Result<LogPage> {
+        Self::unsupported()
+    }
+
+    fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
+        Self::unsupported()
+    }
+
+    fn reflog_head(&self, _limit: usize) -> Result<Vec<ReflogEntry>> {
+        Self::unsupported()
+    }
+
+    fn current_branch(&self) -> Result<String> {
+        Self::unsupported()
+    }
+
+    fn list_branches(&self) -> Result<Vec<Branch>> {
+        Self::unsupported()
+    }
+
+    fn list_remotes(&self) -> Result<Vec<Remote>> {
+        Self::unsupported()
+    }
+
+    fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
+        Self::unsupported()
+    }
+
+    fn status(&self) -> Result<RepoStatus> {
+        Self::unsupported()
+    }
+
+    fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
+        Self::unsupported()
+    }
+
+    fn create_branch(&self, _name: &str, _target: &CommitId) -> Result<()> {
+        Self::unsupported()
+    }
+
+    fn delete_branch(&self, _name: &str) -> Result<()> {
+        Self::unsupported()
+    }
+
+    fn checkout_branch(&self, _name: &str) -> Result<()> {
+        Self::unsupported()
+    }
+
+    fn checkout_commit(&self, _id: &CommitId) -> Result<()> {
+        Self::unsupported()
+    }
+
+    fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
+        Self::unsupported()
+    }
+
+    fn revert(&self, _id: &CommitId) -> Result<()> {
+        Self::unsupported()
+    }
+
+    fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
+        Self::unsupported()
+    }
+
+    fn stash_list(&self) -> Result<Vec<StashEntry>> {
+        std::thread::sleep(Duration::from_millis(250));
+        Ok(Vec::new())
+    }
+
+    fn stash_apply(&self, _index: usize) -> Result<()> {
+        Self::unsupported()
+    }
+
+    fn stash_drop(&self, _index: usize) -> Result<()> {
+        Self::unsupported()
+    }
+
+    fn stage(&self, _paths: &[&Path]) -> Result<()> {
+        Self::unsupported()
+    }
+
+    fn unstage(&self, _paths: &[&Path]) -> Result<()> {
+        Self::unsupported()
+    }
+
+    fn commit(&self, _message: &str) -> Result<()> {
+        Self::unsupported()
+    }
+
+    fn fetch_all(&self) -> Result<()> {
+        Self::unsupported()
+    }
+
+    fn pull(&self, _mode: PullMode) -> Result<()> {
+        Self::unsupported()
+    }
+
+    fn push(&self) -> Result<()> {
+        Self::unsupported()
+    }
+
+    fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {
+        Self::unsupported()
+    }
+}
+
 fn repo_tab_selector(repo_id: RepoId) -> &'static str {
     Box::leak(format!("repo_tab_{}", repo_id.0).into_boxed_str())
 }
 
 fn worktrees_spinner_selector(repo_id: RepoId) -> &'static str {
     Box::leak(format!("worktrees_spinner_{}", repo_id.0).into_boxed_str())
+}
+
+fn submodules_spinner_selector(repo_id: RepoId) -> &'static str {
+    Box::leak(format!("submodules_spinner_{}", repo_id.0).into_boxed_str())
+}
+
+fn stash_spinner_selector(repo_id: RepoId) -> &'static str {
+    Box::leak(format!("stash_spinner_{}", repo_id.0).into_boxed_str())
 }
 
 fn wait_for_repo_count(store: &AppStore, expected: usize) -> Arc<gitcomet_state::model::AppState> {
@@ -1027,6 +1216,53 @@ fn wait_for_repo_order(store: &AppStore, expected: &[RepoId]) {
             panic!("timed out waiting for repo order {expected:?}, got {got:?}");
         }
         std::thread::yield_now();
+    }
+}
+
+fn wait_for_repo_open(store: &AppStore, repo_id: RepoId) {
+    let deadline = Instant::now() + Duration::from_secs(1);
+    loop {
+        let state = store.snapshot();
+        if state
+            .repos
+            .iter()
+            .find(|repo| repo.id == repo_id)
+            .is_some_and(|repo| matches!(repo.open, Loadable::Ready(())))
+        {
+            return;
+        }
+        if Instant::now() >= deadline {
+            panic!("timed out waiting for repo {repo_id:?} to open");
+        }
+        std::thread::yield_now();
+    }
+}
+
+fn seed_workspace_repo(
+    cx: &mut gpui::VisualTestContext,
+    store: &AppStore,
+    view: gpui::Entity<crate::view::GitCometView>,
+    path: PathBuf,
+) {
+    store.dispatch(Msg::OpenRepo(path));
+
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+
+        let ready = cx.update(|_window, app| !view.read(app).blocks_non_repository_actions());
+        if ready {
+            return;
+        }
+
+        if Instant::now() >= deadline {
+            panic!("timed out waiting for the workspace view to leave the splash state");
+        }
+
+        std::thread::sleep(Duration::from_millis(10));
     }
 }
 
@@ -1251,6 +1487,81 @@ fn worktrees_section_shows_spinner_while_removing_worktree(cx: &mut gpui::TestAp
 
         if Instant::now() >= deadline {
             panic!("timed out waiting for worktrees spinner to render");
+        }
+
+        cx.run_until_parked();
+        std::thread::yield_now();
+    }
+}
+
+#[gpui::test]
+fn submodules_section_shows_spinner_while_loading(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_test = store.clone();
+    let (_view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let base = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_submodules_spinner_{}",
+        std::process::id()
+    ));
+    let repo_ids = restore_session_and_draw(cx, &store_for_test, vec![base.join("repo1")]);
+    let repo_id = repo_ids[0];
+
+    store_for_test.dispatch(Msg::LoadSubmodules { repo_id });
+
+    let selector = submodules_spinner_selector(repo_id);
+    let deadline = Instant::now() + Duration::from_secs(1);
+    loop {
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+
+        if cx.debug_bounds(selector).is_some() {
+            break;
+        }
+
+        if Instant::now() >= deadline {
+            panic!("timed out waiting for submodules spinner to render");
+        }
+
+        cx.run_until_parked();
+        std::thread::yield_now();
+    }
+}
+
+#[gpui::test]
+fn stash_section_shows_spinner_while_loading(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(SlowStashBackend));
+    let store_for_test = store.clone();
+    let (_view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let base = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_stash_spinner_{}",
+        std::process::id()
+    ));
+    let repo_ids = restore_session_and_draw(cx, &store_for_test, vec![base.join("repo1")]);
+    let repo_id = repo_ids[0];
+    wait_for_repo_open(&store_for_test, repo_id);
+
+    store_for_test.dispatch(Msg::LoadStashes { repo_id });
+
+    let selector = stash_spinner_selector(repo_id);
+    let deadline = Instant::now() + Duration::from_secs(1);
+    loop {
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+
+        if cx.debug_bounds(selector).is_some() {
+            break;
+        }
+
+        if Instant::now() >= deadline {
+            panic!("timed out waiting for stash spinner to render");
         }
 
         cx.run_until_parked();
@@ -1503,9 +1814,16 @@ fn picker_prompt_scrollbar_drag_scrolls_list(cx: &mut gpui::TestAppContext) {
 #[gpui::test]
 fn popover_is_clickable_above_content(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_view = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
-        crate::view::GitCometView::new(store, events, None, window, cx)
+        crate::view::GitCometView::new(store_for_view, events, None, window, cx)
     });
+    seed_workspace_repo(
+        cx,
+        &store,
+        view.clone(),
+        PathBuf::from("/tmp/gitcomet-smoke-popover-click-test"),
+    );
 
     // Open the repo picker dropdown in the action bar, which should overlay the rest of the UI.
     let picker_bounds = cx
@@ -1557,9 +1875,16 @@ fn popover_is_clickable_above_content(cx: &mut gpui::TestAppContext) {
 #[gpui::test]
 fn popover_closes_when_clicking_outside(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_view = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
-        crate::view::GitCometView::new(store, events, None, window, cx)
+        crate::view::GitCometView::new(store_for_view, events, None, window, cx)
     });
+    seed_workspace_repo(
+        cx,
+        &store,
+        view.clone(),
+        PathBuf::from("/tmp/gitcomet-smoke-popover-outside-test"),
+    );
 
     let picker_bounds = cx
         .debug_bounds("repo_picker")
@@ -1600,7 +1925,86 @@ fn popover_closes_when_clicking_outside(cx: &mut gpui::TestAppContext) {
 }
 
 #[gpui::test]
+fn titlebar_hamburger_opens_app_menu_but_brand_pill_does_not(cx: &mut gpui::TestAppContext) {
+    if cfg!(target_os = "macos") {
+        return;
+    }
+
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitCometView::new(store_for_view, events, None, window, cx)
+    });
+    seed_workspace_repo(
+        cx,
+        &store,
+        view.clone(),
+        PathBuf::from("/tmp/gitcomet-smoke-titlebar-menu-test"),
+    );
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    let brand_bounds = cx
+        .debug_bounds("titlebar_brand")
+        .expect("expected titlebar brand bounds");
+    cx.simulate_mouse_move(brand_bounds.center(), None, Modifiers::default());
+    cx.simulate_mouse_down(
+        brand_bounds.center(),
+        MouseButton::Left,
+        Modifiers::default(),
+    );
+    cx.simulate_mouse_up(
+        brand_bounds.center(),
+        MouseButton::Left,
+        Modifiers::default(),
+    );
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    cx.update(|_window, app| {
+        assert!(
+            !view.read(app).is_popover_open(app),
+            "expected titlebar brand pill click to leave the app menu closed"
+        );
+    });
+
+    let menu_bounds = cx
+        .debug_bounds("app_menu")
+        .expect("expected app menu hamburger bounds");
+    cx.simulate_mouse_move(menu_bounds.center(), None, Modifiers::default());
+    cx.simulate_mouse_down(
+        menu_bounds.center(),
+        MouseButton::Left,
+        Modifiers::default(),
+    );
+    cx.simulate_mouse_up(
+        menu_bounds.center(),
+        MouseButton::Left,
+        Modifiers::default(),
+    );
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    cx.update(|_window, app| {
+        assert!(
+            view.read(app).is_popover_open(app),
+            "expected hamburger click to open the app menu"
+        );
+    });
+}
+
+#[gpui::test]
 fn titlebar_window_controls_update_tooltip_on_hover(cx: &mut gpui::TestAppContext) {
+    if cfg!(target_os = "macos") {
+        // The custom Min/Max/Close controls are only rendered on non-macOS.
+        return;
+    }
+
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         crate::view::GitCometView::new(store, events, None, window, cx)

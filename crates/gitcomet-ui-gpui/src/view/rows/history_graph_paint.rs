@@ -4,7 +4,7 @@ use gpui::{Bounds, Pixels, Window, fill, point, px, size};
 pub(super) fn paint_history_graph(
     theme: AppTheme,
     row: &history_graph::GraphRow,
-    connect_incoming_node: bool,
+    connect_from_top_col: Option<usize>,
     is_stash_node: bool,
     bounds: Bounds<Pixels>,
     window: &mut Window,
@@ -30,7 +30,7 @@ pub(super) fn paint_history_graph(
     // Incoming vertical segments.
     for (col, lane) in row.lanes_now.iter().enumerate() {
         let incoming = row.incoming_mask.get(col).copied().unwrap_or(false);
-        if !(incoming || (connect_incoming_node && col == row.node_col)) {
+        if !(incoming || connect_from_top_col == Some(col)) {
             continue;
         }
         let x = x_for_col(col);

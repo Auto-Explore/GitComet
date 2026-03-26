@@ -267,6 +267,8 @@ mod tests {
         assert_unsupported(repo.push_force_with_output());
         assert_unsupported(repo.push_set_upstream("origin", "main"));
         assert_unsupported(repo.push_set_upstream_with_output("origin", "main"));
+        assert_unsupported(repo.set_upstream_branch_with_output("main", "origin/main"));
+        assert_unsupported(repo.unset_upstream_branch_with_output("main"));
         assert_unsupported(repo.delete_remote_branch_with_output("origin", "main"));
         assert_unsupported(repo.commit_amend_with_output("message"));
         assert_unsupported(repo.pull_branch_with_output("origin", "main"));

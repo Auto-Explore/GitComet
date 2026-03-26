@@ -23,8 +23,8 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
     items.push(ContextMenuItem::Separator);
     items.push(ContextMenuItem::Entry {
         label: "Open diff".into(),
-        icon: Some("↗".into()),
-        shortcut: Some("Enter".into()),
+        icon: Some("icons/open_external.svg".into()),
+        shortcut: None,
         disabled: false,
         action: Box::new(ContextMenuAction::SelectDiff {
             repo_id,
@@ -36,7 +36,7 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
     });
     items.push(ContextMenuItem::Entry {
         label: "Export patch…".into(),
-        icon: Some("⬇".into()),
+        icon: Some("icons/arrow_down.svg".into()),
         shortcut: None,
         disabled: false,
         action: Box::new(ContextMenuAction::ExportPatch {
@@ -46,7 +46,7 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
     });
     items.push(ContextMenuItem::Entry {
         label: "Add tag…".into(),
-        icon: Some("🏷".into()),
+        icon: Some("icons/tag.svg".into()),
         shortcut: Some("T".into()),
         disabled: false,
         action: Box::new(ContextMenuAction::OpenPopover {
@@ -58,7 +58,7 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
     });
     items.push(ContextMenuItem::Entry {
         label: "Checkout (detached)".into(),
-        icon: Some("⎇".into()),
+        icon: Some("icons/git_branch.svg".into()),
         shortcut: Some("D".into()),
         disabled: false,
         action: Box::new(ContextMenuAction::CheckoutCommit {
@@ -68,7 +68,7 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
     });
     items.push(ContextMenuItem::Entry {
         label: "Cherry-pick".into(),
-        icon: Some("⇡".into()),
+        icon: Some("icons/arrow_up.svg".into()),
         shortcut: Some("P".into()),
         disabled: false,
         action: Box::new(ContextMenuAction::CherryPickCommit {
@@ -78,7 +78,7 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
     });
     items.push(ContextMenuItem::Entry {
         label: "Revert".into(),
-        icon: Some("↶".into()),
+        icon: Some("icons/undo.svg".into()),
         shortcut: Some("R".into()),
         disabled: false,
         action: Box::new(ContextMenuAction::RevertCommit {
@@ -89,9 +89,21 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
 
     items.push(ContextMenuItem::Separator);
     for (label, icon, mode) in [
-        ("Reset (--soft) to here", "↺", ResetMode::Soft),
-        ("Reset (--mixed) to here", "↺", ResetMode::Mixed),
-        ("Reset (--hard) to here", "↺", ResetMode::Hard),
+        (
+            "Reset (--soft) to here",
+            "icons/refresh.svg",
+            ResetMode::Soft,
+        ),
+        (
+            "Reset (--mixed) to here",
+            "icons/refresh.svg",
+            ResetMode::Mixed,
+        ),
+        (
+            "Reset (--hard) to here",
+            "icons/refresh.svg",
+            ResetMode::Hard,
+        ),
     ] {
         items.push(ContextMenuItem::Entry {
             label: label.into(),

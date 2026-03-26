@@ -21,8 +21,8 @@ pub(super) fn model(
     items.push(ContextMenuItem::Separator);
     items.push(ContextMenuItem::Entry {
         label: "Open diff".into(),
-        icon: Some("↗".into()),
-        shortcut: Some("Enter".into()),
+        icon: Some("icons/open_external.svg".into()),
+        shortcut: None,
         disabled: false,
         action: Box::new(ContextMenuAction::SelectDiff {
             repo_id,
@@ -34,7 +34,7 @@ pub(super) fn model(
     });
     items.push(ContextMenuItem::Entry {
         label: "Open file".into(),
-        icon: Some("🗎".into()),
+        icon: Some("icons/file.svg".into()),
         shortcut: None,
         disabled: false,
         action: Box::new(ContextMenuAction::OpenFile {
@@ -44,7 +44,7 @@ pub(super) fn model(
     });
     items.push(ContextMenuItem::Entry {
         label: "Open file location".into(),
-        icon: Some("📂".into()),
+        icon: Some("icons/folder.svg".into()),
         shortcut: None,
         disabled: false,
         action: Box::new(ContextMenuAction::OpenFileLocation {
@@ -54,7 +54,7 @@ pub(super) fn model(
     });
     items.push(ContextMenuItem::Entry {
         label: "File history".into(),
-        icon: Some("⟲".into()),
+        icon: Some("icons/refresh.svg".into()),
         shortcut: Some("H".into()),
         disabled: false,
         action: Box::new(ContextMenuAction::OpenPopover {
@@ -66,7 +66,7 @@ pub(super) fn model(
     });
     items.push(ContextMenuItem::Entry {
         label: "Copy path".into(),
-        icon: Some("⧉".into()),
+        icon: Some("icons/copy.svg".into()),
         shortcut: Some("C".into()),
         disabled: false,
         action: Box::new(ContextMenuAction::CopyText {

@@ -6,7 +6,7 @@ pub(super) fn model(repo_id: RepoId) -> ContextMenuModel {
         ContextMenuItem::Separator,
         ContextMenuItem::Entry {
             label: "Current branch".into(),
-            icon: Some("⎇".into()),
+            icon: Some("icons/git_branch.svg".into()),
             shortcut: Some("C".into()),
             disabled: false,
             action: Box::new(ContextMenuAction::SetHistoryScope {
@@ -16,7 +16,7 @@ pub(super) fn model(repo_id: RepoId) -> ContextMenuModel {
         },
         ContextMenuItem::Entry {
             label: "All branches".into(),
-            icon: Some("∞".into()),
+            icon: Some("icons/infinity.svg".into()),
             shortcut: Some("A".into()),
             disabled: false,
             action: Box::new(ContextMenuAction::SetHistoryScope {

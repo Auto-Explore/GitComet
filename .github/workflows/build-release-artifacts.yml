@@ -16,6 +16,21 @@ on:
       release_id:
         required: false
         type: string
+    secrets:
+      AZURE_CREDENTIALS:
+        required: false
+      MACOS_SIGNING_IDENTITY:
+        required: false
+      MACOS_SIGNING_CERT_BASE64:
+        required: false
+      MACOS_SIGNING_CERT_PASSWORD:
+        required: false
+      MACOS_NOTARY_KEY_ID:
+        required: false
+      MACOS_NOTARY_ISSUER_ID:
+        required: false
+      MACOS_NOTARY_API_KEY_P8:
+        required: false
   workflow_dispatch:
     inputs:
       tag:
@@ -120,13 +135,26 @@ jobs:
           echo "release_id=$release_id" >> "$GITHUB_OUTPUT"
 
   build_windows:
-    name: Build Windows artifacts
-    runs-on: windows-latest
+    name: Build Windows artifacts (${{ matrix.target_platform }})
+    runs-on: ${{ matrix.runs_on }}
     timeout-minutes: 120
     needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target_platform: x86_64-windows
+            artifact_arch: x86_64
+            runs_on: windows-latest
     env:
       TAG: ${{ needs.prepare.outputs.tag }}
       VERSION: ${{ needs.prepare.outputs.version }}
+      ARTIFACT_ARCH: ${{ matrix.artifact_arch }}
+      AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
+      WINDOWS_SIGNING_ENDPOINT: ${{ vars.WINDOWS_SIGNING_ENDPOINT }}
+      WINDOWS_SIGNING_ACCOUNT_NAME: ${{ vars.WINDOWS_SIGNING_ACCOUNT_NAME }}
+      WINDOWS_SIGNING_PROFILE_NAME: ${{ needs.prepare.outputs.release_id != '' && 'gitcomet-windows-release' || 'gitcomet-windows-test' }}
+      WINDOWS_SIGNING_TIMESTAMP_RFC3161: http://timestamp.acs.microsoft.com/
     steps:
       - uses: actions/checkout@v6
         with:
@@ -139,22 +167,98 @@ jobs:
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
 
+      - name: Validate Windows signing configuration
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $required = @(
+            "AZURE_CREDENTIALS",
+            "WINDOWS_SIGNING_ENDPOINT",
+            "WINDOWS_SIGNING_ACCOUNT_NAME"
+          )
+          $missing = @()
+
+          foreach ($name in $required) {
+            $value = [Environment]::GetEnvironmentVariable($name)
+            if ([string]::IsNullOrWhiteSpace($value)) {
+              $missing += $name
+            }
+          }
+
+          if ($missing.Count -gt 0) {
+            throw "Missing required Windows signing secret(s)/variable(s): $($missing -join ', ')"
+          }
+
+          Write-Host "Using Windows signing profile: $env:WINDOWS_SIGNING_PROFILE_NAME"
+
+      - name: Log into Azure for Windows signing
+        uses: azure/login@v3
+        with:
+          creds: ${{ env.AZURE_CREDENTIALS }}
+
+      - name: Locate SignTool
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $kitsRoot = Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10\bin"
+          $signTool = Get-ChildItem -Path $kitsRoot -Recurse -Filter signtool.exe -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match '\\x64\\' } |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1 -ExpandProperty FullName
+
+          if ([string]::IsNullOrWhiteSpace($signTool)) {
+            $signTool = Get-ChildItem -Path $kitsRoot -Recurse -Filter signtool.exe -ErrorAction SilentlyContinue |
+              Sort-Object FullName -Descending |
+              Select-Object -First 1 -ExpandProperty FullName
+          }
+
+          if ([string]::IsNullOrWhiteSpace($signTool)) {
+            throw "Unable to locate signtool.exe on the GitHub Actions runner."
+          }
+
+          "SIGNTOOL_PATH=$signTool" >> $env:GITHUB_ENV
+
       - name: Build release binary
         shell: pwsh
         run: |
-          cargo build -p gitcomet-app --release --locked --features ui-gpui,gix --bins
+          cargo build -p gitcomet --release --locked --features ui-gpui,gix --bin gitcomet
+
+      - name: Sign Windows release binary
+        uses: Azure/artifact-signing-action@v1
+        with:
+          endpoint: ${{ env.WINDOWS_SIGNING_ENDPOINT }}
+          trusted-signing-account-name: ${{ env.WINDOWS_SIGNING_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ env.WINDOWS_SIGNING_PROFILE_NAME }}
+          files-folder: ${{ github.workspace }}\target\release
+          files-folder-filter: gitcomet.exe
+          file-digest: SHA256
+          timestamp-rfc3161: ${{ env.WINDOWS_SIGNING_TIMESTAMP_RFC3161 }}
+          timestamp-digest: SHA256
+          append-signature: false
+
+      - name: Verify signed Windows release binary
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $artifactPath = Join-Path $env:GITHUB_WORKSPACE "target\release\gitcomet.exe"
+          & "$env:GITHUB_WORKSPACE\scripts\windows\verify-signed-artifact.ps1" `
+            -Path $artifactPath `
+            -SignToolPath $env:SIGNTOOL_PATH
 
       - name: Package portable ZIP
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           New-Item -ItemType Directory -Path dist\portable -Force | Out-Null
-          Copy-Item target\release\gitcomet-app.exe dist\portable\gitcomet-app.exe -Force
+          Copy-Item target\release\gitcomet.exe dist\portable\gitcomet.exe -Force
           Copy-Item README.md dist\portable\README.md -Force
           Copy-Item LICENSE-AGPL-3.0 dist\portable\LICENSE-AGPL-3.0 -Force
           Copy-Item NOTICE dist\portable\NOTICE -Force
 
-          $zipName = "gitcomet-v${env:VERSION}-windows-x86_64-portable.zip"
+          $zipName = "gitcomet-v${env:VERSION}-windows-${env:ARTIFACT_ARCH}-portable.zip"
           if (Test-Path "dist\$zipName") { Remove-Item "dist\$zipName" -Force }
           Compress-Archive -Path dist\portable\* -DestinationPath "dist\$zipName"
 
@@ -164,16 +268,67 @@ jobs:
           $ErrorActionPreference = "Stop"
           choco install wixtoolset --version "${env:WIXTOOLSET_VERSION}" --yes --no-progress
           cargo install cargo-wix --version "${env:CARGO_WIX_VERSION}" --locked
-          if (!(Test-Path "crates\gitcomet-app\wix\main.wxs")) {
-            cargo wix init --package gitcomet-app
+
+          # Chocolatey updates machine-level env vars, but the current pwsh session does not pick them up automatically.
+          $wixRoot = [Environment]::GetEnvironmentVariable("WIX", "Machine")
+          if ([string]::IsNullOrWhiteSpace($wixRoot)) {
+            $candidateRoots = @()
+            if (${env:ProgramFiles(x86)}) {
+              $candidateRoots += (Join-Path ${env:ProgramFiles(x86)} "WiX Toolset v3.14")
+            }
+            if ($env:ProgramFiles) {
+              $candidateRoots += (Join-Path $env:ProgramFiles "WiX Toolset v3.14")
+            }
+            $wixRoot = $candidateRoots |
+              Where-Object { Test-Path (Join-Path $_ "bin\candle.exe") } |
+              Select-Object -First 1
           }
-          $msiName = "gitcomet-v${env:VERSION}-windows-x86_64.msi"
-          cargo wix --package gitcomet-app --profile release --nocapture --no-build --output "dist\$msiName"
+          if ([string]::IsNullOrWhiteSpace($wixRoot)) {
+            throw "Unable to locate the WiX Toolset installation after Chocolatey install."
+          }
+          $wixBin = $wixRoot
+          if (!(Test-Path (Join-Path $wixBin "candle.exe"))) {
+            $wixBin = Join-Path $wixRoot "bin"
+          }
+          if (!(Test-Path (Join-Path $wixBin "candle.exe"))) {
+            throw "WiX Toolset bin directory '$wixBin' does not contain candle.exe."
+          }
+          $env:WIX = Split-Path $wixBin -Parent
+          $env:PATH = "$wixBin;$env:PATH"
+
+          if (!(Test-Path "crates\gitcomet\wix\main.wxs")) {
+            cargo wix init --package gitcomet
+          }
+          $msiName = "gitcomet-v${env:VERSION}-windows-${env:ARTIFACT_ARCH}.msi"
+          cargo wix --package gitcomet --profile release --nocapture --no-build --bin-path "$wixBin" --output "dist\$msiName"
+
+      - name: Sign Windows MSI installer
+        uses: Azure/artifact-signing-action@v1
+        with:
+          endpoint: ${{ env.WINDOWS_SIGNING_ENDPOINT }}
+          trusted-signing-account-name: ${{ env.WINDOWS_SIGNING_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ env.WINDOWS_SIGNING_PROFILE_NAME }}
+          files-folder: ${{ github.workspace }}\dist
+          files-folder-filter: gitcomet-v${{ env.VERSION }}-windows-${{ env.ARTIFACT_ARCH }}.msi
+          file-digest: SHA256
+          timestamp-rfc3161: ${{ env.WINDOWS_SIGNING_TIMESTAMP_RFC3161 }}
+          timestamp-digest: SHA256
+          append-signature: false
+
+      - name: Verify signed Windows MSI installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $artifactPath = Join-Path $env:GITHUB_WORKSPACE "dist\gitcomet-v$($env:VERSION)-windows-$($env:ARTIFACT_ARCH).msi"
+          & "$env:GITHUB_WORKSPACE\scripts\windows\verify-signed-artifact.ps1" `
+            -Path $artifactPath `
+            -SignToolPath $env:SIGNTOOL_PATH
 
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: windows-release-artifacts
+          name: windows-release-artifacts-${{ matrix.target_platform }}
           path: |
             dist/*.zip
             dist/*.msi
@@ -181,14 +336,30 @@ jobs:
           retention-days: 7
 
   build_linux:
-    name: Build Linux artifacts
-    runs-on: ubuntu-22.04
+    name: Build Linux artifacts (${{ matrix.target_platform }})
+    runs-on: ${{ matrix.runs_on }}
     timeout-minutes: 120
     needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target_platform: x86_64-linux
+            artifact_arch: x86_64
+            deb_arch: amd64
+            runs_on: ubuntu-22.04
+            build_appimage: true
+          - target_platform: aarch64-linux
+            artifact_arch: arm64
+            deb_arch: arm64
+            runs_on: ubuntu-24.04-arm
+            build_appimage: false
     env:
       TAG: ${{ needs.prepare.outputs.tag }}
       VERSION: ${{ needs.prepare.outputs.version }}
       DEB_REVISION: ${{ needs.prepare.outputs.deb_revision }}
+      ARTIFACT_ARCH: ${{ matrix.artifact_arch }}
+      DEB_ARCH: ${{ matrix.deb_arch }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -213,7 +384,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Build release binary
-        run: cargo build -p gitcomet-app --release --locked --features ui-gpui,gix
+        run: cargo build -p gitcomet --release --locked --features ui-gpui,gix
 
       - name: Normalize desktop entry metadata
         run: |
@@ -226,9 +397,9 @@ jobs:
       - name: Package tar.gz
         run: |
           set -euo pipefail
-          root="gitcomet-v${VERSION}-linux-x86_64"
+          root="gitcomet-v${VERSION}-linux-${ARTIFACT_ARCH}"
           mkdir -p "dist/stage/${root}"
-          install -m755 target/release/gitcomet-app "dist/stage/${root}/gitcomet-app"
+          install -m755 target/release/gitcomet "dist/stage/${root}/gitcomet"
           install -m644 README.md "dist/stage/${root}/README.md"
           install -m644 LICENSE-AGPL-3.0 "dist/stage/${root}/LICENSE-AGPL-3.0"
           install -m644 NOTICE "dist/stage/${root}/NOTICE"
@@ -246,14 +417,14 @@ jobs:
           mkdir -p "${pkg_root}/usr/share/applications"
           mkdir -p "${pkg_root}/usr/share/icons/hicolor/512x512/apps"
 
-          install -m755 target/release/gitcomet-app "${pkg_root}/usr/bin/gitcomet-app"
+          install -m755 target/release/gitcomet "${pkg_root}/usr/bin/gitcomet"
           install -m644 dist/dev.gitcomet.GitComet.desktop "${pkg_root}/usr/share/applications/dev.gitcomet.GitComet.desktop"
           install -m644 assets/gitcomet-512.png "${pkg_root}/usr/share/icons/hicolor/512x512/apps/dev.gitcomet.GitComet.png"
 
           {
             echo "Package: gitcomet"
             echo "Version: ${deb_version}"
-            echo "Architecture: amd64"
+            echo "Architecture: ${DEB_ARCH}"
             echo "Maintainer: AutoExplore Oy <info@autoexplore.ai>"
             echo "Depends: git"
             echo "Section: utils"
@@ -261,14 +432,15 @@ jobs:
             echo "Description: Fast, resource-efficient Git GUI written in Rust."
           } > "${pkg_root}/DEBIAN/control"
 
-          dpkg-deb --build "${pkg_root}" "dist/gitcomet_${deb_version}_amd64.deb"
+          dpkg-deb --build "${pkg_root}" "dist/gitcomet_${deb_version}_${DEB_ARCH}.deb"
 
       - name: Package AppImage
+        if: ${{ matrix.build_appimage }}
         run: |
           set -euo pipefail
           appdir="dist/AppDir"
           mkdir -p "${appdir}/usr/bin"
-          install -m755 target/release/gitcomet-app "${appdir}/usr/bin/gitcomet-app"
+          install -m755 target/release/gitcomet "${appdir}/usr/bin/gitcomet"
           install -m644 dist/dev.gitcomet.GitComet.desktop "${appdir}/dev.gitcomet.GitComet.desktop"
           install -m644 assets/gitcomet-512.png "${appdir}/dev.gitcomet.GitComet.png"
 
@@ -276,7 +448,7 @@ jobs:
             echo '#!/usr/bin/env bash'
             echo 'set -euo pipefail'
             echo 'HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"'
-            echo 'exec "${HERE}/usr/bin/gitcomet-app" "$@"'
+            echo 'exec "${HERE}/usr/bin/gitcomet" "$@"'
           } > "${appdir}/AppRun"
           chmod +x "${appdir}/AppRun"
 
@@ -286,12 +458,12 @@ jobs:
           echo "${APPIMAGETOOL_X86_64_SHA256}  /tmp/appimagetool.AppImage" | sha256sum -c -
           chmod +x /tmp/appimagetool.AppImage
           ARCH=x86_64 /tmp/appimagetool.AppImage --appimage-extract-and-run \
-            "${appdir}" "dist/gitcomet-v${VERSION}-linux-x86_64.AppImage"
+            "${appdir}" "dist/gitcomet-v${VERSION}-linux-${ARTIFACT_ARCH}.AppImage"
 
       - name: Upload Linux artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: linux-release-artifacts
+          name: linux-release-artifacts-${{ matrix.target_platform }}
           path: |
             dist/*.tar.gz
             dist/*.AppImage
@@ -339,7 +511,7 @@ jobs:
           retention-days: 7
 
   build_macos:
-    name: Build macOS artifacts (${{ matrix.arch }})
+    name: Build macOS artifacts (${{ matrix.target_platform }})
     runs-on: ${{ matrix.runs_on }}
     timeout-minutes: 120
     needs: prepare
@@ -347,14 +519,22 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - arch: arm64
+          - target_platform: aarch64-darwin
+            arch: arm64
             runs_on: macos-latest
-          - arch: x86_64
+          - target_platform: x86_64-darwin
+            arch: x86_64
             runs_on: macos-15-intel
     env:
       TAG: ${{ needs.prepare.outputs.tag }}
       VERSION: ${{ needs.prepare.outputs.version }}
       ARCH: ${{ matrix.arch }}
+      MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+      MACOS_SIGNING_CERT_BASE64: ${{ secrets.MACOS_SIGNING_CERT_BASE64 }}
+      MACOS_SIGNING_CERT_PASSWORD: ${{ secrets.MACOS_SIGNING_CERT_PASSWORD }}
+      MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+      MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+      MACOS_NOTARY_API_KEY_P8: ${{ secrets.MACOS_NOTARY_API_KEY_P8 }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -367,19 +547,156 @@ jobs:
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
 
+      - name: Determine macOS signing mode
+        id: macos_signing_mode
+        run: |
+          set -euo pipefail
+
+          required=(
+            MACOS_SIGNING_IDENTITY
+            MACOS_SIGNING_CERT_BASE64
+            MACOS_SIGNING_CERT_PASSWORD
+            MACOS_NOTARY_KEY_ID
+            MACOS_NOTARY_ISSUER_ID
+            MACOS_NOTARY_API_KEY_P8
+          )
+          present=()
+          missing=()
+
+          for name in "${required[@]}"; do
+            if [ -n "${!name:-}" ]; then
+              present+=("$name")
+            else
+              missing+=("$name")
+            fi
+          done
+
+          if [ "${#present[@]}" -eq 0 ]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "macOS signing is not configured; building unsigned macOS artifacts."
+            exit 0
+          fi
+
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error title=Incomplete macOS signing configuration::Missing required secret(s): ${missing[*]}"
+            echo "::error title=Partial macOS signing configuration::Either provide all macOS signing and notarization secrets or leave them all unset to build unsigned artifacts."
+            exit 1
+          fi
+
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare macOS signing and notarization credentials
+        if: ${{ steps.macos_signing_mode.outputs.enabled == 'true' }}
+        id: macos_signing
+        run: |
+          set -euo pipefail
+
+          keychain_path="${RUNNER_TEMP}/gitcomet-signing.keychain-db"
+          keychain_password="$(openssl rand -hex 24)"
+          cert_path="${RUNNER_TEMP}/gitcomet-signing-cert.p12"
+          api_key_path="${RUNNER_TEMP}/AuthKey_${MACOS_NOTARY_KEY_ID}.p8"
+          default_keychain="$(security default-keychain -d user | tr -d '"')"
+
+          if base64 --help 2>&1 | grep -q -- '--decode'; then
+            printf '%s' "$MACOS_SIGNING_CERT_BASE64" | base64 --decode > "$cert_path"
+          else
+            printf '%s' "$MACOS_SIGNING_CERT_BASE64" | base64 -D > "$cert_path"
+          fi
+
+          security create-keychain -p "$keychain_password" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$keychain_password" "$keychain_path"
+          security import "$cert_path" \
+            -k "$keychain_path" \
+            -P "$MACOS_SIGNING_CERT_PASSWORD" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain_path"
+          security default-keychain -d user -s "$keychain_path"
+
+          security find-identity -v -p codesigning "$keychain_path"
+
+          printf '%s' "$MACOS_NOTARY_API_KEY_P8" > "$api_key_path"
+          chmod 600 "$api_key_path"
+
+          echo "keychain_path=$keychain_path" >> "$GITHUB_OUTPUT"
+          echo "api_key_path=$api_key_path" >> "$GITHUB_OUTPUT"
+          echo "default_keychain=$default_keychain" >> "$GITHUB_OUTPUT"
+
       - name: Package macOS release assets
         run: |
           set -euo pipefail
-          scripts/package-macos.sh \
-            --version "${VERSION}" \
-            --arch "${ARCH}" \
-            --release \
+          package_args=(
+            --version "${VERSION}"
+            --arch "${ARCH}"
+            --release
             --out-dir dist
+          )
+
+          if [ "${{ steps.macos_signing_mode.outputs.enabled }}" = "true" ]; then
+            package_args+=(
+              --codesign-identity "${MACOS_SIGNING_IDENTITY}"
+              --codesign-keychain "${{ steps.macos_signing.outputs.keychain_path }}"
+            )
+          else
+            echo "Building unsigned macOS artifacts because signing is not configured."
+          fi
+
+          scripts/package-macos.sh "${package_args[@]}"
+
+      - name: Notarize and verify macOS artifacts
+        if: ${{ steps.macos_signing_mode.outputs.enabled == 'true' }}
+        run: |
+          set -euo pipefail
+
+          release_root="gitcomet-v${VERSION}-macos-${ARCH}"
+          dmg_path="dist/${release_root}.dmg"
+          app_path="dist/stage/${release_root}/GitComet.app"
+          app_binary="${app_path}/Contents/MacOS/gitcomet"
+
+          if [ ! -f "$dmg_path" ] || [ ! -d "$app_path" ]; then
+            echo "::error title=Missing macOS package::Expected $dmg_path and $app_path to exist."
+            exit 1
+          fi
+
+          xcrun notarytool submit "$dmg_path" \
+            --key "${{ steps.macos_signing.outputs.api_key_path }}" \
+            --key-id "${MACOS_NOTARY_KEY_ID}" \
+            --issuer "${MACOS_NOTARY_ISSUER_ID}" \
+            --wait
+
+          xcrun stapler staple "$app_path"
+          xcrun stapler staple "$dmg_path"
+          xcrun stapler validate "$app_path"
+          xcrun stapler validate "$dmg_path"
+
+          codesign --verify --deep --strict --verbose=2 "$app_path"
+          spctl --assess --type open --context context:primary-signature --verbose=4 "$app_path"
+          spctl --assess --type execute --verbose=4 "$app_binary"
+          spctl --assess --type open --context context:primary-signature --verbose=4 "$dmg_path"
+
+      - name: Cleanup macOS signing keychain
+        if: ${{ always() && steps.macos_signing_mode.outputs.enabled == 'true' }}
+        env:
+          KEYCHAIN_PATH: ${{ steps.macos_signing.outputs.keychain_path }}
+          DEFAULT_KEYCHAIN_PATH: ${{ steps.macos_signing.outputs.default_keychain }}
+          API_KEY_PATH: ${{ steps.macos_signing.outputs.api_key_path }}
+        run: |
+          set -euo pipefail
+          if [ -n "${DEFAULT_KEYCHAIN_PATH:-}" ]; then
+            security default-keychain -d user -s "$DEFAULT_KEYCHAIN_PATH" || true
+          fi
+          if [ -n "${KEYCHAIN_PATH:-}" ] && [ -f "$KEYCHAIN_PATH" ]; then
+            security delete-keychain "$KEYCHAIN_PATH" || true
+          fi
+          if [ -n "${API_KEY_PATH:-}" ] && [ -f "$API_KEY_PATH" ]; then
+            rm -f "$API_KEY_PATH"
+          fi
 
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: macos-release-artifacts-${{ matrix.arch }}
+          name: macos-release-artifacts-${{ matrix.target_platform }}
           path: |
             dist/*.tar.gz
             dist/*.dmg
@@ -399,18 +716,20 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ env.TAG }}
+          ref: ${{ needs.prepare.outputs.tag }}
           fetch-depth: 0
 
       - uses: actions/download-artifact@v8
         with:
-          name: windows-release-artifacts
+          pattern: windows-release-artifacts-*
           path: dist/windows
+          merge-multiple: true
 
       - uses: actions/download-artifact@v8
         with:
-          name: linux-release-artifacts
+          pattern: linux-release-artifacts-*
           path: dist/linux
+          merge-multiple: true
 
       - uses: actions/download-artifact@v8
         with:
@@ -460,18 +779,24 @@ jobs:
           cp flatpak/cargo-sources.json dist/release/cargo-sources.json
           cp flatpak/flathub.json dist/release/flathub.json
 
-      - name: Generate Homebrew formula
+      - name: Generate Homebrew cask and formula
         run: |
           set -euo pipefail
           arm_tar="gitcomet-v${VERSION}-macos-arm64.tar.gz"
           intel_tar="gitcomet-v${VERSION}-macos-x86_64.tar.gz"
-          linux_tar="gitcomet-v${VERSION}-linux-x86_64.tar.gz"
+          linux_arm_tar="gitcomet-v${VERSION}-linux-arm64.tar.gz"
+          linux_intel_tar="gitcomet-v${VERSION}-linux-x86_64.tar.gz"
+          arm_dmg="gitcomet-v${VERSION}-macos-arm64.dmg"
+          intel_dmg="gitcomet-v${VERSION}-macos-x86_64.dmg"
           arm_path="dist/release/${arm_tar}"
           intel_path="dist/release/${intel_tar}"
-          linux_path="dist/release/${linux_tar}"
+          linux_arm_path="dist/release/${linux_arm_tar}"
+          linux_intel_path="dist/release/${linux_intel_tar}"
+          arm_dmg_path="dist/release/${arm_dmg}"
+          intel_dmg_path="dist/release/${intel_dmg}"
 
-          if [ ! -f "${arm_path}" ] || [ ! -f "${intel_path}" ] || [ ! -f "${linux_path}" ]; then
-            echo "::error title=Missing release tarballs::Expected ${arm_tar}, ${intel_tar}, and ${linux_tar} in dist/release."
+          if [ ! -f "${arm_path}" ] || [ ! -f "${intel_path}" ] || [ ! -f "${linux_arm_path}" ] || [ ! -f "${linux_intel_path}" ] || [ ! -f "${arm_dmg_path}" ] || [ ! -f "${intel_dmg_path}" ]; then
+            echo "::error title=Missing release assets::Expected ${arm_tar}, ${intel_tar}, ${linux_arm_tar}, ${linux_intel_tar}, ${arm_dmg}, and ${intel_dmg} in dist/release."
             exit 1
           fi
 
@@ -480,7 +805,15 @@ jobs:
             --github-repo "${GITHUB_REPOSITORY}" \
             --arm-tar "${arm_path}" \
             --intel-tar "${intel_path}" \
-            --linux-tar "${linux_path}" \
+            --linux-arm-tar "${linux_arm_path}" \
+            --linux-intel-tar "${linux_intel_path}" \
+            --output "dist/release/gitcomet-cli.rb"
+
+          scripts/generate-homebrew-cask.sh \
+            --version "${VERSION}" \
+            --github-repo "${GITHUB_REPOSITORY}" \
+            --arm-dmg "${arm_dmg_path}" \
+            --intel-dmg "${intel_dmg_path}" \
             --output "dist/release/gitcomet.rb"
 
       - name: Generate checksums

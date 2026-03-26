@@ -1,24 +1,28 @@
-; Vendored JavaScript highlights query for tree-sitter-javascript.
-; Based on upstream tree-sitter-javascript queries/highlights.scm and
-; queries/highlights-jsx.scm, with keyword classification enhancements
-; from Zed's JavaScript query assets.
+; Derived from
+; gpui-component/crates/ui/src/highlighter/languages/javascript/highlights.scm
+; (Apache-2.0). Local additions preserve parameter highlighting and JSX-in-.js
+; support in GitComet diffs.
 
 ; Variables
+;----------
+
 (identifier) @variable
 
 ; Properties
+;-----------
+
 (property_identifier) @property
 (shorthand_property_identifier) @property
 (shorthand_property_identifier_pattern) @property
 (private_property_identifier) @property
 
 ; Function and method definitions
+;--------------------------------
+
 (function_expression
   name: (identifier) @function)
-
 (function_declaration
   name: (identifier) @function)
-
 (method_definition
   name: (property_identifier) @function.method)
 
@@ -44,6 +48,8 @@
   right: [(function_expression) (arrow_function)])
 
 ; Function and method calls
+;--------------------------
+
 (call_expression
   function: (identifier) @function)
 
@@ -55,6 +61,8 @@
   constructor: (identifier) @type)
 
 ; Parameters
+;-----------
+
 (arrow_function
   parameter: (identifier) @variable.parameter)
 
@@ -62,30 +70,42 @@
   parameter: (identifier) @variable.parameter)
 
 ; Special identifiers
+;--------------------
+
+((identifier) @type
+ (#match? @type "^[A-Z]"))
+
 ([
   (identifier)
   (shorthand_property_identifier)
   (shorthand_property_identifier_pattern)
 ] @constant
-  (#match? @constant "^[A-Z_][A-Z\\d_]+$"))
+ (#match? @constant "^_*[A-Z_][A-Z\\d_]*$"))
 
-((identifier) @constructor
-  (#match? @constructor "^[A-Z]"))
+((identifier) @variable.special
+ (#match? @variable.special "^(arguments|module|console|window|document)$")
+ (#is-not? local))
+
+((identifier) @function.special
+ (#eq? @function.special "require")
+ (#is-not? local))
 
 ; Literals
+;---------
+
 (this) @variable.special
 
 (super) @variable.special
 
 [
-  (null)
-  (undefined)
-] @constant.builtin
-
-[
   (true)
   (false)
 ] @boolean
+
+[
+  (null)
+  (undefined)
+] @constant.builtin
 
 (comment) @comment
 
@@ -98,11 +118,13 @@
 
 (escape_sequence) @string.escape
 
-(regex) @string.regex
+(regex) @string.special
 
 (number) @number
 
 ; Tokens
+;-------
+
 [
   ";"
   (optional_chain)
@@ -159,9 +181,6 @@
   "..."
 ] @operator
 
-(regex
-  "/" @string.regex)
-
 [
   "("
   ")"
@@ -177,62 +196,49 @@
     ":"
   ] @operator)
 
-; Keywords — split into declaration / import / control for richer styling
 [
   "as"
   "async"
   "await"
-  "debugger"
-  "default"
-  "delete"
-  "extends"
-  "get"
-  "in"
-  "instanceof"
-  "new"
-  "of"
-  "set"
-  "static"
-  "target"
-  "typeof"
-  "void"
-  "with"
-] @keyword
-
-[
-  "const"
-  "let"
-  "var"
-  "function"
-  "class"
-] @keyword.declaration
-
-[
-  "export"
-  "from"
-  "import"
-] @keyword.import
-
-[
   "break"
   "case"
   "catch"
+  "class"
+  "const"
   "continue"
+  "debugger"
+  "default"
+  "delete"
   "do"
   "else"
+  "export"
+  "extends"
   "finally"
   "for"
+  "from"
+  "function"
+  "get"
   "if"
+  "import"
+  "in"
+  "instanceof"
+  "let"
+  "new"
+  "of"
   "return"
+  "set"
+  "static"
   "switch"
+  "target"
   "throw"
   "try"
+  "typeof"
+  "var"
+  "void"
   "while"
+  "with"
   "yield"
-] @keyword.control
-
-(switch_default
-  "default" @keyword.control)
+] @keyword
 
 (template_substitution
   "${" @punctuation.special

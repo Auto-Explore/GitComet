@@ -6,6 +6,7 @@ use gitcomet_core::auth::{
 };
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::platform::host_tempdir;
+use gitcomet_core::process::configure_background_command;
 use gitcomet_core::services::CommandOutput;
 use std::fs;
 use std::io::{BufRead as _, BufReader, Read as _};
@@ -285,6 +286,7 @@ pub(super) fn schedule_clone_repo(
     msg_tx: mpsc::Sender<Msg>,
     url: String,
     dest: PathBuf,
+    auth: Option<StagedGitAuth>,
 ) {
     executor.spawn(move || {
         if let Err(err) = validate_clone_url(&url) {
@@ -300,6 +302,7 @@ pub(super) fn schedule_clone_repo(
         }
 
         let mut cmd = Command::new("git");
+        configure_background_command(&mut cmd);
         cmd.arg("-c")
             .arg("color.ui=false")
             .arg("clone")
@@ -312,7 +315,7 @@ pub(super) fn schedule_clone_repo(
             .env("GIT_TERMINAL_PROMPT", "0");
 
         let askpass_script = match (|| {
-            let auth = take_pending_git_auth();
+            let auth = auth.or_else(take_pending_git_auth);
             let script = create_askpass_script()?;
             configure_clone_auth_prompt(&mut cmd, auth.as_ref(), &script);
             Ok::<AskPassScript, Error>(script)
