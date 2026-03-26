@@ -306,7 +306,7 @@ fn build_font_options_from_names(names: &[String], specials: &[&str]) -> Vec<Str
     options.extend(
         names
             .iter()
-            .filter(|name| !specials.iter().any(|special| name.as_str() == *special))
+            .filter(|name| !specials.contains(&name.as_str()))
             .cloned(),
     );
     options
@@ -369,9 +369,9 @@ fn resolve_applied_font_family(selection: &str, resolved_system_ui_family: &str)
 fn resolved_system_ui_font_family(options: &[String]) -> String {
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     {
-        return first_matching_font_family(options, SYSTEM_UI_FONT_CANDIDATES)
+        first_matching_font_family(options, SYSTEM_UI_FONT_CANDIDATES)
             .or_else(|| first_installed_non_bundled_font_family(options))
-            .unwrap_or_else(|| DEFAULT_UI_FONT_FAMILY.to_string());
+            .unwrap_or_else(|| DEFAULT_UI_FONT_FAMILY.to_string())
     }
 
     #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]

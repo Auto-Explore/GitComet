@@ -75,7 +75,5 @@ pub(crate) fn load_into_fontdb(db: &mut fontdb::Database) {
 }
 
 pub(crate) fn should_skip_font_option_alias(font_family: &str) -> bool {
-    FILTERED_FONT_ALIASES
-        .iter()
-        .any(|alias| font_family == *alias)
+    FILTERED_FONT_ALIASES.contains(&font_family)
 }

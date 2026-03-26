@@ -1496,9 +1496,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn settings_shortcut_reuses_existing_window_and_activates_it(
-        cx: &mut gpui::TestAppContext,
-    ) {
+    fn settings_shortcut_reuses_existing_window_and_activates_it(cx: &mut gpui::TestAppContext) {
         let _visual_guard = lock_visual_test();
         let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
         let (store, events) = AppStore::new(Arc::clone(&backend));
