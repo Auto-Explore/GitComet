@@ -683,6 +683,8 @@ pub(super) type LoadableMarkdownDoc =
 pub(super) type LoadableMarkdownDiff =
     Loadable<Arc<crate::view::markdown_preview::MarkdownPreviewDiff>>;
 
+pub(super) type LoadableImagePreview = Loadable<Option<Arc<gpui::Image>>>;
+
 #[derive(Clone, Debug)]
 pub(super) struct ConflictResolverMarkdownPreviewState {
     pub(super) source_hash: Option<u64>,
@@ -705,6 +707,33 @@ impl Default for ConflictResolverMarkdownPreviewState {
 impl ConflictResolverMarkdownPreviewState {
     pub(super) fn document(&self, side: ThreeWayColumn) -> &LoadableMarkdownDoc {
         &self.documents[side]
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct ConflictResolverImagePreviewState {
+    pub(super) source_hash: Option<u64>,
+    pub(super) path: Option<std::path::PathBuf>,
+    pub(super) images: ThreeWaySides<LoadableImagePreview>,
+}
+
+impl Default for ConflictResolverImagePreviewState {
+    fn default() -> Self {
+        Self {
+            source_hash: None,
+            path: None,
+            images: ThreeWaySides {
+                base: Loadable::NotLoaded,
+                ours: Loadable::NotLoaded,
+                theirs: Loadable::NotLoaded,
+            },
+        }
+    }
+}
+
+impl ConflictResolverImagePreviewState {
+    pub(super) fn image(&self, side: ThreeWayColumn) -> &LoadableImagePreview {
+        &self.images[side]
     }
 }
 
@@ -811,6 +840,8 @@ pub(super) struct ConflictResolverUiState {
     pub(super) resolved_outline: ResolvedOutlineData,
     /// Cached rendered markdown previews for the merge-input sides.
     pub(super) markdown_preview: ConflictResolverMarkdownPreviewState,
+    /// Cached image previews for the merge-input sides.
+    pub(super) image_preview: ConflictResolverImagePreviewState,
     /// Preview mode for the merge-input pane (Text vs rendered Preview).
     pub(super) resolver_preview_mode: ConflictResolverPreviewMode,
 }
@@ -851,6 +882,7 @@ impl Default for ConflictResolverUiState {
             resolver_pending_recompute_seq: 0,
             resolved_outline: ResolvedOutlineData::default(),
             markdown_preview: ConflictResolverMarkdownPreviewState::default(),
+            image_preview: ConflictResolverImagePreviewState::default(),
             resolver_preview_mode: ConflictResolverPreviewMode::default(),
         }
     }
@@ -2083,9 +2115,17 @@ pub enum GitCometViewMode {
     FocusedMergetool,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum InitialRepositoryLaunchMode {
+    #[default]
+    RestoreSession,
+    OpenExplicitly,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct GitCometViewConfig {
     pub initial_path: Option<std::path::PathBuf>,
+    pub initial_repository_launch_mode: InitialRepositoryLaunchMode,
     pub view_mode: GitCometViewMode,
     pub focused_mergetool: Option<FocusedMergetoolViewConfig>,
     pub focused_mergetool_exit_code: Option<Arc<AtomicI32>>,
@@ -2093,12 +2133,24 @@ pub struct GitCometViewConfig {
 }
 
 impl GitCometViewConfig {
-    pub fn normal(
-        initial_path: Option<std::path::PathBuf>,
+    pub fn normal(startup_crash_report: Option<StartupCrashReport>) -> Self {
+        Self {
+            initial_path: None,
+            initial_repository_launch_mode: InitialRepositoryLaunchMode::RestoreSession,
+            view_mode: GitCometViewMode::Normal,
+            focused_mergetool: None,
+            focused_mergetool_exit_code: None,
+            startup_crash_report,
+        }
+    }
+
+    pub fn normal_with_initial_repository(
+        initial_path: std::path::PathBuf,
         startup_crash_report: Option<StartupCrashReport>,
     ) -> Self {
         Self {
-            initial_path,
+            initial_path: Some(initial_path),
+            initial_repository_launch_mode: InitialRepositoryLaunchMode::OpenExplicitly,
             view_mode: GitCometViewMode::Normal,
             focused_mergetool: None,
             focused_mergetool_exit_code: None,
@@ -2279,6 +2331,51 @@ pub(super) fn renders_full_chrome(view_mode: GitCometViewMode) -> bool {
     matches!(view_mode, GitCometViewMode::Normal)
 }
 
+pub(super) fn should_seed_initial_repository_from_session(
+    view_mode: GitCometViewMode,
+    initial_path: Option<&std::path::Path>,
+    initial_repository_launch_mode: InitialRepositoryLaunchMode,
+    has_saved_open_repos: bool,
+) -> bool {
+    matches!(view_mode, GitCometViewMode::Normal)
+        && initial_path.is_some()
+        && (matches!(
+            initial_repository_launch_mode,
+            InitialRepositoryLaunchMode::OpenExplicitly
+        ) || has_saved_open_repos)
+}
+
+pub(super) fn repository_entry_interstitial_active(
+    view_mode: GitCometViewMode,
+    has_repo_tabs: bool,
+) -> bool {
+    matches!(view_mode, GitCometViewMode::Normal) && !has_repo_tabs
+}
+
+pub(super) fn should_show_startup_repository_loading_screen(
+    view_mode: GitCometViewMode,
+    has_repo_tabs: bool,
+    startup_repo_bootstrap_pending: bool,
+) -> bool {
+    repository_entry_interstitial_active(view_mode, has_repo_tabs) && startup_repo_bootstrap_pending
+}
+
+pub(super) fn should_show_splash_screen(
+    view_mode: GitCometViewMode,
+    has_repo_tabs: bool,
+    startup_repo_bootstrap_pending: bool,
+) -> bool {
+    repository_entry_interstitial_active(view_mode, has_repo_tabs)
+        && !startup_repo_bootstrap_pending
+}
+
+pub(super) fn titlebar_workspace_actions_enabled(
+    view_mode: GitCometViewMode,
+    has_repo_tabs: bool,
+) -> bool {
+    !repository_entry_interstitial_active(view_mode, has_repo_tabs)
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(super) enum ThemeMode {
     #[default]
@@ -2389,6 +2486,8 @@ pub struct GitCometView {
     pub(super) toast_host: Entity<ToastHost>,
     pub(super) popover_host: Entity<PopoverHost>,
     pub(super) focused_mergetool_bootstrap: Option<FocusedMergetoolBootstrap>,
+    pub(super) startup_repo_bootstrap_pending: bool,
+    pub(super) splash_backdrop_image: Arc<gpui::Image>,
 
     pub(super) last_window_size: Size<Pixels>,
     pub(super) ui_window_size_last_seen: Size<Pixels>,

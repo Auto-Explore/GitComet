@@ -60,6 +60,7 @@ mod poller;
 mod repo_open;
 pub(crate) mod rows;
 mod settings_window;
+mod splash;
 mod state_apply;
 mod toast_host;
 mod tooltip;
@@ -92,13 +93,13 @@ use diff_utils::{
     build_unified_patch_for_selected_lines_across_hunks_for_worktree_discard,
     compute_diff_file_for_src_ix, compute_diff_file_stats,
     context_menu_selection_range_from_diff_text, diff_content_text, image_format_for_path,
-    parse_diff_git_header_path, parse_unified_hunk_header_for_display, rasterize_svg_preview_image,
+    parse_diff_git_header_path, parse_unified_hunk_header_for_display,
     scrollbar_markers_from_flags,
 };
 use mod_helpers::*;
 pub use mod_helpers::{
     FocusedMergetoolLabels, FocusedMergetoolViewConfig, GitCometView, GitCometViewConfig,
-    GitCometViewMode, StartupCrashReport,
+    GitCometViewMode, InitialRepositoryLaunchMode, StartupCrashReport,
 };
 use panels::{ActionBarView, PopoverHost, RepoTabsBarView};
 use panes::{DetailsPaneInit, DetailsPaneView, HistoryView, MainPaneView, SidebarPaneView};
@@ -230,13 +231,11 @@ impl GitCometView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Self {
-        Self::new_with_config(
-            store,
-            events,
-            GitCometViewConfig::normal(initial_path, None),
-            window,
-            cx,
-        )
+        let config = match initial_path {
+            Some(path) => GitCometViewConfig::normal_with_initial_repository(path, None),
+            None => GitCometViewConfig::normal(None),
+        };
+        Self::new_with_config(store, events, config, window, cx)
     }
 
     pub fn new_with_config(
@@ -248,6 +247,7 @@ impl GitCometView {
     ) -> Self {
         let GitCometViewConfig {
             mut initial_path,
+            initial_repository_launch_mode,
             view_mode,
             focused_mergetool,
             focused_mergetool_exit_code,
@@ -267,8 +267,12 @@ impl GitCometView {
         let store = Arc::new(store);
 
         let mut ui_session = session::load();
-        if view_mode == GitCometViewMode::Normal
-            && let Some(path) = initial_path.as_ref()
+        if should_seed_initial_repository_from_session(
+            view_mode,
+            initial_path.as_deref(),
+            initial_repository_launch_mode,
+            !ui_session.open_repos.is_empty(),
+        ) && let Some(path) = initial_path.as_ref()
         {
             if !ui_session.open_repos.iter().any(|p| p == path) {
                 ui_session.open_repos.push(path.clone());
@@ -306,6 +310,7 @@ impl GitCometView {
         let history_show_author = ui_session.history_show_author.unwrap_or(true);
         let history_show_date = ui_session.history_show_date.unwrap_or(true);
         let history_show_sha = ui_session.history_show_sha.unwrap_or(false);
+        let mut startup_repo_bootstrap_pending = false;
 
         // Only auto-restore/open on startup if the store hasn't already been preloaded.
         // This avoids re-opening repos (and changing RepoIds) when the UI is attached to an
@@ -330,8 +335,7 @@ impl GitCometView {
                     open_repos: ui_session.open_repos,
                     active_repo: ui_session.active_repo,
                 });
-            } else if let Ok(path) = std::env::current_dir() {
-                store.dispatch(Msg::OpenRepo(path));
+                startup_repo_bootstrap_pending = true;
             }
         } else if store_preloaded {
             if let Some(path) = initial_path.as_ref() {
@@ -339,9 +343,13 @@ impl GitCometView {
             }
         } else if let Some(path) = initial_path.as_ref() {
             store.dispatch(Msg::OpenRepo(path.clone()));
+            startup_repo_bootstrap_pending = true;
         }
 
         let initial_state = store.snapshot();
+        if !initial_state.repos.is_empty() {
+            startup_repo_bootstrap_pending = false;
+        }
         let ui_model = cx.new(|_cx| AppUiModel::new(Arc::clone(&initial_state)));
 
         let ui_model_subscription = cx.observe(&ui_model, |this, model, cx| {
@@ -355,7 +363,13 @@ impl GitCometView {
         let weak_view = cx.weak_entity();
         let poller = Poller::start(Arc::clone(&store), events, ui_model.downgrade(), window, cx);
 
-        let title_bar = cx.new(|_cx| TitleBarView::new(initial_theme, weak_view.clone()));
+        let title_bar = cx.new(|_cx| {
+            TitleBarView::new(
+                initial_theme,
+                weak_view.clone(),
+                titlebar_workspace_actions_enabled(view_mode, !initial_state.repos.is_empty()),
+            )
+        });
         let tooltip_host = cx.new(|_cx| TooltipHost::new(initial_theme));
         let toast_host = cx
             .new(|_cx| ToastHost::new(initial_theme, tooltip_host.downgrade(), weak_view.clone()));
@@ -568,6 +582,8 @@ impl GitCometView {
             toast_host,
             popover_host,
             focused_mergetool_bootstrap,
+            startup_repo_bootstrap_pending,
+            splash_backdrop_image: splash::load_splash_backdrop_image(),
             last_window_size: size(px(0.0), px(0.0)),
             ui_window_size_last_seen: size(px(0.0), px(0.0)),
             ui_settings_persist_seq: 0,
@@ -1297,133 +1313,7 @@ impl Render for GitCometView {
             .map(cursor_style_for_resize_edge)
             .unwrap_or(CursorStyle::Arrow);
 
-        let center_content = if renders_full_chrome(self.view_mode) {
-            div()
-                .flex()
-                .flex_col()
-                .flex_1()
-                .min_h(px(0.0))
-                .child(self.repo_tabs_bar.clone())
-                .child(self.open_repo_panel(cx))
-                .child(self.action_bar.clone())
-                .child(
-                    div()
-                        .flex()
-                        .flex_row()
-                        .flex_1()
-                        .min_h(px(0.0))
-                        .child(
-                            div()
-                                .id("sidebar_pane")
-                                .relative()
-                                .w(self.sidebar_render_width)
-                                .min_h(px(0.0))
-                                .bg(theme.colors.surface_bg)
-                                .when(self.sidebar_collapsed, |d| {
-                                    d.border_r_1().border_color(theme.colors.border)
-                                })
-                                .when(!self.sidebar_collapsed, |d| {
-                                    d.child(self.sidebar_pane.clone())
-                                })
-                                .child(
-                                    div().absolute().bottom(px(6.0)).right(px(6.0)).child(
-                                        components::Button::new("sidebar_toggle", "")
-                                            .start_slot(svg_icon(
-                                                if self.sidebar_collapsed {
-                                                    "icons/arrow_right.svg"
-                                                } else {
-                                                    "icons/arrow_left.svg"
-                                                },
-                                                theme.colors.text_muted,
-                                                px(12.0),
-                                            ))
-                                            .style(components::ButtonStyle::Transparent)
-                                            .on_click(theme, cx, |this, _e, _w, cx| {
-                                                this.set_sidebar_collapsed(
-                                                    !this.sidebar_collapsed,
-                                                    cx,
-                                                );
-                                            }),
-                                    ),
-                                ),
-                        )
-                        .child(self.pane_resize_handle(
-                            theme,
-                            "pane_resize_sidebar",
-                            PaneResizeHandle::Sidebar,
-                            cx,
-                        ))
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w(px(0.0))
-                                .min_h(px(0.0))
-                                .child(self.main_pane.clone()),
-                        )
-                        .child(self.pane_resize_handle(
-                            theme,
-                            "pane_resize_details",
-                            PaneResizeHandle::Details,
-                            cx,
-                        ))
-                        .child(
-                            div()
-                                .id("details_pane")
-                                .relative()
-                                .w(self.details_render_width)
-                                .min_h(px(0.0))
-                                .flex()
-                                .flex_col()
-                                .when(self.details_collapsed, |d| {
-                                    d.border_l_1().border_color(theme.colors.border)
-                                })
-                                .when(!self.details_collapsed, |d| {
-                                    d.child(
-                                        div()
-                                            .flex_1()
-                                            .min_h(px(0.0))
-                                            .child(self.details_pane.clone()),
-                                    )
-                                })
-                                .child(
-                                    div().absolute().bottom(px(6.0)).left(px(6.0)).child(
-                                        components::Button::new("details_toggle", "")
-                                            .start_slot(svg_icon(
-                                                if self.details_collapsed {
-                                                    "icons/arrow_left.svg"
-                                                } else {
-                                                    "icons/arrow_right.svg"
-                                                },
-                                                theme.colors.text_muted,
-                                                px(12.0),
-                                            ))
-                                            .style(components::ButtonStyle::Transparent)
-                                            .on_click(theme, cx, |this, _e, _w, cx| {
-                                                this.set_details_collapsed(
-                                                    !this.details_collapsed,
-                                                    cx,
-                                                );
-                                            }),
-                                    ),
-                                ),
-                        ),
-                )
-                .into_any_element()
-        } else {
-            div()
-                .flex()
-                .flex_col()
-                .flex_1()
-                .min_h(px(0.0))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w(px(0.0))
-                        .min_h(px(0.0))
-                        .child(self.main_pane.clone()),
-                )
-                .into_any_element()
-        };
+        let center_content = self.center_content(window, cx);
 
         let mut body = div()
             .flex()

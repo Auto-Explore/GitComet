@@ -43,6 +43,7 @@ clap = { version = "4.6.0", features = ["derive"] }
 criterion = "0.8.2"
 gix = { version = "0.81.0", default-features = false, features = ["max-performance-safe", "comfort", "basic", "auto-chain-error", "status", "blame", "sha1"] }
 gpui = { version = "0.2.2" }
+image = "0.25.10"
 lru = "0.16"
 mimalloc = { version = "0.1.48", features = ["v3"] }
 pulldown-cmark = { version = "0.13", default-features = false, features = ["simd"] }

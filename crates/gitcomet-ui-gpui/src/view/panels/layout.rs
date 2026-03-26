@@ -423,7 +423,7 @@ impl DetailsPaneView {
                                     cx.processor(Self::render_commit_file_rows),
                                 )
                                 .w_full()
-                                .flex_1()
+                                .h_full()
                                 .min_h(px(0.0))
                                 .track_scroll(self.commit_files_scroll.clone());
                                 let files_scrollbar_gutter = components::Scrollbar::visible_gutter(
@@ -579,7 +579,7 @@ impl DetailsPaneView {
                                 cx.processor(Self::render_commit_file_rows),
                             )
                             .w_full()
-                            .flex_1()
+                            .h_full()
                             .min_h(px(0.0))
                             .track_scroll(self.commit_files_scroll.clone());
                             let files_scrollbar_gutter = components::Scrollbar::visible_gutter(

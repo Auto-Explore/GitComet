@@ -346,6 +346,141 @@ fn focused_mergetool_bootstrap_reuses_shared_text_arcs(cx: &mut gpui::TestAppCon
 }
 
 #[gpui::test]
+fn svg_conflict_preview_rasterizes_off_the_ui_thread(cx: &mut gpui::TestAppContext) {
+    use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession};
+
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    disable_view_poller_for_test(cx, &view);
+
+    let repo_id = gitcomet_state::model::RepoId(163);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_svg_conflict_preview",
+        std::process::id()
+    ));
+    let file_rel = std::path::PathBuf::from("fixtures/conflict_preview.svg");
+    let abs_path = workdir.join(&file_rel);
+
+    let base_svg: Arc<str> =
+        r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><rect width="16" height="16" fill="#1d4ed8"/></svg>"##
+            .into();
+    let ours_svg: Arc<str> =
+        r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="#dc2626"/></svg>"##
+            .into();
+    let theirs_svg: Arc<str> =
+        r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M2 14L8 2L14 14Z" fill="#16a34a"/></svg>"##
+            .into();
+    let current_text: Arc<str> = format!(
+        "<<<<<<< ours\n{}\n=======\n{}\n>>>>>>> theirs\n",
+        ours_svg, theirs_svg
+    )
+    .into();
+
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(abs_path.parent().expect("svg conflict preview parent"))
+        .expect("create svg conflict preview dir");
+    std::fs::write(&abs_path, current_text.as_bytes()).expect("write svg conflict preview");
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            set_test_conflict_status(
+                &mut repo,
+                file_rel.clone(),
+                gitcomet_core::domain::DiffArea::Unstaged,
+            );
+            repo.conflict_state.conflict_file_path = Some(file_rel.clone());
+            repo.conflict_state.conflict_file =
+                gitcomet_state::model::Loadable::Ready(Some(gitcomet_state::model::ConflictFile {
+                    path: file_rel.clone(),
+                    base_bytes: None,
+                    ours_bytes: None,
+                    theirs_bytes: None,
+                    current_bytes: None,
+                    base: Some(base_svg.clone()),
+                    ours: Some(ours_svg.clone()),
+                    theirs: Some(theirs_svg.clone()),
+                    current: Some(current_text.clone()),
+                }));
+            repo.conflict_state.conflict_session = Some(ConflictSession::from_merged_text(
+                file_rel.clone(),
+                gitcomet_core::domain::FileConflictKind::BothModified,
+                ConflictPayload::Text(base_svg.clone()),
+                ConflictPayload::Text(ours_svg.clone()),
+                ConflictPayload::Text(theirs_svg.clone()),
+                &current_text,
+            ));
+
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+
+    wait_for_main_pane_condition_with_timeout(
+        cx,
+        &view,
+        "svg conflict resolver bootstrap initialized",
+        BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
+        |pane| {
+            pane.conflict_resolver.path.as_ref() == Some(&file_rel)
+                && pane.conflict_resolver.source_hash.is_some()
+        },
+        |pane| {
+            format!(
+                "path={:?} source_hash={:?} preview_path={:?}",
+                pane.conflict_resolver.path.clone(),
+                pane.conflict_resolver.source_hash,
+                pane.conflict_resolver.image_preview.path.clone(),
+            )
+        },
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.ensure_conflict_image_preview_cache(cx);
+            });
+        });
+    });
+
+    wait_for_main_pane_condition_with_timeout(
+        cx,
+        &view,
+        "svg conflict preview cache rasterized",
+        BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
+        |pane| {
+            matches!(
+                pane.conflict_resolver.image_preview.image(ThreeWayColumn::Base),
+                Loadable::Ready(Some(image)) if image.format() == gpui::ImageFormat::Png
+            ) && matches!(
+                pane.conflict_resolver.image_preview.image(ThreeWayColumn::Ours),
+                Loadable::Ready(Some(image)) if image.format() == gpui::ImageFormat::Png
+            ) && matches!(
+                pane.conflict_resolver.image_preview.image(ThreeWayColumn::Theirs),
+                Loadable::Ready(Some(image)) if image.format() == gpui::ImageFormat::Png
+            )
+        },
+        |pane| {
+            format!(
+                "base={:?} ours={:?} theirs={:?}",
+                pane.conflict_resolver
+                    .image_preview
+                    .image(ThreeWayColumn::Base),
+                pane.conflict_resolver
+                    .image_preview
+                    .image(ThreeWayColumn::Ours),
+                pane.conflict_resolver
+                    .image_preview
+                    .image(ThreeWayColumn::Theirs),
+            )
+        },
+    );
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup svg conflict preview fixture");
+}
+
+#[gpui::test]
 fn conflict_resolver_input_lists_measure_later_long_rows_for_horizontal_scroll(
     cx: &mut gpui::TestAppContext,
 ) {

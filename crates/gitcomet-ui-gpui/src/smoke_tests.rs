@@ -1238,6 +1238,34 @@ fn wait_for_repo_open(store: &AppStore, repo_id: RepoId) {
     }
 }
 
+fn seed_workspace_repo(
+    cx: &mut gpui::VisualTestContext,
+    store: &AppStore,
+    view: gpui::Entity<crate::view::GitCometView>,
+    path: PathBuf,
+) {
+    store.dispatch(Msg::OpenRepo(path));
+
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+
+        let ready = cx.update(|_window, app| !view.read(app).blocks_non_repository_actions());
+        if ready {
+            return;
+        }
+
+        if Instant::now() >= deadline {
+            panic!("timed out waiting for the workspace view to leave the splash state");
+        }
+
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
 fn restore_session_and_draw(
     cx: &mut gpui::VisualTestContext,
     store: &AppStore,
@@ -1786,9 +1814,16 @@ fn picker_prompt_scrollbar_drag_scrolls_list(cx: &mut gpui::TestAppContext) {
 #[gpui::test]
 fn popover_is_clickable_above_content(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_view = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
-        crate::view::GitCometView::new(store, events, None, window, cx)
+        crate::view::GitCometView::new(store_for_view, events, None, window, cx)
     });
+    seed_workspace_repo(
+        cx,
+        &store,
+        view.clone(),
+        PathBuf::from("/tmp/gitcomet-smoke-popover-click-test"),
+    );
 
     // Open the repo picker dropdown in the action bar, which should overlay the rest of the UI.
     let picker_bounds = cx
@@ -1840,9 +1875,16 @@ fn popover_is_clickable_above_content(cx: &mut gpui::TestAppContext) {
 #[gpui::test]
 fn popover_closes_when_clicking_outside(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_view = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
-        crate::view::GitCometView::new(store, events, None, window, cx)
+        crate::view::GitCometView::new(store_for_view, events, None, window, cx)
     });
+    seed_workspace_repo(
+        cx,
+        &store,
+        view.clone(),
+        PathBuf::from("/tmp/gitcomet-smoke-popover-outside-test"),
+    );
 
     let picker_bounds = cx
         .debug_bounds("repo_picker")
@@ -1890,9 +1932,16 @@ fn titlebar_hamburger_opens_app_menu_but_brand_pill_does_not(cx: &mut gpui::Test
 
     let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_view = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
-        crate::view::GitCometView::new(store, events, None, window, cx)
+        crate::view::GitCometView::new(store_for_view, events, None, window, cx)
     });
+    seed_workspace_repo(
+        cx,
+        &store,
+        view.clone(),
+        PathBuf::from("/tmp/gitcomet-smoke-titlebar-menu-test"),
+    );
 
     cx.update(|window, app| {
         let _ = window.draw(app);

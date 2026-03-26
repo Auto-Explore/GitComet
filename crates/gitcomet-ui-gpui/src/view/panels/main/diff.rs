@@ -110,7 +110,7 @@ impl MainPaneView {
                     } else {
                         enum CachedDiffImageSource {
                             Path(std::path::PathBuf),
-                            Image(Arc<gpui::Image>),
+                            Render(Arc<gpui::RenderImage>),
                         }
 
                         let old = self
@@ -120,7 +120,7 @@ impl MainPaneView {
                             .or_else(|| {
                                 self.file_image_diff_cache_old
                                     .clone()
-                                    .map(CachedDiffImageSource::Image)
+                                    .map(CachedDiffImageSource::Render)
                             });
                         let new = self
                             .file_image_diff_cache_new_svg_path
@@ -129,10 +129,11 @@ impl MainPaneView {
                             .or_else(|| {
                                 self.file_image_diff_cache_new
                                     .clone()
-                                    .map(CachedDiffImageSource::Image)
+                                    .map(CachedDiffImageSource::Render)
                             });
 
                         let cell = |id: &'static str, image: Option<CachedDiffImageSource>| {
+                            let muted = theme.colors.text_muted;
                             div()
                                 .id(id)
                                 .flex_1()
@@ -156,13 +157,41 @@ impl MainPaneView {
                                             } else {
                                                 gpui::ObjectFit::Contain
                                             })
+                                            .with_loading(move || {
+                                                div()
+                                                    .text_sm()
+                                                    .text_color(muted)
+                                                    .child("Processing image...")
+                                                    .into_any_element()
+                                            })
+                                            .with_fallback(move || {
+                                                div()
+                                                    .text_sm()
+                                                    .text_color(muted)
+                                                    .child("Preview unavailable.")
+                                                    .into_any_element()
+                                            })
                                             .into_any_element()
                                     }
-                                    Some(CachedDiffImageSource::Image(img_data)) => {
+                                    Some(CachedDiffImageSource::Render(img_data)) => {
                                         gpui::img(img_data)
                                             .w_full()
                                             .h_full()
                                             .object_fit(gpui::ObjectFit::Contain)
+                                            .with_loading(move || {
+                                                div()
+                                                    .text_sm()
+                                                    .text_color(muted)
+                                                    .child("Processing image...")
+                                                    .into_any_element()
+                                            })
+                                            .with_fallback(move || {
+                                                div()
+                                                    .text_sm()
+                                                    .text_color(muted)
+                                                    .child("Preview unavailable.")
+                                                    .into_any_element()
+                                            })
                                             .into_any_element()
                                     }
                                     None => div()

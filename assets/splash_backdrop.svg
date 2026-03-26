@@ -1,0 +1,129 @@
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  width="1600"
+  height="900"
+  viewBox="0 0 1600 900"
+  preserveAspectRatio="none"
+  aria-hidden="true"
+  focusable="false"
+>
+  <defs>
+    <linearGradient id="base-sky" x1="800" y1="0" x2="800" y2="900" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#060a13" />
+      <stop offset="38%" stop-color="#040915" />
+      <stop offset="100%" stop-color="#02050f" />
+    </linearGradient>
+
+    <radialGradient
+      id="top-shade"
+      cx="0"
+      cy="0"
+      r="1"
+      gradientUnits="userSpaceOnUse"
+      gradientTransform="translate(800 -54) scale(1504 522)"
+    >
+      <stop offset="0%" stop-color="#050911" stop-opacity="0.96" />
+      <stop offset="84%" stop-color="#050911" stop-opacity="0" />
+      <stop offset="100%" stop-color="#050911" stop-opacity="0" />
+    </radialGradient>
+
+    <radialGradient
+      id="bottom-glow"
+      cx="0"
+      cy="0"
+      r="1"
+      gradientUnits="userSpaceOnUse"
+      gradientTransform="translate(800 1026) scale(2000 648)"
+    >
+      <stop offset="0%" stop-color="#fff7ed" stop-opacity="0.98" />
+      <stop offset="13%" stop-color="#ffe2cb" stop-opacity="0.78" />
+      <stop offset="24%" stop-color="#f8805a" stop-opacity="0.48" />
+      <stop offset="41%" stop-color="#354865" stop-opacity="0.2" />
+      <stop offset="58%" stop-color="#060a13" stop-opacity="0" />
+      <stop offset="100%" stop-color="#060a13" stop-opacity="0" />
+    </radialGradient>
+
+    <linearGradient
+      id="warm-sweep"
+      x1="31.8"
+      y1="948.9"
+      x2="1568.2"
+      y2="-48.9"
+      gradientUnits="userSpaceOnUse"
+    >
+      <stop offset="0%" stop-color="#f37855" stop-opacity="0" />
+      <stop offset="34%" stop-color="#f37855" stop-opacity="0" />
+      <stop offset="50%" stop-color="#f37855" stop-opacity="0.44" />
+      <stop offset="65%" stop-color="#f37855" stop-opacity="0.1" />
+      <stop offset="78%" stop-color="#f37855" stop-opacity="0" />
+      <stop offset="100%" stop-color="#f37855" stop-opacity="0" />
+    </linearGradient>
+
+    <linearGradient
+      id="cool-sweep"
+      x1="31.8"
+      y1="-48.9"
+      x2="1568.2"
+      y2="948.9"
+      gradientUnits="userSpaceOnUse"
+    >
+      <stop offset="0%" stop-color="#6bc0e7" stop-opacity="0" />
+      <stop offset="30%" stop-color="#6bc0e7" stop-opacity="0" />
+      <stop offset="47%" stop-color="#6bc0e7" stop-opacity="0.38" />
+      <stop offset="62%" stop-color="#6bc0e7" stop-opacity="0.09" />
+      <stop offset="76%" stop-color="#6bc0e7" stop-opacity="0" />
+      <stop offset="100%" stop-color="#6bc0e7" stop-opacity="0" />
+    </linearGradient>
+
+    <linearGradient
+      id="center-sheen"
+      x1="0"
+      y1="450"
+      x2="1600"
+      y2="450"
+      gradientUnits="userSpaceOnUse"
+    >
+      <stop offset="0%" stop-color="#ebf5ff" stop-opacity="0" />
+      <stop offset="33%" stop-color="#ebf5ff" stop-opacity="0" />
+      <stop offset="49%" stop-color="#ebf5ff" stop-opacity="0.24" />
+      <stop offset="63%" stop-color="#ebf5ff" stop-opacity="0.06" />
+      <stop offset="78%" stop-color="#ebf5ff" stop-opacity="0" />
+      <stop offset="100%" stop-color="#ebf5ff" stop-opacity="0" />
+    </linearGradient>
+
+    <radialGradient
+      id="left-haze"
+      cx="0"
+      cy="0"
+      r="1"
+      gradientUnits="userSpaceOnUse"
+      gradientTransform="translate(272 702) scale(1040 468)"
+    >
+      <stop offset="0%" stop-color="#a5b3c9" stop-opacity="0.33" />
+      <stop offset="72%" stop-color="#a5b3c9" stop-opacity="0" />
+      <stop offset="100%" stop-color="#a5b3c9" stop-opacity="0" />
+    </radialGradient>
+
+    <radialGradient
+      id="right-haze"
+      cx="0"
+      cy="0"
+      r="1"
+      gradientUnits="userSpaceOnUse"
+      gradientTransform="translate(1312 702) scale(976 468)"
+    >
+      <stop offset="0%" stop-color="#4694c0" stop-opacity="0.28" />
+      <stop offset="74%" stop-color="#4694c0" stop-opacity="0" />
+      <stop offset="100%" stop-color="#4694c0" stop-opacity="0" />
+    </radialGradient>
+  </defs>
+
+  <rect width="1600" height="900" fill="url(#base-sky)" />
+  <rect width="1600" height="900" fill="url(#bottom-glow)" />
+  <rect width="1600" height="900" fill="url(#warm-sweep)" />
+  <rect width="1600" height="900" fill="url(#cool-sweep)" />
+  <rect width="1600" height="900" fill="url(#center-sheen)" />
+  <rect width="1600" height="900" fill="url(#left-haze)" />
+  <rect width="1600" height="900" fill="url(#right-haze)" />
+  <rect width="1600" height="900" fill="url(#top-shade)" />
+</svg>
