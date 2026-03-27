@@ -1,6 +1,8 @@
 use super::text_model::{TextModel, TextModelSnapshot};
 use crate::theme::AppTheme;
 use crate::view::components::CONTROL_HEIGHT_PX;
+#[cfg(test)]
+use gpui::hsla;
 use gpui::prelude::*;
 use gpui::{
     App, Bounds, ClipboardItem, Context, CursorStyle, Div, Element, ElementId, ElementInputHandler,
@@ -9,8 +11,6 @@ use gpui::{
     ScrollHandle, ShapedLine, SharedString, Style, TextAlign, TextRun, UTF16Selection, Window,
     WrappedLine, actions, anchored, deferred, div, fill, point, px, relative, size,
 };
-#[cfg(test)]
-use gpui::hsla;
 use rustc_hash::{FxHashMap as HashMap, FxHasher};
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
