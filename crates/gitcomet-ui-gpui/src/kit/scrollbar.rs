@@ -611,10 +611,10 @@ impl Scrollbar {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct ThumbMetrics {
-    offset: Pixels,
-    length: Pixels,
-    thickness: Pixels,
+pub(crate) struct ThumbMetrics {
+    pub(crate) offset: Pixels,
+    pub(crate) length: Pixels,
+    pub(crate) thickness: Pixels,
 }
 
 fn marker_colors(
@@ -668,7 +668,7 @@ fn clamped_track_axis_position(
     }
 }
 
-fn compute_vertical_click_offset(
+pub(crate) fn compute_vertical_click_offset(
     event_y: Pixels,
     track_bounds: Bounds<Pixels>,
     thumb_size: Pixels,
@@ -726,7 +726,7 @@ fn compute_horizontal_click_offset(
     scroll_x * sign
 }
 
-fn vertical_thumb_metrics(
+pub(crate) fn vertical_thumb_metrics(
     viewport_h: Pixels,
     max_offset: Pixels,
     scroll_y: Pixels,

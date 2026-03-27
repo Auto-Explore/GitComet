@@ -1,0 +1,10 @@
+{
+  "bench": "app_launch/cold_five_repos",
+  "metrics": {
+    "first_paint_ms": 242,
+    "first_interactive_ms": 266,
+    "rss_at_first_paint_kib": 175104,
+    "rss_at_interactive_kib": 189712,
+    "repos_loaded": 5
+  }
+}

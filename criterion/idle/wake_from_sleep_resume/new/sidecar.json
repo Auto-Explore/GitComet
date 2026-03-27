@@ -1,0 +1,28 @@
+{
+  "bench": "idle/wake_from_sleep_resume",
+  "metrics": {
+    "open_repos": 10,
+    "tracked_files_per_repo": 1000,
+    "sample_duration_ms": 215.928886,
+    "sample_count": 1,
+    "avg_cpu_pct": 55.205317458082014,
+    "peak_cpu_pct": 55.21044656136475,
+    "rss_start_kib": 35092,
+    "rss_end_kib": 80816,
+    "rss_delta_kib": 45724,
+    "refresh_cycles": 1,
+    "repos_refreshed": 10,
+    "status_calls": 10,
+    "status_ms": 215.80568599999998,
+    "avg_refresh_cycle_ms": 215.828086,
+    "max_refresh_cycle_ms": 215.828086,
+    "wake_resume_ms": 215.828086,
+    "alloc_ops": 79273,
+    "dealloc_ops": 79189,
+    "realloc_ops": 15981,
+    "alloc_bytes": 53715217,
+    "dealloc_bytes": 52526425,
+    "realloc_bytes_delta": 3026892,
+    "net_alloc_bytes": 1188792
+  }
+}

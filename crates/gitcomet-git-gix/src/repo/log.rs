@@ -1,5 +1,5 @@
-use super::GixRepo;
 use super::history::gix_head_id_or_none;
+use super::{GixRepo, bstr_to_arc_str, oid_to_arc_str};
 use crate::util::{
     bytes_to_text_preserving_utf8, parse_git_log_pretty_records, path_buf_from_git_bytes,
     run_git_capture, unix_seconds_to_system_time, unix_seconds_to_system_time_or_epoch,
@@ -10,9 +10,11 @@ use gitcomet_core::domain::{
 use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
 use gitcomet_core::services::Result;
 use gix::bstr::ByteSlice as _;
+use gix::objs::FindExt as _;
 use gix::traverse::commit::simple::CommitTimeOrder;
 use rustc_hash::FxHashSet as HashSet;
 use std::path::Path;
+use std::sync::Arc;
 
 struct CursorGate<'a> {
     cursor: Option<&'a LogCursor>,
@@ -101,8 +103,8 @@ pub(super) fn stash_reflog_entries(repo: &gix::Repository) -> Result<Vec<StashEn
             let created_at = unix_seconds_to_system_time(line.signature.time.seconds);
             Ok(StashEntry {
                 index,
-                id: CommitId(line.new_oid.to_string().into()),
-                message: bytes_to_text_preserving_utf8(line.message.as_ref()).into(),
+                id: CommitId(oid_to_arc_str(&line.new_oid)),
+                message: bstr_to_arc_str(line.message.as_ref()),
                 created_at,
             })
         })
@@ -137,40 +139,46 @@ fn reference_commit_id(mut reference: gix::Reference<'_>) -> Result<Option<gix::
     }
 }
 
-fn commit_from_walk_info<'repo>(
-    info: &gix::revision::walk::Info<'repo>,
-    id: String,
+fn commit_from_walk_info(
+    info: &gix::revision::walk::Info<'_>,
+    decode_buf: &mut Vec<u8>,
 ) -> Result<Commit> {
-    let commit_obj = info
-        .object()
+    let id = info.id();
+    let commit_ref = id
+        .repo
+        .objects
+        .find_commit_iter(id.as_ref(), decode_buf)
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix commit object: {e}"))))?;
 
-    let summary = commit_obj
-        .message_raw_sloppy()
+    let summary_bytes = commit_ref
+        .message()
+        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix commit message: {e}"))))?
         .lines()
         .next()
-        .unwrap_or_default()
-        .to_str_lossy()
-        .into_owned();
+        .unwrap_or_default();
+    let summary = bstr_to_arc_str(summary_bytes);
 
-    let author = commit_obj
-        .author()
-        .map(|s| s.name.to_str_lossy().into_owned())
-        .unwrap_or_else(|_| "unknown".to_string());
+    let author = match commit_ref.author() {
+        Ok(s) => bstr_to_arc_str(s.name.as_ref()),
+        Err(_) => Arc::from("unknown"),
+    };
 
-    let seconds = commit_obj.time().map(|t| t.seconds).unwrap_or(0);
+    let seconds = info
+        .commit_time
+        .unwrap_or_else(|| commit_ref.committer().map(|t| t.seconds()).unwrap_or(0));
     let time = unix_seconds_to_system_time_or_epoch(seconds);
 
     let parent_ids = info
-        .parent_ids()
-        .map(|parent_id| CommitId(parent_id.detach().to_string().into()))
+        .parent_ids
+        .iter()
+        .map(|parent_id| CommitId(oid_to_arc_str(parent_id)))
         .collect::<Vec<_>>();
 
     Ok(Commit {
-        id: CommitId(id.into()),
+        id: CommitId(oid_to_arc_str(id.as_ref())),
         parent_ids,
-        summary: summary.into(),
-        author: author.into(),
+        summary,
+        author,
         time,
     })
 }
@@ -266,6 +274,19 @@ fn empty_log_page() -> LogPage {
     }
 }
 
+fn object_id_from_commit_id(id: &CommitId) -> Option<gix::ObjectId> {
+    gix::ObjectId::from_hex(id.as_ref().as_bytes()).ok()
+}
+
+fn apply_first_parent_resume_hint(page: &mut LogPage) {
+    if let Some(cursor) = page.next_cursor.as_mut() {
+        cursor.resume_from = page
+            .commits
+            .last()
+            .and_then(|commit| commit.parent_ids.first().cloned());
+    }
+}
+
 fn reflog_unborn_head_error(repo: &gix::Repository) -> Error {
     let branch = repo
         .head_name()
@@ -312,6 +333,7 @@ fn paginate_commits(
         if result.len() >= limit {
             next_cursor = result.last().map(|c| LogCursor {
                 last_seen: c.id.clone(),
+                resume_from: None,
             });
             break;
         }
@@ -333,12 +355,12 @@ fn log_page_from_walk<'repo, E>(
 where
     E: std::fmt::Display,
 {
+    let mut decode_buf = Vec::new();
     paginate_commits(
-        walk.map(|result| {
+        walk.map(move |result| {
             let info =
                 result.map_err(|e| Error::new(ErrorKind::Backend(format!("gix walk: {e}"))))?;
-            let id = info.id().detach().to_string();
-            commit_from_walk_info(&info, id)
+            commit_from_walk_info(&info, &mut decode_buf)
         }),
         limit,
         cursor,
@@ -371,6 +393,23 @@ impl GixRepo {
         }
 
         let repo = self._repo.to_thread_local();
+        if let Some(resume_tip) = cursor
+            .and_then(|cursor| cursor.resume_from.as_ref())
+            .and_then(object_id_from_commit_id)
+        {
+            let walk = repo
+                .rev_walk([resume_tip])
+                .sorting(gix::revision::walk::Sorting::ByCommitTime(
+                    CommitTimeOrder::NewestFirst,
+                ))
+                .first_parent_only()
+                .all()
+                .map_err(|e| Error::new(ErrorKind::Backend(format!("gix rev_walk: {e}"))))?;
+            let mut page = log_page_from_walk(walk, limit, None)?;
+            apply_first_parent_resume_hint(&mut page);
+            return Ok(page);
+        }
+
         let Some(head_id) = gix_head_id_or_none(&repo)? else {
             return Ok(empty_log_page());
         };
@@ -383,7 +422,9 @@ impl GixRepo {
             .first_parent_only()
             .all()
             .map_err(|e| Error::new(ErrorKind::Backend(format!("gix rev_walk: {e}"))))?;
-        log_page_from_walk(walk, limit, cursor)
+        let mut page = log_page_from_walk(walk, limit, cursor)?;
+        apply_first_parent_resume_hint(&mut page);
+        Ok(page)
     }
 
     pub(super) fn log_all_branches_page_impl(
@@ -497,7 +538,7 @@ impl GixRepo {
             .collect::<Vec<_>>();
         let parent_ids = parent_oids
             .iter()
-            .map(|parent| CommitId(parent.to_string().into()))
+            .map(|parent| CommitId(oid_to_arc_str(parent)))
             .collect::<Vec<_>>();
         let files = commit_file_changes(&repo, &commit, &parent_oids)?;
 
@@ -530,8 +571,8 @@ impl GixRepo {
             .map(|(index, line)| {
                 Ok(ReflogEntry {
                     index,
-                    new_id: CommitId(line.new_oid.to_string().into()),
-                    message: bytes_to_text_preserving_utf8(line.message.as_ref()).into(),
+                    new_id: CommitId(oid_to_arc_str(&line.new_oid)),
+                    message: bstr_to_arc_str(line.message.as_ref()),
                     time: unix_seconds_to_system_time(line.signature.time.seconds),
                     selector: format!("HEAD@{{{index}}}").into(),
                 })
@@ -548,6 +589,7 @@ mod tests {
     fn cursor_gate_skips_until_after_last_seen() {
         let cursor = LogCursor {
             last_seen: CommitId("c2".into()),
+            resume_from: None,
         };
         let mut gate = CursorGate::new(Some(&cursor));
 

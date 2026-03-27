@@ -10,6 +10,9 @@ rust-version.workspace = true
 [lints]
 workspace = true
 
+[features]
+benchmarks = []
+
 [dependencies]
 gitcomet-core = { workspace = true }
 gix = { workspace = true }
@@ -18,6 +21,7 @@ smol = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 rustc-hash = { workspace = true }
+smallvec = { workspace = true }
 tempfile = { workspace = true }
 
 [dev-dependencies]

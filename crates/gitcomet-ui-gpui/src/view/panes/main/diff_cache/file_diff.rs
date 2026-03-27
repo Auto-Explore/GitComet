@@ -1,6 +1,6 @@
 use super::*;
 use rustc_hash::FxHasher;
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, feature = "benchmarks"))]
 use std::sync::atomic::{AtomicU64, Ordering};
 
 pub(super) fn build_inline_text(lines: &[AnnotatedDiffLine]) -> SharedString {
@@ -60,7 +60,8 @@ fn file_diff_row_flag(kind: gitcomet_core::file_diff::FileDiffRowKind) -> u8 {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "benchmarks"))]
+#[cfg_attr(feature = "benchmarks", allow(dead_code))]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct StreamedFileDiffDebugCounters {
     split_page_cache_hits: u64,
@@ -72,7 +73,8 @@ struct StreamedFileDiffDebugCounters {
     inline_full_text_materializations: u64,
 }
 
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, feature = "benchmarks"))]
+#[cfg_attr(feature = "benchmarks", allow(dead_code))]
 #[derive(Debug)]
 struct AtomicStreamedFileDiffDebugCounters {
     split_page_cache_hits: AtomicU64,
@@ -84,7 +86,8 @@ struct AtomicStreamedFileDiffDebugCounters {
     inline_full_text_materializations: AtomicU64,
 }
 
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, feature = "benchmarks"))]
+#[cfg_attr(feature = "benchmarks", allow(dead_code))]
 impl AtomicStreamedFileDiffDebugCounters {
     const fn new() -> Self {
         Self {
@@ -130,7 +133,7 @@ impl AtomicStreamedFileDiffDebugCounters {
             .fetch_add(1, Ordering::Relaxed);
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "benchmarks"))]
     fn snapshot(&self) -> StreamedFileDiffDebugCounters {
         StreamedFileDiffDebugCounters {
             split_page_cache_hits: self.split_page_cache_hits.load(Ordering::Relaxed),
@@ -145,7 +148,7 @@ impl AtomicStreamedFileDiffDebugCounters {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "benchmarks"))]
     fn reset(&self) {
         self.split_page_cache_hits.store(0, Ordering::Relaxed);
         self.split_page_cache_misses.store(0, Ordering::Relaxed);
@@ -225,7 +228,7 @@ struct StreamedFileDiffSource {
     new_line_starts: Arc<[usize]>,
     split_run_starts: Vec<usize>,
     inline_run_starts: Vec<usize>,
-    #[cfg(debug_assertions)]
+    #[cfg(any(debug_assertions, feature = "benchmarks"))]
     debug_counters: Arc<AtomicStreamedFileDiffDebugCounters>,
 }
 
@@ -256,65 +259,67 @@ impl StreamedFileDiffSource {
             new_line_starts,
             split_run_starts,
             inline_run_starts,
-            #[cfg(debug_assertions)]
+            #[cfg(any(debug_assertions, feature = "benchmarks"))]
             debug_counters: Arc::new(AtomicStreamedFileDiffDebugCounters::new()),
         }
     }
 
     #[inline]
     fn record_page_hit(&self, inline: bool) {
-        #[cfg(debug_assertions)]
+        #[cfg(any(debug_assertions, feature = "benchmarks"))]
         {
             self.debug_counters.record_page_hit(inline);
         }
-        #[cfg(not(debug_assertions))]
+        #[cfg(not(any(debug_assertions, feature = "benchmarks")))]
         let _ = inline;
     }
 
     #[inline]
     fn record_page_miss(&self, inline: bool) {
-        #[cfg(debug_assertions)]
+        #[cfg(any(debug_assertions, feature = "benchmarks"))]
         {
             self.debug_counters.record_page_miss(inline);
         }
-        #[cfg(not(debug_assertions))]
+        #[cfg(not(any(debug_assertions, feature = "benchmarks")))]
         let _ = inline;
     }
 
     #[inline]
     fn record_rows_materialized(&self, inline: bool, count: usize) {
-        #[cfg(debug_assertions)]
+        #[cfg(any(debug_assertions, feature = "benchmarks"))]
         {
             self.debug_counters.record_rows_materialized(inline, count);
         }
-        #[cfg(not(debug_assertions))]
+        #[cfg(not(any(debug_assertions, feature = "benchmarks")))]
         let _ = (inline, count);
     }
 
     #[inline]
     fn record_inline_full_text_materialization(&self) {
-        #[cfg(debug_assertions)]
+        #[cfg(any(debug_assertions, feature = "benchmarks"))]
         {
             self.debug_counters
                 .record_inline_full_text_materialization();
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "benchmarks"))]
+    #[cfg_attr(feature = "benchmarks", allow(dead_code))]
     fn debug_counters_snapshot(&self) -> StreamedFileDiffDebugCounters {
-        #[cfg(debug_assertions)]
+        #[cfg(any(debug_assertions, feature = "benchmarks"))]
         {
             self.debug_counters.snapshot()
         }
-        #[cfg(not(debug_assertions))]
+        #[cfg(not(any(debug_assertions, feature = "benchmarks")))]
         {
             StreamedFileDiffDebugCounters::default()
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "benchmarks"))]
+    #[cfg_attr(feature = "benchmarks", allow(dead_code))]
     fn reset_debug_counters(&self) {
-        #[cfg(debug_assertions)]
+        #[cfg(any(debug_assertions, feature = "benchmarks"))]
         {
             self.debug_counters.reset();
         }
@@ -986,6 +991,34 @@ pub(super) fn build_file_diff_cache_rebuild(
         #[cfg(test)]
         inline_rows,
     }
+}
+
+/// Benchmark-only helper: build file diff row providers from raw old/new text.
+///
+/// Returns `(split_provider, inline_provider)`.  Callers can use the
+/// [`DiffRowProvider`] trait to iterate rows and collect metrics.
+#[cfg(feature = "benchmarks")]
+pub(in crate::view) fn bench_build_file_diff_providers(
+    old: &str,
+    new: &str,
+    page_size: usize,
+) -> (Arc<PagedFileDiffRows>, Arc<PagedFileDiffInlineRows>) {
+    let (old_text, old_line_starts) = build_file_diff_document_source(Some(old));
+    let (new_text, new_line_starts) = build_file_diff_document_source(Some(new));
+    let plan = Arc::new(gitcomet_core::file_diff::side_by_side_plan(
+        old_text.as_ref(),
+        new_text.as_ref(),
+    ));
+    let source = Arc::new(StreamedFileDiffSource::new(
+        plan,
+        old_text,
+        old_line_starts,
+        new_text,
+        new_line_starts,
+    ));
+    let split = Arc::new(PagedFileDiffRows::new(Arc::clone(&source), page_size));
+    let inline = Arc::new(PagedFileDiffInlineRows::new(source, page_size));
+    (split, inline)
 }
 
 #[cfg(test)]

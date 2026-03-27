@@ -1,6 +1,7 @@
 use super::{
-    GixRepo,
+    GixRepo, bstr_to_arc_str,
     conflict_stages::{gix_index_stage_blob_bytes_optional, gix_index_stage_exists},
+    oid_to_arc_str,
 };
 use crate::util::{bytes_to_text_preserving_utf8, run_git_with_output};
 use gitcomet_core::error::{Error, ErrorKind};
@@ -13,6 +14,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 struct BlameCommitMetadata {
+    commit_id_text: Arc<str>,
     author: Arc<str>,
     author_time_unix: Option<i64>,
     summary: Arc<str>,
@@ -35,20 +37,20 @@ fn blame_commit_metadata(
 
     let (author, author_time_unix) = match commit.author() {
         Ok(signature) => (
-            bytes_to_text_preserving_utf8(signature.name.as_ref()).into(),
+            bstr_to_arc_str(signature.name.as_ref()),
             signature.time().ok().map(|time| time.seconds),
         ),
         Err(_) => (Arc::<str>::default(), None),
     };
-    let summary = commit
+    let summary_bytes = commit
         .message_raw_sloppy()
         .lines()
         .next()
-        .map(bytes_to_text_preserving_utf8)
-        .map(Arc::<str>::from)
         .unwrap_or_default();
+    let summary = bstr_to_arc_str(summary_bytes);
 
     let metadata = Rc::new(BlameCommitMetadata {
+        commit_id_text: oid_to_arc_str(&commit_id),
         author,
         author_time_unix,
         summary,
@@ -60,7 +62,10 @@ fn blame_commit_metadata(
 fn blame_line_text(bytes: &[u8]) -> String {
     let bytes = bytes.strip_suffix(b"\n").unwrap_or(bytes);
     let bytes = bytes.strip_suffix(b"\r").unwrap_or(bytes);
-    bytes_to_text_preserving_utf8(bytes)
+    match std::str::from_utf8(bytes) {
+        Ok(s) => s.to_string(),
+        Err(_) => bytes_to_text_preserving_utf8(bytes),
+    }
 }
 
 impl GixRepo {
@@ -86,12 +91,10 @@ impl GixRepo {
         let mut metadata_cache = HashMap::default();
         let mut lines = Vec::new();
         for (entry, entry_lines) in outcome.entries_with_lines() {
-            let commit_id = entry.commit_id;
-            let commit_id_text: Arc<str> = commit_id.to_string().into();
-            let metadata = blame_commit_metadata(&repo, &mut metadata_cache, commit_id)?;
+            let metadata = blame_commit_metadata(&repo, &mut metadata_cache, entry.commit_id)?;
             for line in entry_lines {
                 lines.push(BlameLine {
-                    commit_id: commit_id_text.clone(),
+                    commit_id: metadata.commit_id_text.clone(),
                     author: metadata.author.clone(),
                     author_time_unix: metadata.author_time_unix,
                     summary: metadata.summary.clone(),

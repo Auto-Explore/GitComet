@@ -948,12 +948,7 @@ impl MainPaneView {
 
         let marker_parse_started = Instant::now();
         let mut marker_segments = if let Some(cur) = current_text.clone() {
-            let segments = conflict_resolver::parse_conflict_markers_shared(cur);
-            if conflict_resolver::conflict_count(&segments) > 0 {
-                segments
-            } else {
-                Vec::new()
-            }
+            conflict_resolver::parse_conflict_markers_shared_nonempty(cur)
         } else {
             Vec::new()
         };
@@ -1360,12 +1355,7 @@ impl MainPaneView {
 
         // Re-parse marker segments from original current text.
         let mut marker_segments = if let Some(cur) = file.current.clone() {
-            let segments = conflict_resolver::parse_conflict_markers_shared(cur);
-            if conflict_resolver::conflict_count(&segments) > 0 {
-                segments
-            } else {
-                Vec::new()
-            }
+            conflict_resolver::parse_conflict_markers_shared_nonempty(cur)
         } else {
             Vec::new()
         };

@@ -178,6 +178,7 @@ pub struct RepoStatus {
     pub unstaged: Vec<FileStatus>,
 }
 
+#[repr(u8)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FileStatusKind {
     Untracked,
@@ -440,6 +441,10 @@ pub struct LogPage {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LogCursor {
     pub last_seen: CommitId,
+    /// Optional backend-provided resume hint for the next page. Consumers should
+    /// treat this as an opaque optimization and fall back to `last_seen`
+    /// semantics when it is absent.
+    pub resume_from: Option<CommitId>,
 }
 
 #[cfg(test)]
@@ -578,8 +583,13 @@ diff --git a/src/lib.rs b/src/lib.rs\n\
     fn log_cursor_roundtrips() {
         let cursor = LogCursor {
             last_seen: CommitId("deadbeef".into()),
+            resume_from: Some(CommitId("feedface".into())),
         };
         assert_eq!(cursor.last_seen.as_ref(), "deadbeef");
+        assert_eq!(
+            cursor.resume_from.as_ref().map(AsRef::as_ref),
+            Some("feedface")
+        );
     }
 
     #[test]

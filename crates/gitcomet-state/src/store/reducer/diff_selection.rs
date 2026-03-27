@@ -1,7 +1,6 @@
 use super::util::{
-    diff_reload_effects, diff_target_is_svg, diff_target_wants_image_preview,
-    selected_conflict_target_path, start_conflict_target_reload,
-    start_conflict_target_reload_with_mode,
+    diff_target_is_svg, diff_target_wants_image_preview, selected_conflict_target_path,
+    start_conflict_target_reload, start_conflict_target_reload_with_mode,
 };
 use crate::model::{AppState, ConflictFileLoadMode, DiagnosticKind, Loadable, RepoId};
 use crate::msg::Effect;
@@ -46,11 +45,25 @@ pub(super) fn select_diff(
     };
     repo_state.bump_diff_state_rev();
 
-    let mut effects = diff_reload_effects(repo_id, target);
-    // Keep selection-path ordering stable: file payload loads are queued before the main diff.
-    if effects.len() > 1 {
-        effects.rotate_left(1);
+    // Build effects inline with precomputed flags to avoid redundant extension
+    // checks that `diff_reload_effects` would redo. File payload loads are
+    // ordered before the main diff load to keep selection-path ordering stable.
+    let mut effects = Vec::with_capacity(2);
+    if supports_file {
+        if wants_image {
+            effects.push(Effect::LoadDiffFileImage {
+                repo_id,
+                target: target.clone(),
+            });
+        }
+        if !wants_image || is_svg {
+            effects.push(Effect::LoadDiffFile {
+                repo_id,
+                target: target.clone(),
+            });
+        }
     }
+    effects.push(Effect::LoadDiff { repo_id, target });
     effects
 }
 

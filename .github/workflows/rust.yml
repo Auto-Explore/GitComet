@@ -5,8 +5,6 @@ on:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
-  schedule:
-    - cron: "0 4 * * 1"
   workflow_dispatch:
 
 permissions:
@@ -175,51 +173,3 @@ jobs:
       run: cargo test -p gitcomet-git-gix --test git_cli_scoreboard -- --nocapture
     - name: Status and mergetool backend integration
       run: cargo test -p gitcomet-git-gix --verbose
-
-  performance-budgets:
-    name: Conflict performance budgets (alert-only)
-    runs-on: ubuntu-latest
-    # Shared runners are noisy for performance numbers; treat this as signal/alerting only.
-    continue-on-error: true
-    timeout-minutes: 60
-    needs: build
-    steps:
-    - uses: actions/checkout@v6
-    - name: Install Linux UI native dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y \
-          pkg-config \
-          libxcb1-dev \
-          libxkbcommon-dev \
-          libxkbcommon-x11-dev
-    - name: Preflight Linux UI link dependencies
-      run: |
-        missing=0
-        for dep in xcb xkbcommon xkbcommon-x11; do
-          if ! pkg-config --exists "$dep"; then
-            echo "::error title=Missing Linux UI dependency::pkg-config could not find '$dep'. Install libxcb1-dev, libxkbcommon-dev, and libxkbcommon-x11-dev."
-            missing=1
-          fi
-        done
-        if [ "$missing" -ne 0 ]; then
-          echo "performance-budgets job is missing required native UI link dependencies."
-          exit 1
-        fi
-        pkg-config --modversion xcb xkbcommon xkbcommon-x11
-    - name: Install Rust toolchain
-      uses: dtolnay/rust-toolchain@stable
-    - name: Cache Rust artifacts
-      uses: Swatinem/rust-cache@v2
-    - name: Benchmark conflict and markdown preview hot paths
-      run: |
-        cargo bench -p gitcomet-ui-gpui --features benchmarks --bench performance -- conflict_three_way_scroll/style_window
-        cargo bench -p gitcomet-ui-gpui --features benchmarks --bench performance -- conflict_two_way_split_scroll/window_200
-        cargo bench -p gitcomet-ui-gpui --features benchmarks --bench performance -- conflict_search_query_update/window/200
-        cargo bench -p gitcomet-ui-gpui --features benchmarks --bench performance -- conflict_split_resize_step/window/200
-        cargo bench -p gitcomet-ui-gpui --features benchmarks --bench performance -- markdown_preview_parse_build/single_document/medium
-        cargo bench -p gitcomet-ui-gpui --features benchmarks --bench performance -- markdown_preview_parse_build/two_sided_diff/medium
-        cargo bench -p gitcomet-ui-gpui --features benchmarks --bench performance -- markdown_preview_render_single/window_rows/200
-        cargo bench -p gitcomet-ui-gpui --features benchmarks --bench performance -- markdown_preview_render_diff/window_rows/200
-    - name: Emit budget report (alerting mode)
-      run: cargo run -p gitcomet-ui-gpui --bin perf_budget_report -- --criterion-root target/criterion

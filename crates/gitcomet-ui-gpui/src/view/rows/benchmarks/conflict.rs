@@ -4,7 +4,13 @@ use crate::view::conflict_resolver::{
     TwoWayWordHighlights, WordHighlights,
 };
 use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession};
+use gitcomet_core::mergetool_trace::{
+    self, MergetoolTraceEvent, MergetoolTraceRenderingMode, MergetoolTraceSideStats,
+    MergetoolTraceStage,
+};
 use gitcomet_state::model::ConflictFile;
+use std::path::PathBuf;
+use std::time::Instant;
 
 fn word_ranges_for_line(highlights: &WordHighlights, line_ix: usize) -> &[Range<usize>] {
     highlights
@@ -539,6 +545,26 @@ impl ConflictTwoWaySplitScrollFixture {
     pub(super) fn syntax_mode(&self) -> DiffSyntaxMode {
         self.syntax_mode
     }
+
+    /// Returns first-window metrics for sidecar emission.
+    pub fn measure_first_window(&self, window: usize) -> ConflictCompareFirstWindowMetrics {
+        let total_visible = self.visible_row_indices.len();
+        let rows_rendered = window.min(total_visible);
+        ConflictCompareFirstWindowMetrics {
+            total_diff_rows: self.diff_rows.len() as u64,
+            total_visible_rows: total_visible as u64,
+            rows_rendered: rows_rendered as u64,
+            conflict_count: self.conflict_count as u64,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ConflictCompareFirstWindowMetrics {
+    pub total_diff_rows: u64,
+    pub total_visible_rows: u64,
+    pub rows_rendered: u64,
+    pub conflict_count: u64,
 }
 
 pub struct ConflictTwoWayDiffBuildFixture {
@@ -619,19 +645,19 @@ impl ConflictLoadDuplicationFixture {
             build_synthetic_html_conflict_texts(lines, conflict_blocks);
         let current_text: Arc<str> = current_text.into();
         let current_bytes = Arc::<[u8]>::from(current_text.as_bytes());
-        let session = ConflictSession::from_merged_text(
+        let session = ConflictSession::from_merged_shared_text(
             path.clone(),
             gitcomet_core::domain::FileConflictKind::BothModified,
             ConflictPayload::Text(base_text.into()),
             ConflictPayload::Text(ours_text.into()),
             ConflictPayload::Text(theirs_text.into()),
-            current_text.as_ref(),
+            Arc::clone(&current_text),
         );
         let conflict_count = session.regions.len();
         let line_count = session
             .ours
             .as_text()
-            .map(|text| text.lines().count())
+            .map(|text: &str| text.lines().count())
             .unwrap_or_default();
 
         Self {
@@ -1284,6 +1310,7 @@ impl ConflictResolvedOutputGutterScrollFixture {
 }
 
 pub struct ResolvedOutputRecomputeIncrementalFixture {
+    requested_lines: usize,
     base_text: String,
     ours_text: String,
     theirs_text: String,
@@ -1292,12 +1319,27 @@ pub struct ResolvedOutputRecomputeIncrementalFixture {
     theirs_line_starts: Vec<usize>,
     block_ranges: Vec<Range<usize>>,
     block_unresolved: Vec<bool>,
+    both_choice_blocks: usize,
     output_text: String,
     output_line_starts: Vec<usize>,
     meta: Vec<conflict_resolver::ResolvedLineMeta>,
     markers: Vec<Option<ResolvedOutputGutterMarker>>,
     edit_line_ix: usize,
     edit_nonce: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ResolvedOutputRecomputeMetrics {
+    pub requested_lines: u64,
+    pub conflict_blocks: u64,
+    pub unresolved_blocks: u64,
+    pub both_choice_blocks: u64,
+    pub outline_rows: u64,
+    pub marker_rows: u64,
+    pub manual_rows: u64,
+    pub dirty_rows: u64,
+    pub recomputed_rows: u64,
+    pub fallback_full_recompute: bool,
 }
 
 impl ResolvedOutputRecomputeIncrementalFixture {
@@ -1319,8 +1361,21 @@ impl ResolvedOutputRecomputeIncrementalFixture {
                 _ => None,
             })
             .collect::<Vec<_>>();
+        let both_choice_blocks = marker_segments
+            .iter()
+            .filter(|segment| {
+                matches!(
+                    segment,
+                    ConflictSegment::Block(ConflictBlock {
+                        choice: ConflictChoice::Both,
+                        ..
+                    })
+                )
+            })
+            .count();
 
         let mut fixture = Self {
+            requested_lines: lines,
             base_text,
             ours_text,
             theirs_text,
@@ -1329,6 +1384,7 @@ impl ResolvedOutputRecomputeIncrementalFixture {
             theirs_line_starts,
             block_ranges,
             block_unresolved,
+            both_choice_blocks,
             output_text,
             output_line_starts,
             meta: Vec::new(),
@@ -1557,7 +1613,43 @@ impl ResolvedOutputRecomputeIncrementalFixture {
         h.finish()
     }
 
+    fn capture_metrics(
+        &self,
+        dirty_rows: usize,
+        recomputed_rows: usize,
+        fallback_full_recompute: bool,
+    ) -> ResolvedOutputRecomputeMetrics {
+        let unresolved_blocks = self.block_unresolved.iter().filter(|&&value| value).count();
+        let marker_rows = self
+            .markers
+            .iter()
+            .filter(|marker| marker.is_some())
+            .count();
+        let manual_rows = self
+            .meta
+            .iter()
+            .filter(|meta| meta.source == conflict_resolver::ResolvedLineSource::Manual)
+            .count();
+
+        ResolvedOutputRecomputeMetrics {
+            requested_lines: bench_counter_u64(self.requested_lines),
+            conflict_blocks: bench_counter_u64(self.block_ranges.len()),
+            unresolved_blocks: bench_counter_u64(unresolved_blocks),
+            both_choice_blocks: bench_counter_u64(self.both_choice_blocks),
+            outline_rows: bench_counter_u64(self.meta.len()),
+            marker_rows: bench_counter_u64(marker_rows),
+            manual_rows: bench_counter_u64(manual_rows),
+            dirty_rows: bench_counter_u64(dirty_rows),
+            recomputed_rows: bench_counter_u64(recomputed_rows),
+            fallback_full_recompute,
+        }
+    }
+
     pub fn run_full_recompute_step(&mut self) -> u64 {
+        self.run_full_recompute_with_metrics().0
+    }
+
+    pub fn run_full_recompute_with_metrics(&mut self) -> (u64, ResolvedOutputRecomputeMetrics) {
         let (next_output, _old_range, _new_range) = self.next_single_line_edit();
         let next_line_starts = line_starts_for_text(&next_output);
         let line_count = conflict_resolver::split_output_lines_for_outline(&next_output).len();
@@ -1569,10 +1661,18 @@ impl ResolvedOutputRecomputeIncrementalFixture {
         self.meta = next_meta;
         self.markers = next_markers;
 
-        self.hash_outline_state()
+        let hash = self.hash_outline_state();
+        let metrics = self.capture_metrics(0, line_count, false);
+        (hash, metrics)
     }
 
     pub fn run_incremental_recompute_step(&mut self) -> u64 {
+        self.run_incremental_recompute_with_metrics().0
+    }
+
+    pub fn run_incremental_recompute_with_metrics(
+        &mut self,
+    ) -> (u64, ResolvedOutputRecomputeMetrics) {
         let old_text = self.output_text.clone();
         let old_line_starts = self.output_line_starts.clone();
 
@@ -1592,13 +1692,21 @@ impl ResolvedOutputRecomputeIncrementalFixture {
         old_dirty.end = old_dirty.end.saturating_add(1).min(self.meta.len());
         new_dirty.start = new_dirty.start.saturating_sub(1);
         new_dirty.end = new_dirty.end.saturating_add(1).min(next_line_count);
+        let dirty_rows = new_dirty.len();
+        let recomputed_rows;
+        let mut fallback_full_recompute = false;
         if old_dirty.start != new_dirty.start {
             // Keep this fixture conservative; fall back to full for odd shifts.
+            fallback_full_recompute = true;
             self.output_text = next_output;
             self.output_line_starts = next_line_starts;
             self.meta = self.recompute_meta_full(self.output_text.as_str());
             self.markers = self.rebuild_markers(next_line_count);
-            return self.hash_outline_state();
+            recomputed_rows = next_line_count;
+            let hash = self.hash_outline_state();
+            let metrics =
+                self.capture_metrics(dirty_rows, recomputed_rows, fallback_full_recompute);
+            return (hash, metrics);
         }
 
         let line_delta = new_dirty.len() as isize - old_dirty.len() as isize;
@@ -1632,11 +1740,16 @@ impl ResolvedOutputRecomputeIncrementalFixture {
             next_meta.push(shifted);
         }
         if next_meta.len() != next_line_count {
+            fallback_full_recompute = true;
             self.output_text = next_output;
             self.output_line_starts = next_line_starts;
             self.meta = self.recompute_meta_full(self.output_text.as_str());
             self.markers = self.rebuild_markers(next_line_count);
-            return self.hash_outline_state();
+            recomputed_rows = next_line_count;
+            let hash = self.hash_outline_state();
+            let metrics =
+                self.capture_metrics(dirty_rows, recomputed_rows, fallback_full_recompute);
+            return (hash, metrics);
         }
 
         let mut next_markers = if self.markers.len() == next_line_count {
@@ -1681,7 +1794,11 @@ impl ResolvedOutputRecomputeIncrementalFixture {
         self.meta = next_meta;
         self.markers = next_markers;
 
-        self.hash_outline_state()
+        recomputed_rows = dirty_rows;
+
+        let hash = self.hash_outline_state();
+        let metrics = self.capture_metrics(dirty_rows, recomputed_rows, fallback_full_recompute);
+        (hash, metrics)
     }
 
     pub fn visible_rows(&self) -> usize {
@@ -1788,7 +1905,7 @@ impl ConflictStreamedProviderFixture {
     pub fn run_search_step(&self, needle: &str) -> u64 {
         let matches = self
             .split_row_index
-            .search_matching_rows(&self.segments, |line| line.contains(needle));
+            .search_text_matching_rows(&self.segments, needle.as_bytes());
         let mut h = FxHasher::default();
         matches.len().hash(&mut h);
         for &row_ix in matches.iter().take(32) {
@@ -1910,6 +2027,592 @@ impl ConflictStreamedResolvedOutputFixture {
     }
 }
 
+pub struct MergeOpenBootstrapFixture {
+    path: PathBuf,
+    base_text: Arc<str>,
+    ours_text: Arc<str>,
+    theirs_text: Arc<str>,
+    current_text: Arc<str>,
+    line_count: usize,
+    conflict_block_count: usize,
+    syntax_language: Option<DiffSyntaxLanguage>,
+}
+
+#[cfg(any(test, feature = "benchmarks"))]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct MergeOpenBootstrapMetrics {
+    pub trace_event_count: u64,
+    pub conflict_block_count: u64,
+    pub diff_row_count: u64,
+    pub inline_row_count: u64,
+    pub resolved_output_line_count: u64,
+    pub two_way_visible_rows: u64,
+    pub three_way_visible_rows: u64,
+    pub rendering_mode_streamed: u64,
+    pub full_output_generated: u64,
+    pub full_syntax_parse_requested: u64,
+    pub whole_block_diff_ran: u64,
+    pub rss_kib: u64,
+    pub parse_conflict_markers_ms: f64,
+    pub generate_resolved_text_ms: f64,
+    pub side_by_side_rows_ms: f64,
+    pub build_three_way_conflict_maps_ms: f64,
+    pub compute_three_way_word_highlights_ms: f64,
+    pub compute_two_way_word_highlights_ms: f64,
+    pub bootstrap_total_ms: f64,
+}
+
+struct MergeOpenBootstrapRunResult {
+    hash: u64,
+    two_way_visible_rows: usize,
+    three_way_visible_rows: usize,
+}
+
+struct MergeOpenBootstrapTraceContext {
+    path: PathBuf,
+    base: MergetoolTraceSideStats,
+    ours: MergetoolTraceSideStats,
+    theirs: MergetoolTraceSideStats,
+    current: MergetoolTraceSideStats,
+}
+
+impl MergeOpenBootstrapTraceContext {
+    fn new(
+        path: PathBuf,
+        base_text: &str,
+        ours_text: &str,
+        theirs_text: &str,
+        current_text: &str,
+    ) -> Self {
+        if !mergetool_trace::is_enabled() {
+            return Self {
+                path,
+                base: MergetoolTraceSideStats::default(),
+                ours: MergetoolTraceSideStats::default(),
+                theirs: MergetoolTraceSideStats::default(),
+                current: MergetoolTraceSideStats::default(),
+            };
+        }
+
+        Self {
+            path,
+            base: MergetoolTraceSideStats::from_text(Some(base_text)),
+            ours: MergetoolTraceSideStats::from_text(Some(ours_text)),
+            theirs: MergetoolTraceSideStats::from_text(Some(theirs_text)),
+            current: MergetoolTraceSideStats::from_text(Some(current_text)),
+        }
+    }
+
+    fn event(&self, stage: MergetoolTraceStage, started: Instant) -> MergetoolTraceEvent {
+        MergetoolTraceEvent::new(stage, Some(self.path.clone()), started.elapsed())
+            .with_base(self.base)
+            .with_ours(self.ours)
+            .with_theirs(self.theirs)
+            .with_current(self.current)
+    }
+
+    fn bootstrap_event(
+        &self,
+        stage: MergetoolTraceStage,
+        started: Instant,
+        decisions: MergeOpenBootstrapTraceDecisions,
+    ) -> MergetoolTraceEvent {
+        decisions.apply_to_event(self.event(stage, started))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct MergeOpenBootstrapTraceDecisions {
+    rendering_mode: Option<MergetoolTraceRenderingMode>,
+    whole_block_diff_ran: Option<bool>,
+    full_output_generated: Option<bool>,
+    full_syntax_parse_requested: Option<bool>,
+}
+
+impl MergeOpenBootstrapTraceDecisions {
+    fn apply_to_event(self, event: MergetoolTraceEvent) -> MergetoolTraceEvent {
+        event
+            .with_rendering_mode(self.rendering_mode)
+            .with_whole_block_diff_ran(self.whole_block_diff_ran)
+            .with_full_output_generated(self.full_output_generated)
+            .with_full_syntax_parse_requested(self.full_syntax_parse_requested)
+    }
+}
+
+impl MergeOpenBootstrapFixture {
+    /// Small eager bootstrap path: no conflict markers, so the resolver stays
+    /// on the non-streamed path while still building the surrounding resolver
+    /// state for a normal text file.
+    pub fn small(lines: usize) -> Self {
+        Self::new(lines.max(1), 0)
+    }
+
+    pub fn large_streamed(lines: usize, conflict_blocks: usize) -> Self {
+        let lines = lines.max(conflict_resolver::LARGE_CONFLICT_BLOCK_DIFF_MAX_LINES + 1);
+        Self::new(lines, conflict_blocks.max(1))
+    }
+
+    /// Many conflict blocks in a moderate-size file.
+    ///
+    /// Tests how bootstrap cost scales with conflict-block count rather than
+    /// file size.  Uses `10 * conflict_blocks + 100` total lines so each
+    /// block gets a small amount of surrounding context.
+    pub fn many_conflicts(conflict_blocks: usize) -> Self {
+        let conflict_blocks = conflict_blocks.max(2);
+        let lines = 10 * conflict_blocks + 100;
+        Self::new(lines, conflict_blocks)
+    }
+
+    /// Large file with many conflict blocks — the extreme scale case.
+    ///
+    /// Combines a high line count (forced above the streamed threshold) with
+    /// a large number of conflict blocks to stress both dimensions
+    /// simultaneously.
+    pub fn large_many_conflicts(lines: usize, conflict_blocks: usize) -> Self {
+        let lines = lines.max(conflict_resolver::LARGE_CONFLICT_BLOCK_DIFF_MAX_LINES + 1);
+        Self::new(lines, conflict_blocks.max(2))
+    }
+
+    fn new(lines: usize, conflict_blocks: usize) -> Self {
+        let path = PathBuf::from("fixtures/merge_open_bootstrap.html");
+        let (base_text, ours_text, theirs_text, current_text) =
+            build_synthetic_html_conflict_texts(lines, conflict_blocks);
+        let line_count = trace_line_count(&base_text);
+
+        Self {
+            path,
+            base_text: Arc::<str>::from(base_text),
+            ours_text: Arc::<str>::from(ours_text),
+            theirs_text: Arc::<str>::from(theirs_text),
+            current_text: Arc::<str>::from(current_text),
+            line_count,
+            conflict_block_count: conflict_blocks,
+            syntax_language: diff_syntax_language_for_path("fixtures/merge_open_bootstrap.html"),
+        }
+    }
+
+    pub fn run(&self) -> u64 {
+        self.run_internal().hash
+    }
+
+    #[cfg(any(test, feature = "benchmarks"))]
+    pub fn run_with_metrics(&self) -> (u64, MergeOpenBootstrapMetrics) {
+        let _trace = mergetool_trace::capture();
+        let result = self.run_internal();
+        let trace = mergetool_trace::snapshot();
+        let metrics = MergeOpenBootstrapMetrics::from_trace(&trace, &result);
+        (result.hash, metrics)
+    }
+
+    pub fn line_count(&self) -> usize {
+        self.line_count
+    }
+
+    pub fn conflict_count(&self) -> usize {
+        self.conflict_block_count
+    }
+
+    fn run_internal(&self) -> MergeOpenBootstrapRunResult {
+        let bootstrap_started = Instant::now();
+        let base_text = self.base_text.as_ref();
+        let ours_text = self.ours_text.as_ref();
+        let theirs_text = self.theirs_text.as_ref();
+        let current_text = self.current_text.as_ref();
+        let trace_ctx = MergeOpenBootstrapTraceContext::new(
+            self.path.clone(),
+            base_text,
+            ours_text,
+            theirs_text,
+            current_text,
+        );
+
+        let three_way_base_len = trace_line_count(base_text);
+        let three_way_ours_len = trace_line_count(ours_text);
+        let three_way_theirs_len = trace_line_count(theirs_text);
+        let three_way_len = three_way_base_len
+            .max(three_way_ours_len)
+            .max(three_way_theirs_len);
+
+        let marker_parse_started = Instant::now();
+        let mut marker_segments = conflict_resolver::parse_conflict_markers_shared_nonempty(
+            Arc::clone(&self.current_text),
+        );
+        let rendering_mode =
+            conflict_resolver::select_conflict_rendering_mode(&marker_segments, three_way_len);
+        let expected_streamed = self.conflict_block_count > 0;
+        assert_eq!(
+            rendering_mode.is_streamed_large_file(),
+            expected_streamed,
+            "merge_open_bootstrap fixture rendering mode mismatch (expected_streamed={expected_streamed}, actual_conflicts={}, three-way lines={three_way_len})",
+            conflict_resolver::conflict_count(&marker_segments),
+        );
+
+        let mut trace_decisions = MergeOpenBootstrapTraceDecisions {
+            rendering_mode: Some(trace_rendering_mode(rendering_mode)),
+            full_output_generated: Some(!rendering_mode.is_streamed_large_file()),
+            full_syntax_parse_requested: Some(
+                self.syntax_language.is_some()
+                    && [base_text, ours_text, theirs_text]
+                        .into_iter()
+                        .any(|text| !text.is_empty()),
+            ),
+            ..Default::default()
+        };
+        mergetool_trace::record_with(|| {
+            trace_ctx
+                .bootstrap_event(
+                    MergetoolTraceStage::ParseConflictMarkers,
+                    marker_parse_started,
+                    trace_decisions,
+                )
+                .with_conflict_block_count(Some(conflict_resolver::conflict_count(
+                    &marker_segments,
+                )))
+        });
+
+        if !base_text.is_empty() {
+            conflict_resolver::populate_block_bases_from_ancestor(&mut marker_segments, base_text);
+        }
+        let conflict_region_indices =
+            conflict_resolver::sequential_conflict_region_indices(&marker_segments);
+        let conflict_block_count = conflict_resolver::conflict_count(&marker_segments);
+
+        let resolved_started = Instant::now();
+        let resolved_output = if rendering_mode.is_streamed_large_file() {
+            MergeOpenBootstrapResolvedOutput::Projection(
+                conflict_resolver::ResolvedOutputProjection::from_segments(&marker_segments),
+            )
+        } else {
+            MergeOpenBootstrapResolvedOutput::Text {
+                line_count: trace_line_count(current_text),
+                text: current_text.to_string(),
+            }
+        };
+        let resolved_output_line_count = resolved_output.line_count();
+        mergetool_trace::record_with(|| {
+            trace_ctx
+                .bootstrap_event(
+                    MergetoolTraceStage::GenerateResolvedText,
+                    resolved_started,
+                    trace_decisions,
+                )
+                .with_conflict_block_count(Some(conflict_block_count))
+                .with_resolved_output_line_count(Some(resolved_output_line_count))
+        });
+
+        let diff_rows_started = Instant::now();
+        let split_row_index = conflict_resolver::ConflictSplitRowIndex::new(
+            &marker_segments,
+            conflict_resolver::BLOCK_LOCAL_DIFF_CONTEXT_LINES,
+        );
+        trace_decisions.whole_block_diff_ran = Some(false);
+        let diff_row_count = split_row_index.total_rows();
+        mergetool_trace::record_with(|| {
+            trace_ctx
+                .bootstrap_event(
+                    MergetoolTraceStage::SideBySideRows,
+                    diff_rows_started,
+                    trace_decisions,
+                )
+                .with_conflict_block_count(Some(conflict_block_count))
+                .with_diff_row_count(Some(diff_row_count))
+        });
+
+        let three_way_word_highlights_started = Instant::now();
+        mergetool_trace::record_with(|| {
+            trace_ctx
+                .bootstrap_event(
+                    MergetoolTraceStage::ComputeThreeWayWordHighlights,
+                    three_way_word_highlights_started,
+                    trace_decisions,
+                )
+                .with_conflict_block_count(Some(conflict_block_count))
+        });
+
+        let two_way_word_highlights_started = Instant::now();
+        mergetool_trace::record_with(|| {
+            trace_ctx
+                .bootstrap_event(
+                    MergetoolTraceStage::ComputeTwoWayWordHighlights,
+                    two_way_word_highlights_started,
+                    trace_decisions,
+                )
+                .with_conflict_block_count(Some(conflict_block_count))
+                .with_diff_row_count(Some(diff_row_count))
+        });
+
+        let three_way_rebuild_started = Instant::now();
+        let maps = conflict_resolver::build_three_way_conflict_maps_without_line_maps(
+            &marker_segments,
+            three_way_base_len,
+            three_way_ours_len,
+            three_way_theirs_len,
+        );
+        let three_way_visible_projection = conflict_resolver::build_three_way_visible_projection(
+            three_way_len,
+            &maps.conflict_ranges[1],
+            &marker_segments,
+            false,
+        );
+        mergetool_trace::record_with(|| {
+            trace_ctx
+                .bootstrap_event(
+                    MergetoolTraceStage::BuildThreeWayConflictMaps,
+                    three_way_rebuild_started,
+                    trace_decisions,
+                )
+                .with_conflict_block_count(Some(conflict_block_count))
+        });
+
+        let two_way_split_projection = conflict_resolver::TwoWaySplitProjection::new(
+            &split_row_index,
+            &marker_segments,
+            false,
+        );
+        let inline_row_count = 0usize;
+
+        mergetool_trace::record_with(|| {
+            trace_ctx
+                .bootstrap_event(
+                    MergetoolTraceStage::ConflictResolverBootstrapTotal,
+                    bootstrap_started,
+                    trace_decisions,
+                )
+                .with_conflict_block_count(Some(conflict_block_count))
+                .with_diff_row_count(Some(diff_row_count))
+                .with_inline_row_count(Some(inline_row_count))
+                .with_resolved_output_line_count(Some(resolved_output_line_count))
+        });
+
+        let hash = hash_merge_open_bootstrap_state(
+            &marker_segments,
+            &conflict_region_indices,
+            &maps,
+            &split_row_index,
+            &two_way_split_projection,
+            &three_way_visible_projection,
+            &resolved_output,
+        );
+
+        MergeOpenBootstrapRunResult {
+            hash,
+            two_way_visible_rows: two_way_split_projection.visible_len(),
+            three_way_visible_rows: three_way_visible_projection.len(),
+        }
+    }
+}
+
+#[cfg(any(test, feature = "benchmarks"))]
+impl MergeOpenBootstrapMetrics {
+    fn from_trace(
+        trace: &mergetool_trace::MergetoolTraceSnapshot,
+        result: &MergeOpenBootstrapRunResult,
+    ) -> Self {
+        let bootstrap =
+            find_trace_stage(trace, MergetoolTraceStage::ConflictResolverBootstrapTotal);
+        Self {
+            trace_event_count: trace.events.len() as u64,
+            conflict_block_count: bootstrap
+                .and_then(|event| event.conflict_block_count)
+                .unwrap_or_default() as u64,
+            diff_row_count: bootstrap
+                .and_then(|event| event.diff_row_count)
+                .unwrap_or_default() as u64,
+            inline_row_count: bootstrap
+                .and_then(|event| event.inline_row_count)
+                .unwrap_or_default() as u64,
+            resolved_output_line_count: bootstrap
+                .and_then(|event| event.resolved_output_line_count)
+                .unwrap_or_default() as u64,
+            two_way_visible_rows: result.two_way_visible_rows as u64,
+            three_way_visible_rows: result.three_way_visible_rows as u64,
+            rendering_mode_streamed: bootstrap
+                .map(|event| {
+                    u64::from(
+                        event.rendering_mode
+                            == Some(MergetoolTraceRenderingMode::StreamedLargeFile),
+                    )
+                })
+                .unwrap_or_default(),
+            full_output_generated: bootstrap
+                .map(|event| u64::from(event.full_output_generated.unwrap_or(false)))
+                .unwrap_or_default(),
+            full_syntax_parse_requested: bootstrap
+                .map(|event| u64::from(event.full_syntax_parse_requested.unwrap_or(false)))
+                .unwrap_or_default(),
+            whole_block_diff_ran: bootstrap
+                .map(|event| u64::from(event.whole_block_diff_ran.unwrap_or(false)))
+                .unwrap_or_default(),
+            rss_kib: bootstrap
+                .and_then(|event| event.rss_kib)
+                .unwrap_or_default(),
+            parse_conflict_markers_ms: trace_stage_ms(
+                trace,
+                MergetoolTraceStage::ParseConflictMarkers,
+            ),
+            generate_resolved_text_ms: trace_stage_ms(
+                trace,
+                MergetoolTraceStage::GenerateResolvedText,
+            ),
+            side_by_side_rows_ms: trace_stage_ms(trace, MergetoolTraceStage::SideBySideRows),
+            build_three_way_conflict_maps_ms: trace_stage_ms(
+                trace,
+                MergetoolTraceStage::BuildThreeWayConflictMaps,
+            ),
+            compute_three_way_word_highlights_ms: trace_stage_ms(
+                trace,
+                MergetoolTraceStage::ComputeThreeWayWordHighlights,
+            ),
+            compute_two_way_word_highlights_ms: trace_stage_ms(
+                trace,
+                MergetoolTraceStage::ComputeTwoWayWordHighlights,
+            ),
+            bootstrap_total_ms: trace_stage_ms(
+                trace,
+                MergetoolTraceStage::ConflictResolverBootstrapTotal,
+            ),
+        }
+    }
+}
+
+fn trace_rendering_mode(
+    mode: conflict_resolver::ConflictRenderingMode,
+) -> MergetoolTraceRenderingMode {
+    match mode {
+        conflict_resolver::ConflictRenderingMode::EagerSmallFile => {
+            MergetoolTraceRenderingMode::EagerSmallFile
+        }
+        conflict_resolver::ConflictRenderingMode::StreamedLargeFile => {
+            MergetoolTraceRenderingMode::StreamedLargeFile
+        }
+    }
+}
+
+#[cfg(any(test, feature = "benchmarks"))]
+fn find_trace_stage(
+    trace: &mergetool_trace::MergetoolTraceSnapshot,
+    stage: MergetoolTraceStage,
+) -> Option<&MergetoolTraceEvent> {
+    trace.events.iter().rev().find(|event| event.stage == stage)
+}
+
+#[cfg(any(test, feature = "benchmarks"))]
+fn trace_stage_ms(
+    trace: &mergetool_trace::MergetoolTraceSnapshot,
+    stage: MergetoolTraceStage,
+) -> f64 {
+    find_trace_stage(trace, stage)
+        .map(|event| event.elapsed.as_secs_f64() * 1_000.0)
+        .unwrap_or_default()
+}
+
+enum MergeOpenBootstrapResolvedOutput {
+    Projection(conflict_resolver::ResolvedOutputProjection),
+    Text { text: String, line_count: usize },
+}
+
+impl MergeOpenBootstrapResolvedOutput {
+    fn line_count(&self) -> usize {
+        match self {
+            Self::Projection(projection) => projection.len(),
+            Self::Text { line_count, .. } => *line_count,
+        }
+    }
+}
+
+fn hash_merge_open_bootstrap_state(
+    segments: &[ConflictSegment],
+    conflict_region_indices: &[usize],
+    maps: &conflict_resolver::ThreeWayConflictMaps,
+    split_row_index: &conflict_resolver::ConflictSplitRowIndex,
+    two_way_split_projection: &conflict_resolver::TwoWaySplitProjection,
+    three_way_visible_projection: &conflict_resolver::ThreeWayVisibleProjection,
+    resolved_output: &MergeOpenBootstrapResolvedOutput,
+) -> u64 {
+    let mut h = FxHasher::default();
+    segments.len().hash(&mut h);
+    conflict_region_indices.len().hash(&mut h);
+    maps.conflict_has_base.len().hash(&mut h);
+    split_row_index.total_rows().hash(&mut h);
+    two_way_split_projection.visible_len().hash(&mut h);
+    three_way_visible_projection.len().hash(&mut h);
+
+    match resolved_output {
+        MergeOpenBootstrapResolvedOutput::Projection(projection) => {
+            projection.len().hash(&mut h);
+            projection.output_hash().hash(&mut h);
+        }
+        MergeOpenBootstrapResolvedOutput::Text { text, line_count } => {
+            let bytes = text.as_bytes();
+            line_count.hash(&mut h);
+            bytes.len().hash(&mut h);
+            for byte_ix in sampled_indices(bytes.len()) {
+                bytes.get(byte_ix).copied().hash(&mut h);
+            }
+        }
+    }
+
+    for visible_ix in sampled_indices(two_way_split_projection.visible_len()) {
+        if let Some((source_ix, conflict_ix)) = two_way_split_projection.get(visible_ix) {
+            source_ix.hash(&mut h);
+            conflict_ix.hash(&mut h);
+            if let Some(row) = split_row_index.row_at(segments, source_ix) {
+                std::mem::discriminant(&row.kind).hash(&mut h);
+                row.old.as_deref().map(str::len).hash(&mut h);
+                row.new.as_deref().map(str::len).hash(&mut h);
+            }
+        }
+    }
+
+    for visible_ix in sampled_indices(three_way_visible_projection.len()) {
+        if let Some(item) = three_way_visible_projection.get(visible_ix) {
+            match item {
+                ThreeWayVisibleItem::Line(line_ix) => {
+                    0u8.hash(&mut h);
+                    line_ix.hash(&mut h);
+                }
+                ThreeWayVisibleItem::CollapsedBlock(conflict_ix) => {
+                    1u8.hash(&mut h);
+                    conflict_ix.hash(&mut h);
+                }
+            }
+        }
+    }
+
+    if let MergeOpenBootstrapResolvedOutput::Projection(projection) = resolved_output {
+        for line_ix in sampled_indices(projection.len()) {
+            if let Some(line) = projection.line_text(segments, line_ix) {
+                line_ix.hash(&mut h);
+                line.len().hash(&mut h);
+                line.as_bytes().first().copied().hash(&mut h);
+                line.as_bytes().last().copied().hash(&mut h);
+            }
+        }
+    }
+
+    h.finish()
+}
+
+fn sampled_indices(len: usize) -> [usize; 3] {
+    if len == 0 {
+        return [0, 0, 0];
+    }
+    [0, len / 2, len - 1]
+}
+
+fn trace_line_count(text: &str) -> usize {
+    if text.is_empty() {
+        return 0;
+    }
+    let bytes = text.as_bytes();
+    let newline_count = memchr::memchr_iter(b'\n', bytes).count();
+    if bytes.last() == Some(&b'\n') {
+        newline_count
+    } else {
+        newline_count + 1
+    }
+}
+
 fn build_synthetic_html_conflict_texts(
     total_lines: usize,
     requested_conflict_blocks: usize,
@@ -1920,15 +2623,6 @@ fn build_synthetic_html_conflict_texts(
         "<body class=\"fixture-root\">",
     ];
     let total_lines = total_lines.max(header_lines.len().saturating_add(1));
-    let max_conflicts = total_lines.saturating_sub(header_lines.len()).max(1);
-    let conflict_blocks = requested_conflict_blocks.max(1).min(max_conflicts);
-    let context_lines = total_lines
-        .saturating_sub(header_lines.len())
-        .saturating_sub(conflict_blocks);
-    let context_slots = conflict_blocks;
-    let context_per_slot = context_lines / context_slots;
-    let context_remainder = context_lines % context_slots;
-
     let mut base_lines = header_lines
         .iter()
         .map(ToString::to_string)
@@ -1937,6 +2631,32 @@ fn build_synthetic_html_conflict_texts(
     let mut theirs_lines = base_lines.clone();
     let mut current_lines = base_lines.clone();
     let mut next_context_row = 0usize;
+
+    if requested_conflict_blocks == 0 {
+        append_synthetic_html_conflict_context(
+            &mut base_lines,
+            &mut ours_lines,
+            &mut theirs_lines,
+            &mut current_lines,
+            &mut next_context_row,
+            total_lines.saturating_sub(header_lines.len()),
+        );
+        return (
+            base_lines.join("\n"),
+            ours_lines.join("\n"),
+            theirs_lines.join("\n"),
+            current_lines.join("\n"),
+        );
+    }
+
+    let max_conflicts = total_lines.saturating_sub(header_lines.len()).max(1);
+    let conflict_blocks = requested_conflict_blocks.max(1).min(max_conflicts);
+    let context_lines = total_lines
+        .saturating_sub(header_lines.len())
+        .saturating_sub(conflict_blocks);
+    let context_slots = conflict_blocks;
+    let context_per_slot = context_lines / context_slots;
+    let context_remainder = context_lines % context_slots;
 
     for conflict_ix in 0..conflict_blocks {
         let base_line = format!(

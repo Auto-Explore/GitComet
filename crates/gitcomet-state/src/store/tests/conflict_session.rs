@@ -34,14 +34,14 @@ fn setup_repo_with_conflict(
 
     // Inject a status with the conflict entry.
     let repo_state = state.repos.iter_mut().find(|r| r.id == repo_id).unwrap();
-    repo_state.status = Loadable::Ready(Arc::new(RepoStatus {
+    repo_state.set_status(Loadable::Ready(Arc::new(RepoStatus {
         unstaged: vec![FileStatus {
             path: PathBuf::from(path),
             kind: FileStatusKind::Conflicted,
             conflict: Some(conflict_kind),
         }],
         staged: vec![],
-    }));
+    })));
     // Set the conflict file path (simulates LoadConflictFile dispatch).
     repo_state.set_conflict_file_path(Some(PathBuf::from(path)));
 

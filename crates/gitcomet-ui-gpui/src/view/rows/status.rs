@@ -1,40 +1,100 @@
 use super::*;
 use std::sync::Arc;
+#[cfg(any(debug_assertions, feature = "benchmarks"))]
+use std::sync::atomic::{AtomicU64, Ordering};
 
 const STATUS_ROW_HEIGHT_PX: f32 = 24.0;
+
+#[cfg(any(test, feature = "benchmarks"))]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(in crate::view) struct StatusSelectionBenchSnapshot {
+    pub position_scan_steps: u64,
+}
+
+#[cfg(any(test, feature = "benchmarks"))]
+pub(in crate::view) fn bench_snapshot_status_selection() -> StatusSelectionBenchSnapshot {
+    #[cfg(any(debug_assertions, feature = "benchmarks"))]
+    {
+        StatusSelectionBenchSnapshot {
+            position_scan_steps: STATUS_SELECTION_POSITION_SCAN_STEPS.load(Ordering::Relaxed),
+        }
+    }
+    #[cfg(not(any(debug_assertions, feature = "benchmarks")))]
+    {
+        StatusSelectionBenchSnapshot::default()
+    }
+}
+
+#[cfg(any(test, feature = "benchmarks"))]
+pub(in crate::view) fn bench_reset_status_selection() {
+    #[cfg(any(debug_assertions, feature = "benchmarks"))]
+    {
+        STATUS_SELECTION_POSITION_SCAN_STEPS.store(0, Ordering::Relaxed);
+    }
+}
+
+#[cfg(any(debug_assertions, feature = "benchmarks"))]
+static STATUS_SELECTION_POSITION_SCAN_STEPS: AtomicU64 = AtomicU64::new(0);
+
+fn set_status_multi_selection_single(
+    selected: &mut Vec<std::path::PathBuf>,
+    anchor: &mut Option<std::path::PathBuf>,
+    anchor_index: &mut Option<usize>,
+    clicked_path: std::path::PathBuf,
+    clicked_index: Option<usize>,
+) {
+    selected.clear();
+    selected.push(clicked_path.clone());
+    *anchor = Some(clicked_path);
+    *anchor_index = clicked_index;
+}
 
 fn apply_status_multi_selection_to_slice(
     selected: &mut Vec<std::path::PathBuf>,
     anchor: &mut Option<std::path::PathBuf>,
+    anchor_index: &mut Option<usize>,
     clicked_path: std::path::PathBuf,
+    clicked_index: Option<usize>,
     modifiers: gpui::Modifiers,
     entries: Option<&[std::path::PathBuf]>,
 ) {
     if modifiers.shift {
         let Some(entries) = entries else {
-            *selected = vec![clicked_path.clone()];
-            *anchor = Some(clicked_path);
+            set_status_multi_selection_single(
+                selected,
+                anchor,
+                anchor_index,
+                clicked_path,
+                clicked_index,
+            );
             return;
         };
 
-        let Some(clicked_ix) = entries.iter().position(|p| p == &clicked_path) else {
-            *selected = vec![clicked_path.clone()];
-            *anchor = Some(clicked_path);
+        let Some(clicked_ix) =
+            status_selection_entry_index(entries, clicked_path.as_path(), clicked_index)
+        else {
+            set_status_multi_selection_single(
+                selected,
+                anchor,
+                anchor_index,
+                clicked_path,
+                clicked_index,
+            );
             return;
         };
 
         let anchor_path = anchor.clone().unwrap_or_else(|| clicked_path.clone());
-        let anchor_ix = entries
-            .iter()
-            .position(|p| p == &anchor_path)
+        let anchor_ix = status_selection_entry_index(entries, anchor_path.as_path(), *anchor_index)
             .unwrap_or(clicked_ix);
         let (a, b) = if anchor_ix <= clicked_ix {
             (anchor_ix, clicked_ix)
         } else {
             (clicked_ix, anchor_ix)
         };
-        *selected = entries[a..=b].to_vec();
+        selected.clear();
+        selected.extend(entries[a..=b].iter().cloned());
         *anchor = Some(anchor_path);
+        *anchor_index = Some(anchor_ix);
         return;
     }
 
@@ -43,22 +103,60 @@ fn apply_status_multi_selection_to_slice(
             selected.remove(ix);
             if selected.is_empty() {
                 *anchor = None;
+                *anchor_index = None;
             }
         } else {
             selected.push(clicked_path.clone());
             *anchor = Some(clicked_path);
+            *anchor_index = clicked_index;
         }
         return;
     }
 
-    *selected = vec![clicked_path.clone()];
-    *anchor = Some(clicked_path);
+    set_status_multi_selection_single(selected, anchor, anchor_index, clicked_path, clicked_index);
 }
 
-fn apply_status_multi_selection_click(
+fn status_selection_entry_index_hint(
+    entries: &[std::path::PathBuf],
+    target: &std::path::Path,
+    index_hint: Option<usize>,
+) -> Option<usize> {
+    index_hint.filter(|&ix| entries.get(ix).is_some_and(|path| path.as_path() == target))
+}
+
+#[cfg(any(debug_assertions, feature = "benchmarks"))]
+fn status_selection_entry_index(
+    entries: &[std::path::PathBuf],
+    target: &std::path::Path,
+    index_hint: Option<usize>,
+) -> Option<usize> {
+    if let Some(ix) = status_selection_entry_index_hint(entries, target, index_hint) {
+        return Some(ix);
+    }
+    for (ix, path) in entries.iter().enumerate() {
+        STATUS_SELECTION_POSITION_SCAN_STEPS.fetch_add(1, Ordering::Relaxed);
+        if path.as_path() == target {
+            return Some(ix);
+        }
+    }
+    None
+}
+
+#[cfg(not(any(debug_assertions, feature = "benchmarks")))]
+fn status_selection_entry_index(
+    entries: &[std::path::PathBuf],
+    target: &std::path::Path,
+    index_hint: Option<usize>,
+) -> Option<usize> {
+    status_selection_entry_index_hint(entries, target, index_hint)
+        .or_else(|| entries.iter().position(|path| path.as_path() == target))
+}
+
+pub(super) fn apply_status_multi_selection_click(
     selection: &mut StatusMultiSelection,
     section: StatusSection,
     clicked_path: std::path::PathBuf,
+    clicked_index: Option<usize>,
     modifiers: gpui::Modifiers,
     entries: Option<&[std::path::PathBuf]>,
 ) {
@@ -68,10 +166,13 @@ fn apply_status_multi_selection_click(
             selection.untracked_anchor = None;
             selection.staged.clear();
             selection.staged_anchor = None;
+            selection.staged_anchor_index = None;
             apply_status_multi_selection_to_slice(
                 &mut selection.unstaged,
                 &mut selection.unstaged_anchor,
+                &mut selection.unstaged_anchor_index,
                 clicked_path,
+                clicked_index,
                 modifiers,
                 entries,
             );
@@ -79,12 +180,17 @@ fn apply_status_multi_selection_click(
         StatusSection::Untracked => {
             selection.unstaged.clear();
             selection.unstaged_anchor = None;
+            selection.unstaged_anchor_index = None;
             selection.staged.clear();
             selection.staged_anchor = None;
+            selection.staged_anchor_index = None;
+            let mut untracked_anchor_index = None;
             apply_status_multi_selection_to_slice(
                 &mut selection.untracked,
                 &mut selection.untracked_anchor,
+                &mut untracked_anchor_index,
                 clicked_path,
+                clicked_index,
                 modifiers,
                 entries,
             );
@@ -94,10 +200,13 @@ fn apply_status_multi_selection_click(
             selection.untracked_anchor = None;
             selection.unstaged.clear();
             selection.unstaged_anchor = None;
+            selection.unstaged_anchor_index = None;
             apply_status_multi_selection_to_slice(
                 &mut selection.staged,
                 &mut selection.staged_anchor,
+                &mut selection.staged_anchor_index,
                 clicked_path,
+                clicked_index,
                 modifiers,
                 entries,
             );
@@ -184,11 +293,19 @@ impl DetailsPaneView {
         repo_id: RepoId,
         section: StatusSection,
         clicked_path: std::path::PathBuf,
+        clicked_index: Option<usize>,
         modifiers: gpui::Modifiers,
         entries: Option<&[std::path::PathBuf]>,
     ) {
         let sel = self.status_multi_selection_for_repo_mut(repo_id);
-        apply_status_multi_selection_click(sel, section, clicked_path, modifiers, entries);
+        apply_status_multi_selection_click(
+            sel,
+            section,
+            clicked_path,
+            clicked_index,
+            modifiers,
+            entries,
+        );
     }
 
     pub(in super::super) fn render_unstaged_rows(
@@ -303,7 +420,6 @@ fn status_row(
     let path_for_stage = Arc::clone(&path);
     let path_for_row = Arc::clone(&path);
     let path_for_menu = Arc::clone(&path);
-    let path_for_conflict_stage = Arc::clone(&path);
     let is_conflicted = entry.kind == FileStatusKind::Conflicted;
     let stage_label = if is_conflicted {
         "Resolve…"
@@ -381,26 +497,6 @@ fn status_row(
             }
         }));
 
-    let conflict_stage_button = if is_conflicted {
-        Some(
-            components::Button::new(format!("conflict_stage_btn_{ix}"), "Stage")
-                .style(components::ButtonStyle::Outlined)
-                .on_click(theme, cx, move |this, _e, window, cx| {
-                    cx.stop_propagation();
-                    this.focus_diff_panel(window, cx);
-                    this.store.dispatch(Msg::StagePaths {
-                        repo_id,
-                        paths: vec![(*path_for_conflict_stage).clone()],
-                    });
-                    this.clear_status_multi_selection(repo_id);
-                    this.store.dispatch(Msg::ClearDiffSelection { repo_id });
-                    cx.notify();
-                }),
-        )
-    } else {
-        None
-    };
-
     let path_display_for_label = path_display.clone();
 
     div()
@@ -450,6 +546,7 @@ fn status_row(
                         repo_id,
                         section,
                         clicked_path.clone(),
+                        Some(ix),
                         gpui::Modifiers::default(),
                         None,
                     );
@@ -509,23 +606,26 @@ fn status_row(
                 .invisible()
                 .group_hover(row_group.clone(), |d| d.visible())
                 .gap_1()
-                .when_some(conflict_stage_button, |d, btn| d.child(btn))
                 .child(stage_button),
         )
         .on_click(cx.listener(move |this, _e: &ClickEvent, window, cx| {
             this.focus_diff_panel(window, cx);
             let modifiers = _e.modifiers();
-            let entries =
+            let entries = if modifiers.shift {
                 this.active_repo()
                     .filter(|r| r.id == repo_id)
                     .and_then(|repo| match &repo.status {
                         Loadable::Ready(status) => Some(status_paths_for_section(status, section)),
                         _ => None,
-                    });
+                    })
+            } else {
+                None
+            };
             this.status_selection_apply_click(
                 repo_id,
                 section,
                 (*path_for_row).clone(),
+                Some(ix),
                 modifiers,
                 entries.as_deref(),
             );
@@ -563,6 +663,7 @@ mod tests {
             &mut sel,
             StatusSection::CombinedUnstaged,
             pb("a"),
+            None,
             gpui::Modifiers {
                 control: true,
                 ..Default::default()
@@ -575,6 +676,7 @@ mod tests {
             &mut sel,
             StatusSection::CombinedUnstaged,
             pb("b"),
+            None,
             gpui::Modifiers {
                 control: true,
                 ..Default::default()
@@ -587,6 +689,7 @@ mod tests {
             &mut sel,
             StatusSection::CombinedUnstaged,
             pb("a"),
+            None,
             gpui::Modifiers {
                 control: true,
                 ..Default::default()
@@ -605,6 +708,7 @@ mod tests {
             &mut sel,
             StatusSection::CombinedUnstaged,
             pb("b"),
+            None,
             gpui::Modifiers::default(),
             Some(&entries),
         );
@@ -614,6 +718,7 @@ mod tests {
             &mut sel,
             StatusSection::CombinedUnstaged,
             pb("d"),
+            None,
             gpui::Modifiers {
                 shift: true,
                 ..Default::default()
@@ -635,6 +740,7 @@ mod tests {
             &mut sel,
             StatusSection::Untracked,
             pb("new.txt"),
+            None,
             gpui::Modifiers::default(),
             None,
         );

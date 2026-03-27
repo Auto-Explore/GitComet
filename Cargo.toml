@@ -46,6 +46,7 @@ gix = { version = "0.81.0", default-features = false, features = ["max-performan
 gpui = { version = "0.2.2" }
 image = "0.25.10"
 lru = "0.16"
+memchr = "2.8.0"
 mimalloc = { version = "0.1.48", features = ["v3"] }
 pulldown-cmark = { version = "0.13", default-features = false, features = ["simd"] }
 notify = "9.0.0-rc.2"
@@ -53,11 +54,14 @@ raw-window-handle = "0.6"
 regex = "1.12.3"
 resvg = { version = "0.47.0", default-features = false, features = ["text", "system-fonts", "raster-images"] }
 rustc-hash = "2.1.1"
+rustix = { version = "1.1.4", default-features = false, features = ["std", "process"] }
 semver = "1.0.27"
 schemars = "1.2.1"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
+smallvec = "1.15.1"
 smol = "2.0.2"
+stats_alloc = { version = "0.1.10", features = ["nightly"] }
 strsim = "0.11.1"
 tempfile = "3.27.0"
 thiserror = "2.0"

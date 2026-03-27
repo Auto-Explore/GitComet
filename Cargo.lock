@@ -2251,6 +2251,8 @@ dependencies = [
  "gitcomet-ui-gpui",
  "mimalloc",
  "rustc-hash 2.1.1",
+ "serde",
+ "serde_json",
  "tempfile",
 ]
 
@@ -2293,6 +2295,7 @@ dependencies = [
  "rustc-hash 2.1.1",
  "serde",
  "serde_json",
+ "smallvec",
  "smol",
  "tempfile",
 ]
@@ -2311,21 +2314,27 @@ dependencies = [
  "criterion",
  "fontdb 0.23.0",
  "gitcomet-core",
+ "gitcomet-git-gix",
  "gitcomet-state",
  "gitcomet-win32-window-utils",
  "gpui",
  "image",
  "lru",
+ "memchr",
  "metal 0.33.0",
+ "mimalloc",
  "pulldown-cmark",
  "raw-window-handle",
  "resvg 0.47.0",
  "rustc-hash 2.1.1",
+ "rustix 1.1.4",
  "schemars",
  "semver",
  "serde",
  "serde_json",
+ "smallvec",
  "smol",
+ "stats_alloc",
  "tempfile",
  "tree-sitter",
  "tree-sitter-bash",
@@ -6604,6 +6613,12 @@ name = "static_assertions"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
+
+[[package]]
+name = "stats_alloc"
+version = "0.1.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c0e04424e733e69714ca1bbb9204c1a57f09f5493439520f9f68c132ad25eec"
 
 [[package]]
 name = "streaming-iterator"

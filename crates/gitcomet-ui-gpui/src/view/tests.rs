@@ -113,8 +113,10 @@ fn reconcile_status_multi_selection_prunes_missing_paths_and_anchors() {
         untracked_anchor: None,
         unstaged: vec![a.clone(), b.clone()],
         unstaged_anchor: Some(b),
+        unstaged_anchor_index: None,
         staged: vec![c.clone()],
         staged_anchor: Some(c),
+        staged_anchor_index: None,
     };
 
     reconcile_status_multi_selection(&mut selection, &status);
@@ -263,6 +265,193 @@ fn remote_upstream_branch_is_marked() {
 }
 
 #[test]
+fn branch_sidebar_branch_label_uses_leaf_segment() {
+    assert_eq!(
+        branch_sidebar::branch_sidebar_branch_label("origin/feature/topic"),
+        "topic"
+    );
+    assert_eq!(
+        branch_sidebar::branch_sidebar_branch_label("feature"),
+        "feature"
+    );
+}
+
+#[test]
+fn branch_sidebar_keeps_leaf_before_children_when_branch_is_also_group() {
+    let mut repo = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::new(),
+        },
+    );
+
+    repo.branches = Loadable::Ready(Arc::new(vec![
+        Branch {
+            name: "feature".to_string(),
+            target: CommitId("deadbeef".into()),
+            upstream: None,
+            divergence: None,
+        },
+        Branch {
+            name: "feature/topic".to_string(),
+            target: CommitId("feedface".into()),
+            upstream: None,
+            divergence: None,
+        },
+    ]));
+
+    let rows = GitCometView::branch_sidebar_rows(&repo);
+    let feature_group_index = rows
+        .iter()
+        .position(|row| {
+            matches!(
+                row,
+                BranchSidebarRow::GroupHeader { label, depth, .. }
+                    if label.as_ref() == "feature/" && *depth == 0
+            )
+        })
+        .expect("expected feature group header");
+    let feature_leaf_index = rows
+        .iter()
+        .position(|row| {
+            matches!(
+                row,
+                BranchSidebarRow::Branch { name, depth, .. }
+                    if name.as_ref() == "feature" && *depth == 1
+            )
+        })
+        .expect("expected feature branch row");
+    let feature_child_index = rows
+        .iter()
+        .position(|row| {
+            matches!(
+                row,
+                BranchSidebarRow::Branch { name, depth, .. }
+                    if name.as_ref() == "feature/topic" && *depth == 1
+            )
+        })
+        .expect("expected feature/topic branch row");
+
+    assert!(feature_group_index < feature_leaf_index);
+    assert!(feature_leaf_index < feature_child_index);
+}
+
+#[test]
+fn branch_sidebar_sorts_unsorted_local_branches() {
+    let mut repo = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::new(),
+        },
+    );
+
+    repo.branches = Loadable::Ready(Arc::new(vec![
+        Branch {
+            name: "feature/topic".to_string(),
+            target: CommitId("deadbeef".into()),
+            upstream: None,
+            divergence: None,
+        },
+        Branch {
+            name: "zeta".to_string(),
+            target: CommitId("feedface".into()),
+            upstream: None,
+            divergence: None,
+        },
+        Branch {
+            name: "feature".to_string(),
+            target: CommitId("cafebabe".into()),
+            upstream: None,
+            divergence: None,
+        },
+        Branch {
+            name: "alpha".to_string(),
+            target: CommitId("8badf00d".into()),
+            upstream: None,
+            divergence: None,
+        },
+    ]));
+
+    let rows = GitCometView::branch_sidebar_rows(&repo);
+    let names = rows
+        .iter()
+        .filter_map(|row| match row {
+            BranchSidebarRow::Branch { name, .. } => Some(name.as_ref().to_string()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(names, vec!["feature", "feature/topic", "alpha", "zeta"]);
+}
+
+#[test]
+fn branch_sidebar_sorts_unsorted_remote_branches() {
+    let mut repo = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::new(),
+        },
+    );
+
+    repo.remote_branches = Loadable::Ready(Arc::new(vec![
+        RemoteBranch {
+            remote: "upstream".to_string(),
+            name: "zeta/topic".to_string(),
+            target: CommitId("deadbeef".into()),
+        },
+        RemoteBranch {
+            remote: "origin".to_string(),
+            name: "feature/topic".to_string(),
+            target: CommitId("feedface".into()),
+        },
+        RemoteBranch {
+            remote: "origin".to_string(),
+            name: "alpha".to_string(),
+            target: CommitId("cafebabe".into()),
+        },
+        RemoteBranch {
+            remote: "origin".to_string(),
+            name: "feature".to_string(),
+            target: CommitId("8badf00d".into()),
+        },
+        RemoteBranch {
+            remote: "origin".to_string(),
+            name: "alpha".to_string(),
+            target: CommitId("decafbad".into()),
+        },
+        RemoteBranch {
+            remote: "upstream".to_string(),
+            name: "main".to_string(),
+            target: CommitId("facefeed".into()),
+        },
+    ]));
+
+    let rows = GitCometView::branch_sidebar_rows(&repo);
+    let names = rows
+        .iter()
+        .filter_map(|row| match row {
+            BranchSidebarRow::Branch {
+                section: BranchSection::Remote,
+                name,
+                ..
+            } => Some(name.as_ref().to_string()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        names,
+        vec![
+            "origin/feature",
+            "origin/feature/topic",
+            "origin/alpha",
+            "upstream/zeta/topic",
+            "upstream/main",
+        ]
+    );
+}
+
+#[test]
 fn remote_section_includes_tracked_upstream_without_remote_tracking_ref() {
     let mut repo = RepoState::new_opening(
         RepoId(1),
@@ -329,7 +518,20 @@ fn worktree_tooltip_includes_branch_name() {
     let row = rows
         .iter()
         .find_map(|row| match row {
-            BranchSidebarRow::WorktreeItem { tooltip, .. } => Some(tooltip.as_ref().to_owned()),
+            BranchSidebarRow::WorktreeItem {
+                path,
+                branch,
+                detached,
+                ..
+            } => Some(
+                branch_sidebar::branch_sidebar_worktree_label(
+                    branch.as_ref().map(SharedString::as_ref),
+                    *detached,
+                    &path.to_string_lossy(),
+                )
+                .as_ref()
+                .to_owned(),
+            ),
             _ => None,
         })
         .expect("expected worktree row");

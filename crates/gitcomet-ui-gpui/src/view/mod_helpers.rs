@@ -458,8 +458,10 @@ pub(super) struct StatusMultiSelection {
     pub(super) untracked_anchor: Option<std::path::PathBuf>,
     pub(super) unstaged: Vec<std::path::PathBuf>,
     pub(super) unstaged_anchor: Option<std::path::PathBuf>,
+    pub(super) unstaged_anchor_index: Option<usize>,
     pub(super) staged: Vec<std::path::PathBuf>,
     pub(super) staged_anchor: Option<std::path::PathBuf>,
+    pub(super) staged_anchor_index: Option<usize>,
 }
 
 impl StatusMultiSelection {
@@ -533,6 +535,7 @@ pub(super) fn reconcile_status_multi_selection(
         .is_some_and(|a| !unstaged_paths.contains(&a.as_path()))
     {
         selection.unstaged_anchor = None;
+        selection.unstaged_anchor_index = None;
     }
 
     let mut staged_paths: HashSet<&std::path::Path> =
@@ -550,6 +553,7 @@ pub(super) fn reconcile_status_multi_selection(
         .is_some_and(|a| !staged_paths.contains(&a.as_path()))
     {
         selection.staged_anchor = None;
+        selection.staged_anchor_index = None;
     }
 }
 

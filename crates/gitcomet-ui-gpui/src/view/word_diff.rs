@@ -3,6 +3,8 @@ use std::ops::Range;
 const WORD_DIFF_MAX_BYTES_PER_SIDE: usize = 4 * 1024;
 const WORD_DIFF_MAX_TOTAL_BYTES: usize = 8 * 1024;
 
+type WordDiffRangePair = (Vec<Range<usize>>, Vec<Range<usize>>);
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum TokenKind {
     Whitespace,
@@ -15,37 +17,219 @@ struct Token {
     kind: TokenKind,
 }
 
-#[derive(Clone, Debug)]
-struct MyersTraceRow {
-    min_k: isize,
-    max_k: isize,
-    values: Vec<isize>,
+/// Reusable buffers for `word_diff_ranges` to avoid per-call allocation overhead.
+struct WordDiffBufs {
+    old_tokens: Vec<Token>,
+    new_tokens: Vec<Token>,
+    v: Vec<isize>,
+    /// Flat trace buffer: depth `d` stores `2d+1` values starting at offset `d*d`.
+    trace: Vec<isize>,
+    keep_old: Vec<bool>,
+    keep_new: Vec<bool>,
+    old_ranges: Vec<Range<usize>>,
+    new_ranges: Vec<Range<usize>>,
 }
 
-impl MyersTraceRow {
-    fn from_v(v: &[isize], min_k: isize, max_k: isize, offset: isize) -> Self {
-        debug_assert!(min_k <= max_k);
-        let start = (min_k + offset) as usize;
-        let end = (max_k + offset) as usize;
+impl WordDiffBufs {
+    fn new() -> Self {
         Self {
-            min_k,
-            max_k,
-            values: v[start..=end].to_vec(),
+            old_tokens: Vec::new(),
+            new_tokens: Vec::new(),
+            v: Vec::new(),
+            trace: Vec::new(),
+            keep_old: Vec::new(),
+            keep_new: Vec::new(),
+            old_ranges: Vec::new(),
+            new_ranges: Vec::new(),
         }
     }
+}
 
-    fn at(&self, k: isize) -> isize {
-        debug_assert!(k >= self.min_k && k <= self.max_k);
-        self.values[(k - self.min_k) as usize]
+std::thread_local! {
+    static WORD_DIFF_BUFS: std::cell::RefCell<WordDiffBufs> =
+        std::cell::RefCell::new(WordDiffBufs::new());
+}
+
+/// Read trace value for depth `d` at diagonal `k`. Depth `d` stores `2d+1`
+/// values (for `k` in `[-d, d]`) starting at flat offset `d*d`.
+#[inline(always)]
+fn trace_at(trace: &[isize], d: usize, k: isize) -> isize {
+    trace[d * d + (k + d as isize) as usize]
+}
+
+#[inline(always)]
+fn classify_byte(b: u8) -> u8 {
+    if b == b' ' || b == b'\t' || b == b'\n' || b == b'\r' {
+        0 // whitespace
+    } else if b.is_ascii_alphanumeric() || b == b'_' {
+        1 // word
+    } else {
+        2 // punctuation
     }
 }
 
-fn tokenize_for_word_diff(s: &str, max_tokens: usize) -> Vec<Token> {
-    if max_tokens == 0 {
-        return Vec::new();
+#[inline(always)]
+fn token_range_eq(
+    old_bytes: &[u8],
+    old_range: &Range<usize>,
+    new_bytes: &[u8],
+    new_range: &Range<usize>,
+) -> bool {
+    old_bytes[old_range.start..old_range.end] == new_bytes[new_range.start..new_range.end]
+}
+
+#[inline(always)]
+fn retreat_ascii_token_start(bytes: &[u8], mut ix: usize) -> usize {
+    while ix > 0 {
+        let prev_class = classify_byte(bytes[ix - 1]);
+        let current_class = classify_byte(bytes[ix]);
+        if prev_class == 0 || prev_class != current_class {
+            break;
+        }
+        ix -= 1;
+    }
+    ix
+}
+
+#[inline(always)]
+fn advance_ascii_token_end(bytes: &[u8], mut ix: usize) -> usize {
+    while ix < bytes.len() {
+        let prev_class = classify_byte(bytes[ix - 1]);
+        let current_class = classify_byte(bytes[ix]);
+        if current_class == 0 || prev_class != current_class {
+            break;
+        }
+        ix += 1;
+    }
+    ix
+}
+
+#[inline(always)]
+fn is_single_ascii_token_range(bytes: &[u8], range: Range<usize>) -> bool {
+    if range.is_empty() {
+        return true;
+    }
+    let class = classify_byte(bytes[range.start]);
+    if class == 0 {
+        return false;
+    }
+    bytes[range.start + 1..range.end]
+        .iter()
+        .all(|&byte| classify_byte(byte) == class)
+}
+
+fn ascii_single_token_diff_fast_ranges(
+    old: &str,
+    new: &str,
+    bufs: &mut WordDiffBufs,
+) -> Option<WordDiffRangePair> {
+    if !old.is_ascii() || !new.is_ascii() || old.is_empty() || new.is_empty() {
+        return None;
     }
 
-    fn classify(c: char) -> (u8, TokenKind) {
+    let old_bytes = old.as_bytes();
+    let new_bytes = new.as_bytes();
+    let mut prefix = 0usize;
+    let shared_len = old_bytes.len().min(new_bytes.len());
+    while prefix < shared_len && old_bytes[prefix] == new_bytes[prefix] {
+        prefix += 1;
+    }
+    if prefix == old_bytes.len() && prefix == new_bytes.len() {
+        return Some((Vec::new(), Vec::new()));
+    }
+
+    let mut old_end = old_bytes.len();
+    let mut new_end = new_bytes.len();
+    while old_end > prefix && new_end > prefix && old_bytes[old_end - 1] == new_bytes[new_end - 1] {
+        old_end -= 1;
+        new_end -= 1;
+    }
+
+    let mut old_start = prefix;
+    if old_start < old_end {
+        old_start = retreat_ascii_token_start(old_bytes, old_start);
+        old_end = advance_ascii_token_end(old_bytes, old_end);
+    }
+    let mut new_start = prefix;
+    if new_start < new_end {
+        new_start = retreat_ascii_token_start(new_bytes, new_start);
+        new_end = advance_ascii_token_end(new_bytes, new_end);
+    }
+
+    if !is_single_ascii_token_range(old_bytes, old_start..old_end)
+        || !is_single_ascii_token_range(new_bytes, new_start..new_end)
+    {
+        return None;
+    }
+
+    bufs.old_ranges.clear();
+    if old_start < old_end {
+        bufs.old_ranges.push(old_start..old_end);
+    }
+    bufs.new_ranges.clear();
+    if new_start < new_end {
+        bufs.new_ranges.push(new_start..new_end);
+    }
+    Some((bufs.old_ranges.clone(), bufs.new_ranges.clone()))
+}
+
+fn push_all_non_whitespace_token_ranges(tokens: &[Token], out: &mut Vec<Range<usize>>) {
+    out.clear();
+    out.extend(
+        tokens
+            .iter()
+            .filter(|token| token.kind == TokenKind::Other)
+            .map(|token| token.range.clone()),
+    );
+}
+
+fn push_changed_token_ranges(tokens: &[Token], keep: &[bool], out: &mut Vec<Range<usize>>) {
+    out.clear();
+    out.extend(
+        tokens
+            .iter()
+            .zip(keep.iter())
+            .filter(|(token, is_kept)| token.kind == TokenKind::Other && !**is_kept)
+            .map(|(token, _)| token.range.clone()),
+    );
+}
+
+fn tokenize_for_word_diff_into(s: &str, max_tokens: usize, out: &mut Vec<Token>) {
+    out.clear();
+    if max_tokens == 0 {
+        return;
+    }
+
+    let bytes = s.as_bytes();
+    if s.is_ascii() {
+        // Fast path: byte-level tokenization for ASCII strings.
+        let len = bytes.len();
+        let mut i = 0;
+        while i < len {
+            let start = i;
+            let class = classify_byte(bytes[i]);
+            let kind = if class == 0 {
+                TokenKind::Whitespace
+            } else {
+                TokenKind::Other
+            };
+            i += 1;
+            while i < len && classify_byte(bytes[i]) == class {
+                i += 1;
+            }
+            out.push(Token {
+                range: start..i,
+                kind,
+            });
+            if out.len() >= max_tokens {
+                return;
+            }
+        }
+        return;
+    }
+
+    // Slow path: char-based tokenization for non-ASCII strings.
+    fn classify_char(c: char) -> (u8, TokenKind) {
         if c.is_whitespace() {
             return (0, TokenKind::Whitespace);
         }
@@ -55,13 +239,12 @@ fn tokenize_for_word_diff(s: &str, max_tokens: usize) -> Vec<Token> {
         (2, TokenKind::Other)
     }
 
-    let mut out = Vec::with_capacity(max_tokens);
     let mut it = s.char_indices().peekable();
     while let Some((start, ch)) = it.next() {
-        let (class, kind) = classify(ch);
+        let (class, kind) = classify_char(ch);
         let mut end = start + ch.len_utf8();
         while let Some(&(next_start, next_ch)) = it.peek() {
-            let (next_class, _) = classify(next_ch);
+            let (next_class, _) = classify_char(next_ch);
             if next_class != class {
                 break;
             }
@@ -73,72 +256,123 @@ fn tokenize_for_word_diff(s: &str, max_tokens: usize) -> Vec<Token> {
             kind,
         });
         if out.len() >= max_tokens {
-            break;
+            return;
         }
     }
-    out
 }
 
-fn coalesce_ranges(mut ranges: Vec<Range<usize>>) -> Vec<Range<usize>> {
+/// In-place coalescing: sorts `ranges`, deduplicates overlaps, returns a cloned Vec.
+fn coalesce_ranges_in_place(ranges: &mut Vec<Range<usize>>) -> Vec<Range<usize>> {
     if ranges.len() <= 1 {
-        return ranges;
+        return ranges.clone();
     }
     ranges.sort_by_key(|r| (r.start, r.end));
-    let mut out: Vec<Range<usize>> = Vec::with_capacity(ranges.len());
-    for r in ranges {
-        if let Some(last) = out.last_mut()
-            && r.start <= last.end
-        {
-            last.end = last.end.max(r.end);
-            continue;
+    let mut write = 0usize;
+    for read in 1..ranges.len() {
+        if ranges[read].start <= ranges[write].end {
+            let new_end = ranges[read].end;
+            ranges[write].end = ranges[write].end.max(new_end);
+        } else {
+            write += 1;
+            ranges[write] = ranges[read].clone();
         }
-        out.push(r);
     }
-    out
+    ranges.truncate(write + 1);
+    ranges.clone()
 }
 
-pub(super) fn word_diff_ranges(old: &str, new: &str) -> (Vec<Range<usize>>, Vec<Range<usize>>) {
+pub(super) fn word_diff_ranges(old: &str, new: &str) -> WordDiffRangePair {
+    WORD_DIFF_BUFS.with(|cell| {
+        let mut bufs = cell.borrow_mut();
+        word_diff_ranges_with_bufs(old, new, &mut bufs)
+    })
+}
+
+fn word_diff_ranges_with_bufs(old: &str, new: &str, bufs: &mut WordDiffBufs) -> WordDiffRangePair {
     const MAX_TOKENS: usize = 128;
-    let old_tokens = tokenize_for_word_diff(old, MAX_TOKENS + 1);
-    let new_tokens = tokenize_for_word_diff(new, MAX_TOKENS + 1);
-    if old_tokens.len() > MAX_TOKENS || new_tokens.len() > MAX_TOKENS {
+    /// Maximum Myers edit depth before falling back to affix diff. When the
+    /// edit distance exceeds this, the token-level diff is mostly noise rather
+    /// than useful word highlighting. Capping at 48 bounds worst-case work per
+    /// line pair to O(48 * 257) ≈ 12K operations instead of O(256²) ≈ 65K.
+    const MAX_EDIT_DEPTH: usize = 48;
+    if let Some(ranges) = ascii_single_token_diff_fast_ranges(old, new, bufs) {
+        return ranges;
+    }
+    tokenize_for_word_diff_into(old, MAX_TOKENS + 1, &mut bufs.old_tokens);
+    tokenize_for_word_diff_into(new, MAX_TOKENS + 1, &mut bufs.new_tokens);
+    if bufs.old_tokens.len() > MAX_TOKENS || bufs.new_tokens.len() > MAX_TOKENS {
         return fallback_affix_diff_ranges(old, new);
     }
+    if bufs.old_tokens.is_empty() || bufs.new_tokens.is_empty() {
+        return fallback_affix_diff_ranges(old, new);
+    }
+
+    let old_bytes = old.as_bytes();
+    let new_bytes = new.as_bytes();
+
+    // Most edited code lines still share long token prefixes/suffixes. Trim
+    // them so the Myers core only sees the changed middle.
+    let mut prefix = 0usize;
+    let shared_prefix_limit = bufs.old_tokens.len().min(bufs.new_tokens.len());
+    while prefix < shared_prefix_limit
+        && token_range_eq(
+            old_bytes,
+            &bufs.old_tokens[prefix].range,
+            new_bytes,
+            &bufs.new_tokens[prefix].range,
+        )
+    {
+        prefix += 1;
+    }
+
+    let mut old_end = bufs.old_tokens.len();
+    let mut new_end = bufs.new_tokens.len();
+    while old_end > prefix
+        && new_end > prefix
+        && token_range_eq(
+            old_bytes,
+            &bufs.old_tokens[old_end - 1].range,
+            new_bytes,
+            &bufs.new_tokens[new_end - 1].range,
+        )
+    {
+        old_end -= 1;
+        new_end -= 1;
+    }
+
+    let old_tokens = &bufs.old_tokens[prefix..old_end];
+    let new_tokens = &bufs.new_tokens[prefix..new_end];
     if old_tokens.is_empty() || new_tokens.is_empty() {
-        return fallback_affix_diff_ranges(old, new);
+        push_all_non_whitespace_token_ranges(old_tokens, &mut bufs.old_ranges);
+        push_all_non_whitespace_token_ranges(new_tokens, &mut bufs.new_ranges);
+        return (
+            coalesce_ranges_in_place(&mut bufs.old_ranges),
+            coalesce_ranges_in_place(&mut bufs.new_ranges),
+        );
     }
 
-    let old_slices: Vec<&str> = old_tokens
-        .iter()
-        .map(|t| &old[t.range.clone()])
-        .collect::<Vec<_>>();
-    let new_slices: Vec<&str> = new_tokens
-        .iter()
-        .map(|t| &new[t.range.clone()])
-        .collect::<Vec<_>>();
-
-    // Compute the longest common subsequence via Myers' diff algorithm, marking matching tokens
-    // as "kept". This is substantially faster than O(n*m) DP for typical lines.
-    let Some(sum) = old_slices.len().checked_add(new_slices.len()) else {
-        return fallback_affix_diff_ranges(old, new);
-    };
-    if sum > isize::MAX as usize {
-        return fallback_affix_diff_ranges(old, new);
-    }
-
-    let n = old_slices.len() as isize;
-    let m = new_slices.len() as isize;
+    let n = old_tokens.len() as isize;
+    let m = new_tokens.len() as isize;
     let max = (n + m) as usize;
+    let depth_limit = max.min(MAX_EDIT_DEPTH);
     let offset = max as isize;
 
     let Some(v_size) = max.checked_mul(2).and_then(|v| v.checked_add(1)) else {
         return fallback_affix_diff_ranges(old, new);
     };
-    let mut v: Vec<isize> = vec![0; v_size];
-    let mut trace: Vec<MyersTraceRow> = Vec::with_capacity(max + 1);
 
+    // Reuse v buffer.
+    bufs.v.clear();
+    bufs.v.resize(v_size, 0);
+    let v = &mut bufs.v;
+
+    // Flat trace buffer: depth d stores 2d+1 values starting at offset d*d.
+    // Total for depth 0..D: (D+1)^2.
+    bufs.trace.clear();
+
+    let mut final_d = 0usize;
     let mut done = false;
-    for d in 0..=max {
+    for d in 0..=depth_limit {
         for k in (-(d as isize)..=(d as isize)).step_by(2) {
             let k_ix = (k + offset) as usize;
             let x = if k == -(d as isize)
@@ -151,7 +385,15 @@ pub(super) fn word_diff_ranges(old: &str, new: &str) -> (Vec<Range<usize>>, Vec<
 
             let mut x = x;
             let mut y = x - k;
-            while x < n && y < m && old_slices[x as usize] == new_slices[y as usize] {
+            while x < n
+                && y < m
+                && token_range_eq(
+                    old_bytes,
+                    &old_tokens[x as usize].range,
+                    new_bytes,
+                    &new_tokens[y as usize].range,
+                )
+            {
                 x += 1;
                 y += 1;
             }
@@ -163,39 +405,58 @@ pub(super) fn word_diff_ranges(old: &str, new: &str) -> (Vec<Range<usize>>, Vec<
             }
         }
 
-        trace.push(MyersTraceRow::from_v(&v, -(d as isize), d as isize, offset));
+        // Append this depth's v-values to the flat trace buffer.
+        let trace = &mut bufs.trace;
+        let d_isize = d as isize;
+        for k in -d_isize..=d_isize {
+            trace.push(v[(k + offset) as usize]);
+        }
+        final_d = d;
         if done {
             break;
         }
     }
 
-    let mut keep_old = vec![false; old_tokens.len()];
-    let mut keep_new = vec![false; new_tokens.len()];
+    // If we hit the depth limit without finding the full edit path, the lines
+    // are too dissimilar for useful word-level highlighting — fall back to the
+    // cheaper prefix/suffix diff.
+    if !done {
+        return fallback_affix_diff_ranges(old, new);
+    }
+
+    // Backtrace to find kept tokens.
+    bufs.keep_old.clear();
+    bufs.keep_old.resize(bufs.old_tokens.len(), false);
+    bufs.keep_new.clear();
+    bufs.keep_new.resize(bufs.new_tokens.len(), false);
 
     let mut x = n;
     let mut y = m;
 
-    for d in (1..trace.len()).rev() {
+    for d in (1..=final_d).rev() {
         let d_isize = d as isize;
-        let v = &trace[d - 1];
+        // Read from trace at depth d-1.
+        let prev_d = d - 1;
         let k = x - y;
-        let prev_k = if k == -d_isize || (k != d_isize && v.at(k - 1) < v.at(k + 1)) {
+        let prev_k = if k == -d_isize
+            || (k != d_isize
+                && trace_at(&bufs.trace, prev_d, k - 1) < trace_at(&bufs.trace, prev_d, k + 1))
+        {
             k + 1
         } else {
             k - 1
         };
 
-        let prev_x = v.at(prev_k);
+        let prev_x = trace_at(&bufs.trace, prev_d, prev_k);
         let prev_y = prev_x - prev_k;
 
         while x > prev_x && y > prev_y {
-            keep_old[(x - 1) as usize] = true;
-            keep_new[(y - 1) as usize] = true;
+            bufs.keep_old[(x - 1) as usize] = true;
+            bufs.keep_new[(y - 1) as usize] = true;
             x -= 1;
             y -= 1;
         }
 
-        // Step to the previous edit.
         if x == prev_x {
             y -= 1;
         } else {
@@ -204,27 +465,27 @@ pub(super) fn word_diff_ranges(old: &str, new: &str) -> (Vec<Range<usize>>, Vec<
     }
 
     while x > 0 && y > 0 {
-        if old_slices[(x - 1) as usize] != new_slices[(y - 1) as usize] {
+        if !token_range_eq(
+            old_bytes,
+            &old_tokens[(x - 1) as usize].range,
+            new_bytes,
+            &new_tokens[(y - 1) as usize].range,
+        ) {
             break;
         }
-        keep_old[(x - 1) as usize] = true;
-        keep_new[(y - 1) as usize] = true;
+        bufs.keep_old[(x - 1) as usize] = true;
+        bufs.keep_new[(y - 1) as usize] = true;
         x -= 1;
         y -= 1;
     }
 
-    let old_ranges = old_tokens
-        .iter()
-        .zip(keep_old.iter().copied())
-        .filter_map(|(t, keep)| (!keep && t.kind == TokenKind::Other).then_some(t.range.clone()))
-        .collect::<Vec<_>>();
-    let new_ranges = new_tokens
-        .iter()
-        .zip(keep_new.iter().copied())
-        .filter_map(|(t, keep)| (!keep && t.kind == TokenKind::Other).then_some(t.range.clone()))
-        .collect::<Vec<_>>();
+    push_changed_token_ranges(old_tokens, &bufs.keep_old, &mut bufs.old_ranges);
+    push_changed_token_ranges(new_tokens, &bufs.keep_new, &mut bufs.new_ranges);
 
-    (coalesce_ranges(old_ranges), coalesce_ranges(new_ranges))
+    (
+        coalesce_ranges_in_place(&mut bufs.old_ranges),
+        coalesce_ranges_in_place(&mut bufs.new_ranges),
+    )
 }
 
 pub(super) fn capped_word_diff_ranges(
@@ -240,7 +501,7 @@ pub(super) fn capped_word_diff_ranges(
     word_diff_ranges(old, new)
 }
 
-fn fallback_affix_diff_ranges(old: &str, new: &str) -> (Vec<Range<usize>>, Vec<Range<usize>>) {
+fn fallback_affix_diff_ranges(old: &str, new: &str) -> WordDiffRangePair {
     let mut prefix = 0usize;
     for ((old_ix, old_ch), (_new_ix, new_ch)) in old.char_indices().zip(new.char_indices()) {
         if old_ch != new_ch {
@@ -398,16 +659,78 @@ mod tests {
         }
 
         // 64 words produce 127 tokens (words + spaces), staying below the 128-token limit.
+        // All 64 words differ → edit distance = 128 (delete 64 + insert 64), which exceeds
+        // MAX_EDIT_DEPTH. The depth-bounded Myers falls back to affix diff, returning
+        // one range covering the entire text (correct: the whole line is changed).
         let old = words("old", 64);
         let new = words("new", 64);
         let (old_ranges, new_ranges) = word_diff_ranges(&old, &new);
 
-        assert_eq!(old_ranges.len(), 64);
-        assert_eq!(new_ranges.len(), 64);
+        // Affix fallback strips any common suffix (here: "63") and returns
+        // one range covering the differing middle.
+        assert_eq!(old_ranges.len(), 1, "affix fallback produces one range");
+        assert_eq!(new_ranges.len(), 1, "affix fallback produces one range");
+        assert!(old_ranges[0].start == 0);
+        assert!(new_ranges[0].start == 0);
+        // The exact end depends on common-suffix stripping, but both ranges
+        // should cover most of the text.
+        assert!(old_ranges[0].end > old.len() / 2);
+        assert!(new_ranges[0].end > new.len() / 2);
+    }
+
+    #[test]
+    fn word_diff_ranges_moderate_edits_within_depth_limit() {
+        fn words(prefix: &str, count: usize) -> String {
+            (0..count)
+                .map(|ix| format!("{prefix}{ix}"))
+                .collect::<Vec<_>>()
+                .join(" ")
+        }
+
+        // 16 different words + 16 identical words: edit distance is small enough
+        // that Myers completes within the depth limit.
+        let old_part = words("old", 16);
+        let shared_part = words("shared", 16);
+        let old = format!("{old_part} {shared_part}");
+        let new_part = words("new", 16);
+        let new = format!("{new_part} {shared_part}");
+        let (old_ranges, new_ranges) = word_diff_ranges(&old, &new);
+
+        // Should produce 16 individual word ranges (the non-shared words).
+        assert_eq!(old_ranges.len(), 16);
+        assert_eq!(new_ranges.len(), 16);
         assert_eq!(&old[old_ranges[0].clone()], "old0");
-        assert_eq!(&old[old_ranges[63].clone()], "old63");
         assert_eq!(&new[new_ranges[0].clone()], "new0");
-        assert_eq!(&new[new_ranges[63].clone()], "new63");
+    }
+
+    #[test]
+    fn word_diff_ranges_long_shared_affixes_stay_precise() {
+        fn words(prefix: &str, count: usize) -> String {
+            (0..count)
+                .map(|ix| format!("{prefix}{ix}"))
+                .collect::<Vec<_>>()
+                .join(" ")
+        }
+
+        let shared_prefix = words("shared_prefix_", 24);
+        let shared_suffix = words("shared_suffix_", 24);
+        let old = format!("{shared_prefix} changed_old {shared_suffix}");
+        let new = format!("{shared_prefix} changed_new {shared_suffix}");
+        let (old_ranges, new_ranges) = word_diff_ranges(&old, &new);
+
+        assert_eq!(old_ranges.len(), 1);
+        assert_eq!(new_ranges.len(), 1);
+        assert_eq!(&old[old_ranges[0].clone()], "changed_old");
+        assert_eq!(&new[new_ranges[0].clone()], "changed_new");
+    }
+
+    #[test]
+    fn word_diff_ranges_ignores_whitespace_only_edits() {
+        let old = "let x = 1;";
+        let new = "let  x = 1;";
+        let (old_ranges, new_ranges) = word_diff_ranges(old, new);
+        assert!(old_ranges.is_empty());
+        assert!(new_ranges.is_empty());
     }
 
     #[test]

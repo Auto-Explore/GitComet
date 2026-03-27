@@ -127,6 +127,20 @@ pub(super) fn schedule_effect(
         Effect::LoadDiffFileImage { repo_id, target } => {
             repo_load::schedule_load_diff_file_image(executor, repos, msg_tx, repo_id, target);
         }
+        Effect::LoadSelectedDiff {
+            repo_id,
+            target,
+            load_file_text,
+            load_file_image,
+        } => repo_load::schedule_load_selected_diff(
+            executor,
+            repos,
+            msg_tx,
+            repo_id,
+            target,
+            load_file_text,
+            load_file_image,
+        ),
         Effect::CheckoutBranch { repo_id, name } => {
             repo_actions::schedule_checkout_branch(executor, repos, msg_tx, repo_id, name);
         }

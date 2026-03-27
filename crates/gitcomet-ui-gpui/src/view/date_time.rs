@@ -216,12 +216,27 @@ impl Timezone {
     }
 }
 
+#[cfg(test)]
 pub(super) fn format_datetime(
     time: std::time::SystemTime,
     format: DateTimeFormat,
     timezone: Timezone,
     show_timezone: bool,
 ) -> String {
+    let mut buf = String::with_capacity(24);
+    format_datetime_into(&mut buf, time, format, timezone, show_timezone);
+    buf
+}
+
+/// Like `format_datetime` but writes into a caller-owned buffer,
+/// allowing the allocation to be reused across many calls.
+pub(super) fn format_datetime_into(
+    buf: &mut String,
+    time: std::time::SystemTime,
+    format: DateTimeFormat,
+    timezone: Timezone,
+    show_timezone: bool,
+) {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn unix_seconds(t: SystemTime) -> i64 {
@@ -255,6 +270,40 @@ pub(super) fn format_datetime(
         (y as i32, m as u32, d as u32)
     }
 
+    /// Two-digit ASCII lookup table: DEC_PAIR[n] = "00".."99" for n in 0..100.
+    static DEC_PAIR: [[u8; 2]; 100] = {
+        let mut table = [[0u8; 2]; 100];
+        let mut i = 0usize;
+        while i < 100 {
+            table[i][0] = b'0' + (i / 10) as u8;
+            table[i][1] = b'0' + (i % 10) as u8;
+            i += 1;
+        }
+        table
+    };
+
+    #[inline(always)]
+    fn write2(arr: &mut [u8; 19], pos: usize, val: u32) {
+        let pair = DEC_PAIR[(val % 100) as usize];
+        arr[pos] = pair[0];
+        arr[pos + 1] = pair[1];
+    }
+
+    #[inline(always)]
+    fn write4_year(arr: &mut [u8; 19], pos: usize, y: i32) {
+        let y = y.unsigned_abs();
+        let hi = (y / 100) % 100;
+        let lo = y % 100;
+        let p1 = DEC_PAIR[hi as usize];
+        let p2 = DEC_PAIR[lo as usize];
+        arr[pos] = p1[0];
+        arr[pos + 1] = p1[1];
+        arr[pos + 2] = p2[0];
+        arr[pos + 3] = p2[1];
+    }
+
+    buf.clear();
+
     let offset = timezone.offset_seconds();
     let secs = unix_seconds(time) + offset;
     let days = floor_div(secs, 86_400);
@@ -271,18 +320,70 @@ pub(super) fn format_datetime(
 
     let (y, m, d) = civil_from_days(days);
 
-    let tz_suffix = if show_timezone {
-        format!(" {}", timezone.label())
-    } else {
-        String::new()
-    };
+    // Build the date-time string in a fixed stack buffer (all ASCII, always
+    // valid UTF-8) and push_str once — avoids std::fmt dispatch overhead.
+    let mut arr = [0u8; 19]; // max: "YYYY-MM-DD HH:MM:SS"
+
     match format {
-        DateTimeFormat::YmdHm => format!("{y:04}-{m:02}-{d:02} {hour:02}:{minute:02}{tz_suffix}"),
-        DateTimeFormat::YmdHms => {
-            format!("{y:04}-{m:02}-{d:02} {hour:02}:{minute:02}:{second:02}{tz_suffix}")
+        DateTimeFormat::YmdHm => {
+            // "YYYY-MM-DD HH:MM" — 16 bytes
+            write4_year(&mut arr, 0, y);
+            arr[4] = b'-';
+            write2(&mut arr, 5, m);
+            arr[7] = b'-';
+            write2(&mut arr, 8, d);
+            arr[10] = b' ';
+            write2(&mut arr, 11, hour);
+            arr[13] = b':';
+            write2(&mut arr, 14, minute);
+            // SAFETY: all bytes are ASCII digits, '-', ' ', or ':'
+            buf.push_str(std::str::from_utf8(&arr[..16]).unwrap());
         }
-        DateTimeFormat::DmyHm => format!("{d:02}.{m:02}.{y:04} {hour:02}:{minute:02}{tz_suffix}"),
-        DateTimeFormat::MdyHm => format!("{m:02}/{d:02}/{y:04} {hour:02}:{minute:02}{tz_suffix}"),
+        DateTimeFormat::YmdHms => {
+            // "YYYY-MM-DD HH:MM:SS" — 19 bytes
+            write4_year(&mut arr, 0, y);
+            arr[4] = b'-';
+            write2(&mut arr, 5, m);
+            arr[7] = b'-';
+            write2(&mut arr, 8, d);
+            arr[10] = b' ';
+            write2(&mut arr, 11, hour);
+            arr[13] = b':';
+            write2(&mut arr, 14, minute);
+            arr[16] = b':';
+            write2(&mut arr, 17, second);
+            buf.push_str(std::str::from_utf8(&arr[..19]).unwrap());
+        }
+        DateTimeFormat::DmyHm => {
+            // "DD.MM.YYYY HH:MM" — 16 bytes
+            write2(&mut arr, 0, d);
+            arr[2] = b'.';
+            write2(&mut arr, 3, m);
+            arr[5] = b'.';
+            write4_year(&mut arr, 6, y);
+            arr[10] = b' ';
+            write2(&mut arr, 11, hour);
+            arr[13] = b':';
+            write2(&mut arr, 14, minute);
+            buf.push_str(std::str::from_utf8(&arr[..16]).unwrap());
+        }
+        DateTimeFormat::MdyHm => {
+            // "MM/DD/YYYY HH:MM" — 16 bytes
+            write2(&mut arr, 0, m);
+            arr[2] = b'/';
+            write2(&mut arr, 3, d);
+            arr[5] = b'/';
+            write4_year(&mut arr, 6, y);
+            arr[10] = b' ';
+            write2(&mut arr, 11, hour);
+            arr[13] = b':';
+            write2(&mut arr, 14, minute);
+            buf.push_str(std::str::from_utf8(&arr[..16]).unwrap());
+        }
+    }
+    if show_timezone {
+        buf.push(' ');
+        buf.push_str(timezone.label());
     }
 }
 

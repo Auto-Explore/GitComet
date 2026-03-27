@@ -1,11 +1,16 @@
+use super::branch_sidebar::{BranchSidebarSourceFingerprint, BranchSidebarSourceFingerprintParts};
 use super::*;
-use gitcomet_core::domain::LogScope;
+use gitcomet_core::domain::{Branch, LogScope, RemoteBranch, Tag};
+use smallvec::SmallVec;
+use std::cell::RefCell;
+use std::cmp::Ordering;
+use std::time::SystemTime;
 
 #[derive(Clone, Debug)]
 pub(super) struct HistoryCache {
     pub(super) request: HistoryCacheRequest,
     pub(super) visible_indices: Vec<usize>,
-    pub(super) graph_rows: Vec<Arc<history_graph::GraphRow>>,
+    pub(super) graph_rows: Arc<[history_graph::GraphRow]>,
     pub(super) commit_row_vms: Vec<HistoryCommitRowVm>,
 }
 
@@ -26,38 +31,347 @@ pub(super) struct HistoryCacheRequest {
 }
 
 #[derive(Clone, Debug)]
+pub(in crate::view) struct HistoryWhenVm {
+    time: SystemTime,
+    formatted: RefCell<Option<SharedString>>,
+}
+
+impl HistoryWhenVm {
+    pub(in crate::view) fn deferred(time: SystemTime) -> Self {
+        Self {
+            time,
+            formatted: RefCell::new(None),
+        }
+    }
+
+    pub(in crate::view) fn resolve(&self, request: &HistoryCacheRequest) -> SharedString {
+        if let Some(formatted) = self.formatted.borrow().as_ref() {
+            return formatted.clone();
+        }
+
+        let mut formatted = String::with_capacity(32);
+        format_datetime_into(
+            &mut formatted,
+            self.time,
+            request.date_time_format,
+            request.timezone,
+            request.show_timezone,
+        );
+        let formatted: SharedString = formatted.into();
+        *self.formatted.borrow_mut() = Some(formatted.clone());
+        formatted
+    }
+}
+
+const HISTORY_SHORT_SHA_LEN: usize = 8;
+
+#[derive(Clone, Debug)]
+pub(in crate::view) struct HistoryShortShaVm {
+    bytes: [u8; HISTORY_SHORT_SHA_LEN],
+    len: u8,
+    formatted: RefCell<Option<SharedString>>,
+}
+
+impl HistoryShortShaVm {
+    pub(in crate::view) fn new(id: &str) -> Self {
+        let id = id.as_bytes();
+        let len = id.len().min(HISTORY_SHORT_SHA_LEN);
+        let mut bytes = [0; HISTORY_SHORT_SHA_LEN];
+        bytes[..len].copy_from_slice(&id[..len]);
+        Self {
+            bytes,
+            len: u8::try_from(len).expect("short sha length fits into u8"),
+            formatted: RefCell::new(None),
+        }
+    }
+
+    pub(in crate::view) fn as_str(&self) -> &str {
+        std::str::from_utf8(&self.bytes[..usize::from(self.len)])
+            .expect("commit id prefixes must stay valid utf-8")
+    }
+
+    pub(in crate::view) fn resolve(&self) -> SharedString {
+        if let Some(formatted) = self.formatted.borrow().as_ref() {
+            return formatted.clone();
+        }
+
+        let formatted = SharedString::new(self.as_str());
+        *self.formatted.borrow_mut() = Some(formatted.clone());
+        formatted
+    }
+}
+
+#[derive(Clone, Debug)]
 pub(super) struct HistoryCommitRowVm {
     pub(super) branches_text: SharedString,
     pub(super) tag_names: Arc<[SharedString]>,
     pub(super) author: SharedString,
     pub(super) summary: SharedString,
-    pub(super) when: SharedString,
-    pub(super) short_sha: SharedString,
+    pub(super) when: HistoryWhenVm,
+    pub(super) short_sha: HistoryShortShaVm,
     pub(super) is_head: bool,
     pub(super) is_stash: bool,
 }
 
+type HistoryBranchNameBucket<'a> = SmallVec<[HistoryBranchNameRef<'a>; 2]>;
+type HistoryTagNameBucket<'a> = SmallVec<[&'a str; 1]>;
+
+#[derive(Clone, Copy, Debug)]
+enum HistoryBranchNameRef<'a> {
+    Plain(&'a str),
+    Remote { remote: &'a str, name: &'a str },
+}
+
+#[derive(Clone, Copy)]
+struct HistoryBranchDisplaySegments<'a> {
+    parts: [&'a str; 3],
+    len: usize,
+}
+
+impl<'a> HistoryBranchNameRef<'a> {
+    fn display_segments(self) -> HistoryBranchDisplaySegments<'a> {
+        match self {
+            Self::Plain(name) => HistoryBranchDisplaySegments {
+                parts: [name, "", ""],
+                len: 1,
+            },
+            Self::Remote { remote, name } => HistoryBranchDisplaySegments {
+                parts: [remote, "/", name],
+                len: 3,
+            },
+        }
+    }
+
+    fn display_len(self) -> usize {
+        match self {
+            Self::Plain(name) => name.len(),
+            Self::Remote { remote, name } => remote.len() + 1 + name.len(),
+        }
+    }
+
+    fn write_display_to(self, output: &mut String) {
+        match self {
+            Self::Plain(name) => output.push_str(name),
+            Self::Remote { remote, name } => {
+                output.push_str(remote);
+                output.push('/');
+                output.push_str(name);
+            }
+        }
+    }
+}
+
+fn cmp_history_branch_display(
+    left: HistoryBranchNameRef<'_>,
+    right: HistoryBranchNameRef<'_>,
+) -> Ordering {
+    let left = left.display_segments();
+    let right = right.display_segments();
+    let mut left_part_ix = 0usize;
+    let mut left_byte_ix = 0usize;
+    let mut right_part_ix = 0usize;
+    let mut right_byte_ix = 0usize;
+
+    loop {
+        while left_part_ix < left.len && left_byte_ix == left.parts[left_part_ix].len() {
+            left_part_ix += 1;
+            left_byte_ix = 0;
+        }
+        while right_part_ix < right.len && right_byte_ix == right.parts[right_part_ix].len() {
+            right_part_ix += 1;
+            right_byte_ix = 0;
+        }
+
+        match (left_part_ix == left.len, right_part_ix == right.len) {
+            (true, true) => return Ordering::Equal,
+            (true, false) => return Ordering::Less,
+            (false, true) => return Ordering::Greater,
+            (false, false) => {}
+        }
+
+        let left_bytes = left.parts[left_part_ix].as_bytes();
+        let right_bytes = right.parts[right_part_ix].as_bytes();
+        let ord = left_bytes[left_byte_ix].cmp(&right_bytes[right_byte_ix]);
+        if ord != Ordering::Equal {
+            return ord;
+        }
+
+        left_byte_ix += 1;
+        right_byte_ix += 1;
+    }
+}
+
+fn sort_and_dedup_history_branch_names(names: &mut HistoryBranchNameBucket<'_>) {
+    names.sort_unstable_by(|left, right| cmp_history_branch_display(*left, *right));
+    names.dedup_by(|left, right| cmp_history_branch_display(*left, *right) == Ordering::Equal);
+}
+
+fn shared_history_branch_text(names: &[HistoryBranchNameRef<'_>]) -> SharedString {
+    let total_len = names
+        .iter()
+        .copied()
+        .map(HistoryBranchNameRef::display_len)
+        .sum::<usize>()
+        + 2 * names.len().saturating_sub(1);
+    let mut text = String::with_capacity(total_len);
+    for (ix, name) in names.iter().copied().enumerate() {
+        if ix > 0 {
+            text.push_str(", ");
+        }
+        name.write_display_to(&mut text);
+    }
+    SharedString::from(text)
+}
+
+fn shared_history_branch_text_with_extra_plain(
+    names: &[HistoryBranchNameRef<'_>],
+    extra_plain: &str,
+) -> SharedString {
+    let extra = HistoryBranchNameRef::Plain(extra_plain);
+    let include_extra = names
+        .iter()
+        .copied()
+        .all(|name| cmp_history_branch_display(name, extra) != Ordering::Equal);
+    let total_len = names
+        .iter()
+        .copied()
+        .map(HistoryBranchNameRef::display_len)
+        .sum::<usize>()
+        + usize::from(include_extra) * extra.display_len()
+        + 2 * (names.len() + usize::from(include_extra)).saturating_sub(1);
+    let mut text = String::with_capacity(total_len);
+    let mut wrote_any = false;
+    let mut extra_pending = include_extra;
+
+    for name in names.iter().copied() {
+        if extra_pending && cmp_history_branch_display(extra, name) == Ordering::Less {
+            if wrote_any {
+                text.push_str(", ");
+            }
+            extra.write_display_to(&mut text);
+            wrote_any = true;
+            extra_pending = false;
+        }
+        if wrote_any {
+            text.push_str(", ");
+        }
+        name.write_display_to(&mut text);
+        wrote_any = true;
+    }
+
+    if extra_pending {
+        if wrote_any {
+            text.push_str(", ");
+        }
+        extra.write_display_to(&mut text);
+    }
+
+    SharedString::from(text)
+}
+
+pub(in crate::view) fn build_history_branch_text_by_target<'a>(
+    branches: &'a [Branch],
+    remote_branches: &'a [RemoteBranch],
+    head_branch: Option<&str>,
+    head_target: Option<&str>,
+) -> (HashMap<&'a str, SharedString>, Option<SharedString>) {
+    let mut branch_names_by_target: HashMap<&str, HistoryBranchNameBucket<'_>> =
+        HashMap::with_capacity_and_hasher(
+            branches.len() + remote_branches.len(),
+            Default::default(),
+        );
+
+    for branch in branches.iter() {
+        let should_skip = head_branch.is_some_and(|head| head != "HEAD" && branch.name == head)
+            && head_target == Some(branch.target.as_ref());
+        if should_skip {
+            continue;
+        }
+        branch_names_by_target
+            .entry(branch.target.as_ref())
+            .or_default()
+            .push(HistoryBranchNameRef::Plain(branch.name.as_str()));
+    }
+
+    for branch in remote_branches.iter() {
+        branch_names_by_target
+            .entry(branch.target.as_ref())
+            .or_default()
+            .push(HistoryBranchNameRef::Remote {
+                remote: branch.remote.as_str(),
+                name: branch.name.as_str(),
+            });
+    }
+
+    for names in branch_names_by_target.values_mut() {
+        sort_and_dedup_history_branch_names(names);
+    }
+
+    let head_branches_text = history_head_branch_label(head_branch).map(|head_label| {
+        let names = head_target
+            .and_then(|target| branch_names_by_target.get(target))
+            .cloned()
+            .unwrap_or_default();
+        shared_history_branch_text_with_extra_plain(&names, head_label.as_str())
+    });
+
+    let mut branch_text_by_target: HashMap<&str, SharedString> =
+        HashMap::with_capacity_and_hasher(branch_names_by_target.len(), Default::default());
+    for (target, names) in branch_names_by_target {
+        if names.is_empty() {
+            continue;
+        }
+        branch_text_by_target.insert(target, shared_history_branch_text(&names));
+    }
+
+    (branch_text_by_target, head_branches_text)
+}
+
+pub(in crate::view) fn build_history_tag_names_by_target(
+    tags: &[Tag],
+) -> HashMap<&str, Arc<[SharedString]>> {
+    let mut tag_names_by_target: HashMap<&str, HistoryTagNameBucket<'_>> =
+        HashMap::with_capacity_and_hasher(tags.len(), Default::default());
+    for tag in tags.iter() {
+        tag_names_by_target
+            .entry(tag.target.as_ref())
+            .or_default()
+            .push(tag.name.as_str());
+    }
+
+    let mut tag_text_by_target: HashMap<&str, Arc<[SharedString]>> =
+        HashMap::with_capacity_and_hasher(tag_names_by_target.len(), Default::default());
+    for (target, mut names) in tag_names_by_target {
+        names.sort_unstable();
+        names.dedup();
+        if names.is_empty() {
+            continue;
+        }
+        let tag_names: Vec<SharedString> = names.into_iter().map(SharedString::new).collect();
+        tag_text_by_target.insert(target, tag_names.into());
+    }
+
+    tag_text_by_target
+}
+
+fn history_head_branch_label(head_branch: Option<&str>) -> Option<String> {
+    match head_branch {
+        Some("HEAD") => Some("HEAD".to_string()),
+        Some(head) => Some(format!("HEAD → {head}")),
+        None => None,
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct BranchSidebarFingerprint {
-    head_branch_rev: u64,
-    branches_rev: u64,
-    remotes_rev: u64,
-    remote_branches_rev: u64,
-    worktrees_rev: u64,
-    submodules_rev: u64,
-    stashes_rev: u64,
+    cache_rev: u64,
 }
 
 impl BranchSidebarFingerprint {
+    #[inline]
     pub(super) fn from_repo(repo: &RepoState) -> Self {
         Self {
-            head_branch_rev: repo.head_branch_rev,
-            branches_rev: repo.branches_rev,
-            remotes_rev: repo.remotes_rev,
-            remote_branches_rev: repo.remote_branches_rev,
-            worktrees_rev: repo.worktrees_rev,
-            submodules_rev: repo.submodules_rev,
-            stashes_rev: repo.stashes_rev,
+            cache_rev: repo.branch_sidebar_cache_rev(),
         }
     }
 }
@@ -66,7 +380,61 @@ impl BranchSidebarFingerprint {
 pub(super) struct BranchSidebarCache {
     pub(super) repo_id: RepoId,
     pub(super) fingerprint: BranchSidebarFingerprint,
+    pub(super) source_fingerprint: BranchSidebarSourceFingerprint,
+    pub(super) source_parts: BranchSidebarSourceFingerprintParts,
     pub(super) rows: Arc<[BranchSidebarRow]>,
+}
+
+pub(super) fn branch_sidebar_cache_lookup(
+    cache: &mut Option<BranchSidebarCache>,
+    repo_id: RepoId,
+    fingerprint: BranchSidebarFingerprint,
+) -> Option<Arc<[BranchSidebarRow]>> {
+    if let Some(cached) = cache.as_mut()
+        && cached.repo_id == repo_id
+        && cached.fingerprint == fingerprint
+    {
+        return Some(Arc::clone(&cached.rows));
+    }
+
+    None
+}
+
+pub(super) fn branch_sidebar_cache_lookup_by_source(
+    cache: &mut Option<BranchSidebarCache>,
+    repo_id: RepoId,
+    fingerprint: BranchSidebarFingerprint,
+    source_fingerprint: BranchSidebarSourceFingerprint,
+    source_parts: &BranchSidebarSourceFingerprintParts,
+) -> Option<Arc<[BranchSidebarRow]>> {
+    if let Some(cached) = cache.as_mut()
+        && cached.repo_id == repo_id
+        && cached.source_fingerprint == source_fingerprint
+    {
+        cached.fingerprint = fingerprint;
+        cached.source_fingerprint = source_fingerprint;
+        cached.source_parts = source_parts.clone();
+        return Some(Arc::clone(&cached.rows));
+    }
+
+    None
+}
+
+pub(super) fn branch_sidebar_cache_store(
+    cache: &mut Option<BranchSidebarCache>,
+    repo_id: RepoId,
+    fingerprint: BranchSidebarFingerprint,
+    source_fingerprint: BranchSidebarSourceFingerprint,
+    source_parts: BranchSidebarSourceFingerprintParts,
+    rows: Arc<[BranchSidebarRow]>,
+) {
+    *cache = Some(BranchSidebarCache {
+        repo_id,
+        fingerprint,
+        source_fingerprint,
+        source_parts,
+        rows,
+    });
 }
 
 #[derive(Clone, Debug)]
@@ -100,5 +468,138 @@ impl GitCometView {
             .map(|item| (*item).to_string())
             .collect();
         branch_sidebar::branch_sidebar_rows(repo, &collapsed_items)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn commit_id(id: &str) -> CommitId {
+        CommitId(id.into())
+    }
+
+    #[test]
+    fn history_branch_text_cache_precomputes_head_and_remote_labels() {
+        let commit_a = commit_id("a");
+        let commit_b = commit_id("b");
+        let branches = vec![
+            Branch {
+                name: "main".to_string(),
+                target: commit_a.clone(),
+                upstream: None,
+                divergence: None,
+            },
+            Branch {
+                name: "feature".to_string(),
+                target: commit_a.clone(),
+                upstream: None,
+                divergence: None,
+            },
+        ];
+        let remote_branches = vec![
+            RemoteBranch {
+                remote: "origin".to_string(),
+                name: "main".to_string(),
+                target: commit_a.clone(),
+            },
+            RemoteBranch {
+                remote: "upstream".to_string(),
+                name: "topic".to_string(),
+                target: commit_b.clone(),
+            },
+        ];
+
+        let (branch_text_by_target, head_branches_text) = build_history_branch_text_by_target(
+            &branches,
+            &remote_branches,
+            Some("main"),
+            Some(commit_a.as_ref()),
+        );
+
+        assert_eq!(
+            branch_text_by_target
+                .get(commit_a.as_ref())
+                .map(SharedString::as_ref),
+            Some("feature, origin/main")
+        );
+        assert_eq!(
+            branch_text_by_target
+                .get(commit_b.as_ref())
+                .map(SharedString::as_ref),
+            Some("upstream/topic")
+        );
+        assert_eq!(
+            head_branches_text.as_ref().map(SharedString::as_ref),
+            Some("HEAD → main, feature, origin/main")
+        );
+    }
+
+    #[test]
+    fn history_tag_names_cache_dedups_once_per_target() {
+        let commit_a = commit_id("a");
+        let tags = vec![
+            Tag {
+                name: "v2.0.0".to_string(),
+                target: commit_a.clone(),
+            },
+            Tag {
+                name: "v1.0.0".to_string(),
+                target: commit_a.clone(),
+            },
+            Tag {
+                name: "v1.0.0".to_string(),
+                target: commit_a.clone(),
+            },
+        ];
+
+        let tag_names_by_target = build_history_tag_names_by_target(&tags);
+        let tag_names = tag_names_by_target
+            .get(commit_a.as_ref())
+            .expect("tag names should be cached for the target");
+        let tag_names = tag_names
+            .iter()
+            .map(SharedString::as_ref)
+            .collect::<Vec<_>>();
+
+        assert_eq!(tag_names, vec!["v1.0.0", "v2.0.0"]);
+    }
+
+    #[test]
+    fn history_when_vm_formats_lazily_and_caches_result() {
+        let request = HistoryCacheRequest {
+            repo_id: RepoId(1),
+            history_scope: LogScope::AllBranches,
+            log_fingerprint: 0,
+            head_branch_rev: 0,
+            detached_head_commit: None,
+            branches_rev: 0,
+            remote_branches_rev: 0,
+            tags_rev: 0,
+            stashes_rev: 0,
+            date_time_format: DateTimeFormat::YmdHm,
+            timezone: Timezone::Utc,
+            show_timezone: true,
+        };
+        let when = HistoryWhenVm::deferred(SystemTime::UNIX_EPOCH);
+
+        assert!(when.formatted.borrow().is_none());
+        let first = when.resolve(&request);
+        let second = when.resolve(&request);
+        assert_eq!(first, second);
+        assert!(when.formatted.borrow().is_some());
+    }
+
+    #[test]
+    fn history_short_sha_vm_formats_lazily_and_caches_result() {
+        let short_sha = HistoryShortShaVm::new("0123456789abcdef");
+
+        assert_eq!(short_sha.as_str(), "01234567");
+        assert!(short_sha.formatted.borrow().is_none());
+        let first = short_sha.resolve();
+        let second = short_sha.resolve();
+        assert_eq!(first, "01234567");
+        assert_eq!(first, second);
+        assert!(short_sha.formatted.borrow().is_some());
     }
 }

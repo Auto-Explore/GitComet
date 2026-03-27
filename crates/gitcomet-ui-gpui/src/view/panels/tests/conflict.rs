@@ -1450,6 +1450,132 @@ fn whole_file_conflict_streamed_three_way_syntax_survives_view_mode_switch(
     fixture.cleanup();
 }
 
+#[gpui::test]
+fn three_way_view_survives_incomplete_line_syntax_fragments(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    disable_view_poller_for_test(cx, &view);
+
+    let repo_id = gitcomet_state::model::RepoId(173);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_three_way_incomplete_fragments",
+        std::process::id()
+    ));
+    let file_rel = std::path::PathBuf::from("src/three_way_incomplete_fragments.ts");
+    let abs_path = workdir.join(&file_rel);
+
+    let shared_prefix_line = "const element = document.querySelector(";
+    let base_line = r#"  ".base""#;
+    let ours_line = r#"  ".ours""#;
+    let theirs_line = r#"  ".theirs""#;
+
+    let base_text = [
+        shared_prefix_line,
+        base_line,
+        ");",
+        "type Example<T extends Record<string,",
+        "  number>> = HTMLElement;",
+    ]
+    .join("\n");
+    let ours_text = [
+        shared_prefix_line,
+        ours_line,
+        ");",
+        "type Example<T extends Record<string,",
+        "  number>> = HTMLElement;",
+    ]
+    .join("\n");
+    let theirs_text = [
+        shared_prefix_line,
+        theirs_line,
+        ");",
+        "type Example<T extends Record<string,",
+        "  number>> = HTMLElement;",
+    ]
+    .join("\n");
+    let current_text = [
+        shared_prefix_line,
+        "<<<<<<< ours",
+        ours_line,
+        "=======",
+        theirs_line,
+        ">>>>>>> theirs",
+        ");",
+        "type Example<T extends Record<string,",
+        "  number>> = HTMLElement;",
+    ]
+    .join("\n");
+
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(abs_path.parent().expect("fixture file parent"))
+        .expect("create three-way fragment fixture dir");
+    std::fs::write(&abs_path, &current_text).expect("write three-way fragment fixture");
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, _cx| {
+                pane.set_full_document_syntax_budget_override_for_tests(rows::DiffSyntaxBudget {
+                    foreground_parse: std::time::Duration::ZERO,
+                });
+            });
+
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            set_test_conflict_status(
+                &mut repo,
+                file_rel.clone(),
+                gitcomet_core::domain::DiffArea::Unstaged,
+            );
+            set_test_conflict_file(
+                &mut repo,
+                file_rel.clone(),
+                base_text.clone(),
+                ours_text.clone(),
+                theirs_text.clone(),
+                current_text.clone(),
+            );
+
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+
+    wait_for_main_pane_condition_with_timeout(
+        cx,
+        &view,
+        "three-way incomplete-fragment fixture initialized",
+        BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
+        |pane| pane.conflict_resolver.path.as_ref() == Some(&file_rel),
+        |pane| format!("path={:?}", pane.conflict_resolver.path),
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::ThreeWay, cx);
+                pane.conflict_resolver_scroll_all_columns(0, gpui::ScrollStrategy::Top);
+                cx.notify();
+            });
+        });
+    });
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+        let pane = view.read(app).main_pane.read(app);
+        let styled = pane
+            .conflict_three_way_segments_cache
+            .get(&(0, ThreeWayColumn::Base))
+            .expect("three-way draw should cache the visible incomplete base line");
+        assert_eq!(
+            styled.text.as_ref(),
+            shared_prefix_line,
+            "expected the cached base line to preserve the incomplete source fragment"
+        );
+    });
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup three-way fragment fixture");
+}
+
 /// Verifies huge conflicts stay on the streamed split path and avoid
 /// bootstrap diff/highlight work.
 #[gpui::test]

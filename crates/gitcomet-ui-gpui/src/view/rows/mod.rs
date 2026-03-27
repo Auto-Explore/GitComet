@@ -103,6 +103,118 @@ pub(in crate::view) fn new_fx_lru_cache<K: std::hash::Hash + Eq, V>(
     InstrumentedLruCache::with_hasher(cap, BuildHasherDefault::default())
 }
 
+#[derive(Debug)]
+pub(in crate::view) struct CommitFilePathLabelsCache<K: Eq + Clone> {
+    cached: Option<(K, Arc<[SharedString]>)>,
+}
+
+impl<K: Eq + Clone> Default for CommitFilePathLabelsCache<K> {
+    fn default() -> Self {
+        Self { cached: None }
+    }
+}
+
+impl<K: Eq + Clone> CommitFilePathLabelsCache<K> {
+    pub(in crate::view) fn labels_for(
+        &mut self,
+        key: &K,
+        files: &[gitcomet_core::domain::CommitFileChange],
+    ) -> Arc<[SharedString]> {
+        if let Some((cached_key, labels)) = &self.cached
+            && cached_key == key
+        {
+            return labels.clone();
+        }
+
+        let labels: Arc<[SharedString]> = files
+            .iter()
+            .map(|file| super::path_display::path_display_shared_fast(&file.path))
+            .collect::<Vec<_>>()
+            .into();
+        self.cached = Some((key.clone(), labels.clone()));
+        labels
+    }
+
+    #[cfg(any(test, feature = "benchmarks"))]
+    pub(in crate::view) fn clear(&mut self) {
+        self.cached = None;
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::view) enum CommitFileKindTone {
+    Success,
+    Warning,
+    Danger,
+    Accent,
+}
+
+impl CommitFileKindTone {
+    #[inline]
+    pub(in crate::view) fn color(self, theme: &AppTheme) -> gpui::Rgba {
+        match self {
+            Self::Success => theme.colors.success,
+            Self::Warning => theme.colors.warning,
+            Self::Danger => theme.colors.danger,
+            Self::Accent => theme.colors.accent,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::view) struct CommitFileKindVisuals {
+    pub(in crate::view) icon: &'static str,
+    pub(in crate::view) kind_key: u8,
+    tone: CommitFileKindTone,
+}
+
+impl CommitFileKindVisuals {
+    #[inline]
+    pub(in crate::view) fn color(self, theme: &AppTheme) -> gpui::Rgba {
+        self.tone.color(theme)
+    }
+}
+
+const COMMIT_FILE_KIND_VISUALS: [CommitFileKindVisuals; 6] = [
+    CommitFileKindVisuals {
+        icon: "icons/question.svg",
+        kind_key: 4,
+        tone: CommitFileKindTone::Warning,
+    },
+    CommitFileKindVisuals {
+        icon: "icons/pencil.svg",
+        kind_key: 1,
+        tone: CommitFileKindTone::Warning,
+    },
+    CommitFileKindVisuals {
+        icon: "icons/plus.svg",
+        kind_key: 0,
+        tone: CommitFileKindTone::Success,
+    },
+    CommitFileKindVisuals {
+        icon: "icons/minus.svg",
+        kind_key: 2,
+        tone: CommitFileKindTone::Danger,
+    },
+    CommitFileKindVisuals {
+        icon: "icons/swap.svg",
+        kind_key: 3,
+        tone: CommitFileKindTone::Accent,
+    },
+    CommitFileKindVisuals {
+        icon: "icons/warning.svg",
+        kind_key: 5,
+        tone: CommitFileKindTone::Danger,
+    },
+];
+
+#[inline]
+pub(in crate::view) const fn commit_file_kind_visuals(
+    kind: FileStatusKind,
+) -> CommitFileKindVisuals {
+    COMMIT_FILE_KIND_VISUALS[kind as usize]
+}
+
 thread_local! {
     static LINE_NUMBER_STRINGS: RefCell<Vec<SharedString>> =
         RefCell::new(vec![SharedString::default()]);
@@ -161,6 +273,11 @@ pub(in crate::view) use diff_text::{
     prepared_diff_syntax_line_for_inline_diff_row, prepared_diff_syntax_line_for_one_based_line,
     prepared_diff_syntax_reparse_seed, request_syntax_highlights_for_prepared_document_byte_range,
     resolved_output_line_text, syntax_highlights_for_line,
+};
+
+#[cfg(test)]
+pub(in crate::view) use self::diff_canvas::{
+    DiffPaintRecord, clear_diff_paint_log_for_tests, diff_paint_log_for_tests,
 };
 
 #[cfg(test)]

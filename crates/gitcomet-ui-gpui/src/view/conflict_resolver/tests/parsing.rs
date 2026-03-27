@@ -87,6 +87,13 @@ fn shared_marker_parse_reuses_original_backing() {
 }
 
 #[test]
+fn shared_nonempty_marker_parse_skips_clean_text() {
+    let input: std::sync::Arc<str> = std::sync::Arc::from("pre\nplain html\npost\n");
+    let segments = parse_conflict_markers_shared_nonempty(input);
+    assert!(segments.is_empty());
+}
+
+#[test]
 fn generate_with_options_preserves_unresolved_markers_with_labels() {
     let input = "a\n<<<<<<< ours\none\n||||||| base\norig\n=======\nuno\n>>>>>>> theirs\nb\n";
     let segments = parse_conflict_markers(input);

@@ -169,6 +169,7 @@ pub(in crate::view) struct ResolvedOutputSyntaxBackgroundKey {
 #[derive(Clone, Debug)]
 pub(in crate::view) struct VersionedCachedDiffStyledText {
     pub(in crate::view) syntax_epoch: u64,
+    pub(in crate::view) query_generation: u64,
     pub(in crate::view) styled: CachedDiffStyledText,
 }
 
@@ -228,6 +229,16 @@ pub(in crate::view) fn versioned_cached_diff_styled_text_is_current(
     (entry.syntax_epoch == syntax_epoch).then_some(&entry.styled)
 }
 
+pub(in crate::view) fn versioned_query_cached_diff_styled_text_is_current(
+    entry: Option<&VersionedCachedDiffStyledText>,
+    syntax_epoch: u64,
+    query_generation: u64,
+) -> Option<&CachedDiffStyledText> {
+    let entry = entry?;
+    (entry.syntax_epoch == syntax_epoch && entry.query_generation == query_generation)
+        .then_some(&entry.styled)
+}
+
 pub(super) fn split_text_lines_owned(text: &str) -> Vec<String> {
     if text.is_empty() {
         Vec::new()
@@ -269,6 +280,7 @@ pub(super) fn hash_text_bytes(text: &str) -> u64 {
     hasher.finish()
 }
 
+#[cfg(test)]
 pub(super) fn preview_source_text_from_lines(lines: &[String], source_len: usize) -> SharedString {
     let mut source = lines.join("\n");
     if source.len() < source_len {
@@ -286,9 +298,32 @@ pub(in crate::view) fn preview_source_text_and_line_starts_from_lines(
     lines: &[String],
     source_len: usize,
 ) -> (SharedString, Arc<[usize]>) {
-    let text = preview_source_text_from_lines(lines, source_len);
-    let line_starts = Arc::from(build_line_starts(text.as_ref()));
-    (text, line_starts)
+    if lines.is_empty() {
+        debug_assert_eq!(
+            source_len, 0,
+            "empty preview lines should only produce empty source text",
+        );
+        return (SharedString::default(), Arc::default());
+    }
+
+    let mut text = String::with_capacity(source_len);
+    let mut line_starts = Vec::with_capacity(lines.len().saturating_add(1));
+    line_starts.push(0);
+    for (ix, line) in lines.iter().enumerate() {
+        text.push_str(line);
+        let has_more_lines = ix + 1 < lines.len();
+        let needs_trailing_newline = !has_more_lines && text.len() < source_len;
+        if has_more_lines || needs_trailing_newline {
+            text.push('\n');
+            line_starts.push(text.len());
+        }
+    }
+    debug_assert_eq!(
+        text.len(),
+        source_len,
+        "preview lines/source length should only differ by an optional trailing newline",
+    );
+    (text.into(), Arc::from(line_starts))
 }
 
 pub(super) fn line_start_offset_for_index(
@@ -2067,6 +2102,7 @@ pub(in crate::view) struct MainPaneView {
         Option<Arc<super::diff_cache::PagedPatchSplitRows>>,
     pub(in crate::view) diff_file_for_src_ix: Vec<Option<Arc<str>>>,
     pub(in crate::view) diff_language_for_src_ix: Vec<Option<rows::DiffSyntaxLanguage>>,
+    pub(in crate::view) diff_yaml_block_scalar_for_src_ix: Vec<bool>,
     pub(in crate::view) diff_click_kinds: Vec<DiffClickKind>,
     pub(in crate::view) diff_line_kind_for_src_ix: Vec<gitcomet_core::domain::DiffLineKind>,
     pub(in crate::view) diff_hide_unified_header_for_src_ix: Vec<bool>,
@@ -2088,6 +2124,7 @@ pub(in crate::view) struct MainPaneView {
     pub(in crate::view) diff_text_segments_cache: Vec<Option<VersionedCachedDiffStyledText>>,
     pub(in crate::view) diff_text_query_segments_cache: Vec<Option<VersionedCachedDiffStyledText>>,
     pub(in crate::view) diff_text_query_cache_query: SharedString,
+    pub(in crate::view) diff_text_query_cache_generation: u64,
     pub(in crate::view) diff_selection_anchor: Option<usize>,
     pub(in crate::view) diff_selection_range: Option<(usize, usize)>,
     pub(in crate::view) diff_text_selecting: bool,
@@ -2233,7 +2270,7 @@ pub(in crate::view) struct MainPaneView {
     pub(in crate::view) conflict_resolved_preview_scroll: UniformListScrollHandle,
     pub(in crate::view) worktree_preview_scroll: UniformListScrollHandle,
 
-    pub(super) path_display_cache: std::cell::RefCell<HashMap<std::path::PathBuf, SharedString>>,
+    pub(super) path_display_cache: std::cell::RefCell<path_display::PathDisplayCache>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

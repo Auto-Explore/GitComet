@@ -667,6 +667,7 @@ fn load_more_history_emits_paginated_load_log_effect() {
         }],
         next_cursor: Some(LogCursor {
             last_seen: CommitId("c1".into()),
+            resume_from: None,
         }),
     }));
     repo_state.history_state.log_loading_more = false;
@@ -802,6 +803,7 @@ fn log_loaded_appends_when_loading_more() {
         }],
         next_cursor: Some(LogCursor {
             last_seen: CommitId("c1".into()),
+            resume_from: None,
         }),
     }));
     repo_state.history_state.log_loading_more = true;
@@ -815,6 +817,7 @@ fn log_loaded_appends_when_loading_more() {
             scope: LogScope::CurrentBranch,
             cursor: Some(LogCursor {
                 last_seen: CommitId("c1".into()),
+                resume_from: None,
             }),
             result: Ok(LogPage {
                 commits: vec![Commit {

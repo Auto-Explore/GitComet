@@ -1,4 +1,5 @@
 use crate::msg::RepoCommandKind;
+use crate::session;
 use gitcomet_core::conflict_session::ConflictSession;
 use gitcomet_core::domain::*;
 use gitcomet_core::services::BlameLine;
@@ -318,10 +319,23 @@ impl Default for ConflictState {
     }
 }
 
+const BRANCH_SIDEBAR_REV_MIX: u64 = 0x9e37_79b9_7f4a_7c15;
+
+#[inline]
+fn mix_branch_sidebar_revs(values: [u64; 7]) -> u64 {
+    let mut acc = BRANCH_SIDEBAR_REV_MIX;
+    for value in values {
+        acc ^= value.wrapping_mul(BRANCH_SIDEBAR_REV_MIX);
+        acc = acc.rotate_left(11).wrapping_add(BRANCH_SIDEBAR_REV_MIX);
+    }
+    acc
+}
+
 #[derive(Clone, Debug)]
 pub struct RepoState {
     pub id: RepoId,
     pub spec: RepoSpec,
+    session_workdir_key: Arc<str>,
     pub loads_in_flight: RepoLoadsInFlight,
     pub pull_in_flight: u32,
     pub push_in_flight: u32,
@@ -349,6 +363,9 @@ pub struct RepoState {
     pub remote_branches_rev: u64,
     pub status: Loadable<Shared<RepoStatus>>,
     pub status_rev: u64,
+    /// Cached flag: true when `status` is `Ready` and at least one unstaged
+    /// entry has `FileStatusKind::Conflicted`. Recomputed in `set_status`.
+    pub has_unstaged_conflicts: bool,
     pub log: Loadable<Shared<LogPage>>,
     pub log_loading_more: bool,
     pub log_rev: u64,
@@ -362,12 +379,15 @@ pub struct RepoState {
     pub worktrees_rev: u64,
     pub submodules: Loadable<Arc<Vec<Submodule>>>,
     pub submodules_rev: u64,
+    /// Invalidates cached branch-sidebar rows when any sidebar-relevant source changes.
+    pub branch_sidebar_rev: u64,
 
     pub diff_state: DiffState,
     pub conflict_state: ConflictState,
 
     pub open_rev: u64,
     pub ops_rev: u64,
+    pub last_active_at: Option<SystemTime>,
 
     pub missing_on_disk: bool,
     pub last_error: Option<String>,
@@ -379,9 +399,11 @@ pub struct RepoState {
 
 impl RepoState {
     pub fn new_opening(id: RepoId, spec: RepoSpec) -> Self {
+        let session_workdir_key = session::path_storage_key_shared(&spec.workdir);
         Self {
             id,
             spec,
+            session_workdir_key,
             loads_in_flight: RepoLoadsInFlight::default(),
             pull_in_flight: 0,
             push_in_flight: 0,
@@ -408,6 +430,7 @@ impl RepoState {
             remote_branches_rev: 0,
             status: Loadable::NotLoaded,
             status_rev: 0,
+            has_unstaged_conflicts: false,
             log: Loadable::NotLoaded,
             log_loading_more: false,
             log_rev: 0,
@@ -421,10 +444,12 @@ impl RepoState {
             worktrees_rev: 0,
             submodules: Loadable::NotLoaded,
             submodules_rev: 0,
+            branch_sidebar_rev: 0,
             diff_state: DiffState::default(),
             conflict_state: ConflictState::default(),
             open_rev: 0,
             ops_rev: 0,
+            last_active_at: None,
             missing_on_disk: false,
             last_error: None,
             diagnostics: Vec::new(),
@@ -433,12 +458,22 @@ impl RepoState {
         }
     }
 
+    pub(crate) fn set_spec(&mut self, spec: RepoSpec) {
+        self.session_workdir_key = session::path_storage_key_shared(&spec.workdir);
+        self.spec = spec;
+    }
+
+    pub(crate) fn session_workdir_key(&self) -> &Arc<str> {
+        &self.session_workdir_key
+    }
+
     pub(crate) fn set_head_branch(&mut self, head_branch: Loadable<String>) {
         if self.head_branch == head_branch {
             return;
         }
         self.head_branch = head_branch;
         self.head_branch_rev = self.head_branch_rev.wrapping_add(1);
+        self.bump_branch_sidebar_rev();
     }
 
     pub(crate) fn set_detached_head_commit(&mut self, detached_head_commit: Option<CommitId>) {
@@ -455,6 +490,7 @@ impl RepoState {
         }
         self.branches = branches;
         self.branches_rev = self.branches_rev.wrapping_add(1);
+        self.bump_branch_sidebar_rev();
     }
 
     pub(crate) fn set_tags(&mut self, tags: Loadable<Vec<Tag>>) {
@@ -482,6 +518,7 @@ impl RepoState {
         }
         self.remotes = remotes;
         self.remotes_rev = self.remotes_rev.wrapping_add(1);
+        self.bump_branch_sidebar_rev();
     }
 
     pub(crate) fn set_remote_branches(&mut self, remote_branches: Loadable<Vec<RemoteBranch>>) {
@@ -491,6 +528,7 @@ impl RepoState {
         }
         self.remote_branches = remote_branches;
         self.remote_branches_rev = self.remote_branches_rev.wrapping_add(1);
+        self.bump_branch_sidebar_rev();
     }
 
     pub(crate) fn set_stashes(&mut self, stashes: Loadable<Vec<StashEntry>>) {
@@ -500,6 +538,7 @@ impl RepoState {
         }
         self.stashes = stashes;
         self.stashes_rev = self.stashes_rev.wrapping_add(1);
+        self.bump_branch_sidebar_rev();
     }
 
     pub(crate) fn set_worktrees(&mut self, worktrees: Loadable<Vec<Worktree>>) {
@@ -509,6 +548,7 @@ impl RepoState {
         }
         self.worktrees = worktrees;
         self.worktrees_rev = self.worktrees_rev.wrapping_add(1);
+        self.bump_branch_sidebar_rev();
     }
 
     pub(crate) fn set_submodules(&mut self, submodules: Loadable<Vec<Submodule>>) {
@@ -518,12 +558,40 @@ impl RepoState {
         }
         self.submodules = submodules;
         self.submodules_rev = self.submodules_rev.wrapping_add(1);
+        self.bump_branch_sidebar_rev();
+    }
+
+    #[inline]
+    fn bump_branch_sidebar_rev(&mut self) {
+        self.branch_sidebar_rev = self.branch_sidebar_rev.wrapping_add(1);
+    }
+
+    #[inline]
+    pub fn branch_sidebar_cache_rev(&self) -> u64 {
+        let rev = self.branch_sidebar_rev;
+        if rev != 0 {
+            rev
+        } else {
+            mix_branch_sidebar_revs([
+                self.head_branch_rev,
+                self.branches_rev,
+                self.remotes_rev,
+                self.remote_branches_rev,
+                self.worktrees_rev,
+                self.submodules_rev,
+                self.stashes_rev,
+            ])
+        }
     }
 
     pub(crate) fn set_status(&mut self, status: Loadable<Shared<RepoStatus>>) {
         if self.status == status {
             return;
         }
+        self.has_unstaged_conflicts = matches!(
+            &status,
+            Loadable::Ready(s) if s.unstaged.iter().any(|e| e.kind == FileStatusKind::Conflicted)
+        );
         self.status = status;
         self.status_rev = self.status_rev.wrapping_add(1);
     }
@@ -764,6 +832,24 @@ mod tests {
         )
     }
 
+    #[test]
+    fn set_spec_refreshes_session_workdir_key() {
+        let mut repo = RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/repo-a"),
+            },
+        );
+        assert_eq!(repo.session_workdir_key().as_ref(), "/tmp/repo-a");
+
+        repo.set_spec(RepoSpec {
+            workdir: PathBuf::from("/tmp/repo-b"),
+        });
+
+        assert_eq!(repo.spec.workdir, PathBuf::from("/tmp/repo-b"));
+        assert_eq!(repo.session_workdir_key().as_ref(), "/tmp/repo-b");
+    }
+
     // --- Setter rev-bump tests ---
 
     #[test]
@@ -959,6 +1045,30 @@ mod tests {
     }
 
     #[test]
+    fn branch_sidebar_cache_rev_falls_back_to_component_revisions() {
+        let mut repo = new_repo();
+        let initial = repo.branch_sidebar_cache_rev();
+        repo.branches_rev = 1;
+        assert_ne!(repo.branch_sidebar_cache_rev(), initial);
+    }
+
+    #[test]
+    fn branch_sidebar_cache_rev_bumps_only_for_relevant_changes() {
+        let mut repo = new_repo();
+        let initial = repo.branch_sidebar_cache_rev();
+
+        repo.set_head_branch(Loadable::Ready("main".to_string()));
+        let after_head = repo.branch_sidebar_cache_rev();
+        assert_ne!(after_head, initial);
+
+        repo.set_head_branch(Loadable::Ready("main".to_string()));
+        assert_eq!(repo.branch_sidebar_cache_rev(), after_head);
+
+        repo.set_worktrees(Loadable::Loading);
+        assert_ne!(repo.branch_sidebar_cache_rev(), after_head);
+    }
+
+    #[test]
     fn set_detached_head_commit_updates_only_on_change() {
         let mut repo = new_repo();
         let head = CommitId("abc123".into());
@@ -1118,6 +1228,7 @@ mod tests {
         assert_eq!(repo.stashes_rev, 0);
         assert_eq!(repo.worktrees_rev, 0);
         assert_eq!(repo.submodules_rev, 0);
+        assert_eq!(repo.branch_sidebar_rev, 0);
     }
 
     #[test]

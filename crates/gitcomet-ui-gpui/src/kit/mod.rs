@@ -16,5 +16,8 @@ pub(crate) use text_input::{
     benchmark_text_input_runs_streamed_visible_window,
 };
 
+#[cfg(feature = "benchmarks")]
+pub(crate) use scrollbar::{compute_vertical_click_offset, vertical_thumb_metrics};
+
 #[cfg(target_os = "macos")]
 pub use text_input::ShowCharacterPalette;

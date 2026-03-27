@@ -92,6 +92,12 @@ pub enum Effect {
         repo_id: RepoId,
         target: DiffTarget,
     },
+    LoadSelectedDiff {
+        repo_id: RepoId,
+        target: DiffTarget,
+        load_file_text: bool,
+        load_file_image: bool,
+    },
     LoadConflictFile {
         repo_id: RepoId,
         path: PathBuf,

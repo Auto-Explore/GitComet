@@ -1,0 +1,28 @@
+{
+  "bench": "idle/cpu_usage_single_repo_60s",
+  "metrics": {
+    "open_repos": 1,
+    "tracked_files_per_repo": 1000,
+    "sample_duration_ms": 60012.824162,
+    "sample_count": 60,
+    "avg_cpu_pct": 0.005181375886604121,
+    "peak_cpu_pct": 0.018716672259994654,
+    "rss_start_kib": 20652,
+    "rss_end_kib": 20652,
+    "rss_delta_kib": 0,
+    "refresh_cycles": 0,
+    "repos_refreshed": 0,
+    "status_calls": 0,
+    "status_ms": 0.0,
+    "avg_refresh_cycle_ms": 0.0,
+    "max_refresh_cycle_ms": 0.0,
+    "wake_resume_ms": 0.0,
+    "alloc_ops": 11772,
+    "dealloc_ops": 11772,
+    "realloc_ops": 35198,
+    "alloc_bytes": 12148454,
+    "dealloc_bytes": 12148454,
+    "realloc_bytes_delta": 11807680,
+    "net_alloc_bytes": 0
+  }
+}

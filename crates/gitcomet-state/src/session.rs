@@ -2,10 +2,13 @@ use crate::model::{AppState, RepoId};
 use gitcomet_core::domain::LogScope;
 use rustc_hash::FxHashSet;
 use serde::{Deserialize, Serialize};
+use smallvec::SmallVec;
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::{env, fs, io};
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -32,7 +35,7 @@ pub struct UiSession {
     pub history_show_sha: Option<bool>,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum HistoryScopeSetting {
     CurrentBranch,
@@ -146,28 +149,97 @@ pub fn load_from_path(path: &Path) -> UiSession {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct SessionReposSnapshot {
-    pub open_repos: Vec<String>,
-    pub active_repo: Option<String>,
+    pub open_repos: Arc<[Arc<str>]>,
+    pub active_repo_index: Option<usize>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct CachedSessionReposSnapshot {
+    repo_ids: SmallVec<[RepoId; 24]>,
+    repo_keys: SmallVec<[Arc<str>; 24]>,
+    dedup_indexes_by_repo: SmallVec<[usize; 24]>,
+    open_repos: Arc<[Arc<str>]>,
+}
+
+thread_local! {
+    static SESSION_REPOS_SNAPSHOT_CACHE: RefCell<Option<CachedSessionReposSnapshot>> = const { RefCell::new(None) };
+}
+
+fn snapshot_repos_from_cache(state: &AppState) -> Option<SessionReposSnapshot> {
+    SESSION_REPOS_SNAPSHOT_CACHE.with(|cache| {
+        let cache = cache.borrow();
+        let cached = cache.as_ref()?;
+        if cached.repo_ids.len() != state.repos.len() {
+            return None;
+        }
+
+        let mut active_repo_index = None;
+        for (repo_ix, repo) in state.repos.iter().enumerate() {
+            if cached.repo_ids[repo_ix] != repo.id
+                || !Arc::ptr_eq(&cached.repo_keys[repo_ix], repo.session_workdir_key())
+            {
+                return None;
+            }
+            if active_repo_index.is_none() && Some(repo.id) == state.active_repo {
+                active_repo_index = Some(cached.dedup_indexes_by_repo[repo_ix]);
+            }
+        }
+
+        Some(SessionReposSnapshot {
+            open_repos: Arc::clone(&cached.open_repos),
+            active_repo_index,
+        })
+    })
 }
 
 pub fn snapshot_repos_from_state(state: &AppState) -> SessionReposSnapshot {
-    let mut open_repos: Vec<String> = Vec::with_capacity(state.repos.len());
-    let mut seen: FxHashSet<&Path> = FxHashSet::default();
-    for repo in &state.repos {
-        let workdir = repo.spec.workdir.as_path();
-        if !seen.insert(workdir) {
-            continue;
-        }
-        open_repos.push(path_storage_key(workdir));
+    if let Some(snapshot) = snapshot_repos_from_cache(state) {
+        return snapshot;
     }
 
-    let active_repo: Option<String> = active_repo_path(state, state.active_repo)
-        .filter(|p| seen.contains(*p))
-        .map(path_storage_key);
+    // Repo switches rarely change the open-tab order, so cache the last exact repo sequence and
+    // reuse its dedup map on steady-state switches. When the sequence changes, rebuild once with
+    // a linear scan over the small user-scale repo list.
+    let mut repo_ids = SmallVec::<[RepoId; 24]>::with_capacity(state.repos.len());
+    let mut repo_keys = SmallVec::<[Arc<str>; 24]>::with_capacity(state.repos.len());
+    let mut unique_keys = SmallVec::<[Arc<str>; 24]>::new();
+    let mut dedup_indexes_by_repo = SmallVec::<[usize; 24]>::with_capacity(state.repos.len());
+    let active_repo_id = state.active_repo;
+    let mut active_repo_index = None;
+
+    for repo in &state.repos {
+        repo_ids.push(repo.id);
+        let key = repo.session_workdir_key();
+        repo_keys.push(Arc::clone(key));
+
+        let unique_ix = if let Some(ix) = unique_keys
+            .iter()
+            .position(|seen| seen.as_ref() == key.as_ref())
+        {
+            ix
+        } else {
+            unique_keys.push(Arc::clone(key));
+            unique_keys.len() - 1
+        };
+        dedup_indexes_by_repo.push(unique_ix);
+        if active_repo_index.is_none() && Some(repo.id) == active_repo_id {
+            active_repo_index = Some(unique_ix);
+        }
+    }
+
+    let open_repos: Arc<[Arc<str>]> = unique_keys.into_vec().into();
+    SESSION_REPOS_SNAPSHOT_CACHE.with(|cache| {
+        *cache.borrow_mut() = Some(CachedSessionReposSnapshot {
+            repo_ids,
+            repo_keys,
+            dedup_indexes_by_repo,
+            open_repos: Arc::clone(&open_repos),
+        });
+    });
 
     SessionReposSnapshot {
         open_repos,
-        active_repo,
+        active_repo_index,
     }
 }
 
@@ -198,8 +270,15 @@ pub fn persist_repos_snapshot_to_path(
 ) -> io::Result<()> {
     let mut file = load_file_v2(path).unwrap_or_default();
     file.version = CURRENT_SESSION_FILE_VERSION;
-    file.open_repos = snapshot.open_repos.clone();
-    file.active_repo = snapshot.active_repo.clone();
+    file.open_repos = snapshot
+        .open_repos
+        .iter()
+        .map(|path| path.to_string())
+        .collect();
+    file.active_repo = snapshot
+        .active_repo_index
+        .and_then(|ix| snapshot.open_repos.get(ix))
+        .map(|path| path.to_string());
 
     persist_to_path(path, &file)
 }
@@ -378,11 +457,26 @@ pub fn persist_repo_history_scope_to_path(
     session_file_path: &Path,
 ) -> io::Result<()> {
     let mut file = load_file_v2(session_file_path).unwrap_or_default();
+    let scope = HistoryScopeSetting::from(scope);
+
+    if let Some(existing_scope) = file.repo_history_scopes.as_ref().and_then(|scopes| {
+        workdir
+            .to_str()
+            .and_then(|path| scopes.get(path).copied())
+            .or_else(|| {
+                let workdir_key = path_storage_key(workdir);
+                scopes.get(&workdir_key).copied()
+            })
+    }) && existing_scope == scope
+    {
+        return Ok(());
+    }
+
     file.version = CURRENT_SESSION_FILE_VERSION;
     let workdir_key = path_storage_key(workdir);
     file.repo_history_scopes
         .get_or_insert_with(BTreeMap::new)
-        .insert(workdir_key, scope.into());
+        .insert(workdir_key, scope);
 
     persist_to_path(session_file_path, &file)
 }
@@ -557,15 +651,6 @@ fn load_file_v2(path: &Path) -> Option<UiSessionFileV2> {
     }
 }
 
-fn active_repo_path(state: &AppState, active_repo_id: Option<RepoId>) -> Option<&Path> {
-    let active_repo_id = active_repo_id?;
-    state
-        .repos
-        .iter()
-        .find(|r| r.id == active_repo_id)
-        .map(|r| r.spec.workdir.as_path())
-}
-
 pub fn path_storage_key(path: &Path) -> String {
     if let Some(text) = path.to_str() {
         return text.to_string();
@@ -600,6 +685,14 @@ pub fn path_storage_key(path: &Path) -> String {
     {
         path.display().to_string()
     }
+}
+
+pub fn path_storage_key_shared(path: &Path) -> Arc<str> {
+    if let Some(text) = path.to_str() {
+        return Arc::from(text);
+    }
+
+    Arc::from(path_storage_key(path))
 }
 
 pub fn path_from_storage_key(raw: &str) -> PathBuf {
@@ -764,7 +857,7 @@ fn app_state_dir() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::RepoState;
+    use crate::model::{RepoId, RepoState};
     use gitcomet_core::domain::LogScope;
     use gitcomet_core::domain::RepoSpec;
 
@@ -898,8 +991,11 @@ mod tests {
         };
 
         let snapshot = snapshot_repos_from_state(&state);
-        assert_eq!(snapshot.open_repos, vec![path_storage_key(&repo_a)]);
-        assert_eq!(snapshot.active_repo, None);
+        assert_eq!(
+            snapshot.open_repos.as_ref(),
+            &[path_storage_key_shared(&repo_a)]
+        );
+        assert_eq!(snapshot.active_repo_index, None);
 
         let state = AppState {
             repos: vec![
@@ -909,16 +1005,71 @@ mod tests {
                         workdir: repo_a.clone(),
                     },
                 ),
-                RepoState::new_opening(RepoId(2), RepoSpec { workdir: repo_b }),
+                RepoState::new_opening(
+                    RepoId(2),
+                    RepoSpec {
+                        workdir: repo_b.clone(),
+                    },
+                ),
             ],
             active_repo: Some(RepoId(2)),
             ..Default::default()
         };
         let snapshot = snapshot_repos_from_state(&state);
-        assert_eq!(
-            snapshot.active_repo,
-            Some(path_storage_key(Path::new("/tmp/repo-b")))
-        );
+        assert_eq!(snapshot.active_repo_index, Some(1));
+        assert_eq!(snapshot.open_repos[1].as_ref(), "/tmp/repo-b");
+    }
+
+    #[test]
+    fn snapshot_repos_from_state_reuses_cached_open_repo_slice_for_same_repo_list() {
+        let state = AppState {
+            repos: vec![
+                RepoState::new_opening(
+                    RepoId(1),
+                    RepoSpec {
+                        workdir: PathBuf::from("/tmp/repo-a"),
+                    },
+                ),
+                RepoState::new_opening(
+                    RepoId(2),
+                    RepoSpec {
+                        workdir: PathBuf::from("/tmp/repo-b"),
+                    },
+                ),
+            ],
+            active_repo: Some(RepoId(2)),
+            ..Default::default()
+        };
+
+        let first = snapshot_repos_from_state(&state);
+        let second = snapshot_repos_from_state(&state);
+
+        assert!(Arc::ptr_eq(&first.open_repos, &second.open_repos));
+    }
+
+    #[test]
+    fn snapshot_repos_from_state_cache_keeps_dedup_index_for_duplicate_workdirs() {
+        let repo_a = PathBuf::from("/tmp/repo-a");
+        let mut state = AppState {
+            repos: vec![
+                RepoState::new_opening(
+                    RepoId(1),
+                    RepoSpec {
+                        workdir: repo_a.clone(),
+                    },
+                ),
+                RepoState::new_opening(RepoId(2), RepoSpec { workdir: repo_a }),
+            ],
+            active_repo: Some(RepoId(1)),
+            ..Default::default()
+        };
+
+        let first = snapshot_repos_from_state(&state);
+        state.active_repo = Some(RepoId(2));
+        let second = snapshot_repos_from_state(&state);
+
+        assert!(Arc::ptr_eq(&first.open_repos, &second.open_repos));
+        assert_eq!(second.active_repo_index, Some(0));
     }
 
     #[test]
@@ -1486,5 +1637,56 @@ mod tests {
 
         let loaded = load_repo_history_scope_from_path(&repo_a, &session_path);
         assert_eq!(loaded, Some(LogScope::AllBranches));
+    }
+
+    #[test]
+    fn persist_repo_history_scope_skips_rewriting_unchanged_value() {
+        let dir = env::temp_dir().join(format!(
+            "gitcomet-repo-history-scope-noop-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = fs::create_dir_all(&dir);
+        let session_path = dir.join("session.json");
+        let repo_a = dir.join("repo-a");
+        let _ = fs::create_dir_all(&repo_a);
+
+        persist_repo_history_scope_to_path(&repo_a, LogScope::AllBranches, &session_path)
+            .expect("persist repo history scope");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt as _;
+
+            let metadata_before = fs::metadata(&session_path).expect("session metadata before");
+            let inode_before = metadata_before.ino();
+
+            persist_repo_history_scope_to_path(&repo_a, LogScope::AllBranches, &session_path)
+                .expect("persist unchanged repo history scope");
+
+            let metadata_after = fs::metadata(&session_path).expect("session metadata after");
+            assert_eq!(
+                metadata_after.ino(),
+                inode_before,
+                "unchanged history scope should not rewrite the session file"
+            );
+        }
+
+        #[cfg(not(unix))]
+        {
+            let contents_before = fs::read(&session_path).expect("session bytes before");
+
+            persist_repo_history_scope_to_path(&repo_a, LogScope::AllBranches, &session_path)
+                .expect("persist unchanged repo history scope");
+
+            let contents_after = fs::read(&session_path).expect("session bytes after");
+            assert_eq!(
+                contents_after, contents_before,
+                "unchanged history scope should not rewrite the session file"
+            );
+        }
     }
 }

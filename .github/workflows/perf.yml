@@ -1,0 +1,198 @@
+name: Performance
+
+on:
+  schedule:
+    - cron: "0 4 * * 1"
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: Benchmark suite to run
+        required: true
+        type: choice
+        default: pr-subset
+        options:
+          - pr-subset
+          - full
+      ref:
+        description: Optional git ref to benchmark (for example refs/pull/123/head)
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: perf-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  performance-budgets:
+    name: Performance budgets (manual PR subset)
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.suite == 'pr-subset'
+    runs-on: ubuntu-latest
+    # Shared runners are noisy for performance numbers; treat this as signal/alerting only.
+    continue-on-error: true
+    timeout-minutes: 60
+    env:
+      GITCOMET_PERF_CRITERION_ROOT: target/criterion
+    steps:
+    - uses: actions/checkout@v6
+      with:
+        ref: ${{ github.event.inputs.ref || github.ref }}
+    - name: Install Linux UI native dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          pkg-config \
+          libxcb1-dev \
+          libxkbcommon-dev \
+          libxkbcommon-x11-dev
+    - name: Preflight Linux UI link dependencies
+      run: |
+        missing=0
+        for dep in xcb xkbcommon xkbcommon-x11; do
+          if ! pkg-config --exists "$dep"; then
+            echo "::error title=Missing Linux UI dependency::pkg-config could not find '$dep'. Install libxcb1-dev, libxkbcommon-dev, and libxkbcommon-x11-dev."
+            missing=1
+          fi
+        done
+        if [ "$missing" -ne 0 ]; then
+          echo "performance-budgets job is missing required native UI link dependencies."
+          exit 1
+        fi
+        pkg-config --modversion xcb xkbcommon xkbcommon-x11
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+    - name: Cache Rust artifacts
+      uses: Swatinem/rust-cache@v2
+    - name: Benchmark manual PR subset
+      run: |
+        # Conflict and markdown hot paths (existing)
+        cargo bench -p gitcomet-ui-gpui --features benchmarks --bench performance -- conflict_three_way_scroll/style_window
+        cargo bench -p gitcomet-ui-gpui --features benchmarks --bench performance -- conflict_two_way_split_scroll/window_200
+        cargo bench -p gitcomet-ui-gpui --features benchmarks --bench performance -- conflict_search_query_update/window/200
+        cargo bench -p gitcomet-ui-gpui --features benchmarks --bench performance -- conflict_split_resize_step/window/200
+        cargo bench -p gitcomet-ui-gpui --features benchmarks --bench performance -- markdown_preview_parse_build/single_document/medium
+        cargo bench -p gitcomet-ui-gpui --features benchmarks --bench performance -- markdown_preview_parse_build/two_sided_diff/medium
+        cargo bench -p gitcomet-ui-gpui --features benchmarks --bench performance -- markdown_preview_render_single/window_rows/200
+        cargo bench -p gitcomet-ui-gpui --features benchmarks --bench performance -- markdown_preview_render_diff/window_rows/200
+        # Broad workflow alerting subset (perf.md on-demand PR list)
+        cargo bench -p gitcomet-ui-gpui --features benchmarks --bench performance -- open_repo/balanced
+        cargo bench -p gitcomet-ui-gpui --features benchmarks --bench performance -- history_cache_build/balanced
+        cargo bench -p gitcomet-ui-gpui --features benchmarks --bench performance -- 'branch_sidebar/cache_hit_balanced'
+        cargo bench -p gitcomet-ui-gpui --features benchmarks --bench performance -- 'branch_sidebar/20k_branches_100_remotes'
+        cargo bench -p gitcomet-ui-gpui --features benchmarks --bench performance -- 'branch_sidebar/cache_invalidation_worktrees_ready'
+        cargo bench -p gitcomet-ui-gpui --features benchmarks --bench performance -- commit_details/many_files
+        cargo bench -p gitcomet-ui-gpui --features benchmarks --bench performance -- commit_details/large_message_body
+        cargo bench -p gitcomet-ui-gpui --features benchmarks --bench performance -- repo_switch/refocus_same_repo
+        cargo bench -p gitcomet-ui-gpui --features benchmarks --bench performance -- repo_switch/two_hot_repos
+        cargo bench -p gitcomet-ui-gpui --features benchmarks --bench performance -- repo_switch/selected_commit_and_details
+        cargo bench -p gitcomet-ui-gpui --features benchmarks --bench performance -- repo_switch/twenty_tabs
+        cargo bench -p gitcomet-ui-gpui --features benchmarks --bench performance -- repo_switch/selected_diff_file
+        cargo bench -p gitcomet-ui-gpui --features benchmarks --bench performance -- repo_switch/selected_conflict_target
+        cargo bench -p gitcomet-ui-gpui --features benchmarks --bench performance -- repo_switch/merge_active_with_draft_restore
+        cargo bench -p gitcomet-ui-gpui --features benchmarks --bench performance -- status_list/unstaged_large
+        cargo bench -p gitcomet-ui-gpui --features benchmarks --bench performance -- diff_open_patch_first_window/200
+        cargo bench -p gitcomet-ui-gpui --features benchmarks --bench performance -- diff_open_file_split_first_window/200
+        cargo bench -p gitcomet-ui-gpui --features benchmarks --bench performance -- diff_open_file_inline_first_window/200
+        cargo bench -p gitcomet-ui-gpui --features benchmarks --bench performance -- diff_open_image_preview_first_paint
+        cargo bench -p gitcomet-ui-gpui --features benchmarks --bench performance -- diff_open_patch_deep_window_90pct/200
+        cargo bench -p gitcomet-ui-gpui --features benchmarks --bench performance -- 'diff_refresh_rev_only_same_content'
+        # Text input highlight streaming — dense streamed cursor is the main hot path
+        cargo bench -p gitcomet-ui-gpui --features benchmarks --bench performance -- 'text_input_runs_streamed_highlight_dense/streamed_cursor'
+        cargo bench -p gitcomet-ui-gpui --features benchmarks --bench performance -- merge_open_bootstrap/large_streamed
+        # Conflict edit path — incremental resolved-output recompute should stay local, not fall back to full rebuilds
+        cargo bench -p gitcomet-ui-gpui --features benchmarks --bench performance -- 'resolved_output_recompute_incremental/incremental_recompute'
+        # Git data layer (Phase 4)
+        cargo bench -p gitcomet-ui-gpui --features benchmarks --bench performance -- 'git_ops/log_walk_100k_commits_shallow'
+        # Search (Phase 4)
+        cargo bench -p gitcomet-ui-gpui --features benchmarks --bench performance -- 'search/commit_filter_by_author_50k_commits'
+        cargo bench -p gitcomet-ui-gpui --features benchmarks --bench performance -- 'search/in_diff_text_search_100k_lines'
+        # Keyboard (Phase 4)
+        cargo bench -p gitcomet-ui-gpui --features benchmarks --bench performance -- 'keyboard/arrow_scroll_diff_sustained_repeat'
+        cargo bench -p gitcomet-ui-gpui --features benchmarks --bench performance -- 'keyboard/stage_unstage_toggle_rapid'
+        # Staging (Phase 4) — batch stage is the most common staging path at scale
+        cargo bench -p gitcomet-ui-gpui --features benchmarks --bench performance -- 'staging/stage_all_10k_files'
+        # Undo/redo (Phase 4) — deep conflict undo stack is the heaviest undo/redo path
+        cargo bench -p gitcomet-ui-gpui --features benchmarks --bench performance -- 'undo_redo/conflict_resolution_deep_stack'
+        # Frame timing (Phase 4) — rapid commit selection is the most user-visible jank risk
+        cargo bench -p gitcomet-ui-gpui --features benchmarks --bench performance -- 'frame_timing/rapid_commit_selection_changes'
+        # Filesystem event (Phase 4) — single-file save is the most common fs event path
+        cargo bench -p gitcomet-ui-gpui --features benchmarks --bench performance -- 'fs_event/single_file_save_to_status_update'
+        # Network (Phase 4) — interleaved progress+scroll is the most user-visible network jank path
+        cargo bench -p gitcomet-ui-gpui --features benchmarks --bench performance -- 'network/ui_responsiveness_during_fetch'
+        # Clipboard (Phase 4) — copy from diff is the most common clipboard path
+        cargo bench -p gitcomet-ui-gpui --features benchmarks --bench performance -- 'clipboard/copy_10k_lines_from_diff'
+        # Display (Phase 4) — scale factor sweep is the most representative display cost benchmark
+        cargo bench -p gitcomet-ui-gpui --features benchmarks --bench performance -- 'display/render_cost_1x_vs_2x_vs_3x_scale'
+    - name: Emit budget report (alerting mode, skip missing)
+      run: cargo run -p gitcomet-ui-gpui --bin perf_budget_report -- --criterion-root target/criterion --skip-missing
+
+  performance-budgets-full:
+    name: Performance budgets (strict, full suite)
+    # Use a dedicated perf runner when available (set PERF_RUNNER repo variable
+    # to a self-hosted label, e.g. "self-hosted" or "perf-dedicated").
+    # Falls back to ubuntu-latest for shared-runner alerting when unset.
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.suite == 'full')
+    runs-on: ${{ vars.PERF_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 120
+    env:
+      GITCOMET_PERF_CRITERION_ROOT: target/criterion
+    steps:
+    - uses: actions/checkout@v6
+      with:
+        ref: ${{ github.event.inputs.ref || github.ref }}
+    - name: Install Linux UI native dependencies
+      if: vars.PERF_RUNNER == '' || runner.os == 'Linux'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          pkg-config \
+          libxcb1-dev \
+          libxkbcommon-dev \
+          libxkbcommon-x11-dev
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+    - name: Cache Rust artifacts
+      uses: Swatinem/rust-cache@v2
+    - name: Validate dedicated perf-runner inputs
+      if: vars.PERF_RUNNER != ''
+      run: |
+        if [ -z "${{ vars.PERF_REAL_REPO_ROOT }}" ]; then
+          echo "::error title=Missing perf snapshot root::PERF_REAL_REPO_ROOT must be set when PERF_RUNNER is configured so strict nightly gating can cover real_repo budgets."
+          exit 1
+        fi
+        if [ -z "${WAYLAND_DISPLAY:-}${DISPLAY:-}" ]; then
+          echo "::warning title=Missing compositor environment::No DISPLAY or WAYLAND_DISPLAY is set. app_launch/* may fail on this runner unless the compositor is provisioned out-of-band."
+        fi
+    - name: Run full benchmark suite
+      env:
+        GITCOMET_PERF_REAL_REPO_ROOT: ${{ vars.PERF_REAL_REPO_ROOT }}
+      run: cargo bench -p gitcomet-ui-gpui --features benchmarks --bench performance
+    - name: Run idle resource harness (dedicated runner only)
+      if: vars.PERF_RUNNER != ''
+      run: |
+        cargo run -p gitcomet-ui-gpui --features benchmarks --bin perf_idle_resource -- --bench 'idle/cpu_usage_single_repo_60s'
+        cargo run -p gitcomet-ui-gpui --features benchmarks --bin perf_idle_resource -- --bench 'idle/cpu_usage_ten_repos_60s'
+        cargo run -p gitcomet-ui-gpui --features benchmarks --bin perf_idle_resource -- --bench 'idle/memory_growth_single_repo_10min'
+        cargo run -p gitcomet-ui-gpui --features benchmarks --bin perf_idle_resource -- --bench 'idle/memory_growth_ten_repos_10min'
+        cargo run -p gitcomet-ui-gpui --features benchmarks --bin perf_idle_resource -- --bench 'idle/background_refresh_cost_per_cycle'
+        cargo run -p gitcomet-ui-gpui --features benchmarks --bin perf_idle_resource -- --bench 'idle/wake_from_sleep_resume'
+    - name: Run app launch harness (dedicated runner only)
+      if: vars.PERF_RUNNER != ''
+      run: |
+        cargo run -p gitcomet --bin perf-app-launch -- --bench 'app_launch/cold_empty_workspace'
+        cargo run -p gitcomet --bin perf-app-launch -- --bench 'app_launch/cold_single_repo'
+        cargo run -p gitcomet --bin perf-app-launch -- --bench 'app_launch/cold_five_repos'
+        cargo run -p gitcomet --bin perf-app-launch -- --bench 'app_launch/cold_twenty_repos'
+        cargo run -p gitcomet --bin perf-app-launch -- --bench 'app_launch/warm_single_repo'
+        cargo run -p gitcomet --bin perf-app-launch -- --bench 'app_launch/warm_twenty_repos'
+    - name: Emit budget report (strict on dedicated runner, alerting on shared)
+      run: |
+        if [ -n "${{ vars.PERF_RUNNER }}" ]; then
+          echo "::notice::Running in strict mode on dedicated runner (${{ vars.PERF_RUNNER }}) with real-repo snapshots from ${{ vars.PERF_REAL_REPO_ROOT }}"
+          cargo run -p gitcomet-ui-gpui --bin perf_budget_report -- --criterion-root target/criterion --strict
+        else
+          echo "::notice::Running in alerting mode on shared runner (ubuntu-latest) — numbers are noisy"
+          cargo run -p gitcomet-ui-gpui --bin perf_budget_report -- --criterion-root target/criterion --skip-missing
+        fi

@@ -190,14 +190,14 @@ fn select_diff_for_conflicted_file_skips_patch_and_file_diff_loads() {
         path: PathBuf::from("index.html"),
         area: gitcomet_core::domain::DiffArea::Unstaged,
     };
-    repo_state.status = Loadable::Ready(Arc::new(RepoStatus {
+    repo_state.set_status(Loadable::Ready(Arc::new(RepoStatus {
         unstaged: vec![FileStatus {
             path: PathBuf::from("index.html"),
             kind: FileStatusKind::Conflicted,
             conflict: Some(FileConflictKind::BothModified),
         }],
         staged: vec![],
-    }));
+    })));
     state.repos.push(repo_state);
     state.active_repo = Some(RepoId(1));
 

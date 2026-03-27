@@ -13,7 +13,12 @@ workspace = true
 
 [features]
 default = ["syntax-all"]
-benchmarks = ["gitcomet-core/benchmarks"]
+benchmarks = [
+    "gitcomet-core/benchmarks",
+    "gitcomet-state/benchmarks",
+    "gitcomet-git-gix/benchmarks",
+    "dep:gitcomet-git-gix",
+]
 syntax-minimal = ["syntax-rust", "syntax-data", "syntax-shell"]
 syntax-common = ["syntax-minimal", "syntax-web", "syntax-python"]
 syntax-all = ["syntax-common", "syntax-go", "syntax-xml"]
@@ -33,10 +38,13 @@ syntax-xml = ["dep:tree-sitter-xml"]
 [dependencies]
 fontdb = { workspace = true }
 gitcomet-core = { workspace = true }
+gitcomet-git-gix = { workspace = true, optional = true }
 gitcomet-state = { workspace = true }
 gpui = { workspace = true }
 image = { workspace = true }
 lru = { workspace = true }
+memchr = { workspace = true }
+mimalloc = { workspace = true }
 pulldown-cmark = { workspace = true }
 resvg = { workspace = true }
 rustc-hash = { workspace = true }
@@ -44,7 +52,9 @@ semver = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+smallvec = { workspace = true }
 smol = { workspace = true }
+stats_alloc = { workspace = true }
 tempfile = { workspace = true }
 tree-sitter = { workspace = true }
 tree-sitter-bash = { workspace = true, optional = true }
@@ -61,6 +71,9 @@ tree-sitter-yaml = { workspace = true, optional = true }
 unicode-segmentation = { workspace = true }
 url = { workspace = true }
 zed-reqwest = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+rustix = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 metal = "0.33"

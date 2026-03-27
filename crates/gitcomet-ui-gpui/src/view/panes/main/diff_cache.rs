@@ -1,4 +1,5 @@
 use super::*;
+use crate::view::diff_utils::compute_diff_yaml_block_scalar_for_src_ix;
 use crate::view::markdown_preview;
 use crate::view::perf::{self, ViewPerfSpan};
 use crate::view::rows;
@@ -8,6 +9,8 @@ mod file_diff;
 mod image_cache;
 mod patch_diff;
 
+#[cfg(feature = "benchmarks")]
+pub(in crate::view) use self::file_diff::bench_build_file_diff_providers;
 pub(in crate::view) use self::file_diff::{PagedFileDiffInlineRows, PagedFileDiffRows};
 use self::file_diff::{build_file_diff_cache_rebuild, build_inline_text, file_diff_text_signature};
 
@@ -37,6 +40,12 @@ impl FileDiffPreparedSyntaxApplyResult {
     fn any(self) -> bool {
         self.split_left || self.split_right
     }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct SyncFileDiffPreparedSyntaxApplyResult {
+    inserted: bool,
+    needs_background_prepare: bool,
 }
 
 #[cfg(test)]
@@ -707,16 +716,23 @@ impl MainPaneView {
         &mut self,
         attempt: Option<rows::PrepareDiffSyntaxDocumentResult>,
         key: &Option<PreparedSyntaxDocumentKey>,
-    ) -> bool {
+    ) -> SyncFileDiffPreparedSyntaxApplyResult {
         match attempt {
             Some(rows::PrepareDiffSyntaxDocumentResult::Ready(document)) => {
-                if let Some(key) = key.as_ref() {
-                    self.insert_prepared_syntax_document(key.clone(), document);
+                SyncFileDiffPreparedSyntaxApplyResult {
+                    inserted: key.as_ref().is_some_and(|key| {
+                        self.insert_prepared_syntax_document(key.clone(), document)
+                    }),
+                    needs_background_prepare: false,
                 }
-                false
             }
-            Some(rows::PrepareDiffSyntaxDocumentResult::TimedOut) => true,
-            _ => false,
+            Some(rows::PrepareDiffSyntaxDocumentResult::TimedOut) => {
+                SyncFileDiffPreparedSyntaxApplyResult {
+                    inserted: false,
+                    needs_background_prepare: true,
+                }
+            }
+            _ => SyncFileDiffPreparedSyntaxApplyResult::default(),
         }
     }
 
@@ -810,10 +826,20 @@ impl MainPaneView {
             )
         });
 
-        let needs_split_left_async =
-            self.apply_sync_syntax_result(split_left_attempt, &split_left_key);
-        let needs_split_right_async =
-            self.apply_sync_syntax_result(split_right_attempt, &split_right_key);
+        let split_left_sync = self.apply_sync_syntax_result(split_left_attempt, &split_left_key);
+        let split_right_sync = self.apply_sync_syntax_result(split_right_attempt, &split_right_key);
+        let needs_split_left_async = split_left_sync.needs_background_prepare;
+        let needs_split_right_async = split_right_sync.needs_background_prepare;
+
+        if split_left_sync.inserted {
+            self.file_diff_style_cache_epochs.bump_left();
+        }
+        if split_right_sync.inserted {
+            self.file_diff_style_cache_epochs.bump_right();
+        }
+        if split_left_sync.inserted || split_right_sync.inserted {
+            cx.notify();
+        }
 
         if !needs_split_left_async && !needs_split_right_async {
             return;
@@ -1206,6 +1232,7 @@ impl MainPaneView {
         self.diff_cache_target = None;
         self.diff_file_for_src_ix.clear();
         self.diff_language_for_src_ix.clear();
+        self.diff_yaml_block_scalar_for_src_ix.clear();
         self.diff_click_kinds.clear();
         self.diff_line_kind_for_src_ix.clear();
         self.diff_hide_unified_header_for_src_ix.clear();
@@ -1343,7 +1370,11 @@ impl MainPaneView {
             };
             self.diff_language_for_src_ix.push(language);
         }
-
+        self.diff_yaml_block_scalar_for_src_ix = compute_diff_yaml_block_scalar_for_src_ix(
+            diff.lines.as_slice(),
+            self.diff_file_for_src_ix.as_slice(),
+            self.diff_language_for_src_ix.as_slice(),
+        );
         if let Some(preview) = build_new_file_preview_from_diff(
             diff.lines.as_slice(),
             &workdir,

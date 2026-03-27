@@ -198,6 +198,13 @@ impl AppStore {
     }
 }
 
+#[cfg(feature = "benchmarks")]
+pub fn dispatch_sync_for_bench(state: &mut AppState, msg: Msg) -> Vec<crate::msg::Effect> {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    reduce(&mut repos, &id_alloc, state, msg)
+}
+
 #[cfg(test)]
 mod path_tests {
     use super::canonicalize_path;

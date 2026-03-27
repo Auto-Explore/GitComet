@@ -6,12 +6,33 @@ use gitcomet_core::domain::{
     Submodule, Tag, UpstreamDivergence, Worktree,
 };
 use gitcomet_core::error::{Error, ErrorKind};
+use gitcomet_core::git_ops_trace::{self, GitOpTraceKind};
 use gitcomet_core::services::{
     BlameLine, CommandOutput, ConflictFileStages, ConflictSide, GitRepository, MergetoolResult,
     PullMode, RemoteUrlKind, ResetMode, Result,
 };
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Arc;
+
+/// Convert a gix ObjectId to an `Arc<str>` hex string without intermediate String allocation.
+/// Uses a stack buffer + `hex_to_buf` → `Arc::from(&str)` (one heap allocation instead of two).
+#[inline]
+pub(super) fn oid_to_arc_str(oid: &gix::oid) -> Arc<str> {
+    let mut buf = gix::hash::Kind::hex_buf();
+    let hex: &str = oid.hex_to_buf(&mut buf);
+    Arc::from(hex)
+}
+
+/// Convert bytes to `Arc<str>`, avoiding an intermediate String allocation when the input is
+/// valid UTF-8 (the common case for git commit metadata).
+#[inline]
+pub(super) fn bstr_to_arc_str(bytes: &[u8]) -> Arc<str> {
+    match std::str::from_utf8(bytes) {
+        Ok(s) => Arc::from(s),
+        Err(_) => Arc::from(String::from_utf8_lossy(bytes).as_ref()),
+    }
+}
 
 mod blame;
 mod conflict_stages;
@@ -43,10 +64,29 @@ struct GitlinkStatusCapabilityCacheEntry {
     may_have_gitlinks: bool,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct BranchTrackingConfigCacheEntry {
+    local_config: RepoFileStamp,
+    worktree_config: RepoFileStamp,
+    has_branch_sections: bool,
+}
+
+/// Caches the Tree→Index (HEAD vs index) result so that background refresh
+/// cycles can skip the tree comparison when HEAD and the index file are
+/// unchanged since the last status call.
+#[derive(Clone, Debug)]
+struct TreeIndexCacheEntry {
+    head_oid: Option<gix::ObjectId>,
+    index_stamp: RepoFileStamp,
+    staged: Vec<gitcomet_core::domain::FileStatus>,
+}
+
 pub(crate) struct GixRepo {
     spec: RepoSpec,
     _repo: gix::ThreadSafeRepository,
     gitlink_status_capability: std::sync::Mutex<Option<GitlinkStatusCapabilityCacheEntry>>,
+    branch_tracking_config: std::sync::Mutex<Option<BranchTrackingConfigCacheEntry>>,
+    tree_index_cache: std::sync::Mutex<Option<TreeIndexCacheEntry>>,
 }
 
 impl GixRepo {
@@ -55,6 +95,8 @@ impl GixRepo {
             spec: RepoSpec { workdir },
             _repo: repo,
             gitlink_status_capability: std::sync::Mutex::new(None),
+            branch_tracking_config: std::sync::Mutex::new(None),
+            tree_index_cache: std::sync::Mutex::new(None),
         }
     }
 
@@ -82,10 +124,12 @@ impl GitRepository for GixRepo {
     }
 
     fn log_head_page(&self, limit: usize, cursor: Option<&LogCursor>) -> Result<LogPage> {
+        let _scope = git_ops_trace::scope(GitOpTraceKind::LogWalk);
         self.log_head_page_impl(limit, cursor)
     }
 
     fn log_all_branches_page(&self, limit: usize, cursor: Option<&LogCursor>) -> Result<LogPage> {
+        let _scope = git_ops_trace::scope(GitOpTraceKind::LogWalk);
         self.log_all_branches_page_impl(limit, cursor)
     }
 
@@ -95,6 +139,7 @@ impl GitRepository for GixRepo {
         limit: usize,
         cursor: Option<&LogCursor>,
     ) -> Result<LogPage> {
+        let _scope = git_ops_trace::scope(GitOpTraceKind::LogWalk);
         self.log_file_page_impl(path, limit, cursor)
     }
 
@@ -111,26 +156,32 @@ impl GitRepository for GixRepo {
     }
 
     fn list_branches(&self) -> Result<Vec<Branch>> {
+        let _scope = git_ops_trace::scope(GitOpTraceKind::RefEnumerate);
         self.list_branches_impl()
     }
 
     fn list_tags(&self) -> Result<Vec<Tag>> {
+        let _scope = git_ops_trace::scope(GitOpTraceKind::RefEnumerate);
         self.list_tags_impl()
     }
 
     fn list_remote_tags(&self) -> Result<Vec<RemoteTag>> {
+        let _scope = git_ops_trace::scope(GitOpTraceKind::RefEnumerate);
         self.list_remote_tags_impl()
     }
 
     fn list_remotes(&self) -> Result<Vec<Remote>> {
+        let _scope = git_ops_trace::scope(GitOpTraceKind::RefEnumerate);
         self.list_remotes_impl()
     }
 
     fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
+        let _scope = git_ops_trace::scope(GitOpTraceKind::RefEnumerate);
         self.list_remote_branches_impl()
     }
 
     fn status(&self) -> Result<RepoStatus> {
+        let _scope = git_ops_trace::scope(GitOpTraceKind::Status);
         self.status_impl()
     }
 
@@ -151,10 +202,12 @@ impl GitRepository for GixRepo {
     }
 
     fn diff_unified(&self, target: &DiffTarget) -> Result<String> {
+        let _scope = git_ops_trace::scope(GitOpTraceKind::Diff);
         self.diff_unified_impl(target)
     }
 
     fn diff_parsed(&self, target: &DiffTarget) -> Result<Diff> {
+        let _scope = git_ops_trace::scope(GitOpTraceKind::Diff);
         self.diff_parsed_impl(target)
     }
 
@@ -372,6 +425,7 @@ impl GitRepository for GixRepo {
     }
 
     fn blame_file(&self, path: &Path, rev: Option<&str>) -> Result<Vec<BlameLine>> {
+        let _scope = git_ops_trace::scope(GitOpTraceKind::Blame);
         self.blame_file_impl(path, rev)
     }
 

@@ -1,5 +1,6 @@
 use super::super::perf::{self, ViewPerfSpan};
 use super::*;
+use memchr::memchr2_iter;
 use rustc_hash::FxHasher;
 use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
@@ -42,6 +43,59 @@ pub(super) fn syntax_mode_for_prepared_document(
     }
 }
 
+const SYNTAX_HIGHLIGHT_STYLE_KINDS: [SyntaxTokenKind; 27] = [
+    SyntaxTokenKind::None,
+    SyntaxTokenKind::Comment,
+    SyntaxTokenKind::CommentDoc,
+    SyntaxTokenKind::String,
+    SyntaxTokenKind::StringEscape,
+    SyntaxTokenKind::Keyword,
+    SyntaxTokenKind::KeywordControl,
+    SyntaxTokenKind::Number,
+    SyntaxTokenKind::Boolean,
+    SyntaxTokenKind::Function,
+    SyntaxTokenKind::FunctionMethod,
+    SyntaxTokenKind::FunctionSpecial,
+    SyntaxTokenKind::Type,
+    SyntaxTokenKind::TypeBuiltin,
+    SyntaxTokenKind::TypeInterface,
+    SyntaxTokenKind::Variable,
+    SyntaxTokenKind::VariableParameter,
+    SyntaxTokenKind::VariableSpecial,
+    SyntaxTokenKind::Property,
+    SyntaxTokenKind::Constant,
+    SyntaxTokenKind::Operator,
+    SyntaxTokenKind::Punctuation,
+    SyntaxTokenKind::PunctuationBracket,
+    SyntaxTokenKind::PunctuationDelimiter,
+    SyntaxTokenKind::Tag,
+    SyntaxTokenKind::Attribute,
+    SyntaxTokenKind::Lifetime,
+];
+
+#[derive(Clone)]
+pub(super) struct SyntaxHighlightPalette {
+    styles: [Option<gpui::HighlightStyle>; SYNTAX_HIGHLIGHT_STYLE_KINDS.len()],
+}
+
+impl SyntaxHighlightPalette {
+    fn new(theme: AppTheme) -> Self {
+        Self {
+            styles: std::array::from_fn(|ix| {
+                syntax_highlight_style(theme, SYNTAX_HIGHLIGHT_STYLE_KINDS[ix])
+            }),
+        }
+    }
+
+    fn style(&self, kind: SyntaxTokenKind) -> Option<gpui::HighlightStyle> {
+        self.styles[kind as usize]
+    }
+}
+
+pub(super) fn syntax_highlight_palette(theme: AppTheme) -> SyntaxHighlightPalette {
+    SyntaxHighlightPalette::new(theme)
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(in crate::view) struct PreparedDiffSyntaxDocument {
     inner: syntax::PreparedSyntaxDocument,
@@ -75,6 +129,31 @@ pub(in crate::view) enum PrepareDiffSyntaxDocumentResult {
 pub(super) struct DiffSyntaxConfig {
     pub language: Option<DiffSyntaxLanguage>,
     pub mode: DiffSyntaxMode,
+}
+
+type DiffTextHighlight = (Range<usize>, gpui::HighlightStyle);
+type DiffTextHighlights = [DiffTextHighlight];
+type SharedDiffTextHighlights = Arc<DiffTextHighlights>;
+
+#[derive(Clone, Copy)]
+pub(super) struct DiffTextBuildRequest<'a> {
+    pub(super) text: &'a str,
+    pub(super) word_ranges: &'a [Range<usize>],
+    pub(super) query: &'a str,
+    pub(super) syntax: DiffSyntaxConfig,
+    pub(super) word_color: Option<gpui::Rgba>,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct PreparedDiffTextBuildRequest<'a> {
+    pub(super) build: DiffTextBuildRequest<'a>,
+    pub(super) prepared_line: PreparedDiffSyntaxLine,
+}
+
+#[derive(Clone, Copy)]
+struct FusedDiffTextBuildRequest<'a> {
+    build: DiffTextBuildRequest<'a>,
+    syntax_tokens_override: Option<&'a [syntax::SyntaxToken]>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -356,6 +435,7 @@ fn segment_overlaps_sorted_ranges(
         .is_some_and(|range| segment_start < range.end && segment_end > range.start)
 }
 
+#[allow(dead_code)]
 fn build_diff_text_segments(
     text: &str,
     word_ranges: &[Range<usize>],
@@ -382,13 +462,21 @@ fn build_diff_text_segments(
         }];
     }
 
-    let syntax_tokens = if let Some(tokens) = syntax_tokens_override {
-        tokens.to_vec()
-    } else if let Some(language) = language {
-        let _syntax_scope = perf::span(ViewPerfSpan::SyntaxHighlighting);
-        syntax::syntax_tokens_for_line(text, language, syntax_mode)
+    let owned_syntax_tokens = if syntax_tokens_override.is_none() {
+        language.map(|language| {
+            let _syntax_scope = perf::span(ViewPerfSpan::SyntaxHighlighting);
+            syntax::syntax_tokens_for_line_shared(text, language, syntax_mode)
+        })
     } else {
-        Vec::new()
+        None
+    };
+    let syntax_tokens = if let Some(tokens) = syntax_tokens_override {
+        tokens
+    } else if let Some(language) = language {
+        let _ = language;
+        owned_syntax_tokens.as_deref().unwrap_or(&[])
+    } else {
+        &[]
     };
 
     let _word_query_scope = perf::span(ViewPerfSpan::WordQueryHighlighting);
@@ -414,7 +502,7 @@ fn build_diff_text_segments(
             boundaries.push(r.start);
             boundaries.push(r.end);
         }
-        for t in &syntax_tokens {
+        for t in syntax_tokens {
             boundaries.push(t.range.start.min(text.len()));
             boundaries.push(t.range.end.min(text.len()));
         }
@@ -571,17 +659,14 @@ pub(super) fn selectable_cached_diff_text(
         .into_any_element()
 }
 
-fn empty_highlights() -> Arc<Vec<(Range<usize>, gpui::HighlightStyle)>> {
-    type Highlights = Vec<(Range<usize>, gpui::HighlightStyle)>;
-    type HighlightsRef = Arc<Highlights>;
-
-    static EMPTY: OnceLock<HighlightsRef> = OnceLock::new();
-    Arc::clone(EMPTY.get_or_init(|| Arc::new(Vec::new())))
+fn empty_highlights() -> SharedDiffTextHighlights {
+    static EMPTY: OnceLock<SharedDiffTextHighlights> = OnceLock::new();
+    Arc::clone(EMPTY.get_or_init(|| Arc::from(Vec::new())))
 }
 
 fn styled_text_to_cached(
     text: SharedString,
-    highlights: Vec<(Range<usize>, gpui::HighlightStyle)>,
+    highlights: Vec<DiffTextHighlight>,
 ) -> CachedDiffStyledText {
     let mut hasher = FxHasher::default();
     text.as_ref().hash(&mut hasher);
@@ -599,12 +684,72 @@ fn styled_text_to_cached(
     let highlights_hash = hash_highlights(&highlights);
     CachedDiffStyledText {
         text,
-        highlights: Arc::new(highlights),
+        highlights: Arc::from(highlights),
         highlights_hash,
         text_hash,
     }
 }
 
+/// Like [`styled_text_to_cached`] but borrows the highlights buffer instead of
+/// consuming it.  Creates the `Arc<[…]>` from a slice copy so the caller can
+/// reuse the Vec across calls (thread_local pattern).
+fn styled_text_to_cached_from_buf(
+    text: &str,
+    highlights: &DiffTextHighlights,
+) -> CachedDiffStyledText {
+    if text.is_empty() {
+        return empty_styled_text();
+    }
+
+    let text = if !text.contains('\t') {
+        SharedString::new(text)
+    } else {
+        let (expanded, remapped) = expanded_text_and_remapped_relative_highlights(text, highlights);
+        let mut hasher = FxHasher::default();
+        expanded.as_ref().hash(&mut hasher);
+        let text_hash = hasher.finish();
+
+        if remapped.is_empty() {
+            return CachedDiffStyledText {
+                text: expanded,
+                highlights: empty_highlights(),
+                highlights_hash: 0,
+                text_hash,
+            };
+        }
+
+        let highlights_hash = hash_highlights(&remapped);
+        return CachedDiffStyledText {
+            text: expanded,
+            highlights: Arc::from(remapped),
+            highlights_hash,
+            text_hash,
+        };
+    };
+
+    let mut hasher = FxHasher::default();
+    text.as_ref().hash(&mut hasher);
+    let text_hash = hasher.finish();
+
+    if highlights.is_empty() {
+        return CachedDiffStyledText {
+            text,
+            highlights: empty_highlights(),
+            highlights_hash: 0,
+            text_hash,
+        };
+    }
+
+    let highlights_hash = hash_highlights(highlights);
+    CachedDiffStyledText {
+        text,
+        highlights: Arc::from(highlights),
+        highlights_hash,
+        text_hash,
+    }
+}
+
+#[allow(dead_code)]
 fn segments_to_cached_styled_text(
     theme: AppTheme,
     segments: &[CachedDiffTextSegment],
@@ -614,16 +759,184 @@ fn segments_to_cached_styled_text(
     styled_text_to_cached(expanded_text, highlights)
 }
 
+/// Fused version of `build_diff_text_segments` + `segments_to_cached_styled_text`.
+///
+/// Builds the combined styled text and highlights in a single pass over the
+/// boundary windows, skipping intermediate `Vec<CachedDiffTextSegment>` and
+/// per-segment `SharedString` allocations.
+fn build_styled_text_fused(
+    theme: AppTheme,
+    request: FusedDiffTextBuildRequest<'_>,
+) -> CachedDiffStyledText {
+    let text = request.build.text;
+    let word_ranges = request.build.word_ranges;
+    let query = request.build.query;
+    let word_color = request.build.word_color;
+    let DiffSyntaxConfig {
+        language,
+        mode: syntax_mode,
+    } = request.build.syntax;
+    let syntax_tokens_override = request.syntax_tokens_override;
+
+    if text.is_empty() {
+        return empty_styled_text();
+    }
+
+    let query = query.trim();
+    if word_ranges.is_empty()
+        && query.is_empty()
+        && language.is_none()
+        && syntax_tokens_override.is_none()
+    {
+        let expanded = maybe_expand_tabs(text);
+        return styled_text_to_cached(expanded, Vec::new());
+    }
+
+    let owned_syntax_tokens = if syntax_tokens_override.is_none() {
+        language.map(|language| {
+            let _syntax_scope = perf::span(ViewPerfSpan::SyntaxHighlighting);
+            syntax::syntax_tokens_for_line_shared(text, language, syntax_mode)
+        })
+    } else {
+        None
+    };
+    let syntax_tokens = if let Some(tokens) = syntax_tokens_override {
+        tokens
+    } else if let Some(language) = language {
+        let _ = language;
+        owned_syntax_tokens.as_deref().unwrap_or(&[])
+    } else {
+        &[]
+    };
+
+    let _word_query_scope = perf::span(ViewPerfSpan::WordQueryHighlighting);
+    let query_ranges = if !query.is_empty() {
+        find_all_ascii_case_insensitive(text, query)
+    } else {
+        Default::default()
+    };
+
+    thread_local! {
+        static FUSED_BOUNDARY_BUF: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
+    }
+
+    FUSED_BOUNDARY_BUF.with_borrow_mut(|boundaries| {
+        boundaries.clear();
+        boundaries.push(0);
+        boundaries.push(text.len());
+        for r in word_ranges {
+            boundaries.push(r.start.min(text.len()));
+            boundaries.push(r.end.min(text.len()));
+        }
+        for r in &query_ranges {
+            boundaries.push(r.start);
+            boundaries.push(r.end);
+        }
+        for t in syntax_tokens {
+            boundaries.push(t.range.start.min(text.len()));
+            boundaries.push(t.range.end.min(text.len()));
+        }
+        boundaries.sort_unstable();
+        boundaries.dedup();
+
+        let has_tabs = text.contains('\t');
+        let mut combined = String::with_capacity(if has_tabs {
+            text.len() + text.len() / 8
+        } else {
+            text.len()
+        });
+        let mut highlights: Vec<(Range<usize>, gpui::HighlightStyle)> =
+            Vec::with_capacity(boundaries.len().saturating_sub(1));
+
+        let mut token_ix = 0usize;
+        let mut word_ix = 0usize;
+        let mut query_ix = 0usize;
+
+        for w in boundaries.windows(2) {
+            let (a, b) = (w[0], w[1]);
+            if a >= b || a >= text.len() {
+                continue;
+            }
+            let b = b.min(text.len());
+            let Some(seg) = text.get(a..b) else {
+                // Fallback: return whole text expanded, no highlights.
+                let expanded = maybe_expand_tabs(text);
+                return styled_text_to_cached(expanded, Vec::new());
+            };
+
+            while token_ix < syntax_tokens.len() && syntax_tokens[token_ix].range.end <= a {
+                token_ix += 1;
+            }
+            let syntax = syntax_tokens
+                .get(token_ix)
+                .filter(|t| t.range.start <= a && t.range.end >= b)
+                .map(|t| t.kind)
+                .unwrap_or(SyntaxTokenKind::None);
+
+            let in_word = segment_overlaps_sorted_ranges(a, b, word_ranges, &mut word_ix);
+            let in_query = segment_overlaps_sorted_ranges(a, b, &query_ranges, &mut query_ix);
+
+            let offset = combined.len();
+            if has_tabs && seg.contains('\t') {
+                for ch in seg.chars() {
+                    match ch {
+                        '\t' => combined.push_str("    "),
+                        _ => combined.push(ch),
+                    }
+                }
+            } else {
+                combined.push_str(seg);
+            }
+            let next_offset = combined.len();
+
+            let mut style = gpui::HighlightStyle::default();
+
+            if in_word && let Some(mut c) = word_color {
+                c.a = if theme.is_dark { 0.22 } else { 0.16 };
+                style.background_color = Some(c.into());
+            }
+
+            if in_query {
+                style.background_color = Some(
+                    with_alpha(theme.colors.accent, if theme.is_dark { 0.22 } else { 0.16 }).into(),
+                );
+            }
+
+            let syntax_fg = syntax_highlight_color(theme, syntax);
+            if let Some(fg) = syntax_fg {
+                style.color = Some(fg.into());
+            }
+
+            if style != gpui::HighlightStyle::default() && offset < next_offset {
+                highlights.push((offset..next_offset, style));
+            }
+        }
+
+        styled_text_to_cached(combined.into(), highlights)
+    })
+}
+
 pub(super) fn build_cached_diff_styled_text_from_relative_highlights(
     text: &str,
     highlights: &[(Range<usize>, gpui::HighlightStyle)],
+) -> CachedDiffStyledText {
+    build_cached_diff_styled_text_from_owned_relative_highlights(text, highlights.to_vec())
+}
+
+fn build_cached_diff_styled_text_from_owned_relative_highlights(
+    text: &str,
+    highlights: Vec<(Range<usize>, gpui::HighlightStyle)>,
 ) -> CachedDiffStyledText {
     if text.is_empty() {
         return empty_styled_text();
     }
 
+    if !text.contains('\t') {
+        return styled_text_to_cached(SharedString::new(text), highlights);
+    }
+
     let (expanded_text, remapped_highlights) =
-        expanded_text_and_remapped_relative_highlights(text, highlights);
+        expanded_text_and_remapped_relative_highlights(text, &highlights);
     styled_text_to_cached(expanded_text, remapped_highlights)
 }
 
@@ -640,12 +953,138 @@ pub(super) fn build_cached_diff_styled_text(
     syntax_mode: DiffSyntaxMode,
     word_color: Option<gpui::Rgba>,
 ) -> CachedDiffStyledText {
+    build_cached_diff_styled_text_with_optional_palette(
+        theme,
+        None,
+        DiffTextBuildRequest {
+            text,
+            word_ranges,
+            query,
+            syntax: DiffSyntaxConfig {
+                language,
+                mode: syntax_mode,
+            },
+            word_color,
+        },
+    )
+}
+
+pub(super) fn build_cached_diff_styled_text_with_palette(
+    theme: AppTheme,
+    highlight_palette: &SyntaxHighlightPalette,
+    request: DiffTextBuildRequest<'_>,
+) -> CachedDiffStyledText {
+    build_cached_diff_styled_text_with_optional_palette(theme, Some(highlight_palette), request)
+}
+
+pub(super) fn build_cached_diff_styled_text_with_palette_and_full_text_syntax_kind(
+    theme: AppTheme,
+    highlight_palette: &SyntaxHighlightPalette,
+    request: DiffTextBuildRequest<'_>,
+    kind: SyntaxTokenKind,
+) -> CachedDiffStyledText {
+    if request.text.is_empty() {
+        return empty_styled_text();
+    }
+
+    let tokens = [syntax::SyntaxToken {
+        range: 0..request.text.len(),
+        kind,
+    }];
+
+    if request.word_ranges.is_empty() && request.query.trim().is_empty() {
+        return SYNTAX_HIGHLIGHTS_BUF.with_borrow_mut(|buf| {
+            prepared_document_line_highlights_from_tokens_into_with_palette(
+                highlight_palette,
+                request.text.len(),
+                &tokens,
+                buf,
+            );
+            styled_text_to_cached_from_buf(request.text, buf)
+        });
+    }
+
+    build_styled_text_fused(
+        theme,
+        FusedDiffTextBuildRequest {
+            build: request,
+            syntax_tokens_override: Some(&tokens),
+        },
+    )
+}
+
+pub(super) fn build_cached_diff_styled_text_with_palette_and_full_text_string(
+    theme: AppTheme,
+    highlight_palette: &SyntaxHighlightPalette,
+    request: DiffTextBuildRequest<'_>,
+) -> CachedDiffStyledText {
+    build_cached_diff_styled_text_with_palette_and_full_text_syntax_kind(
+        theme,
+        highlight_palette,
+        request,
+        SyntaxTokenKind::String,
+    )
+}
+
+thread_local! {
+    static SYNTAX_HIGHLIGHTS_BUF: RefCell<Vec<DiffTextHighlight>> = const { RefCell::new(Vec::new()) };
+}
+
+fn build_cached_diff_styled_text_with_optional_palette(
+    theme: AppTheme,
+    highlight_palette: Option<&SyntaxHighlightPalette>,
+    request: DiffTextBuildRequest<'_>,
+) -> CachedDiffStyledText {
+    let text = request.text;
+    let word_ranges = request.word_ranges;
+    let query = request.query;
+    let DiffSyntaxConfig {
+        language,
+        mode: syntax_mode,
+    } = request.syntax;
+
     if text.is_empty() {
         return empty_styled_text();
     }
 
-    let segments = build_diff_text_segments(text, word_ranges, query, language, syntax_mode, None);
-    segments_to_cached_styled_text(theme, &segments, word_color)
+    let query = query.trim();
+    if word_ranges.is_empty() && query.is_empty() {
+        return SYNTAX_HIGHLIGHTS_BUF.with_borrow_mut(|buf| {
+            if let Some(language) = language {
+                let _syntax_scope = perf::span(ViewPerfSpan::SyntaxHighlighting);
+                let tokens = syntax::syntax_tokens_for_line_shared(text, language, syntax_mode);
+                match highlight_palette {
+                    Some(palette) => {
+                        prepared_document_line_highlights_from_tokens_into_with_palette(
+                            palette,
+                            text.len(),
+                            &tokens,
+                            buf,
+                        );
+                    }
+                    None => {
+                        prepared_document_line_highlights_from_tokens_into(
+                            theme,
+                            text.len(),
+                            &tokens,
+                            buf,
+                        );
+                    }
+                }
+            } else {
+                buf.clear();
+            }
+            styled_text_to_cached_from_buf(text, buf)
+        });
+    }
+
+    build_styled_text_fused(
+        theme,
+        FusedDiffTextBuildRequest {
+            build: request,
+            syntax_tokens_override: None,
+        },
+    )
 }
 
 pub(super) enum PreparedDocumentLineStyledText {
@@ -681,10 +1120,48 @@ pub(super) fn build_cached_diff_styled_text_for_prepared_document_line_nonblocki
     word_color: Option<gpui::Rgba>,
     prepared_line: PreparedDiffSyntaxLine,
 ) -> PreparedDocumentLineStyledText {
+    build_cached_diff_styled_text_for_prepared_document_line_nonblocking_with_optional_palette(
+        theme,
+        None,
+        PreparedDiffTextBuildRequest {
+            build: DiffTextBuildRequest {
+                text,
+                word_ranges,
+                query,
+                syntax,
+                word_color,
+            },
+            prepared_line,
+        },
+    )
+}
+
+pub(super) fn build_cached_diff_styled_text_for_prepared_document_line_nonblocking_with_palette(
+    theme: AppTheme,
+    highlight_palette: &SyntaxHighlightPalette,
+    request: PreparedDiffTextBuildRequest<'_>,
+) -> PreparedDocumentLineStyledText {
+    build_cached_diff_styled_text_for_prepared_document_line_nonblocking_with_optional_palette(
+        theme,
+        Some(highlight_palette),
+        request,
+    )
+}
+
+fn build_cached_diff_styled_text_for_prepared_document_line_nonblocking_with_optional_palette(
+    theme: AppTheme,
+    highlight_palette: Option<&SyntaxHighlightPalette>,
+    request: PreparedDiffTextBuildRequest<'_>,
+) -> PreparedDocumentLineStyledText {
+    let text = request.build.text;
+    let word_ranges = request.build.word_ranges;
+    let query = request.build.query;
+    let word_color = request.build.word_color;
+    let prepared_line = request.prepared_line;
     let DiffSyntaxConfig {
         language,
         mode: syntax_mode,
-    } = syntax;
+    } = request.build.syntax;
     let fallback = |mode| {
         build_cached_diff_styled_text(theme, text, word_ranges, query, language, mode, word_color)
     };
@@ -702,22 +1179,45 @@ pub(super) fn build_cached_diff_styled_text_for_prepared_document_line_nonblocki
         prepared_line.line_ix,
     ) {
         Some(syntax::PreparedSyntaxLineTokensRequest::Ready(tokens)) => {
-            let segments = build_diff_text_segments(
-                text,
-                word_ranges,
-                query,
-                None,
-                DiffSyntaxMode::HeuristicOnly,
-                Some(tokens.as_slice()),
-            );
-            PreparedDocumentLineStyledText::Cacheable(segments_to_cached_styled_text(
-                theme, &segments, word_color,
-            ))
+            let query_trimmed = query.trim();
+            if word_ranges.is_empty() && query_trimmed.is_empty() {
+                let highlights = match highlight_palette {
+                    Some(highlight_palette) => {
+                        prepared_document_line_highlights_from_tokens_with_palette(
+                            highlight_palette,
+                            text.len(),
+                            &tokens,
+                        )
+                    }
+                    None => {
+                        prepared_document_line_highlights_from_tokens(theme, text.len(), &tokens)
+                    }
+                };
+                PreparedDocumentLineStyledText::Cacheable(
+                    build_cached_diff_styled_text_from_owned_relative_highlights(text, highlights),
+                )
+            } else {
+                PreparedDocumentLineStyledText::Cacheable(build_styled_text_fused(
+                    theme,
+                    FusedDiffTextBuildRequest {
+                        build: DiffTextBuildRequest {
+                            text,
+                            word_ranges,
+                            query,
+                            syntax: DiffSyntaxConfig {
+                                language: None,
+                                mode: DiffSyntaxMode::HeuristicOnly,
+                            },
+                            word_color,
+                        },
+                        syntax_tokens_override: Some(&tokens),
+                    },
+                ))
+            }
         }
-        Some(syntax::PreparedSyntaxLineTokensRequest::Pending) => {
+        Some(syntax::PreparedSyntaxLineTokensRequest::Pending) | None => {
             PreparedDocumentLineStyledText::Pending(fallback(DiffSyntaxMode::HeuristicOnly))
         }
-        None => PreparedDocumentLineStyledText::Cacheable(fallback(syntax_mode)),
     }
 }
 
@@ -731,85 +1231,125 @@ pub(super) fn build_cached_diff_query_overlay_styled_text(
         return base.clone();
     }
 
-    let query_ranges = find_all_ascii_case_insensitive(base.text.as_ref(), query);
-    if query_ranges.is_empty() {
-        return base.clone();
+    thread_local! {
+        static QUERY_OVERLAY_RANGES_BUF: RefCell<Vec<Range<usize>>> = const { RefCell::new(Vec::new()) };
+        static QUERY_OVERLAY_BOUNDARY_BUF: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
     }
 
-    let base_highlights = base.highlights.as_ref();
-    let mut boundaries: Vec<usize> =
-        Vec::with_capacity(2 + base_highlights.len() * 2 + query_ranges.len() * 2);
-    boundaries.push(0);
-    boundaries.push(base.text.len());
-    for (range, _) in base_highlights {
-        boundaries.push(range.start.min(base.text.len()));
-        boundaries.push(range.end.min(base.text.len()));
-    }
-    for range in &query_ranges {
-        boundaries.push(range.start.min(base.text.len()));
-        boundaries.push(range.end.min(base.text.len()));
-    }
-    boundaries.sort_unstable();
-    boundaries.dedup();
-
-    let query_bg = with_alpha(theme.colors.accent, if theme.is_dark { 0.22 } else { 0.16 }).into();
-    let mut merged: Vec<(Range<usize>, gpui::HighlightStyle)> =
-        Vec::with_capacity(boundaries.len().saturating_sub(1));
-    let mut base_ix = 0usize;
-    let mut query_ix = 0usize;
-    let default_style = gpui::HighlightStyle::default();
-
-    for window in boundaries.windows(2) {
-        let (a, b) = (window[0], window[1]);
-        if a >= b || a >= base.text.len() {
-            continue;
-        }
-        let b = b.min(base.text.len());
-        if a >= b {
-            continue;
+    QUERY_OVERLAY_RANGES_BUF.with_borrow_mut(|query_ranges| {
+        find_all_ascii_case_insensitive_into(base.text.as_ref(), query, query_ranges);
+        if query_ranges.is_empty() {
+            return base.clone();
         }
 
-        while base_ix < base_highlights.len() && base_highlights[base_ix].0.end <= a {
-            base_ix += 1;
+        let base_highlights = base.highlights.as_ref();
+        let query_bg =
+            with_alpha(theme.colors.accent, if theme.is_dark { 0.22 } else { 0.16 }).into();
+        if base_highlights.is_empty() {
+            let merged = query_ranges
+                .iter()
+                .map(|range| {
+                    (
+                        range.clone(),
+                        gpui::HighlightStyle {
+                            background_color: Some(query_bg),
+                            ..gpui::HighlightStyle::default()
+                        },
+                    )
+                })
+                .collect::<Vec<_>>();
+            let highlights_hash = hash_highlights(&merged);
+            return CachedDiffStyledText {
+                text: base.text.clone(),
+                highlights: Arc::from(merged),
+                highlights_hash,
+                text_hash: base.text_hash,
+            };
         }
-        let base_style = base_highlights
-            .get(base_ix)
-            .filter(|(range, _)| range.start <= a && range.end >= b)
-            .map(|(_, style)| *style);
 
-        while query_ix < query_ranges.len() && query_ranges[query_ix].end <= a {
-            query_ix += 1;
+        let merged = QUERY_OVERLAY_BOUNDARY_BUF.with_borrow_mut(|boundaries| {
+            boundaries.clear();
+            boundaries.push(0);
+            boundaries.push(base.text.len());
+            for (range, _) in base_highlights.iter() {
+                boundaries.push(range.start.min(base.text.len()));
+                boundaries.push(range.end.min(base.text.len()));
+            }
+            for range in query_ranges.iter() {
+                boundaries.push(range.start.min(base.text.len()));
+                boundaries.push(range.end.min(base.text.len()));
+            }
+            boundaries.sort_unstable();
+            boundaries.dedup();
+
+            let mut merged: Vec<(Range<usize>, gpui::HighlightStyle)> =
+                Vec::with_capacity(boundaries.len().saturating_sub(1));
+            let mut base_ix = 0usize;
+            let mut query_ix = 0usize;
+            let default_style = gpui::HighlightStyle::default();
+
+            for window in boundaries.windows(2) {
+                let (a, b) = (window[0], window[1]);
+                if a >= b || a >= base.text.len() {
+                    continue;
+                }
+                let b = b.min(base.text.len());
+                if a >= b {
+                    continue;
+                }
+
+                while base_ix < base_highlights.len() && base_highlights[base_ix].0.end <= a {
+                    base_ix += 1;
+                }
+                let base_style = base_highlights
+                    .get(base_ix)
+                    .filter(|(range, _)| range.start <= a && range.end >= b)
+                    .map(|(_, style)| *style);
+
+                while query_ix < query_ranges.len() && query_ranges[query_ix].end <= a {
+                    query_ix += 1;
+                }
+                let in_query = query_ranges
+                    .get(query_ix)
+                    .is_some_and(|range| range.start <= a && range.end >= b);
+
+                let mut style = base_style.unwrap_or_default();
+                if in_query {
+                    style.background_color = Some(query_bg);
+                }
+
+                if style != default_style {
+                    if let Some(last) = merged.last_mut()
+                        && last.0.end == a
+                        && last.1 == style
+                    {
+                        last.0.end = b;
+                        continue;
+                    }
+                    merged.push((a..b, style));
+                }
+            }
+
+            merged
+        });
+
+        if merged.is_empty() {
+            return CachedDiffStyledText {
+                text: base.text.clone(),
+                highlights: empty_highlights(),
+                highlights_hash: 0,
+                text_hash: base.text_hash,
+            };
         }
-        let in_query = query_ranges
-            .get(query_ix)
-            .is_some_and(|range| range.start <= a && range.end >= b);
 
-        let mut style = base_style.unwrap_or_default();
-        if in_query {
-            style.background_color = Some(query_bg);
-        }
-
-        if style != default_style {
-            merged.push((a..b, style));
-        }
-    }
-
-    if merged.is_empty() {
-        return CachedDiffStyledText {
+        let highlights_hash = hash_highlights(&merged);
+        CachedDiffStyledText {
             text: base.text.clone(),
-            highlights: empty_highlights(),
-            highlights_hash: 0,
+            highlights: Arc::from(merged),
+            highlights_hash,
             text_hash: base.text_hash,
-        };
-    }
-
-    let highlights_hash = hash_highlights(&merged);
-    CachedDiffStyledText {
-        text: base.text.clone(),
-        highlights: Arc::new(merged),
-        highlights_hash,
-        text_hash: base.text_hash,
-    }
+        }
+    })
 }
 
 fn hash_highlights(highlights: &[(Range<usize>, gpui::HighlightStyle)]) -> u64 {
@@ -1004,35 +1544,129 @@ fn prepared_document_line_highlights_from_tokens(
     line_len: usize,
     tokens: &[syntax::SyntaxToken],
 ) -> Vec<(Range<usize>, gpui::HighlightStyle)> {
-    tokens
-        .iter()
-        .filter_map(|token| {
-            let style = syntax_highlight_style(theme, token.kind)?;
-            if token.range.start >= token.range.end || token.range.start >= line_len {
-                return None;
-            }
-            let end = token.range.end.min(line_len);
-            (token.range.start < end).then_some((token.range.start..end, style))
-        })
-        .collect()
+    let mut highlights = Vec::with_capacity(tokens.len());
+    prepared_document_line_highlights_from_tokens_into(theme, line_len, tokens, &mut highlights);
+    highlights
 }
 
-fn push_clipped_absolute_line_highlights(
+fn prepared_document_line_highlights_from_tokens_with_palette(
+    highlight_palette: &SyntaxHighlightPalette,
+    line_len: usize,
+    tokens: &[syntax::SyntaxToken],
+) -> Vec<(Range<usize>, gpui::HighlightStyle)> {
+    let mut highlights = Vec::with_capacity(tokens.len());
+    prepared_document_line_highlights_from_tokens_into_with_palette(
+        highlight_palette,
+        line_len,
+        tokens,
+        &mut highlights,
+    );
+    highlights
+}
+
+fn prepared_document_line_highlights_from_tokens_into(
+    theme: AppTheme,
+    line_len: usize,
+    tokens: &[syntax::SyntaxToken],
     highlights: &mut Vec<(Range<usize>, gpui::HighlightStyle)>,
+) {
+    highlights.clear();
+    if tokens.is_empty() {
+        return;
+    }
+    let additional = tokens.len().saturating_sub(highlights.capacity());
+    if additional > 0 {
+        highlights.reserve(additional);
+    }
+    for token in tokens {
+        if let Some((range, style)) = prepared_document_highlight_from_token(theme, line_len, token)
+        {
+            highlights.push((range, style));
+        }
+    }
+}
+
+fn prepared_document_line_highlights_from_tokens_into_with_palette(
+    highlight_palette: &SyntaxHighlightPalette,
+    line_len: usize,
+    tokens: &[syntax::SyntaxToken],
+    highlights: &mut Vec<(Range<usize>, gpui::HighlightStyle)>,
+) {
+    highlights.clear();
+    if tokens.is_empty() {
+        return;
+    }
+    let additional = tokens.len().saturating_sub(highlights.capacity());
+    if additional > 0 {
+        highlights.reserve(additional);
+    }
+    for token in tokens {
+        if let Some((range, style)) =
+            prepared_document_highlight_from_token_with_palette(highlight_palette, line_len, token)
+        {
+            highlights.push((range, style));
+        }
+    }
+}
+
+fn prepared_document_highlight_from_token(
+    theme: AppTheme,
+    line_len: usize,
+    token: &syntax::SyntaxToken,
+) -> Option<(Range<usize>, gpui::HighlightStyle)> {
+    prepared_document_highlight_from_token_with_style(
+        line_len,
+        token,
+        syntax_highlight_style(theme, token.kind),
+    )
+}
+
+fn prepared_document_highlight_from_token_with_palette(
+    highlight_palette: &SyntaxHighlightPalette,
+    line_len: usize,
+    token: &syntax::SyntaxToken,
+) -> Option<(Range<usize>, gpui::HighlightStyle)> {
+    prepared_document_highlight_from_token_with_style(
+        line_len,
+        token,
+        highlight_palette.style(token.kind),
+    )
+}
+
+fn prepared_document_highlight_from_token_with_style(
+    line_len: usize,
+    token: &syntax::SyntaxToken,
+    style: Option<gpui::HighlightStyle>,
+) -> Option<(Range<usize>, gpui::HighlightStyle)> {
+    let style = style?;
+    if token.range.start >= token.range.end || token.range.start >= line_len {
+        return None;
+    }
+    let end = token.range.end.min(line_len);
+    (token.range.start < end).then_some((token.range.start..end, style))
+}
+
+fn push_clipped_absolute_prepared_document_token_highlights(
+    highlights: &mut Vec<(Range<usize>, gpui::HighlightStyle)>,
+    theme: AppTheme,
     line_start: usize,
     line_end: usize,
     clamped_range: &Range<usize>,
-    line_highlights: &[(Range<usize>, gpui::HighlightStyle)],
+    tokens: &[syntax::SyntaxToken],
 ) {
-    for (range, style) in line_highlights {
-        clip_and_push_line_highlight(
-            highlights,
-            line_start,
-            line_end,
-            clamped_range,
-            range.clone(),
-            *style,
-        );
+    let line_len = line_end.saturating_sub(line_start);
+    for token in tokens {
+        if let Some((range, style)) = prepared_document_highlight_from_token(theme, line_len, token)
+        {
+            clip_and_push_line_highlight(
+                highlights,
+                line_start,
+                line_end,
+                clamped_range,
+                range,
+                style,
+            );
+        }
     }
 }
 
@@ -1060,7 +1694,7 @@ pub(in crate::view) fn syntax_highlights_for_line(
     }
 
     let _syntax_scope = perf::span(ViewPerfSpan::SyntaxHighlighting);
-    let tokens = syntax::syntax_tokens_for_line(text, language, syntax_mode);
+    let tokens = syntax::syntax_tokens_for_line_shared(text, language, syntax_mode);
     prepared_document_line_highlights_from_tokens(theme, text.len(), &tokens)
 }
 
@@ -1087,17 +1721,13 @@ pub(in crate::view) fn syntax_highlights_for_prepared_document_byte_range(
     for line_ix in line_range {
         let (line_start, line_end) = line_byte_bounds(text, line_starts, line_ix);
         let tokens = syntax::syntax_tokens_for_prepared_document_line(document.inner, line_ix)?;
-        let line_hl = prepared_document_line_highlights_from_tokens(
-            theme,
-            line_end.saturating_sub(line_start),
-            tokens.as_slice(),
-        );
-        push_clipped_absolute_line_highlights(
+        push_clipped_absolute_prepared_document_token_highlights(
             &mut highlights,
+            theme,
             line_start,
             line_end,
             &clamped_range,
-            &line_hl,
+            &tokens,
         );
     }
 
@@ -1125,28 +1755,32 @@ pub(in crate::view) fn request_syntax_highlights_for_prepared_document_line_rang
     let mut line_highlights = Vec::with_capacity(clamped_range.len());
     for line_ix in clamped_range {
         let (line_start, line_end) = line_byte_bounds(text, line_starts, line_ix);
-        match syntax::request_syntax_tokens_for_prepared_document_line(document.inner, line_ix)? {
-            syntax::PreparedSyntaxLineTokensRequest::Ready(tokens) => {
+        match syntax::request_syntax_tokens_for_prepared_document_line(document.inner, line_ix) {
+            Some(syntax::PreparedSyntaxLineTokensRequest::Ready(tokens)) => {
                 line_highlights.push(PreparedDocumentLineHighlights {
                     line_ix,
                     highlights: prepared_document_line_highlights_from_tokens(
                         theme,
                         line_end.saturating_sub(line_start),
-                        tokens.as_slice(),
+                        &tokens,
                     ),
                     pending: false,
                 });
             }
-            syntax::PreparedSyntaxLineTokensRequest::Pending => {
+            Some(syntax::PreparedSyntaxLineTokensRequest::Pending) | None => {
                 let line_text = &text[line_start..line_end];
+                let highlights = HEURISTIC_TOKEN_BUF.with(|buf| {
+                    let tokens = &mut *buf.borrow_mut();
+                    syntax::syntax_tokens_for_line_heuristic_into(line_text, language, tokens);
+                    prepared_document_line_highlights_from_tokens(
+                        theme,
+                        line_end.saturating_sub(line_start),
+                        tokens,
+                    )
+                });
                 line_highlights.push(PreparedDocumentLineHighlights {
                     line_ix,
-                    highlights: syntax_highlights_for_line(
-                        theme,
-                        line_text,
-                        language,
-                        DiffSyntaxMode::HeuristicOnly,
-                    ),
+                    highlights,
                     pending: true,
                 });
             }
@@ -1154,6 +1788,10 @@ pub(in crate::view) fn request_syntax_highlights_for_prepared_document_line_rang
     }
 
     Some(line_highlights)
+}
+
+thread_local! {
+    static HEURISTIC_TOKEN_BUF: RefCell<Vec<syntax::SyntaxToken>> = const { RefCell::new(Vec::new()) };
 }
 
 pub(in crate::view) fn request_syntax_highlights_for_prepared_document_byte_range(
@@ -1179,37 +1817,32 @@ pub(in crate::view) fn request_syntax_highlights_for_prepared_document_byte_rang
     let mut pending = false;
     for line_ix in line_range {
         let (line_start, line_end) = line_byte_bounds(text, line_starts, line_ix);
-        match syntax::request_syntax_tokens_for_prepared_document_line(document.inner, line_ix)? {
-            syntax::PreparedSyntaxLineTokensRequest::Ready(tokens) => {
-                let line_hl = prepared_document_line_highlights_from_tokens(
-                    theme,
-                    line_end.saturating_sub(line_start),
-                    tokens.as_slice(),
-                );
-                push_clipped_absolute_line_highlights(
+        match syntax::request_syntax_tokens_for_prepared_document_line(document.inner, line_ix) {
+            Some(syntax::PreparedSyntaxLineTokensRequest::Ready(tokens)) => {
+                push_clipped_absolute_prepared_document_token_highlights(
                     &mut highlights,
+                    theme,
                     line_start,
                     line_end,
                     &clamped_range,
-                    &line_hl,
+                    &tokens,
                 );
             }
-            syntax::PreparedSyntaxLineTokensRequest::Pending => {
+            Some(syntax::PreparedSyntaxLineTokensRequest::Pending) | None => {
                 pending = true;
                 let line_text = &text[line_start..line_end];
-                let line_hl = syntax_highlights_for_line(
-                    theme,
-                    line_text,
-                    language,
-                    DiffSyntaxMode::HeuristicOnly,
-                );
-                push_clipped_absolute_line_highlights(
-                    &mut highlights,
-                    line_start,
-                    line_end,
-                    &clamped_range,
-                    &line_hl,
-                );
+                HEURISTIC_TOKEN_BUF.with(|buf| {
+                    let tokens = &mut *buf.borrow_mut();
+                    syntax::syntax_tokens_for_line_heuristic_into(line_text, language, tokens);
+                    push_clipped_absolute_prepared_document_token_highlights(
+                        &mut highlights,
+                        theme,
+                        line_start,
+                        line_end,
+                        &clamped_range,
+                        tokens,
+                    );
+                });
             }
         }
     }
@@ -1220,6 +1853,7 @@ pub(in crate::view) fn request_syntax_highlights_for_prepared_document_byte_rang
     })
 }
 
+#[allow(dead_code)]
 fn styled_text_for_diff_segments(
     theme: AppTheme,
     segments: &[CachedDiffTextSegment],
@@ -1266,40 +1900,63 @@ fn styled_text_for_diff_segments(
 }
 
 fn find_all_ascii_case_insensitive(haystack: &str, needle: &str) -> Vec<Range<usize>> {
+    let mut out = Vec::new();
+    find_all_ascii_case_insensitive_into(haystack, needle, &mut out);
+    out
+}
+
+fn find_all_ascii_case_insensitive_into(haystack: &str, needle: &str, out: &mut Vec<Range<usize>>) {
     const MAX_MATCHES: usize = 64;
+    out.clear();
 
     let needle_bytes = needle.as_bytes();
-    if needle_bytes.is_empty() {
-        return Vec::new();
-    }
+    let Some((&first, &last)) = needle_bytes.first().zip(needle_bytes.last()) else {
+        return;
+    };
 
     let haystack_bytes = haystack.as_bytes();
     if needle_bytes.len() > haystack_bytes.len() {
-        return Vec::new();
+        return;
     }
 
-    let max_possible = haystack_bytes.len() / needle_bytes.len().max(1);
-    let mut out = Vec::with_capacity(MAX_MATCHES.min(max_possible));
-    let mut start = 0usize;
-    while start + needle_bytes.len() <= haystack_bytes.len() && out.len() < MAX_MATCHES {
-        let mut matched = true;
-        for (offset, needle_byte) in needle_bytes.iter().copied().enumerate() {
-            let haystack_byte = haystack_bytes[start + offset];
-            if !haystack_byte.eq_ignore_ascii_case(&needle_byte) {
-                matched = false;
-                break;
+    let needle_len = needle_bytes.len();
+    let first_lower = first.to_ascii_lowercase();
+    let first_upper = first.to_ascii_uppercase();
+    if needle_len == 1 {
+        for start in memchr2_iter(first_lower, first_upper, haystack_bytes).take(MAX_MATCHES) {
+            out.push(start..(start + 1));
+        }
+        return;
+    }
+
+    let last_start = haystack_bytes.len() - needle_len;
+    let middle = &needle_bytes[1..needle_len - 1];
+    let last_lower = last.to_ascii_lowercase();
+    let last_upper = last.to_ascii_uppercase();
+    let mut next_allowed_start = 0usize;
+    'candidate: for start in memchr2_iter(first_lower, first_upper, &haystack_bytes[..=last_start])
+    {
+        if start < next_allowed_start {
+            continue;
+        }
+
+        let haystack_last = haystack_bytes[start + needle_len - 1];
+        if haystack_last != last_lower && haystack_last != last_upper {
+            continue;
+        }
+
+        for (offset, needle_byte) in middle.iter().copied().enumerate() {
+            if !haystack_bytes[start + offset + 1].eq_ignore_ascii_case(&needle_byte) {
+                continue 'candidate;
             }
         }
 
-        if matched {
-            out.push(start..(start + needle_bytes.len()));
-            start = start.saturating_add(needle_bytes.len().max(1));
-        } else {
-            start = start.saturating_add(1);
+        out.push(start..(start + needle_len));
+        if out.len() == MAX_MATCHES {
+            break;
         }
+        next_allowed_start = start + needle_len;
     }
-
-    out
 }
 
 pub(super) fn diff_line_colors(
@@ -1570,6 +2227,219 @@ mod tests {
     }
 
     #[test]
+    fn syntax_highlight_palette_matches_direct_styles() {
+        let theme = AppTheme::zed_ayu_dark();
+        let palette = syntax_highlight_palette(theme);
+
+        for kind in SYNTAX_HIGHLIGHT_STYLE_KINDS {
+            let direct = syntax_highlight_style(theme, kind);
+            let cached = palette.style(kind);
+            assert_eq!(
+                cached.is_some(),
+                direct.is_some(),
+                "style presence mismatch for {kind:?}"
+            );
+            if let (Some(cached), Some(direct)) = (cached, direct) {
+                assert_eq!(cached.color, direct.color, "color mismatch for {kind:?}");
+                assert_eq!(
+                    cached.background_color, direct.background_color,
+                    "background mismatch for {kind:?}"
+                );
+                assert_eq!(
+                    cached.font_style, direct.font_style,
+                    "font_style mismatch for {kind:?}"
+                );
+                assert_eq!(
+                    cached.font_weight, direct.font_weight,
+                    "font_weight mismatch for {kind:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn prepared_yaml_fast_path_matches_legacy_segment_builder_for_real_diff_lines() {
+        let theme = AppTheme::zed_ayu_dark();
+        let text = concat!(
+            "name: Deployment CI\n",
+            "\n",
+            "on:\n",
+            "  pull_request:\n",
+            "    branches: [\"main\"]\n",
+            "    paths:\n",
+            "      - \".github/workflows/build-release-artifacts.yml\"\n",
+            "      - \".github/workflows/deploy-aur.yml\"\n",
+            "      - \".github/workflows/deploy-homebrew-tap.yml\"\n",
+            "      - \".github/workflows/deploy-apt-repo.yml\"\n",
+            "      - \".github/workflows/release-manual-main.yml\"\n",
+            "      - \"scripts/update-aur.sh\"\n",
+            "      - \"scripts/package-macos.sh\"\n",
+            "      - \"scripts/macos-cargo-config.sh\"\n",
+            "      - \"scripts/generate-homebrew-formula.sh\"\n",
+            "      - \"scripts/generate-homebrew-cask.sh\"\n",
+            "      - \"scripts/build-apt-repo.sh\"\n",
+            "      - \"scripts/windows/verify-signed-artifact.ps1\"\n",
+            "  push:\n",
+            "    branches: [\"main\"]\n",
+            "    paths:\n",
+            "      - \".github/workflows/build-release-artifacts.yml\"\n",
+            "      - \".github/workflows/deploy-aur.yml\"\n",
+            "      - \".github/workflows/deploy-homebrew-tap.yml\"\n",
+            "      - \".github/workflows/deploy-apt-repo.yml\"\n",
+            "      - \".github/workflows/release-manual-main.yml\"\n",
+            "      - \"scripts/update-aur.sh\"\n",
+            "      - \"scripts/package-macos.sh\"\n",
+            "      - \"scripts/macos-cargo-config.sh\"\n",
+            "      - \"scripts/generate-homebrew-formula.sh\"\n",
+            "      - \"scripts/generate-homebrew-cask.sh\"\n",
+            "      - \"scripts/build-apt-repo.sh\"\n",
+            "      - \"scripts/windows/verify-signed-artifact.ps1\"\n",
+            "  workflow_dispatch:\n",
+            "\n",
+            "permissions:\n",
+            "  contents: read\n",
+            "\n",
+            "env:\n",
+            "  CARGO_TERM_COLOR: always\n",
+        );
+        let lines: Vec<&str> = text.lines().collect();
+        let document = prepare_test_document(DiffSyntaxLanguage::Yaml, text);
+        let line_ixs = [
+            16usize, 17, 18, 21, 23, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35,
+        ];
+
+        for line_ix in line_ixs {
+            let line_text = lines[line_ix];
+            let tokens = syntax::syntax_tokens_for_prepared_document_line(document.inner, line_ix)
+                .unwrap_or_else(|| panic!("prepared YAML line {line_ix} should be available"));
+
+            let current = match build_cached_diff_styled_text_for_prepared_document_line_nonblocking(
+                theme,
+                line_text,
+                &[],
+                "",
+                DiffSyntaxConfig {
+                    language: Some(DiffSyntaxLanguage::Yaml),
+                    mode: DiffSyntaxMode::Auto,
+                },
+                None,
+                PreparedDiffSyntaxLine {
+                    document: Some(document),
+                    line_ix,
+                },
+            ) {
+                PreparedDocumentLineStyledText::Cacheable(styled) => styled,
+                PreparedDocumentLineStyledText::Pending(_) => {
+                    panic!("prepared YAML line {line_ix} should not still be pending")
+                }
+            };
+
+            let legacy = segments_to_cached_styled_text(
+                theme,
+                &build_diff_text_segments(
+                    line_text,
+                    &[],
+                    "",
+                    None,
+                    DiffSyntaxMode::HeuristicOnly,
+                    Some(tokens.as_ref()),
+                ),
+                None,
+            );
+
+            assert_eq!(
+                current.text.as_ref(),
+                legacy.text.as_ref(),
+                "text mismatch for YAML line {line_ix}: {line_text:?}",
+            );
+            assert_eq!(
+                current.highlights.as_ref(),
+                legacy.highlights.as_ref(),
+                "highlight mismatch for YAML line {line_ix}: {line_text:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn heuristic_yaml_highlights_match_prepared_document_for_real_diff_lines() {
+        let theme = AppTheme::zed_ayu_dark();
+        let text = concat!(
+            "name: Deployment CI\n",
+            "\n",
+            "on:\n",
+            "  pull_request:\n",
+            "    branches: [\"main\"]\n",
+            "    paths:\n",
+            "      - \".github/workflows/build-release-artifacts.yml\"\n",
+            "      - \".github/workflows/deploy-aur.yml\"\n",
+            "      - \".github/workflows/deploy-homebrew-tap.yml\"\n",
+            "      - \".github/workflows/deploy-apt-repo.yml\"\n",
+            "      - \".github/workflows/release-manual-main.yml\"\n",
+            "      - \"scripts/update-aur.sh\"\n",
+            "      - \"scripts/package-macos.sh\"\n",
+            "      - \"scripts/macos-cargo-config.sh\"\n",
+            "      - \"scripts/generate-homebrew-formula.sh\"\n",
+            "      - \"scripts/generate-homebrew-cask.sh\"\n",
+            "      - \"scripts/build-apt-repo.sh\"\n",
+            "      - \"scripts/windows/verify-signed-artifact.ps1\"\n",
+            "  push:\n",
+            "    branches: [\"main\"]\n",
+            "    paths:\n",
+            "      - \".github/workflows/build-release-artifacts.yml\"\n",
+            "      - \".github/workflows/deploy-aur.yml\"\n",
+            "      - \".github/workflows/deploy-homebrew-tap.yml\"\n",
+            "      - \".github/workflows/deploy-apt-repo.yml\"\n",
+            "      - \".github/workflows/release-manual-main.yml\"\n",
+            "      - \"scripts/update-aur.sh\"\n",
+            "      - \"scripts/package-macos.sh\"\n",
+            "      - \"scripts/macos-cargo-config.sh\"\n",
+            "      - \"scripts/generate-homebrew-formula.sh\"\n",
+            "      - \"scripts/generate-homebrew-cask.sh\"\n",
+            "      - \"scripts/build-apt-repo.sh\"\n",
+            "      - \"scripts/windows/verify-signed-artifact.ps1\"\n",
+            "  workflow_dispatch:\n",
+            "\n",
+            "permissions:\n",
+            "  contents: read\n",
+            "\n",
+            "env:\n",
+            "  CARGO_TERM_COLOR: always\n",
+        );
+        let lines: Vec<&str> = text.lines().collect();
+        let document = prepare_test_document(DiffSyntaxLanguage::Yaml, text);
+        let line_ixs = [
+            16usize, 17, 18, 21, 23, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35,
+        ];
+
+        for line_ix in line_ixs {
+            let line_text = lines[line_ix];
+            let tokens = syntax::syntax_tokens_for_prepared_document_line(document.inner, line_ix)
+                .unwrap_or_else(|| panic!("prepared YAML line {line_ix} should be available"));
+            let prepared =
+                prepared_document_line_highlights_from_tokens(theme, line_text.len(), &tokens)
+                    .into_iter()
+                    .filter(|(_, style)| style.background_color.is_none())
+                    .map(|(range, style)| (range, style.color))
+                    .collect::<Vec<_>>();
+            let heuristic = syntax_highlights_for_line(
+                theme,
+                line_text,
+                DiffSyntaxLanguage::Yaml,
+                DiffSyntaxMode::HeuristicOnly,
+            )
+            .into_iter()
+            .filter(|(_, style)| style.background_color.is_none())
+            .map(|(range, style)| (range, style.color))
+            .collect::<Vec<_>>();
+
+            assert_eq!(
+                heuristic, prepared,
+                "heuristic YAML highlighting should match prepared document highlighting for line {line_ix}: {line_text:?}",
+            );
+        }
+    }
+
+    #[test]
     fn cached_styled_text_from_relative_highlights_expands_tabs_and_remaps_ranges() {
         let style = gpui::HighlightStyle {
             color: Some(gpui::hsla(0.33, 1.0, 0.5, 1.0)),
@@ -1625,6 +2495,29 @@ mod tests {
         assert_eq!(styled.highlights.len(), 2);
         assert_eq!(styled.highlights[0].0, 0..3);
         assert_eq!(styled.highlights[1].0, 8..9);
+    }
+
+    #[test]
+    fn cached_styled_text_syntax_only_expands_tabs_without_segment_build() {
+        let theme = AppTheme::zed_ayu_dark();
+        let styled = build_cached_diff_styled_text(
+            theme,
+            "\tlet value = 42;",
+            &[],
+            "",
+            Some(DiffSyntaxLanguage::Rust),
+            DiffSyntaxMode::HeuristicOnly,
+            None,
+        );
+
+        assert_eq!(styled.text.as_ref(), "    let value = 42;");
+        assert!(styled.highlights.iter().any(|(range, _)| *range == (4..7)));
+        assert!(
+            styled
+                .highlights
+                .iter()
+                .any(|(range, _)| *range == (16..18))
+        );
     }
 
     #[test]
@@ -2160,7 +3053,7 @@ mod tests {
         };
         let base = CachedDiffStyledText {
             text,
-            highlights: Arc::new(vec![(0..6, style)]),
+            highlights: Arc::from(vec![(0..6, style)]),
             highlights_hash: 42,
             text_hash,
         };
@@ -2187,7 +3080,7 @@ mod tests {
         };
         let base = CachedDiffStyledText {
             text,
-            highlights: Arc::new(vec![(0..6, style)]),
+            highlights: Arc::from(vec![(0..6, style)]),
             highlights_hash: 7,
             text_hash,
         };

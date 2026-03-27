@@ -1,4 +1,5 @@
 use super::send_diagnostics::{SendFailureKind, send_or_log};
+use gitcomet_core::mergetool_trace;
 use std::sync::{Arc, mpsc};
 use std::thread;
 
@@ -42,9 +43,15 @@ impl TaskExecutor {
     }
 
     pub(super) fn spawn(&self, task: impl FnOnce() + Send + 'static) {
+        let mergetool_trace_context = mergetool_trace::current_capture_context();
         send_or_log(
             &self.tx,
-            Box::new(task),
+            Box::new(move || {
+                let _mergetool_trace = mergetool_trace_context
+                    .as_ref()
+                    .map(mergetool_trace::attach_capture);
+                task();
+            }),
             SendFailureKind::ExecutorQueue,
             "TaskExecutor::spawn",
         );

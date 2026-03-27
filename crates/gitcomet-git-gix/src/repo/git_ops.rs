@@ -1,9 +1,11 @@
-use super::GixRepo;
+use super::{BranchTrackingConfigCacheEntry, GixRepo, RepoFileStamp, oid_to_arc_str};
 use crate::util::{bytes_to_text_preserving_utf8, run_git_raw_output};
 use gitcomet_core::domain::{Branch, CommitId, Upstream, UpstreamDivergence};
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::Result;
 use gix::bstr::ByteSlice as _;
+use rustc_hash::FxHashMap as HashMap;
+use std::path::Path;
 use std::process::Output;
 
 pub(super) fn head_upstream_divergence(
@@ -36,10 +38,48 @@ impl GixRepo {
         })
     }
 
-    pub(super) fn list_branches_impl(&self) -> Result<Vec<Branch>> {
-        // Upstream tracking is config-driven (`branch.*`) and can change while the backend stays
-        // open, e.g. after `push -u`. Re-open for a fresh config snapshot before reading refs.
+    fn branch_tracking_config_present(&self) -> Result<bool> {
+        let repo = self._repo.to_thread_local();
+        let local_config = repo_file_stamp(repo.common_dir().join("config").as_path());
+        let worktree_config = repo_file_stamp(repo.git_dir().join("config.worktree").as_path());
+
+        {
+            let cache = self
+                .branch_tracking_config
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if let Some(cached) = cache.as_ref().filter(|cached| {
+                cached.local_config == local_config && cached.worktree_config == worktree_config
+            }) {
+                return Ok(cached.has_branch_sections);
+            }
+        }
+
         let repo = self.reopen_repo()?;
+        let has_branch_sections = repo_has_branch_tracking_config(&repo);
+
+        *self
+            .branch_tracking_config
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+            Some(BranchTrackingConfigCacheEntry {
+                local_config,
+                worktree_config,
+                has_branch_sections,
+            });
+        Ok(has_branch_sections)
+    }
+
+    pub(super) fn list_branches_impl(&self) -> Result<Vec<Branch>> {
+        let has_branch_tracking = self.branch_tracking_config_present()?;
+        let repo = if has_branch_tracking {
+            // Upstream tracking is config-driven (`branch.*`) and can change while the backend
+            // stays open, e.g. after `push -u`. Re-open only while those sections exist so branch
+            // listing reflects config edits without paying the reopen cost for ref-only repos.
+            self.reopen_repo()?
+        } else {
+            self._repo.to_thread_local()
+        };
         let refs = repo
             .references()
             .map_err(|e| Error::new(ErrorKind::Backend(format!("gix references: {e}"))))?;
@@ -47,31 +87,47 @@ impl GixRepo {
             .local_branches()
             .map_err(|e| Error::new(ErrorKind::Backend(format!("gix local_branches: {e}"))))?;
 
-        let mut branches = Vec::new();
+        let (branch_count_lower_bound, _) = iter.size_hint();
+        let mut branches = Vec::with_capacity(branch_count_lower_bound);
+        let mut target_ids = HashMap::default();
+        let mut needs_sort = false;
         for reference in iter {
             let mut reference = reference
                 .map_err(|e| Error::new(ErrorKind::Backend(format!("gix ref iter: {e}"))))?;
-            let name = reference.name().shorten().to_str_lossy().into_owned();
-
-            let target = match reference.try_id() {
+            let target_id = match reference.try_id() {
                 Some(id) => id.detach(),
                 None => reference
                     .peel_to_id()
                     .map_err(|e| Error::new(ErrorKind::Backend(format!("gix peel branch: {e}"))))?
                     .detach(),
             };
+            let name = reference.name().shorten().to_str_lossy().into_owned();
+            let target = cached_commit_id(&mut target_ids, target_id);
 
-            let (upstream, divergence) = branch_upstream_and_divergence(&repo, &reference, target)?;
+            let (upstream, divergence) = if has_branch_tracking {
+                branch_upstream_and_divergence(&repo, &reference, target_id)?
+            } else {
+                (None, None)
+            };
+
+            if branches
+                .last()
+                .is_some_and(|branch: &Branch| branch.name.as_str() > name.as_str())
+            {
+                needs_sort = true;
+            }
 
             branches.push(Branch {
                 name,
-                target: CommitId(target.to_string().into()),
+                target,
                 upstream,
                 divergence,
             });
         }
 
-        branches.sort_by(|a, b| a.name.cmp(&b.name));
+        if needs_sort {
+            branches.sort_unstable_by(|a, b| a.name.cmp(&b.name));
+        }
         Ok(branches)
     }
 
@@ -145,6 +201,37 @@ fn parse_upstream_short(s: &str) -> Option<Upstream> {
         remote: remote.to_string(),
         branch: branch.to_string(),
     })
+}
+
+fn repo_file_stamp(path: &Path) -> RepoFileStamp {
+    match std::fs::metadata(path) {
+        Ok(metadata) => RepoFileStamp {
+            exists: true,
+            len: metadata.len(),
+            modified: metadata.modified().ok(),
+        },
+        Err(_) => RepoFileStamp::default(),
+    }
+}
+
+fn repo_has_branch_tracking_config(repo: &gix::Repository) -> bool {
+    repo.config_snapshot()
+        .plumbing()
+        .sections_by_name("branch")
+        .is_some_and(|mut sections| sections.next().is_some())
+}
+
+fn cached_commit_id(
+    cache: &mut HashMap<gix::ObjectId, CommitId>,
+    target_id: gix::ObjectId,
+) -> CommitId {
+    if let Some(commit_id) = cache.get(&target_id) {
+        return commit_id.clone();
+    }
+
+    let commit_id = CommitId(oid_to_arc_str(&target_id));
+    cache.insert(target_id, commit_id.clone());
+    commit_id
 }
 
 fn count_unique_commits(

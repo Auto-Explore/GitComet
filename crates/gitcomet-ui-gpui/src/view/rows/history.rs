@@ -43,6 +43,7 @@ impl MainPaneView {
         let language = this.worktree_preview_syntax_language;
         let syntax_document = this.worktree_preview_prepared_syntax_document();
         let syntax_mode = syntax_mode_for_prepared_document(syntax_document);
+        let highlight_palette = syntax_highlight_palette(theme);
 
         let bar_color = worktree_preview_bar_color(this, theme);
 
@@ -53,19 +54,24 @@ impl MainPaneView {
                 let mut pending_styled = None;
                 if this.worktree_preview_segments_cache_get(ix).is_none() {
                     let (styled, is_pending) =
-                        build_cached_diff_styled_text_for_prepared_document_line_nonblocking(
+                        build_cached_diff_styled_text_for_prepared_document_line_nonblocking_with_palette(
                             theme,
-                            line,
-                            &[],
-                            query.as_ref(),
-                            DiffSyntaxConfig {
-                                language,
-                                mode: syntax_mode,
-                            },
-                            None,
-                            PreparedDiffSyntaxLine {
-                                document: syntax_document,
-                                line_ix: ix,
+                            &highlight_palette,
+                            PreparedDiffTextBuildRequest {
+                                build: DiffTextBuildRequest {
+                                    text: line,
+                                    word_ranges: &[],
+                                    query: query.as_ref(),
+                                    syntax: DiffSyntaxConfig {
+                                        language,
+                                        mode: syntax_mode,
+                                    },
+                                    word_color: None,
+                                },
+                                prepared_line: PreparedDiffSyntaxLine {
+                                    document: syntax_document,
+                                    line_ix: ix,
+                                },
                             },
                         )
                         .into_parts();
@@ -391,9 +397,8 @@ fn markdown_preview_row_element(
     let row_layout = markdown_preview_row_layout(row);
     let typography =
         markdown_preview_row_typography(theme, row, context.editor_font_family.as_str());
-    let (display, highlights) = markdown_preview_display_and_highlights(theme, row);
+    let styled = markdown_preview_row_styled_text(theme, row);
     let horizontal_padding = markdown_preview_row_horizontal_padding(row);
-    let row_text = row.text.clone();
 
     let mut content = div()
         .relative()
@@ -429,10 +434,13 @@ fn markdown_preview_row_element(
                     view,
                     visible_ix: row_ix,
                     region: text_region,
-                    text: row_text.clone(),
+                    text: row.text.clone(),
                 }),
         );
     }
+
+    let marker = markdown_preview_row_marker(row);
+    let alert_title = markdown_preview_alert_title_label(row);
 
     let body = match row.kind {
         MarkdownPreviewRowKind::ThematicBreak => div()
@@ -447,12 +455,29 @@ fn markdown_preview_row_element(
                 if theme.is_dark { 0.92 } else { 0.88 },
             )))
             .into_any_element(),
-        _ => {
-            let text = if highlights.is_empty() {
-                content.child(display).into_any_element()
+        _ if marker.is_none() && alert_title.is_none() => {
+            // Fast path: no marker or alert badge — use content div directly
+            // as body, skipping the intermediate line wrapper div.
+            if styled.highlights.is_empty() {
+                content.child(styled.text.clone()).into_any_element()
             } else {
                 content
-                    .child(gpui::StyledText::new(display).with_highlights(highlights))
+                    .child(
+                        gpui::StyledText::new(styled.text.clone())
+                            .with_highlights(styled.highlights.iter().cloned()),
+                    )
+                    .into_any_element()
+            }
+        }
+        _ => {
+            let text = if styled.highlights.is_empty() {
+                content.child(styled.text.clone()).into_any_element()
+            } else {
+                content
+                    .child(
+                        gpui::StyledText::new(styled.text.clone())
+                            .with_highlights(styled.highlights.iter().cloned()),
+                    )
                     .into_any_element()
             };
 
@@ -463,7 +488,7 @@ fn markdown_preview_row_element(
                 .h_full()
                 .flex()
                 .items_center();
-            if let Some(marker) = markdown_preview_row_marker(row) {
+            if let Some(marker) = marker {
                 line = line.child(
                     div()
                         .flex_none()
@@ -479,7 +504,7 @@ fn markdown_preview_row_element(
                         .child(marker),
                 );
             }
-            if let Some(alert_title) = markdown_preview_alert_title_label(row) {
+            if let Some(alert_title) = alert_title {
                 let alert_color = markdown_preview_alert_color(theme, row.alert_kind.unwrap());
                 line = line.child(
                     div()
@@ -502,70 +527,14 @@ fn markdown_preview_row_element(
         }
     };
 
-    let mut content_shell = div()
-        .flex_grow()
-        .min_w(px(0.0))
-        .w_full()
-        .h_full()
-        .relative()
-        .flex()
-        .items_center();
-    content_shell = match row.kind {
-        MarkdownPreviewRowKind::Heading { level: 1 | 2 } => {
-            content_shell.border_b_1().border_color(with_alpha(
-                theme.colors.border,
-                if theme.is_dark { 0.85 } else { 0.92 },
-            ))
-        }
-        MarkdownPreviewRowKind::CodeLine { is_first, is_last } => {
-            let code_border =
-                with_alpha(theme.colors.border, if theme.is_dark { 0.90 } else { 0.80 });
-            let mut shell = content_shell
-                .px(px(12.0))
-                .bg(markdown_preview_code_background(theme))
-                .border_l_1()
-                .border_r_1()
-                .border_color(code_border);
-            if is_first {
-                shell = shell.border_t_1();
-            }
-            if is_last {
-                shell = shell.border_b_1();
-            }
-            shell
-        }
-        MarkdownPreviewRowKind::TableRow { is_header } => {
-            let bg = if is_header {
-                with_alpha(
-                    theme.colors.surface_bg_elevated,
-                    if theme.is_dark { 0.64 } else { 0.86 },
-                )
-            } else {
-                with_alpha(
-                    theme.colors.surface_bg_elevated,
-                    if theme.is_dark { 0.42 } else { 0.72 },
-                )
-            };
-            content_shell
-                .px(px(12.0))
-                .bg(bg)
-                .border_b_1()
-                .border_color(with_alpha(
-                    theme.colors.border,
-                    if theme.is_dark { 0.88 } else { 0.86 },
-                ))
-        }
-        MarkdownPreviewRowKind::PlainFallback => content_shell.px(px(12.0)).bg(with_alpha(
-            theme.colors.warning,
-            if theme.is_dark { 0.12 } else { 0.08 },
-        )),
-        _ => content_shell,
-    };
-    content_shell = content_shell.child(body);
-    if matches!(row.kind, MarkdownPreviewRowKind::CodeLine { .. }) {
-        content_shell =
-            content_shell.debug_selector(|| format!("markdown_preview_code_shell_{row_ix}"));
-    }
+    // Rows that need a content_shell wrapper for border/background styling.
+    let needs_content_shell = matches!(
+        row.kind,
+        MarkdownPreviewRowKind::Heading { level: 1 | 2 }
+            | MarkdownPreviewRowKind::CodeLine { .. }
+            | MarkdownPreviewRowKind::TableRow { .. }
+            | MarkdownPreviewRowKind::PlainFallback
+    );
 
     let row_content_width = if bar_color.is_some() {
         (min_width - px(MARKDOWN_PREVIEW_CHANGE_BAR_WIDTH_PX)).max(px(0.0))
@@ -586,7 +555,75 @@ fn markdown_preview_row_element(
     {
         row_content = row_content.child(blockquote_gutter);
     }
-    row_content = row_content.child(content_shell);
+    if needs_content_shell {
+        let mut content_shell = div()
+            .flex_grow()
+            .min_w(px(0.0))
+            .w_full()
+            .h_full()
+            .relative()
+            .flex()
+            .items_center();
+        content_shell = match row.kind {
+            MarkdownPreviewRowKind::Heading { level: 1 | 2 } => {
+                content_shell.border_b_1().border_color(with_alpha(
+                    theme.colors.border,
+                    if theme.is_dark { 0.85 } else { 0.92 },
+                ))
+            }
+            MarkdownPreviewRowKind::CodeLine { is_first, is_last } => {
+                let code_border =
+                    with_alpha(theme.colors.border, if theme.is_dark { 0.90 } else { 0.80 });
+                let mut shell = content_shell
+                    .px(px(12.0))
+                    .bg(markdown_preview_code_background(theme))
+                    .border_l_1()
+                    .border_r_1()
+                    .border_color(code_border);
+                if is_first {
+                    shell = shell.border_t_1();
+                }
+                if is_last {
+                    shell = shell.border_b_1();
+                }
+                shell
+            }
+            MarkdownPreviewRowKind::TableRow { is_header } => {
+                let bg = if is_header {
+                    with_alpha(
+                        theme.colors.surface_bg_elevated,
+                        if theme.is_dark { 0.64 } else { 0.86 },
+                    )
+                } else {
+                    with_alpha(
+                        theme.colors.surface_bg_elevated,
+                        if theme.is_dark { 0.42 } else { 0.72 },
+                    )
+                };
+                content_shell
+                    .px(px(12.0))
+                    .bg(bg)
+                    .border_b_1()
+                    .border_color(with_alpha(
+                        theme.colors.border,
+                        if theme.is_dark { 0.88 } else { 0.86 },
+                    ))
+            }
+            MarkdownPreviewRowKind::PlainFallback => content_shell.px(px(12.0)).bg(with_alpha(
+                theme.colors.warning,
+                if theme.is_dark { 0.12 } else { 0.08 },
+            )),
+            _ => unreachable!(),
+        };
+        content_shell = content_shell.child(body);
+        if matches!(row.kind, MarkdownPreviewRowKind::CodeLine { .. }) {
+            content_shell =
+                content_shell.debug_selector(|| format!("markdown_preview_code_shell_{row_ix}"));
+        }
+        row_content = row_content.child(content_shell);
+    } else {
+        row_content = row_content.child(body);
+    }
 
     if let Some(view) = context.view.clone() {
         // Interactive markdown preview row with text selection + context menu.
@@ -875,34 +912,34 @@ fn worktree_preview_bar_color(this: &MainPaneView, theme: AppTheme) -> Option<gp
     }
 }
 
-fn markdown_preview_display_and_highlights(
+fn markdown_preview_row_styled_text(
     theme: AppTheme,
     row: &MarkdownPreviewRow,
-) -> (SharedString, Vec<(Range<usize>, gpui::HighlightStyle)>) {
-    if matches!(row.kind, MarkdownPreviewRowKind::CodeLine { .. }) {
-        let styled = build_cached_diff_styled_text(
-            theme,
-            row.text.as_ref(),
-            &[],
-            "",
-            row.code_language,
-            DiffSyntaxMode::Auto,
-            None,
-        );
-        return (styled.text, styled.highlights.as_ref().clone());
-    }
+) -> &CachedDiffStyledText {
+    row.styled_text_cache.get_or_init(theme.is_dark, || {
+        if matches!(row.kind, MarkdownPreviewRowKind::CodeLine { .. }) {
+            return build_cached_diff_styled_text(
+                theme,
+                row.text.as_ref(),
+                &[],
+                "",
+                row.code_language,
+                DiffSyntaxMode::Auto,
+                None,
+            );
+        }
 
-    let highlights = row
-        .inline_spans
-        .iter()
-        .filter_map(|span| {
-            let style = markdown_preview_inline_highlight(theme, span.style);
-            (style != gpui::HighlightStyle::default())
-                .then_some((span.byte_range.start..span.byte_range.end, style))
-        })
-        .collect();
-
-    (row.text.clone(), highlights)
+        let highlights = row
+            .inline_spans
+            .iter()
+            .filter_map(|span| {
+                let style = markdown_preview_inline_highlight(theme, span.style);
+                (style != gpui::HighlightStyle::default())
+                    .then_some((span.byte_range.start..span.byte_range.end, style))
+            })
+            .collect::<Vec<_>>();
+        build_cached_diff_styled_text_from_relative_highlights(row.text.as_ref(), &highlights)
+    })
 }
 
 fn markdown_preview_row_marker(row: &MarkdownPreviewRow) -> Option<SharedString> {
@@ -1300,7 +1337,11 @@ impl HistoryView {
             .filter(|c| c.request.repo_id == repo.id);
         let worktree_node_color = cache
             .and_then(|c| c.graph_rows.first())
-            .and_then(|row| row.lanes_now.first().map(|l| l.color))
+            .and_then(|row| {
+                row.lanes_now
+                    .first()
+                    .map(|lane| history_graph::lane_color(theme, lane.color_ix))
+            })
             .unwrap_or(theme.colors.accent);
 
         range
@@ -1333,7 +1374,7 @@ impl HistoryView {
 
                 let commit_ix = cache.visible_indices.get(visible_ix).copied()?;
                 let commit = page.commits.get(commit_ix)?;
-                let graph_row = cache.graph_rows.get(visible_ix)?;
+                cache.graph_rows.get(visible_ix)?;
                 let row_vm = cache.commit_row_vms.get(visible_ix)?;
                 let connect_from_top_col =
                     (show_working_tree_summary_row && visible_ix == 0).then_some(0);
@@ -1359,14 +1400,15 @@ impl HistoryView {
                     list_ix,
                     repo.id,
                     commit,
-                    Arc::clone(graph_row),
+                    Arc::clone(&cache.graph_rows),
+                    visible_ix,
                     connect_from_top_col,
                     Arc::clone(&row_vm.tag_names),
                     row_vm.branches_text.clone(),
                     row_vm.author.clone(),
                     row_vm.summary.clone(),
-                    row_vm.when.clone(),
-                    row_vm.short_sha.clone(),
+                    row_vm.when.resolve(&cache.request),
+                    row_vm.short_sha.resolve(),
                     selected,
                     row_vm.is_head,
                     is_stash_node,
@@ -1395,7 +1437,8 @@ fn history_table_row(
     ix: usize,
     repo_id: RepoId,
     commit: &Commit,
-    graph_row: Arc<history_graph::GraphRow>,
+    graph_rows: Arc<[history_graph::GraphRow]>,
+    graph_row_ix: usize,
     connect_from_top_col: Option<usize>,
     tag_names: Arc<[SharedString]>,
     branches_text: SharedString,
@@ -1429,7 +1472,8 @@ fn history_table_row(
         show_graph_color_marker,
         is_stash_node,
         connect_from_top_col,
-        graph_row,
+        graph_rows,
+        graph_row_ix,
         tag_names,
         branches_text,
         author,
@@ -1694,10 +1738,10 @@ fn working_tree_summary_history_row(
 mod tests {
     use super::{
         MarkdownChangeHint, MarkdownInlineStyle, MarkdownPreviewRow, MarkdownPreviewRowKind,
-        markdown_preview_alert_title_label, markdown_preview_display_and_highlights,
-        markdown_preview_inline_highlight, markdown_preview_row_background,
-        markdown_preview_row_horizontal_padding, markdown_preview_row_layout,
-        markdown_preview_row_marker, markdown_preview_row_typography,
+        markdown_preview_alert_title_label, markdown_preview_inline_highlight,
+        markdown_preview_row_background, markdown_preview_row_horizontal_padding,
+        markdown_preview_row_layout, markdown_preview_row_marker, markdown_preview_row_styled_text,
+        markdown_preview_row_typography,
     };
     use crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY;
     use crate::view::markdown_preview::MarkdownInlineSpan;
@@ -1720,6 +1764,7 @@ mod tests {
             footnote_label: None,
             alert_kind: None,
             starts_alert: false,
+            styled_text_cache: Default::default(),
             measured_width_px: Default::default(),
         }
     }
@@ -1833,6 +1878,7 @@ mod tests {
             footnote_label: None,
             alert_kind: None,
             starts_alert: false,
+            styled_text_cache: Default::default(),
             measured_width_px: Default::default(),
         };
         let h1 = MarkdownPreviewRow {
@@ -1948,6 +1994,7 @@ mod tests {
             footnote_label: None,
             alert_kind: None,
             starts_alert: false,
+            styled_text_cache: Default::default(),
             measured_width_px: Default::default(),
         };
 
@@ -1974,6 +2021,7 @@ mod tests {
             footnote_label: None,
             alert_kind: None,
             starts_alert: false,
+            styled_text_cache: Default::default(),
             measured_width_px: Default::default(),
         };
 
@@ -1995,6 +2043,7 @@ mod tests {
             footnote_label: Some("1".into()),
             alert_kind: None,
             starts_alert: false,
+            styled_text_cache: Default::default(),
             measured_width_px: Default::default(),
         };
 
@@ -2021,6 +2070,7 @@ mod tests {
             footnote_label: None,
             alert_kind: None,
             starts_alert: false,
+            styled_text_cache: Default::default(),
             measured_width_px: Default::default(),
         };
 
@@ -2100,7 +2150,7 @@ mod tests {
     }
 
     #[test]
-    fn markdown_preview_display_and_highlights_maps_inline_styles_and_skips_normal_spans() {
+    fn markdown_preview_row_styled_text_maps_inline_styles_and_skips_normal_spans() {
         let theme = AppTheme::zed_one_light();
         let mut row = markdown_row(MarkdownPreviewRowKind::Paragraph);
         row.text = SharedString::from("link under strike plain");
@@ -2123,9 +2173,10 @@ mod tests {
             },
         ]);
 
-        let (display, highlights) = markdown_preview_display_and_highlights(theme, &row);
+        let styled = markdown_preview_row_styled_text(theme, &row);
+        let highlights = styled.highlights.as_ref();
 
-        assert_eq!(display.as_ref(), "link under strike plain");
+        assert_eq!(styled.text.as_ref(), "link under strike plain");
         assert_eq!(highlights.len(), 3);
         assert_eq!(highlights[0].0, 0..4);
         assert_eq!(
@@ -2188,14 +2239,26 @@ mod tests {
             footnote_label: None,
             alert_kind: None,
             starts_alert: false,
+            styled_text_cache: Default::default(),
             measured_width_px: Default::default(),
         };
 
-        let (display, highlights) = markdown_preview_display_and_highlights(theme, &row);
-        assert_eq!(display.as_ref(), "fn    main() { let x = 1; }");
+        let dark_highlights = Arc::clone(&markdown_preview_row_styled_text(theme, &row).highlights);
+        let dark = markdown_preview_row_styled_text(theme, &row);
+        let light = markdown_preview_row_styled_text(AppTheme::zed_one_light(), &row);
+
+        assert_eq!(dark.text.as_ref(), "fn    main() { let x = 1; }");
         assert!(
-            !highlights.is_empty(),
+            !dark.highlights.is_empty(),
             "code rows should reuse syntax highlights from the diff text renderer"
+        );
+        assert!(
+            Arc::ptr_eq(&dark_highlights, &dark.highlights),
+            "same-theme markdown code rows should reuse cached styled text"
+        );
+        assert!(
+            !Arc::ptr_eq(&dark.highlights, &light.highlights),
+            "light and dark markdown preview caches should stay separate"
         );
     }
 

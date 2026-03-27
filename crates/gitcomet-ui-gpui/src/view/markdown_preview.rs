@@ -1,6 +1,7 @@
+use super::CachedDiffStyledText;
 use gpui::SharedString;
 use std::ops::Range;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 /// Maximum source size (bytes) for a single markdown preview document.
 pub(super) const MAX_PREVIEW_SOURCE_BYTES: usize = 1_024 * 1_024; // 1 MiB
@@ -42,6 +43,7 @@ pub(super) struct MarkdownPreviewRow {
     pub(super) footnote_label: Option<SharedString>,
     pub(super) alert_kind: Option<MarkdownAlertKind>,
     pub(super) starts_alert: bool,
+    pub(super) styled_text_cache: MarkdownPreviewRowStyledTextCache,
     pub(super) measured_width_px: MarkdownPreviewRowWidthCache,
 }
 
@@ -196,6 +198,34 @@ impl PartialEq for MarkdownPreviewRowWidthCache {
 }
 
 impl Eq for MarkdownPreviewRowWidthCache {}
+
+#[derive(Clone, Debug, Default)]
+pub(super) struct MarkdownPreviewRowStyledTextCache {
+    dark: OnceLock<CachedDiffStyledText>,
+    light: OnceLock<CachedDiffStyledText>,
+}
+
+impl MarkdownPreviewRowStyledTextCache {
+    pub(super) fn get_or_init(
+        &self,
+        is_dark: bool,
+        compute: impl FnOnce() -> CachedDiffStyledText,
+    ) -> &CachedDiffStyledText {
+        if is_dark {
+            self.dark.get_or_init(compute)
+        } else {
+            self.light.get_or_init(compute)
+        }
+    }
+}
+
+impl PartialEq for MarkdownPreviewRowStyledTextCache {
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for MarkdownPreviewRowStyledTextCache {}
 
 // ── Error messages ──────────────────────────────────────────────────────
 
@@ -432,6 +462,7 @@ fn markdown_preview_spacer_row_with_range(source_line_range: Range<usize>) -> Ma
         footnote_label: None,
         alert_kind: None,
         starts_alert: false,
+        styled_text_cache: MarkdownPreviewRowStyledTextCache::default(),
         measured_width_px: MarkdownPreviewRowWidthCache::default(),
     }
 }
@@ -1662,6 +1693,7 @@ fn push_row(
         footnote_label: decoration.footnote_label,
         alert_kind: decoration.alert_kind,
         starts_alert: decoration.starts_alert,
+        styled_text_cache: MarkdownPreviewRowStyledTextCache::default(),
         measured_width_px: MarkdownPreviewRowWidthCache::default(),
     });
 

@@ -1,0 +1,10 @@
+{
+  "bench": "app_launch/cold_single_repo",
+  "metrics": {
+    "first_paint_ms": 235,
+    "first_interactive_ms": 259,
+    "rss_at_first_paint_kib": 153296,
+    "rss_at_interactive_kib": 168496,
+    "repos_loaded": 1
+  }
+}

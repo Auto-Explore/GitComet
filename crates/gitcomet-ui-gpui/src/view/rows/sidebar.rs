@@ -714,14 +714,19 @@ impl SidebarPaneView {
                     .into_any_element(),
                 BranchSidebarRow::WorktreeItem {
                     path,
-                    label,
-                    tooltip,
+                    branch,
+                    detached,
                     is_active,
                 } => {
-                    let tooltip = tooltip.clone();
-                    let label = label.clone();
+                    let branch = branch.clone();
                     let path_for_open = path.clone();
                     let path_for_menu = path.clone();
+                    let path_label = this.cached_path_display(&path);
+                    let label = super::super::branch_sidebar::branch_sidebar_worktree_label(
+                        branch.as_ref().map(SharedString::as_ref),
+                        detached,
+                        path_label.as_ref(),
+                    );
                     let context_menu_invoker: SharedString =
                         format!("worktree_menu_{}_{}", repo_id.0, path.display()).into();
                     let context_menu_active =
@@ -772,7 +777,7 @@ impl SidebarPaneView {
                                 .text_sm()
                                 .line_clamp(1)
                                 .whitespace_nowrap()
-                                .child(label),
+                                .child(label.clone()),
                         )
                         .child(
                             context_menu_indicator(
@@ -836,10 +841,10 @@ impl SidebarPaneView {
                         .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
                             let mut changed = false;
                             if *hovering {
-                                changed |=
-                                    this.set_tooltip_text_if_changed(Some(tooltip.clone()), cx);
+                                changed |= this
+                                    .set_tooltip_text_if_changed(Some(label.clone()), cx);
                             } else {
-                                changed |= this.clear_tooltip_if_matches(&tooltip, cx);
+                                changed |= this.clear_tooltip_if_matches(&label, cx);
                             }
                             if changed {
                                 cx.notify();
@@ -992,16 +997,12 @@ impl SidebarPaneView {
                     .text_color(theme.colors.text_muted)
                     .child(message)
                     .into_any_element(),
-                BranchSidebarRow::SubmoduleItem {
-                    path,
-                    label,
-                    tooltip,
-                } => {
-                    let tooltip = tooltip.clone();
-                    let label = label.clone();
+                BranchSidebarRow::SubmoduleItem { path } => {
                     let path_for_open = path.clone();
                     let path_for_menu = path.clone();
                     let repo_workdir_for_open = repo_workdir.clone();
+                    let path_label = this.cached_path_display(&path);
+                    let tooltip = path_label.clone();
                     let context_menu_invoker: SharedString =
                         format!("submodule_menu_{}_{}", repo_id.0, path.display()).into();
                     let context_menu_active =
@@ -1042,7 +1043,7 @@ impl SidebarPaneView {
                                 .text_sm()
                                 .line_clamp(1)
                                 .whitespace_nowrap()
-                                .child(label),
+                                .child(path_label),
                         )
                         .child(
                             context_menu_indicator(
@@ -1243,7 +1244,7 @@ impl SidebarPaneView {
                         .id(("branch_group", ix))
                         .h(px(22.0))
                         .w_full()
-                        .pl(indent_px(depth))
+                        .pl(indent_px(usize::from(depth)))
                         .pr_2()
                         .flex()
                         .items_center()
@@ -1274,20 +1275,18 @@ impl SidebarPaneView {
                         .into_any_element()
                 }
                 BranchSidebarRow::Branch {
-                    label,
                     name,
                     section,
                     depth,
                     muted,
-                    divergence: _,
                     divergence_ahead,
                     divergence_behind,
-                    tooltip,
                     is_head,
                     is_upstream,
                 } => {
                     let full_name_for_checkout: SharedString = name.clone();
                     let full_name_for_menu: SharedString = name.clone();
+                    let full_name_for_tooltip: SharedString = name.clone();
                     let section_key = match section {
                         BranchSection::Local => "local",
                         BranchSection::Remote => "remote",
@@ -1302,6 +1301,10 @@ impl SidebarPaneView {
                     let context_menu_active =
                         this.active_context_menu_invoker.as_ref() == Some(&context_menu_invoker);
                     let context_menu_invoker_for_right_click = context_menu_invoker.clone();
+                    let label: SharedString =
+                        super::super::branch_sidebar::branch_sidebar_branch_label(name.as_ref())
+                            .to_owned()
+                            .into();
                     let context_menu_invoker_for_indicator = context_menu_invoker.clone();
                     let full_name_for_indicator: SharedString = name.clone();
                     let row_group: SharedString = format!("branch_row_{}_{}", repo_id.0, ix).into();
@@ -1337,7 +1340,7 @@ impl SidebarPaneView {
                         .flex()
                         .items_center()
                         .gap(px(BRANCH_TREE_GAP_PX))
-                        .pl(indent_px(depth))
+                        .pl(indent_px(usize::from(depth)))
                         .pr_2()
                         .rounded(px(theme.radii.row))
                         .when(is_head, |d| {
@@ -1407,7 +1410,7 @@ impl SidebarPaneView {
                     }
 
                     if divergence_behind.is_some() || divergence_ahead.is_some() {
-                        if let Some(behind) = divergence_behind.as_ref() {
+                        if let Some(behind) = divergence_behind {
                             let color = theme.colors.warning;
                             right = right.child(
                                 div()
@@ -1418,10 +1421,12 @@ impl SidebarPaneView {
                                     .font_weight(FontWeight::BOLD)
                                     .text_color(color)
                                     .child(svg_icon("icons/arrow_down.svg", color, 11.0))
-                                    .child(behind.clone()),
+                                    .child(super::super::branch_sidebar::branch_sidebar_divergence_label(
+                                        behind,
+                                    )),
                             );
                         }
-                        if let Some(ahead) = divergence_ahead.as_ref() {
+                        if let Some(ahead) = divergence_ahead {
                             let color = theme.colors.success;
                             right = right.child(
                                 div()
@@ -1432,7 +1437,9 @@ impl SidebarPaneView {
                                     .font_weight(FontWeight::BOLD)
                                     .text_color(color)
                                     .child(svg_icon("icons/arrow_up.svg", color, 11.0))
-                                    .child(ahead.clone()),
+                                    .child(super::super::branch_sidebar::branch_sidebar_divergence_label(
+                                        ahead,
+                                    )),
                             );
                         }
                     }
@@ -1468,8 +1475,6 @@ impl SidebarPaneView {
                             },
                         )),
                     );
-
-                    let branch_tooltip: SharedString = tooltip.clone();
 
                     row = row
                         .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
@@ -1525,10 +1530,15 @@ impl SidebarPaneView {
                             }),
                         )
                         .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
+                            let branch_tooltip =
+                                super::super::branch_sidebar::branch_sidebar_branch_tooltip(
+                                    full_name_for_tooltip.as_ref(),
+                                    is_upstream,
+                                );
                             let mut changed = false;
                             if *hovering {
-                                changed |= this
-                                    .set_tooltip_text_if_changed(Some(branch_tooltip.clone()), cx);
+                                changed |=
+                                    this.set_tooltip_text_if_changed(Some(branch_tooltip), cx);
                             } else {
                                 changed |= this.clear_tooltip_if_matches(&branch_tooltip, cx);
                             }
@@ -1560,31 +1570,37 @@ impl DetailsPaneView {
 
         let theme = this.theme;
         let repo_id = repo.id;
+        let has_active_menu = this.active_context_menu_invoker.is_some();
+        let path_labels = this.cached_commit_file_path_labels(
+            repo_id,
+            repo.history_state.commit_details_rev,
+            &details.files,
+        );
 
         range
-            .filter_map(|ix| details.files.get(ix).map(|f| (ix, f)))
-            .map(|(ix, f)| {
+            .filter_map(|ix| {
+                details
+                    .files
+                    .get(ix)
+                    .zip(path_labels.get(ix))
+                    .map(|(f, path_label)| (ix, f, path_label.clone()))
+            })
+            .map(|(ix, f, path_label)| {
                 let commit_id = details.id.clone();
-                let (icon, color) = match f.kind {
-                    FileStatusKind::Added => (Some("icons/plus.svg"), theme.colors.success),
-                    FileStatusKind::Modified => (Some("icons/pencil.svg"), theme.colors.warning),
-                    FileStatusKind::Deleted => (Some("icons/minus.svg"), theme.colors.danger),
-                    FileStatusKind::Renamed => (Some("icons/swap.svg"), theme.colors.accent),
-                    FileStatusKind::Untracked => (Some("icons/question.svg"), theme.colors.warning),
-                    FileStatusKind::Conflicted => (Some("icons/warning.svg"), theme.colors.danger),
-                };
+                let visuals = commit_file_kind_visuals(f.kind);
+                let icon = Some(visuals.icon);
+                let color = visuals.color(&theme);
 
-                let path = f.path.clone();
-                let context_menu_invoker: SharedString = format!(
-                    "commit_file_menu_{}_{}_{}",
-                    repo_id.0,
-                    commit_id.as_ref(),
-                    path.display()
-                )
-                .into();
-                let context_menu_active =
-                    this.active_context_menu_invoker.as_ref() == Some(&context_menu_invoker);
-                let context_menu_invoker_for_right_click = context_menu_invoker.clone();
+                let context_menu_active = has_active_menu && {
+                    let invoker: SharedString = format!(
+                        "commit_file_menu_{}_{}_{}",
+                        repo_id.0,
+                        commit_id.as_ref(),
+                        f.path.display()
+                    )
+                    .into();
+                    this.active_context_menu_invoker.as_ref() == Some(&invoker)
+                };
                 let selected = repo
                     .diff_state
                     .diff_target
@@ -1593,14 +1609,13 @@ impl DetailsPaneView {
                         DiffTarget::Commit {
                             commit_id: t_commit_id,
                             path: Some(t_path),
-                        } => t_commit_id == &commit_id && t_path == &path,
+                        } => t_commit_id == &commit_id && t_path == &f.path,
                         _ => false,
                     });
                 let commit_id_for_click = commit_id.clone();
-                let path_for_click = path.clone();
+                let path_for_click = f.path.clone();
                 let commit_id_for_menu = commit_id.clone();
-                let path_for_menu = path.clone();
-                let path_label = this.cached_path_display(&path);
+                let path_for_menu = f.path.clone();
                 let tooltip = path_label.clone();
 
                 let mut row = div()
@@ -1672,10 +1687,14 @@ impl DetailsPaneView {
                                 path: Some(path_for_menu.clone()),
                             },
                         });
-                        this.activate_context_menu_invoker(
-                            context_menu_invoker_for_right_click.clone(),
-                            cx,
-                        );
+                        let invoker: SharedString = format!(
+                            "commit_file_menu_{}_{}_{}",
+                            repo_id.0,
+                            commit_id_for_menu.as_ref(),
+                            path_for_menu.display()
+                        )
+                        .into();
+                        this.activate_context_menu_invoker(invoker, cx);
                         this.open_popover_at(
                             PopoverKind::CommitFileMenu {
                                 repo_id,

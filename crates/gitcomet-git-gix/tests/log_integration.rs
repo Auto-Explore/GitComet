@@ -1,4 +1,4 @@
-use gitcomet_core::domain::{CommitId, FileStatusKind};
+use gitcomet_core::domain::{CommitId, FileStatusKind, LogCursor};
 use gitcomet_core::error::{ErrorKind, GitFailureId};
 use gitcomet_core::services::GitBackend;
 use gitcomet_git_gix::GixBackend;
@@ -325,6 +325,12 @@ fn log_head_page_limit_sets_next_cursor_and_supports_pagination() {
     assert_eq!(first.commits.len(), 1);
     let first_id = first.commits[0].id.as_ref().to_string();
     let cursor = first.next_cursor.as_ref().expect("next cursor");
+    let expected_resume = first.commits[0]
+        .parent_ids
+        .first()
+        .cloned()
+        .expect("resume hint should point at next first-parent commit");
+    assert_eq!(cursor.resume_from.as_ref(), Some(&expected_resume));
 
     let second = opened.log_head_page(10, Some(cursor)).unwrap();
     assert!(!second.commits.is_empty());
@@ -332,6 +338,13 @@ fn log_head_page_limit_sets_next_cursor_and_supports_pagination() {
         second.commits.iter().all(|c| c.id.as_ref() != first_id),
         "paginated page should skip last-seen commit"
     );
+
+    let legacy_cursor = LogCursor {
+        last_seen: first.commits[0].id.clone(),
+        resume_from: None,
+    };
+    let legacy_second = opened.log_head_page(10, Some(&legacy_cursor)).unwrap();
+    assert_eq!(legacy_second.commits, second.commits);
 }
 
 #[test]

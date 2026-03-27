@@ -2,7 +2,7 @@ use super::diff_canvas;
 use super::diff_text::*;
 use super::*;
 use crate::view::panes::main::{
-    VersionedCachedDiffStyledText, versioned_cached_diff_styled_text_is_current,
+    VersionedCachedDiffStyledText, versioned_query_cached_diff_styled_text_is_current,
 };
 use gitcomet_core::domain::DiffLineKind;
 use gitcomet_core::file_diff::FileDiffRowKind;
@@ -72,16 +72,18 @@ impl MainPaneView {
         }
 
         self.sync_diff_text_query_overlay_cache(query);
+        let query_generation = self.diff_text_query_cache_generation;
         if self.diff_text_query_segments_cache.len() <= key {
             self.diff_text_query_segments_cache
                 .resize_with(key + 1, || None);
         }
 
-        if versioned_cached_diff_styled_text_is_current(
+        if versioned_query_cached_diff_styled_text_is_current(
             self.diff_text_query_segments_cache
                 .get(key)
                 .and_then(Option::as_ref),
             syntax_epoch,
+            query_generation,
         )
         .is_none()
         {
@@ -91,15 +93,17 @@ impl MainPaneView {
             let overlaid = build_cached_diff_query_overlay_styled_text(self.theme, &base, query);
             self.diff_text_query_segments_cache[key] = Some(VersionedCachedDiffStyledText {
                 syntax_epoch,
+                query_generation,
                 styled: overlaid,
             });
         }
 
-        versioned_cached_diff_styled_text_is_current(
+        versioned_query_cached_diff_styled_text_is_current(
             self.diff_text_query_segments_cache
                 .get(key)
                 .and_then(Option::as_ref),
             syntax_epoch,
+            query_generation,
         )
         .cloned()
     }
@@ -541,7 +545,6 @@ impl MainPaneView {
                             let word_color = this
                                 .patch_diff_row(src_ix)
                                 .and_then(|line| diff_line_word_color(line.kind, theme));
-
                             let computed = build_cached_diff_styled_text(
                                 theme,
                                 text,

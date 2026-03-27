@@ -28,40 +28,39 @@ impl SparseLineIndex {
             return Self::default();
         }
 
-        let mut checkpoints = Vec::with_capacity(text.len().saturating_div(4096).saturating_add(1));
-        checkpoints.push(0usize);
         let bytes = text.as_bytes();
-        let mut line_count = 1usize;
-        let mut current_line_ix = 0usize;
-        let mut current_line_len = 0usize;
+        let mut checkpoints =
+            Vec::with_capacity(bytes.len().saturating_div(4096).saturating_add(1));
+        checkpoints.push(0usize);
+        let mut line_count = 0usize;
+        let mut prev_pos = 0usize;
         let mut widest_line_ix = 0usize;
         let mut widest_line_len = 0usize;
 
-        let mut finalize_line = |line_ix: usize, line_len: usize| {
+        for pos in memchr::memchr_iter(b'\n', bytes) {
+            let line_len = pos - prev_pos;
             if line_len > widest_line_len {
                 widest_line_len = line_len;
-                widest_line_ix = line_ix;
+                widest_line_ix = line_count;
             }
-        };
-
-        for (ix, byte) in bytes.iter().enumerate() {
-            if *byte == b'\n' {
-                finalize_line(current_line_ix, current_line_len);
-                current_line_len = 0;
-                if ix.saturating_add(1) < bytes.len() {
-                    if line_count.is_multiple_of(CONFLICT_SPLIT_LINE_CHECKPOINT_STRIDE) {
-                        checkpoints.push(ix.saturating_add(1));
-                    }
-                    current_line_ix = current_line_ix.saturating_add(1);
-                    line_count = line_count.saturating_add(1);
-                }
-            } else {
-                current_line_len = current_line_len.saturating_add(1);
+            line_count += 1;
+            prev_pos = pos + 1;
+            // Record checkpoint at stride boundaries when there is more content.
+            if prev_pos < bytes.len()
+                && line_count.is_multiple_of(CONFLICT_SPLIT_LINE_CHECKPOINT_STRIDE)
+            {
+                checkpoints.push(prev_pos);
             }
         }
 
-        if bytes.last().copied() != Some(b'\n') {
-            finalize_line(current_line_ix, current_line_len);
+        // Handle last line (no trailing newline).
+        if prev_pos < bytes.len() {
+            let line_len = bytes.len() - prev_pos;
+            if line_len > widest_line_len {
+                widest_line_len = line_len;
+                widest_line_ix = line_count;
+            }
+            line_count += 1;
         }
 
         Self {
@@ -80,6 +79,87 @@ impl SparseLineIndex {
         (self.line_count > 0).then_some((self.widest_line_ix, self.widest_line_len))
     }
 
+    fn matching_lines_from_positions(
+        &self,
+        bytes: &[u8],
+        line_limit: usize,
+        positions: impl Iterator<Item = usize>,
+    ) -> Vec<usize> {
+        let mut out = Vec::new();
+        let mut newlines = memchr::memchr_iter(b'\n', bytes).peekable();
+        let mut line_ix = 0usize;
+        let mut last_line = usize::MAX;
+
+        for pos in positions {
+            while let Some(&newline_pos) = newlines.peek() {
+                if newline_pos >= pos {
+                    break;
+                }
+                newlines.next();
+                line_ix = line_ix.saturating_add(1);
+            }
+            if line_ix >= line_limit {
+                break;
+            }
+            if line_ix != last_line {
+                out.push(line_ix);
+                last_line = line_ix;
+            }
+        }
+
+        out
+    }
+
+    /// Collect the 0-based line indices of all lines that contain `needle`
+    /// (case-sensitive) within the first `line_limit` lines.  Uses SIMD
+    /// `memmem::find_iter` on the full text and maps match positions back
+    /// to line indices via checkpoints, avoiding per-line extraction.
+    #[cfg(any(test, feature = "benchmarks"))]
+    fn lines_containing(&self, text: &str, needle: &[u8], line_limit: usize) -> Vec<usize> {
+        let bytes = text.as_bytes();
+        let finder = memchr::memmem::Finder::new(needle);
+        self.matching_lines_from_positions(bytes, line_limit, finder.find_iter(bytes))
+    }
+
+    /// Collect the 0-based line indices of all lines that contain `needle`
+    /// using ASCII case-insensitive matching.
+    fn lines_containing_ascii_case_insensitive(
+        &self,
+        text: &str,
+        needle: &[u8],
+        line_limit: usize,
+    ) -> Vec<usize> {
+        let bytes = text.as_bytes();
+        let Some((&first, &last)) = needle.first().zip(needle.last()) else {
+            return Vec::new();
+        };
+        let first_lower = first.to_ascii_lowercase();
+        let first_upper = first.to_ascii_uppercase();
+
+        if needle.len() == 1 {
+            return self.matching_lines_from_positions(
+                bytes,
+                line_limit,
+                memchr::memchr2_iter(first_lower, first_upper, bytes),
+            );
+        }
+
+        let Some(last_start) = bytes.len().checked_sub(needle.len()) else {
+            return Vec::new();
+        };
+        let last_lower = last.to_ascii_lowercase();
+        let last_upper = last.to_ascii_uppercase();
+        let middle = &needle[1..needle.len() - 1];
+        let positions = memchr::memchr2_iter(first_lower, first_upper, &bytes[..=last_start])
+            .filter(move |&start| {
+                let last = bytes[start + needle.len() - 1];
+                (last == last_lower || last == last_upper)
+                    && bytes[start + 1..start + needle.len() - 1].eq_ignore_ascii_case(middle)
+            });
+        self.matching_lines_from_positions(bytes, line_limit, positions)
+    }
+
+    #[cfg(test)]
     fn line_range(&self, text: &str, line_ix: usize) -> Option<Range<usize>> {
         if line_ix >= self.line_count {
             return None;
@@ -144,6 +224,7 @@ impl SparseLineIndex {
         ranges
     }
 
+    #[cfg(test)]
     fn line_text<'a>(&self, text: &'a str, line_ix: usize) -> Option<&'a str> {
         let range = self.line_range(text, line_ix)?;
         text.get(range)
@@ -629,6 +710,7 @@ impl ConflictSplitRowIndex {
     /// Searches old (ours) and new (theirs) text for each row without
     /// allocating `FileDiffRow` objects, making this much cheaper than
     /// iterating `row_at()` for every row in a giant file.
+    #[cfg(test)]
     pub fn search_matching_rows(
         &self,
         segments: &[ConflictSegment],
@@ -691,6 +773,179 @@ impl ConflictSplitRowIndex {
                             out.push(entry.row_start + offset);
                         }
                     }
+                }
+                _ => {}
+            }
+        }
+        out
+    }
+
+    fn extend_context_line_matches(
+        out: &mut Vec<usize>,
+        entry: &SplitLayoutEntry,
+        leading_row_count: usize,
+        trailing_row_start: usize,
+        matching_lines: &[usize],
+    ) {
+        for &line_ix in matching_lines {
+            if line_ix < leading_row_count {
+                out.push(entry.row_start + line_ix);
+            } else if line_ix >= trailing_row_start {
+                let trailing_offset = line_ix - trailing_row_start;
+                let offset = leading_row_count + trailing_offset;
+                if offset < entry.row_count {
+                    out.push(entry.row_start + offset);
+                }
+            }
+        }
+    }
+
+    fn extend_block_line_matches(
+        out: &mut Vec<usize>,
+        entry: &SplitLayoutEntry,
+        ours_hits: &[usize],
+        theirs_hits: &[usize],
+    ) {
+        let mut oi = 0;
+        let mut ti = 0;
+        while oi < ours_hits.len() || ti < theirs_hits.len() {
+            let o_off = ours_hits.get(oi).copied().unwrap_or(usize::MAX);
+            let t_off = theirs_hits.get(ti).copied().unwrap_or(usize::MAX);
+            let offset = o_off.min(t_off);
+            if offset >= entry.row_count {
+                break;
+            }
+            out.push(entry.row_start + offset);
+            if o_off == offset {
+                oi += 1;
+            }
+            if t_off == offset {
+                ti += 1;
+            }
+        }
+    }
+
+    /// Find all source row indices whose text contains `needle` (case-sensitive
+    /// byte substring).
+    ///
+    /// Uses SIMD-accelerated `memmem::find_iter` to search each segment's full
+    /// text in a single pass and maps match byte positions to line indices
+    /// via the sparse checkpoint structure.  This is dramatically faster than
+    /// `search_matching_rows` with a per-line predicate for large segments
+    /// because it avoids per-line byte-by-byte checkpoint walks.
+    #[cfg(any(test, feature = "benchmarks"))]
+    pub fn search_text_matching_rows(
+        &self,
+        segments: &[ConflictSegment],
+        needle: &[u8],
+    ) -> Vec<usize> {
+        if needle.is_empty() {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        for entry in &self.entries {
+            let Some(segment) = segments.get(entry.segment_ix) else {
+                continue;
+            };
+            match (&entry.kind, segment) {
+                (
+                    SplitLayoutKind::Context {
+                        line_index,
+                        leading_row_count,
+                        trailing_row_start,
+                        ..
+                    },
+                    ConflictSegment::Text(text),
+                ) => {
+                    let matching_lines =
+                        line_index.lines_containing(text, needle, line_index.line_count());
+                    Self::extend_context_line_matches(
+                        &mut out,
+                        entry,
+                        *leading_row_count,
+                        *trailing_row_start,
+                        &matching_lines,
+                    );
+                }
+                (
+                    SplitLayoutKind::Block {
+                        ours_line_index,
+                        theirs_line_index,
+                        ..
+                    },
+                    ConflictSegment::Block(block),
+                ) => {
+                    let ours_count = ours_line_index.line_count();
+                    let theirs_count = theirs_line_index.line_count();
+                    let ours_hits =
+                        ours_line_index.lines_containing(&block.ours, needle, ours_count);
+                    let theirs_hits =
+                        theirs_line_index.lines_containing(&block.theirs, needle, theirs_count);
+                    Self::extend_block_line_matches(&mut out, entry, &ours_hits, &theirs_hits);
+                }
+                _ => {}
+            }
+        }
+        out
+    }
+
+    /// Find all source row indices whose text contains `needle` using ASCII
+    /// case-insensitive matching.
+    pub fn search_ascii_case_insensitive_matching_rows(
+        &self,
+        segments: &[ConflictSegment],
+        needle: &[u8],
+    ) -> Vec<usize> {
+        if needle.is_empty() {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        for entry in &self.entries {
+            let Some(segment) = segments.get(entry.segment_ix) else {
+                continue;
+            };
+            match (&entry.kind, segment) {
+                (
+                    SplitLayoutKind::Context {
+                        line_index,
+                        leading_row_count,
+                        trailing_row_start,
+                        ..
+                    },
+                    ConflictSegment::Text(text),
+                ) => {
+                    let matching_lines = line_index.lines_containing_ascii_case_insensitive(
+                        text,
+                        needle,
+                        line_index.line_count(),
+                    );
+                    Self::extend_context_line_matches(
+                        &mut out,
+                        entry,
+                        *leading_row_count,
+                        *trailing_row_start,
+                        &matching_lines,
+                    );
+                }
+                (
+                    SplitLayoutKind::Block {
+                        ours_line_index,
+                        theirs_line_index,
+                        ..
+                    },
+                    ConflictSegment::Block(block),
+                ) => {
+                    let ours_hits = ours_line_index.lines_containing_ascii_case_insensitive(
+                        &block.ours,
+                        needle,
+                        ours_line_index.line_count(),
+                    );
+                    let theirs_hits = theirs_line_index.lines_containing_ascii_case_insensitive(
+                        &block.theirs,
+                        needle,
+                        theirs_line_index.line_count(),
+                    );
+                    Self::extend_block_line_matches(&mut out, entry, &ours_hits, &theirs_hits);
                 }
                 _ => {}
             }

@@ -1,5 +1,10 @@
 use super::*;
-use std::collections::BTreeSet;
+use rustc_hash::FxHasher;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    hash::{Hash, Hasher},
+    num::NonZeroU32,
+};
 
 const LOCAL_SECTION_KEY: &str = "section:branches/local";
 const REMOTE_SECTION_KEY: &str = "section:branches/remote";
@@ -14,6 +19,8 @@ pub(super) enum BranchSection {
     Local,
     Remote,
 }
+
+type BranchSidebarDepth = u16;
 
 pub(super) const fn local_section_storage_key() -> &'static str {
     LOCAL_SECTION_KEY
@@ -68,20 +75,17 @@ pub(super) enum BranchSidebarRow {
     GroupHeader {
         label: SharedString,
         section: BranchSection,
-        depth: usize,
+        depth: BranchSidebarDepth,
         collapsed: bool,
         collapse_key: SharedString,
     },
     Branch {
-        label: SharedString,
         name: SharedString,
         section: BranchSection,
-        depth: usize,
+        depth: BranchSidebarDepth,
         muted: bool,
-        divergence: Option<UpstreamDivergence>,
-        divergence_ahead: Option<SharedString>,
-        divergence_behind: Option<SharedString>,
-        tooltip: SharedString,
+        divergence_ahead: Option<NonZeroU32>,
+        divergence_behind: Option<NonZeroU32>,
         is_head: bool,
         is_upstream: bool,
     },
@@ -95,8 +99,8 @@ pub(super) enum BranchSidebarRow {
     },
     WorktreeItem {
         path: std::path::PathBuf,
-        label: SharedString,
-        tooltip: SharedString,
+        branch: Option<SharedString>,
+        detached: bool,
         is_active: bool,
     },
     SubmodulesHeader {
@@ -109,8 +113,6 @@ pub(super) enum BranchSidebarRow {
     },
     SubmoduleItem {
         path: std::path::PathBuf,
-        label: SharedString,
-        tooltip: SharedString,
     },
     StashHeader {
         top_border: bool,
@@ -137,17 +139,300 @@ struct SlashTree {
 impl SlashTree {
     fn insert(&mut self, name: &str) {
         let mut node = self;
-        for part in name.split('/').filter(|p| !p.is_empty()) {
+        for part in name.split('/').filter(|part| !part.is_empty()) {
             node = node.children.entry(part.to_string()).or_default();
         }
         node.is_leaf = true;
     }
 }
 
+pub(in crate::view) fn branch_sidebar_branch_tooltip(
+    full_name: &str,
+    is_upstream: bool,
+) -> SharedString {
+    const PREFIX: &str = "Branch: ";
+    const UPSTREAM_NOTE: &str = " (upstream for current branch)";
+
+    let upstream_note = if is_upstream { UPSTREAM_NOTE } else { "" };
+    let mut tooltip = String::with_capacity(PREFIX.len() + full_name.len() + upstream_note.len());
+    tooltip.push_str(PREFIX);
+    tooltip.push_str(full_name);
+    tooltip.push_str(upstream_note);
+    tooltip.into()
+}
+
+pub(in crate::view) fn branch_sidebar_branch_label(full_name: &str) -> &str {
+    full_name
+        .rsplit_once('/')
+        .map_or(full_name, |(_, label)| label)
+}
+
+pub(in crate::view) fn branch_sidebar_worktree_label(
+    branch: Option<&str>,
+    detached: bool,
+    path_display: &str,
+) -> SharedString {
+    const SEPARATOR: &str = "  ";
+    const DETACHED_LABEL: &str = "(detached)";
+
+    match branch {
+        Some(branch) => {
+            let mut label =
+                String::with_capacity(branch.len() + SEPARATOR.len() + path_display.len());
+            label.push_str(branch);
+            label.push_str(SEPARATOR);
+            label.push_str(path_display);
+            label.into()
+        }
+        None if detached => {
+            let mut label =
+                String::with_capacity(DETACHED_LABEL.len() + SEPARATOR.len() + path_display.len());
+            label.push_str(DETACHED_LABEL);
+            label.push_str(SEPARATOR);
+            label.push_str(path_display);
+            label.into()
+        }
+        None => SharedString::new(path_display),
+    }
+}
+
+pub(in crate::view) fn branch_sidebar_divergence_label(count: NonZeroU32) -> SharedString {
+    count.get().to_string().into()
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::view) struct BranchSidebarSourceFingerprint(u64);
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::view) struct BranchSidebarSourceFingerprintParts {
+    local_revs: (u64, u64),
+    local_hash: u64,
+    remote_revs: (u64, u64, u64, u64),
+    remote_hash: u64,
+    worktree_rev: u64,
+    worktree_hash: u64,
+    submodule_rev: u64,
+    submodule_hash: u64,
+    stash_rev: u64,
+    stash_hash: u64,
+}
+
+impl BranchSidebarSourceFingerprintParts {
+    fn for_repo(repo: &RepoState, reuse: Option<&Self>) -> Self {
+        let local_revs = (repo.head_branch_rev, repo.branches_rev);
+        let remote_revs = (
+            repo.head_branch_rev,
+            repo.branches_rev,
+            repo.remotes_rev,
+            repo.remote_branches_rev,
+        );
+        let worktree_rev = repo.worktrees_rev;
+        let submodule_rev = repo.submodules_rev;
+        let stash_rev = repo.stashes_rev;
+
+        Self {
+            local_revs,
+            local_hash: reuse
+                .filter(|parts| parts.local_revs == local_revs)
+                .map_or_else(
+                    || branch_sidebar_local_source_hash(repo),
+                    |parts| parts.local_hash,
+                ),
+            remote_revs,
+            remote_hash: reuse
+                .filter(|parts| parts.remote_revs == remote_revs)
+                .map_or_else(
+                    || branch_sidebar_remote_source_hash(repo),
+                    |parts| parts.remote_hash,
+                ),
+            worktree_rev,
+            worktree_hash: reuse
+                .filter(|parts| parts.worktree_rev == worktree_rev)
+                .map_or_else(
+                    || branch_sidebar_worktree_source_hash(repo),
+                    |parts| parts.worktree_hash,
+                ),
+            submodule_rev,
+            submodule_hash: reuse
+                .filter(|parts| parts.submodule_rev == submodule_rev)
+                .map_or_else(
+                    || branch_sidebar_submodule_source_hash(repo),
+                    |parts| parts.submodule_hash,
+                ),
+            stash_rev,
+            stash_hash: reuse
+                .filter(|parts| parts.stash_rev == stash_rev)
+                .map_or_else(
+                    || branch_sidebar_stash_source_hash(repo),
+                    |parts| parts.stash_hash,
+                ),
+        }
+    }
+
+    fn fingerprint(&self) -> BranchSidebarSourceFingerprint {
+        let mut hasher = FxHasher::default();
+        0u8.hash(&mut hasher);
+        self.local_hash.hash(&mut hasher);
+        1u8.hash(&mut hasher);
+        self.remote_hash.hash(&mut hasher);
+        2u8.hash(&mut hasher);
+        self.worktree_hash.hash(&mut hasher);
+        3u8.hash(&mut hasher);
+        self.submodule_hash.hash(&mut hasher);
+        4u8.hash(&mut hasher);
+        self.stash_hash.hash(&mut hasher);
+        BranchSidebarSourceFingerprint(hasher.finish())
+    }
+}
+
+pub(in crate::view) fn branch_sidebar_source_fingerprint(
+    repo: &RepoState,
+    reuse: Option<&BranchSidebarSourceFingerprintParts>,
+) -> (
+    BranchSidebarSourceFingerprint,
+    BranchSidebarSourceFingerprintParts,
+) {
+    let parts = BranchSidebarSourceFingerprintParts::for_repo(repo, reuse);
+    (parts.fingerprint(), parts)
+}
+
+fn hash_branch_sidebar_local_source<H: Hasher>(repo: &RepoState, hasher: &mut H) {
+    fingerprint::hash_loadable_kind(&repo.head_branch, hasher);
+    if let Loadable::Ready(head_branch) = &repo.head_branch {
+        head_branch.hash(hasher);
+    }
+
+    fingerprint::hash_loadable_kind(&repo.branches, hasher);
+    if let Loadable::Ready(branches) = &repo.branches {
+        for branch in branches.iter() {
+            branch.name.hash(hasher);
+            match branch.divergence {
+                Some(divergence) => {
+                    true.hash(hasher);
+                    divergence.ahead.hash(hasher);
+                    divergence.behind.hash(hasher);
+                }
+                None => false.hash(hasher),
+            }
+        }
+    }
+}
+
+fn branch_sidebar_local_source_hash(repo: &RepoState) -> u64 {
+    let mut hasher = FxHasher::default();
+    hash_branch_sidebar_local_source(repo, &mut hasher);
+    hasher.finish()
+}
+
+fn hash_branch_sidebar_remote_source<H: Hasher>(repo: &RepoState, hasher: &mut H) {
+    fingerprint::hash_loadable_kind(&repo.head_branch, hasher);
+    if let Loadable::Ready(head_branch) = &repo.head_branch {
+        head_branch.hash(hasher);
+    }
+
+    fingerprint::hash_loadable_kind(&repo.branches, hasher);
+    if let Loadable::Ready(branches) = &repo.branches {
+        for branch in branches.iter() {
+            branch.name.hash(hasher);
+            match &branch.upstream {
+                Some(upstream) => {
+                    true.hash(hasher);
+                    upstream.remote.hash(hasher);
+                    upstream.branch.hash(hasher);
+                }
+                None => false.hash(hasher),
+            }
+        }
+    }
+
+    fingerprint::hash_loadable_kind(&repo.remotes, hasher);
+    if let Loadable::Ready(remotes) = &repo.remotes {
+        for remote in remotes.iter() {
+            remote.name.hash(hasher);
+        }
+    }
+
+    fingerprint::hash_loadable_kind(&repo.remote_branches, hasher);
+    if let Loadable::Ready(remote_branches) = &repo.remote_branches {
+        for branch in remote_branches.iter() {
+            branch.remote.hash(hasher);
+            branch.name.hash(hasher);
+        }
+    }
+}
+
+fn branch_sidebar_remote_source_hash(repo: &RepoState) -> u64 {
+    let mut hasher = FxHasher::default();
+    hash_branch_sidebar_remote_source(repo, &mut hasher);
+    hasher.finish()
+}
+
+fn hash_branch_sidebar_worktree_source<H: Hasher>(repo: &RepoState, hasher: &mut H) {
+    repo.spec.workdir.hash(hasher);
+    fingerprint::hash_loadable_kind(&repo.worktrees, hasher);
+    if let Loadable::Ready(worktrees) = &repo.worktrees {
+        for worktree in worktrees.iter() {
+            worktree.path.hash(hasher);
+            worktree.branch.hash(hasher);
+            worktree.detached.hash(hasher);
+        }
+    }
+}
+
+fn branch_sidebar_worktree_source_hash(repo: &RepoState) -> u64 {
+    let mut hasher = FxHasher::default();
+    hash_branch_sidebar_worktree_source(repo, &mut hasher);
+    hasher.finish()
+}
+
+fn hash_branch_sidebar_submodule_source<H: Hasher>(repo: &RepoState, hasher: &mut H) {
+    fingerprint::hash_loadable_kind(&repo.submodules, hasher);
+    if let Loadable::Ready(submodules) = &repo.submodules {
+        for submodule in submodules.iter() {
+            submodule.path.hash(hasher);
+        }
+    }
+}
+
+fn branch_sidebar_submodule_source_hash(repo: &RepoState) -> u64 {
+    let mut hasher = FxHasher::default();
+    hash_branch_sidebar_submodule_source(repo, &mut hasher);
+    hasher.finish()
+}
+
+fn hash_branch_sidebar_stash_source<H: Hasher>(repo: &RepoState, hasher: &mut H) {
+    fingerprint::hash_loadable_kind(&repo.stashes, hasher);
+    if let Loadable::Ready(stashes) = &repo.stashes {
+        for stash in stashes.iter() {
+            stash.index.hash(hasher);
+            stash.message.hash(hasher);
+            stash.created_at.hash(hasher);
+        }
+    }
+}
+
+fn branch_sidebar_stash_source_hash(repo: &RepoState) -> u64 {
+    let mut hasher = FxHasher::default();
+    hash_branch_sidebar_stash_source(repo, &mut hasher);
+    hasher.finish()
+}
+
 fn cmp_case_insensitive_then_case_sensitive(left: &str, right: &str) -> std::cmp::Ordering {
     left.to_lowercase()
         .cmp(&right.to_lowercase())
         .then_with(|| left.cmp(right))
+}
+
+fn branch_sidebar_depth(depth: usize) -> BranchSidebarDepth {
+    u16::try_from(depth).unwrap_or(u16::MAX)
+}
+
+fn branch_sidebar_divergence_count(count: usize) -> Option<NonZeroU32> {
+    if count == 0 {
+        None
+    } else {
+        Some(NonZeroU32::new(u32::try_from(count).unwrap_or(u32::MAX)).unwrap())
+    }
 }
 
 fn defaults_to_collapsed(collapse_key: &str) -> bool {
@@ -209,9 +494,16 @@ pub(super) fn branch_sidebar_rows(
     let head_upstream_full = match (&repo.branches, &repo.head_branch) {
         (Loadable::Ready(branches), Loadable::Ready(head)) => branches
             .iter()
-            .find(|b| b.name == *head)
-            .and_then(|b| b.upstream.as_ref())
-            .map(|u| format!("{}/{}", u.remote, u.branch)),
+            .find(|branch| branch.name == *head)
+            .and_then(|branch| branch.upstream.as_ref())
+            .map(|upstream| {
+                let mut full =
+                    String::with_capacity(upstream.remote.len() + 1 + upstream.branch.len());
+                full.push_str(&upstream.remote);
+                full.push('/');
+                full.push_str(&upstream.branch);
+                full
+            }),
         _ => None,
     };
 
@@ -233,7 +525,7 @@ pub(super) fn branch_sidebar_rows(
             }
             Loadable::Ready(branches) => {
                 let head = match &repo.head_branch {
-                    Loadable::Ready(h) => Some(h.as_str()),
+                    Loadable::Ready(head) => Some(head.as_str()),
                     _ => None,
                 };
                 let mut local_meta: HashMap<String, (Option<UpstreamDivergence>, bool)> =
@@ -242,7 +534,10 @@ pub(super) fn branch_sidebar_rows(
                 for branch in branches.iter() {
                     local_meta.insert(
                         branch.name.clone(),
-                        (branch.divergence, head.is_some_and(|h| h == branch.name)),
+                        (
+                            branch.divergence,
+                            head.is_some_and(|current| current == branch.name),
+                        ),
                     );
                 }
 
@@ -250,6 +545,9 @@ pub(super) fn branch_sidebar_rows(
                 for branch in branches.iter() {
                     tree.insert(&branch.name);
                 }
+
+                let mut name_prefix = String::new();
+                let mut group_path_prefix = String::new();
                 push_slash_tree_rows(
                     &tree,
                     &mut rows,
@@ -258,8 +556,8 @@ pub(super) fn branch_sidebar_rows(
                     0,
                     false,
                     BranchSection::Local,
-                    "",
-                    "",
+                    &mut name_prefix,
+                    &mut group_path_prefix,
                     None,
                     collapsed_items,
                 );
@@ -272,9 +570,9 @@ pub(super) fn branch_sidebar_rows(
                 section: BranchSection::Local,
                 message: "Not loaded".into(),
             }),
-            Loadable::Error(e) => rows.push(BranchSidebarRow::Placeholder {
+            Loadable::Error(error) => rows.push(BranchSidebarRow::Placeholder {
                 section: BranchSection::Local,
-                message: e.clone().into(),
+                message: error.clone().into(),
             }),
         }
     }
@@ -308,10 +606,10 @@ pub(super) fn branch_sidebar_rows(
                 });
                 remote_section_is_loading_or_error = true;
             }
-            Loadable::Error(e) => {
+            Loadable::Error(error) => {
                 rows.push(BranchSidebarRow::Placeholder {
                     section: BranchSection::Remote,
-                    message: e.clone().into(),
+                    message: error.clone().into(),
                 });
                 remote_section_is_loading_or_error = true;
             }
@@ -320,9 +618,6 @@ pub(super) fn branch_sidebar_rows(
 
         if !remote_section_is_loading_or_error {
             if let Loadable::Ready(local_branches) = &repo.branches {
-                // Some repos have upstream tracking configured before any local
-                // remote-tracking refs are present. Surface those upstreams so the
-                // Remote section still reflects tracked branches.
                 for local in local_branches.iter() {
                     if let Some(upstream) = &local.upstream {
                         remotes
@@ -332,13 +627,13 @@ pub(super) fn branch_sidebar_rows(
                     }
                 }
             }
+
             if let Loadable::Ready(known) = &repo.remotes {
-                // Ensure remotes with no local remote-tracking branches are still visible
-                // (e.g. newly added remotes before an initial fetch).
                 for remote in known.iter() {
                     remotes.entry(remote.name.clone()).or_default();
                 }
             }
+
             if remotes.is_empty() {
                 rows.push(BranchSidebarRow::Placeholder {
                     section: BranchSection::Remote,
@@ -371,7 +666,11 @@ pub(super) fn branch_sidebar_rows(
                     for branch in branches {
                         tree.insert(&branch);
                     }
-                    let name_prefix = format!("{remote}/");
+
+                    let mut name_prefix = String::with_capacity(remote.len() + 1);
+                    name_prefix.push_str(&remote);
+                    name_prefix.push('/');
+                    let mut group_path_prefix = String::new();
                     push_slash_tree_rows(
                         &tree,
                         &mut rows,
@@ -380,8 +679,8 @@ pub(super) fn branch_sidebar_rows(
                         1,
                         true,
                         BranchSection::Remote,
-                        &name_prefix,
-                        "",
+                        &mut name_prefix,
+                        &mut group_path_prefix,
                         Some(remote.as_str()),
                         collapsed_items,
                     );
@@ -391,6 +690,7 @@ pub(super) fn branch_sidebar_rows(
     }
 
     rows.push(BranchSidebarRow::SectionSpacer);
+
     let worktrees_collapsed = is_collapsed(collapsed_items, worktrees_section_storage_key());
     rows.push(BranchSidebarRow::WorktreesHeader {
         top_border: true,
@@ -404,18 +704,13 @@ pub(super) fn branch_sidebar_rows(
                 let mut any = false;
                 for worktree in worktrees.iter() {
                     any = true;
-                    let label: SharedString = if let Some(branch) = &worktree.branch {
-                        format!("{branch}  {}", worktree.path.display()).into()
-                    } else if worktree.detached {
-                        format!("(detached)  {}", worktree.path.display()).into()
-                    } else {
-                        worktree.path.display().to_string().into()
-                    };
-                    let tooltip = label.clone();
                     rows.push(BranchSidebarRow::WorktreeItem {
                         path: worktree.path.clone(),
-                        label,
-                        tooltip,
+                        branch: worktree
+                            .branch
+                            .as_ref()
+                            .map(|branch| SharedString::new(branch.as_str())),
+                        detached: worktree.detached,
                         is_active: worktree.path == repo.spec.workdir,
                     });
                 }
@@ -431,13 +726,14 @@ pub(super) fn branch_sidebar_rows(
             Loadable::NotLoaded => rows.push(BranchSidebarRow::WorktreePlaceholder {
                 message: "Loading".into(),
             }),
-            Loadable::Error(e) => rows.push(BranchSidebarRow::WorktreePlaceholder {
-                message: e.clone().into(),
+            Loadable::Error(error) => rows.push(BranchSidebarRow::WorktreePlaceholder {
+                message: error.clone().into(),
             }),
         }
     }
 
     rows.push(BranchSidebarRow::SectionSpacer);
+
     let submodules_collapsed = is_collapsed(collapsed_items, submodules_section_storage_key());
     rows.push(BranchSidebarRow::SubmodulesHeader {
         top_border: true,
@@ -454,12 +750,8 @@ pub(super) fn branch_sidebar_rows(
             }
             Loadable::Ready(submodules) => {
                 for submodule in submodules.iter() {
-                    let label: SharedString = submodule.path.display().to_string().into();
-                    let tooltip: SharedString = submodule.path.display().to_string().into();
                     rows.push(BranchSidebarRow::SubmoduleItem {
                         path: submodule.path.clone(),
-                        label,
-                        tooltip,
                     });
                 }
             }
@@ -469,13 +761,14 @@ pub(super) fn branch_sidebar_rows(
             Loadable::NotLoaded => rows.push(BranchSidebarRow::SubmodulePlaceholder {
                 message: "Loading".into(),
             }),
-            Loadable::Error(e) => rows.push(BranchSidebarRow::SubmodulePlaceholder {
-                message: e.clone().into(),
+            Loadable::Error(error) => rows.push(BranchSidebarRow::SubmodulePlaceholder {
+                message: error.clone().into(),
             }),
         }
     }
 
     rows.push(BranchSidebarRow::SectionSpacer);
+
     let stash_collapsed = is_collapsed(collapsed_items, stash_section_storage_key());
     rows.push(BranchSidebarRow::StashHeader {
         top_border: true,
@@ -512,60 +805,17 @@ pub(super) fn branch_sidebar_rows(
             Loadable::NotLoaded => rows.push(BranchSidebarRow::StashPlaceholder {
                 message: "Loading".into(),
             }),
-            Loadable::Error(e) => rows.push(BranchSidebarRow::StashPlaceholder {
-                message: e.clone().into(),
+            Loadable::Error(error) => rows.push(BranchSidebarRow::StashPlaceholder {
+                message: error.clone().into(),
             }),
         }
     }
 
-    // Add rows to the end of the side to make room for side panel toggler.
     for _ in 0..TRAILING_BOTTOM_SPACERS {
         rows.push(BranchSidebarRow::SectionSpacer);
     }
 
     rows
-}
-
-fn push_branch_leaf(
-    out: &mut Vec<BranchSidebarRow>,
-    label: &str,
-    full_name: String,
-    local_meta: Option<&HashMap<String, (Option<UpstreamDivergence>, bool)>>,
-    upstream_full: Option<&str>,
-    depth: usize,
-    muted: bool,
-    section: BranchSection,
-) {
-    let is_upstream = upstream_full.is_some_and(|u| u == full_name.as_str());
-    let (divergence, is_head) = local_meta
-        .and_then(|meta| meta.get(&full_name))
-        .copied()
-        .unwrap_or((None, false));
-    let divergence_ahead = divergence
-        .filter(|d| d.ahead > 0)
-        .map(|d| d.ahead.to_string().into());
-    let divergence_behind = divergence
-        .filter(|d| d.behind > 0)
-        .map(|d| d.behind.to_string().into());
-    let upstream_note = if is_upstream && section == BranchSection::Remote {
-        " (upstream for current branch)"
-    } else {
-        ""
-    };
-    let tooltip: SharedString = format!("Branch: {full_name}{upstream_note}").into();
-    out.push(BranchSidebarRow::Branch {
-        label: label.to_string().into(),
-        name: full_name.into(),
-        section,
-        depth,
-        muted,
-        divergence,
-        divergence_ahead,
-        divergence_behind,
-        tooltip,
-        is_head,
-        is_upstream,
-    });
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -577,8 +827,8 @@ fn push_slash_tree_rows(
     depth: usize,
     muted: bool,
     section: BranchSection,
-    name_prefix: &str,
-    group_path_prefix: &str,
+    name_prefix: &mut String,
+    group_path_prefix: &mut String,
     remote_name: Option<&str>,
     collapsed_items: &BTreeSet<String>,
 ) {
@@ -594,54 +844,60 @@ fn push_slash_tree_rows(
     for (label, node) in children {
         if node.children.is_empty() {
             if node.is_leaf {
-                push_branch_leaf(
+                push_branch_sidebar_branch_row(
                     out,
                     label,
-                    format!("{name_prefix}{label}"),
+                    name_prefix,
                     local_meta,
                     upstream_full,
+                    section,
                     depth,
                     muted,
-                    section,
                 );
             }
             continue;
         }
 
-        let group_path = format!("{group_path_prefix}{label}");
+        let group_path_mark = group_path_prefix.len();
+        group_path_prefix.push_str(label);
         let collapse_key = match section {
-            BranchSection::Local => local_group_storage_key(&group_path),
-            BranchSection::Remote => {
-                remote_group_storage_key(remote_name.unwrap_or_default(), &group_path)
-            }
+            BranchSection::Local => local_group_storage_key(group_path_prefix.as_str()),
+            BranchSection::Remote => remote_group_storage_key(
+                remote_name.unwrap_or_default(),
+                group_path_prefix.as_str(),
+            ),
         };
         let group_collapsed = is_collapsed(collapsed_items, &collapse_key);
         out.push(BranchSidebarRow::GroupHeader {
             label: format!("{label}/").into(),
             section,
-            depth,
+            depth: branch_sidebar_depth(depth),
             collapsed: group_collapsed,
             collapse_key: collapse_key.into(),
         });
         if group_collapsed {
+            group_path_prefix.truncate(group_path_mark);
             continue;
         }
 
         if node.is_leaf {
-            push_branch_leaf(
+            push_branch_sidebar_branch_row(
                 out,
                 label,
-                format!("{name_prefix}{label}"),
+                name_prefix,
                 local_meta,
                 upstream_full,
+                section,
                 depth + 1,
                 muted,
-                section,
             );
         }
 
-        let next_name_prefix = format!("{name_prefix}{label}/");
-        let next_group_path_prefix = format!("{group_path}/");
+        let name_prefix_mark = name_prefix.len();
+        name_prefix.push_str(label);
+        name_prefix.push('/');
+        group_path_prefix.push('/');
+
         push_slash_tree_rows(
             node,
             out,
@@ -650,10 +906,47 @@ fn push_slash_tree_rows(
             depth + 1,
             muted,
             section,
-            &next_name_prefix,
-            &next_group_path_prefix,
+            name_prefix,
+            group_path_prefix,
             remote_name,
             collapsed_items,
         );
+
+        name_prefix.truncate(name_prefix_mark);
+        group_path_prefix.truncate(group_path_mark);
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_branch_sidebar_branch_row(
+    out: &mut Vec<BranchSidebarRow>,
+    label: &str,
+    name_prefix: &mut String,
+    local_meta: Option<&HashMap<String, (Option<UpstreamDivergence>, bool)>>,
+    upstream_full: Option<&str>,
+    section: BranchSection,
+    depth: usize,
+    muted: bool,
+) {
+    name_prefix.push_str(label);
+    let is_upstream = section == BranchSection::Remote
+        && upstream_full.is_some_and(|u| u == name_prefix.as_str());
+    let (divergence, is_head) = local_meta
+        .and_then(|meta| meta.get(name_prefix.as_str()))
+        .copied()
+        .unwrap_or((None, false));
+    let name = SharedString::new(name_prefix.as_str());
+    name_prefix.truncate(name_prefix.len() - label.len());
+    let divergence_ahead = divergence.and_then(|d| branch_sidebar_divergence_count(d.ahead));
+    let divergence_behind = divergence.and_then(|d| branch_sidebar_divergence_count(d.behind));
+    out.push(BranchSidebarRow::Branch {
+        name,
+        section,
+        depth: branch_sidebar_depth(depth),
+        muted,
+        divergence_ahead,
+        divergence_behind,
+        is_head,
+        is_upstream,
+    });
 }

@@ -34,7 +34,14 @@ gitcomet-ui = { workspace = true, optional = true }
 gitcomet-ui-gpui = { workspace = true, optional = true }
 mimalloc = { workspace = true }
 rustc-hash = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 tempfile = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.build-dependencies]
 embed-resource = "3"
+
+[[bin]]
+name = "perf-app-launch"
+path = "src/bin/perf_app_launch.rs"
+required-features = ["ui-gpui-runtime"]

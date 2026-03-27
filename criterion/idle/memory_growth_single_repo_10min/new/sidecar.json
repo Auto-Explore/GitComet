@@ -1,0 +1,28 @@
+{
+  "bench": "idle/memory_growth_single_repo_10min",
+  "metrics": {
+    "open_repos": 1,
+    "tracked_files_per_repo": 1000,
+    "sample_duration_ms": 600151.804361,
+    "sample_count": 600,
+    "avg_cpu_pct": 0.005408934167008477,
+    "peak_cpu_pct": 0.06844478299846668,
+    "rss_start_kib": 20764,
+    "rss_end_kib": 18660,
+    "rss_delta_kib": -2104,
+    "refresh_cycles": 0,
+    "repos_refreshed": 0,
+    "status_calls": 0,
+    "status_ms": 0.0,
+    "avg_refresh_cycle_ms": 0.0,
+    "max_refresh_cycle_ms": 0.0,
+    "wake_resume_ms": 0.0,
+    "alloc_ops": 117474,
+    "dealloc_ops": 117474,
+    "realloc_ops": 351224,
+    "alloc_bytes": 121228787,
+    "dealloc_bytes": 121228787,
+    "realloc_bytes_delta": 117828256,
+    "net_alloc_bytes": 0
+  }
+}

@@ -436,6 +436,21 @@ pub fn parse_conflict_markers_shared(text: Arc<str>) -> Vec<ConflictSegment> {
         .collect()
 }
 
+/// Parse marker segments only when the text plausibly contains conflict
+/// markers, returning an empty segment list for clean inputs.
+pub fn parse_conflict_markers_shared_nonempty(text: Arc<str>) -> Vec<ConflictSegment> {
+    if memchr::memmem::find(text.as_bytes(), b"<<<<<<<").is_none() {
+        return Vec::new();
+    }
+
+    let segments = parse_conflict_markers_shared(text);
+    if conflict_count(&segments) == 0 {
+        Vec::new()
+    } else {
+        segments
+    }
+}
+
 fn append_text_segment(segments: &mut Vec<ConflictSegment>, text: impl Into<ConflictText>) {
     let text = text.into();
     if text.is_empty() {
@@ -1298,23 +1313,44 @@ impl ResolvedOutputProjection {
         fn fragment_line_stats(
             text: &str,
         ) -> (std::sync::Arc<[usize]>, usize, bool, usize, usize, usize) {
+            let bytes = text.as_bytes();
             let mut starts = Vec::new();
             starts.push(0usize);
-            for (ix, byte) in text.as_bytes().iter().enumerate() {
-                if *byte == b'\n' {
-                    starts.push(ix.saturating_add(1));
+            let mut prev_pos = 0usize;
+            let mut widest_line_ix = 0usize;
+            let mut widest_line_len = 0usize;
+            let mut line_count = 0usize;
+
+            for pos in memchr::memchr_iter(b'\n', bytes) {
+                starts.push(pos + 1);
+                let line_len = pos - prev_pos;
+                if line_len > widest_line_len {
+                    widest_line_len = line_len;
+                    widest_line_ix = line_count;
                 }
+                line_count += 1;
+                prev_pos = pos + 1;
             }
+
+            // Handle last line (no trailing newline).
+            if prev_pos < bytes.len() {
+                let line_len = bytes.len() - prev_pos;
+                if line_len > widest_line_len {
+                    widest_line_len = line_len;
+                    widest_line_ix = line_count;
+                }
+                line_count += 1;
+            }
+
             let newline_count = starts.len().saturating_sub(1);
-            let ends_with_newline = text.as_bytes().last().copied() == Some(b'\n');
-            let stats = scan_text_line_stats(text);
+            let ends_with_newline = bytes.last().copied() == Some(b'\n');
             (
                 starts.into(),
                 newline_count,
                 ends_with_newline,
-                stats.line_count,
-                stats.widest_line_ix,
-                stats.widest_line_len,
+                line_count,
+                widest_line_ix,
+                widest_line_len,
             )
         }
 
@@ -2332,21 +2368,70 @@ fn push_block_local_boundary_context_rows(
     };
     let trailing_start = line_count_usize.saturating_sub(trailing_count);
 
+    // Leading context: scan forward for the first `leading_count` lines.
     push_block_local_context_lines(
         rows,
         text.lines().enumerate().take(leading_count),
         old_line_start,
         new_line_start,
     );
-    push_block_local_context_lines(
-        rows,
-        text.lines()
-            .enumerate()
-            .skip(leading_count.max(trailing_start)),
-        old_line_start,
-        new_line_start,
-    );
+
+    // Trailing context: find the byte offset of the trailing_start-th line
+    // by scanning backwards from the end, avoiding a full-text forward scan.
+    let effective_trailing_start = leading_count.max(trailing_start);
+    if trailing_count > 0 && effective_trailing_start < line_count_usize {
+        let bytes = text.as_bytes();
+        // Find byte offset of the effective_trailing_start-th line by
+        // reverse-scanning for the (line_count - effective_trailing_start)
+        // newlines from the end.
+        let lines_from_end = line_count_usize - effective_trailing_start;
+        let byte_offset = byte_offset_of_nth_line_from_end(bytes, lines_from_end);
+        push_block_local_context_lines(
+            rows,
+            text[byte_offset..]
+                .lines()
+                .enumerate()
+                .map(move |(ix, line)| (effective_trailing_start + ix, line)),
+            old_line_start,
+            new_line_start,
+        );
+    }
     line_count
+}
+
+/// Find the byte offset of the `n`-th line from the end of the text.
+/// Returns the byte offset where the `n`-th-from-end line starts.
+#[cfg(any(test, feature = "benchmarks"))]
+fn byte_offset_of_nth_line_from_end(bytes: &[u8], n: usize) -> usize {
+    if n == 0 {
+        return bytes.len();
+    }
+    // Count newlines from the end. We need to find `n` line-start positions.
+    // A line starts either at the beginning of the text or after a newline.
+    // If the text ends with \n, the last newline does NOT start a new line
+    // (text_line_count_usize treats trailing \n as the last line's terminator).
+    let mut remaining = n;
+    let mut pos = bytes.len();
+    // Skip trailing newline if present (it terminates the last counted line,
+    // not a new line after it).
+    if pos > 0 && bytes[pos - 1] == b'\n' {
+        pos -= 1;
+    }
+    while remaining > 0 && pos > 0 {
+        if let Some(nl) = memchr::memrchr(b'\n', &bytes[..pos]) {
+            pos = nl;
+            remaining -= 1;
+        } else {
+            // No more newlines; the first line starts at offset 0.
+            return 0;
+        }
+    }
+    if remaining > 0 {
+        0
+    } else {
+        // `pos` points at the newline; the line starts after it.
+        pos + 1
+    }
 }
 
 #[cfg(any(test, feature = "benchmarks"))]
@@ -2374,10 +2459,7 @@ fn push_block_local_context_lines<'a>(
 
 #[cfg(any(test, feature = "benchmarks"))]
 pub(super) fn text_line_count(text: &str) -> u32 {
-    if text.is_empty() {
-        return 0;
-    }
-    u32::try_from(text.lines().count()).unwrap_or(u32::MAX)
+    u32::try_from(text_line_count_usize(text)).unwrap_or(u32::MAX)
 }
 
 #[cfg(any(test, feature = "benchmarks"))]
@@ -2423,7 +2505,16 @@ fn row_conflict_index_for_lines(
 }
 
 fn text_line_count_usize(text: &str) -> usize {
-    scan_text_line_stats(text).line_count
+    if text.is_empty() {
+        return 0;
+    }
+    let bytes = text.as_bytes();
+    let newline_count = memchr::memchr_iter(b'\n', bytes).count();
+    if bytes.last() == Some(&b'\n') {
+        newline_count
+    } else {
+        newline_count + 1
+    }
 }
 
 fn indexed_line_count(text: &str, line_starts: &[usize]) -> usize {
@@ -2477,34 +2568,29 @@ pub(super) fn scan_text_line_stats(text: &str) -> TextLineStats {
     }
 
     let bytes = text.as_bytes();
-    let mut line_count = 1usize;
-    let mut current_line_ix = 0usize;
-    let mut current_line_len = 0usize;
+    let mut line_count = 0usize;
+    let mut prev_pos = 0usize;
     let mut widest_line_ix = 0usize;
     let mut widest_line_len = 0usize;
 
-    let mut finalize_line = |line_ix: usize, line_len: usize| {
+    for pos in memchr::memchr_iter(b'\n', bytes) {
+        let line_len = pos - prev_pos;
         if line_len > widest_line_len {
             widest_line_len = line_len;
-            widest_line_ix = line_ix;
+            widest_line_ix = line_count;
         }
-    };
-
-    for (ix, byte) in bytes.iter().enumerate() {
-        if *byte == b'\n' {
-            finalize_line(current_line_ix, current_line_len);
-            current_line_len = 0;
-            if ix.saturating_add(1) < bytes.len() {
-                current_line_ix = current_line_ix.saturating_add(1);
-                line_count = line_count.saturating_add(1);
-            }
-        } else {
-            current_line_len = current_line_len.saturating_add(1);
-        }
+        line_count += 1;
+        prev_pos = pos + 1;
     }
 
-    if bytes.last().copied() != Some(b'\n') {
-        finalize_line(current_line_ix, current_line_len);
+    // Handle last line (no trailing newline).
+    if prev_pos < bytes.len() {
+        let line_len = bytes.len() - prev_pos;
+        if line_len > widest_line_len {
+            widest_line_len = line_len;
+            widest_line_ix = line_count;
+        }
+        line_count += 1;
     }
 
     TextLineStats {
@@ -2553,6 +2639,22 @@ fn build_three_way_conflict_maps_impl(
     theirs_line_count: usize,
     include_line_conflict_maps: bool,
 ) -> ThreeWayConflictMaps {
+    if segments.is_empty() {
+        return ThreeWayConflictMaps {
+            conflict_ranges: Default::default(),
+            line_conflict_maps: if include_line_conflict_maps {
+                [
+                    vec![None; base_line_count],
+                    vec![None; ours_line_count],
+                    vec![None; theirs_line_count],
+                ]
+            } else {
+                Default::default()
+            },
+            conflict_has_base: Vec::new(),
+        };
+    }
+
     let block_count = segments
         .iter()
         .filter(|segment| matches!(segment, ConflictSegment::Block(_)))
@@ -2919,6 +3021,21 @@ pub fn build_three_way_visible_projection(
     segments: &[ConflictSegment],
     hide_resolved: bool,
 ) -> ThreeWayVisibleProjection {
+    if total_lines == 0 {
+        return ThreeWayVisibleProjection::default();
+    }
+
+    if !hide_resolved {
+        return ThreeWayVisibleProjection {
+            spans: vec![ThreeWayVisibleSpan::Lines {
+                visible_start: 0,
+                source_line_start: 0,
+                len: total_lines,
+            }],
+            visible_len: total_lines,
+        };
+    }
+
     let resolved_blocks: Vec<bool> = segments
         .iter()
         .filter_map(|s| match s {

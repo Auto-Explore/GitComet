@@ -3048,6 +3048,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
                 limit: 20,
                 cursor: Some(LogCursor {
                     last_seen: CommitId("cursor".into()),
+                    resume_from: None,
                 }),
             },
             1,
@@ -3103,6 +3104,15 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
                 target: target.clone(),
             },
             1,
+        ),
+        (
+            Effect::LoadSelectedDiff {
+                repo_id,
+                target: target.clone(),
+                load_file_text: true,
+                load_file_image: false,
+            },
+            2,
         ),
         (
             Effect::LoadConflictFile {

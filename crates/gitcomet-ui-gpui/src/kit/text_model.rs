@@ -1,4 +1,5 @@
 use gpui::SharedString;
+use memchr::memchr_iter;
 use std::ops::{Deref, Range};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
@@ -52,12 +53,12 @@ struct LineIndex {
 
 impl LineIndex {
     fn from_text(text: &str) -> Self {
-        let mut starts = Vec::with_capacity(text.bytes().filter(|&b| b == b'\n').count() + 1);
+        let bytes = text.as_bytes();
+        let newline_count = memchr_iter(b'\n', bytes).count();
+        let mut starts = Vec::with_capacity(newline_count + 1);
         starts.push(0);
-        for (ix, byte) in text.bytes().enumerate() {
-            if byte == b'\n' {
-                starts.push(ix + 1);
-            }
+        for pos in memchr_iter(b'\n', bytes) {
+            starts.push(pos + 1);
         }
         Self {
             starts: Arc::<[usize]>::from(starts),
@@ -89,7 +90,7 @@ impl LineIndex {
         // newline byte inside the replaced range and must be removed.
         let suffix_start = starts.partition_point(|&start| start <= range.end);
 
-        let inserted_breaks = inserted.bytes().filter(|&b| b == b'\n').count();
+        let inserted_breaks = memchr_iter(b'\n', inserted.as_bytes()).count();
         let mut updated = Vec::with_capacity(
             prefix_len
                 .saturating_add(inserted_breaks)
@@ -98,10 +99,8 @@ impl LineIndex {
         );
         updated.extend_from_slice(&starts[..prefix_len]);
 
-        for (ix, byte) in inserted.bytes().enumerate() {
-            if byte == b'\n' {
-                updated.push(range.start.saturating_add(ix).saturating_add(1));
-            }
+        for pos in memchr_iter(b'\n', inserted.as_bytes()) {
+            updated.push(range.start.saturating_add(pos).saturating_add(1));
         }
 
         for &start in &starts[suffix_start..] {
@@ -313,6 +312,14 @@ impl TextModel {
 
     pub fn clamp_to_char_boundary(&self, mut offset: usize) -> usize {
         offset = offset.min(self.len());
+        // Fast path: use the materialized string directly to avoid per-byte
+        // snapshot creation in the non-ASCII clamping loop.
+        if let Some(text) = self.core.materialized.get() {
+            while offset > 0 && !text.is_char_boundary(offset) {
+                offset -= 1;
+            }
+            return offset;
+        }
         while offset > 0 && !self.is_char_boundary(offset) {
             offset = offset.saturating_sub(1);
         }
@@ -328,18 +335,59 @@ impl TextModel {
         }
 
         let core = Arc::make_mut(&mut self.core);
-        let (mut left, right_from_start) = split_pieces_at(core.pieces.as_slice(), range.start);
-        let (_removed, mut right) = split_pieces_at(
-            right_from_start.as_slice(),
-            range.end.saturating_sub(range.start),
-        );
-
         let inserted_pieces = append_add_pieces(core, new_text);
-        left.extend(inserted_pieces);
-        left.append(&mut right);
-        merge_adjacent_pieces(&mut left);
+        let mut rebuilt = Vec::with_capacity(
+            core.pieces
+                .len()
+                .saturating_add(inserted_pieces.len())
+                .max(1),
+        );
+        let mut inserted = false;
+        let mut cursor = 0usize;
 
-        core.pieces = left;
+        for piece in &core.pieces {
+            let piece_start = cursor;
+            let piece_end = cursor.saturating_add(piece.len);
+
+            if piece_end <= range.start {
+                push_piece_merged(&mut rebuilt, *piece);
+            } else if piece_start >= range.end {
+                if !inserted {
+                    for inserted_piece in &inserted_pieces {
+                        push_piece_merged(&mut rebuilt, *inserted_piece);
+                    }
+                    inserted = true;
+                }
+                push_piece_merged(&mut rebuilt, *piece);
+            } else {
+                let prefix_len = range.start.saturating_sub(piece_start).min(piece.len);
+                if let Some(prefix) = piece.prefix(prefix_len) {
+                    push_piece_merged(&mut rebuilt, prefix);
+                }
+
+                if !inserted {
+                    for inserted_piece in &inserted_pieces {
+                        push_piece_merged(&mut rebuilt, *inserted_piece);
+                    }
+                    inserted = true;
+                }
+
+                let suffix_offset = range.end.saturating_sub(piece_start).min(piece.len);
+                if let Some(suffix) = piece.suffix(suffix_offset) {
+                    push_piece_merged(&mut rebuilt, suffix);
+                }
+            }
+
+            cursor = piece_end;
+        }
+
+        if !inserted {
+            for inserted_piece in &inserted_pieces {
+                push_piece_merged(&mut rebuilt, *inserted_piece);
+            }
+        }
+
+        core.pieces = rebuilt;
         core.len = core
             .len
             .saturating_sub(range.end.saturating_sub(range.start))
@@ -428,6 +476,12 @@ impl TextModelSnapshot {
             return false;
         }
 
+        // Fast path: if the text is already materialized, check directly on the
+        // contiguous string instead of walking the piece list.
+        if let Some(text) = self.core.materialized.get() {
+            return text.is_char_boundary(offset);
+        }
+
         let mut cursor = 0usize;
         for piece in &self.core.pieces {
             let next = cursor.saturating_add(piece.len);
@@ -461,6 +515,11 @@ impl TextModelSnapshot {
         let range = if end < start { end..start } else { start..end };
         if range.is_empty() {
             return String::new();
+        }
+
+        // Fast path: if the text is already materialized, slice directly.
+        if let Some(text) = self.core.materialized.get() {
+            return text[range].to_string();
         }
 
         let mut out = String::with_capacity(range.end.saturating_sub(range.start));
@@ -605,42 +664,23 @@ fn prepare_chunks_parallel(text: &str, ranges: &[Range<usize>]) -> Vec<Arc<str>>
     chunks
 }
 
-fn split_pieces_at(pieces: &[Piece], offset: usize) -> (Vec<Piece>, Vec<Piece>) {
-    if pieces.is_empty() {
-        return (Vec::new(), Vec::new());
-    }
-    if offset == 0 {
-        return (Vec::new(), pieces.to_vec());
-    }
-
-    let mut left = Vec::with_capacity(pieces.len());
-    let mut right = Vec::with_capacity(pieces.len());
-    let mut consumed = 0usize;
-
-    for piece in pieces {
-        let piece_end = consumed.saturating_add(piece.len);
-        if piece_end <= offset {
-            left.push(*piece);
-        } else if consumed >= offset {
-            right.push(*piece);
-        } else {
-            let split_at = offset.saturating_sub(consumed).min(piece.len);
-            if let Some(prefix) = piece.prefix(split_at) {
-                left.push(prefix);
-            }
-            if let Some(suffix) = piece.suffix(split_at) {
-                right.push(suffix);
-            }
-        }
-        consumed = piece_end;
-    }
-
-    (left, right)
-}
-
 fn append_add_pieces(core: &mut TextModelCore, text: &str) -> Vec<Piece> {
     if text.is_empty() {
         return Vec::new();
+    }
+
+    if text.len() <= LARGE_TEXT_CHUNK_BYTES {
+        let add_chunks = Arc::make_mut(&mut core.add_chunks);
+        let chunk_index = add_chunks.len();
+        let chunk = Arc::<str>::from(text);
+        let len = chunk.len();
+        add_chunks.push(chunk);
+        return vec![Piece {
+            buffer: BufferId::Add,
+            chunk_index,
+            start: 0,
+            len,
+        }];
     }
 
     let ranges = chunk_ranges(text, LARGE_TEXT_CHUNK_BYTES);
@@ -669,26 +709,22 @@ fn append_add_pieces(core: &mut TextModelCore, text: &str) -> Vec<Piece> {
     pieces
 }
 
-fn merge_adjacent_pieces(pieces: &mut Vec<Piece>) {
-    if pieces.len() < 2 {
+fn push_piece_merged(pieces: &mut Vec<Piece>, piece: Piece) {
+    if piece.len == 0 {
         return;
     }
 
-    let mut merged = Vec::with_capacity(pieces.len());
-    let mut current = pieces[0];
-    for piece in pieces.iter().skip(1) {
-        let contiguous = current.buffer == piece.buffer
-            && current.chunk_index == piece.chunk_index
-            && current.start.saturating_add(current.len) == piece.start;
+    if let Some(last) = pieces.last_mut() {
+        let contiguous = last.buffer == piece.buffer
+            && last.chunk_index == piece.chunk_index
+            && last.start.saturating_add(last.len) == piece.start;
         if contiguous {
-            current.len = current.len.saturating_add(piece.len);
-            continue;
+            last.len = last.len.saturating_add(piece.len);
+            return;
         }
-        merged.push(current);
-        current = *piece;
     }
-    merged.push(current);
-    *pieces = merged;
+
+    pieces.push(piece);
 }
 
 #[cfg(test)]

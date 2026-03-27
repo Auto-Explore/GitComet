@@ -747,11 +747,12 @@ impl MainPaneView {
             }
             let next: SharedString = input.read(cx).text().to_string().into();
             if this.diff_search_query != next {
-                this.diff_search_query = next;
-                this.clear_diff_text_query_overlay_cache();
+                let previous_query = this.diff_search_query.clone();
+                this.diff_search_query = next.clone();
+                this.invalidate_diff_text_query_overlay_cache(next.as_ref());
                 this.clear_worktree_preview_segments_cache();
                 this.clear_conflict_diff_query_overlay_caches();
-                this.diff_search_recompute_matches();
+                this.diff_search_recompute_matches_for_query_change(previous_query.as_ref());
                 cx.notify();
             }
         });
@@ -812,6 +813,7 @@ impl MainPaneView {
             diff_split_row_provider: None,
             diff_file_for_src_ix: Vec::new(),
             diff_language_for_src_ix: Vec::new(),
+            diff_yaml_block_scalar_for_src_ix: Vec::new(),
             diff_click_kinds: Vec::new(),
             diff_line_kind_for_src_ix: Vec::new(),
             diff_hide_unified_header_for_src_ix: Vec::new(),
@@ -833,6 +835,7 @@ impl MainPaneView {
             diff_text_segments_cache: Vec::new(),
             diff_text_query_segments_cache: Vec::new(),
             diff_text_query_cache_query: SharedString::default(),
+            diff_text_query_cache_generation: 0,
             diff_selection_anchor: None,
             diff_selection_range: None,
             diff_text_selecting: false,
@@ -954,7 +957,7 @@ impl MainPaneView {
             conflict_preview_last_synced_y: [px(0.0); 3],
             conflict_resolved_preview_scroll: UniformListScrollHandle::default(),
             worktree_preview_scroll: UniformListScrollHandle::default(),
-            path_display_cache: std::cell::RefCell::new(HashMap::default()),
+            path_display_cache: std::cell::RefCell::new(path_display::PathDisplayCache::default()),
         };
 
         pane.set_theme(theme, cx);
@@ -1167,8 +1170,52 @@ impl MainPaneView {
             async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| loop {
                 let should_continue = view
                     .update(cx, |this, cx| {
-                        let applied = rows::drain_completed_prepared_diff_syntax_chunk_builds();
-                        if applied > 0 {
+                        let mut applied = false;
+
+                        let split_left_applied = this
+                            .file_diff_split_prepared_syntax_document(DiffTextRegion::SplitLeft)
+                            .map(rows::drain_completed_prepared_diff_syntax_chunk_builds_for_document)
+                            .unwrap_or(0);
+                        if split_left_applied > 0 {
+                            this.file_diff_style_cache_epochs.bump_left();
+                            applied = true;
+                        }
+
+                        let split_right_applied = this
+                            .file_diff_split_prepared_syntax_document(DiffTextRegion::SplitRight)
+                            .map(rows::drain_completed_prepared_diff_syntax_chunk_builds_for_document)
+                            .unwrap_or(0);
+                        if split_right_applied > 0 {
+                            this.file_diff_style_cache_epochs.bump_right();
+                            applied = true;
+                        }
+
+                        let worktree_preview_applied = this
+                            .worktree_preview_prepared_syntax_document()
+                            .map(rows::drain_completed_prepared_diff_syntax_chunk_builds_for_document)
+                            .unwrap_or(0);
+                        if worktree_preview_applied > 0 {
+                            this.worktree_preview_style_cache_epoch =
+                                this.worktree_preview_style_cache_epoch.wrapping_add(1);
+                            applied = true;
+                        }
+
+                        let resolved_preview_applied = this
+                            .conflict_resolved_preview_prepared_syntax_document
+                            .map(rows::drain_completed_prepared_diff_syntax_chunk_builds_for_document)
+                            .unwrap_or(0);
+                        if resolved_preview_applied > 0 {
+                            this.conflict_resolved_preview_style_cache_epoch = this
+                                .conflict_resolved_preview_style_cache_epoch
+                                .wrapping_add(1);
+                            applied = true;
+                        }
+
+                        if rows::drain_completed_prepared_diff_syntax_chunk_builds() > 0 {
+                            applied = true;
+                        }
+
+                        if applied {
                             cx.notify();
                         }
 
@@ -1382,13 +1429,20 @@ impl MainPaneView {
     pub(in crate::view) fn clear_diff_text_query_overlay_cache(&mut self) {
         self.diff_text_query_segments_cache.clear();
         self.diff_text_query_cache_query = SharedString::default();
+        self.diff_text_query_cache_generation =
+            self.diff_text_query_cache_generation.wrapping_add(1);
+    }
+
+    pub(in crate::view) fn invalidate_diff_text_query_overlay_cache(&mut self, query: &str) {
+        if self.diff_text_query_cache_query.as_ref() != query {
+            self.diff_text_query_cache_query = query.to_string().into();
+            self.diff_text_query_cache_generation =
+                self.diff_text_query_cache_generation.wrapping_add(1);
+        }
     }
 
     pub(in crate::view) fn sync_diff_text_query_overlay_cache(&mut self, query: &str) {
-        if self.diff_text_query_cache_query.as_ref() != query {
-            self.diff_text_query_cache_query = query.to_string().into();
-            self.diff_text_query_segments_cache.clear();
-        }
+        self.invalidate_diff_text_query_overlay_cache(query);
     }
 
     pub(in crate::view) fn clear_diff_text_style_caches(&mut self) {
@@ -2555,7 +2609,7 @@ impl MainPaneView {
         // History caches are now managed by HistoryView.
     }
 
-    pub(in crate::view) fn cached_path_display(&self, path: &std::path::PathBuf) -> SharedString {
+    pub(in crate::view) fn cached_path_display(&self, path: &std::path::Path) -> SharedString {
         let mut cache = self.path_display_cache.borrow_mut();
         path_display::cached_path_display(&mut cache, path)
     }
@@ -2651,6 +2705,7 @@ impl MainPaneView {
         }
         self.diff_text_segments_cache[key] = Some(VersionedCachedDiffStyledText {
             syntax_epoch,
+            query_generation: 0,
             styled: value,
         });
         if self.diff_text_query_segments_cache.len() > key {
@@ -2718,6 +2773,7 @@ impl MainPaneView {
             key,
             VersionedCachedDiffStyledText {
                 syntax_epoch: self.worktree_preview_style_cache_epoch,
+                query_generation: 0,
                 styled: value,
             },
         );
@@ -2742,6 +2798,7 @@ impl MainPaneView {
             key,
             VersionedCachedDiffStyledText {
                 syntax_epoch: self.conflict_resolved_preview_style_cache_epoch,
+                query_generation: 0,
                 styled: value,
             },
         );

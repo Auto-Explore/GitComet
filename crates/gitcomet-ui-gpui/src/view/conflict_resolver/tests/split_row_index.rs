@@ -902,6 +902,90 @@ fn search_matching_rows_does_not_materialize_split_pages() {
 }
 
 #[test]
+fn search_text_matching_rows_matches_predicate_path() {
+    let line_count = CONFLICT_SPLIT_PAGE_SIZE * 4;
+    let ours: String = (0..line_count)
+        .map(|ix| format!("ours_line_{ix}\n"))
+        .collect();
+    let theirs: String = (0..line_count)
+        .map(|ix| format!("theirs_line_{ix}\n"))
+        .collect();
+    let context: String = (0..line_count)
+        .map(|ix| format!("context_line_{ix}\n"))
+        .collect();
+    let segments = vec![
+        ConflictSegment::Text(context.into()),
+        ConflictSegment::Block(ConflictBlock {
+            base: None,
+            ours: ours.into(),
+            theirs: theirs.into(),
+            choice: ConflictChoice::Ours,
+            resolved: false,
+        }),
+    ];
+    let index = ConflictSplitRowIndex::new(&segments, line_count);
+
+    // Test several patterns against both paths.
+    for needle in &[
+        "ours_line_300",
+        "theirs_line_5",
+        "context_line_0",
+        "_line_99",
+    ] {
+        let via_pred = index.search_matching_rows(&segments, |text| text.contains(needle));
+        let via_simd = index.search_text_matching_rows(&segments, needle.as_bytes());
+        assert_eq!(
+            via_pred, via_simd,
+            "search_text_matching_rows must match search_matching_rows for needle {needle:?}"
+        );
+    }
+}
+
+#[test]
+fn search_ascii_case_insensitive_matching_rows_matches_predicate_path() {
+    let line_count = CONFLICT_SPLIT_PAGE_SIZE * 4;
+    let ours: String = (0..line_count)
+        .map(|ix| format!("Ours_Line_{ix}\n"))
+        .collect();
+    let theirs: String = (0..line_count)
+        .map(|ix| format!("THEIRS_line_{ix}\n"))
+        .collect();
+    let context: String = (0..line_count)
+        .map(|ix| format!("Context_LINE_{ix}\n"))
+        .collect();
+    let segments = vec![
+        ConflictSegment::Text(context.into()),
+        ConflictSegment::Block(ConflictBlock {
+            base: None,
+            ours: ours.into(),
+            theirs: theirs.into(),
+            choice: ConflictChoice::Ours,
+            resolved: false,
+        }),
+    ];
+    let index = ConflictSplitRowIndex::new(&segments, line_count);
+
+    for needle in &[
+        "ours_line_300",
+        "THEIRS_LINE_5",
+        "context_line_0",
+        "_LiNe_99",
+    ] {
+        let via_pred = index.search_matching_rows(&segments, |text| {
+            text.as_bytes()
+                .windows(needle.len())
+                .any(|window| window.eq_ignore_ascii_case(needle.as_bytes()))
+        });
+        let via_specialized =
+            index.search_ascii_case_insensitive_matching_rows(&segments, needle.as_bytes());
+        assert_eq!(
+            via_pred, via_specialized,
+            "case-insensitive search must match predicate path for needle {needle:?}"
+        );
+    }
+}
+
+#[test]
 fn split_row_index_sparse_checkpoint_rows_resolve_far_from_start() {
     let line_count = CONFLICT_SPLIT_PAGE_SIZE * 4;
     let ours: String = (0..line_count)

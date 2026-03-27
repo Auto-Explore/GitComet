@@ -1,3 +1,4 @@
+use std::cell::OnceCell;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -278,7 +279,7 @@ pub fn benchmark_side_by_side_plan_with_replacement_backend(
             new,
             old_lines.as_slice(),
             new_lines.as_slice(),
-            replacement_pair_cost,
+            replacement_pair_cost_with_strsim,
         ),
     }
 }
@@ -644,20 +645,45 @@ enum PlannedReplacementOp {
 
 struct PreparedReplacementLine<'a> {
     text: &'a str,
-    chars: Vec<char>,
+    ascii_bytes: Option<&'a [u8]>,
+    chars: OnceCell<Box<[char]>>,
 }
 
 impl<'a> PreparedReplacementLine<'a> {
     fn new(text: &'a str) -> Self {
-        Self {
-            text,
-            chars: text.chars().collect(),
+        if text.is_ascii() {
+            Self {
+                text,
+                ascii_bytes: Some(text.as_bytes()),
+                chars: OnceCell::new(),
+            }
+        } else {
+            let prepared_chars = text.chars().collect::<Vec<_>>().into_boxed_slice();
+            let chars = OnceCell::new();
+            let _ = chars.set(prepared_chars);
+            Self {
+                text,
+                ascii_bytes: None,
+                chars,
+            }
         }
+    }
+
+    fn ascii_bytes(&self) -> Option<&[u8]> {
+        self.ascii_bytes
+    }
+
+    fn chars(&self) -> &[char] {
+        self.chars
+            .get_or_init(|| self.text.chars().collect::<Vec<_>>().into_boxed_slice())
+            .as_ref()
     }
 }
 
+#[cfg(feature = "benchmarks")]
 struct CharSlice<'a>(&'a [char]);
 
+#[cfg(feature = "benchmarks")]
 impl<'b> IntoIterator for &CharSlice<'b> {
     type Item = char;
     type IntoIter = std::iter::Copied<std::slice::Iter<'b, char>>;
@@ -668,20 +694,26 @@ impl<'b> IntoIterator for &CharSlice<'b> {
 }
 
 #[cfg(feature = "benchmarks")]
-#[derive(Default)]
-struct LevenshteinScratch {
-    prev: Vec<usize>,
-    curr: Vec<usize>,
-}
-
-#[cfg(not(feature = "benchmarks"))]
-#[derive(Default)]
-struct LevenshteinScratch;
+struct ByteSlice<'a>(&'a [u8]);
 
 #[cfg(feature = "benchmarks")]
+impl<'b> IntoIterator for &ByteSlice<'b> {
+    type Item = u8;
+    type IntoIter = std::iter::Copied<std::slice::Iter<'b, u8>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter().copied()
+    }
+}
+
+#[derive(Default)]
+struct LevenshteinScratch {
+    cache: Vec<usize>,
+}
+
 impl LevenshteinScratch {
-    fn distance(&mut self, a: &[char], b: &[char]) -> usize {
-        let (a, b) = if b.len() > a.len() { (b, a) } else { (a, b) };
+    fn distance<T: Eq>(&mut self, a: &[T], b: &[T]) -> usize {
+        let (a, b) = if b.len() > a.len() { (a, b) } else { (b, a) };
         if a == b {
             return 0;
         }
@@ -692,25 +724,27 @@ impl LevenshteinScratch {
             return a.len();
         }
 
-        let width = b.len() + 1;
-        self.prev.resize(width, 0);
-        for (ix, slot) in self.prev.iter_mut().enumerate() {
-            *slot = ix;
+        let b_len = b.len();
+        self.cache.resize(b_len, 0);
+        let cache = self.cache.as_mut_slice();
+        for (ix, slot) in cache.iter_mut().enumerate().take(b_len) {
+            *slot = ix + 1;
         }
-        self.curr.resize(width, 0);
 
+        let mut result = b_len;
         for (i, a_ch) in a.iter().enumerate() {
-            self.curr[0] = i + 1;
+            result = i + 1;
+            let mut distance_b = i;
             for (j, b_ch) in b.iter().enumerate() {
-                let subst = self.prev[j] + usize::from(a_ch != b_ch);
-                let insert = self.curr[j] + 1;
-                let delete = self.prev[j + 1] + 1;
-                self.curr[j + 1] = subst.min(insert).min(delete);
+                let cost = usize::from(a_ch != b_ch);
+                let distance_a = distance_b + cost;
+                distance_b = cache[j];
+                result = (result + 1).min(distance_a).min(distance_b + 1);
+                cache[j] = result;
             }
-            std::mem::swap(&mut self.prev, &mut self.curr);
         }
 
-        self.prev[b.len()]
+        result
     }
 }
 
@@ -719,6 +753,21 @@ fn prepare_replacement_lines<'a>(lines: &[&'a str]) -> Vec<PreparedReplacementLi
         .iter()
         .map(|line| PreparedReplacementLine::new(line))
         .collect()
+}
+
+fn prepare_replacement_text_cache_ids(
+    lines: &[PreparedReplacementLine<'_>],
+) -> (Vec<usize>, usize) {
+    let mut text_ids = HashMap::with_capacity(lines.len());
+    let mut ids = Vec::with_capacity(lines.len());
+
+    for line in lines {
+        let next_id = text_ids.len();
+        let id = *text_ids.entry(line.text).or_insert(next_id);
+        ids.push(id);
+    }
+
+    (ids, text_ids.len())
 }
 
 #[cfg(test)]
@@ -749,9 +798,11 @@ where
     let mut step = vec![ReplacementAlignStep::None; (n + 1) * width];
     #[allow(clippy::default_constructed_unit_structs)]
     let mut scratch = LevenshteinScratch::default();
-    // Cache pair costs by (old_text, new_text) to avoid redundant Levenshtein
-    // computations for duplicate line pairs within the same replacement block.
-    let mut pair_cost_cache: HashMap<(&str, &str), u32> = HashMap::new();
+    let (delete_text_ids, delete_unique_texts) = prepare_replacement_text_cache_ids(deletes);
+    let (insert_text_ids, insert_unique_texts) = prepare_replacement_text_cache_ids(inserts);
+    // Cache pair costs by compact per-block text ids so the DP loop only does
+    // integer indexing instead of hashing full line contents on every cell.
+    let mut pair_cost_cache = vec![u32::MAX; delete_unique_texts * insert_unique_texts];
     cost[0] = 0;
 
     for i in 1..=n {
@@ -771,10 +822,17 @@ where
             let ins_idx = i * width + (j - 1);
             let pair_idx = (i - 1) * width + (j - 1);
 
-            let cached_pair_cost = *pair_cost_cache
-                .entry((deletes[i - 1].text, inserts[j - 1].text))
-                .or_insert_with(|| pair_cost_fn(&deletes[i - 1], &inserts[j - 1], &mut scratch));
-            let pair_cost = cost[pair_idx].saturating_add(cached_pair_cost);
+            let pair_cache_idx =
+                delete_text_ids[i - 1] * insert_unique_texts + insert_text_ids[j - 1];
+            let cached_pair_cost = &mut pair_cost_cache[pair_cache_idx];
+            let pair_cost_value = if *cached_pair_cost == u32::MAX {
+                let computed = pair_cost_fn(&deletes[i - 1], &inserts[j - 1], &mut scratch);
+                *cached_pair_cost = computed;
+                computed
+            } else {
+                *cached_pair_cost
+            };
+            let pair_cost = cost[pair_idx].saturating_add(pair_cost_value);
             let insert_cost = cost[ins_idx].saturating_add(REPLACEMENT_GAP_COST);
             let delete_cost = cost[del_idx].saturating_add(REPLACEMENT_GAP_COST);
 
@@ -1503,9 +1561,61 @@ fn make_modify_row(delete: &FileDiffRow, insert: &FileDiffRow) -> FileDiffRow {
 fn replacement_pair_cost(
     old: &PreparedReplacementLine<'_>,
     new: &PreparedReplacementLine<'_>,
+    scratch: &mut LevenshteinScratch,
+) -> u32 {
+    if old.text == new.text {
+        return 0;
+    }
+
+    if let (Some(old_bytes), Some(new_bytes)) = (old.ascii_bytes(), new.ascii_bytes()) {
+        return replacement_pair_cost_with_distance(
+            old_bytes,
+            new_bytes,
+            |old_trimmed, new_trimmed| scratch.distance(old_trimmed, new_trimmed) as u32,
+        );
+    }
+
+    replacement_pair_cost_with_distance(old.chars(), new.chars(), |old_trimmed, new_trimmed| {
+        scratch.distance(old_trimmed, new_trimmed) as u32
+    })
+}
+
+#[cfg(feature = "benchmarks")]
+fn replacement_pair_cost_with_scratch(
+    old: &PreparedReplacementLine<'_>,
+    new: &PreparedReplacementLine<'_>,
+    scratch: &mut LevenshteinScratch,
+) -> u32 {
+    replacement_pair_cost(old, new, scratch)
+}
+
+#[cfg(feature = "benchmarks")]
+fn replacement_pair_cost_with_strsim(
+    old: &PreparedReplacementLine<'_>,
+    new: &PreparedReplacementLine<'_>,
     _scratch: &mut LevenshteinScratch,
 ) -> u32 {
-    replacement_pair_cost_with_distance(old, new, |old_trimmed, new_trimmed| {
+    if old.text == new.text {
+        return 0;
+    }
+
+    if let (Some(old_bytes), Some(new_bytes)) = (old.ascii_bytes(), new.ascii_bytes()) {
+        return replacement_pair_cost_with_distance(
+            old_bytes,
+            new_bytes,
+            |old_trimmed, new_trimmed| {
+                let old_trimmed_wrapper = ByteSlice(old_trimmed);
+                let new_trimmed_wrapper = ByteSlice(new_trimmed);
+                u32::try_from(strsim::generic_levenshtein(
+                    &old_trimmed_wrapper,
+                    &new_trimmed_wrapper,
+                ))
+                .unwrap_or(u32::MAX)
+            },
+        );
+    }
+
+    replacement_pair_cost_with_distance(old.chars(), new.chars(), |old_trimmed, new_trimmed| {
         let old_trimmed_wrapper = CharSlice(old_trimmed);
         let new_trimmed_wrapper = CharSlice(new_trimmed);
         u32::try_from(strsim::generic_levenshtein(
@@ -1516,31 +1626,16 @@ fn replacement_pair_cost(
     })
 }
 
-#[cfg(feature = "benchmarks")]
-fn replacement_pair_cost_with_scratch(
-    old: &PreparedReplacementLine<'_>,
-    new: &PreparedReplacementLine<'_>,
-    scratch: &mut LevenshteinScratch,
+fn replacement_pair_cost_with_distance<T: Eq>(
+    old_units: &[T],
+    new_units: &[T],
+    distance_fn: impl FnOnce(&[T], &[T]) -> u32,
 ) -> u32 {
-    replacement_pair_cost_with_distance(old, new, |old_trimmed, new_trimmed| {
-        scratch.distance(old_trimmed, new_trimmed) as u32
-    })
-}
-
-fn replacement_pair_cost_with_distance(
-    old: &PreparedReplacementLine<'_>,
-    new: &PreparedReplacementLine<'_>,
-    distance_fn: impl FnOnce(&[char], &[char]) -> u32,
-) -> u32 {
-    if old.text == new.text {
-        return 0;
-    }
-
-    let max_len_usize = old.chars.len().max(new.chars.len()).max(1);
+    let max_len_usize = old_units.len().max(new_units.len()).max(1);
     let max_len = max_len_usize as u32;
-    let (shared_prefix, shared_suffix) = shared_boundary_chars(&old.chars, &new.chars);
-    let old_trimmed = &old.chars[shared_prefix..old.chars.len().saturating_sub(shared_suffix)];
-    let new_trimmed = &new.chars[shared_prefix..new.chars.len().saturating_sub(shared_suffix)];
+    let (shared_prefix, shared_suffix) = shared_boundary_units(old_units, new_units);
+    let old_trimmed = &old_units[shared_prefix..old_units.len().saturating_sub(shared_suffix)];
+    let new_trimmed = &new_units[shared_prefix..new_units.len().saturating_sub(shared_suffix)];
 
     // Fast path: if either trimmed side is empty, the distance is exactly
     // the length of the other side — skip the O(n*m) Levenshtein DP.
@@ -1565,7 +1660,7 @@ fn replacement_pair_cost_with_distance(
     cost
 }
 
-fn shared_boundary_chars(a: &[char], b: &[char]) -> (usize, usize) {
+fn shared_boundary_units<T: Eq>(a: &[T], b: &[T]) -> (usize, usize) {
     let mut prefix = 0usize;
     while prefix < a.len() && prefix < b.len() && a[prefix] == b[prefix] {
         prefix += 1;
@@ -1578,6 +1673,11 @@ fn shared_boundary_chars(a: &[char], b: &[char]) -> (usize, usize) {
     }
 
     (prefix, suffix)
+}
+
+#[cfg(test)]
+fn shared_boundary_chars(a: &[char], b: &[char]) -> (usize, usize) {
+    shared_boundary_units(a, b)
 }
 
 /// Patience/histogram diff algorithm.
@@ -1912,7 +2012,14 @@ pub(crate) fn myers_edits<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<Edit<'a>>
         return myers_fallback_edits(old, new);
     };
     let mut v = vec![0isize; v_size];
-    let mut trace: Vec<Vec<isize>> = Vec::with_capacity(max + 1);
+
+    // Compact trace: store only active diagonals per depth.
+    // At depth d, active diagonals are -d, -d+2, ..., d (d+1 values).
+    // Depth d starts at flat index d*(d+1)/2.
+    // This eliminates per-depth Vec allocations and reduces trace memory from
+    // d * (2*(n+m)+1) to d*(d+1)/2 elements.
+    let mut trace = Vec::<isize>::new();
+
     {
         let mut x = 0isize;
         let mut y = 0isize;
@@ -1922,7 +2029,8 @@ pub(crate) fn myers_edits<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<Edit<'a>>
         }
         v[offset as usize] = x;
     }
-    trace.push(v.clone());
+    // Store depth 0: only diagonal 0
+    trace.push(v[offset as usize]);
 
     let mut last_d = 0usize;
     if v[offset as usize] >= n && v[offset as usize] >= m {
@@ -1930,8 +2038,10 @@ pub(crate) fn myers_edits<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<Edit<'a>>
     } else {
         'outer: for d in 1..=max {
             let d_isize = d as isize;
-            let mut next = v.clone();
 
+            // Update v in-place: at depth d, writes go to diagonals with
+            // the same parity as d, reads come from the opposite parity
+            // (depth d-1 values), so there is no aliasing.
             for k in (-d_isize..=d_isize).step_by(2) {
                 let k_idx = (offset + k) as usize;
 
@@ -1949,18 +2059,20 @@ pub(crate) fn myers_edits<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<Edit<'a>>
                     x += 1;
                     y += 1;
                 }
-                next[k_idx] = x;
+                v[k_idx] = x;
 
                 if x >= n && y >= m {
-                    v = next;
-                    trace.push(v.clone());
+                    for k2 in (-d_isize..=d_isize).step_by(2) {
+                        trace.push(v[(offset + k2) as usize]);
+                    }
                     last_d = d;
                     break 'outer;
                 }
             }
 
-            v = next;
-            trace.push(v.clone());
+            for k2 in (-d_isize..=d_isize).step_by(2) {
+                trace.push(v[(offset + k2) as usize]);
+            }
         }
     }
 
@@ -1984,19 +2096,21 @@ pub(crate) fn myers_edits<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<Edit<'a>>
     let mut rev: Vec<Edit<'a>> = Vec::with_capacity(last_d + (n + m) as usize);
 
     for d in (1..=last_d).rev() {
-        let v = &trace[d - 1];
+        let prev_depth = d - 1;
         let d_isize = d as isize;
         let k = x - y;
 
         let prev_k = if k == -d_isize
-            || (k != d_isize && v[(offset + k - 1) as usize] < v[(offset + k + 1) as usize])
+            || (k != d_isize
+                && compact_trace_get(&trace, prev_depth, k - 1)
+                    < compact_trace_get(&trace, prev_depth, k + 1))
         {
             k + 1
         } else {
             k - 1
         };
 
-        let prev_x = v[(offset + prev_k) as usize];
+        let prev_x = compact_trace_get(&trace, prev_depth, prev_k);
         let prev_y = prev_x - prev_k;
 
         while x > prev_x && y > prev_y {
@@ -2054,6 +2168,17 @@ pub(crate) fn myers_edits<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<Edit<'a>>
 
     rev.reverse();
     rev
+}
+
+/// Access diagonal `k` at `depth` in the compact trace buffer.
+/// At depth d, active diagonals are -d, -d+2, ..., d (d+1 values).
+/// Base offset = d*(d+1)/2, index within depth = (k+d)/2.
+#[inline]
+fn compact_trace_get(trace: &[isize], depth: usize, k: isize) -> isize {
+    let d = depth as isize;
+    let base = depth * (depth + 1) / 2;
+    let idx = ((k + d) / 2) as usize;
+    trace[base + idx]
 }
 
 #[cfg(test)]
@@ -2332,7 +2457,7 @@ mod tests {
         let new = PreparedReplacementLine::new("prefix-ê-suffix");
 
         assert_eq!(
-            shared_boundary_chars(&old.chars, &new.chars),
+            shared_boundary_chars(old.chars(), new.chars()),
             ("prefix-".chars().count(), "-suffix".chars().count())
         );
     }
@@ -2709,6 +2834,40 @@ mod tests {
             assert_eq!(
                 current, strsim,
                 "backend parity mismatch for old={old:?} new={new:?}"
+            );
+        }
+    }
+
+    #[cfg(feature = "benchmarks")]
+    #[test]
+    fn levenshtein_scratch_matches_strsim_generic() {
+        let mut scratch = LevenshteinScratch::default();
+
+        for (old, new) in [
+            ("before_source_001", "after_source_002"),
+            ("prefix-only-change", "prefix-only-change extended"),
+            ("", "abc"),
+        ] {
+            let old_bytes = old.as_bytes();
+            let new_bytes = new.as_bytes();
+            let old_wrapper = ByteSlice(old_bytes);
+            let new_wrapper = ByteSlice(new_bytes);
+            assert_eq!(
+                scratch.distance(old_bytes, new_bytes),
+                strsim::generic_levenshtein(&old_wrapper, &new_wrapper),
+                "ascii mismatch for old={old:?} new={new:?}"
+            );
+        }
+
+        for (old, new) in [("café", "caff"), ("prefix-é-suffix", "prefix-ê-suffix")] {
+            let old_chars = old.chars().collect::<Vec<_>>();
+            let new_chars = new.chars().collect::<Vec<_>>();
+            let old_wrapper = CharSlice(old_chars.as_slice());
+            let new_wrapper = CharSlice(new_chars.as_slice());
+            assert_eq!(
+                scratch.distance(old_chars.as_slice(), new_chars.as_slice()),
+                strsim::generic_levenshtein(&old_wrapper, &new_wrapper),
+                "unicode mismatch for old={old:?} new={new:?}"
             );
         }
     }

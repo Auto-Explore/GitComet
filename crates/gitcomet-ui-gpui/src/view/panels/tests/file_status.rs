@@ -1720,7 +1720,7 @@ fn theme_change_clears_conflict_three_way_segments_cache(cx: &mut gpui::TestAppC
             this.main_pane.update(cx, |pane, cx| {
                 let dummy = super::CachedDiffStyledText {
                     text: "dummy".into(),
-                    highlights: Arc::new(vec![]),
+                    highlights: Arc::from(Vec::new()),
                     highlights_hash: 0,
                     text_hash: 0,
                 };

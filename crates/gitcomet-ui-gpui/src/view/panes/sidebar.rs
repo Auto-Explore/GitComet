@@ -1,4 +1,7 @@
-use super::super::caches::BranchSidebarFingerprint;
+use super::super::caches::{
+    BranchSidebarFingerprint, branch_sidebar_cache_lookup, branch_sidebar_cache_lookup_by_source,
+    branch_sidebar_cache_store,
+};
 use super::super::*;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -9,6 +12,7 @@ pub(in super::super) struct SidebarPaneView {
     _ui_model_subscription: gpui::Subscription,
     branches_scroll: UniformListScrollHandle,
     branch_sidebar_cache: Option<BranchSidebarCache>,
+    path_display_cache: std::cell::RefCell<path_display::PathDisplayCache>,
     sidebar_collapsed_items_by_repo: BTreeMap<std::path::PathBuf, BTreeSet<String>>,
     root_view: WeakEntity<GitCometView>,
     tooltip_host: WeakEntity<TooltipHost>,
@@ -74,6 +78,7 @@ impl SidebarPaneView {
             _ui_model_subscription: subscription,
             branches_scroll: UniformListScrollHandle::default(),
             branch_sidebar_cache: None,
+            path_display_cache: std::cell::RefCell::new(path_display::PathDisplayCache::default()),
             sidebar_collapsed_items_by_repo,
             root_view,
             tooltip_host,
@@ -106,6 +111,11 @@ impl SidebarPaneView {
     pub(in super::super) fn active_repo(&self) -> Option<&RepoState> {
         let repo_id = self.active_repo_id()?;
         self.state.repos.iter().find(|r| r.id == repo_id)
+    }
+
+    pub(in super::super) fn cached_path_display(&self, path: &std::path::Path) -> SharedString {
+        let mut cache = self.path_display_cache.borrow_mut();
+        path_display::cached_path_display(&mut cache, path)
     }
 
     pub(in super::super) fn saved_sidebar_collapsed_items(
@@ -182,31 +192,55 @@ impl SidebarPaneView {
             }
         }
 
-        let (repo_id, fingerprint, rows) = {
+        let (repo_id, fingerprint) = {
             let repo = repo?;
-            let fingerprint = BranchSidebarFingerprint::from_repo(repo);
-            if let Some(cache) = &self.branch_sidebar_cache
-                && cache.repo_id == repo.id
-                && cache.fingerprint == fingerprint
-            {
-                return Some(Arc::clone(&cache.rows));
-            }
+            (repo.id, BranchSidebarFingerprint::from_repo(repo))
+        };
 
+        if let Some(rows) =
+            branch_sidebar_cache_lookup(&mut self.branch_sidebar_cache, repo_id, fingerprint)
+        {
+            return Some(rows);
+        }
+
+        let (source_fingerprint, source_parts) = {
+            let repo = self.active_repo()?;
+            let cached_source_parts = self
+                .branch_sidebar_cache
+                .as_ref()
+                .filter(|cached| cached.repo_id == repo.id)
+                .map(|cached| &cached.source_parts);
+            branch_sidebar::branch_sidebar_source_fingerprint(repo, cached_source_parts)
+        };
+
+        if let Some(rows) = branch_sidebar_cache_lookup_by_source(
+            &mut self.branch_sidebar_cache,
+            repo_id,
+            fingerprint,
+            source_fingerprint,
+            &source_parts,
+        ) {
+            return Some(rows);
+        }
+
+        let rows: Arc<[BranchSidebarRow]> = {
+            let repo = self.active_repo()?;
             let empty = BTreeSet::new();
             let collapsed_items = self
                 .sidebar_collapsed_items_by_repo
                 .get(&repo.spec.workdir)
                 .unwrap_or(&empty);
-            let rows: Arc<[BranchSidebarRow]> =
-                branch_sidebar::branch_sidebar_rows(repo, collapsed_items).into();
-            (repo.id, fingerprint, rows)
+            branch_sidebar::branch_sidebar_rows(repo, collapsed_items).into()
         };
 
-        self.branch_sidebar_cache = Some(BranchSidebarCache {
+        branch_sidebar_cache_store(
+            &mut self.branch_sidebar_cache,
             repo_id,
             fingerprint,
-            rows: Arc::clone(&rows),
-        });
+            source_fingerprint,
+            source_parts,
+            Arc::clone(&rows),
+        );
         Some(rows)
     }
 

@@ -13,6 +13,8 @@ use crate::view::markdown_preview::{self, MarkdownPreviewDiff, MarkdownPreviewDo
 
 pub struct FileDiffSyntaxPrepareFixture {
     lines: Vec<String>,
+    warm_text: SharedString,
+    warm_line_starts: Arc<[usize]>,
     language: DiffSyntaxLanguage,
     theme: AppTheme,
     budget: DiffSyntaxBudget,
@@ -22,8 +24,12 @@ impl FileDiffSyntaxPrepareFixture {
     pub fn new(lines: usize, line_bytes: usize) -> Self {
         let language =
             diff_syntax_language_for_path("src/lib.rs").unwrap_or(DiffSyntaxLanguage::Rust);
+        let lines = build_synthetic_source_lines(lines, line_bytes);
+        let (warm_text, warm_line_starts) = shared_source_text_and_line_starts(&lines);
         Self {
-            lines: build_synthetic_source_lines(lines, line_bytes),
+            lines,
+            warm_text,
+            warm_line_starts,
             language,
             theme: AppTheme::zed_ayu_dark(),
             budget: DiffSyntaxBudget::default(),
@@ -33,8 +39,12 @@ impl FileDiffSyntaxPrepareFixture {
     pub fn new_query_stress(lines: usize, line_bytes: usize, nesting_depth: usize) -> Self {
         let language =
             diff_syntax_language_for_path("src/lib.rs").unwrap_or(DiffSyntaxLanguage::Rust);
+        let lines = build_synthetic_nested_query_stress_lines(lines, line_bytes, nesting_depth);
+        let (warm_text, warm_line_starts) = shared_source_text_and_line_starts(&lines);
         Self {
-            lines: build_synthetic_nested_query_stress_lines(lines, line_bytes, nesting_depth),
+            lines,
+            warm_text,
+            warm_line_starts,
             language,
             theme: AppTheme::zed_ayu_dark(),
             budget: DiffSyntaxBudget::default(),
@@ -42,7 +52,7 @@ impl FileDiffSyntaxPrepareFixture {
     }
 
     pub fn prewarm(&self) {
-        let _ = self.prepare_document(&self.lines);
+        let _ = self.prepare_warm_document();
     }
 
     pub fn run_prepare_cold(&self, nonce: u64) -> u64 {
@@ -57,7 +67,7 @@ impl FileDiffSyntaxPrepareFixture {
     }
 
     pub fn run_prepare_warm(&self) -> u64 {
-        let document = self.prepare_document(&self.lines);
+        let document = self.prepare_warm_document();
         self.hash_prepared(&self.lines, document)
     }
 
@@ -148,13 +158,34 @@ impl FileDiffSyntaxPrepareFixture {
         &self,
         lines: &[String],
     ) -> Option<super::diff_text::PreparedDiffSyntaxDocument> {
-        let text = lines.join("\n");
-        prepare_bench_diff_syntax_document(self.language, self.budget, text.as_str(), None)
+        let (text, line_starts) = shared_source_text_and_line_starts(lines);
+        self.prepare_document_from_shared(text, line_starts)
     }
 
     #[cfg(test)]
     pub(super) fn lines(&self) -> &[String] {
         &self.lines
+    }
+
+    fn prepare_warm_document(&self) -> Option<super::diff_text::PreparedDiffSyntaxDocument> {
+        self.prepare_document_from_shared(
+            self.warm_text.clone(),
+            Arc::clone(&self.warm_line_starts),
+        )
+    }
+
+    fn prepare_document_from_shared(
+        &self,
+        text: SharedString,
+        line_starts: Arc<[usize]>,
+    ) -> Option<super::diff_text::PreparedDiffSyntaxDocument> {
+        prepare_bench_diff_syntax_document_from_shared(
+            self.language,
+            self.budget,
+            text,
+            line_starts,
+            None,
+        )
     }
 
     fn hash_prepared(
@@ -195,6 +226,15 @@ impl FileDiffSyntaxPrepareFixture {
         styled.highlights_hash.hash(&mut h);
         h.finish()
     }
+}
+
+fn shared_source_text_and_line_starts(lines: &[String]) -> (SharedString, Arc<[usize]>) {
+    let source_len = if lines.is_empty() {
+        0
+    } else {
+        lines.iter().map(String::len).sum::<usize>() + lines.len().saturating_sub(1)
+    };
+    crate::view::panes::main::preview_source_text_and_line_starts_from_lines(lines, source_len)
 }
 
 pub struct FileDiffSyntaxReparseFixture {
@@ -549,6 +589,24 @@ enum LargeHtmlSyntaxSource {
     Synthetic,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct LargeHtmlSyntaxMetrics {
+    pub text_bytes: u64,
+    pub line_count: u64,
+    pub window_lines: u64,
+    pub start_line: u64,
+    pub visible_byte_len: u64,
+    pub prepared_document_available: u64,
+    pub cache_document_present: u64,
+    pub pending: u64,
+    pub highlight_spans: u64,
+    pub cache_hits: u64,
+    pub cache_misses: u64,
+    pub cache_evictions: u64,
+    pub chunk_build_ms: u64,
+    pub loaded_chunks: u64,
+}
+
 pub struct LargeHtmlSyntaxFixture {
     source: LargeHtmlSyntaxSource,
     text: Arc<str>,
@@ -612,6 +670,10 @@ impl LargeHtmlSyntaxFixture {
     }
 
     pub fn run_background_prepare_step(&self) -> u64 {
+        self.run_background_prepare_with_metrics().0
+    }
+
+    pub fn run_background_prepare_with_metrics(&self) -> (u64, LargeHtmlSyntaxMetrics) {
         let prepared = prepare_diff_syntax_document_in_background_text(
             DiffSyntaxLanguage::Html,
             DiffSyntaxMode::Auto,
@@ -624,35 +686,59 @@ impl LargeHtmlSyntaxFixture {
         self.line_count.hash(&mut h);
         self.source_label().hash(&mut h);
         prepared.is_some().hash(&mut h);
-        h.finish()
+        (
+            h.finish(),
+            LargeHtmlSyntaxMetrics {
+                text_bytes: bench_counter_u64(self.text.len()),
+                line_count: bench_counter_u64(self.line_count),
+                prepared_document_available: u64::from(prepared.is_some()),
+                ..Default::default()
+            },
+        )
     }
 
     pub fn run_visible_window_pending_step(&self, start_line: usize, window_lines: usize) -> u64 {
-        let Some(document) = self.prepared_document_handle() else {
-            return 0;
-        };
-        let Some(result) =
-            self.request_visible_window_for_lines(document, start_line, window_lines)
-        else {
-            return 0;
-        };
-        self.hash_visible_window_result(start_line, window_lines, &result)
+        self.run_visible_window_pending_with_metrics(start_line, window_lines)
+            .0
+    }
+
+    pub fn run_visible_window_pending_with_metrics(
+        &self,
+        start_line: usize,
+        window_lines: usize,
+    ) -> (u64, LargeHtmlSyntaxMetrics) {
+        self.run_visible_window_with_metrics_impl(start_line, window_lines, false)
     }
 
     pub fn run_visible_window_step(&self, start_line: usize, window_lines: usize) -> u64 {
-        let Some(document) = self.prepared_document_handle() else {
-            return 0;
-        };
-        let Some(result) =
-            self.request_visible_window_until_ready(document, start_line, window_lines)
-        else {
-            return 0;
-        };
-        self.hash_visible_window_result(start_line, window_lines, &result)
+        self.run_visible_window_with_metrics(start_line, window_lines)
+            .0
+    }
+
+    pub fn run_visible_window_with_metrics(
+        &self,
+        start_line: usize,
+        window_lines: usize,
+    ) -> (u64, LargeHtmlSyntaxMetrics) {
+        self.run_visible_window_with_metrics_impl(start_line, window_lines, true)
     }
 
     pub fn prime_visible_window(&self, window_lines: usize) {
         let _ = self.run_visible_window_step(0, window_lines);
+    }
+
+    pub fn prime_visible_window_until_ready(&self, window_lines: usize) {
+        for i in 0..32 {
+            let (_, metrics) = self.run_visible_window_with_metrics(0, window_lines);
+            if metrics.pending == 0 {
+                break;
+            }
+            if i < 8 {
+                std::thread::yield_now();
+            } else {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        }
     }
 
     pub fn next_start_line(&self, start_line: usize, window_lines: usize) -> usize {
@@ -670,6 +756,63 @@ impl LargeHtmlSyntaxFixture {
     ) -> Option<super::diff_text::PreparedDiffSyntaxDocument> {
         self.prepared_document
             .or_else(|| Self::prepare_document(self.text.as_ref()))
+    }
+
+    fn run_visible_window_with_metrics_impl(
+        &self,
+        start_line: usize,
+        window_lines: usize,
+        wait_until_ready: bool,
+    ) -> (u64, LargeHtmlSyntaxMetrics) {
+        let byte_range = self.visible_window_byte_range(start_line, window_lines);
+        let base_metrics = LargeHtmlSyntaxMetrics {
+            text_bytes: bench_counter_u64(self.text.len()),
+            line_count: bench_counter_u64(self.line_count),
+            window_lines: bench_counter_u64(window_lines),
+            start_line: bench_counter_u64(start_line),
+            visible_byte_len: bench_counter_u64(byte_range.len()),
+            ..Default::default()
+        };
+        let Some(document) = self.prepared_document_handle() else {
+            return (0, base_metrics);
+        };
+
+        benchmark_reset_diff_syntax_prepared_cache_metrics();
+        let result = if wait_until_ready {
+            self.request_visible_window_until_ready(document, start_line, window_lines)
+        } else {
+            self.request_visible_window_for_lines(document, start_line, window_lines)
+        };
+        let cache_metrics = benchmark_diff_syntax_prepared_cache_metrics();
+        let loaded_chunks =
+            benchmark_diff_syntax_prepared_loaded_chunk_count(document).unwrap_or_default();
+        let cache_document_present =
+            benchmark_diff_syntax_prepared_cache_contains_document(document);
+        let hash = result
+            .as_ref()
+            .map(|result| self.hash_visible_window_result(start_line, window_lines, result))
+            .unwrap_or_default();
+        let highlight_spans = result
+            .as_ref()
+            .map(|result| bench_counter_u64(result.highlights.len()))
+            .unwrap_or_default();
+        let pending = u64::from(result.as_ref().is_some_and(|result| result.pending));
+
+        (
+            hash,
+            LargeHtmlSyntaxMetrics {
+                prepared_document_available: 1,
+                cache_document_present: u64::from(cache_document_present),
+                pending,
+                highlight_spans,
+                cache_hits: cache_metrics.hit,
+                cache_misses: cache_metrics.miss,
+                cache_evictions: cache_metrics.evict,
+                chunk_build_ms: cache_metrics.chunk_build_ms,
+                loaded_chunks: bench_counter_u64(loaded_chunks),
+                ..base_metrics
+            },
+        )
     }
 
     fn prepare_document(text: &str) -> Option<super::diff_text::PreparedDiffSyntaxDocument> {
@@ -723,7 +866,7 @@ impl LargeHtmlSyntaxFixture {
     ) -> Option<super::diff_text::PreparedDocumentByteRangeHighlights> {
         let byte_range = self.visible_window_byte_range(start_line, window_lines);
         let mut result = self.request_visible_window(document, byte_range.clone());
-        for _ in 0..64 {
+        for i in 0..128 {
             if match result.as_ref() {
                 None => true,
                 Some(highlights) => !highlights.pending,
@@ -734,7 +877,11 @@ impl LargeHtmlSyntaxFixture {
             let applied = drain_completed_prepared_diff_syntax_chunk_builds_for_document(document);
             if applied == 0 && has_pending_prepared_diff_syntax_chunk_builds_for_document(document)
             {
-                std::thread::yield_now();
+                if i < 32 {
+                    std::thread::yield_now();
+                } else {
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
             }
             result = self.request_visible_window(document, byte_range.clone());
         }
@@ -841,6 +988,8 @@ impl FileDiffSyntaxCacheDropFixture {
 
 pub struct WorktreePreviewRenderFixture {
     lines: Vec<String>,
+    source_text: SharedString,
+    line_starts: Arc<[usize]>,
     language: Option<DiffSyntaxLanguage>,
     syntax_mode: DiffSyntaxMode,
     prepared_document: Option<super::diff_text::PreparedDiffSyntaxDocument>,
@@ -850,20 +999,23 @@ pub struct WorktreePreviewRenderFixture {
 impl WorktreePreviewRenderFixture {
     pub fn new(lines: usize, line_bytes: usize) -> Self {
         let generated_lines = build_synthetic_source_lines(lines, line_bytes);
+        let (source_text, line_starts) = shared_source_text_and_line_starts(&generated_lines);
         let language = diff_syntax_language_for_path("src/lib.rs");
         let syntax_mode = DiffSyntaxMode::Auto;
-        let generated_text = generated_lines.join("\n");
         let prepared_document = language.and_then(|language| {
-            prepare_bench_diff_syntax_document(
+            prepare_bench_diff_syntax_document_from_shared(
                 language,
                 DiffSyntaxBudget::default(),
-                &generated_text,
+                source_text.clone(),
+                Arc::clone(&line_starts),
                 None,
             )
         });
 
         Self {
             lines: generated_lines,
+            source_text,
+            line_starts,
             language,
             syntax_mode,
             prepared_document,
@@ -876,12 +1028,12 @@ impl WorktreePreviewRenderFixture {
     }
 
     pub fn run_render_time_prepare_step(&self, start: usize, window: usize) -> u64 {
-        let text = self.lines.join("\n");
         let prepared_document = self.language.and_then(|language| {
-            prepare_bench_diff_syntax_document(
+            prepare_bench_diff_syntax_document_from_shared(
                 language,
                 DiffSyntaxBudget::default(),
-                text.as_str(),
+                self.source_text.clone(),
+                Arc::clone(&self.line_starts),
                 None,
             )
         });
@@ -900,31 +1052,101 @@ impl WorktreePreviewRenderFixture {
 
         let start = start % self.lines.len();
         let end = (start + window).min(self.lines.len());
+        let highlight_palette = super::diff_text::syntax_highlight_palette(self.theme);
         let mut h = FxHasher::default();
         for line_ix in start..end {
-            let line = self.lines.get(line_ix).map(String::as_str).unwrap_or("");
-            let styled =
-                super::diff_text::build_cached_diff_styled_text_for_prepared_document_line_nonblocking(
-                    self.theme,
-                    line,
-                    &[],
-                    "",
-                    super::diff_text::DiffSyntaxConfig {
-                        language: self.language,
-                        mode: self.syntax_mode,
+            let line = super::diff_text::resolved_output_line_text(
+                self.source_text.as_ref(),
+                &self.line_starts,
+                line_ix,
+            );
+            let styled = super::diff_text::build_cached_diff_styled_text_for_prepared_document_line_nonblocking_with_palette(
+                self.theme,
+                &highlight_palette,
+                super::diff_text::PreparedDiffTextBuildRequest {
+                    build: super::diff_text::DiffTextBuildRequest {
+                        text: line,
+                        word_ranges: &[],
+                        query: "",
+                        syntax: super::diff_text::DiffSyntaxConfig {
+                            language: self.language,
+                            mode: self.syntax_mode,
+                        },
+                        word_color: None,
                     },
-                    None,
-                    super::diff_text::PreparedDiffSyntaxLine {
+                    prepared_line: super::diff_text::PreparedDiffSyntaxLine {
                         document: prepared_document,
                         line_ix,
                     },
-                )
-                .into_inner();
+                },
+            )
+            .into_inner();
             line_ix.hash(&mut h);
             styled.text_hash.hash(&mut h);
             styled.highlights_hash.hash(&mut h);
         }
         h.finish()
+    }
+
+    pub fn run_cached_lookup_with_metrics(
+        &self,
+        start: usize,
+        window: usize,
+    ) -> (u64, WorktreePreviewRenderMetrics) {
+        let hash = self.hash_window(start, window, self.prepared_document);
+        let actual_start = if self.lines.is_empty() {
+            0
+        } else {
+            start % self.lines.len()
+        };
+        let actual_end = if self.lines.is_empty() {
+            0
+        } else {
+            (actual_start + window).min(self.lines.len())
+        };
+        let metrics = WorktreePreviewRenderMetrics {
+            total_lines: bench_counter_u64(self.lines.len()),
+            window_size: bench_counter_u64(actual_end.saturating_sub(actual_start)),
+            line_bytes: bench_counter_u64(self.lines.first().map(|l| l.len()).unwrap_or(0)),
+            prepared_document_available: u64::from(self.prepared_document.is_some()),
+            syntax_mode_auto: u64::from(self.syntax_mode == DiffSyntaxMode::Auto),
+        };
+        (hash, metrics)
+    }
+
+    pub fn run_render_time_prepare_with_metrics(
+        &self,
+        start: usize,
+        window: usize,
+    ) -> (u64, WorktreePreviewRenderMetrics) {
+        let text = self.lines.join("\n");
+        let prepared_document = self.language.and_then(|language| {
+            prepare_bench_diff_syntax_document(
+                language,
+                DiffSyntaxBudget::default(),
+                text.as_str(),
+                None,
+            )
+        });
+        let hash = self.hash_window(start, window, prepared_document);
+        let actual_start = if self.lines.is_empty() {
+            0
+        } else {
+            start % self.lines.len()
+        };
+        let actual_end = if self.lines.is_empty() {
+            0
+        } else {
+            (actual_start + window).min(self.lines.len())
+        };
+        let metrics = WorktreePreviewRenderMetrics {
+            total_lines: bench_counter_u64(self.lines.len()),
+            window_size: bench_counter_u64(actual_end.saturating_sub(actual_start)),
+            line_bytes: bench_counter_u64(self.lines.first().map(|l| l.len()).unwrap_or(0)),
+            prepared_document_available: u64::from(prepared_document.is_some()),
+            syntax_mode_auto: u64::from(self.syntax_mode == DiffSyntaxMode::Auto),
+        };
+        (hash, metrics)
     }
 
     #[cfg(test)]
@@ -935,6 +1157,105 @@ impl WorktreePreviewRenderFixture {
     #[cfg(test)]
     pub(super) fn has_prepared_document(&self) -> bool {
         self.prepared_document.is_some()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct WorktreePreviewRenderMetrics {
+    pub total_lines: u64,
+    pub window_size: u64,
+    pub line_bytes: u64,
+    pub prepared_document_available: u64,
+    pub syntax_mode_auto: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct MarkdownPreviewFirstWindowMetrics {
+    pub old_total_rows: u64,
+    pub new_total_rows: u64,
+    pub old_rows_rendered: u64,
+    pub new_rows_rendered: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ImagePreviewFirstPaintMetrics {
+    pub old_bytes: u64,
+    pub new_bytes: u64,
+    pub total_bytes: u64,
+    pub images_rendered: u64,
+    pub placeholder_cells: u64,
+    pub divider_count: u64,
+}
+
+/// Benchmark fixture for the ready-image path in `render_selected_file_diff`.
+///
+/// The production image-diff cache stores raw file bytes inside `gpui::Image`
+/// objects. `gpui::Image::from_bytes` hashes and retains those bytes without
+/// decoding them, so a PNG-signature payload with deterministic padding is
+/// sufficient to model the byte-copy/hash cost of first paint in bench builds.
+pub struct ImagePreviewFirstPaintFixture {
+    old_png: Vec<u8>,
+    new_png: Vec<u8>,
+}
+
+impl ImagePreviewFirstPaintFixture {
+    pub fn new(old_bytes: usize, new_bytes: usize) -> Self {
+        Self {
+            old_png: build_synthetic_png_like_payload(
+                old_bytes.max(64 * 1024),
+                0x4f4c_445f_504e_4701,
+            ),
+            new_png: build_synthetic_png_like_payload(
+                new_bytes.max(64 * 1024),
+                0x4e45_575f_504e_4702,
+            ),
+        }
+    }
+
+    pub fn measure_first_paint(&self) -> ImagePreviewFirstPaintMetrics {
+        let old_bytes = bench_counter_u64(self.old_png.len());
+        let new_bytes = bench_counter_u64(self.new_png.len());
+        ImagePreviewFirstPaintMetrics {
+            old_bytes,
+            new_bytes,
+            total_bytes: old_bytes.saturating_add(new_bytes),
+            images_rendered: 2,
+            placeholder_cells: 0,
+            divider_count: 1,
+        }
+    }
+
+    pub fn run_first_paint_step(&self) -> u64 {
+        let cells = [
+            Some(Arc::new(gpui::Image::from_bytes(
+                gpui::ImageFormat::Png,
+                self.old_png.clone(),
+            ))),
+            Some(Arc::new(gpui::Image::from_bytes(
+                gpui::ImageFormat::Png,
+                self.new_png.clone(),
+            ))),
+        ];
+
+        let mut h = FxHasher::default();
+        for (cell_ix, image) in cells.iter().enumerate() {
+            cell_ix.hash(&mut h);
+            match image {
+                Some(image) => {
+                    1u8.hash(&mut h); // actual image cell
+                    image.id().hash(&mut h);
+                    image.bytes.len().hash(&mut h);
+                    1u8.hash(&mut h); // ObjectFit::Contain
+                }
+                None => {
+                    0u8.hash(&mut h); // placeholder
+                    0usize.hash(&mut h);
+                    0u8.hash(&mut h);
+                }
+            }
+        }
+        1u8.hash(&mut h); // divider between before/after columns
+        h.finish()
     }
 }
 
@@ -990,6 +1311,29 @@ impl MarkdownPreviewFixture {
 
     pub fn run_render_single_step(&self, start: usize, window: usize) -> u64 {
         self.hash_render_window(&self.single_document, start, window)
+    }
+
+    /// Measure first-window diff rendering metrics (used for sidecar emission).
+    pub fn measure_first_window_diff(&self, window: usize) -> MarkdownPreviewFirstWindowMetrics {
+        let old_total = self.diff_preview.old.rows.len();
+        let new_total = self.diff_preview.new.rows.len();
+        let old_end = window.min(old_total);
+        let new_end = window.min(new_total);
+
+        let old_rendered = self.render_window(&self.diff_preview.old, 0, old_end);
+        let new_rendered = self.render_window(&self.diff_preview.new, 0, new_end);
+
+        MarkdownPreviewFirstWindowMetrics {
+            old_total_rows: old_total as u64,
+            new_total_rows: new_total as u64,
+            old_rows_rendered: old_rendered.len() as u64,
+            new_rows_rendered: new_rendered.len() as u64,
+        }
+    }
+
+    /// Run the first-window diff rendering step (for Criterion iteration).
+    pub fn run_first_window_diff_step(&self, window: usize) -> u64 {
+        self.run_render_diff_step(0, window)
     }
 
     pub fn run_render_diff_step(&self, start: usize, window: usize) -> u64 {
@@ -1271,6 +1615,169 @@ fn hash_markdown_preview_document_into(document: &MarkdownPreviewDocument, hashe
             .unwrap_or("")
             .hash(hasher);
     }
+}
+
+// ---------------------------------------------------------------------------
+// SVG dual-path first-window fixture
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct SvgDualPathFirstWindowMetrics {
+    pub old_svg_bytes: u64,
+    pub new_svg_bytes: u64,
+    pub rasterize_success: u64,
+    pub fallback_triggered: u64,
+    pub rasterized_png_bytes: u64,
+    pub images_rendered: u64,
+    pub divider_count: u64,
+}
+
+/// Benchmark fixture for the SVG dual-path in `ensure_file_image_diff_cache`.
+///
+/// Production SVG image diffs take one of two paths:
+///
+/// 1. **Rasterize path** — valid SVG is parsed by `resvg::usvg`, rendered to a
+///    pixmap, encoded as PNG, and wrapped in `gpui::Image::from_bytes`.
+/// 2. **Fallback path** — invalid or oversized SVG fails rasterization and is
+///    written to a temp file for external viewing.
+///
+/// This fixture holds one valid SVG (exercises path 1) and one intentionally
+/// invalid SVG payload (exercises path 2 as a hash-based proxy to avoid
+/// filesystem I/O in the hot loop).
+pub struct SvgDualPathFirstWindowFixture {
+    /// Valid SVG document — triggers the rasterize-to-PNG path.
+    old_svg: Vec<u8>,
+    /// Invalid SVG payload — triggers the fallback path.
+    new_svg: Vec<u8>,
+    /// Pre-rasterized PNG for the valid SVG, used for metrics only.
+    old_rasterized_png_len: usize,
+}
+
+impl SvgDualPathFirstWindowFixture {
+    pub fn new(shapes: usize, fallback_bytes: usize) -> Self {
+        let old_svg = build_synthetic_svg_document(shapes.max(4), 0x5560_01D0_5EED_0001);
+        let new_svg =
+            build_synthetic_invalid_svg_payload(fallback_bytes.max(1024), 0x5560_4E50_FA11_0002);
+
+        // Pre-rasterize once to know the PNG size for metrics.
+        let old_rasterized_png_len = crate::view::diff_utils::rasterize_svg_preview_png(&old_svg)
+            .map(|png| png.len())
+            .unwrap_or(0);
+
+        Self {
+            old_svg,
+            new_svg,
+            old_rasterized_png_len,
+        }
+    }
+
+    pub fn measure_first_window(&self) -> SvgDualPathFirstWindowMetrics {
+        let rasterize_success = u64::from(self.old_rasterized_png_len > 0);
+        let fallback_triggered = 1u64; // new_svg always fails rasterization
+        SvgDualPathFirstWindowMetrics {
+            old_svg_bytes: bench_counter_u64(self.old_svg.len()),
+            new_svg_bytes: bench_counter_u64(self.new_svg.len()),
+            rasterize_success,
+            fallback_triggered,
+            rasterized_png_bytes: bench_counter_u64(self.old_rasterized_png_len),
+            images_rendered: rasterize_success, // only the successfully rasterized side
+            divider_count: 1,
+        }
+    }
+
+    /// Hot-path step exercising both SVG paths.
+    ///
+    /// Returns a deterministic hash to prevent dead-code elimination.
+    pub fn run_first_window_step(&self, _window: usize) -> u64 {
+        let mut h = FxHasher::default();
+
+        // Path 1: rasterize the valid SVG → PNG → Image.
+        if let Some(png) = crate::view::diff_utils::rasterize_svg_preview_png(&self.old_svg) {
+            let image = Arc::new(gpui::Image::from_bytes(gpui::ImageFormat::Png, png));
+            1u8.hash(&mut h); // rasterize-success marker
+            image.id().hash(&mut h);
+            image.bytes.len().hash(&mut h);
+        } else {
+            0u8.hash(&mut h); // should not happen for valid SVG
+        }
+
+        // Path 2: fallback for invalid SVG — hash bytes as proxy for tempfile write.
+        {
+            2u8.hash(&mut h); // fallback marker
+            self.new_svg.len().hash(&mut h);
+            // Hash a sample of the payload to model the I/O + hashing cost of
+            // `cached_image_diff_path` without actual filesystem writes.
+            let sample = &self.new_svg[..self.new_svg.len().min(4096)];
+            sample.hash(&mut h);
+        }
+
+        // Divider between before/after columns.
+        1u8.hash(&mut h);
+
+        h.finish()
+    }
+}
+
+fn build_synthetic_svg_document(shape_count: usize, seed: u64) -> Vec<u8> {
+    let mut svg = String::with_capacity(shape_count * 80 + 200);
+    svg.push_str(r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">"#);
+    svg.push('\n');
+
+    let mut state = seed ^ 0x9e37_79b9_7f4a_7c15;
+    for _ in 0..shape_count {
+        state ^= state >> 12;
+        state ^= state << 25;
+        state ^= state >> 27;
+        let v = state.wrapping_mul(0x2545_f491_4f6c_dd1d);
+        let cx = (v >> 48) as u16 % 512;
+        let cy = (v >> 32) as u16 % 512;
+        let r = ((v >> 24) as u16 % 20) + 1;
+        let color = v & 0xFF_FFFF;
+        use std::fmt::Write;
+        let _ = write!(
+            svg,
+            "<circle cx=\"{cx}\" cy=\"{cy}\" r=\"{r}\" fill=\"#{color:06x}\"/>",
+        );
+        svg.push('\n');
+    }
+    svg.push_str("</svg>\n");
+    svg.into_bytes()
+}
+
+fn build_synthetic_invalid_svg_payload(target_bytes: usize, seed: u64) -> Vec<u8> {
+    let target_bytes = target_bytes.max(64);
+    let mut payload = Vec::with_capacity(target_bytes);
+    // Starts like XML but is not valid SVG — triggers fallback in resvg.
+    payload.extend_from_slice(b"<svg invalid-not-parseable ");
+
+    let mut state = seed ^ 0x9e37_79b9_7f4a_7c15;
+    while payload.len() < target_bytes {
+        state ^= state >> 12;
+        state ^= state << 25;
+        state ^= state >> 27;
+        let block = state.wrapping_mul(0x2545_f491_4f6c_dd1d).to_le_bytes();
+        let remaining = target_bytes - payload.len();
+        payload.extend_from_slice(&block[..remaining.min(block.len())]);
+    }
+    payload
+}
+
+fn build_synthetic_png_like_payload(target_bytes: usize, seed: u64) -> Vec<u8> {
+    let target_bytes = target_bytes.max(8);
+    let mut payload = Vec::with_capacity(target_bytes);
+    payload.extend_from_slice(b"\x89PNG\r\n\x1a\n");
+
+    let mut state = seed ^ 0x9e37_79b9_7f4a_7c15;
+    while payload.len() < target_bytes {
+        state ^= state >> 12;
+        state ^= state << 25;
+        state ^= state >> 27;
+        let block = state.wrapping_mul(0x2545_f491_4f6c_dd1d).to_le_bytes();
+        let remaining = target_bytes - payload.len();
+        payload.extend_from_slice(&block[..remaining.min(block.len())]);
+    }
+
+    payload
 }
 
 fn build_synthetic_nested_query_stress_lines(

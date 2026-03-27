@@ -1,0 +1,10 @@
+{
+  "bench": "app_launch/cold_empty_workspace",
+  "metrics": {
+    "first_paint_ms": 266,
+    "first_interactive_ms": 290,
+    "rss_at_first_paint_kib": 130236,
+    "rss_at_interactive_kib": 146204,
+    "repos_loaded": 0
+  }
+}

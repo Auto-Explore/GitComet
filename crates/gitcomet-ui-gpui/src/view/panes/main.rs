@@ -11,6 +11,10 @@ mod diff_text;
 mod helpers;
 mod preview;
 
+#[cfg(feature = "benchmarks")]
+pub(in crate::view) use diff_search::{
+    AsciiCaseInsensitiveNeedle, DiffSearchQueryReuse, diff_search_query_reuse,
+};
 pub(in crate::view) use helpers::*;
 
 const CONFLICT_RESOLVED_OUTLINE_DEBOUNCE_MS: u64 = 140;

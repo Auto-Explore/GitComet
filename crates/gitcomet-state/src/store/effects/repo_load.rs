@@ -846,3 +846,21 @@ pub(super) fn schedule_load_diff_file_image(
         );
     });
 }
+
+pub(super) fn schedule_load_selected_diff(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: mpsc::Sender<Msg>,
+    repo_id: RepoId,
+    target: DiffTarget,
+    load_file_text: bool,
+    load_file_image: bool,
+) {
+    schedule_load_diff(executor, repos, msg_tx.clone(), repo_id, target.clone());
+    if load_file_image {
+        schedule_load_diff_file_image(executor, repos, msg_tx.clone(), repo_id, target.clone());
+    }
+    if load_file_text {
+        schedule_load_diff_file(executor, repos, msg_tx, repo_id, target);
+    }
+}

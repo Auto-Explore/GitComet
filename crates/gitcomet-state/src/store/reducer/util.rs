@@ -17,6 +17,10 @@ use std::time::SystemTime;
 
 /// Default page size for log fetches.
 pub(super) const DEFAULT_LOG_PAGE_SIZE: usize = 200;
+const CONFLICT_RELOAD_EFFECT_COUNT: usize = 1;
+const DIFF_RELOAD_MAX_EFFECTS: usize = 3;
+const PRIMARY_REFRESH_MAX_EFFECTS: usize = 6;
+const FULL_REFRESH_MAX_EFFECTS: usize = 12;
 
 fn is_supported_image_path(path: &Path) -> bool {
     let Some(ext) = path.extension().and_then(|s| s.to_str()) else {
@@ -75,6 +79,11 @@ pub(super) fn selected_conflict_target_path(
         return Some(path.clone());
     }
 
+    // Fast path: skip the full scan when status has no unstaged conflicts.
+    if !repo_state.has_unstaged_conflicts {
+        return None;
+    }
+
     let Loadable::Ready(status) = &repo_state.status else {
         return None;
     };
@@ -97,24 +106,80 @@ pub(super) fn start_conflict_target_reload(
     start_conflict_target_reload_with_mode(repo_state, path, mode)
 }
 
+pub(super) fn append_start_conflict_target_reload(
+    effects: &mut Vec<Effect>,
+    repo_state: &mut RepoState,
+    path: PathBuf,
+) {
+    let mode = current_conflict_load_mode(repo_state);
+    append_start_conflict_target_reload_with_mode(effects, repo_state, path, mode);
+}
+
 pub(super) fn start_conflict_target_reload_with_mode(
     repo_state: &mut RepoState,
     path: PathBuf,
     mode: ConflictFileLoadMode,
 ) -> Vec<Effect> {
-    repo_state.set_conflict_file_path(Some(path.clone()));
+    let mut effects = Vec::with_capacity(CONFLICT_RELOAD_EFFECT_COUNT);
+    append_start_conflict_target_reload_with_mode(&mut effects, repo_state, path, mode);
+    effects
+}
+
+fn append_start_conflict_target_reload_with_mode(
+    effects: &mut Vec<Effect>,
+    repo_state: &mut RepoState,
+    path: PathBuf,
+    mode: ConflictFileLoadMode,
+) {
+    if repo_state.conflict_state.conflict_file_path.as_deref() != Some(path.as_path()) {
+        repo_state.set_conflict_file_path(Some(path.clone()));
+    }
     repo_state.set_conflict_file_load_mode(mode);
     repo_state.set_conflict_file(Loadable::Loading);
-    repo_state.set_conflict_session(None);
+    if repo_state.conflict_state.conflict_session.is_some() {
+        repo_state.set_conflict_session(None);
+    }
     repo_state.set_conflict_hide_resolved(false);
-    vec![Effect::LoadConflictFile {
+    effects.push(Effect::LoadConflictFile {
         repo_id: repo_state.id,
         path,
         mode,
-    }]
+    });
+}
+
+pub(super) fn diff_reload_effect_count(target: &DiffTarget) -> usize {
+    let supports_file = matches!(
+        target,
+        DiffTarget::WorkingTree { .. } | DiffTarget::Commit { path: Some(_), .. }
+    );
+    let wants_image = diff_target_wants_image_preview(target);
+    let is_svg = diff_target_is_svg(target);
+
+    let mut count = 1;
+    if supports_file {
+        if wants_image {
+            count += 1;
+        }
+        if !wants_image || is_svg {
+            count += 1;
+        }
+    }
+
+    debug_assert!(count <= DIFF_RELOAD_MAX_EFFECTS);
+    count
 }
 
 pub(super) fn diff_reload_effects(repo_id: RepoId, target: DiffTarget) -> Vec<Effect> {
+    let mut effects = Vec::with_capacity(diff_reload_effect_count(&target));
+    append_diff_reload_effects(&mut effects, repo_id, target);
+    effects
+}
+
+pub(super) fn append_diff_reload_effects(
+    effects: &mut Vec<Effect>,
+    repo_id: RepoId,
+    target: DiffTarget,
+) {
     let supports_file = matches!(
         &target,
         DiffTarget::WorkingTree { .. } | DiffTarget::Commit { path: Some(_), .. }
@@ -122,10 +187,10 @@ pub(super) fn diff_reload_effects(repo_id: RepoId, target: DiffTarget) -> Vec<Ef
     let wants_image = diff_target_wants_image_preview(&target);
     let is_svg = diff_target_is_svg(&target);
 
-    let mut effects = vec![Effect::LoadDiff {
+    effects.push(Effect::LoadDiff {
         repo_id,
         target: target.clone(),
-    }];
+    });
     if supports_file {
         if wants_image {
             effects.push(Effect::LoadDiffFileImage {
@@ -137,13 +202,23 @@ pub(super) fn diff_reload_effects(repo_id: RepoId, target: DiffTarget) -> Vec<Ef
             effects.push(Effect::LoadDiffFile { repo_id, target });
         }
     }
+}
 
-    effects
+pub(super) fn refresh_primary_effect_capacity() -> usize {
+    PRIMARY_REFRESH_MAX_EFFECTS
 }
 
 pub(super) fn refresh_primary_effects(repo_state: &mut RepoState) -> Vec<Effect> {
+    let mut effects = Vec::with_capacity(refresh_primary_effect_capacity());
+    append_refresh_primary_effects(repo_state, &mut effects);
+    effects
+}
+
+pub(super) fn append_refresh_primary_effects(
+    repo_state: &mut RepoState,
+    effects: &mut Vec<Effect>,
+) {
     let repo_id = repo_state.id;
-    let mut effects = Vec::new();
 
     if repo_state
         .loads_in_flight
@@ -190,13 +265,20 @@ pub(super) fn refresh_primary_effects(repo_state: &mut RepoState) -> Vec<Effect>
             cursor: None,
         });
     }
+}
 
-    effects
+pub(super) fn refresh_full_effect_capacity() -> usize {
+    FULL_REFRESH_MAX_EFFECTS
 }
 
 pub(super) fn refresh_full_effects(repo_state: &mut RepoState) -> Vec<Effect> {
+    let mut effects = Vec::with_capacity(refresh_full_effect_capacity());
+    append_refresh_full_effects(repo_state, &mut effects);
+    effects
+}
+
+pub(super) fn append_refresh_full_effects(repo_state: &mut RepoState, effects: &mut Vec<Effect>) {
     let repo_id = repo_state.id;
-    let mut effects = Vec::new();
 
     // Prioritize UI-critical loads (status + log) early. The executor is a FIFO queue, so this
     // ordering can materially impact perceived responsiveness when switching repositories.
@@ -270,8 +352,6 @@ pub(super) fn refresh_full_effects(repo_state: &mut RepoState) -> Vec<Effect> {
     {
         effects.push(Effect::LoadMergeCommitMessage { repo_id });
     }
-
-    effects
 }
 
 pub(super) fn dedup_paths_in_order(paths: Vec<PathBuf>) -> Vec<PathBuf> {

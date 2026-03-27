@@ -10,6 +10,32 @@ use gitcomet_core::domain::{DiffTarget, LogCursor, LogPage, LogScope};
 use gitcomet_core::error::Error;
 use std::sync::Arc;
 
+const LARGE_HISTORY_APPEND_LEN_THRESHOLD: usize = 4_096;
+const SMALL_APPEND_GROWTH_RATIO: usize = 8;
+
+fn should_reserve_log_append_exact(existing_len: usize, additional: usize) -> bool {
+    existing_len >= LARGE_HISTORY_APPEND_LEN_THRESHOLD
+        && additional.saturating_mul(SMALL_APPEND_GROWTH_RATIO) <= existing_len
+}
+
+fn reserve_log_append_capacity<T>(existing: &mut Vec<T>, additional: usize) {
+    if additional == 0 {
+        return;
+    }
+
+    let spare = existing.capacity().saturating_sub(existing.len());
+    if spare >= additional {
+        return;
+    }
+
+    let missing = additional - spare;
+    if should_reserve_log_append_exact(existing.len(), additional) {
+        existing.reserve_exact(missing);
+    } else {
+        existing.reserve(missing);
+    }
+}
+
 pub(super) fn reload_repo(state: &mut AppState, repo_id: crate::model::RepoId) -> Vec<Effect> {
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
@@ -256,9 +282,16 @@ pub(super) fn log_loaded(
         match result {
             Ok(mut page) => {
                 if is_load_more && let Loadable::Ready(existing) = &mut repo_state.log {
+                    // Drop the history_state copy first so the Arc's refcount
+                    // goes to 1 and make_mut can mutate in-place instead of
+                    // deep-cloning the entire commit list.
+                    repo_state.history_state.log = Loadable::NotLoaded;
                     let existing = Arc::make_mut(existing);
+                    reserve_log_append_capacity(&mut existing.commits, page.commits.len());
                     existing.commits.append(&mut page.commits);
                     existing.next_cursor = page.next_cursor;
+                    // Re-share the updated Arc with history_state.
+                    repo_state.history_state.log = repo_state.log.clone();
                     repo_state.history_state.log_rev =
                         repo_state.history_state.log_rev.wrapping_add(1);
                 } else {
@@ -335,4 +368,27 @@ pub(super) fn repo_action_finished(
         }
     }
     effects
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_reserve_log_append_exact;
+
+    #[test]
+    fn large_history_small_page_uses_exact_append_growth() {
+        assert!(should_reserve_log_append_exact(5_000, 500));
+        assert!(should_reserve_log_append_exact(8_192, 200));
+    }
+
+    #[test]
+    fn smaller_histories_keep_amortized_append_growth() {
+        assert!(!should_reserve_log_append_exact(1_000, 200));
+        assert!(!should_reserve_log_append_exact(4_095, 256));
+    }
+
+    #[test]
+    fn larger_pages_keep_amortized_append_growth() {
+        assert!(!should_reserve_log_append_exact(5_000, 700));
+        assert!(!should_reserve_log_append_exact(16_000, 2_001));
+    }
 }

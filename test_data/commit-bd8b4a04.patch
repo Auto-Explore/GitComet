@@ -1,0 +1,256 @@
+From bd8b4a04b4d7a04caf97392d6a66cbeebd665606 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Sampo=20Kivist=C3=B6?=
+ <2021355+Havunen@users.noreply.github.com>
+Date: Wed, 25 Mar 2026 23:06:53 +0200
+Subject: [PATCH] Use Azure Artifact Signing to sign windows binaries (#86)
+
+---
+ .github/workflows/build-release-artifacts.yml | 106 ++++++++++++++++++
+ .github/workflows/deployment-ci.yml           |  25 +++++
+ scripts/windows/verify-signed-artifact.ps1    |  34 ++++++
+ 3 files changed, 165 insertions(+)
+ create mode 100644 scripts/windows/verify-signed-artifact.ps1
+
+diff --git a/.github/workflows/build-release-artifacts.yml b/.github/workflows/build-release-artifacts.yml
+index 6288bc9..1ed2179 100644
+--- a/.github/workflows/build-release-artifacts.yml
++++ b/.github/workflows/build-release-artifacts.yml
+@@ -17,6 +17,8 @@ on:
+         required: false
+         type: string
+     secrets:
++      AZURE_CREDENTIALS:
++        required: false
+       MACOS_SIGNING_IDENTITY:
+         required: false
+       MACOS_SIGNING_CERT_BASE64:
+@@ -148,6 +150,11 @@ jobs:
+       TAG: ${{ needs.prepare.outputs.tag }}
+       VERSION: ${{ needs.prepare.outputs.version }}
+       ARTIFACT_ARCH: ${{ matrix.artifact_arch }}
++      AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
++      WINDOWS_SIGNING_ENDPOINT: ${{ vars.WINDOWS_SIGNING_ENDPOINT }}
++      WINDOWS_SIGNING_ACCOUNT_NAME: ${{ vars.WINDOWS_SIGNING_ACCOUNT_NAME }}
++      WINDOWS_SIGNING_PROFILE_NAME: ${{ needs.prepare.outputs.release_id != '' && 'gitcomet-windows-release' || 'gitcomet-windows-test' }}
++      WINDOWS_SIGNING_TIMESTAMP_RFC3161: http://timestamp.acs.microsoft.com/
+     steps:
+       - uses: actions/checkout@v6
+         with:
+@@ -160,11 +167,87 @@ jobs:
+       - name: Cache Rust artifacts
+         uses: Swatinem/rust-cache@v2
+ 
++      - name: Validate Windows signing configuration
++        shell: pwsh
++        run: |
++          $ErrorActionPreference = "Stop"
++
++          $required = @(
++            "AZURE_CREDENTIALS",
++            "WINDOWS_SIGNING_ENDPOINT",
++            "WINDOWS_SIGNING_ACCOUNT_NAME"
++          )
++          $missing = @()
++
++          foreach ($name in $required) {
++            $value = [Environment]::GetEnvironmentVariable($name)
++            if ([string]::IsNullOrWhiteSpace($value)) {
++              $missing += $name
++            }
++          }
++
++          if ($missing.Count -gt 0) {
++            throw "Missing required Windows signing secret(s)/variable(s): $($missing -join ', ')"
++          }
++
++          Write-Host "Using Windows signing profile: $env:WINDOWS_SIGNING_PROFILE_NAME"
++
++      - name: Log into Azure for Windows signing
++        uses: azure/login@v3
++        with:
++          creds: ${{ env.AZURE_CREDENTIALS }}
++
++      - name: Locate SignTool
++        shell: pwsh
++        run: |
++          $ErrorActionPreference = "Stop"
++
++          $kitsRoot = Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10\bin"
++          $signTool = Get-ChildItem -Path $kitsRoot -Recurse -Filter signtool.exe -ErrorAction SilentlyContinue |
++            Where-Object { $_.FullName -match '\\x64\\' } |
++            Sort-Object FullName -Descending |
++            Select-Object -First 1 -ExpandProperty FullName
++
++          if ([string]::IsNullOrWhiteSpace($signTool)) {
++            $signTool = Get-ChildItem -Path $kitsRoot -Recurse -Filter signtool.exe -ErrorAction SilentlyContinue |
++              Sort-Object FullName -Descending |
++              Select-Object -First 1 -ExpandProperty FullName
++          }
++
++          if ([string]::IsNullOrWhiteSpace($signTool)) {
++            throw "Unable to locate signtool.exe on the GitHub Actions runner."
++          }
++
++          "SIGNTOOL_PATH=$signTool" >> $env:GITHUB_ENV
++
+       - name: Build release binary
+         shell: pwsh
+         run: |
+           cargo build -p gitcomet --release --locked --features ui-gpui,gix --bin gitcomet
+ 
++      - name: Sign Windows release binary
++        uses: Azure/artifact-signing-action@v1
++        with:
++          endpoint: ${{ env.WINDOWS_SIGNING_ENDPOINT }}
++          trusted-signing-account-name: ${{ env.WINDOWS_SIGNING_ACCOUNT_NAME }}
++          certificate-profile-name: ${{ env.WINDOWS_SIGNING_PROFILE_NAME }}
++          files-folder: ${{ github.workspace }}\target\release
++          files-folder-filter: gitcomet.exe
++          file-digest: SHA256
++          timestamp-rfc3161: ${{ env.WINDOWS_SIGNING_TIMESTAMP_RFC3161 }}
++          timestamp-digest: SHA256
++          append-signature: false
++
++      - name: Verify signed Windows release binary
++        shell: pwsh
++        run: |
++          $ErrorActionPreference = "Stop"
++
++          $artifactPath = Join-Path $env:GITHUB_WORKSPACE "target\release\gitcomet.exe"
++          & "$env:GITHUB_WORKSPACE\scripts\windows\verify-signed-artifact.ps1" `
++            -Path $artifactPath `
++            -SignToolPath $env:SIGNTOOL_PATH
++
+       - name: Package portable ZIP
+         shell: pwsh
+         run: |
+@@ -219,6 +302,29 @@ jobs:
+           $msiName = "gitcomet-v${env:VERSION}-windows-${env:ARTIFACT_ARCH}.msi"
+           cargo wix --package gitcomet --profile release --nocapture --no-build --bin-path "$wixBin" --output "dist\$msiName"
+ 
++      - name: Sign Windows MSI installer
++        uses: Azure/artifact-signing-action@v1
++        with:
++          endpoint: ${{ env.WINDOWS_SIGNING_ENDPOINT }}
++          trusted-signing-account-name: ${{ env.WINDOWS_SIGNING_ACCOUNT_NAME }}
++          certificate-profile-name: ${{ env.WINDOWS_SIGNING_PROFILE_NAME }}
++          files-folder: ${{ github.workspace }}\dist
++          files-folder-filter: gitcomet-v${{ env.VERSION }}-windows-${{ env.ARTIFACT_ARCH }}.msi
++          file-digest: SHA256
++          timestamp-rfc3161: ${{ env.WINDOWS_SIGNING_TIMESTAMP_RFC3161 }}
++          timestamp-digest: SHA256
++          append-signature: false
++
++      - name: Verify signed Windows MSI installer
++        shell: pwsh
++        run: |
++          $ErrorActionPreference = "Stop"
++
++          $artifactPath = Join-Path $env:GITHUB_WORKSPACE "dist\gitcomet-v$($env:VERSION)-windows-$($env:ARTIFACT_ARCH).msi"
++          & "$env:GITHUB_WORKSPACE\scripts\windows\verify-signed-artifact.ps1" `
++            -Path $artifactPath `
++            -SignToolPath $env:SIGNTOOL_PATH
++
+       - name: Upload Windows artifacts
+         uses: actions/upload-artifact@v7
+         with:
+diff --git a/.github/workflows/deployment-ci.yml b/.github/workflows/deployment-ci.yml
+index 7d34e1d..d2b76a1 100644
+--- a/.github/workflows/deployment-ci.yml
++++ b/.github/workflows/deployment-ci.yml
+@@ -15,6 +15,7 @@ on:
+       - "scripts/generate-homebrew-formula.sh"
+       - "scripts/generate-homebrew-cask.sh"
+       - "scripts/build-apt-repo.sh"
++      - "scripts/windows/verify-signed-artifact.ps1"
+   push:
+     branches: ["main"]
+     paths:
+@@ -29,6 +30,7 @@ on:
+       - "scripts/generate-homebrew-formula.sh"
+       - "scripts/generate-homebrew-cask.sh"
+       - "scripts/build-apt-repo.sh"
++      - "scripts/windows/verify-signed-artifact.ps1"
+   workflow_dispatch:
+ 
+ permissions:
+@@ -54,6 +56,17 @@ jobs:
+           bash -n scripts/generate-homebrew-cask.sh
+           bash -n scripts/build-apt-repo.sh
+ 
++      - name: Validate Windows PowerShell helper syntax
++        run: |
++          pwsh -NoLogo -NoProfile -Command '
++            $errors = $null
++            [System.Management.Automation.Language.Parser]::ParseFile("scripts/windows/verify-signed-artifact.ps1", [ref]$null, [ref]$errors) | Out-Null
++            if ($errors.Count -gt 0) {
++              $errors | ForEach-Object { Write-Error $_.Message }
++              exit 1
++            }
++          '
++
+       - name: Validate workflow YAML
+         run: |
+           ruby -e 'require "yaml"; %w[
+@@ -88,6 +101,18 @@ jobs:
+           grep -Fq 'vars.APT_STORAGE_PUBLIC_ACCESS' .github/workflows/deploy-apt-repo.yml
+           grep -Fq 'vars.AUR_GIT_REPOSITORY' .github/workflows/deploy-aur.yml
+           grep -Fq 'vars.AUR_GIT_BRANCH' .github/workflows/deploy-aur.yml
++          grep -Fq 'vars.WINDOWS_SIGNING_ENDPOINT' .github/workflows/build-release-artifacts.yml
++          grep -Fq 'vars.WINDOWS_SIGNING_ACCOUNT_NAME' .github/workflows/build-release-artifacts.yml
++          grep -Fq 'AZURE_CREDENTIALS' .github/workflows/build-release-artifacts.yml
++          grep -Fq 'gitcomet-windows-test' .github/workflows/build-release-artifacts.yml
++          grep -Fq 'gitcomet-windows-release' .github/workflows/build-release-artifacts.yml
++          grep -Fq 'azure/login@' .github/workflows/build-release-artifacts.yml
++          grep -Fq 'artifact-signing-action@' .github/workflows/build-release-artifacts.yml
++          grep -Fq 'file-digest:' .github/workflows/build-release-artifacts.yml
++          grep -Fq 'timestamp-rfc3161:' .github/workflows/build-release-artifacts.yml
++          grep -Fq 'timestamp-digest:' .github/workflows/build-release-artifacts.yml
++          grep -Fq 'append-signature:' .github/workflows/build-release-artifacts.yml
++          grep -Fq 'verify-signed-artifact.ps1' .github/workflows/build-release-artifacts.yml
+           grep -Fq 'AUR_PRIVATE_SSH_KEY' .github/workflows/deploy-aur.yml
+           grep -Fq 'AUR_PRIVATE_SSH_KEY_PASSPHRASE' .github/workflows/deploy-aur.yml
+           grep -Fq 'ssh://aur@aur.archlinux.org/gitcomet.git' .github/workflows/deploy-aur.yml
+diff --git a/scripts/windows/verify-signed-artifact.ps1 b/scripts/windows/verify-signed-artifact.ps1
+new file mode 100644
+index 0000000..a66c7ef
+--- /dev/null
++++ b/scripts/windows/verify-signed-artifact.ps1
+@@ -0,0 +1,34 @@
++param(
++  [Parameter(Mandatory = $true)]
++  [string]$Path,
++
++  [Parameter(Mandatory = $true)]
++  [string]$SignToolPath
++)
++
++$ErrorActionPreference = "Stop"
++Set-StrictMode -Version Latest
++
++if (!(Test-Path -LiteralPath $Path)) {
++  throw "Expected signed artifact '$Path' to exist."
++}
++
++$signature = Get-AuthenticodeSignature -FilePath $Path
++if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
++  throw "Authenticode verification failed for '$Path': $($signature.Status) $($signature.StatusMessage)"
++}
++if ($null -eq $signature.SignerCertificate) {
++  throw "Missing signer certificate on '$Path'."
++}
++if ($null -eq $signature.TimeStamperCertificate) {
++  throw "Missing RFC3161 timestamp on '$Path'."
++}
++
++$verifyOutput = & $SignToolPath verify /pa /all /v /tw $Path 2>&1
++$verifyOutput | ForEach-Object { Write-Host $_ }
++if ($LASTEXITCODE -ne 0) {
++  throw "signtool verification failed for '$Path'."
++}
++if (($verifyOutput | Out-String) -match 'No timestamp') {
++  throw "signtool reported a missing timestamp for '$Path'."
++}
+-- 
+2.53.0
+

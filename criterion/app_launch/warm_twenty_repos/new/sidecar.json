@@ -1,0 +1,10 @@
+{
+  "bench": "app_launch/warm_twenty_repos",
+  "metrics": {
+    "first_paint_ms": 247,
+    "first_interactive_ms": 273,
+    "rss_at_first_paint_kib": 197264,
+    "rss_at_interactive_kib": 215244,
+    "repos_loaded": 20
+  }
+}

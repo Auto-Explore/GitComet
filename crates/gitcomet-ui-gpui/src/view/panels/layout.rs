@@ -440,10 +440,12 @@ impl DetailsPaneView {
                                     .h_full()
                                     .min_h(px(0.0))
                                     .w_full()
+                                    .overflow_hidden()
                                     .child(
                                         div()
                                             .w_full()
                                             .flex_1()
+                                            .h_full()
                                             .min_h(px(0.0))
                                             .pr(files_scrollbar_gutter)
                                             .child(list),
@@ -596,10 +598,12 @@ impl DetailsPaneView {
                                 .h_full()
                                 .min_h(px(0.0))
                                 .w_full()
+                                .overflow_hidden()
                                 .child(
                                     div()
                                         .w_full()
                                         .flex_1()
+                                        .h_full()
                                         .min_h(px(0.0))
                                         .pr(files_scrollbar_gutter)
                                         .child(list),

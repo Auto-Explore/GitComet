@@ -818,20 +818,27 @@ fn set_active_repo_refreshes_repo_state_and_selected_diff() {
     let has_log = effects.iter().any(|e| {
         matches!(e, Effect::LoadLog { repo_id, scope: _, limit: _, cursor: _ } if *repo_id == repo1)
     });
-    let has_diff = effects
-        .iter()
-        .any(|e| matches!(e, Effect::LoadDiff { repo_id, target: _ } if *repo_id == repo1));
-    let has_diff_file = effects
-        .iter()
-        .any(|e| matches!(e, Effect::LoadDiffFile { repo_id, target: _ } if *repo_id == repo1));
+    let has_selected_diff_reload = effects.iter().any(|e| {
+        matches!(
+            e,
+            Effect::LoadSelectedDiff {
+                repo_id,
+                target: DiffTarget::WorkingTree { path, .. },
+                load_file_text: true,
+                load_file_image: false,
+            } if *repo_id == repo1 && path == &PathBuf::from("src/lib.rs")
+        )
+    });
     let has_persist = effects
         .iter()
         .any(|e| matches!(e, Effect::PersistSession { .. }));
 
     assert!(has_status, "expected status refresh on activation");
     assert!(has_log, "expected log refresh on activation");
-    assert!(has_diff, "expected diff refresh on activation");
-    assert!(has_diff_file, "expected diff-file refresh on activation");
+    assert!(
+        has_selected_diff_reload,
+        "expected combined selected-diff reload on activation"
+    );
     assert!(
         has_persist,
         "expected session persist when active repo changes"
@@ -877,23 +884,11 @@ fn set_active_repo_reloads_selected_image_diff_via_image_effect() {
 
     assert!(effects.iter().any(|e| matches!(
         e,
-        Effect::LoadDiff {
+        Effect::LoadSelectedDiff {
             repo_id,
             target: DiffTarget::WorkingTree { path, .. },
-        } if *repo_id == repo1 && path == &PathBuf::from("icon.png")
-    )));
-    assert!(effects.iter().any(|e| matches!(
-        e,
-        Effect::LoadDiffFileImage {
-            repo_id,
-            target: DiffTarget::WorkingTree { path, .. },
-        } if *repo_id == repo1 && path == &PathBuf::from("icon.png")
-    )));
-    assert!(!effects.iter().any(|e| matches!(
-        e,
-        Effect::LoadDiffFile {
-            repo_id,
-            target: DiffTarget::WorkingTree { path, .. },
+            load_file_text: false,
+            load_file_image: true,
         } if *repo_id == repo1 && path == &PathBuf::from("icon.png")
     )));
 }
@@ -936,22 +931,16 @@ fn set_active_repo_png_diff_enqueues_image_preview_only() {
     );
 
     assert!(
-        effects
-            .iter()
-            .any(|e| matches!(e, Effect::LoadDiff { repo_id, .. } if *repo_id == repo1)),
-        "expected diff refresh for png target"
-    );
-    assert!(
-        effects
-            .iter()
-            .any(|e| matches!(e, Effect::LoadDiffFileImage { repo_id, .. } if *repo_id == repo1)),
-        "expected image preview refresh for png target"
-    );
-    assert!(
-        !effects
-            .iter()
-            .any(|e| matches!(e, Effect::LoadDiffFile { repo_id, .. } if *repo_id == repo1)),
-        "did not expect text diff-file refresh for png target"
+        effects.iter().any(|e| matches!(
+            e,
+            Effect::LoadSelectedDiff {
+                repo_id,
+                load_file_text: false,
+                load_file_image: true,
+                ..
+            } if *repo_id == repo1
+        )),
+        "expected combined selected-diff reload with image preview only for png target"
     );
 }
 
@@ -993,17 +982,95 @@ fn set_active_repo_svg_diff_enqueues_image_and_text_previews() {
     );
 
     assert!(
-        effects
-            .iter()
-            .any(|e| matches!(e, Effect::LoadDiffFileImage { repo_id, .. } if *repo_id == repo1)),
-        "expected image preview refresh for svg target"
+        effects.iter().any(|e| matches!(
+            e,
+            Effect::LoadSelectedDiff {
+                repo_id,
+                load_file_text: true,
+                load_file_image: true,
+                ..
+            } if *repo_id == repo1
+        )),
+        "expected combined selected-diff reload with both image and text previews for svg target"
     );
-    assert!(
-        effects
-            .iter()
-            .any(|e| matches!(e, Effect::LoadDiffFile { repo_id, .. } if *repo_id == repo1)),
-        "expected text diff-file refresh for svg target"
+}
+
+#[test]
+fn set_active_repo_selected_conflict_target_reuses_existing_conflict_state() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo1")),
     );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo2")),
+    );
+
+    let repo1 = RepoId(1);
+    let conflict_path = PathBuf::from("src/conflict.rs");
+    let before_rev = {
+        let repo1_state = state
+            .repos
+            .iter_mut()
+            .find(|r| r.id == repo1)
+            .expect("repo1 exists");
+        repo1_state.diff_state.diff_target = Some(DiffTarget::WorkingTree {
+            path: conflict_path.clone(),
+            area: gitcomet_core::domain::DiffArea::Unstaged,
+        });
+        repo1_state.conflict_state.conflict_file_path = Some(conflict_path.clone());
+        let content: Arc<str> = Arc::from("conflict contents");
+        repo1_state.conflict_state.conflict_file =
+            Loadable::Ready(Some(crate::model::ConflictFile {
+                path: conflict_path.clone(),
+                base_bytes: None,
+                ours_bytes: None,
+                theirs_bytes: None,
+                current_bytes: None,
+                base: Some(Arc::clone(&content)),
+                ours: Some(Arc::clone(&content)),
+                theirs: Some(Arc::clone(&content)),
+                current: Some(content),
+            }));
+        repo1_state.conflict_state.conflict_rev = 41;
+        repo1_state.conflict_state.conflict_rev
+    };
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SetActiveRepo { repo_id: repo1 },
+    );
+
+    let repo1_state = state
+        .repos
+        .iter()
+        .find(|r| r.id == repo1)
+        .expect("repo1 exists");
+    assert_eq!(
+        repo1_state.conflict_state.conflict_file_path.as_ref(),
+        Some(&conflict_path)
+    );
+    assert!(repo1_state.conflict_state.conflict_file.is_loading());
+    assert!(repo1_state.conflict_state.conflict_session.is_none());
+    assert_eq!(repo1_state.conflict_state.conflict_rev, before_rev + 1);
+    assert!(effects.iter().any(|effect| matches!(
+        effect,
+        Effect::LoadConflictFile {
+            repo_id,
+            path,
+            mode: crate::model::ConflictFileLoadMode::CurrentOnly,
+        } if *repo_id == repo1 && path == &conflict_path
+    )));
 }
 
 #[test]
