@@ -58,7 +58,7 @@ impl ConflictThreeWayScrollFixture {
     }
 
     fn build(lines: usize, conflict_blocks: usize, prepare_documents: bool) -> Self {
-        let theme = AppTheme::zed_ayu_dark();
+        let theme = AppTheme::gitcomet_dark();
         let segments = build_synthetic_three_way_segments(lines, conflict_blocks);
         let (base_text, ours_text, theirs_text) = materialize_three_way_side_texts(&segments);
         let base_lines = split_lines_shared(&base_text);
@@ -454,7 +454,7 @@ fn build_block_local_two_way_benchmark_rows(
 
 impl ConflictTwoWaySplitScrollFixture {
     pub fn new(lines: usize, conflict_blocks: usize) -> Self {
-        let theme = AppTheme::zed_ayu_dark();
+        let theme = AppTheme::gitcomet_dark();
         let segments = build_synthetic_two_way_segments(lines, conflict_blocks);
         let conflict_count = conflict_block_count_for_segments(&segments);
         let BlockLocalTwoWayBenchmarkRows {
@@ -905,7 +905,7 @@ pub struct ConflictSearchQueryUpdateFixture {
 
 impl ConflictSearchQueryUpdateFixture {
     pub fn new(lines: usize, conflict_blocks: usize) -> Self {
-        let theme = AppTheme::zed_ayu_dark();
+        let theme = AppTheme::gitcomet_dark();
         let segments = build_synthetic_two_way_segments(lines, conflict_blocks);
         let conflict_count = conflict_block_count_for_segments(&segments);
         let BlockLocalTwoWayBenchmarkRows {

@@ -31,7 +31,7 @@ fn abs_scroll_y(raw: Pixels) -> Pixels {
 
 #[test]
 fn builds_pure_components_without_panics() {
-    for theme in [AppTheme::zed_ayu_dark(), AppTheme::zed_one_light()] {
+    for theme in [AppTheme::gitcomet_dark(), AppTheme::gitcomet_light()] {
         assert_no_panic("components::pill", || {
             let _ = components::pill(theme, "Label", theme.colors.accent);
         });
@@ -136,7 +136,7 @@ impl SmokeView {
         });
 
         Self {
-            theme: AppTheme::zed_ayu_dark(),
+            theme: AppTheme::gitcomet_dark(),
             input,
         }
     }
@@ -236,7 +236,7 @@ impl TextInputCursorScrollView {
         });
 
         Self {
-            theme: AppTheme::zed_ayu_dark(),
+            theme: AppTheme::gitcomet_dark(),
             input,
             scroll_handle,
         }
@@ -291,7 +291,7 @@ impl TextInputHostView {
         });
 
         Self {
-            theme: AppTheme::zed_ayu_dark(),
+            theme: AppTheme::gitcomet_dark(),
             input,
         }
     }
@@ -1577,7 +1577,7 @@ struct PanelLayoutTestView {
 impl PanelLayoutTestView {
     fn new() -> Self {
         Self {
-            theme: AppTheme::zed_ayu_dark(),
+            theme: AppTheme::gitcomet_dark(),
             handle: gpui::UniformListScrollHandle::default(),
         }
     }
@@ -1721,7 +1721,7 @@ impl PickerPromptScrollbarTestView {
         });
 
         Self {
-            theme: AppTheme::zed_ayu_dark(),
+            theme: AppTheme::gitcomet_dark(),
             input,
             scroll_handle: ScrollHandle::new(),
         }
@@ -2073,7 +2073,7 @@ struct ScrollbarTestView {
 impl ScrollbarTestView {
     fn new(rows: usize) -> Self {
         Self {
-            theme: AppTheme::zed_ayu_dark(),
+            theme: AppTheme::gitcomet_dark(),
             handle: ScrollHandle::new(),
             rows,
         }
@@ -2273,7 +2273,7 @@ struct ScrollbarMismatchedBoundsView {
 impl ScrollbarMismatchedBoundsView {
     fn new(rows: usize) -> Self {
         Self {
-            theme: AppTheme::zed_ayu_dark(),
+            theme: AppTheme::gitcomet_dark(),
             handle: ScrollHandle::new(),
             rows,
         }

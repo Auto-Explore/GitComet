@@ -1,12 +1,12 @@
 [package]
 name = "gitcomet-ui-gpui"
+build = "build.rs"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-build = "build.rs"
 
 [lints]
 workspace = true

@@ -198,7 +198,7 @@ fn is_supported_git_version(version: GitVersion) -> bool {
 
 pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>) -> gpui::Div {
     let theme = this.theme;
-    let current_theme_mode = this.theme_mode;
+    let current_theme_mode = this.theme_mode.clone();
     let current_format = this.date_time_format;
     let current_timezone = this.timezone;
     let show_timezone = this.show_timezone;

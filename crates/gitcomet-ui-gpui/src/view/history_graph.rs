@@ -1,11 +1,11 @@
-use crate::theme::AppTheme;
+use crate::theme::{AppTheme, GRAPH_LANE_PALETTE_SIZE};
 use gitcomet_core::domain::{Commit, CommitId};
 use gpui::Rgba;
 use rustc_hash::FxHashMap as HashMap;
 use smallvec::SmallVec;
 use std::sync::OnceLock;
 
-const LANE_COLOR_PALETTE_SIZE: usize = 64;
+const LANE_COLOR_PALETTE_SIZE: usize = GRAPH_LANE_PALETTE_SIZE;
 const INLINE_LANE_CAPACITY: usize = 3;
 const INLINE_EDGE_CAPACITY: usize = 2;
 
@@ -521,7 +521,7 @@ mod tests {
 
     #[test]
     fn new_lanes_avoid_reusing_active_lane_colors() {
-        let theme = AppTheme::zed_ayu_dark();
+        let theme = AppTheme::gitcomet_dark();
         let mut commits = Vec::new();
 
         // Advance the internal color counter beyond the palette size using disconnected commits.
@@ -557,7 +557,7 @@ mod tests {
 
     #[test]
     fn branch_heads_split_off_new_lane_when_behind() {
-        let theme = AppTheme::zed_ayu_dark();
+        let theme = AppTheme::gitcomet_dark();
         let commits = vec![
             commit("new1", vec!["base"]),
             commit("base", vec!["root"]),
@@ -584,7 +584,7 @@ mod tests {
 
     #[test]
     fn branch_heads_do_not_split_when_multiple_lanes_converge() {
-        let theme = AppTheme::zed_ayu_dark();
+        let theme = AppTheme::gitcomet_dark();
         let commits = vec![
             commit("top1", vec!["base"]),
             commit("top2", vec!["base"]),
@@ -605,7 +605,7 @@ mod tests {
 
     #[test]
     fn active_head_lane_stays_leftmost_even_when_head_commit_appears_later() {
-        let theme = AppTheme::zed_ayu_dark();
+        let theme = AppTheme::gitcomet_dark();
         let commits = vec![
             commit("feature2", vec!["base"]),
             commit("main2", vec!["base"]),

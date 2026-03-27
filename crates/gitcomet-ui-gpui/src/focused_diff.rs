@@ -5,7 +5,7 @@
 
 use crate::assets::GitCometAssets;
 use crate::launch_guard::run_with_panic_guard;
-use crate::theme::{AppTheme, with_alpha};
+use crate::theme::AppTheme;
 use gitcomet_state::session;
 use gpui::prelude::*;
 use gpui::{
@@ -181,7 +181,7 @@ impl Render for FocusedDiffView {
                             .px(px(10.0))
                             .py(px(4.0))
                             .bg(theme.colors.accent)
-                            .text_color(gpui::rgba(0xffffffff))
+                            .text_color(theme.colors.accent_text)
                             .rounded(px(2.0))
                             .cursor_pointer()
                             .font_weight(FontWeight::BOLD)
@@ -215,13 +215,10 @@ fn render_diff_line(index: usize, line: &DiffLine, theme: &AppTheme) -> impl Int
     let (text_color, bg) = match line.kind {
         DiffLineKind::Header => (theme.colors.text_muted, None),
         DiffLineKind::HunkHeader => (theme.colors.accent, None),
-        DiffLineKind::Add => (
-            theme.colors.success,
-            Some(with_alpha(theme.colors.success, 0.08)),
-        ),
+        DiffLineKind::Add => (theme.colors.diff_add_text, Some(theme.colors.diff_add_bg)),
         DiffLineKind::Remove => (
-            theme.colors.danger,
-            Some(with_alpha(theme.colors.danger, 0.08)),
+            theme.colors.diff_remove_text,
+            Some(theme.colors.diff_remove_bg),
         ),
         DiffLineKind::Context => (theme.colors.text, None),
     };

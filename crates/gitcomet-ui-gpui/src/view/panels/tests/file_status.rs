@@ -1736,7 +1736,7 @@ fn theme_change_clears_conflict_three_way_segments_cache(cx: &mut gpui::TestAppC
                 assert_eq!(pane.conflict_three_way_segments_cache.len(), 2);
                 assert_eq!(pane.conflict_diff_segments_cache_split.len(), 1);
 
-                let new_theme = crate::theme::AppTheme::zed_one_light();
+                let new_theme = crate::theme::AppTheme::gitcomet_light();
                 pane.set_theme(new_theme, cx);
 
                 assert!(

@@ -59,6 +59,8 @@ thread_local! {
     static TS_INJECTION_DEPTH: Cell<usize> = const { Cell::new(0) };
     #[cfg(test)]
     static TS_PARSER_SET_LANGUAGE_CALL_COUNT: Cell<usize> = const { Cell::new(0) };
+    #[cfg(test)]
+    static TS_TREE_STATE_CLONE_COUNT: Cell<usize> = const { Cell::new(0) };
 }
 
 fn invalidate_ts_parser_language_fast_path() {
@@ -102,14 +104,13 @@ fn with_ts_parser<R>(
             .as_deref()
             .is_some_and(|current| current == ts_language);
 
-        if needs_language_reset || !parser_language_matches {
-            if parser.set_language(ts_language).is_err() {
+        if (needs_language_reset || !parser_language_matches)
+            && parser.set_language(ts_language).is_err() {
                 invalidate_ts_parser_language_fast_path();
                 return None;
             }
             #[cfg(test)]
             TS_PARSER_SET_LANGUAGE_CALL_COUNT.with(|count| count.set(count.get() + 1));
-        }
         Some(f(&mut parser))
     })
 }
@@ -384,9 +385,6 @@ static TS_INCREMENTAL_PARSE_COUNT: std::sync::atomic::AtomicUsize =
 #[cfg(test)]
 static TS_INCREMENTAL_FALLBACK_COUNT: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
-#[cfg(test)]
-static TS_TREE_STATE_CLONE_COUNT: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
 
 fn syntax_cache_drop_sender() -> Option<&'static mpsc::Sender<SyntaxCacheDropMessage>> {
     static SENDER: OnceLock<Option<mpsc::Sender<SyntaxCacheDropMessage>>> = OnceLock::new();
@@ -576,7 +574,7 @@ fn reset_deferred_drop_counters() {
     TS_INLINE_DROP_COUNT.store(0, std::sync::atomic::Ordering::Relaxed);
     TS_INCREMENTAL_PARSE_COUNT.store(0, std::sync::atomic::Ordering::Relaxed);
     TS_INCREMENTAL_FALLBACK_COUNT.store(0, std::sync::atomic::Ordering::Relaxed);
-    TS_TREE_STATE_CLONE_COUNT.store(0, std::sync::atomic::Ordering::Relaxed);
+    TS_TREE_STATE_CLONE_COUNT.with(|count| count.set(0));
 }
 
 #[cfg(test)]
@@ -589,7 +587,7 @@ fn incremental_reparse_counters() -> (usize, usize) {
 
 #[cfg(test)]
 fn tree_state_clone_count() -> usize {
-    TS_TREE_STATE_CLONE_COUNT.load(std::sync::atomic::Ordering::Relaxed)
+    TS_TREE_STATE_CLONE_COUNT.with(|count| count.get())
 }
 
 #[cfg(any(test, feature = "benchmarks"))]
@@ -736,7 +734,7 @@ fn clone_tree_state_for_chunk_build_ref(
     tree_state: &PreparedSyntaxTreeState,
 ) -> PreparedSyntaxTreeState {
     #[cfg(test)]
-    TS_TREE_STATE_CLONE_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    TS_TREE_STATE_CLONE_COUNT.with(|count| count.set(count.get().saturating_add(1)));
     tree_state.clone()
 }
 
@@ -4590,11 +4588,10 @@ mod tests {
     use super::*;
     use std::time::{Duration, Instant};
 
-    /// Serializes all tests that read or write the global atomic counters
-    /// (`TS_DEFERRED_DROP_*`, `TS_INCREMENTAL_*`, `TS_TREE_STATE_CLONE_COUNT`).
-    /// Without this lock, concurrent tests can reset or bump counters that
-    /// another test is asserting on, causing flaky failures under parallel
-    /// test execution.
+    /// Serializes tests that reset or assert on the shared syntax instrumentation
+    /// counters. Without this lock, concurrent tests can reset or bump those
+    /// counters while another test is asserting on them, causing flaky failures
+    /// under parallel test execution.
     static GLOBAL_COUNTER_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn lock_global_counter_tests() -> std::sync::MutexGuard<'static, ()> {

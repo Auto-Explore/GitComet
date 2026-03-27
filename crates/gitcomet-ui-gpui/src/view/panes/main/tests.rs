@@ -1568,7 +1568,7 @@ fn empty_base_conflict_hint_overrides_false_a_badge() {
 
 #[test]
 fn resolved_output_syntax_state_uses_prepared_document_for_multiline_comment() {
-    let theme = AppTheme::zed_ayu_dark();
+    let theme = AppTheme::gitcomet_dark();
     let output = "/* open comment\nstill comment */ let x = 1;";
     let output_model = TextModel::from(output);
     let output_snapshot = output_model.snapshot();
@@ -1616,7 +1616,7 @@ fn resolved_output_syntax_state_uses_prepared_document_for_multiline_comment() {
 
 #[test]
 fn resolved_output_syntax_state_requests_background_prepare_for_large_documents() {
-    let theme = AppTheme::zed_ayu_dark();
+    let theme = AppTheme::gitcomet_dark();
     let output = "let value = Some(42);\n".repeat(4_001);
     let output_model = TextModel::from(output.clone());
     let output_snapshot = output_model.snapshot();
@@ -1652,7 +1652,7 @@ fn resolved_output_syntax_state_requests_background_prepare_for_large_documents(
 
 #[test]
 fn resolved_output_highlight_provider_binding_key_tracks_theme_language_and_document() {
-    let theme = AppTheme::zed_ayu_dark();
+    let theme = AppTheme::gitcomet_dark();
     let output_a = TextModel::from("fn alpha() -> usize { 1 }\n");
     let state_a = build_resolved_output_syntax_state_for_snapshot(
         theme,

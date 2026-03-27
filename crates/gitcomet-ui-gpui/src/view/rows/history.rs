@@ -1611,7 +1611,7 @@ fn working_tree_summary_history_row(
         parts.push(icon_count("icons/minus.svg", theme.colors.danger, deleted));
     }
 
-    let black = gpui::rgba(0x000000ff);
+    let node_fill = theme.colors.window_bg;
     let circle = gpui::canvas(
         |_, _, _| (),
         move |bounds, _, window, _cx| {
@@ -1649,7 +1649,7 @@ fn working_tree_summary_history_row(
             window.paint_quad(
                 fill(
                     gpui::Bounds::new(point(center.x - r, center.y - r), size(r * 2.0, r * 2.0)),
-                    black,
+                    node_fill,
                 )
                 .corner_radii(r.min(px(2.0))),
             );
@@ -1868,7 +1868,7 @@ mod tests {
 
     #[test]
     fn markdown_preview_heading_typography_scales_above_body_text() {
-        let theme = AppTheme::zed_one_light();
+        let theme = AppTheme::gitcomet_light();
         let paragraph = MarkdownPreviewRow {
             kind: MarkdownPreviewRowKind::Paragraph,
             text: SharedString::from("body"),
@@ -1917,7 +1917,7 @@ mod tests {
 
     #[test]
     fn markdown_preview_list_rows_match_body_line_height_and_keep_tighter_layout() {
-        let theme = AppTheme::zed_one_light();
+        let theme = AppTheme::gitcomet_light();
         let paragraph = markdown_row(MarkdownPreviewRowKind::Paragraph);
         let list_item = markdown_row(MarkdownPreviewRowKind::ListItem { number: None });
 
@@ -1937,7 +1937,7 @@ mod tests {
 
     #[test]
     fn markdown_preview_details_summary_rows_are_bold_and_marked() {
-        let theme = AppTheme::zed_one_light();
+        let theme = AppTheme::gitcomet_light();
         let row = markdown_row(MarkdownPreviewRowKind::DetailsSummary);
 
         let typography = markdown_preview_row_typography(theme, &row, EDITOR_MONOSPACE_FONT_FAMILY);
@@ -2111,7 +2111,7 @@ mod tests {
 
     #[test]
     fn markdown_preview_row_background_change_hints_override_alert_and_fallback_states() {
-        let theme = AppTheme::zed_one_light();
+        let theme = AppTheme::gitcomet_light();
 
         let mut added_row = markdown_row(MarkdownPreviewRowKind::Paragraph);
         added_row.change_hint = MarkdownChangeHint::Added;
@@ -2136,7 +2136,7 @@ mod tests {
 
     #[test]
     fn markdown_preview_row_background_uses_alert_and_fallback_only_when_unchanged() {
-        let theme = AppTheme::zed_ayu_dark();
+        let theme = AppTheme::gitcomet_dark();
 
         let plain_row = markdown_row(MarkdownPreviewRowKind::Paragraph);
         assert_eq!(markdown_preview_row_background(theme, &plain_row), None);
@@ -2155,7 +2155,8 @@ mod tests {
 
     #[test]
     fn markdown_preview_row_styled_text_maps_inline_styles_and_skips_normal_spans() {
-        let theme = AppTheme::zed_one_light();
+        let theme = AppTheme::gitcomet_light();
+
         let mut row = markdown_row(MarkdownPreviewRowKind::Paragraph);
         row.text = SharedString::from("link under strike plain");
         row.inline_spans = Arc::new(vec![
@@ -2201,7 +2202,7 @@ mod tests {
 
     #[test]
     fn markdown_preview_table_rows_use_monospace_typography_and_only_headers_are_bold() {
-        let theme = AppTheme::zed_one_light();
+        let theme = AppTheme::gitcomet_light();
         let header = markdown_row(MarkdownPreviewRowKind::TableRow { is_header: true });
         let body = markdown_row(MarkdownPreviewRowKind::TableRow { is_header: false });
 
@@ -2226,7 +2227,7 @@ mod tests {
 
     #[test]
     fn markdown_preview_code_rows_reuse_diff_syntax_highlighting() {
-        let theme = AppTheme::zed_ayu_dark();
+        let theme = AppTheme::gitcomet_dark();
         let row = MarkdownPreviewRow {
             kind: MarkdownPreviewRowKind::CodeLine {
                 is_first: true,
@@ -2268,7 +2269,7 @@ mod tests {
 
     #[test]
     fn markdown_preview_spacer_rows_have_no_extra_layout_or_background() {
-        let theme = AppTheme::zed_one_light();
+        let theme = AppTheme::gitcomet_light();
         let row = markdown_row(MarkdownPreviewRowKind::Spacer);
 
         let layout = markdown_preview_row_layout(&row);

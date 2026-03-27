@@ -1845,7 +1845,7 @@ fn generic_error_banner_is_hidden_when_auth_prompt_is_active() {
 
 #[test]
 fn auth_prompt_banner_colors_use_accent_palette() {
-    let theme = AppTheme::zed_one_light();
+    let theme = AppTheme::gitcomet_light();
     let (bg, border) = GitCometView::auth_prompt_banner_colors(theme);
 
     assert_eq!(bg, with_alpha(theme.colors.accent, 0.15));

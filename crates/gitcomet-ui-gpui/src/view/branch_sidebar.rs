@@ -701,7 +701,7 @@ pub(super) fn branch_sidebar_rows(
                 });
 
                 for (remote, branches) in remotes {
-                    let remote_collapse_key = remote_header_storage_key(&remote);
+                    let remote_collapse_key = remote_header_storage_key(remote);
                     let remote_is_collapsed = is_collapsed(collapsed_items, &remote_collapse_key);
                     rows.push(BranchSidebarRow::RemoteHeader {
                         name: SharedString::new(remote),
@@ -716,11 +716,11 @@ pub(super) fn branch_sidebar_rows(
                     // `push_slash_tree_rows()` sorts each fanout level, so sorting the flat
                     // branch list here would only duplicate work.
                     for branch in branches {
-                        tree.insert(&branch);
+                        tree.insert(branch);
                     }
 
                     let mut name_prefix = String::with_capacity(remote.len() + 1);
-                    name_prefix.push_str(&remote);
+                    name_prefix.push_str(remote);
                     name_prefix.push('/');
                     let mut group_path_prefix = String::new();
                     push_slash_tree_rows(

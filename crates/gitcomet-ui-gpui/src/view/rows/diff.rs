@@ -7,18 +7,17 @@ use crate::view::panes::main::{
 use gitcomet_core::domain::DiffLineKind;
 use gitcomet_core::file_diff::FileDiffRowKind;
 
-/// Returns the word-highlight color for a diff line kind: success for Add,
-/// danger for Remove, None otherwise.
+/// Returns the word-highlight color for a diff line kind.
 fn diff_line_word_color(kind: DiffLineKind, theme: AppTheme) -> Option<gpui::Rgba> {
     match kind {
-        DiffLineKind::Add => Some(theme.colors.success),
-        DiffLineKind::Remove => Some(theme.colors.danger),
+        DiffLineKind::Add => Some(theme.colors.diff_add_text),
+        DiffLineKind::Remove => Some(theme.colors.diff_remove_text),
         _ => None,
     }
 }
 
 /// Returns the word-highlight color for a file diff split column.
-/// Left highlights Remove/Modify in danger; Right highlights Add/Modify in success.
+/// Left highlights Remove/Modify; Right highlights Add/Modify.
 fn file_diff_split_word_color(
     column: PatchSplitColumn,
     kind: FileDiffRowKind,
@@ -26,9 +25,9 @@ fn file_diff_split_word_color(
 ) -> Option<gpui::Rgba> {
     match column {
         PatchSplitColumn::Left => matches!(kind, FileDiffRowKind::Remove | FileDiffRowKind::Modify)
-            .then_some(theme.colors.danger),
+            .then_some(theme.colors.diff_remove_text),
         PatchSplitColumn::Right => matches!(kind, FileDiffRowKind::Add | FileDiffRowKind::Modify)
-            .then_some(theme.colors.success),
+            .then_some(theme.colors.diff_add_text),
     }
 }
 

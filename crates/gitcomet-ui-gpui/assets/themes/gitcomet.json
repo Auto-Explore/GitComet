@@ -1,0 +1,93 @@
+{
+  "name": "GitComet",
+  "themes": [
+    {
+      "key": "gitcomet_light",
+      "name": "GitComet Light",
+      "appearance": "light",
+      "colors": {
+        "window_bg": "#fafafaff",
+        "surface_bg": "#ebebecff",
+        "surface_bg_elevated": "#ebebecff",
+        "active_section": "#fafafaff",
+        "border": "#dfdfe0ff",
+        "tooltip_bg": "#ebebecff",
+        "tooltip_text": "#242529ff",
+        "text": "#242529ff",
+        "text_muted": "#58585aff",
+        "accent": "#5c78e2ff",
+        "hover": "#dfdfe0ff",
+        "active": { "hex": "#dfdfe0ff", "alpha": 0.88 },
+        "focus_ring": { "hex": "#5c78e2ff", "alpha": 0.52 },
+        "focus_ring_bg": { "hex": "#5c78e2ff", "alpha": 0.12 },
+        "scrollbar_thumb": { "hex": "#58585aff", "alpha": 0.26 },
+        "scrollbar_thumb_hover": { "hex": "#58585aff", "alpha": 0.36 },
+        "scrollbar_thumb_active": { "hex": "#58585aff", "alpha": 0.46 },
+        "danger": "#de3e35ff",
+        "warning": "#d2b67cff",
+        "success": "#3f953aff",
+        "diff_add_bg": "#e6ffedff",
+        "diff_add_text": "#22863aff",
+        "diff_remove_bg": "#ffeef0ff",
+        "diff_remove_text": "#cb2431ff",
+        "input_placeholder": "#00000033",
+        "accent_text": "#ffffffff",
+        "graph_lane_hues": [
+          0.00, 0.13, 0.26, 0.39, 0.52, 0.65, 0.78, 0.91, 0.04, 0.17, 0.30, 0.43, 0.56, 0.69, 0.82, 0.95,
+          0.08, 0.21, 0.34, 0.47, 0.60, 0.73, 0.86, 0.99, 0.12, 0.25, 0.38, 0.51, 0.64, 0.77, 0.90, 0.03,
+          0.16, 0.29, 0.42, 0.55, 0.68, 0.81, 0.94, 0.07, 0.20, 0.33, 0.46, 0.59, 0.72, 0.85, 0.98, 0.11,
+          0.24, 0.37, 0.50, 0.63, 0.76, 0.89, 0.02, 0.15, 0.28, 0.41, 0.54, 0.67, 0.80, 0.93, 0.06, 0.19
+        ]
+      },
+      "radii": {
+        "panel": 2.0,
+        "pill": 2.0,
+        "row": 2.0
+      }
+    },
+    {
+      "key": "gitcomet_dark",
+      "name": "GitComet Dark",
+      "appearance": "dark",
+      "colors": {
+        "window_bg": "#0d1016ff",
+        "surface_bg": "#1f2127ff",
+        "surface_bg_elevated": "#1f2127ff",
+        "active_section": "#2d2f34ff",
+        "border": "#2d2f34ff",
+        "tooltip_bg": "#000000ff",
+        "tooltip_text": "#ffffffff",
+        "text": "#bfbdb6ff",
+        "text_muted": "#8a8986ff",
+        "accent": "#5ac1feff",
+        "hover": "#2d2f34ff",
+        "active": { "hex": "#2d2f34ff", "alpha": 0.78 },
+        "focus_ring": { "hex": "#5ac1feff", "alpha": 0.60 },
+        "focus_ring_bg": { "hex": "#5ac1feff", "alpha": 0.16 },
+        "scrollbar_thumb": { "hex": "#8a8986ff", "alpha": 0.30 },
+        "scrollbar_thumb_hover": { "hex": "#8a8986ff", "alpha": 0.42 },
+        "scrollbar_thumb_active": { "hex": "#8a8986ff", "alpha": 0.52 },
+        "danger": "#ef7177ff",
+        "warning": "#feb454ff",
+        "success": "#aad84cff",
+        "diff_add_bg": "#0b2e1cff",
+        "diff_add_text": "#bbf7d0ff",
+        "diff_remove_bg": "#3a0d13ff",
+        "diff_remove_text": "#fecacaff",
+        "input_placeholder": "#ffffff59",
+        "accent_text": "#ffffffff",
+        "graph_lane_hues": [
+          0.00, 0.13, 0.26, 0.39, 0.52, 0.65, 0.78, 0.91, 0.04, 0.17, 0.30, 0.43, 0.56, 0.69, 0.82, 0.95,
+          0.08, 0.21, 0.34, 0.47, 0.60, 0.73, 0.86, 0.99, 0.12, 0.25, 0.38, 0.51, 0.64, 0.77, 0.90, 0.03,
+          0.16, 0.29, 0.42, 0.55, 0.68, 0.81, 0.94, 0.07, 0.20, 0.33, 0.46, 0.59, 0.72, 0.85, 0.98, 0.11,
+          0.24, 0.37, 0.50, 0.63, 0.76, 0.89, 0.02, 0.15, 0.28, 0.41, 0.54, 0.67, 0.80, 0.93, 0.06, 0.19
+        ]
+      },
+      "radii": {
+        "panel": 2.0,
+        "pill": 2.0,
+        "row": 2.0
+      }
+    }
+  ]
+}

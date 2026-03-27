@@ -116,7 +116,7 @@ impl OpenRepoFixture {
         worktrees: usize,
         submodules: usize,
     ) -> Self {
-        let theme = AppTheme::zed_ayu_dark();
+        let theme = AppTheme::gitcomet_dark();
         let commits_vec = build_synthetic_commits(commits);
         let repo = build_synthetic_repo_state(
             local_branches,
@@ -1177,7 +1177,7 @@ impl HistoryGraphFixture {
         Self {
             commits: commits_vec,
             branch_head_indices,
-            theme: AppTheme::zed_ayu_dark(),
+            theme: AppTheme::gitcomet_dark(),
         }
     }
 
@@ -3652,7 +3652,7 @@ impl LargeFileDiffScrollFixture {
     }
 
     pub fn new_with_line_bytes(lines: usize, line_bytes: usize) -> Self {
-        let theme = AppTheme::zed_ayu_dark();
+        let theme = AppTheme::gitcomet_dark();
         let language = diff_syntax_language_for_path("src/lib.rs");
         Self {
             lines: build_synthetic_source_lines(lines, line_bytes),
@@ -6733,7 +6733,7 @@ impl PatchDiffPagedRowsFixture {
     pub fn run_eager_full_materialize_step(&self) -> u64 {
         let annotated = annotate_unified(&self.diff);
         let split = build_patch_split_rows(&annotated);
-        let theme = AppTheme::zed_ayu_dark();
+        let theme = AppTheme::gitcomet_dark();
         let language = diff_syntax_language_for_path("src/lib.rs");
         let mut hasher = FxHasher::default();
         annotated.len().hash(&mut hasher);
@@ -6809,7 +6809,7 @@ impl PatchDiffPagedRowsFixture {
         let window = window.max(1);
         let rows_provider = Arc::new(PagedPatchDiffRows::new(Arc::clone(&self.diff), 256));
         let split_provider = PagedPatchSplitRows::new(Arc::clone(&rows_provider));
-        let theme = AppTheme::zed_ayu_dark();
+        let theme = AppTheme::gitcomet_dark();
         let language = diff_syntax_language_for_path("src/lib.rs");
 
         let mut hasher = FxHasher::default();
@@ -8485,7 +8485,7 @@ struct PatchDiffSearchQueryCacheEntry {
 
 impl PatchDiffSearchQueryUpdateFixture {
     pub fn new(lines: usize) -> Self {
-        let theme = AppTheme::zed_ayu_dark();
+        let theme = AppTheme::gitcomet_dark();
         let language = diff_syntax_language_for_path("src/lib.rs");
         let target_lines = lines.max(1);
         let mut diff_rows = Vec::with_capacity(target_lines);
@@ -8627,8 +8627,8 @@ impl PatchDiffSearchQueryUpdateFixture {
                     .unwrap_or(&[]);
                 let language = self.language_for_src_ix.get(src_ix).copied().flatten();
                 let word_color = match line.kind {
-                    DiffLineKind::Add => Some(self.theme.colors.success),
-                    DiffLineKind::Remove => Some(self.theme.colors.danger),
+                    DiffLineKind::Add => Some(self.theme.colors.diff_add_text),
+                    DiffLineKind::Remove => Some(self.theme.colors.diff_remove_text),
                     _ => None,
                 };
 
@@ -9789,7 +9789,7 @@ fn build_text_input_streamed_highlights(
     line_starts: &[usize],
     density: TextInputHighlightDensity,
 ) -> Vec<(Range<usize>, gpui::HighlightStyle)> {
-    let theme = AppTheme::zed_ayu_dark();
+    let theme = AppTheme::gitcomet_dark();
     let style_primary = gpui::HighlightStyle {
         color: Some(theme.colors.accent.into()),
         ..gpui::HighlightStyle::default()

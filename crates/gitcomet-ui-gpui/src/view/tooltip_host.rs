@@ -195,8 +195,8 @@ impl Render for TooltipHost {
             .size_full();
 
         if let Some(text) = self.tooltip_visible_text.clone() {
-            let tooltip_bg = gpui::rgba(0x000000ff);
-            let tooltip_text_color = gpui::rgba(0xffffffff);
+            let tooltip_bg = theme.colors.tooltip_bg;
+            let tooltip_text_color = theme.colors.tooltip_text;
             let anchor = self.tooltip_visible_pos.unwrap_or(self.last_mouse_pos);
             let pos = point(anchor.x + px(12.0), anchor.y + px(18.0));
 
