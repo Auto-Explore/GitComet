@@ -1,8 +1,6 @@
 use super::text_model::{TextModel, TextModelSnapshot};
 use crate::theme::AppTheme;
 use crate::view::components::CONTROL_HEIGHT_PX;
-#[cfg(test)]
-use gpui::hsla;
 use gpui::prelude::*;
 use gpui::{
     App, Bounds, ClipboardItem, Context, CursorStyle, Div, Element, ElementId, ElementInputHandler,
@@ -4403,7 +4401,7 @@ pub(crate) fn benchmark_text_input_runs_legacy_visible_window(
     highlights: &[(Range<usize>, gpui::HighlightStyle)],
 ) -> u64 {
     let base_font = gpui::font(".SystemUIFont");
-    let base_color = hsla(0.0, 0.0, 1.0, 1.0);
+    let base_color = gpui::hsla(0.0, 0.0, 1.0, 1.0);
     let mut hasher = FxHasher::default();
     for line_ix in visible_line_range {
         let line_start = line_starts.get(line_ix).copied().unwrap_or(0);
@@ -4430,7 +4428,7 @@ pub(crate) fn benchmark_text_input_runs_streamed_visible_window(
     highlights: &[(Range<usize>, gpui::HighlightStyle)],
 ) -> u64 {
     let base_font = gpui::font(".SystemUIFont");
-    let base_color = hsla(0.0, 0.0, 1.0, 1.0);
+    let base_color = gpui::hsla(0.0, 0.0, 1.0, 1.0);
     let line_runs = build_streamed_highlight_runs_for_visible_window(
         &base_font,
         base_color,

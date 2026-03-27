@@ -752,10 +752,10 @@ fn app_data_dir() -> Option<PathBuf> {
     // Follow XDG on linux; otherwise fall back to platform conventions.
     #[cfg(target_os = "linux")]
     {
-        return app_data_dir_linux(
+        app_data_dir_linux(
             env::var_os("XDG_DATA_HOME").as_deref(),
             env::var_os("HOME").as_deref(),
-        );
+        )
     }
 
     #[cfg(target_os = "macos")]
