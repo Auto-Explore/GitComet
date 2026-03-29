@@ -117,14 +117,14 @@ fn with_ts_parser<R>(
             .as_deref()
             .is_some_and(|current| current == ts_language);
 
-        if (needs_language_reset || !parser_language_matches)
-            && parser.set_language(ts_language).is_err()
-        {
-            invalidate_ts_parser_language_fast_path();
-            return None;
+        if needs_language_reset || !parser_language_matches {
+            #[cfg(test)]
+            TS_PARSER_SET_LANGUAGE_CALL_COUNT.with(|count| count.set(count.get() + 1));
+            if parser.set_language(ts_language).is_err() {
+                invalidate_ts_parser_language_fast_path();
+                return None;
+            }
         }
-        #[cfg(test)]
-        TS_PARSER_SET_LANGUAGE_CALL_COUNT.with(|count| count.set(count.get() + 1));
         Some(f(&mut parser))
     })
 }
