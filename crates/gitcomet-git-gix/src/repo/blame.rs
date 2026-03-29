@@ -152,7 +152,7 @@ impl GixRepo {
                     author: metadata.author.clone(),
                     author_time_unix: metadata.author_time_unix,
                     summary: metadata.summary.clone(),
-                    line: blame_line_text(line.as_ref()),
+                    line: blame_line_text(line),
                 });
             }
         }

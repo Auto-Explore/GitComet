@@ -6569,6 +6569,8 @@ pub struct TextModelBulkLoadLargeMetrics {
 
 pub struct TextModelBulkLoadLargeFixture {
     pub text: String,
+    control_chunk_ranges: Vec<Range<usize>>,
+    control_sampled_prefix_bytes: usize,
 }
 
 impl TextModelBulkLoadLargeFixture {
@@ -6579,7 +6581,13 @@ impl TextModelBulkLoadLargeFixture {
             text.push_str(line.as_str());
             text.push('\n');
         }
-        Self { text }
+        let control_chunk_ranges = utf8_chunk_ranges(text.as_str(), 32 * 1024);
+        let control_sampled_prefix_bytes = text.len().min(96);
+        Self {
+            text,
+            control_chunk_ranges,
+            control_sampled_prefix_bytes,
+        }
     }
 
     pub fn run_piece_table_bulk_load_step(&self) -> u64 {
@@ -6662,22 +6670,18 @@ impl TextModelBulkLoadLargeFixture {
         }
 
         let mut loaded = String::with_capacity(self.text.len());
-        let mut chunk_count = 0u64;
-        for chunk in self.text.as_bytes().chunks(32 * 1024) {
-            if let Ok(chunk_text) = std::str::from_utf8(chunk) {
-                loaded.push_str(chunk_text);
-            }
-            chunk_count += 1;
+        for range in &self.control_chunk_ranges {
+            loaded.push_str(&self.text[range.clone()]);
         }
         let mut h = FxHasher::default();
         loaded.len().hash(&mut h);
-        loaded.bytes().take(96).count().hash(&mut h);
+        self.control_sampled_prefix_bytes.hash(&mut h);
 
         let metrics = TextModelBulkLoadLargeMetrics {
             source_bytes: bench_counter_u64(self.text.len()),
             document_bytes_after: bench_counter_u64(loaded.len()),
             line_starts_after: 0,
-            chunk_count,
+            chunk_count: bench_counter_u64(self.control_chunk_ranges.len()),
             load_variant: 2,
         };
         (h.finish(), metrics)
@@ -6696,11 +6700,20 @@ pub struct TextModelFragmentedEditsMetrics {
     pub string_control: u64,
 }
 
+#[derive(Clone, Debug)]
+struct TextModelFragmentedEdit {
+    offset: usize,
+    delete_len: usize,
+    insert: String,
+    insert_newlines: usize,
+}
+
 pub struct TextModelFragmentedEditFixture {
     /// The initial document text, used to build fresh models per iteration.
     initial_text: String,
-    /// Pre-computed edit sequence: (byte_offset, delete_len, insert_text).
-    edits: Vec<(usize, usize, String)>,
+    initial_line_starts: usize,
+    /// Pre-computed edit sequence over ASCII-only document content.
+    edits: Vec<TextModelFragmentedEdit>,
 }
 
 impl TextModelFragmentedEditFixture {
@@ -6708,8 +6721,10 @@ impl TextModelFragmentedEditFixture {
         let initial_text = build_text_model_document(min_bytes.max(1024));
         let doc_len = initial_text.len();
         let edits = build_deterministic_edits(&initial_text, doc_len, edit_count.max(1));
+        let initial_line_starts = text_line_starts_for_benchmark(initial_text.as_str());
         Self {
             initial_text,
+            initial_line_starts,
             edits,
         }
     }
@@ -6739,28 +6754,33 @@ impl TextModelFragmentedEditFixture {
         let mut model = TextModel::from_large_text(&self.initial_text);
         let mut deleted_bytes = 0usize;
         let mut inserted_bytes = 0usize;
-        for (offset, delete_len, insert) in &self.edits {
-            let end = offset.saturating_add(*delete_len).min(model.len());
-            let start = (*offset).min(model.len());
+        for edit in &self.edits {
+            let end = edit.offset.saturating_add(edit.delete_len).min(model.len());
+            let start = edit.offset.min(model.len());
             deleted_bytes = deleted_bytes.saturating_add(end.saturating_sub(start));
-            inserted_bytes = inserted_bytes.saturating_add(insert.len());
-            let _ = model.replace_range(start..end, insert);
+            inserted_bytes = inserted_bytes.saturating_add(edit.insert.len());
+            let _ = model.replace_range(start..end, edit.insert.as_str());
         }
         (model, deleted_bytes, inserted_bytes)
     }
 
-    fn apply_edits_to_string(&self) -> (String, usize, usize) {
+    fn apply_edits_to_string(&self) -> (String, usize, usize, usize) {
         let mut text = self.initial_text.clone();
         let mut deleted_bytes = 0usize;
         let mut inserted_bytes = 0usize;
-        for (offset, delete_len, insert) in &self.edits {
-            let start = (*offset).min(text.len());
-            let end = offset.saturating_add(*delete_len).min(text.len());
+        let mut line_starts_after = self.initial_line_starts;
+        for edit in &self.edits {
+            let start = edit.offset.min(text.len());
+            let end = edit.offset.saturating_add(edit.delete_len).min(text.len());
+            let deleted_newlines = memchr::memchr_iter(b'\n', text[start..end].as_bytes()).count();
             deleted_bytes = deleted_bytes.saturating_add(end.saturating_sub(start));
-            inserted_bytes = inserted_bytes.saturating_add(insert.len());
-            text.replace_range(start..end, insert);
+            inserted_bytes = inserted_bytes.saturating_add(edit.insert.len());
+            line_starts_after = line_starts_after
+                .saturating_sub(deleted_newlines)
+                .saturating_add(edit.insert_newlines);
+            text.replace_range(start..end, edit.insert.as_str());
         }
-        (text, deleted_bytes, inserted_bytes)
+        (text, deleted_bytes, inserted_bytes, line_starts_after)
     }
 
     /// Benchmark: apply all edits to a fresh piece-table model.
@@ -6845,15 +6865,15 @@ impl TextModelFragmentedEditFixture {
     pub fn run_string_edit_control_step_with_metrics(
         &self,
     ) -> (u64, TextModelFragmentedEditsMetrics) {
-        let (text, deleted_bytes, inserted_bytes) = self.apply_edits_to_string();
+        let (text, deleted_bytes, inserted_bytes, line_starts_after) = self.apply_edits_to_string();
         let mut h = FxHasher::default();
         text.len().hash(&mut h);
-        text.bytes().take(128).count().hash(&mut h);
+        text.len().min(128).hash(&mut h);
         let metrics = self.metrics(
             deleted_bytes,
             inserted_bytes,
             text.len(),
-            text_line_starts_for_benchmark(text.as_str()),
+            line_starts_after,
             0,
             true,
         );
@@ -6866,7 +6886,7 @@ fn build_deterministic_edits(
     text: &str,
     initial_len: usize,
     count: usize,
-) -> Vec<(usize, usize, String)> {
+) -> Vec<TextModelFragmentedEdit> {
     let mut edits = Vec::with_capacity(count);
     // Track approximate document length to keep offsets in bounds.
     let mut approx_len = initial_len;
@@ -6887,17 +6907,22 @@ fn build_deterministic_edits(
         let offset = clamp_byte_to_char_boundary(text, offset);
 
         let delete_len = ((seed >> 16) as usize) % 16;
-        let insert = match ix % 5 {
-            0 => format!("edit_{ix}"),
-            1 => format!("fn f{ix}() {{ }}\n"),
-            2 => String::new(), // pure delete
-            3 => format!("/* {ix} */"),
-            _ => format!("x{ix}\ny{ix}\n"),
+        let (insert, insert_newlines) = match ix % 5 {
+            0 => (format!("edit_{ix}"), 0),
+            1 => (format!("fn f{ix}() {{ }}\n"), 1),
+            2 => (String::new(), 0), // pure delete
+            3 => (format!("/* {ix} */"), 0),
+            _ => (format!("x{ix}\ny{ix}\n"), 2),
         };
         approx_len = approx_len
             .saturating_sub(delete_len.min(approx_len.saturating_sub(offset)))
             .saturating_add(insert.len());
-        edits.push((offset, delete_len, insert));
+        edits.push(TextModelFragmentedEdit {
+            offset,
+            delete_len,
+            insert,
+            insert_newlines,
+        });
     }
     edits
 }
@@ -6908,6 +6933,25 @@ fn clamp_byte_to_char_boundary(text: &str, mut offset: usize) -> usize {
         offset -= 1;
     }
     offset
+}
+
+fn utf8_chunk_ranges(text: &str, chunk_bytes: usize) -> Vec<Range<usize>> {
+    if text.is_empty() {
+        return Vec::new();
+    }
+
+    let chunk_bytes = chunk_bytes.max(1);
+    let mut ranges = Vec::with_capacity(text.len() / chunk_bytes + 1);
+    let mut start = 0usize;
+    while start < text.len() {
+        let mut end = clamp_byte_to_char_boundary(text, (start + chunk_bytes).min(text.len()));
+        if end == start {
+            end = text.len();
+        }
+        ranges.push(start..end);
+        start = end;
+    }
+    ranges
 }
 
 fn text_line_starts_for_benchmark(text: &str) -> usize {

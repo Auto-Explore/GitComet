@@ -729,11 +729,7 @@ pub(crate) fn parse_git_log_pretty_records(output: &str) -> LogPage {
             continue;
         }
         let mut parts = record.split('\u{001f}');
-        let Some(id) = parts
-            .next()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-        else {
+        let Some(id) = parts.next().map(str::trim).filter(|s| !s.is_empty()) else {
             continue;
         };
         let parents = parts.next().unwrap_or_default();
@@ -1174,7 +1170,10 @@ mod tests {
         assert!(page.commits[1].parent_ids.is_empty());
         assert_eq!(&*page.commits[1].author, "Tom Preston-Werner");
         assert_eq!(&*page.commits[1].summary, "initial grit setup");
-        assert!(Arc::ptr_eq(&page.commits[0].author, &page.commits[1].author));
+        assert!(Arc::ptr_eq(
+            &page.commits[0].author,
+            &page.commits[1].author
+        ));
         assert!(Arc::ptr_eq(
             &page.commits[0].parent_ids[0].0,
             &page.commits[1].id.0

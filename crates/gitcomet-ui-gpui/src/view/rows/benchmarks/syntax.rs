@@ -368,7 +368,6 @@ impl FileDiffSyntaxReparseFixture {
 
 pub struct FileDiffInlineSyntaxProjectionFixture {
     inline_rows: Vec<AnnotatedDiffLine>,
-    inline_word_highlights: Vec<Option<Vec<Range<usize>>>>,
     language: DiffSyntaxLanguage,
     theme: AppTheme,
     old_document: Option<super::diff_text::PreparedDiffSyntaxDocument>,
@@ -384,8 +383,6 @@ impl FileDiffInlineSyntaxProjectionFixture {
         let mut old_lines = Vec::with_capacity(generated_lines.len());
         let mut new_lines = Vec::with_capacity(generated_lines.len());
         let mut inline_rows = Vec::with_capacity(generated_lines.len().saturating_mul(2));
-        let mut inline_word_highlights =
-            Vec::with_capacity(generated_lines.len().saturating_mul(2));
         let mut old_line_no = 1u32;
         let mut new_line_no = 1u32;
 
@@ -400,7 +397,6 @@ impl FileDiffInlineSyntaxProjectionFixture {
                         old_line: Some(old_line_no),
                         new_line: None,
                     });
-                    inline_word_highlights.push(None);
                     old_line_no = old_line_no.saturating_add(1);
                 }
                 1 => {
@@ -412,7 +408,6 @@ impl FileDiffInlineSyntaxProjectionFixture {
                         old_line: None,
                         new_line: Some(new_line_no),
                     });
-                    inline_word_highlights.push(None);
                     new_line_no = new_line_no.saturating_add(1);
                 }
                 2 => {
@@ -426,14 +421,12 @@ impl FileDiffInlineSyntaxProjectionFixture {
                         old_line: Some(old_line_no),
                         new_line: None,
                     });
-                    inline_word_highlights.push(None);
                     inline_rows.push(AnnotatedDiffLine {
                         kind: DiffLineKind::Add,
                         text: format!("+{new_line}").into(),
                         old_line: None,
                         new_line: Some(new_line_no),
                     });
-                    inline_word_highlights.push(None);
                     old_line_no = old_line_no.saturating_add(1);
                     new_line_no = new_line_no.saturating_add(1);
                 }
@@ -446,7 +439,6 @@ impl FileDiffInlineSyntaxProjectionFixture {
                         old_line: Some(old_line_no),
                         new_line: Some(new_line_no),
                     });
-                    inline_word_highlights.push(None);
                     old_line_no = old_line_no.saturating_add(1);
                     new_line_no = new_line_no.saturating_add(1);
                 }
@@ -463,7 +455,6 @@ impl FileDiffInlineSyntaxProjectionFixture {
 
         Self {
             inline_rows,
-            inline_word_highlights,
             language,
             theme: AppTheme::gitcomet_dark(),
             old_document,
@@ -525,17 +516,6 @@ impl FileDiffInlineSyntaxProjectionFixture {
                 .is_some_and(has_pending_prepared_diff_syntax_chunk_builds_for_document)
     }
 
-    fn projected_syntax_line(
-        &self,
-        line: &AnnotatedDiffLine,
-    ) -> super::diff_text::PreparedDiffSyntaxLine {
-        super::diff_text::prepared_diff_syntax_line_for_inline_diff_row(
-            self.old_document,
-            self.new_document,
-            line,
-        )
-    }
-
     fn hash_window_step(&self, start: usize, window: usize) -> (u64, bool) {
         if self.inline_rows.is_empty() || window == 0 {
             return (0, false);
@@ -543,39 +523,30 @@ impl FileDiffInlineSyntaxProjectionFixture {
 
         let start = start % self.inline_rows.len();
         let end = (start + window).min(self.inline_rows.len());
+        let visible_rows = self.inline_rows[start..end]
+            .iter()
+            .map(|line| super::diff_text::InlineDiffSyntaxOnlyRow {
+                text: diff_content_text(line),
+                line,
+            })
+            .collect::<Vec<_>>();
+        let styled_rows =
+            super::diff_text::build_cached_diff_styled_text_for_inline_syntax_only_rows_nonblocking(
+                self.theme,
+                self.language,
+                super::diff_text::PreparedDiffSyntaxTextSource {
+                    document: self.old_document,
+                },
+                super::diff_text::PreparedDiffSyntaxTextSource {
+                    document: self.new_document,
+                },
+                visible_rows.as_slice(),
+            );
         let mut pending = false;
         let mut h = FxHasher::default();
-        for row_ix in start..end {
-            let Some(line) = self.inline_rows.get(row_ix) else {
-                continue;
-            };
-            let word_ranges = self
-                .inline_word_highlights
-                .get(row_ix)
-                .and_then(|ranges| ranges.as_deref())
-                .unwrap_or(&[]);
-            let projected = self.projected_syntax_line(line);
-            let syntax_mode =
-                super::diff_text::syntax_mode_for_prepared_document(projected.document);
-            let word_color = match line.kind {
-                DiffLineKind::Add => Some(self.theme.colors.diff_add_text),
-                DiffLineKind::Remove => Some(self.theme.colors.diff_remove_text),
-                _ => None,
-            };
-            let (styled, is_pending) =
-                super::diff_text::build_cached_diff_styled_text_for_prepared_document_line_nonblocking(
-                    self.theme,
-                    diff_content_text(line),
-                    word_ranges,
-                    "",
-                    super::diff_text::DiffSyntaxConfig {
-                        language: Some(self.language),
-                        mode: syntax_mode,
-                    },
-                    word_color,
-                    projected,
-                )
-                .into_parts();
+        for (offset, prepared) in styled_rows.into_iter().enumerate() {
+            let row_ix = start + offset;
+            let (styled, is_pending) = prepared.into_parts();
             pending |= is_pending;
             row_ix.hash(&mut h);
             is_pending.hash(&mut h);

@@ -702,8 +702,8 @@ pub(super) fn branch_sidebar_rows(
     let mut head_upstream_full = None;
     let mut local_upstreams: SmallVec<[(&str, &str); 4]> = SmallVec::new();
 
-    if local_collapsed {
-        if let Loadable::Ready(branches) = &repo.branches {
+    if local_collapsed
+        && let Loadable::Ready(branches) = &repo.branches {
             for branch in branches.iter() {
                 record_local_branch_sidebar_metadata(
                     branch,
@@ -713,7 +713,6 @@ pub(super) fn branch_sidebar_rows(
                 );
             }
         }
-    }
 
     rows.push(BranchSidebarRow::SectionHeader {
         section: BranchSection::Local,
@@ -1015,8 +1014,8 @@ fn push_slash_tree_rows(
     remote_name: Option<&str>,
     collapsed_items: &BTreeSet<String>,
 ) {
-    if let Some((label, node)) = tree.children.first_key_value() {
-        if tree.children.len() == 1 {
+    if let Some((label, node)) = tree.children.first_key_value()
+        && tree.children.len() == 1 {
             push_slash_tree_child_rows(
                 label,
                 node,
@@ -1033,7 +1032,6 @@ fn push_slash_tree_rows(
             );
             return;
         }
-    }
 
     let mut has_group = false;
     let mut has_leaf = false;
@@ -1143,7 +1141,7 @@ fn slash_tree_label_needs_sort(label: &str) -> bool {
             .any(|byte| byte.is_ascii_uppercase())
 }
 
-fn slash_tree_segments<'a>(name: &'a str) -> SmallVec<[&'a str; 8]> {
+fn slash_tree_segments(name: &str) -> SmallVec<[&str; 8]> {
     let bytes = name.as_bytes();
     let mut segment_start = 0;
     let mut segments = SmallVec::new();

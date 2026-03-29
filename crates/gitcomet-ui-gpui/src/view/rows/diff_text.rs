@@ -1,5 +1,6 @@
 use super::super::perf::{self, ViewPerfSpan};
 use super::*;
+use gitcomet_core::domain::DiffLineKind;
 use memchr::memchr2_iter;
 use rustc_hash::FxHasher;
 use std::cell::RefCell;
@@ -72,6 +73,96 @@ const SYNTAX_HIGHLIGHT_STYLE_KINDS: [SyntaxTokenKind; 27] = [
     SyntaxTokenKind::Attribute,
     SyntaxTokenKind::Lifetime,
 ];
+
+const SINGLE_LINE_STYLED_TEXT_CACHE_MAX_ENTRIES: usize = 4_096;
+const SINGLE_LINE_STYLED_TEXT_CACHE_MAX_SOURCE_BYTES: usize = 512;
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct SingleLineStyledTextCacheKey {
+    language: DiffSyntaxLanguage,
+    mode: DiffSyntaxMode,
+    theme_signature: u64,
+    source_hash: u64,
+}
+
+#[derive(Clone)]
+struct CachedSingleLineStyledText {
+    source_text: Arc<str>,
+    styled: CachedDiffStyledText,
+}
+
+#[derive(Clone, Copy)]
+struct CachedSingleLineThemeSignature {
+    theme: AppTheme,
+    signature: u64,
+}
+
+struct SingleLineStyledTextCache {
+    by_key: FxLruCache<SingleLineStyledTextCacheKey, CachedSingleLineStyledText>,
+    cached_theme_signature: Option<CachedSingleLineThemeSignature>,
+}
+
+impl SingleLineStyledTextCache {
+    fn new() -> Self {
+        Self {
+            by_key: new_fx_lru_cache(SINGLE_LINE_STYLED_TEXT_CACHE_MAX_ENTRIES),
+            cached_theme_signature: None,
+        }
+    }
+
+    fn theme_signature(&mut self, theme: AppTheme) -> u64 {
+        if let Some(cached) = self.cached_theme_signature
+            && cached.theme == theme
+        {
+            return cached.signature;
+        }
+
+        let signature = syntax_theme_signature(theme);
+        self.cached_theme_signature = Some(CachedSingleLineThemeSignature { theme, signature });
+        signature
+    }
+
+    fn key_for(
+        &mut self,
+        theme: AppTheme,
+        language: DiffSyntaxLanguage,
+        mode: DiffSyntaxMode,
+        text: &str,
+    ) -> SingleLineStyledTextCacheKey {
+        SingleLineStyledTextCacheKey {
+            language,
+            mode,
+            theme_signature: self.theme_signature(theme),
+            source_hash: hash_text_content(text),
+        }
+    }
+
+    fn get(
+        &mut self,
+        key: SingleLineStyledTextCacheKey,
+        text: &str,
+    ) -> Option<CachedDiffStyledText> {
+        self.by_key
+            .get(&key)
+            .filter(|entry| entry.source_text.as_ref() == text)
+            .map(|entry| entry.styled.clone())
+    }
+
+    fn insert(
+        &mut self,
+        key: SingleLineStyledTextCacheKey,
+        text: &str,
+        styled: CachedDiffStyledText,
+    ) {
+        self.by_key.put(
+            key,
+            CachedSingleLineStyledText {
+                source_text: Arc::<str>::from(text),
+                styled,
+            },
+        );
+    }
+}
 
 #[derive(Clone)]
 pub(super) struct SyntaxHighlightPalette {
@@ -148,6 +239,17 @@ pub(super) struct DiffTextBuildRequest<'a> {
 pub(super) struct PreparedDiffTextBuildRequest<'a> {
     pub(super) build: DiffTextBuildRequest<'a>,
     pub(super) prepared_line: PreparedDiffSyntaxLine,
+}
+
+#[derive(Clone, Copy)]
+pub(in crate::view) struct PreparedDiffSyntaxTextSource {
+    pub document: Option<PreparedDiffSyntaxDocument>,
+}
+
+#[derive(Clone, Copy)]
+pub(in crate::view) struct InlineDiffSyntaxOnlyRow<'a> {
+    pub line: &'a AnnotatedDiffLine,
+    pub text: &'a str,
 }
 
 #[derive(Clone, Copy)]
@@ -664,13 +766,63 @@ fn empty_highlights() -> SharedDiffTextHighlights {
     Arc::clone(EMPTY.get_or_init(|| Arc::from(Vec::new())))
 }
 
+fn hash_text_content(text: &str) -> u64 {
+    let mut hasher = FxHasher::default();
+    text.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn hash_rgba_bits(hasher: &mut FxHasher, rgba: gpui::Rgba) {
+    rgba.r.to_bits().hash(hasher);
+    rgba.g.to_bits().hash(hasher);
+    rgba.b.to_bits().hash(hasher);
+    rgba.a.to_bits().hash(hasher);
+}
+
+fn syntax_theme_signature(theme: AppTheme) -> u64 {
+    let mut hasher = FxHasher::default();
+    let syntax = theme.syntax;
+    hash_rgba_bits(&mut hasher, syntax.comment);
+    hash_rgba_bits(&mut hasher, syntax.comment_doc);
+    hash_rgba_bits(&mut hasher, syntax.string);
+    hash_rgba_bits(&mut hasher, syntax.string_escape);
+    hash_rgba_bits(&mut hasher, syntax.keyword);
+    hash_rgba_bits(&mut hasher, syntax.keyword_control);
+    hash_rgba_bits(&mut hasher, syntax.number);
+    hash_rgba_bits(&mut hasher, syntax.boolean);
+    hash_rgba_bits(&mut hasher, syntax.function);
+    hash_rgba_bits(&mut hasher, syntax.function_method);
+    hash_rgba_bits(&mut hasher, syntax.function_special);
+    hash_rgba_bits(&mut hasher, syntax.type_name);
+    hash_rgba_bits(&mut hasher, syntax.type_builtin);
+    hash_rgba_bits(&mut hasher, syntax.type_interface);
+    syntax.variable.is_some().hash(&mut hasher);
+    if let Some(variable) = syntax.variable {
+        hash_rgba_bits(&mut hasher, variable);
+    }
+    hash_rgba_bits(&mut hasher, syntax.variable_parameter);
+    hash_rgba_bits(&mut hasher, syntax.variable_special);
+    hash_rgba_bits(&mut hasher, syntax.property);
+    hash_rgba_bits(&mut hasher, syntax.constant);
+    hash_rgba_bits(&mut hasher, syntax.operator);
+    hash_rgba_bits(&mut hasher, syntax.punctuation);
+    hash_rgba_bits(&mut hasher, syntax.punctuation_bracket);
+    hash_rgba_bits(&mut hasher, syntax.punctuation_delimiter);
+    hash_rgba_bits(&mut hasher, syntax.tag);
+    hash_rgba_bits(&mut hasher, syntax.attribute);
+    hash_rgba_bits(&mut hasher, syntax.lifetime);
+    hasher.finish()
+}
+
+fn should_cache_single_line_styled_text(text: &str) -> bool {
+    !text.is_empty() && text.len() <= SINGLE_LINE_STYLED_TEXT_CACHE_MAX_SOURCE_BYTES
+}
+
 fn styled_text_to_cached(
     text: SharedString,
     highlights: Vec<DiffTextHighlight>,
 ) -> CachedDiffStyledText {
-    let mut hasher = FxHasher::default();
-    text.as_ref().hash(&mut hasher);
-    let text_hash = hasher.finish();
+    let text_hash = hash_text_content(text.as_ref());
 
     if highlights.is_empty() {
         return CachedDiffStyledText {
@@ -705,9 +857,7 @@ fn styled_text_to_cached_from_buf(
         SharedString::new(text)
     } else {
         let (expanded, remapped) = expanded_text_and_remapped_relative_highlights(text, highlights);
-        let mut hasher = FxHasher::default();
-        expanded.as_ref().hash(&mut hasher);
-        let text_hash = hasher.finish();
+        let text_hash = hash_text_content(expanded.as_ref());
 
         if remapped.is_empty() {
             return CachedDiffStyledText {
@@ -727,9 +877,7 @@ fn styled_text_to_cached_from_buf(
         };
     };
 
-    let mut hasher = FxHasher::default();
-    text.as_ref().hash(&mut hasher);
-    let text_hash = hasher.finish();
+    let text_hash = hash_text_content(text.as_ref());
 
     if highlights.is_empty() {
         return CachedDiffStyledText {
@@ -1028,6 +1176,7 @@ pub(super) fn build_cached_diff_styled_text_with_palette_and_full_text_string(
 
 thread_local! {
     static SYNTAX_HIGHLIGHTS_BUF: RefCell<Vec<DiffTextHighlight>> = const { RefCell::new(Vec::new()) };
+    static SINGLE_LINE_STYLED_TEXT_CACHE: RefCell<SingleLineStyledTextCache> = RefCell::new(SingleLineStyledTextCache::new());
 }
 
 fn build_cached_diff_styled_text_with_optional_palette(
@@ -1049,33 +1198,58 @@ fn build_cached_diff_styled_text_with_optional_palette(
 
     let query = query.trim();
     if word_ranges.is_empty() && query.is_empty() {
-        return SYNTAX_HIGHLIGHTS_BUF.with_borrow_mut(|buf| {
-            if let Some(language) = language {
-                let _syntax_scope = perf::span(ViewPerfSpan::SyntaxHighlighting);
-                let tokens = syntax::syntax_tokens_for_line_shared(text, language, syntax_mode);
-                match highlight_palette {
-                    Some(palette) => {
-                        prepared_document_line_highlights_from_tokens_into_with_palette(
-                            palette,
-                            text.len(),
-                            &tokens,
-                            buf,
-                        );
+        let build_syntax_only = || {
+            SYNTAX_HIGHLIGHTS_BUF.with_borrow_mut(|buf| {
+                if let Some(language) = language {
+                    let _syntax_scope = perf::span(ViewPerfSpan::SyntaxHighlighting);
+                    let tokens = syntax::syntax_tokens_for_line_shared(text, language, syntax_mode);
+                    match highlight_palette {
+                        Some(palette) => {
+                            prepared_document_line_highlights_from_tokens_into_with_palette(
+                                palette,
+                                text.len(),
+                                &tokens,
+                                buf,
+                            );
+                        }
+                        None => {
+                            prepared_document_line_highlights_from_tokens_into(
+                                theme,
+                                text.len(),
+                                &tokens,
+                                buf,
+                            );
+                        }
                     }
-                    None => {
-                        prepared_document_line_highlights_from_tokens_into(
-                            theme,
-                            text.len(),
-                            &tokens,
-                            buf,
-                        );
-                    }
+                } else {
+                    buf.clear();
                 }
-            } else {
-                buf.clear();
+                styled_text_to_cached_from_buf(text, buf)
+            })
+        };
+
+        if highlight_palette.is_none()
+            && let Some(language) = language
+            && should_cache_single_line_styled_text(text)
+        {
+            let (key, cached) = SINGLE_LINE_STYLED_TEXT_CACHE.with(|cache| {
+                let mut cache = cache.borrow_mut();
+                let key = cache.key_for(theme, language, syntax_mode, text);
+                let styled = cache.get(key, text);
+                (key, styled)
+            });
+            if let Some(styled) = cached {
+                return styled;
             }
-            styled_text_to_cached_from_buf(text, buf)
-        });
+
+            let styled = build_syntax_only();
+            SINGLE_LINE_STYLED_TEXT_CACHE.with(|cache| {
+                cache.borrow_mut().insert(key, text, styled.clone());
+            });
+            return styled;
+        }
+
+        return build_syntax_only();
     }
 
     build_styled_text_fused(
@@ -1742,10 +1916,14 @@ pub(in crate::view) fn request_syntax_highlights_for_prepared_document_line_rang
     }
 
     let mut line_highlights = Vec::with_capacity(clamped_range.len());
-    for line_ix in clamped_range {
+    let token_requests = syntax::request_syntax_tokens_for_prepared_document_line_range(
+        document.inner,
+        clamped_range.clone(),
+    )?;
+    for (line_ix, token_request) in clamped_range.zip(token_requests) {
         let (line_start, line_end) = line_byte_bounds(text, line_starts, line_ix);
-        match syntax::request_syntax_tokens_for_prepared_document_line(document.inner, line_ix) {
-            Some(syntax::PreparedSyntaxLineTokensRequest::Ready(tokens)) => {
+        match token_request {
+            syntax::PreparedSyntaxLineTokensRequest::Ready(tokens) => {
                 line_highlights.push(PreparedDocumentLineHighlights {
                     line_ix,
                     highlights: prepared_document_line_highlights_from_tokens(
@@ -1756,7 +1934,7 @@ pub(in crate::view) fn request_syntax_highlights_for_prepared_document_line_rang
                     pending: false,
                 });
             }
-            Some(syntax::PreparedSyntaxLineTokensRequest::Pending) | None => {
+            syntax::PreparedSyntaxLineTokensRequest::Pending => {
                 let line_text = &text[line_start..line_end];
                 let highlights = HEURISTIC_TOKEN_BUF.with(|buf| {
                     let tokens = &mut *buf.borrow_mut();
@@ -1777,6 +1955,243 @@ pub(in crate::view) fn request_syntax_highlights_for_prepared_document_line_rang
     }
 
     Some(line_highlights)
+}
+
+pub(in crate::view) fn build_cached_diff_styled_text_for_inline_syntax_only_rows_nonblocking(
+    theme: AppTheme,
+    language: DiffSyntaxLanguage,
+    old_source: PreparedDiffSyntaxTextSource,
+    new_source: PreparedDiffSyntaxTextSource,
+    rows: &[InlineDiffSyntaxOnlyRow<'_>],
+) -> Vec<PreparedDocumentLineStyledText> {
+    #[derive(Clone, Copy)]
+    struct SideRow<'a> {
+        result_ix: usize,
+        line_ix: usize,
+        text: &'a str,
+    }
+
+    fn styled_text_from_prepared_line_token_request(
+        theme: AppTheme,
+        language: DiffSyntaxLanguage,
+        text: &str,
+        token_request: syntax::PreparedSyntaxLineTokensRequest,
+    ) -> PreparedDocumentLineStyledText {
+        match token_request {
+            syntax::PreparedSyntaxLineTokensRequest::Ready(tokens) => {
+                PreparedDocumentLineStyledText::Cacheable(SYNTAX_HIGHLIGHTS_BUF.with_borrow_mut(
+                    |buf| {
+                        prepared_document_line_highlights_from_tokens_into(
+                            theme,
+                            text.len(),
+                            &tokens,
+                            buf,
+                        );
+                        styled_text_to_cached_from_buf(text, buf)
+                    },
+                ))
+            }
+            syntax::PreparedSyntaxLineTokensRequest::Pending => {
+                let styled = HEURISTIC_TOKEN_BUF.with(|buf| {
+                    let tokens = &mut *buf.borrow_mut();
+                    syntax::syntax_tokens_for_line_heuristic_into(text, language, tokens);
+                    SYNTAX_HIGHLIGHTS_BUF.with_borrow_mut(|highlights| {
+                        prepared_document_line_highlights_from_tokens_into(
+                            theme,
+                            text.len(),
+                            tokens,
+                            highlights,
+                        );
+                        styled_text_to_cached_from_buf(text, highlights)
+                    })
+                });
+                PreparedDocumentLineStyledText::Pending(styled)
+            }
+        }
+    }
+
+    fn fallback_syntax_only_row(
+        theme: AppTheme,
+        language: DiffSyntaxLanguage,
+        text: &str,
+        document: Option<PreparedDiffSyntaxDocument>,
+    ) -> PreparedDocumentLineStyledText {
+        PreparedDocumentLineStyledText::Cacheable(build_cached_diff_styled_text(
+            theme,
+            text,
+            &[],
+            "",
+            Some(language),
+            syntax_mode_for_prepared_document(document),
+            None,
+        ))
+    }
+
+    fn fill_side_results(
+        theme: AppTheme,
+        language: DiffSyntaxLanguage,
+        source: PreparedDiffSyntaxTextSource,
+        rows: &[SideRow<'_>],
+        results: &mut [Option<PreparedDocumentLineStyledText>],
+    ) {
+        if rows.is_empty() {
+            return;
+        }
+
+        let Some(document) = source.document else {
+            for row in rows {
+                results[row.result_ix] = Some(fallback_syntax_only_row(
+                    theme,
+                    language,
+                    row.text,
+                    source.document,
+                ));
+            }
+            return;
+        };
+
+        let mut group_start = 0usize;
+        while group_start < rows.len() {
+            let mut group_end = group_start + 1;
+            while group_end < rows.len()
+                && rows[group_end].line_ix == rows[group_end - 1].line_ix.saturating_add(1)
+            {
+                group_end += 1;
+            }
+
+            let group = &rows[group_start..group_end];
+            let line_range = group[0].line_ix..group[group.len() - 1].line_ix.saturating_add(1);
+            let token_requests = syntax::request_syntax_tokens_for_prepared_document_line_range(
+                document.inner,
+                line_range,
+            );
+
+            if let Some(token_requests) = token_requests
+                && token_requests.len() == group.len()
+            {
+                for (row, token_request) in group.iter().zip(token_requests.into_iter()) {
+                    results[row.result_ix] = Some(styled_text_from_prepared_line_token_request(
+                        theme,
+                        language,
+                        row.text,
+                        token_request,
+                    ));
+                }
+            } else {
+                for row in group {
+                    results[row.result_ix] = Some(fallback_syntax_only_row(
+                        theme,
+                        language,
+                        row.text,
+                        Some(document),
+                    ));
+                }
+            }
+
+            group_start = group_end;
+        }
+    }
+
+    let mut old_rows = Vec::new();
+    let mut new_rows = Vec::new();
+    let mut results = std::iter::repeat_with(|| None)
+        .take(rows.len())
+        .collect::<Vec<_>>();
+
+    for (result_ix, row) in rows.iter().enumerate() {
+        match row.line.kind {
+            DiffLineKind::Remove => {
+                if let Some(line_ix) = row
+                    .line
+                    .old_line
+                    .and_then(|line| usize::try_from(line).ok())
+                    .and_then(|line| line.checked_sub(1))
+                {
+                    old_rows.push(SideRow {
+                        result_ix,
+                        line_ix,
+                        text: row.text,
+                    });
+                } else {
+                    results[result_ix] = Some(fallback_syntax_only_row(
+                        theme,
+                        language,
+                        row.text,
+                        old_source.document,
+                    ));
+                }
+            }
+            DiffLineKind::Add | DiffLineKind::Context => {
+                if let Some(line_ix) = row
+                    .line
+                    .new_line
+                    .and_then(|line| usize::try_from(line).ok())
+                    .and_then(|line| line.checked_sub(1))
+                {
+                    new_rows.push(SideRow {
+                        result_ix,
+                        line_ix,
+                        text: row.text,
+                    });
+                } else {
+                    results[result_ix] = Some(fallback_syntax_only_row(
+                        theme,
+                        language,
+                        row.text,
+                        new_source.document,
+                    ));
+                }
+            }
+            DiffLineKind::Header | DiffLineKind::Hunk => {
+                results[result_ix] = Some(PreparedDocumentLineStyledText::Cacheable(
+                    build_cached_diff_styled_text(
+                        theme,
+                        row.text,
+                        &[],
+                        "",
+                        None,
+                        DiffSyntaxMode::HeuristicOnly,
+                        None,
+                    ),
+                ));
+            }
+        }
+    }
+
+    fill_side_results(
+        theme,
+        language,
+        old_source,
+        old_rows.as_slice(),
+        results.as_mut_slice(),
+    );
+    fill_side_results(
+        theme,
+        language,
+        new_source,
+        new_rows.as_slice(),
+        results.as_mut_slice(),
+    );
+
+    results
+        .into_iter()
+        .enumerate()
+        .map(|(ix, styled)| {
+            styled.unwrap_or_else(|| {
+                fallback_syntax_only_row(
+                    theme,
+                    language,
+                    rows[ix].text,
+                    prepared_diff_syntax_line_for_inline_diff_row(
+                        old_source.document,
+                        new_source.document,
+                        rows[ix].line,
+                    )
+                    .document,
+                )
+            })
+        })
+        .collect()
 }
 
 thread_local! {
@@ -2550,6 +2965,84 @@ mod tests {
                 .highlights
                 .iter()
                 .any(|(range, _)| *range == (16..18))
+        );
+    }
+
+    #[test]
+    fn repeated_syntax_only_line_styled_text_reuses_cached_highlights() {
+        let theme = AppTheme::gitcomet_dark();
+        let text = "let cached_value = 42;";
+
+        let first = build_cached_diff_styled_text(
+            theme,
+            text,
+            &[],
+            "",
+            Some(DiffSyntaxLanguage::Rust),
+            DiffSyntaxMode::HeuristicOnly,
+            None,
+        );
+        let second = build_cached_diff_styled_text(
+            theme,
+            text,
+            &[],
+            "",
+            Some(DiffSyntaxLanguage::Rust),
+            DiffSyntaxMode::HeuristicOnly,
+            None,
+        );
+
+        assert!(
+            !first.highlights.is_empty(),
+            "heuristic syntax styling should produce highlights for Rust keywords"
+        );
+        assert!(
+            Arc::ptr_eq(&first.highlights, &second.highlights),
+            "repeated syntax-only lines should reuse the cached highlight arc"
+        );
+    }
+
+    #[test]
+    fn syntax_only_line_styled_text_cache_is_scoped_by_theme() {
+        let text = "let themed_value = 42;";
+        let dark_theme = AppTheme::gitcomet_dark();
+        let light_theme = AppTheme::gitcomet_light();
+
+        let dark = build_cached_diff_styled_text(
+            dark_theme,
+            text,
+            &[],
+            "",
+            Some(DiffSyntaxLanguage::Rust),
+            DiffSyntaxMode::HeuristicOnly,
+            None,
+        );
+        let light = build_cached_diff_styled_text(
+            light_theme,
+            text,
+            &[],
+            "",
+            Some(DiffSyntaxLanguage::Rust),
+            DiffSyntaxMode::HeuristicOnly,
+            None,
+        );
+
+        let dark_keyword = dark
+            .highlights
+            .iter()
+            .find(|(range, _)| *range == (0..3))
+            .and_then(|(_, style)| style.color);
+        let light_keyword = light
+            .highlights
+            .iter()
+            .find(|(range, _)| *range == (0..3))
+            .and_then(|(_, style)| style.color);
+
+        assert_eq!(dark_keyword, Some(dark_theme.syntax.keyword.into()));
+        assert_eq!(light_keyword, Some(light_theme.syntax.keyword.into()));
+        assert_ne!(
+            dark_keyword, light_keyword,
+            "theme-specific syntax colors should not bleed across cached entries"
         );
     }
 

@@ -105,6 +105,71 @@ impl MainPaneView {
             // Inline syntax is now projected from the real old/new (split)
             // documents instead of parsing a synthetic mixed inline stream.
             // syntax_mode is determined per-row based on projection availability.
+            if let Some(language) = language {
+                let mut syntax_only_rows = Vec::new();
+                for visible_ix in range.clone() {
+                    let Some(inline_ix) = this.diff_mapped_ix_for_visible_ix(visible_ix) else {
+                        continue;
+                    };
+                    let Some(line) = this.file_diff_inline_row(inline_ix) else {
+                        continue;
+                    };
+                    let cache_epoch = this.file_diff_inline_style_cache_epoch(&line);
+                    if this
+                        .diff_text_segments_cache_get(inline_ix, cache_epoch)
+                        .is_some()
+                    {
+                        continue;
+                    }
+                    if !matches!(
+                        line.kind,
+                        DiffLineKind::Add | DiffLineKind::Remove | DiffLineKind::Context
+                    ) {
+                        continue;
+                    }
+                    if this.file_diff_inline_modify_pair_texts(inline_ix).is_some() {
+                        continue;
+                    }
+                    syntax_only_rows.push((inline_ix, cache_epoch, line));
+                }
+
+                if !syntax_only_rows.is_empty() {
+                    let batch_rows = syntax_only_rows
+                        .iter()
+                        .map(|(_, _, line)| InlineDiffSyntaxOnlyRow {
+                            text: diff_content_text(line),
+                            line,
+                        })
+                        .collect::<Vec<_>>();
+                    let batched_styles =
+                        build_cached_diff_styled_text_for_inline_syntax_only_rows_nonblocking(
+                            theme,
+                            language,
+                            PreparedDiffSyntaxTextSource {
+                                document: this.file_diff_split_prepared_syntax_document(
+                                    DiffTextRegion::SplitLeft,
+                                ),
+                            },
+                            PreparedDiffSyntaxTextSource {
+                                document: this.file_diff_split_prepared_syntax_document(
+                                    DiffTextRegion::SplitRight,
+                                ),
+                            },
+                            batch_rows.as_slice(),
+                        );
+                    let mut pending_batch = false;
+                    for ((inline_ix, cache_epoch, _), prepared) in
+                        syntax_only_rows.iter().zip(batched_styles.into_iter())
+                    {
+                        let (styled, is_pending) = prepared.into_parts();
+                        pending_batch |= is_pending;
+                        this.diff_text_segments_cache_set(*inline_ix, *cache_epoch, styled);
+                    }
+                    if pending_batch {
+                        this.ensure_prepared_syntax_chunk_poll(cx);
+                    }
+                }
+            }
 
             return range
                 .map(|visible_ix| {

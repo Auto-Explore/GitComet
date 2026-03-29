@@ -228,10 +228,7 @@ pub struct SharedLineText {
 }
 
 impl SharedLineText {
-    fn from_storage(
-        storage: &Arc<SharedLineTextStorage>,
-        range: std::ops::Range<usize>,
-    ) -> Self {
+    fn from_storage(storage: &Arc<SharedLineTextStorage>, range: std::ops::Range<usize>) -> Self {
         Self {
             storage: Arc::clone(storage),
             start: u32::try_from(range.start).unwrap_or(u32::MAX),
@@ -459,8 +456,7 @@ impl Diff {
             return 0;
         }
 
-        bytes.iter().filter(|&&byte| byte == b'\n').count()
-            + usize::from(!bytes.ends_with(b"\n"))
+        bytes.iter().filter(|&&byte| byte == b'\n').count() + usize::from(!bytes.ends_with(b"\n"))
     }
 
     fn classify_unified_line_bytes(raw: &[u8]) -> DiffLineKind {
@@ -685,10 +681,19 @@ diff --git a/src/lib.rs b/src/lib.rs\r\n\
         let diff = Diff::from_unified_reader(target, reader).expect("reader parse should succeed");
 
         assert_eq!(diff.lines.len(), 4);
-        assert_eq!(diff.lines[0].text.as_ref(), "diff --git a/src/lib.rs b/src/lib.rs");
+        assert_eq!(
+            diff.lines[0].text.as_ref(),
+            "diff --git a/src/lib.rs b/src/lib.rs"
+        );
         assert_eq!(diff.lines[1].kind, DiffLineKind::Hunk);
-        assert_eq!(diff.lines[2].text.as_ref(), "-alpha beta gamma delta epsilon");
-        assert_eq!(diff.lines[3].text.as_ref(), "+omega beta gamma delta epsilon");
+        assert_eq!(
+            diff.lines[2].text.as_ref(),
+            "-alpha beta gamma delta epsilon"
+        );
+        assert_eq!(
+            diff.lines[3].text.as_ref(),
+            "+omega beta gamma delta epsilon"
+        );
     }
 
     #[test]

@@ -99,7 +99,7 @@ impl GixRepo {
                 .into_iter(std::iter::empty::<gix::bstr::BString>())
                 .map_err(|e| Error::new(ErrorKind::Backend(format!("gix status iter: {e}"))))?;
 
-            while let Some(item) = iter.next() {
+            for item in iter.by_ref() {
                 let item = item
                     .map_err(|e| Error::new(ErrorKind::Backend(format!("gix status item: {e}"))))?;
 
@@ -139,8 +139,8 @@ impl GixRepo {
             });
         }
 
-        if used_cached_staged {
-            if let Some(updated_index_stamp) = index_stamp_after_write {
+        if used_cached_staged
+            && let Some(updated_index_stamp) = index_stamp_after_write {
                 let mut cache = self
                     .gitlink_status_capability
                     .lock()
@@ -149,7 +149,6 @@ impl GixRepo {
                     cached.index = updated_index_stamp;
                 }
             }
-        }
 
         let mut staged = staged;
 
@@ -500,7 +499,7 @@ fn collect_index_worktree_status_entry<U>(
             {
                 index_changes.push(IndexWorktreeApplyChange::NewStat {
                     entry_index,
-                    stat: stat.clone(),
+                    stat: *stat,
                 });
                 return Ok(());
             }

@@ -362,11 +362,10 @@ fn cached_commit_id(
     last_target: &mut Option<(gix::ObjectId, CommitId)>,
     target_id: gix::ObjectId,
 ) -> CommitId {
-    if let Some((cached_oid, commit_id)) = last_target.as_ref() {
-        if *cached_oid == target_id {
+    if let Some((cached_oid, commit_id)) = last_target.as_ref()
+        && *cached_oid == target_id {
             return commit_id.clone();
         }
-    }
 
     if let Some(commit_id) = cache.get(&target_id) {
         let commit_id = commit_id.clone();

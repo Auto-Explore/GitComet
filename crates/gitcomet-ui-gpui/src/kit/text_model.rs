@@ -1,15 +1,14 @@
 use gpui::SharedString;
 use memchr::memchr_iter;
+use smallvec::SmallVec;
 use std::borrow::Cow;
 use std::ops::{Deref, Range};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 
 const LARGE_TEXT_CHUNK_BYTES: usize = 16 * 1024;
-const LARGE_TEXT_PARALLEL_THRESHOLD: usize = 512 * 1024;
-const LARGE_TEXT_PARALLEL_MIN_CHUNKS: usize = 8;
-const LARGE_TEXT_MAX_THREADS: usize = 8;
-
+const SMALL_ADD_CHUNK_BYTES: usize = 4 * 1024;
+const PIECE_TABLE_COMPACTION_THRESHOLD: usize = 256;
 static NEXT_MODEL_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -74,30 +73,85 @@ impl LineIndex {
         Arc::clone(&self.starts)
     }
 
-    fn apply_edit(&mut self, range: Range<usize>, inserted: &str) {
+    fn append_text(&mut self, offset: usize, inserted: &str) {
+        if inserted.is_empty() {
+            return;
+        }
+
+        let inserted_breaks = memchr_iter(b'\n', inserted.as_bytes()).count();
+        if inserted_breaks == 0 {
+            return;
+        }
+
         let starts = self.starts.as_ref();
-        debug_assert_eq!(starts.first().copied(), Some(0));
+        let mut updated = Vec::with_capacity(starts.len().saturating_add(inserted_breaks));
+        updated.extend_from_slice(starts);
+
+        for pos in memchr_iter(b'\n', inserted.as_bytes()) {
+            updated.push(offset.saturating_add(pos).saturating_add(1));
+        }
+
+        self.starts = Arc::<[usize]>::from(updated);
+        debug_assert_eq!(self.starts.as_ref().first().copied(), Some(0));
         debug_assert!(
-            starts.windows(2).all(|window| window[0] < window[1]),
-            "line starts must remain strictly increasing before edit"
+            self.starts
+                .as_ref()
+                .windows(2)
+                .all(|window| window[0] < window[1]),
+            "line starts must remain strictly increasing after append"
         );
+    }
+
+    fn apply_edit(&mut self, range: Range<usize>, inserted: &str) {
+        {
+            let starts = self.starts.as_ref();
+            debug_assert_eq!(starts.first().copied(), Some(0));
+            debug_assert!(
+                starts.windows(2).all(|window| window[0] < window[1]),
+                "line starts must remain strictly increasing before edit"
+            );
+        }
 
         let old_len = range.end.saturating_sub(range.start);
         let new_len = inserted.len();
         let delta = new_len as isize - old_len as isize;
 
-        let prefix_len = starts.partition_point(|&start| start <= range.start);
-        // For non-empty edits, a line start at `range.end` is produced by a
-        // newline byte inside the replaced range and must be removed.
-        let suffix_start = starts.partition_point(|&start| start <= range.end);
+        let (prefix_len, starts_len, suffix_start) = {
+            let starts = self.starts.as_ref();
+            (
+                starts.partition_point(|&start| start <= range.start),
+                starts.len(),
+                starts.partition_point(|&start| start <= range.end),
+            )
+        };
 
         let inserted_breaks = memchr_iter(b'\n', inserted.as_bytes()).count();
+        let removed_breaks = suffix_start.saturating_sub(prefix_len);
+        if removed_breaks == inserted_breaks
+            && let Some(updated) = Arc::get_mut(&mut self.starts) {
+                let mut write_ix = prefix_len;
+                for pos in memchr_iter(b'\n', inserted.as_bytes()) {
+                    updated[write_ix] = range.start.saturating_add(pos).saturating_add(1);
+                    write_ix += 1;
+                }
+                for start in &mut updated[suffix_start..] {
+                    *start = shift_offset_by_delta(*start, delta);
+                }
+                debug_assert_eq!(updated.first().copied(), Some(0));
+                debug_assert!(
+                    updated.windows(2).all(|window| window[0] < window[1]),
+                    "line starts must remain strictly increasing after in-place edit"
+                );
+                return;
+            }
+
         let mut updated = Vec::with_capacity(
             prefix_len
                 .saturating_add(inserted_breaks)
-                .saturating_add(starts.len().saturating_sub(suffix_start))
+                .saturating_add(starts_len.saturating_sub(suffix_start))
                 .saturating_add(1),
         );
+        let starts = self.starts.as_ref();
         updated.extend_from_slice(&starts[..prefix_len]);
 
         for pos in memchr_iter(b'\n', inserted.as_bytes()) {
@@ -105,12 +159,7 @@ impl LineIndex {
         }
 
         for &start in &starts[suffix_start..] {
-            let shifted = if delta >= 0 {
-                start.saturating_add(delta as usize)
-            } else {
-                start.saturating_sub((-delta) as usize)
-            };
-            updated.push(shifted);
+            updated.push(shift_offset_by_delta(start, delta));
         }
 
         // The three sections (prefix, inserted breaks, shifted suffix) are
@@ -131,14 +180,23 @@ impl LineIndex {
     }
 }
 
+fn shift_offset_by_delta(start: usize, delta: isize) -> usize {
+    if delta >= 0 {
+        start.saturating_add(delta as usize)
+    } else {
+        start.saturating_sub((-delta) as usize)
+    }
+}
+
 #[derive(Debug)]
 struct TextModelCore {
     model_id: u64,
     revision: u64,
     original_chunks: Arc<Vec<Arc<str>>>,
-    add_chunks: Arc<Vec<Arc<str>>>,
+    add_chunks: Arc<Vec<Arc<String>>>,
     pieces: Vec<Piece>,
     len: usize,
+    ascii_only: bool,
     line_index: LineIndex,
     materialized: OnceLock<SharedString>,
 }
@@ -152,6 +210,7 @@ impl Clone for TextModelCore {
             add_chunks: Arc::clone(&self.add_chunks),
             pieces: self.pieces.clone(),
             len: self.len,
+            ascii_only: self.ascii_only,
             line_index: self.line_index.clone(),
             // Do not clone materialized text into writable COW clones.
             materialized: OnceLock::new(),
@@ -170,22 +229,58 @@ impl TextModelCore {
             BufferId::Add => self
                 .add_chunks
                 .get(piece.chunk_index)
-                .map(|chunk| chunk.as_ref())
+                .map(|chunk| chunk.as_str())
                 .unwrap_or(""),
         }
     }
 
     fn piece_slice<'a>(&'a self, piece: &Piece) -> &'a str {
         let chunk = self.chunk_for_piece(piece);
-        let start = piece.start.min(chunk.len());
-        let end = piece.start.saturating_add(piece.len).min(chunk.len());
-        chunk.get(start..end).unwrap_or("")
+        let end = piece.start.saturating_add(piece.len);
+        debug_assert!(
+            end <= chunk.len(),
+            "piece range must stay within backing chunk"
+        );
+        &chunk[piece.start..end]
+    }
+
+    fn original_text_shared_string(&self) -> Option<SharedString> {
+        let first = *self.pieces.first()?;
+        if first.buffer != BufferId::Original || first.start != 0 {
+            return None;
+        }
+
+        let chunk = Arc::clone(self.original_chunks.get(first.chunk_index)?);
+        let mut expected_start = 0usize;
+        for piece in &self.pieces {
+            if piece.buffer != BufferId::Original
+                || piece.chunk_index != first.chunk_index
+                || piece.start != expected_start
+            {
+                return None;
+            }
+            expected_start = expected_start.saturating_add(piece.len);
+        }
+
+        (expected_start == self.len && expected_start == chunk.len())
+            .then_some(SharedString::from(chunk))
+    }
+
+    fn materialized_clone(&self) -> SharedString {
+        self.materialized
+            .get()
+            .cloned()
+            .unwrap_or_else(|| self.materialized().clone())
     }
 
     fn materialized(&self) -> &SharedString {
         self.materialized.get_or_init(|| {
             if self.pieces.is_empty() {
                 return SharedString::default();
+            }
+
+            if let Some(original) = self.original_text_shared_string() {
+                return original;
             }
 
             let mut text = String::with_capacity(self.len);
@@ -225,25 +320,15 @@ impl TextModel {
     }
 
     pub fn from_large_text(text: &str) -> Self {
-        let ranges = chunk_ranges(text, LARGE_TEXT_CHUNK_BYTES);
-        let original_chunks = prepare_chunks(
-            text,
-            ranges.as_slice(),
-            LARGE_TEXT_PARALLEL_THRESHOLD,
-            LARGE_TEXT_PARALLEL_MIN_CHUNKS,
-        );
-        let pieces = original_chunks
-            .iter()
-            .enumerate()
-            .filter_map(|(chunk_index, chunk)| {
-                (!chunk.is_empty()).then_some(Piece {
-                    buffer: BufferId::Original,
-                    chunk_index,
-                    start: 0,
-                    len: chunk.len(),
-                })
-            })
-            .collect::<Vec<_>>();
+        let mut original_chunks = Vec::with_capacity(usize::from(!text.is_empty()));
+        let pieces = if text.is_empty() {
+            Vec::new()
+        } else {
+            let original = Arc::<str>::from(text);
+            let pieces = build_original_pieces(original.as_ref(), LARGE_TEXT_CHUNK_BYTES);
+            original_chunks.push(original);
+            pieces
+        };
 
         let model_id = NEXT_MODEL_ID.fetch_add(1, Ordering::Relaxed).max(1);
         Self {
@@ -253,6 +338,7 @@ impl TextModel {
                 original_chunks: Arc::new(original_chunks),
                 add_chunks: Arc::new(Vec::new()),
                 len: text.len(),
+                ascii_only: text.is_ascii(),
                 line_index: LineIndex::from_text(text),
                 pieces,
                 materialized: OnceLock::new(),
@@ -282,9 +368,9 @@ impl TextModel {
         self.core.materialized().as_ref()
     }
 
-    #[cfg(feature = "benchmarks")]
+    #[cfg(any(test, feature = "benchmarks"))]
     pub fn as_shared_string(&self) -> SharedString {
-        self.core.materialized().clone()
+        self.core.materialized_clone()
     }
 
     pub fn line_starts(&self) -> &[usize] {
@@ -308,26 +394,24 @@ impl TextModel {
     }
 
     pub fn is_char_boundary(&self, offset: usize) -> bool {
-        self.snapshot().is_char_boundary(offset)
+        core_is_char_boundary(self.core.as_ref(), offset)
     }
 
-    pub fn clamp_to_char_boundary(&self, mut offset: usize) -> usize {
-        offset = offset.min(self.len());
-        // Fast path: use the materialized string directly to avoid per-byte
-        // snapshot creation in the non-ASCII clamping loop.
-        if let Some(text) = self.core.materialized.get() {
-            while offset > 0 && !text.is_char_boundary(offset) {
-                offset -= 1;
-            }
-            return offset;
-        }
-        while offset > 0 && !self.is_char_boundary(offset) {
-            offset = offset.saturating_sub(1);
-        }
-        offset
+    pub fn clamp_to_char_boundary(&self, offset: usize) -> usize {
+        core_clamp_to_char_boundary(self.core.as_ref(), offset)
     }
 
     pub fn replace_range(&mut self, range: Range<usize>, new_text: &str) -> Range<usize> {
+        let len = self.len();
+        if range.start >= len && range.end >= len {
+            if new_text.is_empty() {
+                return len..len;
+            }
+
+            let core = Arc::make_mut(&mut self.core);
+            return append_text_to_core(core, new_text);
+        }
+
         let start = self.clamp_to_char_boundary(range.start.min(self.len()));
         let end = self.clamp_to_char_boundary(range.end.min(self.len()));
         let range = if end < start { end..start } else { start..end };
@@ -336,66 +420,45 @@ impl TextModel {
         }
 
         let core = Arc::make_mut(&mut self.core);
-        let inserted_pieces = append_add_pieces(core, new_text);
-        let mut rebuilt = Vec::with_capacity(
-            core.pieces
-                .len()
-                .saturating_add(inserted_pieces.len())
-                .max(1),
-        );
-        let mut inserted = false;
-        let mut cursor = 0usize;
-
-        for piece in &core.pieces {
-            let piece_start = cursor;
-            let piece_end = cursor.saturating_add(piece.len);
-
-            if piece_end <= range.start {
-                push_piece_merged(&mut rebuilt, *piece);
-            } else if piece_start >= range.end {
-                if !inserted {
-                    for inserted_piece in &inserted_pieces {
-                        push_piece_merged(&mut rebuilt, *inserted_piece);
-                    }
-                    inserted = true;
-                }
-                push_piece_merged(&mut rebuilt, *piece);
-            } else {
-                let prefix_len = range.start.saturating_sub(piece_start).min(piece.len);
-                if let Some(prefix) = piece.prefix(prefix_len) {
-                    push_piece_merged(&mut rebuilt, prefix);
-                }
-
-                if !inserted {
-                    for inserted_piece in &inserted_pieces {
-                        push_piece_merged(&mut rebuilt, *inserted_piece);
-                    }
-                    inserted = true;
-                }
-
-                let suffix_offset = range.end.saturating_sub(piece_start).min(piece.len);
-                if let Some(suffix) = piece.suffix(suffix_offset) {
-                    push_piece_merged(&mut rebuilt, suffix);
-                }
-            }
-
-            cursor = piece_end;
+        core.ascii_only &= new_text.is_ascii();
+        let inserted_piece = append_add_piece(core, new_text);
+        let span = locate_piece_edit_span(core.pieces.as_slice(), range.clone());
+        let mut replacement = SmallVec::<[Piece; 3]>::new();
+        if let Some(prefix) = span.prefix_fragment {
+            push_piece_merged_small(&mut replacement, prefix);
+        }
+        if let Some(inserted_piece) = inserted_piece {
+            push_piece_merged_small(&mut replacement, inserted_piece);
+        }
+        if let Some(suffix) = span.suffix_fragment {
+            push_piece_merged_small(&mut replacement, suffix);
         }
 
-        if !inserted {
-            for inserted_piece in &inserted_pieces {
-                push_piece_merged(&mut rebuilt, *inserted_piece);
+        let mut replacement_len = replacement.len();
+        core.pieces
+            .splice(span.replace_start..span.replace_end, replacement);
+        let merged_left = span.replace_start > 0
+            && merge_piece_at(&mut core.pieces, span.replace_start.saturating_sub(1));
+        if replacement_len > 0 {
+            if merged_left {
+                replacement_len = replacement_len.saturating_sub(1);
+            }
+            let right_ix = span
+                .replace_start
+                .saturating_add(replacement_len.saturating_sub(1));
+            if right_ix < core.pieces.len() {
+                let _ = merge_piece_at(&mut core.pieces, right_ix);
             }
         }
-
-        core.pieces = rebuilt;
         core.len = core
             .len
             .saturating_sub(range.end.saturating_sub(range.start))
             .saturating_add(new_text.len());
         core.line_index.apply_edit(range.clone(), new_text);
         core.revision = core.revision.wrapping_add(1).max(1);
-        core.materialized = OnceLock::new();
+        if !maybe_compact_piece_table(core) {
+            core.materialized = OnceLock::new();
+        }
 
         range.start..range.start.saturating_add(new_text.len())
     }
@@ -457,7 +520,7 @@ impl TextModelSnapshot {
     }
 
     pub fn as_shared_string(&self) -> SharedString {
-        self.core.materialized().clone()
+        self.core.materialized_clone()
     }
 
     #[cfg(any(test, feature = "benchmarks"))]
@@ -469,12 +532,8 @@ impl TextModelSnapshot {
         self.core.line_index.shared_starts()
     }
 
-    fn clamp_offset_to_char_boundary(&self, mut offset: usize) -> usize {
-        offset = offset.min(self.len());
-        while offset > 0 && !self.is_char_boundary(offset) {
-            offset = offset.saturating_sub(1);
-        }
-        offset
+    fn clamp_offset_to_char_boundary(&self, offset: usize) -> usize {
+        core_clamp_to_char_boundary(self.core.as_ref(), offset)
     }
 
     fn normalized_char_range(&self, range: Range<usize>) -> Range<usize> {
@@ -550,34 +609,7 @@ impl TextModelSnapshot {
     }
 
     pub fn is_char_boundary(&self, offset: usize) -> bool {
-        if offset == 0 || offset == self.core.len {
-            return true;
-        }
-        if offset > self.core.len {
-            return false;
-        }
-
-        // Fast path: if the text is already materialized, check directly on the
-        // contiguous string instead of walking the piece list.
-        if let Some(text) = self.core.materialized.get() {
-            return text.is_char_boundary(offset);
-        }
-
-        let mut cursor = 0usize;
-        for piece in &self.core.pieces {
-            let next = cursor.saturating_add(piece.len);
-            if offset == cursor || offset == next {
-                return true;
-            }
-            if offset < next {
-                let local = offset.saturating_sub(cursor);
-                let chunk = self.core.chunk_for_piece(piece);
-                let absolute = piece.start.saturating_add(local);
-                return chunk.is_char_boundary(absolute);
-            }
-            cursor = next;
-        }
-        false
+        core_is_char_boundary(self.core.as_ref(), offset)
     }
 
     #[cfg(any(test, feature = "benchmarks"))]
@@ -613,13 +645,21 @@ impl PartialEq for TextModelSnapshot {
 
 impl Eq for TextModelSnapshot {}
 
-fn chunk_ranges(text: &str, chunk_bytes: usize) -> Vec<Range<usize>> {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PieceEditSpan {
+    replace_start: usize,
+    replace_end: usize,
+    prefix_fragment: Option<Piece>,
+    suffix_fragment: Option<Piece>,
+}
+
+fn build_original_pieces(text: &str, chunk_bytes: usize) -> Vec<Piece> {
     if text.is_empty() {
         return Vec::new();
     }
 
     let chunk_bytes = chunk_bytes.max(1);
-    let mut ranges = Vec::with_capacity(text.len() / chunk_bytes + 1);
+    let mut pieces = Vec::with_capacity(text.len() / chunk_bytes + 1);
     let mut start = 0usize;
     while start < text.len() {
         let mut end = (start + chunk_bytes).min(text.len());
@@ -629,124 +669,254 @@ fn chunk_ranges(text: &str, chunk_bytes: usize) -> Vec<Range<usize>> {
         if end == start {
             end = text.len();
         }
-        ranges.push(start..end);
+
+        pieces.push(Piece {
+            buffer: BufferId::Original,
+            chunk_index: 0,
+            start,
+            len: end.saturating_sub(start),
+        });
         start = end;
     }
-    ranges
+
+    pieces
 }
 
-fn prepare_chunks(
-    text: &str,
-    ranges: &[Range<usize>],
-    parallel_threshold: usize,
-    parallel_min_chunks: usize,
-) -> Vec<Arc<str>> {
-    if ranges.is_empty() {
-        return Vec::new();
+fn append_text_to_core(core: &mut TextModelCore, text: &str) -> Range<usize> {
+    let start = core.len;
+    if let Some(inserted_piece) = append_add_piece(core, text) {
+        core.ascii_only &= text.is_ascii();
+        push_piece_merged(&mut core.pieces, inserted_piece);
+        core.len = start.saturating_add(text.len());
+        core.line_index.append_text(start, text);
+        core.revision = core.revision.wrapping_add(1).max(1);
+        core.materialized = OnceLock::new();
     }
 
-    let should_parallelize = text.len() >= parallel_threshold
-        && ranges.len() >= parallel_min_chunks
-        && std::thread::available_parallelism()
-            .map(|n| n.get() > 1)
-            .unwrap_or(false);
-    if !should_parallelize {
-        return ranges
-            .iter()
-            .map(|range| Arc::<str>::from(&text[range.clone()]))
-            .collect();
-    }
-
-    prepare_chunks_parallel(text, ranges)
+    start..start.saturating_add(text.len())
 }
 
-fn prepare_chunks_parallel(text: &str, ranges: &[Range<usize>]) -> Vec<Arc<str>> {
-    let thread_count = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(1)
-        .clamp(1, LARGE_TEXT_MAX_THREADS)
-        .min(ranges.len());
-    if thread_count <= 1 {
-        return ranges
-            .iter()
-            .map(|range| Arc::<str>::from(&text[range.clone()]))
-            .collect();
-    }
-
-    let mut assignments = vec![Vec::<(usize, Range<usize>)>::new(); thread_count];
-    for (ix, range) in ranges.iter().enumerate() {
-        assignments[ix % thread_count].push((ix, range.clone()));
-    }
-
-    let mut worker_results = vec![Vec::<(usize, Arc<str>)>::new(); thread_count];
-    std::thread::scope(|scope| {
-        for (result_slot, worker_ranges) in worker_results.iter_mut().zip(assignments.into_iter()) {
-            let text_ref = text;
-            scope.spawn(move || {
-                result_slot.reserve(worker_ranges.len());
-                for (ix, range) in worker_ranges {
-                    result_slot.push((ix, Arc::<str>::from(&text_ref[range])));
-                }
-            });
-        }
-    });
-
-    let mut chunks = std::iter::repeat_with(|| Arc::<str>::from(""))
-        .take(ranges.len())
-        .collect::<Vec<_>>();
-    for worker in worker_results {
-        for (ix, chunk) in worker {
-            if let Some(slot) = chunks.get_mut(ix) {
-                *slot = chunk;
-            }
-        }
-    }
-    chunks
-}
-
-fn append_add_pieces(core: &mut TextModelCore, text: &str) -> Vec<Piece> {
+fn append_add_piece(core: &mut TextModelCore, text: &str) -> Option<Piece> {
     if text.is_empty() {
-        return Vec::new();
+        return None;
     }
-
-    if text.len() <= LARGE_TEXT_CHUNK_BYTES {
-        let add_chunks = Arc::make_mut(&mut core.add_chunks);
-        let chunk_index = add_chunks.len();
-        let chunk = Arc::<str>::from(text);
-        let len = chunk.len();
-        add_chunks.push(chunk);
-        return vec![Piece {
-            buffer: BufferId::Add,
-            chunk_index,
-            start: 0,
-            len,
-        }];
-    }
-
-    let ranges = chunk_ranges(text, LARGE_TEXT_CHUNK_BYTES);
-    let chunks = prepare_chunks(
-        text,
-        ranges.as_slice(),
-        LARGE_TEXT_PARALLEL_THRESHOLD,
-        LARGE_TEXT_PARALLEL_MIN_CHUNKS,
-    );
 
     let add_chunks = Arc::make_mut(&mut core.add_chunks);
-    add_chunks.reserve(chunks.len());
-    let base = add_chunks.len();
-
-    let mut pieces = Vec::with_capacity(chunks.len());
-    for (ix, chunk) in chunks.into_iter().enumerate() {
-        let len = chunk.len();
-        add_chunks.push(chunk);
-        pieces.push(Piece {
-            buffer: BufferId::Add,
-            chunk_index: base + ix,
-            start: 0,
-            len,
-        });
+    if let Some(piece) = append_small_text_to_last_add_chunk(add_chunks, text) {
+        return Some(piece);
     }
-    pieces
+
+    let chunk_index = add_chunks.len();
+    let mut chunk = String::with_capacity(if text.len() <= SMALL_ADD_CHUNK_BYTES {
+        SMALL_ADD_CHUNK_BYTES
+    } else {
+        text.len()
+    });
+    chunk.push_str(text);
+    let len = chunk.len();
+    let chunk = Arc::new(chunk);
+    add_chunks.push(chunk);
+    Some(Piece {
+        buffer: BufferId::Add,
+        chunk_index,
+        start: 0,
+        len,
+    })
+}
+
+fn append_small_text_to_last_add_chunk(
+    add_chunks: &mut Vec<Arc<String>>,
+    text: &str,
+) -> Option<Piece> {
+    if text.len() > SMALL_ADD_CHUNK_BYTES {
+        return None;
+    }
+
+    let chunk_index = add_chunks.len().checked_sub(1)?;
+    let chunk = Arc::get_mut(add_chunks.get_mut(chunk_index)?)?;
+    let start = chunk.len();
+    let new_len = start.checked_add(text.len())?;
+    if new_len > SMALL_ADD_CHUNK_BYTES {
+        return None;
+    }
+
+    chunk.push_str(text);
+    Some(Piece {
+        buffer: BufferId::Add,
+        chunk_index,
+        start,
+        len: text.len(),
+    })
+}
+
+fn maybe_compact_piece_table(core: &mut TextModelCore) -> bool {
+    if core.pieces.len() <= PIECE_TABLE_COMPACTION_THRESHOLD {
+        return false;
+    }
+
+    let mut text = String::with_capacity(core.len);
+    for piece in &core.pieces {
+        text.push_str(core.piece_slice(piece));
+    }
+
+    let original = Arc::<str>::from(text);
+    let shared = SharedString::from(Arc::clone(&original));
+    core.original_chunks = Arc::new(vec![original]);
+    core.add_chunks = Arc::new(Vec::new());
+    core.pieces = build_original_pieces(core.original_chunks[0].as_ref(), LARGE_TEXT_CHUNK_BYTES);
+    core.ascii_only = core.original_chunks[0].is_ascii();
+
+    let materialized = OnceLock::new();
+    let _ = materialized.set(shared);
+    core.materialized = materialized;
+    true
+}
+
+fn core_clamp_to_char_boundary(core: &TextModelCore, mut offset: usize) -> usize {
+    offset = offset.min(core.len);
+    if core.ascii_only {
+        return offset;
+    }
+
+    // Fast path: use the materialized string directly to avoid piece walks in
+    // the non-ASCII clamping loop.
+    if let Some(text) = core.materialized.get() {
+        while offset > 0 && !text.is_char_boundary(offset) {
+            offset -= 1;
+        }
+        return offset;
+    }
+
+    while offset > 0 && !core_is_char_boundary(core, offset) {
+        offset = offset.saturating_sub(1);
+    }
+    offset
+}
+
+fn core_is_char_boundary(core: &TextModelCore, offset: usize) -> bool {
+    if offset == 0 || offset == core.len {
+        return true;
+    }
+    if offset > core.len {
+        return false;
+    }
+    if core.ascii_only {
+        return true;
+    }
+
+    if let Some(text) = core.materialized.get() {
+        return text.is_char_boundary(offset);
+    }
+
+    let mut cursor = 0usize;
+    for piece in &core.pieces {
+        let next = cursor.saturating_add(piece.len);
+        if offset == cursor || offset == next {
+            return true;
+        }
+        if offset < next {
+            let local = offset.saturating_sub(cursor);
+            let chunk = core.chunk_for_piece(piece);
+            let absolute = piece.start.saturating_add(local);
+            return chunk.is_char_boundary(absolute);
+        }
+        cursor = next;
+    }
+    false
+}
+
+fn locate_piece_edit_span(pieces: &[Piece], range: Range<usize>) -> PieceEditSpan {
+    let mut cursor = 0usize;
+    let mut ix = 0usize;
+    let mut replace_start = pieces.len();
+    let mut prefix_fragment = None;
+
+    while ix < pieces.len() {
+        let piece = pieces[ix];
+        let piece_start = cursor;
+        let piece_end = cursor.saturating_add(piece.len);
+        if piece_end <= range.start {
+            cursor = piece_end;
+            ix += 1;
+            continue;
+        }
+
+        replace_start = ix;
+        if range.start > piece_start {
+            prefix_fragment = piece.prefix(range.start.saturating_sub(piece_start));
+        }
+        break;
+    }
+
+    if replace_start == pieces.len() {
+        return PieceEditSpan {
+            replace_start,
+            replace_end: replace_start,
+            prefix_fragment: None,
+            suffix_fragment: None,
+        };
+    }
+
+    while ix < pieces.len() {
+        let piece = pieces[ix];
+        let piece_start = cursor;
+        let piece_end = cursor.saturating_add(piece.len);
+        if range.end <= piece_start {
+            return PieceEditSpan {
+                replace_start,
+                replace_end: ix,
+                prefix_fragment,
+                suffix_fragment: None,
+            };
+        }
+        if range.end < piece_end {
+            return PieceEditSpan {
+                replace_start,
+                replace_end: ix.saturating_add(1),
+                prefix_fragment,
+                suffix_fragment: piece.suffix(range.end.saturating_sub(piece_start)),
+            };
+        }
+        if range.end == piece_end {
+            return PieceEditSpan {
+                replace_start,
+                replace_end: ix.saturating_add(1),
+                prefix_fragment,
+                suffix_fragment: None,
+            };
+        }
+        cursor = piece_end;
+        ix += 1;
+    }
+
+    PieceEditSpan {
+        replace_start,
+        replace_end: pieces.len(),
+        prefix_fragment,
+        suffix_fragment: None,
+    }
+}
+
+fn pieces_are_mergeable(left: Piece, right: Piece) -> bool {
+    left.len > 0
+        && right.len > 0
+        && left.buffer == right.buffer
+        && left.chunk_index == right.chunk_index
+        && left.start.saturating_add(left.len) == right.start
+}
+
+fn merge_piece_at(pieces: &mut Vec<Piece>, index: usize) -> bool {
+    let Some(right_ix) = index.checked_add(1) else {
+        return false;
+    };
+    if right_ix >= pieces.len() || !pieces_are_mergeable(pieces[index], pieces[right_ix]) {
+        return false;
+    }
+
+    let right_len = pieces[right_ix].len;
+    pieces[index].len = pieces[index].len.saturating_add(right_len);
+    pieces.remove(right_ix);
+    true
 }
 
 fn push_piece_merged(pieces: &mut Vec<Piece>, piece: Piece) {
@@ -754,14 +924,26 @@ fn push_piece_merged(pieces: &mut Vec<Piece>, piece: Piece) {
         return;
     }
 
-    if let Some(last) = pieces.last_mut() {
-        let contiguous = last.buffer == piece.buffer
-            && last.chunk_index == piece.chunk_index
-            && last.start.saturating_add(last.len) == piece.start;
-        if contiguous {
-            last.len = last.len.saturating_add(piece.len);
-            return;
-        }
+    if let Some(last) = pieces.last_mut()
+        && pieces_are_mergeable(*last, piece)
+    {
+        last.len = last.len.saturating_add(piece.len);
+        return;
+    }
+
+    pieces.push(piece);
+}
+
+fn push_piece_merged_small(pieces: &mut SmallVec<[Piece; 3]>, piece: Piece) {
+    if piece.len == 0 {
+        return;
+    }
+
+    if let Some(last) = pieces.last_mut()
+        && pieces_are_mergeable(*last, piece)
+    {
+        last.len = last.len.saturating_add(piece.len);
+        return;
     }
 
     pieces.push(piece);
@@ -916,6 +1098,52 @@ mod tests {
     }
 
     #[test]
+    fn small_unique_inserts_share_one_add_chunk() {
+        let mut model = TextModel::from_large_text("body");
+
+        let _ = model.replace_range(4..4, "-tail");
+        let _ = model.replace_range(0..0, "head-");
+        let _ = model.replace_range(5..5, "mid-");
+
+        assert_eq!(model.as_str(), "head-mid-body-tail");
+        assert_eq!(model.core.add_chunks.len(), 1);
+        assert!(
+            model
+                .core
+                .pieces
+                .iter()
+                .filter(|piece| piece.buffer == BufferId::Add)
+                .all(|piece| piece.chunk_index == 0)
+        );
+    }
+
+    #[test]
+    fn later_insert_after_snapshot_uses_new_add_chunk() {
+        let mut model = TextModel::from_large_text("body");
+        let _ = model.replace_range(0..0, "head-");
+        let snapshot = model.snapshot();
+
+        let _ = model.replace_range(model.len()..model.len(), "-tail");
+
+        assert_eq!(snapshot.as_str(), "head-body");
+        assert_eq!(model.as_str(), "head-body-tail");
+        assert_eq!(snapshot.core.add_chunks.len(), 1);
+        assert_eq!(model.core.add_chunks.len(), 2);
+    }
+
+    #[test]
+    fn ascii_fast_path_turns_off_after_unicode_insert() {
+        let mut model = TextModel::from_large_text("alpha");
+        let inserted = model.replace_range(5..5, "🙂");
+        assert_eq!(inserted, 5..9);
+        assert_eq!(model.as_str(), "alpha🙂");
+
+        let replaced = model.replace_range(6..9, "!");
+        assert_eq!(replaced, 5..6);
+        assert_eq!(model.as_str(), "alpha!");
+    }
+
+    #[test]
     fn from_large_text_chunks_preserve_content() {
         let mut text = String::new();
         for ix in 0..2_048usize {
@@ -925,6 +1153,43 @@ mod tests {
         assert_eq!(model.len(), text.len());
         assert_eq!(model.as_str(), text);
         assert_eq!(model.line_starts().len(), 2_049);
+    }
+
+    #[test]
+    fn from_large_text_uses_one_backing_chunk_with_logical_boundaries() {
+        let text = "a".repeat(LARGE_TEXT_CHUNK_BYTES * 2 + 32);
+        let model = TextModel::from_large_text(text.as_str());
+
+        assert_eq!(model.core.original_chunks.len(), 1);
+        assert_eq!(model.core.original_chunks[0].len(), text.len());
+        assert!(model.core.pieces.len() >= 2);
+        assert!(
+            model
+                .core
+                .pieces
+                .iter()
+                .all(|piece| { piece.buffer == BufferId::Original && piece.chunk_index == 0 })
+        );
+        assert_eq!(
+            model
+                .core
+                .pieces
+                .iter()
+                .map(|piece| piece.len)
+                .sum::<usize>(),
+            text.len()
+        );
+    }
+
+    #[test]
+    fn as_shared_string_reuses_original_chunk_when_unedited() {
+        let text = "alpha\nbeta\n".repeat(2_048);
+        let model = TextModel::from_large_text(text.as_str());
+
+        let shared = model.as_shared_string();
+        let shared_arc: Arc<str> = shared.into();
+
+        assert!(Arc::ptr_eq(&shared_arc, &model.core.original_chunks[0]));
     }
 
     #[test]
@@ -993,6 +1258,22 @@ mod tests {
     }
 
     #[test]
+    fn replace_range_reuses_line_index_storage_when_unique_and_line_count_unchanged() {
+        let mut model = TextModel::from_large_text("alpha\nbeta\ngamma");
+        let before_ptr = Arc::as_ptr(&model.core.line_index.starts);
+
+        model.replace_range(6..10, "BETA");
+
+        let after_ptr = Arc::as_ptr(&model.core.line_index.starts);
+        assert_eq!(model.as_str(), "alpha\nBETA\ngamma");
+        assert_eq!(model.line_starts(), &[0, 6, 11]);
+        assert_eq!(
+            before_ptr, after_ptr,
+            "unique edits with unchanged line counts should reuse line-index storage"
+        );
+    }
+
+    #[test]
     fn apply_edit_at_line_boundaries_stays_monotonic() {
         // Exercises boundary conditions around the monotonic-output guarantee:
         // edits exactly at newline offsets, multi-newline inserts replacing
@@ -1056,5 +1337,23 @@ mod tests {
             let expected_starts = line_starts_for_text(control.as_str());
             assert_eq!(model.line_starts(), expected_starts.as_slice());
         }
+    }
+
+    #[test]
+    fn heavily_fragmented_unique_edits_compact_piece_table() {
+        let mut control = "line\n".repeat(LARGE_TEXT_CHUNK_BYTES);
+        let mut model = TextModel::from_large_text(control.as_str());
+
+        for ix in 0..(PIECE_TABLE_COMPACTION_THRESHOLD + 32) {
+            let offset = (ix * 97) % control.len();
+            model.replace_range(offset..offset, "x");
+            control.insert(offset, 'x');
+        }
+
+        assert_eq!(model.as_str(), control);
+        assert!(
+            model.core.pieces.len() <= PIECE_TABLE_COMPACTION_THRESHOLD,
+            "fragmentation past the threshold should trigger table compaction"
+        );
     }
 }

@@ -13,6 +13,8 @@ const TS_DOCUMENT_LINE_TOKEN_CHUNK_ROWS: usize = 64;
 const TS_DOCUMENT_LINE_TOKEN_PREFETCH_GUARD_CHUNKS: usize = 1;
 const DIFF_SYNTAX_FOREGROUND_PARSE_BUDGET_NON_TEST: Duration = Duration::from_millis(1);
 const DIFF_SYNTAX_FOREGROUND_PARSE_BUDGET_TEST: Duration = Duration::from_millis(2);
+const DIFF_SYNTAX_FOREGROUND_SKIP_TEXT_BYTES: usize = 128 * 1024;
+const DIFF_SYNTAX_FOREGROUND_SKIP_LINE_COUNT: usize = 2_048;
 const TS_QUERY_MATCH_LIMIT: u32 = 256;
 const TS_MAX_BYTES_TO_QUERY: usize = 16 * 1024;
 const TS_QUERY_MAX_LINES_PER_PASS: usize = 256;
@@ -20,8 +22,12 @@ const TS_DEFERRED_DROP_MIN_BYTES: usize = 256 * 1024;
 const TS_INCREMENTAL_REPARSE_ENABLE_ENV: &str = "GITCOMET_DIFF_SYNTAX_INCREMENTAL_REPARSE";
 const TS_INCREMENTAL_REPARSE_MAX_CHANGED_BYTES: usize = 64 * 1024;
 const TS_INCREMENTAL_REPARSE_MAX_CHANGED_PERCENT: usize = 35;
+const TS_INCREMENTAL_REPARSE_LATE_EDIT_MIN_PREFIX_BYTES: usize = 8 * 1024;
+const TS_INCREMENTAL_REPARSE_LATE_EDIT_MAX_CHANGED_BYTES: usize = 384 * 1024;
+const TS_INCREMENTAL_REPARSE_LATE_EDIT_MAX_CHANGED_PERCENT: usize = 80;
 const TS_LINE_TOKEN_CACHE_MAX_ENTRIES: usize = 256;
 const TS_SHARED_DOCUMENT_SEED_MAX_ENTRIES: usize = 64;
+const TS_PENDING_PARSE_REQUEST_MAX_ENTRIES: usize = 8;
 #[cfg(any(test, feature = "syntax-web"))]
 const HTML_HIGHLIGHTS_QUERY: &str = include_str!("queries/html_highlights.scm");
 #[cfg(any(test, feature = "syntax-web"))]
@@ -55,12 +61,19 @@ thread_local! {
     static TS_DOCUMENT_CACHE: RefCell<TreesitterDocumentCache> = RefCell::new(TreesitterDocumentCache::new());
     static TS_LINE_TOKEN_CACHE: RefCell<SingleLineSyntaxTokenCache> = RefCell::new(SingleLineSyntaxTokenCache::new());
     static TS_INJECTION_CACHE: RefCell<HashMap<TreesitterInjectionMatch, CachedInjectionTokens>> = RefCell::new(HashMap::default());
+    static TS_PENDING_PARSE_REQUESTS: RefCell<Vec<PendingParseRequest>> = const { RefCell::new(Vec::new()) };
     static TS_INJECTION_ACCESS_COUNTER: Cell<u64> = const { Cell::new(0) };
     static TS_INJECTION_DEPTH: Cell<usize> = const { Cell::new(0) };
     #[cfg(test)]
     static TS_PARSER_SET_LANGUAGE_CALL_COUNT: Cell<usize> = const { Cell::new(0) };
     #[cfg(test)]
     static TS_TREE_STATE_CLONE_COUNT: Cell<usize> = const { Cell::new(0) };
+    #[cfg(test)]
+    static TS_INCREMENTAL_PARSE_COUNT: Cell<usize> = const { Cell::new(0) };
+    #[cfg(test)]
+    static TS_INCREMENTAL_FALLBACK_COUNT: Cell<usize> = const { Cell::new(0) };
+    #[cfg(test)]
+    static TS_DOCUMENT_HASH_COUNT: Cell<usize> = const { Cell::new(0) };
 }
 
 fn invalidate_ts_parser_language_fast_path() {
@@ -104,14 +117,13 @@ fn with_ts_parser<R>(
             .as_deref()
             .is_some_and(|current| current == ts_language);
 
-        if needs_language_reset || !parser_language_matches {
-            if parser.set_language(ts_language).is_err() {
+        if (needs_language_reset || !parser_language_matches)
+            && parser.set_language(ts_language).is_err() {
                 invalidate_ts_parser_language_fast_path();
                 return None;
             }
             #[cfg(test)]
             TS_PARSER_SET_LANGUAGE_CALL_COUNT.with(|count| count.set(count.get() + 1));
-        }
         Some(f(&mut parser))
     })
 }
@@ -190,6 +202,14 @@ struct PreparedSyntaxCacheKey {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct PreparedSyntaxSourceIdentity {
+    language: DiffSyntaxLanguage,
+    text_ptr: usize,
+    text_len: usize,
+    line_count: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 struct SingleLineSyntaxTokenCacheKey {
     language: DiffSyntaxLanguage,
     mode: DiffSyntaxMode,
@@ -225,6 +245,7 @@ pub(super) struct PreparedSyntaxDocumentData {
 
 #[derive(Clone, Debug)]
 pub(super) struct PreparedSyntaxReparseSeed {
+    document: PreparedSyntaxDocument,
     tree_state: PreparedSyntaxTreeState,
 }
 
@@ -260,9 +281,23 @@ enum SyntaxCacheDropMode {
 }
 
 enum SyntaxCacheDropMessage {
-    Drop(Vec<Arc<[SyntaxToken]>>),
+    Drop(SyntaxCacheDropPayload),
     #[cfg(any(test, feature = "benchmarks"))]
     Flush(mpsc::Sender<()>),
+}
+
+struct SyntaxCacheDropPayload {
+    line_tokens: Vec<Arc<[SyntaxToken]>>,
+    estimated_bytes: usize,
+}
+
+impl SyntaxCacheDropPayload {
+    fn new(line_tokens: Vec<Arc<[SyntaxToken]>>, estimated_bytes: usize) -> Self {
+        Self {
+            line_tokens,
+            estimated_bytes,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -380,13 +415,6 @@ static TS_DEFERRED_DROP_COMPLETED: std::sync::atomic::AtomicUsize =
 #[cfg(test)]
 static TS_INLINE_DROP_COUNT: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
-#[cfg(test)]
-static TS_INCREMENTAL_PARSE_COUNT: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
-#[cfg(test)]
-static TS_INCREMENTAL_FALLBACK_COUNT: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
-
 fn syntax_cache_drop_sender() -> Option<&'static mpsc::Sender<SyntaxCacheDropMessage>> {
     static SENDER: OnceLock<Option<mpsc::Sender<SyntaxCacheDropMessage>>> = OnceLock::new();
     SENDER
@@ -397,8 +425,8 @@ fn syntax_cache_drop_sender() -> Option<&'static mpsc::Sender<SyntaxCacheDropMes
                 .spawn(move || {
                     while let Ok(msg) = rx.recv() {
                         match msg {
-                            SyntaxCacheDropMessage::Drop(line_tokens) => {
-                                drop(line_tokens);
+                            SyntaxCacheDropMessage::Drop(drop_payload) => {
+                                drop(drop_payload);
                                 #[cfg(test)]
                                 TS_DEFERRED_DROP_COMPLETED
                                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -529,20 +557,53 @@ fn estimated_line_tokens_allocation_bytes(line_tokens: &[Arc<[SyntaxToken]>]) ->
     outer.saturating_add(inner)
 }
 
-fn should_defer_line_tokens_drop(line_tokens: &[Arc<[SyntaxToken]>]) -> bool {
-    estimated_line_tokens_allocation_bytes(line_tokens) >= TS_DEFERRED_DROP_MIN_BYTES
+fn estimated_chunked_line_tokens_allocation_bytes(
+    line_token_chunks: &HashMap<usize, Vec<Arc<[SyntaxToken]>>>,
+) -> usize {
+    line_token_chunks.values().fold(0usize, |acc, chunk| {
+        acc.saturating_add(estimated_line_tokens_allocation_bytes(chunk))
+    })
+}
+
+fn share_recent_line_token_arcs(line_tokens: Vec<Vec<SyntaxToken>>) -> Vec<Arc<[SyntaxToken]>> {
+    let mut shared = Vec::with_capacity(line_tokens.len());
+    let mut previous: Option<Arc<[SyntaxToken]>> = None;
+    let mut previous_two_back: Option<Arc<[SyntaxToken]>> = None;
+
+    for line in line_tokens {
+        let line_slice = line.as_slice();
+        let line_tokens = if line_slice.is_empty() {
+            empty_line_syntax_tokens()
+        } else if let Some(existing) = previous
+            .as_ref()
+            .filter(|candidate| candidate.as_ref() == line_slice)
+            .or_else(|| {
+                previous_two_back
+                    .as_ref()
+                    .filter(|candidate| candidate.as_ref() == line_slice)
+            })
+        {
+            existing.clone()
+        } else {
+            Arc::from(line)
+        };
+        previous_two_back = previous.replace(line_tokens.clone());
+        shared.push(line_tokens);
+    }
+
+    shared
 }
 
 fn drop_line_tokens_with_mode(
-    line_tokens: Vec<Arc<[SyntaxToken]>>,
+    drop_payload: SyntaxCacheDropPayload,
     drop_mode: SyntaxCacheDropMode,
 ) {
     let should_try_deferred = matches!(drop_mode, SyntaxCacheDropMode::DeferredWhenLarge)
-        && should_defer_line_tokens_drop(&line_tokens);
+        && drop_payload.estimated_bytes >= TS_DEFERRED_DROP_MIN_BYTES;
 
     if should_try_deferred && let Some(sender) = syntax_cache_drop_sender() {
         if sender
-            .send(SyntaxCacheDropMessage::Drop(line_tokens))
+            .send(SyntaxCacheDropMessage::Drop(drop_payload))
             .is_ok()
         {
             #[cfg(test)]
@@ -556,7 +617,7 @@ fn drop_line_tokens_with_mode(
 
     #[cfg(test)]
     TS_INLINE_DROP_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    drop(line_tokens);
+    drop(drop_payload);
 }
 
 #[cfg(test)]
@@ -573,22 +634,28 @@ fn reset_deferred_drop_counters() {
     TS_DEFERRED_DROP_ENQUEUED.store(0, std::sync::atomic::Ordering::Relaxed);
     TS_DEFERRED_DROP_COMPLETED.store(0, std::sync::atomic::Ordering::Relaxed);
     TS_INLINE_DROP_COUNT.store(0, std::sync::atomic::Ordering::Relaxed);
-    TS_INCREMENTAL_PARSE_COUNT.store(0, std::sync::atomic::Ordering::Relaxed);
-    TS_INCREMENTAL_FALLBACK_COUNT.store(0, std::sync::atomic::Ordering::Relaxed);
+    TS_INCREMENTAL_PARSE_COUNT.with(|count| count.set(0));
+    TS_INCREMENTAL_FALLBACK_COUNT.with(|count| count.set(0));
+    TS_DOCUMENT_HASH_COUNT.with(|count| count.set(0));
     TS_TREE_STATE_CLONE_COUNT.with(|count| count.set(0));
 }
 
 #[cfg(test)]
 fn incremental_reparse_counters() -> (usize, usize) {
     (
-        TS_INCREMENTAL_PARSE_COUNT.load(std::sync::atomic::Ordering::Relaxed),
-        TS_INCREMENTAL_FALLBACK_COUNT.load(std::sync::atomic::Ordering::Relaxed),
+        TS_INCREMENTAL_PARSE_COUNT.with(Cell::get),
+        TS_INCREMENTAL_FALLBACK_COUNT.with(Cell::get),
     )
 }
 
 #[cfg(test)]
 fn tree_state_clone_count() -> usize {
     TS_TREE_STATE_CLONE_COUNT.with(|count| count.get())
+}
+
+#[cfg(test)]
+fn document_hash_count() -> usize {
+    TS_DOCUMENT_HASH_COUNT.with(Cell::get)
 }
 
 #[cfg(any(test, feature = "benchmarks"))]
@@ -633,20 +700,37 @@ struct PreparedSyntaxCacheMetrics {
 struct TreesitterCachedDocument {
     line_count: usize,
     line_token_chunks: HashMap<usize, Vec<Arc<[SyntaxToken]>>>,
+    line_token_bytes: usize,
     tree_state: Option<PreparedSyntaxTreeState>,
 }
 
 impl TreesitterCachedDocument {
+    fn from_chunked_line_tokens(
+        line_count: usize,
+        line_token_chunks: HashMap<usize, Vec<Arc<[SyntaxToken]>>>,
+        tree_state: Option<PreparedSyntaxTreeState>,
+    ) -> Self {
+        let line_token_bytes = estimated_chunked_line_tokens_allocation_bytes(&line_token_chunks);
+        Self {
+            line_count,
+            line_token_chunks,
+            line_token_bytes,
+            tree_state,
+        }
+    }
+
     #[cfg(any(test, feature = "benchmarks"))]
     fn from_line_tokens(
         line_tokens: Vec<Vec<SyntaxToken>>,
         tree_state: Option<PreparedSyntaxTreeState>,
     ) -> Self {
         let line_count = line_tokens.len();
-        let arc_tokens: Vec<Arc<[SyntaxToken]>> = line_tokens.into_iter().map(Arc::from).collect();
+        let arc_tokens = share_recent_line_token_arcs(line_tokens);
+        let line_token_bytes = estimated_line_tokens_allocation_bytes(&arc_tokens);
         Self {
             line_count,
             line_token_chunks: chunk_line_tokens_by_row(arc_tokens),
+            line_token_bytes,
             tree_state,
         }
     }
@@ -659,9 +743,20 @@ impl TreesitterCachedDocument {
         start.min(end)..end
     }
 
-    fn into_line_tokens_for_drop(self) -> Vec<Arc<[SyntaxToken]>> {
+    fn source_identity(&self) -> Option<PreparedSyntaxSourceIdentity> {
+        self.tree_state
+            .as_ref()
+            .map(|tree_state| PreparedSyntaxSourceIdentity {
+                language: tree_state.language,
+                text_ptr: tree_state.text.as_ptr() as usize,
+                text_len: tree_state.text.len(),
+                line_count: self.line_count,
+            })
+    }
+
+    fn into_drop_payload(self) -> SyntaxCacheDropPayload {
         if self.line_token_chunks.is_empty() {
-            return Vec::new();
+            return SyntaxCacheDropPayload::new(Vec::new(), self.line_token_bytes);
         }
 
         let mut chunks = self.line_token_chunks.into_iter().collect::<Vec<_>>();
@@ -674,7 +769,13 @@ impl TreesitterCachedDocument {
         for (_, chunk) in chunks {
             out.extend(chunk);
         }
-        out
+        let payload = SyntaxCacheDropPayload::new(out, self.line_token_bytes);
+        debug_assert_eq!(
+            payload.estimated_bytes,
+            estimated_line_tokens_allocation_bytes(&payload.line_tokens),
+            "cached line-token byte accounting should match flattened drop payloads"
+        );
+        payload
     }
 }
 
@@ -717,9 +818,19 @@ fn insert_line_token_chunk(
         let empty: Arc<[SyntaxToken]> = Arc::from([]);
         vec![empty; bounds.end.saturating_sub(bounds.start)]
     };
-    document
-        .line_token_chunks
-        .insert(chunk_ix, chunk_tokens.unwrap_or_else(fallback_empty_chunk));
+    let chunk = chunk_tokens.unwrap_or_else(fallback_empty_chunk);
+    document.line_token_bytes = document
+        .line_token_bytes
+        .saturating_add(estimated_line_tokens_allocation_bytes(&chunk));
+    document.line_token_chunks.insert(chunk_ix, chunk);
+}
+
+fn clone_tree_state_for_chunk_build_ref(
+    tree_state: &PreparedSyntaxTreeState,
+) -> PreparedSyntaxTreeState {
+    #[cfg(test)]
+    TS_TREE_STATE_CLONE_COUNT.with(|count| count.set(count.get().saturating_add(1)));
+    tree_state.clone()
 }
 
 fn shared_tree_state_for_chunk_build(
@@ -729,14 +840,6 @@ fn shared_tree_state_for_chunk_build(
         .as_ref()
         .map(clone_tree_state_for_chunk_build_ref)
         .map(Arc::new)
-}
-
-fn clone_tree_state_for_chunk_build_ref(
-    tree_state: &PreparedSyntaxTreeState,
-) -> PreparedSyntaxTreeState {
-    #[cfg(test)]
-    TS_TREE_STATE_CLONE_COUNT.with(|count| count.set(count.get().saturating_add(1)));
-    tree_state.clone()
 }
 
 fn build_line_token_chunk_for_state(
@@ -764,7 +867,7 @@ fn build_line_token_chunk_for_state(
         chunk_end,
     );
     let chunk_build_ms = started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
-    let arc_chunk: Vec<Arc<[SyntaxToken]>> = chunk.into_iter().map(Arc::from).collect();
+    let arc_chunk = share_recent_line_token_arcs(chunk);
     (Some(arc_chunk), chunk_build_ms)
 }
 
@@ -778,6 +881,7 @@ fn chunk_count_for_line_count(line_count: usize) -> usize {
 
 struct TreesitterDocumentCache {
     by_cache_key: HashMap<PreparedSyntaxCacheKey, TreesitterCachedDocument>,
+    by_source_identity: HashMap<PreparedSyntaxSourceIdentity, PreparedSyntaxCacheKey>,
     lru_order: VecDeque<PreparedSyntaxCacheKey>,
     pending_chunk_requests: HashSet<PreparedSyntaxChunkKey>,
     metrics: PreparedSyntaxCacheMetrics,
@@ -794,6 +898,7 @@ impl TreesitterDocumentCache {
     fn new() -> Self {
         Self {
             by_cache_key: HashMap::default(),
+            by_source_identity: HashMap::default(),
             lru_order: VecDeque::new(),
             pending_chunk_requests: HashSet::default(),
             metrics: PreparedSyntaxCacheMetrics::default(),
@@ -819,14 +924,39 @@ impl TreesitterDocumentCache {
         self.touch_key(cache_key);
     }
 
+    fn remove_source_identity_mapping(
+        &mut self,
+        cache_key: PreparedSyntaxCacheKey,
+        document: &TreesitterCachedDocument,
+    ) {
+        let Some(identity) = document.source_identity() else {
+            return;
+        };
+        if self.by_source_identity.get(&identity) == Some(&cache_key) {
+            self.by_source_identity.remove(&identity);
+        }
+    }
+
+    fn index_source_identity(
+        &mut self,
+        cache_key: PreparedSyntaxCacheKey,
+        document: &TreesitterCachedDocument,
+    ) {
+        let Some(identity) = document.source_identity() else {
+            return;
+        };
+        self.by_source_identity.insert(identity, cache_key);
+    }
+
     fn evict_if_needed(&mut self, drop_mode: SyntaxCacheDropMode) {
         while self.by_cache_key.len() >= TS_DOCUMENT_CACHE_MAX_ENTRIES {
             let Some(evict_key) = self.lru_order.pop_front() else {
                 break;
             };
             if let Some(evicted) = self.by_cache_key.remove(&evict_key) {
+                self.remove_source_identity_mapping(evict_key, &evicted);
                 self.metrics.evict = self.metrics.evict.saturating_add(1);
-                drop_line_tokens_with_mode(evicted.into_line_tokens_for_drop(), drop_mode);
+                drop_line_tokens_with_mode(evicted.into_drop_payload(), drop_mode);
                 break;
             }
         }
@@ -841,6 +971,31 @@ impl TreesitterDocumentCache {
             self.touch_key(cache_key);
         }
         exists
+    }
+
+    fn document_for_source_identity(
+        &mut self,
+        identity: PreparedSyntaxSourceIdentity,
+    ) -> Option<PreparedSyntaxDocument> {
+        let cache_key = *self.by_source_identity.get(&identity)?;
+        if !self.by_cache_key.contains_key(&cache_key) {
+            self.by_source_identity.remove(&identity);
+            return None;
+        }
+        self.touch_key(cache_key);
+        Some(PreparedSyntaxDocument { cache_key })
+    }
+
+    fn alias_source_identity(
+        &mut self,
+        cache_key: PreparedSyntaxCacheKey,
+        identity: PreparedSyntaxSourceIdentity,
+    ) {
+        if !self.by_cache_key.contains_key(&cache_key) {
+            return;
+        }
+        self.by_source_identity.insert(identity, cache_key);
+        self.touch_key(cache_key);
     }
 
     fn extract_line_from_chunk(
@@ -892,33 +1047,41 @@ impl TreesitterDocumentCache {
 
         let mut inserted = false;
         let mut updated = false;
+        let mut remove_identity = None;
+        let mut insert_identity = None;
 
         match self.by_cache_key.entry(cache_key) {
             std::collections::hash_map::Entry::Vacant(entry) => {
-                entry.insert(TreesitterCachedDocument {
-                    line_count: shared_document.line_count,
-                    line_token_chunks: shared_document.line_token_chunks,
-                    tree_state: shared_document.tree_state,
-                });
+                let document = TreesitterCachedDocument::from_chunked_line_tokens(
+                    shared_document.line_count,
+                    shared_document.line_token_chunks,
+                    shared_document.tree_state,
+                );
+                insert_identity = document.source_identity();
+                entry.insert(document);
                 inserted = true;
             }
             std::collections::hash_map::Entry::Occupied(mut entry) => {
                 let document = entry.get_mut();
                 if document.line_count != shared_document.line_count {
+                    let old_identity = document.source_identity();
                     let replaced = std::mem::replace(
                         document,
-                        TreesitterCachedDocument {
-                            line_count: shared_document.line_count,
-                            line_token_chunks: shared_document.line_token_chunks,
-                            tree_state: shared_document.tree_state,
-                        },
+                        TreesitterCachedDocument::from_chunked_line_tokens(
+                            shared_document.line_count,
+                            shared_document.line_token_chunks,
+                            shared_document.tree_state,
+                        ),
                     );
+                    remove_identity = old_identity;
+                    insert_identity = document.source_identity();
                     drop_line_tokens_with_mode(
-                        replaced.into_line_tokens_for_drop(),
+                        replaced.into_drop_payload(),
                         SyntaxCacheDropMode::DeferredWhenLarge,
                     );
                     updated = true;
                 } else {
+                    let old_identity = document.source_identity();
                     if document.tree_state.is_none() && shared_document.tree_state.is_some() {
                         document.tree_state = shared_document.tree_state;
                         updated = true;
@@ -928,15 +1091,28 @@ impl TreesitterDocumentCache {
                         if document.line_token_chunks.contains_key(&chunk_ix) {
                             continue;
                         }
-                        document.line_token_chunks.insert(chunk_ix, chunk);
+                        insert_line_token_chunk(document, chunk_ix, Some(chunk));
                         self.pending_chunk_requests.remove(&PreparedSyntaxChunkKey {
                             cache_key,
                             chunk_ix,
                         });
                         updated = true;
                     }
+                    if document.source_identity() != old_identity {
+                        remove_identity = old_identity;
+                        insert_identity = document.source_identity();
+                    }
                 }
             }
+        }
+
+        if let Some(identity) = remove_identity
+            && self.by_source_identity.get(&identity) == Some(&cache_key)
+        {
+            self.by_source_identity.remove(&identity);
+        }
+        if let Some(identity) = insert_identity {
+            self.by_source_identity.insert(identity, cache_key);
         }
 
         if inserted || updated {
@@ -1076,18 +1252,12 @@ impl TreesitterDocumentCache {
         }
     }
 
-    fn request_line_tokens(
+    fn request_line_tokens_with_context(
         &mut self,
         cache_key: PreparedSyntaxCacheKey,
         line_ix: usize,
+        allow_sync_build_on_insert: bool,
     ) -> Option<PreparedSyntaxLineTokensRequest> {
-        // Visible row draws can request a chunk on the render thread while the
-        // main-pane poller drains worker completions on the app thread. Apply
-        // any completions targeted at this current thread before we decide that
-        // the line is still pending, otherwise the row can remain stuck on the
-        // heuristic fallback until some other code path drains it here.
-        let _ = self.drain_completed_chunk_builds_for_cache_key(cache_key);
-        let shared_merge = self.merge_document_from_shared_seed(cache_key);
         let (line_count, chunk_ix, has_chunk) = self.lookup_chunk_state(cache_key, line_ix)?;
 
         static EMPTY_TOKENS: OnceLock<Arc<[SyntaxToken]>> = OnceLock::new();
@@ -1124,7 +1294,7 @@ impl TreesitterDocumentCache {
             return Some(PreparedSyntaxLineTokensRequest::Ready(empty_tokens()));
         };
 
-        if matches!(shared_merge, SharedDocumentMergeResult::Inserted) {
+        if allow_sync_build_on_insert {
             self.build_chunk_sync_and_insert(cache_key, chunk_ix, tree_state.as_ref(), line_count);
             self.record_hit(cache_key);
             return Some(PreparedSyntaxLineTokensRequest::Ready(
@@ -1152,6 +1322,50 @@ impl TreesitterDocumentCache {
         Some(PreparedSyntaxLineTokensRequest::Ready(
             self.extract_line_from_chunk(cache_key, line_ix, chunk_ix),
         ))
+    }
+
+    fn request_line_tokens(
+        &mut self,
+        cache_key: PreparedSyntaxCacheKey,
+        line_ix: usize,
+    ) -> Option<PreparedSyntaxLineTokensRequest> {
+        // Visible row draws can request a chunk on the render thread while the
+        // main-pane poller drains worker completions on the app thread. Apply
+        // any completions targeted at this current thread before we decide that
+        // the line is still pending, otherwise the row can remain stuck on the
+        // heuristic fallback until some other code path drains it here.
+        let _ = self.drain_completed_chunk_builds_for_cache_key(cache_key);
+        let allow_sync_build_on_insert = matches!(
+            self.merge_document_from_shared_seed(cache_key),
+            SharedDocumentMergeResult::Inserted
+        );
+        self.request_line_tokens_with_context(cache_key, line_ix, allow_sync_build_on_insert)
+    }
+
+    fn request_line_tokens_range(
+        &mut self,
+        cache_key: PreparedSyntaxCacheKey,
+        line_range: Range<usize>,
+    ) -> Option<Vec<PreparedSyntaxLineTokensRequest>> {
+        if line_range.is_empty() {
+            return Some(Vec::new());
+        }
+
+        let _ = self.drain_completed_chunk_builds_for_cache_key(cache_key);
+        let mut allow_sync_build_on_insert = matches!(
+            self.merge_document_from_shared_seed(cache_key),
+            SharedDocumentMergeResult::Inserted
+        );
+        let mut requests = Vec::with_capacity(line_range.len());
+        for line_ix in line_range {
+            requests.push(self.request_line_tokens_with_context(
+                cache_key,
+                line_ix,
+                allow_sync_build_on_insert,
+            )?);
+            allow_sync_build_on_insert = false;
+        }
+        Some(requests)
     }
 
     fn prepared_document_data(
@@ -1186,7 +1400,7 @@ impl TreesitterDocumentCache {
         self.metrics
     }
 
-    #[cfg(feature = "benchmarks")]
+    #[cfg(any(test, feature = "benchmarks"))]
     fn reset_metrics(&mut self) {
         self.metrics = PreparedSyntaxCacheMetrics::default();
     }
@@ -1368,8 +1582,10 @@ impl TreesitterDocumentCache {
             self.lru_order.remove(pos);
         }
 
+        self.index_source_identity(cache_key, &document);
         if let Some(replaced) = self.by_cache_key.insert(cache_key, document) {
-            drop_line_tokens_with_mode(replaced.into_line_tokens_for_drop(), drop_mode);
+            self.remove_source_identity_mapping(cache_key, &replaced);
+            drop_line_tokens_with_mode(replaced.into_drop_payload(), drop_mode);
         }
         self.touch_key(cache_key);
     }
@@ -1387,11 +1603,13 @@ fn should_apply_chunk_build_result(
         }
 }
 
+#[derive(Clone)]
 struct TreesitterDocumentInput {
     text: Arc<str>,
     line_starts: Arc<[usize]>,
 }
 
+#[derive(Clone)]
 struct TreesitterDocumentParseRequest {
     language: DiffSyntaxLanguage,
     ts_language: tree_sitter::Language,
@@ -1399,7 +1617,12 @@ struct TreesitterDocumentParseRequest {
     cache_key: PreparedSyntaxCacheKey,
 }
 
-#[cfg(feature = "benchmarks")]
+struct PendingParseRequest {
+    identity: PreparedSyntaxSourceIdentity,
+    request: TreesitterDocumentParseRequest,
+}
+
+#[cfg(any(test, feature = "benchmarks"))]
 pub(super) fn benchmark_reset_prepared_syntax_cache_metrics() {
     TS_DOCUMENT_CACHE.with(|cache| cache.borrow_mut().reset_metrics());
 }
@@ -1447,6 +1670,12 @@ fn reset_prepared_syntax_cache() {
     TS_DOCUMENT_CACHE.with(|cache| {
         *cache.borrow_mut() = TreesitterDocumentCache::new();
     });
+    TS_PENDING_PARSE_REQUESTS.with(|requests| requests.borrow_mut().clear());
+    let mut store = match shared_prepared_document_seed_store().lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    store.clear();
 }
 
 #[cfg(test)]
@@ -1536,7 +1765,7 @@ fn single_line_syntax_token_cache_key(
     SingleLineSyntaxTokenCacheKey {
         language,
         mode,
-        text_hash: treesitter_document_doc_hash(text),
+        text_hash: treesitter_text_hash(text),
     }
 }
 
@@ -1615,32 +1844,79 @@ pub(super) fn prepare_treesitter_document_with_budget_reuse_text(
     old_document: Option<PreparedSyntaxDocument>,
     edit_hint: Option<DiffSyntaxEdit>,
 ) -> PrepareTreesitterDocumentResult {
-    if let Some(cache_key) = prepared_document_cache_key_for_shared_text(
+    let line_count = normalized_treesitter_line_starts(text.as_ref(), line_starts.as_ref()).len();
+    if let Some(identity) =
+        prepared_document_source_identity_for_shared_text(language, mode, text.as_ref(), line_count)
+        && let Some(document) = TS_DOCUMENT_CACHE
+            .with(|cache| cache.borrow_mut().document_for_source_identity(identity))
+        {
+            return PrepareTreesitterDocumentResult::Ready(document);
+        }
+    let source_identity = prepared_document_source_identity_for_shared_text(
         language,
         mode,
         text.as_ref(),
-        line_starts.as_ref(),
-    ) {
-        let line_count =
-            normalized_treesitter_line_starts(text.as_ref(), line_starts.as_ref()).len();
-        let has_cache_hit = TS_DOCUMENT_CACHE
-            .with(|cache| cache.borrow_mut().contains_document(cache_key, line_count));
-        if has_cache_hit {
-            return PrepareTreesitterDocumentResult::Ready(PreparedSyntaxDocument { cache_key });
-        }
+        line_count,
+    );
+    let old_tree_state = old_document.and_then(prepared_document_tree_state);
+    let input = treesitter_document_input_from_shared_text(text, line_starts);
+    let reparse_plan = old_tree_state.as_ref().and_then(|state| {
+        build_treesitter_reparse_plan(state, language, &input, edit_hint.as_ref())
+    });
+    if let (Some(document), Some(identity), Some(TreesitterReparsePlan::Unchanged)) =
+        (old_document, source_identity, reparse_plan.as_ref())
+    {
+        TS_DOCUMENT_CACHE.with(|cache| {
+            cache
+                .borrow_mut()
+                .alias_source_identity(document.cache_key, identity);
+        });
+        clear_pending_parse_request(identity);
+        return PrepareTreesitterDocumentResult::Ready(document);
     }
-
-    let Some(request) =
-        treesitter_document_parse_request_from_shared_text(language, mode, text, line_starts)
-    else {
+    let Some(request) = treesitter_document_parse_request_from_input_with_reuse(
+        language,
+        mode,
+        input,
+        old_tree_state.as_ref(),
+        reparse_plan.as_ref(),
+    ) else {
+        if let Some(identity) = source_identity {
+            clear_pending_parse_request(identity);
+        }
         return PrepareTreesitterDocumentResult::Unsupported;
     };
-    prepare_treesitter_document_request_after_cache_lookup(
-        request,
+    let has_cache_hit = TS_DOCUMENT_CACHE.with(|cache| {
+        cache
+            .borrow_mut()
+            .contains_document(request.cache_key, line_count)
+    });
+    if has_cache_hit {
+        if let Some(identity) = source_identity {
+            clear_pending_parse_request(identity);
+        }
+        return PrepareTreesitterDocumentResult::Ready(PreparedSyntaxDocument {
+            cache_key: request.cache_key,
+        });
+    }
+
+    let result = prepare_treesitter_document_request_after_cache_lookup(
+        request.clone(),
         Some(budget),
         old_document,
-        edit_hint,
-    )
+        edit_hint.is_some(),
+        reparse_plan,
+    );
+    match (source_identity, result) {
+        (Some(identity), PrepareTreesitterDocumentResult::TimedOut) => {
+            store_pending_parse_request(identity, request);
+        }
+        (Some(identity), _) => {
+            clear_pending_parse_request(identity);
+        }
+        (None, _) => {}
+    }
+    result
 }
 
 #[cfg(test)]
@@ -1652,16 +1928,27 @@ pub(super) fn prepare_treesitter_document_in_background_text_with_reuse(
     old_document: Option<PreparedSyntaxDocument>,
     edit_hint: Option<DiffSyntaxEdit>,
 ) -> Option<PreparedSyntaxDocumentData> {
-    let request = treesitter_document_parse_request_from_input(
+    let input = treesitter_document_input_from_shared_text(text, line_starts);
+    let old_tree_state = old_document.and_then(prepared_document_tree_state);
+    let reparse_plan = old_tree_state.as_ref().and_then(|state| {
+        build_treesitter_reparse_plan(state, language, &input, edit_hint.as_ref())
+    });
+    let request = take_pending_parse_request_for_shared_text(
         language,
         mode,
-        treesitter_document_input_from_shared_text(text, line_starts),
-    )?;
-    prepare_treesitter_document_data_request_impl(
-        request,
-        old_document.and_then(prepared_document_tree_state),
-        edit_hint,
+        input.text.as_ref(),
+        input.line_starts.as_ref(),
     )
+    .or_else(|| {
+        treesitter_document_parse_request_from_input_with_reuse(
+            language,
+            mode,
+            input,
+            old_tree_state.as_ref(),
+            reparse_plan.as_ref(),
+        )
+    })?;
+    prepare_treesitter_document_data_request_impl(request, old_document, reparse_plan)
 }
 
 pub(super) fn prepare_treesitter_document_in_background_text_with_reparse_seed(
@@ -1672,16 +1959,30 @@ pub(super) fn prepare_treesitter_document_in_background_text_with_reparse_seed(
     reparse_seed: Option<PreparedSyntaxReparseSeed>,
     edit_hint: Option<DiffSyntaxEdit>,
 ) -> Option<PreparedSyntaxDocumentData> {
-    let request = treesitter_document_parse_request_from_input(
+    let input = treesitter_document_input_from_shared_text(text, line_starts);
+    let (old_document, old_tree_state) = match reparse_seed {
+        Some(seed) => (Some(seed.document), Some(seed.tree_state)),
+        None => (None, None),
+    };
+    let reparse_plan = old_tree_state.as_ref().and_then(|state| {
+        build_treesitter_reparse_plan(state, language, &input, edit_hint.as_ref())
+    });
+    let request = take_pending_parse_request_for_shared_text(
         language,
         mode,
-        treesitter_document_input_from_shared_text(text, line_starts),
-    )?;
-    prepare_treesitter_document_data_request_impl(
-        request,
-        reparse_seed.map(|seed| seed.tree_state),
-        edit_hint,
+        input.text.as_ref(),
+        input.line_starts.as_ref(),
     )
+    .or_else(|| {
+        treesitter_document_parse_request_from_input_with_reuse(
+            language,
+            mode,
+            input,
+            old_tree_state.as_ref(),
+            reparse_plan.as_ref(),
+        )
+    })?;
+    prepare_treesitter_document_data_request_impl(request, old_document, reparse_plan)
 }
 
 pub(super) fn inject_prepared_document_data(
@@ -1691,11 +1992,11 @@ pub(super) fn inject_prepared_document_data(
     TS_DOCUMENT_CACHE.with(|cache| {
         cache.borrow_mut().insert_document_with_mode(
             document.cache_key,
-            TreesitterCachedDocument {
-                line_count: document.line_count,
-                line_token_chunks: document.line_token_chunks,
-                tree_state: document.tree_state,
-            },
+            TreesitterCachedDocument::from_chunked_line_tokens(
+                document.line_count,
+                document.line_token_chunks,
+                document.tree_state,
+            ),
             SyntaxCacheDropMode::DeferredWhenLarge,
         );
     });
@@ -1720,6 +2021,17 @@ pub(super) fn request_syntax_tokens_for_prepared_document_line(
         cache
             .borrow_mut()
             .request_line_tokens(document.cache_key, line_ix)
+    })
+}
+
+pub(super) fn request_syntax_tokens_for_prepared_document_line_range(
+    document: PreparedSyntaxDocument,
+    line_range: Range<usize>,
+) -> Option<Vec<PreparedSyntaxLineTokensRequest>> {
+    TS_DOCUMENT_CACHE.with(|cache| {
+        cache
+            .borrow_mut()
+            .request_line_tokens_range(document.cache_key, line_range)
     })
 }
 
@@ -1760,8 +2072,10 @@ fn prepared_document_tree_state(
 pub(super) fn prepared_document_reparse_seed(
     document: PreparedSyntaxDocument,
 ) -> Option<PreparedSyntaxReparseSeed> {
-    prepared_document_tree_state(document)
-        .map(|tree_state| PreparedSyntaxReparseSeed { tree_state })
+    prepared_document_tree_state(document).map(|tree_state| PreparedSyntaxReparseSeed {
+        document,
+        tree_state,
+    })
 }
 
 #[cfg(test)]
@@ -1826,14 +2140,18 @@ pub(super) fn benchmark_drop_payload_timed_step(
     defer_drop: bool,
 ) -> Duration {
     let payload = benchmark_line_tokens_payload(lines.max(1), tokens_per_line.max(1), seed);
-    let arc_payload: Vec<Arc<[SyntaxToken]>> = payload.into_iter().map(Arc::from).collect();
+    let arc_payload = share_recent_line_token_arcs(payload);
+    let estimated_bytes = estimated_line_tokens_allocation_bytes(&arc_payload);
     let drop_mode = if defer_drop {
         SyntaxCacheDropMode::DeferredWhenLarge
     } else {
         SyntaxCacheDropMode::InlineWhenLarge
     };
     let start = std::time::Instant::now();
-    drop_line_tokens_with_mode(arc_payload, drop_mode);
+    drop_line_tokens_with_mode(
+        SyntaxCacheDropPayload::new(arc_payload, estimated_bytes),
+        drop_mode,
+    );
     start.elapsed()
 }
 
@@ -1889,24 +2207,30 @@ fn benchmark_line_tokens_payload(
 fn parse_treesitter_document_core(
     request: &TreesitterDocumentParseRequest,
     foreground_timeout: Option<Duration>,
-    old_tree_state: Option<PreparedSyntaxTreeState>,
-    edit_hint: Option<DiffSyntaxEdit>,
+    old_document: Option<PreparedSyntaxDocument>,
+    reparse_plan: Option<&TreesitterReparsePlan>,
 ) -> Option<PreparedSyntaxDocumentData> {
-    let mut used_old_document_without_incremental = false;
-    let incremental_seed = old_tree_state.as_ref().and_then(|state| {
-        let seed = build_incremental_parse_seed(state, request, edit_hint.as_ref());
-        if seed.is_none() && state.language == request.language && incremental_reparse_enabled() {
-            used_old_document_without_incremental = true;
-        }
-        seed
-    });
+    let incremental_seed = match reparse_plan {
+        Some(TreesitterReparsePlan::Changed {
+            incremental_seed, ..
+        }) => incremental_seed.as_ref(),
+        _ => None,
+    };
 
     #[cfg(test)]
     {
+        let used_old_document_without_incremental = incremental_reparse_enabled()
+            && matches!(
+                reparse_plan,
+                Some(TreesitterReparsePlan::Changed {
+                    incremental_seed: None,
+                    ..
+                })
+            );
         if incremental_seed.is_some() {
-            TS_INCREMENTAL_PARSE_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            TS_INCREMENTAL_PARSE_COUNT.with(|count| count.set(count.get().saturating_add(1)));
         } else if used_old_document_without_incremental {
-            TS_INCREMENTAL_FALLBACK_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            TS_INCREMENTAL_FALLBACK_COUNT.with(|count| count.set(count.get().saturating_add(1)));
         }
     }
 
@@ -1926,15 +2250,26 @@ fn parse_treesitter_document_core(
     } else {
         TreesitterParseReuseMode::Full
     };
-    let source_version = incremental_seed
-        .as_ref()
-        .map(|seed| seed.next_version)
-        .unwrap_or(1);
+    let source_version = incremental_seed.map(|seed| seed.next_version).unwrap_or(1);
+    let reused_prefix_chunks = match (old_document, reparse_plan) {
+        (
+            Some(document),
+            Some(TreesitterReparsePlan::Changed {
+                reusable_prefix_chunk_count,
+                ..
+            }),
+        ) if *reusable_prefix_chunk_count > 0 => TS_DOCUMENT_CACHE.with(|cache| {
+            cache
+                .borrow_mut()
+                .clone_prefix_line_token_chunks(document.cache_key, *reusable_prefix_chunk_count)
+        }),
+        _ => HashMap::default(),
+    };
 
     Some(PreparedSyntaxDocumentData {
         cache_key: request.cache_key,
         line_count: request.input.line_starts.len(),
-        line_token_chunks: HashMap::default(),
+        line_token_chunks: reused_prefix_chunks,
         tree_state: Some(PreparedSyntaxTreeState {
             language: request.language,
             text: request.input.text.clone(),
@@ -1952,17 +2287,28 @@ fn prepare_treesitter_document_request_after_cache_lookup(
     request: TreesitterDocumentParseRequest,
     foreground_budget: Option<DiffSyntaxBudget>,
     old_document: Option<PreparedSyntaxDocument>,
-    edit_hint: Option<DiffSyntaxEdit>,
+    has_edit_hint: bool,
+    reparse_plan: Option<TreesitterReparsePlan>,
 ) -> PrepareTreesitterDocumentResult {
     if foreground_budget.is_some_and(|budget| budget.foreground_parse.is_zero()) {
+        return PrepareTreesitterDocumentResult::TimedOut;
+    }
+    if foreground_budget.is_some_and(|budget| {
+        should_skip_budgeted_foreground_parse(
+            &request,
+            budget,
+            old_document.is_some(),
+            has_edit_hint,
+        )
+    }) {
         return PrepareTreesitterDocumentResult::TimedOut;
     }
 
     let Some(data) = parse_treesitter_document_core(
         &request,
         foreground_budget.map(|b| b.foreground_parse),
-        old_document.and_then(prepared_document_tree_state),
-        edit_hint,
+        old_document,
+        reparse_plan.as_ref(),
     ) else {
         return if foreground_budget.is_some() {
             PrepareTreesitterDocumentResult::TimedOut
@@ -1975,11 +2321,11 @@ fn prepare_treesitter_document_request_after_cache_lookup(
     TS_DOCUMENT_CACHE.with(|cache| {
         cache.borrow_mut().insert_document_with_mode(
             data.cache_key,
-            TreesitterCachedDocument {
-                line_count: data.line_count,
-                line_token_chunks: data.line_token_chunks,
-                tree_state: data.tree_state,
-            },
+            TreesitterCachedDocument::from_chunked_line_tokens(
+                data.line_count,
+                data.line_token_chunks,
+                data.tree_state,
+            ),
             SyntaxCacheDropMode::DeferredWhenLarge,
         );
     });
@@ -1991,9 +2337,21 @@ fn prepare_treesitter_document_request_after_cache_lookup(
 
 fn prepare_treesitter_document_data_request_impl(
     request: TreesitterDocumentParseRequest,
-    old_tree_state: Option<PreparedSyntaxTreeState>,
-    edit_hint: Option<DiffSyntaxEdit>,
+    old_document: Option<PreparedSyntaxDocument>,
+    reparse_plan: Option<TreesitterReparsePlan>,
 ) -> Option<PreparedSyntaxDocumentData> {
+    if matches!(reparse_plan, Some(TreesitterReparsePlan::Unchanged))
+        && let Some(document) = old_document
+    {
+        let line_count = request.input.line_starts.len();
+        if let Some(cached) = TS_DOCUMENT_CACHE.with(|cache| {
+            cache
+                .borrow_mut()
+                .prepared_document_data(document.cache_key, line_count)
+        }) {
+            return Some(cached);
+        }
+    }
     if let Some(cached) = TS_DOCUMENT_CACHE.with(|cache| {
         cache
             .borrow_mut()
@@ -2002,13 +2360,40 @@ fn prepare_treesitter_document_data_request_impl(
         return Some(cached);
     }
 
-    parse_treesitter_document_core(&request, None, old_tree_state, edit_hint)
+    parse_treesitter_document_core(&request, None, old_document, reparse_plan.as_ref())
+}
+
+fn should_skip_budgeted_foreground_parse(
+    request: &TreesitterDocumentParseRequest,
+    budget: DiffSyntaxBudget,
+    has_old_document: bool,
+    has_edit_hint: bool,
+) -> bool {
+    if budget.foreground_parse > DIFF_SYNTAX_FOREGROUND_PARSE_BUDGET_NON_TEST {
+        return false;
+    }
+    if has_old_document || has_edit_hint {
+        return false;
+    }
+
+    request.input.text.len() >= DIFF_SYNTAX_FOREGROUND_SKIP_TEXT_BYTES
+        || request.input.line_starts.len() >= DIFF_SYNTAX_FOREGROUND_SKIP_LINE_COUNT
 }
 
 fn treesitter_document_parse_request_from_input(
     language: DiffSyntaxLanguage,
     mode: DiffSyntaxMode,
     input: TreesitterDocumentInput,
+) -> Option<TreesitterDocumentParseRequest> {
+    treesitter_document_parse_request_from_input_with_reuse(language, mode, input, None, None)
+}
+
+fn treesitter_document_parse_request_from_input_with_reuse(
+    language: DiffSyntaxLanguage,
+    mode: DiffSyntaxMode,
+    input: TreesitterDocumentInput,
+    old_tree_state: Option<&PreparedSyntaxTreeState>,
+    reparse_plan: Option<&TreesitterReparsePlan>,
 ) -> Option<TreesitterDocumentParseRequest> {
     if mode != DiffSyntaxMode::Auto {
         return None;
@@ -2018,7 +2403,12 @@ fn treesitter_document_parse_request_from_input(
     }
 
     let spec = tree_sitter_highlight_spec(language)?;
-    let cache_key = treesitter_document_cache_key(language, input.text.as_ref());
+    let cache_key = match (old_tree_state, reparse_plan) {
+        (Some(previous), Some(TreesitterReparsePlan::Changed { edit_ranges, .. })) => {
+            treesitter_document_cache_key_for_reparse_plan(language, previous, &input, edit_ranges)
+        }
+        _ => treesitter_document_cache_key(language, input.text.as_ref()),
+    };
 
     Some(TreesitterDocumentParseRequest {
         language,
@@ -2035,7 +2425,7 @@ fn treesitter_document_parse_request_from_shared_text(
     line_starts: Arc<[usize]>,
 ) -> Option<TreesitterDocumentParseRequest> {
     let input = treesitter_document_input_from_shared_text(text, line_starts);
-    treesitter_document_parse_request_from_input(language, mode, input)
+    treesitter_document_parse_request_from_input_with_reuse(language, mode, input, None, None)
 }
 
 fn treesitter_document_input_from_shared_text(
@@ -2116,23 +2506,28 @@ struct TreesitterIncrementalSeed {
     next_version: u64,
 }
 
-fn build_incremental_parse_seed(
+#[derive(Clone, Debug)]
+enum TreesitterReparsePlan {
+    Unchanged,
+    Changed {
+        edit_ranges: Vec<TreesitterByteEditRange>,
+        incremental_seed: Option<TreesitterIncrementalSeed>,
+        reusable_prefix_chunk_count: usize,
+    },
+}
+
+fn build_treesitter_reparse_plan(
     previous: &PreparedSyntaxTreeState,
-    request: &TreesitterDocumentParseRequest,
+    language: DiffSyntaxLanguage,
+    input: &TreesitterDocumentInput,
     edit_hint: Option<&DiffSyntaxEdit>,
-) -> Option<TreesitterIncrementalSeed> {
-    if !incremental_reparse_enabled() {
-        return None;
-    }
-    if previous.language != request.language {
-        return None;
-    }
-    if previous.source_hash == request.cache_key.doc_hash {
+) -> Option<TreesitterReparsePlan> {
+    if previous.language != language {
         return None;
     }
 
     let old_input = previous.text.as_bytes();
-    let new_input = request.input.text.as_bytes();
+    let new_input = input.text.as_bytes();
     let edit_ranges = edit_hint
         .and_then(|hint| {
             treesitter_byte_edit_range_from_hint(hint, old_input.len(), new_input.len())
@@ -2140,42 +2535,127 @@ fn build_incremental_parse_seed(
         .map(|range| vec![range])
         .unwrap_or_else(|| compute_incremental_edit_ranges(old_input, new_input));
     if edit_ranges.is_empty() {
-        return None;
+        return Some(TreesitterReparsePlan::Unchanged);
     }
-    if incremental_reparse_should_fallback(&edit_ranges, old_input.len(), new_input.len()) {
-        return None;
-    }
+    let reusable_prefix_chunk_count =
+        reusable_prefix_chunk_count(&previous.line_starts, old_input, &edit_ranges);
 
-    let new_line_starts = request.input.line_starts.as_ref();
-    let mut tree = previous.tree.clone();
-    for edit_range in edit_ranges {
-        let input_edit = tree_sitter::InputEdit {
-            start_byte: edit_range.start_byte,
-            old_end_byte: edit_range.old_end_byte,
-            new_end_byte: edit_range.new_end_byte,
-            start_position: treesitter_point_for_byte(
-                &previous.line_starts,
-                old_input,
-                edit_range.start_byte,
-            ),
-            old_end_position: treesitter_point_for_byte(
-                &previous.line_starts,
-                old_input,
-                edit_range.old_end_byte,
-            ),
-            new_end_position: treesitter_point_for_byte(
-                new_line_starts,
-                new_input,
-                edit_range.new_end_byte,
-            ),
-        };
-        tree.edit(&input_edit);
-    }
+    let incremental_enabled = incremental_reparse_enabled();
+    let should_attempt_incremental = incremental_enabled
+        && (!incremental_reparse_should_fallback(&edit_ranges, old_input.len(), new_input.len())
+            || incremental_reparse_should_try_large_late_edit(
+                &edit_ranges,
+                old_input.len(),
+                new_input.len(),
+            ));
+    let incremental_seed = if should_attempt_incremental {
+        let new_line_starts = input.line_starts.as_ref();
+        let mut tree = previous.tree.clone();
+        for edit_range in &edit_ranges {
+            let input_edit = tree_sitter::InputEdit {
+                start_byte: edit_range.start_byte,
+                old_end_byte: edit_range.old_end_byte,
+                new_end_byte: edit_range.new_end_byte,
+                start_position: treesitter_point_for_byte(
+                    &previous.line_starts,
+                    old_input,
+                    edit_range.start_byte,
+                ),
+                old_end_position: treesitter_point_for_byte(
+                    &previous.line_starts,
+                    old_input,
+                    edit_range.old_end_byte,
+                ),
+                new_end_position: treesitter_point_for_byte(
+                    new_line_starts,
+                    new_input,
+                    edit_range.new_end_byte,
+                ),
+            };
+            tree.edit(&input_edit);
+        }
 
-    Some(TreesitterIncrementalSeed {
-        tree,
-        next_version: previous.source_version.saturating_add(1),
+        Some(TreesitterIncrementalSeed {
+            tree,
+            next_version: previous.source_version.saturating_add(1),
+        })
+    } else {
+        None
+    };
+
+    Some(TreesitterReparsePlan::Changed {
+        edit_ranges,
+        incremental_seed,
+        reusable_prefix_chunk_count,
     })
+}
+
+fn treesitter_document_cache_key_for_reparse_plan(
+    language: DiffSyntaxLanguage,
+    previous: &PreparedSyntaxTreeState,
+    input: &TreesitterDocumentInput,
+    edit_ranges: &[TreesitterByteEditRange],
+) -> PreparedSyntaxCacheKey {
+    use std::hash::{Hash, Hasher};
+
+    let old_input = previous.text.as_bytes();
+    let new_input = input.text.as_bytes();
+    let mut hasher = FxHasher::default();
+    previous.source_hash.hash(&mut hasher);
+    input.text.len().hash(&mut hasher);
+    input.line_starts.len().hash(&mut hasher);
+    edit_ranges.len().hash(&mut hasher);
+    for edit in edit_ranges {
+        edit.start_byte.hash(&mut hasher);
+        edit.old_end_byte.hash(&mut hasher);
+        edit.new_end_byte.hash(&mut hasher);
+        old_input[edit.start_byte..edit.old_end_byte].hash(&mut hasher);
+        new_input[edit.start_byte..edit.new_end_byte].hash(&mut hasher);
+    }
+    PreparedSyntaxCacheKey {
+        language,
+        doc_hash: hasher.finish(),
+    }
+}
+
+fn reusable_prefix_chunk_count(
+    old_line_starts: &[usize],
+    old_input: &[u8],
+    edit_ranges: &[TreesitterByteEditRange],
+) -> usize {
+    let Some(first_changed_byte) = edit_ranges.iter().map(|edit| edit.start_byte).min() else {
+        return 0;
+    };
+    let first_changed_line =
+        treesitter_point_for_byte(old_line_starts, old_input, first_changed_byte).row;
+    first_changed_line / TS_DOCUMENT_LINE_TOKEN_CHUNK_ROWS
+}
+
+impl TreesitterDocumentCache {
+    fn clone_prefix_line_token_chunks(
+        &mut self,
+        cache_key: PreparedSyntaxCacheKey,
+        chunk_limit: usize,
+    ) -> HashMap<usize, Vec<Arc<[SyntaxToken]>>> {
+        if chunk_limit == 0 {
+            return HashMap::default();
+        }
+        let reused: HashMap<usize, Vec<Arc<[SyntaxToken]>>> = self
+            .by_cache_key
+            .get(&cache_key)
+            .map(|document| {
+                document
+                    .line_token_chunks
+                    .iter()
+                    .filter(|&(&chunk_ix, chunk)| (chunk_ix < chunk_limit)).map(|(&chunk_ix, chunk)| (chunk_ix, chunk.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        if !reused.is_empty() {
+            self.touch_key(cache_key);
+        }
+        reused
+    }
 }
 
 fn treesitter_byte_edit_range_from_hint(
@@ -2232,11 +2712,7 @@ fn incremental_reparse_should_fallback(
     old_len: usize,
     new_len: usize,
 ) -> bool {
-    let changed_bytes = edits.iter().fold(0usize, |acc, edit| {
-        let old_delta = edit.old_end_byte.saturating_sub(edit.start_byte);
-        let new_delta = edit.new_end_byte.saturating_sub(edit.start_byte);
-        acc.saturating_add(old_delta.max(new_delta))
-    });
+    let changed_bytes = incremental_reparse_changed_bytes(edits);
     if changed_bytes == 0 {
         return false;
     }
@@ -2247,6 +2723,36 @@ fn incremental_reparse_should_fallback(
     let baseline = old_len.max(new_len).max(1);
     changed_bytes.saturating_mul(100)
         > baseline.saturating_mul(TS_INCREMENTAL_REPARSE_MAX_CHANGED_PERCENT)
+}
+
+fn incremental_reparse_changed_bytes(edits: &[TreesitterByteEditRange]) -> usize {
+    edits.iter().fold(0usize, |acc, edit| {
+        let old_delta = edit.old_end_byte.saturating_sub(edit.start_byte);
+        let new_delta = edit.new_end_byte.saturating_sub(edit.start_byte);
+        acc.saturating_add(old_delta.max(new_delta))
+    })
+}
+
+fn incremental_reparse_should_try_large_late_edit(
+    edits: &[TreesitterByteEditRange],
+    old_len: usize,
+    new_len: usize,
+) -> bool {
+    let [edit] = edits else {
+        return false;
+    };
+    if edit.start_byte < TS_INCREMENTAL_REPARSE_LATE_EDIT_MIN_PREFIX_BYTES {
+        return false;
+    }
+
+    let changed_bytes = incremental_reparse_changed_bytes(edits);
+    if changed_bytes == 0 || changed_bytes > TS_INCREMENTAL_REPARSE_LATE_EDIT_MAX_CHANGED_BYTES {
+        return false;
+    }
+
+    let baseline = old_len.max(new_len).max(1);
+    changed_bytes.saturating_mul(100)
+        <= baseline.saturating_mul(TS_INCREMENTAL_REPARSE_LATE_EDIT_MAX_CHANGED_PERCENT)
 }
 
 fn treesitter_point_for_byte(
@@ -2476,18 +2982,21 @@ fn treesitter_document_cache_key(
     language: DiffSyntaxLanguage,
     input: &str,
 ) -> PreparedSyntaxCacheKey {
+    #[cfg(test)]
+    TS_DOCUMENT_HASH_COUNT.with(|count| count.set(count.get().saturating_add(1)));
+
     PreparedSyntaxCacheKey {
         language,
-        doc_hash: treesitter_document_doc_hash(input),
+        doc_hash: treesitter_text_hash(input),
     }
 }
 
-fn prepared_document_cache_key_for_shared_text(
+fn prepared_document_source_identity_for_shared_text(
     language: DiffSyntaxLanguage,
     mode: DiffSyntaxMode,
     text: &str,
-    _line_starts: &[usize],
-) -> Option<PreparedSyntaxCacheKey> {
+    line_count: usize,
+) -> Option<PreparedSyntaxSourceIdentity> {
     if mode != DiffSyntaxMode::Auto {
         return None;
     }
@@ -2495,10 +3004,76 @@ fn prepared_document_cache_key_for_shared_text(
         return None;
     }
 
-    Some(treesitter_document_cache_key(language, text))
+    Some(PreparedSyntaxSourceIdentity {
+        language,
+        text_ptr: text.as_ptr() as usize,
+        text_len: text.len(),
+        line_count,
+    })
 }
 
-fn treesitter_document_doc_hash(input: &str) -> u64 {
+fn store_pending_parse_request(
+    identity: PreparedSyntaxSourceIdentity,
+    request: TreesitterDocumentParseRequest,
+) {
+    TS_PENDING_PARSE_REQUESTS.with(|requests| {
+        let mut requests = requests.borrow_mut();
+        if let Some(existing) = requests
+            .iter_mut()
+            .find(|existing| existing.identity == identity)
+        {
+            existing.request = request;
+            return;
+        }
+        if requests.len() >= TS_PENDING_PARSE_REQUEST_MAX_ENTRIES {
+            requests.remove(0);
+        }
+        requests.push(PendingParseRequest { identity, request });
+    });
+}
+
+fn clear_pending_parse_request(identity: PreparedSyntaxSourceIdentity) {
+    TS_PENDING_PARSE_REQUESTS.with(|requests| {
+        let mut requests = requests.borrow_mut();
+        if let Some(pos) = requests
+            .iter()
+            .position(|existing| existing.identity == identity)
+        {
+            requests.remove(pos);
+        }
+    });
+}
+
+fn take_pending_parse_request_for_shared_text(
+    language: DiffSyntaxLanguage,
+    mode: DiffSyntaxMode,
+    text: &str,
+    line_starts: &[usize],
+) -> Option<TreesitterDocumentParseRequest> {
+    let normalized_line_starts = normalized_treesitter_line_starts(text, line_starts);
+    let identity = prepared_document_source_identity_for_shared_text(
+        language,
+        mode,
+        text,
+        normalized_line_starts.len(),
+    )?;
+
+    TS_PENDING_PARSE_REQUESTS.with(|requests| {
+        let mut requests = requests.borrow_mut();
+        let pos = requests
+            .iter()
+            .position(|existing| existing.identity == identity)?;
+        let request = requests.remove(pos).request;
+        let text_matches =
+            request.input.text.as_ptr() == text.as_ptr() && request.input.text.len() == text.len();
+        if text_matches && request.input.line_starts.as_ref() == normalized_line_starts {
+            return Some(request);
+        }
+        None
+    })
+}
+
+fn treesitter_text_hash(input: &str) -> u64 {
     use std::hash::{Hash, Hasher};
 
     let mut hasher = FxHasher::default();
@@ -5818,6 +6393,134 @@ mod tests {
     }
 
     #[test]
+    fn warm_shared_text_prepare_reuses_source_identity_without_rehashing() {
+        let _lock = lock_global_counter_tests();
+        reset_prepared_syntax_cache();
+        reset_deferred_drop_counters();
+
+        let source = vec!["fn warm_identity() { let value = Some(42); }"; 512].join("\n");
+        let text: SharedString = source.clone().into();
+        let line_starts = treesitter_document_input_from_text(&source).line_starts;
+        let budget = DiffSyntaxBudget {
+            foreground_parse: Duration::from_secs(1),
+        };
+
+        let first = match prepare_treesitter_document_with_budget_reuse_text(
+            DiffSyntaxLanguage::Rust,
+            DiffSyntaxMode::Auto,
+            text.clone(),
+            Arc::clone(&line_starts),
+            budget,
+            None,
+            None,
+        ) {
+            PrepareTreesitterDocumentResult::Ready(document) => document,
+            other => panic!("expected prepared document, got {other:?}"),
+        };
+        let first_hash_count = document_hash_count();
+        assert!(
+            first_hash_count > 0,
+            "initial prepare should still hash the source at least once"
+        );
+
+        let second = match prepare_treesitter_document_with_budget_reuse_text(
+            DiffSyntaxLanguage::Rust,
+            DiffSyntaxMode::Auto,
+            text,
+            line_starts,
+            budget,
+            None,
+            None,
+        ) {
+            PrepareTreesitterDocumentResult::Ready(document) => document,
+            other => panic!("expected warm prepared document, got {other:?}"),
+        };
+
+        assert_eq!(second, first);
+        assert_eq!(
+            document_hash_count(),
+            first_hash_count,
+            "warm prepare should reuse the source-identity cache hit without rehashing the full text"
+        );
+    }
+
+    #[test]
+    fn cold_prepare_hashes_the_source_only_once_on_cache_miss() {
+        let _lock = lock_global_counter_tests();
+        reset_prepared_syntax_cache();
+        reset_deferred_drop_counters();
+
+        let source = vec!["fn cold_hash_miss() { let value = Some(42); }"; 512].join("\n");
+        let text: SharedString = source.clone().into();
+        let line_starts = treesitter_document_input_from_text(&source).line_starts;
+        let budget = DiffSyntaxBudget {
+            foreground_parse: Duration::from_secs(1),
+        };
+
+        let document = match prepare_treesitter_document_with_budget_reuse_text(
+            DiffSyntaxLanguage::Rust,
+            DiffSyntaxMode::Auto,
+            text,
+            line_starts,
+            budget,
+            None,
+            None,
+        ) {
+            PrepareTreesitterDocumentResult::Ready(document) => document,
+            other => panic!("expected prepared document, got {other:?}"),
+        };
+
+        assert_eq!(document_hash_count(), 1);
+        assert_eq!(prepared_syntax_loaded_chunk_count(document), 0);
+    }
+
+    #[test]
+    fn timed_out_prepare_reuses_pending_parse_request_in_background_without_rehashing() {
+        let _lock = lock_global_counter_tests();
+        reset_prepared_syntax_cache();
+        reset_deferred_drop_counters();
+
+        let source = vec!["fn background_reuse() { let value = Some(42); }"; 4_096].join("\n");
+        let text: SharedString = source.clone().into();
+        let line_starts = treesitter_document_input_from_text(&source).line_starts;
+
+        let timed_out = prepare_treesitter_document_with_budget_reuse_text(
+            DiffSyntaxLanguage::Rust,
+            DiffSyntaxMode::Auto,
+            text.clone(),
+            Arc::clone(&line_starts),
+            DiffSyntaxBudget {
+                foreground_parse: Duration::from_millis(1),
+            },
+            None,
+            None,
+        );
+        assert_eq!(timed_out, PrepareTreesitterDocumentResult::TimedOut);
+        assert_eq!(
+            document_hash_count(),
+            1,
+            "timed-out foreground prepare should hash once while storing the pending request"
+        );
+
+        let background = prepare_treesitter_document_in_background_text_with_reuse(
+            DiffSyntaxLanguage::Rust,
+            DiffSyntaxMode::Auto,
+            text,
+            line_starts,
+            None,
+            None,
+        )
+        .expect("background parse should still succeed after foreground timeout");
+
+        assert_eq!(
+            document_hash_count(),
+            1,
+            "background parse should reuse the pending request instead of hashing again"
+        );
+        assert_eq!(background.line_count, 4_096);
+    }
+
+    #[test]
     fn incremental_edit_ranges_cover_the_changed_window() {
         let old = b"alpha\nbeta\ngamma\n";
         let new = b"alpha\nbeta changed\ngamma\n";
@@ -5935,6 +6638,171 @@ mod tests {
     }
 
     #[test]
+    fn unchanged_reparse_reuses_old_document_without_rehashing() {
+        let _lock = lock_global_counter_tests();
+        reset_deferred_drop_counters();
+        reset_prepared_syntax_cache();
+
+        let source = "let value = 1;\n".repeat(256);
+        let base_input = treesitter_document_input_from_text(&source);
+        let PrepareTreesitterDocumentResult::Ready(base_document) =
+            prepare_treesitter_document_with_budget_reuse_text(
+                DiffSyntaxLanguage::Rust,
+                DiffSyntaxMode::Auto,
+                source.clone().into(),
+                base_input.line_starts.clone(),
+                DiffSyntaxBudget {
+                    foreground_parse: Duration::from_millis(50),
+                },
+                None,
+                None,
+            )
+        else {
+            panic!("base text document should parse");
+        };
+
+        reset_deferred_drop_counters();
+        let repeated_input = treesitter_document_input_from_text(&source);
+        let attempt = prepare_treesitter_document_with_budget_reuse_text(
+            DiffSyntaxLanguage::Rust,
+            DiffSyntaxMode::Auto,
+            source.into(),
+            repeated_input.line_starts,
+            DiffSyntaxBudget {
+                foreground_parse: Duration::from_millis(50),
+            },
+            Some(base_document),
+            None,
+        );
+        let PrepareTreesitterDocumentResult::Ready(reused_document) = attempt else {
+            panic!("unchanged reparse should reuse the existing prepared document");
+        };
+
+        assert_eq!(reused_document, base_document);
+        assert_eq!(
+            document_hash_count(),
+            0,
+            "unchanged reparses with an old document should not rehash the full source"
+        );
+    }
+
+    #[test]
+    fn small_reparse_without_edit_hint_does_not_rehash_full_source() {
+        let _lock = lock_global_counter_tests();
+        reset_deferred_drop_counters();
+        reset_prepared_syntax_cache();
+
+        let base_text = "let value = 1;\n".repeat(256);
+        let base_input = treesitter_document_input_from_text(&base_text);
+        let PrepareTreesitterDocumentResult::Ready(base_document) =
+            prepare_treesitter_document_with_budget_reuse_text(
+                DiffSyntaxLanguage::Rust,
+                DiffSyntaxMode::Auto,
+                base_text.clone().into(),
+                base_input.line_starts.clone(),
+                DiffSyntaxBudget {
+                    foreground_parse: Duration::from_millis(50),
+                },
+                None,
+                None,
+            )
+        else {
+            panic!("base text document should parse");
+        };
+
+        let insert_offset = base_input.line_starts[42].saturating_add("let value = 1;".len());
+        let mut edited_text = base_text;
+        edited_text.insert_str(insert_offset, " // tiny edit");
+        let edited_input = treesitter_document_input_from_text(&edited_text);
+
+        reset_deferred_drop_counters();
+        let attempt = prepare_treesitter_document_with_budget_reuse_text(
+            DiffSyntaxLanguage::Rust,
+            DiffSyntaxMode::Auto,
+            edited_text.into(),
+            edited_input.line_starts,
+            DiffSyntaxBudget {
+                foreground_parse: Duration::from_millis(50),
+            },
+            Some(base_document),
+            None,
+        );
+        let PrepareTreesitterDocumentResult::Ready(reparsed_document) = attempt else {
+            panic!("small reparse should complete within budget");
+        };
+
+        assert_eq!(
+            prepared_document_parse_mode(reparsed_document),
+            Some(TreesitterParseReuseMode::Incremental)
+        );
+        assert_eq!(
+            document_hash_count(),
+            0,
+            "small no-hint reparses should reuse the old source fingerprint without hashing the full text"
+        );
+    }
+
+    #[test]
+    fn small_reparse_reuses_cached_prefix_chunks_before_the_edit() {
+        let _lock = lock_global_counter_tests();
+        reset_deferred_drop_counters();
+        reset_prepared_syntax_cache();
+
+        let line_count = TS_DOCUMENT_LINE_TOKEN_CHUNK_ROWS * 3;
+        let base_lines = (0..line_count)
+            .map(|ix| format!("let value_{ix} = {ix};"))
+            .collect::<Vec<_>>();
+        let base_document = prepare_test_document(DiffSyntaxLanguage::Rust, &base_lines.join("\n"));
+
+        let _ = syntax_tokens_for_prepared_document_line(base_document, 0)
+            .expect("base document should materialize its first chunk");
+        assert_eq!(
+            prepared_syntax_loaded_chunk_count(base_document),
+            1,
+            "base document should only have its first chunk materialized"
+        );
+
+        let mut edited = base_lines.clone();
+        let edited_line = TS_DOCUMENT_LINE_TOKEN_CHUNK_ROWS * 2;
+        edited[edited_line].push_str(" // tiny edit");
+        let attempt = prepare_test_document_with_budget_reuse(
+            DiffSyntaxLanguage::Rust,
+            &edited.join("\n"),
+            DiffSyntaxBudget {
+                foreground_parse: Duration::from_millis(50),
+            },
+            Some(base_document),
+        );
+        let PrepareTreesitterDocumentResult::Ready(reparsed_document) = attempt else {
+            panic!("small reparse should complete within budget");
+        };
+
+        assert_eq!(
+            prepared_document_parse_mode(reparsed_document),
+            Some(TreesitterParseReuseMode::Incremental),
+            "small later-line edit should stay on the incremental path"
+        );
+        assert_eq!(
+            prepared_syntax_loaded_chunk_count(reparsed_document),
+            1,
+            "cached prefix chunks before the edit should carry forward to the reparsed document"
+        );
+
+        benchmark_reset_prepared_syntax_cache_metrics();
+        let _ = syntax_tokens_for_prepared_document_line(reparsed_document, 0)
+            .expect("reparsed document should reuse the carried prefix chunk");
+        let after_prefix_hit = prepared_syntax_cache_metrics();
+        assert_eq!(after_prefix_hit.hit, 1);
+        assert_eq!(after_prefix_hit.miss, 0);
+
+        let _ = syntax_tokens_for_prepared_document_line(reparsed_document, edited_line)
+            .expect("changed chunk should still be buildable on demand");
+        let after_changed_lookup = prepared_syntax_cache_metrics();
+        assert_eq!(after_changed_lookup.hit, 1);
+        assert_eq!(after_changed_lookup.miss, 1);
+    }
+
+    #[test]
     fn small_reparse_reuses_old_tree_with_explicit_edit_hint_text_input() {
         let _lock = lock_global_counter_tests();
         reset_deferred_drop_counters();
@@ -6027,6 +6895,50 @@ mod tests {
         assert!(
             fallback > 0,
             "large edit should trigger full-parse fallback path"
+        );
+    }
+
+    #[test]
+    fn large_late_edit_with_preserved_prefix_can_stay_incremental() {
+        let _lock = lock_global_counter_tests();
+        reset_deferred_drop_counters();
+
+        let base_lines = (0..256)
+            .map(|ix| format!("let value_{ix} = {ix}; {}", "x".repeat(96)))
+            .collect::<Vec<_>>();
+        let base_document = prepare_test_document(DiffSyntaxLanguage::Rust, &base_lines.join("\n"));
+
+        let mut edited = base_lines.clone();
+        for (offset, line) in edited.iter_mut().skip(96).enumerate() {
+            *line = format!(
+                "pub fn large_late_edit_{offset}() {{ let values = [{offset}, {offset}, {offset}, {offset}]; }} {}",
+                "y".repeat(64)
+            );
+        }
+        let attempt = prepare_test_document_with_budget_reuse(
+            DiffSyntaxLanguage::Rust,
+            &edited.join("\n"),
+            DiffSyntaxBudget {
+                foreground_parse: Duration::from_millis(200),
+            },
+            Some(base_document),
+        );
+        let PrepareTreesitterDocumentResult::Ready(reparsed_document) = attempt else {
+            panic!("large later-line reparse should complete within the test budget");
+        };
+
+        assert_eq!(
+            prepared_document_parse_mode(reparsed_document),
+            Some(TreesitterParseReuseMode::Incremental)
+        );
+        let (incremental, fallback) = incremental_reparse_counters();
+        assert!(
+            incremental > 0,
+            "later large edit should use incremental reparse"
+        );
+        assert_eq!(
+            fallback, 0,
+            "later large edit should avoid full-parse fallback"
         );
     }
 
@@ -6151,6 +7063,58 @@ mod tests {
     }
 
     #[test]
+    fn recent_duplicate_line_tokens_reuse_existing_arcs() {
+        let document = TreesitterCachedDocument::from_line_tokens(
+            benchmark_line_tokens_payload(4, 8, 0),
+            None,
+        );
+        let first_chunk = document
+            .line_token_chunks
+            .get(&0)
+            .expect("single chunk should be present");
+        assert_eq!(first_chunk.len(), 4);
+        assert!(
+            Arc::ptr_eq(&first_chunk[0], &first_chunk[2]),
+            "alternating duplicate line tokens should reuse the two-back Arc"
+        );
+        assert!(
+            Arc::ptr_eq(&first_chunk[1], &first_chunk[3]),
+            "alternating duplicate line tokens should reuse the matching recent Arc"
+        );
+    }
+
+    #[test]
+    fn cached_document_drop_payload_bytes_match_flattened_chunks() {
+        let mut document =
+            TreesitterCachedDocument::from_chunked_line_tokens(128, HashMap::default(), None);
+        let first_chunk = benchmark_line_tokens_payload(64, 4, 0)
+            .into_iter()
+            .map(Arc::from)
+            .collect::<Vec<_>>();
+        let second_chunk = benchmark_line_tokens_payload(64, 4, 1)
+            .into_iter()
+            .map(Arc::from)
+            .collect::<Vec<_>>();
+
+        insert_line_token_chunk(&mut document, 0, Some(first_chunk));
+        let bytes_after_first_insert = document.line_token_bytes;
+        insert_line_token_chunk(&mut document, 0, Some(second_chunk.clone()));
+        assert_eq!(
+            document.line_token_bytes, bytes_after_first_insert,
+            "reinserting an existing chunk should not double-count drop bytes"
+        );
+
+        insert_line_token_chunk(&mut document, 1, Some(second_chunk));
+        let payload = document.into_drop_payload();
+        assert_eq!(
+            payload.estimated_bytes,
+            estimated_line_tokens_allocation_bytes(&payload.line_tokens),
+            "cached drop bytes should match the flattened payload"
+        );
+        assert_eq!(payload.line_tokens.len(), 128);
+    }
+
+    #[test]
     fn large_cache_eviction_uses_deferred_drop_queue() {
         let _lock = lock_global_counter_tests();
         reset_deferred_drop_counters();
@@ -6207,6 +7171,62 @@ mod tests {
             tokens.iter().any(|t| t.kind == SyntaxTokenKind::Comment),
             "background parse should still yield syntax tokens"
         );
+    }
+
+    #[test]
+    fn large_full_documents_skip_default_foreground_probe_without_reuse() {
+        let text = vec!["fn parse_budget_probe() { let value = Some(42); }"; 2_048].join("\n");
+        let request = treesitter_document_parse_request_from_input(
+            DiffSyntaxLanguage::Rust,
+            DiffSyntaxMode::Auto,
+            treesitter_document_input_from_text(&text),
+        )
+        .expect("rust request should build");
+
+        assert!(should_skip_budgeted_foreground_parse(
+            &request,
+            DiffSyntaxBudget {
+                foreground_parse: DIFF_SYNTAX_FOREGROUND_PARSE_BUDGET_NON_TEST,
+            },
+            false,
+            false,
+        ));
+        assert!(!should_skip_budgeted_foreground_parse(
+            &request,
+            DiffSyntaxBudget {
+                foreground_parse: Duration::from_millis(50),
+            },
+            false,
+            false,
+        ));
+        assert!(!should_skip_budgeted_foreground_parse(
+            &request,
+            DiffSyntaxBudget {
+                foreground_parse: DIFF_SYNTAX_FOREGROUND_PARSE_BUDGET_NON_TEST,
+            },
+            true,
+            false,
+        ));
+    }
+
+    #[test]
+    fn small_full_documents_keep_default_foreground_probe() {
+        let text = vec!["fn small_probe() { value += 1; }"; 256].join("\n");
+        let request = treesitter_document_parse_request_from_input(
+            DiffSyntaxLanguage::Rust,
+            DiffSyntaxMode::Auto,
+            treesitter_document_input_from_text(&text),
+        )
+        .expect("rust request should build");
+
+        assert!(!should_skip_budgeted_foreground_parse(
+            &request,
+            DiffSyntaxBudget {
+                foreground_parse: DIFF_SYNTAX_FOREGROUND_PARSE_BUDGET_NON_TEST,
+            },
+            false,
+            false,
+        ));
     }
 
     #[test]
@@ -6339,6 +7359,68 @@ mod tests {
             fallback, 0,
             "background explicit edit hint should not trigger fallback"
         );
+    }
+
+    #[test]
+    fn background_seed_reuses_cached_prefix_chunks_before_large_edit_fallback() {
+        let _lock = lock_global_counter_tests();
+        reset_deferred_drop_counters();
+        reset_prepared_syntax_cache();
+
+        let line_count = TS_DOCUMENT_LINE_TOKEN_CHUNK_ROWS * 4;
+        let base_lines = (0..line_count)
+            .map(|ix| format!("let value_{ix} = {ix};"))
+            .collect::<Vec<_>>();
+        let base_document = prepare_test_document(DiffSyntaxLanguage::Rust, &base_lines.join("\n"));
+
+        let _ = syntax_tokens_for_prepared_document_line(base_document, 0)
+            .expect("base document should materialize its first chunk");
+        assert_eq!(
+            prepared_syntax_loaded_chunk_count(base_document),
+            1,
+            "base document should only have its first chunk materialized"
+        );
+
+        let reparse_seed = prepared_document_reparse_seed(base_document)
+            .expect("base document should expose a seed");
+        let mut edited = base_lines.clone();
+        let first_changed_line = TS_DOCUMENT_LINE_TOKEN_CHUNK_ROWS * 2;
+        for (offset, line) in edited.iter_mut().skip(first_changed_line).enumerate() {
+            *line = format!(
+                "pub fn fallback_edit_{offset}() {{ let values = [{offset}, {offset}, {offset}, {offset}]; }}"
+            );
+        }
+        let edited_text = edited.join("\n");
+        let edited_input = treesitter_document_input_from_text(&edited_text);
+
+        let prepared = prepare_treesitter_document_in_background_text_with_reparse_seed(
+            DiffSyntaxLanguage::Rust,
+            DiffSyntaxMode::Auto,
+            edited_text.into(),
+            edited_input.line_starts,
+            Some(reparse_seed),
+            None,
+        )
+        .expect("background large-edit reparse should produce prepared data");
+        let reparsed_document = inject_prepared_document_data(prepared);
+
+        assert_eq!(
+            prepared_document_parse_mode(reparsed_document),
+            Some(TreesitterParseReuseMode::Full),
+            "large edit should still take the full-parse fallback path"
+        );
+        assert_eq!(
+            prepared_syntax_loaded_chunk_count(reparsed_document),
+            1,
+            "background reparse seed should preserve cached prefix chunks before the edit"
+        );
+
+        benchmark_reset_prepared_syntax_cache_metrics();
+        let _ = syntax_tokens_for_prepared_document_line(reparsed_document, 0)
+            .expect("reparsed document should reuse the preserved prefix chunk");
+        let after_prefix_hit = prepared_syntax_cache_metrics();
+        assert_eq!(after_prefix_hit.hit, 1);
+        assert_eq!(after_prefix_hit.miss, 0);
     }
 
     #[test]

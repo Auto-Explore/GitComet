@@ -1439,7 +1439,11 @@ fn text_model_bulk_load_large_fixture_reports_expected_sidecar_metrics() {
         fixture.text.len()
     );
     assert_eq!(control_metrics.line_starts_after, 0);
-    assert!(control_metrics.chunk_count >= 1);
+    assert_eq!(
+        control_metrics.chunk_count as usize,
+        fixture.control_chunk_ranges.len()
+    );
+    assert!(fixture.control_chunk_ranges.len() > 1);
     assert_eq!(control_metrics.load_variant, 2);
 
     // Both piece-table variants should agree on source_bytes and line_starts
