@@ -1736,7 +1736,7 @@ fn theme_change_clears_conflict_three_way_segments_cache(cx: &mut gpui::TestAppC
                 assert_eq!(pane.conflict_three_way_segments_cache.len(), 2);
                 assert_eq!(pane.conflict_diff_segments_cache_split.len(), 1);
 
-                let new_theme = crate::theme::AppTheme::zed_one_light();
+                let new_theme = crate::theme::AppTheme::gitcomet_light();
                 pane.set_theme(new_theme, cx);
 
                 assert!(
@@ -2135,8 +2135,8 @@ fn split_status_section_resize_moves_untracked_section(cx: &mut gpui::TestAppCon
     assert!(
         updated_handle_bounds.center().y > initial_handle_bounds.center().y,
         "expected the inner divider to move downward after resizing (initial_handle_y={}, updated_handle_y={}, updated_untracked_height={:?})",
-        format!("{:?}", initial_handle_bounds.center().y),
-        format!("{:?}", updated_handle_bounds.center().y),
+        initial_handle_bounds.center().y,
+        updated_handle_bounds.center().y,
         updated_untracked_height,
     );
 }

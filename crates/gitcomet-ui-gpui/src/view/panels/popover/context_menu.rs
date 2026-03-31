@@ -134,10 +134,9 @@ pub(in super::super) fn context_menu_shortcut_entry_ix(
 }
 
 fn settings_theme_model(host: &PopoverHost) -> ContextMenuModel {
-    let selected = host.theme_mode;
+    let selected = host.theme_mode.clone();
     let check = |enabled: bool| enabled.then_some("icons/check.svg".into());
-
-    ContextMenuModel::new(vec![
+    let mut items = vec![
         ContextMenuItem::Header("Theme".into()),
         ContextMenuItem::Separator,
         ContextMenuItem::Entry {
@@ -149,25 +148,21 @@ fn settings_theme_model(host: &PopoverHost) -> ContextMenuModel {
                 mode: ThemeMode::Automatic,
             }),
         },
-        ContextMenuItem::Entry {
-            label: ThemeMode::Light.label().into(),
-            icon: check(selected == ThemeMode::Light),
-            shortcut: Some("L".into()),
+        ContextMenuItem::Separator,
+    ];
+
+    for theme in crate::theme::available_themes() {
+        let mode = ThemeMode::Named(theme.key.to_string());
+        items.push(ContextMenuItem::Entry {
+            label: theme.label.into(),
+            icon: check(selected == mode),
+            shortcut: None,
             disabled: false,
-            action: Box::new(ContextMenuAction::SetThemeMode {
-                mode: ThemeMode::Light,
-            }),
-        },
-        ContextMenuItem::Entry {
-            label: ThemeMode::Dark.label().into(),
-            icon: check(selected == ThemeMode::Dark),
-            shortcut: Some("D".into()),
-            disabled: false,
-            action: Box::new(ContextMenuAction::SetThemeMode {
-                mode: ThemeMode::Dark,
-            }),
-        },
-    ])
+            action: Box::new(ContextMenuAction::SetThemeMode { mode }),
+        });
+    }
+
+    ContextMenuModel::new(items)
 }
 
 fn settings_date_format_model(host: &PopoverHost) -> ContextMenuModel {

@@ -2,6 +2,7 @@ use gpui::SharedString;
 use rustc_hash::FxHashMap as HashMap;
 use std::path::{Path, PathBuf};
 
+#[cfg(feature = "benchmarks")]
 pub(in crate::view) type PathDisplayCache = HashMap<PathBuf, SharedString>;
 
 #[cfg(feature = "benchmarks")]

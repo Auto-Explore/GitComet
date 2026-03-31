@@ -1,9 +1,12 @@
 use crate::theme::AppTheme;
+#[cfg(test)]
+use crate::theme::GRAPH_LANE_PALETTE_SIZE;
 use gitcomet_core::domain::Commit;
 use gpui::Rgba;
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
-const LANE_COLOR_PALETTE_SIZE: usize = 64;
+#[cfg(test)]
+const LANE_COLOR_PALETTE_SIZE: usize = GRAPH_LANE_PALETTE_SIZE;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct LaneId(pub u64);
@@ -46,13 +49,7 @@ pub fn compute_graph(
     branch_heads: &HashSet<&str>,
     active_head_target: Option<&str>,
 ) -> Vec<GraphRow> {
-    let mut palette: Vec<Rgba> = Vec::with_capacity(LANE_COLOR_PALETTE_SIZE);
-    for i in 0..LANE_COLOR_PALETTE_SIZE {
-        let hue = (i as f32 * 0.13) % 1.0;
-        let sat = 0.75;
-        let light = if theme.is_dark { 0.62 } else { 0.45 };
-        palette.push(gpui::hsla(hue, sat, light, 1.0).into());
-    }
+    let palette = theme.graph_lane_palette.as_slice();
 
     let known: HashSet<&str> = commits.iter().map(|c| c.id.as_ref()).collect();
     let by_id: HashMap<&str, &Commit> = commits.iter().map(|c| (c.id.as_ref(), c)).collect();
@@ -366,7 +363,7 @@ mod tests {
 
     #[test]
     fn new_lanes_avoid_reusing_active_lane_colors() {
-        let theme = AppTheme::zed_ayu_dark();
+        let theme = AppTheme::gitcomet_dark();
         let mut commits = Vec::new();
 
         // Advance the internal color counter beyond the palette size using disconnected commits.
@@ -403,7 +400,7 @@ mod tests {
 
     #[test]
     fn branch_heads_split_off_new_lane_when_behind() {
-        let theme = AppTheme::zed_ayu_dark();
+        let theme = AppTheme::gitcomet_dark();
         let commits = vec![
             commit("new1", vec!["base"]),
             commit("base", vec!["root"]),
@@ -430,7 +427,7 @@ mod tests {
 
     #[test]
     fn branch_heads_do_not_split_when_multiple_lanes_converge() {
-        let theme = AppTheme::zed_ayu_dark();
+        let theme = AppTheme::gitcomet_dark();
         let commits = vec![
             commit("top1", vec!["base"]),
             commit("top2", vec!["base"]),
@@ -454,7 +451,7 @@ mod tests {
 
     #[test]
     fn active_head_lane_stays_leftmost_even_when_head_commit_appears_later() {
-        let theme = AppTheme::zed_ayu_dark();
+        let theme = AppTheme::gitcomet_dark();
         let commits = vec![
             commit("feature2", vec!["base"]),
             commit("main2", vec!["base"]),

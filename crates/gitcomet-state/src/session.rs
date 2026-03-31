@@ -732,32 +732,85 @@ fn looks_like_cargo_test_binary_name(stem: &OsStr) -> bool {
     suffix.len() == 16 && suffix.chars().all(|c| c.is_ascii_hexdigit())
 }
 
-fn app_state_dir() -> Option<PathBuf> {
+pub fn user_themes_dir() -> Option<PathBuf> {
+    if cfg!(test) || running_under_test_harness() {
+        return None;
+    }
+
+    Some(app_data_dir()?.join("themes"))
+}
+
+fn non_empty_path(value: Option<&OsStr>) -> Option<PathBuf> {
+    let value = value?;
+    if value.is_empty() {
+        return None;
+    }
+    Some(PathBuf::from(value))
+}
+
+fn app_data_dir() -> Option<PathBuf> {
     // Follow XDG on linux; otherwise fall back to platform conventions.
     #[cfg(target_os = "linux")]
     {
-        if let Some(state_home) = env::var_os("XDG_STATE_HOME") {
-            return Some(PathBuf::from(state_home).join("gitcomet"));
-        }
-        let home = env::var_os("HOME")?;
-        Some(PathBuf::from(home).join(".local/state/gitcomet"))
+        app_data_dir_linux(
+            env::var_os("XDG_DATA_HOME").as_deref(),
+            env::var_os("HOME").as_deref(),
+        )
     }
 
     #[cfg(target_os = "macos")]
     {
-        let home = env::var_os("HOME")?;
-        Some(PathBuf::from(home).join("Library/Application Support/gitcomet"))
+        let home = non_empty_path(env::var_os("HOME").as_deref())?;
+        Some(home.join("Library/Application Support/gitcomet"))
     }
 
     #[cfg(target_os = "windows")]
     {
-        let appdata = env::var_os("LOCALAPPDATA").or_else(|| env::var_os("APPDATA"))?;
-        Some(PathBuf::from(appdata).join("gitcomet"))
+        let appdata = env::var_os("LOCALAPPDATA").or_else(|| env::var_os("APPDATA"));
+        Some(non_empty_path(appdata.as_deref())?.join("gitcomet"))
     }
 
     #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
     {
-        env::var_os("HOME").map(|home| PathBuf::from(home).join(".gitcomet"))
+        non_empty_path(env::var_os("HOME").as_deref()).map(|home| home.join(".gitcomet"))
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn app_data_dir_linux(xdg_data_home: Option<&OsStr>, home: Option<&OsStr>) -> Option<PathBuf> {
+    if let Some(data_home) = non_empty_path(xdg_data_home) {
+        return Some(data_home.join("gitcomet"));
+    }
+    let home = non_empty_path(home)?;
+    Some(home.join(".local/share/gitcomet"))
+}
+
+fn app_state_dir() -> Option<PathBuf> {
+    // Follow XDG on linux; otherwise fall back to platform conventions.
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(state_home) = non_empty_path(env::var_os("XDG_STATE_HOME").as_deref()) {
+            return Some(state_home.join("gitcomet"));
+        }
+        let home = non_empty_path(env::var_os("HOME").as_deref())?;
+        Some(home.join(".local/state/gitcomet"))
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let home = non_empty_path(env::var_os("HOME").as_deref())?;
+        Some(home.join("Library/Application Support/gitcomet"))
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let appdata = env::var_os("LOCALAPPDATA").or_else(|| env::var_os("APPDATA"));
+        Some(non_empty_path(appdata.as_deref())?.join("gitcomet"))
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    {
+        non_empty_path(env::var_os("HOME").as_deref()).map(|home| home.join(".gitcomet"))
     }
 }
 
@@ -829,6 +882,27 @@ mod tests {
         assert!(!looks_like_test_binary(Path::new(
             "/tmp/target/debug/gitcomet"
         )));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn app_data_dir_prefers_xdg_data_home() {
+        assert_eq!(
+            app_data_dir_linux(
+                Some(OsStr::new("/tmp/gitcomet-data")),
+                Some(OsStr::new("/home/alice"))
+            ),
+            Some(PathBuf::from("/tmp/gitcomet-data/gitcomet"))
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn app_data_dir_falls_back_to_local_share() {
+        assert_eq!(
+            app_data_dir_linux(None, Some(OsStr::new("/home/alice"))),
+            Some(PathBuf::from("/home/alice/.local/share/gitcomet"))
+        );
     }
 
     #[test]

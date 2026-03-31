@@ -159,16 +159,15 @@ pub(super) fn styled_debug_info(
     )
 }
 
+type StyledDebugSpan = (
+    std::ops::Range<usize>,
+    Option<gpui::Hsla>,
+    Option<gpui::Hsla>,
+);
+
 pub(super) fn styled_debug_info_with_styles(
     styled: &super::CachedDiffStyledText,
-) -> (
-    gpui::SharedString,
-    Vec<(
-        std::ops::Range<usize>,
-        Option<gpui::Hsla>,
-        Option<gpui::Hsla>,
-    )>,
-) {
+) -> (gpui::SharedString, Vec<StyledDebugSpan>) {
     (
         styled.text.clone(),
         styled
@@ -466,7 +465,7 @@ pub(super) fn assert_file_preview_ctrl_a_ctrl_c_copies_all(
             set_test_file_status(
                 &mut repo,
                 file_rel.clone(),
-                status_kind.clone(),
+                status_kind,
                 gitcomet_core::domain::DiffArea::Staged,
             );
 
@@ -505,7 +504,7 @@ pub(super) fn assert_file_preview_ctrl_a_ctrl_c_copies_all(
     cx.simulate_keystrokes("ctrl-a ctrl-c");
     assert_eq!(
         cx.read_from_clipboard().and_then(|item| item.text()),
-        Some(expected.into())
+        Some(expected)
     );
 
     let _ = std::fs::remove_dir_all(&workdir);
@@ -822,7 +821,7 @@ pub(super) fn wait_for_main_pane_condition_with_timeout<T, Ready, Snapshot>(
 
         let ready = cx.update(|_window, app| {
             let pane = view.read(app).main_pane.read(app);
-            is_ready(&pane)
+            is_ready(pane)
         });
         if ready {
             return;
@@ -830,7 +829,7 @@ pub(super) fn wait_for_main_pane_condition_with_timeout<T, Ready, Snapshot>(
         if std::time::Instant::now() >= deadline {
             let snapshot = cx.update(|_window, app| {
                 let pane = view.read(app).main_pane.read(app);
-                snapshot(&pane)
+                snapshot(pane)
             });
             panic!("timed out waiting for {description}: {snapshot:?}");
         }

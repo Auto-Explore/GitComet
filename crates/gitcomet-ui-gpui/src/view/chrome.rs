@@ -2,7 +2,6 @@ use super::*;
 
 pub(super) const CLIENT_SIDE_DECORATION_INSET: Pixels = px(10.0);
 pub(super) const TITLE_BAR_HEIGHT: Pixels = px(34.0);
-pub(super) const WINDOW_OUTLINE_RGBA: u32 = 0x5a5d63ff;
 const MACOS_TRAFFIC_LIGHTS_SAFE_INSET: Pixels = px(78.0);
 
 pub(super) struct TitleBarView {
@@ -157,7 +156,7 @@ fn window_frame_outline_color(theme: AppTheme) -> gpui::Rgba {
     if cfg!(target_os = "macos") {
         with_alpha(theme.colors.border, if theme.is_dark { 0.96 } else { 0.90 })
     } else {
-        gpui::rgba(WINDOW_OUTLINE_RGBA)
+        theme.colors.border
     }
 }
 
@@ -681,7 +680,7 @@ mod tests {
 
     #[test]
     fn titlebar_buttons_do_not_double_set_hover_style() {
-        let theme = AppTheme::zed_ayu_dark();
+        let theme = AppTheme::gitcomet_dark();
         assert!(
             std::panic::catch_unwind(|| {
                 let _ = titlebar_control_button(
@@ -718,8 +717,8 @@ mod tests {
 
     #[test]
     fn window_frame_outline_color_tracks_platform_and_theme() {
-        let dark = AppTheme::zed_ayu_dark();
-        let light = AppTheme::zed_one_light();
+        let dark = AppTheme::gitcomet_dark();
+        let light = AppTheme::gitcomet_light();
 
         #[cfg(target_os = "macos")]
         {
@@ -735,14 +734,8 @@ mod tests {
 
         #[cfg(not(target_os = "macos"))]
         {
-            assert_eq!(
-                window_frame_outline_color(dark),
-                gpui::rgba(WINDOW_OUTLINE_RGBA)
-            );
-            assert_eq!(
-                window_frame_outline_color(light),
-                gpui::rgba(WINDOW_OUTLINE_RGBA)
-            );
+            assert_eq!(window_frame_outline_color(dark), dark.colors.border);
+            assert_eq!(window_frame_outline_color(light), light.colors.border);
         }
     }
 

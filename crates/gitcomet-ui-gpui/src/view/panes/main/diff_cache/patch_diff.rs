@@ -160,7 +160,7 @@ impl PagedPatchDiffRows {
         self.pages.lock().map(|pages| pages.len()).unwrap_or(0)
     }
 
-    #[cfg(any(test, feature = "benchmarks"))]
+    #[cfg(feature = "benchmarks")]
     pub(in crate::view) fn materialized_row_count(&self) -> usize {
         self.pages
             .lock()

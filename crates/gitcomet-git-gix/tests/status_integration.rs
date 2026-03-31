@@ -4139,7 +4139,7 @@ fn squash_ref_stages_changes_without_creating_merge_commit() {
         status
             .staged
             .iter()
-            .any(|f| f.path == PathBuf::from("b.txt")),
+            .any(|f| f.path == std::path::Path::new("b.txt")),
         "expected squashed changes to be staged"
     );
 }

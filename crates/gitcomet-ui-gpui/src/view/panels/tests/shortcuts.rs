@@ -207,26 +207,12 @@ fn settings_and_history_context_menu_shortcuts_match_expected_actions(
 
     let theme_model = cx
         .update(|_window, app| context_menu_model_for(&view, app, PopoverKind::SettingsThemeMenu));
-    assert_declared_shortcuts(&theme_model, &["A", "L", "D"]);
+    assert_declared_shortcuts(&theme_model, &["A"]);
     assert_shortcut_action!(
         theme_model,
         "A",
         ContextMenuAction::SetThemeMode {
             mode: ThemeMode::Automatic
-        }
-    );
-    assert_shortcut_action!(
-        theme_model,
-        "L",
-        ContextMenuAction::SetThemeMode {
-            mode: ThemeMode::Light
-        }
-    );
-    assert_shortcut_action!(
-        theme_model,
-        "D",
-        ContextMenuAction::SetThemeMode {
-            mode: ThemeMode::Dark
         }
     );
 

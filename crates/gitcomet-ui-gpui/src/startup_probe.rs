@@ -19,6 +19,7 @@ static CONFIG: OnceLock<StartupProbeConfig> = OnceLock::new();
 #[derive(Clone, Copy, Debug)]
 struct StartupProbeConfig {
     enabled: bool,
+    #[cfg_attr(test, allow(dead_code))]
     disable_auto_restore: bool,
     auto_exit_after_interactive: bool,
     expected_ready_repos: Option<usize>,
@@ -45,6 +46,7 @@ pub(crate) fn is_enabled() -> bool {
     config().enabled
 }
 
+#[cfg_attr(test, allow(dead_code))]
 pub(crate) fn disable_auto_restore() -> bool {
     let config = config();
     config.enabled && config.disable_auto_restore

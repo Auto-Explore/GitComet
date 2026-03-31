@@ -1195,18 +1195,18 @@ impl PopoverHost {
             return;
         }
 
-        self.theme_mode = next;
+        self.theme_mode = next.clone();
         self.set_theme(next.resolve_theme(appearance), cx);
         let root_view = self.root_view.clone();
         cx.defer(move |cx| {
             let _ = root_view.update(cx, |root, cx| {
-                root.set_theme_mode(next, appearance, cx);
+                root.set_theme_mode(next.clone(), appearance, cx);
             });
         });
     }
 
     fn schedule_ui_settings_persist(&mut self, cx: &mut gpui::Context<Self>) {
-        let mode = self.theme_mode;
+        let mode = self.theme_mode.clone();
         let fmt = self.date_time_format;
         let tz = self.timezone;
         let show_tz = self.show_timezone;
@@ -1783,7 +1783,7 @@ impl PopoverHost {
         let popover_border_color = if use_accent_border {
             with_alpha(theme.colors.accent, 0.90)
         } else {
-            gpui::rgba(crate::view::chrome::WINDOW_OUTLINE_RGBA)
+            theme.colors.border
         };
         let gap_y = if is_app_menu || is_settings {
             crate::view::chrome::TITLE_BAR_HEIGHT

@@ -1255,8 +1255,10 @@ fn focused_mergetool_bootstrap_requests_open_repo_when_missing() {
 fn focused_mergetool_bootstrap_selects_worktree_diff_target() {
     let repo = normalize_bootstrap_repo_path(PathBuf::from("/repo"));
     let bootstrap = focused_bootstrap(repo.clone(), repo.join("src/conflict.txt"));
-    let mut state = AppState::default();
-    state.active_repo = Some(RepoId(1));
+    let mut state = AppState {
+        active_repo: Some(RepoId(1)),
+        ..Default::default()
+    };
     state.repos.push(open_repo_state_with_workdir(
         repo.to_str().expect("test path should be unicode"),
     ));
@@ -1274,8 +1276,10 @@ fn focused_mergetool_bootstrap_selects_worktree_diff_target() {
 fn focused_mergetool_bootstrap_loads_conflict_file_after_diff_target() {
     let repo = normalize_bootstrap_repo_path(PathBuf::from("/repo"));
     let bootstrap = focused_bootstrap(repo.clone(), repo.join("src/conflict.txt"));
-    let mut state = AppState::default();
-    state.active_repo = Some(RepoId(1));
+    let mut state = AppState {
+        active_repo: Some(RepoId(1)),
+        ..Default::default()
+    };
     let mut repo_state =
         open_repo_state_with_workdir(repo.to_str().expect("test path should be unicode"));
     repo_state.diff_state.diff_target = Some(DiffTarget::WorkingTree {
@@ -1297,8 +1301,10 @@ fn focused_mergetool_bootstrap_loads_conflict_file_after_diff_target() {
 fn focused_mergetool_bootstrap_completes_after_conflict_file_target_set() {
     let repo = normalize_bootstrap_repo_path(PathBuf::from("/repo"));
     let bootstrap = focused_bootstrap(repo.clone(), repo.join("src/conflict.txt"));
-    let mut state = AppState::default();
-    state.active_repo = Some(RepoId(1));
+    let mut state = AppState {
+        active_repo: Some(RepoId(1)),
+        ..Default::default()
+    };
     let mut repo_state =
         open_repo_state_with_workdir(repo.to_str().expect("test path should be unicode"));
     repo_state.diff_state.diff_target = Some(DiffTarget::WorkingTree {
@@ -1596,7 +1602,7 @@ fn splash_screen_clears_stale_close_repository_tooltip(cx: &mut gpui::TestAppCon
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            let _ = this.tooltip_host.update(cx, |host, cx| {
+            this.tooltip_host.update(cx, |host, cx| {
                 host.set_tooltip_text_if_changed(Some("Close repository".into()), cx);
             });
         });
@@ -1643,7 +1649,7 @@ fn generic_error_banner_is_hidden_when_auth_prompt_is_active() {
 
 #[test]
 fn auth_prompt_banner_colors_use_accent_palette() {
-    let theme = AppTheme::zed_one_light();
+    let theme = AppTheme::gitcomet_light();
     let (bg, border) = GitCometView::auth_prompt_banner_colors(theme);
 
     assert_eq!(bg, with_alpha(theme.colors.accent, 0.15));

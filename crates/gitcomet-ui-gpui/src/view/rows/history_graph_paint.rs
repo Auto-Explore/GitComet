@@ -123,17 +123,21 @@ pub(super) fn paint_history_graph(
         .get(row.node_col)
         .map(|l| l.color)
         .unwrap_or(theme.colors.text_muted);
-    let black = gpui::rgba(0x000000ff);
 
     if is_stash_node {
-        paint_stash_node(bounds.left() + node_x, y_center, black, node_color, window);
+        paint_stash_node(
+            bounds.left() + node_x,
+            y_center,
+            theme.colors.window_bg,
+            node_color,
+            window,
+        );
     } else {
         paint_commit_node(
             bounds.left() + node_x,
             y_center,
             node_radius,
             node_color,
-            black,
             window,
         );
     }
@@ -144,21 +148,8 @@ fn paint_commit_node(
     y_center: Pixels,
     node_radius: Pixels,
     node_color: gpui::Rgba,
-    border_color: gpui::Rgba,
     window: &mut Window,
 ) {
-    let node_border = px(1.0);
-    let outer_r = node_radius + node_border;
-    window.paint_quad(
-        fill(
-            gpui::Bounds::new(
-                point(x_center - outer_r, y_center - outer_r),
-                size(outer_r * 2.0, outer_r * 2.0),
-            ),
-            border_color,
-        )
-        .corner_radii(outer_r.min(px(2.0))),
-    );
     window.paint_quad(
         fill(
             gpui::Bounds::new(

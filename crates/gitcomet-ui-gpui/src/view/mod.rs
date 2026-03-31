@@ -226,6 +226,7 @@ pub(in crate::view) fn next_pane_resize_drag_width(
 ///
 /// Returns `None` when the available width is too narrow for two columns
 /// (the caller should force 50/50 in that case).
+#[cfg(feature = "benchmarks")]
 pub(in crate::view) fn next_diff_split_drag_ratio(
     available: Pixels,
     min_col_w: Pixels,
@@ -429,20 +430,14 @@ impl GitCometView {
         // This avoids re-opening repos (and changing RepoIds) when the UI is attached to an
         // already-initialized store (notably in `gpui::test` setup).
         let store_preloaded = !store.snapshot().repos.is_empty();
-        let should_auto_restore = if crate::startup_probe::disable_auto_restore()
-            || view_mode == GitCometViewMode::FocusedMergetool
-        {
-            false
-        } else {
-            #[cfg(test)]
-            {
-                false
-            }
-            #[cfg(not(test))]
-            {
-                !store_preloaded
-            }
+        #[cfg(not(test))]
+        let should_auto_restore = {
+            !crate::startup_probe::disable_auto_restore()
+                && view_mode != GitCometViewMode::FocusedMergetool
+                && !store_preloaded
         };
+        #[cfg(test)]
+        let should_auto_restore = false;
 
         if should_auto_restore {
             if !ui_session.open_repos.is_empty() {
@@ -566,7 +561,7 @@ impl GitCometView {
                 Arc::clone(&store),
                 ui_model.clone(),
                 initial_theme,
-                theme_mode,
+                theme_mode.clone(),
                 date_time_format,
                 timezone,
                 show_timezone,
@@ -821,7 +816,7 @@ impl GitCometView {
             return;
         }
 
-        self.theme_mode = mode;
+        self.theme_mode = mode.clone();
         self.set_theme(mode.resolve_theme(appearance), cx);
         self.schedule_ui_settings_persist(cx);
     }

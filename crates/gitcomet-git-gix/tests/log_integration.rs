@@ -631,7 +631,7 @@ fn commit_details_reports_merge_parents_and_file_changes() {
     );
     assert!(
         feature_details.files.iter().any(|f| {
-            f.path == std::path::PathBuf::from("feature.txt") && f.kind == FileStatusKind::Added
+            f.path == std::path::Path::new("feature.txt") && f.kind == FileStatusKind::Added
         }),
         "expected feature commit details to include feature file"
     );

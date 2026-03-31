@@ -2411,50 +2411,52 @@ pub(super) fn titlebar_workspace_actions_enabled(
     !repository_entry_interstitial_active(view_mode, has_repo_tabs)
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(super) enum ThemeMode {
     #[default]
     Automatic,
-    Light,
-    Dark,
+    Named(String),
 }
 
 impl ThemeMode {
-    pub(super) const fn is_automatic(self) -> bool {
-        matches!(self, Self::Automatic)
-    }
-
-    pub(super) const fn key(self) -> &'static str {
+    pub(super) fn key(&self) -> &str {
         match self {
             Self::Automatic => "automatic",
-            Self::Light => "light",
-            Self::Dark => "dark",
+            Self::Named(key) => key,
         }
     }
 
     pub(super) fn from_key(raw: &str) -> Option<Self> {
         match raw {
             "automatic" => Some(Self::Automatic),
-            "light" => Some(Self::Light),
-            "dark" => Some(Self::Dark),
+            "light" => Some(Self::Named(
+                crate::theme::DEFAULT_LIGHT_THEME_KEY.to_string(),
+            )),
+            "dark" => Some(Self::Named(
+                crate::theme::DEFAULT_DARK_THEME_KEY.to_string(),
+            )),
+            _ if crate::theme::has_theme_key(raw) => Some(Self::Named(raw.to_string())),
             _ => None,
         }
     }
 
-    pub(super) const fn label(self) -> &'static str {
+    pub(super) fn label(&self) -> String {
         match self {
-            Self::Automatic => "Automatic",
-            Self::Light => "Light",
-            Self::Dark => "Dark",
+            Self::Automatic => "Automatic".to_string(),
+            Self::Named(key) => crate::theme::theme_label(key).unwrap_or_else(|| key.clone()),
         }
     }
 
-    pub(super) fn resolve_theme(self, appearance: gpui::WindowAppearance) -> AppTheme {
+    pub(super) fn resolve_theme(&self, appearance: gpui::WindowAppearance) -> AppTheme {
         match self {
             Self::Automatic => AppTheme::default_for_window_appearance(appearance),
-            Self::Light => AppTheme::zed_one_light(),
-            Self::Dark => AppTheme::zed_ayu_dark(),
+            Self::Named(key) => crate::theme::AppTheme::from_key(key)
+                .unwrap_or_else(|| AppTheme::default_for_window_appearance(appearance)),
         }
+    }
+
+    pub(super) const fn is_automatic(&self) -> bool {
+        matches!(self, Self::Automatic)
     }
 }
 

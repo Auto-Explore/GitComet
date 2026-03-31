@@ -713,8 +713,10 @@ mod tests {
             divergence: None,
         }]));
 
-        let mut state = AppState::default();
-        state.active_repo = Some(repo_id);
+        let mut state = AppState {
+            active_repo: Some(repo_id),
+            ..Default::default()
+        };
         state.repos.push(repo);
 
         let before = notify_fingerprint(&state, &PopoverKind::PullPicker);

@@ -7,7 +7,7 @@ use gpui::{
     Entity, EntityInputHandler, FocusHandle, Focusable, GlobalElementId, IsZero, LayoutId,
     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, Rgba,
     ScrollHandle, ShapedLine, SharedString, Style, TextAlign, TextRun, UTF16Selection, Window,
-    WrappedLine, actions, anchored, deferred, div, fill, hsla, point, px, relative, size,
+    WrappedLine, actions, anchored, deferred, div, fill, point, px, relative, size,
 };
 use rustc_hash::{FxHashMap as HashMap, FxHasher};
 use std::hash::{Hash, Hasher};
@@ -326,11 +326,6 @@ impl TextInputStyle {
             if theme.is_dark { 0.55 } else { 0.40 },
         );
         let focus_border = with_alpha(theme.colors.accent, if theme.is_dark { 0.98 } else { 0.92 });
-        let placeholder = if theme.is_dark {
-            hsla(0., 0., 1., 0.35)
-        } else {
-            hsla(0., 0., 0., 0.2)
-        };
         Self {
             background,
             border: base_border,
@@ -338,7 +333,7 @@ impl TextInputStyle {
             focus_border,
             radius: theme.radii.row,
             text: theme.colors.text.into(),
-            placeholder,
+            placeholder: theme.colors.input_placeholder.into(),
             cursor: with_alpha(theme.colors.text, if theme.is_dark { 0.78 } else { 0.62 }),
             selection: with_alpha(theme.colors.accent, if theme.is_dark { 0.28 } else { 0.18 }),
         }
@@ -458,7 +453,7 @@ impl TextInput {
             soft_wrap: options.soft_wrap,
             masked: false,
             line_ending: if cfg!(windows) { "\r\n" } else { "\n" },
-            style: TextInputStyle::from_theme(AppTheme::zed_ayu_dark()),
+            style: TextInputStyle::from_theme(AppTheme::gitcomet_dark()),
             highlights: Arc::new(Vec::new()),
             highlight_provider: None,
             highlight_provider_binding_key: None,
@@ -516,7 +511,7 @@ impl TextInput {
             soft_wrap: options.soft_wrap,
             masked: false,
             line_ending: if cfg!(windows) { "\r\n" } else { "\n" },
-            style: TextInputStyle::from_theme(AppTheme::zed_ayu_dark()),
+            style: TextInputStyle::from_theme(AppTheme::gitcomet_dark()),
             highlights: Arc::new(Vec::new()),
             highlight_provider: None,
             highlight_provider_binding_key: None,
@@ -4420,7 +4415,7 @@ pub(crate) fn benchmark_text_input_runs_legacy_visible_window(
     highlights: &[(Range<usize>, gpui::HighlightStyle)],
 ) -> u64 {
     let base_font = gpui::font(".SystemUIFont");
-    let base_color = hsla(0.0, 0.0, 1.0, 1.0);
+    let base_color = gpui::hsla(0.0, 0.0, 1.0, 1.0);
     let mut hasher = FxHasher::default();
     for line_ix in visible_line_range {
         let line_start = line_starts.get(line_ix).copied().unwrap_or(0);
@@ -4447,7 +4442,7 @@ pub(crate) fn benchmark_text_input_runs_streamed_visible_window(
     highlights: &[(Range<usize>, gpui::HighlightStyle)],
 ) -> u64 {
     let base_font = gpui::font(".SystemUIFont");
-    let base_color = hsla(0.0, 0.0, 1.0, 1.0);
+    let base_color = gpui::hsla(0.0, 0.0, 1.0, 1.0);
     let line_runs = build_streamed_highlight_runs_for_visible_window(
         &base_font,
         base_color,
@@ -4568,10 +4563,7 @@ mod tests {
 
     #[test]
     fn provider_prefetch_byte_range_extends_visible_window_with_guard_rows() {
-        let text = std::iter::repeat("x")
-            .take(100)
-            .collect::<Vec<_>>()
-            .join("\n");
+        let text = std::iter::repeat_n("x", 100).collect::<Vec<_>>().join("\n");
         let line_starts = compute_line_starts(text.as_str());
         let range = provider_prefetch_byte_range_for_visible_window(
             line_starts.as_slice(),
@@ -4587,10 +4579,7 @@ mod tests {
 
     #[test]
     fn provider_prefetch_byte_range_clamps_to_document_bounds() {
-        let text = std::iter::repeat("x")
-            .take(10)
-            .collect::<Vec<_>>()
-            .join("\n");
+        let text = std::iter::repeat_n("x", 10).collect::<Vec<_>>().join("\n");
         let line_starts = compute_line_starts(text.as_str());
         let range = provider_prefetch_byte_range_for_visible_window(
             line_starts.as_slice(),
@@ -4781,15 +4770,15 @@ mod tests {
         let line_starts = compute_line_starts(text.as_str());
 
         let style_a = gpui::HighlightStyle {
-            color: Some(hsla(0.0, 1.0, 0.5, 1.0)),
+            color: Some(gpui::hsla(0.0, 1.0, 0.5, 1.0)),
             ..gpui::HighlightStyle::default()
         };
         let style_b = gpui::HighlightStyle {
-            color: Some(hsla(0.33, 1.0, 0.5, 1.0)),
+            color: Some(gpui::hsla(0.33, 1.0, 0.5, 1.0)),
             ..gpui::HighlightStyle::default()
         };
         let style_c = gpui::HighlightStyle {
-            color: Some(hsla(0.66, 1.0, 0.5, 1.0)),
+            color: Some(gpui::hsla(0.66, 1.0, 0.5, 1.0)),
             ..gpui::HighlightStyle::default()
         };
         let mut highlights: Vec<(Range<usize>, gpui::HighlightStyle)> = Vec::new();
@@ -4801,13 +4790,10 @@ mod tests {
                 continue;
             }
             if line_ix % 2 == 0 {
-                highlights.push((line_start + 1..line_start + 14, style_a.clone()));
+                highlights.push((line_start + 1..line_start + 14, style_a));
             }
             if line_ix % 3 == 0 {
-                highlights.push((
-                    line_start + 6..line_start + line_len.min(24),
-                    style_b.clone(),
-                ));
+                highlights.push((line_start + 6..line_start + line_len.min(24), style_b));
             }
         }
         let wide_start = line_starts.get(18).copied().unwrap_or(0).saturating_add(2);
@@ -4822,7 +4808,7 @@ mod tests {
 
         let visible_range = 47..121;
         let base_font = gpui::font(".SystemUIFont");
-        let base_color = hsla(0.0, 0.0, 1.0, 1.0);
+        let base_color = gpui::hsla(0.0, 0.0, 1.0, 1.0);
         let streamed = build_streamed_highlight_runs_for_visible_window(
             &base_font,
             base_color,
@@ -4857,18 +4843,18 @@ mod tests {
         let text = "abcdefghijklmnop";
         let line_starts = compute_line_starts(text);
         let style_low = gpui::HighlightStyle {
-            color: Some(hsla(0.0, 1.0, 0.5, 1.0)),
+            color: Some(gpui::hsla(0.0, 1.0, 0.5, 1.0)),
             ..gpui::HighlightStyle::default()
         };
         let style_high = gpui::HighlightStyle {
-            color: Some(hsla(0.66, 1.0, 0.5, 1.0)),
+            color: Some(gpui::hsla(0.66, 1.0, 0.5, 1.0)),
             ..gpui::HighlightStyle::default()
         };
-        let mut highlights = vec![(2..12, style_low.clone()), (4..10, style_high.clone())];
+        let mut highlights = vec![(2..12, style_low), (4..10, style_high)];
         highlights.sort_by(|(a, _), (b, _)| a.start.cmp(&b.start).then(a.end.cmp(&b.end)));
 
         let base_font = gpui::font(".SystemUIFont");
-        let base_color = hsla(0.0, 0.0, 1.0, 1.0);
+        let base_color = gpui::hsla(0.0, 0.0, 1.0, 1.0);
         let streamed = build_streamed_highlight_runs_for_visible_window(
             &base_font,
             base_color,

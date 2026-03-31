@@ -1,3 +1,4 @@
+mod build_themes;
 use std::env;
 use std::fs;
 use std::path::PathBuf;
@@ -41,6 +42,7 @@ fn rasterize_svg_png(svg_bytes: &[u8], target_width_px: f32, max_edge_px: f32) -
 }
 
 fn main() {
+    build_themes::generate_embedded_theme_registry();
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=../../assets/splash_backdrop.svg");
 

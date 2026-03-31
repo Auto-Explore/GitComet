@@ -990,10 +990,10 @@ fn file_diff_cache_does_not_rebuild_when_rev_changes_with_identical_payload(
                 "identical payload refresh should keep the right prepared syntax document reachable"
             );
             let left_cached =
-                file_diff_split_cached_styled(&pane, DiffTextRegion::SplitLeft, stable_left_line)
+                file_diff_split_cached_styled(pane, DiffTextRegion::SplitLeft, stable_left_line)
                     .expect("identical payload refresh should preserve the cached left split row");
             let right_cached =
-                file_diff_split_cached_styled(&pane, DiffTextRegion::SplitRight, stable_right_line)
+                file_diff_split_cached_styled(pane, DiffTextRegion::SplitRight, stable_right_line)
                     .expect("identical payload refresh should preserve the cached right split row");
             assert_eq!(
                 left_cached.highlights_hash, left_hash_before,

@@ -1475,7 +1475,7 @@ fn session_persist_error_without_repo_still_reports_notification() {
         &mut state,
         Some(RepoId(999)),
         "closing a repository",
-        Err(std::io::Error::new(std::io::ErrorKind::Other, "disk full")),
+        Err(std::io::Error::other("disk full")),
     );
 
     assert!(

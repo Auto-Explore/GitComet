@@ -21,7 +21,6 @@ const GITHUB_URL: &str = "https://github.com/Auto-Explore/GitComet";
 const LICENSE_URL: &str = "https://github.com/Auto-Explore/GitComet/blob/main/LICENSE-AGPL-3.0";
 const LICENSE_NAME: &str = "AGPL-3.0";
 
-const THEME_MODE_OPTIONS: &[ThemeMode] = &[ThemeMode::Automatic, ThemeMode::Light, ThemeMode::Dark];
 const CHANGE_TRACKING_OPTIONS: &[(&str, ChangeTrackingView, &str)] = &[
     (
         "settings_window_change_tracking_combined",
@@ -271,6 +270,17 @@ fn settings_dropdown_height(
     )
 }
 
+fn settings_theme_modes() -> Vec<ThemeMode> {
+    let mut modes = Vec::with_capacity(crate::theme::available_themes().len() + 1);
+    modes.push(ThemeMode::Automatic);
+    modes.extend(
+        crate::theme::available_themes()
+            .into_iter()
+            .map(|theme| ThemeMode::Named(theme.key.to_string())),
+    );
+    modes
+}
+
 impl SettingsWindowView {
     fn new(window: &mut Window, cx: &mut gpui::Context<Self>) -> Self {
         window.set_window_title(SETTINGS_WINDOW_TITLE);
@@ -311,7 +321,7 @@ impl SettingsWindowView {
                 }
 
                 let _ = view.update(app, |this, cx| {
-                    if this.theme_mode != ThemeMode::Automatic {
+                    if !this.theme_mode.is_automatic() {
                         return;
                     }
                     this.theme = this.theme_mode.resolve_theme(window.appearance());
@@ -467,13 +477,13 @@ impl SettingsWindowView {
             return;
         }
 
-        self.theme_mode = mode;
+        self.theme_mode = mode.clone();
         self.theme = mode.resolve_theme(window.appearance());
         self.expanded_section = None;
         self.persist_preferences(cx);
         self.update_main_windows(cx, move |view, root_window, cx| {
             view.popover_host.update(cx, |host, cx| {
-                host.set_theme_mode(mode, root_window.appearance(), cx);
+                host.set_theme_mode(mode.clone(), root_window.appearance(), cx);
             });
         });
         cx.notify();
@@ -1048,22 +1058,19 @@ impl SettingsWindowView {
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
         let theme = this.theme;
+        let modes = settings_theme_modes();
         range
-            .filter_map(|ix| THEME_MODE_OPTIONS.get(ix).copied().map(|mode| (ix, mode)))
-            .map(|(_ix, mode)| {
+            .filter_map(|ix| modes.get(ix).cloned())
+            .map(|mode| {
                 this.option_row(
-                    match mode {
-                        ThemeMode::Automatic => "settings_window_theme_auto",
-                        ThemeMode::Light => "settings_window_theme_light",
-                        ThemeMode::Dark => "settings_window_theme_dark",
-                    },
+                    format!("settings_window_theme_{}", mode.key()),
                     mode.label(),
                     None,
                     this.theme_mode == mode,
                     theme,
                 )
                 .on_click(cx.listener(move |this, _e: &ClickEvent, window, cx| {
-                    this.set_theme_mode(mode, window, cx);
+                    this.set_theme_mode(mode.clone(), window, cx);
                 }))
                 .into_any_element()
             })
@@ -1470,9 +1477,10 @@ impl Render for SettingsWindowView {
                     .child(theme_row);
 
                 if self.expanded_section == Some(SettingsSection::Theme) {
+                    let theme_mode_count = settings_theme_modes().len();
                     let list = uniform_list(
                         "settings_window_theme_list",
-                        THEME_MODE_OPTIONS.len(),
+                        theme_mode_count,
                         cx.processor(Self::render_theme_option_rows),
                     )
                     .h_full()
@@ -1491,7 +1499,7 @@ impl Render for SettingsWindowView {
                         "settings_window_theme_list_container",
                         "settings_window_theme_scrollbar",
                         self.theme_scroll.clone(),
-                        THEME_MODE_OPTIONS.len(),
+                        theme_mode_count,
                         SETTINGS_DROPDOWN_COMPACT_ROW_HEIGHT_PX,
                         SETTINGS_DROPDOWN_COMPACT_LIST_EXTRA_HEIGHT_PX,
                         list,
@@ -2302,18 +2310,38 @@ mod tests {
             color.r + color.g + color.b
         }
 
-        let dark = AppTheme::zed_ayu_dark();
+        let dark = AppTheme::gitcomet_dark();
         assert!(
             brightness(settings_dropdown_background(dark))
                 < brightness(dark.colors.surface_bg_elevated),
             "dark dropdown surface should be darker than the card surface"
         );
 
-        let light = AppTheme::zed_one_light();
+        let light = AppTheme::gitcomet_light();
         assert!(
             brightness(settings_dropdown_background(light))
                 < brightness(light.colors.surface_bg_elevated),
             "light dropdown surface should still read darker than the card surface"
+        );
+    }
+
+    #[test]
+    fn settings_theme_modes_include_automatic_and_all_available_named_themes() {
+        let modes = settings_theme_modes();
+        assert_eq!(modes.first(), Some(&ThemeMode::Automatic));
+
+        let named_modes = modes.iter().skip(1).map(ThemeMode::key).collect::<Vec<_>>();
+        let available_themes = crate::theme::available_themes()
+            .into_iter()
+            .map(|theme| theme.key.to_string())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            named_modes,
+            available_themes
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>()
         );
     }
 

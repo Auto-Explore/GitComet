@@ -95,9 +95,17 @@ fn blame_file_reports_head_and_explicit_revision() {
             .collect::<Vec<_>>(),
         vec!["one", "two"]
     );
-    assert!(base_blame.iter().all(|line| &*line.commit_id == base_id));
-    assert!(base_blame.iter().all(|line| &*line.author == "You"));
-    assert!(base_blame.iter().all(|line| &*line.summary == "base"));
+    assert!(
+        base_blame
+            .iter()
+            .all(|line| line.commit_id.as_ref() == base_id)
+    );
+    assert!(base_blame.iter().all(|line| line.author.as_ref() == "You"));
+    assert!(
+        base_blame
+            .iter()
+            .all(|line| line.summary.as_ref() == "base")
+    );
     assert!(
         base_blame
             .iter()

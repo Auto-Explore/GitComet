@@ -66,6 +66,7 @@ impl<K: std::hash::Hash + Eq, V, S: std::hash::BuildHasher> InstrumentedLruCache
         previous
     }
 
+    #[cfg(test)]
     pub(in crate::view) fn len(&self) -> usize {
         self.cache.len()
     }

@@ -959,54 +959,35 @@ fn hash_highlights(highlights: &[(Range<usize>, gpui::HighlightStyle)]) -> u64 {
     hasher.finish()
 }
 
-fn mix_colors(a: gpui::Rgba, b: gpui::Rgba, t: f32) -> gpui::Rgba {
-    let t = t.clamp(0.0, 1.0);
-    gpui::Rgba {
-        r: a.r + (b.r - a.r) * t,
-        g: a.g + (b.g - a.g) * t,
-        b: a.b + (b.b - a.b) * t,
-        a: 1.0,
-    }
-}
-
-fn calm_syntax_color(theme: AppTheme, token: gpui::Rgba) -> gpui::Rgba {
-    // Pull token colors towards the base foreground for a less-saturated "calm" look.
-    let blend_to_text = if theme.is_dark { 0.42 } else { 0.58 };
-    mix_colors(token, theme.colors.text, blend_to_text)
-}
-
 fn syntax_highlight_color(theme: AppTheme, kind: SyntaxTokenKind) -> Option<gpui::Rgba> {
     match kind {
-        SyntaxTokenKind::None | SyntaxTokenKind::Variable => None,
-        // Muted: comments, parameters, operators, punctuation
-        SyntaxTokenKind::Comment
-        | SyntaxTokenKind::CommentDoc
-        | SyntaxTokenKind::VariableParameter
-        | SyntaxTokenKind::Operator
-        | SyntaxTokenKind::Punctuation
-        | SyntaxTokenKind::PunctuationBracket
-        | SyntaxTokenKind::PunctuationDelimiter => Some(theme.colors.text_muted),
-        // Accent: keywords, functions, properties, attributes, variable.special, lifetime
-        SyntaxTokenKind::Keyword
-        | SyntaxTokenKind::KeywordControl
-        | SyntaxTokenKind::Function
-        | SyntaxTokenKind::FunctionMethod
-        | SyntaxTokenKind::FunctionSpecial
-        | SyntaxTokenKind::VariableSpecial
-        | SyntaxTokenKind::Property
-        | SyntaxTokenKind::Attribute
-        | SyntaxTokenKind::Lifetime => Some(calm_syntax_color(theme, theme.colors.accent)),
-        // Warning: strings, types, tags
-        SyntaxTokenKind::String
-        | SyntaxTokenKind::Type
-        | SyntaxTokenKind::TypeBuiltin
-        | SyntaxTokenKind::TypeInterface
-        | SyntaxTokenKind::Tag => Some(calm_syntax_color(theme, theme.colors.warning)),
-        // Success: numbers, booleans, constants, string escapes
-        SyntaxTokenKind::Number
-        | SyntaxTokenKind::Boolean
-        | SyntaxTokenKind::Constant
-        | SyntaxTokenKind::StringEscape => Some(calm_syntax_color(theme, theme.colors.success)),
+        SyntaxTokenKind::None => None,
+        SyntaxTokenKind::Comment => Some(theme.syntax.comment),
+        SyntaxTokenKind::CommentDoc => Some(theme.syntax.comment_doc),
+        SyntaxTokenKind::String => Some(theme.syntax.string),
+        SyntaxTokenKind::StringEscape => Some(theme.syntax.string_escape),
+        SyntaxTokenKind::Keyword => Some(theme.syntax.keyword),
+        SyntaxTokenKind::KeywordControl => Some(theme.syntax.keyword_control),
+        SyntaxTokenKind::Number => Some(theme.syntax.number),
+        SyntaxTokenKind::Boolean => Some(theme.syntax.boolean),
+        SyntaxTokenKind::Function => Some(theme.syntax.function),
+        SyntaxTokenKind::FunctionMethod => Some(theme.syntax.function_method),
+        SyntaxTokenKind::FunctionSpecial => Some(theme.syntax.function_special),
+        SyntaxTokenKind::Type => Some(theme.syntax.type_name),
+        SyntaxTokenKind::TypeBuiltin => Some(theme.syntax.type_builtin),
+        SyntaxTokenKind::TypeInterface => Some(theme.syntax.type_interface),
+        SyntaxTokenKind::Variable => theme.syntax.variable,
+        SyntaxTokenKind::VariableParameter => Some(theme.syntax.variable_parameter),
+        SyntaxTokenKind::VariableSpecial => Some(theme.syntax.variable_special),
+        SyntaxTokenKind::Property => Some(theme.syntax.property),
+        SyntaxTokenKind::Constant => Some(theme.syntax.constant),
+        SyntaxTokenKind::Operator => Some(theme.syntax.operator),
+        SyntaxTokenKind::Punctuation => Some(theme.syntax.punctuation),
+        SyntaxTokenKind::PunctuationBracket => Some(theme.syntax.punctuation_bracket),
+        SyntaxTokenKind::PunctuationDelimiter => Some(theme.syntax.punctuation_delimiter),
+        SyntaxTokenKind::Tag => Some(theme.syntax.tag),
+        SyntaxTokenKind::Attribute => Some(theme.syntax.attribute),
+        SyntaxTokenKind::Lifetime => Some(theme.syntax.lifetime),
     }
 }
 
@@ -1457,25 +1438,15 @@ pub(super) fn diff_line_colors(
             theme.colors.accent,
             theme.colors.text_muted,
         ),
-        (true, Add) => (
-            gpui::rgb(0x0B2E1C),
-            gpui::rgb(0xBBF7D0),
-            gpui::rgb(0x86EFAC),
+        (_, Add) => (
+            theme.colors.diff_add_bg,
+            theme.colors.diff_add_text,
+            theme.colors.diff_add_text,
         ),
-        (true, Remove) => (
-            gpui::rgb(0x3A0D13),
-            gpui::rgb(0xFECACA),
-            gpui::rgb(0xFCA5A5),
-        ),
-        (false, Add) => (
-            gpui::rgba(0xe6ffedff),
-            gpui::rgba(0x22863aff),
-            theme.colors.text_muted,
-        ),
-        (false, Remove) => (
-            gpui::rgba(0xffeef0ff),
-            gpui::rgba(0xcb2431ff),
-            theme.colors.text_muted,
+        (_, Remove) => (
+            theme.colors.diff_remove_bg,
+            theme.colors.diff_remove_text,
+            theme.colors.diff_remove_text,
         ),
         (_, Context) => (
             theme.colors.window_bg,
@@ -1574,7 +1545,7 @@ mod tests {
 
     #[test]
     fn build_cached_styled_text_plain_has_no_highlights() {
-        let theme = AppTheme::zed_ayu_dark();
+        let theme = AppTheme::gitcomet_dark();
         let styled =
             build_cached_diff_styled_text(theme, "a\tb", &[], "", None, DiffSyntaxMode::Auto, None);
         assert_eq!(styled.text.as_ref(), "a    b");
@@ -1596,7 +1567,7 @@ mod tests {
 
     #[test]
     fn styled_text_highlights_cover_combined_ranges() {
-        let theme = AppTheme::zed_ayu_dark();
+        let theme = AppTheme::gitcomet_dark();
         let segments = vec![
             CachedDiffTextSegment {
                 text: "abc".into(),
@@ -1636,7 +1607,7 @@ mod tests {
 
     #[test]
     fn cached_styled_text_highlights_all_query_occurrences() {
-        let theme = AppTheme::zed_ayu_dark();
+        let theme = AppTheme::gitcomet_dark();
         let styled = build_cached_diff_styled_text(
             theme,
             "abxxab",
@@ -1653,7 +1624,7 @@ mod tests {
 
     #[test]
     fn styled_text_word_highlight_sets_background() {
-        let theme = AppTheme::zed_ayu_dark();
+        let theme = AppTheme::gitcomet_dark();
         let segments = vec![CachedDiffTextSegment {
             text: "x".into(),
             in_word: true,
@@ -1661,7 +1632,7 @@ mod tests {
             syntax: SyntaxTokenKind::None,
         }];
         let (text, highlights) =
-            styled_text_for_diff_segments(theme, &segments, Some(theme.colors.danger));
+            styled_text_for_diff_segments(theme, &segments, Some(theme.colors.diff_remove_text));
         assert_eq!(text.as_ref(), "x");
         assert_eq!(highlights.len(), 1);
         assert!(highlights[0].1.background_color.is_some());
@@ -1669,7 +1640,7 @@ mod tests {
 
     #[test]
     fn syntax_colors_are_softened_for_keywords() {
-        let theme = AppTheme::zed_one_light();
+        let theme = AppTheme::gitcomet_light();
         let segments = vec![CachedDiffTextSegment {
             text: "fn".into(),
             in_word: false,
@@ -1685,7 +1656,7 @@ mod tests {
 
     #[test]
     fn doc_comment_renders_italic() {
-        let theme = AppTheme::zed_ayu_dark();
+        let theme = AppTheme::gitcomet_dark();
         let style = syntax_highlight_style(theme, SyntaxTokenKind::CommentDoc);
         assert!(style.is_some());
         let style = style.unwrap();
@@ -1697,7 +1668,7 @@ mod tests {
 
     #[test]
     fn keyword_control_renders_semibold() {
-        let theme = AppTheme::zed_ayu_dark();
+        let theme = AppTheme::gitcomet_dark();
         let style = syntax_highlight_style(theme, SyntaxTokenKind::KeywordControl);
         assert!(style.is_some());
         let style = style.unwrap();
@@ -1705,6 +1676,60 @@ mod tests {
         // Regular keywords should not have font weight.
         let plain = syntax_highlight_style(theme, SyntaxTokenKind::Keyword).unwrap();
         assert_eq!(plain.font_weight, None);
+    }
+
+    #[test]
+    fn syntax_highlight_style_uses_theme_syntax_overrides() {
+        let theme = AppTheme::from_json_str(
+            r##"{
+                "name": "Fixture",
+                "themes": [
+                    {
+                        "key": "fixture",
+                        "name": "Fixture",
+                        "appearance": "dark",
+                        "colors": {
+                            "window_bg": "#0d1016ff",
+                            "surface_bg": "#1f2127ff",
+                            "surface_bg_elevated": "#1f2127ff",
+                            "active_section": "#2d2f34ff",
+                            "border": "#2d2f34ff",
+                            "text": "#bfbdb6ff",
+                            "text_muted": "#8a8986ff",
+                            "accent": "#5ac1feff",
+                            "hover": "#2d2f34ff",
+                            "active": { "hex": "#2d2f34ff", "alpha": 0.78 },
+                            "focus_ring": { "hex": "#5ac1feff", "alpha": 0.60 },
+                            "focus_ring_bg": { "hex": "#5ac1feff", "alpha": 0.16 },
+                            "scrollbar_thumb": { "hex": "#8a8986ff", "alpha": 0.30 },
+                            "scrollbar_thumb_hover": { "hex": "#8a8986ff", "alpha": 0.42 },
+                            "scrollbar_thumb_active": { "hex": "#8a8986ff", "alpha": 0.52 },
+                            "danger": "#ef7177ff",
+                            "warning": "#feb454ff",
+                            "success": "#aad84cff"
+                        },
+                        "syntax": {
+                            "keyword": "#112233ff",
+                            "variable": "#445566ff"
+                        },
+                        "radii": {
+                            "panel": 2.0,
+                            "pill": 2.0,
+                            "row": 2.0
+                        }
+                    }
+                ]
+            }"##,
+        )
+        .expect("theme JSON should parse");
+
+        let keyword = syntax_highlight_style(theme, SyntaxTokenKind::Keyword)
+            .expect("keyword style should be present");
+        assert_eq!(keyword.color, Some(gpui::rgba(0x112233ff).into()));
+
+        let variable = syntax_highlight_style(theme, SyntaxTokenKind::Variable)
+            .expect("variable style should be present when overridden");
+        assert_eq!(variable.color, Some(gpui::rgba(0x445566ff).into()));
     }
 
     #[test]
@@ -1767,7 +1792,7 @@ mod tests {
 
     #[test]
     fn prepared_document_byte_range_highlights_multiline_comment_continuation() {
-        let theme = AppTheme::zed_ayu_dark();
+        let theme = AppTheme::gitcomet_dark();
         let text = "/* open comment\nstill comment */ let x = 1;";
         let line_starts = vec![0, "/* open comment\n".len()];
         let document = prepare_test_document(DiffSyntaxLanguage::Rust, text);
@@ -1800,7 +1825,7 @@ mod tests {
 
     #[test]
     fn nonblocking_prepared_document_byte_range_upgrades_after_chunk_build() {
-        let theme = AppTheme::zed_ayu_dark();
+        let theme = AppTheme::gitcomet_dark();
         let text = "/* open comment\nstill comment */ let x = 1;";
         let line_starts = vec![0, "/* open comment\n".len()];
         let document = prepare_test_document(DiffSyntaxLanguage::Rust, text);
@@ -1854,7 +1879,7 @@ mod tests {
 
     #[test]
     fn prepared_document_line_range_reports_ready_and_pending_rows_per_chunk() {
-        let theme = AppTheme::zed_ayu_dark();
+        let theme = AppTheme::gitcomet_dark();
         let lines: Vec<String> = (0..70)
             .map(|ix| format!("let chunk_boundary_value_{ix} = {ix};"))
             .collect();
@@ -1914,7 +1939,7 @@ mod tests {
 
     #[test]
     fn prepared_document_line_range_clamps_beyond_document_bounds() {
-        let theme = AppTheme::zed_ayu_dark();
+        let theme = AppTheme::gitcomet_dark();
         let text = "let a = 1;\nlet b = 2;";
         let line_starts = vec![0, "let a = 1;\n".len()];
         let document = prepare_test_document(DiffSyntaxLanguage::Rust, text);
@@ -1951,7 +1976,7 @@ mod tests {
 
     #[test]
     fn nonblocking_prepared_line_helper_transitions_from_pending_to_cacheable() {
-        let theme = AppTheme::zed_ayu_dark();
+        let theme = AppTheme::gitcomet_dark();
         let text = "let value = 1;";
         let document = prepare_test_document(DiffSyntaxLanguage::Rust, text);
 
@@ -2287,7 +2312,7 @@ mod tests {
 
     #[test]
     fn query_overlay_reuses_base_when_query_is_empty_or_missing() {
-        let theme = AppTheme::zed_ayu_dark();
+        let theme = AppTheme::gitcomet_dark();
         let text: SharedString = "abcdef".into();
         let mut text_hasher = FxHasher::default();
         text.as_ref().hash(&mut text_hasher);
@@ -2314,7 +2339,7 @@ mod tests {
 
     #[test]
     fn query_overlay_adds_background_without_losing_existing_color() {
-        let theme = AppTheme::zed_ayu_dark();
+        let theme = AppTheme::gitcomet_dark();
         let text: SharedString = "abcdef".into();
         let mut text_hasher = FxHasher::default();
         text.as_ref().hash(&mut text_hasher);

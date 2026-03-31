@@ -363,7 +363,7 @@ impl Scrollbar {
                         });
                     }
 
-                    // Zed-style autohide: show on hover/drag, then hide after a delay.
+                    // Auto-hide: show on hover/drag, then hide after a delay.
                     let state = interaction.read(cx);
                     let show = hovered || is_dragging || state.showing;
                     let should_schedule_hide =
@@ -621,8 +621,8 @@ fn marker_colors(
     theme: AppTheme,
     kind: ScrollbarMarkerKind,
 ) -> (Option<gpui::Rgba>, Option<gpui::Rgba>) {
-    let mut add = theme.colors.success;
-    let mut rem = theme.colors.danger;
+    let mut add = theme.colors.diff_add_text;
+    let mut rem = theme.colors.diff_remove_text;
     let alpha = if theme.is_dark { 0.70 } else { 0.55 };
     add.a = alpha;
     rem.a = alpha;
@@ -797,7 +797,7 @@ mod tests {
 
     #[test]
     fn scrollbar_thumb_alpha_in_range() {
-        for theme in [AppTheme::zed_ayu_dark(), AppTheme::zed_one_light()] {
+        for theme in [AppTheme::gitcomet_dark(), AppTheme::gitcomet_light()] {
             for c in [
                 theme.colors.scrollbar_thumb,
                 theme.colors.scrollbar_thumb_hover,

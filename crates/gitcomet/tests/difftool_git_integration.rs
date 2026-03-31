@@ -56,10 +56,10 @@ fn require_git_shell_for_tool_tests() -> bool {
 
 fn gitcomet_bin() -> PathBuf {
     for env_key in ["CARGO_BIN_EXE_gitcomet"] {
-        if let Some(path) = std::env::var_os(env_key).map(PathBuf::from) {
-            if path.is_file() {
-                return path;
-            }
+        if let Some(path) = std::env::var_os(env_key).map(PathBuf::from)
+            && path.is_file()
+        {
+            return path;
         }
     }
 
@@ -78,7 +78,8 @@ fn gitcomet_bin_from_current_exe() -> Option<PathBuf> {
     let profile_dir = deps_dir.parent()?;
     let exe_suffix = std::env::consts::EXE_SUFFIX;
 
-    for bin_name in ["gitcomet"] {
+    {
+        let bin_name = "gitcomet";
         let candidate = profile_dir.join(format!("{bin_name}{exe_suffix}"));
         if candidate.is_file() {
             return Some(candidate);

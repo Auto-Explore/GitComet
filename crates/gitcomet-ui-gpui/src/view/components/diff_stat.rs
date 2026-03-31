@@ -16,12 +16,12 @@ pub fn diff_stat(theme: AppTheme, added: usize, removed: usize) -> Div {
         .text_xs()
         .child(
             div()
-                .text_color(theme.colors.success)
+                .text_color(theme.colors.diff_add_text)
                 .child(format!("+{added}")),
         )
         .child(
             div()
-                .text_color(theme.colors.danger)
+                .text_color(theme.colors.diff_remove_text)
                 .child(format!("-{removed}")),
         )
 }
