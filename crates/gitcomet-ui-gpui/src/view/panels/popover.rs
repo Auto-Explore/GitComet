@@ -1203,7 +1203,6 @@ impl PopoverHost {
             root.push_toast(kind, message, cx);
         });
     }
-
 }
 
 impl Render for PopoverHost {
