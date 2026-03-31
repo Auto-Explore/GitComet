@@ -161,16 +161,15 @@ pub(super) fn styled_debug_info(
     )
 }
 
+type StyledDebugSpan = (
+    std::ops::Range<usize>,
+    Option<gpui::Hsla>,
+    Option<gpui::Hsla>,
+);
+
 pub(super) fn styled_debug_info_with_styles(
     styled: &super::CachedDiffStyledText,
-) -> (
-    gpui::SharedString,
-    Vec<(
-        std::ops::Range<usize>,
-        Option<gpui::Hsla>,
-        Option<gpui::Hsla>,
-    )>,
-) {
+) -> (gpui::SharedString, Vec<StyledDebugSpan>) {
     (
         styled.text.clone(),
         styled

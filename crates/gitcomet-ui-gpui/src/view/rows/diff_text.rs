@@ -457,6 +457,55 @@ pub(in crate::view) struct PreparedDiffSyntaxLine {
     pub line_ix: usize,
 }
 
+#[cfg(feature = "benchmarks")]
+#[derive(Clone, Copy, Debug)]
+pub(super) struct DiffTextSourceIdentity(u64);
+
+#[cfg(feature = "benchmarks")]
+impl DiffTextSourceIdentity {
+    pub(super) fn from_str(text: &str) -> Self {
+        let mut hasher = FxHasher::default();
+        text.hash(&mut hasher);
+        Self(hasher.finish())
+    }
+}
+
+#[cfg(feature = "benchmarks")]
+#[derive(Clone, Copy, Debug)]
+pub(super) struct PreparedDiffSyntaxTextSource {
+    pub document: Option<PreparedDiffSyntaxDocument>,
+}
+
+#[cfg(feature = "benchmarks")]
+#[derive(Clone, Copy, Debug)]
+pub(super) struct InlineDiffSyntaxOnlyRow<'a> {
+    pub text: &'a str,
+    pub line: &'a AnnotatedDiffLine,
+}
+
+#[cfg(feature = "benchmarks")]
+pub(super) type SyntaxHighlightPalette = AppTheme;
+
+#[cfg(feature = "benchmarks")]
+pub(super) fn syntax_highlight_palette(theme: AppTheme) -> SyntaxHighlightPalette {
+    theme
+}
+
+#[cfg(feature = "benchmarks")]
+pub(super) struct DiffTextBuildRequest<'a> {
+    pub text: &'a str,
+    pub word_ranges: &'a [Range<usize>],
+    pub query: &'a str,
+    pub syntax: DiffSyntaxConfig,
+    pub word_color: Option<gpui::Rgba>,
+}
+
+#[cfg(feature = "benchmarks")]
+pub(super) struct PreparedDiffTextBuildRequest<'a> {
+    pub build: DiffTextBuildRequest<'a>,
+    pub prepared_line: PreparedDiffSyntaxLine,
+}
+
 /// Projects an optional 1-based line number into a prepared syntax document.
 ///
 /// Diff metadata stores line numbers using the natural 1-based file coordinates.
@@ -1529,6 +1578,48 @@ fn build_cached_diff_styled_text_with_optional_palette(
     )
 }
 
+#[cfg(feature = "benchmarks")]
+pub(super) fn build_cached_diff_styled_text_with_source_identity(
+    theme: AppTheme,
+    text: &str,
+    source_identity: Option<DiffTextSourceIdentity>,
+    word_ranges: &[Range<usize>],
+    query: &str,
+    language: Option<DiffSyntaxLanguage>,
+    syntax_mode: DiffSyntaxMode,
+    word_color: Option<gpui::Rgba>,
+) -> CachedDiffStyledText {
+    if let Some(identity) = source_identity {
+        let _ = identity.0;
+    }
+    build_cached_diff_styled_text(
+        theme,
+        text,
+        word_ranges,
+        query,
+        language,
+        syntax_mode,
+        word_color,
+    )
+}
+
+#[cfg(feature = "benchmarks")]
+pub(super) fn build_cached_diff_styled_text_with_palette(
+    theme: AppTheme,
+    _palette: &SyntaxHighlightPalette,
+    request: DiffTextBuildRequest<'_>,
+) -> CachedDiffStyledText {
+    build_cached_diff_styled_text(
+        theme,
+        request.text,
+        request.word_ranges,
+        request.query,
+        request.syntax.language,
+        request.syntax.mode,
+        request.word_color,
+    )
+}
+
 pub(super) enum PreparedDocumentLineStyledText {
     Cacheable(CachedDiffStyledText),
     Pending(CachedDiffStyledText),
@@ -1694,6 +1785,53 @@ fn build_cached_diff_styled_text_for_prepared_document_line_nonblocking_with_opt
             PreparedDocumentLineStyledText::Pending(fallback(DiffSyntaxMode::HeuristicOnly))
         }
     }
+}
+
+#[cfg(feature = "benchmarks")]
+pub(super) fn build_cached_diff_styled_text_for_prepared_document_line_nonblocking_with_palette(
+    theme: AppTheme,
+    _palette: &SyntaxHighlightPalette,
+    request: PreparedDiffTextBuildRequest<'_>,
+) -> PreparedDocumentLineStyledText {
+    build_cached_diff_styled_text_for_prepared_document_line_nonblocking(
+        theme,
+        request.build.text,
+        request.build.word_ranges,
+        request.build.query,
+        request.build.syntax,
+        request.build.word_color,
+        request.prepared_line,
+    )
+}
+
+#[cfg(feature = "benchmarks")]
+pub(super) fn build_cached_diff_styled_text_for_inline_syntax_only_rows_nonblocking(
+    theme: AppTheme,
+    language: Option<DiffSyntaxLanguage>,
+    old_source: PreparedDiffSyntaxTextSource,
+    new_source: PreparedDiffSyntaxTextSource,
+    rows: &[InlineDiffSyntaxOnlyRow<'_>],
+) -> Vec<PreparedDocumentLineStyledText> {
+    rows.iter()
+        .map(|row| {
+            build_cached_diff_styled_text_for_prepared_document_line_nonblocking(
+                theme,
+                row.text,
+                &[],
+                "",
+                DiffSyntaxConfig {
+                    language,
+                    mode: DiffSyntaxMode::Auto,
+                },
+                None,
+                prepared_diff_syntax_line_for_inline_diff_row(
+                    old_source.document,
+                    new_source.document,
+                    row.line,
+                ),
+            )
+        })
+        .collect()
 }
 
 pub(super) fn build_cached_diff_query_overlay_styled_text(

@@ -494,7 +494,10 @@ impl AppStore {
 pub fn dispatch_sync_for_bench(state: &mut AppState, msg: Msg) -> Vec<crate::msg::Effect> {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);
-    reduce(&mut repos, &id_alloc, state, msg)
+    let reduce_started = Instant::now();
+    let effects = reduce(&mut repos, &id_alloc, state, msg);
+    reducer_diagnostics::record_reducer_pass(reduce_started.elapsed());
+    effects
 }
 
 #[cfg(feature = "benchmarks")]

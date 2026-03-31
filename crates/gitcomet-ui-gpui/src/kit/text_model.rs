@@ -521,6 +521,14 @@ impl TextModelSnapshot {
         self.core.materialized().as_ref()
     }
 
+    #[cfg(feature = "benchmarks")]
+    pub fn slice(&self, range: Range<usize>) -> &str {
+        let text = self.as_str();
+        let start = range.start.min(text.len());
+        let end = range.end.min(text.len()).max(start);
+        &text[start..end]
+    }
+
     pub fn as_shared_string(&self) -> SharedString {
         self.core.materialized_clone()
     }

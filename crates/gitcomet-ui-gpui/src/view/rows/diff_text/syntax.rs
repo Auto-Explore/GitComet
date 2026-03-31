@@ -5378,6 +5378,23 @@ mod tests {
         }
     }
 
+    fn prepare_test_document_from_shared_text(
+        language: DiffSyntaxLanguage,
+        text: &str,
+    ) -> PreparedSyntaxDocument {
+        let input = treesitter_document_input_from_text(text);
+        let prepared = prepare_treesitter_document_in_background_text_with_reuse(
+            language,
+            DiffSyntaxMode::Auto,
+            SharedString::from(text.to_owned()),
+            input.line_starts,
+            None,
+            None,
+        )
+        .expect("shared-text test document should parse successfully");
+        inject_prepared_document_data(prepared)
+    }
+
     fn prepare_test_document_with_budget_reuse(
         language: DiffSyntaxLanguage,
         text: &str,
@@ -6909,21 +6926,8 @@ mod tests {
 
         let base_text = "let value = 1;\n".repeat(256);
         let base_input = treesitter_document_input_from_text(&base_text);
-        let PrepareTreesitterDocumentResult::Ready(base_document) =
-            prepare_treesitter_document_with_budget_reuse_text(
-                DiffSyntaxLanguage::Rust,
-                DiffSyntaxMode::Auto,
-                base_text.clone().into(),
-                base_input.line_starts.clone(),
-                DiffSyntaxBudget {
-                    foreground_parse: Duration::from_millis(50),
-                },
-                None,
-                None,
-            )
-        else {
-            panic!("base text document should parse");
-        };
+        let base_document =
+            prepare_test_document_from_shared_text(DiffSyntaxLanguage::Rust, &base_text);
 
         let insert_offset = base_input.line_starts[42].saturating_add("let value = 1;".len());
         let mut edited_text = base_text.clone();
@@ -7336,21 +7340,8 @@ mod tests {
 
         let base_text = "let value = 1;\n".repeat(256);
         let base_input = treesitter_document_input_from_text(&base_text);
-        let PrepareTreesitterDocumentResult::Ready(base_document) =
-            prepare_treesitter_document_with_budget_reuse_text(
-                DiffSyntaxLanguage::Rust,
-                DiffSyntaxMode::Auto,
-                base_text.clone().into(),
-                base_input.line_starts.clone(),
-                DiffSyntaxBudget {
-                    foreground_parse: Duration::from_millis(50),
-                },
-                None,
-                None,
-            )
-        else {
-            panic!("base text document should parse");
-        };
+        let base_document =
+            prepare_test_document_from_shared_text(DiffSyntaxLanguage::Rust, &base_text);
         let base_version =
             prepared_document_source_version(base_document).expect("base source version");
 
@@ -7400,21 +7391,8 @@ mod tests {
 
         let base_text = "let value = 1;\n".repeat(256);
         let base_input = treesitter_document_input_from_text(&base_text);
-        let PrepareTreesitterDocumentResult::Ready(base_document) =
-            prepare_treesitter_document_with_budget_reuse_text(
-                DiffSyntaxLanguage::Rust,
-                DiffSyntaxMode::Auto,
-                base_text.clone().into(),
-                base_input.line_starts.clone(),
-                DiffSyntaxBudget {
-                    foreground_parse: Duration::from_millis(50),
-                },
-                None,
-                None,
-            )
-        else {
-            panic!("base text document should parse");
-        };
+        let base_document =
+            prepare_test_document_from_shared_text(DiffSyntaxLanguage::Rust, &base_text);
         let base_version =
             prepared_document_source_version(base_document).expect("base source version");
 

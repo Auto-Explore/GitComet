@@ -4757,6 +4757,20 @@ fn hash_text_runs_for_benchmark(runs: &[TextRun], hasher: &mut FxHasher) {
 }
 
 #[cfg(feature = "benchmarks")]
+pub(crate) fn benchmark_text_input_shaping_slice(text: &str, max_bytes: usize) -> (u64, usize) {
+    let (truncated, hash) = truncate_line_for_shaping(text, max_bytes.max(1));
+    (hash, truncated.len())
+}
+
+#[cfg(feature = "benchmarks")]
+pub(crate) fn benchmark_text_input_wrap_rows_for_line(
+    line_text: &str,
+    wrap_columns: usize,
+) -> usize {
+    estimate_wrap_rows_for_line(line_text, wrap_columns)
+}
+
+#[cfg(feature = "benchmarks")]
 pub(crate) fn benchmark_text_input_runs_legacy_visible_window(
     text: &str,
     line_starts: &[usize],
