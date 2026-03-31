@@ -534,7 +534,7 @@ impl FileDiffInlineSyntaxProjectionFixture {
         let styled_rows =
             super::diff_text::build_cached_diff_styled_text_for_inline_syntax_only_rows_nonblocking(
                 self.theme,
-                self.language,
+                Some(self.language),
                 super::diff_text::PreparedDiffSyntaxTextSource {
                     document: self.old_document,
                 },

@@ -860,8 +860,6 @@ mod tests {
     use std::fs;
     use std::process::Command;
     use std::sync::{OnceLock, atomic::AtomicBool, mpsc};
-    use std::time::SystemTime;
-
     struct IsolatedGitConfigEnv {
         _root: tempfile::TempDir,
         home_dir: PathBuf,
@@ -938,15 +936,11 @@ mod tests {
         run_git(workdir, &["commit", "--allow-empty", "-m", "init"]);
     }
 
-    fn unique_temp_dir(prefix: &str) -> PathBuf {
-        std::env::temp_dir().join(format!(
-            "{prefix}-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
-        ))
+    fn unique_temp_dir(prefix: &str) -> tempfile::TempDir {
+        tempfile::Builder::new()
+            .prefix(prefix)
+            .tempdir()
+            .expect("create unique tempdir")
     }
 
     fn cache_key(rel: impl Into<PathBuf>, is_dir_hint: Option<bool>) -> IgnoreCacheKey {
@@ -958,15 +952,8 @@ mod tests {
 
     #[test]
     fn resolve_git_dir_handles_dot_git_directory() {
-        let dir = std::env::temp_dir().join(format!(
-            "gitcomet-monitor-test-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
-        ));
-        let workdir = dir.join("repo");
+        let dir = unique_temp_dir("gitcomet-monitor-test");
+        let workdir = dir.path().join("repo");
         let _ = fs::create_dir_all(workdir.join(".git"));
 
         assert_eq!(resolve_git_dir(&workdir), Some(workdir.join(".git")));
@@ -974,16 +961,9 @@ mod tests {
 
     #[test]
     fn resolve_git_dir_parses_dot_git_file() {
-        let dir = std::env::temp_dir().join(format!(
-            "gitcomet-monitor-test-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
-        ));
-        let workdir = dir.join("repo");
-        let gitdir = dir.join("actual-git-dir");
+        let dir = unique_temp_dir("gitcomet-monitor-test");
+        let workdir = dir.path().join("repo");
+        let gitdir = dir.path().join("actual-git-dir");
         let _ = fs::create_dir_all(&workdir);
         let _ = fs::create_dir_all(&gitdir);
 
@@ -1018,15 +998,8 @@ mod tests {
 
     #[test]
     fn classify_repo_change_distinguishes_gitdir_from_worktree() {
-        let dir = std::env::temp_dir().join(format!(
-            "gitcomet-monitor-test-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
-        ));
-        let workdir = dir.join("repo");
+        let dir = unique_temp_dir("gitcomet-monitor-test");
+        let workdir = dir.path().join("repo");
         let _ = fs::create_dir_all(workdir.join(".git"));
 
         let event = notify::Event {
@@ -1078,7 +1051,7 @@ mod tests {
     #[test]
     fn classify_repo_change_ignores_git_index_lock_churn() {
         let dir = unique_temp_dir("gitcomet-monitor-test");
-        let workdir = dir.join("repo");
+        let workdir = dir.path().join("repo");
         let _ = fs::create_dir_all(workdir.join(".git"));
 
         let mut rules = GitignoreRules::default();
@@ -1119,7 +1092,7 @@ mod tests {
     #[test]
     fn classify_repo_change_ignoring_index_lock_does_not_drop_real_worktree_events() {
         let dir = unique_temp_dir("gitcomet-monitor-test");
-        let workdir = dir.join("repo");
+        let workdir = dir.path().join("repo");
         let _ = fs::create_dir_all(workdir.join(".git"));
 
         let mut rules = GitignoreRules::default();
@@ -1180,15 +1153,8 @@ mod tests {
 
     #[test]
     fn access_events_do_not_trigger_refresh_loops() {
-        let dir = std::env::temp_dir().join(format!(
-            "gitcomet-monitor-test-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
-        ));
-        let workdir = dir.join("repo");
+        let dir = unique_temp_dir("gitcomet-monitor-test");
+        let workdir = dir.path().join("repo");
         let _ = fs::create_dir_all(workdir.join(".git"));
 
         let event = notify::Event {
@@ -1239,15 +1205,8 @@ mod tests {
 
     #[test]
     fn gitignore_rules_match_git_semantics_for_nested_negation_and_anchoring() {
-        let dir = std::env::temp_dir().join(format!(
-            "gitcomet-monitor-test-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
-        ));
-        let workdir = dir.join("repo");
+        let dir = unique_temp_dir("gitcomet-monitor-test");
+        let workdir = dir.path().join("repo");
         init_repo_for_ignore_tests(&workdir);
         let git_dir = resolve_git_dir(&workdir);
 
@@ -1299,15 +1258,8 @@ mod tests {
 
     #[test]
     fn tracked_paths_are_not_treated_as_ignored() {
-        let dir = std::env::temp_dir().join(format!(
-            "gitcomet-monitor-test-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
-        ));
-        let workdir = dir.join("repo");
+        let dir = unique_temp_dir("gitcomet-monitor-test");
+        let workdir = dir.path().join("repo");
         init_repo_for_ignore_tests(&workdir);
         let git_dir = resolve_git_dir(&workdir);
 
@@ -1413,7 +1365,7 @@ mod tests {
     #[test]
     fn resolve_git_dir_parses_relative_dot_git_file() {
         let dir = unique_temp_dir("gitcomet-monitor-test");
-        let workdir = dir.join("repo");
+        let workdir = dir.path().join("repo");
         fs::create_dir_all(&workdir).expect("create workdir");
         fs::write(workdir.join(".git"), "gitdir: .actual-git\n").expect("write .git file");
 
@@ -1423,7 +1375,7 @@ mod tests {
     #[test]
     fn classify_repo_event_handles_empty_paths_git_state_and_gitignore_config() {
         let dir = unique_temp_dir("gitcomet-monitor-test");
-        let workdir = dir.join("repo");
+        let workdir = dir.path().join("repo");
         fs::create_dir_all(workdir.join(".git")).expect("create .git dir");
         let git_dir = Some(workdir.join(".git"));
 
@@ -1505,8 +1457,8 @@ mod tests {
     #[test]
     fn helper_predicates_cover_git_dir_index_strip_prefix_and_remove_hints() {
         let dir = unique_temp_dir("gitcomet-monitor-test");
-        let workdir = dir.join("repo");
-        let git_dir = dir.join("worktrees").join("repo");
+        let workdir = dir.path().join("repo");
+        let git_dir = dir.path().join("worktrees").join("repo");
         fs::create_dir_all(workdir.join(".git")).expect("create .git dir");
         fs::create_dir_all(&git_dir).expect("create detached git dir");
 
@@ -1536,7 +1488,7 @@ mod tests {
             !is_ignored_worktree_path_with_hint(
                 &workdir,
                 &mut rules,
-                dir.join("outside.txt").as_path(),
+                dir.path().join("outside.txt").as_path(),
                 Some(false),
             ),
             "paths outside the workdir should never be treated as ignored"

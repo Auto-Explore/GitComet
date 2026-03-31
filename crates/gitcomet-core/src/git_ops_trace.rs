@@ -94,6 +94,7 @@ impl Drop for GitOpTraceScope {
                 return;
             };
             let elapsed_nanos = started_at.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
+            let elapsed_nanos = elapsed_nanos.max(1);
             record_ns(self.kind, elapsed_nanos);
         }
     }
