@@ -61,6 +61,7 @@ pub(in crate::view) struct ConflictSplitStyledTextCache {
 }
 
 impl ConflictSplitStyledTextCache {
+    #[cfg(feature = "benchmarks")]
     pub(in crate::view) fn with_row_capacity(row_count: usize) -> Self {
         let mut cache = Self::default();
         cache
@@ -348,6 +349,7 @@ pub enum ResolvedLineSource {
 }
 
 impl ResolvedLineSource {
+    #[cfg(test)]
     /// Compact single-character label for UI badges.
     pub fn badge_char(self) -> char {
         match self {
@@ -1577,7 +1579,7 @@ impl ResolvedOutputFragment {
         &self,
         segments: &'a [ConflictSegment],
         range: Range<usize>,
-        mut visit: impl FnMut(usize, &'a str),
+        visit: impl FnMut(usize, &'a str),
     ) {
         let Some(text) = self.source_text(segments) else {
             return;
@@ -1587,8 +1589,7 @@ impl ResolvedOutputFragment {
         if start >= end {
             return;
         }
-        self.line_index
-            .for_each_line_text(text, start..end, visit);
+        self.line_index.for_each_line_text(text, start..end, visit);
     }
 
     fn widest_line(&self) -> Option<(usize, usize)> {
@@ -2839,12 +2840,12 @@ fn push_tiny_block_diff_rows(
         suffix += 1;
     }
 
-    for offset in 0..prefix {
+    for (offset, line) in old_lines.iter().enumerate().take(prefix) {
         push_tiny_block_context_row(
             rows,
             tiny_block_line_number(old_line_offset, offset),
             tiny_block_line_number(new_line_offset, offset),
-            old_lines[offset],
+            line,
         );
     }
 
@@ -3847,6 +3848,7 @@ impl ThreeWayVisibleProjection {
     }
 }
 
+#[cfg(any(test, feature = "benchmarks"))]
 fn resolved_conflict_flags_from_segments(segments: &[ConflictSegment]) -> Vec<bool> {
     segments
         .iter()
@@ -3919,6 +3921,7 @@ pub(in crate::view) fn build_three_way_visible_projection_with_resolved_flags(
     }
 }
 
+#[cfg(any(test, feature = "benchmarks"))]
 pub fn build_three_way_visible_projection(
     total_lines: usize,
     conflict_ranges: &[std::ops::Range<usize>],
@@ -4088,6 +4091,7 @@ fn populate_block_bases_from_ancestor_impl(
     }
 }
 
+#[cfg(any(test, feature = "benchmarks"))]
 pub fn populate_block_bases_from_ancestor(segments: &mut [ConflictSegment], ancestor_text: &str) {
     populate_block_bases_from_ancestor_impl(segments, ancestor_text, None);
 }
@@ -4145,6 +4149,7 @@ pub fn resolved_output_outline_line_count(output: &str) -> usize {
 /// Split resolved output into one logical row per newline for outline rendering.
 ///
 /// Uses `split('\n')` so trailing newlines are preserved as a final empty row.
+#[cfg(any(test, feature = "benchmarks"))]
 pub fn split_output_lines_for_outline(output: &str) -> Vec<String> {
     let mut lines = Vec::with_capacity(resolved_output_outline_line_count(output));
     lines.extend(output.split('\n').map(str::to_string));

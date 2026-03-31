@@ -195,7 +195,7 @@ fn large_file_diff_renders_plain_text_then_upgrades_after_background_syntax(
         cx.update(|_window, app| {
             let pane = view.read(app).main_pane.read(app);
             let styled = file_diff_split_cached_styled(
-                &pane,
+                pane,
                 DiffTextRegion::SplitLeft,
                 comment_line.as_str(),
             )
@@ -283,7 +283,7 @@ fn large_file_diff_renders_plain_text_then_upgrades_after_background_syntax(
     cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
         let split_styled = file_diff_split_cached_styled(
-            &pane,
+            pane,
             DiffTextRegion::SplitLeft,
             comment_line.as_str(),
         )
@@ -574,7 +574,7 @@ fn edited_large_file_diff_reparses_incrementally_in_background_after_timeout(
         cx.update(|_window, app| {
             let pane = view.read(app).main_pane.read(app);
             let styled = file_diff_split_cached_styled(
-                &pane,
+                pane,
                 DiffTextRegion::SplitLeft,
                 comment_line,
             )
@@ -674,7 +674,7 @@ fn edited_large_file_diff_reparses_incrementally_in_background_after_timeout(
             .file_diff_split_prepared_syntax_document(DiffTextRegion::SplitRight)
             .expect("background reparse should produce the edited right syntax document");
         let split_styled = file_diff_split_cached_styled(
-            &pane,
+            pane,
             DiffTextRegion::SplitLeft,
             comment_line,
         )
@@ -936,7 +936,7 @@ fn file_diff_background_left_syntax_upgrade_preserves_right_cached_rows(
 
     let cached_right_row_ix = cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
-        file_diff_split_row_ix(&pane, DiffTextRegion::SplitRight, cached_right_line)
+        file_diff_split_row_ix(pane, DiffTextRegion::SplitRight, cached_right_line)
             .expect("expected the cached right row to exist in the rebuilt split diff")
     });
 
@@ -1037,12 +1037,11 @@ fn file_diff_background_left_syntax_upgrade_preserves_right_cached_rows(
         );
 
         let top_cached =
-            file_diff_split_cached_styled(&pane, DiffTextRegion::SplitRight, top_right_line)
-                .expect(
-                    "expected the top right row to be cached before left background completion",
-                );
+            file_diff_split_cached_styled(pane, DiffTextRegion::SplitRight, top_right_line).expect(
+                "expected the top right row to be cached before left background completion",
+            );
         let lower_cached = file_diff_split_cached_styled(
-            &pane,
+            pane,
             DiffTextRegion::SplitRight,
             cached_right_line,
         )
@@ -1050,7 +1049,7 @@ fn file_diff_background_left_syntax_upgrade_preserves_right_cached_rows(
             "expected the offscreen right row to remain cached before left background completion",
         );
         let left_fallback =
-            file_diff_split_cached_styled(&pane, DiffTextRegion::SplitLeft, comment_line).expect(
+            file_diff_split_cached_styled(pane, DiffTextRegion::SplitLeft, comment_line).expect(
                 "expected the pending left comment row to be cached before background completion",
             );
         assert!(
@@ -1117,19 +1116,19 @@ fn file_diff_background_left_syntax_upgrade_preserves_right_cached_rows(
     cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
         let top_cached = file_diff_split_cached_styled(
-            &pane,
+            pane,
             DiffTextRegion::SplitRight,
             top_right_line,
         )
         .expect("top right row should remain cached after left background completion");
         let lower_cached = file_diff_split_cached_styled(
-            &pane,
+            pane,
             DiffTextRegion::SplitRight,
             cached_right_line,
         )
         .expect("offscreen right row should remain cached after left background completion");
         let left_cached = file_diff_split_cached_styled(
-            &pane,
+            pane,
             DiffTextRegion::SplitLeft,
             comment_line,
         )

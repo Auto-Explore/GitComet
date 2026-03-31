@@ -77,34 +77,37 @@ fn make_mut_state_with_diagnostics(state: &mut Arc<AppState>) -> &mut AppState {
     }
 }
 
-fn handle_reducer_effects<I>(
-    effects: I,
-    thread_state: &Arc<RwLock<Arc<AppState>>>,
-    active_repo_id: &Arc<AtomicU64>,
-    event_tx: &smol::channel::Sender<StoreEvent>,
-    repo_monitors: &mut RepoMonitorManager,
-    repos: &HashMap<RepoId, Arc<dyn GitRepository>>,
-    thread_msg_tx: &mpsc::Sender<Msg>,
-    executor: &TaskExecutor,
-    session_persist_executor: &TaskExecutor,
-    backend: &Arc<dyn GitBackend>,
-) where
+struct ReducerEffectsContext<'a> {
+    thread_state: &'a Arc<RwLock<Arc<AppState>>>,
+    active_repo_id: &'a Arc<AtomicU64>,
+    event_tx: &'a smol::channel::Sender<StoreEvent>,
+    repo_monitors: &'a mut RepoMonitorManager,
+    repos: &'a HashMap<RepoId, Arc<dyn GitRepository>>,
+    thread_msg_tx: &'a mpsc::Sender<Msg>,
+    executor: &'a TaskExecutor,
+    session_persist_executor: &'a TaskExecutor,
+    backend: &'a Arc<dyn GitBackend>,
+}
+
+fn handle_reducer_effects<I>(effects: I, ctx: ReducerEffectsContext<'_>)
+where
     I: IntoIterator<Item = crate::msg::Effect>,
 {
-    let active_value = thread_state
+    let active_value = ctx
+        .thread_state
         .read()
         .unwrap_or_else(|e| e.into_inner())
         .active_repo
         .map(|id| id.0)
         .unwrap_or(0);
-    active_repo_id.store(active_value, Ordering::Relaxed);
+    ctx.active_repo_id.store(active_value, Ordering::Relaxed);
 
-    try_send_state_changed_or_log(event_tx, "store worker loop state notification");
+    try_send_state_changed_or_log(ctx.event_tx, "store worker loop state notification");
 
     // Keep filesystem monitoring scoped to the active repository only, to minimize
     // OS watcher load in large multi-repo sessions.
     let (active_repo, active_workdir) = {
-        let state = thread_state.read().unwrap_or_else(|e| e.into_inner());
+        let state = ctx.thread_state.read().unwrap_or_else(|e| e.into_inner());
         let active_repo = state.active_repo;
         let active_workdir = active_repo.and_then(|repo_id| {
             state
@@ -116,32 +119,32 @@ fn handle_reducer_effects<I>(
         (active_repo, active_workdir)
     };
 
-    for repo_id in repo_monitors.running_repo_ids() {
+    for repo_id in ctx.repo_monitors.running_repo_ids() {
         if Some(repo_id) != active_repo {
-            repo_monitors.stop(repo_id);
+            ctx.repo_monitors.stop(repo_id);
         }
     }
 
     if let Some(repo_id) = active_repo
         && let Some(workdir) = active_workdir
-        && repos.contains_key(&repo_id)
+        && ctx.repos.contains_key(&repo_id)
     {
-        repo_monitors.start(
+        ctx.repo_monitors.start(
             repo_id,
             workdir,
-            thread_msg_tx.clone(),
-            Arc::clone(active_repo_id),
+            ctx.thread_msg_tx.clone(),
+            Arc::clone(ctx.active_repo_id),
         );
     }
 
     for effect in effects {
         schedule_effect(
-            executor,
-            session_persist_executor,
-            thread_state,
-            backend,
-            repos,
-            thread_msg_tx.clone(),
+            ctx.executor,
+            ctx.session_persist_executor,
+            ctx.thread_state,
+            ctx.backend,
+            ctx.repos,
+            ctx.thread_msg_tx.clone(),
             effect,
         );
     }
@@ -204,15 +207,17 @@ impl AppStore {
                         };
                         handle_reducer_effects(
                             effects,
-                            &thread_state,
-                            &active_repo_id,
-                            &event_tx,
-                            &mut repo_monitors,
-                            &repos,
-                            &thread_msg_tx,
-                            &executor,
-                            &session_persist_executor,
-                            &backend,
+                            ReducerEffectsContext {
+                                thread_state: &thread_state,
+                                active_repo_id: &active_repo_id,
+                                event_tx: &event_tx,
+                                repo_monitors: &mut repo_monitors,
+                                repos: &repos,
+                                thread_msg_tx: &thread_msg_tx,
+                                executor: &executor,
+                                session_persist_executor: &session_persist_executor,
+                                backend: &backend,
+                            },
                         );
                     }
                     Msg::ReorderRepoTabs {
@@ -236,15 +241,17 @@ impl AppStore {
                         };
                         handle_reducer_effects(
                             effects,
-                            &thread_state,
-                            &active_repo_id,
-                            &event_tx,
-                            &mut repo_monitors,
-                            &repos,
-                            &thread_msg_tx,
-                            &executor,
-                            &session_persist_executor,
-                            &backend,
+                            ReducerEffectsContext {
+                                thread_state: &thread_state,
+                                active_repo_id: &active_repo_id,
+                                event_tx: &event_tx,
+                                repo_monitors: &mut repo_monitors,
+                                repos: &repos,
+                                thread_msg_tx: &thread_msg_tx,
+                                executor: &executor,
+                                session_persist_executor: &session_persist_executor,
+                                backend: &backend,
+                            },
                         );
                     }
                     Msg::SelectDiff { repo_id, target } => {
@@ -260,15 +267,17 @@ impl AppStore {
                         };
                         handle_reducer_effects(
                             effects,
-                            &thread_state,
-                            &active_repo_id,
-                            &event_tx,
-                            &mut repo_monitors,
-                            &repos,
-                            &thread_msg_tx,
-                            &executor,
-                            &session_persist_executor,
-                            &backend,
+                            ReducerEffectsContext {
+                                thread_state: &thread_state,
+                                active_repo_id: &active_repo_id,
+                                event_tx: &event_tx,
+                                repo_monitors: &mut repo_monitors,
+                                repos: &repos,
+                                thread_msg_tx: &thread_msg_tx,
+                                executor: &executor,
+                                session_persist_executor: &session_persist_executor,
+                                backend: &backend,
+                            },
                         );
                     }
                     Msg::StagePath { repo_id, path } => {
@@ -284,15 +293,17 @@ impl AppStore {
                         };
                         handle_reducer_effects(
                             effects,
-                            &thread_state,
-                            &active_repo_id,
-                            &event_tx,
-                            &mut repo_monitors,
-                            &repos,
-                            &thread_msg_tx,
-                            &executor,
-                            &session_persist_executor,
-                            &backend,
+                            ReducerEffectsContext {
+                                thread_state: &thread_state,
+                                active_repo_id: &active_repo_id,
+                                event_tx: &event_tx,
+                                repo_monitors: &mut repo_monitors,
+                                repos: &repos,
+                                thread_msg_tx: &thread_msg_tx,
+                                executor: &executor,
+                                session_persist_executor: &session_persist_executor,
+                                backend: &backend,
+                            },
                         );
                     }
                     Msg::StagePaths { repo_id, paths } => {
@@ -308,15 +319,17 @@ impl AppStore {
                         };
                         handle_reducer_effects(
                             effects,
-                            &thread_state,
-                            &active_repo_id,
-                            &event_tx,
-                            &mut repo_monitors,
-                            &repos,
-                            &thread_msg_tx,
-                            &executor,
-                            &session_persist_executor,
-                            &backend,
+                            ReducerEffectsContext {
+                                thread_state: &thread_state,
+                                active_repo_id: &active_repo_id,
+                                event_tx: &event_tx,
+                                repo_monitors: &mut repo_monitors,
+                                repos: &repos,
+                                thread_msg_tx: &thread_msg_tx,
+                                executor: &executor,
+                                session_persist_executor: &session_persist_executor,
+                                backend: &backend,
+                            },
                         );
                     }
                     Msg::UnstagePath { repo_id, path } => {
@@ -332,15 +345,17 @@ impl AppStore {
                         };
                         handle_reducer_effects(
                             effects,
-                            &thread_state,
-                            &active_repo_id,
-                            &event_tx,
-                            &mut repo_monitors,
-                            &repos,
-                            &thread_msg_tx,
-                            &executor,
-                            &session_persist_executor,
-                            &backend,
+                            ReducerEffectsContext {
+                                thread_state: &thread_state,
+                                active_repo_id: &active_repo_id,
+                                event_tx: &event_tx,
+                                repo_monitors: &mut repo_monitors,
+                                repos: &repos,
+                                thread_msg_tx: &thread_msg_tx,
+                                executor: &executor,
+                                session_persist_executor: &session_persist_executor,
+                                backend: &backend,
+                            },
                         );
                     }
                     Msg::UnstagePaths { repo_id, paths } => {
@@ -356,15 +371,17 @@ impl AppStore {
                         };
                         handle_reducer_effects(
                             effects,
-                            &thread_state,
-                            &active_repo_id,
-                            &event_tx,
-                            &mut repo_monitors,
-                            &repos,
-                            &thread_msg_tx,
-                            &executor,
-                            &session_persist_executor,
-                            &backend,
+                            ReducerEffectsContext {
+                                thread_state: &thread_state,
+                                active_repo_id: &active_repo_id,
+                                event_tx: &event_tx,
+                                repo_monitors: &mut repo_monitors,
+                                repos: &repos,
+                                thread_msg_tx: &thread_msg_tx,
+                                executor: &executor,
+                                session_persist_executor: &session_persist_executor,
+                                backend: &backend,
+                            },
                         );
                     }
                     Msg::ConflictSetRegionChoice {
@@ -389,15 +406,17 @@ impl AppStore {
                         }
                         handle_reducer_effects(
                             std::iter::empty::<crate::msg::Effect>(),
-                            &thread_state,
-                            &active_repo_id,
-                            &event_tx,
-                            &mut repo_monitors,
-                            &repos,
-                            &thread_msg_tx,
-                            &executor,
-                            &session_persist_executor,
-                            &backend,
+                            ReducerEffectsContext {
+                                thread_state: &thread_state,
+                                active_repo_id: &active_repo_id,
+                                event_tx: &event_tx,
+                                repo_monitors: &mut repo_monitors,
+                                repos: &repos,
+                                thread_msg_tx: &thread_msg_tx,
+                                executor: &executor,
+                                session_persist_executor: &session_persist_executor,
+                                backend: &backend,
+                            },
                         );
                     }
                     Msg::ConflictResetResolutions { repo_id, path } => {
@@ -411,15 +430,17 @@ impl AppStore {
                         }
                         handle_reducer_effects(
                             std::iter::empty::<crate::msg::Effect>(),
-                            &thread_state,
-                            &active_repo_id,
-                            &event_tx,
-                            &mut repo_monitors,
-                            &repos,
-                            &thread_msg_tx,
-                            &executor,
-                            &session_persist_executor,
-                            &backend,
+                            ReducerEffectsContext {
+                                thread_state: &thread_state,
+                                active_repo_id: &active_repo_id,
+                                event_tx: &event_tx,
+                                repo_monitors: &mut repo_monitors,
+                                repos: &repos,
+                                thread_msg_tx: &thread_msg_tx,
+                                executor: &executor,
+                                session_persist_executor: &session_persist_executor,
+                                backend: &backend,
+                            },
                         );
                     }
                     msg => {
@@ -434,15 +455,17 @@ impl AppStore {
                         };
                         handle_reducer_effects(
                             effects,
-                            &thread_state,
-                            &active_repo_id,
-                            &event_tx,
-                            &mut repo_monitors,
-                            &repos,
-                            &thread_msg_tx,
-                            &executor,
-                            &session_persist_executor,
-                            &backend,
+                            ReducerEffectsContext {
+                                thread_state: &thread_state,
+                                active_repo_id: &active_repo_id,
+                                event_tx: &event_tx,
+                                repo_monitors: &mut repo_monitors,
+                                repos: &repos,
+                                thread_msg_tx: &thread_msg_tx,
+                                executor: &executor,
+                                session_persist_executor: &session_persist_executor,
+                                backend: &backend,
+                            },
                         );
                     }
                 }

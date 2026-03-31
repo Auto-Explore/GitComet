@@ -78,7 +78,6 @@ impl ConflictRowStyledText {
     }
 }
 
-
 fn build_conflict_row_base_styled(
     theme: AppTheme,
     text: &str,
@@ -1143,7 +1142,7 @@ impl MainPaneView {
             let line_count = this.conflict_resolved_preview_line_count;
             let mut elements = Vec::with_capacity(requested_rows);
 
-            let mut push_row = |ix: usize, line: &str| {
+            let push_row = |ix: usize, line: &str| {
                 let line_text = SharedString::new(line);
                 let min_width = conflict_resolved_output_row_min_width(
                     window,

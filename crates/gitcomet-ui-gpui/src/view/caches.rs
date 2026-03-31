@@ -926,6 +926,7 @@ mod tests {
         assert!(analysis.stash_helper_ids.contains("helper"));
     }
 
+    #[test]
     fn history_when_vm_formats_lazily_and_caches_result() {
         let request = HistoryCacheRequest {
             repo_id: RepoId(1),

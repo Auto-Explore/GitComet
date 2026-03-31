@@ -160,6 +160,7 @@ pub(in crate::view) fn pane_resize_handles_width(
     px(f32::from(visible_handles) * PANE_RESIZE_HANDLE_PX)
 }
 
+#[cfg(test)]
 pub(in crate::view) fn pane_resize_drag_width_bounds(
     handle: PaneResizeHandle,
     start_sidebar: Pixels,
@@ -441,20 +442,10 @@ impl GitCometView {
         // This avoids re-opening repos (and changing RepoIds) when the UI is attached to an
         // already-initialized store (notably in `gpui::test` setup).
         let store_preloaded = !store.snapshot().repos.is_empty();
-        let should_auto_restore = if crate::startup_probe::disable_auto_restore()
-            || view_mode == GitCometViewMode::FocusedMergetool
-        {
-            false
-        } else {
-            #[cfg(test)]
-            {
-                false
-            }
-            #[cfg(not(test))]
-            {
-                !store_preloaded
-            }
-        };
+        let should_auto_restore = !crate::startup_probe::disable_auto_restore()
+            && view_mode != GitCometViewMode::FocusedMergetool
+            && cfg!(not(test))
+            && !store_preloaded;
 
         if should_auto_restore {
             if !ui_session.open_repos.is_empty() {

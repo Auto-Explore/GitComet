@@ -313,11 +313,13 @@ type FrameTimingDurations = SmallVec<[u64; 256]>;
 pub struct FrameTimingCapture {
     frame_durations_ns: FrameTimingDurations,
     frame_budget_ns: u64,
+    #[cfg(feature = "benchmarks")]
     capture_start: Instant,
 }
 
 #[cfg(any(test, feature = "benchmarks"))]
 impl FrameTimingCapture {
+    #[cfg(feature = "benchmarks")]
     /// 60 fps ≈ 16.667 ms per frame.
     pub const DEFAULT_FRAME_BUDGET_NS: u64 = 16_666_667;
 
@@ -329,10 +331,12 @@ impl FrameTimingCapture {
         Self {
             frame_durations_ns: FrameTimingDurations::with_capacity(expected_frames),
             frame_budget_ns,
+            #[cfg(feature = "benchmarks")]
             capture_start: Instant::now(),
         }
     }
 
+    #[cfg(feature = "benchmarks")]
     pub fn with_default_budget() -> Self {
         Self::new(Self::DEFAULT_FRAME_BUDGET_NS)
     }
@@ -349,6 +353,7 @@ impl FrameTimingCapture {
         self.record_frame_ns(duration.as_nanos().min(u128::from(u64::MAX)) as u64);
     }
 
+    #[cfg(feature = "benchmarks")]
     /// Consume the capture and compute statistics.  Total capture wall time is
     /// derived from the [`Instant`] recorded at construction.
     pub fn finish(self) -> FrameTimingStats {

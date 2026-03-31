@@ -22,7 +22,7 @@ fn dispatch_increments_failure_counter_when_channel_is_disconnected() {
     let after = super::send_diagnostics::send_failure_count(
         super::send_diagnostics::SendFailureKind::StoreDispatch,
     );
-    assert!(after >= before + 1);
+    assert!(after > before);
 }
 
 #[test]
@@ -51,7 +51,7 @@ fn executor_increments_failure_counter_when_worker_queue_disconnects() {
         let after = super::send_diagnostics::send_failure_count(
             super::send_diagnostics::SendFailureKind::ExecutorQueue,
         );
-        if after >= before + 1 {
+        if after > before {
             break;
         }
         assert!(
@@ -81,7 +81,7 @@ fn effect_message_send_increments_failure_counter_when_disconnected() {
     let after = super::send_diagnostics::send_failure_count(
         super::send_diagnostics::SendFailureKind::EffectMessage,
     );
-    assert!(after >= before + 1);
+    assert!(after > before);
 }
 
 #[test]
@@ -98,5 +98,5 @@ fn store_event_send_increments_failure_counter_when_receiver_closed() {
     let after = super::send_diagnostics::send_failure_count(
         super::send_diagnostics::SendFailureKind::StoreEvent,
     );
-    assert!(after >= before + 1);
+    assert!(after > before);
 }

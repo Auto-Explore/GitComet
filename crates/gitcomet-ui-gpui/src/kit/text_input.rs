@@ -9,10 +9,14 @@ use gpui::{
     ScrollHandle, ShapedLine, SharedString, Style, TextAlign, TextRun, UTF16Selection, Window,
     WrappedLine, actions, anchored, deferred, div, fill, point, px, relative, size,
 };
-use rustc_hash::{FxHashMap as HashMap, FxHasher};
+use rustc_hash::FxHashMap as HashMap;
+#[cfg(any(test, feature = "benchmarks"))]
+use rustc_hash::FxHasher;
 use smallvec::SmallVec;
 use std::borrow::Cow;
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
+#[cfg(any(test, feature = "benchmarks"))]
+use std::hash::Hasher;
 use std::ops::Range;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -3775,8 +3779,11 @@ impl Render for TextInput {
     }
 }
 
+#[cfg(any(test, feature = "benchmarks"))]
 const TEXT_INPUT_SHAPING_FINGERPRINT_SAMPLE_BYTES: usize = 64;
+#[cfg(any(test, feature = "benchmarks"))]
 const TEXT_INPUT_SHAPING_FINGERPRINT_MID_SAMPLES_TRUNCATED: usize = 3;
+#[cfg(any(test, feature = "benchmarks"))]
 const TEXT_INPUT_SHAPING_FINGERPRINT_MID_SAMPLES_UNTRUNCATED: usize = 1;
 
 #[derive(Clone, Copy)]
@@ -3810,6 +3817,7 @@ impl<'a> ShapingSliceInfo<'a> {
         }
     }
 
+    #[cfg(any(test, feature = "benchmarks"))]
     #[inline]
     fn hash(self) -> u64 {
         hash_shaping_prefix_bytes(self.prefix.as_bytes(), self.capped_len, self.truncated)
@@ -3840,6 +3848,7 @@ impl<'a> ShapingSliceInfo<'a> {
     }
 }
 
+#[cfg(any(test, feature = "benchmarks"))]
 #[inline]
 fn hash_shaping_prefix_bytes(prefix_bytes: &[u8], capped_len: usize, truncated: bool) -> u64 {
     let mut hasher = FxHasher::default();
@@ -3883,6 +3892,7 @@ fn shaping_slice_info(line_text: &str, max_bytes: usize) -> ShapingSliceInfo<'_>
 /// Compute a stable fingerprint and capped byte length for a line that may need truncation.
 /// This does NOT allocate, and on very long lines it samples representative chunks instead of
 /// rescanning the full shaping prefix.
+#[cfg(any(test, feature = "benchmarks"))]
 fn hash_shaping_slice(line_text: &str, max_bytes: usize) -> (u64, usize) {
     let info = shaping_slice_info(line_text, max_bytes);
     (info.hash(), info.capped_len)
@@ -3897,6 +3907,7 @@ fn build_shaping_line_slice<'a>(line_text: &'a str, max_bytes: usize) -> Cow<'a,
     shaping_slice_info(line_text, max_bytes).into_cow()
 }
 
+#[cfg(any(test, feature = "benchmarks"))]
 fn truncate_line_for_shaping(line_text: &str, max_bytes: usize) -> (SharedString, u64) {
     let info = shaping_slice_info(line_text, max_bytes);
     let hash = info.hash();
@@ -4905,10 +4916,7 @@ mod tests {
 
     #[test]
     fn provider_prefetch_byte_range_extends_visible_window_with_guard_rows() {
-        let text = std::iter::repeat("x")
-            .take(100)
-            .collect::<Vec<_>>()
-            .join("\n");
+        let text = std::iter::repeat_n("x", 100).collect::<Vec<_>>().join("\n");
         let line_starts = compute_line_starts(text.as_str());
         let range = provider_prefetch_byte_range_for_visible_window(
             line_starts.as_slice(),
@@ -4924,10 +4932,7 @@ mod tests {
 
     #[test]
     fn provider_prefetch_byte_range_clamps_to_document_bounds() {
-        let text = std::iter::repeat("x")
-            .take(10)
-            .collect::<Vec<_>>()
-            .join("\n");
+        let text = std::iter::repeat_n("x", 10).collect::<Vec<_>>().join("\n");
         let line_starts = compute_line_starts(text.as_str());
         let range = provider_prefetch_byte_range_for_visible_window(
             line_starts.as_slice(),
@@ -5192,11 +5197,7 @@ mod tests {
             color: Some(gpui::hsla(0.66, 1.0, 0.5, 1.0)),
             ..gpui::HighlightStyle::default()
         };
-        let mut highlights = vec![
-            (0..10, style_low.clone()),
-            (2..8, style_mid.clone()),
-            (4..12, style_high.clone()),
-        ];
+        let mut highlights = vec![(0..10, style_low), (2..8, style_mid), (4..12, style_high)];
         highlights.sort_by(|(a, _), (b, _)| a.start.cmp(&b.start).then(a.end.cmp(&b.end)));
 
         let base_font = gpui::font(".SystemUIFont");
@@ -5261,13 +5262,10 @@ mod tests {
                 continue;
             }
             if line_ix % 2 == 0 {
-                highlights.push((line_start + 1..line_start + 14, style_a.clone()));
+                highlights.push((line_start + 1..line_start + 14, style_a));
             }
             if line_ix % 3 == 0 {
-                highlights.push((
-                    line_start + 6..line_start + line_len.min(24),
-                    style_b.clone(),
-                ));
+                highlights.push((line_start + 6..line_start + line_len.min(24), style_b));
             }
         }
         let wide_start = line_starts.get(18).copied().unwrap_or(0).saturating_add(2);
@@ -5324,7 +5322,7 @@ mod tests {
             color: Some(gpui::hsla(0.66, 1.0, 0.5, 1.0)),
             ..gpui::HighlightStyle::default()
         };
-        let mut highlights = vec![(2..12, style_low.clone()), (4..10, style_high.clone())];
+        let mut highlights = vec![(2..12, style_low), (4..10, style_high)];
         highlights.sort_by(|(a, _), (b, _)| a.start.cmp(&b.start).then(a.end.cmp(&b.end)));
 
         let base_font = gpui::font(".SystemUIFont");

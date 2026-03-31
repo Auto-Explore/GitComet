@@ -166,6 +166,7 @@ impl GraphLanePalette {
         }
     }
 
+    #[cfg(test)]
     pub fn as_slice(&self) -> &[Rgba] {
         let len = usize::from(self.len).max(1);
         &self.colors[..len]

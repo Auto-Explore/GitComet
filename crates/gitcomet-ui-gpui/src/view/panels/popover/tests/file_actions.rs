@@ -497,7 +497,7 @@ fn commit_file_menu_copy_path_supports_right_button_release(cx: &mut gpui::TestA
 
     assert_eq!(
         cx.read_from_clipboard().and_then(|item| item.text()),
-        Some(expected.display().to_string().into())
+        Some(expected.display().to_string())
     );
 }
 
@@ -599,7 +599,7 @@ fn status_file_menu_copy_path_supports_right_button_release(cx: &mut gpui::TestA
 
     assert_eq!(
         cx.read_from_clipboard().and_then(|item| item.text()),
-        Some(expected.display().to_string().into())
+        Some(expected.display().to_string())
     );
 }
 

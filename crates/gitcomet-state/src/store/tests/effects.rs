@@ -741,7 +741,7 @@ fn load_conflict_file_effect_preserves_binary_payloads_when_reusing_session() {
                 matches!(
                     session.current.as_ref(),
                     Some(ConflictPayload::Binary(bytes))
-                        if Arc::ptr_eq(file.current_bytes.as_ref().expect("current bytes"), &bytes)
+                        if Arc::ptr_eq(file.current_bytes.as_ref().expect("current bytes"), bytes)
                 ),
                 "current binary bytes should be forwarded from the session without rereading the worktree",
             );

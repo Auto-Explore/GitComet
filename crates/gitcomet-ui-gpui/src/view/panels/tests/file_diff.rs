@@ -1,3 +1,6 @@
+#![allow(dead_code)]
+#![allow(clippy::type_complexity)]
+
 use super::*;
 
 fn fixture_repo_root() -> std::path::PathBuf {
@@ -666,19 +669,19 @@ fn yaml_commit_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
     use gitcomet_core::domain::DiffLineKind;
     use gitcomet_core::file_diff::FileDiffRowKind;
 
-    fn split_right_row_by_new_line<'a>(
-        pane: &'a MainPaneView,
+    fn split_right_row_by_new_line(
+        pane: &MainPaneView,
         new_line: u32,
-    ) -> Option<&'a gitcomet_core::file_diff::FileDiffRow> {
+    ) -> Option<&gitcomet_core::file_diff::FileDiffRow> {
         pane.file_diff_cache_rows
             .iter()
             .find(|row| row.new_line == Some(new_line))
     }
 
-    fn split_right_cached_styled_by_new_line<'a>(
-        pane: &'a MainPaneView,
+    fn split_right_cached_styled_by_new_line(
+        pane: &MainPaneView,
         new_line: u32,
-    ) -> Option<(&'a str, &'a super::CachedDiffStyledText)> {
+    ) -> Option<(&str, &super::CachedDiffStyledText)> {
         let row_ix = pane
             .file_diff_cache_rows
             .iter()
@@ -690,19 +693,16 @@ fn yaml_commit_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
         Some((text, styled))
     }
 
-    fn inline_row_by_new_line<'a>(
-        pane: &'a MainPaneView,
-        new_line: u32,
-    ) -> Option<&'a AnnotatedDiffLine> {
+    fn inline_row_by_new_line(pane: &MainPaneView, new_line: u32) -> Option<&AnnotatedDiffLine> {
         pane.file_diff_inline_cache
             .iter()
             .find(|line| line.new_line == Some(new_line))
     }
 
-    fn inline_cached_styled_by_new_line<'a>(
-        pane: &'a MainPaneView,
+    fn inline_cached_styled_by_new_line(
+        pane: &MainPaneView,
         new_line: u32,
-    ) -> Option<(&'a str, &'a super::CachedDiffStyledText)> {
+    ) -> Option<(&str, &super::CachedDiffStyledText)> {
         let inline_ix = pane
             .file_diff_inline_cache
             .iter()
@@ -1225,15 +1225,15 @@ fn yaml_commit_patch_diff_keeps_consistent_highlighting_for_added_paths_and_keys
     use gitcomet_core::domain::DiffLineKind;
     use gitcomet_core::file_diff::FileDiffRowKind;
 
-    fn split_right_cached_styled_by_new_line<'a>(
-        pane: &'a MainPaneView,
+    fn split_right_cached_styled_by_new_line(
+        pane: &MainPaneView,
         new_line: u32,
     ) -> Option<(
         FileDiffRowKind,
         usize,
         String,
         Option<rows::DiffSyntaxLanguage>,
-        &'a super::CachedDiffStyledText,
+        &super::CachedDiffStyledText,
     )> {
         for row_ix in 0..pane.patch_diff_split_row_len() {
             let PatchSplitRow::Aligned {
@@ -1259,15 +1259,15 @@ fn yaml_commit_patch_diff_keeps_consistent_highlighting_for_added_paths_and_keys
         None
     }
 
-    fn inline_cached_styled_by_new_line<'a>(
-        pane: &'a MainPaneView,
+    fn inline_cached_styled_by_new_line(
+        pane: &MainPaneView,
         new_line: u32,
     ) -> Option<(
         DiffLineKind,
         usize,
         String,
         Option<rows::DiffSyntaxLanguage>,
-        &'a super::CachedDiffStyledText,
+        &super::CachedDiffStyledText,
     )> {
         for src_ix in 0..pane.patch_diff_row_len() {
             let line = pane.patch_diff_row(src_ix)?;
@@ -2125,7 +2125,7 @@ fn yaml_commit_patch_diff_full_fixture_keeps_consistent_highlighting_across_file
                 let pane = view.read(app).main_pane.read(app);
                 let Some((_kind, _src_ix, text, _language, styled)) =
                     split_right_cached_styled_by_file_and_new_line(
-                        &pane,
+                        pane,
                         file_path,
                         expected.line_no,
                     )
@@ -2200,7 +2200,7 @@ fn yaml_commit_patch_diff_full_fixture_keeps_consistent_highlighting_across_file
             let (text, highlights) = cx.update(|_window, app| {
                 let pane = view.read(app).main_pane.read(app);
                 let Some((_kind, _src_ix, text, _language, styled)) =
-                    inline_cached_styled_by_file_and_new_line(&pane, file_path, expected.line_no)
+                    inline_cached_styled_by_file_and_new_line(pane, file_path, expected.line_no)
                 else {
                     panic!(
                         "expected cached inline styled text for {file_path} line {}",
@@ -2487,7 +2487,7 @@ fn yaml_commit_patch_diff_full_fixture_keeps_consistent_highlighting_across_file
 
     let build_release_split_expected = cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
-        split_draw_rows_for_lines(&pane, build_release_file, &build_release_draw_lines)
+        split_draw_rows_for_lines(pane, build_release_file, &build_release_draw_lines)
     });
     assert_split_rows_match_render_cache(
         cx,
@@ -2633,7 +2633,7 @@ fn yaml_commit_patch_diff_full_fixture_keeps_consistent_highlighting_across_file
 
     let deployment_split_expected = cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
-        split_draw_rows_for_lines(&pane, deployment_file, &deployment_draw_lines)
+        split_draw_rows_for_lines(pane, deployment_file, &deployment_draw_lines)
     });
     assert_split_rows_match_render_cache(
         cx,
@@ -2785,7 +2785,7 @@ fn yaml_commit_patch_diff_full_fixture_keeps_consistent_highlighting_across_file
 
     let build_release_inline_expected = cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
-        inline_draw_rows_for_lines(&pane, build_release_file, &build_release_draw_lines)
+        inline_draw_rows_for_lines(pane, build_release_file, &build_release_draw_lines)
     });
     assert_inline_rows_match_render_cache(
         cx,
@@ -2923,7 +2923,7 @@ fn yaml_commit_patch_diff_full_fixture_keeps_consistent_highlighting_across_file
 
     let deployment_inline_expected = cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
-        inline_draw_rows_for_lines(&pane, deployment_file, &deployment_draw_lines)
+        inline_draw_rows_for_lines(pane, deployment_file, &deployment_draw_lines)
     });
     assert_inline_rows_match_render_cache(
         cx,
@@ -3483,7 +3483,7 @@ fn yaml_commit_patch_diff_matches_commit_file_diff_for_build_release_artifacts(
 
         for (&line_no, expected) in &baseline_old_by_line {
             let actual = patch_split_snapshot_by_line(
-                &pane,
+                pane,
                 DiffTextRegion::SplitLeft,
                 theme,
                 yaml_string_color,
@@ -3496,7 +3496,7 @@ fn yaml_commit_patch_diff_matches_commit_file_diff_for_build_release_artifacts(
 
         for (&line_no, expected) in &baseline_new_by_line {
             let actual = patch_split_snapshot_by_line(
-                &pane,
+                pane,
                 DiffTextRegion::SplitRight,
                 theme,
                 yaml_string_color,
@@ -3567,7 +3567,7 @@ fn yaml_commit_patch_diff_matches_commit_file_diff_for_build_release_artifacts(
             };
 
             let actual = Some(yaml_patch_snapshot_for_src_ix(
-                &pane,
+                pane,
                 theme,
                 yaml_string_color,
                 src_ix,
@@ -3761,49 +3761,51 @@ fn file_diff_cache_does_not_rebuild_when_rev_changes_with_identical_payload(
 
     set_state(cx, 1);
 
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
-    loop {
-        cx.update(|window, app| {
-            let _ = window.draw(app);
-        });
-        cx.run_until_parked();
-
-        let ready = cx.update(|_window, app| {
-            let pane = view.read(app).main_pane.read(app);
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "initial file-diff cache build for rev-stability check",
+        |pane| {
+            let left_doc = pane.file_diff_split_prepared_syntax_document(DiffTextRegion::SplitLeft);
+            let right_doc =
+                pane.file_diff_split_prepared_syntax_document(DiffTextRegion::SplitRight);
             pane.file_diff_cache_inflight.is_none()
                 && pane.file_diff_cache_path.is_some()
-                && pane
-                    .file_diff_split_prepared_syntax_document(DiffTextRegion::SplitLeft)
-                    .is_some()
-                && pane
-                    .file_diff_split_prepared_syntax_document(DiffTextRegion::SplitRight)
-                    .is_some()
-        });
-        if ready {
-            break;
-        }
-        if std::time::Instant::now() >= deadline {
-            let snapshot = cx.update(|_window, app| {
-                let pane = view.read(app).main_pane.read(app);
-                (
-                    pane.file_diff_cache_seq,
-                    pane.file_diff_cache_inflight,
-                    pane.file_diff_cache_repo_id,
-                    pane.file_diff_cache_rev,
-                    pane.file_diff_cache_target.clone(),
-                    pane.file_diff_cache_path.clone(),
-                    pane.file_diff_inline_cache.len(),
-                    pane.file_diff_split_prepared_syntax_document(DiffTextRegion::SplitLeft),
-                    pane.file_diff_split_prepared_syntax_document(DiffTextRegion::SplitRight),
-                    pane.active_repo().map(|repo| repo.diff_state.diff_file_rev),
-                    pane.active_repo()
-                        .and_then(|repo| repo.diff_state.diff_target.clone()),
-                    pane.is_file_diff_view_active(),
-                )
-            });
-            panic!("timed out waiting for initial file-diff cache build: {snapshot:?}");
-        }
-    }
+                && left_doc.is_some()
+                && right_doc.is_some()
+                && left_doc.is_some_and(|document| {
+                    !rows::has_pending_prepared_diff_syntax_chunk_builds_for_document(document)
+                })
+                && right_doc.is_some_and(|document| {
+                    !rows::has_pending_prepared_diff_syntax_chunk_builds_for_document(document)
+                })
+                && pane.syntax_chunk_poll_task.is_none()
+        },
+        |pane| {
+            let left_doc = pane.file_diff_split_prepared_syntax_document(DiffTextRegion::SplitLeft);
+            let right_doc =
+                pane.file_diff_split_prepared_syntax_document(DiffTextRegion::SplitRight);
+            format!(
+                "seq={} inflight={:?} repo_id={:?} rev={} target={:?} path={:?} inline_rows={} left_doc={:?} right_doc={:?} left_pending={:?} right_pending={:?} chunk_poll={} active_diff_rev={:?} active_target={:?} file_diff_active={}",
+                pane.file_diff_cache_seq,
+                pane.file_diff_cache_inflight,
+                pane.file_diff_cache_repo_id,
+                pane.file_diff_cache_rev,
+                pane.file_diff_cache_target,
+                pane.file_diff_cache_path,
+                pane.file_diff_inline_cache.len(),
+                left_doc,
+                right_doc,
+                left_doc.map(rows::has_pending_prepared_diff_syntax_chunk_builds_for_document),
+                right_doc.map(rows::has_pending_prepared_diff_syntax_chunk_builds_for_document),
+                pane.syntax_chunk_poll_task.is_some(),
+                pane.active_repo().map(|repo| repo.diff_state.diff_file_rev),
+                pane.active_repo()
+                    .and_then(|repo| repo.diff_state.diff_target.clone()),
+                pane.is_file_diff_view_active(),
+            )
+        },
+    );
 
     let baseline_seq =
         cx.update(|_window, app| view.read(app).main_pane.read(app).file_diff_cache_seq);
@@ -3891,10 +3893,44 @@ fn file_diff_cache_does_not_rebuild_when_rev_changes_with_identical_payload(
 
     for rev in 2..=6 {
         set_state(cx, rev);
-        cx.update(|window, app| {
-            let _ = window.draw(app);
-        });
-        cx.run_until_parked();
+        wait_for_main_pane_condition(
+            cx,
+            &view,
+            "identical file-diff payload refresh to settle",
+            |pane| {
+                let left_doc =
+                    pane.file_diff_split_prepared_syntax_document(DiffTextRegion::SplitLeft);
+                let right_doc =
+                    pane.file_diff_split_prepared_syntax_document(DiffTextRegion::SplitRight);
+                pane.file_diff_cache_rev == rev
+                    && pane.file_diff_cache_inflight.is_none()
+                    && left_doc.is_some()
+                    && right_doc.is_some()
+                    && left_doc.is_some_and(|document| {
+                        !rows::has_pending_prepared_diff_syntax_chunk_builds_for_document(document)
+                    })
+                    && right_doc.is_some_and(|document| {
+                        !rows::has_pending_prepared_diff_syntax_chunk_builds_for_document(document)
+                    })
+                    && pane.syntax_chunk_poll_task.is_none()
+            },
+            |pane| {
+                let left_doc =
+                    pane.file_diff_split_prepared_syntax_document(DiffTextRegion::SplitLeft);
+                let right_doc =
+                    pane.file_diff_split_prepared_syntax_document(DiffTextRegion::SplitRight);
+                (
+                    pane.file_diff_cache_seq,
+                    pane.file_diff_cache_inflight,
+                    pane.file_diff_cache_rev,
+                    left_doc,
+                    right_doc,
+                    left_doc.map(rows::has_pending_prepared_diff_syntax_chunk_builds_for_document),
+                    right_doc.map(rows::has_pending_prepared_diff_syntax_chunk_builds_for_document),
+                    pane.syntax_chunk_poll_task.is_some(),
+                )
+            },
+        );
 
         cx.update(|_window, app| {
             let pane = view.read(app).main_pane.read(app);
@@ -3931,10 +3967,10 @@ fn file_diff_cache_does_not_rebuild_when_rev_changes_with_identical_payload(
                 "identical payload refresh should keep the right prepared syntax document reachable"
             );
             let left_cached =
-                file_diff_split_cached_styled(&pane, DiffTextRegion::SplitLeft, stable_left_line)
+                file_diff_split_cached_styled(pane, DiffTextRegion::SplitLeft, stable_left_line)
                     .expect("identical payload refresh should preserve the cached left split row");
             let right_cached =
-                file_diff_split_cached_styled(&pane, DiffTextRegion::SplitRight, stable_right_line)
+                file_diff_split_cached_styled(pane, DiffTextRegion::SplitRight, stable_right_line)
                     .expect("identical payload refresh should preserve the cached right split row");
             assert_eq!(
                 left_cached.highlights_hash, left_hash_before,
@@ -4812,19 +4848,19 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
     use gitcomet_core::domain::DiffLineKind;
     use gitcomet_core::file_diff::FileDiffRowKind;
 
-    fn split_right_row_by_new_line<'a>(
-        pane: &'a MainPaneView,
+    fn split_right_row_by_new_line(
+        pane: &MainPaneView,
         new_line: u32,
-    ) -> Option<&'a gitcomet_core::file_diff::FileDiffRow> {
+    ) -> Option<&gitcomet_core::file_diff::FileDiffRow> {
         pane.file_diff_cache_rows
             .iter()
             .find(|row| row.new_line == Some(new_line))
     }
 
-    fn split_right_cached_styled_by_new_line<'a>(
-        pane: &'a MainPaneView,
+    fn split_right_cached_styled_by_new_line(
+        pane: &MainPaneView,
         new_line: u32,
-    ) -> Option<(&'a str, &'a super::CachedDiffStyledText)> {
+    ) -> Option<(&str, &super::CachedDiffStyledText)> {
         let row_ix = pane
             .file_diff_cache_rows
             .iter()
@@ -4836,19 +4872,16 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
         Some((text, styled))
     }
 
-    fn inline_row_by_new_line<'a>(
-        pane: &'a MainPaneView,
-        new_line: u32,
-    ) -> Option<&'a AnnotatedDiffLine> {
+    fn inline_row_by_new_line(pane: &MainPaneView, new_line: u32) -> Option<&AnnotatedDiffLine> {
         pane.file_diff_inline_cache
             .iter()
             .find(|line| line.new_line == Some(new_line))
     }
 
-    fn inline_cached_styled_by_new_line<'a>(
-        pane: &'a MainPaneView,
+    fn inline_cached_styled_by_new_line(
+        pane: &MainPaneView,
         new_line: u32,
-    ) -> Option<(&'a str, &'a super::CachedDiffStyledText)> {
+    ) -> Option<(&str, &super::CachedDiffStyledText)> {
         let inline_ix = pane
             .file_diff_inline_cache
             .iter()
@@ -5113,7 +5146,7 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
             );
             let (text, highlights) = cx.update(|_window, app| {
                 let pane = view.read(app).main_pane.read(app);
-                let (text, styled) = split_right_cached_styled_by_new_line(&pane, expected.line_no)
+                let (text, styled) = split_right_cached_styled_by_new_line(pane, expected.line_no)
                     .unwrap_or_else(|| {
                         panic!(
                             "expected cached split-right styled text for line {}",
@@ -5186,7 +5219,7 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
             );
             let (text, highlights) = cx.update(|_window, app| {
                 let pane = view.read(app).main_pane.read(app);
-                let (text, styled) = inline_cached_styled_by_new_line(&pane, expected.line_no)
+                let (text, styled) = inline_cached_styled_by_new_line(pane, expected.line_no)
                     .unwrap_or_else(|| {
                         panic!(
                             "expected cached inline styled text for line {}",
@@ -5352,14 +5385,14 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
     cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
         let (baseline_path_text, baseline_path_styled) =
-            split_right_cached_styled_by_new_line(&pane, baseline_path_line)
+            split_right_cached_styled_by_new_line(pane, baseline_path_line)
                 .expect("fallback split draw should cache the baseline YAML path row");
         let baseline_dash_color = list_item_dash_color(baseline_path_styled, baseline_path_text)
             .expect("fallback split draw should syntax-highlight the YAML list dash");
         let (_, baseline_path_color) = quoted_scalar_style(baseline_path_styled, baseline_path_text)
             .expect("fallback split draw should syntax-highlight the YAML quoted path");
         for line_no in affected_path_lines {
-            let (text, styled) = split_right_cached_styled_by_new_line(&pane, line_no)
+            let (text, styled) = split_right_cached_styled_by_new_line(pane, line_no)
                 .unwrap_or_else(|| panic!("fallback split draw should cache YAML row {line_no}"));
             assert_eq!(
                 list_item_dash_color(styled, text),
@@ -5374,7 +5407,7 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
         }
 
         let (baseline_nested_key_text, baseline_nested_key_styled) =
-            split_right_cached_styled_by_new_line(&pane, baseline_nested_key_line)
+            split_right_cached_styled_by_new_line(pane, baseline_nested_key_line)
                 .expect("fallback split draw should cache the baseline YAML nested key row");
         let baseline_nested_key_color = mapping_key_color(
             baseline_nested_key_styled,
@@ -5382,7 +5415,7 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
         )
         .expect("fallback split draw should syntax-highlight the YAML nested key");
         for line_no in affected_nested_key_lines {
-            let (text, styled) = split_right_cached_styled_by_new_line(&pane, line_no)
+            let (text, styled) = split_right_cached_styled_by_new_line(pane, line_no)
                 .unwrap_or_else(|| panic!("fallback split draw should cache YAML key row {line_no}"));
             assert_eq!(
                 mapping_key_color(styled, text),
@@ -5392,13 +5425,13 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
         }
 
         let (baseline_top_key_text, baseline_top_key_styled) =
-            split_right_cached_styled_by_new_line(&pane, baseline_top_key_line)
+            split_right_cached_styled_by_new_line(pane, baseline_top_key_line)
                 .expect("fallback split draw should cache the baseline YAML top-level key row");
         let baseline_top_key_color =
             mapping_key_color(baseline_top_key_styled, baseline_top_key_text)
                 .expect("fallback split draw should syntax-highlight the YAML top-level key");
         for line_no in affected_top_key_lines {
-            let (text, styled) = split_right_cached_styled_by_new_line(&pane, line_no)
+            let (text, styled) = split_right_cached_styled_by_new_line(pane, line_no)
                 .unwrap_or_else(|| panic!("fallback split draw should cache YAML top-level key row {line_no}"));
             assert_eq!(
                 mapping_key_color(styled, text),
@@ -5410,7 +5443,7 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
 
     let fallback_split_draw_rows = cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
-        split_draw_rows_for_lines(&pane, &render_lines)
+        split_draw_rows_for_lines(pane, &render_lines)
     });
     assert_split_rows_match_render_cache(cx, &view, "fallback split", fallback_split_draw_rows);
 
@@ -5431,14 +5464,14 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
     cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
         let (baseline_path_text, baseline_path_styled) =
-            inline_cached_styled_by_new_line(&pane, baseline_path_line)
+            inline_cached_styled_by_new_line(pane, baseline_path_line)
                 .expect("fallback inline draw should cache the baseline YAML path row");
         let baseline_dash_color = list_item_dash_color(baseline_path_styled, baseline_path_text)
             .expect("fallback inline draw should syntax-highlight the YAML list dash");
         let (_, baseline_path_color) = quoted_scalar_style(baseline_path_styled, baseline_path_text)
             .expect("fallback inline draw should syntax-highlight the YAML quoted path");
         for line_no in affected_path_lines {
-            let (text, styled) = inline_cached_styled_by_new_line(&pane, line_no)
+            let (text, styled) = inline_cached_styled_by_new_line(pane, line_no)
                 .unwrap_or_else(|| panic!("fallback inline draw should cache YAML row {line_no}"));
             assert_eq!(
                 list_item_dash_color(styled, text),
@@ -5453,7 +5486,7 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
         }
 
         let (baseline_nested_key_text, baseline_nested_key_styled) =
-            inline_cached_styled_by_new_line(&pane, baseline_nested_key_line)
+            inline_cached_styled_by_new_line(pane, baseline_nested_key_line)
                 .expect("fallback inline draw should cache the baseline YAML nested key row");
         let baseline_nested_key_color = mapping_key_color(
             baseline_nested_key_styled,
@@ -5461,7 +5494,7 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
         )
         .expect("fallback inline draw should syntax-highlight the YAML nested key");
         for line_no in affected_nested_key_lines {
-            let (text, styled) = inline_cached_styled_by_new_line(&pane, line_no)
+            let (text, styled) = inline_cached_styled_by_new_line(pane, line_no)
                 .unwrap_or_else(|| panic!("fallback inline draw should cache YAML key row {line_no}"));
             assert_eq!(
                 mapping_key_color(styled, text),
@@ -5471,13 +5504,13 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
         }
 
         let (baseline_top_key_text, baseline_top_key_styled) =
-            inline_cached_styled_by_new_line(&pane, baseline_top_key_line)
+            inline_cached_styled_by_new_line(pane, baseline_top_key_line)
                 .expect("fallback inline draw should cache the baseline YAML top-level key row");
         let baseline_top_key_color =
             mapping_key_color(baseline_top_key_styled, baseline_top_key_text)
                 .expect("fallback inline draw should syntax-highlight the YAML top-level key");
         for line_no in affected_top_key_lines {
-            let (text, styled) = inline_cached_styled_by_new_line(&pane, line_no)
+            let (text, styled) = inline_cached_styled_by_new_line(pane, line_no)
                 .unwrap_or_else(|| panic!("fallback inline draw should cache YAML top-level key row {line_no}"));
             assert_eq!(
                 mapping_key_color(styled, text),
@@ -5489,7 +5522,7 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
 
     let fallback_inline_draw_rows = cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
-        inline_draw_rows_for_lines(&pane, &render_lines)
+        inline_draw_rows_for_lines(pane, &render_lines)
     });
     assert_inline_rows_match_render_cache(cx, &view, "fallback inline", fallback_inline_draw_rows);
 
@@ -5695,7 +5728,7 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
 
     let prepared_split_draw_rows = cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
-        split_draw_rows_for_lines(&pane, &render_lines)
+        split_draw_rows_for_lines(pane, &render_lines)
     });
     assert_split_rows_match_render_cache(cx, &view, "prepared split", prepared_split_draw_rows);
 
@@ -5808,7 +5841,7 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
 
     let prepared_inline_draw_rows = cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
-        inline_draw_rows_for_lines(&pane, &render_lines)
+        inline_draw_rows_for_lines(pane, &render_lines)
     });
     assert_inline_rows_match_render_cache(cx, &view, "prepared inline", prepared_inline_draw_rows);
 }
@@ -5827,10 +5860,10 @@ fn yaml_file_diff_fallback_matches_prepared_document_for_deployment_ci(
         syntax: Vec<(std::ops::Range<usize>, Option<gpui::Hsla>)>,
     }
 
-    fn split_right_cached_styled_by_new_line<'a>(
-        pane: &'a MainPaneView,
+    fn split_right_cached_styled_by_new_line(
+        pane: &MainPaneView,
         new_line: u32,
-    ) -> Option<(&'a str, &'a super::CachedDiffStyledText)> {
+    ) -> Option<(&str, &super::CachedDiffStyledText)> {
         let row_ix = pane
             .file_diff_cache_rows
             .iter()
@@ -5842,19 +5875,19 @@ fn yaml_file_diff_fallback_matches_prepared_document_for_deployment_ci(
         Some((text, styled))
     }
 
-    fn split_right_row_by_new_line<'a>(
-        pane: &'a MainPaneView,
+    fn split_right_row_by_new_line(
+        pane: &MainPaneView,
         new_line: u32,
-    ) -> Option<&'a gitcomet_core::file_diff::FileDiffRow> {
+    ) -> Option<&gitcomet_core::file_diff::FileDiffRow> {
         pane.file_diff_cache_rows
             .iter()
             .find(|row| row.new_line == Some(new_line))
     }
 
-    fn inline_cached_styled_by_new_line<'a>(
-        pane: &'a MainPaneView,
+    fn inline_cached_styled_by_new_line(
+        pane: &MainPaneView,
         new_line: u32,
-    ) -> Option<(&'a str, &'a super::CachedDiffStyledText)> {
+    ) -> Option<(&str, &super::CachedDiffStyledText)> {
         let inline_ix = pane
             .file_diff_inline_cache
             .iter()
@@ -5865,10 +5898,7 @@ fn yaml_file_diff_fallback_matches_prepared_document_for_deployment_ci(
         Some((styled.text.as_ref(), styled))
     }
 
-    fn inline_row_by_new_line<'a>(
-        pane: &'a MainPaneView,
-        new_line: u32,
-    ) -> Option<&'a AnnotatedDiffLine> {
+    fn inline_row_by_new_line(pane: &MainPaneView, new_line: u32) -> Option<&AnnotatedDiffLine> {
         pane.file_diff_inline_cache
             .iter()
             .find(|line| line.new_line == Some(new_line))
@@ -6210,7 +6240,7 @@ fn yaml_file_diff_fallback_matches_prepared_document_for_deployment_ci(
     cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
         for line_no in new_lines {
-            let actual = split_right_cached_styled_by_new_line(&pane, line_no)
+            let actual = split_right_cached_styled_by_new_line(pane, line_no)
                 .map(cached_snapshot)
                 .unwrap_or_else(|| {
                     panic!("expected fallback split-right styled text for deployment-ci line {line_no}")
@@ -6232,7 +6262,7 @@ fn yaml_file_diff_fallback_matches_prepared_document_for_deployment_ci(
             .iter()
             .copied()
             .map(|line_no| {
-                split_visible_ix_by_new_line(&pane, line_no).unwrap_or_else(|| {
+                split_visible_ix_by_new_line(pane, line_no).unwrap_or_else(|| {
                     panic!("expected split visible row for deployment-ci line {line_no}")
                 })
             })
@@ -6245,13 +6275,13 @@ fn yaml_file_diff_fallback_matches_prepared_document_for_deployment_ci(
             draw_paint_record_for_visible_ix(cx, &view, visible_ix, DiffTextRegion::SplitRight);
         let (text, styled, kind) = cx.update(|_window, app| {
             let pane = view.read(app).main_pane.read(app);
-            let (text, styled) = split_right_cached_styled_by_new_line(&pane, line_no)
+            let (text, styled) = split_right_cached_styled_by_new_line(pane, line_no)
                 .unwrap_or_else(|| {
                     panic!(
                         "expected cached split-right styled text for deployment-ci line {line_no}"
                     )
                 });
-            let kind = split_right_row_by_new_line(&pane, line_no)
+            let kind = split_right_row_by_new_line(pane, line_no)
                 .unwrap_or_else(|| {
                     panic!("expected split-right row for deployment-ci line {line_no}")
                 })
@@ -6297,7 +6327,7 @@ fn yaml_file_diff_fallback_matches_prepared_document_for_deployment_ci(
             .iter()
             .copied()
             .map(|line_no| {
-                inline_visible_ix_by_new_line(&pane, line_no).unwrap_or_else(|| {
+                inline_visible_ix_by_new_line(pane, line_no).unwrap_or_else(|| {
                     panic!("expected inline visible row for deployment-ci line {line_no}")
                 })
             })
@@ -6308,7 +6338,7 @@ fn yaml_file_diff_fallback_matches_prepared_document_for_deployment_ci(
     cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
         for line_no in new_lines {
-            let actual = inline_cached_styled_by_new_line(&pane, line_no)
+            let actual = inline_cached_styled_by_new_line(pane, line_no)
                 .map(cached_snapshot)
                 .unwrap_or_else(|| {
                     panic!("expected fallback inline styled text for deployment-ci line {line_no}")
@@ -6330,10 +6360,10 @@ fn yaml_file_diff_fallback_matches_prepared_document_for_deployment_ci(
         let (text, styled, kind) = cx.update(|_window, app| {
             let pane = view.read(app).main_pane.read(app);
             let (text, styled) =
-                inline_cached_styled_by_new_line(&pane, line_no).unwrap_or_else(|| {
+                inline_cached_styled_by_new_line(pane, line_no).unwrap_or_else(|| {
                     panic!("expected cached inline styled text for deployment-ci line {line_no}")
                 });
-            let kind = inline_row_by_new_line(&pane, line_no)
+            let kind = inline_row_by_new_line(pane, line_no)
                 .unwrap_or_else(|| panic!("expected inline row for deployment-ci line {line_no}"))
                 .kind;
             (
@@ -6372,28 +6402,28 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_build_release_artifacts(
     use gitcomet_core::domain::DiffLineKind;
     use gitcomet_core::file_diff::FileDiffRowKind;
 
-    fn split_right_row_by_new_line<'a>(
-        pane: &'a MainPaneView,
+    fn split_right_row_by_new_line(
+        pane: &MainPaneView,
         new_line: u32,
-    ) -> Option<&'a gitcomet_core::file_diff::FileDiffRow> {
+    ) -> Option<&gitcomet_core::file_diff::FileDiffRow> {
         pane.file_diff_cache_rows
             .iter()
             .find(|row| row.new_line == Some(new_line))
     }
 
-    fn split_left_row_by_old_line<'a>(
-        pane: &'a MainPaneView,
+    fn split_left_row_by_old_line(
+        pane: &MainPaneView,
         old_line: u32,
-    ) -> Option<&'a gitcomet_core::file_diff::FileDiffRow> {
+    ) -> Option<&gitcomet_core::file_diff::FileDiffRow> {
         pane.file_diff_cache_rows
             .iter()
             .find(|row| row.old_line == Some(old_line))
     }
 
-    fn split_right_cached_styled_by_new_line<'a>(
-        pane: &'a MainPaneView,
+    fn split_right_cached_styled_by_new_line(
+        pane: &MainPaneView,
         new_line: u32,
-    ) -> Option<(&'a str, &'a super::CachedDiffStyledText)> {
+    ) -> Option<(&str, &super::CachedDiffStyledText)> {
         let row_ix = pane
             .file_diff_cache_rows
             .iter()
@@ -6405,10 +6435,10 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_build_release_artifacts(
         Some((text, styled))
     }
 
-    fn split_left_cached_styled_by_old_line<'a>(
-        pane: &'a MainPaneView,
+    fn split_left_cached_styled_by_old_line(
+        pane: &MainPaneView,
         old_line: u32,
-    ) -> Option<(&'a str, &'a super::CachedDiffStyledText)> {
+    ) -> Option<(&str, &super::CachedDiffStyledText)> {
         let row_ix = pane
             .file_diff_cache_rows
             .iter()
@@ -6420,19 +6450,16 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_build_release_artifacts(
         Some((text, styled))
     }
 
-    fn inline_row_by_new_line<'a>(
-        pane: &'a MainPaneView,
-        new_line: u32,
-    ) -> Option<&'a AnnotatedDiffLine> {
+    fn inline_row_by_new_line(pane: &MainPaneView, new_line: u32) -> Option<&AnnotatedDiffLine> {
         pane.file_diff_inline_cache
             .iter()
             .find(|line| line.new_line == Some(new_line))
     }
 
-    fn inline_cached_styled_by_new_line<'a>(
-        pane: &'a MainPaneView,
+    fn inline_cached_styled_by_new_line(
+        pane: &MainPaneView,
         new_line: u32,
-    ) -> Option<(&'a str, &'a super::CachedDiffStyledText)> {
+    ) -> Option<(&str, &super::CachedDiffStyledText)> {
         let inline_ix = pane
             .file_diff_inline_cache
             .iter()
@@ -6783,7 +6810,7 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_build_release_artifacts(
         old_lines.extend(old_affected_required_lines);
 
         for old_line in old_lines {
-            let Some(row) = split_left_row_by_old_line(&pane, old_line) else {
+            let Some(row) = split_left_row_by_old_line(pane, old_line) else {
                 panic!("expected split-left row for old line {old_line}");
             };
             assert_eq!(
@@ -6791,7 +6818,7 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_build_release_artifacts(
                 FileDiffRowKind::Context,
                 "expected build-release old line {old_line} to remain a context row on the left side"
             );
-            let Some((text, styled)) = split_left_cached_styled_by_old_line(&pane, old_line) else {
+            let Some((text, styled)) = split_left_cached_styled_by_old_line(pane, old_line) else {
                 panic!("expected cached split-left styled text for old line {old_line}");
             };
             let expected = expected_yaml_snapshot(theme, text);
@@ -6896,10 +6923,10 @@ fn yaml_file_diff_matches_prepared_document_for_build_release_artifacts(
         syntax: Vec<(std::ops::Range<usize>, Option<gpui::Hsla>)>,
     }
 
-    fn split_right_cached_styled_by_new_line<'a>(
-        pane: &'a MainPaneView,
+    fn split_right_cached_styled_by_new_line(
+        pane: &MainPaneView,
         new_line: u32,
-    ) -> Option<(&'a str, &'a super::CachedDiffStyledText)> {
+    ) -> Option<(&str, &super::CachedDiffStyledText)> {
         let row_ix = pane
             .file_diff_cache_rows
             .iter()
@@ -6911,10 +6938,10 @@ fn yaml_file_diff_matches_prepared_document_for_build_release_artifacts(
         Some((text, styled))
     }
 
-    fn split_left_cached_styled_by_old_line<'a>(
-        pane: &'a MainPaneView,
+    fn split_left_cached_styled_by_old_line(
+        pane: &MainPaneView,
         old_line: u32,
-    ) -> Option<(&'a str, &'a super::CachedDiffStyledText)> {
+    ) -> Option<(&str, &super::CachedDiffStyledText)> {
         let row_ix = pane
             .file_diff_cache_rows
             .iter()
@@ -6926,28 +6953,28 @@ fn yaml_file_diff_matches_prepared_document_for_build_release_artifacts(
         Some((text, styled))
     }
 
-    fn split_right_row_by_new_line<'a>(
-        pane: &'a MainPaneView,
+    fn split_right_row_by_new_line(
+        pane: &MainPaneView,
         new_line: u32,
-    ) -> Option<&'a gitcomet_core::file_diff::FileDiffRow> {
+    ) -> Option<&gitcomet_core::file_diff::FileDiffRow> {
         pane.file_diff_cache_rows
             .iter()
             .find(|row| row.new_line == Some(new_line))
     }
 
-    fn split_left_row_by_old_line<'a>(
-        pane: &'a MainPaneView,
+    fn split_left_row_by_old_line(
+        pane: &MainPaneView,
         old_line: u32,
-    ) -> Option<&'a gitcomet_core::file_diff::FileDiffRow> {
+    ) -> Option<&gitcomet_core::file_diff::FileDiffRow> {
         pane.file_diff_cache_rows
             .iter()
             .find(|row| row.old_line == Some(old_line))
     }
 
-    fn inline_cached_styled_by_new_line<'a>(
-        pane: &'a MainPaneView,
+    fn inline_cached_styled_by_new_line(
+        pane: &MainPaneView,
         new_line: u32,
-    ) -> Option<(&'a str, &'a super::CachedDiffStyledText)> {
+    ) -> Option<(&str, &super::CachedDiffStyledText)> {
         let inline_ix = pane
             .file_diff_inline_cache
             .iter()
@@ -6958,10 +6985,7 @@ fn yaml_file_diff_matches_prepared_document_for_build_release_artifacts(
         Some((styled.text.as_ref(), styled))
     }
 
-    fn inline_row_by_new_line<'a>(
-        pane: &'a MainPaneView,
-        new_line: u32,
-    ) -> Option<&'a AnnotatedDiffLine> {
+    fn inline_row_by_new_line(pane: &MainPaneView, new_line: u32) -> Option<&AnnotatedDiffLine> {
         pane.file_diff_inline_cache
             .iter()
             .find(|line| line.new_line == Some(new_line))
@@ -7309,7 +7333,7 @@ fn yaml_file_diff_matches_prepared_document_for_build_release_artifacts(
     cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
         for line_no in old_lines {
-            let actual = split_left_cached_styled_by_old_line(&pane, line_no)
+            let actual = split_left_cached_styled_by_old_line(pane, line_no)
                 .map(cached_snapshot)
                 .unwrap_or_else(|| {
                     panic!("expected split-left styled text for build-release old line {line_no}")
@@ -7325,7 +7349,7 @@ fn yaml_file_diff_matches_prepared_document_for_build_release_artifacts(
         }
 
         for line_no in new_lines {
-            let actual = split_right_cached_styled_by_new_line(&pane, line_no)
+            let actual = split_right_cached_styled_by_new_line(pane, line_no)
                 .map(cached_snapshot)
                 .unwrap_or_else(|| {
                     panic!("expected split-right styled text for build-release new line {line_no}")
@@ -7369,7 +7393,7 @@ fn yaml_file_diff_matches_prepared_document_for_build_release_artifacts(
             .iter()
             .copied()
             .map(|line_no| {
-                split_visible_ix_by_new_line(&pane, line_no).unwrap_or_else(|| {
+                split_visible_ix_by_new_line(pane, line_no).unwrap_or_else(|| {
                     panic!("expected split-right visible row for build-release new line {line_no}")
                 })
             })
@@ -7383,11 +7407,11 @@ fn yaml_file_diff_matches_prepared_document_for_build_release_artifacts(
             draw_paint_record_for_visible_ix(cx, &view, visible_ix, DiffTextRegion::SplitLeft);
         let (text, styled, kind) = cx.update(|_window, app| {
             let pane = view.read(app).main_pane.read(app);
-            let (text, styled) = split_left_cached_styled_by_old_line(&pane, line_no)
+            let (text, styled) = split_left_cached_styled_by_old_line(pane, line_no)
                 .unwrap_or_else(|| {
                     panic!("expected cached split-left styled text for build-release old line {line_no}")
                 });
-            let kind = split_left_row_by_old_line(&pane, line_no)
+            let kind = split_left_row_by_old_line(pane, line_no)
                 .unwrap_or_else(|| {
                     panic!("expected split-left row for build-release old line {line_no}")
                 })
@@ -7415,11 +7439,11 @@ fn yaml_file_diff_matches_prepared_document_for_build_release_artifacts(
             draw_paint_record_for_visible_ix(cx, &view, visible_ix, DiffTextRegion::SplitRight);
         let (text, styled, kind) = cx.update(|_window, app| {
             let pane = view.read(app).main_pane.read(app);
-            let (text, styled) = split_right_cached_styled_by_new_line(&pane, line_no)
+            let (text, styled) = split_right_cached_styled_by_new_line(pane, line_no)
                 .unwrap_or_else(|| {
                     panic!("expected cached split-right styled text for build-release new line {line_no}")
                 });
-            let kind = split_right_row_by_new_line(&pane, line_no)
+            let kind = split_right_row_by_new_line(pane, line_no)
                 .unwrap_or_else(|| {
                     panic!("expected split-right row for build-release new line {line_no}")
                 })
@@ -7461,7 +7485,7 @@ fn yaml_file_diff_matches_prepared_document_for_build_release_artifacts(
             .iter()
             .copied()
             .map(|line_no| {
-                inline_visible_ix_by_new_line(&pane, line_no).unwrap_or_else(|| {
+                inline_visible_ix_by_new_line(pane, line_no).unwrap_or_else(|| {
                     panic!("expected inline visible row for build-release new line {line_no}")
                 })
             })
@@ -7472,7 +7496,7 @@ fn yaml_file_diff_matches_prepared_document_for_build_release_artifacts(
     cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
         for line_no in new_lines {
-            let actual = inline_cached_styled_by_new_line(&pane, line_no)
+            let actual = inline_cached_styled_by_new_line(pane, line_no)
                 .map(cached_snapshot)
                 .unwrap_or_else(|| {
                     panic!("expected inline styled text for build-release new line {line_no}")
@@ -7494,12 +7518,12 @@ fn yaml_file_diff_matches_prepared_document_for_build_release_artifacts(
         let (text, styled, kind) = cx.update(|_window, app| {
             let pane = view.read(app).main_pane.read(app);
             let (text, styled) =
-                inline_cached_styled_by_new_line(&pane, line_no).unwrap_or_else(|| {
+                inline_cached_styled_by_new_line(pane, line_no).unwrap_or_else(|| {
                     panic!(
                         "expected cached inline styled text for build-release new line {line_no}"
                     )
                 });
-            let kind = inline_row_by_new_line(&pane, line_no)
+            let kind = inline_row_by_new_line(pane, line_no)
                 .unwrap_or_else(|| {
                     panic!("expected inline row for build-release new line {line_no}")
                 })
@@ -7533,10 +7557,10 @@ fn yaml_commit_file_diff_transition_from_patch_clears_stale_split_cache(
 ) {
     use gitcomet_core::domain::DiffTarget;
 
-    fn split_right_cached_styled_by_new_line<'a>(
-        pane: &'a MainPaneView,
+    fn split_right_cached_styled_by_new_line(
+        pane: &MainPaneView,
         new_line: u32,
-    ) -> Option<(&'a str, &'a super::CachedDiffStyledText)> {
+    ) -> Option<(&str, &super::CachedDiffStyledText)> {
         let row_ix = pane
             .file_diff_cache_rows
             .iter()
@@ -7755,7 +7779,7 @@ fn yaml_commit_file_diff_transition_from_patch_clears_stale_split_cache(
     cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
         for new_line in [17u32, 18, 22, 33] {
-            let Some((text, styled)) = split_right_cached_styled_by_new_line(&pane, new_line) else {
+            let Some((text, styled)) = split_right_cached_styled_by_new_line(pane, new_line) else {
                 panic!("expected cached split-right styled text for deployment-ci new line {new_line}");
             };
             let expected = expected_yaml_snapshot(theme, text);
@@ -7780,10 +7804,10 @@ fn yaml_same_content_rev_refresh_invalidates_cached_heuristic_file_diff_rows(
         syntax: Vec<(std::ops::Range<usize>, Option<gpui::Hsla>)>,
     }
 
-    fn split_right_cached_styled_by_new_line<'a>(
-        pane: &'a MainPaneView,
+    fn split_right_cached_styled_by_new_line(
+        pane: &MainPaneView,
         new_line: u32,
-    ) -> Option<(&'a str, &'a super::CachedDiffStyledText)> {
+    ) -> Option<(&str, &super::CachedDiffStyledText)> {
         let row_ix = pane
             .file_diff_cache_rows
             .iter()
@@ -7795,10 +7819,10 @@ fn yaml_same_content_rev_refresh_invalidates_cached_heuristic_file_diff_rows(
         Some((text, styled))
     }
 
-    fn inline_cached_styled_by_new_line<'a>(
-        pane: &'a MainPaneView,
+    fn inline_cached_styled_by_new_line(
+        pane: &MainPaneView,
         new_line: u32,
-    ) -> Option<(&'a str, &'a super::CachedDiffStyledText)> {
+    ) -> Option<(&str, &super::CachedDiffStyledText)> {
         let inline_ix = pane
             .file_diff_inline_cache
             .iter()
@@ -8204,7 +8228,7 @@ fn yaml_same_content_rev_refresh_invalidates_cached_heuristic_file_diff_rows(
             .iter()
             .copied()
             .map(|line| {
-                split_visible_ix_by_new_line(&pane, line).unwrap_or_else(|| {
+                split_visible_ix_by_new_line(pane, line).unwrap_or_else(|| {
                     panic!("expected split visible row for build-release line {line}")
                 })
             })
@@ -8218,7 +8242,7 @@ fn yaml_same_content_rev_refresh_invalidates_cached_heuristic_file_diff_rows(
             pane.file_diff_split_style_cache_epoch(DiffTextRegion::SplitRight),
             pane.file_diff_split_prepared_syntax_document(DiffTextRegion::SplitRight)
                 .is_some(),
-            split_mismatch_lines(&pane, &baseline_new_by_line, &affected_lines),
+            split_mismatch_lines(pane, &baseline_new_by_line, &affected_lines),
         )
     });
     if !right_doc_ready_before {
@@ -8348,7 +8372,7 @@ fn yaml_same_content_rev_refresh_invalidates_cached_heuristic_file_diff_rows(
             draw_paint_record_for_visible_ix(cx, &view, visible_ix, DiffTextRegion::SplitRight);
         let cached = cx.update(|_window, app| {
             let pane = view.read(app).main_pane.read(app);
-            split_right_cached_styled_by_new_line(&pane, line_no).map(cached_snapshot)
+            split_right_cached_styled_by_new_line(pane, line_no).map(cached_snapshot)
         });
         let expected = baseline_new_by_line
             .get(&line_no)
@@ -8400,7 +8424,7 @@ fn yaml_same_content_rev_refresh_invalidates_cached_heuristic_file_diff_rows(
             .iter()
             .copied()
             .map(|line| {
-                inline_visible_ix_by_new_line(&pane, line).unwrap_or_else(|| {
+                inline_visible_ix_by_new_line(pane, line).unwrap_or_else(|| {
                     panic!("expected inline visible row for build-release line {line}")
                 })
             })

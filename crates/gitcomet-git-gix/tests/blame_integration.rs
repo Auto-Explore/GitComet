@@ -1,5 +1,6 @@
 use gitcomet_core::services::GitBackend;
 use gitcomet_git_gix::GixBackend;
+#[path = "support/test_git_env.rs"]
 mod test_git_env;
 use std::path::Path;
 use std::process::Command;
@@ -95,9 +96,17 @@ fn blame_file_reports_head_and_explicit_revision() {
             .collect::<Vec<_>>(),
         vec!["one", "two"]
     );
-    assert!(base_blame.iter().all(|line| &*line.commit_id == base_id));
-    assert!(base_blame.iter().all(|line| &*line.author == "You"));
-    assert!(base_blame.iter().all(|line| &*line.summary == "base"));
+    assert!(
+        base_blame
+            .iter()
+            .all(|line| line.commit_id.as_ref() == base_id)
+    );
+    assert!(base_blame.iter().all(|line| line.author.as_ref() == "You"));
+    assert!(
+        base_blame
+            .iter()
+            .all(|line| line.summary.as_ref() == "base")
+    );
     assert!(
         base_blame
             .iter()

@@ -911,6 +911,7 @@ impl PagedFileDiffRows {
         page.get(page_row_ix).cloned()
     }
 
+    #[cfg(any(test, feature = "benchmarks"))]
     pub(in crate::view) fn for_each_row_range(
         &self,
         row_range: Range<usize>,

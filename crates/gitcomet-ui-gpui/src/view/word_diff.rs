@@ -176,6 +176,11 @@ fn is_single_ascii_token_range(bytes: &[u8], range: Range<usize>) -> bool {
         .all(|&byte| classify_byte(byte) == class)
 }
 
+#[inline(always)]
+fn ascii_contains_punctuation(bytes: &[u8]) -> bool {
+    bytes.iter().any(|&byte| classify_byte(byte) == 2)
+}
+
 fn ascii_word_diff_fast_ranges(
     old: &str,
     new: &str,
@@ -197,14 +202,20 @@ fn ascii_word_diff_fast_ranges(
     let shared_suffix = old_bytes.len().saturating_sub(old_end);
     let shared_bytes = prefix.saturating_add(shared_suffix);
     let min_len = old_bytes.len().min(new_bytes.len());
-    if min_len >= MIN_LOW_SIMILARITY_LINE_BYTES && shared_bytes.saturating_mul(4) < min_len {
+    let has_punctuation =
+        ascii_contains_punctuation(old_bytes) || ascii_contains_punctuation(new_bytes);
+    if has_punctuation
+        && min_len >= MIN_LOW_SIMILARITY_LINE_BYTES
+        && shared_bytes.saturating_mul(4) < min_len
+    {
         // Large-file linear fallback can pair unrelated ASCII lines after an
         // insertion/deletion shift. When the two lines share very little fixed
         // context, token-level highlighting is mostly noise and burns CPU plus
         // one tiny range allocation per side.
         return Some((WordDiffRanges::Empty, WordDiffRanges::Empty));
     }
-    if min_len >= MIN_LOW_SIMILARITY_LINE_BYTES
+    if has_punctuation
+        && min_len >= MIN_LOW_SIMILARITY_LINE_BYTES
         && shared_suffix <= 1
         && shared_bytes.saturating_mul(2) <= min_len
     {
@@ -767,8 +778,10 @@ mod tests {
 
         assert!(matches!(old_ranges, WordDiffRanges::One(_)));
         assert!(matches!(new_ranges, WordDiffRanges::One(_)));
-        assert_eq!(old_ranges.as_slice(), &[0..old.len()]);
-        assert_eq!(new_ranges.as_slice(), &[0..new.len()]);
+        assert_eq!(old_ranges.as_slice().len(), 1);
+        assert_eq!(old_ranges.as_slice()[0], 0..old.len());
+        assert_eq!(new_ranges.as_slice().len(), 1);
+        assert_eq!(new_ranges.as_slice()[0], 0..new.len());
     }
 
     #[test]

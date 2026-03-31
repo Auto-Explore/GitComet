@@ -2488,6 +2488,7 @@ fn should_skip_budgeted_foreground_parse(
         || request.input.line_starts.len() >= DIFF_SYNTAX_FOREGROUND_SKIP_LINE_COUNT
 }
 
+#[cfg(test)]
 fn treesitter_document_parse_request_from_input(
     language: DiffSyntaxLanguage,
     mode: DiffSyntaxMode,
@@ -2524,16 +2525,6 @@ fn treesitter_document_parse_request_from_input_with_reuse(
         input,
         cache_key,
     })
-}
-
-fn treesitter_document_parse_request_from_shared_text(
-    language: DiffSyntaxLanguage,
-    mode: DiffSyntaxMode,
-    text: SharedString,
-    line_starts: Arc<[usize]>,
-) -> Option<TreesitterDocumentParseRequest> {
-    let input = treesitter_document_input_from_shared_text(text, line_starts);
-    treesitter_document_parse_request_from_input_with_reuse(language, mode, input, None, None)
 }
 
 fn treesitter_document_input_from_shared_text(

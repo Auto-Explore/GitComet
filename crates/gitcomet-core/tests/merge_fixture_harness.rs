@@ -1053,13 +1053,13 @@ fn run_fixture(fixture: &MergeFixture) -> Result<(), String> {
         }
     }
 
-    if let Some(expected_conflict_count) = directives.expected_conflict_count {
-        if result.conflict_count != expected_conflict_count {
-            return Err(format!(
-                "[{}] expected conflict_count={}, got {}",
-                fixture.name, expected_conflict_count, result.conflict_count
-            ));
-        }
+    if let Some(expected_conflict_count) = directives.expected_conflict_count
+        && result.conflict_count != expected_conflict_count
+    {
+        return Err(format!(
+            "[{}] expected conflict_count={}, got {}",
+            fixture.name, expected_conflict_count, result.conflict_count
+        ));
     }
 
     let base = match base_text_opt {

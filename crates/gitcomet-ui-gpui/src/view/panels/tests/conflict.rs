@@ -2198,7 +2198,7 @@ fn large_conflict_two_way_views_upgrade_to_prepared_document_syntax(cx: &mut gpu
     let fallback_split_highlights_hash = cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
         let styled = conflict_split_cached_styled(
-            &pane,
+            pane,
             crate::view::conflict_resolver::ConflictPickSide::Ours,
             ours_comment_line,
         )
@@ -2279,7 +2279,7 @@ fn large_conflict_two_way_views_upgrade_to_prepared_document_syntax(cx: &mut gpu
     cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
         let styled = conflict_split_cached_styled(
-            &pane,
+            pane,
             crate::view::conflict_resolver::ConflictPickSide::Ours,
             ours_comment_line,
         )
@@ -2358,7 +2358,7 @@ fn large_conflict_two_way_views_upgrade_to_prepared_document_syntax(cx: &mut gpu
     cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
         let styled = conflict_split_cached_styled(
-            &pane,
+            pane,
             crate::view::conflict_resolver::ConflictPickSide::Ours,
             ours_comment_line,
         )
@@ -3413,8 +3413,8 @@ fn giant_two_way_search_finds_text_in_middle_of_large_block(cx: &mut gpui::TestA
                 let row = index
                     .row_at(&pane.conflict_resolver.marker_segments, matched_row_ix)
                     .expect("matched row should be generatable");
-                let row_has_target = row.old.as_ref().map_or(false, |t| t.contains(target))
-                    || row.new.as_ref().map_or(false, |t| t.contains(target));
+                let row_has_target = row.old.as_ref().is_some_and(|t| t.contains(target))
+                    || row.new.as_ref().is_some_and(|t| t.contains(target));
                 assert!(
                     row_has_target,
                     "generated row at source index {matched_row_ix} should contain '{target}'",

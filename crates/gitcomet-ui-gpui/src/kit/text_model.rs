@@ -1,6 +1,7 @@
 use gpui::SharedString;
 use memchr::memchr_iter;
 use smallvec::SmallVec;
+#[cfg(any(test, feature = "benchmarks"))]
 use std::borrow::Cow;
 use std::ops::{Deref, Range};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -533,16 +534,19 @@ impl TextModelSnapshot {
         self.core.line_index.shared_starts()
     }
 
+    #[cfg(any(test, feature = "benchmarks"))]
     fn clamp_offset_to_char_boundary(&self, offset: usize) -> usize {
         core_clamp_to_char_boundary(self.core.as_ref(), offset)
     }
 
+    #[cfg(any(test, feature = "benchmarks"))]
     fn normalized_char_range(&self, range: Range<usize>) -> Range<usize> {
         let start = self.clamp_offset_to_char_boundary(range.start.min(self.len()));
         let end = self.clamp_offset_to_char_boundary(range.end.min(self.len()));
         if end < start { end..start } else { start..end }
     }
 
+    #[cfg(any(test, feature = "benchmarks"))]
     fn borrowed_slice_for_range(&self, range: Range<usize>) -> Option<&str> {
         if range.is_empty() {
             return Some("");
@@ -573,6 +577,7 @@ impl TextModelSnapshot {
         None
     }
 
+    #[cfg(any(test, feature = "benchmarks"))]
     fn collect_range_to_string(&self, range: Range<usize>) -> String {
         let mut out = String::with_capacity(range.end.saturating_sub(range.start));
         let mut cursor = 0usize;
@@ -602,15 +607,12 @@ impl TextModelSnapshot {
         out
     }
 
+    #[cfg(any(test, feature = "benchmarks"))]
     pub fn slice(&self, range: Range<usize>) -> Cow<'_, str> {
         let range = self.normalized_char_range(range);
         self.borrowed_slice_for_range(range.clone())
             .map(Cow::Borrowed)
             .unwrap_or_else(|| Cow::Owned(self.collect_range_to_string(range)))
-    }
-
-    pub fn is_char_boundary(&self, offset: usize) -> bool {
-        core_is_char_boundary(self.core.as_ref(), offset)
     }
 
     #[cfg(any(test, feature = "benchmarks"))]
@@ -751,7 +753,7 @@ fn append_add_piece(core: &mut TextModelCore, text: &str) -> Option<Piece> {
 }
 
 fn append_small_text_to_last_add_chunk(
-    add_chunks: &mut Vec<Arc<String>>,
+    add_chunks: &mut [Arc<String>],
     text: &str,
 ) -> Option<Piece> {
     if text.len() > SMALL_ADD_CHUNK_BYTES {

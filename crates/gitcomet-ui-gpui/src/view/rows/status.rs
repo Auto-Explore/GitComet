@@ -36,27 +36,28 @@ pub(in crate::view) fn bench_reset_status_selection() {
 #[cfg(any(debug_assertions, feature = "benchmarks"))]
 static STATUS_SELECTION_POSITION_SCAN_STEPS: AtomicU64 = AtomicU64::new(0);
 
+struct StatusMultiSelectionSlice<'a> {
+    selected: &'a mut Vec<std::path::PathBuf>,
+    anchor: &'a mut Option<std::path::PathBuf>,
+    anchor_index: &'a mut Option<usize>,
+    anchor_status_rev: &'a mut Option<u64>,
+}
+
 fn set_status_multi_selection_single(
-    selected: &mut Vec<std::path::PathBuf>,
-    anchor: &mut Option<std::path::PathBuf>,
-    anchor_index: &mut Option<usize>,
-    anchor_status_rev: &mut Option<u64>,
+    selection: StatusMultiSelectionSlice<'_>,
     clicked_path: std::path::PathBuf,
     clicked_index: Option<usize>,
     status_rev: Option<u64>,
 ) {
-    selected.clear();
-    selected.push(clicked_path.clone());
-    *anchor = Some(clicked_path);
-    *anchor_index = clicked_index;
-    *anchor_status_rev = status_rev;
+    selection.selected.clear();
+    selection.selected.push(clicked_path.clone());
+    *selection.anchor = Some(clicked_path);
+    *selection.anchor_index = clicked_index;
+    *selection.anchor_status_rev = status_rev;
 }
 
 fn apply_status_multi_selection_to_slice(
-    selected: &mut Vec<std::path::PathBuf>,
-    anchor: &mut Option<std::path::PathBuf>,
-    anchor_index: &mut Option<usize>,
-    anchor_status_rev: &mut Option<u64>,
+    selection: StatusMultiSelectionSlice<'_>,
     clicked_path: std::path::PathBuf,
     clicked_index: Option<usize>,
     modifiers: gpui::Modifiers,
@@ -66,15 +67,7 @@ fn apply_status_multi_selection_to_slice(
 ) {
     if modifiers.shift {
         let Some(entries) = entries else {
-            set_status_multi_selection_single(
-                selected,
-                anchor,
-                anchor_index,
-                anchor_status_rev,
-                clicked_path,
-                clicked_index,
-                status_rev,
-            );
+            set_status_multi_selection_single(selection, clicked_path, clicked_index, status_rev);
             return;
         };
 
@@ -84,24 +77,21 @@ fn apply_status_multi_selection_to_slice(
             clicked_index,
             trust_clicked_index,
         ) else {
-            set_status_multi_selection_single(
-                selected,
-                anchor,
-                anchor_index,
-                anchor_status_rev,
-                clicked_path,
-                clicked_index,
-                status_rev,
-            );
+            set_status_multi_selection_single(selection, clicked_path, clicked_index, status_rev);
             return;
         };
 
-        let anchor_ix = if let Some(anchor_path) = anchor.as_deref() {
+        let anchor_ix = if let Some(anchor_path) = selection.anchor.as_deref() {
             let trust_anchor_index = status_rev
-                .zip(*anchor_status_rev)
+                .zip(*selection.anchor_status_rev)
                 .is_some_and(|(current, anchor_rev)| current == anchor_rev);
-            status_selection_entry_index(entries, anchor_path, *anchor_index, trust_anchor_index)
-                .unwrap_or(clicked_ix)
+            status_selection_entry_index(
+                entries,
+                anchor_path,
+                *selection.anchor_index,
+                trust_anchor_index,
+            )
+            .unwrap_or(clicked_ix)
         } else {
             clicked_ix
         };
@@ -110,42 +100,34 @@ fn apply_status_multi_selection_to_slice(
         } else {
             (clicked_ix, anchor_ix)
         };
-        selected.clear();
-        selected.extend(entries[a..=b].iter().cloned());
-        if anchor.is_none() {
-            *anchor = Some(clicked_path.clone());
+        selection.selected.clear();
+        selection.selected.extend(entries[a..=b].iter().cloned());
+        if selection.anchor.is_none() {
+            *selection.anchor = Some(clicked_path.clone());
         }
-        *anchor_index = Some(anchor_ix);
-        *anchor_status_rev = status_rev;
+        *selection.anchor_index = Some(anchor_ix);
+        *selection.anchor_status_rev = status_rev;
         return;
     }
 
     if modifiers.secondary() || modifiers.control || modifiers.platform {
-        if let Some(ix) = selected.iter().position(|p| p == &clicked_path) {
-            selected.remove(ix);
-            if selected.is_empty() {
-                *anchor = None;
-                *anchor_index = None;
-                *anchor_status_rev = None;
+        if let Some(ix) = selection.selected.iter().position(|p| p == &clicked_path) {
+            selection.selected.remove(ix);
+            if selection.selected.is_empty() {
+                *selection.anchor = None;
+                *selection.anchor_index = None;
+                *selection.anchor_status_rev = None;
             }
         } else {
-            selected.push(clicked_path.clone());
-            *anchor = Some(clicked_path);
-            *anchor_index = clicked_index;
-            *anchor_status_rev = status_rev;
+            selection.selected.push(clicked_path.clone());
+            *selection.anchor = Some(clicked_path);
+            *selection.anchor_index = clicked_index;
+            *selection.anchor_status_rev = status_rev;
         }
         return;
     }
 
-    set_status_multi_selection_single(
-        selected,
-        anchor,
-        anchor_index,
-        anchor_status_rev,
-        clicked_path,
-        clicked_index,
-        status_rev,
-    );
+    set_status_multi_selection_single(selection, clicked_path, clicked_index, status_rev);
 }
 
 fn status_selection_entry_index_hint(
@@ -209,10 +191,12 @@ pub(super) fn apply_status_multi_selection_click(
             selection.staged_anchor_index = None;
             selection.staged_anchor_status_rev = None;
             apply_status_multi_selection_to_slice(
-                &mut selection.unstaged,
-                &mut selection.unstaged_anchor,
-                &mut selection.unstaged_anchor_index,
-                &mut selection.unstaged_anchor_status_rev,
+                StatusMultiSelectionSlice {
+                    selected: &mut selection.unstaged,
+                    anchor: &mut selection.unstaged_anchor,
+                    anchor_index: &mut selection.unstaged_anchor_index,
+                    anchor_status_rev: &mut selection.unstaged_anchor_status_rev,
+                },
                 clicked_path,
                 clicked_index,
                 modifiers,
@@ -233,10 +217,12 @@ pub(super) fn apply_status_multi_selection_click(
             let mut untracked_anchor_index = None;
             let mut untracked_anchor_status_rev = None;
             apply_status_multi_selection_to_slice(
-                &mut selection.untracked,
-                &mut selection.untracked_anchor,
-                &mut untracked_anchor_index,
-                &mut untracked_anchor_status_rev,
+                StatusMultiSelectionSlice {
+                    selected: &mut selection.untracked,
+                    anchor: &mut selection.untracked_anchor,
+                    anchor_index: &mut untracked_anchor_index,
+                    anchor_status_rev: &mut untracked_anchor_status_rev,
+                },
                 clicked_path,
                 clicked_index,
                 modifiers,
@@ -253,10 +239,12 @@ pub(super) fn apply_status_multi_selection_click(
             selection.unstaged_anchor_index = None;
             selection.unstaged_anchor_status_rev = None;
             apply_status_multi_selection_to_slice(
-                &mut selection.staged,
-                &mut selection.staged_anchor,
-                &mut selection.staged_anchor_index,
-                &mut selection.staged_anchor_status_rev,
+                StatusMultiSelectionSlice {
+                    selected: &mut selection.staged,
+                    anchor: &mut selection.staged_anchor,
+                    anchor_index: &mut selection.staged_anchor_index,
+                    anchor_status_rev: &mut selection.staged_anchor_status_rev,
+                },
                 clicked_path,
                 clicked_index,
                 modifiers,

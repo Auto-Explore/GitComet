@@ -92,6 +92,7 @@ impl DiffTextSourceIdentity {
         }
     }
 
+    #[cfg(feature = "benchmarks")]
     pub(super) fn from_arc_text(text: &Arc<str>) -> Self {
         Self::from_str(text.as_ref())
     }
@@ -1337,6 +1338,7 @@ pub(super) fn build_cached_diff_styled_text_with_source_identity(
     )
 }
 
+#[cfg(feature = "benchmarks")]
 pub(super) fn build_cached_diff_styled_text_with_palette(
     theme: AppTheme,
     highlight_palette: &SyntaxHighlightPalette,
@@ -1350,6 +1352,7 @@ pub(super) fn build_cached_diff_styled_text_with_palette(
     )
 }
 
+#[cfg(feature = "benchmarks")]
 pub(super) fn build_cached_diff_styled_text_with_palette_and_full_text_syntax_kind(
     theme: AppTheme,
     highlight_palette: &SyntaxHighlightPalette,
@@ -1386,6 +1389,7 @@ pub(super) fn build_cached_diff_styled_text_with_palette_and_full_text_syntax_ki
     )
 }
 
+#[cfg(feature = "benchmarks")]
 pub(super) fn build_cached_diff_styled_text_with_palette_and_full_text_string(
     theme: AppTheme,
     highlight_palette: &SyntaxHighlightPalette,
@@ -2028,6 +2032,7 @@ fn prepared_document_line_highlights_from_tokens(
     highlights
 }
 
+#[cfg(feature = "benchmarks")]
 fn prepared_document_line_highlights_from_tokens_with_palette(
     highlight_palette: &SyntaxHighlightPalette,
     line_len: usize,

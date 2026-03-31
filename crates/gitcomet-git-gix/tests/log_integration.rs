@@ -2,6 +2,7 @@ use gitcomet_core::domain::{CommitId, FileStatusKind, LogCursor};
 use gitcomet_core::error::{ErrorKind, GitFailureId};
 use gitcomet_core::services::GitBackend;
 use gitcomet_git_gix::GixBackend;
+#[path = "support/test_git_env.rs"]
 mod test_git_env;
 use std::path::Path;
 use std::process::Command;
@@ -766,7 +767,7 @@ fn commit_details_reports_merge_parents_and_file_changes() {
     );
     assert!(
         feature_details.files.iter().any(|f| {
-            f.path == std::path::PathBuf::from("feature.txt") && f.kind == FileStatusKind::Added
+            f.path.as_path() == Path::new("feature.txt") && f.kind == FileStatusKind::Added
         }),
         "expected feature commit details to include feature file"
     );

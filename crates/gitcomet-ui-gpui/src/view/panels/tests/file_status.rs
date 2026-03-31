@@ -2134,9 +2134,9 @@ fn split_status_section_resize_moves_untracked_section(cx: &mut gpui::TestAppCon
     );
     assert!(
         updated_handle_bounds.center().y > initial_handle_bounds.center().y,
-        "expected the inner divider to move downward after resizing (initial_handle_y={}, updated_handle_y={}, updated_untracked_height={:?})",
-        format!("{:?}", initial_handle_bounds.center().y),
-        format!("{:?}", updated_handle_bounds.center().y),
+        "expected the inner divider to move downward after resizing (initial_handle_y={:?}, updated_handle_y={:?}, updated_untracked_height={:?})",
+        initial_handle_bounds.center().y,
+        updated_handle_bounds.center().y,
         updated_untracked_height,
     );
 }

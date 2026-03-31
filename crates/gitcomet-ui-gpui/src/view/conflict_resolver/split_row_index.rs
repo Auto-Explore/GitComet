@@ -796,6 +796,7 @@ impl ConflictSplitRowIndex {
         page.get(row_offset).cloned()
     }
 
+    #[cfg(any(test, feature = "benchmarks"))]
     pub(in crate::view) fn for_each_row_range(
         &self,
         segments: &[ConflictSegment],

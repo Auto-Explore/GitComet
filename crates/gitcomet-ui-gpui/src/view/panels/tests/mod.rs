@@ -1,3 +1,5 @@
+#![allow(clippy::type_complexity)]
+
 pub(super) use super::main::{
     next_conflict_diff_split_ratio, show_conflict_save_stage_action,
     show_external_mergetool_actions,
@@ -466,7 +468,7 @@ pub(super) fn assert_file_preview_ctrl_a_ctrl_c_copies_all(
             set_test_file_status(
                 &mut repo,
                 file_rel.clone(),
-                status_kind.clone(),
+                status_kind,
                 gitcomet_core::domain::DiffArea::Staged,
             );
 
@@ -505,7 +507,7 @@ pub(super) fn assert_file_preview_ctrl_a_ctrl_c_copies_all(
     cx.simulate_keystrokes("ctrl-a ctrl-c");
     assert_eq!(
         cx.read_from_clipboard().and_then(|item| item.text()),
-        Some(expected.into())
+        Some(expected)
     );
 
     let _ = std::fs::remove_dir_all(&workdir);
@@ -822,7 +824,7 @@ pub(super) fn wait_for_main_pane_condition_with_timeout<T, Ready, Snapshot>(
 
         let ready = cx.update(|_window, app| {
             let pane = view.read(app).main_pane.read(app);
-            is_ready(&pane)
+            is_ready(pane)
         });
         if ready {
             return;
@@ -830,7 +832,7 @@ pub(super) fn wait_for_main_pane_condition_with_timeout<T, Ready, Snapshot>(
         if std::time::Instant::now() >= deadline {
             let snapshot = cx.update(|_window, app| {
                 let pane = view.read(app).main_pane.read(app);
-                snapshot(&pane)
+                snapshot(pane)
             });
             panic!("timed out waiting for {description}: {snapshot:?}");
         }

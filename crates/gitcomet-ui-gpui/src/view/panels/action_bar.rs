@@ -801,8 +801,10 @@ mod tests {
     #[test]
     fn notify_fingerprint_changes_when_branches_rev_changes() {
         let repo_id = RepoId(1);
-        let mut state = AppState::default();
-        state.active_repo = Some(repo_id);
+        let mut state = AppState {
+            active_repo: Some(repo_id),
+            ..AppState::default()
+        };
         state.repos.push(RepoState::new_opening(
             repo_id,
             RepoSpec {

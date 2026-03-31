@@ -459,7 +459,7 @@ fn remap_line_keyed_cache_for_delta_preserves_versioned_preview_entries() {
     let shifted = versioned_cached_diff_styled_text_is_current(cache.get(&5), 7)
         .expect("suffix entry should move and keep its syntax epoch");
     assert_eq!(shifted.text.as_ref(), "shift");
-    assert!(cache.get(&7).is_none());
+    assert!(!cache.contains_key(&7));
 }
 
 #[test]
@@ -1550,7 +1550,7 @@ fn empty_base_conflict_hint_overrides_false_a_badge() {
 
     assert_eq!(meta[1].source, ResolvedLineSource::B);
     assert_eq!(meta[1].input_line, Some(2));
-    assert_eq!(
+    assert!(
         conflict_resolver::build_resolved_output_line_sources_index(
             &meta,
             &output_lines,
@@ -1561,8 +1561,7 @@ fn empty_base_conflict_hint_overrides_false_a_badge() {
             ResolvedLineSource::B,
             2,
             "dup"
-        )),
-        true
+        ))
     );
 }
 

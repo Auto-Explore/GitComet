@@ -224,6 +224,7 @@ pub(in crate::view) fn history_resize_state_visible_columns(
     Some(state.visible_columns)
 }
 
+#[cfg(any(test, feature = "benchmarks"))]
 #[inline]
 pub(in crate::view) fn history_resize_state_visible_columns_for_current_width(
     available: Pixels,
@@ -263,6 +264,7 @@ pub(in crate::view) fn history_column_drag_clamped_width_for_state(
     next
 }
 
+#[cfg(any(test, feature = "benchmarks"))]
 fn history_column_drag_clamped_width(
     handle: HistoryColResizeHandle,
     candidate: Pixels,
@@ -288,6 +290,7 @@ fn history_column_width_for_handle(
     }
 }
 
+#[cfg(any(test, feature = "benchmarks"))]
 pub(in crate::view) fn history_resize_state_preserves_visible_columns(
     available: Pixels,
     layout: HistoryColumnDragLayout,
@@ -311,9 +314,10 @@ pub(in crate::view) fn history_visible_columns_for_layout_with_resize_state(
     if let Some(state) = resize_state {
         let current_width = history_column_width_for_handle(layout, state.handle);
         if current_width == state.current_width
-            && let Some(columns) = history_resize_state_visible_columns(available, Some(state)) {
-                return columns;
-            }
+            && let Some(columns) = history_resize_state_visible_columns(available, Some(state))
+        {
+            return columns;
+        }
     }
 
     history_visible_columns_for_layout(available, layout)
@@ -628,9 +632,9 @@ impl HistoryView {
             let current_width = self.history_column_width(state.handle);
             if current_width == state.current_width
                 && let Some(columns) = history_resize_state_visible_columns(available, Some(state))
-                {
-                    return columns;
-                }
+            {
+                return columns;
+            }
         }
 
         let layout = HistoryColumnDragLayout {

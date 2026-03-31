@@ -77,19 +77,6 @@ impl PathDisplayCache {
     const MAX_ENTRIES: usize = 8_192;
     const RECENT_MAX_ENTRIES: usize = Self::MAX_ENTRIES / 2;
 
-    #[cfg(any(test, feature = "benchmarks"))]
-    pub(super) fn clear(&mut self) {
-        self.recent.clear();
-        self.previous.clear();
-        self.recent_entries = 0;
-        self.previous_entries = 0;
-        #[cfg(not(windows))]
-        {
-            self.present_hash_counts.clear();
-            self.overflow_tail_active = false;
-        }
-    }
-
     pub(super) fn len(&self) -> usize {
         self.recent_entries + self.previous_entries
     }
