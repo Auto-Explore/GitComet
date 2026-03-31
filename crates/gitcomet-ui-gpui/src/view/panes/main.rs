@@ -62,9 +62,12 @@ impl Render for MainPaneView {
             GitCometViewMode::Normal | GitCometViewMode::FocusedMergetool
         ));
         self.last_window_size = window.viewport_size();
-        self.history_view
-            .update(cx, |v, _| v.set_last_window_size(self.last_window_size));
         self.sync_root_layout_snapshot(cx);
+        let history_content_width = self.main_pane_content_width(cx);
+        self.history_view.update(cx, |v, _| {
+            v.set_last_window_size(self.last_window_size);
+            v.set_history_content_width(history_content_width);
+        });
 
         let show_diff = self
             .active_repo()

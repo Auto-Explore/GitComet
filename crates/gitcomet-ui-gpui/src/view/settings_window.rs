@@ -82,6 +82,7 @@ pub(crate) struct SettingsWindowView {
     theme: AppTheme,
     ui_font_family: String,
     editor_font_family: String,
+    use_font_ligatures: bool,
     ui_font_options: Arc<[String]>,
     editor_font_options: Arc<[String]>,
     settings_window_scroll: ScrollHandle,
@@ -335,6 +336,7 @@ impl SettingsWindowView {
             theme,
             ui_font_family: font_preferences.ui_font_family,
             editor_font_family: font_preferences.editor_font_family,
+            use_font_ligatures: font_preferences.use_font_ligatures,
             ui_font_options: crate::font_preferences::ui_font_options(window),
             editor_font_options: crate::font_preferences::editor_font_options(window),
             settings_window_scroll: ScrollHandle::default(),
@@ -377,6 +379,7 @@ impl SettingsWindowView {
             theme_mode: Some(self.theme_mode.key().to_string()),
             ui_font_family: Some(self.ui_font_family.clone()),
             editor_font_family: Some(self.editor_font_family.clone()),
+            use_font_ligatures: Some(self.use_font_ligatures),
             date_time_format: Some(self.date_time_format.key().to_string()),
             timezone: Some(self.timezone.key()),
             show_timezone: Some(self.show_timezone),
@@ -500,6 +503,7 @@ impl SettingsWindowView {
             cx,
             self.ui_font_family.clone(),
             self.editor_font_family.clone(),
+            self.use_font_ligatures,
         );
         self.persist_preferences(cx);
         self.update_main_windows(cx, move |view, _window, cx| {
@@ -519,6 +523,26 @@ impl SettingsWindowView {
             cx,
             self.ui_font_family.clone(),
             self.editor_font_family.clone(),
+            self.use_font_ligatures,
+        );
+        self.persist_preferences(cx);
+        self.update_main_windows(cx, move |view, _window, cx| {
+            view.notify_font_preferences_changed(cx);
+        });
+        cx.notify();
+    }
+
+    fn set_use_font_ligatures(&mut self, enabled: bool, cx: &mut gpui::Context<Self>) {
+        if self.use_font_ligatures == enabled {
+            return;
+        }
+
+        self.use_font_ligatures = enabled;
+        crate::font_preferences::set_current(
+            cx,
+            self.ui_font_family.clone(),
+            self.editor_font_family.clone(),
+            self.use_font_ligatures,
         );
         self.persist_preferences(cx);
         self.update_main_windows(cx, move |view, _window, cx| {
@@ -1437,6 +1461,17 @@ impl Render for SettingsWindowView {
                         this.toggle_section(SettingsSection::EditorFont, cx);
                     }));
 
+                let font_ligatures_row = self
+                    .toggle_row(
+                        "settings_window_use_font_ligatures",
+                        "Use font ligatures",
+                        self.use_font_ligatures,
+                        theme,
+                    )
+                    .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                        this.set_use_font_ligatures(!this.use_font_ligatures, cx);
+                    }));
+
                 let timezone_row = self
                     .summary_row(
                         "settings_window_timezone",
@@ -1598,6 +1633,8 @@ impl Render for SettingsWindowView {
                             theme,
                         ));
                 }
+
+                general_card = general_card.child(font_ligatures_row);
 
                 general_card = general_card.child(date_format_row);
                 if self.expanded_section == Some(SettingsSection::DateFormat) {
@@ -1975,9 +2012,14 @@ impl Render for SettingsWindowView {
             .flex()
             .flex_col()
             .bg(theme.colors.window_bg)
-            .font_family(crate::font_preferences::applied_ui_font_family(
-                &self.ui_font_family,
-            ))
+            .font(gpui::Font {
+                family: crate::font_preferences::applied_ui_font_family(&self.ui_font_family)
+                    .into(),
+                features: crate::font_preferences::applied_font_features(self.use_font_ligatures),
+                fallbacks: None,
+                weight: gpui::FontWeight::default(),
+                style: gpui::FontStyle::default(),
+            })
             .text_color(theme.colors.text)
             .child(header)
             .child(content);

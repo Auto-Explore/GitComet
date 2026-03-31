@@ -387,8 +387,7 @@ impl HistoryView {
                         if handle == HistoryColResizeHandle::Graph {
                             this.history_col_graph_auto = false;
                         }
-                        let available_width =
-                            super::history_columns_available_width(this.last_window_size.width);
+                        let available_width = this.history_content_width;
                         let drag_layout = super::HistoryColumnDragLayout {
                             show_author: this.history_show_author,
                             show_date: this.history_show_date,
@@ -417,8 +416,7 @@ impl HistoryView {
                             return;
                         }
 
-                        let available_width =
-                            super::history_columns_available_width(this.last_window_size.width);
+                        let available_width = this.history_content_width;
                         let next = super::history_column_drag_clamped_width_for_state(
                             &mut state,
                             e.event.position.x,
