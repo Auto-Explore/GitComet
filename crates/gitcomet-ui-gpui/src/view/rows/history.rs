@@ -79,11 +79,13 @@ impl MainPaneView {
                         .into_parts();
                     if is_pending {
                         this.ensure_prepared_syntax_chunk_poll(cx);
-                    }
-                    if defer_cache_write {
                         pending_styled = Some(styled);
                     } else {
-                        this.worktree_preview_segments_cache_set(ix, styled);
+                        if defer_cache_write {
+                            pending_styled = Some(styled);
+                        } else {
+                            this.worktree_preview_segments_cache_set(ix, styled);
+                        }
                     }
                 }
 
