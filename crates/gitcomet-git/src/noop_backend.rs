@@ -9,8 +9,7 @@ use std::sync::Arc;
 pub struct NoopBackend;
 
 impl GitBackend for NoopBackend {
-    fn open(&self, workdir: &Path) -> Result<Arc<dyn GitRepository>> {
-        let _ = workdir;
+    fn open(&self, _workdir: &Path) -> Result<Arc<dyn GitRepository>> {
         Err(Error::new(ErrorKind::Unsupported(
             "No Git backend enabled. Build with `--features gix`.",
         )))

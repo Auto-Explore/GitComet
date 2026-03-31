@@ -484,9 +484,8 @@ pub struct TextInput {
 }
 
 impl TextInput {
-    pub fn new(options: TextInputOptions, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(options: TextInputOptions, _window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
-        let _ = window;
         Self {
             focus_handle,
             content: TextModel::new(),

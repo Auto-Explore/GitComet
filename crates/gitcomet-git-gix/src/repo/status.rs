@@ -625,14 +625,11 @@ fn collect_index_worktree_status_entry<U>(
         gix::status::plumbing::index_as_worktree_with_renames::Entry::Modification {
             rela_path,
             status,
-            entry_index,
             ..
         } => {
-            if let gix::status::plumbing::index_as_worktree::EntryStatus::NeedsUpdate(stat) =
+            if let gix::status::plumbing::index_as_worktree::EntryStatus::NeedsUpdate(_stat) =
                 &status
             {
-                let _ = entry_index;
-                let _ = stat;
                 index_changes.push(IndexWorktreeApplyChange::NewStat);
                 return Ok(());
             }
@@ -645,7 +642,6 @@ fn collect_index_worktree_status_entry<U>(
                     },
                 )
             ) {
-                let _ = entry_index;
                 index_changes.push(IndexWorktreeApplyChange::SetSizeToZero);
             }
             let path = path_buf_from_git_bytes(

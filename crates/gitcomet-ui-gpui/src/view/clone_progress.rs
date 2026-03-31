@@ -17,7 +17,7 @@ pub(crate) fn append_clone_progress_header(buf: &mut String, title: &str, url: &
     buf.push_str(url);
     buf.push('\n');
     buf.push_str("-> ");
-    let _ = write!(buf, "{}", dest.display());
+    write!(buf, "{}", dest.display()).expect("writing to String should not fail");
 }
 
 pub(crate) fn reset_clone_progress_message(buf: &mut String, header: &str) {

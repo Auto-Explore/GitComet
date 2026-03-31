@@ -845,7 +845,10 @@ impl<'a> PreparedReplacementLine<'a> {
         } else {
             let prepared_chars = text.chars().collect::<Vec<_>>().into_boxed_slice();
             let chars = OnceCell::new();
-            let _ = chars.set(prepared_chars);
+            assert!(
+                chars.set(prepared_chars).is_ok(),
+                "fresh OnceCell should accept prepared chars"
+            );
             Self {
                 text,
                 ascii_bytes: None,
