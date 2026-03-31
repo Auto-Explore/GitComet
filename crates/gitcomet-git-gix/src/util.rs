@@ -531,11 +531,10 @@ fn run_command_with_timeout(mut cmd: Command, label: &str, timeout: Duration) ->
         ));
     }
 
-    if let Some((askpass_script, auth)) = askpass_context.as_ref() {
-        if status.success() {
+    if let Some((askpass_script, auth)) = askpass_context.as_ref()
+        && status.success() {
             remember_successful_prompt_auth(auth.as_ref(), askpass_script);
         }
-    }
 
     Ok(Output {
         status,
