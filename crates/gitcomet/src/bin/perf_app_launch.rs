@@ -1020,7 +1020,7 @@ fn detect_linux_display_environment_blocker(
 ) -> Option<String> {
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     {
-        return format_linux_display_environment_blocker(bench, stage, stderr_tail);
+        format_linux_display_environment_blocker(bench, stage, stderr_tail)
     }
 
     #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
