@@ -388,28 +388,28 @@ impl HistoryView {
                         let dx = e.event.position.x - state.start_x;
                         let available_width =
                             super::history_columns_available_width(this.last_window_size.width);
-                        let show_author_pref = this.history_show_author;
-                        let show_date_pref = this.history_show_date;
-                        let show_sha_pref = this.history_show_sha;
-                        let drag_layout = super::HistoryColumnDragLayout {
-                            show_author: show_author_pref,
-                            show_date: show_date_pref,
-                            show_sha: show_sha_pref,
-                            branch_w: this.history_col_branch,
-                            graph_w: this.history_col_graph,
-                            author_w: this.history_col_author,
-                            date_w: this.history_col_date,
-                            sha_w: this.history_col_sha,
+                        let preferred_columns = (
+                            this.history_show_author,
+                            this.history_show_date,
+                            this.history_show_sha,
+                        );
+                        let widths = super::HistoryColumnWidths {
+                            branch: this.history_col_branch,
+                            graph: this.history_col_graph,
+                            author: this.history_col_author,
+                            date: this.history_col_date,
+                            sha: this.history_col_sha,
                         };
                         let mut changed = false;
                         match state.handle {
                             HistoryColResizeHandle::Branch => {
                                 let candidate = state.start_branch + dx;
-                                let next = super::history_column_drag_clamped_width(
+                                let next = super::history_column_drag_next_width(
                                     HistoryColResizeHandle::Branch,
                                     candidate,
                                     available_width,
-                                    drag_layout,
+                                    preferred_columns,
+                                    widths,
                                 );
                                 if this.history_col_branch != next {
                                     this.history_col_branch = next;
@@ -418,11 +418,12 @@ impl HistoryView {
                             }
                             HistoryColResizeHandle::Graph => {
                                 let candidate = state.start_graph + dx;
-                                let next = super::history_column_drag_clamped_width(
+                                let next = super::history_column_drag_next_width(
                                     HistoryColResizeHandle::Graph,
                                     candidate,
                                     available_width,
-                                    drag_layout,
+                                    preferred_columns,
+                                    widths,
                                 );
                                 if this.history_col_graph != next {
                                     this.history_col_graph = next;
@@ -431,11 +432,12 @@ impl HistoryView {
                             }
                             HistoryColResizeHandle::Author => {
                                 let candidate = state.start_author - dx;
-                                let next = super::history_column_drag_clamped_width(
+                                let next = super::history_column_drag_next_width(
                                     HistoryColResizeHandle::Author,
                                     candidate,
                                     available_width,
-                                    drag_layout,
+                                    preferred_columns,
+                                    widths,
                                 );
                                 if this.history_col_author != next {
                                     this.history_col_author = next;
@@ -444,11 +446,12 @@ impl HistoryView {
                             }
                             HistoryColResizeHandle::Date => {
                                 let candidate = state.start_date - dx;
-                                let next = super::history_column_drag_clamped_width(
+                                let next = super::history_column_drag_next_width(
                                     HistoryColResizeHandle::Date,
                                     candidate,
                                     available_width,
-                                    drag_layout,
+                                    preferred_columns,
+                                    widths,
                                 );
                                 if this.history_col_date != next {
                                     this.history_col_date = next;
@@ -457,11 +460,12 @@ impl HistoryView {
                             }
                             HistoryColResizeHandle::Sha => {
                                 let candidate = state.start_sha - dx;
-                                let next = super::history_column_drag_clamped_width(
+                                let next = super::history_column_drag_next_width(
                                     HistoryColResizeHandle::Sha,
                                     candidate,
                                     available_width,
-                                    drag_layout,
+                                    preferred_columns,
+                                    widths,
                                 );
                                 if this.history_col_sha != next {
                                     this.history_col_sha = next;
