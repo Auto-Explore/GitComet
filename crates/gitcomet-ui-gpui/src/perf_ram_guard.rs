@@ -280,6 +280,7 @@ fn parse_status_kib_bytes(status: &[u8], key: &[u8]) -> Option<u64> {
         saw_digit.then_some(rss_kib)
     })
 }
+#[cfg(target_os = "linux")]
 fn env_flag(key: &str) -> bool {
     env::var(key)
         .ok()
