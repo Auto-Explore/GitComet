@@ -9,8 +9,14 @@ use gpui::{
     ScrollHandle, ShapedLine, SharedString, Style, TextAlign, TextRun, UTF16Selection, Window,
     WrappedLine, actions, anchored, deferred, div, fill, point, px, relative, size,
 };
-use rustc_hash::{FxHashMap as HashMap, FxHasher};
-use std::hash::{Hash, Hasher};
+use rustc_hash::FxHashMap as HashMap;
+#[cfg(any(test, feature = "benchmarks"))]
+use rustc_hash::FxHasher;
+use smallvec::SmallVec;
+use std::borrow::Cow;
+use std::hash::Hash;
+#[cfg(any(test, feature = "benchmarks"))]
+use std::hash::Hasher;
 use std::ops::Range;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -69,13 +75,16 @@ const TEXT_INPUT_WRAP_TAB_STOP_COLUMNS: usize = 4;
 const TEXT_INPUT_WRAP_CHAR_ADVANCE_FACTOR: f32 = 0.6;
 const TEXT_INPUT_MAX_INTERPOLATED_WRAP_PATCHES: usize = 4_096;
 const TEXT_INPUT_STREAMED_HIGHLIGHT_LEGACY_LINE_THRESHOLD: usize = 64;
+const TEXT_INPUT_STREAMED_HIGHLIGHT_ESTIMATED_RUNS_PER_VISIBLE_LINE: usize = 2;
+const TEXT_INPUT_INLINE_ACTIVE_HIGHLIGHT_CAPACITY: usize = 8;
+const TEXT_INPUT_INLINE_TEXT_RUN_CAPACITY: usize = 32;
 
+// Text or display-mode changes always clear shaped-row caches, so cache keys
+// only need the line index plus wrap identity.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 struct ShapedRowCacheKey {
     line_ix: usize,
     wrap_width_key: i32,
-    style_epoch: u64,
-    text_hash_slice: u64,
 }
 
 #[derive(Clone, Default)]
@@ -249,7 +258,42 @@ struct PrepaintHighlightRunsCache {
     highlight_epoch: u64,
     visible_start: usize,
     visible_end: usize,
-    line_runs: Arc<Vec<Vec<TextRun>>>,
+    line_runs: Arc<VisibleWindowTextRuns>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct VisibleWindowTextRuns {
+    line_offsets: Vec<usize>,
+    runs: Vec<TextRun>,
+}
+
+impl VisibleWindowTextRuns {
+    fn with_line_capacity(line_count: usize) -> Self {
+        let mut line_offsets = Vec::with_capacity(line_count.saturating_add(1));
+        line_offsets.push(0);
+        Self {
+            line_offsets,
+            runs: Vec::with_capacity(
+                line_count
+                    .saturating_mul(TEXT_INPUT_STREAMED_HIGHLIGHT_ESTIMATED_RUNS_PER_VISIBLE_LINE),
+            ),
+        }
+    }
+
+    fn finish_line(&mut self) {
+        self.line_offsets.push(self.runs.len());
+    }
+
+    #[cfg(any(test, feature = "benchmarks"))]
+    fn len(&self) -> usize {
+        self.line_offsets.len().saturating_sub(1)
+    }
+
+    fn line(&self, local_ix: usize) -> Option<&[TextRun]> {
+        let start = *self.line_offsets.get(local_ix)?;
+        let end = *self.line_offsets.get(local_ix.saturating_add(1))?;
+        self.runs.get(start..end)
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -405,7 +449,7 @@ pub struct TextInput {
 
     scroll_x: Pixels,
     last_layout: Option<TextInputLayout>,
-    last_line_starts: Option<Vec<usize>>,
+    last_line_starts: Option<Arc<[usize]>>,
     last_bounds: Option<Bounds<Pixels>>,
     last_line_height: Pixels,
     wrap_cache: Option<WrapCache>,
@@ -863,7 +907,7 @@ impl TextInput {
         line_starts: &[usize],
         visible_line_range: Range<usize>,
         shape_style: &TextShapeStyle<'_>,
-    ) -> Option<Arc<Vec<Vec<TextRun>>>> {
+    ) -> Option<Arc<VisibleWindowTextRuns>> {
         let Some(highlights) = shape_style.highlights else {
             self.prepaint_highlight_runs_cache = None;
             return None;
@@ -909,18 +953,15 @@ impl TextInput {
         shape_style: &TextShapeStyle<'_>,
         window: &mut Window,
     ) -> ShapedLine {
-        let (capped_text, text_hash_slice) =
-            truncate_line_for_shaping(line.line_text, TEXT_INPUT_MAX_LINE_SHAPE_BYTES);
         let key = ShapedRowCacheKey {
             line_ix: line.line_ix,
             wrap_width_key: i32::MIN,
-            style_epoch: self.shape_style_epoch,
-            text_hash_slice,
         };
         if let Some(cached) = self.plain_line_cache.get(&key) {
             return cached.clone();
         }
 
+        let capped_text = build_shaping_text(line.line_text, TEXT_INPUT_MAX_LINE_SHAPE_BYTES);
         let owned_runs;
         let runs = if let Some(precomputed_runs) = precomputed_runs {
             precomputed_runs
@@ -951,18 +992,15 @@ impl TextInput {
         shape_style: &TextShapeStyle<'_>,
         window: &mut Window,
     ) -> WrappedLine {
-        let (capped_text, text_hash_slice) =
-            truncate_line_for_shaping(line.line_text, TEXT_INPUT_MAX_LINE_SHAPE_BYTES);
         let key = ShapedRowCacheKey {
             line_ix: line.line_ix,
             wrap_width_key: wrap_width_cache_key(wrap_width),
-            style_epoch: self.shape_style_epoch,
-            text_hash_slice,
         };
         if let Some(cached) = self.wrapped_line_cache.get(&key) {
             return cached.clone();
         }
 
+        let capped_text = build_shaping_text(line.line_text, TEXT_INPUT_MAX_LINE_SHAPE_BYTES);
         let owned_runs;
         let runs = if let Some(precomputed_runs) = precomputed_runs {
             precomputed_runs
@@ -1078,10 +1116,9 @@ impl TextInput {
         &mut self,
         display_text: &str,
         line_starts: &[usize],
-        wrap_width: Pixels,
-        shape_style: &TextShapeStyle<'_>,
+        rounded_wrap_width: Pixels,
+        font_size: Pixels,
         allow_interpolated_patches: bool,
-        window: &mut Window,
     ) -> bool {
         if self.pending_wrap_dirty_ranges.is_empty() {
             return false;
@@ -1103,7 +1140,8 @@ impl TextInput {
             return false;
         }
 
-        let width_key = wrap_width_cache_key(wrap_width);
+        let width_key = wrap_width_cache_key(rounded_wrap_width);
+        let wrap_columns = wrap_columns_for_width(rounded_wrap_width, font_size);
         let job_accepts_interpolation = pending_wrap_job_accepts_interpolated_patch(
             self.pending_wrap_job.as_ref(),
             width_key,
@@ -1113,29 +1151,16 @@ impl TextInput {
         let mut changed = false;
         for range in ranges.drain(..) {
             for line_ix in range {
-                let line_start = line_starts.get(line_ix).copied().unwrap_or(0);
-                let wrapped = self.shape_wrapped_line_cached(
-                    LineShapeInput {
-                        line_ix,
-                        line_start,
-                        line_text: line_text_for_index(display_text, line_starts, line_ix),
-                    },
-                    wrap_width,
-                    None,
-                    shape_style,
-                    window,
-                );
-                let new_rows = wrapped.wrap_boundaries().len().saturating_add(1).max(1);
-                let old_rows = self
-                    .wrap_row_counts
-                    .get(line_ix)
-                    .copied()
-                    .unwrap_or(1)
-                    .max(1);
+                // Dirty wrap patches only need updated row counts here; the
+                // visible-row pass below shapes whichever lines enter view.
+                let new_rows = estimate_wrap_rows_for_line(
+                    line_text_for_index(display_text, line_starts, line_ix),
+                    wrap_columns,
+                )
+                .max(1);
+                let old_rows = self.wrap_row_counts[line_ix].max(1);
                 if old_rows != new_rows {
-                    if let Some(slot) = self.wrap_row_counts.get_mut(line_ix) {
-                        *slot = new_rows;
-                    }
+                    self.wrap_row_counts[line_ix] = new_rows;
                     changed = true;
                     if job_accepts_interpolation {
                         self.push_interpolated_wrap_patch(width_key, line_ix, old_rows, new_rows);
@@ -1149,6 +1174,7 @@ impl TextInput {
     fn maybe_recompute_wrap_rows(
         &mut self,
         display_text: &str,
+        line_starts: &[usize],
         rounded_wrap_width: Pixels,
         font_size: Pixels,
         line_count: usize,
@@ -1159,8 +1185,12 @@ impl TextInput {
         if line_count <= TEXT_INPUT_WRAP_SYNC_LINE_THRESHOLD {
             self.pending_wrap_job = None;
             self.interpolated_wrap_patches.clear();
-            self.wrap_row_counts = estimate_wrap_rows_for_text(display_text, wrap_columns);
-            self.wrap_row_counts.resize(line_count, 1);
+            estimate_wrap_rows_with_line_starts(
+                display_text,
+                line_starts,
+                wrap_columns,
+                &mut self.wrap_row_counts,
+            );
             self.wrap_recompute_requested = false;
             return false;
         }
@@ -1176,10 +1206,11 @@ impl TextInput {
             return false;
         }
 
-        let mut budget_rows = self.wrap_row_counts.clone();
+        let mut budget_rows = std::mem::take(&mut self.wrap_row_counts);
         budget_rows.resize(line_count, 1);
         estimate_wrap_rows_budgeted(
             display_text,
+            line_starts,
             wrap_columns,
             &mut budget_rows,
             Duration::from_millis(TEXT_INPUT_WRAP_FOREGROUND_BUDGET_MS),
@@ -2857,7 +2888,7 @@ struct PrepaintState {
     layout: Option<TextInputLayout>,
     cursor: Option<PaintQuad>,
     selections: Vec<PaintQuad>,
-    line_starts: Option<Vec<usize>>,
+    line_starts: Option<Arc<[usize]>>,
     wrap_cache: Option<WrapCache>,
     scroll_x: Pixels,
     visible_line_range: Range<usize>,
@@ -2951,7 +2982,11 @@ impl Element for TextElement {
             let base_font = style.font();
 
             let display_text_str = display_text.as_ref();
-            let line_starts = compute_line_starts(display_text_str);
+            let line_starts: Arc<[usize]> = if has_content && !input.masked {
+                content.shared_line_starts()
+            } else {
+                compute_line_starts(display_text_str).into()
+            };
             let line_count = line_starts.len().max(1);
             let (visible_top, visible_bottom) =
                 visible_vertical_window(bounds, input.vertical_scroll_handle.as_ref());
@@ -2962,7 +2997,7 @@ impl Element for TextElement {
                 None
             } else if input.highlight_provider.is_some() {
                 let byte_range = provider_prefetch_byte_range_for_visible_window(
-                    line_starts.as_slice(),
+                    line_starts.as_ref(),
                     display_text_str.len(),
                     line_count,
                     line_height,
@@ -3008,14 +3043,14 @@ impl Element for TextElement {
                 }
                 let streamed_line_runs = input.streamed_highlight_runs_for_visible_window(
                     display_text_str,
-                    line_starts.as_slice(),
+                    line_starts.as_ref(),
                     visible_line_range.clone(),
                     &shape_style,
                 );
 
                 for line_ix in visible_line_range.clone() {
                     let precomputed_runs = visible_window_runs_for_line_ix(
-                        streamed_line_runs.as_ref().map(|runs| runs.as_slice()),
+                        streamed_line_runs.as_deref(),
                         visible_line_range.start,
                         line_ix,
                     );
@@ -3025,7 +3060,7 @@ impl Element for TextElement {
                             line_start: line_starts.get(line_ix).copied().unwrap_or(0),
                             line_text: line_text_for_index(
                                 display_text_str,
-                                line_starts.as_slice(),
+                                line_starts.as_ref(),
                                 line_ix,
                             ),
                         },
@@ -3038,7 +3073,8 @@ impl Element for TextElement {
                     }
                 }
 
-                let cursor_line_ix = line_index_for_offset(&line_starts, cursor, line_count);
+                let cursor_line_ix =
+                    line_index_for_offset(line_starts.as_ref(), cursor, line_count);
                 if cursor_line_ix < line_count
                     && (cursor_line_ix < visible_line_range.start
                         || cursor_line_ix >= visible_line_range.end)
@@ -3049,7 +3085,7 @@ impl Element for TextElement {
                             line_start: line_starts.get(cursor_line_ix).copied().unwrap_or(0),
                             line_text: line_text_for_index(
                                 display_text_str,
-                                line_starts.as_slice(),
+                                line_starts.as_ref(),
                                 cursor_line_ix,
                             ),
                         },
@@ -3065,7 +3101,7 @@ impl Element for TextElement {
                 if !input.multiline && !lines.is_empty() {
                     let viewport_w = bounds.size.width.max(px(0.0));
                     let pad = px(8.0).min(viewport_w / 4.0);
-                    let (line_ix, local_ix) = line_for_offset(&line_starts, &lines, cursor);
+                    let (line_ix, local_ix) = line_for_offset(line_starts.as_ref(), &lines, cursor);
                     let cursor_x = lines[line_ix].x_for_index(local_ix);
                     let max_scroll_x = (lines[line_ix].width - viewport_w).max(px(0.0));
 
@@ -3083,7 +3119,7 @@ impl Element for TextElement {
 
                 let mut selections = Vec::with_capacity(visible_line_range.len().max(1));
                 let cursor_quad = if selected_range.is_empty() {
-                    let (line_ix, local_ix) = line_for_offset(&line_starts, &lines, cursor);
+                    let (line_ix, local_ix) = line_for_offset(line_starts.as_ref(), &lines, cursor);
                     let x = lines[line_ix].x_for_index(local_ix) - scroll_x;
                     let caret_inset_y = px(3.0);
                     let caret_h = if !input.multiline && !input.chromeless {
@@ -3159,6 +3195,7 @@ impl Element for TextElement {
             }
             let started_wrap_job = input.maybe_recompute_wrap_rows(
                 display_text_str,
+                line_starts.as_ref(),
                 rounded_wrap_width,
                 font_size,
                 line_count,
@@ -3167,11 +3204,10 @@ impl Element for TextElement {
 
             let mut row_counts_changed = input.apply_pending_dirty_wrap_updates(
                 display_text_str,
-                line_starts.as_slice(),
-                wrap_width,
-                &shape_style,
+                line_starts.as_ref(),
+                rounded_wrap_width,
+                font_size,
                 !started_wrap_job,
-                window,
             );
 
             let mut y_offsets = vec![Pixels::ZERO; line_count];
@@ -3199,14 +3235,14 @@ impl Element for TextElement {
             );
             let mut streamed_line_runs = input.streamed_highlight_runs_for_visible_window(
                 display_text_str,
-                line_starts.as_slice(),
+                line_starts.as_ref(),
                 visible_line_range.clone(),
                 &shape_style,
             );
 
             for line_ix in visible_line_range.clone() {
                 let precomputed_runs = visible_window_runs_for_line_ix(
-                    streamed_line_runs.as_ref().map(|runs| runs.as_slice()),
+                    streamed_line_runs.as_deref(),
                     visible_line_range.start,
                     line_ix,
                 );
@@ -3216,7 +3252,7 @@ impl Element for TextElement {
                         line_start: line_starts.get(line_ix).copied().unwrap_or(0),
                         line_text: line_text_for_index(
                             display_text_str,
-                            line_starts.as_slice(),
+                            line_starts.as_ref(),
                             line_ix,
                         ),
                     },
@@ -3249,7 +3285,7 @@ impl Element for TextElement {
                 }
             }
 
-            let cursor_line_ix = line_index_for_offset(&line_starts, cursor, line_count);
+            let cursor_line_ix = line_index_for_offset(line_starts.as_ref(), cursor, line_count);
             if cursor_line_ix < line_count
                 && (cursor_line_ix < visible_line_range.start
                     || cursor_line_ix >= visible_line_range.end)
@@ -3260,7 +3296,7 @@ impl Element for TextElement {
                         line_start: line_starts.get(cursor_line_ix).copied().unwrap_or(0),
                         line_text: line_text_for_index(
                             display_text_str,
-                            line_starts.as_slice(),
+                            line_starts.as_ref(),
                             cursor_line_ix,
                         ),
                     },
@@ -3314,7 +3350,7 @@ impl Element for TextElement {
                 );
                 streamed_line_runs = input.streamed_highlight_runs_for_visible_window(
                     display_text_str,
-                    line_starts.as_slice(),
+                    line_starts.as_ref(),
                     visible_line_range.clone(),
                     &shape_style,
                 );
@@ -3323,7 +3359,7 @@ impl Element for TextElement {
                         continue;
                     }
                     let precomputed_runs = visible_window_runs_for_line_ix(
-                        streamed_line_runs.as_ref().map(|runs| runs.as_slice()),
+                        streamed_line_runs.as_deref(),
                         visible_line_range.start,
                         line_ix,
                     );
@@ -3333,7 +3369,7 @@ impl Element for TextElement {
                             line_start: line_starts.get(line_ix).copied().unwrap_or(0),
                             line_text: line_text_for_index(
                                 display_text_str,
-                                line_starts.as_slice(),
+                                line_starts.as_ref(),
                                 line_ix,
                             ),
                         },
@@ -3372,7 +3408,7 @@ impl Element for TextElement {
 
             let mut selections = Vec::with_capacity(visible_line_range.len().max(1));
             let cursor_quad = if selected_range.is_empty() {
-                let line_ix = line_index_for_offset(&line_starts, cursor, line_count);
+                let line_ix = line_index_for_offset(line_starts.as_ref(), cursor, line_count);
                 let start = line_starts.get(line_ix).copied().unwrap_or(0);
                 let local = cursor.saturating_sub(start).min(lines[line_ix].len());
                 let caret_inset_y = px(3.0);
@@ -3743,33 +3779,152 @@ impl Render for TextInput {
     }
 }
 
-fn hash_text_slice(text: &str) -> u64 {
+#[cfg(any(test, feature = "benchmarks"))]
+const TEXT_INPUT_SHAPING_FINGERPRINT_SAMPLE_BYTES: usize = 64;
+#[cfg(any(test, feature = "benchmarks"))]
+const TEXT_INPUT_SHAPING_FINGERPRINT_MID_SAMPLES_TRUNCATED: usize = 3;
+#[cfg(any(test, feature = "benchmarks"))]
+const TEXT_INPUT_SHAPING_FINGERPRINT_MID_SAMPLES_UNTRUNCATED: usize = 1;
+
+#[derive(Clone, Copy)]
+struct ShapingSliceInfo<'a> {
+    prefix: &'a str,
+    capped_len: usize,
+    truncated: bool,
+}
+
+impl<'a> ShapingSliceInfo<'a> {
+    #[inline]
+    fn new(line_text: &'a str, max_bytes: usize) -> Self {
+        if line_text.len() <= max_bytes {
+            return Self {
+                prefix: line_text,
+                capped_len: line_text.len(),
+                truncated: false,
+            };
+        }
+
+        let suffix_len = TEXT_INPUT_TRUNCATION_SUFFIX.len();
+        let mut end = max_bytes.saturating_sub(suffix_len).min(line_text.len());
+        while end > 0 && !line_text.is_char_boundary(end) {
+            end = end.saturating_sub(1);
+        }
+
+        Self {
+            prefix: &line_text[..end],
+            capped_len: end.saturating_add(suffix_len),
+            truncated: true,
+        }
+    }
+
+    #[cfg(any(test, feature = "benchmarks"))]
+    #[inline]
+    fn hash(self) -> u64 {
+        hash_shaping_prefix_bytes(self.prefix.as_bytes(), self.capped_len, self.truncated)
+    }
+
+    #[inline]
+    fn into_shared_string(self) -> SharedString {
+        if !self.truncated {
+            return self.prefix.to_string().into();
+        }
+
+        let mut truncated = String::with_capacity(self.capped_len);
+        truncated.push_str(self.prefix);
+        truncated.push_str(TEXT_INPUT_TRUNCATION_SUFFIX);
+        truncated.into()
+    }
+
+    #[inline]
+    fn into_cow(self) -> Cow<'a, str> {
+        if !self.truncated {
+            return Cow::Borrowed(self.prefix);
+        }
+
+        let mut truncated = String::with_capacity(self.capped_len);
+        truncated.push_str(self.prefix);
+        truncated.push_str(TEXT_INPUT_TRUNCATION_SUFFIX);
+        Cow::Owned(truncated)
+    }
+}
+
+#[cfg(any(test, feature = "benchmarks"))]
+#[inline]
+fn hash_shaping_prefix_bytes(prefix_bytes: &[u8], capped_len: usize, truncated: bool) -> u64 {
     let mut hasher = FxHasher::default();
-    text.hash(&mut hasher);
+    hasher.write_usize(capped_len);
+
+    if prefix_bytes.len() <= TEXT_INPUT_SHAPING_FINGERPRINT_SAMPLE_BYTES * 4 {
+        hasher.write(prefix_bytes);
+        return hasher.finish();
+    }
+
+    let sample_len = TEXT_INPUT_SHAPING_FINGERPRINT_SAMPLE_BYTES;
+    let mid_samples = if truncated {
+        TEXT_INPUT_SHAPING_FINGERPRINT_MID_SAMPLES_TRUNCATED
+    } else {
+        // The uncapped path only needs a cheap stable whole-line sketch for
+        // benchmark/test helpers, not the denser truncated-line sampling.
+        TEXT_INPUT_SHAPING_FINGERPRINT_MID_SAMPLES_UNTRUNCATED
+    };
+    hasher.write(&prefix_bytes[..sample_len]);
+
+    let last_start = prefix_bytes.len().saturating_sub(sample_len);
+    if mid_samples > 0 {
+        let gap = last_start.saturating_sub(sample_len);
+        for sample_ix in 1..=mid_samples {
+            let start = sample_len + gap.saturating_mul(sample_ix) / (mid_samples + 1);
+            hasher.write_usize(start);
+            hasher.write(&prefix_bytes[start..start + sample_len]);
+        }
+    }
+
+    hasher.write_usize(last_start);
+    hasher.write(&prefix_bytes[last_start..]);
     hasher.finish()
 }
 
+#[inline]
+fn shaping_slice_info(line_text: &str, max_bytes: usize) -> ShapingSliceInfo<'_> {
+    ShapingSliceInfo::new(line_text, max_bytes)
+}
+
+/// Compute a stable fingerprint and capped byte length for a line that may need truncation.
+/// This does NOT allocate, and on very long lines it samples representative chunks instead of
+/// rescanning the full shaping prefix.
+#[cfg(any(test, feature = "benchmarks"))]
+fn hash_shaping_slice(line_text: &str, max_bytes: usize) -> (u64, usize) {
+    let info = shaping_slice_info(line_text, max_bytes);
+    (info.hash(), info.capped_len)
+}
+
+/// Build the (possibly truncated) SharedString for shaping. Only call on cache miss.
+fn build_shaping_text(line_text: &str, max_bytes: usize) -> SharedString {
+    shaping_slice_info(line_text, max_bytes).into_shared_string()
+}
+
+fn build_shaping_line_slice<'a>(line_text: &'a str, max_bytes: usize) -> Cow<'a, str> {
+    shaping_slice_info(line_text, max_bytes).into_cow()
+}
+
+#[cfg(any(test, feature = "benchmarks"))]
 fn truncate_line_for_shaping(line_text: &str, max_bytes: usize) -> (SharedString, u64) {
-    if line_text.len() <= max_bytes {
-        let hash = hash_text_slice(line_text);
-        return (line_text.to_string().into(), hash);
-    }
+    let info = shaping_slice_info(line_text, max_bytes);
+    let hash = info.hash();
+    let text = info.into_shared_string();
+    (text, hash)
+}
 
-    let suffix = TEXT_INPUT_TRUNCATION_SUFFIX;
-    let suffix_len = suffix.len();
-    let mut end = max_bytes.saturating_sub(suffix_len).min(line_text.len());
-    while end > 0 && !line_text.is_char_boundary(end) {
-        end = end.saturating_sub(1);
-    }
+#[cfg(feature = "benchmarks")]
+#[inline]
+pub(crate) fn benchmark_text_input_shaping_slice(text: &str, max_bytes: usize) -> (u64, usize) {
+    hash_shaping_slice(text, max_bytes)
+}
 
-    let mut truncated = String::with_capacity(end.saturating_add(suffix_len));
-    if end > 0 {
-        truncated.push_str(&line_text[..end]);
-    }
-    truncated.push_str(suffix);
-
-    let hash = hash_text_slice(truncated.as_str());
-    (truncated.into(), hash)
+#[cfg(feature = "benchmarks")]
+#[inline]
+pub(crate) fn benchmark_text_input_wrap_rows_for_line(text: &str, wrap_columns: usize) -> usize {
+    estimate_wrap_rows_for_line(text, wrap_columns)
 }
 
 fn wrap_width_cache_key(wrap_width: Pixels) -> i32 {
@@ -3952,25 +4107,35 @@ fn wrap_columns_for_width(wrap_width: Pixels, font_size: Pixels) -> usize {
 
 fn estimate_wrap_rows_for_text(text: &str, wrap_columns: usize) -> Vec<usize> {
     let line_starts = compute_line_starts(text);
+    let mut rows = Vec::with_capacity(line_starts.len().max(1));
+    estimate_wrap_rows_with_line_starts(text, line_starts.as_slice(), wrap_columns, &mut rows);
+    rows
+}
+
+fn estimate_wrap_rows_with_line_starts(
+    text: &str,
+    line_starts: &[usize],
+    wrap_columns: usize,
+    rows: &mut Vec<usize>,
+) {
     let line_count = line_starts.len().max(1);
-    let mut rows = vec![1; line_count];
+    rows.resize(line_count, 1);
     for (line_ix, row_slot) in rows.iter_mut().take(line_count).enumerate() {
         if line_ix > 0 && line_ix % TEXT_INPUT_WRAP_BACKGROUND_YIELD_EVERY_ROWS == 0 {
             std::thread::yield_now();
         }
-        let line_text = line_text_for_index(text, line_starts.as_slice(), line_ix);
+        let line_text = line_text_for_index(text, line_starts, line_ix);
         *row_slot = estimate_wrap_rows_for_line(line_text, wrap_columns);
     }
-    rows
 }
 
 fn estimate_wrap_rows_budgeted(
     text: &str,
+    line_starts: &[usize],
     wrap_columns: usize,
     rows: &mut [usize],
     budget: Duration,
 ) {
-    let line_starts = compute_line_starts(text);
     let line_count = line_starts.len().min(rows.len());
     if line_count == 0 {
         return;
@@ -3984,16 +4149,55 @@ fn estimate_wrap_rows_budgeted(
         {
             break;
         }
-        let line_text = line_text_for_index(text, line_starts.as_slice(), line_ix);
+        let line_text = line_text_for_index(text, line_starts, line_ix);
         *row_slot = estimate_wrap_rows_for_line(line_text, wrap_columns);
     }
 }
 
+#[inline]
 fn estimate_wrap_rows_for_line(line_text: &str, wrap_columns: usize) -> usize {
     if line_text.is_empty() {
         return 1;
     }
     let wrap_columns = wrap_columns.max(1);
+    let bytes = line_text.as_bytes();
+
+    // ASCII fast path: process segments between tabs in O(1) each
+    // instead of iterating character by character.
+    if line_text.is_ascii() {
+        let tab_stop = TEXT_INPUT_WRAP_TAB_STOP_COLUMNS;
+        let mut rows = 1usize;
+        let mut column = 0usize;
+        let mut pos = 0usize;
+
+        if wrap_columns > tab_stop {
+            for tab_pos in memchr::memchr_iter(b'\t', bytes) {
+                let seg = tab_pos - pos;
+                if seg > 0 {
+                    advance_ascii_segment(&mut rows, &mut column, seg, wrap_columns);
+                }
+                advance_ascii_tab_common(&mut rows, &mut column, wrap_columns);
+                pos = tab_pos + 1;
+            }
+        } else {
+            for tab_pos in memchr::memchr_iter(b'\t', bytes) {
+                let seg = tab_pos - pos;
+                if seg > 0 {
+                    advance_ascii_segment(&mut rows, &mut column, seg, wrap_columns);
+                }
+                advance_ascii_tab_general(&mut rows, &mut column, wrap_columns);
+                pos = tab_pos + 1;
+            }
+        }
+
+        let trailing = bytes.len() - pos;
+        if trailing > 0 {
+            advance_ascii_segment(&mut rows, &mut column, trailing, wrap_columns);
+        }
+        return rows.max(1);
+    }
+
+    // Non-ASCII fallback: character-by-character scan
     let mut rows = 1usize;
     let mut column = 0usize;
     for ch in line_text.chars() {
@@ -4030,6 +4234,60 @@ fn estimate_wrap_rows_for_line(line_text: &str, wrap_columns: usize) -> usize {
     rows.max(1)
 }
 
+/// Advance column by `segment_len` ASCII characters (width 1 each),
+/// updating rows and column for wraps. O(1) per segment.
+#[inline]
+fn advance_ascii_segment(
+    rows: &mut usize,
+    column: &mut usize,
+    segment_len: usize,
+    wrap_columns: usize,
+) {
+    let remaining = wrap_columns - *column;
+    if segment_len <= remaining {
+        *column += segment_len;
+    } else {
+        let after = segment_len - remaining;
+        *rows += 1 + after / wrap_columns;
+        *column = after % wrap_columns;
+    }
+}
+
+#[inline]
+fn advance_ascii_tab_common(rows: &mut usize, column: &mut usize, wrap_columns: usize) {
+    debug_assert!(TEXT_INPUT_WRAP_TAB_STOP_COLUMNS.is_power_of_two());
+    let tab_stop = TEXT_INPUT_WRAP_TAB_STOP_COLUMNS;
+    let tab_width = tab_stop - (*column & (tab_stop - 1));
+    if *column > wrap_columns - tab_width {
+        *rows += 1;
+        *column = tab_width;
+    } else {
+        *column += tab_width;
+    }
+}
+
+#[inline]
+fn advance_ascii_tab_general(rows: &mut usize, column: &mut usize, wrap_columns: usize) {
+    let tab_stop = TEXT_INPUT_WRAP_TAB_STOP_COLUMNS;
+    let rem = *column % tab_stop;
+    let tab_width = if rem == 0 { tab_stop } else { tab_stop - rem };
+    if tab_width >= wrap_columns {
+        if *column > 0 {
+            *rows += 1;
+        }
+        *rows += tab_width / wrap_columns;
+        *column = tab_width % wrap_columns;
+        if *column == 0 {
+            *column = wrap_columns;
+        }
+    } else if *column + tab_width > wrap_columns {
+        *rows += 1;
+        *column = tab_width;
+    } else {
+        *column += tab_width;
+    }
+}
+
 fn clamp_offset_to_char_boundary(text: &str, mut offset: usize) -> usize {
     offset = offset.min(text.len());
     while offset > 0 && !text.is_char_boundary(offset) {
@@ -4062,22 +4320,7 @@ fn expanded_dirty_wrap_line_range_for_edit(
         end_line = (start_line + 1).min(line_count);
     }
 
-    let mut expanded_start_line = start_line;
-    let mut expanded_end_line = end_line;
-    // Tab-aware invalidation: edits before tabs can shift downstream tab stops for the same row.
-    for line_ix in start_line..end_line {
-        let line_start = line_starts.get(line_ix).copied().unwrap_or(0);
-        let edit_local = start_offset.saturating_sub(line_start);
-        let line_text = line_text_for_index(text, line_starts, line_ix);
-        if let Some(tab_ix) = line_text.rfind('\t')
-            && edit_local <= tab_ix
-        {
-            expanded_start_line = expanded_start_line.min(line_ix);
-            expanded_end_line = expanded_end_line.max((line_ix + 1).min(line_count));
-        }
-    }
-
-    expanded_start_line.min(line_count)..expanded_end_line.min(line_count)
+    start_line.min(line_count)..end_line.min(line_count)
 }
 
 fn apply_interpolated_wrap_patch_delta(rows: &mut [usize], patch: &InterpolatedWrapPatch) {
@@ -4119,40 +4362,78 @@ fn pending_wrap_job_accepts_interpolated_patch(
 }
 
 fn visible_window_runs_for_line_ix(
-    line_runs_by_visible_line: Option<&[Vec<TextRun>]>,
+    line_runs_by_visible_line: Option<&VisibleWindowTextRuns>,
     visible_start: usize,
     line_ix: usize,
 ) -> Option<&[TextRun]> {
     let visible_runs = line_runs_by_visible_line?;
     let local_ix = line_ix.checked_sub(visible_start)?;
-    visible_runs.get(local_ix).map(Vec::as_slice)
+    visible_runs.line(local_ix)
 }
 
 #[derive(Clone)]
 struct ActiveHighlight<'a> {
-    order: usize,
-    range: Range<usize>,
+    end: usize,
     style: &'a gpui::HighlightStyle,
+}
+
+type ActiveHighlightBuffer<'a> =
+    SmallVec<[ActiveHighlight<'a>; TEXT_INPUT_INLINE_ACTIVE_HIGHLIGHT_CAPACITY]>;
+type LineTextRuns = SmallVec<[TextRun; TEXT_INPUT_INLINE_TEXT_RUN_CAPACITY]>;
+
+trait TextRunSink {
+    fn push_text_run(&mut self, run: TextRun);
+}
+
+impl TextRunSink for Vec<TextRun> {
+    fn push_text_run(&mut self, run: TextRun) {
+        self.push(run);
+    }
+}
+
+impl<const N: usize> TextRunSink for SmallVec<[TextRun; N]> {
+    fn push_text_run(&mut self, run: TextRun) {
+        self.push(run);
+    }
 }
 
 struct HighlightCursor<'a> {
     highlights: &'a [(Range<usize>, gpui::HighlightStyle)],
     next_ix: usize,
-    active: Vec<ActiveHighlight<'a>>,
+    active: ActiveHighlightBuffer<'a>,
 }
 
 impl<'a> HighlightCursor<'a> {
-    fn new(highlights: &'a [(Range<usize>, gpui::HighlightStyle)]) -> Self {
+    fn new_at_offset(
+        highlights: &'a [(Range<usize>, gpui::HighlightStyle)],
+        offset: usize,
+    ) -> Self {
+        let next_ix = highlights.partition_point(|(range, _)| range.start < offset);
+        let mut active_start = next_ix;
+        let mut active = ActiveHighlightBuffer::new();
+        while active_start > 0 {
+            let order = active_start.saturating_sub(1);
+            let Some((range, style)) = highlights.get(order) else {
+                break;
+            };
+            if range.end <= offset {
+                break;
+            }
+            active_start = order;
+            active.push(ActiveHighlight {
+                end: range.end,
+                style,
+            });
+        }
         Self {
             highlights,
-            next_ix: 0,
-            active: Vec::new(),
+            next_ix,
+            active,
         }
     }
 
     fn advance_to_line_start(&mut self, line_start: usize) {
-        self.active
-            .retain(|highlight| highlight.range.end > line_start);
+        self.active.retain(|highlight| highlight.end > line_start);
         while let Some((range, style)) = self.highlights.get(self.next_ix) {
             if range.end <= line_start {
                 self.next_ix = self.next_ix.saturating_add(1);
@@ -4160,8 +4441,7 @@ impl<'a> HighlightCursor<'a> {
             }
             if range.start < line_start {
                 self.active.push(ActiveHighlight {
-                    order: self.next_ix,
-                    range: range.clone(),
+                    end: range.end,
                     style,
                 });
                 self.next_ix = self.next_ix.saturating_add(1);
@@ -4171,28 +4451,129 @@ impl<'a> HighlightCursor<'a> {
         }
     }
 
-    fn top_style_for_offset(&self, offset: usize) -> Option<&'a gpui::HighlightStyle> {
-        self.active
-            .iter()
-            .filter(|highlight| highlight.range.start <= offset && highlight.range.end > offset)
-            .max_by_key(|highlight| highlight.order)
-            .map(|highlight| highlight.style)
+    fn append_simple_runs_for_line(
+        &self,
+        base_font: &gpui::Font,
+        base_color: gpui::Hsla,
+        line_start: usize,
+        line_end: usize,
+        runs: &mut impl TextRunSink,
+    ) -> bool {
+        let next_highlight = self
+            .highlights
+            .get(self.next_ix)
+            .filter(|(range, _)| range.start < line_end);
+
+        match (self.active.len(), next_highlight) {
+            (0, None) => {
+                runs.push_text_run(text_run_for_style(
+                    base_font,
+                    base_color,
+                    line_end.saturating_sub(line_start),
+                    None,
+                ));
+                true
+            }
+            (0, Some((range, style)))
+                if self
+                    .highlights
+                    .get(self.next_ix.saturating_add(1))
+                    .map(|(next_range, _)| next_range.start >= line_end)
+                    .unwrap_or(true) =>
+            {
+                if range.start > line_start {
+                    runs.push_text_run(text_run_for_style(
+                        base_font,
+                        base_color,
+                        range.start.saturating_sub(line_start),
+                        None,
+                    ));
+                }
+                let styled_end = range.end.min(line_end);
+                if styled_end > range.start {
+                    runs.push_text_run(text_run_for_style(
+                        base_font,
+                        base_color,
+                        styled_end.saturating_sub(range.start),
+                        Some(style),
+                    ));
+                }
+                if styled_end < line_end {
+                    runs.push_text_run(text_run_for_style(
+                        base_font,
+                        base_color,
+                        line_end.saturating_sub(styled_end),
+                        None,
+                    ));
+                }
+                true
+            }
+            (1, None) => {
+                let Some(active) = self.active.first() else {
+                    return false;
+                };
+                let styled_end = active.end.min(line_end);
+                runs.push_text_run(text_run_for_style(
+                    base_font,
+                    base_color,
+                    styled_end.saturating_sub(line_start),
+                    Some(active.style),
+                ));
+                if styled_end < line_end {
+                    runs.push_text_run(text_run_for_style(
+                        base_font,
+                        base_color,
+                        line_end.saturating_sub(styled_end),
+                        None,
+                    ));
+                }
+                true
+            }
+            _ => false,
+        }
     }
 
-    fn runs_for_line(
+    fn try_simple_runs_for_line(
+        &self,
+        base_font: &gpui::Font,
+        base_color: gpui::Hsla,
+        line_start: usize,
+        line_end: usize,
+    ) -> Option<LineTextRuns> {
+        let mut runs = LineTextRuns::new();
+        if self.append_simple_runs_for_line(base_font, base_color, line_start, line_end, &mut runs)
+        {
+            Some(runs)
+        } else {
+            None
+        }
+    }
+
+    fn append_runs_for_line(
         &mut self,
         base_font: &gpui::Font,
         base_color: gpui::Hsla,
         line_start: usize,
         line_text: &str,
-    ) -> Vec<TextRun> {
+        runs: &mut impl TextRunSink,
+    ) {
         if line_text.is_empty() {
-            return Vec::new();
+            return;
         }
-        let line_end = line_start + line_text.len();
         self.advance_to_line_start(line_start);
+        self.append_runs_for_current_line(base_font, base_color, line_start, line_text, runs);
+    }
 
-        let mut runs = Vec::new();
+    fn append_runs_for_current_line(
+        &mut self,
+        base_font: &gpui::Font,
+        base_color: gpui::Hsla,
+        line_start: usize,
+        line_text: &str,
+        runs: &mut impl TextRunSink,
+    ) {
+        let line_end = line_start + line_text.len();
+
         let mut offset = line_start;
         while offset < line_end {
             while let Some((range, style)) = self.highlights.get(self.next_ix) {
@@ -4204,41 +4585,42 @@ impl<'a> HighlightCursor<'a> {
                     break;
                 }
                 self.active.push(ActiveHighlight {
-                    order: self.next_ix,
-                    range: range.clone(),
+                    end: range.end,
                     style,
                 });
                 self.next_ix = self.next_ix.saturating_add(1);
             }
 
-            let style = self.top_style_for_offset(offset);
             let mut next_boundary = line_end;
             if let Some((next_range, _)) = self.highlights.get(self.next_ix)
                 && next_range.start < line_end
             {
                 next_boundary = next_boundary.min(next_range.start);
             }
-            for highlight in &self.active {
-                if highlight.range.end > offset && highlight.range.end < next_boundary {
-                    next_boundary = highlight.range.end;
-                }
+            // Active highlights stay in insertion order, and later highlights
+            // win precedence, so the last active entry is always the visible
+            // style at the current offset.
+            let top_highlight = self.active.last();
+            let style = top_highlight.map(|highlight| highlight.style);
+            if let Some(top_highlight) = top_highlight {
+                // Only the current top highlight's end can change the visible
+                // style; lower-priority highlight ends should not split runs.
+                next_boundary = next_boundary.min(top_highlight.end);
             }
             if next_boundary <= offset {
                 next_boundary = (offset + 1).min(line_end);
             }
 
-            runs.push(text_run_for_style(
+            runs.push_text_run(text_run_for_style(
                 base_font,
                 base_color,
                 next_boundary - offset,
                 style,
             ));
             self.active
-                .retain(|highlight| highlight.range.end > next_boundary);
+                .retain(|highlight| highlight.end > next_boundary);
             offset = next_boundary;
         }
-
-        runs
     }
 }
 
@@ -4249,20 +4631,41 @@ fn build_streamed_highlight_runs_for_visible_window(
     line_starts: &[usize],
     visible_line_range: Range<usize>,
     highlights: &[(Range<usize>, gpui::HighlightStyle)],
-) -> Vec<Vec<TextRun>> {
-    let mut cursor = HighlightCursor::new(highlights);
-    let mut line_runs = Vec::with_capacity(visible_line_range.len());
+) -> VisibleWindowTextRuns {
+    let mut line_runs = VisibleWindowTextRuns::with_line_capacity(visible_line_range.len());
+    if visible_line_range.is_empty() {
+        return line_runs;
+    }
+    let first_line_start = line_starts
+        .get(visible_line_range.start)
+        .copied()
+        .unwrap_or(0);
+    let mut cursor = HighlightCursor::new_at_offset(highlights, first_line_start);
     for line_ix in visible_line_range {
         let line_start = line_starts.get(line_ix).copied().unwrap_or(0);
         let line_text = line_text_for_index(display_text, line_starts, line_ix);
-        let (capped_line_text, _) =
-            truncate_line_for_shaping(line_text, TEXT_INPUT_MAX_LINE_SHAPE_BYTES);
-        line_runs.push(cursor.runs_for_line(
-            base_font,
-            base_color,
-            line_start,
-            capped_line_text.as_ref(),
-        ));
+        let capped_line_text = build_shaping_line_slice(line_text, TEXT_INPUT_MAX_LINE_SHAPE_BYTES);
+        let capped_line_text = capped_line_text.as_ref();
+        if !capped_line_text.is_empty() {
+            let line_end = line_start.saturating_add(capped_line_text.len());
+            cursor.advance_to_line_start(line_start);
+            if !cursor.append_simple_runs_for_line(
+                base_font,
+                base_color,
+                line_start,
+                line_end,
+                &mut line_runs.runs,
+            ) {
+                cursor.append_runs_for_current_line(
+                    base_font,
+                    base_color,
+                    line_start,
+                    capped_line_text,
+                    &mut line_runs.runs,
+                );
+            }
+        }
+        line_runs.finish_line();
     }
     line_runs
 }
@@ -4313,71 +4716,30 @@ fn runs_for_line(
     line_start: usize,
     line_text: &str,
     highlights: Option<&[(Range<usize>, gpui::HighlightStyle)]>,
-) -> Vec<TextRun> {
+) -> LineTextRuns {
     if line_text.is_empty() {
-        return Vec::new();
+        return LineTextRuns::new();
     }
 
     let Some(highlights) = highlights else {
-        return vec![text_run_for_style(
+        let mut runs = LineTextRuns::new();
+        runs.push(text_run_for_style(
             base_font,
             base_color,
             line_text.len(),
             None,
-        )];
+        ));
+        return runs;
     };
 
-    let line_end = line_start + line_text.len();
-    let mut line_highlights: Vec<(usize, usize, &gpui::HighlightStyle)> = Vec::new();
-    for (range, style) in highlights {
-        if range.end <= line_start {
-            continue;
-        }
-        if range.start >= line_end {
-            break;
-        }
-        let seg_start = range.start.max(line_start) - line_start;
-        let seg_end = range.end.min(line_end) - line_start;
-        if seg_start < seg_end {
-            line_highlights.push((seg_start, seg_end, style));
-        }
+    let line_end = line_start.saturating_add(line_text.len());
+    let mut cursor = HighlightCursor::new_at_offset(highlights, line_start);
+    if let Some(runs) = cursor.try_simple_runs_for_line(base_font, base_color, line_start, line_end)
+    {
+        return runs;
     }
-
-    if line_highlights.is_empty() {
-        return vec![text_run_for_style(
-            base_font,
-            base_color,
-            line_text.len(),
-            None,
-        )];
-    }
-
-    let mut boundaries = Vec::with_capacity(line_highlights.len() * 2 + 2);
-    boundaries.push(0usize);
-    boundaries.push(line_text.len());
-    for (start, end, _) in &line_highlights {
-        boundaries.push(*start);
-        boundaries.push(*end);
-    }
-    boundaries.sort_unstable();
-    boundaries.dedup();
-
-    let mut runs = Vec::with_capacity(boundaries.len().saturating_sub(1));
-    for w in boundaries.windows(2) {
-        let a = w[0];
-        let b = w[1];
-        if a >= b {
-            continue;
-        }
-        let style = line_highlights
-            .iter()
-            .rev()
-            .find(|(start, end, _)| *start <= a && *end >= b)
-            .map(|(_, _, style)| *style);
-
-        runs.push(text_run_for_style(base_font, base_color, b - a, style));
-    }
-
+    let mut runs = LineTextRuns::new();
+    cursor.append_runs_for_line(base_font, base_color, line_start, line_text, &mut runs);
     runs
 }
 
@@ -4391,20 +4753,6 @@ fn hash_text_runs_for_benchmark(runs: &[TextRun], hasher: &mut FxHasher) {
         run.color.a.to_bits().hash(hasher);
     }
     total.hash(hasher);
-}
-
-#[cfg(feature = "benchmarks")]
-pub(crate) fn benchmark_text_input_shaping_slice(text: &str, max_bytes: usize) -> (u64, usize) {
-    let (truncated, hash) = truncate_line_for_shaping(text, max_bytes.max(1));
-    (hash, truncated.len())
-}
-
-#[cfg(feature = "benchmarks")]
-pub(crate) fn benchmark_text_input_wrap_rows_for_line(
-    line_text: &str,
-    wrap_columns: usize,
-) -> usize {
-    estimate_wrap_rows_for_line(line_text, wrap_columns)
 }
 
 #[cfg(feature = "benchmarks")]
@@ -4452,8 +4800,10 @@ pub(crate) fn benchmark_text_input_runs_streamed_visible_window(
         highlights,
     );
     let mut hasher = FxHasher::default();
-    for runs in &line_runs {
-        hash_text_runs_for_benchmark(runs.as_slice(), &mut hasher);
+    for local_ix in 0..line_runs.len() {
+        if let Some(runs) = line_runs.line(local_ix) {
+            hash_text_runs_for_benchmark(runs, &mut hasher);
+        }
     }
     hasher.finish()
 }
@@ -4552,7 +4902,9 @@ mod tests {
         let input = "éééé";
         let (truncated, hash) = truncate_line_for_shaping(input, 5);
         assert_eq!(truncated.as_ref(), "é…");
-        assert_eq!(hash, hash_text_slice(truncated.as_ref()));
+        // hash_shaping_slice must be consistent with truncate_line_for_shaping
+        let (hash2, _) = hash_shaping_slice(input, 5);
+        assert_eq!(hash, hash2);
     }
 
     #[test]
@@ -4652,6 +5004,73 @@ mod tests {
         assert_eq!(estimate_wrap_rows_for_line("abcd", 4), 1);
         assert_eq!(estimate_wrap_rows_for_line("abcde", 4), 2);
         assert_eq!(estimate_wrap_rows_for_line("a\tb", 4), 2);
+    }
+
+    #[test]
+    fn estimate_wrap_rows_for_line_matches_reference_for_ascii_tabs() {
+        fn reference_wrap_rows_for_line(line_text: &str, wrap_columns: usize) -> usize {
+            if line_text.is_empty() {
+                return 1;
+            }
+            let wrap_columns = wrap_columns.max(1);
+            let mut rows = 1usize;
+            let mut column = 0usize;
+            for ch in line_text.chars() {
+                let width = if ch == '\t' {
+                    let rem = column % TEXT_INPUT_WRAP_TAB_STOP_COLUMNS;
+                    if rem == 0 {
+                        TEXT_INPUT_WRAP_TAB_STOP_COLUMNS
+                    } else {
+                        TEXT_INPUT_WRAP_TAB_STOP_COLUMNS - rem
+                    }
+                } else {
+                    1
+                };
+
+                if width >= wrap_columns {
+                    if column > 0 {
+                        rows += 1;
+                    }
+                    rows += width / wrap_columns;
+                    column = width % wrap_columns;
+                    if column == 0 {
+                        column = wrap_columns;
+                    }
+                    continue;
+                }
+
+                if column + width > wrap_columns {
+                    rows += 1;
+                    column = width;
+                } else {
+                    column += width;
+                }
+            }
+            rows.max(1)
+        }
+
+        let samples = [
+            "",
+            "\t",
+            "a\tb",
+            "ab\tcd\tef",
+            "\tsection_00000\tvalue = token\ttoken\ttoken\ttoken\t",
+            "token\ttoken\ttoken\ttoken\ttoken\t",
+            "abcd",
+            "abcde",
+            "\t\t\t",
+            "trailing-tab\t",
+        ];
+
+        for wrap_columns in (TEXT_INPUT_WRAP_TAB_STOP_COLUMNS + 1)..=12 {
+            for sample in samples {
+                assert_eq!(
+                    estimate_wrap_rows_for_line(sample, wrap_columns),
+                    reference_wrap_rows_for_line(sample, wrap_columns),
+                    "sample={sample:?}, wrap_columns={wrap_columns}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -4762,6 +5181,58 @@ mod tests {
     }
 
     #[test]
+    fn highlight_runs_skip_hidden_overlap_end_boundaries() {
+        let text = "abcdefghijklmnop";
+        let line_starts = compute_line_starts(text);
+        let style_low = gpui::HighlightStyle {
+            color: Some(gpui::hsla(0.0, 1.0, 0.5, 1.0)),
+            ..gpui::HighlightStyle::default()
+        };
+        let style_mid = gpui::HighlightStyle {
+            color: Some(gpui::hsla(0.33, 1.0, 0.5, 1.0)),
+            ..gpui::HighlightStyle::default()
+        };
+        let style_high = gpui::HighlightStyle {
+            color: Some(gpui::hsla(0.66, 1.0, 0.5, 1.0)),
+            ..gpui::HighlightStyle::default()
+        };
+        let mut highlights = vec![(0..10, style_low), (2..8, style_mid), (4..12, style_high)];
+        highlights.sort_by(|(a, _), (b, _)| a.start.cmp(&b.start).then(a.end.cmp(&b.end)));
+
+        let base_font = gpui::font(".SystemUIFont");
+        let base_color = gpui::hsla(0.0, 0.0, 1.0, 1.0);
+        let streamed = build_streamed_highlight_runs_for_visible_window(
+            &base_font,
+            base_color,
+            text,
+            line_starts.as_slice(),
+            0..1,
+            highlights.as_slice(),
+        );
+        let legacy_runs =
+            runs_for_line(&base_font, base_color, 0, text, Some(highlights.as_slice()));
+
+        assert_eq!(streamed.line(0).unwrap_or(&[]).len(), 4);
+        assert_eq!(legacy_runs.len(), 4);
+        assert_eq!(
+            run_color_at_offset(streamed.line(0).unwrap_or(&[]), 1),
+            style_low.color.expect("style_low color should exist")
+        );
+        assert_eq!(
+            run_color_at_offset(streamed.line(0).unwrap_or(&[]), 3),
+            style_mid.color.expect("style_mid color should exist")
+        );
+        assert_eq!(
+            run_color_at_offset(streamed.line(0).unwrap_or(&[]), 6),
+            style_high.color.expect("style_high color should exist")
+        );
+        assert_eq!(
+            run_color_at_offset(streamed.line(0).unwrap_or(&[]), 14),
+            base_color
+        );
+    }
+
+    #[test]
     fn streamed_highlight_runs_match_legacy_visible_window() {
         let mut text = String::new();
         for ix in 0..160usize {
@@ -4819,7 +5290,7 @@ mod tests {
         );
         assert_eq!(streamed.len(), visible_range.len());
 
-        for (local_ix, streamed_runs) in streamed.iter().enumerate() {
+        for local_ix in 0..streamed.len() {
             let line_ix = visible_range.start + local_ix;
             let line_start = line_starts.get(line_ix).copied().unwrap_or(0);
             let line_text = line_text_for_index(text.as_str(), line_starts.as_slice(), line_ix);
@@ -4832,7 +5303,7 @@ mod tests {
                 Some(highlights.as_slice()),
             );
             assert_eq!(
-                runs_fingerprint(streamed_runs.as_slice()),
+                runs_fingerprint(streamed.line(local_ix).unwrap_or(&[])),
                 runs_fingerprint(legacy_runs.as_slice())
             );
         }
@@ -4863,22 +5334,60 @@ mod tests {
             0..1,
             highlights.as_slice(),
         );
-        let streamed_runs = streamed.first().cloned().unwrap_or_default();
         let legacy_runs =
             runs_for_line(&base_font, base_color, 0, text, Some(highlights.as_slice()));
         assert_eq!(
-            runs_fingerprint(streamed_runs.as_slice()),
+            runs_fingerprint(streamed.line(0).unwrap_or(&[])),
             runs_fingerprint(legacy_runs.as_slice())
         );
 
         assert_eq!(
-            run_color_at_offset(streamed_runs.as_slice(), 3),
+            run_color_at_offset(streamed.line(0).unwrap_or(&[]), 3),
             style_low.color.expect("style_low color should exist")
         );
         assert_eq!(
-            run_color_at_offset(streamed_runs.as_slice(), 6),
+            run_color_at_offset(streamed.line(0).unwrap_or(&[]), 6),
             style_high.color.expect("style_high color should exist")
         );
+    }
+
+    #[test]
+    fn highlight_runs_single_carry_in_highlight_matches_streamed() {
+        let text = "prefix highlight continues here\nsuffix line";
+        let line_starts = compute_line_starts(text);
+        let style = gpui::HighlightStyle {
+            color: Some(gpui::hsla(0.12, 1.0, 0.5, 1.0)),
+            ..gpui::HighlightStyle::default()
+        };
+        let mut highlights = vec![(3..30, style)];
+        highlights.sort_by(|(a, _), (b, _)| a.start.cmp(&b.start).then(a.end.cmp(&b.end)));
+
+        let base_font = gpui::font(".SystemUIFont");
+        let base_color = gpui::hsla(0.0, 0.0, 1.0, 1.0);
+        let streamed = build_streamed_highlight_runs_for_visible_window(
+            &base_font,
+            base_color,
+            text,
+            line_starts.as_slice(),
+            0..2,
+            highlights.as_slice(),
+        );
+
+        for line_ix in 0..2 {
+            let line_start = line_starts.get(line_ix).copied().unwrap_or(0);
+            let line_text = line_text_for_index(text, line_starts.as_slice(), line_ix);
+            let legacy_runs = runs_for_line(
+                &base_font,
+                base_color,
+                line_start,
+                line_text,
+                Some(highlights.as_slice()),
+            );
+            assert_eq!(
+                runs_fingerprint(streamed.line(line_ix).unwrap_or(&[])),
+                runs_fingerprint(legacy_runs.as_slice())
+            );
+        }
     }
 
     #[test]
@@ -5276,6 +5785,56 @@ mod tests {
                     &initial_cached_highlights
                 ));
                 assert_eq!(resolved.highlights[0].1.color, Some(dp.first_color));
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn replace_utf8_range_clears_shaped_row_caches(cx: &mut gpui::TestAppContext) {
+        let (input, cx) = cx.add_window_view(|window, cx| {
+            TextInput::new(
+                TextInputOptions {
+                    multiline: true,
+                    soft_wrap: true,
+                    ..Default::default()
+                },
+                window,
+                cx,
+            )
+        });
+
+        cx.update(|_window, app| {
+            input.update(app, |input, cx| {
+                input.set_text("alpha\nbeta", cx);
+
+                input.plain_line_cache.insert(
+                    ShapedRowCacheKey {
+                        line_ix: 0,
+                        wrap_width_key: i32::MIN,
+                    },
+                    ShapedLine::default(),
+                );
+                input.wrapped_line_cache.insert(
+                    ShapedRowCacheKey {
+                        line_ix: 0,
+                        wrap_width_key: wrap_width_cache_key(px(320.0)),
+                    },
+                    WrappedLine::default(),
+                );
+
+                assert_eq!(input.plain_line_cache.len(), 1);
+                assert_eq!(input.wrapped_line_cache.len(), 1);
+
+                input.replace_utf8_range(0..5, "gamma", cx);
+
+                assert!(
+                    input.plain_line_cache.is_empty(),
+                    "text edits must invalidate cached plain shaped rows"
+                );
+                assert!(
+                    input.wrapped_line_cache.is_empty(),
+                    "text edits must invalidate cached wrapped shaped rows"
+                );
             });
         });
     }

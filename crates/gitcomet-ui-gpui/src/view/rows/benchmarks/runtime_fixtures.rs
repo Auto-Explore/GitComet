@@ -1439,7 +1439,7 @@ fn apply_mock_network_progress(
     let _ = dispatch_sync(
         state,
         Msg::Internal(InternalMsg::CloneRepoProgress {
-            dest: dest.to_path_buf(),
+            dest: dest.to_path_buf().into(),
             line: snapshot.progress_line.clone(),
         }),
     );
@@ -1449,7 +1449,7 @@ fn apply_mock_network_progress(
 fn render_mock_network_progress(
     url: &str,
     dest: &Path,
-    output_tail: &[String],
+    output_tail: &std::collections::VecDeque<String>,
     snapshot: &MockNetworkProgressSnapshot,
     bar_width: usize,
     title: Option<&str>,

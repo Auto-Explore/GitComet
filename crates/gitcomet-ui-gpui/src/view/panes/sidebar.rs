@@ -1,6 +1,11 @@
-use super::super::caches::BranchSidebarFingerprint;
+use super::super::caches::{
+    BranchSidebarFingerprint, branch_sidebar_cache_lookup,
+    branch_sidebar_cache_lookup_by_cached_source, branch_sidebar_cache_lookup_by_source,
+    branch_sidebar_cache_store,
+};
 use super::super::*;
 use std::collections::{BTreeMap, BTreeSet};
+use std::rc::Rc;
 
 pub(in super::super) struct SidebarPaneView {
     pub(in super::super) store: Arc<AppStore>,
@@ -9,6 +14,7 @@ pub(in super::super) struct SidebarPaneView {
     _ui_model_subscription: gpui::Subscription,
     branches_scroll: UniformListScrollHandle,
     branch_sidebar_cache: Option<BranchSidebarCache>,
+    path_display_cache: std::cell::RefCell<path_display::PathDisplayCache>,
     sidebar_collapsed_items_by_repo: BTreeMap<std::path::PathBuf, BTreeSet<String>>,
     root_view: WeakEntity<GitCometView>,
     tooltip_host: WeakEntity<TooltipHost>,
@@ -74,6 +80,7 @@ impl SidebarPaneView {
             _ui_model_subscription: subscription,
             branches_scroll: UniformListScrollHandle::default(),
             branch_sidebar_cache: None,
+            path_display_cache: std::cell::RefCell::new(path_display::PathDisplayCache::default()),
             sidebar_collapsed_items_by_repo,
             root_view,
             tooltip_host,
@@ -106,6 +113,11 @@ impl SidebarPaneView {
     pub(in super::super) fn active_repo(&self) -> Option<&RepoState> {
         let repo_id = self.active_repo_id()?;
         self.state.repos.iter().find(|r| r.id == repo_id)
+    }
+
+    pub(in super::super) fn cached_path_display(&self, path: &std::path::Path) -> SharedString {
+        let mut cache = self.path_display_cache.borrow_mut();
+        path_display::cached_path_display(&mut cache, path)
     }
 
     pub(in super::super) fn saved_sidebar_collapsed_items(
@@ -155,58 +167,76 @@ impl SidebarPaneView {
 
     pub(in super::super) fn branch_sidebar_rows_cached(
         &mut self,
-    ) -> Option<Arc<[BranchSidebarRow]>> {
-        let repo = self.active_repo();
-        if repo.is_none() {
+    ) -> Option<Rc<[BranchSidebarRow]>> {
+        let Some(repo_id) = self.active_repo_id() else {
             self.branch_sidebar_cache = None;
             return None;
+        };
+        let repo = self.state.repos.iter().find(|repo| repo.id == repo_id)?;
+
+        let empty = BTreeSet::new();
+        let collapsed_items = self
+            .sidebar_collapsed_items_by_repo
+            .get(&repo.spec.workdir)
+            .unwrap_or(&empty);
+        let lazy_loads = pending_sidebar_lazy_loads(repo, collapsed_items);
+
+        if lazy_loads.worktrees {
+            self.store.dispatch(Msg::LoadWorktrees { repo_id });
+        }
+        if lazy_loads.submodules {
+            self.store.dispatch(Msg::LoadSubmodules { repo_id });
+        }
+        if lazy_loads.stashes {
+            self.store.dispatch(Msg::LoadStashes { repo_id });
         }
 
-        if let Some(repo) = repo {
-            let empty = BTreeSet::new();
-            let collapsed_items = self
-                .sidebar_collapsed_items_by_repo
-                .get(&repo.spec.workdir)
-                .unwrap_or(&empty);
-            let lazy_loads = pending_sidebar_lazy_loads(repo, collapsed_items);
+        let fingerprint = BranchSidebarFingerprint::from_repo(repo);
 
-            if lazy_loads.worktrees {
-                self.store.dispatch(Msg::LoadWorktrees { repo_id: repo.id });
-            }
-            if lazy_loads.submodules {
-                self.store
-                    .dispatch(Msg::LoadSubmodules { repo_id: repo.id });
-            }
-            if lazy_loads.stashes {
-                self.store.dispatch(Msg::LoadStashes { repo_id: repo.id });
-            }
+        if let Some(rows) =
+            branch_sidebar_cache_lookup(&mut self.branch_sidebar_cache, repo_id, fingerprint)
+        {
+            return Some(rows);
         }
 
-        let (repo_id, fingerprint, rows) = {
-            let repo = repo?;
-            let fingerprint = BranchSidebarFingerprint::from_repo(repo);
-            if let Some(cache) = &self.branch_sidebar_cache
-                && cache.repo_id == repo.id
-                && cache.fingerprint == fingerprint
-            {
-                return Some(Arc::clone(&cache.rows));
-            }
+        if let Some(rows) = branch_sidebar_cache_lookup_by_cached_source(
+            &mut self.branch_sidebar_cache,
+            repo,
+            fingerprint,
+        ) {
+            return Some(rows);
+        }
 
-            let empty = BTreeSet::new();
-            let collapsed_items = self
-                .sidebar_collapsed_items_by_repo
-                .get(&repo.spec.workdir)
-                .unwrap_or(&empty);
-            let rows: Arc<[BranchSidebarRow]> =
-                branch_sidebar::branch_sidebar_rows(repo, collapsed_items).into();
-            (repo.id, fingerprint, rows)
+        let (source_fingerprint, source_parts) = {
+            let cached_source_parts = self
+                .branch_sidebar_cache
+                .as_ref()
+                .filter(|cached| cached.repo_id == repo_id)
+                .map(|cached| &cached.source_parts);
+            branch_sidebar::branch_sidebar_source_fingerprint(repo, cached_source_parts)
         };
 
-        self.branch_sidebar_cache = Some(BranchSidebarCache {
+        if let Some(rows) = branch_sidebar_cache_lookup_by_source(
+            &mut self.branch_sidebar_cache,
             repo_id,
             fingerprint,
-            rows: Arc::clone(&rows),
-        });
+            source_fingerprint,
+            &source_parts,
+        ) {
+            return Some(rows);
+        }
+
+        let rows: Rc<[BranchSidebarRow]> =
+            { branch_sidebar::branch_sidebar_rows(repo, collapsed_items).into() };
+
+        branch_sidebar_cache_store(
+            &mut self.branch_sidebar_cache,
+            repo_id,
+            fingerprint,
+            source_fingerprint,
+            source_parts,
+            Rc::clone(&rows),
+        );
         Some(rows)
     }
 
@@ -358,6 +388,15 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
+    fn repo_state(id: RepoId, path: &str) -> RepoState {
+        RepoState::new_opening(
+            id,
+            gitcomet_core::domain::RepoSpec {
+                workdir: PathBuf::from(path),
+            },
+        )
+    }
+
     #[test]
     fn pending_sidebar_lazy_loads_defaults_secondary_sections_to_closed() {
         let repo = RepoState::new_opening(
@@ -462,5 +501,50 @@ mod tests {
             "closing a default-closed section should drop the override"
         );
         assert!(collapsed_items.is_empty());
+    }
+
+    #[test]
+    fn sidebar_notify_fingerprint_ignores_inactive_repo_changes() {
+        let active = repo_state(RepoId(1), "/tmp/active");
+        let inactive = repo_state(RepoId(2), "/tmp/inactive");
+        let mut state = AppState {
+            repos: vec![active, inactive],
+            active_repo: Some(RepoId(1)),
+            ..AppState::default()
+        };
+
+        let initial = SidebarNotifyFingerprint::from_state(&state);
+
+        state.repos[1].head_branch_rev = 1;
+        state.repos[1].branches_rev = 1;
+        state.repos[1].remote_branches_rev = 1;
+        state.repos[1].worktrees_rev = 1;
+        state.repos[1].submodules_rev = 1;
+        state.repos[1].stashes_rev = 1;
+        state.repos[1].branch_sidebar_rev = 1;
+
+        assert_eq!(SidebarNotifyFingerprint::from_state(&state), initial);
+    }
+
+    #[test]
+    fn sidebar_notify_fingerprint_tracks_active_repo_branch_sidebar_changes() {
+        let mut state = AppState {
+            repos: vec![repo_state(RepoId(1), "/tmp/repo")],
+            active_repo: Some(RepoId(1)),
+            ..AppState::default()
+        };
+
+        let initial = SidebarNotifyFingerprint::from_state(&state);
+
+        state.repos[0].head_branch_rev = 1;
+        let after_head = SidebarNotifyFingerprint::from_state(&state);
+        assert_ne!(after_head, initial);
+
+        state.repos[0].branches_rev = 1;
+        let after_branches = SidebarNotifyFingerprint::from_state(&state);
+        assert_ne!(after_branches, after_head);
+
+        state.repos[0].branch_sidebar_rev = 42;
+        assert_ne!(SidebarNotifyFingerprint::from_state(&state), after_branches);
     }
 }

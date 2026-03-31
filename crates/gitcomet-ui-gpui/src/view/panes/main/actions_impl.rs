@@ -886,6 +886,7 @@ impl MainPaneView {
             )
         };
         let conflict_syntax_language = rows::diff_syntax_language_for_path(&path);
+        let shared_path = gitcomet_state::msg::RepoPath::from(path.clone());
 
         // For binary conflicts, populate minimal state and return early.
         if is_binary {
@@ -897,6 +898,7 @@ impl MainPaneView {
             self.conflict_resolver = ConflictResolverUiState {
                 repo_id: Some(repo_id),
                 path: Some(path),
+                shared_path: Some(shared_path),
                 loaded_file: Some(file.clone()),
                 conflict_syntax_language,
                 source_hash: Some(source_hash),
@@ -948,12 +950,7 @@ impl MainPaneView {
 
         let marker_parse_started = Instant::now();
         let mut marker_segments = if let Some(cur) = current_text.clone() {
-            let segments = conflict_resolver::parse_conflict_markers_shared(cur);
-            if conflict_resolver::conflict_count(&segments) > 0 {
-                segments
-            } else {
-                Vec::new()
-            }
+            conflict_resolver::parse_conflict_markers_shared_nonempty(cur)
         } else {
             Vec::new()
         };
@@ -982,8 +979,11 @@ impl MainPaneView {
 
         // When conflict markers are 2-way (no base section), populate block.base
         // from the git ancestor file so "A (base)" picks work.
-        if !base_text.is_empty() {
-            conflict_resolver::populate_block_bases_from_ancestor(&mut marker_segments, base_text);
+        if let Some(base_text) = file.base.clone() {
+            conflict_resolver::populate_block_bases_from_shared_ancestor(
+                &mut marker_segments,
+                base_text,
+            );
         }
         let mut conflict_region_indices =
             conflict_resolver::sequential_conflict_region_indices(&marker_segments);
@@ -1009,19 +1009,12 @@ impl MainPaneView {
             } else {
                 trace_decisions.full_output_generated = Some(true);
                 (
-                    Some(if marker_segments.is_empty() {
-                        if let Some(cur) = current_text_ref {
-                            cur.to_string()
-                        } else if let Some(ours) = file.ours.as_deref() {
-                            ours.to_string()
-                        } else if let Some(theirs) = file.theirs.as_deref() {
-                            theirs.to_string()
-                        } else {
-                            String::new()
-                        }
-                    } else {
-                        conflict_resolver::generate_resolved_text(&marker_segments)
-                    }),
+                    Some(conflict_resolver::bootstrap_resolved_output_text(
+                        &marker_segments,
+                        current_text.as_ref(),
+                        file.ours.as_ref(),
+                        file.theirs.as_ref(),
+                    )),
                     None,
                 )
             };
@@ -1030,13 +1023,9 @@ impl MainPaneView {
                 .as_ref()
                 .map(conflict_resolver::ResolvedOutputProjection::len)
                 .or_else(|| {
-                    resolved_output_text.as_ref().map(|resolved| {
-                        if resolved.is_empty() {
-                            0
-                        } else {
-                            count_newlines(resolved).saturating_add(1)
-                        }
-                    })
+                    resolved_output_text
+                        .as_ref()
+                        .map(|resolved| resolved.line_count())
                 })
         } else {
             None
@@ -1199,12 +1188,14 @@ impl MainPaneView {
         }
         self.conflict_three_way_prepared_syntax_documents = three_way_prepared_docs;
         self.conflict_three_way_syntax_inflight = ThreeWaySides::default();
+        let shared_path = gitcomet_state::msg::RepoPath::from(path.clone());
 
         // Build state with core/shared fields; mode-dependent visible state
         // is populated by the rebuild methods below.
         self.conflict_resolver = ConflictResolverUiState {
             repo_id: Some(repo_id),
             path: Some(path),
+            shared_path: Some(shared_path),
             loaded_file: Some(file.clone()),
             conflict_syntax_language,
             source_hash: Some(source_hash),
@@ -1235,6 +1226,7 @@ impl MainPaneView {
             conflict_rev: repo.conflict_state.conflict_rev,
             resolver_pending_recompute_seq: 0,
             resolved_outline: ResolvedOutlineData::default(),
+            resolved_outline_gutter_rows: Vec::new(),
             markdown_preview: ConflictResolverMarkdownPreviewState::default(),
             image_preview: ConflictResolverImagePreviewState::default(),
             resolver_preview_mode,
@@ -1267,14 +1259,14 @@ impl MainPaneView {
             );
         } else if let Some(resolved) = resolved_output_text {
             self.conflict_resolved_output_projection = None;
-            let line_ending = crate::kit::TextInput::detect_line_ending(&resolved);
+            let line_ending = crate::kit::TextInput::detect_line_ending(resolved.as_str());
             let theme = self.theme;
-            let output_hash = hash_text_bytes(&resolved);
+            let output_hash = hash_text_bytes(resolved.as_str());
             let input_set_text_started = Instant::now();
             self.conflict_resolver_input.update(cx, |input, cx| {
                 input.set_theme(theme, cx);
                 input.set_line_ending(line_ending);
-                input.set_text(resolved, cx);
+                input.set_text(resolved.into_shared_string(), cx);
             });
             mergetool_trace::record_with(|| {
                 trace_ctx
@@ -1360,20 +1352,16 @@ impl MainPaneView {
 
         // Re-parse marker segments from original current text.
         let mut marker_segments = if let Some(cur) = file.current.clone() {
-            let segments = conflict_resolver::parse_conflict_markers_shared(cur);
-            if conflict_resolver::conflict_count(&segments) > 0 {
-                segments
-            } else {
-                Vec::new()
-            }
+            conflict_resolver::parse_conflict_markers_shared_nonempty(cur)
         } else {
             Vec::new()
         };
-        let base_text = file.base.as_deref().unwrap_or("");
-
         // Re-populate bases from ancestor (needed for 2-way markers).
-        if !base_text.is_empty() {
-            conflict_resolver::populate_block_bases_from_ancestor(&mut marker_segments, base_text);
+        if let Some(base_text) = file.base.clone() {
+            conflict_resolver::populate_block_bases_from_shared_ancestor(
+                &mut marker_segments,
+                base_text,
+            );
         }
         let mut conflict_region_indices =
             conflict_resolver::sequential_conflict_region_indices(&marker_segments);
@@ -1390,19 +1378,12 @@ impl MainPaneView {
         let use_streamed_projection =
             self.conflict_resolved_output_is_streamed() && !marker_segments.is_empty();
         let resolved = (!use_streamed_projection).then(|| {
-            if marker_segments.is_empty() {
-                if let Some(cur) = file.current.as_deref() {
-                    cur.to_string()
-                } else if let Some(ours) = file.ours.as_deref() {
-                    ours.to_string()
-                } else if let Some(theirs) = file.theirs.as_deref() {
-                    theirs.to_string()
-                } else {
-                    String::new()
-                }
-            } else {
-                conflict_resolver::generate_resolved_text(&marker_segments)
-            }
+            conflict_resolver::bootstrap_resolved_output_text(
+                &marker_segments,
+                file.current.as_ref(),
+                file.ours.as_ref(),
+                file.theirs.as_ref(),
+            )
         });
 
         // Read hide_resolved from state (authoritative source).
@@ -1441,13 +1422,13 @@ impl MainPaneView {
             self.refresh_streamed_resolved_output_preview_from_markers(output_path.as_ref());
         } else if let Some(resolved) = resolved {
             self.conflict_resolved_output_projection = None;
-            let line_ending = crate::kit::TextInput::detect_line_ending(&resolved);
+            let line_ending = crate::kit::TextInput::detect_line_ending(resolved.as_str());
             let theme = self.theme;
-            let output_hash = hash_text_bytes(&resolved);
+            let output_hash = hash_text_bytes(resolved.as_str());
             self.conflict_resolver_input.update(cx, |input, cx| {
                 input.set_theme(theme, cx);
                 input.set_line_ending(line_ending);
-                input.set_text(resolved, cx);
+                input.set_text(resolved.into_shared_string(), cx);
             });
             self.conflict_resolved_preview_path = output_path.clone();
             self.conflict_resolved_preview_source_hash = Some(output_hash);
@@ -1546,6 +1527,7 @@ impl MainPaneView {
                 .resolved_outline
                 .sources_index
                 .clear();
+            self.conflict_resolver.resolved_outline_gutter_rows.clear();
         } else {
             self.recompute_conflict_resolved_outline_and_provenance(path.as_ref(), cx);
         }
@@ -1575,7 +1557,7 @@ impl MainPaneView {
             self.conflict_resolver
                 .repo_id
                 .or_else(|| self.active_repo_id()),
-            self.conflict_resolver.path.clone(),
+            self.conflict_resolver.dispatch_path(),
         ) {
             self.store.dispatch(Msg::ConflictSetHideResolved {
                 repo_id,
@@ -2095,7 +2077,7 @@ impl MainPaneView {
                 self.conflict_resolver
                     .repo_id
                     .or_else(|| self.active_repo_id()),
-                self.conflict_resolver.path.clone(),
+                self.conflict_resolver.dispatch_path(),
             )
         {
             self.store.dispatch(Msg::ConflictSetRegionChoice {
@@ -2246,7 +2228,7 @@ impl MainPaneView {
         else {
             return;
         };
-        let Some(path) = self.conflict_resolver.path.clone() else {
+        let Some(path) = self.conflict_resolver.dispatch_path() else {
             return;
         };
         let updates = updates
@@ -2289,7 +2271,7 @@ impl MainPaneView {
             self.conflict_resolver
                 .repo_id
                 .or_else(|| self.active_repo_id()),
-            self.conflict_resolver.path.clone(),
+            self.conflict_resolver.dispatch_path(),
         ) {
             self.store
                 .dispatch(Msg::ConflictResetResolutions { repo_id, path });
@@ -2558,7 +2540,7 @@ impl MainPaneView {
                 self.conflict_resolver
                     .repo_id
                     .or_else(|| self.active_repo_id()),
-                self.conflict_resolver.path.clone(),
+                self.conflict_resolver.dispatch_path(),
             )
         {
             self.store.dispatch(Msg::ConflictApplyAutosolve {
@@ -2579,7 +2561,7 @@ mod tests {
     #[test]
     fn conflict_file_source_fingerprint_is_stable_across_fresh_allocations() {
         let make_file = || gitcomet_state::model::ConflictFile {
-            path: std::path::PathBuf::from("index.html"),
+            path: std::path::PathBuf::from("index.html").into(),
             base_bytes: Some(std::sync::Arc::<[u8]>::from(b"base\nbytes\n".as_slice())),
             ours_bytes: None,
             theirs_bytes: Some(std::sync::Arc::<[u8]>::from(b"theirs\nbytes\n".as_slice())),

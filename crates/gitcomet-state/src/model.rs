@@ -1,7 +1,12 @@
 use crate::msg::RepoCommandKind;
-use gitcomet_core::conflict_session::ConflictSession;
+use crate::msg::RepoPath;
+use crate::session;
+use gitcomet_core::conflict_session::{
+    ConflictPayload, ConflictSession, ConflictStageParts, canonicalize_stage_parts,
+};
 use gitcomet_core::domain::*;
 use gitcomet_core::services::BlameLine;
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -36,6 +41,12 @@ impl RepoLoadsInFlight {
     pub const LOG: u32 = 1 << 10;
     pub const MERGE_COMMIT_MESSAGE: u32 = 1 << 11;
     pub const REMOTE_TAGS: u32 = 1 << 12;
+    const PRIMARY_REFRESH_FLAGS: u32 = Self::HEAD_BRANCH
+        | Self::UPSTREAM_DIVERGENCE
+        | Self::REBASE_STATE
+        | Self::MERGE_COMMIT_MESSAGE
+        | Self::STATUS
+        | Self::LOG;
 
     pub fn is_in_flight(&self, flag: u32) -> bool {
         (self.in_flight & flag) != 0
@@ -43,6 +54,17 @@ impl RepoLoadsInFlight {
 
     pub fn any_in_flight(&self) -> bool {
         self.in_flight != 0
+    }
+
+    /// Starts the common primary-refresh batch immediately when no work is already queued or
+    /// running. Callers fall back to per-load request coalescing when this returns `false`.
+    pub fn request_primary_refresh_batch(&mut self) -> bool {
+        if self.in_flight == 0 && self.pending == 0 && self.pending_log.is_none() {
+            self.in_flight |= Self::PRIMARY_REFRESH_FLAGS;
+            true
+        } else {
+            false
+        }
     }
 
     /// For non-log loads: starts immediately if not in flight, otherwise coalesces by remembering
@@ -115,7 +137,7 @@ impl RepoLoadsInFlight {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ConflictFile {
-    pub path: PathBuf,
+    pub path: RepoPath,
     pub base_bytes: Option<Arc<[u8]>>,
     pub ours_bytes: Option<Arc<[u8]>>,
     pub theirs_bytes: Option<Arc<[u8]>>,
@@ -124,6 +146,73 @@ pub struct ConflictFile {
     pub ours: Option<Arc<str>>,
     pub theirs: Option<Arc<str>>,
     pub current: Option<Arc<str>>,
+}
+
+impl ConflictFile {
+    /// Build a conflict file from stage/current parts, canonicalizing UTF-8
+    /// payloads down to text-only storage.
+    pub fn from_loaded_stage_parts(
+        path: impl Into<RepoPath>,
+        base: ConflictStageParts,
+        ours: ConflictStageParts,
+        theirs: ConflictStageParts,
+        current: ConflictStageParts,
+    ) -> Self {
+        let (base_bytes, base) = canonicalize_stage_parts(base.0, base.1);
+        let (ours_bytes, ours) = canonicalize_stage_parts(ours.0, ours.1);
+        let (theirs_bytes, theirs) = canonicalize_stage_parts(theirs.0, theirs.1);
+        let (current_bytes, current) = canonicalize_stage_parts(current.0, current.1);
+
+        Self {
+            path: path.into(),
+            base_bytes,
+            ours_bytes,
+            theirs_bytes,
+            current_bytes,
+            base,
+            ours,
+            theirs,
+            current,
+        }
+    }
+
+    /// Build a conflict file directly from an existing session without
+    /// round-tripping through staged parts first.
+    pub fn from_shared_conflict_session(
+        path: impl Into<RepoPath>,
+        session: &ConflictSession,
+    ) -> Self {
+        let (base_bytes, base) = conflict_file_side_from_payload(&session.base);
+        let (ours_bytes, ours) = conflict_file_side_from_payload(&session.ours);
+        let (theirs_bytes, theirs) = conflict_file_side_from_payload(&session.theirs);
+        let (current_bytes, current) = session
+            .current
+            .as_ref()
+            .map(conflict_file_side_from_payload)
+            .unwrap_or((None, None));
+
+        Self {
+            path: path.into(),
+            base_bytes,
+            ours_bytes,
+            theirs_bytes,
+            current_bytes,
+            base,
+            ours,
+            theirs,
+            current,
+        }
+    }
+}
+
+fn conflict_file_side_from_payload(
+    payload: &ConflictPayload,
+) -> (Option<Arc<[u8]>>, Option<Arc<str>>) {
+    match payload {
+        ConflictPayload::Text(text) => (None, Some(text.clone())),
+        ConflictPayload::Binary(bytes) => (Some(bytes.clone()), None),
+        ConflictPayload::Absent => (None, None),
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -203,11 +292,11 @@ pub enum AppNotificationKind {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CloneOpState {
-    pub url: String,
-    pub dest: PathBuf,
+    pub url: Arc<str>,
+    pub dest: Arc<PathBuf>,
     pub status: CloneOpStatus,
     pub seq: u64,
-    pub output_tail: Vec<String>,
+    pub output_tail: VecDeque<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -237,6 +326,7 @@ pub struct PendingCommitRetry {
 pub struct HistoryState {
     pub history_scope: LogScope,
     pub log: Loadable<Shared<LogPage>>,
+    pub retained_log_while_loading: Option<Shared<LogPage>>,
     pub log_loading_more: bool,
     pub log_rev: u64,
     pub file_history_path: Option<PathBuf>,
@@ -255,6 +345,7 @@ impl Default for HistoryState {
         Self {
             history_scope: LogScope::CurrentBranch,
             log: Loadable::NotLoaded,
+            retained_log_while_loading: None,
             log_loading_more: false,
             log_rev: 0,
             file_history_path: None,
@@ -318,10 +409,23 @@ impl Default for ConflictState {
     }
 }
 
+const BRANCH_SIDEBAR_REV_MIX: u64 = 0x9e37_79b9_7f4a_7c15;
+
+#[inline]
+fn mix_branch_sidebar_revs(values: [u64; 7]) -> u64 {
+    let mut acc = BRANCH_SIDEBAR_REV_MIX;
+    for value in values {
+        acc ^= value.wrapping_mul(BRANCH_SIDEBAR_REV_MIX);
+        acc = acc.rotate_left(11).wrapping_add(BRANCH_SIDEBAR_REV_MIX);
+    }
+    acc
+}
+
 #[derive(Clone, Debug)]
 pub struct RepoState {
     pub id: RepoId,
     pub spec: RepoSpec,
+    session_workdir_key: Arc<str>,
     pub loads_in_flight: RepoLoadsInFlight,
     pub pull_in_flight: u32,
     pub push_in_flight: u32,
@@ -349,6 +453,9 @@ pub struct RepoState {
     pub remote_branches_rev: u64,
     pub status: Loadable<Shared<RepoStatus>>,
     pub status_rev: u64,
+    /// Cached flag: true when `status` is `Ready` and at least one unstaged
+    /// entry has `FileStatusKind::Conflicted`. Recomputed in `set_status`.
+    pub has_unstaged_conflicts: bool,
     pub log: Loadable<Shared<LogPage>>,
     pub log_loading_more: bool,
     pub log_rev: u64,
@@ -362,12 +469,15 @@ pub struct RepoState {
     pub worktrees_rev: u64,
     pub submodules: Loadable<Arc<Vec<Submodule>>>,
     pub submodules_rev: u64,
+    /// Invalidates cached branch-sidebar rows when any sidebar-relevant source changes.
+    pub branch_sidebar_rev: u64,
 
     pub diff_state: DiffState,
     pub conflict_state: ConflictState,
 
     pub open_rev: u64,
     pub ops_rev: u64,
+    pub last_active_at: Option<SystemTime>,
 
     pub missing_on_disk: bool,
     pub last_error: Option<String>,
@@ -379,9 +489,11 @@ pub struct RepoState {
 
 impl RepoState {
     pub fn new_opening(id: RepoId, spec: RepoSpec) -> Self {
+        let session_workdir_key = session::path_storage_key_shared(&spec.workdir);
         Self {
             id,
             spec,
+            session_workdir_key,
             loads_in_flight: RepoLoadsInFlight::default(),
             pull_in_flight: 0,
             push_in_flight: 0,
@@ -408,6 +520,7 @@ impl RepoState {
             remote_branches_rev: 0,
             status: Loadable::NotLoaded,
             status_rev: 0,
+            has_unstaged_conflicts: false,
             log: Loadable::NotLoaded,
             log_loading_more: false,
             log_rev: 0,
@@ -421,10 +534,12 @@ impl RepoState {
             worktrees_rev: 0,
             submodules: Loadable::NotLoaded,
             submodules_rev: 0,
+            branch_sidebar_rev: 0,
             diff_state: DiffState::default(),
             conflict_state: ConflictState::default(),
             open_rev: 0,
             ops_rev: 0,
+            last_active_at: None,
             missing_on_disk: false,
             last_error: None,
             diagnostics: Vec::new(),
@@ -433,12 +548,22 @@ impl RepoState {
         }
     }
 
+    pub(crate) fn set_spec(&mut self, spec: RepoSpec) {
+        self.session_workdir_key = session::path_storage_key_shared(&spec.workdir);
+        self.spec = spec;
+    }
+
+    pub(crate) fn session_workdir_key(&self) -> &Arc<str> {
+        &self.session_workdir_key
+    }
+
     pub(crate) fn set_head_branch(&mut self, head_branch: Loadable<String>) {
         if self.head_branch == head_branch {
             return;
         }
         self.head_branch = head_branch;
         self.head_branch_rev = self.head_branch_rev.wrapping_add(1);
+        self.bump_branch_sidebar_rev();
     }
 
     pub(crate) fn set_detached_head_commit(&mut self, detached_head_commit: Option<CommitId>) {
@@ -455,6 +580,7 @@ impl RepoState {
         }
         self.branches = branches;
         self.branches_rev = self.branches_rev.wrapping_add(1);
+        self.bump_branch_sidebar_rev();
     }
 
     pub(crate) fn set_tags(&mut self, tags: Loadable<Vec<Tag>>) {
@@ -482,6 +608,7 @@ impl RepoState {
         }
         self.remotes = remotes;
         self.remotes_rev = self.remotes_rev.wrapping_add(1);
+        self.bump_branch_sidebar_rev();
     }
 
     pub(crate) fn set_remote_branches(&mut self, remote_branches: Loadable<Vec<RemoteBranch>>) {
@@ -491,6 +618,7 @@ impl RepoState {
         }
         self.remote_branches = remote_branches;
         self.remote_branches_rev = self.remote_branches_rev.wrapping_add(1);
+        self.bump_branch_sidebar_rev();
     }
 
     pub(crate) fn set_stashes(&mut self, stashes: Loadable<Vec<StashEntry>>) {
@@ -500,6 +628,7 @@ impl RepoState {
         }
         self.stashes = stashes;
         self.stashes_rev = self.stashes_rev.wrapping_add(1);
+        self.bump_branch_sidebar_rev();
     }
 
     pub(crate) fn set_worktrees(&mut self, worktrees: Loadable<Vec<Worktree>>) {
@@ -509,6 +638,7 @@ impl RepoState {
         }
         self.worktrees = worktrees;
         self.worktrees_rev = self.worktrees_rev.wrapping_add(1);
+        self.bump_branch_sidebar_rev();
     }
 
     pub(crate) fn set_submodules(&mut self, submodules: Loadable<Vec<Submodule>>) {
@@ -518,12 +648,40 @@ impl RepoState {
         }
         self.submodules = submodules;
         self.submodules_rev = self.submodules_rev.wrapping_add(1);
+        self.bump_branch_sidebar_rev();
+    }
+
+    #[inline]
+    fn bump_branch_sidebar_rev(&mut self) {
+        self.branch_sidebar_rev = self.branch_sidebar_rev.wrapping_add(1);
+    }
+
+    #[inline]
+    pub fn branch_sidebar_cache_rev(&self) -> u64 {
+        let rev = self.branch_sidebar_rev;
+        if rev != 0 {
+            rev
+        } else {
+            mix_branch_sidebar_revs([
+                self.head_branch_rev,
+                self.branches_rev,
+                self.remotes_rev,
+                self.remote_branches_rev,
+                self.worktrees_rev,
+                self.submodules_rev,
+                self.stashes_rev,
+            ])
+        }
     }
 
     pub(crate) fn set_status(&mut self, status: Loadable<Shared<RepoStatus>>) {
         if self.status == status {
             return;
         }
+        self.has_unstaged_conflicts = matches!(
+            &status,
+            Loadable::Ready(s) if s.unstaged.iter().any(|e| e.kind == FileStatusKind::Conflicted)
+        );
         self.status = status;
         self.status_rev = self.status_rev.wrapping_add(1);
     }
@@ -532,9 +690,22 @@ impl RepoState {
         if self.history_state.log == log && self.log == log {
             return;
         }
+        if !matches!(log, Loadable::Loading) {
+            self.history_state.retained_log_while_loading = None;
+        }
         self.history_state.log = log.clone();
         self.log = log;
         self.history_state.log_rev = self.history_state.log_rev.wrapping_add(1);
+    }
+
+    pub(crate) fn retain_log_while_loading(&mut self) {
+        if self.history_state.retained_log_while_loading.is_some() {
+            return;
+        }
+
+        if let Loadable::Ready(page) = &self.log {
+            self.history_state.retained_log_while_loading = Some(Arc::clone(page));
+        }
     }
 
     pub(crate) fn set_log_loading_more(&mut self, v: bool) {
@@ -689,7 +860,7 @@ mod tests {
         repo.history_state.log = Loadable::Ready(Arc::new(LogPage {
             commits: vec![Commit {
                 id: CommitId("c1".into()),
-                parent_ids: Vec::new(),
+                parent_ids: gitcomet_core::domain::CommitParentIds::new(),
                 summary: "s1".into(),
                 author: "a".into(),
                 time: SystemTime::UNIX_EPOCH,
@@ -764,6 +935,48 @@ mod tests {
         )
     }
 
+    #[test]
+    fn request_primary_refresh_batch_marks_all_primary_loads_when_idle() {
+        let mut loads = RepoLoadsInFlight::default();
+
+        assert!(loads.request_primary_refresh_batch());
+        assert!(loads.is_in_flight(RepoLoadsInFlight::HEAD_BRANCH));
+        assert!(loads.is_in_flight(RepoLoadsInFlight::UPSTREAM_DIVERGENCE));
+        assert!(loads.is_in_flight(RepoLoadsInFlight::REBASE_STATE));
+        assert!(loads.is_in_flight(RepoLoadsInFlight::MERGE_COMMIT_MESSAGE));
+        assert!(loads.is_in_flight(RepoLoadsInFlight::STATUS));
+        assert!(loads.is_in_flight(RepoLoadsInFlight::LOG));
+    }
+
+    #[test]
+    fn request_primary_refresh_batch_skips_when_any_load_is_already_in_flight() {
+        let mut loads = RepoLoadsInFlight::default();
+        assert!(loads.request(RepoLoadsInFlight::STATUS));
+
+        assert!(!loads.request_primary_refresh_batch());
+        assert!(!loads.is_in_flight(RepoLoadsInFlight::HEAD_BRANCH));
+        assert!(loads.is_in_flight(RepoLoadsInFlight::STATUS));
+        assert!(!loads.is_in_flight(RepoLoadsInFlight::LOG));
+    }
+
+    #[test]
+    fn set_spec_refreshes_session_workdir_key() {
+        let mut repo = RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/repo-a"),
+            },
+        );
+        assert_eq!(repo.session_workdir_key().as_ref(), "/tmp/repo-a");
+
+        repo.set_spec(RepoSpec {
+            workdir: PathBuf::from("/tmp/repo-b"),
+        });
+
+        assert_eq!(repo.spec.workdir, PathBuf::from("/tmp/repo-b"));
+        assert_eq!(repo.session_workdir_key().as_ref(), "/tmp/repo-b");
+    }
+
     // --- Setter rev-bump tests ---
 
     #[test]
@@ -782,6 +995,39 @@ mod tests {
         let before = repo.history_state.log_rev;
         repo.set_log(Loadable::Loading);
         assert_eq!(repo.history_state.log_rev, before + 1);
+    }
+
+    #[test]
+    fn retain_log_while_loading_keeps_ready_log_alive_until_next_log_state() {
+        let mut repo = new_repo();
+        let page = Arc::new(LogPage {
+            commits: vec![Commit {
+                id: CommitId("c1".into()),
+                parent_ids: gitcomet_core::domain::CommitParentIds::new(),
+                summary: "s1".into(),
+                author: "a".into(),
+                time: SystemTime::UNIX_EPOCH,
+            }],
+            next_cursor: None,
+        });
+        repo.set_log(Loadable::Ready(Arc::clone(&page)));
+
+        repo.retain_log_while_loading();
+        repo.set_log(Loadable::Loading);
+
+        let retained = repo
+            .history_state
+            .retained_log_while_loading
+            .as_ref()
+            .expect("ready log should stay retained while loading");
+        assert!(Arc::ptr_eq(retained, &page));
+
+        repo.set_log(Loadable::Ready(Arc::new(LogPage {
+            commits: Vec::new(),
+            next_cursor: None,
+        })));
+
+        assert!(repo.history_state.retained_log_while_loading.is_none());
     }
 
     #[test]
@@ -959,6 +1205,30 @@ mod tests {
     }
 
     #[test]
+    fn branch_sidebar_cache_rev_falls_back_to_component_revisions() {
+        let mut repo = new_repo();
+        let initial = repo.branch_sidebar_cache_rev();
+        repo.branches_rev = 1;
+        assert_ne!(repo.branch_sidebar_cache_rev(), initial);
+    }
+
+    #[test]
+    fn branch_sidebar_cache_rev_bumps_only_for_relevant_changes() {
+        let mut repo = new_repo();
+        let initial = repo.branch_sidebar_cache_rev();
+
+        repo.set_head_branch(Loadable::Ready("main".to_string()));
+        let after_head = repo.branch_sidebar_cache_rev();
+        assert_ne!(after_head, initial);
+
+        repo.set_head_branch(Loadable::Ready("main".to_string()));
+        assert_eq!(repo.branch_sidebar_cache_rev(), after_head);
+
+        repo.set_worktrees(Loadable::Loading);
+        assert_ne!(repo.branch_sidebar_cache_rev(), after_head);
+    }
+
+    #[test]
     fn set_detached_head_commit_updates_only_on_change() {
         let mut repo = new_repo();
         let head = CommitId("abc123".into());
@@ -1118,6 +1388,7 @@ mod tests {
         assert_eq!(repo.stashes_rev, 0);
         assert_eq!(repo.worktrees_rev, 0);
         assert_eq!(repo.submodules_rev, 0);
+        assert_eq!(repo.branch_sidebar_rev, 0);
     }
 
     #[test]

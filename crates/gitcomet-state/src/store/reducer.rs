@@ -9,12 +9,22 @@ mod util;
 use crate::model::{
     AppState, AuthPromptState, AuthRetryOperation, BannerErrorState, PendingCommitRetry, RepoId,
 };
-use crate::msg::{Effect, Msg, RepoCommandKind};
+use crate::msg::{ConflictRegionChoice, Effect, Msg, RepoCommandKind, RepoPath, RepoPathList};
 use gitcomet_core::auth::StagedGitAuth;
 use gitcomet_core::services::GitRepository;
 use rustc_hash::FxHashMap as HashMap;
+use smallvec::SmallVec;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
+
+pub(crate) use diff_selection::SelectDiffEffects;
+pub(crate) use repo_management::{ReorderRepoTabsEffects, SetActiveRepoEffects};
+
+pub(crate) const SINGLE_PATH_ACTION_INLINE_EFFECT_CAPACITY: usize = 1;
+pub(crate) type SinglePathActionEffects =
+    SmallVec<[Effect; SINGLE_PATH_ACTION_INLINE_EFFECT_CAPACITY]>;
+pub(crate) type BatchPathActionEffects =
+    SmallVec<[Effect; SINGLE_PATH_ACTION_INLINE_EFFECT_CAPACITY]>;
 
 #[cfg(test)]
 pub(super) fn normalize_repo_path(path: std::path::PathBuf) -> std::path::PathBuf {
@@ -33,6 +43,7 @@ fn normalize_repo_relative_path(
     util::canonicalize_path(path)
 }
 
+#[inline]
 fn begin_local_action(state: &mut AppState, repo_id: RepoId) {
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         repo_state.local_actions_in_flight = repo_state.local_actions_in_flight.saturating_add(1);
@@ -265,6 +276,96 @@ fn attach_git_auth_to_effects(mut effects: Vec<Effect>, auth: StagedGitAuth) -> 
     }
 
     effects
+}
+
+pub(crate) fn fill_set_active_repo_inline(
+    state: &mut AppState,
+    repo_id: RepoId,
+    effects: &mut SetActiveRepoEffects,
+) {
+    repo_management::fill_set_active_repo_inline(state, repo_id, effects)
+}
+
+pub(crate) fn fill_reorder_repo_tabs_inline(
+    state: &mut AppState,
+    repo_id: RepoId,
+    insert_before: Option<RepoId>,
+    effects: &mut ReorderRepoTabsEffects,
+) {
+    repo_management::fill_reorder_repo_tabs_inline(state, repo_id, insert_before, effects)
+}
+
+pub(crate) fn fill_select_diff_inline(
+    state: &mut AppState,
+    repo_id: RepoId,
+    target: gitcomet_core::domain::DiffTarget,
+    effects: &mut SelectDiffEffects,
+) {
+    diff_selection::fill_select_diff_inline(state, repo_id, target, effects)
+}
+
+#[inline]
+pub(crate) fn fill_stage_path_inline(
+    state: &mut AppState,
+    repo_id: RepoId,
+    path: std::path::PathBuf,
+    effects: &mut SinglePathActionEffects,
+) {
+    begin_local_action(state, repo_id);
+    effects.push(Effect::StagePath { repo_id, path });
+}
+
+#[inline]
+pub(crate) fn fill_stage_paths_inline(
+    state: &mut AppState,
+    repo_id: RepoId,
+    paths: RepoPathList,
+    effects: &mut BatchPathActionEffects,
+) {
+    begin_local_action(state, repo_id);
+    effects.push(Effect::StagePaths { repo_id, paths });
+}
+
+#[inline]
+pub(crate) fn fill_unstage_path_inline(
+    state: &mut AppState,
+    repo_id: RepoId,
+    path: std::path::PathBuf,
+    effects: &mut SinglePathActionEffects,
+) {
+    begin_local_action(state, repo_id);
+    effects.push(Effect::UnstagePath { repo_id, path });
+}
+
+#[inline]
+pub(crate) fn fill_unstage_paths_inline(
+    state: &mut AppState,
+    repo_id: RepoId,
+    paths: RepoPathList,
+    effects: &mut BatchPathActionEffects,
+) {
+    begin_local_action(state, repo_id);
+    effects.push(Effect::UnstagePaths { repo_id, paths });
+}
+
+#[inline]
+pub(crate) fn set_conflict_region_choice_inline(
+    state: &mut AppState,
+    repo_id: RepoId,
+    path: RepoPath,
+    region_index: usize,
+    choice: ConflictRegionChoice,
+) {
+    conflict_interactions::set_region_choice_inline(state, repo_id, path, region_index, choice);
+}
+
+#[inline]
+pub(crate) fn reset_conflict_resolutions_inline(
+    state: &mut AppState,
+    repo_id: RepoId,
+    path: RepoPath,
+) {
+    conflict_interactions::reset_resolutions_inline(state, repo_id, path);
 }
 
 fn submit_auth_prompt(

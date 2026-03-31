@@ -3,6 +3,46 @@ use super::*;
 static MERGETOOL_TRACE_TEST_LOCK: std::sync::LazyLock<std::sync::Mutex<()>> =
     std::sync::LazyLock::new(|| std::sync::Mutex::new(()));
 
+fn schedule_effect_with_state_for_test(
+    executor: &super::executor::TaskExecutor,
+    session_persist_executor: &super::executor::TaskExecutor,
+    backend: &Arc<dyn GitBackend>,
+    repos: &HashMap<RepoId, Arc<dyn GitRepository>>,
+    state: AppState,
+    msg_tx: std::sync::mpsc::Sender<Msg>,
+    effect: Effect,
+) {
+    let thread_state = Arc::new(std::sync::RwLock::new(Arc::new(state)));
+    super::effects::schedule_effect(
+        executor,
+        session_persist_executor,
+        &thread_state,
+        backend,
+        repos,
+        msg_tx,
+        effect,
+    );
+}
+
+fn schedule_effect_for_test(
+    executor: &super::executor::TaskExecutor,
+    session_persist_executor: &super::executor::TaskExecutor,
+    backend: &Arc<dyn GitBackend>,
+    repos: &HashMap<RepoId, Arc<dyn GitRepository>>,
+    msg_tx: std::sync::mpsc::Sender<Msg>,
+    effect: Effect,
+) {
+    schedule_effect_with_state_for_test(
+        executor,
+        session_persist_executor,
+        backend,
+        repos,
+        AppState::default(),
+        msg_tx,
+        effect,
+    );
+}
+
 #[test]
 fn clone_repo_effect_clones_local_repo_and_emits_finished_and_open_repo() {
     if !super::require_git_shell_for_store_tests() {
@@ -45,7 +85,7 @@ fn clone_repo_effect_clones_local_repo_and_emits_finished_and_open_repo() {
     let repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
 
-    super::effects::schedule_effect(
+    schedule_effect_for_test(
         &executor,
         &executor,
         &backend,
@@ -216,11 +256,11 @@ fn load_conflict_file_effect_reads_worktree_and_emits_loaded() {
         spec: RepoSpec {
             workdir: base.clone(),
         },
-        diff: gitcomet_core::domain::FileDiffText {
-            path: rel.clone(),
-            old: Some("ours\n".to_string()),
-            new: Some("theirs\n".to_string()),
-        },
+        diff: gitcomet_core::domain::FileDiffText::new(
+            rel.clone(),
+            Some("ours\n".to_string()),
+            Some("theirs\n".to_string()),
+        ),
     });
 
     let executor = super::executor::TaskExecutor::new(1);
@@ -232,7 +272,7 @@ fn load_conflict_file_effect_reads_worktree_and_emits_loaded() {
     };
     let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
 
-    super::effects::schedule_effect(
+    schedule_effect_for_test(
         &executor,
         &executor,
         &backend,
@@ -426,7 +466,7 @@ fn load_conflict_file_effect_reuses_conflict_session_payloads_without_stage_fetc
     };
     let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
 
-    super::effects::schedule_effect(
+    schedule_effect_for_test(
         &executor,
         &executor,
         &backend,
@@ -643,7 +683,7 @@ fn load_conflict_file_effect_preserves_binary_payloads_when_reusing_session() {
     };
     let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
 
-    super::effects::schedule_effect(
+    schedule_effect_for_test(
         &executor,
         &executor,
         &backend,
@@ -868,7 +908,7 @@ fn load_conflict_file_effect_reuses_absent_current_payload_without_rereading_wor
     };
     let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
 
-    super::effects::schedule_effect(
+    schedule_effect_for_test(
         &executor,
         &executor,
         &backend,
@@ -1119,7 +1159,7 @@ fn load_conflict_file_effect_records_trace_stages_and_sizes() {
     };
     let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
 
-    super::effects::schedule_effect(
+    schedule_effect_for_test(
         &executor,
         &executor,
         &backend,
@@ -1342,7 +1382,7 @@ fn save_worktree_file_effect_writes_and_can_stage() {
     let backend: Arc<dyn GitBackend> = Arc::new(Backend);
     let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
 
-    super::effects::schedule_effect(
+    schedule_effect_for_test(
         &executor,
         &executor,
         &backend,
@@ -1400,7 +1440,7 @@ fn save_worktree_file_effect_writes_and_can_stage() {
         .join(&escaped_name);
     let _ = std::fs::remove_file(&escaped_dest);
 
-    super::effects::schedule_effect(
+    schedule_effect_for_test(
         &executor,
         &executor,
         &backend,
@@ -1577,7 +1617,7 @@ fn checkout_conflict_base_effect_calls_repo_and_emits_finished() {
     let backend: Arc<dyn GitBackend> = Arc::new(Backend);
     let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
 
-    super::effects::schedule_effect(
+    schedule_effect_for_test(
         &executor,
         &executor,
         &backend,
@@ -1739,7 +1779,7 @@ fn accept_conflict_deletion_effect_calls_repo_and_emits_finished() {
     let backend: Arc<dyn GitBackend> = Arc::new(Backend);
     let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
 
-    super::effects::schedule_effect(
+    schedule_effect_for_test(
         &executor,
         &executor,
         &backend,
@@ -1910,7 +1950,7 @@ fn load_stashes_effect_truncates_results_to_limit() {
     };
     let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
 
-    super::effects::schedule_effect(
+    schedule_effect_for_test(
         &executor,
         &executor,
         &backend,
@@ -2066,7 +2106,7 @@ fn stash_effect_requests_stash_reload_on_success() {
     repos.insert(RepoId(1), repo);
     let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
 
-    super::effects::schedule_effect(
+    schedule_effect_for_test(
         &executor,
         &executor,
         &backend,
@@ -2234,7 +2274,7 @@ fn pop_stash_effect_applies_and_drops_then_requests_stash_reload() {
     repos.insert(RepoId(1), repo);
     let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
 
-    super::effects::schedule_effect(
+    schedule_effect_for_test(
         &executor,
         &executor,
         &backend,
@@ -2401,7 +2441,7 @@ fn pop_stash_effect_propagates_apply_error_without_drop_or_reload() {
     repos.insert(RepoId(1), repo);
     let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
 
-    super::effects::schedule_effect(
+    schedule_effect_for_test(
         &executor,
         &executor,
         &backend,
@@ -2566,7 +2606,7 @@ fn drop_stash_effect_requests_stash_reload_on_success() {
     repos.insert(RepoId(1), repo);
     let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
 
-    super::effects::schedule_effect(
+    schedule_effect_for_test(
         &executor,
         &executor,
         &backend,
@@ -2729,7 +2769,7 @@ fn drop_stash_effect_requests_stash_reload_on_error() {
     repos.insert(RepoId(1), repo);
     let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
 
-    super::effects::schedule_effect(
+    schedule_effect_for_test(
         &executor,
         &executor,
         &backend,
@@ -2916,7 +2956,7 @@ fn open_repo_effect_emits_repo_opened_ok() {
     let repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
 
-    super::effects::schedule_effect(
+    schedule_effect_for_test(
         &executor,
         &executor,
         &backend,
@@ -2963,7 +3003,7 @@ fn open_repo_effect_emits_repo_opened_err() {
     let repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
 
-    super::effects::schedule_effect(
+    schedule_effect_for_test(
         &executor,
         &executor,
         &backend,
@@ -3024,6 +3064,17 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
         path: PathBuf::from("tracked.txt"),
         area: DiffArea::Unstaged,
     };
+    let mut state = AppState::default();
+    let mut repo_state = crate::model::RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: workdir.clone(),
+        },
+    );
+    repo_state.diff_state.diff_target = Some(target.clone());
+    repo_state.conflict_state.conflict_file_path = Some(PathBuf::from("conflicted.txt"));
+    state.active_repo = Some(repo_id);
+    state.repos.push(repo_state);
     let commit_id = CommitId("deadbeef".into());
     let effect_specs: Vec<(Effect, usize)> = vec![
         (Effect::LoadBranches { repo_id }, 1),
@@ -3048,6 +3099,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
                 limit: 20,
                 cursor: Some(LogCursor {
                     last_seen: CommitId("cursor".into()),
+                    resume_from: None,
                 }),
             },
             1,
@@ -3074,6 +3126,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
         ),
         (Effect::LoadWorktrees { repo_id }, 1),
         (Effect::LoadSubmodules { repo_id }, 1),
+        (Effect::LoadRebaseAndMergeState { repo_id }, 2),
         (Effect::LoadRebaseState { repo_id }, 1),
         (Effect::LoadMergeCommitMessage { repo_id }, 1),
         (
@@ -3105,9 +3158,24 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
             1,
         ),
         (
+            Effect::LoadSelectedDiff {
+                repo_id,
+                load_file_text: true,
+                load_file_image: false,
+            },
+            2,
+        ),
+        (
             Effect::LoadConflictFile {
                 repo_id,
                 path: PathBuf::from("conflicted.txt"),
+                mode: crate::model::ConflictFileLoadMode::CurrentOnly,
+            },
+            1,
+        ),
+        (
+            Effect::LoadSelectedConflictFile {
+                repo_id,
                 mode: crate::model::ConflictFileLoadMode::CurrentOnly,
             },
             1,
@@ -3273,7 +3341,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
         (
             Effect::StagePaths {
                 repo_id,
-                paths: vec![PathBuf::from("b.txt"), PathBuf::from("a.txt")],
+                paths: vec![PathBuf::from("b.txt"), PathBuf::from("a.txt")].into(),
             },
             1,
         ),
@@ -3287,7 +3355,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
         (
             Effect::UnstagePaths {
                 repo_id,
-                paths: vec![PathBuf::from("b.txt"), PathBuf::from("a.txt")],
+                paths: vec![PathBuf::from("b.txt"), PathBuf::from("a.txt")].into(),
             },
             1,
         ),
@@ -3527,11 +3595,12 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
     ];
 
     for (effect, expected_messages) in effect_specs {
-        super::effects::schedule_effect(
+        schedule_effect_with_state_for_test(
             &executor,
             &executor,
             &backend,
             &repos,
+            state.clone(),
             msg_tx.clone(),
             effect,
         );

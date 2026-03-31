@@ -115,7 +115,8 @@ pub(super) fn history_commit_row_canvas(
     show_graph_color_marker: bool,
     is_stash_node: bool,
     connect_from_top_col: Option<usize>,
-    graph_row: Arc<history_graph::GraphRow>,
+    graph_rows: Arc<[history_graph::GraphRow]>,
+    graph_row_ix: usize,
     tag_names: Arc<[SharedString]>,
     branches_text: SharedString,
     author: SharedString,
@@ -138,6 +139,9 @@ pub(super) fn history_commit_row_canvas(
             (inner, pad, hitbox)
         },
         move |bounds, (inner, _pad, hitbox), window, cx| {
+            let Some(graph_row) = graph_rows.get(graph_row_ix) else {
+                return;
+            };
             if hitbox.is_hovered(window) {
                 window.paint_quad(fill(bounds, theme.colors.hover));
             }
@@ -227,7 +231,7 @@ pub(super) fn history_commit_row_canvas(
                     window.paint_layer(graph_bounds, |window| {
                         super::history_graph_paint::paint_history_graph(
                             theme,
-                            &graph_row,
+                            graph_row,
                             connect_from_top_col,
                             is_stash_node,
                             graph_bounds,
@@ -354,8 +358,8 @@ pub(super) fn history_commit_row_canvas(
 
             let node_color = graph_row
                 .lanes_now
-                .get(graph_row.node_col)
-                .map(|l| l.color)
+                .get(usize::from(graph_row.node_col))
+                .map(|lane| history_graph::lane_color(theme, lane.color_ix))
                 .unwrap_or(theme.colors.text_muted);
 
             if show_graph_color_marker {

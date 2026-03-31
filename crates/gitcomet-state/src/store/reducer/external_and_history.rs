@@ -1,7 +1,7 @@
 use super::util::{
-    clear_banner_error_for_repo, diff_reload_effects, handle_session_persist_result,
-    push_diagnostic, refresh_full_effects, refresh_primary_effects, selected_conflict_target_path,
-    start_conflict_target_reload,
+    SelectedConflictTarget, clear_banner_error_for_repo, diff_reload_effects,
+    handle_session_persist_result, push_diagnostic, refresh_full_effects, refresh_primary_effects,
+    selected_conflict_target, start_conflict_target_reload, start_current_conflict_target_reload,
 };
 use crate::model::{AppState, DiagnosticKind, Loadable, RepoLoadsInFlight};
 use crate::msg::{Effect, RepoExternalChange};
@@ -9,6 +9,47 @@ use crate::session;
 use gitcomet_core::domain::{DiffTarget, LogCursor, LogPage, LogScope};
 use gitcomet_core::error::Error;
 use std::sync::Arc;
+
+const LARGE_HISTORY_APPEND_LEN_THRESHOLD: usize = 4_096;
+const SMALL_APPEND_GROWTH_RATIO: usize = 8;
+const INITIAL_PAGINATED_LOG_APPEND_SLACK_CAP: usize = 512;
+
+fn should_reserve_log_append_exact(existing_len: usize, additional: usize) -> bool {
+    existing_len >= LARGE_HISTORY_APPEND_LEN_THRESHOLD
+        && additional.saturating_mul(SMALL_APPEND_GROWTH_RATIO) <= existing_len
+}
+
+fn reserve_log_append_capacity<T>(existing: &mut Vec<T>, additional: usize) {
+    if additional == 0 {
+        return;
+    }
+
+    let spare = existing.capacity().saturating_sub(existing.len());
+    if spare >= additional {
+        return;
+    }
+
+    let missing = additional - spare;
+    if should_reserve_log_append_exact(existing.len(), additional) {
+        existing.reserve_exact(missing);
+    } else {
+        existing.reserve(missing);
+    }
+}
+
+fn reserve_initial_paginated_log_append_slack<T>(commits: &mut Vec<T>) {
+    if commits.is_empty() {
+        return;
+    }
+
+    let desired_spare = commits.len().min(INITIAL_PAGINATED_LOG_APPEND_SLACK_CAP);
+    let spare = commits.capacity().saturating_sub(commits.len());
+    if spare >= desired_spare {
+        return;
+    }
+
+    commits.reserve_exact(desired_spare - spare);
+}
 
 pub(super) fn reload_repo(state: &mut AppState, repo_id: crate::model::RepoId) -> Vec<Effect> {
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
@@ -86,8 +127,15 @@ pub(super) fn repo_externally_changed(
         && let Some(target) = repo_state.diff_state.diff_target.clone()
         && matches!(target, DiffTarget::WorkingTree { .. })
     {
-        if let Some(conflict_path) = selected_conflict_target_path(repo_state, &target) {
-            effects.extend(start_conflict_target_reload(repo_state, conflict_path));
+        if let Some(conflict_target) = selected_conflict_target(repo_state, &target) {
+            match conflict_target {
+                SelectedConflictTarget::Current => {
+                    effects.extend(start_current_conflict_target_reload(repo_state));
+                }
+                SelectedConflictTarget::Path(path) => {
+                    effects.extend(start_conflict_target_reload(repo_state, path));
+                }
+            }
         } else {
             effects.extend(diff_reload_effects(repo_id, target));
         }
@@ -112,6 +160,7 @@ pub(super) fn set_history_scope(
         }
 
         repo_state.set_log_scope(scope);
+        repo_state.retain_log_while_loading();
         repo_state.set_log(Loadable::Loading);
         repo_state.set_log_loading_more(false);
         repo_state.spec.workdir.clone()
@@ -256,12 +305,22 @@ pub(super) fn log_loaded(
         match result {
             Ok(mut page) => {
                 if is_load_more && let Loadable::Ready(existing) = &mut repo_state.log {
+                    // Drop the history_state copy first so the Arc's refcount
+                    // goes to 1 and make_mut can mutate in-place instead of
+                    // deep-cloning the entire commit list.
+                    repo_state.history_state.log = Loadable::NotLoaded;
                     let existing = Arc::make_mut(existing);
+                    reserve_log_append_capacity(&mut existing.commits, page.commits.len());
                     existing.commits.append(&mut page.commits);
                     existing.next_cursor = page.next_cursor;
+                    // Re-share the updated Arc with history_state.
+                    repo_state.history_state.log = repo_state.log.clone();
                     repo_state.history_state.log_rev =
                         repo_state.history_state.log_rev.wrapping_add(1);
                 } else {
+                    if page.next_cursor.is_some() {
+                        reserve_initial_paginated_log_append_slack(&mut page.commits);
+                    }
                     repo_state.set_log(Loadable::Ready(Arc::new(page)));
                 }
             }
@@ -328,11 +387,76 @@ pub(super) fn repo_action_finished(
     if let Some(target) = repo_state.diff_state.diff_target.clone()
         && matches!(target, DiffTarget::WorkingTree { .. })
     {
-        if let Some(conflict_path) = selected_conflict_target_path(repo_state, &target) {
-            effects.extend(start_conflict_target_reload(repo_state, conflict_path));
+        if let Some(conflict_target) = selected_conflict_target(repo_state, &target) {
+            match conflict_target {
+                SelectedConflictTarget::Current => {
+                    effects.extend(start_current_conflict_target_reload(repo_state));
+                }
+                SelectedConflictTarget::Path(path) => {
+                    effects.extend(start_conflict_target_reload(repo_state, path));
+                }
+            }
         } else {
             effects.extend(diff_reload_effects(repo_id, target));
         }
     }
     effects
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        reserve_initial_paginated_log_append_slack, reserve_log_append_capacity,
+        should_reserve_log_append_exact,
+    };
+
+    #[test]
+    fn large_history_small_page_uses_exact_append_growth() {
+        assert!(should_reserve_log_append_exact(5_000, 500));
+        assert!(should_reserve_log_append_exact(8_192, 200));
+    }
+
+    #[test]
+    fn smaller_histories_keep_amortized_append_growth() {
+        assert!(!should_reserve_log_append_exact(1_000, 200));
+        assert!(!should_reserve_log_append_exact(4_095, 256));
+    }
+
+    #[test]
+    fn larger_pages_keep_amortized_append_growth() {
+        assert!(!should_reserve_log_append_exact(5_000, 700));
+        assert!(!should_reserve_log_append_exact(16_000, 2_001));
+    }
+
+    #[test]
+    fn reserve_log_append_capacity_skips_zero_additional_items() {
+        let mut values = vec![1, 2, 3];
+        values.reserve(8);
+        let capacity = values.capacity();
+
+        reserve_log_append_capacity(&mut values, 0);
+
+        assert_eq!(values.capacity(), capacity);
+    }
+
+    #[test]
+    fn reserve_log_append_capacity_skips_growth_when_spare_capacity_is_enough() {
+        let mut values = Vec::with_capacity(8);
+        values.extend([1, 2, 3, 4]);
+        let capacity = values.capacity();
+
+        reserve_log_append_capacity(&mut values, 4);
+
+        assert_eq!(values.capacity(), capacity);
+    }
+
+    #[test]
+    fn initial_paginated_log_keeps_bounded_append_slack() {
+        let mut values = Vec::with_capacity(600);
+        values.extend(0..600);
+
+        reserve_initial_paginated_log_append_slack(&mut values);
+
+        assert!(values.capacity() >= values.len() + 512);
+    }
 }

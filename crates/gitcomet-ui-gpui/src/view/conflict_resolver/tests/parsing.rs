@@ -87,6 +87,37 @@ fn shared_marker_parse_reuses_original_backing() {
 }
 
 #[test]
+fn shared_nonempty_marker_parse_skips_clean_text() {
+    let input: std::sync::Arc<str> = std::sync::Arc::from("pre\nplain html\npost\n");
+    let segments = parse_conflict_markers_shared_nonempty(input);
+    assert!(segments.is_empty());
+}
+
+#[test]
+fn bootstrap_resolved_output_text_reuses_clean_current_arc() {
+    let current: std::sync::Arc<str> = std::sync::Arc::from("pre\nplain html\npost\n");
+    let output = bootstrap_resolved_output_text(&[], Some(&current), None, None);
+
+    let ResolvedOutputText::Shared(shared) = &output else {
+        panic!("clean bootstrap should reuse the shared current text");
+    };
+
+    assert!(std::sync::Arc::ptr_eq(&current, shared));
+    assert_eq!(output.line_count(), 3);
+}
+
+#[test]
+fn bootstrap_resolved_output_text_materializes_conflicted_output() {
+    let segments =
+        parse_conflict_markers("a\n<<<<<<< ours\none\n=======\nuno\n>>>>>>> theirs\nb\n");
+    let output = bootstrap_resolved_output_text(&segments, None, None, None);
+
+    assert!(matches!(output, ResolvedOutputText::Owned(_)));
+    assert_eq!(output.as_str(), "a\none\nb\n");
+    assert_eq!(output.line_count(), 3);
+}
+
+#[test]
 fn generate_with_options_preserves_unresolved_markers_with_labels() {
     let input = "a\n<<<<<<< ours\none\n||||||| base\norig\n=======\nuno\n>>>>>>> theirs\nb\n";
     let segments = parse_conflict_markers(input);
@@ -499,12 +530,14 @@ fn append_lines_adds_newlines_safely() {
 fn split_output_lines_for_outline_keeps_trailing_newline_row() {
     let lines = split_output_lines_for_outline("a\nb\n");
     assert_eq!(lines, vec!["a", "b", ""]);
+    assert_eq!(resolved_output_outline_line_count("a\nb\n"), lines.len());
 }
 
 #[test]
 fn split_output_lines_for_outline_keeps_single_empty_row_for_empty_text() {
     let lines = split_output_lines_for_outline("");
     assert_eq!(lines, vec![""]);
+    assert_eq!(resolved_output_outline_line_count(""), lines.len());
 }
 
 // -----------------------------------------------------------------------
@@ -711,4 +744,32 @@ fn resolved_line_source_badge_chars() {
     assert_eq!(ResolvedLineSource::B.badge_char(), 'B');
     assert_eq!(ResolvedLineSource::C.badge_char(), 'C');
     assert_eq!(ResolvedLineSource::Manual.badge_char(), 'M');
+}
+
+#[test]
+fn resolved_output_gutter_row_packs_marker_bits() {
+    let manual = ResolvedOutputGutterRow::default();
+    assert_eq!(manual.source(), ResolvedLineSource::Manual);
+    assert_eq!(manual.badge_char(), 'M');
+    assert!(manual.manual_without_marker());
+    assert_eq!(manual.marker_conflict_ix(), None);
+
+    let marker = ResolvedOutputGutterRow::new(ResolvedLineSource::B, Some(17), true, false, true);
+    assert_eq!(marker.source(), ResolvedLineSource::B);
+    assert_eq!(marker.badge_char(), 'B');
+    assert_eq!(marker.marker_conflict_ix(), Some(17));
+    assert!(marker.has_marker());
+    assert!(marker.is_start());
+    assert!(!marker.is_end());
+    assert!(marker.unresolved());
+    assert!(!marker.manual_without_marker());
+
+    let source_only = ResolvedOutputGutterRow::new(ResolvedLineSource::C, None, true, true, true);
+    assert_eq!(source_only.source(), ResolvedLineSource::C);
+    assert_eq!(source_only.badge_char(), 'C');
+    assert_eq!(source_only.marker_conflict_ix(), None);
+    assert!(!source_only.has_marker());
+    assert!(!source_only.is_start());
+    assert!(!source_only.is_end());
+    assert!(!source_only.unresolved());
 }

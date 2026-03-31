@@ -33,11 +33,11 @@ fn markdown_diff_preview_cache_does_not_rebuild_when_rev_changes_with_identical_
                 );
                 repo.diff_state.diff_file_rev = diff_file_rev;
                 repo.diff_state.diff_file = gitcomet_state::model::Loadable::Ready(Some(Arc::new(
-                    gitcomet_core::domain::FileDiffText {
-                        path: path.clone(),
-                        old: Some(old_text.clone()),
-                        new: Some(new_text.clone()),
-                    },
+                    gitcomet_core::domain::FileDiffText::new(
+                        path.clone(),
+                        Some(old_text.clone()),
+                        Some(new_text.clone()),
+                    ),
                 )));
 
                 let next_state = app_state_with_repo(repo, repo_id);
@@ -1066,11 +1066,11 @@ fn markdown_diff_preview_over_limit_shows_fallback_instead_of_rendering(
                 gitcomet_core::domain::DiffArea::Unstaged,
             );
             repo.diff_state.diff_file = gitcomet_state::model::Loadable::Ready(Some(Arc::new(
-                gitcomet_core::domain::FileDiffText {
-                    path: path.clone(),
-                    old: Some(oversized_side.clone()),
-                    new: Some(oversized_side.clone()),
-                },
+                gitcomet_core::domain::FileDiffText::new(
+                    path.clone(),
+                    Some(oversized_side.clone()),
+                    Some(oversized_side.clone()),
+                ),
             )));
 
             let next_state = app_state_with_repo(repo, repo_id);
@@ -1140,11 +1140,11 @@ fn markdown_diff_preview_row_limit_shows_fallback_instead_of_rendering(
                 gitcomet_core::domain::DiffArea::Unstaged,
             );
             repo.diff_state.diff_file = gitcomet_state::model::Loadable::Ready(Some(Arc::new(
-                gitcomet_core::domain::FileDiffText {
-                    path: path.clone(),
-                    old: Some(old_text.clone()),
-                    new: Some(new_text.clone()),
-                },
+                gitcomet_core::domain::FileDiffText::new(
+                    path.clone(),
+                    Some(old_text.clone()),
+                    Some(new_text.clone()),
+                ),
             )));
 
             let next_state = app_state_with_repo(repo, repo_id);
@@ -1263,11 +1263,11 @@ fn markdown_diff_preview_hides_text_controls_and_ignores_text_hotkeys(
                 gitcomet_core::domain::DiffArea::Unstaged,
             );
             repo.diff_state.diff_file = gitcomet_state::model::Loadable::Ready(Some(Arc::new(
-                gitcomet_core::domain::FileDiffText {
-                    path: path.clone(),
-                    old: Some(old_text.to_string()),
-                    new: Some(new_text.to_string()),
-                },
+                gitcomet_core::domain::FileDiffText::new(
+                    path.clone(),
+                    Some(old_text.to_string()),
+                    Some(new_text.to_string()),
+                ),
             )));
 
             let next_state = app_state_with_repo(repo, repo_id);

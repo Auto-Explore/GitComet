@@ -1,5 +1,30 @@
 use super::*;
 
+fn mark_repo_switch_secondary_metadata_ready(repo: &mut RepoState) {
+    repo.branches = Loadable::Ready(Arc::new(Vec::new()));
+    repo.tags = Loadable::Ready(Arc::new(Vec::new()));
+    repo.remote_tags = Loadable::Ready(Arc::new(Vec::new()));
+    repo.remotes = Loadable::Ready(Arc::new(Vec::new()));
+    repo.remote_branches = Loadable::Ready(Arc::new(Vec::new()));
+    repo.stashes = Loadable::Ready(Arc::new(Vec::new()));
+    repo.rebase_in_progress = Loadable::Ready(false);
+    repo.merge_commit_message = Loadable::Ready(None);
+}
+
+fn has_secondary_refresh_effects(effects: &[Effect], repo_id: RepoId) -> bool {
+    effects.iter().any(|effect| {
+        matches!(
+            effect,
+            Effect::LoadBranches { repo_id: candidate }
+                | Effect::LoadTags { repo_id: candidate }
+                | Effect::LoadRemoteTags { repo_id: candidate }
+                | Effect::LoadRemotes { repo_id: candidate }
+                | Effect::LoadRemoteBranches { repo_id: candidate }
+                if *candidate == repo_id
+        )
+    })
+}
+
 #[test]
 fn open_repo_sets_opening_and_emits_effect() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
@@ -230,7 +255,7 @@ fn clone_repo_progress_trims_tail_and_skips_blank_lines() {
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::CloneRepoProgress {
-            dest: dest.clone(),
+            dest: Arc::new(dest.clone()),
             line: "   ".to_string(),
         }),
     );
@@ -240,7 +265,7 @@ fn clone_repo_progress_trims_tail_and_skips_blank_lines() {
             &id_alloc,
             &mut state,
             Msg::Internal(crate::msg::InternalMsg::CloneRepoProgress {
-                dest: dest.clone(),
+                dest: Arc::new(dest.clone()),
                 line: format!("line-{i}"),
             }),
         );
@@ -249,8 +274,8 @@ fn clone_repo_progress_trims_tail_and_skips_blank_lines() {
     let op = state.clone.as_ref().expect("clone op set");
     assert_eq!(op.seq, 85);
     assert_eq!(op.output_tail.len(), 80);
-    assert_eq!(op.output_tail.first().map(String::as_str), Some("line-4"));
-    assert_eq!(op.output_tail.last().map(String::as_str), Some("line-83"));
+    assert_eq!(op.output_tail.front().map(String::as_str), Some("line-4"));
+    assert_eq!(op.output_tail.back().map(String::as_str), Some("line-83"));
 }
 
 #[test]
@@ -275,7 +300,7 @@ fn clone_repo_progress_ignores_mismatched_or_non_running_operation() {
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::CloneRepoProgress {
-            dest: PathBuf::from("/tmp/other"),
+            dest: Arc::new(PathBuf::from("/tmp/other")),
             line: "ignored".to_string(),
         }),
     );
@@ -293,7 +318,7 @@ fn clone_repo_progress_ignores_mismatched_or_non_running_operation() {
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::CloneRepoProgress {
-            dest: dest.clone(),
+            dest: Arc::new(dest.clone()),
             line: "ignored-too".to_string(),
         }),
     );
@@ -309,7 +334,7 @@ fn clone_repo_progress_ignores_mismatched_or_non_running_operation() {
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::CloneRepoProgress {
-            dest,
+            dest: Arc::new(dest),
             line: "no-op".to_string(),
         }),
     );
@@ -345,8 +370,8 @@ fn clone_repo_finished_updates_existing_operation_for_success_and_error() {
     );
     {
         let op = state.clone.as_ref().expect("clone op set");
-        assert_eq!(op.url, "file:///tmp/success.git");
-        assert_eq!(op.dest, dest);
+        assert_eq!(&*op.url, "file:///tmp/success.git");
+        assert_eq!(op.dest.as_ref(), &dest);
         assert!(matches!(op.status, CloneOpStatus::FinishedOk));
         assert_eq!(op.seq, 1);
     }
@@ -362,7 +387,7 @@ fn clone_repo_finished_updates_existing_operation_for_success_and_error() {
         }),
     );
     let op = state.clone.as_ref().expect("clone op set");
-    assert_eq!(op.url, "file:///tmp/failure.git");
+    assert_eq!(&*op.url, "file:///tmp/failure.git");
     assert_eq!(op.seq, 2);
     match &op.status {
         CloneOpStatus::FinishedErr(message) => {
@@ -401,8 +426,8 @@ fn clone_repo_finished_replaces_state_when_destination_differs() {
     );
 
     let op = state.clone.as_ref().expect("clone op set");
-    assert_eq!(op.url, "file:///tmp/replacement.git");
-    assert_eq!(op.dest, PathBuf::from("/tmp/replacement"));
+    assert_eq!(&*op.url, "file:///tmp/replacement.git");
+    assert_eq!(op.dest.as_ref(), &PathBuf::from("/tmp/replacement"));
     assert!(matches!(op.status, CloneOpStatus::FinishedOk));
     assert_eq!(op.seq, 1);
     assert!(op.output_tail.is_empty());
@@ -818,20 +843,37 @@ fn set_active_repo_refreshes_repo_state_and_selected_diff() {
     let has_log = effects.iter().any(|e| {
         matches!(e, Effect::LoadLog { repo_id, scope: _, limit: _, cursor: _ } if *repo_id == repo1)
     });
-    let has_diff = effects
-        .iter()
-        .any(|e| matches!(e, Effect::LoadDiff { repo_id, target: _ } if *repo_id == repo1));
-    let has_diff_file = effects
-        .iter()
-        .any(|e| matches!(e, Effect::LoadDiffFile { repo_id, target: _ } if *repo_id == repo1));
+    let has_selected_diff_reload = effects.iter().any(|e| {
+        matches!(
+            e,
+            Effect::LoadSelectedDiff {
+                repo_id,
+                load_file_text: true,
+                load_file_image: false,
+            } if *repo_id == repo1
+        )
+    });
     let has_persist = effects
         .iter()
         .any(|e| matches!(e, Effect::PersistSession { .. }));
 
     assert!(has_status, "expected status refresh on activation");
     assert!(has_log, "expected log refresh on activation");
-    assert!(has_diff, "expected diff refresh on activation");
-    assert!(has_diff_file, "expected diff-file refresh on activation");
+    assert!(
+        has_selected_diff_reload,
+        "expected combined selected-diff reload on activation"
+    );
+    assert!(
+        matches!(
+            state
+                .repos
+                .iter()
+                .find(|repo| repo.id == repo1)
+                .and_then(|repo| repo.diff_state.diff_target.as_ref()),
+            Some(DiffTarget::WorkingTree { path, .. }) if path == &PathBuf::from("src/lib.rs")
+        ),
+        "expected the selected diff target to remain available on repo state for scheduling"
+    );
     assert!(
         has_persist,
         "expected session persist when active repo changes"
@@ -877,24 +919,11 @@ fn set_active_repo_reloads_selected_image_diff_via_image_effect() {
 
     assert!(effects.iter().any(|e| matches!(
         e,
-        Effect::LoadDiff {
+        Effect::LoadSelectedDiff {
             repo_id,
-            target: DiffTarget::WorkingTree { path, .. },
-        } if *repo_id == repo1 && path == &PathBuf::from("icon.png")
-    )));
-    assert!(effects.iter().any(|e| matches!(
-        e,
-        Effect::LoadDiffFileImage {
-            repo_id,
-            target: DiffTarget::WorkingTree { path, .. },
-        } if *repo_id == repo1 && path == &PathBuf::from("icon.png")
-    )));
-    assert!(!effects.iter().any(|e| matches!(
-        e,
-        Effect::LoadDiffFile {
-            repo_id,
-            target: DiffTarget::WorkingTree { path, .. },
-        } if *repo_id == repo1 && path == &PathBuf::from("icon.png")
+            load_file_text: false,
+            load_file_image: true,
+        } if *repo_id == repo1
     )));
 }
 
@@ -936,22 +965,16 @@ fn set_active_repo_png_diff_enqueues_image_preview_only() {
     );
 
     assert!(
-        effects
-            .iter()
-            .any(|e| matches!(e, Effect::LoadDiff { repo_id, .. } if *repo_id == repo1)),
-        "expected diff refresh for png target"
-    );
-    assert!(
-        effects
-            .iter()
-            .any(|e| matches!(e, Effect::LoadDiffFileImage { repo_id, .. } if *repo_id == repo1)),
-        "expected image preview refresh for png target"
-    );
-    assert!(
-        !effects
-            .iter()
-            .any(|e| matches!(e, Effect::LoadDiffFile { repo_id, .. } if *repo_id == repo1)),
-        "did not expect text diff-file refresh for png target"
+        effects.iter().any(|e| matches!(
+            e,
+            Effect::LoadSelectedDiff {
+                repo_id,
+                load_file_text: false,
+                load_file_image: true,
+                ..
+            } if *repo_id == repo1
+        )),
+        "expected combined selected-diff reload with image preview only for png target"
     );
 }
 
@@ -993,16 +1016,231 @@ fn set_active_repo_svg_diff_enqueues_image_and_text_previews() {
     );
 
     assert!(
-        effects
-            .iter()
-            .any(|e| matches!(e, Effect::LoadDiffFileImage { repo_id, .. } if *repo_id == repo1)),
-        "expected image preview refresh for svg target"
+        effects.iter().any(|e| matches!(
+            e,
+            Effect::LoadSelectedDiff {
+                repo_id,
+                load_file_text: true,
+                load_file_image: true,
+                ..
+            } if *repo_id == repo1
+        )),
+        "expected combined selected-diff reload with both image and text previews for svg target"
+    );
+}
+
+#[test]
+fn set_active_repo_selected_conflict_target_reuses_existing_conflict_state() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo1")),
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo2")),
+    );
+
+    let repo1 = RepoId(1);
+    let conflict_path = PathBuf::from("src/conflict.rs");
+    let before_rev = {
+        let repo1_state = state
+            .repos
+            .iter_mut()
+            .find(|r| r.id == repo1)
+            .expect("repo1 exists");
+        repo1_state.diff_state.diff_target = Some(DiffTarget::WorkingTree {
+            path: conflict_path.clone(),
+            area: gitcomet_core::domain::DiffArea::Unstaged,
+        });
+        repo1_state.conflict_state.conflict_file_path = Some(conflict_path.clone());
+        let content: Arc<str> = Arc::from("conflict contents");
+        repo1_state.conflict_state.conflict_file =
+            Loadable::Ready(Some(crate::model::ConflictFile {
+                path: conflict_path.clone().into(),
+                base_bytes: None,
+                ours_bytes: None,
+                theirs_bytes: None,
+                current_bytes: None,
+                base: Some(Arc::clone(&content)),
+                ours: Some(Arc::clone(&content)),
+                theirs: Some(Arc::clone(&content)),
+                current: Some(content),
+            }));
+        repo1_state.conflict_state.conflict_rev = 41;
+        repo1_state.conflict_state.conflict_rev
+    };
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SetActiveRepo { repo_id: repo1 },
+    );
+
+    let repo1_state = state
+        .repos
+        .iter()
+        .find(|r| r.id == repo1)
+        .expect("repo1 exists");
+    assert_eq!(
+        repo1_state.conflict_state.conflict_file_path.as_ref(),
+        Some(&conflict_path)
+    );
+    assert!(repo1_state.conflict_state.conflict_file.is_loading());
+    assert!(repo1_state.conflict_state.conflict_session.is_none());
+    assert_eq!(repo1_state.conflict_state.conflict_rev, before_rev + 1);
+    assert!(effects.iter().any(|effect| matches!(
+        effect,
+        Effect::LoadSelectedConflictFile {
+            repo_id,
+            mode: crate::model::ConflictFileLoadMode::CurrentOnly,
+        } if *repo_id == repo1
+    )));
+}
+
+#[test]
+fn set_active_repo_hot_switch_skips_secondary_refresh_when_metadata_is_ready() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo1")),
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo2")),
+    );
+
+    let repo1 = RepoId(1);
+    let repo1_state = state
+        .repos
+        .iter_mut()
+        .find(|repo| repo.id == repo1)
+        .expect("repo1 exists");
+    mark_repo_switch_secondary_metadata_ready(repo1_state);
+    repo1_state.last_active_at = Some(SystemTime::now());
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SetActiveRepo { repo_id: repo1 },
+    );
+
+    assert!(
+        !has_secondary_refresh_effects(&effects, repo1),
+        "hot repo switches with ready metadata should stay on the primary refresh path"
     );
     assert!(
         effects
             .iter()
-            .any(|e| matches!(e, Effect::LoadDiffFile { repo_id, .. } if *repo_id == repo1)),
-        "expected text diff-file refresh for svg target"
+            .any(|effect| matches!(effect, Effect::LoadStatus { repo_id } if *repo_id == repo1))
+    );
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::LoadLog { repo_id, .. } if *repo_id == repo1))
+    );
+    assert!(effects.iter().any(|effect| matches!(
+        effect,
+        Effect::LoadRebaseAndMergeState { repo_id } if *repo_id == repo1
+    )));
+}
+
+#[test]
+fn set_active_repo_uses_full_refresh_when_hot_switch_metadata_is_incomplete() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo1")),
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo2")),
+    );
+
+    let repo1 = RepoId(1);
+    let repo1_state = state
+        .repos
+        .iter_mut()
+        .find(|repo| repo.id == repo1)
+        .expect("repo1 exists");
+    mark_repo_switch_secondary_metadata_ready(repo1_state);
+    repo1_state.tags = Loadable::NotLoaded;
+    repo1_state.last_active_at = Some(SystemTime::now());
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SetActiveRepo { repo_id: repo1 },
+    );
+
+    assert!(
+        has_secondary_refresh_effects(&effects, repo1),
+        "missing secondary metadata should force the full refresh path"
+    );
+}
+
+#[test]
+fn set_active_repo_uses_full_refresh_when_hot_switch_window_expires() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo1")),
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo2")),
+    );
+
+    let repo1 = RepoId(1);
+    let repo1_state = state
+        .repos
+        .iter_mut()
+        .find(|repo| repo.id == repo1)
+        .expect("repo1 exists");
+    mark_repo_switch_secondary_metadata_ready(repo1_state);
+    repo1_state.last_active_at = Some(SystemTime::now() - Duration::from_secs(6));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SetActiveRepo { repo_id: repo1 },
+    );
+
+    assert!(
+        has_secondary_refresh_effects(&effects, repo1),
+        "stale repo switches should fall back to the full refresh path"
     );
 }
 
@@ -1130,8 +1368,7 @@ fn repo_opened_ok_sets_loading_and_emits_refresh_effects() {
             Effect::LoadRemoteTags { .. },
             Effect::LoadRemotes { .. },
             Effect::LoadRemoteBranches { .. },
-            Effect::LoadRebaseState { .. },
-            Effect::LoadMergeCommitMessage { .. },
+            Effect::LoadRebaseAndMergeState { .. },
         ]
     ));
 }

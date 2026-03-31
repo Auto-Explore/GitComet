@@ -136,7 +136,7 @@ fn shortcut_fixture_repo(
         gitcomet_core::domain::LogPage {
             commits: vec![gitcomet_core::domain::Commit {
                 id: commit_id.clone(),
-                parent_ids: vec![],
+                parent_ids: gitcomet_core::domain::CommitParentIds::new(),
                 summary: "Initial commit".into(),
                 author: "Alice".into(),
                 time: std::time::SystemTime::UNIX_EPOCH,
@@ -188,9 +188,7 @@ fn simple_hunk_diff(target: DiffTarget) -> gitcomet_core::domain::Diff {
 }
 
 #[gpui::test]
-fn settings_and_history_context_menu_shortcuts_match_expected_actions(
-    cx: &mut gpui::TestAppContext,
-) {
+fn history_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -204,17 +202,6 @@ fn settings_and_history_context_menu_shortcuts_match_expected_actions(
     ));
     let repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
     apply_state(cx, &view, app_state_with_active_repo(repo));
-
-    let theme_model = cx
-        .update(|_window, app| context_menu_model_for(&view, app, PopoverKind::SettingsThemeMenu));
-    assert_declared_shortcuts(&theme_model, &["A"]);
-    assert_shortcut_action!(
-        theme_model,
-        "A",
-        ContextMenuAction::SetThemeMode {
-            mode: ThemeMode::Automatic
-        }
-    );
 
     let history_filter_model = cx.update(|_window, app| {
         context_menu_model_for(&view, app, PopoverKind::HistoryBranchFilter { repo_id })

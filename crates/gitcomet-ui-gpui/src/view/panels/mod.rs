@@ -58,15 +58,6 @@ enum ContextMenuAction {
         show_sha: bool,
     },
     ResetHistoryColumnWidths,
-    SetThemeMode {
-        mode: ThemeMode,
-    },
-    SetDateTimeFormat {
-        format: DateTimeFormat,
-    },
-    SetTimezone {
-        timezone: Timezone,
-    },
     SetChangeTrackingView {
         view: ChangeTrackingView,
     },
@@ -275,6 +266,8 @@ mod repo_tabs_bar;
 pub(super) use action_bar::ActionBarView;
 pub(super) use popover::PopoverHost;
 pub(super) use repo_tabs_bar::RepoTabsBarView;
+#[allow(unused_imports)]
+pub(in crate::view) use repo_tabs_bar::repo_tab_insert_before_for_drag_cursor;
 
 #[cfg(test)]
 mod tests;

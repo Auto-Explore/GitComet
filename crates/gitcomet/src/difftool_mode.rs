@@ -925,9 +925,13 @@ mod tests {
         use std::os::unix::fs as unix_fs;
 
         let tmp = tempfile::tempdir().unwrap();
+        let outside_tmp = tempfile::Builder::new()
+            .prefix("gitcomet-difftool-outside-")
+            .tempdir()
+            .expect("create outside temp dir");
         let left = tmp.path().join("left");
         let right = tmp.path().join("right");
-        let outside = tmp.path().join("outside");
+        let outside = outside_tmp.path().join("outside");
         std::fs::create_dir_all(&left).unwrap();
         std::fs::create_dir_all(&right).unwrap();
         std::fs::create_dir_all(&outside).unwrap();

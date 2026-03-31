@@ -1,6 +1,13 @@
+use memchr::memchr;
+use rustc_hash::FxHasher;
+use smallvec::SmallVec;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::SystemTime;
+use std::{
+    hash::{Hash, Hasher},
+    ops::Deref,
+};
 
 #[cfg(test)]
 use rustc_hash::FxHashMap as HashMap;
@@ -14,6 +21,8 @@ pub struct RepoSpec {
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct CommitId(pub Arc<str>);
+
+pub type CommitParentIds = SmallVec<[CommitId; 2]>;
 
 impl AsRef<str> for CommitId {
     fn as_ref(&self) -> &str {
@@ -30,7 +39,7 @@ impl std::fmt::Display for CommitId {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Commit {
     pub id: CommitId,
-    pub parent_ids: Vec<CommitId>,
+    pub parent_ids: CommitParentIds,
     pub summary: Arc<str>,
     pub author: Arc<str>,
     pub time: SystemTime,
@@ -178,6 +187,7 @@ pub struct RepoStatus {
     pub unstaged: Vec<FileStatus>,
 }
 
+#[repr(u8)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FileStatusKind {
     Untracked,
@@ -212,25 +222,152 @@ pub struct Diff {
     pub lines: Vec<DiffLine>,
 }
 
+#[derive(Debug)]
+struct SharedLineTextStorage {
+    text: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct SharedLineText {
+    storage: Arc<SharedLineTextStorage>,
+    start: u32,
+    len: u32,
+}
+
+impl SharedLineText {
+    fn from_storage(storage: &Arc<SharedLineTextStorage>, range: std::ops::Range<usize>) -> Self {
+        Self {
+            storage: Arc::clone(storage),
+            start: u32::try_from(range.start).unwrap_or(u32::MAX),
+            len: u32::try_from(range.end.saturating_sub(range.start)).unwrap_or(u32::MAX),
+        }
+    }
+
+    pub fn from_owned(text: impl Into<String>) -> Self {
+        let text = text.into();
+        let len = text.len();
+        Self {
+            storage: Arc::new(SharedLineTextStorage { text }),
+            start: 0,
+            len: u32::try_from(len).unwrap_or(u32::MAX),
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.len as usize
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    pub fn starts_with(&self, prefix: &str) -> bool {
+        self.as_ref().starts_with(prefix)
+    }
+
+    pub fn to_arc(&self) -> Arc<str> {
+        Arc::from(self.as_ref())
+    }
+
+    pub fn slice(&self, range: std::ops::Range<usize>) -> Option<Self> {
+        if range.start > range.end || range.end > self.len() {
+            return None;
+        }
+
+        let start = (self.start as usize).checked_add(range.start)?;
+        Some(Self {
+            storage: Arc::clone(&self.storage),
+            start: u32::try_from(start).ok()?,
+            len: u32::try_from(range.end.saturating_sub(range.start)).ok()?,
+        })
+    }
+
+    pub(crate) fn shares_storage_with(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.storage, &other.storage)
+    }
+}
+
+impl AsRef<str> for SharedLineText {
+    fn as_ref(&self) -> &str {
+        let start = self.start as usize;
+        let end = start.saturating_add(self.len as usize);
+        &self.storage.text[start..end]
+    }
+}
+
+impl Deref for SharedLineText {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        self.as_ref()
+    }
+}
+
+impl Eq for SharedLineText {}
+
+impl PartialEq for SharedLineText {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_ref() == other.as_ref()
+    }
+}
+
+impl Hash for SharedLineText {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.as_ref().hash(state);
+    }
+}
+
+impl From<&str> for SharedLineText {
+    fn from(value: &str) -> Self {
+        Self::from_owned(value.to_owned())
+    }
+}
+
+impl From<String> for SharedLineText {
+    fn from(value: String) -> Self {
+        Self::from_owned(value)
+    }
+}
+
+impl From<SharedLineText> for Arc<str> {
+    fn from(value: SharedLineText) -> Self {
+        value.to_arc()
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FileDiffText {
     pub path: PathBuf,
     pub old: Option<String>,
     pub new: Option<String>,
+    content_signature: u64,
 }
 
 impl FileDiffText {
     pub fn new(path: PathBuf, old: Option<String>, new: Option<String>) -> Self {
-        Self { path, old, new }
+        let content_signature =
+            Self::content_signature_for_parts(&path, old.as_deref(), new.as_deref());
+        Self {
+            path,
+            old,
+            new,
+            content_signature,
+        }
     }
 
     pub fn content_signature(&self) -> u64 {
-        use std::hash::{Hash, Hasher};
+        self.content_signature
+    }
 
-        let mut hasher = rustc_hash::FxHasher::default();
-        self.path.hash(&mut hasher);
-        self.old.hash(&mut hasher);
-        self.new.hash(&mut hasher);
+    fn content_signature_for_parts(
+        path: &std::path::Path,
+        old: Option<&str>,
+        new: Option<&str>,
+    ) -> u64 {
+        let mut hasher = FxHasher::default();
+        path.hash(&mut hasher);
+        old.hash(&mut hasher);
+        new.hash(&mut hasher);
         hasher.finish()
     }
 }
@@ -245,7 +382,7 @@ pub struct FileDiffImage {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DiffLine {
     pub kind: DiffLineKind,
-    pub text: Arc<str>,
+    pub text: SharedLineText,
 }
 
 pub trait DiffRowProvider {
@@ -363,25 +500,69 @@ pub enum DiffLineKind {
 }
 
 impl Diff {
-    fn classify_unified_line(raw: &str) -> DiffLineKind {
-        match raw.as_bytes().first().copied() {
-            Some(b'@') if raw.starts_with("@@") => DiffLineKind::Hunk,
-            Some(b'd') if raw.starts_with("diff ") || raw.starts_with("deleted file mode ") => {
+    fn line_capacity_from_bytes(bytes: &[u8]) -> usize {
+        if bytes.is_empty() {
+            return 0;
+        }
+
+        bytes.iter().filter(|&&byte| byte == b'\n').count() + usize::from(!bytes.ends_with(b"\n"))
+    }
+
+    fn classify_unified_line_bytes(raw: &[u8]) -> DiffLineKind {
+        match raw.first().copied() {
+            Some(b'@') if raw.starts_with(b"@@") => DiffLineKind::Hunk,
+            Some(b'd') if raw.starts_with(b"diff ") || raw.starts_with(b"deleted file mode ") => {
                 DiffLineKind::Header
             }
-            Some(b'i') if raw.starts_with("index ") => DiffLineKind::Header,
-            Some(b'-') if raw.starts_with("--- ") => DiffLineKind::Header,
+            Some(b'i') if raw.starts_with(b"index ") => DiffLineKind::Header,
+            Some(b'-') if raw.starts_with(b"--- ") => DiffLineKind::Header,
             Some(b'-') => DiffLineKind::Remove,
-            Some(b'+') if raw.starts_with("+++ ") => DiffLineKind::Header,
+            Some(b'+') if raw.starts_with(b"+++ ") => DiffLineKind::Header,
             Some(b'+') => DiffLineKind::Add,
-            Some(b'n') if raw.starts_with("new file mode ") => DiffLineKind::Header,
-            Some(b's') if raw.starts_with("similarity index ") => DiffLineKind::Header,
-            Some(b'r') if raw.starts_with("rename from ") || raw.starts_with("rename to ") => {
+            Some(b'n') if raw.starts_with(b"new file mode ") => DiffLineKind::Header,
+            Some(b's') if raw.starts_with(b"similarity index ") => DiffLineKind::Header,
+            Some(b'r') if raw.starts_with(b"rename from ") || raw.starts_with(b"rename to ") => {
                 DiffLineKind::Header
             }
-            Some(b'B') if raw.starts_with("Binary files ") => DiffLineKind::Header,
+            Some(b'B') if raw.starts_with(b"Binary files ") => DiffLineKind::Header,
             _ => DiffLineKind::Context,
         }
+    }
+
+    fn parsed_unified_line(raw: &str) -> DiffLine {
+        DiffLine {
+            kind: Self::classify_unified_line_bytes(raw.as_bytes()),
+            text: SharedLineText::from(raw),
+        }
+    }
+
+    fn trim_unified_line_bytes(raw: &[u8]) -> &[u8] {
+        raw.strip_suffix(b"\r").unwrap_or(raw)
+    }
+
+    pub fn from_unified_owned(target: DiffTarget, text: String) -> Self {
+        let storage = Arc::new(SharedLineTextStorage { text });
+        let bytes = storage.text.as_bytes();
+        let mut lines = Vec::with_capacity(Self::line_capacity_from_bytes(bytes));
+
+        let mut start = 0usize;
+        while start < bytes.len() {
+            let line_end = match memchr(b'\n', &bytes[start..]) {
+                Some(offset) => start + offset,
+                None => bytes.len(),
+            };
+            let raw_end = Self::trim_unified_line_bytes(&bytes[start..line_end]).len() + start;
+            lines.push(DiffLine {
+                kind: Self::classify_unified_line_bytes(&bytes[start..raw_end]),
+                text: SharedLineText::from_storage(&storage, start..raw_end),
+            });
+            if line_end == bytes.len() {
+                break;
+            }
+            start = line_end + 1;
+        }
+
+        Self { target, lines }
     }
 
     pub fn from_unified_iter<'a>(
@@ -390,38 +571,22 @@ impl Diff {
     ) -> Self {
         let mut out = Vec::new();
         for raw in lines {
-            out.push(DiffLine {
-                kind: Self::classify_unified_line(raw),
-                text: raw.into(),
-            });
+            out.push(Self::parsed_unified_line(raw));
         }
         Self { target, lines: out }
     }
 
-    #[cfg(test)]
-    pub(crate) fn from_unified_reader<R: std::io::BufRead>(
+    pub fn from_unified_reader<R: std::io::BufRead>(
         target: DiffTarget,
         mut reader: R,
     ) -> std::io::Result<Self> {
-        let mut lines = Vec::new();
-        let mut buf = String::new();
-        loop {
-            buf.clear();
-            let read = reader.read_line(&mut buf)?;
-            if read == 0 {
-                break;
-            }
-            let raw = buf.trim_end_matches(['\n', '\r']);
-            lines.push(DiffLine {
-                kind: Self::classify_unified_line(raw),
-                text: raw.into(),
-            });
-        }
-        Ok(Self { target, lines })
+        let mut text = String::new();
+        reader.read_to_string(&mut text)?;
+        Ok(Self::from_unified_owned(target, text))
     }
 
     pub fn from_unified(target: DiffTarget, text: &str) -> Self {
-        Self::from_unified_iter(target, text.lines())
+        Self::from_unified_owned(target, text.to_owned())
     }
 
     #[cfg(test)]
@@ -456,6 +621,10 @@ pub struct LogPage {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LogCursor {
     pub last_seen: CommitId,
+    /// Optional backend-provided resume hint for the next page. Consumers should
+    /// treat this as an opaque optimization and fall back to `last_seen`
+    /// semantics when it is absent.
+    pub resume_from: Option<CommitId>,
 }
 
 #[cfg(test)]
@@ -546,6 +715,56 @@ index 1111111..2222222 100644\n\
     }
 
     #[test]
+    fn unified_reader_handles_small_buffer_chunks_without_extra_newline_bytes() {
+        let target = DiffTarget::WorkingTree {
+            path: PathBuf::from("src/lib.rs"),
+            area: DiffArea::Unstaged,
+        };
+        let unified = "\
+diff --git a/src/lib.rs b/src/lib.rs\r\n\
+@@ -1,2 +1,2 @@\r\n\
+-alpha beta gamma delta epsilon\r\n\
++omega beta gamma delta epsilon\r\n";
+
+        let reader = std::io::BufReader::with_capacity(7, Cursor::new(unified.as_bytes()));
+        let diff = Diff::from_unified_reader(target, reader).expect("reader parse should succeed");
+
+        assert_eq!(diff.lines.len(), 4);
+        assert_eq!(
+            diff.lines[0].text.as_ref(),
+            "diff --git a/src/lib.rs b/src/lib.rs"
+        );
+        assert_eq!(diff.lines[1].kind, DiffLineKind::Hunk);
+        assert_eq!(
+            diff.lines[2].text.as_ref(),
+            "-alpha beta gamma delta epsilon"
+        );
+        assert_eq!(
+            diff.lines[3].text.as_ref(),
+            "+omega beta gamma delta epsilon"
+        );
+    }
+
+    #[test]
+    fn unified_reader_lines_share_backing_storage() {
+        let target = DiffTarget::WorkingTree {
+            path: PathBuf::from("README.md"),
+            area: DiffArea::Unstaged,
+        };
+        let unified = "\
+@@ -1 +1 @@\n\
+-old\n\
++new\n";
+
+        let diff = Diff::from_unified_reader(target, Cursor::new(unified.as_bytes()))
+            .expect("reader parse should succeed");
+
+        assert_eq!(diff.lines.len(), 3);
+        assert!(diff.lines[0].text.shares_storage_with(&diff.lines[1].text));
+        assert!(diff.lines[1].text.shares_storage_with(&diff.lines[2].text));
+    }
+
+    #[test]
     fn paged_provider_loads_pages_on_demand() {
         let target = DiffTarget::WorkingTree {
             path: PathBuf::from("src/lib.rs"),
@@ -594,8 +813,13 @@ diff --git a/src/lib.rs b/src/lib.rs\n\
     fn log_cursor_roundtrips() {
         let cursor = LogCursor {
             last_seen: CommitId("deadbeef".into()),
+            resume_from: Some(CommitId("feedface".into())),
         };
         assert_eq!(cursor.last_seen.as_ref(), "deadbeef");
+        assert_eq!(
+            cursor.resume_from.as_ref().map(AsRef::as_ref),
+            Some("feedface")
+        );
     }
 
     #[test]
@@ -603,7 +827,7 @@ diff --git a/src/lib.rs b/src/lib.rs\n\
         let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1);
         let commit = Commit {
             id: CommitId("1".into()),
-            parent_ids: vec![CommitId("0".into())],
+            parent_ids: smallvec::smallvec![CommitId("0".into())],
             summary: "test".into(),
             author: "me".into(),
             time: now,

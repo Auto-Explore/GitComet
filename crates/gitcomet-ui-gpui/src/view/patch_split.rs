@@ -1,5 +1,5 @@
 use super::*;
-use std::sync::Arc;
+use crate::view::diff_utils::diff_content_line_text;
 
 pub(super) fn build_patch_split_rows(diff: &[AnnotatedDiffLine]) -> Vec<PatchSplitRow> {
     use gitcomet_core::domain::DiffLineKind as DK;
@@ -34,8 +34,8 @@ pub(super) fn build_patch_split_rows(diff: &[AnnotatedDiffLine]) -> Vec<PatchSpl
                 kind,
                 old_line: left.and_then(|l| l.old_line),
                 new_line: right.and_then(|l| l.new_line),
-                old: left.map(|l| diff_content_text(l).into()),
-                new: right.map(|l| diff_content_text(l).into()),
+                old: left.map(diff_content_line_text),
+                new: right.map(diff_content_line_text),
                 eof_newline: None,
             };
             out.push(PatchSplitRow::Aligned {
@@ -82,13 +82,13 @@ pub(super) fn build_patch_split_rows(diff: &[AnnotatedDiffLine]) -> Vec<PatchSpl
                 match line.kind {
                     DK::Context => {
                         flush_pending(&mut out, diff, &mut pending_removes, &mut pending_adds);
-                        let text: Arc<str> = diff_content_text(line).into();
+                        let text = diff_content_line_text(line);
                         out.push(PatchSplitRow::Aligned {
                             row: FileDiffRow {
                                 kind: K::Context,
                                 old_line: line.old_line,
                                 new_line: line.new_line,
-                                old: Some(Arc::clone(&text)),
+                                old: Some(text.clone()),
                                 new: Some(text),
                                 eof_newline: None,
                             },
@@ -211,6 +211,36 @@ mod tests {
                 assert_eq!(row.kind, RK::Remove);
                 assert_eq!(row.old.as_deref(), Some("old2"));
                 assert!(row.new.is_none());
+            }
+            _ => panic!("expected aligned row"),
+        }
+    }
+
+    #[test]
+    fn context_rows_reuse_annotated_line_storage_for_content() {
+        let diff = vec![
+            line(DK::Header, "diff --git a/a.txt b/a.txt", None, None),
+            line(DK::Hunk, "@@ -1 +1 @@", None, None),
+            line(DK::Context, " shared", Some(1), Some(1)),
+        ];
+
+        let expected = diff_content_line_text(&diff[2]);
+        let rows = build_patch_split_rows(&diff);
+
+        match &rows[2] {
+            PatchSplitRow::Aligned { row, .. } => {
+                assert_eq!(row.old.as_deref(), Some("shared"));
+                assert_eq!(row.new.as_deref(), Some("shared"));
+                assert!(
+                    row.old
+                        .as_ref()
+                        .is_some_and(|text| text.shares_backing_with(&expected))
+                );
+                assert!(
+                    row.new
+                        .as_ref()
+                        .is_some_and(|text| text.shares_backing_with(&expected))
+                );
             }
             _ => panic!("expected aligned row"),
         }

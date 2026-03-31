@@ -457,19 +457,12 @@ impl MainPaneView {
                                         components::ScrollbarAxis::Vertical,
                                     );
                                     let handle_w = px(PANE_RESIZE_HANDLE_PX);
-                                    let min_col_w = px(DIFF_SPLIT_COL_MIN_PX);
                                     let main_w = (self.main_pane_content_width(cx)
                                         - scrollbar_gutter)
                                         .max(px(0.0));
-                                    let available = (main_w - handle_w).max(px(0.0));
-                                    let left_w = if available <= min_col_w * 2.0 {
-                                        available * 0.5
-                                    } else {
-                                        (available * self.diff_split_ratio)
-                                            .max(min_col_w)
-                                            .min(available - min_col_w)
-                                    };
-                                    let right_w = available - left_w;
+                                    let (_, min_col_w) = diff_split_drag_params(main_w);
+                                    let (left_w, right_w) =
+                                        diff_split_column_widths(main_w, self.diff_split_ratio);
 
                                     let resize_handle = |id: &'static str| {
                                         div()
@@ -536,31 +529,34 @@ impl MainPaneView {
                                                         .max(px(0.0));
                                                     let available =
                                                         (main_w - handle_w).max(px(0.0));
-                                                    if available <= min_col_w * 2.0 {
-                                                        if (this.diff_split_ratio - 0.5).abs()
-                                                            > f32::EPSILON
-                                                        {
-                                                            this.diff_split_ratio = 0.5;
-                                                            cx.notify();
-                                                        }
-                                                        return;
-                                                    }
-
                                                     let dx =
                                                         e.event.position.x - state.start_x;
-                                                    let max_left = available - min_col_w;
-                                                    let mut next_left =
-                                                        (available * state.start_ratio) + dx;
-                                                    next_left =
-                                                        next_left.max(min_col_w).min(max_left);
-
-                                                    let next_ratio =
-                                                        (next_left / available).clamp(0.0, 1.0);
-                                                    if (this.diff_split_ratio - next_ratio).abs()
-                                                        > f32::EPSILON
-                                                    {
-                                                        this.diff_split_ratio = next_ratio;
-                                                        cx.notify();
+                                                    match next_diff_split_drag_ratio(
+                                                        available,
+                                                        min_col_w,
+                                                        state.start_ratio,
+                                                        dx,
+                                                    ) {
+                                                        None => {
+                                                            if (this.diff_split_ratio - 0.5)
+                                                                .abs()
+                                                                > f32::EPSILON
+                                                            {
+                                                                this.diff_split_ratio = 0.5;
+                                                                cx.notify();
+                                                            }
+                                                        }
+                                                        Some(next_ratio) => {
+                                                            if (this.diff_split_ratio
+                                                                - next_ratio)
+                                                                .abs()
+                                                                > f32::EPSILON
+                                                            {
+                                                                this.diff_split_ratio =
+                                                                    next_ratio;
+                                                                cx.notify();
+                                                            }
+                                                        }
                                                     }
                                                 },
                                             ))

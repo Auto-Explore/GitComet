@@ -41,13 +41,7 @@ pub(super) fn notify_fingerprint(state: &AppState, popover: &PopoverKind) -> u64
                 view_fingerprint::hash_loadable_kind(&repo.open, &mut hasher);
             }
         }
-        PopoverKind::Settings
-        | PopoverKind::SettingsThemeMenu
-        | PopoverKind::SettingsDateFormatMenu
-        | PopoverKind::SettingsTimezoneMenu
-        | PopoverKind::ChangeTrackingSettings
-        | PopoverKind::OpenSourceLicenses
-        | PopoverKind::AppMenu => {
+        PopoverKind::ChangeTrackingSettings | PopoverKind::AppMenu => {
             // Mostly local UI state; depend only on whether a repo is active/open.
             state.active_repo.hash(&mut hasher);
             if let Some(repo) = repo_for_popover(state, popover) {
@@ -71,12 +65,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         PopoverKind::RepoPicker
         | PopoverKind::RecentRepositoryPicker
         | PopoverKind::CloneRepo
-        | PopoverKind::Settings
-        | PopoverKind::SettingsThemeMenu
-        | PopoverKind::SettingsDateFormatMenu
-        | PopoverKind::SettingsTimezoneMenu
-        | PopoverKind::ChangeTrackingSettings
-        | PopoverKind::OpenSourceLicenses => None,
+        | PopoverKind::ChangeTrackingSettings => None,
 
         // Popovers that implicitly use the currently active repo.
         PopoverKind::BranchPicker
@@ -235,11 +224,6 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         | PopoverKind::ConflictResolverChunkMenu { .. }
         | PopoverKind::ConflictResolverOutputMenu { .. }
         | PopoverKind::AppMenu
-        | PopoverKind::Settings
-        | PopoverKind::SettingsThemeMenu
-        | PopoverKind::SettingsDateFormatMenu
-        | PopoverKind::SettingsTimezoneMenu
-        | PopoverKind::OpenSourceLicenses
         | PopoverKind::RepoPicker
         | PopoverKind::RecentRepositoryPicker
         | PopoverKind::CloneRepo => {}
@@ -289,12 +273,7 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             message.hash(hasher);
         }
         PopoverKind::CloneRepo => 4u8.hash(hasher),
-        PopoverKind::Settings => 5u8.hash(hasher),
-        PopoverKind::SettingsThemeMenu => 62u8.hash(hasher),
-        PopoverKind::SettingsDateFormatMenu => 63u8.hash(hasher),
-        PopoverKind::SettingsTimezoneMenu => 64u8.hash(hasher),
         PopoverKind::ChangeTrackingSettings => 66u8.hash(hasher),
-        PopoverKind::OpenSourceLicenses => 60u8.hash(hasher),
 
         PopoverKind::ResetPrompt {
             repo_id,
@@ -715,7 +694,7 @@ mod tests {
 
         let mut state = AppState {
             active_repo: Some(repo_id),
-            ..Default::default()
+            ..AppState::default()
         };
         state.repos.push(repo);
 

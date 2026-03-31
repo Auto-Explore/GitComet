@@ -1,14 +1,15 @@
 use super::{
     GixRepo,
-    conflict_stages::{conflict_kind_from_stage_mask, gix_index_stage_blob_bytes_optional},
+    conflict_stages::{
+        ConflictStageData, gix_index_conflict_stage_data, gix_index_stage_blob_bytes_optional,
+    },
 };
-use crate::util::{git_command_failed_error, run_git_raw_output};
-use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession};
-use gitcomet_core::domain::{
-    Diff, DiffArea, DiffTarget, FileConflictKind, FileDiffImage, FileDiffText,
-};
+use crate::util::{git_command_failed_error, run_git_parsed_stdout, run_git_raw_output};
+use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession, canonicalize_stage_parts};
+use gitcomet_core::domain::{Diff, DiffArea, DiffTarget, FileDiffImage, FileDiffText};
 use gitcomet_core::error::{Error, ErrorKind};
-use gitcomet_core::services::{ConflictFileStages, Result, decode_utf8_optional};
+use gitcomet_core::services::{ConflictFileStages, Result};
+use std::io::BufReader;
 use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
@@ -58,8 +59,23 @@ impl GixRepo {
     }
 
     pub(super) fn diff_parsed_impl(&self, target: &DiffTarget) -> Result<Diff> {
-        let text = self.diff_unified_impl(target)?;
-        Ok(Diff::from_unified(target.clone(), &text))
+        if let Some(diff) = self.synthetic_simple_commit_path_diff(target)? {
+            return Ok(diff);
+        }
+
+        let target = target.clone();
+        run_git_parsed_stdout(
+            self.build_unified_diff_command(&target),
+            "git diff",
+            true,
+            move |stdout| {
+                Diff::from_unified_reader(target, BufReader::new(stdout)).map_err(|err| {
+                    Error::new(ErrorKind::Backend(format!(
+                        "git diff produced non-UTF-8 output: {err}"
+                    )))
+                })
+            },
+        )
     }
 
     pub(super) fn diff_file_text_impl(&self, target: &DiffTarget) -> Result<Option<FileDiffText>> {
@@ -89,11 +105,7 @@ impl GixRepo {
                                 let theirs = decode_utf8_bytes_optional(
                                     gix_index_stage_blob_bytes_optional(&repo, path, 3)?,
                                 )?;
-                                return Ok(Some(FileDiffText {
-                                    path: path.clone(),
-                                    old: ours,
-                                    new: theirs,
-                                }));
+                                return Ok(Some(FileDiffText::new(path.clone(), ours, theirs)));
                             }
                         };
                         let new = read_worktree_file_utf8_optional(&self.spec.workdir, path)?;
@@ -119,11 +131,7 @@ impl GixRepo {
                     }
                 };
 
-                Ok(Some(FileDiffText {
-                    path: path.clone(),
-                    old,
-                    new,
-                }))
+                Ok(Some(FileDiffText::new(path.clone(), old, new)))
             }
             DiffTarget::Commit { commit_id, path } => {
                 let Some(path) = path else {
@@ -134,22 +142,16 @@ impl GixRepo {
                 let parent = gix_first_parent_optional(&repo, commit_id.as_ref())?;
 
                 let old = match parent {
-                    Some(parent) => decode_utf8_bytes_optional(
-                        gix_revision_path_blob_bytes_optional(&repo, &parent, path)?,
-                    )?,
+                    Some(parent) => gix_revision_path_blob_entry_optional(&repo, &parent, path)?
+                        .map(|entry| decode_utf8_bytes(entry.bytes))
+                        .transpose()?,
                     None => None,
                 };
-                let new = decode_utf8_bytes_optional(gix_revision_path_blob_bytes_optional(
-                    &repo,
-                    commit_id.as_ref(),
-                    path,
-                )?)?;
+                let new = gix_revision_path_blob_entry_optional(&repo, commit_id.as_ref(), path)?
+                    .map(|entry| decode_utf8_bytes(entry.bytes))
+                    .transpose()?;
 
-                Ok(Some(FileDiffText {
-                    path: path.clone(),
-                    old,
-                    new,
-                }))
+                Ok(Some(FileDiffText::new(path.clone(), old, new)))
             }
         }
     }
@@ -245,37 +247,21 @@ impl GixRepo {
         }
 
         let repo = self._repo.to_thread_local();
-        let base_bytes =
-            gix_index_stage_blob_bytes_optional(&repo, path, 1)?.map(Arc::<[u8]>::from);
-        let ours_bytes =
-            gix_index_stage_blob_bytes_optional(&repo, path, 2)?.map(Arc::<[u8]>::from);
-        let theirs_bytes =
-            gix_index_stage_blob_bytes_optional(&repo, path, 3)?.map(Arc::<[u8]>::from);
-        let base = decode_utf8_optional(base_bytes.as_deref());
-        let ours = decode_utf8_optional(ours_bytes.as_deref());
-        let theirs = decode_utf8_optional(theirs_bytes.as_deref());
-
-        Ok(Some(ConflictFileStages {
-            path: path.to_path_buf(),
-            base_bytes,
-            ours_bytes,
-            theirs_bytes,
-            base: base.map(Arc::<str>::from),
-            ours: ours.map(Arc::<str>::from),
-            theirs: theirs.map(Arc::<str>::from),
-        }))
+        Ok(Some(conflict_file_stages_from_stage_data(
+            path,
+            gix_index_conflict_stage_data(&repo, path)?,
+        )))
     }
 
     pub(super) fn conflict_session_impl(&self, path: &Path) -> Result<Option<ConflictSession>> {
         let repo_path = to_repo_path(path, &self.spec.workdir)?;
         let repo = self._repo.to_thread_local();
-        let Some(conflict_kind) = gix_index_conflict_kind_optional(&repo, &repo_path)? else {
+        let stage_data = gix_index_conflict_stage_data(&repo, &repo_path)?;
+        let Some(conflict_kind) = stage_data.conflict_kind else {
             return Ok(None);
         };
 
-        let Some(stages) = self.conflict_file_stages_impl(&repo_path)? else {
-            return Ok(None);
-        };
+        let stages = conflict_file_stages_from_stage_data(&repo_path, stage_data);
         let current =
             read_worktree_file_conflict_payload_known_optional(&self.spec.workdir, &repo_path);
 
@@ -303,6 +289,80 @@ impl GixRepo {
             None => ConflictSession::new(repo_path, conflict_kind, base, ours, theirs),
         };
         Ok(Some(session))
+    }
+
+    fn synthetic_simple_commit_path_diff(&self, target: &DiffTarget) -> Result<Option<Diff>> {
+        let DiffTarget::Commit {
+            commit_id,
+            path: Some(path),
+        } = target
+        else {
+            return Ok(None);
+        };
+
+        let repo = self._repo.to_thread_local();
+        let parent = gix_first_parent_optional(&repo, commit_id.as_ref())?;
+        let old = match parent.as_deref() {
+            Some(parent) => gix_revision_path_blob_entry_optional(&repo, parent, path)?,
+            None => None,
+        };
+        let new = gix_revision_path_blob_entry_optional(&repo, commit_id.as_ref(), path)?;
+
+        let (prefix, body_text, blob) = match (old, new) {
+            (None, Some(new)) => {
+                let new_text = decode_utf8_bytes(new.bytes)?;
+                (
+                    UnifiedBlobPrefix::Add,
+                    new_text,
+                    UnifiedBlobDiff {
+                        mode: new.mode,
+                        short_id: new.short_id,
+                    },
+                )
+            }
+            (Some(old), None) => {
+                let old_text = decode_utf8_bytes(old.bytes)?;
+                (
+                    UnifiedBlobPrefix::Remove,
+                    old_text,
+                    UnifiedBlobDiff {
+                        mode: old.mode,
+                        short_id: old.short_id,
+                    },
+                )
+            }
+            _ => return Ok(None),
+        };
+
+        Ok(Some(build_simple_commit_path_diff(
+            target.clone(),
+            path,
+            body_text.as_str(),
+            prefix,
+            &blob,
+        )))
+    }
+}
+
+fn conflict_file_stages_from_stage_data(
+    path: &Path,
+    stage_data: ConflictStageData,
+) -> ConflictFileStages {
+    let (base_bytes, base) =
+        canonicalize_stage_parts(stage_data.base_bytes.map(Arc::<[u8]>::from), None);
+    let (ours_bytes, ours) =
+        canonicalize_stage_parts(stage_data.ours_bytes.map(Arc::<[u8]>::from), None);
+    let (theirs_bytes, theirs) =
+        canonicalize_stage_parts(stage_data.theirs_bytes.map(Arc::<[u8]>::from), None);
+
+    ConflictFileStages {
+        path: path.to_path_buf(),
+        base_bytes,
+        ours_bytes,
+        theirs_bytes,
+        base,
+        ours,
+        theirs,
     }
 }
 
@@ -357,6 +417,23 @@ enum IndexUnconflictedBlob {
     Present(Vec<u8>),
     Missing,
     Unmerged,
+}
+
+struct RevisionPathBlobEntry {
+    bytes: Vec<u8>,
+    mode: gix::objs::tree::EntryMode,
+    short_id: String,
+}
+
+struct UnifiedBlobDiff {
+    mode: gix::objs::tree::EntryMode,
+    short_id: String,
+}
+
+#[derive(Clone, Copy)]
+enum UnifiedBlobPrefix {
+    Add,
+    Remove,
 }
 
 fn decode_utf8_bytes(bytes: Vec<u8>) -> Result<String> {
@@ -445,38 +522,40 @@ fn gix_revision_path_blob_bytes_optional(
     gix_blob_bytes_from_object_id_optional(repo, entry.object_id())
 }
 
-fn gix_index_conflict_kind_optional(
+fn gix_revision_path_blob_entry_optional(
     repo: &gix::Repository,
+    revision: &str,
     path: &Path,
-) -> Result<Option<FileConflictKind>> {
-    let index = repo
-        .index_or_load_from_head_or_empty()
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix index: {e}"))))?;
+) -> Result<Option<RevisionPathBlobEntry>> {
+    let Some(object_id) = gix_revision_id_optional(repo, revision)? else {
+        return Ok(None);
+    };
 
-    let path = gix::path::os_str_into_bstr(path.as_os_str())
-        .map_err(|_| Error::new(ErrorKind::Unsupported("path is not valid UTF-8")))?;
+    let object = match repo.find_object(object_id) {
+        Ok(object) => object,
+        Err(_) => return Ok(None),
+    };
+    let tree = match object.peel_to_tree() {
+        Ok(tree) => tree,
+        Err(_) => return Ok(None),
+    };
 
-    let mut stage_mask = 0u8;
-    if index
-        .entry_by_path_and_stage(path, gix::index::entry::Stage::Base)
-        .is_some()
-    {
-        stage_mask |= 0b001;
-    }
-    if index
-        .entry_by_path_and_stage(path, gix::index::entry::Stage::Ours)
-        .is_some()
-    {
-        stage_mask |= 0b010;
-    }
-    if index
-        .entry_by_path_and_stage(path, gix::index::entry::Stage::Theirs)
-        .is_some()
-    {
-        stage_mask |= 0b100;
-    }
+    let Some(entry) = tree
+        .lookup_entry_by_path(path)
+        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix lookup_entry_by_path: {e}"))))?
+    else {
+        return Ok(None);
+    };
 
-    Ok(conflict_kind_from_stage_mask(stage_mask))
+    let Some(bytes) = gix_blob_bytes_from_object_id_optional(repo, entry.object_id())? else {
+        return Ok(None);
+    };
+
+    Ok(Some(RevisionPathBlobEntry {
+        bytes,
+        mode: entry.mode(),
+        short_id: entry.id().shorten_or_id().to_string(),
+    }))
 }
 
 fn gix_index_unconflicted_blob_bytes_optional(
@@ -517,4 +596,121 @@ fn gix_first_parent_optional(repo: &gix::Repository, commit: &str) -> Result<Opt
         Err(_) => return Ok(None),
     };
     Ok(commit.parent_ids().next().map(|id| id.detach().to_string()))
+}
+
+fn build_simple_commit_path_diff(
+    target: DiffTarget,
+    path: &Path,
+    body_text: &str,
+    prefix: UnifiedBlobPrefix,
+    blob: &UnifiedBlobDiff,
+) -> Diff {
+    let path_text = path.to_string_lossy();
+    let line_count = unified_body_line_count(body_text);
+    let mut mode_buf = [0u8; 6];
+    let mode_text =
+        std::str::from_utf8(blob.mode.as_bytes(&mut mode_buf).as_ref()).unwrap_or("100644");
+    let header_capacity = path_text.len().saturating_mul(4).saturating_add(96);
+    let body_capacity = body_text.len().saturating_add(line_count);
+    let missing_newline_marker = usize::from(!body_text.is_empty() && !body_text.ends_with('\n'))
+        .saturating_mul("\\ No newline at end of file\n".len());
+    let mut text = String::with_capacity(
+        header_capacity
+            .saturating_add(body_capacity)
+            .saturating_add(missing_newline_marker),
+    );
+
+    text.push_str("diff --git a/");
+    text.push_str(path_text.as_ref());
+    text.push_str(" b/");
+    text.push_str(path_text.as_ref());
+    text.push('\n');
+
+    match prefix {
+        UnifiedBlobPrefix::Add => {
+            text.push_str("new file mode ");
+            text.push_str(mode_text);
+            text.push('\n');
+            text.push_str("index 0000000..");
+            text.push_str(blob.short_id.as_str());
+            text.push('\n');
+            text.push_str("--- /dev/null\n");
+            text.push_str("+++ b/");
+            text.push_str(path_text.as_ref());
+            text.push('\n');
+            text.push_str("@@ -0,0 +");
+            push_unified_hunk_range(&mut text, 1, line_count);
+            text.push_str(" @@\n");
+        }
+        UnifiedBlobPrefix::Remove => {
+            text.push_str("deleted file mode ");
+            text.push_str(mode_text);
+            text.push('\n');
+            text.push_str("index ");
+            text.push_str(blob.short_id.as_str());
+            text.push_str("..0000000\n");
+            text.push_str("--- a/");
+            text.push_str(path_text.as_ref());
+            text.push('\n');
+            text.push_str("+++ /dev/null\n");
+            text.push_str("@@ -");
+            push_unified_hunk_range(&mut text, 1, line_count);
+            text.push_str(" +0,0 @@\n");
+        }
+    }
+
+    append_prefixed_unified_body(&mut text, prefix, body_text);
+    Diff::from_unified_owned(target, text)
+}
+
+fn append_prefixed_unified_body(target: &mut String, prefix: UnifiedBlobPrefix, text: &str) {
+    if text.is_empty() {
+        return;
+    }
+
+    let prefix_char = match prefix {
+        UnifiedBlobPrefix::Add => '+',
+        UnifiedBlobPrefix::Remove => '-',
+    };
+
+    let mut emitted_trailing_newline = false;
+    for line in text.split_inclusive('\n') {
+        target.push(prefix_char);
+        target.push_str(line);
+        emitted_trailing_newline = line.ends_with('\n');
+    }
+
+    if !emitted_trailing_newline {
+        target.push('\n');
+        target.push_str("\\ No newline at end of file\n");
+    }
+}
+
+fn push_unified_hunk_range(target: &mut String, start: usize, count: usize) {
+    match count {
+        0 => {
+            target.push_str(start.to_string().as_str());
+            target.push_str(",0");
+        }
+        1 => {
+            target.push_str(start.to_string().as_str());
+        }
+        _ => {
+            target.push_str(start.to_string().as_str());
+            target.push(',');
+            target.push_str(count.to_string().as_str());
+        }
+    }
+}
+
+fn unified_body_line_count(text: &str) -> usize {
+    if text.is_empty() {
+        0
+    } else {
+        text.as_bytes()
+            .iter()
+            .filter(|&&byte| byte == b'\n')
+            .count()
+            + usize::from(!text.ends_with('\n'))
+    }
 }

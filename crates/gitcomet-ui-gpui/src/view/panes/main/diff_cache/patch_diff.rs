@@ -1,5 +1,7 @@
 use super::super::*;
+use crate::view::diff_utils::diff_content_line_text;
 use gitcomet_core::domain::DiffRowProvider;
+use smallvec::SmallVec;
 
 pub(in crate::view) const PATCH_DIFF_PAGE_SIZE: usize = 256;
 
@@ -9,37 +11,99 @@ struct DiffLineNumberState {
     new_line: Option<u32>,
 }
 
+pub(crate) struct PagedPatchDiffRowsSliceIter<'a> {
+    provider: &'a PagedPatchDiffRows,
+    next_ix: usize,
+    end_ix: usize,
+    current_page_ix: Option<usize>,
+    current_page: Option<Arc<[AnnotatedDiffLine]>>,
+}
+
+impl<'a> PagedPatchDiffRowsSliceIter<'a> {
+    fn empty(provider: &'a PagedPatchDiffRows) -> Self {
+        Self {
+            provider,
+            next_ix: 0,
+            end_ix: 0,
+            current_page_ix: None,
+            current_page: None,
+        }
+    }
+
+    fn new(provider: &'a PagedPatchDiffRows, start: usize, end: usize) -> Self {
+        Self {
+            provider,
+            next_ix: start,
+            end_ix: end,
+            current_page_ix: None,
+            current_page: None,
+        }
+    }
+}
+
+impl Iterator for PagedPatchDiffRowsSliceIter<'_> {
+    type Item = AnnotatedDiffLine;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.next_ix >= self.end_ix {
+            return None;
+        }
+
+        let page_ix = self.next_ix / self.provider.page_size;
+        if self.current_page_ix != Some(page_ix) {
+            self.current_page = self.provider.load_page(page_ix);
+            self.current_page_ix = Some(page_ix);
+        }
+
+        let page_row_ix = self.next_ix % self.provider.page_size;
+        let row = self.current_page.as_ref()?.get(page_row_ix)?.clone();
+        self.next_ix += 1;
+        Some(row)
+    }
+}
+
 #[derive(Debug)]
 pub(in crate::view) struct PagedPatchDiffRows {
     diff: Arc<gitcomet_core::domain::Diff>,
     page_size: usize,
-    page_start_states: Vec<DiffLineNumberState>,
+    page_start_states: std::sync::Mutex<Vec<DiffLineNumberState>>,
     pages: std::sync::Mutex<HashMap<usize, Arc<[AnnotatedDiffLine]>>>,
 }
 
 impl PagedPatchDiffRows {
     pub(in crate::view) fn new(diff: Arc<gitcomet_core::domain::Diff>, page_size: usize) -> Self {
         let page_size = page_size.max(1);
-        let line_count = diff.lines.len();
-        let page_count = line_count.div_ceil(page_size);
-        let mut page_start_states = Vec::with_capacity(page_count);
-        let mut state = DiffLineNumberState::default();
-
-        for page_ix in 0..page_count {
-            page_start_states.push(state);
-            let start = page_ix * page_size;
-            let end = (start + page_size).min(line_count);
-            for line in &diff.lines[start..end] {
-                state = Self::advance_state(state, line);
-            }
-        }
-
         Self {
             diff,
             page_size,
-            page_start_states,
+            page_start_states: std::sync::Mutex::new(vec![DiffLineNumberState::default()]),
             pages: std::sync::Mutex::new(HashMap::default()),
         }
+    }
+
+    fn ensure_page_start_state(&self, page_ix: usize) -> Option<DiffLineNumberState> {
+        let page_count = self.diff.lines.len().div_ceil(self.page_size);
+        if page_ix >= page_count {
+            return None;
+        }
+        {
+            let states = self.page_start_states.lock().ok()?;
+            if let Some(&state) = states.get(page_ix) {
+                return Some(state);
+            }
+        }
+        let mut states = self.page_start_states.lock().ok()?;
+        while states.len() <= page_ix {
+            let prev_ix = states.len() - 1;
+            let mut state = states[prev_ix];
+            let start = prev_ix * self.page_size;
+            let end = (start + self.page_size).min(self.diff.lines.len());
+            for line in &self.diff.lines[start..end] {
+                state = Self::advance_state(state, line);
+            }
+            states.push(state);
+        }
+        Some(states[page_ix])
     }
 
     fn page_bounds(&self, page_ix: usize) -> Option<(usize, usize)> {
@@ -102,11 +166,7 @@ impl PagedPatchDiffRows {
 
     fn build_page(&self, page_ix: usize) -> Option<Arc<[AnnotatedDiffLine]>> {
         let (start, end) = self.page_bounds(page_ix)?;
-        let mut state = self
-            .page_start_states
-            .get(page_ix)
-            .copied()
-            .unwrap_or_default();
+        let mut state = self.ensure_page_start_state(page_ix)?;
         let mut rows = Vec::with_capacity(end - start);
 
         for line in &self.diff.lines[start..end] {
@@ -119,7 +179,7 @@ impl PagedPatchDiffRows {
             };
             rows.push(AnnotatedDiffLine {
                 kind: line.kind,
-                text: Arc::clone(&line.text),
+                text: line.text.clone(),
                 old_line,
                 new_line,
             });
@@ -160,7 +220,7 @@ impl PagedPatchDiffRows {
         self.pages.lock().map(|pages| pages.len()).unwrap_or(0)
     }
 
-    #[cfg(feature = "benchmarks")]
+    #[cfg(any(test, feature = "benchmarks"))]
     pub(in crate::view) fn materialized_row_count(&self) -> usize {
         self.pages
             .lock()
@@ -172,7 +232,7 @@ impl PagedPatchDiffRows {
 impl gitcomet_core::domain::DiffRowProvider for PagedPatchDiffRows {
     type RowRef = AnnotatedDiffLine;
     type SliceIter<'a>
-        = std::vec::IntoIter<AnnotatedDiffLine>
+        = PagedPatchDiffRowsSliceIter<'a>
     where
         Self: 'a;
 
@@ -186,29 +246,22 @@ impl gitcomet_core::domain::DiffRowProvider for PagedPatchDiffRows {
 
     fn slice(&self, start: usize, end: usize) -> Self::SliceIter<'_> {
         if start >= end || start >= self.diff.lines.len() {
-            return Vec::new().into_iter();
+            return PagedPatchDiffRowsSliceIter::empty(self);
         }
         let end = end.min(self.diff.lines.len());
-        let mut rows = Vec::with_capacity(end - start);
-        let mut ix = start;
-        while ix < end {
-            if let Some(line) = self.row_at(ix) {
-                rows.push(line);
-                ix += 1;
-            } else {
-                break;
-            }
-        }
-        rows.into_iter()
+        PagedPatchDiffRowsSliceIter::new(self, start, end)
     }
 }
 
 #[derive(Debug, Default)]
 struct PatchSplitMaterializationState {
-    rows: Vec<PatchSplitRow>,
+    rows: SmallVec<[PatchSplitRow; PATCH_DIFF_PAGE_SIZE]>,
+    /// Logical index of `rows[0]`. Rows before this index were skipped via
+    /// the fast-forward scan and are not stored.
+    row_base: usize,
     next_src_ix: usize,
-    pending_removes: Vec<usize>,
-    pending_adds: Vec<usize>,
+    pending_removes: SmallVec<[(usize, AnnotatedDiffLine); 8]>,
+    pending_adds: SmallVec<[(usize, AnnotatedDiffLine); 8]>,
     done: bool,
 }
 
@@ -220,16 +273,12 @@ pub(in crate::view) struct PagedPatchSplitRows {
 }
 
 impl PagedPatchSplitRows {
+    #[cfg(test)]
     pub(in crate::view) fn new(source: Arc<PagedPatchDiffRows>) -> Self {
         let len_hint = Self::count_rows(source.diff.lines.as_slice());
-        Self {
-            source,
-            len_hint,
-            state: std::sync::Mutex::new(PatchSplitMaterializationState::default()),
-        }
+        Self::new_with_len_hint(source, len_hint)
     }
 
-    #[cfg(feature = "benchmarks")]
     pub(in crate::view) fn new_with_len_hint(
         source: Arc<PagedPatchDiffRows>,
         len_hint: usize,
@@ -241,79 +290,96 @@ impl PagedPatchSplitRows {
         }
     }
 
+    #[cfg(test)]
     fn count_rows(lines: &[gitcomet_core::domain::DiffLine]) -> usize {
         use gitcomet_core::domain::DiffLineKind as DK;
 
         let mut out = 0usize;
-        let mut ix = 0usize;
         let mut pending_removes = 0usize;
         let mut pending_adds = 0usize;
-        let flush_pending =
-            |out: &mut usize, pending_removes: &mut usize, pending_adds: &mut usize| {
-                *out = out.saturating_add((*pending_removes).max(*pending_adds));
-                *pending_removes = 0;
-                *pending_adds = 0;
-            };
 
-        while ix < lines.len() {
-            let line = &lines[ix];
-            let is_file_header =
-                matches!(line.kind, DK::Header) && line.text.starts_with("diff --git ");
-
-            if is_file_header {
-                flush_pending(&mut out, &mut pending_removes, &mut pending_adds);
-                out = out.saturating_add(1);
-                ix += 1;
-                continue;
-            }
-
-            if matches!(line.kind, DK::Hunk) {
-                flush_pending(&mut out, &mut pending_removes, &mut pending_adds);
-                out = out.saturating_add(1);
-                ix += 1;
-
-                while ix < lines.len() {
-                    let line = &lines[ix];
-                    let is_next_file_header =
-                        matches!(line.kind, DK::Header) && line.text.starts_with("diff --git ");
-                    if is_next_file_header || matches!(line.kind, DK::Hunk) {
-                        break;
-                    }
-                    match line.kind {
-                        DK::Context => {
-                            flush_pending(&mut out, &mut pending_removes, &mut pending_adds);
-                            out = out.saturating_add(1);
-                        }
-                        DK::Remove => pending_removes = pending_removes.saturating_add(1),
-                        DK::Add => pending_adds = pending_adds.saturating_add(1),
-                        DK::Header | DK::Hunk => {
-                            flush_pending(&mut out, &mut pending_removes, &mut pending_adds);
-                            out = out.saturating_add(1);
-                        }
-                    }
-                    ix += 1;
+        for line in lines {
+            match line.kind {
+                DK::Remove => {
+                    pending_removes += 1;
                 }
-
-                flush_pending(&mut out, &mut pending_removes, &mut pending_adds);
-                continue;
+                DK::Add => {
+                    pending_adds += 1;
+                }
+                DK::Context | DK::Header | DK::Hunk => {
+                    out += pending_removes.max(pending_adds);
+                    pending_removes = 0;
+                    pending_adds = 0;
+                    out += 1;
+                }
             }
-
-            out = out.saturating_add(1);
-            ix += 1;
         }
-
-        flush_pending(&mut out, &mut pending_removes, &mut pending_adds);
+        out += pending_removes.max(pending_adds);
         out
     }
 
-    fn flush_pending(&self, state: &mut PatchSplitMaterializationState) {
+    /// Lightweight scan using only `DiffLineKind` to find the last block
+    /// boundary at or before `target_split_row`. A block boundary is a
+    /// position where both pending-removes and pending-adds are empty,
+    /// meaning full materialization can start cleanly from that source index.
+    ///
+    /// Returns `(src_ix, split_row_count)` at the boundary. This avoids
+    /// page-cache overhead and `Arc<str>` cloning — only the `kind` field
+    /// of each `DiffLine` is inspected.
+    fn scan_to_block_boundary(
+        lines: &[gitcomet_core::domain::DiffLine],
+        target_split_row: usize,
+    ) -> (usize, usize) {
+        use gitcomet_core::domain::DiffLineKind as DK;
+
+        let mut row_count = 0usize;
+        let mut pending_removes = 0usize;
+        let mut pending_adds = 0usize;
+        let mut best_src_ix = 0usize;
+        let mut best_row_count = 0usize;
+
+        for (src_ix, line) in lines.iter().enumerate() {
+            match line.kind {
+                DK::Remove => pending_removes += 1,
+                DK::Add => pending_adds += 1,
+                DK::Context | DK::Header | DK::Hunk => {
+                    row_count += pending_removes.max(pending_adds);
+                    pending_removes = 0;
+                    pending_adds = 0;
+
+                    if row_count > target_split_row {
+                        return (best_src_ix, best_row_count);
+                    }
+
+                    best_src_ix = src_ix;
+                    best_row_count = row_count;
+
+                    row_count += 1;
+
+                    if row_count > target_split_row {
+                        return (best_src_ix, best_row_count);
+                    }
+
+                    best_src_ix = src_ix + 1;
+                    best_row_count = row_count;
+                }
+            }
+        }
+
+        row_count += pending_removes.max(pending_adds);
+        if row_count > target_split_row {
+            return (best_src_ix, best_row_count);
+        }
+
+        (best_src_ix, best_row_count)
+    }
+
+    fn flush_pending(state: &mut PatchSplitMaterializationState) {
         let pairs = state.pending_removes.len().max(state.pending_adds.len());
         for i in 0..pairs {
-            let left_ix = state.pending_removes.get(i).copied();
-            let right_ix = state.pending_adds.get(i).copied();
-            let left = left_ix.and_then(|ix| self.source.row_at(ix));
-            let right = right_ix.and_then(|ix| self.source.row_at(ix));
-            let kind = match (left_ix.is_some(), right_ix.is_some()) {
+            let left = state.pending_removes.get(i);
+            let right = state.pending_adds.get(i);
+            let kind = match (left.is_some(), right.is_some()) {
                 (true, true) => gitcomet_core::file_diff::FileDiffRowKind::Modify,
                 (true, false) => gitcomet_core::file_diff::FileDiffRowKind::Remove,
                 (false, true) => gitcomet_core::file_diff::FileDiffRowKind::Add,
@@ -322,22 +388,80 @@ impl PagedPatchSplitRows {
             state.rows.push(PatchSplitRow::Aligned {
                 row: FileDiffRow {
                     kind,
-                    old_line: left.as_ref().and_then(|line| line.old_line),
-                    new_line: right.as_ref().and_then(|line| line.new_line),
-                    old: left.as_ref().map(|line| diff_content_text(line).into()),
-                    new: right.as_ref().map(|line| diff_content_text(line).into()),
+                    old_line: left.and_then(|(_, line)| line.old_line),
+                    new_line: right.and_then(|(_, line)| line.new_line),
+                    old: left.map(|(_, line)| diff_content_line_text(line)),
+                    new: right.map(|(_, line)| diff_content_line_text(line)),
                     eof_newline: None,
                 },
-                old_src_ix: left_ix,
-                new_src_ix: right_ix,
+                old_src_ix: left.map(|(ix, _)| *ix),
+                new_src_ix: right.map(|(ix, _)| *ix),
             });
         }
         state.pending_removes.clear();
         state.pending_adds.clear();
     }
 
-    fn materialize_until(&self, target_ix: usize) {
+    fn push_context_row(
+        state: &mut PatchSplitMaterializationState,
+        src_ix: usize,
+        line: AnnotatedDiffLine,
+    ) {
+        let text = diff_content_line_text(&line);
+        state.rows.push(PatchSplitRow::Aligned {
+            row: FileDiffRow {
+                kind: gitcomet_core::file_diff::FileDiffRowKind::Context,
+                old_line: line.old_line,
+                new_line: line.new_line,
+                old: Some(text.clone()),
+                new: Some(text),
+                eof_newline: None,
+            },
+            old_src_ix: Some(src_ix),
+            new_src_ix: Some(src_ix),
+        });
+    }
+
+    fn materialize_source_line(
+        state: &mut PatchSplitMaterializationState,
+        src_ix: usize,
+        line: AnnotatedDiffLine,
+    ) {
         use gitcomet_core::domain::DiffLineKind as DK;
+
+        match line.kind {
+            DK::Header if line.text.starts_with("diff --git ") => {
+                Self::flush_pending(state);
+                state.rows.push(PatchSplitRow::Raw {
+                    src_ix,
+                    click_kind: DiffClickKind::FileHeader,
+                });
+            }
+            DK::Hunk => {
+                Self::flush_pending(state);
+                state.rows.push(PatchSplitRow::Raw {
+                    src_ix,
+                    click_kind: DiffClickKind::HunkHeader,
+                });
+            }
+            DK::Context => {
+                Self::flush_pending(state);
+                Self::push_context_row(state, src_ix, line);
+            }
+            DK::Remove => state.pending_removes.push((src_ix, line)),
+            DK::Add => state.pending_adds.push((src_ix, line)),
+            DK::Header => {
+                Self::flush_pending(state);
+                state.rows.push(PatchSplitRow::Raw {
+                    src_ix,
+                    click_kind: DiffClickKind::Line,
+                });
+            }
+        }
+        state.next_src_ix = src_ix.saturating_add(1);
+    }
+
+    fn materialize_until(&self, target_ix: usize) {
         if target_ix >= self.len_hint {
             return;
         }
@@ -346,109 +470,98 @@ impl PagedPatchSplitRows {
             Ok(state) => state,
             Err(_) => return,
         };
-        while state.rows.len() <= target_ix && !state.done {
-            if state.next_src_ix >= self.source.len_hint() {
-                self.flush_pending(&mut state);
+
+        // If the target is before the skip window, reset and rematerialize
+        // from the beginning (handles backward-scroll in production).
+        if target_ix < state.row_base {
+            state.rows.clear();
+            state.row_base = 0;
+            state.next_src_ix = 0;
+            state.pending_removes.clear();
+            state.pending_adds.clear();
+            state.done = false;
+        }
+
+        let logical_len = |s: &PatchSplitMaterializationState| s.row_base + s.rows.len();
+
+        // Already materialized far enough.
+        if logical_len(&state) > target_ix {
+            return;
+        }
+
+        self.maybe_fast_forward_to(&mut state, target_ix);
+
+        if state.rows.is_empty() {
+            let reserve_rows = target_ix
+                .saturating_sub(state.row_base)
+                .saturating_add(1)
+                .min(self.len_hint.saturating_sub(state.row_base));
+            state.rows.reserve(reserve_rows);
+        }
+
+        while logical_len(&state) <= target_ix && !state.done {
+            let src_start = state.next_src_ix;
+            let src_len = self.source.len_hint();
+            if src_start >= src_len {
+                Self::flush_pending(&mut state);
                 state.done = true;
                 break;
             }
 
-            let src_ix = state.next_src_ix;
-            let Some(line) = self.source.row_at(src_ix) else {
-                state.done = true;
-                break;
-            };
-            let is_file_header =
-                matches!(line.kind, DK::Header) && line.text.starts_with("diff --git ");
-            if is_file_header {
-                self.flush_pending(&mut state);
-                state.rows.push(PatchSplitRow::Raw {
-                    src_ix,
-                    click_kind: DiffClickKind::FileHeader,
-                });
-                state.next_src_ix += 1;
-                continue;
-            }
+            // Batch-load source rows to amortize page-cache lock overhead.
+            let batch_end = (src_start + self.source.page_size).min(src_len);
+            let batch = self.source.slice(src_start, batch_end);
 
-            if matches!(line.kind, DK::Hunk) {
-                self.flush_pending(&mut state);
-                state.rows.push(PatchSplitRow::Raw {
-                    src_ix,
-                    click_kind: DiffClickKind::HunkHeader,
-                });
-                state.next_src_ix += 1;
-
-                while state.next_src_ix < self.source.len_hint() {
-                    let src_ix = state.next_src_ix;
-                    let Some(line) = self.source.row_at(src_ix) else {
-                        break;
-                    };
-                    let is_next_file_header =
-                        matches!(line.kind, DK::Header) && line.text.starts_with("diff --git ");
-                    if is_next_file_header || matches!(line.kind, DK::Hunk) {
-                        break;
-                    }
-
-                    match line.kind {
-                        DK::Context => {
-                            self.flush_pending(&mut state);
-                            let text: Arc<str> = diff_content_text(&line).into();
-                            state.rows.push(PatchSplitRow::Aligned {
-                                row: FileDiffRow {
-                                    kind: gitcomet_core::file_diff::FileDiffRowKind::Context,
-                                    old_line: line.old_line,
-                                    new_line: line.new_line,
-                                    old: Some(Arc::clone(&text)),
-                                    new: Some(text),
-                                    eof_newline: None,
-                                },
-                                old_src_ix: Some(src_ix),
-                                new_src_ix: Some(src_ix),
-                            });
-                        }
-                        DK::Remove => state.pending_removes.push(src_ix),
-                        DK::Add => state.pending_adds.push(src_ix),
-                        DK::Header | DK::Hunk => {
-                            self.flush_pending(&mut state);
-                            state.rows.push(PatchSplitRow::Raw {
-                                src_ix,
-                                click_kind: DiffClickKind::Line,
-                            });
-                        }
-                    }
-                    state.next_src_ix += 1;
+            for (offset, line) in batch.enumerate() {
+                let src_ix = src_start + offset;
+                Self::materialize_source_line(&mut state, src_ix, line);
+                if logical_len(&state) > target_ix {
+                    break;
                 }
-
-                self.flush_pending(&mut state);
-                continue;
             }
-
-            state.rows.push(PatchSplitRow::Raw {
-                src_ix,
-                click_kind: DiffClickKind::Line,
-            });
-            state.next_src_ix += 1;
         }
     }
 
     fn row_at(&self, ix: usize) -> Option<PatchSplitRow> {
         self.materialize_until(ix);
-        self.state
-            .lock()
-            .ok()
-            .and_then(|state| state.rows.get(ix).cloned())
+        self.state.lock().ok().and_then(|state| {
+            if ix < state.row_base {
+                return None;
+            }
+            state.rows.get(ix - state.row_base).cloned()
+        })
     }
 
     #[cfg(any(test, feature = "benchmarks"))]
     pub(in crate::view) fn materialized_row_count(&self) -> usize {
         self.state.lock().map(|state| state.rows.len()).unwrap_or(0)
     }
+
+    fn maybe_fast_forward_to(&self, state: &mut PatchSplitMaterializationState, target_ix: usize) {
+        // On a fresh deep access, skip directly to the last clean block
+        // boundary before the requested row so we only materialize rows that
+        // can actually land in the requested window.
+        if !state.rows.is_empty()
+            || state.next_src_ix != 0
+            || state.row_base != 0
+            || target_ix <= self.source.page_size
+        {
+            return;
+        }
+
+        let (skip_src, skip_rows) =
+            Self::scan_to_block_boundary(&self.source.diff.lines, target_ix);
+        if skip_rows > 0 {
+            state.row_base = skip_rows;
+            state.next_src_ix = skip_src;
+        }
+    }
 }
 
 impl gitcomet_core::domain::DiffRowProvider for PagedPatchSplitRows {
     type RowRef = PatchSplitRow;
     type SliceIter<'a>
-        = std::vec::IntoIter<PatchSplitRow>
+        = smallvec::IntoIter<[PatchSplitRow; PATCH_DIFF_PAGE_SIZE]>
     where
         Self: 'a;
 
@@ -462,61 +575,118 @@ impl gitcomet_core::domain::DiffRowProvider for PagedPatchSplitRows {
 
     fn slice(&self, start: usize, end: usize) -> Self::SliceIter<'_> {
         if start >= end || start >= self.len_hint {
-            return Vec::new().into_iter();
+            return SmallVec::<[PatchSplitRow; PATCH_DIFF_PAGE_SIZE]>::new().into_iter();
         }
         let end = end.min(self.len_hint);
-        self.materialize_until(end.saturating_sub(1));
-        if let Ok(state) = self.state.lock() {
-            let mut rows = Vec::with_capacity(end.saturating_sub(start));
-            rows.extend(state.rows[start..end].iter().cloned());
-            return rows.into_iter();
+
+        if let Ok(mut state) = self.state.lock() {
+            if start < state.row_base {
+                state.rows.clear();
+                state.row_base = 0;
+                state.next_src_ix = 0;
+                state.pending_removes.clear();
+                state.pending_adds.clear();
+                state.done = false;
+            }
+            self.maybe_fast_forward_to(&mut state, start);
         }
-        Vec::new().into_iter()
+
+        self.materialize_until(end.saturating_sub(1));
+
+        if let Ok(state) = self.state.lock() {
+            let local_start = start.saturating_sub(state.row_base);
+            let local_end = end.saturating_sub(state.row_base).min(state.rows.len());
+            if local_start < local_end {
+                let mut rows = SmallVec::<[PatchSplitRow; PATCH_DIFF_PAGE_SIZE]>::with_capacity(
+                    local_end - local_start,
+                );
+                rows.extend(state.rows[local_start..local_end].iter().cloned());
+                return rows.into_iter();
+            }
+        }
+        SmallVec::<[PatchSplitRow; PATCH_DIFF_PAGE_SIZE]>::new().into_iter()
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PatchInlineVisibleRun {
+    start_visible_ix: usize,
+    start_src_ix: usize,
+    len: usize,
 }
 
 #[derive(Clone, Debug, Default)]
 pub(in crate::view) struct PatchInlineVisibleMap {
-    src_len: usize,
-    hidden_src_ixs: Vec<usize>,
+    visible_len: usize,
+    visible_runs: Vec<PatchInlineVisibleRun>,
 }
 
 impl PatchInlineVisibleMap {
     pub(in crate::view) fn from_hidden_flags(hidden_flags: &[bool]) -> Self {
-        let mut hidden_src_ixs = Vec::new();
+        let mut visible_runs = Vec::new();
+        let mut visible_len = 0usize;
+        let mut run_start_src_ix = None;
+
         for (src_ix, hide) in hidden_flags.iter().copied().enumerate() {
             if hide {
-                hidden_src_ixs.push(src_ix);
+                if let Some(start_src_ix) = run_start_src_ix.take() {
+                    let len = src_ix.saturating_sub(start_src_ix);
+                    if len > 0 {
+                        visible_runs.push(PatchInlineVisibleRun {
+                            start_visible_ix: visible_len,
+                            start_src_ix,
+                            len,
+                        });
+                        visible_len += len;
+                    }
+                }
+            } else if run_start_src_ix.is_none() {
+                run_start_src_ix = Some(src_ix);
             }
         }
+
+        if let Some(start_src_ix) = run_start_src_ix {
+            let len = hidden_flags.len().saturating_sub(start_src_ix);
+            if len > 0 {
+                visible_runs.push(PatchInlineVisibleRun {
+                    start_visible_ix: visible_len,
+                    start_src_ix,
+                    len,
+                });
+                visible_len += len;
+            }
+        }
+
         Self {
-            src_len: hidden_flags.len(),
-            hidden_src_ixs,
+            visible_len,
+            visible_runs,
         }
     }
 
     pub(in crate::view) fn visible_len(&self) -> usize {
-        self.src_len.saturating_sub(self.hidden_src_ixs.len())
+        self.visible_len
+    }
+
+    pub(in crate::view) fn for_each_visible_src_ix(&self, mut visit: impl FnMut(usize, usize)) {
+        for run in &self.visible_runs {
+            for offset in 0..run.len {
+                visit(run.start_visible_ix + offset, run.start_src_ix + offset);
+            }
+        }
     }
 
     pub(in crate::view) fn src_ix_for_visible_ix(&self, visible_ix: usize) -> Option<usize> {
-        if visible_ix >= self.visible_len() {
+        if visible_ix >= self.visible_len {
             return None;
         }
 
-        let mut lo = 0usize;
-        let mut hi = self.src_len;
-        while lo < hi {
-            let mid = lo + (hi - lo) / 2;
-            let hidden_through_mid = self.hidden_src_ixs.partition_point(|&ix| ix <= mid);
-            let visible_through_mid = mid + 1 - hidden_through_mid;
-            if visible_through_mid <= visible_ix {
-                lo = mid.saturating_add(1);
-            } else {
-                hi = mid;
-            }
-        }
-        (lo < self.src_len).then_some(lo)
+        let run_ix = self
+            .visible_runs
+            .partition_point(|run| run.start_visible_ix <= visible_ix)
+            .checked_sub(1)?;
+        let run = self.visible_runs.get(run_ix)?;
+        let offset = visible_ix.saturating_sub(run.start_visible_ix);
+        (offset < run.len).then_some(run.start_src_ix + offset)
     }
 }
 
@@ -799,6 +969,96 @@ index 1111111..2222222 100644\n\
             split_provider.materialized_row_count(),
             split_provider.len_hint()
         );
+    }
+
+    #[test]
+    fn paged_patch_split_rows_first_window_stops_inside_large_hunk() {
+        let line_count = 20_000usize;
+        let mut text = String::new();
+        text.push_str("diff --git a/src/lib.rs b/src/lib.rs\n");
+        text.push_str("index 1111111..2222222 100644\n");
+        text.push_str("--- a/src/lib.rs\n");
+        text.push_str("+++ b/src/lib.rs\n");
+        text.push_str(&format!(
+            "@@ -1,{} +1,{} @@ fn synthetic() {{\n",
+            line_count.saturating_mul(2),
+            line_count.saturating_mul(2)
+        ));
+        for ix in 0..line_count {
+            if ix % 7 == 0 {
+                text.push_str(&format!("-let old_{ix} = old_call({ix});\n"));
+                text.push_str(&format!("+let new_{ix} = new_call({ix});\n"));
+            } else {
+                text.push_str(&format!(" let shared_{ix} = keep({ix});\n"));
+            }
+        }
+
+        let diff = Arc::new(Diff::from_unified(
+            DiffTarget::WorkingTree {
+                path: PathBuf::from("src/lib.rs"),
+                area: DiffArea::Unstaged,
+            },
+            text.as_str(),
+        ));
+        let rows_provider = Arc::new(PagedPatchDiffRows::new(Arc::clone(&diff), 256));
+        let split_provider = PagedPatchSplitRows::new(Arc::clone(&rows_provider));
+
+        let first_window = split_provider.slice(0, 200).collect::<Vec<_>>();
+
+        assert_eq!(first_window.len(), 200);
+        assert_eq!(rows_provider.cached_page_count(), 1);
+        assert_eq!(rows_provider.materialized_row_count(), 256);
+        assert!(split_provider.materialized_row_count() < 256);
+        assert!(split_provider.materialized_row_count() < split_provider.len_hint());
+    }
+
+    #[test]
+    fn paged_patch_split_rows_deep_window_returns_full_requested_slice() {
+        let line_count = 20_000usize;
+        let mut text = String::new();
+        text.push_str("diff --git a/src/lib.rs b/src/lib.rs\n");
+        text.push_str("index 1111111..2222222 100644\n");
+        text.push_str("--- a/src/lib.rs\n");
+        text.push_str("+++ b/src/lib.rs\n");
+        text.push_str(&format!(
+            "@@ -1,{} +1,{} @@ fn synthetic() {{\n",
+            line_count.saturating_mul(2),
+            line_count.saturating_mul(2)
+        ));
+        for ix in 0..line_count {
+            if ix % 7 == 0 {
+                text.push_str(&format!("-let old_{ix} = old_call({ix});\n"));
+                text.push_str(&format!("+let new_{ix} = new_call({ix});\n"));
+            } else {
+                text.push_str(&format!(" let shared_{ix} = keep({ix});\n"));
+            }
+        }
+
+        let diff = Arc::new(Diff::from_unified(
+            DiffTarget::WorkingTree {
+                path: PathBuf::from("src/lib.rs"),
+                area: DiffArea::Unstaged,
+            },
+            text.as_str(),
+        ));
+        let rows_provider = Arc::new(PagedPatchDiffRows::new(Arc::clone(&diff), 256));
+        let split_provider = PagedPatchSplitRows::new(Arc::clone(&rows_provider));
+        let window = 200usize;
+        let start = split_provider
+            .len_hint()
+            .saturating_mul(9)
+            .checked_div(10)
+            .unwrap_or(0)
+            .min(split_provider.len_hint().saturating_sub(window));
+
+        let deep_window = split_provider
+            .slice(start, start + window)
+            .collect::<Vec<_>>();
+
+        assert_eq!(deep_window.len(), window);
+        assert!(split_provider.materialized_row_count() >= window);
+        assert!(split_provider.materialized_row_count() < split_provider.len_hint());
+        assert!(rows_provider.cached_page_count() > 0);
     }
 
     #[test]

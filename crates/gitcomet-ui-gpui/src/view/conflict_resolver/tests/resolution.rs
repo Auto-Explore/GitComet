@@ -123,6 +123,29 @@ fn populate_block_bases_from_ancestor_fills_missing_base() {
 }
 
 #[test]
+fn populate_block_bases_from_shared_ancestor_reuses_ancestor_storage() {
+    let input = "a\n<<<<<<< HEAD\none\n=======\nuno\n>>>>>>> other\nb\n";
+    let mut segments = parse_conflict_markers(input);
+    let ancestor = Arc::<str>::from("a\norig\nb\n");
+    let ancestor_ptr = ancestor.as_ptr() as usize;
+    let ancestor_end = ancestor_ptr + ancestor.len();
+
+    populate_block_bases_from_shared_ancestor(&mut segments, Arc::clone(&ancestor));
+
+    let block = segments
+        .iter()
+        .find_map(|s| match s {
+            ConflictSegment::Block(b) => Some(b),
+            _ => None,
+        })
+        .unwrap();
+    let base = block.base.as_deref().unwrap();
+    let base_ptr = base.as_ptr() as usize;
+    assert_eq!(base, "orig\n");
+    assert!(base_ptr >= ancestor_ptr && base_ptr < ancestor_end);
+}
+
+#[test]
 fn populate_block_bases_preserves_existing_base() {
     // 3-way conflict markers (with base section)
     let input = "a\n<<<<<<< ours\none\n||||||| base\norig\n=======\nuno\n>>>>>>> theirs\nb\n";

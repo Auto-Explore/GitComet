@@ -1,10 +1,9 @@
-use crate::domain::{Diff, DiffLineKind};
-use std::sync::Arc;
+use crate::domain::{Diff, DiffLineKind, SharedLineText};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AnnotatedDiffLine {
     pub kind: DiffLineKind,
-    pub text: Arc<str>,
+    pub text: SharedLineText,
     pub old_line: Option<u32>,
     pub new_line: Option<u32>,
 }

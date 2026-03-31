@@ -1,4 +1,5 @@
 use gitcomet_core::process::background_command as no_window_command;
+#[path = "support/test_git_env.rs"]
 mod test_git_env;
 use std::fs;
 use std::io::Write;

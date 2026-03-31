@@ -3,14 +3,15 @@ use gitcomet_core::auth::{
     GITCOMET_AUTH_KIND_USERNAME_PASSWORD, GITCOMET_AUTH_SECRET_ENV, GITCOMET_AUTH_USERNAME_ENV,
     GitAuthKind, StagedGitAuth, take_staged_git_auth,
 };
-use gitcomet_core::domain::{Commit, CommitId, LogPage};
+use gitcomet_core::domain::{Commit, CommitId, CommitParentIds, LogPage};
 use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
 use gitcomet_core::process::configure_background_command;
 use gitcomet_core::services::{CommandOutput, Result};
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
-use std::sync::OnceLock;
+use std::process::{ChildStdout, Command, Output, Stdio};
+use std::sync::{Arc, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -22,7 +23,7 @@ use std::ffi::OsString;
 
 const GIT_COMMAND_TIMEOUT_ENV: &str = "GITCOMET_GIT_COMMAND_TIMEOUT_SECS";
 const GIT_COMMAND_TIMEOUT_DEFAULT_SECS: u64 = 300;
-const GIT_COMMAND_WAIT_POLL: Duration = Duration::from_millis(100);
+const GIT_COMMAND_WAIT_POLL_MAX: Duration = Duration::from_millis(5);
 const GITCOMET_ASKPASS_PROMPT_LOG_ENV: &str = "GITCOMET_ASKPASS_PROMPT_LOG";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -52,6 +53,23 @@ fn git_command_timeout() -> Duration {
 
 fn io_err(e: std::io::Error) -> Error {
     Error::new(ErrorKind::Io(e.kind()))
+}
+
+fn git_command_wait_poll(elapsed: Duration, timeout: Duration) -> Option<Duration> {
+    if elapsed >= timeout {
+        return None;
+    }
+
+    let remaining = timeout.saturating_sub(elapsed);
+    let poll = if elapsed < Duration::from_millis(2) {
+        Duration::from_micros(250)
+    } else if elapsed < Duration::from_millis(20) {
+        Duration::from_millis(1)
+    } else {
+        GIT_COMMAND_WAIT_POLL_MAX
+    };
+
+    Some(poll.min(remaining))
 }
 
 fn spawn_read_pipe(
@@ -339,7 +357,8 @@ fn run_command_with_timeout(mut cmd: Command, label: &str, timeout: Duration) ->
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) => {
-                if start.elapsed() >= timeout {
+                let elapsed = start.elapsed();
+                if elapsed >= timeout {
                     timed_out = true;
                     let _ = child.kill();
                     match child.wait() {
@@ -347,7 +366,9 @@ fn run_command_with_timeout(mut cmd: Command, label: &str, timeout: Duration) ->
                         Err(e) => return Err(io_err(e)),
                     }
                 }
-                thread::sleep(GIT_COMMAND_WAIT_POLL);
+                if let Some(poll) = git_command_wait_poll(elapsed, timeout) {
+                    thread::sleep(poll);
+                }
             }
             Err(e) => return Err(io_err(e)),
         }
@@ -379,6 +400,96 @@ fn run_command_with_timeout(mut cmd: Command, label: &str, timeout: Duration) ->
 
 pub(crate) fn run_git_raw_output(cmd: Command, label: &str) -> Result<Output> {
     run_command_with_timeout(cmd, label, git_command_timeout())
+}
+
+pub(crate) fn run_git_parsed_stdout<T, F>(
+    mut cmd: Command,
+    label: &str,
+    allow_exit_code_one: bool,
+    parse_stdout: F,
+) -> Result<T>
+where
+    T: Send + 'static,
+    F: FnOnce(ChildStdout) -> Result<T> + Send + 'static,
+{
+    configure_background_command(&mut cmd);
+    configure_non_interactive_git(&mut cmd);
+    let askpass_script = if command_may_require_auth(&cmd) {
+        let auth = take_pending_git_auth();
+        let script = create_askpass_script()?;
+        configure_git_auth_prompt(&mut cmd, auth.as_ref(), &script);
+        Some(script)
+    } else {
+        None
+    };
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+
+    let mut child = cmd.spawn().map_err(io_err)?;
+    let stdout = child.stdout.take().ok_or_else(|| {
+        Error::new(ErrorKind::Backend(format!(
+            "{label} did not provide piped stdout"
+        )))
+    })?;
+    let stderr_handle = spawn_read_pipe(child.stderr.take());
+    let stdout_handle = thread::spawn(move || parse_stdout(stdout));
+
+    let timeout = git_command_timeout();
+    let start = Instant::now();
+    let mut timed_out = false;
+
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {
+                let elapsed = start.elapsed();
+                if elapsed >= timeout {
+                    timed_out = true;
+                    let _ = child.kill();
+                    match child.wait() {
+                        Ok(status) => break status,
+                        Err(err) => return Err(io_err(err)),
+                    }
+                }
+                if let Some(poll) = git_command_wait_poll(elapsed, timeout) {
+                    thread::sleep(poll);
+                }
+            }
+            Err(err) => return Err(io_err(err)),
+        }
+    };
+
+    let parsed_result = stdout_handle
+        .join()
+        .unwrap_or_else(|_| Err(Error::new(ErrorKind::Io(io::ErrorKind::Other))));
+    let mut stderr = stderr_handle.join().unwrap_or_default();
+
+    if let Some(askpass_script) = askpass_script.as_ref() {
+        append_host_prompt_to_stderr(&mut stderr, askpass_script);
+    }
+
+    if timed_out {
+        return Err(git_timeout_error(
+            label,
+            timeout,
+            status.code(),
+            Vec::new(),
+            stderr,
+        ));
+    }
+
+    let ok_exit = status.success() || (allow_exit_code_one && status.code() == Some(1));
+    if !ok_exit {
+        return Err(git_command_failed_error(
+            label,
+            Output {
+                status,
+                stdout: Vec::new(),
+                stderr,
+            },
+        ));
+    }
+
+    parsed_result
 }
 
 fn run_git_checked_output(cmd: Command, label: &str) -> Result<Output> {
@@ -610,39 +721,57 @@ pub(crate) fn parse_git_log_pretty_records(output: &str) -> LogPage {
         .count()
         .saturating_add(1);
     let mut commits = Vec::with_capacity(approx_commits);
+    let mut repeated_author: Option<Arc<str>> = None;
+    let mut next_commit_id_cache: Option<CommitId> = None;
     for record in output.split('\u{001e}') {
         let record = record.trim();
         if record.is_empty() {
             continue;
         }
         let mut parts = record.split('\u{001f}');
-        let Some(id) = parts
-            .next()
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-        else {
+        let Some(id) = parts.next().map(str::trim).filter(|s| !s.is_empty()) else {
             continue;
         };
         let parents = parts.next().unwrap_or_default();
-        let author = parts.next().unwrap_or_default().to_string();
+        let author = parts.next().unwrap_or_default();
         let time_secs = parts
             .next()
             .and_then(|s| s.trim().parse::<i64>().ok())
             .unwrap_or(0);
-        let summary = parts.next().unwrap_or_default().to_string();
+        let summary = parts.next().unwrap_or_default();
 
         let time = unix_seconds_to_system_time_or_epoch(time_secs);
+
+        let id = if let Some(cached) = next_commit_id_cache.as_ref()
+            && cached.as_ref() == id
+        {
+            cached.clone()
+        } else {
+            CommitId(id.into())
+        };
 
         let parent_ids = parents
             .split_whitespace()
             .map(|p| CommitId(p.into()))
-            .collect::<Vec<_>>();
+            .collect::<CommitParentIds>();
+
+        next_commit_id_cache = parent_ids.first().cloned();
+
+        let author = if let Some(cached) = repeated_author.as_ref()
+            && cached.as_ref() == author
+        {
+            Arc::clone(cached)
+        } else {
+            let author: Arc<str> = author.into();
+            repeated_author = Some(Arc::clone(&author));
+            author
+        };
 
         commits.push(Commit {
-            id: CommitId(id.into()),
+            id,
             parent_ids,
             summary: summary.into(),
-            author: author.into(),
+            author,
             time,
         });
     }
@@ -882,6 +1011,30 @@ mod tests {
         }
     }
 
+    #[test]
+    fn git_command_wait_poll_is_short_for_fast_commands_and_capped_for_slow_ones() {
+        assert_eq!(
+            git_command_wait_poll(Duration::from_micros(500), Duration::from_secs(1)),
+            Some(Duration::from_micros(250))
+        );
+        assert_eq!(
+            git_command_wait_poll(Duration::from_millis(10), Duration::from_secs(1)),
+            Some(Duration::from_millis(1))
+        );
+        assert_eq!(
+            git_command_wait_poll(Duration::from_millis(50), Duration::from_secs(1)),
+            Some(Duration::from_millis(5))
+        );
+        assert_eq!(
+            git_command_wait_poll(Duration::from_millis(50), Duration::from_millis(52)),
+            Some(Duration::from_millis(2))
+        );
+        assert_eq!(
+            git_command_wait_poll(Duration::from_millis(50), Duration::from_millis(50)),
+            None
+        );
+    }
+
     fn gitpython_rev_list_fixture_to_pretty_record(fixture: &str) -> String {
         let id = fixture
             .lines()
@@ -987,8 +1140,8 @@ mod tests {
             CommitId("4c8124ffcf4039d292442eeccabdeca5af5c5017".into())
         );
         assert_eq!(
-            commit.parent_ids,
-            vec![CommitId("634396b2f541a9f2d58b00be1a07f0c358b999b3".into())]
+            commit.parent_ids.as_slice(),
+            &[CommitId("634396b2f541a9f2d58b00be1a07f0c358b999b3".into())]
         );
         assert_eq!(&*commit.author, "Tom Preston-Werner");
         assert_eq!(&*commit.summary, "implement Grit#heads");
@@ -1017,6 +1170,14 @@ mod tests {
         assert!(page.commits[1].parent_ids.is_empty());
         assert_eq!(&*page.commits[1].author, "Tom Preston-Werner");
         assert_eq!(&*page.commits[1].summary, "initial grit setup");
+        assert!(Arc::ptr_eq(
+            &page.commits[0].author,
+            &page.commits[1].author
+        ));
+        assert!(Arc::ptr_eq(
+            &page.commits[0].parent_ids[0].0,
+            &page.commits[1].id.0
+        ));
         assert_eq!(
             page.commits[1].time,
             SystemTime::UNIX_EPOCH + Duration::from_secs(1_191_997_100)

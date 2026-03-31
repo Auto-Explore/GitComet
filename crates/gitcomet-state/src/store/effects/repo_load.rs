@@ -6,7 +6,7 @@ use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::mergetool_trace::{
     self, MergetoolTraceEvent, MergetoolTraceSideStats, MergetoolTraceStage,
 };
-use gitcomet_core::services::{ConflictFileStages, decode_utf8_optional};
+use gitcomet_core::services::ConflictFileStages;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc;
@@ -69,23 +69,6 @@ fn conflict_file_current_from_session(session: &ConflictSession) -> Option<Confl
         .current
         .as_ref()
         .map(|p| p.clone().into_stage_parts())
-}
-
-fn canonicalize_loaded_side(
-    bytes: Option<Arc<[u8]>>,
-    text: Option<Arc<str>>,
-) -> ConflictStageParts {
-    if let Some(text) = text {
-        return (None, Some(text));
-    }
-
-    match bytes {
-        Some(bytes) => match std::str::from_utf8(bytes.as_ref()) {
-            Ok(text) => (None, Some(Arc::<str>::from(text))),
-            Err(_) => (Some(bytes), None),
-        },
-        None => (None, None),
-    }
 }
 
 pub(super) fn schedule_load_branches(
@@ -537,50 +520,49 @@ pub(super) fn schedule_load_conflict_file(
             let current_bytes = std::fs::read(repo.spec().workdir.join(&path))
                 .ok()
                 .map(Arc::<[u8]>::from);
-            let current = decode_utf8_optional(current_bytes.as_deref()).map(Arc::<str>::from);
-            (MergetoolTraceStage::LoadCurrentRead, current_bytes, current)
+            (MergetoolTraceStage::LoadCurrentRead, current_bytes, None)
         };
+        let current_text = current.as_deref().or_else(|| {
+            current_bytes
+                .as_deref()
+                .and_then(|bytes| std::str::from_utf8(bytes).ok())
+        });
         mergetool_trace::record_with(|| {
             MergetoolTraceEvent::new(
                 current_trace_stage,
                 Some(trace_path),
                 current_started.elapsed(),
             )
-            .with_current(trace_side_stats(
-                current_bytes.as_deref(),
-                current.as_deref(),
-            ))
+            .with_current(trace_side_stats(current_bytes.as_deref(), current_text))
         });
-        let (current_bytes, current) = canonicalize_loaded_side(current_bytes, current);
-
-        let result = stages.map(|opt| {
-            opt.map(|d| {
-                let gitcomet_core::services::ConflictFileStages {
-                    path,
-                    base_bytes,
-                    ours_bytes,
-                    theirs_bytes,
-                    base,
-                    ours,
-                    theirs,
-                } = d;
-                let (base_bytes, base) = canonicalize_loaded_side(base_bytes, base);
-                let (ours_bytes, ours) = canonicalize_loaded_side(ours_bytes, ours);
-                let (theirs_bytes, theirs) = canonicalize_loaded_side(theirs_bytes, theirs);
-
-                crate::model::ConflictFile {
-                    path,
-                    base,
-                    ours,
-                    theirs,
-                    base_bytes,
-                    ours_bytes,
-                    theirs_bytes,
-                    current_bytes,
-                    current,
-                }
+        let result = if let Some(session) = session_ref {
+            stages.map(|opt| {
+                opt.map(|_| {
+                    crate::model::ConflictFile::from_shared_conflict_session(path.clone(), session)
+                })
             })
-        });
+        } else {
+            stages.map(|opt| {
+                opt.map(|d| {
+                    let gitcomet_core::services::ConflictFileStages {
+                        path,
+                        base_bytes,
+                        ours_bytes,
+                        theirs_bytes,
+                        base,
+                        ours,
+                        theirs,
+                    } = d;
+                    crate::model::ConflictFile::from_loaded_stage_parts(
+                        path,
+                        (base_bytes, base),
+                        (ours_bytes, ours),
+                        (theirs_bytes, theirs),
+                        (current_bytes, current),
+                    )
+                })
+            })
+        };
 
         send_or_log(
             &msg_tx,
@@ -735,6 +717,52 @@ pub(super) fn schedule_load_rebase_state(
     );
 }
 
+pub(super) fn schedule_load_rebase_and_merge_state(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: mpsc::Sender<Msg>,
+    repo_id: RepoId,
+) {
+    spawn_with_repo_or_else(
+        executor,
+        repos,
+        repo_id,
+        msg_tx,
+        move |repo, msg_tx| {
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(crate::msg::InternalMsg::RebaseStateLoaded {
+                    repo_id,
+                    result: repo.rebase_in_progress(),
+                }),
+            );
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(crate::msg::InternalMsg::MergeCommitMessageLoaded {
+                    repo_id,
+                    result: repo.merge_commit_message(),
+                }),
+            );
+        },
+        move |msg_tx| {
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(crate::msg::InternalMsg::RebaseStateLoaded {
+                    repo_id,
+                    result: Err(missing_repo_error(repo_id)),
+                }),
+            );
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(crate::msg::InternalMsg::MergeCommitMessageLoaded {
+                    repo_id,
+                    result: Err(missing_repo_error(repo_id)),
+                }),
+            );
+        },
+    );
+}
+
 pub(super) fn schedule_load_merge_commit_message(
     executor: &TaskExecutor,
     repos: &RepoMap,
@@ -845,4 +873,22 @@ pub(super) fn schedule_load_diff_file_image(
             }),
         );
     });
+}
+
+pub(super) fn schedule_load_selected_diff(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: mpsc::Sender<Msg>,
+    repo_id: RepoId,
+    target: DiffTarget,
+    load_file_text: bool,
+    load_file_image: bool,
+) {
+    if load_file_image {
+        schedule_load_diff_file_image(executor, repos, msg_tx.clone(), repo_id, target.clone());
+    }
+    if load_file_text {
+        schedule_load_diff_file(executor, repos, msg_tx.clone(), repo_id, target.clone());
+    }
+    schedule_load_diff(executor, repos, msg_tx, repo_id, target);
 }

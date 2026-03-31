@@ -208,6 +208,61 @@ fn block_local_two_way_diff_rows_handles_multiple_blocks() {
 }
 
 #[test]
+fn block_local_two_way_diff_rows_preserves_tiny_block_prefix_alignment() {
+    let input = "<<<<<<< HEAD\nsame\nours-only\n=======\nsame\n>>>>>>> other\n";
+    let rows = block_local_two_way_diff_rows(&parse_conflict_markers(input));
+
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].kind, RK::Context);
+    assert_eq!(rows[0].old_line, Some(1));
+    assert_eq!(rows[0].new_line, Some(1));
+    assert_eq!(rows[0].old.as_deref(), Some("same"));
+    assert_eq!(rows[0].new.as_deref(), Some("same"));
+
+    assert_eq!(rows[1].kind, RK::Remove);
+    assert_eq!(rows[1].old_line, Some(2));
+    assert_eq!(rows[1].new_line, None);
+    assert_eq!(rows[1].old.as_deref(), Some("ours-only"));
+    assert_eq!(rows[1].new.as_deref(), None);
+}
+
+#[test]
+fn block_local_two_way_diff_rows_preserves_tiny_block_suffix_alignment() {
+    let input = "<<<<<<< HEAD\nours-only\nsame\n=======\nsame\n>>>>>>> other\n";
+    let rows = block_local_two_way_diff_rows(&parse_conflict_markers(input));
+
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].kind, RK::Remove);
+    assert_eq!(rows[0].old_line, Some(1));
+    assert_eq!(rows[0].new_line, None);
+    assert_eq!(rows[0].old.as_deref(), Some("ours-only"));
+    assert_eq!(rows[0].new.as_deref(), None);
+
+    assert_eq!(rows[1].kind, RK::Context);
+    assert_eq!(rows[1].old_line, Some(2));
+    assert_eq!(rows[1].new_line, Some(1));
+    assert_eq!(rows[1].old.as_deref(), Some("same"));
+    assert_eq!(rows[1].new.as_deref(), Some("same"));
+}
+
+#[test]
+fn block_local_two_way_diff_rows_keeps_trailing_context_without_terminal_newline() {
+    let input = "ctx-0\n<<<<<<< HEAD\nours-line\n=======\ntheirs-line\n>>>>>>> other\nctx-1";
+    let segments = parse_conflict_markers(input);
+    assert_eq!(conflict_count(&segments), 1);
+
+    let rows = block_local_two_way_diff_rows(&segments);
+    let trailing_row = rows
+        .iter()
+        .find(|row| row.old.as_deref() == Some("ctx-1") && row.new.as_deref() == Some("ctx-1"))
+        .expect("expected trailing boundary context row without a terminal newline");
+
+    assert_eq!(trailing_row.kind, RK::Context);
+    assert_eq!(trailing_row.old_line, Some(3));
+    assert_eq!(trailing_row.new_line, Some(3));
+}
+
+#[test]
 fn block_local_two_way_diff_rows_empty_for_no_conflicts() {
     let segments = parse_conflict_markers("just plain text\nno conflicts\n");
     assert_eq!(conflict_count(&segments), 0);

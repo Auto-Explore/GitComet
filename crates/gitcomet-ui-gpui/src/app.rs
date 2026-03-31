@@ -753,7 +753,7 @@ fn focus_existing_repository_window(cx: &mut App, window: &GitCometWindowEntry, 
     cx.add_recent_document(path);
 }
 
-#[allow(dead_code)]
+#[cfg(all(test, target_os = "macos"))]
 pub(crate) fn focus_existing_repository_window_for_path(cx: &mut App, path: &Path) -> bool {
     let Some(window) = find_normal_gitcomet_window_for_repo(cx, path) else {
         return false;

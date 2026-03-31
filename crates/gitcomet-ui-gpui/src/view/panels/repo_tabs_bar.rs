@@ -262,6 +262,7 @@ impl Render for RepoTabsBarView {
         let mut bar = components::TabBar::new("repo_tab_bar");
         for (ix, repo) in self.state.repos.iter().enumerate() {
             let repo_id = repo.id;
+            let next_repo_id = self.state.repos.get(ix + 1).map(|r| r.id);
             let is_active = Some(repo_id) == active;
             let is_busy = Self::is_repo_busy(repo);
             let show_spinner = is_active
@@ -421,8 +422,8 @@ impl Render for RepoTabsBarView {
                         }
 
                         let Some(insert_before) = repo_tab_insert_before_for_drop(
-                            &this.state.repos,
                             repo_id,
+                            next_repo_id,
                             e.event.position,
                             e.bounds,
                         ) else {
@@ -523,9 +524,23 @@ impl Render for RepoTabsBarView {
     }
 }
 
-fn repo_tab_insert_before_for_drop(
-    repos: &[RepoState],
+#[inline(always)]
+pub(in crate::view) fn repo_tab_insert_before_for_drag_cursor(
     target_repo_id: RepoId,
+    next_repo_id: Option<RepoId>,
+    cursor_x: f32,
+    tab_center_x: f32,
+) -> Option<RepoId> {
+    if cursor_x <= tab_center_x {
+        Some(target_repo_id)
+    } else {
+        next_repo_id
+    }
+}
+
+fn repo_tab_insert_before_for_drop(
+    target_repo_id: RepoId,
+    next_repo_id: Option<RepoId>,
     pos: Point<Pixels>,
     bounds: Bounds<Pixels>,
 ) -> Option<Option<RepoId>> {
@@ -539,17 +554,17 @@ fn repo_tab_insert_before_for_drop(
         return None;
     }
 
-    let target_ix = repos.iter().position(|r| r.id == target_repo_id)?;
-    if pos.x <= bounds.center().x {
-        return Some(Some(target_repo_id));
-    }
-
-    Some(repos.get(target_ix + 1).map(|r| r.id))
+    Some(repo_tab_insert_before_for_drag_cursor(
+        target_repo_id,
+        next_repo_id,
+        f32::from(pos.x),
+        f32::from(bounds.center().x),
+    ))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::RepoTabsBarView;
+    use super::{RepoTabsBarView, repo_tab_insert_before_for_drag_cursor};
     use gitcomet_core::domain::RepoSpec;
     use gitcomet_state::model::{RepoId, RepoState};
     use std::path::PathBuf;
@@ -592,5 +607,29 @@ mod tests {
         assert!(!RepoTabsBarView::repo_tab_shows_missing_warning(
             &repo, true
         ));
+    }
+
+    #[test]
+    fn repo_tab_drag_cursor_prefers_target_on_left_half() {
+        assert_eq!(
+            repo_tab_insert_before_for_drag_cursor(RepoId(5), Some(RepoId(6)), 12.0, 60.0),
+            Some(RepoId(5))
+        );
+        assert_eq!(
+            repo_tab_insert_before_for_drag_cursor(RepoId(5), Some(RepoId(6)), 60.0, 60.0),
+            Some(RepoId(5))
+        );
+    }
+
+    #[test]
+    fn repo_tab_drag_cursor_uses_next_repo_on_right_half() {
+        assert_eq!(
+            repo_tab_insert_before_for_drag_cursor(RepoId(5), Some(RepoId(6)), 60.5, 60.0),
+            Some(RepoId(6))
+        );
+        assert_eq!(
+            repo_tab_insert_before_for_drag_cursor(RepoId(5), None, 80.0, 60.0),
+            None
+        );
     }
 }

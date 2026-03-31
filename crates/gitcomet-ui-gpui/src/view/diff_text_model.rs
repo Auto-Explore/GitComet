@@ -1,5 +1,6 @@
 use super::*;
 
+#[cfg(test)]
 #[derive(Clone, Debug)]
 pub(super) struct CachedDiffTextSegment {
     pub(super) text: SharedString,
@@ -11,7 +12,7 @@ pub(super) struct CachedDiffTextSegment {
 #[derive(Clone, Debug)]
 pub(super) struct CachedDiffStyledText {
     pub(super) text: SharedString,
-    pub(super) highlights: Arc<Vec<(Range<usize>, gpui::HighlightStyle)>>,
+    pub(super) highlights: Arc<[(Range<usize>, gpui::HighlightStyle)]>,
     pub(super) highlights_hash: u64,
     pub(super) text_hash: u64,
 }

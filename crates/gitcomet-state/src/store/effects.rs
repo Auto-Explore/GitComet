@@ -5,31 +5,58 @@ mod repo_commands;
 mod repo_load;
 mod util;
 
+use crate::model::AppState;
 use crate::msg::{Effect, Msg};
 use crate::session;
+use gitcomet_core::domain::DiffTarget;
 use gitcomet_core::services::{GitBackend, GitRepository};
 use rustc_hash::FxHashMap as HashMap;
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, RwLock, mpsc};
 
 use super::RepoId;
 use super::executor::TaskExecutor;
 
+fn selected_diff_target(
+    thread_state: &Arc<RwLock<Arc<AppState>>>,
+    repo_id: RepoId,
+) -> Option<DiffTarget> {
+    let state = thread_state.read().unwrap_or_else(|e| e.into_inner());
+    state
+        .repos
+        .iter()
+        .find(|repo| repo.id == repo_id)
+        .and_then(|repo| repo.diff_state.diff_target.clone())
+}
+
+fn selected_conflict_file_path(
+    thread_state: &Arc<RwLock<Arc<AppState>>>,
+    repo_id: RepoId,
+) -> Option<std::path::PathBuf> {
+    let state = thread_state.read().unwrap_or_else(|e| e.into_inner());
+    state
+        .repos
+        .iter()
+        .find(|repo| repo.id == repo_id)
+        .and_then(|repo| repo.conflict_state.conflict_file_path.clone())
+}
+
 pub(super) fn schedule_effect(
     executor: &TaskExecutor,
     session_persist_executor: &TaskExecutor,
+    thread_state: &Arc<RwLock<Arc<AppState>>>,
     backend: &Arc<dyn GitBackend>,
     repos: &HashMap<RepoId, Arc<dyn GitRepository>>,
     msg_tx: mpsc::Sender<Msg>,
     effect: Effect,
 ) {
     match effect {
-        Effect::PersistSession {
-            snapshot,
-            repo_id,
-            action,
-        } => {
+        Effect::PersistSession { repo_id, action } => {
+            let state_snapshot = {
+                let state = thread_state.read().unwrap_or_else(|e| e.into_inner());
+                Arc::clone(&state)
+            };
             session_persist_executor.spawn(move || {
-                if let Err(error) = session::persist_repos_snapshot(&snapshot) {
+                if let Err(error) = session::persist_from_state(&state_snapshot) {
                     util::send_or_log(
                         &msg_tx,
                         Msg::Internal(crate::msg::InternalMsg::SessionPersistFailed {
@@ -109,6 +136,9 @@ pub(super) fn schedule_effect(
         Effect::LoadSubmodules { repo_id } => {
             repo_load::schedule_load_submodules(executor, repos, msg_tx, repo_id);
         }
+        Effect::LoadRebaseAndMergeState { repo_id } => {
+            repo_load::schedule_load_rebase_and_merge_state(executor, repos, msg_tx, repo_id);
+        }
         Effect::LoadRebaseState { repo_id } => {
             repo_load::schedule_load_rebase_state(executor, repos, msg_tx, repo_id);
         }
@@ -126,6 +156,30 @@ pub(super) fn schedule_effect(
         }
         Effect::LoadDiffFileImage { repo_id, target } => {
             repo_load::schedule_load_diff_file_image(executor, repos, msg_tx, repo_id, target);
+        }
+        Effect::LoadSelectedDiff {
+            repo_id,
+            load_file_text,
+            load_file_image,
+        } => {
+            if let Some(target) = selected_diff_target(thread_state, repo_id) {
+                repo_load::schedule_load_selected_diff(
+                    executor,
+                    repos,
+                    msg_tx,
+                    repo_id,
+                    target,
+                    load_file_text,
+                    load_file_image,
+                );
+            }
+        }
+        Effect::LoadSelectedConflictFile { repo_id, mode } => {
+            if let Some(path) = selected_conflict_file_path(thread_state, repo_id) {
+                repo_load::schedule_load_conflict_file(
+                    executor, repos, msg_tx, repo_id, path, mode,
+                );
+            }
         }
         Effect::CheckoutBranch { repo_id, name } => {
             repo_actions::schedule_checkout_branch(executor, repos, msg_tx, repo_id, name);

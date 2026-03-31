@@ -11,6 +11,7 @@ use std::fs;
 use std::io::{BufRead as _, BufReader, Read as _};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::Arc;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -362,7 +363,7 @@ pub(super) fn schedule_clone_repo(
         });
 
         let stderr = child.stderr.take();
-        let progress_dest = dest.clone();
+        let progress_dest = Arc::new(dest.clone());
         let progress_tx = msg_tx.clone();
         let stderr_handle = std::thread::spawn(move || {
             let mut stderr_acc = String::new();
@@ -374,7 +375,7 @@ pub(super) fn schedule_clone_repo(
                     send_or_log(
                         &progress_tx,
                         Msg::Internal(crate::msg::InternalMsg::CloneRepoProgress {
-                            dest: progress_dest.clone(),
+                            dest: Arc::clone(&progress_dest),
                             line,
                         }),
                     );

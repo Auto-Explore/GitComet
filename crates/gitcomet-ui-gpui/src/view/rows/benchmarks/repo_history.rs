@@ -340,8 +340,12 @@ impl OpenRepoFixture {
 
             // History graph is the main "long history" transformation.
             let branch_heads = empty_history_graph_heads();
-            let graph =
-                history_graph::compute_graph(&self.commits, self.theme, &branch_heads, None);
+            let graph = history_graph::compute_graph(
+                &self.commits,
+                self.theme,
+                branch_heads.iter().copied(),
+                None,
+            );
 
             let mut h = FxHasher::default();
             rows.len().hash(&mut h);
@@ -363,7 +367,12 @@ impl OpenRepoFixture {
 
         // History graph is the main "long history" transformation.
         let branch_heads = empty_history_graph_heads();
-        let graph = history_graph::compute_graph(&self.commits, self.theme, &branch_heads, None);
+        let graph = history_graph::compute_graph(
+            &self.commits,
+            self.theme,
+            branch_heads.iter().copied(),
+            None,
+        );
 
         let mut h = FxHasher::default();
         rows.len().hash(&mut h);
@@ -492,32 +501,33 @@ pub(in crate::view) fn hash_branch_sidebar_rows(rows: &[BranchSidebarRow]) -> u6
             }
             BranchSidebarRow::WorktreeItem {
                 path,
-                label,
-                tooltip,
+                branch,
+                detached,
                 is_active,
                 ..
             } => {
                 let path_len = path
                     .to_str()
                     .map_or_else(|| path.to_string_lossy().len(), str::len);
-                let label_len = label.len();
-                label_len.hash(&mut h);
-                tooltip.len().hash(&mut h);
+                let path_label = path_display::path_display_shared_fast(path.as_path());
+                let label = crate::view::branch_sidebar::branch_sidebar_worktree_label(
+                    branch.as_ref().map(|value| value.as_ref()),
+                    *detached,
+                    path_label.as_ref(),
+                );
+                label.len().hash(&mut h);
+                path_label.len().hash(&mut h);
                 path_len.hash(&mut h);
+                detached.hash(&mut h);
                 is_active.hash(&mut h);
             }
-            BranchSidebarRow::SubmoduleItem {
-                path,
-                label,
-                tooltip,
-                ..
-            } => {
+            BranchSidebarRow::SubmoduleItem { path } => {
                 let path_len = path
                     .to_str()
                     .map_or_else(|| path.to_string_lossy().len(), str::len);
+                let path_label = path_display::path_display_shared_fast(path.as_path());
                 path_len.hash(&mut h);
-                label.len().hash(&mut h);
-                tooltip.len().hash(&mut h);
+                path_label.len().hash(&mut h);
             }
             BranchSidebarRow::StashItem {
                 index,
@@ -598,7 +608,7 @@ impl BranchSidebarFixture {
                 }
                 BranchSidebarRow::Branch { depth, .. } => {
                     branch_rows = branch_rows.saturating_add(1);
-                    max_branch_depth = max_branch_depth.max(*depth);
+                    max_branch_depth = max_branch_depth.max(usize::from(*depth));
                 }
                 _ => {}
             }
@@ -1376,7 +1386,12 @@ impl HistoryGraphFixture {
     pub fn run(&self) -> u64 {
         let branch_heads =
             history_graph_heads_from_indices(&self.commits, &self.branch_head_indices);
-        let graph = history_graph::compute_graph(&self.commits, self.theme, &branch_heads, None);
+        let graph = history_graph::compute_graph(
+            &self.commits,
+            self.theme,
+            branch_heads.iter().copied(),
+            None,
+        );
         let mut h = FxHasher::default();
         graph.len().hash(&mut h);
         graph
@@ -1400,7 +1415,12 @@ impl HistoryGraphFixture {
     pub fn run_with_metrics(&self) -> (u64, HistoryGraphMetrics) {
         let branch_heads =
             history_graph_heads_from_indices(&self.commits, &self.branch_head_indices);
-        let graph = history_graph::compute_graph(&self.commits, self.theme, &branch_heads, None);
+        let graph = history_graph::compute_graph(
+            &self.commits,
+            self.theme,
+            branch_heads.iter().copied(),
+            None,
+        );
 
         let graph_rows = graph.len();
         let max_lanes = graph.iter().map(|r| r.lanes_now.len()).max().unwrap_or(0);
@@ -1620,13 +1640,20 @@ impl HistoryCacheBuildFixture {
         };
         let branch_heads = history_graph_heads_from_branches(branches, remote_branches);
         let graph_rows: Arc<[history_graph::GraphRow]> = if stash_helper_ids.is_empty() {
-            history_graph::compute_graph(commits, theme, &branch_heads, head_target).into()
+            history_graph::compute_graph(commits, theme, branch_heads.iter().copied(), head_target)
+                .into()
         } else {
             let visible_commits = visible_indices
                 .iter()
                 .map(|&ix| commits[ix].clone())
                 .collect::<Vec<_>>();
-            history_graph::compute_graph(&visible_commits, theme, &branch_heads, head_target).into()
+            history_graph::compute_graph(
+                &visible_commits,
+                theme,
+                branch_heads.iter().copied(),
+                head_target,
+            )
+            .into()
         };
         let max_lanes = graph_rows
             .iter()
@@ -1820,12 +1847,14 @@ impl HistoryLoadMoreAppendFixture {
     pub fn request_cursor(&self) -> Option<LogCursor> {
         self.existing_commits.last().map(|commit| LogCursor {
             last_seen: commit.id.clone(),
+            resume_from: None,
         })
     }
 
     fn response_cursor(&self) -> Option<LogCursor> {
         self.appended_commits.last().map(|commit| LogCursor {
             last_seen: commit.id.clone(),
+            resume_from: None,
         })
     }
 
@@ -2002,6 +2031,7 @@ impl HistoryScopeSwitchFixture {
             commits: self.existing_commits.clone(),
             next_cursor: self.existing_commits.last().map(|c| LogCursor {
                 last_seen: c.id.clone(),
+                resume_from: None,
             }),
         }));
         state.repos.push(repo_state);
@@ -2174,7 +2204,7 @@ impl CommitDetailsFixture {
 
         let mut kind_counts = [0usize; 6];
         for f in &self.details.files {
-            let ix = commit_file_kind_visuals(f.kind).kind_key as usize;
+            let ix = crate::view::rows::commit_file_kind_visuals(f.kind).kind_key as usize;
             kind_counts[ix] = kind_counts[ix].saturating_add(1);
         }
 

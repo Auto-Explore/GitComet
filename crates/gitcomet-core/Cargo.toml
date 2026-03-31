@@ -18,6 +18,7 @@ benchmarks = []
 memchr = { workspace = true }
 regex = { workspace = true }
 rustc-hash = { workspace = true }
+smallvec = { workspace = true }
 strsim = { workspace = true }
 thiserror = { workspace = true }
 

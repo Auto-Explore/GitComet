@@ -1,5 +1,9 @@
 use super::super::*;
-use crate::view::date_time::format_datetime;
+use crate::view::caches::{
+    HistoryShortShaVm, HistoryVisibleIndices, HistoryWhenVm, analyze_history_stashes,
+    build_history_branch_text_by_target, build_history_tag_names_by_target,
+    build_history_visible_indices, next_history_stash_tip_for_commit_ix,
+};
 use rustc_hash::FxHasher;
 use std::hash::{Hash, Hasher};
 
@@ -17,16 +21,17 @@ fn graph_branch_heads<'a>(
     history_scope: LogScope,
     branches: &'a [Branch],
     remote_branches: &'a [RemoteBranch],
-) -> HashSet<&'a str> {
-    if history_scope == LogScope::CurrentBranch {
-        HashSet::default()
-    } else {
-        branches
-            .iter()
-            .map(|b| b.target.as_ref())
-            .chain(remote_branches.iter().map(|b| b.target.as_ref()))
-            .collect()
-    }
+) -> impl Iterator<Item = &'a str> + 'a {
+    let (branches, remote_branches): (&[Branch], &[RemoteBranch]) =
+        if history_scope == LogScope::CurrentBranch {
+            (&[], &[])
+        } else {
+            (branches, remote_branches)
+        };
+    branches
+        .iter()
+        .map(|b| b.target.as_ref())
+        .chain(remote_branches.iter().map(|b| b.target.as_ref()))
 }
 
 fn history_column_static_bounds(handle: HistoryColResizeHandle) -> (Pixels, Pixels) {
@@ -46,25 +51,39 @@ fn history_column_static_bounds(handle: HistoryColResizeHandle) -> (Pixels, Pixe
 }
 
 #[derive(Copy, Clone)]
-struct HistoryColumnDragLayout {
-    show_author: bool,
-    show_date: bool,
-    show_sha: bool,
-    branch_w: Pixels,
-    graph_w: Pixels,
-    author_w: Pixels,
-    date_w: Pixels,
-    sha_w: Pixels,
+pub(in crate::view) struct HistoryColumnDragLayout {
+    pub(in crate::view) show_author: bool,
+    pub(in crate::view) show_date: bool,
+    pub(in crate::view) show_sha: bool,
+    pub(in crate::view) branch_w: Pixels,
+    pub(in crate::view) graph_w: Pixels,
+    pub(in crate::view) author_w: Pixels,
+    pub(in crate::view) date_w: Pixels,
+    pub(in crate::view) sha_w: Pixels,
 }
 
-fn history_column_drag_clamped_width(
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(in crate::view) struct HistoryColumnResizeDragParams {
+    pub(in crate::view) start_width: Pixels,
+    pub(in crate::view) drag_delta_sign: f32,
+    pub(in crate::view) min_width: Pixels,
+    pub(in crate::view) static_max_width: Pixels,
+    pub(in crate::view) other_fixed_width: Pixels,
+}
+
+pub(in crate::view) fn history_column_resize_drag_params(
     handle: HistoryColResizeHandle,
-    candidate: Pixels,
-    available_width: Pixels,
     layout: HistoryColumnDragLayout,
-) -> Pixels {
-    let (min_w, static_max_w) = history_column_static_bounds(handle);
-    let right_fixed_w = match handle {
+) -> HistoryColumnResizeDragParams {
+    let (start_width, drag_delta_sign) = match handle {
+        HistoryColResizeHandle::Branch => (layout.branch_w, 1.0),
+        HistoryColResizeHandle::Graph => (layout.graph_w, 1.0),
+        HistoryColResizeHandle::Author => (layout.author_w, -1.0),
+        HistoryColResizeHandle::Date => (layout.date_w, -1.0),
+        HistoryColResizeHandle::Sha => (layout.sha_w, -1.0),
+    };
+    let (min_width, static_max_width) = history_column_static_bounds(handle);
+    let other_fixed_width = match handle {
         HistoryColResizeHandle::Branch => {
             layout.graph_w
                 + if layout.show_author {
@@ -145,9 +164,325 @@ fn history_column_drag_clamped_width(
         }
     };
 
-    let dynamic_max = (available_width - right_fixed_w - px(HISTORY_COL_MESSAGE_MIN_PX)).max(min_w);
-    let max_w = static_max_w.min(dynamic_max).max(min_w);
-    candidate.max(min_w).min(max_w)
+    HistoryColumnResizeDragParams {
+        start_width,
+        drag_delta_sign,
+        min_width,
+        static_max_width,
+        other_fixed_width,
+    }
+}
+
+pub(in crate::view) fn history_column_resize_max_width(
+    params: HistoryColumnResizeDragParams,
+    available_width: Pixels,
+) -> Pixels {
+    let dynamic_max = (available_width - params.other_fixed_width - px(HISTORY_COL_MESSAGE_MIN_PX))
+        .max(params.min_width);
+    params
+        .static_max_width
+        .min(dynamic_max)
+        .max(params.min_width)
+}
+
+pub(in crate::view) fn history_column_resize_state(
+    handle: HistoryColResizeHandle,
+    start_x: Pixels,
+    available_width: Pixels,
+    layout: HistoryColumnDragLayout,
+) -> HistoryColResizeState {
+    let params = history_column_resize_drag_params(handle, layout);
+    HistoryColResizeState {
+        handle,
+        start_x,
+        start_width: params.start_width,
+        current_width: params.start_width,
+        drag_delta_sign: params.drag_delta_sign,
+        min_width: params.min_width,
+        static_max_width: params.static_max_width,
+        other_fixed_width: params.other_fixed_width,
+        bounds_available_width: available_width,
+        max_width: history_column_resize_max_width(params, available_width),
+        visible_columns: (layout.show_author, layout.show_date, layout.show_sha),
+    }
+}
+
+#[inline]
+pub(in crate::view) fn history_resize_state_visible_columns(
+    available: Pixels,
+    resize_state: Option<&HistoryColResizeState>,
+) -> Option<(bool, bool, bool)> {
+    let state = resize_state?;
+    if available <= px(0.0)
+        || state.bounds_available_width != available
+        || state.current_width < state.min_width
+        || state.current_width > state.max_width
+    {
+        return None;
+    }
+
+    Some(state.visible_columns)
+}
+
+#[cfg(test)]
+#[inline]
+pub(in crate::view) fn history_resize_state_visible_columns_for_current_width(
+    available: Pixels,
+    current_width: Pixels,
+    resize_state: Option<&HistoryColResizeState>,
+) -> Option<(bool, bool, bool)> {
+    let state = resize_state?;
+    if current_width != state.current_width {
+        return None;
+    }
+
+    history_resize_state_visible_columns(available, Some(state))
+}
+
+pub(in crate::view) fn history_column_drag_clamped_width_for_state(
+    state: &mut HistoryColResizeState,
+    current_x: Pixels,
+    available_width: Pixels,
+) -> Pixels {
+    if state.bounds_available_width != available_width {
+        let params = HistoryColumnResizeDragParams {
+            start_width: state.start_width,
+            drag_delta_sign: state.drag_delta_sign,
+            min_width: state.min_width,
+            static_max_width: state.static_max_width,
+            other_fixed_width: state.other_fixed_width,
+        };
+        state.max_width = history_column_resize_max_width(params, available_width);
+        state.bounds_available_width = available_width;
+    }
+
+    let dx = current_x - state.start_x;
+    let next = (state.start_width + (dx * state.drag_delta_sign))
+        .max(state.min_width)
+        .min(state.max_width);
+    state.current_width = next;
+    next
+}
+
+#[cfg(test)]
+fn history_column_drag_clamped_width(
+    handle: HistoryColResizeHandle,
+    candidate: Pixels,
+    available_width: Pixels,
+    layout: HistoryColumnDragLayout,
+) -> Pixels {
+    let params = history_column_resize_drag_params(handle, layout);
+    candidate
+        .max(params.min_width)
+        .min(history_column_resize_max_width(params, available_width))
+}
+
+fn history_column_width_for_handle(
+    layout: HistoryColumnDragLayout,
+    handle: HistoryColResizeHandle,
+) -> Pixels {
+    match handle {
+        HistoryColResizeHandle::Branch => layout.branch_w,
+        HistoryColResizeHandle::Graph => layout.graph_w,
+        HistoryColResizeHandle::Author => layout.author_w,
+        HistoryColResizeHandle::Date => layout.date_w,
+        HistoryColResizeHandle::Sha => layout.sha_w,
+    }
+}
+
+#[cfg(test)]
+pub(in crate::view) fn history_resize_state_preserves_visible_columns(
+    available: Pixels,
+    layout: HistoryColumnDragLayout,
+    resize_state: Option<&HistoryColResizeState>,
+) -> bool {
+    let current_width =
+        resize_state.map(|state| history_column_width_for_handle(layout, state.handle));
+    history_resize_state_visible_columns_for_current_width(
+        available,
+        current_width.unwrap_or(px(0.0)),
+        resize_state,
+    )
+    .is_some()
+}
+
+pub(in crate::view) fn history_visible_columns_for_layout_with_resize_state(
+    available: Pixels,
+    layout: HistoryColumnDragLayout,
+    resize_state: Option<&HistoryColResizeState>,
+) -> (bool, bool, bool) {
+    if let Some(state) = resize_state {
+        let current_width = history_column_width_for_handle(layout, state.handle);
+        if current_width == state.current_width
+            && let Some(columns) = history_resize_state_visible_columns(available, Some(state))
+        {
+            return columns;
+        }
+    }
+
+    history_visible_columns_for_layout(available, layout)
+}
+
+pub(in crate::view) fn history_visible_columns_for_layout(
+    available: Pixels,
+    layout: HistoryColumnDragLayout,
+) -> (bool, bool, bool) {
+    if available <= px(0.0) {
+        return (false, false, false);
+    }
+
+    let min_message = px(HISTORY_COL_MESSAGE_MIN_PX);
+
+    let mut show_author = layout.show_author;
+    let mut show_date = layout.show_date;
+    let mut show_sha = layout.show_sha;
+
+    let fixed_base = layout.branch_w + layout.graph_w;
+    let mut fixed = fixed_base
+        + if show_author {
+            layout.author_w
+        } else {
+            px(0.0)
+        }
+        + if show_date { layout.date_w } else { px(0.0) }
+        + if show_sha { layout.sha_w } else { px(0.0) };
+
+    if available - fixed < min_message && show_sha {
+        show_sha = false;
+        fixed -= layout.sha_w;
+    }
+    if available - fixed < min_message {
+        if show_date {
+            show_date = false;
+            fixed -= layout.date_w;
+        }
+        show_sha = false;
+    }
+    if available - fixed < min_message && show_author {
+        show_author = false;
+        fixed -= layout.author_w;
+    }
+
+    if available - fixed < min_message {
+        show_author = false;
+        show_date = false;
+        show_sha = false;
+    }
+
+    (show_author, show_date, show_sha)
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct HistorySelectedListIndexCache {
+    repo_id: RepoId,
+    log_rev: u64,
+    stashes_rev: u64,
+    history_scope: LogScope,
+    show_working_tree_summary_row: bool,
+    selected_commit: Option<CommitId>,
+    list_ix: usize,
+}
+
+fn history_selected_list_index_cache_matches(
+    cache: &HistorySelectedListIndexCache,
+    repo_id: RepoId,
+    log_rev: u64,
+    stashes_rev: u64,
+    history_scope: LogScope,
+    show_working_tree_summary_row: bool,
+    selected_commit: Option<&CommitId>,
+) -> bool {
+    cache.repo_id == repo_id
+        && cache.log_rev == log_rev
+        && cache.stashes_rev == stashes_rev
+        && cache.history_scope == history_scope
+        && cache.show_working_tree_summary_row == show_working_tree_summary_row
+        && cache.selected_commit.as_ref() == selected_commit
+}
+
+fn set_history_selected_list_index_cache(
+    cache: &mut Option<HistorySelectedListIndexCache>,
+    repo_id: RepoId,
+    log_rev: u64,
+    stashes_rev: u64,
+    history_scope: LogScope,
+    show_working_tree_summary_row: bool,
+    selected_commit: Option<CommitId>,
+    list_ix: usize,
+) {
+    *cache = Some(HistorySelectedListIndexCache {
+        repo_id,
+        log_rev,
+        stashes_rev,
+        history_scope,
+        show_working_tree_summary_row,
+        selected_commit,
+        list_ix,
+    });
+}
+
+fn resolve_history_selected_list_index(
+    cache: &mut Option<HistorySelectedListIndexCache>,
+    repo_id: RepoId,
+    log_rev: u64,
+    stashes_rev: u64,
+    history_scope: LogScope,
+    show_working_tree_summary_row: bool,
+    selected_commit: Option<&CommitId>,
+    visible_indices: &HistoryVisibleIndices,
+    commits: &[Commit],
+) -> Option<usize> {
+    if show_working_tree_summary_row && selected_commit.is_none() {
+        set_history_selected_list_index_cache(
+            cache,
+            repo_id,
+            log_rev,
+            stashes_rev,
+            history_scope,
+            show_working_tree_summary_row,
+            None,
+            0,
+        );
+        return Some(0);
+    }
+
+    if let Some(list_ix) = cache
+        .as_ref()
+        .filter(|entry| {
+            history_selected_list_index_cache_matches(
+                entry,
+                repo_id,
+                log_rev,
+                stashes_rev,
+                history_scope,
+                show_working_tree_summary_row,
+                selected_commit,
+            )
+        })
+        .map(|entry| entry.list_ix)
+    {
+        return Some(list_ix);
+    }
+
+    let selected_commit = selected_commit?;
+    let offset = usize::from(show_working_tree_summary_row);
+    let visible_ix = visible_indices.iter().position(|commit_ix| {
+        commits
+            .get(commit_ix)
+            .is_some_and(|commit| &commit.id == selected_commit)
+    })?;
+    let list_ix = visible_ix + offset;
+    set_history_selected_list_index_cache(
+        cache,
+        repo_id,
+        log_rev,
+        stashes_rev,
+        history_scope,
+        show_working_tree_summary_row,
+        Some(selected_commit.clone()),
+        list_ix,
+    );
+    Some(list_ix)
 }
 
 pub(in super::super) struct HistoryView {
@@ -177,6 +512,7 @@ pub(in super::super) struct HistoryView {
     pub(in super::super) history_col_graph_auto: bool,
     pub(in super::super) history_col_resize: Option<HistoryColResizeState>,
     pub(in super::super) history_cache: Option<HistoryCache>,
+    history_selected_list_index_cache: Option<HistorySelectedListIndexCache>,
     pub(in super::super) history_worktree_summary_cache: Option<HistoryWorktreeSummaryCache>,
     pub(in super::super) history_stash_ids_cache: Option<HistoryStashIdsCache>,
     pub(in super::super) history_scroll: UniformListScrollHandle,
@@ -265,6 +601,7 @@ impl HistoryView {
             history_col_graph_auto: true,
             history_col_resize: None,
             history_cache: None,
+            history_selected_list_index_cache: None,
             history_worktree_summary_cache: None,
             history_stash_ids_cache: None,
             history_scroll: UniformListScrollHandle::default(),
@@ -290,60 +627,41 @@ impl HistoryView {
     }
 
     pub(in super::super) fn history_visible_columns(&self) -> (bool, bool, bool) {
-        // Prefer keeping commit message visible. Hide SHA first, then date, then author.
         let available = history_columns_available_width(self.last_window_size.width);
-        if available <= px(0.0) {
-            return (false, false, false);
-        }
-
-        let min_message = px(HISTORY_COL_MESSAGE_MIN_PX);
-
-        let mut show_author = self.history_show_author;
-        let mut show_date = self.history_show_date;
-        let mut show_sha = self.history_show_sha;
-
-        // Always show Branch + Graph; Message is flex.
-        let fixed_base = self.history_col_branch + self.history_col_graph;
-        let mut fixed = fixed_base
-            + if show_author {
-                self.history_col_author
-            } else {
-                px(0.0)
+        if let Some(state) = self.history_col_resize.as_ref() {
+            let current_width = self.history_column_width(state.handle);
+            if current_width == state.current_width
+                && let Some(columns) = history_resize_state_visible_columns(available, Some(state))
+            {
+                return columns;
             }
-            + if show_date {
-                self.history_col_date
-            } else {
-                px(0.0)
-            }
-            + if show_sha {
-                self.history_col_sha
-            } else {
-                px(0.0)
-            };
-
-        if available - fixed < min_message && show_sha {
-            show_sha = false;
-            fixed -= self.history_col_sha;
-        }
-        if available - fixed < min_message {
-            if show_date {
-                show_date = false;
-                fixed -= self.history_col_date;
-            }
-            show_sha = false;
-        }
-        if available - fixed < min_message && show_author {
-            show_author = false;
-            fixed -= self.history_col_author;
         }
 
-        if available - fixed < min_message {
-            show_author = false;
-            show_date = false;
-            show_sha = false;
-        }
+        let layout = HistoryColumnDragLayout {
+            show_author: self.history_show_author,
+            show_date: self.history_show_date,
+            show_sha: self.history_show_sha,
+            branch_w: self.history_col_branch,
+            graph_w: self.history_col_graph,
+            author_w: self.history_col_author,
+            date_w: self.history_col_date,
+            sha_w: self.history_col_sha,
+        };
+        history_visible_columns_for_layout_with_resize_state(
+            available,
+            layout,
+            self.history_col_resize.as_ref(),
+        )
+    }
 
-        (show_author, show_date, show_sha)
+    pub(in super::super) fn history_column_width(&self, handle: HistoryColResizeHandle) -> Pixels {
+        match handle {
+            HistoryColResizeHandle::Branch => self.history_col_branch,
+            HistoryColResizeHandle::Graph => self.history_col_graph,
+            HistoryColResizeHandle::Author => self.history_col_author,
+            HistoryColResizeHandle::Date => self.history_col_date,
+            HistoryColResizeHandle::Sha => self.history_col_sha,
+        }
     }
 
     pub(in super::super) fn reset_history_column_widths(&mut self) {
@@ -354,6 +672,19 @@ impl HistoryView {
         self.history_col_sha = px(HISTORY_COL_SHA_PX);
         self.history_col_graph_auto = true;
         self.history_col_resize = None;
+    }
+
+    pub(in super::super) fn history_column_width_mut(
+        &mut self,
+        handle: HistoryColResizeHandle,
+    ) -> &mut Pixels {
+        match handle {
+            HistoryColResizeHandle::Branch => &mut self.history_col_branch,
+            HistoryColResizeHandle::Graph => &mut self.history_col_graph,
+            HistoryColResizeHandle::Author => &mut self.history_col_author,
+            HistoryColResizeHandle::Date => &mut self.history_col_date,
+            HistoryColResizeHandle::Sha => &mut self.history_col_sha,
+        }
     }
 
     pub(in super::super) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
@@ -761,8 +1092,8 @@ impl HistoryView {
         cx.spawn(
             async move |view: WeakEntity<HistoryView>, cx: &mut gpui::AsyncApp| {
                 struct Rebuild {
-                    visible_indices: Vec<usize>,
-                    graph_rows: Vec<Arc<history_graph::GraphRow>>,
+                    visible_indices: HistoryVisibleIndices,
+                    graph_rows: Arc<[history_graph::GraphRow]>,
                     max_lanes: usize,
                     commit_row_vms: Vec<HistoryCommitRowVm>,
                 }
@@ -771,63 +1102,12 @@ impl HistoryView {
                 let request_for_build = request_for_task.clone();
 
                 let rebuild = smol::unblock(move || {
-                    let mut commit_index_by_id: HashMap<&str, usize> =
-                        HashMap::with_capacity_and_hasher(page.commits.len(), Default::default());
-                    for (ix, commit) in page.commits.iter().enumerate() {
-                        commit_index_by_id.insert(commit.id.as_ref(), ix);
-                    }
+                    let stash_analysis = analyze_history_stashes(&page.commits, stashes.as_ref());
+                    let stash_tips = stash_analysis.stash_tips;
+                    let stash_helper_ids = stash_analysis.stash_helper_ids;
 
-                    let mut stash_messages_by_id: HashMap<&str, &str> =
-                        HashMap::with_capacity_and_hasher(stashes.len(), Default::default());
-                    for stash in stashes.iter() {
-                        stash_messages_by_id.insert(stash.id.as_ref(), stash.message.as_ref());
-                    }
-
-                    let stash_tip_ids_from_list: HashSet<&str> = stash_messages_by_id
-                        .keys()
-                        .copied()
-                        .collect::<HashSet<&str>>();
-                    let mut stash_tip_ids = stash_tip_ids_from_list.clone();
-                    for commit in page.commits.iter() {
-                        if is_probable_stash_tip(commit) {
-                            stash_tip_ids.insert(commit.id.as_ref());
-                        }
-                    }
-
-                    let mut stash_helper_ids: HashSet<&str> = HashSet::default();
-                    let stash_tip_ids_for_helper_filter = if stash_tip_ids_from_list.is_empty() {
-                        &stash_tip_ids
-                    } else {
-                        &stash_tip_ids_from_list
-                    };
-                    for stash_tip_id in stash_tip_ids_for_helper_filter.iter().copied() {
-                        let Some(&stash_ix) = commit_index_by_id.get(stash_tip_id) else {
-                            continue;
-                        };
-                        let Some(stash_commit) = page.commits.get(stash_ix) else {
-                            continue;
-                        };
-                        for parent_id in stash_commit.parent_ids.iter().skip(1).map(|p| p.as_ref())
-                        {
-                            if commit_index_by_id.contains_key(parent_id) {
-                                stash_helper_ids.insert(parent_id);
-                            }
-                        }
-                    }
-
-                    let visible_indices = page
-                        .commits
-                        .iter()
-                        .enumerate()
-                        .filter_map(|(ix, commit)| {
-                            (!stash_helper_ids.contains(commit.id.as_ref())).then_some(ix)
-                        })
-                        .collect::<Vec<_>>();
-
-                    let visible_commits = visible_indices
-                        .iter()
-                        .filter_map(|ix| page.commits.get(*ix).cloned())
-                        .collect::<Vec<_>>();
+                    let visible_indices =
+                        build_history_visible_indices(&page.commits, &stash_helper_ids);
 
                     let head_target = match head_branch.as_deref() {
                         Some("HEAD") => request_for_build
@@ -836,7 +1116,12 @@ impl HistoryView {
                             .map(|id| id.as_ref())
                             .or_else(|| {
                                 (request_for_build.history_scope == LogScope::CurrentBranch)
-                                    .then(|| visible_commits.first().map(|c| c.id.as_ref()))
+                                    .then(|| {
+                                        visible_indices
+                                            .first()
+                                            .and_then(|ix| page.commits.get(ix))
+                                            .map(|c| c.id.as_ref())
+                                    })
                                     .flatten()
                             }),
                         Some(head) => branches
@@ -851,149 +1136,138 @@ impl HistoryView {
                         branches.as_ref(),
                         remote_branches.as_ref(),
                     );
-                    let graph_rows: Vec<Arc<history_graph::GraphRow>> =
+                    let graph_rows: Arc<[history_graph::GraphRow]> = if stash_helper_ids.is_empty()
+                    {
                         history_graph::compute_graph(
-                            &visible_commits,
+                            &page.commits,
                             theme,
-                            &branch_heads,
+                            branch_heads,
                             head_target,
                         )
-                        .into_iter()
-                        .map(Arc::new)
-                        .collect();
+                        .into()
+                    } else {
+                        // Reuse the existing visible commits instead of cloning
+                        // each filtered row's parent-id vector just for graph
+                        // construction.
+                        let visible_commit_refs = visible_indices
+                            .iter()
+                            .map(|ix| &page.commits[ix])
+                            .collect::<Vec<_>>();
+                        history_graph::compute_graph_refs(
+                            &visible_commit_refs,
+                            theme,
+                            branch_heads,
+                            head_target,
+                        )
+                        .into()
+                    };
                     let max_lanes = graph_rows
                         .iter()
                         .map(|r| r.lanes_now.len().max(r.lanes_next.len()))
                         .max()
                         .unwrap_or(1);
-
-                    let mut branch_names_by_target: HashMap<&str, Vec<String>> =
-                        HashMap::with_capacity_and_hasher(
-                            branches.len() + remote_branches.len(),
-                            Default::default(),
+                    let (mut branch_text_by_target, head_branches_text) =
+                        build_history_branch_text_by_target(
+                            branches.as_ref(),
+                            remote_branches.as_ref(),
+                            head_branch.as_deref(),
+                            head_target,
                         );
-                    for branch in branches.iter() {
-                        let should_skip = head_branch
-                            .as_ref()
-                            .is_some_and(|head| head != "HEAD" && branch.name == *head)
-                            && head_target == Some(branch.target.as_ref());
-                        if should_skip {
-                            continue;
-                        }
-                        branch_names_by_target
-                            .entry(branch.target.as_ref())
-                            .or_default()
-                            .push(branch.name.clone());
-                    }
-                    for branch in remote_branches.iter() {
-                        branch_names_by_target
-                            .entry(branch.target.as_ref())
-                            .or_default()
-                            .push(format!("{}/{}", branch.remote, branch.name));
-                    }
-                    for names in branch_names_by_target.values_mut() {
-                        names.sort_unstable();
-                        names.dedup();
-                    }
+                    let mut tag_names_by_target = build_history_tag_names_by_target(tags.as_ref());
 
-                    let mut tag_names_by_target: HashMap<&str, Vec<&str>> =
-                        HashMap::with_capacity_and_hasher(tags.len(), Default::default());
-                    for tag in tags.iter() {
-                        tag_names_by_target
-                            .entry(tag.target.as_ref())
-                            .or_default()
-                            .push(tag.name.as_str());
-                    }
-                    for names in tag_names_by_target.values_mut() {
-                        names.sort_unstable();
-                        names.dedup();
-                    }
-
-                    let empty_tags: Arc<[SharedString]> = Vec::new().into();
-                    let commit_row_vms = visible_indices
-                        .iter()
-                        .filter_map(|ix| page.commits.get(*ix))
-                        .map(|commit| {
+                    let has_stash_tips = !stash_tips.is_empty();
+                    let mut author_cache: HashMap<&str, SharedString> =
+                        HashMap::with_capacity_and_hasher(64, Default::default());
+                    let mut commit_row_vms = Vec::with_capacity(visible_indices.len());
+                    if has_stash_tips {
+                        let mut next_stash_tip_ix = 0usize;
+                        for ix in visible_indices.iter() {
+                            let Some(commit) = page.commits.get(ix) else {
+                                continue;
+                            };
                             let commit_id = commit.id.as_ref();
 
                             let is_head = head_target == Some(commit_id);
 
-                            let branches_text = {
-                                let branch_count =
-                                    branch_names_by_target.get(commit_id).map_or(0, |b| b.len());
-                                let mut names: Vec<String> =
-                                    Vec::with_capacity(branch_count + usize::from(is_head));
-                                if head_target == Some(commit_id) {
-                                    match head_branch.as_deref() {
-                                        Some("HEAD") => names.push("HEAD".to_string()),
-                                        Some(head) => names.push(format!("HEAD → {head}")),
-                                        None => {}
-                                    }
-                                }
-                                if let Some(branches) = branch_names_by_target.get(commit_id) {
-                                    names.extend(branches.iter().cloned());
-                                }
-                                names.sort_unstable();
-                                names.dedup();
-                                if names.is_empty() {
-                                    SharedString::from("")
-                                } else {
-                                    SharedString::from(names.join(", "))
-                                }
+                            let branches_text = if is_head {
+                                head_branches_text.clone().unwrap_or_default()
+                            } else {
+                                branch_text_by_target.remove(commit_id).unwrap_or_default()
                             };
 
-                            let tag_names = tag_names_by_target.get(commit_id).map_or_else(
-                                || Arc::clone(&empty_tags),
-                                |names| {
-                                    let tag_names: Vec<SharedString> = names
-                                        .iter()
-                                        .copied()
-                                        .map(|n| n.to_string().into())
-                                        .collect();
-                                    tag_names.into()
-                                },
-                            );
+                            let tag_names =
+                                tag_names_by_target.remove(commit_id).unwrap_or_default();
 
-                            let author: SharedString = commit.author.clone().into();
-                            let is_stash = stash_tip_ids.contains(commit_id);
-                            let summary_text = stash_messages_by_id
-                                .get(commit_id)
-                                .copied()
-                                .filter(|s| !s.trim().is_empty())
-                                .or_else(|| {
-                                    if is_stash {
-                                        stash_summary_from_log_summary(&commit.summary)
-                                    } else {
-                                        None
-                                    }
-                                })
-                                .unwrap_or(&commit.summary);
-                            let summary: SharedString = summary_text.to_string().into();
+                            let author: SharedString = author_cache
+                                .entry(commit.author.as_ref())
+                                .or_insert_with(|| commit.author.clone().into())
+                                .clone();
+                            let (is_stash, summary): (bool, SharedString) =
+                                match next_history_stash_tip_for_commit_ix(
+                                    &stash_tips,
+                                    &mut next_stash_tip_ix,
+                                    ix,
+                                ) {
+                                    Some(stash_tip) => (
+                                        true,
+                                        stash_tip
+                                            .message
+                                            .map(|message| Arc::clone(message).into())
+                                            .or_else(|| {
+                                                stash_summary_from_log_summary(&commit.summary)
+                                                    .map(SharedString::new)
+                                            })
+                                            .unwrap_or_else(|| commit.summary.clone().into()),
+                                    ),
+                                    None => (false, commit.summary.clone().into()),
+                                };
 
-                            let when: SharedString = format_datetime(
-                                commit.time,
-                                request_for_build.date_time_format,
-                                request_for_build.timezone,
-                                request_for_build.show_timezone,
-                            )
-                            .into();
-
-                            let id: &str = commit.id.as_ref();
-                            let short = id.get(0..8).unwrap_or(id);
-                            let short_sha: SharedString = short.to_string().into();
-
-                            HistoryCommitRowVm {
+                            commit_row_vms.push(HistoryCommitRowVm {
                                 branches_text,
                                 tag_names,
                                 author,
                                 summary,
-                                when,
-                                short_sha,
+                                when: HistoryWhenVm::deferred(commit.time),
+                                short_sha: HistoryShortShaVm::new(commit.id.as_ref()),
                                 is_head,
                                 is_stash,
-                            }
-                        })
-                        .collect::<Vec<_>>();
+                            });
+                        }
+                    } else {
+                        for ix in visible_indices.iter() {
+                            let Some(commit) = page.commits.get(ix) else {
+                                continue;
+                            };
+                            let commit_id = commit.id.as_ref();
+
+                            let is_head = head_target == Some(commit_id);
+
+                            let branches_text = if is_head {
+                                head_branches_text.clone().unwrap_or_default()
+                            } else {
+                                branch_text_by_target.remove(commit_id).unwrap_or_default()
+                            };
+
+                            let tag_names =
+                                tag_names_by_target.remove(commit_id).unwrap_or_default();
+
+                            let author: SharedString = author_cache
+                                .entry(commit.author.as_ref())
+                                .or_insert_with(|| commit.author.clone().into())
+                                .clone();
+
+                            commit_row_vms.push(HistoryCommitRowVm {
+                                branches_text,
+                                tag_names,
+                                author,
+                                summary: commit.summary.clone().into(),
+                                when: HistoryWhenVm::deferred(commit.time),
+                                short_sha: HistoryShortShaVm::new(commit.id.as_ref()),
+                                is_head,
+                                is_stash: false,
+                            });
+                        }
+                    }
 
                     Rebuild {
                         visible_indices,
@@ -1050,12 +1324,9 @@ impl HistoryView {
     }
 }
 
+#[cfg(test)]
 fn is_probable_stash_tip(commit: &Commit) -> bool {
-    if !(2..=3).contains(&commit.parent_ids.len()) {
-        return false;
-    }
-    let summary: &str = &commit.summary;
-    (summary.starts_with("WIP on ") || summary.starts_with("On ")) && summary.contains(": ")
+    crate::view::caches::history_commit_is_probable_stash_tip(commit)
 }
 
 fn stash_summary_from_log_summary(summary: &str) -> Option<&str> {
@@ -1156,15 +1427,16 @@ mod tests {
         let branches = vec![branch("main", "local-head")];
         let remote_branches = vec![remote_branch("origin", "feature/x", "remote-head")];
 
-        let current_branch_heads =
+        let mut current_branch_heads =
             graph_branch_heads(LogScope::CurrentBranch, &branches, &remote_branches);
-        assert!(current_branch_heads.is_empty());
+        assert!(current_branch_heads.next().is_none());
 
         let all_branch_heads =
-            graph_branch_heads(LogScope::AllBranches, &branches, &remote_branches);
+            graph_branch_heads(LogScope::AllBranches, &branches, &remote_branches)
+                .collect::<Vec<_>>();
         assert_eq!(all_branch_heads.len(), 2);
-        assert!(all_branch_heads.contains("local-head"));
-        assert!(all_branch_heads.contains("remote-head"));
+        assert!(all_branch_heads.contains(&"local-head"));
+        assert!(all_branch_heads.contains(&"remote-head"));
     }
 
     #[test]
@@ -1206,5 +1478,134 @@ mod tests {
             layout,
         );
         assert_eq!(next, px(HISTORY_COL_SHA_MIN_PX));
+    }
+
+    #[test]
+    fn history_resize_state_preserves_visible_columns_within_drag_bounds() {
+        let available = history_columns_available_width(px(1600.0));
+        let layout = all_columns_visible_drag_layout();
+        let state =
+            history_column_resize_state(HistoryColResizeHandle::Graph, px(0.0), available, layout);
+
+        assert!(history_resize_state_preserves_visible_columns(
+            available,
+            layout,
+            Some(&state)
+        ));
+        assert_eq!(
+            history_visible_columns_for_layout_with_resize_state(available, layout, Some(&state)),
+            (true, true, true)
+        );
+    }
+
+    #[test]
+    fn history_resize_state_visibility_fast_path_falls_back_for_out_of_bounds_layout() {
+        let available = history_columns_available_width(px(1600.0));
+        let layout = HistoryColumnDragLayout {
+            graph_w: px(140.0),
+            ..all_columns_visible_drag_layout()
+        };
+        let state =
+            history_column_resize_state(HistoryColResizeHandle::Graph, px(0.0), available, layout);
+
+        assert!(!history_resize_state_preserves_visible_columns(
+            available,
+            layout,
+            Some(&state)
+        ));
+        assert_eq!(
+            history_visible_columns_for_layout_with_resize_state(available, layout, Some(&state)),
+            history_visible_columns_for_layout(available, layout)
+        );
+    }
+
+    #[test]
+    fn history_resize_state_visible_columns_fast_path_rejects_stale_current_width() {
+        let available = history_columns_available_width(px(1600.0));
+        let layout = all_columns_visible_drag_layout();
+        let state =
+            history_column_resize_state(HistoryColResizeHandle::Date, px(0.0), available, layout);
+
+        assert_eq!(
+            history_resize_state_visible_columns_for_current_width(
+                available,
+                px(HISTORY_COL_DATE_PX),
+                Some(&state),
+            ),
+            Some((true, true, true))
+        );
+        assert_eq!(
+            history_resize_state_visible_columns_for_current_width(
+                available,
+                px(HISTORY_COL_DATE_PX + 1.0),
+                Some(&state),
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn resolve_history_selected_list_index_populates_cache_for_commit_selection() {
+        let commits = vec![
+            commit("a", &["p0"], "a"),
+            commit("b", &["a"], "b"),
+            commit("c", &["b"], "c"),
+        ];
+        let selected = CommitId("c".into());
+        let mut cache = None;
+
+        let list_ix = resolve_history_selected_list_index(
+            &mut cache,
+            RepoId(7),
+            11,
+            13,
+            LogScope::AllBranches,
+            true,
+            Some(&selected),
+            &HistoryVisibleIndices::Filtered(vec![0, 2]),
+            &commits,
+        );
+
+        assert_eq!(list_ix, Some(2));
+        assert_eq!(
+            cache,
+            Some(HistorySelectedListIndexCache {
+                repo_id: RepoId(7),
+                log_rev: 11,
+                stashes_rev: 13,
+                history_scope: LogScope::AllBranches,
+                show_working_tree_summary_row: true,
+                selected_commit: Some(selected),
+                list_ix: 2,
+            })
+        );
+    }
+
+    #[test]
+    fn resolve_history_selected_list_index_reuses_matching_cache() {
+        let selected = CommitId("cached".into());
+        let mut cache = Some(HistorySelectedListIndexCache {
+            repo_id: RepoId(3),
+            log_rev: 21,
+            stashes_rev: 34,
+            history_scope: LogScope::CurrentBranch,
+            show_working_tree_summary_row: false,
+            selected_commit: Some(selected.clone()),
+            list_ix: 5,
+        });
+
+        let list_ix = resolve_history_selected_list_index(
+            &mut cache,
+            RepoId(3),
+            21,
+            34,
+            LogScope::CurrentBranch,
+            false,
+            Some(&selected),
+            &HistoryVisibleIndices::all(0),
+            &[],
+        );
+
+        assert_eq!(list_ix, Some(5));
     }
 }

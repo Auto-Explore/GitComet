@@ -11,8 +11,16 @@ pub fn with_set_active_repo_sync<T>(
     repo_id: RepoId,
     f: impl FnOnce(&AppState, &[Effect]) -> T,
 ) -> T {
-    let effects = dispatch_sync(state, Msg::SetActiveRepo { repo_id });
-    f(state, &effects)
+    crate::store::with_set_active_repo_inline_for_bench(state, repo_id, f)
+}
+
+pub fn with_reorder_repo_tabs_sync<T>(
+    state: &mut AppState,
+    repo_id: RepoId,
+    insert_before: Option<RepoId>,
+    f: impl FnOnce(&AppState, &[Effect]) -> T,
+) -> T {
+    crate::store::with_reorder_repo_tabs_inline_for_bench(state, repo_id, insert_before, f)
 }
 
 pub fn with_select_diff_sync<T>(
@@ -21,8 +29,7 @@ pub fn with_select_diff_sync<T>(
     target: DiffTarget,
     f: impl FnOnce(&AppState, &[Effect]) -> T,
 ) -> T {
-    let effects = dispatch_sync(state, Msg::SelectDiff { repo_id, target });
-    f(state, &effects)
+    crate::store::with_select_diff_inline_for_bench(state, repo_id, target, f)
 }
 
 #[inline]
@@ -32,8 +39,7 @@ pub fn with_stage_path_sync<T>(
     path: std::path::PathBuf,
     f: impl FnOnce(&AppState, &[Effect]) -> T,
 ) -> T {
-    let effects = dispatch_sync(state, Msg::StagePath { repo_id, path });
-    f(state, &effects)
+    crate::store::with_stage_path_inline_for_bench(state, repo_id, path, f)
 }
 
 #[inline]
@@ -43,8 +49,7 @@ pub fn with_stage_paths_sync<T>(
     paths: RepoPathList,
     f: impl FnOnce(&AppState, &[Effect]) -> T,
 ) -> T {
-    let effects = dispatch_sync(state, Msg::StagePaths { repo_id, paths });
-    f(state, &effects)
+    crate::store::with_stage_paths_inline_for_bench(state, repo_id, paths, f)
 }
 
 #[inline]
@@ -54,8 +59,7 @@ pub fn with_unstage_path_sync<T>(
     path: std::path::PathBuf,
     f: impl FnOnce(&AppState, &[Effect]) -> T,
 ) -> T {
-    let effects = dispatch_sync(state, Msg::UnstagePath { repo_id, path });
-    f(state, &effects)
+    crate::store::with_unstage_path_inline_for_bench(state, repo_id, path, f)
 }
 
 #[inline]
@@ -65,8 +69,7 @@ pub fn with_unstage_paths_sync<T>(
     paths: RepoPathList,
     f: impl FnOnce(&AppState, &[Effect]) -> T,
 ) -> T {
-    let effects = dispatch_sync(state, Msg::UnstagePaths { repo_id, paths });
-    f(state, &effects)
+    crate::store::with_unstage_paths_inline_for_bench(state, repo_id, paths, f)
 }
 
 #[inline]
@@ -77,20 +80,18 @@ pub fn set_conflict_region_choice_sync(
     region_index: usize,
     choice: ConflictRegionChoice,
 ) {
-    let _ = dispatch_sync(
+    crate::store::set_conflict_region_choice_inline_for_bench(
         state,
-        Msg::ConflictSetRegionChoice {
-            repo_id,
-            path,
-            region_index,
-            choice,
-        },
-    );
+        repo_id,
+        path,
+        region_index,
+        choice,
+    )
 }
 
 #[inline]
 pub fn reset_conflict_resolutions_sync(state: &mut AppState, repo_id: RepoId, path: RepoPath) {
-    let _ = dispatch_sync(state, Msg::ConflictResetResolutions { repo_id, path });
+    crate::store::reset_conflict_resolutions_inline_for_bench(state, repo_id, path)
 }
 
 #[cfg(all(test, feature = "benchmarks"))]
@@ -182,6 +183,43 @@ mod tests {
     }
 
     #[test]
+    fn reorder_repo_tabs_sync_uses_reducer_path() {
+        let mut state = AppState::default();
+
+        let mut repo1 = RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/bench-repo-tab-1"),
+            },
+        );
+        repo1.open = Loadable::Ready(());
+
+        let mut repo2 = RepoState::new_opening(
+            RepoId(2),
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/bench-repo-tab-2"),
+            },
+        );
+        repo2.open = Loadable::Ready(());
+
+        state.repos.push(repo1);
+        state.repos.push(repo2);
+        state.active_repo = Some(RepoId(1));
+
+        with_reorder_repo_tabs_sync(&mut state, RepoId(1), None, |_state, effects| {
+            assert!(matches!(
+                effects,
+                [Effect::PersistSession {
+                    repo_id: Some(RepoId(1)),
+                    action: "reordering repository tabs",
+                }]
+            ));
+        });
+        assert_eq!(state.repos[0].id, RepoId(2));
+        assert_eq!(state.repos[1].id, RepoId(1));
+    }
+
+    #[test]
     fn select_diff_sync_uses_inline_reducer_path() {
         let mut state = AppState::default();
 
@@ -204,16 +242,11 @@ mod tests {
         with_select_diff_sync(&mut state, RepoId(1), target.clone(), |state, effects| {
             assert!(matches!(
                 effects,
-                [
-                    Effect::LoadDiffFile {
-                        repo_id: RepoId(1),
-                        target: file_target,
-                    },
-                    Effect::LoadDiff {
-                        repo_id: RepoId(1),
-                        target: diff_target,
-                    },
-                ] if file_target == &target && diff_target == &target
+                [Effect::LoadSelectedDiff {
+                    repo_id: RepoId(1),
+                    load_file_text: true,
+                    load_file_image: false,
+                }]
             ));
             assert_eq!(state.repos[0].diff_state.diff_target, Some(target.clone()));
             assert!(state.repos[0].diff_state.diff.is_loading());

@@ -101,7 +101,9 @@ impl MainPaneView {
     pub(super) fn reset_worktree_preview_source_state(&mut self) {
         self.worktree_preview_text = SharedString::default();
         self.worktree_preview_line_starts = Arc::default();
+        self.worktree_preview_search_trigram_index = None;
         self.worktree_preview_segments_cache_path = None;
+        self.worktree_preview_cache_write_blocked_until_rev = None;
         self.worktree_preview_segments_cache.clear();
     }
 

@@ -1,5 +1,5 @@
 use super::*;
-use gitcomet_core::domain::{FileConflictKind, FileStatus, FileStatusKind};
+use gitcomet_core::domain::{CommitId, FileConflictKind, FileStatus, FileStatusKind};
 
 #[test]
 fn select_diff_sets_loading_and_emits_effect() {
@@ -35,10 +35,11 @@ fn select_diff_sets_loading_and_emits_effect() {
     assert!(repo_state.diff_state.diff_file.is_loading());
     assert!(matches!(
         effects.as_slice(),
-        [
-            Effect::LoadDiffFile { repo_id: RepoId(1), target: a },
-            Effect::LoadDiff { repo_id: RepoId(1), target: b },
-        ] if a == &target && b == &target
+        [Effect::LoadSelectedDiff {
+            repo_id: RepoId(1),
+            load_file_text: true,
+            load_file_image: false,
+        }]
     ));
 }
 
@@ -80,10 +81,11 @@ fn select_diff_for_image_sets_loading_and_emits_effect() {
     assert!(repo_state.diff_state.diff_file_image.is_loading());
     assert!(matches!(
         effects.as_slice(),
-        [
-            Effect::LoadDiffFileImage { repo_id: RepoId(1), target: a },
-            Effect::LoadDiff { repo_id: RepoId(1), target: b },
-        ] if a == &target && b == &target
+        [Effect::LoadSelectedDiff {
+            repo_id: RepoId(1),
+            load_file_text: false,
+            load_file_image: true,
+        }]
     ));
 }
 
@@ -125,10 +127,11 @@ fn select_diff_for_ico_sets_loading_and_emits_effect() {
     assert!(repo_state.diff_state.diff_file_image.is_loading());
     assert!(matches!(
         effects.as_slice(),
-        [
-            Effect::LoadDiffFileImage { repo_id: RepoId(1), target: a },
-            Effect::LoadDiff { repo_id: RepoId(1), target: b },
-        ] if a == &target && b == &target
+        [Effect::LoadSelectedDiff {
+            repo_id: RepoId(1),
+            load_file_text: false,
+            load_file_image: true,
+        }]
     ));
 }
 
@@ -167,11 +170,11 @@ fn select_diff_for_svg_loads_image_and_text() {
     assert!(repo_state.diff_state.diff_file_image.is_loading());
     assert!(matches!(
         effects.as_slice(),
-        [
-            Effect::LoadDiffFileImage { repo_id: RepoId(1), target: a },
-            Effect::LoadDiffFile { repo_id: RepoId(1), target: b },
-            Effect::LoadDiff { repo_id: RepoId(1), target: c },
-        ] if a == &target && b == &target && c == &target
+        [Effect::LoadSelectedDiff {
+            repo_id: RepoId(1),
+            load_file_text: true,
+            load_file_image: true,
+        }]
     ));
 }
 
@@ -190,14 +193,14 @@ fn select_diff_for_conflicted_file_skips_patch_and_file_diff_loads() {
         path: PathBuf::from("index.html"),
         area: gitcomet_core::domain::DiffArea::Unstaged,
     };
-    repo_state.status = Loadable::Ready(Arc::new(RepoStatus {
+    repo_state.set_status(Loadable::Ready(Arc::new(RepoStatus {
         unstaged: vec![FileStatus {
             path: PathBuf::from("index.html"),
             kind: FileStatusKind::Conflicted,
             conflict: Some(FileConflictKind::BothModified),
         }],
         staged: vec![],
-    }));
+    })));
     state.repos.push(repo_state);
     state.active_repo = Some(RepoId(1));
 
@@ -229,11 +232,157 @@ fn select_diff_for_conflicted_file_skips_patch_and_file_diff_loads() {
     assert!(repo_state.conflict_state.conflict_file.is_loading());
     assert!(matches!(
         effects.as_slice(),
-        [Effect::LoadConflictFile {
+        [Effect::LoadSelectedConflictFile {
             repo_id: RepoId(1),
-            path,
             mode: crate::model::ConflictFileLoadMode::CurrentOnly
-        }] if path == &PathBuf::from("index.html")
+        }]
+    ));
+}
+
+#[test]
+fn select_diff_for_conflicted_svg_prefers_conflict_loader_over_preview_effects() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(2);
+    let mut state = AppState::default();
+    let mut repo_state = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    );
+    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
+        path: PathBuf::from("icon.svg"),
+        area: gitcomet_core::domain::DiffArea::Unstaged,
+    };
+    repo_state.set_status(Loadable::Ready(Arc::new(RepoStatus {
+        unstaged: vec![FileStatus {
+            path: PathBuf::from("icon.svg"),
+            kind: FileStatusKind::Conflicted,
+            conflict: Some(FileConflictKind::BothModified),
+        }],
+        staged: vec![],
+    })));
+    state.repos.push(repo_state);
+    state.active_repo = Some(RepoId(1));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SelectDiff {
+            repo_id: RepoId(1),
+            target,
+        },
+    );
+
+    let repo_state = state.repos.first().expect("repo state to exist");
+    assert!(matches!(repo_state.diff_state.diff, Loadable::NotLoaded));
+    assert!(matches!(
+        repo_state.diff_state.diff_file,
+        Loadable::NotLoaded
+    ));
+    assert!(matches!(
+        repo_state.diff_state.diff_file_image,
+        Loadable::NotLoaded
+    ));
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::LoadSelectedConflictFile {
+            repo_id: RepoId(1),
+            mode: crate::model::ConflictFileLoadMode::CurrentOnly
+        }]
+    ));
+}
+
+#[test]
+fn select_diff_for_commit_without_path_only_loads_patch() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(2);
+    let mut state = AppState::default();
+    state.repos.push(RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(RepoId(1));
+
+    let target = gitcomet_core::domain::DiffTarget::Commit {
+        commit_id: CommitId("deadbeef".into()),
+        path: None,
+    };
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SelectDiff {
+            repo_id: RepoId(1),
+            target: target.clone(),
+        },
+    );
+
+    let repo_state = state.repos.first().expect("repo state to exist");
+    assert_eq!(repo_state.diff_state.diff_target, Some(target.clone()));
+    assert!(repo_state.diff_state.diff.is_loading());
+    assert!(matches!(
+        repo_state.diff_state.diff_file,
+        Loadable::NotLoaded
+    ));
+    assert!(matches!(
+        repo_state.diff_state.diff_file_image,
+        Loadable::NotLoaded
+    ));
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::LoadSelectedDiff {
+            repo_id: RepoId(1),
+            load_file_text: false,
+            load_file_image: false,
+        }]
+    ));
+}
+
+#[test]
+fn select_diff_for_commit_svg_path_loads_text_and_image_previews() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(2);
+    let mut state = AppState::default();
+    state.repos.push(RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(RepoId(1));
+
+    let target = gitcomet_core::domain::DiffTarget::Commit {
+        commit_id: CommitId("deadbeef".into()),
+        path: Some(PathBuf::from("diagram.svg")),
+    };
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SelectDiff {
+            repo_id: RepoId(1),
+            target: target.clone(),
+        },
+    );
+
+    let repo_state = state.repos.first().expect("repo state to exist");
+    assert_eq!(repo_state.diff_state.diff_target, Some(target.clone()));
+    assert!(repo_state.diff_state.diff.is_loading());
+    assert!(repo_state.diff_state.diff_file.is_loading());
+    assert!(repo_state.diff_state.diff_file_image.is_loading());
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::LoadSelectedDiff {
+            repo_id: RepoId(1),
+            load_file_text: true,
+            load_file_image: true,
+        }]
     ));
 }
 
@@ -677,11 +826,11 @@ fn diff_file_loaded_and_image_loaded_cover_success_and_error_paths() {
         Msg::Internal(crate::msg::InternalMsg::DiffFileLoaded {
             repo_id: RepoId(1),
             target: target.clone(),
-            result: Ok(Some(gitcomet_core::domain::FileDiffText {
-                path: PathBuf::from("img.png"),
-                old: Some("old".to_string()),
-                new: Some("new".to_string()),
-            })),
+            result: Ok(Some(gitcomet_core::domain::FileDiffText::new(
+                PathBuf::from("img.png"),
+                Some("old".to_string()),
+                Some("new".to_string()),
+            ))),
         }),
     );
     assert!(matches!(

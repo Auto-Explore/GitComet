@@ -1,5 +1,7 @@
 use super::TwoWayWordHighlightPair;
 
+#[cfg(feature = "benchmarks")]
+use std::num::NonZeroU32;
 #[cfg(any(test, feature = "benchmarks"))]
 use {
     super::{
@@ -228,29 +230,74 @@ fn merge_ranges(a: &[Range<usize>], b: &[Range<usize>]) -> Vec<Range<usize>> {
 
 /// Per-line pair of (old, new) word-highlight ranges for two-way diff.
 #[cfg(feature = "benchmarks")]
-pub type TwoWayWordHighlights = Vec<Option<TwoWayWordHighlightPair>>;
+#[derive(Clone, Debug, Default)]
+pub struct TwoWayWordHighlights {
+    row_to_entry: Box<[Option<NonZeroU32>]>,
+    entries: Box<[TwoWayWordHighlightPair]>,
+}
+
+#[cfg(feature = "benchmarks")]
+impl TwoWayWordHighlights {
+    pub fn len(&self) -> usize {
+        self.row_to_entry.len()
+    }
+
+    pub fn get(&self, row_ix: usize) -> Option<&TwoWayWordHighlightPair> {
+        let entry_ix = self
+            .row_to_entry
+            .get(row_ix)?
+            .map(|ix| ix.get() as usize - 1)?;
+        self.entries.get(entry_ix)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = Option<&TwoWayWordHighlightPair>> + '_ {
+        self.row_to_entry
+            .iter()
+            .copied()
+            .map(|entry_ix| entry_ix.and_then(|ix| self.entries.get(ix.get() as usize - 1)))
+    }
+
+    #[cfg(test)]
+    pub(super) fn highlighted_rows(&self) -> usize {
+        self.entries.len()
+    }
+}
 
 #[cfg(feature = "benchmarks")]
 pub fn compute_two_way_word_highlights(
     diff_rows: &[gitcomet_core::file_diff::FileDiffRow],
 ) -> TwoWayWordHighlights {
-    diff_rows
+    let modify_rows = diff_rows
         .iter()
-        .map(|row| {
-            if row.kind != gitcomet_core::file_diff::FileDiffRowKind::Modify {
-                return None;
-            }
-            let old = row.old.as_deref().unwrap_or("");
-            let new = row.new.as_deref().unwrap_or("");
-            let (old_ranges, new_ranges) =
-                crate::view::word_diff::capped_word_diff_ranges(old, new);
-            if old_ranges.is_empty() && new_ranges.is_empty() {
-                None
-            } else {
-                Some((old_ranges, new_ranges))
-            }
-        })
-        .collect()
+        .filter(|row| row.kind == gitcomet_core::file_diff::FileDiffRowKind::Modify)
+        .count();
+    let mut row_to_entry = vec![None; diff_rows.len()];
+    let mut entries = Vec::with_capacity(modify_rows);
+
+    for (row_ix, row) in diff_rows.iter().enumerate() {
+        if row.kind != gitcomet_core::file_diff::FileDiffRowKind::Modify {
+            continue;
+        }
+        let old = row.old.as_deref().unwrap_or("");
+        let new = row.new.as_deref().unwrap_or("");
+        let (old_ranges, new_ranges) =
+            crate::view::word_diff::compact_capped_word_diff_ranges(old, new);
+        if old_ranges.is_empty() && new_ranges.is_empty() {
+            continue;
+        }
+
+        entries.push((old_ranges, new_ranges));
+        let entry_ix = NonZeroU32::new(
+            u32::try_from(entries.len()).expect("two-way word highlights should fit in u32"),
+        )
+        .expect("stored highlight entry index should be non-zero");
+        row_to_entry[row_ix] = Some(entry_ix);
+    }
+
+    TwoWayWordHighlights {
+        row_to_entry: row_to_entry.into_boxed_slice(),
+        entries: entries.into_boxed_slice(),
+    }
 }
 
 /// Compute word-level highlights for a single `FileDiffRow` on the fly.
@@ -266,10 +313,60 @@ pub fn compute_word_highlights_for_row(
     }
     let old = row.old.as_deref().unwrap_or("");
     let new = row.new.as_deref().unwrap_or("");
-    let (old_ranges, new_ranges) = crate::view::word_diff::capped_word_diff_ranges(old, new);
+    let (old_ranges, new_ranges) =
+        crate::view::word_diff::compact_capped_word_diff_ranges(old, new);
     if old_ranges.is_empty() && new_ranges.is_empty() {
         None
     } else {
         Some((old_ranges, new_ranges))
+    }
+}
+
+#[cfg(all(test, feature = "benchmarks"))]
+mod tests {
+    use super::*;
+    use gitcomet_core::file_diff::{FileDiffLineText, FileDiffRow, FileDiffRowKind};
+    use std::sync::Arc;
+
+    fn modify_row(old: &'static str, new: &'static str) -> FileDiffRow {
+        FileDiffRow {
+            kind: FileDiffRowKind::Modify,
+            old_line: Some(1),
+            new_line: Some(1),
+            old: Some(FileDiffLineText::shared(Arc::<str>::from(old))),
+            new: Some(FileDiffLineText::shared(Arc::<str>::from(new))),
+            eof_newline: None,
+        }
+    }
+
+    #[test]
+    fn two_way_word_highlights_store_only_rows_with_ranges() {
+        let rows = vec![
+            FileDiffRow {
+                kind: FileDiffRowKind::Context,
+                old_line: Some(1),
+                new_line: Some(1),
+                old: Some(FileDiffLineText::shared(Arc::<str>::from("same"))),
+                new: Some(FileDiffLineText::shared(Arc::<str>::from("same"))),
+                eof_newline: None,
+            },
+            modify_row(
+                "let value = compute_local(1);",
+                "let value = compute_remote(1);",
+            ),
+            modify_row(
+                "let shared_alpha = compute_local(2);",
+                "let shared_alpha_tail = compute_remote(2);",
+            ),
+        ];
+
+        let highlights = compute_two_way_word_highlights(&rows);
+
+        assert_eq!(highlights.len(), rows.len());
+        assert_eq!(highlights.highlighted_rows(), 2);
+        assert!(highlights.get(0).is_none());
+        assert!(highlights.get(1).is_some());
+        assert!(highlights.get(2).is_some());
+        assert_eq!(highlights.iter().filter(|entry| entry.is_some()).count(), 2);
     }
 }

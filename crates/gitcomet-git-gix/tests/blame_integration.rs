@@ -1,5 +1,6 @@
 use gitcomet_core::services::GitBackend;
 use gitcomet_git_gix::GixBackend;
+#[path = "support/test_git_env.rs"]
 mod test_git_env;
 use std::path::Path;
 use std::process::Command;

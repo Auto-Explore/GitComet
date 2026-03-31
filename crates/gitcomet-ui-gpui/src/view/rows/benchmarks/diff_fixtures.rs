@@ -1087,8 +1087,8 @@ impl DiffSplitResizeDragStepFixture {
             // Compute column widths for this ratio (exercises the layout path).
             let (left_w, right_w) = diff_split_column_widths(self.main_pane_width, self.ratio);
             column_width_recomputes = column_width_recomputes.saturating_add(1);
-            let left_f: f32 = left_w.into();
-            let right_f: f32 = right_w.into();
+            let left_f = f32::from(left_w);
+            let right_f = f32::from(right_w);
 
             let ratio_f64 = self.ratio as f64;
             min_ratio = min_ratio.min(ratio_f64);
@@ -1401,8 +1401,8 @@ impl WindowResizeLayoutExtremeFixture {
                 diff_narrow_fallback_steps = diff_narrow_fallback_steps.saturating_add(1);
             }
             let (left_w, right_w) = diff_split_column_widths(main_w, self.diff_split_ratio);
-            let left_w_px: f32 = left_w.into();
-            let right_w_px: f32 = right_w.into();
+            let left_w_px = f32::from(left_w);
+            let right_w_px = f32::from(right_w);
 
             let history_hash = self
                 .history

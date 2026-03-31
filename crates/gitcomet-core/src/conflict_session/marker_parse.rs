@@ -56,12 +56,10 @@ impl<'a> LineCursor<'a> {
         }
 
         let start = self.offset;
-        while self.offset < self.bytes.len() && self.bytes[self.offset] != b'\n' {
-            self.offset = self.offset.saturating_add(1);
-        }
-        if self.offset < self.bytes.len() && self.bytes[self.offset] == b'\n' {
-            self.offset = self.offset.saturating_add(1);
-        }
+        self.offset = self.text[start..]
+            .find('\n')
+            .map(|rel| start.saturating_add(rel).saturating_add(1))
+            .unwrap_or(self.bytes.len());
 
         let end = self.offset;
         Some((

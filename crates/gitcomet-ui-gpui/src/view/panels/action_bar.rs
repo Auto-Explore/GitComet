@@ -803,7 +803,7 @@ mod tests {
         let repo_id = RepoId(1);
         let mut state = AppState {
             active_repo: Some(repo_id),
-            ..Default::default()
+            ..AppState::default()
         };
         state.repos.push(RepoState::new_opening(
             repo_id,

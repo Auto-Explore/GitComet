@@ -8,7 +8,8 @@ pub(super) struct ToastHost {
     toasts: Vec<ToastState>,
     clone_progress_toast_id: Option<u64>,
     clone_progress_last_seq: u64,
-    clone_progress_dest: Option<std::path::PathBuf>,
+    clone_progress_dest: Option<std::sync::Arc<std::path::PathBuf>>,
+    clone_progress_header: Option<String>,
 }
 
 fn looks_like_code_message(message: &str) -> bool {
@@ -37,6 +38,7 @@ impl ToastHost {
             clone_progress_toast_id: None,
             clone_progress_last_seq: 0,
             clone_progress_dest: None,
+            clone_progress_header: None,
         }
     }
 
@@ -213,19 +215,25 @@ impl ToastHost {
             Some(op) => match &op.status {
                 CloneOpStatus::Running => {
                     let needs_reset = self.clone_progress_toast_id.is_none()
-                        || self.clone_progress_dest.as_ref() != Some(&op.dest);
+                        || !matches!(
+                            self.clone_progress_dest.as_ref(),
+                            Some(dest) if std::sync::Arc::ptr_eq(dest, &op.dest)
+                        );
                     if needs_reset {
                         if let Some(id) = self.clone_progress_toast_id.take() {
                             self.remove_toast(id, cx);
                         }
                         self.clone_progress_last_seq = 0;
                         self.clone_progress_dest = Some(op.dest.clone());
-
-                        let id = self.push_persistent_toast(
-                            components::ToastKind::Success,
-                            format!("Cloning repository…\n{}\n→ {}", op.url, op.dest.display()),
-                            cx,
+                        let message = crate::view::clone_progress::build_clone_progress_header(
+                            "Cloning repository…",
+                            &op.url,
+                            &op.dest,
                         );
+                        self.clone_progress_header = Some(message.clone());
+
+                        let id =
+                            self.push_persistent_toast(components::ToastKind::Success, message, cx);
                         self.clone_progress_toast_id = Some(id);
                     }
 
@@ -233,18 +241,16 @@ impl ToastHost {
                         && self.clone_progress_last_seq != op.seq
                     {
                         self.clone_progress_last_seq = op.seq;
-                        let tail_lines = op.output_tail.iter().rev().take(12).rev().cloned();
-                        let tail = tail_lines.collect::<Vec<_>>().join("\n");
-                        let message = if tail.is_empty() {
-                            format!("Cloning repository…\n{}\n→ {}", op.url, op.dest.display())
-                        } else {
-                            format!(
-                                "Cloning repository…\n{}\n→ {}\n\n{}",
-                                op.url,
-                                op.dest.display(),
-                                tail
-                            )
-                        };
+                        let mut message = String::new();
+                        crate::view::clone_progress::reset_clone_progress_message(
+                            &mut message,
+                            self.clone_progress_header.as_deref().unwrap_or_default(),
+                        );
+                        crate::view::clone_progress::append_clone_progress_tail_window(
+                            &mut message,
+                            &op.output_tail,
+                            12,
+                        );
                         self.update_toast_text(id, message, cx);
                     }
                 }
@@ -254,6 +260,7 @@ impl ToastHost {
                             self.remove_toast(id, cx);
                         }
                         self.clone_progress_dest = None;
+                        self.clone_progress_header = None;
                         self.clone_progress_last_seq = op.seq;
                         self.push_toast(
                             components::ToastKind::Success,
@@ -268,6 +275,7 @@ impl ToastHost {
                             self.remove_toast(id, cx);
                         }
                         self.clone_progress_dest = None;
+                        self.clone_progress_header = None;
                         self.clone_progress_last_seq = op.seq;
                         self.push_toast(components::ToastKind::Error, err.clone(), cx);
                     }
@@ -279,6 +287,7 @@ impl ToastHost {
                 }
                 self.clone_progress_last_seq = 0;
                 self.clone_progress_dest = None;
+                self.clone_progress_header = None;
             }
         }
     }

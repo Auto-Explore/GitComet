@@ -1,3 +1,4 @@
+use super::branch::wait_until;
 use super::*;
 
 fn click_debug_selector(cx: &mut gpui::VisualTestContext, selector: &'static str) {
@@ -162,13 +163,22 @@ fn clone_repo_popover_enter_from_parent_input_submits_and_closes(cx: &mut gpui::
     let is_open = cx.update(|_window, app| view.read(app).popover_host.read(app).is_open());
     assert!(!is_open, "expected Enter to close clone popover");
 
+    // AppStore dispatch is asynchronous, so wait until the reducer records the clone request.
+    wait_until("clone op to be recorded", || {
+        let snapshot = store.snapshot();
+        snapshot
+            .clone
+            .as_ref()
+            .is_some_and(|op| &*op.url == url && op.dest.as_ref() == &expected_dest)
+    });
+
     let snapshot = store.snapshot();
     let op = snapshot
         .clone
         .as_ref()
         .expect("expected clone op to be recorded");
-    assert_eq!(op.url, url);
-    assert_eq!(op.dest, expected_dest);
+    assert_eq!(&*op.url, url);
+    assert_eq!(op.dest.as_ref(), &expected_dest);
 }
 
 #[gpui::test]

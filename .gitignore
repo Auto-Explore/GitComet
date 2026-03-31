@@ -15,3 +15,5 @@ feat/*
 dist/
 __pycache__/
 *.pyc
+criterion
+

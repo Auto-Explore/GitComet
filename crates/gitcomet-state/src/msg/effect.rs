@@ -1,14 +1,14 @@
 use crate::model::{ConflictFileLoadMode, RepoId};
-use crate::session::SessionReposSnapshot;
 use gitcomet_core::auth::StagedGitAuth;
 use gitcomet_core::domain::*;
 use gitcomet_core::services::{ConflictSide, PullMode, RemoteUrlKind, ResetMode};
 use std::path::PathBuf;
 
+use super::RepoPathList;
+
 #[derive(Clone, Debug)]
 pub enum Effect {
     PersistSession {
-        snapshot: SessionReposSnapshot,
         repo_id: Option<RepoId>,
         action: &'static str,
     },
@@ -70,6 +70,9 @@ pub enum Effect {
     LoadSubmodules {
         repo_id: RepoId,
     },
+    LoadRebaseAndMergeState {
+        repo_id: RepoId,
+    },
     LoadRebaseState {
         repo_id: RepoId,
     },
@@ -91,6 +94,15 @@ pub enum Effect {
     LoadDiffFileImage {
         repo_id: RepoId,
         target: DiffTarget,
+    },
+    LoadSelectedDiff {
+        repo_id: RepoId,
+        load_file_text: bool,
+        load_file_image: bool,
+    },
+    LoadSelectedConflictFile {
+        repo_id: RepoId,
+        mode: ConflictFileLoadMode,
     },
     LoadConflictFile {
         repo_id: RepoId,
@@ -204,7 +216,7 @@ pub enum Effect {
     },
     StagePaths {
         repo_id: RepoId,
-        paths: Vec<PathBuf>,
+        paths: RepoPathList,
     },
     UnstagePath {
         repo_id: RepoId,
@@ -212,7 +224,7 @@ pub enum Effect {
     },
     UnstagePaths {
         repo_id: RepoId,
-        paths: Vec<PathBuf>,
+        paths: RepoPathList,
     },
     DiscardWorktreeChangesPath {
         repo_id: RepoId,

@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use super::repo_command_kind::RepoCommandKind;
 use super::repo_external_change::RepoExternalChange;
+use super::{RepoPath, RepoPathList};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ConflictAutosolveMode {
@@ -257,7 +258,7 @@ pub enum Msg {
     },
     StagePaths {
         repo_id: RepoId,
-        paths: Vec<PathBuf>,
+        paths: RepoPathList,
     },
     UnstagePath {
         repo_id: RepoId,
@@ -265,7 +266,7 @@ pub enum Msg {
     },
     UnstagePaths {
         repo_id: RepoId,
-        paths: Vec<PathBuf>,
+        paths: RepoPathList,
     },
     DiscardWorktreeChangesPath {
         repo_id: RepoId,
@@ -421,34 +422,34 @@ pub enum Msg {
     },
     ConflictSetHideResolved {
         repo_id: RepoId,
-        path: PathBuf,
+        path: RepoPath,
         hide_resolved: bool,
     },
     ConflictApplyBulkChoice {
         repo_id: RepoId,
-        path: PathBuf,
+        path: RepoPath,
         choice: ConflictBulkChoice,
     },
     ConflictSetRegionChoice {
         repo_id: RepoId,
-        path: PathBuf,
+        path: RepoPath,
         region_index: usize,
         choice: ConflictRegionChoice,
     },
     ConflictSyncRegionResolutions {
         repo_id: RepoId,
-        path: PathBuf,
+        path: RepoPath,
         updates: Vec<ConflictRegionResolutionUpdate>,
     },
     ConflictApplyAutosolve {
         repo_id: RepoId,
-        path: PathBuf,
+        path: RepoPath,
         mode: ConflictAutosolveMode,
         whitespace_normalize: bool,
     },
     ConflictResetResolutions {
         repo_id: RepoId,
-        path: PathBuf,
+        path: RepoPath,
     },
     Stash {
         repo_id: RepoId,
@@ -477,7 +478,7 @@ pub enum InternalMsg {
         error: String,
     },
     CloneRepoProgress {
-        dest: PathBuf,
+        dest: Arc<PathBuf>,
         line: String,
     },
     CloneRepoFinished {

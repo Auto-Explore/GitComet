@@ -302,7 +302,9 @@ impl HistoryListScrollFixture {
         let graph_rows = history_graph::compute_graph(
             &commits,
             AppTheme::gitcomet_dark(),
-            &history_graph_heads_from_branches(&branches, &remote_branches),
+            history_graph_heads_from_branches(&branches, &remote_branches)
+                .iter()
+                .copied(),
             None,
         )
         .into_iter()

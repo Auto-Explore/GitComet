@@ -48,6 +48,25 @@ pub enum ConflictPayload {
 /// Tuple form used by staged conflict-file loading: `(raw_bytes, utf8_text)`.
 pub type ConflictStageParts = (Option<Arc<[u8]>>, Option<Arc<str>>);
 
+/// Canonicalize staged conflict-file parts so UTF-8 content is carried once as
+/// text while non-UTF8 payloads stay in their raw byte form.
+pub fn canonicalize_stage_parts(
+    bytes: Option<Arc<[u8]>>,
+    text: Option<Arc<str>>,
+) -> ConflictStageParts {
+    if let Some(text) = text {
+        return (None, Some(text));
+    }
+
+    match bytes {
+        Some(bytes) => match std::str::from_utf8(bytes.as_ref()) {
+            Ok(text) => (None, Some(Arc::<str>::from(text))),
+            Err(_) => (Some(bytes), None),
+        },
+        None => (None, None),
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum ConflictRegionTextStorage {
     Owned(String),

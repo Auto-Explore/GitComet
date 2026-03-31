@@ -539,7 +539,20 @@ run_main_suite() {
   fi
 
   local -a main_benches=()
-  mapfile -t main_benches < <(discover_main_benchmarks)
+  local bench_list_file=""
+  bench_list_file="$(mktemp)"
+
+  # `mapfile < <(...)` would hide a failing discovery command behind a
+  # successful `mapfile`, which can turn compile errors into a misleading
+  # "no benchmarks matched" message.
+  if ! discover_main_benchmarks > "${bench_list_file}"; then
+    rm -f "${bench_list_file}"
+    echo "Failed to discover Criterion benchmarks." >&2
+    return 1
+  fi
+
+  mapfile -t main_benches < "${bench_list_file}"
+  rm -f "${bench_list_file}"
 
   if [[ ${#main_benches[@]} -eq 0 ]]; then
     echo "No Criterion benchmarks matched the requested main-suite filter." >&2

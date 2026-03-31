@@ -15,11 +15,142 @@ const DIFF_FONT_SCALE: f32 = 0.80;
 
 const GUTTER_TEXT_LAYOUT_CACHE_MAX_ENTRIES: usize = 16_384;
 
-type HighlightSpans = Arc<Vec<(Range<usize>, HighlightStyle)>>;
+type HighlightSpans = Arc<[(Range<usize>, HighlightStyle)]>;
 
 thread_local! {
     static GUTTER_TEXT_LAYOUT_CACHE: RefCell<FxLruCache<u64, gpui::ShapedLine>> =
         RefCell::new(new_fx_lru_cache(GUTTER_TEXT_LAYOUT_CACHE_MAX_ENTRIES));
+}
+
+fn hash_rgba(hasher: &mut FxHasher, color: gpui::Rgba) {
+    color.r.to_bits().hash(hasher);
+    color.g.to_bits().hash(hasher);
+    color.b.to_bits().hash(hasher);
+    color.a.to_bits().hash(hasher);
+}
+
+fn hash_shared_string(hasher: &mut FxHasher, text: &SharedString) {
+    text.as_ref().hash(hasher);
+}
+
+fn inline_row_canvas_revision_key(
+    old: &SharedString,
+    new: &SharedString,
+    bg: gpui::Rgba,
+    fg: gpui::Rgba,
+    gutter_fg: gpui::Rgba,
+    text_hash: u64,
+    highlights_hash: u64,
+) -> u64 {
+    let mut hasher = FxHasher::default();
+    hash_shared_string(&mut hasher, old);
+    hash_shared_string(&mut hasher, new);
+    hash_rgba(&mut hasher, bg);
+    hash_rgba(&mut hasher, fg);
+    hash_rgba(&mut hasher, gutter_fg);
+    text_hash.hash(&mut hasher);
+    highlights_hash.hash(&mut hasher);
+    hasher.finish()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn split_row_canvas_revision_key(
+    old: &SharedString,
+    new: &SharedString,
+    left_bg: gpui::Rgba,
+    left_fg: gpui::Rgba,
+    left_gutter: gpui::Rgba,
+    right_bg: gpui::Rgba,
+    right_fg: gpui::Rgba,
+    right_gutter: gpui::Rgba,
+    left_text_hash: u64,
+    left_highlights_hash: u64,
+    right_text_hash: u64,
+    right_highlights_hash: u64,
+) -> u64 {
+    let mut hasher = FxHasher::default();
+    hash_shared_string(&mut hasher, old);
+    hash_shared_string(&mut hasher, new);
+    hash_rgba(&mut hasher, left_bg);
+    hash_rgba(&mut hasher, left_fg);
+    hash_rgba(&mut hasher, left_gutter);
+    hash_rgba(&mut hasher, right_bg);
+    hash_rgba(&mut hasher, right_fg);
+    hash_rgba(&mut hasher, right_gutter);
+    left_text_hash.hash(&mut hasher);
+    left_highlights_hash.hash(&mut hasher);
+    right_text_hash.hash(&mut hasher);
+    right_highlights_hash.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn patch_split_row_canvas_revision_key(
+    line_no: &SharedString,
+    bg: gpui::Rgba,
+    fg: gpui::Rgba,
+    gutter_fg: gpui::Rgba,
+    text_hash: u64,
+    highlights_hash: u64,
+) -> u64 {
+    let mut hasher = FxHasher::default();
+    hash_shared_string(&mut hasher, line_no);
+    hash_rgba(&mut hasher, bg);
+    hash_rgba(&mut hasher, fg);
+    hash_rgba(&mut hasher, gutter_fg);
+    text_hash.hash(&mut hasher);
+    highlights_hash.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn semantic_diff_row_bg(theme: AppTheme, bg: gpui::Rgba) -> Option<gpui::Rgba> {
+    (bg != theme.colors.window_bg).then_some(bg)
+}
+
+#[cfg(test)]
+#[derive(Clone, Debug, PartialEq)]
+pub(in crate::view) struct DiffPaintRecord {
+    pub(in crate::view) visible_ix: usize,
+    pub(in crate::view) region: DiffTextRegion,
+    pub(in crate::view) text: SharedString,
+    pub(in crate::view) highlights: Vec<(Range<usize>, Option<gpui::Hsla>, Option<gpui::Hsla>)>,
+    pub(in crate::view) row_bg: Option<gpui::Rgba>,
+}
+
+#[cfg(test)]
+thread_local! {
+    static DIFF_PAINT_LOG: RefCell<Vec<DiffPaintRecord>> = const { RefCell::new(Vec::new()) };
+}
+
+#[cfg(test)]
+fn record_diff_paint_for_tests(
+    visible_ix: usize,
+    region: DiffTextRegion,
+    text: &SharedString,
+    highlights: &[(Range<usize>, HighlightStyle)],
+    row_bg: Option<gpui::Rgba>,
+) {
+    DIFF_PAINT_LOG.with(|log| {
+        log.borrow_mut().push(DiffPaintRecord {
+            visible_ix,
+            region,
+            text: text.clone(),
+            highlights: highlights
+                .iter()
+                .map(|(range, style)| (range.clone(), style.color, style.background_color))
+                .collect(),
+            row_bg,
+        });
+    });
+}
+
+#[cfg(test)]
+pub(in crate::view) fn clear_diff_paint_log_for_tests() {
+    DIFF_PAINT_LOG.with(|log| log.borrow_mut().clear());
+}
+
+#[cfg(test)]
+pub(in crate::view) fn diff_paint_log_for_tests() -> Vec<DiffPaintRecord> {
+    DIFF_PAINT_LOG.with(|log| log.borrow().clone())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -42,9 +173,13 @@ pub(super) fn inline_diff_line_row_canvas(
         .unwrap_or_else(empty_highlights);
     let highlights_hash = styled.map(|s| s.highlights_hash).unwrap_or(0);
     let text_hash = styled.map(|s| s.text_hash).unwrap_or(0);
+    let revision =
+        inline_row_canvas_revision_key(&old, &new, bg, fg, gutter_fg, text_hash, highlights_hash);
+    let canvas_id: gpui::ElementId = ("diff_row_canvas_inline", visible_ix).into();
+    let test_row_bg = semantic_diff_row_bg(theme, bg);
 
     keyed_canvas(
-        ("diff_row_canvas_inline", visible_ix),
+        (canvas_id, format!("{revision:016x}")),
         move |bounds, window, _cx| {
             let pad = px_2(window);
             let gutter_total = gutter_cell_total_width(window, pad);
@@ -92,6 +227,7 @@ pub(super) fn inline_diff_line_row_canvas(
                     prepaint.text_bounds,
                     &text,
                     &highlights,
+                    test_row_bg,
                     highlights_hash,
                     text_hash,
                     y,
@@ -170,9 +306,26 @@ pub(super) fn split_diff_line_row_canvas(
         .unwrap_or_else(empty_highlights);
     let right_highlights_hash = right_styled.map(|s| s.highlights_hash).unwrap_or(0);
     let right_text_hash = right_styled.map(|s| s.text_hash).unwrap_or(0);
+    let revision = split_row_canvas_revision_key(
+        &old,
+        &new,
+        left_bg,
+        left_fg,
+        left_gutter,
+        right_bg,
+        right_fg,
+        right_gutter,
+        left_text_hash,
+        left_highlights_hash,
+        right_text_hash,
+        right_highlights_hash,
+    );
+    let canvas_id: gpui::ElementId = ("diff_row_canvas_split", visible_ix).into();
+    let left_test_row_bg = semantic_diff_row_bg(theme, left_bg);
+    let right_test_row_bg = semantic_diff_row_bg(theme, right_bg);
 
     keyed_canvas(
-        ("diff_row_canvas_split", visible_ix),
+        (canvas_id, format!("{revision:016x}")),
         move |bounds, window, _cx| {
             let pad = px_2(window);
             let gutter_total = gutter_cell_total_width(window, pad);
@@ -233,6 +386,7 @@ pub(super) fn split_diff_line_row_canvas(
                     prepaint.left_text_bounds,
                     &left_text,
                     &left_highlights,
+                    left_test_row_bg,
                     left_highlights_hash,
                     left_text_hash,
                     y,
@@ -251,6 +405,7 @@ pub(super) fn split_diff_line_row_canvas(
                     prepaint.right_text_bounds,
                     &right_text,
                     &right_highlights,
+                    right_test_row_bg,
                     right_highlights_hash,
                     right_text_hash,
                     y,
@@ -324,15 +479,26 @@ pub(super) fn patch_split_column_row_canvas(
         .unwrap_or_else(empty_highlights);
     let highlights_hash = styled.map(|s| s.highlights_hash).unwrap_or(0);
     let text_hash = styled.map(|s| s.text_hash).unwrap_or(0);
+    let revision = patch_split_row_canvas_revision_key(
+        &line_no,
+        bg,
+        fg,
+        gutter_fg,
+        text_hash,
+        highlights_hash,
+    );
+    let canvas_id: gpui::ElementId = (
+        match column {
+            super::diff::PatchSplitColumn::Left => "diff_row_canvas_file_split_left",
+            super::diff::PatchSplitColumn::Right => "diff_row_canvas_file_split_right",
+        },
+        visible_ix,
+    )
+        .into();
+    let test_row_bg = semantic_diff_row_bg(theme, bg);
 
     keyed_canvas(
-        (
-            match column {
-                super::diff::PatchSplitColumn::Left => "diff_row_canvas_file_split_left",
-                super::diff::PatchSplitColumn::Right => "diff_row_canvas_file_split_right",
-            },
-            visible_ix,
-        ),
+        (canvas_id, format!("{revision:016x}")),
         move |bounds, window, _cx| {
             let pad = px_2(window);
             let gutter_total = gutter_cell_total_width(window, pad);
@@ -371,6 +537,7 @@ pub(super) fn patch_split_column_row_canvas(
                     prepaint.text_bounds,
                     &text,
                     &highlights,
+                    test_row_bg,
                     highlights_hash,
                     text_hash,
                     y,
@@ -490,6 +657,7 @@ pub(super) fn worktree_preview_row_canvas(
                     prepaint.text_bounds,
                     &text,
                     &highlights,
+                    None,
                     highlights_hash,
                     text_hash,
                     y,
@@ -882,7 +1050,8 @@ fn paint_selectable_diff_text(
     region: DiffTextRegion,
     bounds: Bounds<Pixels>,
     text: &SharedString,
-    highlights: &Arc<Vec<(Range<usize>, HighlightStyle)>>,
+    highlights: &Arc<[(Range<usize>, HighlightStyle)]>,
+    row_bg: Option<gpui::Rgba>,
     highlights_hash: u64,
     text_hash: u64,
     y: Pixels,
@@ -895,6 +1064,11 @@ fn paint_selectable_diff_text(
     base_style.color = base_fg.into();
     base_style.white_space = gpui::WhiteSpace::Nowrap;
     base_style.text_overflow = None;
+
+    #[cfg(test)]
+    record_diff_paint_for_tests(visible_ix, region, text, highlights.as_ref(), row_bg);
+    #[cfg(not(test))]
+    let _ = row_bg;
 
     let selection = view
         .read(cx)
@@ -1052,12 +1226,16 @@ fn compute_runs(
 
 fn empty_highlights() -> HighlightSpans {
     static EMPTY: OnceLock<HighlightSpans> = OnceLock::new();
-    Arc::clone(EMPTY.get_or_init(|| Arc::new(Vec::new())))
+    Arc::clone(EMPTY.get_or_init(|| Arc::from(Vec::new())))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn rgba(r: f32, g: f32, b: f32) -> gpui::Rgba {
+        gpui::Rgba { r, g, b, a: 1.0 }
+    }
 
     fn test_bounds(x: f32, y: f32, width: f32, height: f32) -> Bounds<Pixels> {
         Bounds::new(point(px(x), px(y)), size(px(width), px(height)))
@@ -1114,5 +1292,183 @@ mod tests {
             Some(DiffTextRegion::SplitRight)
         );
         assert_eq!(regions.region_at(point(px(40.5), px(10.0))), None);
+    }
+
+    #[test]
+    fn inline_row_canvas_revision_key_tracks_rendered_payload() {
+        let base = inline_row_canvas_revision_key(
+            &"1".into(),
+            &"2".into(),
+            rgba(0.0, 0.0, 0.0),
+            rgba(1.0, 1.0, 1.0),
+            rgba(1.0, 1.0, 1.0),
+            11,
+            17,
+        );
+
+        assert_eq!(
+            base,
+            inline_row_canvas_revision_key(
+                &"1".into(),
+                &"2".into(),
+                rgba(0.0, 0.0, 0.0),
+                rgba(1.0, 1.0, 1.0),
+                rgba(1.0, 1.0, 1.0),
+                11,
+                17,
+            )
+        );
+        assert_ne!(
+            base,
+            inline_row_canvas_revision_key(
+                &"1".into(),
+                &"3".into(),
+                rgba(0.0, 0.0, 0.0),
+                rgba(1.0, 1.0, 1.0),
+                rgba(1.0, 1.0, 1.0),
+                11,
+                17,
+            )
+        );
+        assert_ne!(
+            base,
+            inline_row_canvas_revision_key(
+                &"1".into(),
+                &"2".into(),
+                rgba(1.0, 0.0, 0.0),
+                rgba(1.0, 1.0, 1.0),
+                rgba(1.0, 1.0, 1.0),
+                11,
+                17,
+            )
+        );
+        assert_ne!(
+            base,
+            inline_row_canvas_revision_key(
+                &"1".into(),
+                &"2".into(),
+                rgba(0.0, 0.0, 0.0),
+                rgba(1.0, 1.0, 1.0),
+                rgba(1.0, 1.0, 1.0),
+                12,
+                17,
+            )
+        );
+    }
+
+    #[test]
+    fn split_row_canvas_revision_key_tracks_both_sides() {
+        let base = split_row_canvas_revision_key(
+            &"10".into(),
+            &"20".into(),
+            rgba(0.0, 0.0, 0.0),
+            rgba(1.0, 1.0, 1.0),
+            rgba(1.0, 1.0, 1.0),
+            rgba(0.0, 0.0, 0.0),
+            rgba(1.0, 1.0, 1.0),
+            rgba(1.0, 1.0, 1.0),
+            3,
+            5,
+            7,
+            11,
+        );
+
+        assert_ne!(
+            base,
+            split_row_canvas_revision_key(
+                &"10".into(),
+                &"20".into(),
+                rgba(0.0, 0.0, 0.0),
+                rgba(1.0, 1.0, 1.0),
+                rgba(1.0, 1.0, 1.0),
+                rgba(0.0, 0.0, 0.0),
+                rgba(1.0, 1.0, 1.0),
+                rgba(1.0, 1.0, 1.0),
+                4,
+                5,
+                7,
+                11,
+            )
+        );
+        assert_ne!(
+            base,
+            split_row_canvas_revision_key(
+                &"10".into(),
+                &"20".into(),
+                rgba(0.0, 0.0, 0.0),
+                rgba(1.0, 1.0, 1.0),
+                rgba(1.0, 1.0, 1.0),
+                rgba(1.0, 0.0, 0.0),
+                rgba(1.0, 1.0, 1.0),
+                rgba(1.0, 1.0, 1.0),
+                3,
+                5,
+                7,
+                11,
+            )
+        );
+        assert_ne!(
+            base,
+            split_row_canvas_revision_key(
+                &"10".into(),
+                &"21".into(),
+                rgba(0.0, 0.0, 0.0),
+                rgba(1.0, 1.0, 1.0),
+                rgba(1.0, 1.0, 1.0),
+                rgba(0.0, 0.0, 0.0),
+                rgba(1.0, 1.0, 1.0),
+                rgba(1.0, 1.0, 1.0),
+                3,
+                5,
+                7,
+                11,
+            )
+        );
+    }
+
+    #[test]
+    fn patch_split_row_canvas_revision_key_tracks_line_number_and_style() {
+        let base = patch_split_row_canvas_revision_key(
+            &"42".into(),
+            rgba(0.0, 0.0, 0.0),
+            rgba(1.0, 1.0, 1.0),
+            rgba(1.0, 1.0, 1.0),
+            13,
+            17,
+        );
+
+        assert_ne!(
+            base,
+            patch_split_row_canvas_revision_key(
+                &"43".into(),
+                rgba(0.0, 0.0, 0.0),
+                rgba(1.0, 1.0, 1.0),
+                rgba(1.0, 1.0, 1.0),
+                13,
+                17,
+            )
+        );
+        assert_ne!(
+            base,
+            patch_split_row_canvas_revision_key(
+                &"42".into(),
+                rgba(0.0, 1.0, 0.0),
+                rgba(1.0, 1.0, 1.0),
+                rgba(1.0, 1.0, 1.0),
+                13,
+                17,
+            )
+        );
+        assert_ne!(
+            base,
+            patch_split_row_canvas_revision_key(
+                &"42".into(),
+                rgba(0.0, 0.0, 0.0),
+                rgba(1.0, 1.0, 1.0),
+                rgba(1.0, 1.0, 1.0),
+                14,
+                17,
+            )
+        );
     }
 }

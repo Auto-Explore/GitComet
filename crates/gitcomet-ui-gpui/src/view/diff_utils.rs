@@ -1,5 +1,25 @@
 use super::*;
 
+const MULTILINE_TEXT_COPY_BYTES_PER_LINE_ESTIMATE: usize = 64;
+const DIFF_TEXT_TAB_WIDTH: usize = 4;
+
+pub(in crate::view) fn multiline_text_copy_capacity_hint(line_count: usize) -> usize {
+    line_count.saturating_mul(MULTILINE_TEXT_COPY_BYTES_PER_LINE_ESTIMATE)
+}
+
+pub(in crate::view) fn diff_text_display_len(text: &str) -> usize {
+    if !text.contains('\t') {
+        return text.len();
+    }
+
+    text.chars().fold(0usize, |len, ch| {
+        len.saturating_add(match ch {
+            '\t' => DIFF_TEXT_TAB_WIDTH,
+            _ => ch.len_utf8(),
+        })
+    })
+}
+
 pub(super) fn scrollbar_markers_from_flags(
     len: usize,
     mut flag_at_index: impl FnMut(usize) -> u8,
@@ -70,6 +90,23 @@ pub(super) fn diff_content_text(line: &AnnotatedDiffLine) -> &str {
     }
 }
 
+pub(super) fn diff_content_line_text(
+    line: &AnnotatedDiffLine,
+) -> gitcomet_core::file_diff::FileDiffLineText {
+    let content_start = match line.kind {
+        gitcomet_core::domain::DiffLineKind::Add
+        | gitcomet_core::domain::DiffLineKind::Remove
+        | gitcomet_core::domain::DiffLineKind::Context => 1,
+        gitcomet_core::domain::DiffLineKind::Header | gitcomet_core::domain::DiffLineKind::Hunk => {
+            0
+        }
+    };
+    line.text
+        .slice(content_start..line.text.len())
+        .unwrap_or_else(|| line.text.clone())
+        .into()
+}
+
 pub(super) fn image_format_for_path(path: &std::path::Path) -> Option<gpui::ImageFormat> {
     let ext = path.extension()?.to_str()?;
     if ext.eq_ignore_ascii_case("png") {
@@ -91,15 +128,17 @@ pub(super) fn image_format_for_path(path: &std::path::Path) -> Option<gpui::Imag
     }
 }
 
-const SVG_PREVIEW_MIN_RASTER_WIDTH_PX: f32 = 2048.0;
+const SVG_PREVIEW_MIN_RASTER_WIDTH_PX: f32 = 1024.0;
 const SVG_PREVIEW_MAX_RASTER_EDGE_PX: f32 = 4096.0;
+static SVG_PREVIEW_USVG_OPTIONS: std::sync::LazyLock<resvg::usvg::Options<'static>> =
+    std::sync::LazyLock::new(resvg::usvg::Options::default);
 
 pub(in crate::view) fn rasterize_svg_png(
     svg_bytes: &[u8],
     target_width_px: f32,
     max_edge_px: f32,
 ) -> Option<Vec<u8>> {
-    let tree = resvg::usvg::Tree::from_data(svg_bytes, &resvg::usvg::Options::default()).ok()?;
+    let tree = resvg::usvg::Tree::from_data(svg_bytes, &SVG_PREVIEW_USVG_OPTIONS).ok()?;
     let svg_size = tree.size();
     let svg_width = svg_size.width();
     let svg_height = svg_size.height();
@@ -222,6 +261,156 @@ pub(super) fn compute_diff_file_for_src_ix(diff: &[impl UnifiedDiffLine]) -> Vec
             current_file = parse_diff_git_header_path(line.text()).map(Arc::<str>::from);
         }
         out.push(current_file.clone());
+    }
+
+    out
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct YamlBlockScalarState {
+    block_scalar_indent: Option<usize>,
+}
+
+fn diff_line_content_text(kind: gitcomet_core::domain::DiffLineKind, text: &str) -> &str {
+    match kind {
+        gitcomet_core::domain::DiffLineKind::Add => text.strip_prefix('+').unwrap_or(text),
+        gitcomet_core::domain::DiffLineKind::Remove => text.strip_prefix('-').unwrap_or(text),
+        gitcomet_core::domain::DiffLineKind::Context => text.strip_prefix(' ').unwrap_or(text),
+        gitcomet_core::domain::DiffLineKind::Header | gitcomet_core::domain::DiffLineKind::Hunk => {
+            text
+        }
+    }
+}
+
+fn yaml_block_scalar_indicator_indent(text: &str) -> Option<usize> {
+    let bytes = text.as_bytes();
+    let indent = bytes.iter().take_while(|&&byte| byte == b' ').count();
+    let mut ix = indent;
+
+    if bytes.get(ix) == Some(&b'-') {
+        ix += 1;
+        while bytes.get(ix).is_some_and(|byte| byte.is_ascii_whitespace()) {
+            ix += 1;
+        }
+    }
+
+    let key_start = ix;
+    while bytes
+        .get(ix)
+        .is_some_and(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+    {
+        ix += 1;
+    }
+    if ix == key_start || bytes.get(ix) != Some(&b':') {
+        return None;
+    }
+
+    ix += 1;
+    while bytes.get(ix).is_some_and(|byte| byte.is_ascii_whitespace()) {
+        ix += 1;
+    }
+
+    if !matches!(bytes.get(ix), Some(b'|') | Some(b'>')) {
+        return None;
+    }
+
+    ix += 1;
+    while bytes
+        .get(ix)
+        .is_some_and(|byte| matches!(byte, b'+' | b'-') || byte.is_ascii_digit())
+    {
+        ix += 1;
+    }
+
+    bytes[ix..]
+        .iter()
+        .all(|byte| byte.is_ascii_whitespace())
+        .then_some(indent)
+}
+
+fn yaml_update_block_scalar_state(state: &mut YamlBlockScalarState, text: &str) -> bool {
+    let indent = text
+        .as_bytes()
+        .iter()
+        .take_while(|&&byte| byte == b' ')
+        .count();
+    let trimmed = text[indent..].trim_end();
+    let mut is_block_scalar_content = false;
+    let mut keep_existing_block_scalar = false;
+
+    if let Some(base_indent) = state.block_scalar_indent {
+        if trimmed.is_empty() {
+            keep_existing_block_scalar = true;
+        } else if indent > base_indent {
+            keep_existing_block_scalar = true;
+            is_block_scalar_content = true;
+        } else {
+            state.block_scalar_indent = None;
+        }
+    }
+
+    if !keep_existing_block_scalar {
+        state.block_scalar_indent = yaml_block_scalar_indicator_indent(text);
+    }
+
+    is_block_scalar_content
+}
+
+pub(super) fn compute_diff_yaml_block_scalar_for_src_ix(
+    diff: &[impl UnifiedDiffLine],
+    diff_file_for_src_ix: &[Option<Arc<str>>],
+    diff_language_for_src_ix: &[Option<rows::DiffSyntaxLanguage>],
+) -> Vec<bool> {
+    let mut out = vec![false; diff.len()];
+    let mut current_file: Option<Arc<str>> = None;
+    let mut old_state = YamlBlockScalarState::default();
+    let mut new_state = YamlBlockScalarState::default();
+
+    for (ix, line) in diff.iter().enumerate() {
+        let next_file = diff_file_for_src_ix
+            .get(ix)
+            .and_then(|file| file.as_ref())
+            .cloned();
+        let file_changed = match (&current_file, &next_file) {
+            (Some(current), Some(next)) => !Arc::ptr_eq(current, next),
+            (None, None) => false,
+            _ => true,
+        };
+        if file_changed {
+            current_file = next_file;
+            old_state = YamlBlockScalarState::default();
+            new_state = YamlBlockScalarState::default();
+        }
+
+        if !matches!(
+            diff_language_for_src_ix.get(ix).copied().flatten(),
+            Some(rows::DiffSyntaxLanguage::Yaml)
+        ) {
+            continue;
+        }
+
+        if matches!(line.kind(), gitcomet_core::domain::DiffLineKind::Hunk) {
+            old_state = YamlBlockScalarState::default();
+            new_state = YamlBlockScalarState::default();
+            continue;
+        }
+
+        let text = diff_line_content_text(line.kind(), line.text());
+        match line.kind() {
+            gitcomet_core::domain::DiffLineKind::Context => {
+                let old = yaml_update_block_scalar_state(&mut old_state, text);
+                let new = yaml_update_block_scalar_state(&mut new_state, text);
+                out[ix] = old || new;
+            }
+            gitcomet_core::domain::DiffLineKind::Remove => {
+                out[ix] = yaml_update_block_scalar_state(&mut old_state, text);
+            }
+            gitcomet_core::domain::DiffLineKind::Add => {
+                out[ix] = yaml_update_block_scalar_state(&mut new_state, text);
+            }
+            gitcomet_core::domain::DiffLineKind::Header
+            | gitcomet_core::domain::DiffLineKind::Hunk => {}
+        }
     }
 
     out
@@ -687,6 +876,138 @@ mod tests {
     }
 
     #[test]
+    fn yaml_block_scalar_state_survives_blank_lines_between_added_content() {
+        let diff = vec![
+            dl(K::Header, "diff --git a/workflow.yml b/workflow.yml"),
+            dl(K::Header, "--- a/workflow.yml"),
+            dl(K::Header, "+++ b/workflow.yml"),
+            dl(K::Hunk, "@@ -1,0 +1,5 @@"),
+            dl(K::Add, "+        run: |"),
+            dl(K::Add, "+          $ErrorActionPreference = \"Stop\""),
+            dl(K::Add, "+"),
+            dl(K::Add, "+          $required = @("),
+            dl(K::Add, "+            \"AZURE_CREDENTIALS\""),
+        ];
+        let files = vec![Some(Arc::<str>::from("workflow.yml")); diff.len()];
+        let languages = vec![Some(rows::DiffSyntaxLanguage::Yaml); diff.len()];
+
+        let flags = compute_diff_yaml_block_scalar_for_src_ix(
+            diff.as_slice(),
+            files.as_slice(),
+            languages.as_slice(),
+        );
+
+        assert_eq!(
+            flags.get(4),
+            Some(&false),
+            "indicator line should not be forced"
+        );
+        assert_eq!(
+            flags.get(5),
+            Some(&true),
+            "first block-scalar content line should be forced"
+        );
+        assert_eq!(
+            flags.get(6),
+            Some(&false),
+            "blank block-scalar line should not need forcing"
+        );
+        assert_eq!(
+            flags.get(7),
+            Some(&true),
+            "content after a blank block-scalar line should still be forced"
+        );
+        assert_eq!(
+            flags.get(8),
+            Some(&true),
+            "nested content after a blank block-scalar line should still be forced"
+        );
+    }
+
+    #[test]
+    fn yaml_block_scalar_indicator_accepts_list_items_and_chomping_modifiers() {
+        assert_eq!(yaml_block_scalar_indicator_indent("- script: |-2"), Some(0));
+        assert_eq!(
+            yaml_block_scalar_indicator_indent("  - script: >+"),
+            Some(2)
+        );
+        assert_eq!(yaml_block_scalar_indicator_indent("script: value"), None);
+    }
+
+    #[test]
+    fn yaml_block_scalar_state_resets_when_diff_switches_files() {
+        let file_a: Arc<str> = Arc::from("a.yml");
+        let file_b: Arc<str> = Arc::from("b.yml");
+        let diff = vec![
+            dl(K::Add, "+script: |"),
+            dl(K::Add, "+  echo one"),
+            dl(K::Add, "+plain: value"),
+        ];
+        let files = vec![
+            Some(Arc::clone(&file_a)),
+            Some(Arc::clone(&file_a)),
+            Some(file_b),
+        ];
+        let languages = vec![
+            Some(rows::DiffSyntaxLanguage::Yaml),
+            Some(rows::DiffSyntaxLanguage::Yaml),
+            Some(rows::DiffSyntaxLanguage::Yaml),
+        ];
+
+        let flags = compute_diff_yaml_block_scalar_for_src_ix(
+            diff.as_slice(),
+            files.as_slice(),
+            languages.as_slice(),
+        );
+
+        assert_eq!(flags, vec![false, true, false]);
+    }
+
+    #[test]
+    fn parse_diff_and_hunk_headers_reject_malformed_inputs() {
+        for text in ["", "diff --git", "diff --git ", "index 123..456 100644"] {
+            assert_eq!(parse_diff_git_header_path(text), None, "{text:?}");
+        }
+
+        for text in [
+            "",
+            "@@",
+            "@@ -1,2",
+            "@@ -1,2 @@",
+            "@@ -1,2 +3,4",
+            "@@ start @@ heading",
+        ] {
+            assert!(
+                parse_unified_hunk_header_for_display(text).is_none(),
+                "{text:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn yaml_block_scalar_state_tolerates_short_metadata_arrays() {
+        let diff = vec![
+            dl(K::Header, "diff --git a/workflow.yml b/workflow.yml"),
+            dl(K::Add, "+script: |"),
+            dl(K::Add, "+  echo one"),
+            dl(K::Add, "+  echo two"),
+        ];
+        let files = vec![Some(Arc::<str>::from("workflow.yml"))];
+        let languages = vec![
+            Some(rows::DiffSyntaxLanguage::Yaml),
+            Some(rows::DiffSyntaxLanguage::Yaml),
+        ];
+
+        let flags = compute_diff_yaml_block_scalar_for_src_ix(
+            diff.as_slice(),
+            files.as_slice(),
+            languages.as_slice(),
+        );
+
+        assert_eq!(flags, vec![false, false, false, false]);
+    }
+
+    #[test]
     fn build_unified_patch_for_hunks_includes_multiple_hunks() {
         let diff = example_two_hunk_diff();
         let patch = build_unified_patch_for_hunks(&diff, &[4, 9]).expect("patch");
@@ -763,6 +1084,22 @@ mod tests {
     }
 
     #[test]
+    fn rasterize_svg_preview_png_scales_small_previews_to_2x_floor() {
+        let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 8">
+<rect width="16" height="8" fill="#00aaff"/>
+</svg>"##;
+
+        let png = rasterize_svg_preview_png(svg).expect("svg should rasterize");
+        assert!(png.len() >= 24, "png should contain an IHDR chunk");
+        assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
+        let width = u32::from_be_bytes([png[16], png[17], png[18], png[19]]);
+        let height = u32::from_be_bytes([png[20], png[21], png[22], png[23]]);
+
+        assert_eq!(width, SVG_PREVIEW_MIN_RASTER_WIDTH_PX as u32);
+        assert_eq!(height, (SVG_PREVIEW_MIN_RASTER_WIDTH_PX / 2.0) as u32);
+    }
+
+    #[test]
     fn context_menu_selection_range_from_diff_text_requires_click_in_selection() {
         let selection = Some((
             DiffTextPos {
@@ -828,5 +1165,11 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn diff_text_display_len_expands_tabs_without_allocating() {
+        assert_eq!(diff_text_display_len("hello"), 5);
+        assert_eq!(diff_text_display_len("\twide\tcell"), 16);
     }
 }

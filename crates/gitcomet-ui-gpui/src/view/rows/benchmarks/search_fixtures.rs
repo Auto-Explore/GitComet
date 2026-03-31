@@ -1301,7 +1301,7 @@ fn build_synthetic_commits_for_search(count: usize) -> Vec<Commit> {
 
         commits.push(Commit {
             id,
-            parent_ids,
+            parent_ids: parent_ids.into(),
             summary,
             author: author.into(),
             time: base + Duration::from_secs(ix as u64),

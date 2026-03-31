@@ -12,6 +12,8 @@ const IMAGE_DIFF_CACHE_CLEANUP_WRITE_INTERVAL: usize = 16;
 const IMAGE_DIFF_RASTER_PREVIEW_MAX_EDGE_PX: u32 = 1920;
 const IMAGE_DIFF_SVG_PREVIEW_TARGET_WIDTH_PX: f32 = 640.0;
 const IMAGE_DIFF_SVG_PREVIEW_MAX_EDGE_PX: f32 = 1024.0;
+static IMAGE_DIFF_SVG_USVG_OPTIONS: std::sync::LazyLock<resvg::usvg::Options<'static>> =
+    std::sync::LazyLock::new(resvg::usvg::Options::default);
 static IMAGE_DIFF_CACHE_STARTUP_CLEANUP: std::sync::Once = std::sync::Once::new();
 static IMAGE_DIFF_CACHE_WRITE_COUNT: AtomicUsize = AtomicUsize::new(0);
 
@@ -172,7 +174,7 @@ fn render_image_from_bgra8(buffer: image::RgbaImage) -> Arc<gpui::RenderImage> {
 pub(in crate::view) fn render_svg_image_diff_preview(
     svg_bytes: &[u8],
 ) -> Option<Arc<gpui::RenderImage>> {
-    let tree = resvg::usvg::Tree::from_data(svg_bytes, &resvg::usvg::Options::default()).ok()?;
+    let tree = resvg::usvg::Tree::from_data(svg_bytes, &IMAGE_DIFF_SVG_USVG_OPTIONS).ok()?;
     let svg_size = tree.size();
     let svg_width = svg_size.width();
     let svg_height = svg_size.height();
@@ -364,7 +366,7 @@ fn build_file_image_diff_cache_rebuild(
         .and_then(|s| s.to_str())
         .is_some_and(|ext| ext.eq_ignore_ascii_case("ico"));
     let file_path = Some(if file.path.is_absolute() {
-        file.path.clone()
+        file.path.to_path_buf()
     } else {
         workdir.join(&file.path)
     });

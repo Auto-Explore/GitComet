@@ -1,4 +1,4 @@
-use crate::msg::Msg;
+use crate::msg::{Msg, RepoPathList};
 use gitcomet_core::auth::{
     StagedGitAuth, clear_staged_git_auth, stage_git_auth_for_current_thread,
 };
@@ -257,10 +257,10 @@ pub(super) fn schedule_stage_paths(
     repos: &RepoMap,
     msg_tx: mpsc::Sender<Msg>,
     repo_id: RepoId,
-    paths: Vec<PathBuf>,
+    paths: RepoPathList,
 ) {
     schedule_repo_action(executor, repos, msg_tx, repo_id, move |repo| {
-        let unique = dedup_paths(paths);
+        let unique = dedup_paths(paths.as_slice().to_vec());
         let refs = unique.iter().map(|p| p.as_path()).collect::<Vec<_>>();
         repo.stage(&refs)
     });
@@ -284,10 +284,10 @@ pub(super) fn schedule_unstage_paths(
     repos: &RepoMap,
     msg_tx: mpsc::Sender<Msg>,
     repo_id: RepoId,
-    paths: Vec<PathBuf>,
+    paths: RepoPathList,
 ) {
     schedule_repo_action(executor, repos, msg_tx, repo_id, move |repo| {
-        let unique = dedup_paths(paths);
+        let unique = dedup_paths(paths.as_slice().to_vec());
         let refs = unique.iter().map(|p| p.as_path()).collect::<Vec<_>>();
         repo.unstage(&refs)
     });

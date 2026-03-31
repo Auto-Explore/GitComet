@@ -1757,7 +1757,7 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
         &mut state,
         Msg::StagePaths {
             repo_id,
-            paths: vec![PathBuf::from("a.txt"), PathBuf::from("b.txt")],
+            paths: vec![PathBuf::from("a.txt"), PathBuf::from("b.txt")].into(),
         },
     );
     assert!(matches!(
@@ -1774,7 +1774,7 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
         &mut state,
         Msg::UnstagePaths {
             repo_id,
-            paths: vec![PathBuf::from("a.txt"), PathBuf::from("b.txt")],
+            paths: vec![PathBuf::from("a.txt"), PathBuf::from("b.txt")].into(),
         },
     );
     assert!(matches!(

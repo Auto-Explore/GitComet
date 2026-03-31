@@ -6,6 +6,7 @@ usage() {
 Usage: scripts/compare-perf-runs.sh [options] BASE_RUN CANDIDATE_RUN
 
 Compare two archived performance runs produced by scripts/archive-perf-run.sh.
+Matching is done by benchmark name, with fallbacks for alternate field names.
 
 Run arguments may be:
   - a run id under tmp/perf-records (for example 20260331-062033Z)
@@ -33,8 +34,9 @@ Options:
   --direction MODE      Metric direction: lower, higher, neutral
                         Default: lower
   --sort FIELD          Sort rows by: regression, delta, abs_delta, name
-                        Default: regression
-  --limit N             Max rows. Default: 40
+                        Default: name
+  --limit N             Max rows. Use 0 for all rows.
+                        Default: 0
   --only-regressions    Show only worsening rows according to --direction
   -h, --help            Show this help.
 
@@ -250,6 +252,9 @@ format_change_cell() {
         printf "reg %.2f%%", v;
       }'
       ;;
+    missing_base|missing_candidate|incomparable)
+      printf -- '-'
+      ;;
     *)
       awk -v v="${delta_pct}" 'BEGIN {
         if (v < 0) v = -v;
@@ -257,6 +262,14 @@ format_change_cell() {
       }'
       ;;
   esac
+}
+
+markdown_escape() {
+  local value="$1"
+  value="${value//$'\n'/ }"
+  value="${value//\\/\\\\}"
+  value="${value//|/\\|}"
+  printf '%s' "${value}"
 }
 
 metadata_get() {
@@ -325,11 +338,13 @@ print_run_summary() {
   runner_class="$(metadata_get "${metadata_path}" "runner_class")"
   real_repo_root="$(metadata_get "${metadata_path}" "real_repo_root")"
 
-  echo "${label}: ${run_id:-$(basename "${run_dir}")}"
-  echo "  dir: ${run_dir}"
-  echo "  git: ${git_branch:-unknown} ${git_head:-unknown}"
-  echo "  runner_class: ${runner_class:-<unset>}"
-  echo "  real_repo_root: ${real_repo_root:-<unset>}"
+  echo "## ${label}"
+  echo
+  echo "- run: ${run_id:-$(basename "${run_dir}")}"
+  echo "- dir: ${run_dir}"
+  echo "- git: ${git_branch:-unknown} ${git_head:-unknown}"
+  echo "- runner_class: ${runner_class:-<unset>}"
+  echo "- real_repo_root: ${real_repo_root:-<unset>}"
 }
 
 compare_metrics_table() {
@@ -365,8 +380,40 @@ compare_metrics_table() {
     --arg sort_by "${sort_by}" \
     --argjson limit "${limit}" \
     --argjson only_regressions "${only_regressions_json}" '
+      def benchmark_name($row):
+        $row.bench
+        // $row.benchmark_name
+        // $row.benchmark
+        // $row.name
+        // $row.id
+        // (
+          [
+            $row.estimates_path?,
+            $row.sidecar_path?
+          ]
+          | map(select(. != null and . != ""))
+          | map(
+              if test("/new/") then
+                split("/new/")[0]
+              else
+                .
+              end
+              | sub("^target/criterion/"; "")
+              | sub("^crates/gitcomet-ui-gpui/target/criterion/"; "")
+            )
+          | .[0]?
+        );
+
       def idx(xs):
-        reduce xs[] as $x ({}; .[$x.kind + "|" + $x.bench] = $x);
+        reduce xs[] as $x (
+          {};
+          (benchmark_name($x)) as $name
+          | if $name == null or $name == "" then
+              .
+            else
+              .[$name] = ((.[$name] // []) + [$x])
+            end
+        );
 
       def metric_value($row; $metric):
         if $metric == "criterion.mean_ns" then $row.criterion.mean_ns
@@ -423,16 +470,41 @@ compare_metrics_table() {
       . as $base
       | (idx($base)) as $base_idx
       | (idx($cand)) as $cand_idx
+      | (
+          [
+            $base_idx
+            | to_entries[]
+            | select((.value | length) > 1)
+            | .key
+          ]
+        ) as $base_duplicate_names
+      | (
+          [
+            $cand_idx
+            | to_entries[]
+            | select((.value | length) > 1)
+            | .key
+          ]
+        ) as $candidate_duplicate_names
       | [
-          $base_idx
-          | keys_unsorted[]
-          | select($cand_idx[.] != null)
-          | ($base_idx[.]) as $old
-          | ($cand_idx[.]) as $new
-          | select($kind == "all" or $old.kind == $kind)
+          (
+            (($base_idx | keys_unsorted) + ($cand_idx | keys_unsorted))
+            | unique[]
+          ) as $bench_name
+          | ($base_idx[$bench_name] // []) as $old_rows
+          | ($cand_idx[$bench_name] // []) as $new_rows
+          | select(($old_rows | length) <= 1 and ($new_rows | length) <= 1)
+          | ($old_rows[0]?) as $old
+          | ($new_rows[0]?) as $new
+          | (($new.kind // $old.kind) // null) as $resolved_kind
+          | select($kind == "all" or $resolved_kind == $kind)
           | {
-              kind: $old.kind,
-              bench: $old.bench,
+              kind: $resolved_kind,
+              base_kind: $old.kind,
+              candidate_kind: $new.kind,
+              bench: $bench_name,
+              base_present: ($old != null),
+              candidate_present: ($new != null),
               metrics: [ $metrics[] as $metric | metric_entry($old; $new; $metric; $direction) ]
             }
           | . + {
@@ -454,10 +526,15 @@ compare_metrics_table() {
                 ] | max // 0
               )
             }
-          | select(.comparable_count > 0)
           | . + {
               status: (
-                if .improved_count > 0 and .regressed_count == 0 and .changed_count == 0 then
+                if (.base_present | not) then
+                  "missing_base"
+                elif (.candidate_present | not) then
+                  "missing_candidate"
+                elif .comparable_count == 0 then
+                  "incomparable"
+                elif .improved_count > 0 and .regressed_count == 0 and .changed_count == 0 then
                   "improved"
                 elif .regressed_count > 0 and .improved_count == 0 and .changed_count == 0 then
                   "regressed"
@@ -490,6 +567,17 @@ compare_metrics_table() {
         ) as $sorted
       | {
           matched: $matched,
+          displayed: (
+            if $limit == 0 then
+              ($sorted | length)
+            else
+              ($sorted[:$limit] | length)
+            end
+          ),
+          duplicate_names: {
+            base: $base_duplicate_names,
+            candidate: $candidate_duplicate_names
+          },
           groups: (
             [
               "criterion",
@@ -498,7 +586,14 @@ compare_metrics_table() {
             ]
             | map(
                 . as $kind_name
-                | ($sorted[:$limit] | map(select(.kind == $kind_name))) as $kind_rows
+                | (
+                    if $limit == 0 then
+                      $sorted
+                    else
+                      $sorted[:$limit]
+                    end
+                    | map(select(.kind == $kind_name))
+                  ) as $kind_rows
                 | select(($kind_rows | length) > 0)
                 | {
                     kind: $kind_name,
@@ -519,40 +614,57 @@ compare_metrics_table() {
     return 0
   fi
 
+  local matched_count
+  local displayed_count
+  local duplicate_base_count
+  local duplicate_candidate_count
+  matched_count="$(jq -r '.matched' "${tmp_file}")"
+  displayed_count="$(jq -r '.displayed' "${tmp_file}")"
+  duplicate_base_count="$(jq -r '.duplicate_names.base | length' "${tmp_file}")"
+  duplicate_candidate_count="$(jq -r '.duplicate_names.candidate | length' "${tmp_file}")"
+
+  echo
+  echo "- matched benchmarks: ${matched_count}"
+  if [[ "${displayed_count}" != "${matched_count}" ]]; then
+    echo "- showing benchmarks: ${displayed_count} (truncated by --limit=${limit})"
+  fi
+  if [[ "${duplicate_base_count}" != "0" ]]; then
+    echo "warning: skipped ${duplicate_base_count} ambiguous benchmark name(s) in base run" >&2
+  fi
+  if [[ "${duplicate_candidate_count}" != "0" ]]; then
+    echo "warning: skipped ${duplicate_candidate_count} ambiguous benchmark name(s) in candidate run" >&2
+  fi
+
   group_count="$(jq -r '.groups | length' "${tmp_file}")"
   for ((group_index = 0; group_index < group_count; group_index++)); do
     local kind_name
     local row_tsv_filter=""
     local -a group_metrics=()
     local -a header=()
-    local -a separator=()
 
     kind_name="$(jq -r ".groups[${group_index}].kind" "${tmp_file}")"
     mapfile -t group_metrics < <(jq -r ".groups[${group_index}].metrics[]" "${tmp_file}")
 
     echo
-    echo "${kind_name}"
+    echo "### ${kind_name}"
+    echo
 
     header=("bench" "status")
-    separator=("----------------------------------------------" "-----------")
     for metric_jq in "${group_metrics[@]}"; do
       header+=("$(metric_column_stem "${metric_jq}")_base")
       header+=("$(metric_column_stem "${metric_jq}")_cand")
       header+=("$(metric_column_stem "${metric_jq}")%")
-      separator+=("--------------")
-      separator+=("--------------")
-      separator+=("------------")
     done
 
-    printf '%-46s  %-11s' "${header[0]}" "${header[1]}"
-    for ((i = 2; i < ${#header[@]}; i++)); do
-      printf '  %-14s' "${header[$i]}"
+    printf '|'
+    for column in "${header[@]}"; do
+      printf ' %s |' "$(markdown_escape "${column}")"
     done
     printf '\n'
 
-    printf '%-46s  %-11s' "${separator[0]}" "${separator[1]}"
-    for ((i = 2; i < ${#separator[@]}; i++)); do
-      printf '  %-14s' "${separator[$i]}"
+    printf '|'
+    for ((i = 0; i < ${#header[@]}; i++)); do
+      printf ' --- |'
     done
     printf '\n'
 
@@ -561,21 +673,23 @@ compare_metrics_table() {
       row_tsv_filter+=" + [((\$row.metrics[] | select(.metric == \"${metric_jq}\") | (.before // \"null\")) | tostring)]"
       row_tsv_filter+=" + [((\$row.metrics[] | select(.metric == \"${metric_jq}\") | (.after // \"null\")) | tostring)]"
       row_tsv_filter+=" + [((\$row.metrics[] | select(.metric == \"${metric_jq}\") | (.delta_pct // \"null\")) | tostring)]"
-      row_tsv_filter+=" + [((\$row.metrics[] | select(.metric == \"${metric_jq}\") | (.status // \"\")) | tostring)]"
+      row_tsv_filter+=" + [((\$row.metrics[] | select(.metric == \"${metric_jq}\") | (.status // \"null\")) | tostring)]"
     done
     row_tsv_filter+=" | @tsv"
 
     while IFS=$'\t' read -r -a fields; do
       local field_index=2
-      printf '%-46s  %-11s' "${fields[0]:0:46}" "${fields[1]}"
+      printf '| %s | %s |' \
+        "$(markdown_escape "${fields[0]}")" \
+        "$(markdown_escape "${fields[1]}")"
       for metric_jq in "${group_metrics[@]}"; do
         local before_raw="${fields[$field_index]}"
         local after_raw="${fields[$((field_index + 1))]}"
         local delta_pct_raw="${fields[$((field_index + 2))]}"
         local status_raw="${fields[$((field_index + 3))]}"
-        printf '  %-14s' "$(format_metric_value "${metric_jq}" "${before_raw}")"
-        printf '  %-14s' "$(format_metric_value "${metric_jq}" "${after_raw}")"
-        printf '  %-14s' "$(format_change_cell "${status_raw}" "${delta_pct_raw}")"
+        printf ' %s |' "$(markdown_escape "$(format_metric_value "${metric_jq}" "${before_raw}")")"
+        printf ' %s |' "$(markdown_escape "$(format_metric_value "${metric_jq}" "${after_raw}")")"
+        printf ' %s |' "$(markdown_escape "$(format_change_cell "${status_raw}" "${delta_pct_raw}")")"
         field_index=$((field_index + 4))
       done
       printf '\n'
@@ -588,8 +702,8 @@ compare_metrics_table() {
 archive_root="tmp/perf-records"
 kind_filter="all"
 direction="lower"
-sort_by="regression"
-limit=40
+sort_by="name"
+limit=0
 only_regressions=0
 metrics=()
 positionals=()
@@ -676,8 +790,8 @@ case "${sort_by}" in
     ;;
 esac
 
-if ! [[ "${limit}" =~ ^[0-9]+$ ]] || [[ "${limit}" -lt 1 ]]; then
-  echo "--limit must be a positive integer" >&2
+if ! [[ "${limit}" =~ ^[0-9]+$ ]]; then
+  echo "--limit must be a non-negative integer" >&2
   exit 2
 fi
 
@@ -695,10 +809,19 @@ if ! IFS='|' read -r candidate_run_dir candidate_jsonl candidate_metadata <<< "$
   exit 1
 fi
 
-echo "Comparing archived performance runs"
+echo "# Comparing archived performance runs"
+echo
 print_run_summary "base" "${base_run_dir}" "${base_metadata}"
+echo
 print_run_summary "candidate" "${candidate_run_dir}" "${candidate_metadata}"
-echo "filters: kind=${kind_filter} direction=${direction} sort=${sort_by} limit=${limit} only_regressions=${only_regressions}"
+if [[ "${limit}" == "0" ]]; then
+  limit_label="all"
+else
+  limit_label="${limit}"
+fi
+
+echo
+echo "- filters: kind=${kind_filter} direction=${direction} sort=${sort_by} limit=${limit_label} only_regressions=${only_regressions}"
 
 base_git_head="$(metadata_get "${base_metadata}" "git_head")"
 candidate_git_head="$(metadata_get "${candidate_metadata}" "git_head")"
@@ -708,13 +831,13 @@ base_real_repo_root="$(metadata_get "${base_metadata}" "real_repo_root")"
 candidate_real_repo_root="$(metadata_get "${candidate_metadata}" "real_repo_root")"
 
 if [[ "${base_git_head}" != "${candidate_git_head}" ]]; then
-  echo "warning: git_head differs between runs"
+  echo "> Warning: git_head differs between runs"
 fi
 if [[ "${base_runner_class}" != "${candidate_runner_class}" ]]; then
-  echo "warning: runner_class differs between runs"
+  echo "> Warning: runner_class differs between runs"
 fi
 if [[ "${base_real_repo_root}" != "${candidate_real_repo_root}" ]]; then
-  echo "warning: real_repo_root differs between runs"
+  echo "> Warning: real_repo_root differs between runs"
 fi
 
 echo

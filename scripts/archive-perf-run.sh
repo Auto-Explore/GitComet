@@ -187,6 +187,12 @@ if [[ ${suite_dry_run} -eq 1 ]]; then
     echo "Dry run requested."
     echo "No benchmark artifacts were copied into this archive."
   } > "${budget_report}"
+elif [[ ${suite_status} -ne 0 ]]; then
+  {
+    echo "Suite command failed with exit ${suite_status}."
+    echo "Skipped artifact snapshot and archived budget replay to avoid archiving stale Criterion data."
+    echo "See full-suite.log for the primary failure."
+  } > "${budget_report}"
 else
   copied_any_criterion_root=0
   mkdir -p "${archive_criterion_root}"

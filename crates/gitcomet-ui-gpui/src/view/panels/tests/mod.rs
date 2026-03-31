@@ -1,3 +1,5 @@
+#![allow(clippy::type_complexity)]
+
 pub(super) use super::main::{
     next_conflict_diff_split_ratio, show_conflict_save_stage_action,
     show_external_mergetool_actions,
@@ -325,11 +327,11 @@ pub(super) fn seed_file_diff_state_with_rev(
             );
             repo.diff_state.diff_file_rev = diff_file_rev;
             repo.diff_state.diff_file = gitcomet_state::model::Loadable::Ready(Some(Arc::new(
-                gitcomet_core::domain::FileDiffText {
-                    path: path.to_path_buf(),
-                    old: Some(old_text.to_string()),
-                    new: Some(new_text.to_string()),
-                },
+                gitcomet_core::domain::FileDiffText::new(
+                    path.to_path_buf(),
+                    Some(old_text.to_string()),
+                    Some(new_text.to_string()),
+                ),
             )));
 
             let next_state = app_state_with_repo(repo, repo_id);
@@ -544,11 +546,11 @@ pub(super) fn assert_markdown_file_preview_toggle_visible(
                 gitcomet_core::domain::DiffArea::Staged,
             );
             repo.diff_state.diff_file = gitcomet_state::model::Loadable::Ready(Some(Arc::new(
-                gitcomet_core::domain::FileDiffText {
-                    path: file_rel.clone(),
-                    old: old_text.map(|text| text.to_string()),
-                    new: new_text.map(|text| text.to_string()),
-                },
+                gitcomet_core::domain::FileDiffText::new(
+                    file_rel.clone(),
+                    old_text.map(|text| text.to_string()),
+                    new_text.map(|text| text.to_string()),
+                ),
             )));
 
             let next_state = app_state_with_repo(repo, repo_id);
@@ -741,7 +743,7 @@ pub(super) fn set_test_conflict_file(
     repo.conflict_state.conflict_file_path = Some(path.clone());
     repo.conflict_state.conflict_file =
         gitcomet_state::model::Loadable::Ready(Some(gitcomet_state::model::ConflictFile {
-            path,
+            path: path.into(),
             base_bytes: None,
             ours_bytes: None,
             theirs_bytes: None,
@@ -860,6 +862,7 @@ pub(super) fn wait_for_file_image_diff_cache<Ready>(
 
 mod conflict;
 mod file_diff;
+mod file_preview;
 mod file_status;
 mod large_file_diff;
 mod markdown;

@@ -262,9 +262,10 @@ fn external_git_state_change_refreshes_history_and_selected_diff() {
         "expected upstream divergence refresh"
     );
     assert!(
-        effects
-            .iter()
-            .any(|e| matches!(e, Effect::LoadRebaseState { repo_id } if *repo_id == RepoId(1))),
+        effects.iter().any(|e| matches!(
+            e,
+            Effect::LoadRebaseAndMergeState { repo_id } if *repo_id == RepoId(1)
+        )),
         "expected rebase state refresh"
     );
     assert!(
@@ -281,7 +282,10 @@ fn external_git_state_change_refreshes_history_and_selected_diff() {
     );
     assert!(
         effects.iter().any(|e| {
-            matches!(e, Effect::LoadMergeCommitMessage { repo_id } if *repo_id == RepoId(1))
+            matches!(
+                e,
+                Effect::LoadRebaseAndMergeState { repo_id } if *repo_id == RepoId(1)
+            )
         }),
         "expected merge commit message refresh"
     );
@@ -329,12 +333,12 @@ fn external_git_state_refresh_is_coalesced_and_replayed_once() {
     assert!(
         effects1
             .iter()
-            .any(|e| matches!(e, Effect::LoadRebaseState { .. }))
+            .any(|e| matches!(e, Effect::LoadRebaseAndMergeState { .. }))
     );
     assert!(
         effects1
             .iter()
-            .any(|e| matches!(e, Effect::LoadMergeCommitMessage { .. }))
+            .any(|e| matches!(e, Effect::LoadRebaseAndMergeState { .. }))
     );
     assert!(
         effects1
@@ -660,13 +664,14 @@ fn load_more_history_emits_paginated_load_log_effect() {
     repo_state.log = Loadable::Ready(Arc::new(LogPage {
         commits: vec![Commit {
             id: CommitId("c1".into()),
-            parent_ids: Vec::new(),
+            parent_ids: gitcomet_core::domain::CommitParentIds::new(),
             summary: "s1".into(),
             author: "a".into(),
             time: SystemTime::UNIX_EPOCH,
         }],
         next_cursor: Some(LogCursor {
             last_seen: CommitId("c1".into()),
+            resume_from: None,
         }),
     }));
     repo_state.history_state.log_loading_more = false;
@@ -741,6 +746,53 @@ fn set_history_scope_to_all_branches_emits_load_log_all_branches_effect() {
 }
 
 #[test]
+fn set_history_scope_retains_ready_log_while_loading() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    state.repos.push(RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(RepoId(1));
+
+    let retained_page = Arc::new(LogPage {
+        commits: vec![Commit {
+            id: CommitId("c1".into()),
+            parent_ids: gitcomet_core::domain::CommitParentIds::new(),
+            summary: "s1".into(),
+            author: "a".into(),
+            time: SystemTime::UNIX_EPOCH,
+        }],
+        next_cursor: None,
+    });
+    let repo_state = &mut state.repos[0];
+    repo_state.history_state.history_scope = LogScope::CurrentBranch;
+    repo_state.set_log(Loadable::Ready(Arc::clone(&retained_page)));
+
+    let _effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SetHistoryScope {
+            repo_id: RepoId(1),
+            scope: LogScope::AllBranches,
+        },
+    );
+
+    let repo_state = &state.repos[0];
+    assert!(repo_state.log.is_loading());
+    let retained = repo_state
+        .history_state
+        .retained_log_while_loading
+        .as_ref()
+        .expect("scope switch should retain the previous ready log while loading");
+    assert!(Arc::ptr_eq(retained, &retained_page));
+}
+
+#[test]
 fn load_more_history_noops_when_no_next_cursor() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);
@@ -757,7 +809,7 @@ fn load_more_history_noops_when_no_next_cursor() {
     repo_state.log = Loadable::Ready(Arc::new(LogPage {
         commits: vec![Commit {
             id: CommitId("c1".into()),
-            parent_ids: Vec::new(),
+            parent_ids: gitcomet_core::domain::CommitParentIds::new(),
             summary: "s1".into(),
             author: "a".into(),
             time: SystemTime::UNIX_EPOCH,
@@ -795,13 +847,14 @@ fn log_loaded_appends_when_loading_more() {
     repo_state.log = Loadable::Ready(Arc::new(LogPage {
         commits: vec![Commit {
             id: CommitId("c1".into()),
-            parent_ids: Vec::new(),
+            parent_ids: gitcomet_core::domain::CommitParentIds::new(),
             summary: "s1".into(),
             author: "a".into(),
             time: SystemTime::UNIX_EPOCH,
         }],
         next_cursor: Some(LogCursor {
             last_seen: CommitId("c1".into()),
+            resume_from: None,
         }),
     }));
     repo_state.history_state.log_loading_more = true;
@@ -815,11 +868,12 @@ fn log_loaded_appends_when_loading_more() {
             scope: LogScope::CurrentBranch,
             cursor: Some(LogCursor {
                 last_seen: CommitId("c1".into()),
+                resume_from: None,
             }),
             result: Ok(LogPage {
                 commits: vec![Commit {
                     id: CommitId("c2".into()),
-                    parent_ids: Vec::new(),
+                    parent_ids: gitcomet_core::domain::CommitParentIds::new(),
                     summary: "s2".into(),
                     author: "a".into(),
                     time: SystemTime::UNIX_EPOCH,
@@ -838,6 +892,205 @@ fn log_loaded_appends_when_loading_more() {
     assert_eq!(page.commits[0].id.as_ref(), "c1");
     assert_eq!(page.commits[1].id.as_ref(), "c2");
     assert_eq!(page.next_cursor, None);
+}
+
+#[test]
+fn log_loaded_appends_when_loading_more_re_shares_history_log_arc() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    state.repos.push(RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(RepoId(1));
+
+    let repo_state = &mut state.repos[0];
+    repo_state.history_state.history_scope = LogScope::CurrentBranch;
+    repo_state.set_log(Loadable::Ready(Arc::new(LogPage {
+        commits: vec![Commit {
+            id: CommitId("c1".into()),
+            parent_ids: gitcomet_core::domain::CommitParentIds::new(),
+            summary: "s1".into(),
+            author: "a".into(),
+            time: SystemTime::UNIX_EPOCH,
+        }],
+        next_cursor: Some(LogCursor {
+            last_seen: CommitId("c1".into()),
+            resume_from: None,
+        }),
+    })));
+    repo_state.history_state.log_loading_more = true;
+
+    let _effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::LogLoaded {
+            repo_id: RepoId(1),
+            scope: LogScope::CurrentBranch,
+            cursor: Some(LogCursor {
+                last_seen: CommitId("c1".into()),
+                resume_from: None,
+            }),
+            result: Ok(LogPage {
+                commits: vec![Commit {
+                    id: CommitId("c2".into()),
+                    parent_ids: gitcomet_core::domain::CommitParentIds::new(),
+                    summary: "s2".into(),
+                    author: "a".into(),
+                    time: SystemTime::UNIX_EPOCH,
+                }],
+                next_cursor: Some(LogCursor {
+                    last_seen: CommitId("c2".into()),
+                    resume_from: None,
+                }),
+            }),
+        }),
+    );
+
+    let repo_state = &state.repos[0];
+    let Loadable::Ready(repo_log) = &repo_state.log else {
+        panic!("expected repo log ready");
+    };
+    let Loadable::Ready(history_log) = &repo_state.history_state.log else {
+        panic!("expected history log ready");
+    };
+
+    assert!(Arc::ptr_eq(repo_log, history_log));
+    assert_eq!(repo_log.commits.len(), 2);
+    assert_eq!(repo_log.commits[1].id.as_ref(), "c2");
+    assert_eq!(
+        repo_log
+            .next_cursor
+            .as_ref()
+            .and_then(|cursor| cursor.last_seen.as_ref().strip_prefix('c')),
+        Some("2")
+    );
+}
+
+#[test]
+fn log_loaded_clears_retained_scope_switch_log() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    state.repos.push(RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(RepoId(1));
+
+    let repo_state = &mut state.repos[0];
+    repo_state.history_state.history_scope = LogScope::CurrentBranch;
+    repo_state.set_log(Loadable::Ready(Arc::new(LogPage {
+        commits: vec![Commit {
+            id: CommitId("old".into()),
+            parent_ids: gitcomet_core::domain::CommitParentIds::new(),
+            summary: "old".into(),
+            author: "a".into(),
+            time: SystemTime::UNIX_EPOCH,
+        }],
+        next_cursor: None,
+    })));
+
+    let _ = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SetHistoryScope {
+            repo_id: RepoId(1),
+            scope: LogScope::AllBranches,
+        },
+    );
+
+    assert!(
+        state.repos[0]
+            .history_state
+            .retained_log_while_loading
+            .is_some()
+    );
+
+    let _ = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::LogLoaded {
+            repo_id: RepoId(1),
+            scope: LogScope::AllBranches,
+            cursor: None,
+            result: Ok(LogPage {
+                commits: vec![Commit {
+                    id: CommitId("new".into()),
+                    parent_ids: gitcomet_core::domain::CommitParentIds::new(),
+                    summary: "new".into(),
+                    author: "a".into(),
+                    time: SystemTime::UNIX_EPOCH,
+                }],
+                next_cursor: None,
+            }),
+        }),
+    );
+
+    let repo_state = &state.repos[0];
+    assert!(matches!(repo_state.log, Loadable::Ready(_)));
+    assert!(
+        repo_state
+            .history_state
+            .retained_log_while_loading
+            .is_none()
+    );
+}
+
+#[test]
+fn log_loaded_initial_paginated_page_keeps_append_slack() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    state.repos.push(RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(RepoId(1));
+
+    let commits: Vec<Commit> = (0..600)
+        .map(|ix| Commit {
+            id: CommitId(format!("{ix:040x}").into()),
+            parent_ids: gitcomet_core::domain::CommitParentIds::new(),
+            summary: format!("s{ix}").into(),
+            author: "a".into(),
+            time: SystemTime::UNIX_EPOCH,
+        })
+        .collect();
+    let last_seen = commits.last().expect("last commit").id.clone();
+
+    let _effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::LogLoaded {
+            repo_id: RepoId(1),
+            scope: LogScope::CurrentBranch,
+            cursor: None,
+            result: Ok(LogPage {
+                commits,
+                next_cursor: Some(LogCursor {
+                    last_seen,
+                    resume_from: None,
+                }),
+            }),
+        }),
+    );
+
+    let Loadable::Ready(page) = &state.repos[0].log else {
+        panic!("expected log ready");
+    };
+    assert!(page.commits.capacity() >= page.commits.len() + 512);
 }
 
 // --- Revision counter regression tests ---
@@ -870,7 +1123,7 @@ fn log_loaded_bumps_log_rev() {
             result: Ok(LogPage {
                 commits: vec![Commit {
                     id: CommitId("c1".into()),
-                    parent_ids: Vec::new(),
+                    parent_ids: gitcomet_core::domain::CommitParentIds::new(),
                     summary: "s1".into(),
                     author: "a".into(),
                     time: SystemTime::UNIX_EPOCH,
@@ -923,14 +1176,14 @@ fn detached_head_target_tracks_current_branch_log_head() {
                 commits: vec![
                     Commit {
                         id: CommitId("c1".into()),
-                        parent_ids: vec![CommitId("c0".into())],
+                        parent_ids: smallvec::smallvec![CommitId("c0".into())],
                         summary: "s1".into(),
                         author: "a".into(),
                         time: SystemTime::UNIX_EPOCH,
                     },
                     Commit {
                         id: CommitId("c0".into()),
-                        parent_ids: Vec::new(),
+                        parent_ids: gitcomet_core::domain::CommitParentIds::new(),
                         summary: "s0".into(),
                         author: "a".into(),
                         time: SystemTime::UNIX_EPOCH,

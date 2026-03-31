@@ -1,4 +1,5 @@
 use super::*;
+use crate::perf_alloc::measure_allocations;
 use gitcomet_core::conflict_session::ConflictPayload;
 
 #[test]
@@ -832,20 +833,22 @@ fn repo_switch_twenty_tabs_scales_repo_count_without_heating_all_tabs() {
 }
 
 #[test]
-fn repo_switch_fresh_state_clones_baseline_repo_set() {
+fn repo_switch_fresh_state_restamps_hot_repos_only() {
     let fixture = RepoSwitchFixture::twenty_tabs(500, 20, 40, 2);
+    let before = SystemTime::now();
     let state = fixture.fresh_state();
-    assert_eq!(state.active_repo, fixture.baseline.active_repo);
-    assert_eq!(state.repos.len(), fixture.baseline.repos.len());
-    assert_eq!(
-        state.repos.iter().map(|repo| repo.id).collect::<Vec<_>>(),
-        fixture
-            .baseline
-            .repos
-            .iter()
-            .map(|repo| repo.id)
-            .collect::<Vec<_>>()
-    );
+    let after = SystemTime::now();
+
+    let hot_repos: Vec<_> = state
+        .repos
+        .iter()
+        .filter_map(|repo| repo.last_active_at)
+        .collect();
+    assert_eq!(hot_repos.len(), 2);
+    assert!(hot_repos.iter().all(|last_active_at| {
+        last_active_at.duration_since(before).is_ok()
+            && after.duration_since(*last_active_at).is_ok()
+    }));
 }
 
 #[test]
@@ -2131,7 +2134,7 @@ fn history_column_resize_fixture_clamps_and_bounces() {
     assert_ne!(hash, 0);
     assert_eq!(metrics.steps, 200);
     assert_eq!(metrics.width_clamp_recomputes, metrics.steps);
-    assert_eq!(metrics.visible_column_recomputes, metrics.steps);
+    assert_eq!(metrics.visible_column_recomputes, 0);
     // The drag should clamp at least once at either min or max.
     assert!(
         metrics.clamp_at_min_count + metrics.clamp_at_max_count >= 1,
@@ -2142,12 +2145,36 @@ fn history_column_resize_fixture_clamps_and_bounces() {
 }
 
 #[test]
+fn history_column_resize_fixture_hash_only_matches_metrics_path() {
+    let mut hash_only = HistoryColumnResizeDragStepFixture::new(HistoryResizeColumn::Branch);
+    let mut with_metrics = HistoryColumnResizeDragStepFixture::new(HistoryResizeColumn::Branch);
+    let hash = hash_only.run(HistoryResizeColumn::Branch);
+    let (metrics_hash, metrics) = with_metrics.run_with_metrics(HistoryResizeColumn::Branch);
+    assert_eq!(hash, metrics_hash);
+    assert_eq!(metrics.steps, 200);
+}
+
+#[test]
 fn repo_tab_drag_hit_test_covers_all_tabs() {
     let fixture = RepoTabDragFixture::new(20);
     let (hash, metrics) = fixture.run_hit_test();
     assert_ne!(hash, 0);
     assert_eq!(metrics.tab_count, 20);
     assert_eq!(metrics.hit_test_steps, 60); // 20 * 3 steps
+}
+
+#[test]
+fn repo_tab_drag_hit_test_precomputes_expected_sweep() {
+    let fixture = RepoTabDragFixture::new(4);
+    assert_eq!(fixture.hit_test_steps.len(), 12);
+    assert_eq!(
+        fixture.hit_test_steps.first().unwrap().target.repo_id,
+        RepoId(1)
+    );
+    assert_eq!(
+        fixture.hit_test_steps.last().unwrap().target.repo_id,
+        RepoId(4)
+    );
 }
 
 #[test]
@@ -2257,6 +2284,12 @@ fn commit_search_filter_fixture_has_100_distinct_authors() {
 }
 
 #[test]
+fn commit_search_filter_fixture_builds_message_trigram_index() {
+    let fixture = CommitSearchFilterFixture::new(50_000);
+    assert!(fixture.distinct_message_trigrams() > 0);
+}
+
+#[test]
 fn commit_search_filter_by_author_finds_expected_matches() {
     let fixture = CommitSearchFilterFixture::new(50_000);
     // "Alice" is 1 of 10 first names → matches ~10% of commits.
@@ -2279,6 +2312,21 @@ fn commit_search_filter_by_message_finds_expected_matches() {
     // "fix" appears at indices 0, 10, 20, ... → exactly 5000 matches.
     assert_eq!(metrics.matches_found, 5_000);
     // "fixx" should match zero.
+    assert_eq!(metrics.incremental_matches, 0);
+}
+
+#[test]
+fn commit_search_filter_by_message_short_query_matches_same_prefix_family() {
+    let fixture = CommitSearchFilterFixture::new(50_000);
+    let (_, metrics) = fixture.run_filter_by_message_with_metrics("fi");
+    assert_eq!(metrics.matches_found, 5_000);
+}
+
+#[test]
+fn commit_search_filter_by_message_can_match_unique_commit_suffix() {
+    let fixture = CommitSearchFilterFixture::new(50_000);
+    let (_, metrics) = fixture.run_filter_by_message_with_metrics("commit 12345");
+    assert_eq!(metrics.matches_found, 1);
     assert_eq!(metrics.incremental_matches, 0);
 }
 
@@ -2331,7 +2379,8 @@ fn in_diff_text_search_fixture_reports_expected_match_counts() {
     assert_eq!(metrics.query_len, "render_cache".len() as u64);
     assert_eq!(metrics.matches_found, expected_broad_matches);
     assert_eq!(metrics.prior_matches, 0);
-    assert!(metrics.visible_rows_scanned > metrics.total_lines);
+    assert!(metrics.visible_rows_scanned >= metrics.matches_found);
+    assert!(metrics.visible_rows_scanned < fixture.visible_rows() as u64);
 }
 
 #[test]
@@ -2347,6 +2396,7 @@ fn in_diff_text_search_fixture_reports_refinement_counts() {
     assert_eq!(metrics.matches_found, expected_refined_matches);
     assert_eq!(metrics.prior_matches, expected_broad_matches);
     assert!(metrics.prior_matches > metrics.matches_found);
+    assert_eq!(metrics.visible_rows_scanned, metrics.matches_found);
 }
 
 #[test]
@@ -2538,6 +2588,7 @@ fn branch_sidebar_cache_single_ref_change_rebuilds_when_branch_rows_change() {
     next_branches[0].name.push_str("-renamed");
     fixture.repo.branches = Loadable::Ready(Arc::new(next_branches));
     fixture.repo.branches_rev = fixture.repo.branches_rev.wrapping_add(1);
+    fixture.repo.branch_sidebar_rev = fixture.repo.branch_sidebar_rev.wrapping_add(1);
 
     let rebuilt_hash = fixture.run_cached();
     assert_ne!(rebuilt_hash, 0);
@@ -2880,7 +2931,12 @@ fn file_fuzzy_find_incremental_narrows_matches() {
     assert!(metrics.prior_matches >= metrics.matches_found);
     assert!(metrics.prior_matches > 0);
     assert!(metrics.matches_found > 0);
-    assert_eq!(metrics.files_scanned, 1_000 + metrics.prior_matches);
+    assert!(metrics.files_scanned >= 1_000);
+    assert!(metrics.files_scanned <= 1_000 + metrics.prior_matches);
+    assert!(
+        metrics.files_scanned < 1_000 + metrics.prior_matches,
+        "strict-extension refinement should skip obviously impossible prior matches",
+    );
 }
 
 #[test]
@@ -2897,6 +2953,48 @@ fn file_fuzzy_find_incremental_matches_full_scan_hash() {
     let incremental = fixture.run_incremental("dc", "dcrs");
     let full = fixture.run_find("dcrs");
     assert_eq!(incremental, full);
+}
+
+#[test]
+fn file_fuzzy_find_ordered_pair_prefilter_matches_naive_hashes() {
+    let fixture = FileFuzzyFindFixture::new(4_096);
+    for query in ["dcrs", "dc", "ss", "src", "a/b", "render.rs"] {
+        assert_eq!(
+            fixture.run_find(query),
+            fixture.run_find_without_ordered_pair_prefilter(query),
+            "query {query:?} should preserve fuzzy-search results",
+        );
+    }
+}
+
+#[test]
+fn file_fuzzy_find_direct_metrics_are_allocation_free() {
+    let fixture = FileFuzzyFindFixture::new(100_000);
+    let ((_hash, _metrics), alloc_metrics) =
+        measure_allocations(|| fixture.run_find_with_metrics("dcrs"));
+    assert_eq!(
+        alloc_metrics.alloc_ops, 0,
+        "unexpected broad alloc metrics: {alloc_metrics:?}"
+    );
+    assert_eq!(
+        alloc_metrics.alloc_bytes, 0,
+        "unexpected broad alloc metrics: {alloc_metrics:?}"
+    );
+}
+
+#[test]
+fn file_fuzzy_find_incremental_direct_metrics_are_allocation_free() {
+    let fixture = FileFuzzyFindFixture::new(100_000);
+    let ((_hash, _metrics), alloc_metrics) =
+        measure_allocations(|| fixture.run_incremental_with_metrics("dc", "dcrs"));
+    assert_eq!(
+        alloc_metrics.alloc_ops, 0,
+        "unexpected incremental alloc metrics: {alloc_metrics:?}"
+    );
+    assert_eq!(
+        alloc_metrics.alloc_bytes, 0,
+        "unexpected incremental alloc metrics: {alloc_metrics:?}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -3124,6 +3222,19 @@ fn idle_cpu_usage_hash_is_deterministic_for_fixed_config() {
     assert_eq!(fixture.run(), fixture.run());
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn idle_linux_proc_parsers_extract_runtime_and_rss() {
+    assert_eq!(
+        parse_first_u64_ascii_token(b"123456789 456 789\n"),
+        Some(123_456_789)
+    );
+    assert_eq!(
+        parse_vmrss_kib(b"Name:\ttest\nState:\tR\nVmRSS:\t  24696 kB\nThreads:\t1\n"),
+        Some(24_696)
+    );
+}
+
 // ---------------------------------------------------------------------------
 // network — mocked transport progress and cancellation
 // ---------------------------------------------------------------------------
@@ -3238,8 +3349,9 @@ fn clipboard_select_range_iterates_correct_range() {
 
     assert_ne!(hash, 0);
     assert_eq!(metrics.total_lines, 500);
-    assert_eq!(metrics.line_iterations, 250);
+    assert_eq!(metrics.line_iterations, 1);
     assert!(metrics.total_bytes > 0);
+    assert_eq!(metrics.allocations_approx, 0);
 }
 
 #[test]
@@ -3249,9 +3361,31 @@ fn clipboard_copy_is_deterministic() {
 }
 
 #[test]
+fn clipboard_copy_from_diff_preallocates_without_reallocating() {
+    let fixture = ClipboardFixture::copy_from_diff(10_000);
+    let ((_hash, metrics), alloc_metrics) = measure_allocations(|| fixture.run_with_metrics());
+
+    assert!(metrics.total_bytes > 0);
+    assert_eq!(alloc_metrics.alloc_ops, 1);
+    assert_eq!(alloc_metrics.realloc_ops, 0);
+    assert!(alloc_metrics.alloc_bytes >= metrics.total_bytes);
+}
+
+#[test]
 fn clipboard_paste_is_deterministic() {
     let fixture = ClipboardFixture::paste_into_commit_message(200, 96);
     assert_eq!(fixture.run(), fixture.run());
+}
+
+#[test]
+fn clipboard_select_range_is_allocation_free() {
+    let fixture = ClipboardFixture::select_range_in_diff(10_000, 5_000);
+    let ((_hash, metrics), alloc_metrics) = measure_allocations(|| fixture.run_with_metrics());
+
+    assert_eq!(metrics.line_iterations, 1);
+    assert_eq!(metrics.allocations_approx, 0);
+    assert_eq!(alloc_metrics.alloc_ops, 0);
+    assert_eq!(alloc_metrics.alloc_bytes, 0);
 }
 
 // ---------------------------------------------------------------------------

@@ -319,8 +319,8 @@ pub struct FrameTimingCapture {
 
 #[cfg(any(test, feature = "benchmarks"))]
 impl FrameTimingCapture {
-    /// 60 fps ≈ 16.667 ms per frame.
     #[cfg(feature = "benchmarks")]
+    /// 60 fps ≈ 16.667 ms per frame.
     pub const DEFAULT_FRAME_BUDGET_NS: u64 = 16_666_667;
 
     pub fn new(frame_budget_ns: u64) -> Self {
@@ -353,9 +353,9 @@ impl FrameTimingCapture {
         self.record_frame_ns(duration.as_nanos().min(u128::from(u64::MAX)) as u64);
     }
 
+    #[cfg(feature = "benchmarks")]
     /// Consume the capture and compute statistics.  Total capture wall time is
     /// derived from the [`Instant`] recorded at construction.
-    #[cfg(feature = "benchmarks")]
     pub fn finish(self) -> FrameTimingStats {
         let total_capture_ns = self
             .capture_start

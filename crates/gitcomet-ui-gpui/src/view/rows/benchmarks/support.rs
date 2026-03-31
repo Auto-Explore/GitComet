@@ -1,56 +1,5 @@
 use super::*;
 
-#[derive(Clone)]
-pub(crate) struct CommitFileRowPresentationCache<K> {
-    entries: HashMap<K, u64>,
-}
-
-impl<K> Default for CommitFileRowPresentationCache<K> {
-    fn default() -> Self {
-        Self {
-            entries: HashMap::default(),
-        }
-    }
-}
-
-impl<K: Clone + Eq + Hash> CommitFileRowPresentationCache<K> {
-    pub(crate) fn rows_for(&mut self, key: &K, files: &[CommitFileChange]) -> u64 {
-        let hash = self.bench_row_hash_for(key, files);
-        self.entries.insert(key.clone(), hash);
-        hash
-    }
-
-    fn bench_row_hash_for(&mut self, key: &K, files: &[CommitFileChange]) -> u64 {
-        if let Some(hash) = self.entries.get(key) {
-            return *hash;
-        }
-        let mut hasher = FxHasher::default();
-        files.len().hash(&mut hasher);
-        for file in files.iter().take(256) {
-            commit_file_kind_key(file.kind).hash(&mut hasher);
-            hash_path_identity(file.path.as_path(), &mut hasher);
-        }
-        let hash = hasher.finish();
-        self.entries.insert(key.clone(), hash);
-        hash
-    }
-
-    pub(crate) fn clear(&mut self) {
-        self.entries.clear();
-    }
-}
-
-pub(crate) fn commit_file_kind_key(kind: FileStatusKind) -> u8 {
-    match kind {
-        FileStatusKind::Untracked => 0,
-        FileStatusKind::Modified => 1,
-        FileStatusKind::Added => 2,
-        FileStatusKind::Deleted => 3,
-        FileStatusKind::Renamed => 4,
-        FileStatusKind::Conflicted => 5,
-    }
-}
-
 pub(crate) fn empty_history_graph_heads<'a>() -> HashSet<&'a str> {
     HashSet::default()
 }
@@ -74,23 +23,6 @@ pub(crate) fn history_graph_heads_from_branches<'a>(
         .map(|branch| branch.target.as_ref())
         .chain(remote_branches.iter().map(|branch| branch.target.as_ref()))
         .collect()
-}
-
-#[derive(Clone, Copy)]
-pub(crate) struct CommitFileKindVisuals {
-    pub(crate) kind_key: u8,
-}
-
-pub(crate) fn commit_file_kind_visuals(kind: FileStatusKind) -> CommitFileKindVisuals {
-    let kind_key = match kind {
-        FileStatusKind::Added => 0,
-        FileStatusKind::Modified => 1,
-        FileStatusKind::Deleted => 2,
-        FileStatusKind::Renamed => 3,
-        FileStatusKind::Conflicted => 4,
-        FileStatusKind::Untracked => 5,
-    };
-    CommitFileKindVisuals { kind_key }
 }
 
 pub(in crate::view) fn prepare_bench_diff_syntax_document(
@@ -287,6 +219,7 @@ pub(crate) fn build_repo_switch_repo_state(
         commits: commits.iter().take(200).cloned().collect(),
         next_cursor: commits.get(200).map(|commit| LogCursor {
             last_seen: commit.id.clone(),
+            resume_from: None,
         }),
     });
     repo.history_state.log = Loadable::Ready(Arc::clone(&log_page));
@@ -315,7 +248,7 @@ pub(crate) fn build_repo_switch_repo_state(
                 repo.spec.workdir.display()
             ),
             committed_at: "2023-11-14 22:13".to_string(),
-            parent_ids: selected_commit.parent_ids.clone(),
+            parent_ids: selected_commit.parent_ids.to_vec(),
             files: (0..48)
                 .map(|ix| CommitFileChange {
                     path: std::path::PathBuf::from(format!("src/module_{}/file_{ix}.rs", ix % 12)),
@@ -370,7 +303,7 @@ pub(crate) fn populate_conflict_state(repo: &mut RepoState, path: &str, line_cou
     repo.conflict_state.conflict_file_path = Some(path_buf.clone());
     let content: Arc<str> = Arc::from(build_synthetic_file_content(line_count));
     repo.conflict_state.conflict_file = Loadable::Ready(Some(ConflictFile {
-        path: path_buf,
+        path: path_buf.into(),
         base_bytes: None,
         ours_bytes: None,
         theirs_bytes: None,
@@ -583,7 +516,7 @@ pub(crate) fn build_synthetic_commits_with_merge_stride(
 
         commits.push(Commit {
             id,
-            parent_ids,
+            parent_ids: parent_ids.into(),
             summary: format!("Commit {ix} - synthetic benchmark history entry").into(),
             author: format!("Author {}", ix % 10).into(),
             time: base + Duration::from_secs(ix as u64),
@@ -718,7 +651,7 @@ pub(crate) fn build_stash_fixture_commits(
         let helper_id = CommitId(format!("{:040x}", helper_ix).into());
         extra_commits.push(Commit {
             id: helper_id.clone(),
-            parent_ids: vec![parent_id.clone()],
+            parent_ids: vec![parent_id.clone()].into(),
             summary: format!("index on main: {i}").into(),
             author: "Author 0".into(),
             time: base_time + Duration::from_secs(i as u64 * 2),
@@ -729,7 +662,7 @@ pub(crate) fn build_stash_fixture_commits(
         let tip_id = CommitId(format!("{:040x}", tip_ix).into());
         extra_commits.push(Commit {
             id: tip_id.clone(),
-            parent_ids: vec![parent_id, helper_id],
+            parent_ids: vec![parent_id, helper_id].into(),
             summary: format!("WIP on main: stash message {i}").into(),
             author: "Author 0".into(),
             time: base_time + Duration::from_secs(i as u64 * 2 + 1),
@@ -970,7 +903,7 @@ pub(crate) fn hash_status_multi_selection_path_sample(
 pub(crate) fn commit_details_cached_row_hash(
     details: &CommitDetails,
     message_render: Option<&CommitDetailsMessageRenderState>,
-    file_rows: &mut CommitFileRowPresentationCache<CommitId>,
+    file_rows: &mut crate::view::rows::CommitFileRowPresentationCache<CommitId>,
 ) -> u64 {
     let mut h = FxHasher::default();
     details.id.as_ref().hash(&mut h);

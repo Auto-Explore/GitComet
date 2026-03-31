@@ -16,7 +16,7 @@ const DIFF_FONT_SCALE: f32 = 0.80;
 const GUTTER_TEXT_LAYOUT_CACHE_MAX_ENTRIES: usize = 16_384;
 const CONFLICT_TEXT_LAYOUT_CACHE_MAX_ENTRIES: usize = 32_768;
 
-type HighlightSpans = Arc<Vec<(Range<usize>, HighlightStyle)>>;
+type HighlightSpans = Arc<[(Range<usize>, HighlightStyle)]>;
 thread_local! {
     static GUTTER_TEXT_LAYOUT_CACHE: RefCell<FxLruCache<u64, gpui::ShapedLine>> =
         RefCell::new(new_fx_lru_cache(GUTTER_TEXT_LAYOUT_CACHE_MAX_ENTRIES));
@@ -355,7 +355,7 @@ fn prepare_conflict_text_for_canvas(
         let highlights = if remapped.is_empty() {
             empty_highlights()
         } else {
-            Arc::new(remapped)
+            Arc::from(remapped)
         };
         return PreparedConflictText {
             text_hash: hash_text(display.as_ref()),
@@ -719,7 +719,7 @@ fn compute_runs(
 
 fn empty_highlights() -> HighlightSpans {
     static EMPTY: OnceLock<HighlightSpans> = OnceLock::new();
-    Arc::clone(EMPTY.get_or_init(|| Arc::new(Vec::new())))
+    Arc::clone(EMPTY.get_or_init(|| Arc::from(Vec::new())))
 }
 
 #[cfg(test)]
@@ -780,7 +780,7 @@ mod tests {
         let style = gpui::HighlightStyle::default();
         let styled = CachedDiffStyledText {
             text: "a b".into(),
-            highlights: Arc::new(vec![(1..3, style)]),
+            highlights: Arc::from(vec![(1..3, style)]),
             highlights_hash: 11,
             text_hash: 7,
         };

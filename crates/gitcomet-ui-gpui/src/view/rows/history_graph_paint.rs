@@ -25,11 +25,11 @@ pub(super) fn paint_history_graph(
     let y_bottom = bounds.bottom();
 
     let x_for_col = |col: usize| margin_x + col_gap * (col as f32);
-    let node_x = x_for_col(row.node_col);
+    let node_x = x_for_col(usize::from(row.node_col));
 
     // Incoming vertical segments.
     for (col, lane) in row.lanes_now.iter().enumerate() {
-        let incoming = row.incoming_mask.get(col).copied().unwrap_or(false);
+        let incoming = lane.incoming;
         if !(incoming || connect_from_top_col == Some(col)) {
             continue;
         }
@@ -38,7 +38,7 @@ pub(super) fn paint_history_graph(
         path.move_to(point(bounds.left() + x, y_top));
         path.line_to(point(bounds.left() + x, y_center));
         if let Ok(p) = path.build() {
-            window.paint_path(p, lane.color);
+            window.paint_path(p, history_graph::lane_color(theme, lane.color_ix));
         }
     }
 
@@ -47,8 +47,8 @@ pub(super) fn paint_history_graph(
         if edge.from_col == edge.to_col {
             continue;
         }
-        let x_from = x_for_col(edge.from_col);
-        let x_to = x_for_col(edge.to_col);
+        let x_from = x_for_col(edge.from_col as usize);
+        let x_to = x_for_col(edge.to_col as usize);
         let mut path = PathBuilder::stroke(stroke_width);
         path.move_to(point(bounds.left() + x_from, y_center));
         if (x_from - x_to).abs() < px(0.5) {
@@ -62,7 +62,7 @@ pub(super) fn paint_history_graph(
             );
         }
         if let Ok(p) = path.build() {
-            window.paint_path(p, edge.color);
+            window.paint_path(p, history_graph::lane_color(theme, edge.color_ix));
         }
     }
 
@@ -70,12 +70,9 @@ pub(super) fn paint_history_graph(
     for (out_col, lane) in row.lanes_next.iter().enumerate() {
         let x_out = x_for_col(out_col);
 
-        let x_from = row
-            .next_from_cols
-            .get(out_col)
-            .copied()
-            .flatten()
-            .map(x_for_col)
+        let x_from = lane
+            .from_col
+            .map(|col| x_for_col(col as usize))
             .unwrap_or(node_x);
 
         let mut path = PathBuilder::stroke(stroke_width);
@@ -91,7 +88,7 @@ pub(super) fn paint_history_graph(
             );
         }
         if let Ok(p) = path.build() {
-            window.paint_path(p, lane.color);
+            window.paint_path(p, history_graph::lane_color(theme, lane.color_ix));
         }
     }
 
@@ -100,7 +97,7 @@ pub(super) fn paint_history_graph(
         if edge.from_col == edge.to_col {
             continue;
         }
-        let x_to = x_for_col(edge.to_col);
+        let x_to = x_for_col(edge.to_col as usize);
         let mut path = PathBuilder::stroke(stroke_width);
         path.move_to(point(bounds.left() + node_x, y_center));
         if (node_x - x_to).abs() < px(0.5) {
@@ -114,14 +111,14 @@ pub(super) fn paint_history_graph(
             );
         }
         if let Ok(p) = path.build() {
-            window.paint_path(p, edge.color);
+            window.paint_path(p, history_graph::lane_color(theme, edge.color_ix));
         }
     }
 
     let node_color = row
         .lanes_now
-        .get(row.node_col)
-        .map(|l| l.color)
+        .get(usize::from(row.node_col))
+        .map(|l| history_graph::lane_color(theme, l.color_ix))
         .unwrap_or(theme.colors.text_muted);
 
     if is_stash_node {

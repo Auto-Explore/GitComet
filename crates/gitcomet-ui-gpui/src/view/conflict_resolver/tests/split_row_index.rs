@@ -1,4 +1,5 @@
 use super::*;
+use std::sync::Arc;
 
 #[test]
 fn split_row_index_single_block_plain_rows() {
@@ -59,6 +60,12 @@ fn split_row_index_context_plus_block() {
     let c0 = index.row_at(&segments, 0).unwrap();
     assert_eq!(c0.old, Some("line4".into()));
     assert_eq!(c0.new, Some("line4".into()));
+    assert!(
+        c0.old
+            .as_ref()
+            .unwrap()
+            .shares_backing_with(c0.new.as_ref().unwrap())
+    );
     assert_eq!(c0.old_line, Some(4)); // line4 is at 1-based index 4
     assert_eq!(c0.kind, gitcomet_core::file_diff::FileDiffRowKind::Context);
 
@@ -77,6 +84,137 @@ fn split_row_index_context_plus_block() {
     assert_eq!(b1.old, None);
     assert_eq!(b1.new, Some("c".into()));
     assert_eq!(b1.kind, gitcomet_core::file_diff::FileDiffRowKind::Add);
+}
+
+#[test]
+fn split_row_index_equal_block_rows_share_old_new_arc() {
+    let segments = vec![ConflictSegment::Block(ConflictBlock {
+        base: None,
+        ours: "shared\n".into(),
+        theirs: "shared\n".into(),
+        choice: ConflictChoice::Ours,
+        resolved: false,
+    })];
+    let index = ConflictSplitRowIndex::new(&segments, 1);
+
+    let row = index.row_at(&segments, 0).unwrap();
+    assert_eq!(row.kind, gitcomet_core::file_diff::FileDiffRowKind::Context);
+    assert_eq!(row.old, Some("shared".into()));
+    assert_eq!(row.new, Some("shared".into()));
+    assert!(
+        row.old
+            .as_ref()
+            .unwrap()
+            .shares_backing_with(row.new.as_ref().unwrap())
+    );
+}
+
+#[test]
+fn split_row_index_row_range_matches_row_at_across_page_boundary() {
+    let line_count = CONFLICT_SPLIT_PAGE_SIZE * 2;
+    let shared: String = (0..line_count)
+        .map(|ix| format!("shared_line_{ix}\n"))
+        .collect();
+    let ours: String = (0..line_count)
+        .map(|ix| format!("ours_line_{ix}\n"))
+        .collect();
+    let theirs: String = (0..line_count)
+        .map(|ix| format!("theirs_line_{ix}\n"))
+        .collect();
+    let segments = vec![
+        ConflictSegment::Text(shared.into()),
+        ConflictSegment::Block(ConflictBlock {
+            base: None,
+            ours: ours.into(),
+            theirs: theirs.into(),
+            choice: ConflictChoice::Ours,
+            resolved: false,
+        }),
+    ];
+    let index = ConflictSplitRowIndex::new(&segments, 1);
+    let start = CONFLICT_SPLIT_PAGE_SIZE - 8;
+    let end = start + 24;
+
+    let mut via_range = Vec::new();
+    index.for_each_row_range(&segments, start..end, |row_ix, row| {
+        via_range.push((
+            row_ix,
+            row.kind,
+            row.old_line,
+            row.new_line,
+            row.old.as_deref().map(str::to_owned),
+            row.new.as_deref().map(str::to_owned),
+        ));
+    });
+
+    let via_row_at: Vec<_> = (start..end)
+        .filter_map(|row_ix| {
+            index.row_at(&segments, row_ix).map(|row| {
+                (
+                    row_ix,
+                    row.kind,
+                    row.old_line,
+                    row.new_line,
+                    row.old.as_deref().map(str::to_owned),
+                    row.new.as_deref().map(str::to_owned),
+                )
+            })
+        })
+        .collect();
+
+    assert_eq!(via_range, via_row_at);
+    assert_eq!(
+        index.cached_page_count(),
+        2,
+        "cross-page range traversal should materialize exactly the touched pages"
+    );
+}
+
+#[test]
+fn split_row_index_shared_slice_context_rows_reuse_conflict_backing() {
+    let shared = std::sync::Arc::<str>::from("ctx\nshared\n");
+    let segments = vec![ConflictSegment::Block(ConflictBlock {
+        base: None,
+        ours: ConflictText::shared_slice(Arc::clone(&shared), 0..shared.len()),
+        theirs: ConflictText::shared_slice(Arc::clone(&shared), 0..shared.len()),
+        choice: ConflictChoice::Ours,
+        resolved: false,
+    })];
+    let index = ConflictSplitRowIndex::new(&segments, 0);
+
+    let row = index.row_at(&segments, 1).unwrap();
+    let expected =
+        gitcomet_core::file_diff::FileDiffLineText::shared_slice(Arc::clone(&shared), 4..10);
+    assert_eq!(row.kind, gitcomet_core::file_diff::FileDiffRowKind::Context);
+    assert_eq!(row.old, Some("shared".into()));
+    assert_eq!(row.new, Some("shared".into()));
+    assert!(row.old.as_ref().unwrap().shares_backing_with(&expected));
+    assert!(row.new.as_ref().unwrap().shares_backing_with(&expected));
+}
+
+#[test]
+fn split_row_index_shared_slice_modify_rows_reuse_conflict_backing() {
+    let ours = std::sync::Arc::<str>::from("old\n");
+    let theirs = std::sync::Arc::<str>::from("new\n");
+    let segments = vec![ConflictSegment::Block(ConflictBlock {
+        base: None,
+        ours: ConflictText::shared_slice(Arc::clone(&ours), 0..ours.len()),
+        theirs: ConflictText::shared_slice(Arc::clone(&theirs), 0..theirs.len()),
+        choice: ConflictChoice::Ours,
+        resolved: false,
+    })];
+    let index = ConflictSplitRowIndex::new(&segments, 0);
+
+    let row = index.row_at(&segments, 0).unwrap();
+    let expected_old =
+        gitcomet_core::file_diff::FileDiffLineText::shared_slice(Arc::clone(&ours), 0..3);
+    let expected_new =
+        gitcomet_core::file_diff::FileDiffLineText::shared_slice(Arc::clone(&theirs), 0..3);
+    assert_eq!(row.kind, gitcomet_core::file_diff::FileDiffRowKind::Modify);
+    assert_eq!(row.old, Some("old".into()));
+    assert_eq!(row.new, Some("new".into()));
+    assert!(row.old.as_ref().unwrap().shares_backing_with(&expected_old));
+    assert!(row.new.as_ref().unwrap().shares_backing_with(&expected_new));
 }
 
 #[test]
@@ -902,6 +1040,90 @@ fn search_matching_rows_does_not_materialize_split_pages() {
 }
 
 #[test]
+fn search_text_matching_rows_matches_predicate_path() {
+    let line_count = CONFLICT_SPLIT_PAGE_SIZE * 4;
+    let ours: String = (0..line_count)
+        .map(|ix| format!("ours_line_{ix}\n"))
+        .collect();
+    let theirs: String = (0..line_count)
+        .map(|ix| format!("theirs_line_{ix}\n"))
+        .collect();
+    let context: String = (0..line_count)
+        .map(|ix| format!("context_line_{ix}\n"))
+        .collect();
+    let segments = vec![
+        ConflictSegment::Text(context.into()),
+        ConflictSegment::Block(ConflictBlock {
+            base: None,
+            ours: ours.into(),
+            theirs: theirs.into(),
+            choice: ConflictChoice::Ours,
+            resolved: false,
+        }),
+    ];
+    let index = ConflictSplitRowIndex::new(&segments, line_count);
+
+    // Test several patterns against both paths.
+    for needle in &[
+        "ours_line_300",
+        "theirs_line_5",
+        "context_line_0",
+        "_line_99",
+    ] {
+        let via_pred = index.search_matching_rows(&segments, |text| text.contains(needle));
+        let via_simd = index.search_text_matching_rows(&segments, needle.as_bytes());
+        assert_eq!(
+            via_pred, via_simd,
+            "search_text_matching_rows must match search_matching_rows for needle {needle:?}"
+        );
+    }
+}
+
+#[test]
+fn search_ascii_case_insensitive_matching_rows_matches_predicate_path() {
+    let line_count = CONFLICT_SPLIT_PAGE_SIZE * 4;
+    let ours: String = (0..line_count)
+        .map(|ix| format!("Ours_Line_{ix}\n"))
+        .collect();
+    let theirs: String = (0..line_count)
+        .map(|ix| format!("THEIRS_line_{ix}\n"))
+        .collect();
+    let context: String = (0..line_count)
+        .map(|ix| format!("Context_LINE_{ix}\n"))
+        .collect();
+    let segments = vec![
+        ConflictSegment::Text(context.into()),
+        ConflictSegment::Block(ConflictBlock {
+            base: None,
+            ours: ours.into(),
+            theirs: theirs.into(),
+            choice: ConflictChoice::Ours,
+            resolved: false,
+        }),
+    ];
+    let index = ConflictSplitRowIndex::new(&segments, line_count);
+
+    for needle in &[
+        "ours_line_300",
+        "THEIRS_LINE_5",
+        "context_line_0",
+        "_LiNe_99",
+    ] {
+        let via_pred = index.search_matching_rows(&segments, |text| {
+            text.as_bytes()
+                .windows(needle.len())
+                .any(|window| window.eq_ignore_ascii_case(needle.as_bytes()))
+        });
+        let via_specialized =
+            index.search_ascii_case_insensitive_matching_rows(&segments, needle.as_bytes());
+        assert_eq!(
+            via_pred, via_specialized,
+            "case-insensitive search must match predicate path for needle {needle:?}"
+        );
+    }
+}
+
+#[test]
 fn split_row_index_sparse_checkpoint_rows_resolve_far_from_start() {
     let line_count = CONFLICT_SPLIT_PAGE_SIZE * 4;
     let ours: String = (0..line_count)
@@ -1064,6 +1286,146 @@ fn resolved_output_projection_tracks_conflict_line_ranges() {
             .as_ref(),
         "base-last"
     );
+}
+
+#[test]
+fn resolved_output_projection_keeps_large_fragment_line_access() {
+    let mut trailing = String::new();
+    for line_ix in 0..(LARGE_CONFLICT_BLOCK_DIFF_MAX_LINES + 32) {
+        trailing.push_str("tail-");
+        trailing.push_str(line_ix.to_string().as_str());
+        trailing.push('\n');
+    }
+
+    let segments = vec![
+        ConflictSegment::Text("head\n".into()),
+        ConflictSegment::Block(ConflictBlock {
+            base: None,
+            ours: "ours-choice\n".into(),
+            theirs: "theirs-choice\n".into(),
+            choice: ConflictChoice::Ours,
+            resolved: true,
+        }),
+        ConflictSegment::Text(trailing.into()),
+    ];
+
+    let projection = ResolvedOutputProjection::from_segments(&segments);
+    let expected_lines: Vec<String> = generate_resolved_text(&segments)
+        .split('\n')
+        .map(str::to_string)
+        .collect();
+    let deep_line_ix = expected_lines.len().saturating_sub(2);
+
+    assert_eq!(projection.len(), expected_lines.len());
+    assert_eq!(
+        projection
+            .line_text(&segments, 0)
+            .expect("first line should stay accessible")
+            .as_ref(),
+        "head"
+    );
+    assert_eq!(
+        projection
+            .line_text(&segments, 1)
+            .expect("chosen conflict line should stay accessible")
+            .as_ref(),
+        "ours-choice"
+    );
+    assert_eq!(
+        projection
+            .line_text(&segments, deep_line_ix)
+            .expect("deep trailing line should stay accessible")
+            .as_ref(),
+        expected_lines[deep_line_ix].as_str()
+    );
+}
+
+#[test]
+fn resolved_output_projection_range_walk_matches_point_lookups() {
+    let segments = vec![
+        ConflictSegment::Text("head\nprefix ".into()),
+        ConflictSegment::Block(ConflictBlock {
+            base: None,
+            ours: "middle".into(),
+            theirs: "remote".into(),
+            choice: ConflictChoice::Ours,
+            resolved: true,
+        }),
+        ConflictSegment::Text(" suffix\nbody\n".into()),
+    ];
+
+    let projection = ResolvedOutputProjection::from_segments(&segments);
+    let range = 0..projection.len();
+    let expected: Vec<(usize, String)> = range
+        .clone()
+        .map(|line_ix| {
+            (
+                line_ix,
+                projection
+                    .line_text(&segments, line_ix)
+                    .expect("point lookup should resolve every projected line")
+                    .into_owned(),
+            )
+        })
+        .collect();
+    let mut walked = Vec::new();
+
+    projection.for_each_line_text_in_range(&segments, range, |line_ix, line| {
+        walked.push((line_ix, line.to_string()));
+    });
+
+    assert_eq!(walked, expected);
+}
+
+#[test]
+fn resolved_output_projection_deep_range_walk_matches_point_lookups() {
+    let mut head = String::new();
+    for line_ix in 0..(LARGE_CONFLICT_BLOCK_DIFF_MAX_LINES + 96) {
+        head.push_str("head-");
+        head.push_str(line_ix.to_string().as_str());
+        head.push('\n');
+    }
+
+    let mut tail = String::new();
+    for line_ix in 0..512 {
+        tail.push_str("tail-");
+        tail.push_str(line_ix.to_string().as_str());
+        tail.push('\n');
+    }
+
+    let segments = vec![
+        ConflictSegment::Text(head.into()),
+        ConflictSegment::Block(ConflictBlock {
+            base: None,
+            ours: "ours-only\n".into(),
+            theirs: "theirs-only\n".into(),
+            choice: ConflictChoice::Ours,
+            resolved: true,
+        }),
+        ConflictSegment::Text(tail.into()),
+    ];
+
+    let projection = ResolvedOutputProjection::from_segments(&segments);
+    let start = projection.len().saturating_sub(220);
+    let end = (start + 200).min(projection.len());
+    let expected: Vec<(usize, String)> = (start..end)
+        .map(|line_ix| {
+            (
+                line_ix,
+                projection
+                    .line_text(&segments, line_ix)
+                    .expect("point lookup should resolve every deep projected line")
+                    .into_owned(),
+            )
+        })
+        .collect();
+    let mut walked = Vec::new();
+
+    projection.for_each_line_text_in_range(&segments, start..end, |line_ix, line| {
+        walked.push((line_ix, line.to_string()));
+    });
+
+    assert_eq!(walked, expected);
 }
 
 #[test]

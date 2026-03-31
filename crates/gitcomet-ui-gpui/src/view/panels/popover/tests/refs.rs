@@ -36,7 +36,7 @@ fn tag_menu_lists_delete_entries_for_commit_tags(cx: &mut gpui::TestAppContext) 
                 gitcomet_core::domain::LogPage {
                     commits: vec![gitcomet_core::domain::Commit {
                         id: commit_id.clone(),
-                        parent_ids: vec![],
+                        parent_ids: gitcomet_core::domain::CommitParentIds::new(),
                         summary: "Hello".into(),
                         author: "Alice".into(),
                         time: SystemTime::UNIX_EPOCH,

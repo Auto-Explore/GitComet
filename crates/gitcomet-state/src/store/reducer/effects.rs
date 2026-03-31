@@ -125,7 +125,7 @@ fn build_conflict_session(
     // If we have merged text with markers, parse regions from it.
     if let Some(current) = file.current.as_ref() {
         Some(ConflictSession::from_merged_shared_text(
-            file.path.clone(),
+            file.path.to_path_buf(),
             conflict_kind,
             base,
             ours,
@@ -134,7 +134,7 @@ fn build_conflict_session(
         ))
     } else if let Some(current) = file.current_bytes.as_ref() {
         Some(ConflictSession::new_with_current(
-            file.path.clone(),
+            file.path.to_path_buf(),
             conflict_kind,
             base,
             ours,
@@ -143,7 +143,7 @@ fn build_conflict_session(
         ))
     } else {
         Some(ConflictSession::new(
-            file.path.clone(),
+            file.path.to_path_buf(),
             conflict_kind,
             base,
             ours,
@@ -720,7 +720,7 @@ mod tests {
 
     fn empty_conflict_file(path: &Path) -> ConflictFile {
         ConflictFile {
-            path: path.to_path_buf(),
+            path: path.to_path_buf().into(),
             base_bytes: None,
             ours_bytes: None,
             theirs_bytes: None,
@@ -915,7 +915,7 @@ mod tests {
         }
 
         let file = ConflictFile {
-            path: path.clone(),
+            path: path.clone().into(),
             base_bytes: None,
             ours_bytes: None,
             theirs_bytes: None,
@@ -962,7 +962,7 @@ mod tests {
         }
 
         let file = ConflictFile {
-            path: path.clone(),
+            path: path.clone().into(),
             base_bytes: Some(vec![0xff, 0x00].into()),
             ours_bytes: Some(b"ours\n".to_vec().into()),
             theirs_bytes: Some(b"theirs\n".to_vec().into()),
@@ -1397,7 +1397,7 @@ mod tests {
         repo_mut(&mut state, repo_id).set_log(Loadable::Ready(Arc::new(LogPage {
             commits: vec![gitcomet_core::domain::Commit {
                 id: CommitId("c1".into()),
-                parent_ids: Vec::new(),
+                parent_ids: gitcomet_core::domain::CommitParentIds::new(),
                 summary: "s".into(),
                 author: "a".into(),
                 time: std::time::SystemTime::UNIX_EPOCH,

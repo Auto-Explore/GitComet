@@ -505,11 +505,11 @@ fn staged_deleted_file_preview_uses_old_contents(cx: &mut gpui::TestAppContext) 
                 gitcomet_core::domain::DiffArea::Staged,
             );
             repo.diff_state.diff_file = gitcomet_state::model::Loadable::Ready(Some(Arc::new(
-                gitcomet_core::domain::FileDiffText {
-                    path: file_rel.clone(),
-                    old: Some("one\ntwo\n".to_string()),
-                    new: None,
-                },
+                gitcomet_core::domain::FileDiffText::new(
+                    file_rel.clone(),
+                    Some("one\ntwo\n".to_string()),
+                    None,
+                ),
             )));
 
             let next_state = app_state_with_repo(repo, repo_id);
@@ -1720,7 +1720,7 @@ fn theme_change_clears_conflict_three_way_segments_cache(cx: &mut gpui::TestAppC
             this.main_pane.update(cx, |pane, cx| {
                 let dummy = super::CachedDiffStyledText {
                     text: "dummy".into(),
-                    highlights: Arc::new(vec![]),
+                    highlights: Arc::from(Vec::new()),
                     highlights_hash: 0,
                     text_hash: 0,
                 };
@@ -2134,7 +2134,7 @@ fn split_status_section_resize_moves_untracked_section(cx: &mut gpui::TestAppCon
     );
     assert!(
         updated_handle_bounds.center().y > initial_handle_bounds.center().y,
-        "expected the inner divider to move downward after resizing (initial_handle_y={}, updated_handle_y={}, updated_untracked_height={:?})",
+        "expected the inner divider to move downward after resizing (initial_handle_y={:?}, updated_handle_y={:?}, updated_untracked_height={:?})",
         initial_handle_bounds.center().y,
         updated_handle_bounds.center().y,
         updated_untracked_height,

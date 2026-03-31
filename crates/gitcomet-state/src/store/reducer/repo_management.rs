@@ -1,21 +1,53 @@
 use super::util::{
-    clear_banner_error_for_repo, dedup_paths_in_order, diff_reload_effects, format_failure_summary,
-    handle_session_persist_result, normalize_repo_path, push_diagnostic, push_notification,
-    refresh_full_effects, refresh_primary_effects, selected_conflict_target_path,
-    start_conflict_target_reload,
+    SelectedConflictTarget, append_refresh_full_effects, append_refresh_primary_effects,
+    append_start_conflict_target_reload, append_start_current_conflict_target_reload,
+    clear_banner_error_for_repo, dedup_paths_in_order, diff_target_preview_flags,
+    format_failure_summary, handle_session_persist_result, normalize_repo_path, push_diagnostic,
+    push_notification, refresh_full_effect_capacity, refresh_full_effects,
+    refresh_primary_effect_capacity, selected_conflict_target,
 };
 use crate::model::{
     AppNotificationKind, AppState, CloneOpState, CloneOpStatus, DiagnosticKind, Loadable, RepoId,
+    RepoState,
 };
 use crate::msg::Effect;
 use crate::session;
-use gitcomet_core::domain::RepoSpec;
+use gitcomet_core::domain::{DiffTarget, RepoSpec};
 use gitcomet_core::error::Error;
 use gitcomet_core::services::{CommandOutput, GitRepository};
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
+use smallvec::SmallVec;
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, SystemTime};
+
+const HOT_REPO_SWITCH_SECONDARY_REFRESH_WINDOW: Duration = Duration::from_secs(5);
+pub(crate) const SET_ACTIVE_REPO_INLINE_EFFECT_CAPACITY: usize = 16;
+pub(crate) type SetActiveRepoEffects = SmallVec<[Effect; SET_ACTIVE_REPO_INLINE_EFFECT_CAPACITY]>;
+pub(crate) const REORDER_REPO_TABS_INLINE_EFFECT_CAPACITY: usize = 1;
+pub(crate) type ReorderRepoTabsEffects =
+    SmallVec<[Effect; REORDER_REPO_TABS_INLINE_EFFECT_CAPACITY]>;
+
+fn repo_switch_secondary_metadata_ready(repo_state: &RepoState) -> bool {
+    matches!(repo_state.branches, Loadable::Ready(_))
+        && matches!(repo_state.tags, Loadable::Ready(_))
+        && matches!(repo_state.remote_tags, Loadable::Ready(_))
+        && matches!(repo_state.remotes, Loadable::Ready(_))
+        && matches!(repo_state.remote_branches, Loadable::Ready(_))
+        && matches!(repo_state.stashes, Loadable::Ready(_))
+        && matches!(repo_state.rebase_in_progress, Loadable::Ready(_))
+        && matches!(repo_state.merge_commit_message, Loadable::Ready(_))
+}
+
+fn repo_switch_can_use_primary_refresh(repo_state: &RepoState, now: SystemTime) -> bool {
+    repo_switch_secondary_metadata_ready(repo_state)
+        && repo_state
+            .last_active_at
+            .and_then(|last_active_at| now.duration_since(last_active_at).ok())
+            .is_some_and(|elapsed| elapsed <= HOT_REPO_SWITCH_SECONDARY_REFRESH_WINDOW)
+}
 
 fn is_missing_repo_error(error: &Error) -> bool {
     matches!(
@@ -25,18 +57,15 @@ fn is_missing_repo_error(error: &Error) -> bool {
 }
 
 fn persist_session_effect(
-    state: &AppState,
+    _state: &AppState,
     repo_id: Option<RepoId>,
     action: &'static str,
 ) -> Effect {
-    Effect::PersistSession {
-        snapshot: session::snapshot_repos_from_state(state),
-        repo_id,
-        action,
-    }
+    Effect::PersistSession { repo_id, action }
 }
 
 pub(super) fn open_repo(id_alloc: &AtomicU64, state: &mut AppState, path: PathBuf) -> Vec<Effect> {
+    let now = SystemTime::now();
     let path = normalize_repo_path(path);
     if let Some(repo_id) = state
         .repos
@@ -70,6 +99,7 @@ pub(super) fn open_repo(id_alloc: &AtomicU64, state: &mut AppState, path: PathBu
         {
             repo_state.fetch_prune_deleted_remote_tracking_branches = enabled;
         }
+        repo_state.last_active_at = Some(now);
         repo_state
     });
     state.active_repo = Some(repo_id);
@@ -99,6 +129,7 @@ pub(super) fn restore_session(
     open_repos: Vec<PathBuf>,
     active_repo: Option<PathBuf>,
 ) -> Vec<Effect> {
+    let now = SystemTime::now();
     repos.clear();
     state.repos.clear();
     state.active_repo = None;
@@ -153,6 +184,14 @@ pub(super) fn restore_session(
     } else {
         state.repos.last().map(|r| r.id)
     };
+    if let Some(active_repo_id) = state.active_repo
+        && let Some(repo_state) = state
+            .repos
+            .iter_mut()
+            .find(|repo| repo.id == active_repo_id)
+    {
+        repo_state.last_active_at = Some(now);
+    }
 
     effects.push(persist_session_effect(
         state,
@@ -190,41 +229,112 @@ pub(super) fn close_repo(
 }
 
 pub(super) fn set_active_repo(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
-    if !state.repos.iter().any(|r| r.id == repo_id) {
-        return Vec::new();
+    let mut effects = SetActiveRepoEffects::new();
+    fill_set_active_repo_inline(state, repo_id, &mut effects);
+    effects.into_vec()
+}
+
+pub(super) fn fill_set_active_repo_inline(
+    state: &mut AppState,
+    repo_id: RepoId,
+    effects: &mut SetActiveRepoEffects,
+) {
+    enum SelectedDiffReload {
+        Conflict(PathBuf),
+        ConflictCurrent,
+        Diff {
+            load_file_text: bool,
+            load_file_image: bool,
+        },
     }
 
+    effects.clear();
+
+    let Some(repo_ix) = state.repos.iter().position(|r| r.id == repo_id) else {
+        return;
+    };
+
+    let now = SystemTime::now();
     let changed = state.active_repo != Some(repo_id);
     state.active_repo = Some(repo_id);
     let persist_effect = changed
         .then(|| persist_session_effect(state, Some(repo_id), "switching active repository"));
 
-    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
-        return Vec::new();
+    let repo_state = &mut state.repos[repo_ix];
+    let use_full_refresh = changed && !repo_switch_can_use_primary_refresh(repo_state, now);
+
+    // Reload the selected diff when switching repos; steady-state refreshes rely on the
+    // filesystem watcher (`RepoExternallyChanged`) for diff invalidation.
+    let selected_diff_reload = if changed {
+        repo_state.diff_state.diff_target.as_ref().map(|target| {
+            if let Some(conflict_target) = selected_conflict_target(repo_state, target) {
+                match conflict_target {
+                    SelectedConflictTarget::Current => SelectedDiffReload::ConflictCurrent,
+                    SelectedConflictTarget::Path(path) => {
+                        SelectedDiffReload::Conflict(path.to_path_buf())
+                    }
+                }
+            } else {
+                let supports_file = matches!(
+                    target,
+                    DiffTarget::WorkingTree { .. } | DiffTarget::Commit { path: Some(_), .. }
+                );
+                let preview = diff_target_preview_flags(target);
+                let load_file_image = supports_file && preview.wants_image;
+                let load_file_text = supports_file && (!preview.wants_image || preview.is_svg);
+                SelectedDiffReload::Diff {
+                    load_file_text,
+                    load_file_image,
+                }
+            }
+        })
+    } else {
+        None
     };
 
     // On focus events the UI can re-send SetActiveRepo for the already-active repo. Avoid
     // re-running the full refresh fan-out in that case: prioritize the minimum set that
     // keeps the UI correct and responsive.
-    let mut effects = if changed {
-        refresh_full_effects(repo_state)
+    let extra_effect_capacity =
+        usize::from(selected_diff_reload.is_some()) + usize::from(persist_effect.is_some());
+    let base_effect_capacity = if use_full_refresh {
+        refresh_full_effect_capacity()
     } else {
-        refresh_primary_effects(repo_state)
+        refresh_primary_effect_capacity()
     };
+    debug_assert!(
+        base_effect_capacity + extra_effect_capacity <= SET_ACTIVE_REPO_INLINE_EFFECT_CAPACITY
+    );
+    if use_full_refresh {
+        append_refresh_full_effects(repo_state, effects);
+    } else {
+        append_refresh_primary_effects(repo_state, effects);
+    }
+    repo_state.last_active_at = Some(now);
 
-    // Reload the selected diff when switching repos; steady-state refreshes rely on the
-    // filesystem watcher (`RepoExternallyChanged`) for diff invalidation.
-    if changed && let Some(target) = repo_state.diff_state.diff_target.clone() {
-        if let Some(conflict_path) = selected_conflict_target_path(repo_state, &target) {
-            effects.extend(start_conflict_target_reload(repo_state, conflict_path));
-        } else {
-            effects.extend(diff_reload_effects(repo_id, target));
+    if let Some(selected_diff_reload) = selected_diff_reload {
+        match selected_diff_reload {
+            SelectedDiffReload::ConflictCurrent => {
+                append_start_current_conflict_target_reload(effects, repo_state);
+            }
+            SelectedDiffReload::Conflict(conflict_path) => {
+                append_start_conflict_target_reload(effects, repo_state, &conflict_path);
+            }
+            SelectedDiffReload::Diff {
+                load_file_text,
+                load_file_image,
+            } => {
+                effects.push(Effect::LoadSelectedDiff {
+                    repo_id,
+                    load_file_text,
+                    load_file_image,
+                });
+            }
         }
     }
     if let Some(effect) = persist_effect {
         effects.push(effect);
     }
-    effects
 }
 
 pub(super) fn set_fetch_prune_deleted_remote_tracking_branches(
@@ -261,54 +371,77 @@ pub(super) fn reorder_repo_tabs(
     repo_id: RepoId,
     insert_before: Option<RepoId>,
 ) -> Vec<Effect> {
+    let mut effects = ReorderRepoTabsEffects::new();
+    fill_reorder_repo_tabs_inline(state, repo_id, insert_before, &mut effects);
+    effects.into_vec()
+}
+
+pub(super) fn fill_reorder_repo_tabs_inline(
+    state: &mut AppState,
+    repo_id: RepoId,
+    insert_before: Option<RepoId>,
+    effects: &mut ReorderRepoTabsEffects,
+) {
     if state.repos.len() <= 1 {
-        return Vec::new();
+        return;
     }
 
-    let Some(from_ix) = state.repos.iter().position(|r| r.id == repo_id) else {
-        return Vec::new();
+    if insert_before == Some(repo_id) {
+        return;
+    }
+
+    let mut from_ix = None;
+    let mut before_ix = None;
+    for (ix, repo) in state.repos.iter().enumerate() {
+        if repo.id == repo_id {
+            from_ix = Some(ix);
+        }
+        if insert_before == Some(repo.id) {
+            before_ix = Some(ix);
+        }
+        if from_ix.is_some() && (insert_before.is_none() || before_ix.is_some()) {
+            break;
+        }
+    }
+
+    let Some(from_ix) = from_ix else {
+        return;
     };
 
-    if let Some(before_repo_id) = insert_before {
-        if before_repo_id == repo_id {
-            return Vec::new();
-        }
-        if let Some(before_ix) = state.repos.iter().position(|r| r.id == before_repo_id)
-            && from_ix + 1 == before_ix
-        {
+    match before_ix {
+        Some(before_ix) if from_ix + 1 == before_ix => {
             // Already immediately before the target.
-            return Vec::new();
+            return;
         }
-    } else if from_ix + 1 == state.repos.len() {
-        // Already last.
-        return Vec::new();
-    }
-
-    let moved = state.repos.remove(from_ix);
-    let insert_ix = match insert_before {
-        Some(before_repo_id) => state
-            .repos
-            .iter()
-            .position(|r| r.id == before_repo_id)
-            .unwrap_or(state.repos.len()),
-        None => state.repos.len(),
+        Some(before_ix) if from_ix < before_ix => {
+            state.repos[from_ix..before_ix].rotate_left(1);
+        }
+        Some(before_ix) => {
+            state.repos[before_ix..=from_ix].rotate_right(1);
+        }
+        None if from_ix + 1 == state.repos.len() => {
+            // Already last.
+            return;
+        }
+        None => {
+            state.repos[from_ix..].rotate_left(1);
+        }
     };
-    state.repos.insert(insert_ix, moved);
 
-    vec![persist_session_effect(
+    effects.push(persist_session_effect(
         state,
         state.active_repo,
         "reordering repository tabs",
-    )]
+    ));
 }
 
 pub(super) fn clone_repo(state: &mut AppState, url: String, dest: PathBuf) -> Vec<Effect> {
     state.clone = Some(CloneOpState {
-        url: url.clone(),
-        dest: dest.clone(),
+        url: Arc::<str>::from(url.as_str()),
+        dest: Arc::new(dest.clone()),
         status: CloneOpStatus::Running,
         seq: 0,
-        output_tail: Vec::new(),
+        output_tail: VecDeque::new(),
     });
     vec![Effect::CloneRepo {
         url,
@@ -319,21 +452,25 @@ pub(super) fn clone_repo(state: &mut AppState, url: String, dest: PathBuf) -> Ve
 
 pub(super) fn clone_repo_progress(
     state: &mut AppState,
-    dest: PathBuf,
+    dest: Arc<PathBuf>,
     line: String,
 ) -> Vec<Effect> {
+    const MAX_LINES: usize = 80;
+
     if let Some(op) = state.clone.as_mut()
         && matches!(op.status, CloneOpStatus::Running)
-        && op.dest == dest
+        && op.dest.as_ref() == dest.as_ref()
     {
         op.seq = op.seq.wrapping_add(1);
         if !line.trim().is_empty() {
-            op.output_tail.push(line);
-            const MAX_LINES: usize = 80;
-            if op.output_tail.len() > MAX_LINES {
-                let drain = op.output_tail.len() - MAX_LINES;
-                op.output_tail.drain(0..drain);
+            if op.output_tail.capacity() < MAX_LINES {
+                op.output_tail
+                    .reserve(MAX_LINES.saturating_sub(op.output_tail.capacity()));
             }
+            if op.output_tail.len() == MAX_LINES {
+                op.output_tail.pop_front();
+            }
+            op.output_tail.push_back(line);
         }
     }
     Vec::new()
@@ -346,9 +483,9 @@ pub(super) fn clone_repo_finished(
     result: std::result::Result<CommandOutput, Error>,
 ) -> Vec<Effect> {
     if let Some(op) = state.clone.as_mut()
-        && op.dest == dest
+        && op.dest.as_ref() == &dest
     {
-        op.url = url;
+        op.url = Arc::<str>::from(url.as_str());
         op.status = match result {
             Ok(_) => CloneOpStatus::FinishedOk,
             Err(e) => CloneOpStatus::FinishedErr(format_failure_summary("Clone", &e)),
@@ -356,14 +493,14 @@ pub(super) fn clone_repo_finished(
         op.seq = op.seq.wrapping_add(1);
     } else {
         state.clone = Some(CloneOpState {
-            url,
-            dest,
+            url: Arc::<str>::from(url.as_str()),
+            dest: Arc::new(dest),
             status: match result {
                 Ok(_) => CloneOpStatus::FinishedOk,
                 Err(e) => CloneOpStatus::FinishedErr(format_failure_summary("Clone", &e)),
             },
             seq: 1,
-            output_tail: Vec::new(),
+            output_tail: VecDeque::new(),
         });
     }
     Vec::new()
@@ -383,7 +520,7 @@ pub(super) fn repo_opened_ok(
     };
     let mut clear_banner = false;
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-        repo_state.spec = spec;
+        repo_state.set_spec(spec);
         repo_state.set_open(Loadable::Ready(()));
         repo_state.missing_on_disk = false;
         repo_state.set_head_branch(Loadable::Loading);
@@ -483,7 +620,7 @@ pub(super) fn repo_opened_err(
 
     let mut clear_banner = false;
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-        repo_state.spec = spec;
+        repo_state.set_spec(spec);
         repo_state.set_open(Loadable::Error(error.to_string()));
         repo_state.missing_on_disk = is_missing_repo_error(&error);
         if repo_state.missing_on_disk {

@@ -1,4 +1,5 @@
 use super::*;
+use crate::view::diff_utils::compute_diff_yaml_block_scalar_for_src_ix;
 use crate::view::markdown_preview;
 use crate::view::perf::{self, ViewPerfSpan};
 use crate::view::rows;
@@ -8,8 +9,12 @@ mod file_diff;
 mod image_cache;
 mod patch_diff;
 
+#[cfg(feature = "benchmarks")]
+pub(in crate::view) use self::file_diff::bench_build_file_diff_providers;
 pub(in crate::view) use self::file_diff::{PagedFileDiffInlineRows, PagedFileDiffRows};
 use self::file_diff::{build_file_diff_cache_rebuild, build_inline_text, file_diff_text_signature};
+#[cfg(feature = "benchmarks")]
+pub(in crate::view) use self::image_cache::render_svg_image_diff_preview;
 
 use self::patch_diff::{
     PATCH_DIFF_PAGE_SIZE, PatchSplitVisibleMeta, build_patch_split_visible_meta_from_src,
@@ -18,28 +23,6 @@ use self::patch_diff::{
 pub(in crate::view) use self::patch_diff::{
     PagedPatchDiffRows, PagedPatchSplitRows, PatchInlineVisibleMap,
 };
-
-#[cfg(feature = "benchmarks")]
-pub(in crate::view) fn render_svg_image_diff_preview(
-    svg_bytes: &[u8],
-) -> Option<Arc<gpui::RenderImage>> {
-    image_cache::render_svg_image_diff_preview(svg_bytes)
-}
-
-#[cfg(feature = "benchmarks")]
-pub(in crate::view) fn bench_build_file_diff_providers(
-    old: &str,
-    new: &str,
-    _page_size: usize,
-) -> (Arc<PagedFileDiffRows>, Arc<PagedFileDiffInlineRows>) {
-    let file = gitcomet_core::domain::FileDiffText::new(
-        std::path::PathBuf::from("bench.rs"),
-        Some(old.to_owned()),
-        Some(new.to_owned()),
-    );
-    let rebuild = build_file_diff_cache_rebuild(&file, std::path::Path::new("/tmp"));
-    (rebuild.row_provider, rebuild.inline_row_provider)
-}
 
 const PREPARED_SYNTAX_DOCUMENT_CACHE_MAX_ENTRIES: usize = 256;
 const FILE_DIFF_PAGE_SIZE: usize = 256;
@@ -59,6 +42,12 @@ impl FileDiffPreparedSyntaxApplyResult {
     fn any(self) -> bool {
         self.split_left || self.split_right
     }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct SyncFileDiffPreparedSyntaxApplyResult {
+    inserted: bool,
+    needs_background_prepare: bool,
 }
 
 #[cfg(test)]
@@ -606,15 +595,28 @@ impl MainPaneView {
             || self.worktree_preview_line_count() != Some(line_count)
             || self.worktree_preview_text.len() != source_text.len()
             || self.worktree_preview_text.as_ref() != source_text.as_ref();
+        let search_trigram_index =
+            (source_changed || self.worktree_preview_search_trigram_index.is_none()).then(|| {
+                super::diff_search::build_resolved_output_trigram_index(
+                    source_text.as_ref(),
+                    line_starts.as_ref(),
+                    line_count,
+                )
+            });
         let cache_binding_changed =
             self.worktree_preview_segments_cache_path.as_ref() != Some(&path);
+        let same_path_source_refresh = source_changed && !cache_binding_changed;
 
         self.worktree_preview_path = Some(path.clone());
         self.worktree_preview = Loadable::Ready(line_count);
         self.worktree_preview_text = source_text;
         self.worktree_preview_line_starts = line_starts;
+        if let Some(search_trigram_index) = search_trigram_index {
+            self.worktree_preview_search_trigram_index = Some(search_trigram_index);
+        }
         self.worktree_preview_syntax_language = rows::diff_syntax_language_for_path(&path);
         self.worktree_preview_segments_cache_path = Some(path);
+        self.worktree_preview_cache_write_blocked_until_rev = None;
         if source_changed || cache_binding_changed {
             self.worktree_preview_segments_cache.clear();
         }
@@ -627,6 +629,23 @@ impl MainPaneView {
             self.worktree_markdown_preview_source_rev = 0;
             self.worktree_markdown_preview = Loadable::NotLoaded;
             self.worktree_markdown_preview_inflight = None;
+        }
+
+        if same_path_source_refresh {
+            let blocked_rev = self.worktree_preview_content_rev;
+            self.worktree_preview_cache_write_blocked_until_rev = Some(blocked_rev);
+            cx.spawn(
+                async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
+                    gpui::Timer::after(std::time::Duration::from_millis(1)).await;
+                    let _ = view.update(cx, |this, _cx| {
+                        if this.worktree_preview_cache_write_blocked_until_rev == Some(blocked_rev)
+                        {
+                            this.worktree_preview_cache_write_blocked_until_rev = None;
+                        }
+                    });
+                },
+            )
+            .detach();
         }
 
         self.refresh_worktree_preview_syntax_document(cx);
@@ -729,16 +748,23 @@ impl MainPaneView {
         &mut self,
         attempt: Option<rows::PrepareDiffSyntaxDocumentResult>,
         key: &Option<PreparedSyntaxDocumentKey>,
-    ) -> bool {
+    ) -> SyncFileDiffPreparedSyntaxApplyResult {
         match attempt {
             Some(rows::PrepareDiffSyntaxDocumentResult::Ready(document)) => {
-                if let Some(key) = key.as_ref() {
-                    self.insert_prepared_syntax_document(key.clone(), document);
+                SyncFileDiffPreparedSyntaxApplyResult {
+                    inserted: key.as_ref().is_some_and(|key| {
+                        self.insert_prepared_syntax_document(key.clone(), document)
+                    }),
+                    needs_background_prepare: false,
                 }
-                false
             }
-            Some(rows::PrepareDiffSyntaxDocumentResult::TimedOut) => true,
-            _ => false,
+            Some(rows::PrepareDiffSyntaxDocumentResult::TimedOut) => {
+                SyncFileDiffPreparedSyntaxApplyResult {
+                    inserted: false,
+                    needs_background_prepare: true,
+                }
+            }
+            _ => SyncFileDiffPreparedSyntaxApplyResult::default(),
         }
     }
 
@@ -832,10 +858,20 @@ impl MainPaneView {
             )
         });
 
-        let needs_split_left_async =
-            self.apply_sync_syntax_result(split_left_attempt, &split_left_key);
-        let needs_split_right_async =
-            self.apply_sync_syntax_result(split_right_attempt, &split_right_key);
+        let split_left_sync = self.apply_sync_syntax_result(split_left_attempt, &split_left_key);
+        let split_right_sync = self.apply_sync_syntax_result(split_right_attempt, &split_right_key);
+        let needs_split_left_async = split_left_sync.needs_background_prepare;
+        let needs_split_right_async = split_right_sync.needs_background_prepare;
+
+        if split_left_sync.inserted {
+            self.file_diff_style_cache_epochs.bump_left();
+        }
+        if split_right_sync.inserted {
+            self.file_diff_style_cache_epochs.bump_right();
+        }
+        if split_left_sync.inserted || split_right_sync.inserted {
+            cx.notify();
+        }
 
         if !needs_split_left_async && !needs_split_right_async {
             return;
@@ -1228,6 +1264,7 @@ impl MainPaneView {
         self.diff_cache_target = None;
         self.diff_file_for_src_ix.clear();
         self.diff_language_for_src_ix.clear();
+        self.diff_yaml_block_scalar_for_src_ix.clear();
         self.diff_click_kinds.clear();
         self.diff_line_kind_for_src_ix.clear();
         self.diff_hide_unified_header_for_src_ix.clear();
@@ -1277,12 +1314,35 @@ impl MainPaneView {
             Arc::clone(&diff),
             PATCH_DIFF_PAGE_SIZE,
         ));
-        let split_row_provider = Arc::new(PagedPatchSplitRows::new(Arc::clone(&row_provider)));
+        let mut split_row_count = 0usize;
+        let mut pending_split_removes = 0usize;
+        let mut pending_split_adds = 0usize;
         self.diff_row_provider = Some(row_provider);
-        self.diff_split_row_provider = Some(split_row_provider);
 
         self.diff_file_for_src_ix = compute_diff_file_for_src_ix(diff.lines.as_slice());
-        self.diff_line_kind_for_src_ix = diff.lines.iter().map(|line| line.kind).collect();
+        self.diff_line_kind_for_src_ix = diff
+            .lines
+            .iter()
+            .map(|line| {
+                match line.kind {
+                    gitcomet_core::domain::DiffLineKind::Remove => pending_split_removes += 1,
+                    gitcomet_core::domain::DiffLineKind::Add => pending_split_adds += 1,
+                    gitcomet_core::domain::DiffLineKind::Context
+                    | gitcomet_core::domain::DiffLineKind::Header
+                    | gitcomet_core::domain::DiffLineKind::Hunk => {
+                        split_row_count += pending_split_removes.max(pending_split_adds) + 1;
+                        pending_split_removes = 0;
+                        pending_split_adds = 0;
+                    }
+                }
+                line.kind
+            })
+            .collect();
+        split_row_count += pending_split_removes.max(pending_split_adds);
+        self.diff_split_row_provider = Some(Arc::new(PagedPatchSplitRows::new_with_len_hint(
+            Arc::clone(self.diff_row_provider.as_ref().expect("set just above")),
+            split_row_count,
+        )));
         self.diff_hide_unified_header_for_src_ix = diff
             .lines
             .iter()
@@ -1365,7 +1425,11 @@ impl MainPaneView {
             };
             self.diff_language_for_src_ix.push(language);
         }
-
+        self.diff_yaml_block_scalar_for_src_ix = compute_diff_yaml_block_scalar_for_src_ix(
+            diff.lines.as_slice(),
+            self.diff_file_for_src_ix.as_slice(),
+            self.diff_language_for_src_ix.as_slice(),
+        );
         if let Some(preview) = build_new_file_preview_from_diff(
             diff.lines.as_slice(),
             &workdir,
@@ -1510,6 +1574,7 @@ impl MainPaneView {
         self.diff_visible_is_file_view = is_file_view;
         self.diff_horizontal_min_width = px(0.0);
         self.diff_visible_inline_map = None;
+        self.diff_search_inline_patch_trigram_index = None;
 
         if is_file_view {
             self.diff_visible_indices = (0..current_len).collect();
@@ -1727,31 +1792,31 @@ mod tests {
         let diff = vec![
             AnnotatedDiffLine {
                 kind: gitcomet_core::domain::DiffLineKind::Header,
-                text: Arc::from("diff --git a/docs/table.md b/docs/table.md"),
+                text: "diff --git a/docs/table.md b/docs/table.md".into(),
                 old_line: None,
                 new_line: None,
             },
             AnnotatedDiffLine {
                 kind: gitcomet_core::domain::DiffLineKind::Header,
-                text: Arc::from("deleted file mode 100644"),
+                text: "deleted file mode 100644".into(),
                 old_line: None,
                 new_line: None,
             },
             AnnotatedDiffLine {
                 kind: gitcomet_core::domain::DiffLineKind::Remove,
-                text: Arc::from("-| **Header Bold** | B |"),
+                text: "-| **Header Bold** | B |".into(),
                 old_line: Some(1),
                 new_line: None,
             },
             AnnotatedDiffLine {
                 kind: gitcomet_core::domain::DiffLineKind::Remove,
-                text: Arc::from("-| --- | --- |"),
+                text: "-| --- | --- |".into(),
                 old_line: Some(2),
                 new_line: None,
             },
             AnnotatedDiffLine {
                 kind: gitcomet_core::domain::DiffLineKind::Remove,
-                text: Arc::from("-| [link](https://example.com) | plain |"),
+                text: "-| [link](https://example.com) | plain |".into(),
                 old_line: Some(3),
                 new_line: None,
             },

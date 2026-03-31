@@ -1,5 +1,6 @@
 use gitcomet_core::domain::{DiffArea, DiffTarget};
 use gitcomet_state::model::Loadable;
+use rustc_hash::FxHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
@@ -45,5 +46,30 @@ pub(super) fn hash_loadable_arc<T, H: Hasher>(value: &Loadable<Arc<T>>, hasher: 
             3u8.hash(hasher);
             err.hash(hasher);
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum LoadableArcIdentity {
+    NotLoaded,
+    Loading,
+    Ready(usize),
+    Error(u64),
+}
+
+#[inline]
+fn loadable_error_identity(err: &str) -> u64 {
+    let mut hasher = FxHasher::default();
+    err.hash(&mut hasher);
+    hasher.finish()
+}
+
+#[inline]
+pub(super) fn loadable_arc_identity<T>(value: &Loadable<Arc<T>>) -> LoadableArcIdentity {
+    match value {
+        Loadable::NotLoaded => LoadableArcIdentity::NotLoaded,
+        Loadable::Loading => LoadableArcIdentity::Loading,
+        Loadable::Ready(shared) => LoadableArcIdentity::Ready(Arc::as_ptr(shared) as usize),
+        Loadable::Error(err) => LoadableArcIdentity::Error(loadable_error_identity(err)),
     }
 }

@@ -26,8 +26,7 @@ fn two_way_word_ranges_for_row(
 ) -> (&[Range<usize>], &[Range<usize>]) {
     highlights
         .get(row_ix)
-        .and_then(|pair| pair.as_ref())
-        .map(|pair| (pair.0.as_slice(), pair.1.as_slice()))
+        .map(|(old, new)| (old.as_slice(), new.as_slice()))
         .unwrap_or((&[], &[]))
 }
 
@@ -348,12 +347,13 @@ impl ConflictThreeWayVisibleMapBuildFixture {
             theirs_lines.len(),
         );
         let [_base_ranges, ours_ranges, _theirs_ranges] = conflict_maps.conflict_ranges;
+        let conflict_resolved = conflict_maps.conflict_resolved;
         let conflict_count = ours_ranges.len();
 
         Self {
             total_lines,
             conflict_ranges: ours_ranges,
-            conflict_resolved: vec![false; conflict_count],
+            conflict_resolved,
             segments,
             conflict_count,
         }
@@ -763,53 +763,17 @@ impl ConflictLoadDuplicationFixture {
     }
 
     pub(super) fn build_shared_conflict_file(&self) -> ConflictFile {
-        ConflictFile {
-            path: self.path.to_path_buf(),
-            base_bytes: match &self.session.base {
-                ConflictPayload::Binary(bytes) => Some(Arc::clone(bytes)),
-                _ => None,
-            },
-            ours_bytes: match &self.session.ours {
-                ConflictPayload::Binary(bytes) => Some(Arc::clone(bytes)),
-                _ => None,
-            },
-            theirs_bytes: match &self.session.theirs {
-                ConflictPayload::Binary(bytes) => Some(Arc::clone(bytes)),
-                _ => None,
-            },
-            current_bytes: Some(Arc::clone(&self.current_bytes)),
-            base: match &self.session.base {
-                ConflictPayload::Text(text) => Some(Arc::clone(text)),
-                _ => None,
-            },
-            ours: match &self.session.ours {
-                ConflictPayload::Text(text) => Some(Arc::clone(text)),
-                _ => None,
-            },
-            theirs: match &self.session.theirs {
-                ConflictPayload::Text(text) => Some(Arc::clone(text)),
-                _ => None,
-            },
-            current: Some(Arc::clone(&self.current_text)),
-        }
+        ConflictFile::from_shared_conflict_session(self.path.clone(), &self.session)
     }
 
     pub(super) fn build_duplicated_conflict_file(&self) -> ConflictFile {
-        let base = clone_stage_parts(&self.base_stage);
-        let ours = clone_stage_parts(&self.ours_stage);
-        let theirs = clone_stage_parts(&self.theirs_stage);
-        let current = clone_stage_parts(&self.current_stage);
-        ConflictFile {
-            path: self.path.to_path_buf(),
-            base_bytes: base.0,
-            ours_bytes: ours.0,
-            theirs_bytes: theirs.0,
-            current_bytes: current.0,
-            base: base.1,
-            ours: ours.1,
-            theirs: theirs.1,
-            current: current.1,
-        }
+        ConflictFile::from_loaded_stage_parts(
+            self.path.clone(),
+            clone_stage_parts(&self.base_stage),
+            clone_stage_parts(&self.ours_stage),
+            clone_stage_parts(&self.theirs_stage),
+            clone_stage_parts(&self.current_stage),
+        )
     }
 }
 
@@ -1440,7 +1404,7 @@ impl ResolvedOutputRecomputeIncrementalFixture {
         let ours_line_starts = line_starts_for_text(&ours_text);
         let theirs_line_starts = line_starts_for_text(&theirs_text);
         let output_line_starts = line_starts_for_text(&output_text);
-        let line_count = conflict_resolver::split_output_lines_for_outline(&output_text).len();
+        let line_count = conflict_resolver::resolved_output_outline_line_count(&output_text);
         let block_unresolved = marker_segments
             .iter()
             .filter_map(|segment| match segment {
@@ -1644,7 +1608,7 @@ impl ResolvedOutputRecomputeIncrementalFixture {
         start..end
     }
 
-    fn next_single_line_edit(&mut self) -> (String, Range<usize>, Range<usize>) {
+    fn next_single_line_edit(&mut self) -> (String, Range<usize>, Range<usize>, usize, isize) {
         self.edit_nonce = self.edit_nonce.wrapping_add(1);
         let line_ix = self
             .edit_line_ix
@@ -1683,7 +1647,29 @@ impl ResolvedOutputRecomputeIncrementalFixture {
         next.push_str(self.output_text.get(end..).unwrap_or_default());
         let old_range = start..end;
         let new_range = start..start.saturating_add(replacement.len());
-        (next, old_range, new_range)
+        let byte_delta = replacement.len() as isize - end.saturating_sub(start) as isize;
+        (next, old_range, new_range, line_ix, byte_delta)
+    }
+
+    fn shift_line_starts_after_same_line_edit(
+        mut line_starts: Vec<usize>,
+        edited_line_ix: usize,
+        byte_delta: isize,
+    ) -> Vec<usize> {
+        if byte_delta == 0 {
+            return line_starts;
+        }
+        for start in line_starts
+            .iter_mut()
+            .skip(edited_line_ix.saturating_add(1))
+        {
+            *start = if byte_delta >= 0 {
+                start.saturating_add(byte_delta as usize)
+            } else {
+                start.saturating_sub((-byte_delta) as usize)
+            };
+        }
+        line_starts
     }
 
     fn hash_outline_state(&self) -> u64 {
@@ -1737,9 +1723,10 @@ impl ResolvedOutputRecomputeIncrementalFixture {
     }
 
     pub fn run_full_recompute_with_metrics(&mut self) -> (u64, ResolvedOutputRecomputeMetrics) {
-        let (next_output, _old_range, _new_range) = self.next_single_line_edit();
+        let (next_output, _old_range, _new_range, _line_ix, _byte_delta) =
+            self.next_single_line_edit();
         let next_line_starts = line_starts_for_text(&next_output);
-        let line_count = conflict_resolver::split_output_lines_for_outline(&next_output).len();
+        let line_count = conflict_resolver::resolved_output_outline_line_count(&next_output);
         let next_meta = self.recompute_meta_full(next_output.as_str());
         let next_markers = self.rebuild_markers(line_count);
 
@@ -1760,16 +1747,20 @@ impl ResolvedOutputRecomputeIncrementalFixture {
     pub fn run_incremental_recompute_with_metrics(
         &mut self,
     ) -> (u64, ResolvedOutputRecomputeMetrics) {
-        let old_text = self.output_text.clone();
-        let old_line_starts = self.output_line_starts.clone();
+        let (next_output, old_byte_range, new_byte_range, edited_line_ix, byte_delta) =
+            self.next_single_line_edit();
 
-        let (next_output, old_byte_range, new_byte_range) = self.next_single_line_edit();
-        let next_line_starts = line_starts_for_text(&next_output);
-        let next_line_count = conflict_resolver::split_output_lines_for_outline(&next_output).len();
-        let source_lookup = self.build_source_lookup();
-
-        let mut old_dirty =
-            Self::dirty_line_range(old_line_starts.as_slice(), old_text.len(), old_byte_range);
+        let mut old_dirty = Self::dirty_line_range(
+            self.output_line_starts.as_slice(),
+            self.output_text.len(),
+            old_byte_range,
+        );
+        let next_line_count = self.output_line_starts.len().max(1);
+        let next_line_starts = Self::shift_line_starts_after_same_line_edit(
+            std::mem::take(&mut self.output_line_starts),
+            edited_line_ix,
+            byte_delta,
+        );
         let mut new_dirty = Self::dirty_line_range(
             next_line_starts.as_slice(),
             next_output.len(),
@@ -1797,26 +1788,34 @@ impl ResolvedOutputRecomputeIncrementalFixture {
         }
 
         let line_delta = new_dirty.len() as isize - old_dirty.len() as isize;
+        let middle_meta = {
+            let source_lookup = self.build_source_lookup();
+            let mut middle_meta = Vec::with_capacity(new_dirty.len());
+            for line_ix in new_dirty.clone() {
+                let line =
+                    self.line_text(next_output.as_str(), next_line_starts.as_slice(), line_ix);
+                let (source, input_line) = source_lookup
+                    .get(line)
+                    .copied()
+                    .unwrap_or((conflict_resolver::ResolvedLineSource::Manual, None));
+                middle_meta.push(conflict_resolver::ResolvedLineMeta {
+                    output_line: u32::try_from(line_ix).unwrap_or(u32::MAX),
+                    source,
+                    input_line,
+                });
+            }
+            middle_meta
+        };
+        let old_meta = std::mem::take(&mut self.meta);
         let mut next_meta = Vec::with_capacity(next_line_count);
         next_meta.extend(
-            self.meta
+            old_meta
                 .iter()
-                .take(old_dirty.start.min(self.meta.len()))
+                .take(old_dirty.start.min(old_meta.len()))
                 .cloned(),
         );
-        for line_ix in new_dirty.clone() {
-            let line = self.line_text(next_output.as_str(), next_line_starts.as_slice(), line_ix);
-            let (source, input_line) = source_lookup
-                .get(line)
-                .copied()
-                .unwrap_or((conflict_resolver::ResolvedLineSource::Manual, None));
-            next_meta.push(conflict_resolver::ResolvedLineMeta {
-                output_line: u32::try_from(line_ix).unwrap_or(u32::MAX),
-                source,
-                input_line,
-            });
-        }
-        for meta in self.meta.iter().skip(old_dirty.end.min(self.meta.len())) {
+        next_meta.extend(middle_meta);
+        for meta in old_meta.iter().skip(old_dirty.end.min(old_meta.len())) {
             let mut shifted = meta.clone();
             let shifted_ix = if line_delta >= 0 {
                 (meta.output_line as usize).saturating_add(line_delta as usize)
@@ -1839,8 +1838,9 @@ impl ResolvedOutputRecomputeIncrementalFixture {
             return (hash, metrics);
         }
 
-        let mut next_markers = if self.markers.len() == next_line_count {
-            self.markers.clone()
+        let old_markers = std::mem::take(&mut self.markers);
+        let mut next_markers = if old_markers.len() == next_line_count {
+            old_markers
         } else {
             self.rebuild_markers(next_line_count)
         };
@@ -1944,15 +1944,17 @@ impl ConflictStreamedProviderFixture {
 
     fn hash_visible_window(&self, start: usize, end: usize) -> u64 {
         let mut h = FxHasher::default();
-        for vi in start..end {
-            if let Some((source_ix, _conflict_ix)) = self.two_way_projection.get(vi)
-                && let Some(row) = self.split_row_index.row_at(&self.segments, source_ix)
-            {
-                std::mem::discriminant(&row.kind).hash(&mut h);
-                row.old.as_deref().map(|s| s.len()).hash(&mut h);
-                row.new.as_deref().map(|s| s.len()).hash(&mut h);
-            }
-        }
+        self.two_way_projection.for_each_chunk_in_visible_range(
+            start..end,
+            |_, source_range, _conflict_ix| {
+                self.split_row_index
+                    .for_each_row_range(&self.segments, source_range, |_, row| {
+                        std::mem::discriminant(&row.kind).hash(&mut h);
+                        row.old.as_deref().map(|s| s.len()).hash(&mut h);
+                        row.new.as_deref().map(|s| s.len()).hash(&mut h);
+                    });
+            },
+        );
         h.finish()
     }
 
@@ -2072,13 +2074,12 @@ impl ConflictStreamedResolvedOutputFixture {
 
     fn hash_visible_window(&self, start: usize, end: usize) -> u64 {
         let mut h = FxHasher::default();
-        for line_ix in start..end {
-            if let Some(line) = self.projection.line_text(&self.segments, line_ix) {
+        self.projection
+            .for_each_line_text_in_range(&self.segments, start..end, |_, line| {
                 line.len().hash(&mut h);
                 line.as_bytes().first().copied().hash(&mut h);
                 line.as_bytes().last().copied().hash(&mut h);
-            }
-        }
+            });
         h.finish()
     }
 
@@ -2324,18 +2325,14 @@ impl MergeOpenBootstrapFixture {
         let mut marker_segments = conflict_resolver::parse_conflict_markers_shared_nonempty(
             Arc::clone(&self.current_text),
         );
-        let parsed_conflict_count = conflict_resolver::conflict_count(&marker_segments);
-        if parsed_conflict_count == 0 {
-            marker_segments.clear();
-        }
         let rendering_mode =
             conflict_resolver::select_conflict_rendering_mode(&marker_segments, three_way_len);
-        let expected_streamed = parsed_conflict_count > 0;
+        let expected_streamed = self.conflict_block_count > 0;
         assert_eq!(
             rendering_mode.is_streamed_large_file(),
             expected_streamed,
             "merge_open_bootstrap fixture rendering mode mismatch (expected_streamed={expected_streamed}, actual_conflicts={}, three-way lines={three_way_len})",
-            parsed_conflict_count,
+            conflict_resolver::conflict_count(&marker_segments),
         );
 
         let mut trace_decisions = MergeOpenBootstrapTraceDecisions {

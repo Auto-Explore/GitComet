@@ -261,7 +261,7 @@ impl MainPaneView {
             if !s.contains('\t') {
                 return SharedString::new(s);
             }
-            let mut out = String::with_capacity(s.len());
+            let mut out = String::with_capacity(crate::view::diff_utils::diff_text_display_len(s));
             for ch in s.chars() {
                 match ch {
                     '\t' => out.push_str("    "),
@@ -379,6 +379,120 @@ impl MainPaneView {
         }
     }
 
+    pub(in super::super::super) fn diff_text_line_len_for_region(
+        &self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+    ) -> usize {
+        let display_len = crate::view::diff_utils::diff_text_display_len;
+
+        // Markdown preview rows already come from pre-rendered preview text, so
+        // fall back to the existing materialized path there.
+        if self.is_markdown_preview_active() {
+            return self.markdown_preview_row_text(visible_ix, region).len();
+        }
+
+        if self.is_file_preview_active() {
+            if region != DiffTextRegion::Inline {
+                return 0;
+            }
+            return self
+                .worktree_preview_line_text(visible_ix)
+                .map(display_len)
+                .unwrap_or(0);
+        }
+
+        let Some(mapped_ix) = self.diff_mapped_ix_for_visible_ix(visible_ix) else {
+            return 0;
+        };
+
+        if self.diff_view == DiffViewMode::Inline {
+            if region != DiffTextRegion::Inline {
+                return 0;
+            }
+            if self.is_file_diff_view_active() {
+                let Some(line) = self.file_diff_inline_row(mapped_ix) else {
+                    return 0;
+                };
+                let cache_epoch = self.file_diff_inline_style_cache_epoch(&line);
+                if let Some(styled) = self.diff_text_segments_cache_get(mapped_ix, cache_epoch) {
+                    return styled.text.len();
+                }
+                return display_len(diff_content_text(&line));
+            }
+
+            if let Some(styled) = self.diff_text_segments_cache_get(mapped_ix, 0) {
+                return styled.text.len();
+            }
+            let Some(line) = self.patch_diff_row(mapped_ix) else {
+                return 0;
+            };
+            let click_kind = self
+                .diff_click_kinds
+                .get(mapped_ix)
+                .copied()
+                .unwrap_or(DiffClickKind::Line);
+            if matches!(
+                click_kind,
+                DiffClickKind::HunkHeader | DiffClickKind::FileHeader
+            ) && let Some(display) = self.diff_header_display_cache.get(&mapped_ix)
+            {
+                return display.len();
+            }
+            return display_len(line.text.as_ref());
+        }
+
+        match region {
+            DiffTextRegion::SplitLeft | DiffTextRegion::SplitRight => {}
+            DiffTextRegion::Inline => return 0,
+        }
+
+        if self.is_file_diff_view_active() {
+            let cache_epoch = self.file_diff_split_style_cache_epoch(region);
+            if let Some(key) = self.file_diff_split_cache_key(mapped_ix, region)
+                && let Some(styled) = self.diff_text_segments_cache_get(key, cache_epoch)
+            {
+                return styled.text.len();
+            }
+            let Some(row) = self.file_diff_split_row(mapped_ix) else {
+                return 0;
+            };
+            let text = match region {
+                DiffTextRegion::SplitLeft => row.old.as_deref().unwrap_or(""),
+                DiffTextRegion::SplitRight => row.new.as_deref().unwrap_or(""),
+                DiffTextRegion::Inline => unreachable!(),
+            };
+            return display_len(text);
+        }
+
+        let Some(split_row) = self.patch_diff_split_row(mapped_ix) else {
+            return 0;
+        };
+        match split_row {
+            PatchSplitRow::Raw { src_ix, click_kind } => {
+                let Some(line) = self.patch_diff_row(src_ix) else {
+                    return 0;
+                };
+                if matches!(
+                    click_kind,
+                    DiffClickKind::HunkHeader | DiffClickKind::FileHeader
+                ) && let Some(display) = self.diff_header_display_cache.get(&src_ix)
+                {
+                    return display.len();
+                }
+                display_len(line.text.as_ref())
+            }
+            PatchSplitRow::Aligned { row, .. } => {
+                let text = match region {
+                    DiffTextRegion::SplitLeft => row.old.as_deref().unwrap_or(""),
+                    DiffTextRegion::SplitRight => row.new.as_deref().unwrap_or(""),
+                    DiffTextRegion::Inline => unreachable!(),
+                };
+                display_len(text)
+            }
+        }
+    }
+
     fn diff_text_combined_offset(&self, pos: DiffTextPos, left_len: usize) -> usize {
         match self.diff_view {
             DiffViewMode::Inline => pos.offset,
@@ -397,8 +511,14 @@ impl MainPaneView {
         }
 
         let force_inline = self.is_file_preview_active();
+        let selected_line_count = end
+            .visible_ix
+            .saturating_sub(start.visible_ix)
+            .saturating_add(1);
 
-        let mut out = String::new();
+        let mut out = String::with_capacity(
+            crate::view::diff_utils::multiline_text_copy_capacity_hint(selected_line_count),
+        );
         for visible_ix in start.visible_ix..=end.visible_ix {
             if force_inline || self.diff_view == DiffViewMode::Inline {
                 let text = self.diff_text_line_for_region(visible_ix, DiffTextRegion::Inline);

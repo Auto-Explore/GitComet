@@ -1,70 +1,106 @@
 use super::{
-    GixRepo,
+    GixRepo, bstr_to_arc_str,
     conflict_stages::{gix_index_stage_blob_bytes_optional, gix_index_stage_exists},
+    oid_to_arc_str,
 };
 use crate::util::{bytes_to_text_preserving_utf8, run_git_with_output};
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{BlameLine, CommandOutput, ConflictSide, Result};
 use gix::bstr::ByteSlice as _;
 use rustc_hash::FxHashMap as HashMap;
+use std::collections::hash_map::Entry;
 use std::fs;
 use std::path::Path;
-use std::rc::Rc;
 use std::sync::Arc;
 
 struct BlameCommitMetadata {
+    commit_id_text: Arc<str>,
     author: Arc<str>,
     author_time_unix: Option<i64>,
     summary: Arc<str>,
 }
 
-fn blame_commit_metadata(
+fn blame_commit_metadata<'a>(
     repo: &gix::Repository,
-    cache: &mut HashMap<gix::ObjectId, Rc<BlameCommitMetadata>>,
+    cache: &'a mut HashMap<gix::ObjectId, BlameCommitMetadata>,
     commit_id: gix::ObjectId,
-) -> Result<Rc<BlameCommitMetadata>> {
-    if let Some(metadata) = cache.get(&commit_id) {
-        return Ok(Rc::clone(metadata));
+) -> Result<&'a BlameCommitMetadata> {
+    match cache.entry(commit_id) {
+        Entry::Occupied(entry) => Ok(entry.into_mut()),
+        Entry::Vacant(entry) => {
+            let commit = repo.find_commit(commit_id).map_err(|e| {
+                Error::new(ErrorKind::Backend(format!(
+                    "gix find_commit {commit_id}: {e}"
+                )))
+            })?;
+
+            let (author, author_time_unix) = match commit.author() {
+                Ok(signature) => (
+                    bstr_to_arc_str(signature.name.as_ref()),
+                    signature.time().ok().map(|time| time.seconds),
+                ),
+                Err(_) => (Arc::<str>::default(), None),
+            };
+            let summary_bytes = commit
+                .message_raw_sloppy()
+                .lines()
+                .next()
+                .unwrap_or_default();
+            let summary = bstr_to_arc_str(summary_bytes);
+
+            Ok(entry.insert(BlameCommitMetadata {
+                commit_id_text: oid_to_arc_str(&commit_id),
+                author,
+                author_time_unix,
+                summary,
+            }))
+        }
     }
-
-    let commit = repo.find_commit(commit_id).map_err(|e| {
-        Error::new(ErrorKind::Backend(format!(
-            "gix find_commit {commit_id}: {e}"
-        )))
-    })?;
-
-    let (author, author_time_unix) = match commit.author() {
-        Ok(signature) => (
-            bytes_to_text_preserving_utf8(signature.name.as_ref()).into(),
-            signature.time().ok().map(|time| time.seconds),
-        ),
-        Err(_) => (Arc::<str>::default(), None),
-    };
-    let summary = commit
-        .message_raw_sloppy()
-        .lines()
-        .next()
-        .map(bytes_to_text_preserving_utf8)
-        .map(Arc::<str>::from)
-        .unwrap_or_default();
-
-    let metadata = Rc::new(BlameCommitMetadata {
-        author,
-        author_time_unix,
-        summary,
-    });
-    cache.insert(commit_id, Rc::clone(&metadata));
-    Ok(metadata)
 }
 
 fn blame_line_text(bytes: &[u8]) -> String {
     let bytes = bytes.strip_suffix(b"\n").unwrap_or(bytes);
     let bytes = bytes.strip_suffix(b"\r").unwrap_or(bytes);
-    bytes_to_text_preserving_utf8(bytes)
+    match std::str::from_utf8(bytes) {
+        Ok(s) => s.to_string(),
+        Err(_) => bytes_to_text_preserving_utf8(bytes),
+    }
+}
+
+struct BlameBlobLines<'a> {
+    blob: &'a [u8],
+    cursor: usize,
+}
+
+impl<'a> Iterator for BlameBlobLines<'a> {
+    type Item = &'a [u8];
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.cursor >= self.blob.len() {
+            return None;
+        }
+
+        let start = self.cursor;
+        let remaining = &self.blob[start..];
+        if let Some(offset) = remaining.iter().position(|byte| *byte == b'\n') {
+            let end = start + offset + 1;
+            self.cursor = end;
+            Some(&self.blob[start..end])
+        } else {
+            self.cursor = self.blob.len();
+            Some(&self.blob[start..])
+        }
+    }
+}
+
+fn blame_blob_lines(blob: &[u8]) -> BlameBlobLines<'_> {
+    BlameBlobLines { blob, cursor: 0 }
 }
 
 impl GixRepo {
     pub(super) fn blame_file_impl(&self, path: &Path, rev: Option<&str>) -> Result<Vec<BlameLine>> {
+        const BLOB_LINE_MISMATCH: &str = "gix blame blob line count did not match blame entries";
+
         let repo = self._repo.to_thread_local();
         let spec = rev.unwrap_or("HEAD");
         let suspect = repo
@@ -84,18 +120,39 @@ impl GixRepo {
             })?;
 
         let mut metadata_cache = HashMap::default();
-        let mut lines = Vec::new();
-        for (entry, entry_lines) in outcome.entries_with_lines() {
-            let commit_id = entry.commit_id;
-            let commit_id_text: Arc<str> = commit_id.to_string().into();
-            let metadata = blame_commit_metadata(&repo, &mut metadata_cache, commit_id)?;
-            for line in entry_lines {
+        let total_lines = outcome
+            .entries
+            .last()
+            .map(|entry| entry.start_in_blamed_file as usize + entry.len.get() as usize)
+            .unwrap_or_default();
+        let mut lines = Vec::with_capacity(total_lines);
+        let mut blob_lines = blame_blob_lines(&outcome.blob);
+        let mut blob_line_ix = 0usize;
+        for entry in &outcome.entries {
+            let entry_start = entry.start_in_blamed_file as usize;
+            let entry_len = entry.len.get() as usize;
+            while blob_line_ix < entry_start {
+                if blob_lines.next().is_none() {
+                    return Err(Error::new(ErrorKind::Backend(
+                        BLOB_LINE_MISMATCH.to_string(),
+                    )));
+                }
+                blob_line_ix += 1;
+            }
+            let metadata = blame_commit_metadata(&repo, &mut metadata_cache, entry.commit_id)?;
+            for _ in 0..entry_len {
+                let Some(line) = blob_lines.next() else {
+                    return Err(Error::new(ErrorKind::Backend(
+                        BLOB_LINE_MISMATCH.to_string(),
+                    )));
+                };
+                blob_line_ix += 1;
                 lines.push(BlameLine {
-                    commit_id: commit_id_text.clone(),
+                    commit_id: metadata.commit_id_text.clone(),
                     author: metadata.author.clone(),
                     author_time_unix: metadata.author_time_unix,
                     summary: metadata.summary.clone(),
-                    line: blame_line_text(line.as_ref()),
+                    line: blame_line_text(line),
                 });
             }
         }
@@ -195,5 +252,20 @@ mod tests {
         assert_eq!(blame_line_text(b"hello\n"), "hello");
         assert_eq!(blame_line_text(b"hello\r\n"), "hello");
         assert_eq!(blame_line_text(b"hello"), "hello");
+    }
+
+    #[test]
+    fn blame_blob_lines_preserves_terminators_and_final_line() {
+        let blob = b"first\nsecond\r\nthird";
+        let lines = blame_blob_lines(blob).collect::<Vec<_>>();
+        assert_eq!(
+            lines,
+            vec![&b"first\n"[..], &b"second\r\n"[..], &b"third"[..]]
+        );
+    }
+
+    #[test]
+    fn blame_blob_lines_is_empty_for_empty_blob() {
+        assert_eq!(blame_blob_lines(b"").count(), 0);
     }
 }

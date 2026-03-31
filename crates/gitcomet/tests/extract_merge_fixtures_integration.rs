@@ -1,4 +1,5 @@
 use gitcomet_core::process::background_command as no_window_command;
+#[path = "support/test_git_env.rs"]
 mod test_git_env;
 use std::ffi::{OsStr, OsString};
 use std::fs;
@@ -194,7 +195,10 @@ fn extract_merge_fixtures_e2e_writes_fixture_sets() {
 
 #[test]
 fn extract_merge_fixtures_e2e_non_repo_exits_two() {
-    let non_repo = tempfile::tempdir().expect("create non-repo dir");
+    let non_repo = tempfile::Builder::new()
+        .prefix("gitcomet-extract-non-repo-it-")
+        .tempdir()
+        .expect("create non-repo dir outside repo");
     let out = tempfile::tempdir().expect("create output dir");
 
     let output = run_gitcomet([

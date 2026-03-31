@@ -1,25 +1,24 @@
 use crate::model::{AppState, RepoId};
 use crate::msg::{
     ConflictAutosolveMode, ConflictBulkChoice, ConflictRegionChoice,
-    ConflictRegionResolutionUpdate, Effect,
+    ConflictRegionResolutionUpdate, Effect, RepoPath,
 };
 use gitcomet_core::conflict_session::{
     ConflictRegionResolution, HistoryAutosolveOptions, RegexAutosolveOptions,
 };
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::path::PathBuf;
 
 pub(super) fn set_hide_resolved(
     state: &mut AppState,
     repo_id: RepoId,
-    path: PathBuf,
+    path: RepoPath,
     hide_resolved: bool,
 ) -> Vec<Effect> {
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
     };
-    if !matches_current_conflict_path(repo_state, &path) {
+    if !matches_current_conflict_path(repo_state, path.as_path()) {
         return Vec::new();
     }
     repo_state.set_conflict_hide_resolved(hide_resolved);
@@ -29,19 +28,19 @@ pub(super) fn set_hide_resolved(
 pub(super) fn apply_bulk_choice(
     state: &mut AppState,
     repo_id: RepoId,
-    path: PathBuf,
+    path: RepoPath,
     choice: ConflictBulkChoice,
 ) -> Vec<Effect> {
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
     };
-    if !matches_current_conflict_path(repo_state, &path) {
+    if !matches_current_conflict_path(repo_state, path.as_path()) {
         return Vec::new();
     }
     let Some(session) = repo_state.conflict_state.conflict_session.as_mut() else {
         return Vec::new();
     };
-    if session.path != path {
+    if session.path != path.as_path() {
         return Vec::new();
     }
 
@@ -55,25 +54,37 @@ pub(super) fn apply_bulk_choice(
 pub(super) fn set_region_choice(
     state: &mut AppState,
     repo_id: RepoId,
-    path: PathBuf,
+    path: RepoPath,
     region_index: usize,
     choice: ConflictRegionChoice,
 ) -> Vec<Effect> {
+    set_region_choice_inline(state, repo_id, path, region_index, choice);
+    Vec::new()
+}
+
+#[inline]
+pub(super) fn set_region_choice_inline(
+    state: &mut AppState,
+    repo_id: RepoId,
+    path: RepoPath,
+    region_index: usize,
+    choice: ConflictRegionChoice,
+) {
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
-        return Vec::new();
+        return;
     };
-    if !matches_current_conflict_path(repo_state, &path) {
-        return Vec::new();
+    if !matches_current_conflict_path(repo_state, path.as_path()) {
+        return;
     }
     let Some(session) = repo_state.conflict_state.conflict_session.as_mut() else {
-        return Vec::new();
+        return;
     };
-    if session.path != path {
-        return Vec::new();
+    if session.path != path.as_path() {
+        return;
     }
 
     let Some(region) = session.regions.get_mut(region_index) else {
-        return Vec::new();
+        return;
     };
     let Some(next_resolution) = (match choice {
         ConflictRegionChoice::Base => region
@@ -84,20 +95,19 @@ pub(super) fn set_region_choice(
         ConflictRegionChoice::Theirs => Some(ConflictRegionResolution::PickTheirs),
         ConflictRegionChoice::Both => Some(ConflictRegionResolution::PickBoth),
     }) else {
-        return Vec::new();
+        return;
     };
 
     if region.resolution != next_resolution {
         region.resolution = next_resolution;
         repo_state.bump_conflict_rev();
     }
-    Vec::new()
 }
 
 pub(super) fn sync_region_resolutions(
     state: &mut AppState,
     repo_id: RepoId,
-    path: PathBuf,
+    path: RepoPath,
     updates: Vec<ConflictRegionResolutionUpdate>,
 ) -> Vec<Effect> {
     if updates.is_empty() {
@@ -106,13 +116,13 @@ pub(super) fn sync_region_resolutions(
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
     };
-    if !matches_current_conflict_path(repo_state, &path) {
+    if !matches_current_conflict_path(repo_state, path.as_path()) {
         return Vec::new();
     }
     let Some(session) = repo_state.conflict_state.conflict_session.as_mut() else {
         return Vec::new();
     };
-    if session.path != path {
+    if session.path != path.as_path() {
         return Vec::new();
     }
 
@@ -144,20 +154,20 @@ pub(super) fn sync_region_resolutions(
 pub(super) fn apply_autosolve(
     state: &mut AppState,
     repo_id: RepoId,
-    path: PathBuf,
+    path: RepoPath,
     mode: ConflictAutosolveMode,
     whitespace_normalize: bool,
 ) -> Vec<Effect> {
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
     };
-    if !matches_current_conflict_path(repo_state, &path) {
+    if !matches_current_conflict_path(repo_state, path.as_path()) {
         return Vec::new();
     }
     let Some(session) = repo_state.conflict_state.conflict_session.as_mut() else {
         return Vec::new();
     };
-    if session.path != path {
+    if session.path != path.as_path() {
         return Vec::new();
     }
 
@@ -171,26 +181,31 @@ pub(super) fn apply_autosolve(
 pub(super) fn reset_resolutions(
     state: &mut AppState,
     repo_id: RepoId,
-    path: PathBuf,
+    path: RepoPath,
 ) -> Vec<Effect> {
+    reset_resolutions_inline(state, repo_id, path);
+    Vec::new()
+}
+
+#[inline]
+pub(super) fn reset_resolutions_inline(state: &mut AppState, repo_id: RepoId, path: RepoPath) {
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
-        return Vec::new();
+        return;
     };
-    if !matches_current_conflict_path(repo_state, &path) {
-        return Vec::new();
+    if !matches_current_conflict_path(repo_state, path.as_path()) {
+        return;
     }
     let Some(session) = repo_state.conflict_state.conflict_session.as_mut() else {
-        return Vec::new();
+        return;
     };
-    if session.path != path {
-        return Vec::new();
+    if session.path != path.as_path() {
+        return;
     }
 
     let reset_count = reset_session_resolutions(session);
     if reset_count > 0 {
         repo_state.bump_conflict_rev();
     }
-    Vec::new()
 }
 
 fn matches_current_conflict_path(repo_state: &crate::model::RepoState, path: &Path) -> bool {

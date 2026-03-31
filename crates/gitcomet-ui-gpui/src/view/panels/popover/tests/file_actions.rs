@@ -25,7 +25,7 @@ fn commit_menu_has_add_tag_entry(cx: &mut gpui::TestAppContext) {
                 gitcomet_core::domain::LogPage {
                     commits: vec![gitcomet_core::domain::Commit {
                         id: commit_id.clone(),
-                        parent_ids: vec![],
+                        parent_ids: gitcomet_core::domain::CommitParentIds::new(),
                         summary: "Hello".into(),
                         author: "Alice".into(),
                         time: SystemTime::UNIX_EPOCH,
@@ -711,11 +711,11 @@ fn file_preview_context_menu_matches_diff_editor_actions(cx: &mut gpui::TestAppC
                 area: DiffArea::Staged,
             });
             repo.diff_state.diff_file =
-                Loadable::Ready(Some(Arc::new(gitcomet_core::domain::FileDiffText {
-                    path: path.clone(),
-                    old: None,
-                    new: Some("alpha\nbeta\n".to_string()),
-                })));
+                Loadable::Ready(Some(Arc::new(gitcomet_core::domain::FileDiffText::new(
+                    path.clone(),
+                    None,
+                    Some("alpha\nbeta\n".to_string()),
+                ))));
 
             let next_state = Arc::new(AppState {
                 repos: vec![repo],

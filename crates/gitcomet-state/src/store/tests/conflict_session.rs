@@ -34,14 +34,14 @@ fn setup_repo_with_conflict(
 
     // Inject a status with the conflict entry.
     let repo_state = state.repos.iter_mut().find(|r| r.id == repo_id).unwrap();
-    repo_state.status = Loadable::Ready(Arc::new(RepoStatus {
+    repo_state.set_status(Loadable::Ready(Arc::new(RepoStatus {
         unstaged: vec![FileStatus {
             path: PathBuf::from(path),
             kind: FileStatusKind::Conflicted,
             conflict: Some(conflict_kind),
         }],
         staged: vec![],
-    }));
+    })));
     // Set the conflict file path (simulates LoadConflictFile dispatch).
     repo_state.set_conflict_file_path(Some(PathBuf::from(path)));
 
@@ -50,7 +50,7 @@ fn setup_repo_with_conflict(
 
 fn sample_marker_conflict_file(path: &str) -> ConflictFile {
     ConflictFile {
-        path: PathBuf::from(path),
+        path: PathBuf::from(path).into(),
         base_bytes: Some(b"base\n".to_vec().into()),
         ours_bytes: Some(b"ours\n".to_vec().into()),
         theirs_bytes: Some(b"theirs\n".to_vec().into()),
@@ -87,7 +87,7 @@ fn conflict_file_loaded_builds_session_with_regions() {
     let current_text: Arc<str> =
         "a\n<<<<<<< ours\nours\n=======\ntheirs\n>>>>>>> theirs\nb\n".into();
     let file = ConflictFile {
-        path: PathBuf::from("file.txt"),
+        path: PathBuf::from("file.txt").into(),
         base_bytes: Some(b"base\n".to_vec().into()),
         ours_bytes: Some(b"ours\n".to_vec().into()),
         theirs_bytes: Some(b"theirs\n".to_vec().into()),
@@ -156,7 +156,7 @@ fn conflict_file_loaded_builds_session_for_delete_conflict() {
     );
 
     let file = ConflictFile {
-        path: PathBuf::from("deleted.txt"),
+        path: PathBuf::from("deleted.txt").into(),
         base_bytes: Some(b"original\n".to_vec().into()),
         ours_bytes: Some(b"modified\n".to_vec().into()),
         theirs_bytes: None,
@@ -211,7 +211,7 @@ fn conflict_file_loaded_builds_binary_session() {
 
     // Binary file: bytes present but text is None (non-UTF8).
     let file = ConflictFile {
-        path: PathBuf::from("image.png"),
+        path: PathBuf::from("image.png").into(),
         base_bytes: Some(vec![0x89, 0x50, 0x4E, 0x47].into()),
         ours_bytes: Some(vec![0x89, 0x50, 0x4E, 0x48].into()),
         theirs_bytes: Some(vec![0x89, 0x50, 0x4E, 0x49].into()),
@@ -296,7 +296,7 @@ fn load_conflict_file_clears_previous_session() {
 
     // First load — builds a session.
     let file = ConflictFile {
-        path: PathBuf::from("file.txt"),
+        path: PathBuf::from("file.txt").into(),
         base_bytes: None,
         ours_bytes: Some(b"ours\n".to_vec().into()),
         theirs_bytes: Some(b"theirs\n".to_vec().into()),
@@ -396,7 +396,7 @@ fn status_loaded_clears_conflict_context_when_path_is_resolved() {
         &mut state,
         Msg::ConflictSetHideResolved {
             repo_id,
-            path: PathBuf::from("file.txt"),
+            path: PathBuf::from("file.txt").into(),
             hide_resolved: true,
         },
     );
@@ -512,7 +512,7 @@ fn conflict_file_loaded_prefers_backend_session_when_provided() {
     );
 
     let file = ConflictFile {
-        path: PathBuf::from("file.txt"),
+        path: PathBuf::from("file.txt").into(),
         base_bytes: Some(b"base\n".to_vec().into()),
         ours_bytes: Some(b"ours\n".to_vec().into()),
         theirs_bytes: Some(b"theirs\n".to_vec().into()),
@@ -589,7 +589,7 @@ fn conflict_set_hide_resolved_updates_repo_state() {
         &mut state,
         Msg::ConflictSetHideResolved {
             repo_id,
-            path: PathBuf::from("file.txt"),
+            path: PathBuf::from("file.txt").into(),
             hide_resolved: true,
         },
     );
@@ -627,7 +627,7 @@ theirs two\n\
 >>>>>>> theirs\n\
 ";
     let file = ConflictFile {
-        path: PathBuf::from("file.txt"),
+        path: PathBuf::from("file.txt").into(),
         base_bytes: Some(b"base\n".to_vec().into()),
         ours_bytes: Some(b"ours\n".to_vec().into()),
         theirs_bytes: Some(b"theirs\n".to_vec().into()),
@@ -673,7 +673,7 @@ theirs two\n\
         &mut state,
         Msg::ConflictApplyBulkChoice {
             repo_id,
-            path: PathBuf::from("file.txt"),
+            path: PathBuf::from("file.txt").into(),
             choice: crate::msg::ConflictBulkChoice::Ours,
         },
     );
@@ -723,7 +723,7 @@ theirs two\n\
 >>>>>>> theirs\n\
 ";
     let file = ConflictFile {
-        path: PathBuf::from("file.txt"),
+        path: PathBuf::from("file.txt").into(),
         base_bytes: Some(b"base\n".to_vec().into()),
         ours_bytes: Some(b"ours\n".to_vec().into()),
         theirs_bytes: Some(b"theirs\n".to_vec().into()),
@@ -759,7 +759,7 @@ theirs two\n\
         &mut state,
         Msg::ConflictSetRegionChoice {
             repo_id,
-            path: PathBuf::from("file.txt"),
+            path: PathBuf::from("file.txt").into(),
             region_index: 1,
             choice: crate::msg::ConflictRegionChoice::Theirs,
         },
@@ -805,7 +805,7 @@ theirs only\n\
 >>>>>>> theirs\n\
 ";
     let file = ConflictFile {
-        path: PathBuf::from("file.txt"),
+        path: PathBuf::from("file.txt").into(),
         base_bytes: Some(b"base\n".to_vec().into()),
         ours_bytes: Some(b"ours only\n".to_vec().into()),
         theirs_bytes: Some(b"theirs only\n".to_vec().into()),
@@ -841,7 +841,7 @@ theirs only\n\
         &mut state,
         Msg::ConflictSetRegionChoice {
             repo_id,
-            path: PathBuf::from("file.txt"),
+            path: PathBuf::from("file.txt").into(),
             region_index: 0,
             choice: crate::msg::ConflictRegionChoice::Base,
         },
@@ -888,7 +888,7 @@ theirs two\n\
 >>>>>>> theirs\n\
 ";
     let file = ConflictFile {
-        path: PathBuf::from("file.txt"),
+        path: PathBuf::from("file.txt").into(),
         base_bytes: Some(b"base\n".to_vec().into()),
         ours_bytes: Some(b"ours\n".to_vec().into()),
         theirs_bytes: Some(b"theirs\n".to_vec().into()),
@@ -915,7 +915,7 @@ theirs two\n\
         &mut state,
         Msg::ConflictSetRegionChoice {
             repo_id,
-            path: PathBuf::from("file.txt"),
+            path: PathBuf::from("file.txt").into(),
             region_index: 0,
             choice: crate::msg::ConflictRegionChoice::Ours,
         },
@@ -926,7 +926,7 @@ theirs two\n\
         &mut state,
         Msg::ConflictSetRegionChoice {
             repo_id,
-            path: PathBuf::from("file.txt"),
+            path: PathBuf::from("file.txt").into(),
             region_index: 1,
             choice: crate::msg::ConflictRegionChoice::Theirs,
         },
@@ -946,7 +946,7 @@ theirs two\n\
         &mut state,
         Msg::ConflictResetResolutions {
             repo_id,
-            path: PathBuf::from("file.txt"),
+            path: PathBuf::from("file.txt").into(),
         },
     );
 
@@ -989,7 +989,7 @@ theirs one\n\
 >>>>>>> theirs\n\
 ";
     let file = ConflictFile {
-        path: PathBuf::from("file.txt"),
+        path: PathBuf::from("file.txt").into(),
         base_bytes: Some(b"base\n".to_vec().into()),
         ours_bytes: Some(b"ours\n".to_vec().into()),
         theirs_bytes: Some(b"theirs\n".to_vec().into()),
@@ -1025,7 +1025,7 @@ theirs one\n\
         &mut state,
         Msg::ConflictResetResolutions {
             repo_id,
-            path: PathBuf::from("file.txt"),
+            path: PathBuf::from("file.txt").into(),
         },
     );
 
@@ -1064,7 +1064,7 @@ same content\n\
 >>>>>>> theirs\n\
 ";
     let file = ConflictFile {
-        path: PathBuf::from("file.txt"),
+        path: PathBuf::from("file.txt").into(),
         base_bytes: Some(b"base\n".to_vec().into()),
         ours_bytes: Some(b"same content\n".to_vec().into()),
         theirs_bytes: Some(b"same content\n".to_vec().into()),
@@ -1100,7 +1100,7 @@ same content\n\
         &mut state,
         Msg::ConflictApplyAutosolve {
             repo_id,
-            path: PathBuf::from("file.txt"),
+            path: PathBuf::from("file.txt").into(),
             mode: crate::msg::ConflictAutosolveMode::Safe,
             whitespace_normalize: false,
         },
@@ -1148,7 +1148,7 @@ theirs two\n\
 >>>>>>> theirs\n\
 ";
     let file = ConflictFile {
-        path: PathBuf::from("file.txt"),
+        path: PathBuf::from("file.txt").into(),
         base_bytes: Some(b"base\n".to_vec().into()),
         ours_bytes: Some(b"ours\n".to_vec().into()),
         theirs_bytes: Some(b"theirs\n".to_vec().into()),
@@ -1184,7 +1184,7 @@ theirs two\n\
         &mut state,
         Msg::ConflictSyncRegionResolutions {
             repo_id,
-            path: PathBuf::from("file.txt"),
+            path: PathBuf::from("file.txt").into(),
             updates: vec![
                 crate::msg::ConflictRegionResolutionUpdate {
                     region_index: 0,
@@ -1243,7 +1243,7 @@ theirs one\n\
 >>>>>>> theirs\n\
 ";
     let file = ConflictFile {
-        path: PathBuf::from("file.txt"),
+        path: PathBuf::from("file.txt").into(),
         base_bytes: Some(b"base\n".to_vec().into()),
         ours_bytes: Some(b"ours one\n".to_vec().into()),
         theirs_bytes: Some(b"theirs one\n".to_vec().into()),
@@ -1279,7 +1279,7 @@ theirs one\n\
         &mut state,
         Msg::ConflictSyncRegionResolutions {
             repo_id,
-            path: PathBuf::from("file.txt"),
+            path: PathBuf::from("file.txt").into(),
             updates: vec![crate::msg::ConflictRegionResolutionUpdate {
                 region_index: 0,
                 resolution: gitcomet_core::conflict_session::ConflictRegionResolution::Unresolved,
@@ -1329,7 +1329,7 @@ theirs two\n\
 >>>>>>> theirs\n\
 ";
     let file = ConflictFile {
-        path: PathBuf::from("file.txt"),
+        path: PathBuf::from("file.txt").into(),
         base_bytes: Some(b"base\n".to_vec().into()),
         ours_bytes: Some(b"ours\n".to_vec().into()),
         theirs_bytes: Some(b"theirs\n".to_vec().into()),
@@ -1420,7 +1420,7 @@ theirs two\n\
 >>>>>>> theirs\n\
 ";
     let file = ConflictFile {
-        path: PathBuf::from("file.txt"),
+        path: PathBuf::from("file.txt").into(),
         base_bytes: Some(b"base one\nbase two\n".to_vec().into()),
         ours_bytes: Some(b"ours one\nours two\n".to_vec().into()),
         theirs_bytes: Some(b"theirs one\ntheirs two\n".to_vec().into()),
@@ -1493,7 +1493,7 @@ fn repo_command_finished_accept_conflict_deletion_syncs_two_way_region_resolutio
     );
 
     let file = ConflictFile {
-        path: PathBuf::from("file.txt"),
+        path: PathBuf::from("file.txt").into(),
         base_bytes: None,
         ours_bytes: Some(b"ours only\n".to_vec().into()),
         theirs_bytes: None,
@@ -1580,7 +1580,7 @@ fn repo_command_finished_launch_mergetool_clears_conflict_context() {
         &mut state,
         Msg::ConflictSetHideResolved {
             repo_id,
-            path: PathBuf::from("file.txt"),
+            path: PathBuf::from("file.txt").into(),
             hide_resolved: true,
         },
     );
@@ -1632,7 +1632,7 @@ fn repo_command_finished_checkout_conflict_side_clears_binary_conflict_context()
     );
 
     let file = ConflictFile {
-        path: PathBuf::from("image.png"),
+        path: PathBuf::from("image.png").into(),
         base_bytes: Some(vec![0x89, 0x50, 0x4E, 0x47].into()),
         ours_bytes: Some(vec![0x89, 0x50, 0x4E, 0x48].into()),
         theirs_bytes: Some(vec![0x89, 0x50, 0x4E, 0x49].into()),
@@ -1659,7 +1659,7 @@ fn repo_command_finished_checkout_conflict_side_clears_binary_conflict_context()
         &mut state,
         Msg::ConflictSetHideResolved {
             repo_id,
-            path: PathBuf::from("image.png"),
+            path: PathBuf::from("image.png").into(),
             hide_resolved: true,
         },
     );
@@ -1714,7 +1714,7 @@ fn repo_command_finished_checkout_conflict_base_clears_binary_conflict_context()
     );
 
     let file = ConflictFile {
-        path: PathBuf::from("image.png"),
+        path: PathBuf::from("image.png").into(),
         base_bytes: Some(vec![0x89, 0x50, 0x4E, 0x47].into()),
         ours_bytes: Some(vec![0x89, 0x50, 0x4E, 0x48].into()),
         theirs_bytes: Some(vec![0x89, 0x50, 0x4E, 0x49].into()),
@@ -1741,7 +1741,7 @@ fn repo_command_finished_checkout_conflict_base_clears_binary_conflict_context()
         &mut state,
         Msg::ConflictSetHideResolved {
             repo_id,
-            path: PathBuf::from("image.png"),
+            path: PathBuf::from("image.png").into(),
             hide_resolved: true,
         },
     );
@@ -1988,7 +1988,7 @@ fn repo_command_finished_accept_conflict_deletion_maps_added_by_them_to_pick_our
     );
 
     let file = ConflictFile {
-        path: PathBuf::from("file.txt"),
+        path: PathBuf::from("file.txt").into(),
         base_bytes: None,
         ours_bytes: None,
         theirs_bytes: Some(b"theirs only\n".to_vec().into()),
@@ -2106,7 +2106,7 @@ fn repo_command_finished_checkout_conflict_base_noops_for_regions_without_base()
     );
 
     let file = ConflictFile {
-        path: PathBuf::from("file.txt"),
+        path: PathBuf::from("file.txt").into(),
         base_bytes: None,
         ours_bytes: None,
         theirs_bytes: Some(b"theirs only\n".to_vec().into()),

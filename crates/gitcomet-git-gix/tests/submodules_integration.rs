@@ -1,6 +1,7 @@
 use gitcomet_core::domain::SubmoduleStatus;
 use gitcomet_core::services::GitBackend;
 use gitcomet_git_gix::GixBackend;
+#[path = "support/test_git_env.rs"]
 mod test_git_env;
 use std::fs;
 use std::path::{Path, PathBuf};

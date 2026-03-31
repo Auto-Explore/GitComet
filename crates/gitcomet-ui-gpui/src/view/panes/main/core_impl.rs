@@ -170,7 +170,6 @@ struct ResolvedOutlineIncrementalBase<'a> {
     line_starts: &'a Arc<[usize]>,
     marker_segments: &'a [conflict_resolver::ConflictSegment],
     view_mode: ConflictResolverViewMode,
-    outline: &'a ResolvedOutlineData,
 }
 
 fn compute_resolved_outline_computation(
@@ -747,11 +746,12 @@ impl MainPaneView {
             }
             let next: SharedString = input.read(cx).text().to_string().into();
             if this.diff_search_query != next {
-                this.diff_search_query = next;
-                this.clear_diff_text_query_overlay_cache();
+                let previous_query = this.diff_search_query.clone();
+                this.diff_search_query = next.clone();
+                this.invalidate_diff_text_query_overlay_cache(next.as_ref());
                 this.clear_worktree_preview_segments_cache();
                 this.clear_conflict_diff_query_overlay_caches();
-                this.diff_search_recompute_matches();
+                this.diff_search_recompute_matches_for_query_change(previous_query.as_ref());
                 cx.notify();
             }
         });
@@ -812,6 +812,7 @@ impl MainPaneView {
             diff_split_row_provider: None,
             diff_file_for_src_ix: Vec::new(),
             diff_language_for_src_ix: Vec::new(),
+            diff_yaml_block_scalar_for_src_ix: Vec::new(),
             diff_click_kinds: Vec::new(),
             diff_line_kind_for_src_ix: Vec::new(),
             diff_hide_unified_header_for_src_ix: Vec::new(),
@@ -833,6 +834,7 @@ impl MainPaneView {
             diff_text_segments_cache: Vec::new(),
             diff_text_query_segments_cache: Vec::new(),
             diff_text_query_cache_query: SharedString::default(),
+            diff_text_query_cache_generation: 0,
             diff_selection_anchor: None,
             diff_selection_range: None,
             diff_text_selecting: false,
@@ -849,6 +851,7 @@ impl MainPaneView {
             diff_search_active: false,
             diff_search_query: "".into(),
             diff_search_matches: Vec::new(),
+            diff_search_inline_patch_trigram_index: None,
             diff_search_match_ix: None,
             diff_search_input,
             _diff_search_subscription: diff_search_subscription,
@@ -900,6 +903,7 @@ impl MainPaneView {
             worktree_preview: Loadable::NotLoaded,
             worktree_preview_text: SharedString::default(),
             worktree_preview_line_starts: Arc::default(),
+            worktree_preview_search_trigram_index: None,
             worktree_preview_content_rev: 0,
             worktree_markdown_preview_path: None,
             worktree_markdown_preview_source_rev: 0,
@@ -909,6 +913,7 @@ impl MainPaneView {
             worktree_preview_segments_cache_path: None,
             worktree_preview_syntax_language: None,
             worktree_preview_style_cache_epoch: 0,
+            worktree_preview_cache_write_blocked_until_rev: None,
             worktree_preview_segments_cache: HashMap::default(),
             diff_preview_is_new_file: false,
             conflict_resolver_input,
@@ -923,8 +928,10 @@ impl MainPaneView {
             conflict_diff_split_resize: None,
             conflict_diff_split_col_widths: [px(0.0); 2],
             conflict_canvas_rows_enabled: conflict_canvas_rows_enabled_from_env(),
-            conflict_diff_segments_cache_split: HashMap::default(),
-            conflict_diff_query_segments_cache_split: HashMap::default(),
+            conflict_diff_segments_cache_split:
+                conflict_resolver::ConflictSplitStyledTextCache::default(),
+            conflict_diff_query_segments_cache_split:
+                conflict_resolver::ConflictSplitStyledTextCache::default(),
             conflict_diff_query_cache_query: SharedString::default(),
             conflict_three_way_segments_cache: HashMap::default(),
             conflict_three_way_prepared_syntax_documents: ThreeWaySides::default(),
@@ -954,7 +961,7 @@ impl MainPaneView {
             conflict_preview_last_synced_y: [px(0.0); 3],
             conflict_resolved_preview_scroll: UniformListScrollHandle::default(),
             worktree_preview_scroll: UniformListScrollHandle::default(),
-            path_display_cache: std::cell::RefCell::new(HashMap::default()),
+            path_display_cache: std::cell::RefCell::new(path_display::PathDisplayCache::default()),
         };
 
         pane.set_theme(theme, cx);
@@ -1167,8 +1174,52 @@ impl MainPaneView {
             async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| loop {
                 let should_continue = view
                     .update(cx, |this, cx| {
-                        let applied = rows::drain_completed_prepared_diff_syntax_chunk_builds();
-                        if applied > 0 {
+                        let mut applied = false;
+
+                        let split_left_applied = this
+                            .file_diff_split_prepared_syntax_document(DiffTextRegion::SplitLeft)
+                            .map(rows::drain_completed_prepared_diff_syntax_chunk_builds_for_document)
+                            .unwrap_or(0);
+                        if split_left_applied > 0 {
+                            this.file_diff_style_cache_epochs.bump_left();
+                            applied = true;
+                        }
+
+                        let split_right_applied = this
+                            .file_diff_split_prepared_syntax_document(DiffTextRegion::SplitRight)
+                            .map(rows::drain_completed_prepared_diff_syntax_chunk_builds_for_document)
+                            .unwrap_or(0);
+                        if split_right_applied > 0 {
+                            this.file_diff_style_cache_epochs.bump_right();
+                            applied = true;
+                        }
+
+                        let worktree_preview_applied = this
+                            .worktree_preview_prepared_syntax_document()
+                            .map(rows::drain_completed_prepared_diff_syntax_chunk_builds_for_document)
+                            .unwrap_or(0);
+                        if worktree_preview_applied > 0 {
+                            this.worktree_preview_style_cache_epoch =
+                                this.worktree_preview_style_cache_epoch.wrapping_add(1);
+                            applied = true;
+                        }
+
+                        let resolved_preview_applied = this
+                            .conflict_resolved_preview_prepared_syntax_document
+                            .map(rows::drain_completed_prepared_diff_syntax_chunk_builds_for_document)
+                            .unwrap_or(0);
+                        if resolved_preview_applied > 0 {
+                            this.conflict_resolved_preview_style_cache_epoch = this
+                                .conflict_resolved_preview_style_cache_epoch
+                                .wrapping_add(1);
+                            applied = true;
+                        }
+
+                        if rows::drain_completed_prepared_diff_syntax_chunk_builds() > 0 {
+                            applied = true;
+                        }
+
+                        if applied {
                             cx.notify();
                         }
 
@@ -1382,13 +1433,20 @@ impl MainPaneView {
     pub(in crate::view) fn clear_diff_text_query_overlay_cache(&mut self) {
         self.diff_text_query_segments_cache.clear();
         self.diff_text_query_cache_query = SharedString::default();
+        self.diff_text_query_cache_generation =
+            self.diff_text_query_cache_generation.wrapping_add(1);
+    }
+
+    pub(in crate::view) fn invalidate_diff_text_query_overlay_cache(&mut self, query: &str) {
+        if self.diff_text_query_cache_query.as_ref() != query {
+            self.diff_text_query_cache_query = query.to_string().into();
+            self.diff_text_query_cache_generation =
+                self.diff_text_query_cache_generation.wrapping_add(1);
+        }
     }
 
     pub(in crate::view) fn sync_diff_text_query_overlay_cache(&mut self, query: &str) {
-        if self.diff_text_query_cache_query.as_ref() != query {
-            self.diff_text_query_cache_query = query.to_string().into();
-            self.diff_text_query_segments_cache.clear();
-        }
+        self.invalidate_diff_text_query_overlay_cache(query);
     }
 
     pub(in crate::view) fn clear_diff_text_style_caches(&mut self) {
@@ -1398,6 +1456,7 @@ impl MainPaneView {
 
     pub(in crate::view) fn clear_worktree_preview_segments_cache(&mut self) {
         self.worktree_preview_segments_cache.clear();
+        self.worktree_preview_cache_write_blocked_until_rev = None;
     }
 
     pub(in crate::view) fn clear_conflict_diff_query_overlay_caches(&mut self) {
@@ -1551,7 +1610,6 @@ impl MainPaneView {
                 line_starts: &stash.line_starts,
                 marker_segments: &stash.marker_segments,
                 view_mode: stash.view_mode,
-                outline: &stash.outline,
             });
         }
 
@@ -1568,7 +1626,6 @@ impl MainPaneView {
             line_starts: &self.conflict_resolved_preview_line_starts,
             marker_segments: &self.conflict_resolver.marker_segments,
             view_mode: self.conflict_resolver.view_mode,
-            outline: &self.conflict_resolver.resolved_outline,
         })
     }
 
@@ -1598,6 +1655,7 @@ impl MainPaneView {
 
         if clear_outline {
             self.conflict_resolver.resolved_outline = ResolvedOutlineData::default();
+            self.conflict_resolver.resolved_outline_gutter_rows.clear();
         }
     }
 
@@ -1609,6 +1667,7 @@ impl MainPaneView {
     ) {
         self.conflict_resolved_outline_stash = None;
         self.conflict_resolver.resolved_outline = computed.outline;
+        self.conflict_resolver.resolved_outline_gutter_rows.clear();
         record_resolved_outline_trace(path, trace_started, self, computed.output_line_count);
     }
 
@@ -1662,7 +1721,8 @@ impl MainPaneView {
         let Some(base) = self.resolved_outline_incremental_base() else {
             return false;
         };
-        let old_text = base.text.as_ref();
+        let old_text_snapshot = base.text.clone();
+        let old_text = old_text_snapshot.as_ref();
         let output_snapshot = self
             .conflict_resolver_input
             .read_with(cx, |input, _| input.text_snapshot());
@@ -1761,67 +1821,83 @@ impl MainPaneView {
 
         let old_view_mode = base.view_mode;
         let new_view_mode = self.conflict_resolver.view_mode;
-        let mut source_lookup: HashMap<&str, (conflict_resolver::ResolvedLineSource, Option<u32>)> =
-            HashMap::default();
-        match new_view_mode {
-            ConflictResolverViewMode::ThreeWay => {
-                insert_lookup_from_indexed_text(
-                    &mut source_lookup,
-                    conflict_resolver::ResolvedLineSource::C,
-                    &self.conflict_resolver.three_way_text.theirs,
-                    self.conflict_resolver
-                        .three_way_line_starts_ref(ThreeWayColumn::Theirs),
-                );
-                insert_lookup_from_indexed_text(
-                    &mut source_lookup,
-                    conflict_resolver::ResolvedLineSource::B,
-                    &self.conflict_resolver.three_way_text.ours,
-                    self.conflict_resolver
-                        .three_way_line_starts_ref(ThreeWayColumn::Ours),
-                );
-                insert_lookup_from_indexed_text(
-                    &mut source_lookup,
-                    conflict_resolver::ResolvedLineSource::A,
-                    &self.conflict_resolver.three_way_text.base,
-                    self.conflict_resolver
-                        .three_way_line_starts_ref(ThreeWayColumn::Base),
-                );
+        let middle_meta = {
+            let mut source_lookup: HashMap<
+                &str,
+                (conflict_resolver::ResolvedLineSource, Option<u32>),
+            > = HashMap::default();
+            match new_view_mode {
+                ConflictResolverViewMode::ThreeWay => {
+                    insert_lookup_from_indexed_text(
+                        &mut source_lookup,
+                        conflict_resolver::ResolvedLineSource::C,
+                        &self.conflict_resolver.three_way_text.theirs,
+                        self.conflict_resolver
+                            .three_way_line_starts_ref(ThreeWayColumn::Theirs),
+                    );
+                    insert_lookup_from_indexed_text(
+                        &mut source_lookup,
+                        conflict_resolver::ResolvedLineSource::B,
+                        &self.conflict_resolver.three_way_text.ours,
+                        self.conflict_resolver
+                            .three_way_line_starts_ref(ThreeWayColumn::Ours),
+                    );
+                    insert_lookup_from_indexed_text(
+                        &mut source_lookup,
+                        conflict_resolver::ResolvedLineSource::A,
+                        &self.conflict_resolver.three_way_text.base,
+                        self.conflict_resolver
+                            .three_way_line_starts_ref(ThreeWayColumn::Base),
+                    );
+                }
+                ConflictResolverViewMode::TwoWayDiff => {
+                    insert_lookup_from_indexed_text(
+                        &mut source_lookup,
+                        conflict_resolver::ResolvedLineSource::B,
+                        &self.conflict_resolver.three_way_text.theirs,
+                        self.conflict_resolver
+                            .three_way_line_starts_ref(ThreeWayColumn::Theirs),
+                    );
+                    insert_lookup_from_indexed_text(
+                        &mut source_lookup,
+                        conflict_resolver::ResolvedLineSource::A,
+                        &self.conflict_resolver.three_way_text.ours,
+                        self.conflict_resolver
+                            .three_way_line_starts_ref(ThreeWayColumn::Ours),
+                    );
+                }
             }
-            ConflictResolverViewMode::TwoWayDiff => {
-                insert_lookup_from_indexed_text(
-                    &mut source_lookup,
-                    conflict_resolver::ResolvedLineSource::B,
-                    &self.conflict_resolver.three_way_text.theirs,
-                    self.conflict_resolver
-                        .three_way_line_starts_ref(ThreeWayColumn::Theirs),
-                );
-                insert_lookup_from_indexed_text(
-                    &mut source_lookup,
-                    conflict_resolver::ResolvedLineSource::A,
-                    &self.conflict_resolver.three_way_text.ours,
-                    self.conflict_resolver
-                        .three_way_line_starts_ref(ThreeWayColumn::Ours),
-                );
+
+            let mut middle_meta = Vec::with_capacity(new_affected.len());
+            for line_ix in new_affected.clone() {
+                let output_line =
+                    rows::resolved_output_line_text(output_text, new_line_starts.as_ref(), line_ix);
+                let (source, input_line) = source_lookup
+                    .get(output_line)
+                    .copied()
+                    .unwrap_or((conflict_resolver::ResolvedLineSource::Manual, None));
+                middle_meta.push(conflict_resolver::ResolvedLineMeta {
+                    output_line: u32::try_from(line_ix).unwrap_or(u32::MAX),
+                    source,
+                    input_line,
+                });
             }
-        }
+            middle_meta
+        };
 
-        let old_meta = base.outline.meta.to_vec();
-        let mut middle_meta = Vec::with_capacity(new_affected.len());
-        for line_ix in new_affected.clone() {
-            let output_line =
-                rows::resolved_output_line_text(output_text, new_line_starts.as_ref(), line_ix);
-            let (source, input_line) = source_lookup
-                .get(output_line)
-                .copied()
-                .unwrap_or((conflict_resolver::ResolvedLineSource::Manual, None));
-            middle_meta.push(conflict_resolver::ResolvedLineMeta {
-                output_line: u32::try_from(line_ix).unwrap_or(u32::MAX),
-                source,
-                input_line,
-            });
-        }
-
+        let old_outline = if used_stash {
+            self.conflict_resolved_outline_stash
+                .as_ref()
+                .map(|stash| stash.outline.clone())
+                .unwrap_or_default()
+        } else {
+            std::mem::take(&mut self.conflict_resolver.resolved_outline)
+        };
+        let old_meta = old_outline.meta;
+        let old_markers = old_outline.markers;
+        let mut next_sources_index = old_outline.sources_index;
         let line_delta = new_affected.len() as isize - old_affected.len() as isize;
+
         let mut next_meta = Vec::with_capacity(new_line_count);
         next_meta.extend(
             old_meta
@@ -1837,9 +1913,6 @@ impl MainPaneView {
                     .unwrap_or(u32::MAX);
             next_meta.push(shifted);
         }
-        if next_meta.len() != new_line_count {
-            return false;
-        }
         apply_conflict_choice_provenance_hints(
             &mut next_meta,
             &self.conflict_resolver.marker_segments,
@@ -1847,7 +1920,6 @@ impl MainPaneView {
             new_view_mode,
         );
 
-        let old_markers = base.outline.markers.to_vec();
         let mut next_markers = vec![None; new_line_count];
         for (line_ix, marker) in old_markers
             .iter()
@@ -1883,12 +1955,8 @@ impl MainPaneView {
             })
             .collect();
         for conflict_ix in recompute_conflicts {
-            let Some(block) = blocks.get(conflict_ix).copied() else {
-                return false;
-            };
-            let Some(range) = new_block_ranges.get(conflict_ix).cloned() else {
-                return false;
-            };
+            let block = blocks[conflict_ix];
+            let range = new_block_ranges[conflict_ix].clone();
             let marker_ranges = conflict_marker_ranges_for_block(block, range);
             write_conflict_markers_for_ranges(
                 &mut next_markers,
@@ -1898,7 +1966,6 @@ impl MainPaneView {
             );
         }
 
-        let mut next_sources_index = base.outline.sources_index.clone();
         update_line_sources_index_for_range(
             &mut next_sources_index,
             old_view_mode,
@@ -1943,6 +2010,7 @@ impl MainPaneView {
             markers: next_markers,
             sources_index: next_sources_index,
         };
+        self.conflict_resolver.resolved_outline_gutter_rows.clear();
         self.conflict_resolved_preview_text = output_snapshot;
         true
     }
@@ -2555,7 +2623,7 @@ impl MainPaneView {
         // History caches are now managed by HistoryView.
     }
 
-    pub(in crate::view) fn cached_path_display(&self, path: &std::path::PathBuf) -> SharedString {
+    pub(in crate::view) fn cached_path_display(&self, path: &std::path::Path) -> SharedString {
         let mut cache = self.path_display_cache.borrow_mut();
         path_display::cached_path_display(&mut cache, path)
     }
@@ -2651,6 +2719,7 @@ impl MainPaneView {
         }
         self.diff_text_segments_cache[key] = Some(VersionedCachedDiffStyledText {
             syntax_epoch,
+            query_generation: 0,
             styled: value,
         });
         if self.diff_text_query_segments_cache.len() > key {
@@ -2718,6 +2787,7 @@ impl MainPaneView {
             key,
             VersionedCachedDiffStyledText {
                 syntax_epoch: self.worktree_preview_style_cache_epoch,
+                query_generation: 0,
                 styled: value,
             },
         );
@@ -2742,6 +2812,7 @@ impl MainPaneView {
             key,
             VersionedCachedDiffStyledText {
                 syntax_epoch: self.conflict_resolved_preview_style_cache_epoch,
+                query_generation: 0,
                 styled: value,
             },
         );
@@ -2876,7 +2947,7 @@ impl MainPaneView {
                 }
             };
             let end_visible_ix = count - 1;
-            let end_text = self.diff_text_line_for_region(end_visible_ix, region);
+            let end_offset = self.diff_text_line_len_for_region(end_visible_ix, region);
 
             self.diff_text_selecting = false;
             self.diff_text_anchor = Some(DiffTextPos {
@@ -2887,7 +2958,7 @@ impl MainPaneView {
             self.diff_text_head = Some(DiffTextPos {
                 visible_ix: end_visible_ix,
                 region,
-                offset: end_text.len(),
+                offset: end_offset,
             });
             return;
         }
@@ -2900,7 +2971,8 @@ impl MainPaneView {
                 return;
             }
             let end_visible_ix = count - 1;
-            let end_text = self.diff_text_line_for_region(end_visible_ix, DiffTextRegion::Inline);
+            let end_offset =
+                self.diff_text_line_len_for_region(end_visible_ix, DiffTextRegion::Inline);
 
             self.diff_text_selecting = false;
             self.diff_text_anchor = Some(DiffTextPos {
@@ -2911,7 +2983,7 @@ impl MainPaneView {
             self.diff_text_head = Some(DiffTextPos {
                 visible_ix: end_visible_ix,
                 region: DiffTextRegion::Inline,
-                offset: end_text.len(),
+                offset: end_offset,
             });
             return;
         }
@@ -2932,7 +3004,7 @@ impl MainPaneView {
 
         let end_visible_ix = self.diff_visible_len() - 1;
         let end_region = start_region;
-        let end_text = self.diff_text_line_for_region(end_visible_ix, end_region);
+        let end_offset = self.diff_text_line_len_for_region(end_visible_ix, end_region);
 
         self.diff_text_selecting = false;
         self.diff_text_anchor = Some(DiffTextPos {
@@ -2943,7 +3015,7 @@ impl MainPaneView {
         self.diff_text_head = Some(DiffTextPos {
             visible_ix: end_visible_ix,
             region: end_region,
-            offset: end_text.len(),
+            offset: end_offset,
         });
     }
 
@@ -2972,7 +3044,7 @@ impl MainPaneView {
         let start_region = region;
         let end_region = region;
 
-        let end_text = self.diff_text_line_for_region(b, end_region);
+        let end_offset = self.diff_text_line_len_for_region(b, end_region);
 
         self.diff_text_selecting = false;
         self.diff_text_anchor = Some(DiffTextPos {
@@ -2983,7 +3055,7 @@ impl MainPaneView {
         self.diff_text_head = Some(DiffTextPos {
             visible_ix: b,
             region: end_region,
-            offset: end_text.len(),
+            offset: end_offset,
         });
 
         // Double-click produces two click events; suppress both.
@@ -3010,7 +3082,7 @@ impl MainPaneView {
                 region
             };
             let visible_ix = visible_ix.min(count - 1);
-            let end_text = self.diff_text_line_for_region(visible_ix, effective_region);
+            let end_offset = self.diff_text_line_len_for_region(visible_ix, effective_region);
             self.diff_text_selecting = false;
             self.diff_text_anchor = Some(DiffTextPos {
                 visible_ix,
@@ -3020,7 +3092,7 @@ impl MainPaneView {
             self.diff_text_head = Some(DiffTextPos {
                 visible_ix,
                 region: effective_region,
-                offset: end_text.len(),
+                offset: end_offset,
             });
             self.diff_suppress_clicks_remaining = 2;
             return;
@@ -3034,7 +3106,7 @@ impl MainPaneView {
                 return;
             }
             let visible_ix = visible_ix.min(count - 1);
-            let end_text = self.diff_text_line_for_region(visible_ix, DiffTextRegion::Inline);
+            let end_offset = self.diff_text_line_len_for_region(visible_ix, DiffTextRegion::Inline);
             self.diff_text_selecting = false;
             self.diff_text_anchor = Some(DiffTextPos {
                 visible_ix,
@@ -3044,7 +3116,7 @@ impl MainPaneView {
             self.diff_text_head = Some(DiffTextPos {
                 visible_ix,
                 region: DiffTextRegion::Inline,
-                offset: end_text.len(),
+                offset: end_offset,
             });
 
             // Double-click produces two click events; suppress both.

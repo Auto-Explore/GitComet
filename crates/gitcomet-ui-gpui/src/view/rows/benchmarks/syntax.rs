@@ -12,7 +12,7 @@ use super::*;
 use crate::view::markdown_preview::{
     self, MarkdownChangeHint, MarkdownInlineSpan, MarkdownInlineStyle, MarkdownPreviewDiff,
     MarkdownPreviewDocument, MarkdownPreviewRow, MarkdownPreviewRowKind,
-    MarkdownPreviewRowWidthCache,
+    MarkdownPreviewRowStyledTextCache, MarkdownPreviewRowWidthCache,
 };
 use crate::view::panes::main::diff_cache::render_svg_image_diff_preview;
 
@@ -2047,6 +2047,7 @@ fn build_markdown_preview_row(
         footnote_label: None,
         alert_kind: None,
         starts_alert: false,
+        styled_text_cache: MarkdownPreviewRowStyledTextCache::default(),
         measured_width_px: MarkdownPreviewRowWidthCache::default(),
     }
 }

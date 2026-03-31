@@ -166,6 +166,7 @@ impl GraphLanePalette {
         }
     }
 
+    #[cfg(test)]
     pub fn as_slice(&self) -> &[Rgba] {
         let len = usize::from(self.len).max(1);
         &self.colors[..len]
@@ -181,6 +182,7 @@ pub struct Radii {
 }
 
 impl AppTheme {
+    #[cfg(test)]
     pub(crate) fn from_json_str(json: &str) -> Result<Self, ThemeParseError> {
         let mut bundle = parse_theme_bundle(json)?;
         if bundle.themes.len() != 1 {
@@ -197,7 +199,7 @@ impl AppTheme {
         Ok(theme.into_app_theme())
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn from_json_path(path: impl AsRef<Path>) -> Result<Self, ThemeLoadError> {
         let path = path.as_ref();
         let json = fs::read_to_string(path).map_err(|source| ThemeLoadError::Read {
@@ -234,14 +236,13 @@ impl AppTheme {
     }
 
     /// GitComet's default dark theme loaded from an embedded JSON definition.
-    #[allow(dead_code)]
     pub fn gitcomet_dark() -> Self {
         Self::from_key(DEFAULT_DARK_THEME_KEY)
             .unwrap_or_else(|| panic!("missing default dark theme `{DEFAULT_DARK_THEME_KEY}`"))
     }
 
     /// GitComet's default light theme loaded from an embedded JSON definition.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn gitcomet_light() -> Self {
         Self::from_key(DEFAULT_LIGHT_THEME_KEY)
             .unwrap_or_else(|| panic!("missing default light theme `{DEFAULT_LIGHT_THEME_KEY}`"))
@@ -265,7 +266,7 @@ pub(crate) fn theme_label(key: &str) -> Option<String> {
         .map(|option| option.label)
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 #[derive(Debug)]
 pub(crate) enum ThemeLoadError {
     Read {
@@ -278,6 +279,7 @@ pub(crate) enum ThemeLoadError {
     },
 }
 
+#[cfg(test)]
 impl fmt::Display for ThemeLoadError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -299,6 +301,7 @@ impl fmt::Display for ThemeLoadError {
     }
 }
 
+#[cfg(test)]
 impl Error for ThemeLoadError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {

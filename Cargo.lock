@@ -2263,6 +2263,7 @@ dependencies = [
  "memchr",
  "regex",
  "rustc-hash 2.1.2",
+ "smallvec",
  "strsim",
  "tempfile",
  "thiserror 2.0.18",

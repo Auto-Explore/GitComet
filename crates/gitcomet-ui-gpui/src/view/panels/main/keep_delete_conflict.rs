@@ -309,7 +309,7 @@ mod tests {
 
     fn empty_conflict_file() -> ConflictFile {
         ConflictFile {
-            path: PathBuf::from("a.txt"),
+            path: PathBuf::from("a.txt").into(),
             base_bytes: None,
             ours_bytes: None,
             theirs_bytes: None,
