@@ -264,6 +264,14 @@ format_change_cell() {
   esac
 }
 
+markdown_escape() {
+  local value="$1"
+  value="${value//$'\n'/ }"
+  value="${value//\\/\\\\}"
+  value="${value//|/\\|}"
+  printf '%s' "${value}"
+}
+
 metadata_get() {
   local file="$1"
   local key="$2"
@@ -330,11 +338,13 @@ print_run_summary() {
   runner_class="$(metadata_get "${metadata_path}" "runner_class")"
   real_repo_root="$(metadata_get "${metadata_path}" "real_repo_root")"
 
-  echo "${label}: ${run_id:-$(basename "${run_dir}")}"
-  echo "  dir: ${run_dir}"
-  echo "  git: ${git_branch:-unknown} ${git_head:-unknown}"
-  echo "  runner_class: ${runner_class:-<unset>}"
-  echo "  real_repo_root: ${real_repo_root:-<unset>}"
+  echo "## ${label}"
+  echo
+  echo "- run: ${run_id:-$(basename "${run_dir}")}"
+  echo "- dir: ${run_dir}"
+  echo "- git: ${git_branch:-unknown} ${git_head:-unknown}"
+  echo "- runner_class: ${runner_class:-<unset>}"
+  echo "- real_repo_root: ${real_repo_root:-<unset>}"
 }
 
 compare_metrics_table() {
@@ -614,9 +624,9 @@ compare_metrics_table() {
   duplicate_candidate_count="$(jq -r '.duplicate_names.candidate | length' "${tmp_file}")"
 
   echo
-  echo "matched benchmarks: ${matched_count}"
+  echo "- matched benchmarks: ${matched_count}"
   if [[ "${displayed_count}" != "${matched_count}" ]]; then
-    echo "showing benchmarks: ${displayed_count} (truncated by --limit=${limit})"
+    echo "- showing benchmarks: ${displayed_count} (truncated by --limit=${limit})"
   fi
   if [[ "${duplicate_base_count}" != "0" ]]; then
     echo "warning: skipped ${duplicate_base_count} ambiguous benchmark name(s) in base run" >&2
@@ -631,34 +641,30 @@ compare_metrics_table() {
     local row_tsv_filter=""
     local -a group_metrics=()
     local -a header=()
-    local -a separator=()
 
     kind_name="$(jq -r ".groups[${group_index}].kind" "${tmp_file}")"
     mapfile -t group_metrics < <(jq -r ".groups[${group_index}].metrics[]" "${tmp_file}")
 
     echo
-    echo "${kind_name}"
+    echo "### ${kind_name}"
+    echo
 
     header=("bench" "status")
-    separator=("----------------------------------------------" "-----------")
     for metric_jq in "${group_metrics[@]}"; do
       header+=("$(metric_column_stem "${metric_jq}")_base")
       header+=("$(metric_column_stem "${metric_jq}")_cand")
       header+=("$(metric_column_stem "${metric_jq}")%")
-      separator+=("--------------")
-      separator+=("--------------")
-      separator+=("------------")
     done
 
-    printf '%-46s  %-11s' "${header[0]}" "${header[1]}"
-    for ((i = 2; i < ${#header[@]}; i++)); do
-      printf '  %-14s' "${header[$i]}"
+    printf '|'
+    for column in "${header[@]}"; do
+      printf ' %s |' "$(markdown_escape "${column}")"
     done
     printf '\n'
 
-    printf '%-46s  %-11s' "${separator[0]}" "${separator[1]}"
-    for ((i = 2; i < ${#separator[@]}; i++)); do
-      printf '  %-14s' "${separator[$i]}"
+    printf '|'
+    for ((i = 0; i < ${#header[@]}; i++)); do
+      printf ' --- |'
     done
     printf '\n'
 
@@ -673,15 +679,17 @@ compare_metrics_table() {
 
     while IFS=$'\t' read -r -a fields; do
       local field_index=2
-      printf '%-46s  %-11s' "${fields[0]:0:46}" "${fields[1]}"
+      printf '| %s | %s |' \
+        "$(markdown_escape "${fields[0]}")" \
+        "$(markdown_escape "${fields[1]}")"
       for metric_jq in "${group_metrics[@]}"; do
         local before_raw="${fields[$field_index]}"
         local after_raw="${fields[$((field_index + 1))]}"
         local delta_pct_raw="${fields[$((field_index + 2))]}"
         local status_raw="${fields[$((field_index + 3))]}"
-        printf '  %-14s' "$(format_metric_value "${metric_jq}" "${before_raw}")"
-        printf '  %-14s' "$(format_metric_value "${metric_jq}" "${after_raw}")"
-        printf '  %-14s' "$(format_change_cell "${status_raw}" "${delta_pct_raw}")"
+        printf ' %s |' "$(markdown_escape "$(format_metric_value "${metric_jq}" "${before_raw}")")"
+        printf ' %s |' "$(markdown_escape "$(format_metric_value "${metric_jq}" "${after_raw}")")"
+        printf ' %s |' "$(markdown_escape "$(format_change_cell "${status_raw}" "${delta_pct_raw}")")"
         field_index=$((field_index + 4))
       done
       printf '\n'
@@ -801,8 +809,10 @@ if ! IFS='|' read -r candidate_run_dir candidate_jsonl candidate_metadata <<< "$
   exit 1
 fi
 
-echo "Comparing archived performance runs"
+echo "# Comparing archived performance runs"
+echo
 print_run_summary "base" "${base_run_dir}" "${base_metadata}"
+echo
 print_run_summary "candidate" "${candidate_run_dir}" "${candidate_metadata}"
 if [[ "${limit}" == "0" ]]; then
   limit_label="all"
@@ -810,7 +820,8 @@ else
   limit_label="${limit}"
 fi
 
-echo "filters: kind=${kind_filter} direction=${direction} sort=${sort_by} limit=${limit_label} only_regressions=${only_regressions}"
+echo
+echo "- filters: kind=${kind_filter} direction=${direction} sort=${sort_by} limit=${limit_label} only_regressions=${only_regressions}"
 
 base_git_head="$(metadata_get "${base_metadata}" "git_head")"
 candidate_git_head="$(metadata_get "${candidate_metadata}" "git_head")"
@@ -820,13 +831,13 @@ base_real_repo_root="$(metadata_get "${base_metadata}" "real_repo_root")"
 candidate_real_repo_root="$(metadata_get "${candidate_metadata}" "real_repo_root")"
 
 if [[ "${base_git_head}" != "${candidate_git_head}" ]]; then
-  echo "warning: git_head differs between runs"
+  echo "> Warning: git_head differs between runs"
 fi
 if [[ "${base_runner_class}" != "${candidate_runner_class}" ]]; then
-  echo "warning: runner_class differs between runs"
+  echo "> Warning: runner_class differs between runs"
 fi
 if [[ "${base_real_repo_root}" != "${candidate_real_repo_root}" ]]; then
-  echo "warning: real_repo_root differs between runs"
+  echo "> Warning: real_repo_root differs between runs"
 fi
 
 echo
