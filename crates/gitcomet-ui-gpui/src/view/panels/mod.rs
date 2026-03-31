@@ -58,15 +58,6 @@ enum ContextMenuAction {
         show_sha: bool,
     },
     ResetHistoryColumnWidths,
-    SetThemeMode {
-        mode: ThemeMode,
-    },
-    SetDateTimeFormat {
-        format: DateTimeFormat,
-    },
-    SetTimezone {
-        timezone: Timezone,
-    },
     SetChangeTrackingView {
         view: ChangeTrackingView,
     },

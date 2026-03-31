@@ -862,6 +862,7 @@ pub(super) fn wait_for_file_image_diff_cache<Ready>(
 
 mod conflict;
 mod file_diff;
+mod file_preview;
 mod file_status;
 mod large_file_diff;
 mod markdown;

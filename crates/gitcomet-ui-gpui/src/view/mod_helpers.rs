@@ -2000,11 +2000,6 @@ pub(super) enum PopoverKind {
         message: String,
     },
     CloneRepo,
-    Settings,
-    SettingsThemeMenu,
-    SettingsDateFormatMenu,
-    SettingsTimezoneMenu,
-    OpenSourceLicenses,
     ResetPrompt {
         repo_id: RepoId,
         target: String,

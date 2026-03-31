@@ -90,9 +90,9 @@ use patch_split::build_patch_split_rows;
 use poller::Poller;
 use word_diff::capped_word_diff_ranges;
 
-use diff_text_model::{CachedDiffStyledText, SyntaxTokenKind};
 #[cfg(test)]
 use diff_text_model::CachedDiffTextSegment;
+use diff_text_model::{CachedDiffStyledText, SyntaxTokenKind};
 use diff_text_selection::{DiffTextSelectionOverlay, DiffTextSelectionTracker};
 use diff_utils::{
     build_unified_patch_for_hunks, build_unified_patch_for_selected_lines_across_hunks,
