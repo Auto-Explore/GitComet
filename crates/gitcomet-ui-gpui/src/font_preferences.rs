@@ -1,12 +1,13 @@
 use crate::bundled_fonts;
 use gitcomet_state::session;
-use gpui::{BorrowAppContext, Window};
+use gpui::{BorrowAppContext, FontFeatures, Window};
 use std::collections::BTreeMap;
 use std::sync::{Arc, OnceLock};
 
 pub(crate) const UI_SYSTEM_FONT_FAMILY: &str = ".SystemUIFont";
 pub(crate) const DEFAULT_UI_FONT_FAMILY: &str = bundled_fonts::IBM_PLEX_SANS_FONT_FAMILY;
 pub(crate) const EDITOR_MONOSPACE_FONT_FAMILY: &str = bundled_fonts::LILEX_FONT_FAMILY;
+pub(crate) const DEFAULT_USE_FONT_LIGATURES: bool = false;
 
 const LEGACY_EDITOR_MONOSPACE_FONT_FAMILY: &str = "monospace";
 
@@ -130,6 +131,7 @@ const DEFAULT_EDITOR_FONT_CANDIDATES: &[&str] = &[
 pub(crate) struct AppFontPreferences {
     pub(crate) ui_font_family: String,
     pub(crate) editor_font_family: String,
+    pub(crate) use_font_ligatures: bool,
     initialized: bool,
 }
 
@@ -138,6 +140,7 @@ impl Default for AppFontPreferences {
         Self {
             ui_font_family: DEFAULT_UI_FONT_FAMILY.to_string(),
             editor_font_family: EDITOR_MONOSPACE_FONT_FAMILY.to_string(),
+            use_font_ligatures: DEFAULT_USE_FONT_LIGATURES,
             initialized: false,
         }
     }
@@ -193,6 +196,14 @@ pub(crate) fn normalize_editor_font_family(candidate: Option<&str>, options: &[S
     )
 }
 
+pub(crate) fn applied_font_features(use_font_ligatures: bool) -> FontFeatures {
+    if use_font_ligatures {
+        FontFeatures::default()
+    } else {
+        FontFeatures::disable_ligatures()
+    }
+}
+
 pub(crate) fn current<C>(cx: &mut C) -> AppFontPreferences
 where
     C: BorrowAppContext,
@@ -206,6 +217,13 @@ where
 {
     let selection = current(cx).editor_font_family;
     applied_editor_font_family(&selection)
+}
+
+pub(crate) fn current_font_features<C>(cx: &mut C) -> FontFeatures
+where
+    C: BorrowAppContext,
+{
+    applied_font_features(current(cx).use_font_ligatures)
 }
 
 pub(crate) fn current_or_initialize_from_session<C>(
@@ -222,12 +240,14 @@ where
             window,
             Some(current.ui_font_family.as_str()),
             Some(current.editor_font_family.as_str()),
+            Some(current.use_font_ligatures),
         )
     } else {
         resolve_for_window(
             window,
             ui_session.ui_font_family.as_deref(),
             ui_session.editor_font_family.as_deref(),
+            ui_session.use_font_ligatures,
         )
     };
     cx.set_global(next.clone());
@@ -238,6 +258,7 @@ pub(crate) fn set_current<C>(
     cx: &mut C,
     ui_font_family: String,
     editor_font_family: String,
+    use_font_ligatures: bool,
 ) -> AppFontPreferences
 where
     C: BorrowAppContext,
@@ -245,6 +266,7 @@ where
     let next = AppFontPreferences {
         ui_font_family,
         editor_font_family,
+        use_font_ligatures,
         initialized: true,
     };
     cx.set_global(next.clone());
@@ -417,6 +439,7 @@ fn resolve_for_window(
     window: &Window,
     ui_font_family: Option<&str>,
     editor_font_family: Option<&str>,
+    use_font_ligatures: Option<bool>,
 ) -> AppFontPreferences {
     let catalog = font_option_catalog(window);
     AppFontPreferences {
@@ -425,6 +448,7 @@ fn resolve_for_window(
             editor_font_family,
             &catalog.editor_options,
         ),
+        use_font_ligatures: use_font_ligatures.unwrap_or(DEFAULT_USE_FONT_LIGATURES),
         initialized: true,
     }
 }
@@ -723,5 +747,14 @@ mod tests {
             resolve_applied_font_family("IBM Plex Sans", "Noto Sans"),
             "IBM Plex Sans".to_string()
         );
+    }
+
+    #[test]
+    fn applied_font_features_disables_ligatures_by_default() {
+        assert_eq!(
+            applied_font_features(DEFAULT_USE_FONT_LIGATURES),
+            FontFeatures::disable_ligatures()
+        );
+        assert_eq!(applied_font_features(true), FontFeatures::default());
     }
 }

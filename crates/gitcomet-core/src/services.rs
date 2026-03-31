@@ -332,8 +332,7 @@ pub trait GitRepository: Send + Sync {
         Ok(CommandOutput::empty_success("git fetch --all"))
     }
 
-    fn fetch_all_with_output_prune(&self, prune: bool) -> Result<CommandOutput> {
-        let _ = prune;
+    fn fetch_all_with_output_prune(&self, _prune: bool) -> Result<CommandOutput> {
         self.fetch_all_with_output()
     }
 

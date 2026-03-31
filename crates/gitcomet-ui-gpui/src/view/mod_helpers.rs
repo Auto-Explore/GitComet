@@ -751,7 +751,10 @@ impl DeferredLineStarts {
 
     fn materialized_with_count(line_starts: std::sync::Arc<[usize]>, line_count: usize) -> Self {
         let starts = std::sync::OnceLock::new();
-        let _ = starts.set(line_starts);
+        assert!(
+            starts.set(line_starts).is_ok(),
+            "fresh OnceLock should accept line starts"
+        );
         Self {
             line_count,
             starts: std::sync::Arc::new(starts),
@@ -1077,9 +1080,8 @@ impl ConflictResolverUiState {
     }
 
     #[track_caller]
-    pub(super) fn debug_assert_rendering_mode_invariants(&self) {
-        let _ = self;
-    }
+    #[allow(unused_variables)]
+    pub(super) fn debug_assert_rendering_mode_invariants(&self) {}
 
     pub(super) fn three_way_line_count(&self, side: ThreeWayColumn) -> usize {
         self.three_way_line_starts[side].line_count()
@@ -1432,9 +1434,8 @@ impl ConflictResolverUiState {
     /// via `compute_word_highlights_for_row` at render time instead).
     pub(super) fn two_way_split_word_highlight(
         &self,
-        row_ix: usize,
+        _row_ix: usize,
     ) -> Option<&conflict_resolver::TwoWayWordHighlightPair> {
-        let _ = row_ix;
         None
     }
 

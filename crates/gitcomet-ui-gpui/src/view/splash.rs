@@ -601,7 +601,6 @@ impl GitCometView {
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         let theme = self.theme;
-        let _ = cx;
 
         if self.is_startup_repository_loading_screen_active() {
             return self.startup_repository_loading_screen();

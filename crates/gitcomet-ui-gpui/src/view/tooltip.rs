@@ -43,6 +43,7 @@ impl GitCometView {
                             theme_mode: Some(this.theme_mode.key().to_string()),
                             ui_font_family: Some(font_preferences.ui_font_family),
                             editor_font_family: Some(font_preferences.editor_font_family),
+                            use_font_ligatures: Some(font_preferences.use_font_ligatures),
                             date_time_format: Some(this.date_time_format.key().to_string()),
                             timezone: Some(this.timezone.key()),
                             show_timezone: Some(this.show_timezone),

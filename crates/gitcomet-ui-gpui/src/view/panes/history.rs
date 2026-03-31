@@ -9,12 +9,8 @@ use std::hash::{Hash, Hasher};
 
 mod history_panel;
 
-fn history_columns_available_width(window_width: Pixels) -> Pixels {
-    let mut available = window_width;
-    available -= px(280.0);
-    available -= px(420.0);
-    available -= px(64.0);
-    available.max(px(0.0))
+fn history_columns_available_width(content_width: Pixels) -> Pixels {
+    content_width.max(px(0.0))
 }
 
 fn graph_branch_heads<'a>(
@@ -51,6 +47,25 @@ fn history_column_static_bounds(handle: HistoryColResizeHandle) -> (Pixels, Pixe
 }
 
 #[derive(Copy, Clone)]
+struct HistoryColumnWidths {
+    branch: Pixels,
+    graph: Pixels,
+    author: Pixels,
+    date: Pixels,
+    sha: Pixels,
+}
+
+fn default_history_column_widths() -> HistoryColumnWidths {
+    HistoryColumnWidths {
+        branch: px(HISTORY_COL_BRANCH_PX),
+        graph: px(HISTORY_COL_GRAPH_PX),
+        author: px(HISTORY_COL_AUTHOR_PX),
+        date: px(HISTORY_COL_DATE_PX),
+        sha: px(HISTORY_COL_SHA_PX),
+    }
+}
+
+#[derive(Copy, Clone)]
 pub(in crate::view) struct HistoryColumnDragLayout {
     pub(in crate::view) show_author: bool,
     pub(in crate::view) show_date: bool,
@@ -60,6 +75,99 @@ pub(in crate::view) struct HistoryColumnDragLayout {
     pub(in crate::view) author_w: Pixels,
     pub(in crate::view) date_w: Pixels,
     pub(in crate::view) sha_w: Pixels,
+}
+
+fn history_visible_columns_for_width(
+    available_width: Pixels,
+    preferred: (bool, bool, bool),
+    widths: HistoryColumnWidths,
+) -> (bool, bool, bool) {
+    if available_width <= px(0.0) {
+        return (false, false, false);
+    }
+
+    let min_message = px(HISTORY_COL_MESSAGE_MIN_PX);
+
+    let (mut show_author, mut show_date, mut show_sha) = preferred;
+
+    // Always show Branch + Graph; Message is flex.
+    let fixed_base = widths.branch + widths.graph;
+    let mut fixed = fixed_base
+        + if show_author { widths.author } else { px(0.0) }
+        + if show_date { widths.date } else { px(0.0) }
+        + if show_sha { widths.sha } else { px(0.0) };
+
+    if available_width - fixed < min_message && show_sha {
+        show_sha = false;
+        fixed -= widths.sha;
+    }
+    if available_width - fixed < min_message {
+        if show_date {
+            show_date = false;
+            fixed -= widths.date;
+        }
+        show_sha = false;
+    }
+    if available_width - fixed < min_message && show_author {
+        show_author = false;
+        fixed -= widths.author;
+    }
+
+    if available_width - fixed < min_message {
+        show_author = false;
+        show_date = false;
+        show_sha = false;
+    }
+
+    (show_author, show_date, show_sha)
+}
+
+fn history_column_drag_next_width(
+    handle: HistoryColResizeHandle,
+    candidate: Pixels,
+    available_width: Pixels,
+    preferred: (bool, bool, bool),
+    widths: HistoryColumnWidths,
+) -> Pixels {
+    let (show_author, show_date, show_sha) =
+        history_visible_columns_for_width(available_width, preferred, widths);
+    history_column_drag_clamped_width(
+        handle,
+        candidate,
+        available_width,
+        HistoryColumnDragLayout {
+            show_author,
+            show_date,
+            show_sha,
+            branch_w: widths.branch,
+            graph_w: widths.graph,
+            author_w: widths.author,
+            date_w: widths.date,
+            sha_w: widths.sha,
+        },
+    )
+}
+
+fn history_reset_widths_for_available_width(
+    available_width: Pixels,
+    preferred: (bool, bool, bool),
+) -> HistoryColumnWidths {
+    let mut widths = default_history_column_widths();
+    widths.graph = history_column_drag_next_width(
+        HistoryColResizeHandle::Graph,
+        widths.graph,
+        available_width,
+        preferred,
+        widths,
+    );
+    widths.branch = history_column_drag_next_width(
+        HistoryColResizeHandle::Branch,
+        widths.branch,
+        available_width,
+        preferred,
+        widths,
+    );
+    widths
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -191,7 +299,16 @@ pub(in crate::view) fn history_column_resize_state(
     available_width: Pixels,
     layout: HistoryColumnDragLayout,
 ) -> HistoryColResizeState {
-    let params = history_column_resize_drag_params(handle, layout);
+    let visible_columns = history_visible_columns_for_layout(available_width, layout);
+    let params = history_column_resize_drag_params(
+        handle,
+        HistoryColumnDragLayout {
+            show_author: visible_columns.0,
+            show_date: visible_columns.1,
+            show_sha: visible_columns.2,
+            ..layout
+        },
+    );
     HistoryColResizeState {
         handle,
         start_x,
@@ -203,7 +320,7 @@ pub(in crate::view) fn history_column_resize_state(
         other_fixed_width: params.other_fixed_width,
         bounds_available_width: available_width,
         max_width: history_column_resize_max_width(params, available_width),
-        visible_columns: (layout.show_author, layout.show_date, layout.show_sha),
+        visible_columns,
     }
 }
 
@@ -264,7 +381,6 @@ pub(in crate::view) fn history_column_drag_clamped_width_for_state(
     next
 }
 
-#[cfg(test)]
 fn history_column_drag_clamped_width(
     handle: HistoryColResizeHandle,
     candidate: Pixels,
@@ -498,6 +614,7 @@ pub(in super::super) struct HistoryView {
     notify_fingerprint: u64,
     pub(in super::super) active_context_menu_invoker: Option<SharedString>,
     pub(in super::super) last_window_size: Size<Pixels>,
+    pub(in super::super) history_content_width: Pixels,
 
     pub(in super::super) history_cache_seq: u64,
     pub(in super::super) history_cache_inflight: Option<HistoryCacheRequest>,
@@ -574,6 +691,7 @@ impl HistoryView {
         });
 
         let history_panel_focus_handle = cx.focus_handle().tab_index(0).tab_stop(false);
+        let default_widths = default_history_column_widths();
 
         Self {
             store,
@@ -588,13 +706,14 @@ impl HistoryView {
             notify_fingerprint: initial_fingerprint,
             active_context_menu_invoker: None,
             last_window_size,
+            history_content_width: history_columns_available_width(last_window_size.width),
             history_cache_seq: 0,
             history_cache_inflight: None,
-            history_col_branch: px(HISTORY_COL_BRANCH_PX),
-            history_col_graph: px(HISTORY_COL_GRAPH_PX),
-            history_col_author: px(HISTORY_COL_AUTHOR_PX),
-            history_col_date: px(HISTORY_COL_DATE_PX),
-            history_col_sha: px(HISTORY_COL_SHA_PX),
+            history_col_branch: default_widths.branch,
+            history_col_graph: default_widths.graph,
+            history_col_author: default_widths.author,
+            history_col_date: default_widths.date,
+            history_col_sha: default_widths.sha,
             history_show_author,
             history_show_date,
             history_show_sha,
@@ -627,16 +746,7 @@ impl HistoryView {
     }
 
     pub(in super::super) fn history_visible_columns(&self) -> (bool, bool, bool) {
-        let available = history_columns_available_width(self.last_window_size.width);
-        if let Some(state) = self.history_col_resize.as_ref() {
-            let current_width = self.history_column_width(state.handle);
-            if current_width == state.current_width
-                && let Some(columns) = history_resize_state_visible_columns(available, Some(state))
-            {
-                return columns;
-            }
-        }
-
+        let available = self.history_content_width;
         let layout = HistoryColumnDragLayout {
             show_author: self.history_show_author,
             show_date: self.history_show_date,
@@ -654,22 +764,16 @@ impl HistoryView {
         )
     }
 
-    pub(in super::super) fn history_column_width(&self, handle: HistoryColResizeHandle) -> Pixels {
-        match handle {
-            HistoryColResizeHandle::Branch => self.history_col_branch,
-            HistoryColResizeHandle::Graph => self.history_col_graph,
-            HistoryColResizeHandle::Author => self.history_col_author,
-            HistoryColResizeHandle::Date => self.history_col_date,
-            HistoryColResizeHandle::Sha => self.history_col_sha,
-        }
-    }
-
     pub(in super::super) fn reset_history_column_widths(&mut self) {
-        self.history_col_branch = px(HISTORY_COL_BRANCH_PX);
-        self.history_col_graph = px(HISTORY_COL_GRAPH_PX);
-        self.history_col_author = px(HISTORY_COL_AUTHOR_PX);
-        self.history_col_date = px(HISTORY_COL_DATE_PX);
-        self.history_col_sha = px(HISTORY_COL_SHA_PX);
+        let widths = history_reset_widths_for_available_width(
+            self.history_content_width,
+            self.history_visible_column_preferences(),
+        );
+        self.history_col_branch = widths.branch;
+        self.history_col_graph = widths.graph;
+        self.history_col_author = widths.author;
+        self.history_col_date = widths.date;
+        self.history_col_sha = widths.sha;
         self.history_col_graph_auto = true;
         self.history_col_resize = None;
     }
@@ -744,6 +848,10 @@ impl HistoryView {
 
     pub(in super::super) fn set_last_window_size(&mut self, size: Size<Pixels>) {
         self.last_window_size = size;
+    }
+
+    pub(in super::super) fn set_history_content_width(&mut self, width: Pixels) {
+        self.history_content_width = history_columns_available_width(width);
     }
 
     pub(in super::super) fn open_popover_at(
@@ -1292,9 +1400,19 @@ impl HistoryView {
                     if this.history_col_graph_auto && this.history_col_resize.is_none() {
                         let required = px(HISTORY_GRAPH_MARGIN_X_PX * 2.0
                             + HISTORY_GRAPH_COL_GAP_PX * (rebuild.max_lanes as f32));
-                        this.history_col_graph = required
-                            .min(px(HISTORY_COL_GRAPH_MAX_PX))
-                            .max(px(HISTORY_COL_GRAPH_MIN_PX));
+                        this.history_col_graph = history_column_drag_next_width(
+                            HistoryColResizeHandle::Graph,
+                            required.min(px(HISTORY_COL_GRAPH_MAX_PX)),
+                            this.history_content_width,
+                            this.history_visible_column_preferences(),
+                            HistoryColumnWidths {
+                                branch: this.history_col_branch,
+                                graph: this.history_col_graph,
+                                author: this.history_col_author,
+                                date: this.history_col_date,
+                                sha: this.history_col_sha,
+                            },
+                        );
                     }
 
                     this.history_cache_inflight = None;
@@ -1441,7 +1559,7 @@ mod tests {
 
     #[test]
     fn history_column_drag_clamp_respects_static_maximums() {
-        let available = history_columns_available_width(px(2200.0));
+        let available = history_columns_available_width(px(1436.0));
         let layout = all_columns_visible_drag_layout();
         let next = history_column_drag_clamped_width(
             HistoryColResizeHandle::Branch,
@@ -1454,7 +1572,7 @@ mod tests {
 
     #[test]
     fn history_column_drag_clamp_preserves_message_space() {
-        let available = history_columns_available_width(px(1600.0));
+        let available = history_columns_available_width(px(836.0));
         let layout = all_columns_visible_drag_layout();
         let next = history_column_drag_clamped_width(
             HistoryColResizeHandle::Branch,
@@ -1469,7 +1587,7 @@ mod tests {
 
     #[test]
     fn history_column_drag_clamp_never_goes_below_minimum() {
-        let available = history_columns_available_width(px(2200.0));
+        let available = history_columns_available_width(px(1436.0));
         let layout = all_columns_visible_drag_layout();
         let next = history_column_drag_clamped_width(
             HistoryColResizeHandle::Sha,
@@ -1481,8 +1599,59 @@ mod tests {
     }
 
     #[test]
+    fn graph_drag_ignores_auto_hidden_optional_columns() {
+        let available = history_columns_available_width(px(500.0));
+        let widths = default_history_column_widths();
+        let preferred = (true, true, true);
+
+        assert_eq!(
+            history_visible_columns_for_width(available, preferred, widths),
+            (false, false, false)
+        );
+
+        let next = history_column_drag_next_width(
+            HistoryColResizeHandle::Graph,
+            px(90.0),
+            available,
+            preferred,
+            widths,
+        );
+
+        assert_eq!(next, px(90.0));
+    }
+
+    #[test]
+    fn reset_widths_clamp_default_graph_in_narrow_windows() {
+        let widths = history_reset_widths_for_available_width(px(396.0), (true, true, true));
+
+        assert_eq!(widths.branch, px(HISTORY_COL_BRANCH_PX));
+        assert_eq!(widths.graph, px(46.0));
+    }
+
+    #[test]
+    fn reset_widths_clamp_branch_after_graph_reaches_minimum() {
+        let widths = history_reset_widths_for_available_width(px(360.0), (true, true, true));
+
+        assert_eq!(widths.graph, px(HISTORY_COL_GRAPH_MIN_PX));
+        assert_eq!(widths.branch, px(96.0));
+    }
+
+    #[test]
+    fn history_resize_state_uses_actual_visible_columns_in_narrow_windows() {
+        let available = history_columns_available_width(px(500.0));
+        let layout = all_columns_visible_drag_layout();
+        let state =
+            history_column_resize_state(HistoryColResizeHandle::Graph, px(0.0), available, layout);
+
+        assert_eq!(
+            history_resize_state_visible_columns(available, Some(&state)),
+            Some((false, false, false))
+        );
+    }
+
+    #[test]
     fn history_resize_state_preserves_visible_columns_within_drag_bounds() {
-        let available = history_columns_available_width(px(1600.0));
+        let available = history_columns_available_width(px(836.0));
         let layout = all_columns_visible_drag_layout();
         let state =
             history_column_resize_state(HistoryColResizeHandle::Graph, px(0.0), available, layout);
@@ -1500,13 +1669,17 @@ mod tests {
 
     #[test]
     fn history_resize_state_visibility_fast_path_falls_back_for_out_of_bounds_layout() {
-        let available = history_columns_available_width(px(1600.0));
+        let available = history_columns_available_width(px(836.0));
+        let state = history_column_resize_state(
+            HistoryColResizeHandle::Graph,
+            px(0.0),
+            available,
+            all_columns_visible_drag_layout(),
+        );
         let layout = HistoryColumnDragLayout {
             graph_w: px(140.0),
             ..all_columns_visible_drag_layout()
         };
-        let state =
-            history_column_resize_state(HistoryColResizeHandle::Graph, px(0.0), available, layout);
 
         assert!(!history_resize_state_preserves_visible_columns(
             available,
@@ -1521,7 +1694,7 @@ mod tests {
 
     #[test]
     fn history_resize_state_visible_columns_fast_path_rejects_stale_current_width() {
-        let available = history_columns_available_width(px(1600.0));
+        let available = history_columns_available_width(px(836.0));
         let layout = all_columns_visible_drag_layout();
         let state =
             history_column_resize_state(HistoryColResizeHandle::Date, px(0.0), available, layout);

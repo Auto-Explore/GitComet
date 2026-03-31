@@ -625,16 +625,12 @@ fn collect_index_worktree_status_entry<U>(
         gix::status::plumbing::index_as_worktree_with_renames::Entry::Modification {
             rela_path,
             status,
-            entry_index,
             ..
         } => {
-            if let gix::status::plumbing::index_as_worktree::EntryStatus::NeedsUpdate(stat) =
+            if let gix::status::plumbing::index_as_worktree::EntryStatus::NeedsUpdate(_stat) =
                 &status
             {
-                index_changes.push(IndexWorktreeApplyChange::NewStat {
-                    entry_index,
-                    stat: *stat,
-                });
+                index_changes.push(IndexWorktreeApplyChange::NewStat);
                 return Ok(());
             }
             if matches!(
@@ -646,7 +642,7 @@ fn collect_index_worktree_status_entry<U>(
                     },
                 )
             ) {
-                index_changes.push(IndexWorktreeApplyChange::SetSizeToZero { entry_index });
+                index_changes.push(IndexWorktreeApplyChange::SetSizeToZero);
             }
             let path = path_buf_from_git_bytes(
                 rela_path.as_ref(),
@@ -732,61 +728,28 @@ struct StatusEntryCollection {
 }
 
 enum IndexWorktreeApplyChange {
-    NewStat {
-        entry_index: usize,
-        stat: gix::index::entry::Stat,
-    },
-    SetSizeToZero {
-        entry_index: usize,
-    },
+    NewStat,
+    SetSizeToZero,
 }
 
 fn maybe_persist_status_outcome_changes(
-    outcome: Option<gix::status::Outcome>,
-    index_path: &Path,
+    _outcome: Option<gix::status::Outcome>,
+    _index_path: &Path,
 ) -> Option<RepoFileStamp> {
-    let mut outcome = outcome?;
-    match outcome.write_changes() {
-        Some(Ok(())) => Some(repo_file_stamp(index_path)),
-        Some(Err(_)) | None => None,
-    }
+    // Avoid rewriting `.git/index` during status reads. The repo monitor maps index updates to
+    // worktree refreshes, so gix's stat write-back can self-trigger a refresh loop even when the
+    // status payload itself is unchanged.
+    None
 }
 
 fn maybe_persist_direct_index_changes(
-    repo: &gix::Repository,
-    index: &gix::worktree::Index,
-    index_changes: Vec<IndexWorktreeApplyChange>,
+    _repo: &gix::Repository,
+    _index: &gix::worktree::Index,
+    _index_changes: Vec<IndexWorktreeApplyChange>,
 ) -> Option<RepoFileStamp> {
-    if index_changes.is_empty() {
-        return None;
-    }
-
-    let mut index_file = gix::worktree::IndexPersistedOrInMemory::from(index.clone()).into_owned();
-    apply_index_worktree_changes(index_file.entries_mut(), index_changes);
-    match index_file.write(gix::index::write::Options::default()) {
-        Ok(()) => Some(repo_file_stamp(repo.index_path().as_path())),
-        Err(_) => None,
-    }
-}
-
-fn apply_index_worktree_changes(
-    entries: &mut [gix::index::Entry],
-    index_changes: Vec<IndexWorktreeApplyChange>,
-) {
-    for change in index_changes {
-        match change {
-            IndexWorktreeApplyChange::NewStat { entry_index, stat } => {
-                if let Some(entry) = entries.get_mut(entry_index) {
-                    entry.stat = stat;
-                }
-            }
-            IndexWorktreeApplyChange::SetSizeToZero { entry_index } => {
-                if let Some(entry) = entries.get_mut(entry_index) {
-                    entry.stat.size = 0;
-                }
-            }
-        }
-    }
+    // Same rationale as `maybe_persist_status_outcome_changes`: keep status collection read-only
+    // so monitor-driven refreshes do not recursively manufacture new worktree events.
+    None
 }
 
 /// Collect a single TreeIndex change into the `staged` list.

@@ -44,6 +44,7 @@ struct FocusedDiffView {
     theme: AppTheme,
     ui_font_family: String,
     editor_font_family: String,
+    use_font_ligatures: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -91,6 +92,7 @@ impl FocusedDiffView {
             editor_font_family: crate::font_preferences::applied_editor_font_family(
                 &font_preferences.editor_font_family,
             ),
+            use_font_ligatures: font_preferences.use_font_ligatures,
         }
     }
 
@@ -145,7 +147,13 @@ impl Render for FocusedDiffView {
             .size_full()
             .bg(theme.colors.window_bg)
             .text_color(theme.colors.text)
-            .font_family(self.ui_font_family.clone())
+            .font(gpui::Font {
+                family: self.ui_font_family.clone().into(),
+                features: crate::font_preferences::applied_font_features(self.use_font_ligatures),
+                fallbacks: None,
+                weight: FontWeight::default(),
+                style: gpui::FontStyle::default(),
+            })
             .text_size(px(13.0))
             .flex()
             .flex_col()

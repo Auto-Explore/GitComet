@@ -1423,14 +1423,22 @@ impl Render for GitCometView {
             .unwrap_or(CursorStyle::Arrow);
 
         let center_content = self.center_content(window, cx);
+        let font_features = crate::font_preferences::current_font_features(cx);
 
         let mut body = div()
             .flex()
             .flex_col()
             .size_full()
-            .font_family(crate::font_preferences::applied_ui_font_family(
-                &font_preferences.ui_font_family,
-            ))
+            .font(gpui::Font {
+                family: crate::font_preferences::applied_ui_font_family(
+                    &font_preferences.ui_font_family,
+                )
+                .into(),
+                features: font_features,
+                fallbacks: None,
+                weight: gpui::FontWeight::default(),
+                style: gpui::FontStyle::default(),
+            })
             .text_color(theme.colors.text)
             .child(self.title_bar.clone())
             .child(center_content);

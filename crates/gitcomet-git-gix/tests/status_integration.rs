@@ -850,6 +850,84 @@ fn repeated_status_on_same_repo_instance_reuses_staged_state_and_invalidates_on_
 }
 
 #[test]
+fn status_does_not_rewrite_index_when_only_worktree_stat_is_stale() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    write(repo, "a.txt", "one\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "init"],
+    );
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+
+    set_fixed_mtime(&repo.join("a.txt"));
+    let index_before = fs::read(repo.join(".git").join("index")).unwrap();
+
+    let status = opened.status().unwrap();
+    assert!(status.staged.is_empty());
+    assert!(status.unstaged.is_empty());
+
+    let index_after = fs::read(repo.join(".git").join("index")).unwrap();
+    assert_eq!(
+        index_after, index_before,
+        "status should not rewrite the index for metadata-only worktree changes"
+    );
+}
+
+#[test]
+fn repeated_status_does_not_rewrite_index_when_cached_staged_state_is_reused() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    write(repo, "a.txt", "one\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "init"],
+    );
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+
+    let first = opened.status().unwrap();
+    assert!(first.staged.is_empty());
+    assert!(first.unstaged.is_empty());
+
+    set_fixed_mtime(&repo.join("a.txt"));
+    let index_before = fs::read(repo.join(".git").join("index")).unwrap();
+
+    let second = opened.status().unwrap();
+    assert!(second.staged.is_empty());
+    assert!(second.unstaged.is_empty());
+
+    let index_after = fs::read(repo.join(".git").join("index")).unwrap();
+    assert_eq!(
+        index_after, index_before,
+        "cached repeated status should stay read-only for metadata-only worktree changes"
+    );
+}
+
+#[test]
 fn repeated_status_on_same_repo_instance_invalidates_when_head_moves_without_index_change() {
     if !require_git_shell_for_status_integration_tests() {
         return;

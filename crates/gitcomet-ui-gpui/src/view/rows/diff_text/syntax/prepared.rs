@@ -202,16 +202,16 @@ fn merge_shared_prepared_document_chunk(
     cache_key: PreparedSyntaxCacheKey,
     chunk_ix: usize,
     chunk_tokens: Option<Vec<Arc<[SyntaxToken]>>>,
-) -> bool {
+) {
     let mut store = match shared_prepared_document_seed_store().lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
     };
     let Some(document) = store.get_mut(&cache_key) else {
-        return false;
+        return;
     };
     if document.line_token_chunks.contains_key(&chunk_ix) {
-        return false;
+        return;
     }
 
     let fallback_empty_chunk = || {
@@ -225,7 +225,6 @@ fn merge_shared_prepared_document_chunk(
     document
         .line_token_chunks
         .insert(chunk_ix, chunk_tokens.unwrap_or_else(fallback_empty_chunk));
-    true
 }
 
 struct PreparedSyntaxChunkWorker {
@@ -649,15 +648,14 @@ impl TreesitterDocumentCache {
         self.touch_key(cache_key);
     }
 
-    fn insert_pending_chunk_request(&mut self, chunk_key: PreparedSyntaxChunkKey) -> bool {
+    fn insert_pending_chunk_request(&mut self, chunk_key: PreparedSyntaxChunkKey) {
         if !self.pending_chunk_requests.insert(chunk_key) {
-            return false;
+            return;
         }
         *self
             .pending_chunk_request_counts
             .entry(chunk_key.cache_key)
             .or_default() += 1;
-        true
     }
 
     fn remove_pending_chunk_request(&mut self, chunk_key: PreparedSyntaxChunkKey) -> bool {
@@ -950,7 +948,7 @@ impl TreesitterDocumentCache {
         if let Some(document) = self.by_cache_key.get_mut(&cache_key) {
             insert_line_token_chunk(document, chunk_ix, chunk_tokens);
         }
-        let _ = merge_shared_prepared_document_chunk(cache_key, chunk_ix, shared_chunk_tokens);
+        merge_shared_prepared_document_chunk(cache_key, chunk_ix, shared_chunk_tokens);
     }
 
     fn queue_chunk_build_request_nonblocking(
@@ -983,7 +981,7 @@ impl TreesitterDocumentCache {
         if worker.sender.send(request).is_err() {
             return false;
         }
-        let _ = self.insert_pending_chunk_request(chunk_key);
+        self.insert_pending_chunk_request(chunk_key);
         true
     }
 
@@ -1010,7 +1008,7 @@ impl TreesitterDocumentCache {
             if chunk_ix == center_chunk_ix {
                 continue;
             }
-            let _ = self.queue_chunk_build_request_nonblocking(
+            self.queue_chunk_build_request_nonblocking(
                 PreparedSyntaxChunkKey {
                     cache_key,
                     chunk_ix,
@@ -1104,7 +1102,7 @@ impl TreesitterDocumentCache {
         // any completions targeted at this current thread before we decide that
         // the line is still pending, otherwise the row can remain stuck on the
         // heuristic fallback until some other code path drains it here.
-        let _ = self.drain_completed_chunk_builds_for_cache_key(cache_key);
+        self.drain_completed_chunk_builds_for_cache_key(cache_key);
         let allow_sync_build_on_insert = matches!(
             self.merge_document_from_shared_seed(cache_key),
             SharedDocumentMergeResult::Inserted
@@ -1123,7 +1121,7 @@ impl TreesitterDocumentCache {
             return Some(PreparedSyntaxLineTokensRangeSummary::default());
         }
 
-        let _ = self.drain_completed_chunk_builds_for_cache_key(cache_key);
+        self.drain_completed_chunk_builds_for_cache_key(cache_key);
         let mut allow_sync_build_on_insert = matches!(
             self.merge_document_from_shared_seed(cache_key),
             SharedDocumentMergeResult::Inserted
@@ -1285,7 +1283,7 @@ impl TreesitterDocumentCache {
             };
             let mut remaining = VecDeque::with_capacity(deferred.len());
             while let Some(result) = deferred.pop_front() {
-                let _ = merge_shared_prepared_document_chunk(
+                merge_shared_prepared_document_chunk(
                     result.chunk_key.cache_key,
                     result.chunk_key.chunk_ix,
                     result.chunk_tokens.clone(),
@@ -1315,7 +1313,7 @@ impl TreesitterDocumentCache {
                 Err(poisoned) => poisoned.into_inner(),
             };
             for result in polled_results {
-                let _ = merge_shared_prepared_document_chunk(
+                merge_shared_prepared_document_chunk(
                     result.chunk_key.cache_key,
                     result.chunk_key.chunk_ix,
                     result.chunk_tokens.clone(),
@@ -1337,7 +1335,7 @@ impl TreesitterDocumentCache {
                 .saturating_add(result.chunk_build_ms);
             let shared_chunk_tokens = result.chunk_tokens.clone();
             let Some(document) = self.by_cache_key.get_mut(&result.chunk_key.cache_key) else {
-                let _ = merge_shared_prepared_document_chunk(
+                merge_shared_prepared_document_chunk(
                     result.chunk_key.cache_key,
                     result.chunk_key.chunk_ix,
                     shared_chunk_tokens,
@@ -1349,7 +1347,7 @@ impl TreesitterDocumentCache {
                 .line_token_chunks
                 .contains_key(&result.chunk_key.chunk_ix)
             {
-                let _ = merge_shared_prepared_document_chunk(
+                merge_shared_prepared_document_chunk(
                     result.chunk_key.cache_key,
                     result.chunk_key.chunk_ix,
                     shared_chunk_tokens,
@@ -1357,7 +1355,7 @@ impl TreesitterDocumentCache {
                 continue;
             }
             insert_line_token_chunk(document, result.chunk_key.chunk_ix, result.chunk_tokens);
-            let _ = merge_shared_prepared_document_chunk(
+            merge_shared_prepared_document_chunk(
                 result.chunk_key.cache_key,
                 result.chunk_key.chunk_ix,
                 shared_chunk_tokens,
@@ -2959,7 +2957,7 @@ fn collect_query_pass_tokens_for_document(
     pass: &TreesitterQueryPass,
     context: &mut DocumentTokenCollectionContext<'_>,
 ) {
-    let _ = catch_treesitter_query_panic(|| {
+    catch_treesitter_query_panic(|| {
         TS_CURSOR.with(|cursor| {
             let mut cursor = cursor.borrow_mut();
             configure_query_cursor(&mut cursor, pass, input.len());
@@ -3118,7 +3116,7 @@ fn collect_treesitter_injection_matches_for_line_window(
     let mut seen = HashSet::default();
     let mut injections = Vec::new();
     for pass in &query_passes {
-        let _ = catch_treesitter_query_panic(|| {
+        catch_treesitter_query_panic(|| {
             TS_CURSOR.with(|cursor| {
                 let mut cursor = cursor.borrow_mut();
                 configure_query_cursor(&mut cursor, pass, input.len());

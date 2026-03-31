@@ -795,7 +795,10 @@ fn maybe_compact_piece_table(core: &mut TextModelCore) -> bool {
     core.ascii_only = core.original_chunks[0].is_ascii();
 
     let materialized = OnceLock::new();
-    let _ = materialized.set(shared);
+    assert!(
+        materialized.set(shared).is_ok(),
+        "fresh OnceLock should accept materialized text"
+    );
     core.materialized = materialized;
     true
 }
