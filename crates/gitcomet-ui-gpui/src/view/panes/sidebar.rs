@@ -4,7 +4,9 @@ use super::super::caches::{
     branch_sidebar_cache_store,
 };
 use super::super::*;
+use rustc_hash::FxHasher;
 use std::collections::{BTreeMap, BTreeSet};
+use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
 pub(in super::super) struct SidebarPaneView {
@@ -26,6 +28,10 @@ pub(in super::super) struct SidebarPaneView {
 struct SidebarNotifyFingerprint {
     active_repo_id: Option<RepoId>,
     repo_fingerprint: Option<BranchSidebarFingerprint>,
+    open_repo_workdirs_count: usize,
+    open_repo_workdirs_hash: u64,
+    active_workspace_badges_count: usize,
+    active_workspace_badges_hash: u64,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -41,9 +47,17 @@ impl SidebarNotifyFingerprint {
         let repo_fingerprint = active_repo_id
             .and_then(|repo_id| state.repos.iter().find(|r| r.id == repo_id))
             .map(BranchSidebarFingerprint::from_repo);
+        let (open_repo_workdirs_count, open_repo_workdirs_hash) =
+            open_repo_workdirs_fingerprint(state);
+        let (active_workspace_badges_count, active_workspace_badges_hash) =
+            active_workspace_badges_fingerprint(state);
         Self {
             active_repo_id,
             repo_fingerprint,
+            open_repo_workdirs_count,
+            open_repo_workdirs_hash,
+            active_workspace_badges_count,
+            active_workspace_badges_hash,
         }
     }
 }
@@ -113,6 +127,19 @@ impl SidebarPaneView {
     pub(in super::super) fn active_repo(&self) -> Option<&RepoState> {
         let repo_id = self.active_repo_id()?;
         self.state.repos.iter().find(|r| r.id == repo_id)
+    }
+
+    pub(in super::super) fn active_workspace_paths_by_branch(
+        &self,
+    ) -> HashMap<String, std::path::PathBuf> {
+        self.active_repo()
+            .map(|repo| {
+                crate::view::rows::active_workspace_paths_by_branch(
+                    repo,
+                    self.state.repos.as_slice(),
+                )
+            })
+            .unwrap_or_default()
     }
 
     pub(in super::super) fn cached_path_display(&self, path: &std::path::Path) -> SharedString {
@@ -368,10 +395,9 @@ fn pending_sidebar_lazy_loads(
     collapsed_items: &BTreeSet<String>,
 ) -> SidebarLazyLoadPlan {
     SidebarLazyLoadPlan {
-        worktrees: !branch_sidebar::is_collapsed(
-            collapsed_items,
-            branch_sidebar::worktrees_section_storage_key(),
-        ) && matches!(repo.worktrees, Loadable::NotLoaded),
+        // Worktree data also drives local branch workspace badges, so load it even when the
+        // Worktrees section itself is collapsed.
+        worktrees: matches!(repo.worktrees, Loadable::NotLoaded),
         submodules: !branch_sidebar::is_collapsed(
             collapsed_items,
             branch_sidebar::submodules_section_storage_key(),
@@ -381,6 +407,51 @@ fn pending_sidebar_lazy_loads(
             branch_sidebar::stash_section_storage_key(),
         ) && matches!(repo.stashes, Loadable::NotLoaded),
     }
+}
+
+fn open_repo_workdirs_fingerprint(state: &AppState) -> (usize, u64) {
+    let mut workdirs = state
+        .repos
+        .iter()
+        .map(|repo| repo.spec.workdir.as_path())
+        .collect::<Vec<_>>();
+    workdirs.sort_unstable_by(|left, right| left.as_os_str().cmp(right.as_os_str()));
+
+    let mut hasher = FxHasher::default();
+    workdirs.len().hash(&mut hasher);
+    for workdir in workdirs {
+        workdir.hash(&mut hasher);
+    }
+
+    (state.repos.len(), hasher.finish())
+}
+
+fn active_workspace_badges_fingerprint(state: &AppState) -> (usize, u64) {
+    let Some(active_repo_id) = state.active_repo else {
+        return (0, 0);
+    };
+    let Some(active_repo) = state.repos.iter().find(|repo| repo.id == active_repo_id) else {
+        return (0, 0);
+    };
+
+    let mut badges =
+        crate::view::rows::active_workspace_paths_by_branch(active_repo, state.repos.as_slice())
+            .into_iter()
+            .collect::<Vec<_>>();
+    badges.sort_unstable_by(|(left_branch, left_path), (right_branch, right_path)| {
+        left_branch
+            .cmp(right_branch)
+            .then_with(|| left_path.as_os_str().cmp(right_path.as_os_str()))
+    });
+
+    let mut hasher = FxHasher::default();
+    badges.len().hash(&mut hasher);
+    for (branch, path) in &badges {
+        branch.hash(&mut hasher);
+        path.hash(&mut hasher);
+    }
+
+    (badges.len(), hasher.finish())
 }
 
 #[cfg(test)]
@@ -398,7 +469,7 @@ mod tests {
     }
 
     #[test]
-    fn pending_sidebar_lazy_loads_defaults_secondary_sections_to_closed() {
+    fn pending_sidebar_lazy_loads_preloads_worktrees_for_workspace_badges() {
         let repo = RepoState::new_opening(
             RepoId(1),
             gitcomet_core::domain::RepoSpec {
@@ -407,7 +478,13 @@ mod tests {
         );
 
         let expanded = pending_sidebar_lazy_loads(&repo, &BTreeSet::new());
-        assert_eq!(expanded, SidebarLazyLoadPlan::default());
+        assert_eq!(
+            expanded,
+            SidebarLazyLoadPlan {
+                worktrees: true,
+                ..SidebarLazyLoadPlan::default()
+            }
+        );
 
         let expanded = BTreeSet::from([
             branch_sidebar::expanded_default_section_storage_key(
@@ -461,6 +538,115 @@ mod tests {
                 submodules: false,
                 stashes: true,
             }
+        );
+    }
+
+    #[test]
+    fn sidebar_notify_fingerprint_tracks_open_repo_workdirs() {
+        let mut state = AppState::default();
+        state.active_repo = Some(RepoId(1));
+        state.repos.push(repo_state(RepoId(1), "/tmp/repo"));
+
+        let initial = SidebarNotifyFingerprint::from_state(&state);
+
+        state.repos.push(repo_state(RepoId(2), "/tmp/repo-wt"));
+
+        assert_ne!(SidebarNotifyFingerprint::from_state(&state), initial);
+    }
+
+    #[test]
+    fn sidebar_notify_fingerprint_tracks_live_workspace_badge_branch_changes() {
+        let mut active = repo_state(RepoId(1), "/tmp/repo");
+        active.worktrees = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Worktree {
+            path: PathBuf::from("/tmp/repo-feature"),
+            head: None,
+            branch: Some("feature/old".to_string()),
+            detached: false,
+        }]));
+
+        let mut worktree_repo = repo_state(RepoId(2), "/tmp/repo-feature");
+        worktree_repo.head_branch = Loadable::Ready("feature/old".to_string());
+        let mut state = AppState {
+            repos: vec![active, worktree_repo],
+            active_repo: Some(RepoId(1)),
+            ..AppState::default()
+        };
+
+        let initial = SidebarNotifyFingerprint::from_state(&state);
+
+        state.repos[1].head_branch = Loadable::Ready("feature/new".to_string());
+        state.repos[1].head_branch_rev = 1;
+
+        assert_ne!(SidebarNotifyFingerprint::from_state(&state), initial);
+    }
+
+    #[test]
+    fn sidebar_notify_fingerprint_tracks_workspace_badge_removal_when_tab_closes() {
+        let mut active = repo_state(RepoId(1), "/tmp/repo");
+        active.worktrees = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Worktree {
+            path: PathBuf::from("/tmp/repo-feature"),
+            head: None,
+            branch: Some("feature".to_string()),
+            detached: false,
+        }]));
+
+        let mut worktree_repo = repo_state(RepoId(2), "/tmp/repo-feature");
+        worktree_repo.head_branch = Loadable::Ready("feature".to_string());
+        let mut state = AppState {
+            repos: vec![active, worktree_repo],
+            active_repo: Some(RepoId(1)),
+            ..AppState::default()
+        };
+
+        let initial = SidebarNotifyFingerprint::from_state(&state);
+
+        state.repos.pop();
+
+        assert_ne!(SidebarNotifyFingerprint::from_state(&state), initial);
+    }
+
+    #[test]
+    fn sidebar_notify_fingerprint_tracks_workspace_badge_removal_when_worktree_detaches() {
+        let mut active = repo_state(RepoId(1), "/tmp/repo");
+        active.worktrees = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Worktree {
+            path: PathBuf::from("/tmp/repo-feature"),
+            head: None,
+            branch: Some("feature".to_string()),
+            detached: false,
+        }]));
+
+        let mut worktree_repo = repo_state(RepoId(2), "/tmp/repo-feature");
+        worktree_repo.head_branch = Loadable::Ready("feature".to_string());
+        let mut state = AppState {
+            repos: vec![active, worktree_repo],
+            active_repo: Some(RepoId(1)),
+            ..AppState::default()
+        };
+
+        let initial = SidebarNotifyFingerprint::from_state(&state);
+
+        state.repos[1].head_branch = Loadable::Ready("HEAD".to_string());
+        state.repos[1].head_branch_rev = 1;
+        state.repos[1].detached_head_commit = Some(CommitId("deadbeef".into()));
+
+        assert_ne!(SidebarNotifyFingerprint::from_state(&state), initial);
+    }
+
+    #[test]
+    fn sidebar_notify_fingerprint_ignores_repo_tab_order() {
+        let mut state_a = AppState::default();
+        state_a.active_repo = Some(RepoId(1));
+        state_a.repos.push(repo_state(RepoId(1), "/tmp/repo"));
+        state_a.repos.push(repo_state(RepoId(2), "/tmp/repo-wt"));
+
+        let mut state_b = AppState::default();
+        state_b.active_repo = Some(RepoId(1));
+        state_b.repos.push(repo_state(RepoId(2), "/tmp/repo-wt"));
+        state_b.repos.push(repo_state(RepoId(1), "/tmp/repo"));
+
+        assert_eq!(
+            SidebarNotifyFingerprint::from_state(&state_a),
+            SidebarNotifyFingerprint::from_state(&state_b)
         );
     }
 
@@ -522,6 +708,31 @@ mod tests {
         state.repos[1].submodules_rev = 1;
         state.repos[1].stashes_rev = 1;
         state.repos[1].branch_sidebar_rev = 1;
+
+        assert_eq!(SidebarNotifyFingerprint::from_state(&state), initial);
+    }
+
+    #[test]
+    fn sidebar_notify_fingerprint_ignores_unrelated_open_repo_branch_changes() {
+        let mut active = repo_state(RepoId(1), "/tmp/active");
+        active.worktrees = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Worktree {
+            path: PathBuf::from("/tmp/active-feature"),
+            head: None,
+            branch: Some("feature".to_string()),
+            detached: false,
+        }]));
+        let related = repo_state(RepoId(2), "/tmp/active-feature");
+        let unrelated = repo_state(RepoId(3), "/tmp/unrelated");
+        let mut state = AppState {
+            repos: vec![active, related, unrelated],
+            active_repo: Some(RepoId(1)),
+            ..AppState::default()
+        };
+
+        let initial = SidebarNotifyFingerprint::from_state(&state);
+
+        state.repos[2].head_branch = Loadable::Ready("other".to_string());
+        state.repos[2].head_branch_rev = 1;
 
         assert_eq!(SidebarNotifyFingerprint::from_state(&state), initial);
     }

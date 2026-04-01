@@ -1457,9 +1457,12 @@ impl PopoverHost {
                         )
                         .min_w(px(160.0))
                         .max_w(px(320.0)),
-                    WorktreePopoverKind::Menu { path } => self
+                    WorktreePopoverKind::Menu { path, branch } => self
                         .context_menu_view(
-                            PopoverKind::worktree(repo_id, WorktreePopoverKind::Menu { path }),
+                            PopoverKind::worktree(
+                                repo_id,
+                                WorktreePopoverKind::Menu { path, branch },
+                            ),
                             cx,
                         )
                         .min_w(px(160.0))
@@ -1471,8 +1474,8 @@ impl PopoverHost {
                     WorktreePopoverKind::RemovePicker => {
                         worktree_remove_picker::panel(self, repo_id, cx)
                     }
-                    WorktreePopoverKind::RemoveConfirm { path } => {
-                        worktree_remove_confirm::panel(self, repo_id, path, cx)
+                    WorktreePopoverKind::RemoveConfirm { path, branch } => {
+                        worktree_remove_confirm::panel(self, repo_id, path, branch, cx)
                     }
                 },
                 RepoPopoverKind::Submodule(submodule_kind) => match submodule_kind {
@@ -1532,9 +1535,11 @@ impl PopoverHost {
             PopoverKind::ForceDeleteBranchConfirm { repo_id, name } => {
                 force_delete_branch_confirm::panel(self, repo_id, name, cx)
             }
-            PopoverKind::ForceRemoveWorktreeConfirm { repo_id, path } => {
-                force_remove_worktree_confirm::panel(self, repo_id, path, cx)
-            }
+            PopoverKind::ForceRemoveWorktreeConfirm {
+                repo_id,
+                path,
+                branch,
+            } => force_remove_worktree_confirm::panel(self, repo_id, path, branch, cx),
             PopoverKind::DiscardChangesConfirm {
                 repo_id,
                 area,

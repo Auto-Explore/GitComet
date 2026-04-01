@@ -246,8 +246,8 @@ impl PopoverHost {
             } => Some(worktree_section::model(*repo_id)),
             PopoverKind::Repo {
                 repo_id,
-                kind: RepoPopoverKind::Worktree(WorktreePopoverKind::Menu { path }),
-            } => Some(worktree::model(*repo_id, path)),
+                kind: RepoPopoverKind::Worktree(WorktreePopoverKind::Menu { path, branch }),
+            } => Some(worktree::model(*repo_id, path, branch.as_deref())),
             PopoverKind::Repo {
                 repo_id,
                 kind: RepoPopoverKind::Submodule(SubmodulePopoverKind::SectionMenu),

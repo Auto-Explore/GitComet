@@ -342,6 +342,25 @@ impl GitCometView {
         });
     }
 
+    pub(in crate::view) fn register_pending_worktree_branch_removal(
+        &mut self,
+        repo_id: RepoId,
+        path: std::path::PathBuf,
+        branch: String,
+    ) {
+        self.pending_worktree_branch_removals
+            .insert((repo_id, path), branch);
+    }
+
+    fn take_pending_worktree_branch_removal(
+        &mut self,
+        repo_id: RepoId,
+        path: &std::path::Path,
+    ) -> Option<String> {
+        self.pending_worktree_branch_removals
+            .remove(&(repo_id, path.to_path_buf()))
+    }
+
     #[cfg(test)]
     pub fn new(
         store: AppStore,
@@ -726,6 +745,7 @@ impl GitCometView {
             pending_pull_reconcile_prompt: None,
             pending_force_delete_branch_prompt: None,
             pending_force_remove_worktree_prompt: None,
+            pending_worktree_branch_removals: HashMap::default(),
             startup_crash_report,
             #[cfg(target_os = "macos")]
             recent_repos_menu_fingerprint: ui_session.recent_repos.clone(),
@@ -1399,11 +1419,15 @@ impl Render for GitCometView {
             );
         }
 
-        if let Some((repo_id, path)) = self.pending_force_remove_worktree_prompt.take()
+        if let Some((repo_id, path, branch)) = self.pending_force_remove_worktree_prompt.take()
             && self.active_repo_id() == Some(repo_id)
         {
             self.open_popover_at(
-                PopoverKind::ForceRemoveWorktreeConfirm { repo_id, path },
+                PopoverKind::ForceRemoveWorktreeConfirm {
+                    repo_id,
+                    path,
+                    branch,
+                },
                 self.last_mouse_pos,
                 window,
                 cx,

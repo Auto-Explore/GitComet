@@ -39,7 +39,7 @@ pub(super) fn panel(
                                 this.open_popover_at(
                                     PopoverKind::worktree(
                                         repo_id,
-                                        WorktreePopoverKind::RemoveConfirm { path },
+                                        WorktreePopoverKind::RemoveConfirm { path, branch: None },
                                     ),
                                     e.position(),
                                     window,

@@ -526,7 +526,8 @@ fn list_branches_preserves_nested_upstream_branch_names() {
     );
     run_git(&work_repo, &["push", "-u", "origin", "main"]);
 
-    run_git(&work_repo, &["checkout", "-b", "feature/nested/name"]);
+    let nested_branch = "feature/nested/name";
+    run_git(&work_repo, &["checkout", "-b", nested_branch]);
     fs::write(work_repo.join("nested.txt"), "nested\n").unwrap();
     run_git(&work_repo, &["add", "nested.txt"]);
     run_git(
@@ -539,21 +540,21 @@ fn list_branches_preserves_nested_upstream_branch_names() {
             "nested feature",
         ],
     );
-    run_git(&work_repo, &["push", "-u", "origin", "HEAD"]);
+    run_git(&work_repo, &["push", "-u", "origin", nested_branch]);
 
     let backend = GixBackend;
     let opened = backend.open(&work_repo).unwrap();
     let branches = opened.list_branches().unwrap();
     let feature = branches
         .iter()
-        .find(|branch| branch.name == "feature/nested/name")
+        .find(|branch| branch.name == nested_branch)
         .expect("nested feature branch present");
 
     assert_eq!(
         feature.upstream,
         Some(Upstream {
             remote: "origin".to_string(),
-            branch: "feature/nested/name".to_string(),
+            branch: nested_branch.to_string(),
         })
     );
     assert_eq!(

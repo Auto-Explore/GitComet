@@ -313,10 +313,15 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             repo_id.hash(hasher);
             name.hash(hasher);
         }
-        PopoverKind::ForceRemoveWorktreeConfirm { repo_id, path } => {
+        PopoverKind::ForceRemoveWorktreeConfirm {
+            repo_id,
+            path,
+            branch,
+        } => {
             61u8.hash(hasher);
             repo_id.hash(hasher);
             path.hash(hasher);
+            branch.hash(hasher);
         }
         PopoverKind::DiscardChangesConfirm {
             repo_id,
@@ -502,10 +507,11 @@ fn hash_repo_popover_kind<H: Hasher>(repo_id: RepoId, kind: &RepoPopoverKind, ha
                 16u8.hash(hasher);
                 repo_id.hash(hasher);
             }
-            WorktreePopoverKind::Menu { path } => {
+            WorktreePopoverKind::Menu { path, branch } => {
                 17u8.hash(hasher);
                 repo_id.hash(hasher);
                 path.hash(hasher);
+                branch.hash(hasher);
             }
             WorktreePopoverKind::AddPrompt => {
                 20u8.hash(hasher);
@@ -519,10 +525,11 @@ fn hash_repo_popover_kind<H: Hasher>(repo_id: RepoId, kind: &RepoPopoverKind, ha
                 22u8.hash(hasher);
                 repo_id.hash(hasher);
             }
-            WorktreePopoverKind::RemoveConfirm { path } => {
+            WorktreePopoverKind::RemoveConfirm { path, branch } => {
                 23u8.hash(hasher);
                 repo_id.hash(hasher);
                 path.hash(hasher);
+                branch.hash(hasher);
             }
         },
         RepoPopoverKind::Submodule(submodule_kind) => match submodule_kind {

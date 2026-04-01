@@ -10,6 +10,7 @@ impl GitCometView {
         let prev_banner_error = self.state.banner_error.clone();
         let prev_auth_prompt = self.state.auth_prompt.clone();
         let next_banner_error = next.banner_error.clone();
+        let mut follow_up_msgs = Vec::new();
 
         let old_notification_len = self.state.notifications.len();
         let new_notifications = next
@@ -72,13 +73,29 @@ impl GitCometView {
                 } else {
                     parse_force_remove_worktree_path(&entry.command, &entry.stderr)
                 };
-                if self.pending_force_remove_worktree_prompt.is_none()
-                    && let Some(path) = force_remove_worktree_path.clone()
-                {
-                    self.pending_force_remove_worktree_prompt = Some((next_repo.id, path));
-                }
-                if force_remove_worktree_path.is_some() {
+                if let Some(path) = force_remove_worktree_path.clone() {
+                    if self.pending_force_remove_worktree_prompt.is_none() {
+                        let branch = self.take_pending_worktree_branch_removal(next_repo.id, &path);
+                        self.pending_force_remove_worktree_prompt =
+                            Some((next_repo.id, path, branch));
+                    }
                     continue;
+                }
+
+                let worktree_remove_path = parse_worktree_remove_path_from_command(&entry.command);
+                if let Some(path) = worktree_remove_path.as_ref() {
+                    if entry.ok {
+                        if let Some(branch) =
+                            self.take_pending_worktree_branch_removal(next_repo.id, path)
+                        {
+                            follow_up_msgs.push(Msg::DeleteBranch {
+                                repo_id: next_repo.id,
+                                name: branch,
+                            });
+                        }
+                    } else {
+                        self.take_pending_worktree_branch_removal(next_repo.id, path);
+                    }
                 }
 
                 if entry.ok {
@@ -127,6 +144,9 @@ impl GitCometView {
         }
 
         self.state = next;
+        for msg in follow_up_msgs {
+            self.store.dispatch(msg);
+        }
         if !self.state.repos.is_empty() {
             self.startup_repo_bootstrap_pending = false;
         }
@@ -191,7 +211,8 @@ fn parse_force_remove_worktree_path(command: &str, stderr: &str) -> Option<std::
     if !is_force_remove_worktree_required_error(command, stderr) {
         return None;
     }
-    parse_worktree_path_from_fatal(stderr).or_else(|| parse_worktree_path_from_command(command))
+    parse_worktree_path_from_fatal(stderr)
+        .or_else(|| parse_worktree_remove_path_from_command(command))
 }
 
 fn is_force_remove_worktree_required_error(command: &str, stderr: &str) -> bool {
@@ -212,9 +233,10 @@ fn parse_worktree_path_from_fatal(stderr: &str) -> Option<std::path::PathBuf> {
     (!path.is_empty()).then(|| std::path::PathBuf::from(path))
 }
 
-fn parse_worktree_path_from_command(command: &str) -> Option<std::path::PathBuf> {
+fn parse_worktree_remove_path_from_command(command: &str) -> Option<std::path::PathBuf> {
     let command = command.trim();
     let rest = command.strip_prefix("git worktree remove ")?;
+    let rest = rest.strip_prefix("--force ").unwrap_or(rest);
     let path = rest.trim();
     if path.is_empty() || path.starts_with('-') {
         return None;
@@ -273,6 +295,18 @@ mod tests {
         let command = "git worktree remove --force /tmp/worktree";
         let stderr = "contains modified or untracked files, use --force to delete it";
         assert_eq!(parse_force_remove_worktree_path(command, stderr), None);
+    }
+
+    #[test]
+    fn parse_worktree_remove_path_from_command_supports_forced_and_plain_remove() {
+        assert_eq!(
+            parse_worktree_remove_path_from_command("git worktree remove /tmp/worktree"),
+            Some(PathBuf::from("/tmp/worktree"))
+        );
+        assert_eq!(
+            parse_worktree_remove_path_from_command("git worktree remove --force /tmp/worktree"),
+            Some(PathBuf::from("/tmp/worktree"))
+        );
     }
 
     #[cfg(target_os = "macos")]
