@@ -109,7 +109,7 @@ pub fn context_menu_entry(
         .flex()
         .items_center()
         .gap_2()
-        .font_family("monospace")
+        .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
         .text_xs()
         .text_color(theme.colors.text_muted);
 

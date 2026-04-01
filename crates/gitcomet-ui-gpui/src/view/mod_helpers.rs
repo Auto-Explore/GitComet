@@ -555,6 +555,10 @@ pub(super) struct StatusMultiSelection {
 }
 
 impl StatusMultiSelection {
+    pub(super) fn is_empty(&self) -> bool {
+        self.untracked.is_empty() && self.unstaged.is_empty() && self.staged.is_empty()
+    }
+
     pub(super) fn selected_paths_for_area(&self, area: DiffArea) -> &[std::path::PathBuf] {
         match area {
             DiffArea::Unstaged => {

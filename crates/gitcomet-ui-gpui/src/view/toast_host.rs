@@ -377,7 +377,7 @@ impl Render for ToastHost {
                 .child(
                     div()
                         .when(t.is_code_message, |this| {
-                            this.font_family("monospace")
+                            this.font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
                                 .bg(with_alpha(
                                     theme.colors.window_bg,
                                     if theme.is_dark { 0.28 } else { 0.75 },

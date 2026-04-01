@@ -2321,7 +2321,7 @@ impl TextInput {
             .child(
                 div()
                     .text_xs()
-                    .font_family("monospace")
+                    .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
                     .text_color(self.style.placeholder)
                     .child(shortcut),
             );

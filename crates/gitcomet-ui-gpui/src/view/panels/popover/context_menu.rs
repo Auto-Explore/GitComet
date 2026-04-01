@@ -803,7 +803,7 @@ impl PopoverHost {
             }
         }
         if close_after_action {
-            self.close_popover(cx);
+            self.close_popover_and_restore_focus(window, cx);
         } else {
             cx.notify();
         }
@@ -962,7 +962,7 @@ impl PopoverHost {
 
                         match key {
                             "escape" => {
-                                this.close_popover(cx);
+                                this.close_popover_and_restore_focus(window, cx);
                             }
                             "up" => {
                                 let next = model_for_keys

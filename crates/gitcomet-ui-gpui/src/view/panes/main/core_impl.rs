@@ -2522,20 +2522,32 @@ impl MainPaneView {
         });
     }
 
-    pub(in crate::view) fn scroll_status_list_to_ix(
+    pub(in crate::view) fn active_change_tracking_view(
+        &self,
+        cx: &mut gpui::Context<Self>,
+    ) -> ChangeTrackingView {
+        self.root_view
+            .update(cx, |root, _cx| root.change_tracking_view)
+            .unwrap_or(ChangeTrackingView::Combined)
+    }
+
+    pub(in crate::view) fn scroll_status_section_to_ix(
         &mut self,
-        area: DiffArea,
+        section: StatusSection,
         ix: usize,
         cx: &mut gpui::Context<Self>,
     ) {
         let _ = self.root_view.update(cx, |root, cx| {
             root.details_pane
                 .update(cx, |pane: &mut DetailsPaneView, cx| {
-                    match area {
-                        DiffArea::Unstaged => pane
+                    match section {
+                        StatusSection::CombinedUnstaged | StatusSection::Unstaged => pane
                             .unstaged_scroll
                             .scroll_to_item_strict(ix, gpui::ScrollStrategy::Center),
-                        DiffArea::Staged => pane
+                        StatusSection::Untracked => pane
+                            .untracked_scroll
+                            .scroll_to_item_strict(ix, gpui::ScrollStrategy::Center),
+                        StatusSection::Staged => pane
                             .staged_scroll
                             .scroll_to_item_strict(ix, gpui::ScrollStrategy::Center),
                     }

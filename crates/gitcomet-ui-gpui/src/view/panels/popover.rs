@@ -590,6 +590,20 @@ impl PopoverHost {
         cx.notify();
     }
 
+    pub(in super::super) fn close_popover_and_restore_focus(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let restore_diff_panel_focus =
+            matches!(self.popover, Some(PopoverKind::ChangeTrackingSettings));
+        self.close_popover(cx);
+        if restore_diff_panel_focus {
+            let focus = self.main_pane.read(cx).diff_panel_focus_handle.clone();
+            window.focus(&focus);
+        }
+    }
+
     #[cfg(test)]
     pub(in super::super) fn is_open(&self) -> bool {
         self.popover.is_some()
@@ -1211,7 +1225,9 @@ impl Render for PopoverHost {
             return div().into_any_element();
         };
 
-        let close = cx.listener(|this, _e: &MouseDownEvent, _w, cx| this.close_popover(cx));
+        let close = cx.listener(|this, _e: &MouseDownEvent, window, cx| {
+            this.close_popover_and_restore_focus(window, cx);
+        });
         let scrim = div()
             .id("popover_scrim")
             .debug_selector(|| "repo_popover_close".to_string())

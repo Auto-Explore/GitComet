@@ -71,7 +71,7 @@ pub(super) fn panel(
                 .px_2()
                 .pb_1()
                 .text_xs()
-                .font_family("monospace")
+                .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
                 .text_color(theme.colors.text_muted)
                 .child(command),
         )

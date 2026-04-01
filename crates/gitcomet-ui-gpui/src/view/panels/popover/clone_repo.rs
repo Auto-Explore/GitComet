@@ -3,7 +3,7 @@ use super::*;
 fn hotkey_hint(theme: AppTheme, debug_selector: &'static str, label: &'static str) -> gpui::Div {
     div()
         .debug_selector(move || debug_selector.to_string())
-        .font_family("monospace")
+        .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
         .text_xs()
         .text_color(theme.colors.text_muted)
         .child(label)

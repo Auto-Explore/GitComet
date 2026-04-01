@@ -2712,28 +2712,29 @@ impl MainPaneView {
                         .is_focused(window)
                     && let Some(repo_id) = this.active_repo_id()
                     && let Some(repo) = this.active_repo()
-                    && let Some(DiffTarget::WorkingTree { path, area }) =
-                        repo.diff_state.diff_target.clone()
+                    && let Some(diff_target) = repo.diff_state.diff_target.clone()
+                    && let DiffTarget::WorkingTree { path, area } = &diff_target
                 {
-                    let next_path_in_area = |entries: &[gitcomet_core::domain::FileStatus]| {
-                        if entries.len() <= 1 {
-                            return None;
-                        }
-
-                        let (prev_ix, next_ix) =
-                            Self::status_prev_next_indices(entries, path.as_path());
-                        next_ix
-                            .or(prev_ix)
-                            .and_then(|ix| entries.get(ix).map(|e| e.path.clone()))
+                    let path = path.clone();
+                    let area = *area;
+                    let change_tracking_view = this.active_change_tracking_view(cx);
+                    let next_path_in_section = match &repo.status {
+                        Loadable::Ready(status) => status_nav::status_navigation_context(
+                            status,
+                            &diff_target,
+                            change_tracking_view,
+                        )
+                        .and_then(|navigation| navigation.next_or_prev_path()),
+                        _ => None,
                     };
 
                     match (&repo.status, area) {
-                        (Loadable::Ready(status), DiffArea::Unstaged) => {
+                        (Loadable::Ready(_status), DiffArea::Unstaged) => {
                             this.store.dispatch(Msg::StagePath {
                                 repo_id,
                                 path: path.clone(),
                             });
-                            if let Some(next_path) = next_path_in_area(&status.unstaged) {
+                            if let Some(next_path) = next_path_in_section {
                                 this.store.dispatch(Msg::SelectDiff {
                                     repo_id,
                                     target: DiffTarget::WorkingTree {
@@ -2745,12 +2746,12 @@ impl MainPaneView {
                                 this.clear_diff_selection_or_exit(repo_id, cx);
                             }
                         }
-                        (Loadable::Ready(status), DiffArea::Staged) => {
+                        (Loadable::Ready(_status), DiffArea::Staged) => {
                             this.store.dispatch(Msg::UnstagePath {
                                 repo_id,
                                 path: path.clone(),
                             });
-                            if let Some(next_path) = next_path_in_area(&status.staged) {
+                            if let Some(next_path) = next_path_in_section {
                                 this.store.dispatch(Msg::SelectDiff {
                                     repo_id,
                                     target: DiffTarget::WorkingTree {

@@ -1,7 +1,7 @@
 use crate::bundled_fonts;
 use gitcomet_state::session;
 use gpui::{BorrowAppContext, FontFeatures, Window};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, OnceLock};
 
 pub(crate) const UI_SYSTEM_FONT_FAMILY: &str = ".SystemUIFont";
@@ -177,11 +177,17 @@ pub(crate) fn editor_font_options(window: &Window) -> Arc<[String]> {
 }
 
 pub(crate) fn applied_ui_font_family(selection: &str) -> String {
-    resolve_applied_font_family(selection, &system_font_catalog().resolved_system_ui_family)
+    resolve_applied_font_family(
+        selection,
+        &system_font_catalog(None).resolved_system_ui_family,
+    )
 }
 
 pub(crate) fn applied_editor_font_family(selection: &str) -> String {
-    resolve_applied_font_family(selection, &system_font_catalog().resolved_system_ui_family)
+    resolve_applied_font_family(
+        selection,
+        &system_font_catalog(None).resolved_system_ui_family,
+    )
 }
 
 pub(crate) fn normalize_ui_font_family(candidate: Option<&str>, options: &[String]) -> String {
@@ -192,7 +198,7 @@ pub(crate) fn normalize_editor_font_family(candidate: Option<&str>, options: &[S
     normalize_editor_font_family_with_monospace_options(
         candidate,
         options,
-        system_font_catalog().monospace_families.as_ref(),
+        system_font_catalog(None).monospace_families.as_ref(),
     )
 }
 
@@ -263,6 +269,18 @@ pub(crate) fn set_current<C>(
 where
     C: BorrowAppContext,
 {
+    let (ui_font_family, editor_font_family) = if let Some(catalog) = FONT_OPTION_CATALOG.get() {
+        (
+            normalize_ui_font_family(Some(ui_font_family.as_str()), &catalog.ui_options),
+            normalize_editor_font_family_with_monospace_options(
+                Some(editor_font_family.as_str()),
+                &catalog.editor_options,
+                system_font_catalog(None).monospace_families.as_ref(),
+            ),
+        )
+    } else {
+        (ui_font_family, editor_font_family)
+    };
     let next = AppFontPreferences {
         ui_font_family,
         editor_font_family,
@@ -273,15 +291,57 @@ where
     next
 }
 
-fn build_font_options(_window: &Window, specials: &[&str]) -> Vec<String> {
-    build_font_options_from_names(system_font_catalog().all_families.as_ref(), specials)
+fn build_font_options(window: &Window, specials: &[&str]) -> Vec<String> {
+    build_font_options_from_names(
+        system_font_catalog(Some(window)).all_families.as_ref(),
+        specials,
+    )
 }
 
-fn system_font_catalog() -> &'static SystemFontCatalog {
-    SYSTEM_FONT_CATALOG.get_or_init(collect_system_font_catalog)
+fn system_font_catalog(window: Option<&Window>) -> &'static SystemFontCatalog {
+    if let Some(catalog) = SYSTEM_FONT_CATALOG.get() {
+        return catalog;
+    }
+
+    if let Some(window) = window {
+        return SYSTEM_FONT_CATALOG.get_or_init(|| collect_system_font_catalog(window));
+    }
+
+    SYSTEM_FONT_CATALOG.get_or_init(collect_fontdb_system_font_catalog)
 }
 
-fn collect_system_font_catalog() -> SystemFontCatalog {
+fn collect_system_font_catalog(window: &Window) -> SystemFontCatalog {
+    let (_, fontdb_monospace_families) = collect_fontdb_families();
+    let all_families = normalize_font_names(window.text_system().all_font_names());
+    let available_family_keys = all_families
+        .iter()
+        .map(|name| name.to_ascii_lowercase())
+        .collect::<BTreeSet<_>>();
+    let monospace_families = fontdb_monospace_families
+        .into_iter()
+        .filter(|name| available_family_keys.contains(&name.to_ascii_lowercase()))
+        .collect::<Vec<_>>();
+    let resolved_system_ui_family = resolved_system_ui_font_family(&all_families);
+
+    SystemFontCatalog {
+        all_families: all_families.into(),
+        monospace_families: monospace_families.into(),
+        resolved_system_ui_family,
+    }
+}
+
+fn collect_fontdb_system_font_catalog() -> SystemFontCatalog {
+    let (all_families, monospace_families) = collect_fontdb_families();
+    let resolved_system_ui_family = resolved_system_ui_font_family(&all_families);
+
+    SystemFontCatalog {
+        all_families: all_families.into(),
+        monospace_families: monospace_families.into(),
+        resolved_system_ui_family,
+    }
+}
+
+fn collect_fontdb_families() -> (Vec<String>, Vec<String>) {
     let mut db = fontdb::Database::new();
     bundled_fonts::load_into_fontdb(&mut db);
     db.load_system_fonts();
@@ -294,13 +354,7 @@ fn collect_system_font_catalog() -> SystemFontCatalog {
             .filter(|face| face.monospaced)
             .flat_map(|face| face.families.iter().map(|(name, _)| name.clone())),
     );
-    let resolved_system_ui_family = resolved_system_ui_font_family(&all_families);
-
-    SystemFontCatalog {
-        all_families: all_families.into(),
-        monospace_families: monospace_families.into(),
-        resolved_system_ui_family,
-    }
+    (all_families, monospace_families)
 }
 
 fn normalize_font_names(names: impl IntoIterator<Item = String>) -> Vec<String> {

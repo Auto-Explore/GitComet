@@ -85,7 +85,7 @@ impl MainPaneView {
 
     pub(super) fn diff_nav_hotkey_hint(theme: AppTheme, label: &'static str) -> gpui::Div {
         div()
-            .font_family("monospace")
+            .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
             .text_xs()
             .text_color(theme.colors.text_muted)
             .child(label)
@@ -100,20 +100,18 @@ impl MainPaneView {
         let buttons = (|| {
             let repo_id = repo_id?;
             let repo = self.active_repo()?;
-            let DiffTarget::WorkingTree { path, area } = repo.diff_state.diff_target.as_ref()?
-            else {
-                return None;
-            };
-            let area = *area;
+            let change_tracking_view = self.active_change_tracking_view(cx);
 
             let (prev, next) = match &repo.status {
-                Loadable::Ready(status) => {
-                    let entries = match area {
-                        DiffArea::Unstaged => status.unstaged.as_slice(),
-                        DiffArea::Staged => status.staged.as_slice(),
-                    };
-                    Self::status_prev_next_indices(entries, path.as_path())
-                }
+                Loadable::Ready(status) => repo
+                    .diff_state
+                    .diff_target
+                    .as_ref()
+                    .and_then(|target| {
+                        status_nav::status_navigation_context(status, target, change_tracking_view)
+                    })
+                    .map(|navigation| (navigation.prev_ix(), navigation.next_ix()))
+                    .unwrap_or((None, None)),
                 _ => (None, None),
             };
 

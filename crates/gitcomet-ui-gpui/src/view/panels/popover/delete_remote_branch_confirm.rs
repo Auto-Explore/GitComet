@@ -26,7 +26,7 @@ pub(super) fn panel(
         .child(
             div().px_2().py_1().text_sm().child(
                 div()
-                    .font_family("monospace")
+                    .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
                     .text_color(theme.colors.text_muted)
                     .child(full.clone()),
             ),
@@ -44,7 +44,7 @@ pub(super) fn panel(
                 .px_2()
                 .pb_1()
                 .text_xs()
-                .font_family("monospace")
+                .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
                 .text_color(theme.colors.text_muted)
                 .child(format!("git push {remote} --delete {branch}")),
         )

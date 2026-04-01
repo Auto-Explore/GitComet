@@ -459,7 +459,7 @@ impl DetailsPaneView {
                 return false;
             };
 
-            if selection.unstaged.is_empty() && selection.staged.is_empty() {
+            if selection.is_empty() {
                 last_status.remove(repo_id);
                 return false;
             }
@@ -477,7 +477,7 @@ impl DetailsPaneView {
                 reconcile_status_multi_selection(selection, status);
             }
 
-            if selection.unstaged.is_empty() && selection.staged.is_empty() {
+            if selection.is_empty() {
                 last_status.remove(repo_id);
                 return false;
             }

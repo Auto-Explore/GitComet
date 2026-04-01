@@ -1705,7 +1705,7 @@ impl Render for GitCometView {
             let command_block = error_command.as_ref().map(|command| {
                 div()
                     .id("repo_error_banner_command")
-                    .font_family("monospace")
+                    .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
                     .bg(with_alpha(
                         theme.colors.window_bg,
                         if theme.is_dark { 0.28 } else { 0.75 },

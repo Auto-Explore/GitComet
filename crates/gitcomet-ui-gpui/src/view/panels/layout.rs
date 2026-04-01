@@ -90,7 +90,121 @@ fn visible_bounds_probe() -> Div {
     div().absolute().top_0().left_0().size_full()
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct StatusSectionActionSelection {
+    paths: Vec<std::path::PathBuf>,
+    from_explicit_selection: bool,
+}
+
+impl StatusSectionActionSelection {
+    fn count(&self) -> usize {
+        self.paths.len()
+    }
+
+    fn popover_path(&self) -> Option<std::path::PathBuf> {
+        (!self.from_explicit_selection && self.paths.len() == 1).then(|| self.paths[0].clone())
+    }
+}
+
+fn explicit_status_section_action_paths(
+    selection: &StatusMultiSelection,
+    section: StatusSection,
+) -> Vec<std::path::PathBuf> {
+    match section {
+        StatusSection::CombinedUnstaged => selection
+            .selected_paths_for_area(DiffArea::Unstaged)
+            .to_vec(),
+        StatusSection::Untracked => selection.untracked.clone(),
+        StatusSection::Unstaged => selection.unstaged.clone(),
+        StatusSection::Staged => selection.staged.clone(),
+    }
+}
+
+fn active_status_section_action_path(
+    status: &RepoStatus,
+    diff_target: Option<&DiffTarget>,
+    section: StatusSection,
+) -> Option<std::path::PathBuf> {
+    let DiffTarget::WorkingTree { path, area } = diff_target? else {
+        return None;
+    };
+    if *area != section.diff_area() {
+        return None;
+    }
+
+    let matches_section = match section {
+        StatusSection::CombinedUnstaged => status.unstaged.iter().any(|entry| entry.path == *path),
+        StatusSection::Untracked => status
+            .unstaged
+            .iter()
+            .any(|entry| entry.path == *path && entry.kind == FileStatusKind::Untracked),
+        StatusSection::Unstaged => status
+            .unstaged
+            .iter()
+            .any(|entry| entry.path == *path && entry.kind != FileStatusKind::Untracked),
+        StatusSection::Staged => status.staged.iter().any(|entry| entry.path == *path),
+    };
+
+    matches_section.then(|| path.clone())
+}
+
+fn status_section_action_selection(
+    status: &RepoStatus,
+    diff_target: Option<&DiffTarget>,
+    selection: Option<&StatusMultiSelection>,
+    section: StatusSection,
+) -> StatusSectionActionSelection {
+    if let Some(selection) = selection {
+        let paths = explicit_status_section_action_paths(selection, section);
+        if !paths.is_empty() {
+            return StatusSectionActionSelection {
+                paths,
+                from_explicit_selection: true,
+            };
+        }
+    }
+
+    active_status_section_action_path(status, diff_target, section)
+        .map(|path| StatusSectionActionSelection {
+            paths: vec![path],
+            from_explicit_selection: false,
+        })
+        .unwrap_or_default()
+}
+
 impl DetailsPaneView {
+    fn status_section_action_selection(
+        &self,
+        repo_id: RepoId,
+        section: StatusSection,
+    ) -> StatusSectionActionSelection {
+        let Some(repo) = self.active_repo().filter(|repo| repo.id == repo_id) else {
+            return StatusSectionActionSelection::default();
+        };
+        let Loadable::Ready(status) = &repo.status else {
+            return StatusSectionActionSelection::default();
+        };
+
+        status_section_action_selection(
+            status,
+            repo.diff_state.diff_target.as_ref(),
+            self.status_multi_selection.get(&repo_id),
+            section,
+        )
+    }
+
+    fn take_status_section_action_selection(
+        &mut self,
+        repo_id: RepoId,
+        section: StatusSection,
+    ) -> StatusSectionActionSelection {
+        let selection = self.status_section_action_selection(repo_id, section);
+        if selection.from_explicit_selection {
+            self.status_multi_selection.remove(&repo_id);
+        }
+        selection
+    }
+
     fn measured_status_sections_total_height(&self, resize_handle_h: Pixels) -> Option<Pixels> {
         self.current_status_sections_bounds()
             .map(|bounds| (bounds.size.height - resize_handle_h).max(px(0.0)))
@@ -777,31 +891,27 @@ impl DetailsPaneView {
 
         let repo_id = self.active_repo_id();
         let selected_combined_unstaged = repo_id
-            .and_then(|rid| {
-                self.status_multi_selection
-                    .get(&rid)
-                    .map(|s| s.selected_count_for_area(DiffArea::Unstaged))
+            .map(|rid| {
+                self.status_section_action_selection(rid, StatusSection::CombinedUnstaged)
+                    .count()
             })
             .unwrap_or(0);
         let selected_untracked = repo_id
-            .and_then(|rid| {
-                self.status_multi_selection
-                    .get(&rid)
-                    .map(|s| s.untracked.len())
+            .map(|rid| {
+                self.status_section_action_selection(rid, StatusSection::Untracked)
+                    .count()
             })
             .unwrap_or(0);
         let selected_split_unstaged = repo_id
-            .and_then(|rid| {
-                self.status_multi_selection
-                    .get(&rid)
-                    .map(|s| s.unstaged.len())
+            .map(|rid| {
+                self.status_section_action_selection(rid, StatusSection::Unstaged)
+                    .count()
             })
             .unwrap_or(0);
         let selected_staged = repo_id
-            .and_then(|rid| {
-                self.status_multi_selection
-                    .get(&rid)
-                    .map(|s| s.staged.len())
+            .map(|rid| {
+                self.status_section_action_selection(rid, StatusSection::Staged)
+                    .count()
             })
             .unwrap_or(0);
 
@@ -849,10 +959,8 @@ impl DetailsPaneView {
                 return;
             };
             let paths = this
-                .status_multi_selection
-                .remove(&repo_id)
-                .map(|s| s.take_selected_paths_for_area(DiffArea::Unstaged))
-                .unwrap_or_default();
+                .take_status_section_action_selection(repo_id, StatusSection::CombinedUnstaged)
+                .paths;
             if paths.is_empty() {
                 return;
             }
@@ -874,19 +982,16 @@ impl DetailsPaneView {
             let Some(repo_id) = this.active_repo_id() else {
                 return;
             };
-            let count = this
-                .status_multi_selection
-                .get(&repo_id)
-                .map(|s| s.selected_count_for_area(DiffArea::Unstaged))
-                .unwrap_or(0);
-            if count == 0 {
+            let selection =
+                this.status_section_action_selection(repo_id, StatusSection::CombinedUnstaged);
+            if selection.paths.is_empty() {
                 return;
             }
             this.open_popover_at(
                 PopoverKind::DiscardChangesConfirm {
                     repo_id,
                     area: DiffArea::Unstaged,
-                    path: None,
+                    path: selection.popover_path(),
                 },
                 e.position(),
                 window,
@@ -927,10 +1032,8 @@ impl DetailsPaneView {
                 return;
             };
             let paths = this
-                .status_multi_selection
-                .remove(&repo_id)
-                .map(|s| s.untracked)
-                .unwrap_or_default();
+                .take_status_section_action_selection(repo_id, StatusSection::Untracked)
+                .paths;
             if paths.is_empty() {
                 return;
             }
@@ -952,19 +1055,15 @@ impl DetailsPaneView {
             let Some(repo_id) = this.active_repo_id() else {
                 return;
             };
-            let count = this
-                .status_multi_selection
-                .get(&repo_id)
-                .map(|s| s.untracked.len())
-                .unwrap_or(0);
-            if count == 0 {
+            let selection = this.status_section_action_selection(repo_id, StatusSection::Untracked);
+            if selection.paths.is_empty() {
                 return;
             }
             this.open_popover_at(
                 PopoverKind::DiscardChangesConfirm {
                     repo_id,
                     area: DiffArea::Unstaged,
-                    path: None,
+                    path: selection.popover_path(),
                 },
                 e.position(),
                 window,
@@ -1006,10 +1105,8 @@ impl DetailsPaneView {
                 return;
             };
             let paths = this
-                .status_multi_selection
-                .remove(&repo_id)
-                .map(|s| s.unstaged)
-                .unwrap_or_default();
+                .take_status_section_action_selection(repo_id, StatusSection::Unstaged)
+                .paths;
             if paths.is_empty() {
                 return;
             }
@@ -1031,19 +1128,15 @@ impl DetailsPaneView {
             let Some(repo_id) = this.active_repo_id() else {
                 return;
             };
-            let count = this
-                .status_multi_selection
-                .get(&repo_id)
-                .map(|s| s.unstaged.len())
-                .unwrap_or(0);
-            if count == 0 {
+            let selection = this.status_section_action_selection(repo_id, StatusSection::Unstaged);
+            if selection.paths.is_empty() {
                 return;
             }
             this.open_popover_at(
                 PopoverKind::DiscardChangesConfirm {
                     repo_id,
                     area: DiffArea::Unstaged,
-                    path: None,
+                    path: selection.popover_path(),
                 },
                 e.position(),
                 window,
@@ -1089,10 +1182,8 @@ impl DetailsPaneView {
                         return;
                     };
                     let paths = this
-                        .status_multi_selection
-                        .remove(&repo_id)
-                        .map(|s| s.staged)
-                        .unwrap_or_default();
+                        .take_status_section_action_selection(repo_id, StatusSection::Staged)
+                        .paths;
                     if paths.is_empty() {
                         return;
                     }
@@ -1870,6 +1961,14 @@ mod tests {
         )
     }
 
+    fn file_status(path: &str, kind: FileStatusKind) -> FileStatus {
+        FileStatus {
+            path: PathBuf::from(path),
+            kind,
+            conflict: None,
+        }
+    }
+
     #[test]
     fn commit_allowed_when_staged_changes_exist() {
         assert!(commit_allowed(false, 1));
@@ -1944,5 +2043,113 @@ mod tests {
             DetailsPaneView::sanitized_restored_untracked_height(Some(1)),
             Some(px(STATUS_SECTION_MIN_HEIGHT_PX))
         );
+    }
+
+    #[test]
+    fn status_section_action_selection_falls_back_to_active_combined_unstaged_row() {
+        let status = RepoStatus {
+            unstaged: vec![file_status("src/lib.rs", FileStatusKind::Modified)],
+            staged: Vec::new(),
+        };
+        let diff_target = DiffTarget::WorkingTree {
+            path: PathBuf::from("src/lib.rs"),
+            area: DiffArea::Unstaged,
+        };
+
+        let selection = status_section_action_selection(
+            &status,
+            Some(&diff_target),
+            None,
+            StatusSection::CombinedUnstaged,
+        );
+
+        assert_eq!(
+            selection,
+            StatusSectionActionSelection {
+                paths: vec![PathBuf::from("src/lib.rs")],
+                from_explicit_selection: false,
+            }
+        );
+        assert_eq!(selection.popover_path(), Some(PathBuf::from("src/lib.rs")));
+    }
+
+    #[test]
+    fn status_section_action_selection_limits_active_row_to_matching_split_section() {
+        let status = RepoStatus {
+            unstaged: vec![
+                file_status("new.txt", FileStatusKind::Untracked),
+                file_status("src/lib.rs", FileStatusKind::Modified),
+            ],
+            staged: Vec::new(),
+        };
+        let diff_target = DiffTarget::WorkingTree {
+            path: PathBuf::from("new.txt"),
+            area: DiffArea::Unstaged,
+        };
+
+        let untracked = status_section_action_selection(
+            &status,
+            Some(&diff_target),
+            None,
+            StatusSection::Untracked,
+        );
+        let unstaged = status_section_action_selection(
+            &status,
+            Some(&diff_target),
+            None,
+            StatusSection::Unstaged,
+        );
+
+        assert_eq!(
+            untracked,
+            StatusSectionActionSelection {
+                paths: vec![PathBuf::from("new.txt")],
+                from_explicit_selection: false,
+            }
+        );
+        assert!(unstaged.paths.is_empty());
+    }
+
+    #[test]
+    fn status_section_action_selection_prefers_explicit_selection_over_active_row() {
+        let selected_a = PathBuf::from("src/lib.rs");
+        let selected_b = PathBuf::from("src/main.rs");
+        let status = RepoStatus {
+            unstaged: vec![
+                file_status(
+                    selected_a.to_string_lossy().as_ref(),
+                    FileStatusKind::Modified,
+                ),
+                file_status(
+                    selected_b.to_string_lossy().as_ref(),
+                    FileStatusKind::Modified,
+                ),
+            ],
+            staged: Vec::new(),
+        };
+        let diff_target = DiffTarget::WorkingTree {
+            path: PathBuf::from("src/other.rs"),
+            area: DiffArea::Unstaged,
+        };
+        let selection = StatusMultiSelection {
+            unstaged: vec![selected_a.clone(), selected_b.clone()],
+            ..Default::default()
+        };
+
+        let action_selection = status_section_action_selection(
+            &status,
+            Some(&diff_target),
+            Some(&selection),
+            StatusSection::CombinedUnstaged,
+        );
+
+        assert_eq!(
+            action_selection,
+            StatusSectionActionSelection {
+                paths: vec![selected_a, selected_b],
+                from_explicit_selection: true,
+            }
+        );
+        assert_eq!(action_selection.popover_path(), None);
     }
 }
