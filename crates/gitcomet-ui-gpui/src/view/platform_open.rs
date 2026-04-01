@@ -92,7 +92,12 @@ fn open_with_default(arg: &str) -> Result<(), io::Error> {
 
     #[cfg(target_os = "windows")]
     {
-        let _ = std::process::Command::new("explorer.exe")
+        // `explorer.exe <url>` can fall back to opening the current folder for
+        // long query-heavy URLs on Windows. Route URLs through the shell's
+        // protocol handler instead so GitHub issue links reliably open in the
+        // default browser.
+        let _ = std::process::Command::new("rundll32.exe")
+            .arg("url.dll,FileProtocolHandler")
             .arg(arg)
             .spawn()?;
         Ok(())

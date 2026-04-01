@@ -80,6 +80,11 @@ set "LIB=%MSVC_LIB%;%SDK_UM_LIB%;%SDK_UCRT_LIB%;%LIB%"
 set "LIBPATH=%MSVC_LIB%;%SDK_UM_LIB%;%SDK_UCRT_LIB%;%LIBPATH%"
 set "INCLUDE=%MSVC_INCLUDE%;%SDK_SHARED_INC%;%SDK_UM_INC%;%SDK_UCRT_INC%;%SDK_WINRT_INC%;%SDK_CPPWINRT_INC%;%INCLUDE%"
 
-"%LINK_EXE%" %*
+rem GitComet's GPUI diff/render paths are substantially deeper in debug builds.
+rem The Windows default 1 MiB main-thread stack is not enough there, which can
+rem abort the process with a stack overflow before Rust's panic hook runs.
+if "%GITCOMET_LINK_STACK_RESERVE%"=="" set "GITCOMET_LINK_STACK_RESERVE=8388608"
+
+"%LINK_EXE%" /STACK:%GITCOMET_LINK_STACK_RESERVE% %*
 set "EXITCODE=%ERRORLEVEL%"
 exit /b %EXITCODE%
