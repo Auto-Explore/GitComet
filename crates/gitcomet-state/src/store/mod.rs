@@ -1,5 +1,6 @@
 use crate::model::{AppState, RepoId};
 use crate::msg::{Msg, StoreEvent};
+use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::services::{GitBackend, GitRepository};
 use rustc_hash::FxHashMap as HashMap;
 use std::path::PathBuf;
@@ -30,39 +31,7 @@ use send_diagnostics::{SendFailureKind, send_or_log, try_send_state_changed_or_l
 pub use reducer_diagnostics::StoreReducerDiagnostics;
 
 fn canonicalize_path(path: PathBuf) -> PathBuf {
-    strip_windows_verbatim_prefix(std::fs::canonicalize(&path).unwrap_or(path))
-}
-
-#[cfg(windows)]
-fn strip_windows_verbatim_prefix(path: PathBuf) -> PathBuf {
-    use std::path::{Component, Prefix};
-
-    let mut components = path.components();
-    let Some(Component::Prefix(prefix)) = components.next() else {
-        return path;
-    };
-
-    let mut out = match prefix.kind() {
-        Prefix::VerbatimDisk(letter) => PathBuf::from(format!("{}:", char::from(letter))),
-        Prefix::VerbatimUNC(server, share) => {
-            let mut out = PathBuf::from(r"\\");
-            out.push(server);
-            out.push(share);
-            out
-        }
-        Prefix::Verbatim(raw) => PathBuf::from(raw),
-        _ => return path,
-    };
-
-    for component in components {
-        out.push(component.as_os_str());
-    }
-    out
-}
-
-#[cfg(not(windows))]
-fn strip_windows_verbatim_prefix(path: PathBuf) -> PathBuf {
-    path
+    canonicalize_or_original(path)
 }
 
 fn make_mut_state_with_diagnostics(state: &mut Arc<AppState>) -> &mut AppState {

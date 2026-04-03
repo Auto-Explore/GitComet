@@ -2332,10 +2332,7 @@ mod tests {
             Some(std::path::PathBuf::from("/tmp/repo-feature-listed"))
         );
         assert_eq!(
-            branch_workspace_badge_path(
-                None,
-                Some(std::path::Path::new("/tmp/repo-feature-open")),
-            ),
+            branch_workspace_badge_path(None, Some(std::path::Path::new("/tmp/repo-feature-open")),),
             Some(std::path::PathBuf::from("/tmp/repo-feature-open"))
         );
     }

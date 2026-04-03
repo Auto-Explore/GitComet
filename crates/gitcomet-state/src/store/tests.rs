@@ -6,6 +6,7 @@ use gitcomet_core::domain::{
     ReflogEntry, Remote, RemoteBranch, RepoSpec, RepoStatus, StashEntry,
 };
 use gitcomet_core::error::{Error, ErrorKind};
+use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::services::{CommandOutput, PullMode, Result};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -239,7 +240,7 @@ fn app_store_open_repo_effect_propagates_open_error_into_state() {
             .as_nanos()
     ));
     std::fs::create_dir_all(&base).expect("temporary repo path should be creatable");
-    let expected_workdir = canonicalize_path(base.clone());
+    let expected_workdir = canonicalize_or_original(base.clone());
 
     store.dispatch(Msg::OpenRepo(base));
 

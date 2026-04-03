@@ -1,9 +1,10 @@
+use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::services::GitBackend;
 use gitcomet_git_gix::GixBackend;
 #[path = "support/test_git_env.rs"]
 mod test_git_env;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 
 fn git_command() -> Command {
@@ -22,12 +23,8 @@ fn run_git(repo: &Path, args: &[&str]) {
     assert!(status.success(), "git {:?} failed", args);
 }
 
-fn canonicalize_or_original(path: &Path) -> PathBuf {
-    fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
-}
-
 fn same_path(lhs: &Path, rhs: &Path) -> bool {
-    canonicalize_or_original(lhs) == canonicalize_or_original(rhs)
+    canonicalize_or_original(lhs.to_path_buf()) == canonicalize_or_original(rhs.to_path_buf())
 }
 
 #[test]

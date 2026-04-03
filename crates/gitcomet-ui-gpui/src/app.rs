@@ -4,6 +4,7 @@ use crate::view::{
     FocusedMergetoolLabels, FocusedMergetoolViewConfig, GitCometView, GitCometViewConfig,
     GitCometViewMode, InitialRepositoryLaunchMode, StartupCrashReport,
 };
+use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::services::GitBackend;
 use gitcomet_state::session;
 use gitcomet_state::store::AppStore;
@@ -825,7 +826,7 @@ fn normalize_repository_open_path(path: PathBuf) -> PathBuf {
     } else {
         path
     };
-    std::fs::canonicalize(&path).unwrap_or(path)
+    canonicalize_or_original(path)
 }
 
 #[cfg(target_os = "macos")]

@@ -1,4 +1,5 @@
 use super::*;
+use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::process::background_command as no_window_command;
 use std::time::{Duration, Instant};
 
@@ -23,41 +24,7 @@ fn wait_until(cx: &mut gpui::VisualTestContext, description: &str, ready: impl F
 }
 
 fn normalize_existing_path(path: std::path::PathBuf) -> std::path::PathBuf {
-    strip_windows_verbatim_prefix(std::fs::canonicalize(&path).unwrap_or(path))
-}
-
-#[cfg(windows)]
-fn strip_windows_verbatim_prefix(path: std::path::PathBuf) -> std::path::PathBuf {
-    use std::path::{Component, Prefix};
-
-    let mut components = path.components();
-    let Some(Component::Prefix(prefix)) = components.next() else {
-        return path;
-    };
-
-    let mut out = match prefix.kind() {
-        Prefix::VerbatimDisk(letter) => {
-            std::path::PathBuf::from(format!("{}:", char::from(letter)))
-        }
-        Prefix::VerbatimUNC(server, share) => {
-            let mut out = std::path::PathBuf::from(r"\\");
-            out.push(server);
-            out.push(share);
-            out
-        }
-        Prefix::Verbatim(raw) => std::path::PathBuf::from(raw),
-        _ => return path,
-    };
-
-    for component in components {
-        out.push(component.as_os_str());
-    }
-    out
-}
-
-#[cfg(not(windows))]
-fn strip_windows_verbatim_prefix(path: std::path::PathBuf) -> std::path::PathBuf {
-    path
+    canonicalize_or_original(path)
 }
 
 #[gpui::test]

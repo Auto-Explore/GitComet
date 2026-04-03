@@ -1,4 +1,5 @@
 use super::*;
+use gitcomet_core::path_utils::canonicalize_or_original;
 
 pub(super) fn toast_fade_in_duration() -> Duration {
     Duration::from_millis(TOAST_FADE_IN_MS)
@@ -2357,41 +2358,7 @@ pub(super) fn focused_mergetool_target_path(
 }
 
 pub(super) fn canonicalize_path(path: std::path::PathBuf) -> std::path::PathBuf {
-    strip_windows_verbatim_prefix(std::fs::canonicalize(&path).unwrap_or(path))
-}
-
-#[cfg(windows)]
-pub(super) fn strip_windows_verbatim_prefix(path: std::path::PathBuf) -> std::path::PathBuf {
-    use std::path::{Component, Prefix};
-
-    let mut components = path.components();
-    let Some(Component::Prefix(prefix)) = components.next() else {
-        return path;
-    };
-
-    let mut out = match prefix.kind() {
-        Prefix::VerbatimDisk(letter) => {
-            std::path::PathBuf::from(format!("{}:", char::from(letter)))
-        }
-        Prefix::VerbatimUNC(server, share) => {
-            let mut out = std::path::PathBuf::from(r"\\");
-            out.push(server);
-            out.push(share);
-            out
-        }
-        Prefix::Verbatim(raw) => std::path::PathBuf::from(raw),
-        _ => return path,
-    };
-
-    for component in components {
-        out.push(component.as_os_str());
-    }
-    out
-}
-
-#[cfg(not(windows))]
-pub(super) fn strip_windows_verbatim_prefix(path: std::path::PathBuf) -> std::path::PathBuf {
-    path
+    canonicalize_or_original(path)
 }
 
 pub(super) fn focused_mergetool_bootstrap_action(

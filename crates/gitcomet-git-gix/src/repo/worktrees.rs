@@ -1,8 +1,9 @@
 use super::GixRepo;
 use crate::util::{path_buf_from_git_bytes, run_git_capture_bytes, run_git_with_output};
 use gitcomet_core::domain::{CommitId, Worktree};
+use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::services::{CommandOutput, Result};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 impl GixRepo {
     pub(super) fn list_worktrees_impl(&self) -> Result<Vec<Worktree>> {
@@ -104,27 +105,7 @@ fn parse_git_worktree_list_porcelain_z(output: &[u8]) -> Result<Vec<Worktree>> {
 }
 
 fn canonicalize_worktree_path(worktree: &mut Worktree) {
-    worktree.path = canonicalize_path(worktree.path.clone());
-}
-
-fn canonicalize_path(path: PathBuf) -> PathBuf {
-    strip_windows_verbatim_prefix(std::fs::canonicalize(&path).unwrap_or(path))
-}
-
-#[cfg(windows)]
-fn strip_windows_verbatim_prefix(path: PathBuf) -> PathBuf {
-    if let Ok(stripped) = path.strip_prefix(Path::new(r"\\?\UNC\")) {
-        return Path::new(r"\\").join(stripped);
-    }
-    if let Ok(stripped) = path.strip_prefix(Path::new(r"\\?\")) {
-        return stripped.to_path_buf();
-    }
-    path
-}
-
-#[cfg(not(windows))]
-fn strip_windows_verbatim_prefix(path: PathBuf) -> PathBuf {
-    path
+    worktree.path = canonicalize_or_original(worktree.path.clone());
 }
 
 #[cfg(test)]
@@ -218,4 +199,3 @@ mod tests {
         assert_eq!(parsed[0].path, std::fs::canonicalize(&nested).unwrap());
     }
 }
-

@@ -1,7 +1,8 @@
 use crate::repo::GixRepo;
 use gitcomet_core::error::{Error, ErrorKind};
+use gitcomet_core::path_utils::strip_windows_verbatim_prefix;
 use gitcomet_core::services::{GitBackend, GitRepository, Result};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 pub struct GixBackend;
@@ -28,20 +29,4 @@ impl GitBackend for GixBackend {
 
         Ok(Arc::new(GixRepo::new(workdir, repo.into_sync())))
     }
-}
-
-#[cfg(windows)]
-fn strip_windows_verbatim_prefix(path: PathBuf) -> PathBuf {
-    if let Ok(stripped) = path.strip_prefix(Path::new(r"\\?\UNC\")) {
-        return Path::new(r"\\").join(stripped);
-    }
-    if let Ok(stripped) = path.strip_prefix(Path::new(r"\\?\")) {
-        return stripped.to_path_buf();
-    }
-    path
-}
-
-#[cfg(not(windows))]
-fn strip_windows_verbatim_prefix(path: PathBuf) -> PathBuf {
-    path
 }
