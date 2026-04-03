@@ -962,25 +962,30 @@ impl PopoverHost {
 
                         match key {
                             "escape" => {
+                                cx.stop_propagation();
                                 this.close_popover_and_restore_focus(window, cx);
                             }
                             "up" => {
+                                cx.stop_propagation();
                                 let next = model_for_keys
                                     .next_selectable(this.context_menu_selected_ix, -1);
                                 this.context_menu_selected_ix = next;
                                 cx.notify();
                             }
                             "down" => {
+                                cx.stop_propagation();
                                 let next = model_for_keys
                                     .next_selectable(this.context_menu_selected_ix, 1);
                                 this.context_menu_selected_ix = next;
                                 cx.notify();
                             }
                             "home" => {
+                                cx.stop_propagation();
                                 this.context_menu_selected_ix = model_for_keys.first_selectable();
                                 cx.notify();
                             }
                             "end" => {
+                                cx.stop_propagation();
                                 this.context_menu_selected_ix = model_for_keys.last_selectable();
                                 cx.notify();
                             }
@@ -991,6 +996,7 @@ impl PopoverHost {
                                 ) else {
                                     return;
                                 };
+                                cx.stop_propagation();
                                 if let Some(action) =
                                     context_menu_entry_action_at(&model_for_keys, ix)
                                 {
@@ -1003,6 +1009,7 @@ impl PopoverHost {
                                     && let Some(action) =
                                         context_menu_entry_action_at(&model_for_keys, ix)
                                 {
+                                    cx.stop_propagation();
                                     this.context_menu_activate_action(action, window, cx);
                                 }
                             }

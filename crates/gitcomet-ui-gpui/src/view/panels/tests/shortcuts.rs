@@ -99,6 +99,7 @@ fn apply_state(
     cx.update(|window, app| {
         let state_for_host = Arc::clone(&state);
         view.update(app, |this, cx| {
+            this.disable_poller_for_tests();
             push_test_state(this, state, cx);
             this.popover_host.update(cx, |host, _cx| {
                 host.set_state_for_test(state_for_host);
@@ -128,28 +129,6 @@ fn set_change_tracking_view_for_test(
         let _ = window.draw(app);
     });
     cx.run_until_parked();
-}
-
-fn click_debug_selector(cx: &mut gpui::VisualTestContext, selector: &'static str) {
-    let center = cx
-        .debug_bounds(selector)
-        .unwrap_or_else(|| panic!("expected `{selector}` bounds"))
-        .center();
-    cx.simulate_mouse_move(center, None, Modifiers::default());
-    cx.simulate_event(MouseDownEvent {
-        position: center,
-        modifiers: Modifiers::default(),
-        button: MouseButton::Left,
-        click_count: 1,
-        first_mouse: false,
-    });
-    cx.simulate_event(MouseUpEvent {
-        position: center,
-        modifiers: Modifiers::default(),
-        button: MouseButton::Left,
-        click_count: 1,
-    });
-    draw_and_drain_test_window(cx);
 }
 
 fn diff_panel_is_focused(
@@ -204,7 +183,6 @@ fn open_change_tracking_settings_popover(
         });
         let _ = window.draw(app);
     });
-    cx.run_until_parked();
 }
 
 fn shortcut_fixture_repo(
@@ -1274,7 +1252,8 @@ fn switching_change_tracking_view_restores_diff_panel_focus_for_adjacent_navigat
         "expected opening the change-tracking settings popover to move focus away from the diff panel"
     );
 
-    click_debug_selector(cx, "context_menu_show_separate_untracked_block");
+    cx.simulate_keystrokes("s");
+    draw_and_drain_test_window(cx);
 
     assert_eq!(
         cx.update(|_window, app| view.read(app).change_tracking_view_for_test()),

@@ -111,6 +111,7 @@ fn canonicalize_worktree_path(worktree: &mut Worktree) {
 #[cfg(test)]
 mod tests {
     use super::parse_git_worktree_list_porcelain_z;
+    use gitcomet_core::path_utils::canonicalize_or_original;
     use std::path::PathBuf;
 
     #[test]
@@ -196,6 +197,6 @@ mod tests {
         let parsed = parse_git_worktree_list_porcelain_z(input.as_bytes()).unwrap();
 
         assert_eq!(parsed.len(), 1);
-        assert_eq!(parsed[0].path, std::fs::canonicalize(&nested).unwrap());
+        assert_eq!(parsed[0].path, canonicalize_or_original(nested.clone()));
     }
 }
