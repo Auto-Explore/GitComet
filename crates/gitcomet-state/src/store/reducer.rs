@@ -148,6 +148,16 @@ fn retry_msg_for_auth_operation(operation: AuthRetryOperation) -> Option<Msg> {
     }
 }
 
+fn clear_banner_error_for_auth_operation(state: &mut AppState, operation: &AuthRetryOperation) {
+    match operation {
+        AuthRetryOperation::RepoCommand { repo_id, .. }
+        | AuthRetryOperation::Commit { repo_id, .. } => {
+            util::clear_banner_error_for_repo(state, *repo_id);
+        }
+        AuthRetryOperation::Clone { .. } => {}
+    }
+}
+
 fn retry_msg_for_repo_command(repo_id: RepoId, command: RepoCommandKind) -> Option<Msg> {
     Some(match command {
         RepoCommandKind::FetchAll => Msg::FetchAll { repo_id },
@@ -401,6 +411,8 @@ fn submit_auth_prompt(
             };
         }
     };
+
+    clear_banner_error_for_auth_operation(state, &prompt.operation);
 
     match retry_msg_for_auth_operation(prompt.operation) {
         Some(msg) => attach_git_auth_to_effects(reduce(repos, id_alloc, state, msg), auth),

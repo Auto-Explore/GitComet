@@ -362,6 +362,53 @@ fn clone_finished_ssh_publickey_error_sets_passphrase_prompt() {
 }
 
 #[test]
+fn submit_auth_prompt_clears_stale_repo_banner_before_retry() {
+    let _lock = super::staged_auth_test_lock();
+    clear_staged_git_auth();
+
+    let repo_id = RepoId(1);
+    let (mut repos, mut state) = setup_open_repo(repo_id, "/tmp/repo");
+    let id_alloc = AtomicU64::new(1);
+    state.banner_error = Some(crate::model::BannerErrorState {
+        repo_id: Some(repo_id),
+        message: "git pull failed: Enter passphrase for key '/home/user/.ssh/id_ed25519'"
+            .to_string(),
+    });
+    state.auth_prompt = Some(AuthPromptState {
+        kind: AuthPromptKind::Passphrase,
+        reason: "auth required".to_string(),
+        operation: AuthRetryOperation::RepoCommand {
+            repo_id,
+            command: RepoCommandKind::Pull {
+                mode: PullMode::Default,
+            },
+        },
+    });
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SubmitAuthPrompt {
+            username: None,
+            secret: "passphrase".to_string(),
+        },
+    );
+
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::Pull {
+            repo_id: RepoId(1),
+            mode: PullMode::Default,
+            ..
+        }]
+    ));
+    assert!(state.banner_error.is_none());
+    assert!(state.auth_prompt.is_none());
+    clear_staged_git_auth();
+}
+
+#[test]
 fn submit_auth_prompt_replays_repo_command_and_stages_trimmed_credentials() {
     let _lock = super::staged_auth_test_lock();
     clear_staged_git_auth();
