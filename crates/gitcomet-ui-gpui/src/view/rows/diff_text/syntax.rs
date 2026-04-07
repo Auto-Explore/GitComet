@@ -26,6 +26,9 @@ const TS_INCREMENTAL_REPARSE_LATE_EDIT_MIN_PREFIX_BYTES: usize = 8 * 1024;
 const TS_INCREMENTAL_REPARSE_LATE_EDIT_MAX_CHANGED_BYTES: usize = 384 * 1024;
 const TS_INCREMENTAL_REPARSE_LATE_EDIT_MAX_CHANGED_PERCENT: usize = 80;
 const TS_LINE_TOKEN_CACHE_MAX_ENTRIES: usize = 256;
+// Extreme multi-megabyte documents are better served by the existing visible-line
+// heuristic fallback than by building a full prepared tree-sitter document.
+const TS_PREPARED_DOCUMENT_MAX_TEXT_BYTES: usize = 8 * 1024 * 1024;
 const TS_SHARED_DOCUMENT_SEED_MAX_ENTRIES: usize = 64;
 const TS_PENDING_PARSE_REQUEST_MAX_ENTRIES: usize = 8;
 #[cfg(any(test, feature = "syntax-web"))]
@@ -1692,6 +1695,60 @@ mod tests {
             "background parse should reuse the pending request instead of hashing again"
         );
         assert_eq!(background.line_count, 4_096);
+    }
+
+    #[test]
+    fn oversized_shared_text_prepare_falls_back_without_prepared_tree_sitter() {
+        let _lock = lock_global_counter_tests();
+        reset_prepared_syntax_cache();
+        reset_deferred_drop_counters();
+
+        let line = "let oversized_value: usize = 1;";
+        let repeat = (TS_PREPARED_DOCUMENT_MAX_TEXT_BYTES / (line.len() + 1)).saturating_add(1);
+        let source = std::iter::repeat_n(line, repeat)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            source.len() > TS_PREPARED_DOCUMENT_MAX_TEXT_BYTES,
+            "fixture should exceed the prepared full-document syntax byte gate"
+        );
+        let input = treesitter_document_input_from_text(&source);
+        let text: SharedString = source.clone().into();
+
+        let attempt = prepare_treesitter_document_with_budget_reuse_text(
+            DiffSyntaxLanguage::Rust,
+            DiffSyntaxMode::Auto,
+            text.clone(),
+            Arc::clone(&input.line_starts),
+            DiffSyntaxBudget {
+                foreground_parse: Duration::from_secs(1),
+            },
+            None,
+            None,
+        );
+        assert_eq!(
+            attempt,
+            PrepareTreesitterDocumentResult::Unsupported,
+            "oversized full-document syntax should fall back before parsing"
+        );
+        assert_eq!(
+            document_hash_count(),
+            0,
+            "oversized full-document syntax should skip whole-document hash work"
+        );
+
+        let background = prepare_treesitter_document_in_background_text_with_reuse(
+            DiffSyntaxLanguage::Rust,
+            DiffSyntaxMode::Auto,
+            text,
+            input.line_starts,
+            None,
+            None,
+        );
+        assert!(
+            background.is_none(),
+            "background prepared syntax should also skip oversized full-document inputs"
+        );
     }
 
     #[test]

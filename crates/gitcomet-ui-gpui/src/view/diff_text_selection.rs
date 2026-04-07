@@ -225,6 +225,7 @@ impl Element for DiffTextSelectionOverlay {
             bounds,
             layout_key,
             text_len: self.text.len(),
+            streamed_ascii_monospace_cell_width: None,
         };
 
         let visible_ix = self.visible_ix;

@@ -10,15 +10,21 @@ pub(crate) const STRUCTURAL_BUDGETS: &[StructuralBudgetSpec] = &[
     },
     StructuralBudgetSpec {
         bench: "status_select_diff_open/unstaged",
-        metric: "load_diff_effect_count",
+        metric: "load_selected_diff_effect_count",
         comparator: StructuralBudgetComparator::Exactly,
         threshold: 1.0,
     },
     StructuralBudgetSpec {
         bench: "status_select_diff_open/unstaged",
+        metric: "load_diff_effect_count",
+        comparator: StructuralBudgetComparator::Exactly,
+        threshold: 0.0,
+    },
+    StructuralBudgetSpec {
+        bench: "status_select_diff_open/unstaged",
         metric: "load_diff_file_effect_count",
         comparator: StructuralBudgetComparator::Exactly,
-        threshold: 1.0,
+        threshold: 0.0,
     },
     StructuralBudgetSpec {
         bench: "status_select_diff_open/unstaged",
@@ -34,15 +40,21 @@ pub(crate) const STRUCTURAL_BUDGETS: &[StructuralBudgetSpec] = &[
     },
     StructuralBudgetSpec {
         bench: "status_select_diff_open/staged",
-        metric: "load_diff_effect_count",
+        metric: "load_selected_diff_effect_count",
         comparator: StructuralBudgetComparator::Exactly,
         threshold: 1.0,
     },
     StructuralBudgetSpec {
         bench: "status_select_diff_open/staged",
+        metric: "load_diff_effect_count",
+        comparator: StructuralBudgetComparator::Exactly,
+        threshold: 0.0,
+    },
+    StructuralBudgetSpec {
+        bench: "status_select_diff_open/staged",
         metric: "load_diff_file_effect_count",
         comparator: StructuralBudgetComparator::Exactly,
-        threshold: 1.0,
+        threshold: 0.0,
     },
     StructuralBudgetSpec {
         bench: "status_select_diff_open/staged",

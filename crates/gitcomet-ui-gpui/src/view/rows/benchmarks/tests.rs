@@ -773,7 +773,9 @@ fn open_repo_fixture_reports_extreme_metadata_fanout_metrics() {
     assert_eq!(metrics.worktrees, 5_000);
     assert_eq!(metrics.submodules, 1_000);
     assert_eq!(metrics.graph_rows, 1_000);
-    assert!(metrics.sidebar_rows >= 17_000);
+    // Initial open keeps Worktrees and Submodules collapsed, so their section
+    // headers appear but their rows do not.
+    assert!(metrics.sidebar_rows >= 11_400);
 }
 
 #[test]
@@ -782,7 +784,7 @@ fn repo_switch_refocus_same_repo_stays_on_primary_refresh_path() {
     let (hash, metrics) = fixture.run();
     assert_ne!(hash, 0);
     assert_eq!(metrics.effect_count, 5);
-    assert_eq!(metrics.refresh_effect_count, 6);
+    assert_eq!(metrics.refresh_effect_count, 5);
     assert_eq!(metrics.selected_diff_reload_effect_count, 0);
     assert_eq!(metrics.persist_session_effect_count, 0);
 }
@@ -793,8 +795,8 @@ fn repo_switch_two_hot_repos_reloads_selected_diff_and_persists_session() {
     let (hash, metrics) = fixture.run();
     assert_ne!(hash, 0);
     assert_eq!(metrics.effect_count, 7);
-    assert_eq!(metrics.refresh_effect_count, 6);
-    assert_eq!(metrics.selected_diff_reload_effect_count, 2);
+    assert_eq!(metrics.refresh_effect_count, 5);
+    assert_eq!(metrics.selected_diff_reload_effect_count, 1);
     assert_eq!(metrics.persist_session_effect_count, 1);
     assert_eq!(metrics.repo_count, 2);
     assert_eq!(metrics.hydrated_repo_count, 2);
@@ -808,7 +810,7 @@ fn repo_switch_selected_commit_and_details_skips_diff_reload_path() {
     let (hash, metrics) = fixture.run();
     assert_ne!(hash, 0);
     assert_eq!(metrics.effect_count, 6);
-    assert_eq!(metrics.refresh_effect_count, 6);
+    assert_eq!(metrics.refresh_effect_count, 5);
     assert_eq!(metrics.selected_diff_reload_effect_count, 0);
     assert_eq!(metrics.persist_session_effect_count, 1);
     assert_eq!(metrics.repo_count, 2);
@@ -823,8 +825,8 @@ fn repo_switch_twenty_tabs_scales_repo_count_without_heating_all_tabs() {
     let (hash, metrics) = fixture.run();
     assert_ne!(hash, 0);
     assert_eq!(metrics.effect_count, 7);
-    assert_eq!(metrics.refresh_effect_count, 6);
-    assert_eq!(metrics.selected_diff_reload_effect_count, 2);
+    assert_eq!(metrics.refresh_effect_count, 5);
+    assert_eq!(metrics.selected_diff_reload_effect_count, 1);
     assert_eq!(metrics.persist_session_effect_count, 1);
     assert_eq!(metrics.repo_count, 20);
     assert_eq!(metrics.hydrated_repo_count, 2);
@@ -857,8 +859,8 @@ fn repo_switch_twenty_repos_all_hot_tracks_extreme_hot_tab_scale() {
     let (hash, metrics) = fixture.run();
     assert_ne!(hash, 0);
     assert_eq!(metrics.effect_count, 7);
-    assert_eq!(metrics.refresh_effect_count, 6);
-    assert_eq!(metrics.selected_diff_reload_effect_count, 2);
+    assert_eq!(metrics.refresh_effect_count, 5);
+    assert_eq!(metrics.selected_diff_reload_effect_count, 1);
     assert_eq!(metrics.persist_session_effect_count, 1);
     assert_eq!(metrics.repo_count, 20);
     assert_eq!(metrics.hydrated_repo_count, 20);
@@ -872,8 +874,8 @@ fn repo_switch_selected_diff_file_triggers_diff_reload_with_loaded_content() {
     let (hash, metrics) = fixture.run();
     assert_ne!(hash, 0);
     assert_eq!(metrics.effect_count, 7);
-    assert_eq!(metrics.refresh_effect_count, 6);
-    assert_eq!(metrics.selected_diff_reload_effect_count, 2);
+    assert_eq!(metrics.refresh_effect_count, 5);
+    assert_eq!(metrics.selected_diff_reload_effect_count, 1);
     assert_eq!(metrics.persist_session_effect_count, 1);
     assert_eq!(metrics.repo_count, 2);
     assert_eq!(metrics.hydrated_repo_count, 2);
@@ -887,7 +889,7 @@ fn repo_switch_selected_conflict_target_dispatches_conflict_reload() {
     let (hash, metrics) = fixture.run();
     assert_ne!(hash, 0);
     assert_eq!(metrics.effect_count, 7);
-    assert_eq!(metrics.refresh_effect_count, 6);
+    assert_eq!(metrics.refresh_effect_count, 5);
     assert_eq!(metrics.selected_diff_reload_effect_count, 1);
     assert_eq!(metrics.persist_session_effect_count, 1);
     assert_eq!(metrics.repo_count, 2);
@@ -901,8 +903,8 @@ fn repo_switch_merge_active_with_draft_restore_includes_merge_message() {
     let (hash, metrics) = fixture.run();
     assert_ne!(hash, 0);
     assert_eq!(metrics.effect_count, 7);
-    assert_eq!(metrics.refresh_effect_count, 6);
-    assert_eq!(metrics.selected_diff_reload_effect_count, 2);
+    assert_eq!(metrics.refresh_effect_count, 5);
+    assert_eq!(metrics.selected_diff_reload_effect_count, 1);
     assert_eq!(metrics.persist_session_effect_count, 1);
     assert_eq!(metrics.repo_count, 2);
     assert_eq!(metrics.hydrated_repo_count, 2);
@@ -915,10 +917,12 @@ fn status_select_diff_open_unstaged_produces_expected_effects() {
     let (hash, metrics) = fixture.run();
     assert_ne!(hash, 0);
     // SelectDiff now emits one lightweight selected-diff intent and lets
-    // effect scheduling expand it to the same file+patch reload work.
+    // effect scheduling expand it later instead of returning eager reload
+    // effects directly from the inline reducer path.
     assert_eq!(metrics.effect_count, 1);
-    assert_eq!(metrics.load_diff_effect_count, 1);
-    assert_eq!(metrics.load_diff_file_effect_count, 1);
+    assert_eq!(metrics.load_selected_diff_effect_count, 1);
+    assert_eq!(metrics.load_diff_effect_count, 0);
+    assert_eq!(metrics.load_diff_file_effect_count, 0);
     assert_eq!(metrics.load_diff_file_image_effect_count, 0);
     assert_eq!(metrics.diff_state_rev_delta, 1);
 }
@@ -929,8 +933,9 @@ fn status_select_diff_open_staged_produces_expected_effects() {
     let (hash, metrics) = fixture.run();
     assert_ne!(hash, 0);
     assert_eq!(metrics.effect_count, 1);
-    assert_eq!(metrics.load_diff_effect_count, 1);
-    assert_eq!(metrics.load_diff_file_effect_count, 1);
+    assert_eq!(metrics.load_selected_diff_effect_count, 1);
+    assert_eq!(metrics.load_diff_effect_count, 0);
+    assert_eq!(metrics.load_diff_file_effect_count, 0);
     assert_eq!(metrics.load_diff_file_image_effect_count, 0);
     assert_eq!(metrics.diff_state_rev_delta, 1);
 }

@@ -2303,6 +2303,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "gitcomet-tree-sitter-alloc"
+version = "0.1.9"
+dependencies = [
+ "tree-sitter",
+]
+
+[[package]]
 name = "gitcomet-ui"
 version = "0.1.9"
 dependencies = [
@@ -2318,6 +2325,7 @@ dependencies = [
  "gitcomet-core",
  "gitcomet-git-gix",
  "gitcomet-state",
+ "gitcomet-tree-sitter-alloc",
  "gitcomet-win32-window-utils",
  "gpui",
  "image",
@@ -2327,6 +2335,7 @@ dependencies = [
  "mimalloc",
  "pulldown-cmark",
  "raw-window-handle",
+ "regex",
  "resvg 0.47.0",
  "rustc-hash 2.1.2",
  "rustix 1.1.4",

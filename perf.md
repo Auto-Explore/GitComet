@@ -27,6 +27,8 @@ Treat this as a large-text and syntax-path regression until the measurements pro
 - CPU: Criterion mean or harness-reported timing for the exact same benchmark label.
 - Allocation bytes: `alloc_bytes` from the sidecar payload captured by `PerfTrackingAllocator`.
 - Allocation ops: `alloc_ops` from the same sidecar payload.
+- For Criterion syntax benches, sidecars now also emit `tree_sitter_alloc_*` when the benchmark uses the benchmark-only native tree-sitter allocator shim. Use those fields for native parser heap comparisons; the base `alloc_*` fields remain Rust-side only.
+- On the current worktree, prepared whole-document tree-sitter is skipped above `8 MiB`, so the two large-JSON proxy commands below now measure that retained heuristic-fallback gate instead of the old parser-path outlier unless the threshold changes again.
 - When a command crashes before Criterion finishes, keep the task unchecked and record the crash together with any partial timing or stderr output.
 
 ## Large-JSON Proxy Commands
@@ -35,7 +37,8 @@ These are the first commands to try because they are already wired into the curr
 
 ### Syntax prepare proxy
 
-This approximates a roughly 150 MB single-document workload:
+This now uses a JSON-grammar synthetic document and approximates a roughly
+150 MB single-document workload:
 
 ```bash
 GITCOMET_BENCH_FILE_DIFF_SYNTAX_LINES=12200 \
@@ -46,7 +49,8 @@ cargo bench -p gitcomet-ui-gpui --features benchmarks --bench performance -- --n
 
 ### Query-stress proxy
 
-This is the best existing stress case for large nested syntax inputs and long lines:
+This now uses a JSON-grammar nested synthetic document and is the best existing
+stress case for large nested syntax inputs and long lines:
 
 ```bash
 GITCOMET_BENCH_FILE_DIFF_SYNTAX_STRESS_LINES=3072 \

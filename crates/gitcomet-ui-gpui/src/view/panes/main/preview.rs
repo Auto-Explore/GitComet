@@ -6,12 +6,17 @@ struct ReadyWorktreePreview {
 }
 
 impl ReadyWorktreePreview {
-    fn from_text(text: String) -> Self {
+    fn from_shared_text(text: SharedString) -> Self {
         let line_starts = Arc::from(build_line_starts(&text));
-        Self {
-            text: text.into(),
-            line_starts,
-        }
+        Self { text, line_starts }
+    }
+
+    fn from_text(text: String) -> Self {
+        Self::from_shared_text(text.into())
+    }
+
+    fn from_shared_arc(text: Arc<str>) -> Self {
+        Self::from_shared_text(SharedString::from(text))
     }
 
     fn from_lines(lines: &[String], source_len: usize) -> Self {
@@ -636,27 +641,23 @@ impl MainPaneView {
             .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
 
         cx.spawn(async move |view, cx| {
-            const MAX_BYTES: u64 = 2 * 1024 * 1024;
             let result = smol::unblock({
                 let path_for_task = path.clone();
                 move || {
-                let meta = std::fs::metadata(&path_for_task).map_err(|e| e.to_string())?;
-                if meta.is_dir() {
-                    return Err("Selected path is a directory. Select a file inside to preview, or stage the directory to add its contents.".to_string());
-                }
-                if meta.len() > MAX_BYTES {
-                    return Err(format!(
-                        "File is too large to preview ({} bytes).",
-                        meta.len()
-                    ));
-                }
+                    let meta = std::fs::metadata(&path_for_task).map_err(|e| e.to_string())?;
+                    if meta.is_dir() {
+                        return Err("Selected path is a directory. Select a file inside to preview, or stage the directory to add its contents.".to_string());
+                    }
 
-                let bytes = std::fs::read(&path_for_task).map_err(|e| e.to_string())?;
-                let text = String::from_utf8(bytes).map_err(|_| {
-                    "File is not valid UTF-8; binary preview is not supported.".to_string()
-                })?;
+                    let text = std::fs::read_to_string(&path_for_task).map_err(|e| {
+                        if e.kind() == std::io::ErrorKind::InvalidData {
+                            "File is not valid UTF-8; binary preview is not supported.".to_string()
+                        } else {
+                            e.to_string()
+                        }
+                    })?;
 
-                Ok::<ReadyWorktreePreview, String>(ReadyWorktreePreview::from_text(text))
+                    Ok::<ReadyWorktreePreview, String>(ReadyWorktreePreview::from_text(text))
                 }
             })
             .await;
@@ -740,11 +741,11 @@ impl MainPaneView {
                     }
                     Loadable::Ready(file) => file.as_ref().and_then(|file| {
                         let text = if prefer_old {
-                            file.old.as_deref()
+                            file.old.as_ref()
                         } else {
-                            file.new.as_deref()
+                            file.new.as_ref()
                         };
-                        text.map(|text| Ok(ReadyWorktreePreview::from_text(text.to_owned())))
+                        text.map(|text| Ok(ReadyWorktreePreview::from_shared_arc(Arc::clone(text))))
                     }),
                 };
 

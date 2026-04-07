@@ -580,6 +580,11 @@ impl PopoverHost {
         self.state = state;
     }
 
+    #[cfg(test)]
+    pub(in super::super) fn popover_kind_for_tests(&self) -> Option<PopoverKind> {
+        self.popover.clone()
+    }
+
     pub(in super::super) fn close_popover(&mut self, cx: &mut gpui::Context<Self>) {
         self.popover = None;
         self.popover_anchor = None;

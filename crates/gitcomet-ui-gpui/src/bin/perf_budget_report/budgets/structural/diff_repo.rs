@@ -310,7 +310,10 @@ pub(crate) const STRUCTURAL_BUDGETS: &[StructuralBudgetSpec] = &[
         bench: "open_repo/extreme_metadata_fanout",
         metric: "sidebar_rows",
         comparator: StructuralBudgetComparator::AtLeast,
-        threshold: 17_000.0,
+        // Initial open keeps Worktrees and Submodules collapsed, so the visible
+        // row count should cover branch fanout plus section headers rather than
+        // every worktree/submodule entry.
+        threshold: 11_400.0,
     },
     // history_cache_build/balanced — visible commits should be close to input count
     // (only stash helpers are filtered out; with 20 stashes the delta is small).

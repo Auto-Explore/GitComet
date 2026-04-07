@@ -6,6 +6,7 @@ members = [
   "crates/gitcomet-git",
   "crates/gitcomet-git-gix",
   "crates/gitcomet-state",
+  "crates/gitcomet-tree-sitter-alloc",
   "crates/gitcomet-ui",
   "crates/gitcomet-ui-gpui",
 ]

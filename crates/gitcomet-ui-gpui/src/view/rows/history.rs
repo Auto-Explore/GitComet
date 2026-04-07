@@ -10,6 +10,70 @@ use crate::view::markdown_preview::{
 use crate::view::perf::{self, ViewPerfRenderLane, ViewPerfSpan};
 use rustc_hash::FxHasher;
 
+fn resolved_output_line_byte_range(
+    text: &str,
+    line_starts: &[usize],
+    line_ix: usize,
+) -> Range<usize> {
+    let text_len = text.len();
+    let start = line_starts
+        .get(line_ix)
+        .copied()
+        .unwrap_or(text_len)
+        .min(text_len);
+    let mut end = line_starts
+        .get(line_ix.saturating_add(1))
+        .copied()
+        .unwrap_or(text_len)
+        .min(text_len);
+    if end > start && text.as_bytes().get(end.saturating_sub(1)) == Some(&b'\n') {
+        end = end.saturating_sub(1);
+    }
+    start..end
+}
+
+fn worktree_preview_streamed_spec(
+    source_text: &Arc<str>,
+    line_starts: &Arc<[usize]>,
+    line_ix: usize,
+    query: &SharedString,
+    language: Option<rows::DiffSyntaxLanguage>,
+    syntax_mode: rows::DiffSyntaxMode,
+    syntax_document: Option<rows::PreparedDiffSyntaxDocument>,
+) -> Option<diff_canvas::StreamedDiffTextPaintSpec> {
+    let raw_range =
+        resolved_output_line_byte_range(source_text.as_ref(), line_starts.as_ref(), line_ix);
+    let line = source_text.get(raw_range.clone()).unwrap_or_default();
+    diff_canvas::is_streamable_diff_text(line).then(|| {
+        let syntax = match (language, syntax_document) {
+            (Some(language), Some(document)) => {
+                diff_canvas::StreamedDiffTextSyntaxSource::Prepared {
+                    document_text: Arc::clone(source_text),
+                    line_starts: Arc::clone(line_starts),
+                    document,
+                    language,
+                    line_ix,
+                }
+            }
+            (Some(language), None) => diff_canvas::StreamedDiffTextSyntaxSource::Heuristic {
+                language,
+                mode: syntax_mode,
+            },
+            (None, _) => diff_canvas::StreamedDiffTextSyntaxSource::None,
+        };
+        diff_canvas::StreamedDiffTextPaintSpec {
+            raw_text: gitcomet_core::file_diff::FileDiffLineText::shared_slice(
+                Arc::clone(source_text),
+                raw_range,
+            ),
+            query: query.clone(),
+            word_ranges: Arc::from([]),
+            word_color: None,
+            syntax,
+        }
+    })
+}
+
 impl MainPaneView {
     pub(in super::super) fn render_worktree_preview_rows(
         this: &mut Self,
@@ -28,6 +92,7 @@ impl MainPaneView {
             return Vec::new();
         };
         let source_text = this.worktree_preview_text.clone();
+        let source_text_arc: Arc<str> = source_text.clone().into();
         let line_starts = Arc::clone(&this.worktree_preview_line_starts);
 
         let should_clear_cache = match this.worktree_preview_segments_cache_path.as_ref() {
@@ -53,8 +118,17 @@ impl MainPaneView {
             .take_while(|ix| *ix < line_count)
             .map(|ix| {
                 let line = rows::resolved_output_line_text(source_text.as_ref(), &line_starts, ix);
+                let streamed_spec = worktree_preview_streamed_spec(
+                    &source_text_arc,
+                    &line_starts,
+                    ix,
+                    &query,
+                    language,
+                    syntax_mode,
+                    syntax_document,
+                );
                 let mut pending_styled = None;
-                if this.worktree_preview_segments_cache_get(ix).is_none() {
+                if streamed_spec.is_none() && this.worktree_preview_segments_cache_get(ix).is_none() {
                     let (styled, is_pending) =
                         build_cached_diff_styled_text_for_prepared_document_line_nonblocking_with_palette(
                             theme,
@@ -100,7 +174,8 @@ impl MainPaneView {
                     min_width,
                     bar_color,
                     line_no,
-                    styled.expect("worktree preview row style should exist after populate"),
+                    styled,
+                    streamed_spec,
                 )
             })
             .collect()

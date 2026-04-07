@@ -124,26 +124,62 @@ pub(crate) const STRUCTURAL_BUDGETS: &[StructuralBudgetSpec] = &[
         comparator: StructuralBudgetComparator::Exactly,
         threshold: 0.0,
     },
-    // branch_sidebar/cache_miss_remote_fanout — every iteration is an invalidation + miss
+    StructuralBudgetSpec {
+        bench: "branch_sidebar/cache_hit_balanced",
+        metric: "worktree_rows",
+        comparator: StructuralBudgetComparator::Exactly,
+        threshold: 80.0,
+    },
+    StructuralBudgetSpec {
+        bench: "branch_sidebar/cache_hit_balanced",
+        metric: "submodule_rows",
+        comparator: StructuralBudgetComparator::Exactly,
+        threshold: 150.0,
+    },
+    StructuralBudgetSpec {
+        bench: "branch_sidebar/cache_hit_balanced",
+        metric: "stash_rows",
+        comparator: StructuralBudgetComparator::Exactly,
+        threshold: 300.0,
+    },
+    // branch_sidebar/cache_miss_remote_fanout — every iteration mutates the remote source and misses
     StructuralBudgetSpec {
         bench: "branch_sidebar/cache_miss_remote_fanout",
         metric: "cache_hits",
         comparator: StructuralBudgetComparator::Exactly,
         threshold: 0.0,
     },
-    // branch_sidebar/cache_invalidation_single_ref_change — every iteration is an invalidation
+    // branch_sidebar/cache_invalidation_single_ref_change — every iteration mutates local branch metadata and misses
     StructuralBudgetSpec {
         bench: "branch_sidebar/cache_invalidation_single_ref_change",
         metric: "cache_hits",
         comparator: StructuralBudgetComparator::Exactly,
         threshold: 0.0,
     },
-    // branch_sidebar/cache_invalidation_worktrees_ready — every iteration is an invalidation
+    // branch_sidebar/cache_invalidation_worktrees_ready — every iteration mutates ready worktree source and misses
     StructuralBudgetSpec {
         bench: "branch_sidebar/cache_invalidation_worktrees_ready",
         metric: "cache_hits",
         comparator: StructuralBudgetComparator::Exactly,
         threshold: 0.0,
+    },
+    StructuralBudgetSpec {
+        bench: "branch_sidebar/cache_invalidation_worktrees_ready",
+        metric: "worktree_rows",
+        comparator: StructuralBudgetComparator::Exactly,
+        threshold: 80.0,
+    },
+    StructuralBudgetSpec {
+        bench: "branch_sidebar/cache_invalidation_worktrees_ready",
+        metric: "submodule_rows",
+        comparator: StructuralBudgetComparator::Exactly,
+        threshold: 150.0,
+    },
+    StructuralBudgetSpec {
+        bench: "branch_sidebar/cache_invalidation_worktrees_ready",
+        metric: "stash_rows",
+        comparator: StructuralBudgetComparator::Exactly,
+        threshold: 300.0,
     },
     StructuralBudgetSpec {
         bench: "branch_sidebar/20k_branches_100_remotes",
@@ -197,7 +233,9 @@ pub(crate) const STRUCTURAL_BUDGETS: &[StructuralBudgetSpec] = &[
         bench: "repo_switch/refocus_same_repo",
         metric: "effect_count",
         comparator: StructuralBudgetComparator::Exactly,
-        threshold: 6.0,
+        // Same-repo refocus stays on the primary refresh path without
+        // persisting session state or reloading a selected diff.
+        threshold: 5.0,
     },
     StructuralBudgetSpec {
         bench: "repo_switch/refocus_same_repo",
@@ -209,21 +247,20 @@ pub(crate) const STRUCTURAL_BUDGETS: &[StructuralBudgetSpec] = &[
         bench: "repo_switch/two_hot_repos",
         metric: "effect_count",
         comparator: StructuralBudgetComparator::Exactly,
-        // Turn 27 hot-switch restamp fix reduced from 15 → 9 (skips cold-path refresh effects)
-        threshold: 9.0,
+        // Primary refresh (5) + combined selected-diff intent (1) + persist (1).
+        threshold: 7.0,
     },
     StructuralBudgetSpec {
         bench: "repo_switch/two_hot_repos",
         metric: "refresh_effect_count",
         comparator: StructuralBudgetComparator::Exactly,
-        // Turn 27 hot-switch restamp fix reduced from 12 → 6
-        threshold: 6.0,
+        threshold: 5.0,
     },
     StructuralBudgetSpec {
         bench: "repo_switch/two_hot_repos",
         metric: "selected_diff_reload_effect_count",
         comparator: StructuralBudgetComparator::Exactly,
-        threshold: 2.0,
+        threshold: 1.0,
     },
     StructuralBudgetSpec {
         bench: "repo_switch/two_hot_repos",
@@ -235,7 +272,7 @@ pub(crate) const STRUCTURAL_BUDGETS: &[StructuralBudgetSpec] = &[
         bench: "repo_switch/selected_commit_and_details",
         metric: "effect_count",
         comparator: StructuralBudgetComparator::Exactly,
-        threshold: 13.0,
+        threshold: 6.0,
     },
     StructuralBudgetSpec {
         bench: "repo_switch/selected_commit_and_details",
@@ -265,7 +302,7 @@ pub(crate) const STRUCTURAL_BUDGETS: &[StructuralBudgetSpec] = &[
         bench: "repo_switch/twenty_tabs",
         metric: "effect_count",
         comparator: StructuralBudgetComparator::Exactly,
-        threshold: 15.0,
+        threshold: 7.0,
     },
     StructuralBudgetSpec {
         bench: "repo_switch/twenty_tabs",
@@ -301,7 +338,7 @@ pub(crate) const STRUCTURAL_BUDGETS: &[StructuralBudgetSpec] = &[
         bench: "repo_switch/20_repos_all_hot",
         metric: "effect_count",
         comparator: StructuralBudgetComparator::Exactly,
-        threshold: 15.0,
+        threshold: 7.0,
     },
     StructuralBudgetSpec {
         bench: "repo_switch/20_repos_all_hot",
@@ -339,14 +376,13 @@ pub(crate) const STRUCTURAL_BUDGETS: &[StructuralBudgetSpec] = &[
         bench: "repo_switch/selected_diff_file",
         metric: "effect_count",
         comparator: StructuralBudgetComparator::Exactly,
-        // Turn 27 hot-switch restamp fix reduced from 15 → 9
-        threshold: 9.0,
+        threshold: 7.0,
     },
     StructuralBudgetSpec {
         bench: "repo_switch/selected_diff_file",
         metric: "selected_diff_reload_effect_count",
         comparator: StructuralBudgetComparator::Exactly,
-        threshold: 2.0,
+        threshold: 1.0,
     },
     StructuralBudgetSpec {
         bench: "repo_switch/selected_diff_file",
@@ -360,13 +396,13 @@ pub(crate) const STRUCTURAL_BUDGETS: &[StructuralBudgetSpec] = &[
         comparator: StructuralBudgetComparator::Exactly,
         threshold: 2.0,
     },
-    // repo_switch/selected_conflict_target — 1 LoadConflictFile instead of
-    // 2 diff reload effects, giving effect_count = 14.
+    // repo_switch/selected_conflict_target — primary refresh + one combined
+    // selected-conflict reload intent + persist.
     StructuralBudgetSpec {
         bench: "repo_switch/selected_conflict_target",
         metric: "effect_count",
         comparator: StructuralBudgetComparator::Exactly,
-        threshold: 14.0,
+        threshold: 7.0,
     },
     StructuralBudgetSpec {
         bench: "repo_switch/selected_conflict_target",
@@ -386,19 +422,19 @@ pub(crate) const STRUCTURAL_BUDGETS: &[StructuralBudgetSpec] = &[
         comparator: StructuralBudgetComparator::Exactly,
         threshold: 2.0,
     },
-    // repo_switch/merge_active_with_draft_restore — same effect shape as
-    // two_hot_repos; the merge message is part of the state snapshot cost.
+    // repo_switch/merge_active_with_draft_restore — same emitted effect shape
+    // as `two_hot_repos`; the merge draft only changes snapshot size.
     StructuralBudgetSpec {
         bench: "repo_switch/merge_active_with_draft_restore",
         metric: "effect_count",
         comparator: StructuralBudgetComparator::Exactly,
-        threshold: 15.0,
+        threshold: 7.0,
     },
     StructuralBudgetSpec {
         bench: "repo_switch/merge_active_with_draft_restore",
         metric: "selected_diff_reload_effect_count",
         comparator: StructuralBudgetComparator::Exactly,
-        threshold: 2.0,
+        threshold: 1.0,
     },
     StructuralBudgetSpec {
         bench: "repo_switch/merge_active_with_draft_restore",

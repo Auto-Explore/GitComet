@@ -134,23 +134,6 @@ impl DiffSearchVisibleTrigramIndex {
     }
 }
 
-pub(in crate::view) fn build_resolved_output_trigram_index(
-    text: &str,
-    line_starts: &[usize],
-    line_count: usize,
-) -> DiffSearchVisibleTrigramIndex {
-    let mut index = DiffSearchVisibleTrigramIndex::default();
-    let mut trigrams = SmallVec::<[u32; 64]>::new();
-    for line_ix in 0..line_count {
-        index.insert_text(
-            line_ix as u32,
-            rows::resolved_output_line_text(text, line_starts, line_ix),
-            &mut trigrams,
-        );
-    }
-    index.finish()
-}
-
 #[inline]
 fn diff_search_displayed_text_matches_query(
     query: AsciiCaseInsensitiveNeedle<'_>,
@@ -514,6 +497,16 @@ impl MainPaneView {
             }
 
             let total = self.diff_visible_len();
+            if self.diff_view == DiffViewMode::Inline && self.is_file_diff_view_active() {
+                for visible_ix in 0..total {
+                    if self
+                        .diff_search_file_diff_inline_visible_row_matches_query(query, visible_ix)
+                    {
+                        self.diff_search_matches.push(visible_ix);
+                    }
+                }
+                return;
+            }
             if self.diff_view == DiffViewMode::Split && self.is_file_diff_view_active() {
                 let mut expanded_tabs = String::new();
                 for visible_ix in 0..total {
@@ -661,6 +654,21 @@ impl MainPaneView {
         diff_search_split_row_texts_match_query(query, left, right, expanded_tabs)
     }
 
+    fn diff_search_file_diff_inline_visible_row_matches_query(
+        &self,
+        query: AsciiCaseInsensitiveNeedle<'_>,
+        visible_ix: usize,
+    ) -> bool {
+        if !self.is_file_diff_view_active() || self.diff_view != DiffViewMode::Inline {
+            return false;
+        }
+        let Some(mapped_ix) = self.diff_mapped_ix_for_visible_ix(visible_ix) else {
+            return false;
+        };
+        self.file_diff_inline_render_data(mapped_ix)
+            .is_some_and(|row| query.is_match(row.text.as_ref()))
+    }
+
     fn diff_search_can_refine_current_matches(&self) -> bool {
         self.is_file_preview_active() || self.active_conflict_target().is_none()
     }
@@ -746,10 +754,16 @@ impl MainPaneView {
         }
 
         match self.diff_view {
-            DiffViewMode::Inline => query.is_match(
-                self.diff_text_line_for_region(visible_ix, DiffTextRegion::Inline)
-                    .as_ref(),
-            ),
+            DiffViewMode::Inline => {
+                if self.is_file_diff_view_active() {
+                    return self
+                        .diff_search_file_diff_inline_visible_row_matches_query(query, visible_ix);
+                }
+                query.is_match(
+                    self.diff_text_line_for_region(visible_ix, DiffTextRegion::Inline)
+                        .as_ref(),
+                )
+            }
             DiffViewMode::Split => {
                 if self.is_file_diff_view_active() {
                     let mut expanded_tabs = String::new();

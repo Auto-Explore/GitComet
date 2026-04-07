@@ -478,8 +478,8 @@ pub(super) fn schedule_load_conflict_file(
                                 ours_bytes,
                                 theirs_bytes,
                                 base: None,
-                                ours: d.old.map(Arc::<str>::from),
-                                theirs: d.new.map(Arc::<str>::from),
+                                ours: d.old,
+                                theirs: d.new,
                             }
                         })
                     }),

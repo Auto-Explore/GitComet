@@ -251,6 +251,7 @@ fn hash_status_multi_selection(selection: &StatusMultiSelection) -> u64 {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct StatusSelectDiffOpenMetrics {
     pub effect_count: usize,
+    pub load_selected_diff_effect_count: usize,
     pub load_diff_effect_count: usize,
     pub load_diff_file_effect_count: usize,
     pub load_diff_file_image_effect_count: usize,
@@ -266,6 +267,9 @@ impl StatusSelectDiffOpenMetrics {
         };
         for effect in effects {
             match effect {
+                Effect::LoadSelectedDiff { .. } => {
+                    metrics.load_selected_diff_effect_count += 1;
+                }
                 Effect::LoadDiff { .. } => metrics.load_diff_effect_count += 1,
                 Effect::LoadDiffFile { .. } => metrics.load_diff_file_effect_count += 1,
                 Effect::LoadDiffFileImage { .. } => metrics.load_diff_file_image_effect_count += 1,
@@ -375,6 +379,15 @@ impl StatusSelectDiffOpenFixture {
                 for effect in effects.iter() {
                     std::mem::discriminant(effect).hash(&mut h);
                     match effect {
+                        Effect::LoadSelectedDiff {
+                            repo_id,
+                            load_file_text,
+                            load_file_image,
+                        } => {
+                            repo_id.0.hash(&mut h);
+                            load_file_text.hash(&mut h);
+                            load_file_image.hash(&mut h);
+                        }
                         Effect::LoadDiff { repo_id, target }
                         | Effect::LoadDiffFile { repo_id, target }
                         | Effect::LoadDiffFileImage { repo_id, target } => {
@@ -384,6 +397,7 @@ impl StatusSelectDiffOpenFixture {
                         _ => {}
                     }
                 }
+                metrics.load_selected_diff_effect_count.hash(&mut h);
                 metrics.load_diff_effect_count.hash(&mut h);
                 metrics.load_diff_file_effect_count.hash(&mut h);
                 metrics.load_diff_file_image_effect_count.hash(&mut h);

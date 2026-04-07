@@ -496,6 +496,7 @@ pub(super) struct DiffTextHitbox {
     pub(super) bounds: Bounds<Pixels>,
     pub(super) layout_key: u64,
     pub(super) text_len: usize,
+    pub(super) streamed_ascii_monospace_cell_width: Option<Pixels>,
 }
 
 #[derive(Clone)]

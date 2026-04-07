@@ -38,6 +38,7 @@ syntax-xml = ["dep:tree-sitter-xml"]
 [dependencies]
 fontdb = { workspace = true }
 gitcomet-core = { workspace = true }
+gitcomet-tree-sitter-alloc = { path = "../gitcomet-tree-sitter-alloc" }
 gitcomet-git-gix = { workspace = true, optional = true }
 gitcomet-state = { workspace = true }
 gpui = { workspace = true }
@@ -86,6 +87,7 @@ raw-window-handle = { workspace = true }
 gitcomet-core = { workspace = true, features = ["test-support"] }
 gpui = { workspace = true, features = ["test-support"] }
 criterion = { workspace = true }
+regex = { workspace = true }
 tree-sitter-bash = { workspace = true }
 tree-sitter-css = { workspace = true }
 tree-sitter-go = { workspace = true }

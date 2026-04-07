@@ -141,6 +141,32 @@ pub(super) fn set_ready_worktree_preview(
     cx.notify();
 }
 
+pub(super) fn build_large_json_array_lines(
+    object_count: usize,
+    payload_bytes: usize,
+) -> Vec<String> {
+    assert!(
+        object_count >= 2,
+        "need at least two objects to build a stable large-JSON test fixture"
+    );
+
+    let payload = "x".repeat(payload_bytes);
+    let mut lines = Vec::with_capacity(object_count + 2);
+    lines.push("[".to_string());
+    lines.push(r#"  {"first": true, "count": 1},"#.to_string());
+    for ix in 1..object_count - 1 {
+        lines.push(format!(
+            r#"  {{"line": {ix}, "flag": true, "payload": "{payload}"}},"#
+        ));
+    }
+    lines.push(format!(
+        r#"  {{"line": {}, "flag": true, "payload": "{payload}"}}"#,
+        object_count - 1
+    ));
+    lines.push("]".to_string());
+    lines
+}
+
 pub(super) fn highlights_include_range(
     highlights: &[(std::ops::Range<usize>, gpui::HighlightStyle)],
     target: std::ops::Range<usize>,

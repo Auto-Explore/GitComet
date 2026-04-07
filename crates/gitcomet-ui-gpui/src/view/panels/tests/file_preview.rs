@@ -438,6 +438,411 @@ fn large_file_preview_keeps_prepared_syntax_document_above_old_line_gate(
 }
 
 #[gpui::test]
+fn oversized_json_preview_uses_visible_line_fallback_without_prepared_syntax_document(
+    cx: &mut gpui::TestAppContext,
+) {
+    const OBJECT_COUNT: usize = 512;
+    const PAYLOAD_BYTES: usize = 16 * 1024;
+    const PREPARED_DOCUMENT_MAX_BYTES: usize = 8 * 1024 * 1024;
+
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    disable_view_poller_for_test(cx, &view);
+
+    let repo_id = gitcomet_state::model::RepoId(81);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_oversized_json_preview_syntax",
+        std::process::id()
+    ));
+    let file_rel = std::path::PathBuf::from("oversized_preview.json");
+    let preview_abs_path = workdir.join(&file_rel);
+    let lines_vec = build_large_json_array_lines(OBJECT_COUNT, PAYLOAD_BYTES);
+    let target_line_ix = 1usize;
+    let target_line = lines_vec[target_line_ix].clone();
+    let line_count = lines_vec.len();
+    let preview_text = lines_vec.join("\n");
+    let lines: Arc<Vec<String>> = Arc::new(lines_vec);
+
+    assert!(
+        line_count < 4_001,
+        "fixture should stay below the old line-count gate so this test specifically exercises the new byte gate"
+    );
+    assert!(
+        preview_text.len() > PREPARED_DOCUMENT_MAX_BYTES,
+        "fixture should exceed the prepared-document byte gate"
+    );
+
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(&workdir).expect("create oversized JSON preview workdir");
+    std::fs::write(&preview_abs_path, &preview_text).expect("write oversized JSON preview fixture");
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            set_test_file_status(
+                &mut repo,
+                file_rel.clone(),
+                gitcomet_core::domain::FileStatusKind::Added,
+                gitcomet_core::domain::DiffArea::Staged,
+            );
+
+            let next_state = app_state_with_repo(repo, repo_id);
+
+            push_test_state(this, Arc::clone(&next_state), cx);
+        });
+    });
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let lines = Arc::clone(&lines);
+            let preview_abs_path = preview_abs_path.clone();
+            this.main_pane.update(cx, |pane, cx| {
+                set_ready_worktree_preview(pane, preview_abs_path, lines, preview_text.len(), cx);
+            });
+        });
+    });
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    wait_for_main_pane_condition_with_timeout(
+        cx,
+        &view,
+        "oversized JSON preview heuristic syntax fallback",
+        BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
+        |pane| {
+            pane.is_file_preview_active()
+                && pane.worktree_preview_path.as_ref() == Some(&preview_abs_path)
+                && pane.worktree_preview_line_count() == Some(line_count)
+                && pane.worktree_preview_text.len() == preview_text.len()
+                && pane.worktree_preview_text.len() > PREPARED_DOCUMENT_MAX_BYTES
+                && pane.worktree_preview_line_starts.len() == line_count
+                && pane.worktree_preview_syntax_language == Some(rows::DiffSyntaxLanguage::Json)
+                && pane.worktree_preview_prepared_syntax_document().is_none()
+                && pane
+                    .worktree_preview_segments_cache_get(target_line_ix)
+                    .is_some_and(|styled| {
+                        styled.text.as_ref() == target_line && !styled.highlights.is_empty()
+                    })
+        },
+        |pane| {
+            let row_cache = pane
+                .worktree_preview_segments_cache_get(target_line_ix)
+                .map(styled_debug_info_with_styles);
+            format!(
+                "preview_path={:?} line_count={:?} text_len={} language={:?} prepared_document={:?} row_cache={row_cache:?}",
+                pane.worktree_preview_path.clone(),
+                pane.worktree_preview_line_count(),
+                pane.worktree_preview_text.len(),
+                pane.worktree_preview_syntax_language,
+                pane.worktree_preview_prepared_syntax_document(),
+            )
+        },
+    );
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let styled = pane
+            .worktree_preview_segments_cache_get(target_line_ix)
+            .expect("oversized JSON preview should cache the visible fallback row");
+        assert!(
+            pane.worktree_preview_prepared_syntax_document().is_none(),
+            "oversized JSON preview should stay on the visible-line fallback path"
+        );
+        assert!(
+            !styled.highlights.is_empty(),
+            "oversized JSON preview should still render heuristic syntax highlights for visible rows"
+        );
+    });
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup oversized JSON preview fixture");
+}
+
+#[gpui::test]
+fn minified_json_preview_streams_visible_slice_for_giant_line(cx: &mut gpui::TestAppContext) {
+    const PAYLOAD_BYTES: usize = 256 * 1024;
+
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    disable_view_poller_for_test(cx, &view);
+
+    let repo_id = gitcomet_state::model::RepoId(91);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_minified_json_preview_streamed",
+        std::process::id()
+    ));
+    let file_rel = std::path::PathBuf::from("streamed_preview.json");
+    let preview_abs_path = workdir.join(&file_rel);
+    let long_json = format!(
+        r#"{{"needle":"preview-streamed","payload":"{}","tail":true}}"#,
+        "x".repeat(PAYLOAD_BYTES)
+    );
+    let lines: Arc<Vec<String>> = Arc::new(vec![long_json.clone()]);
+
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(&workdir).expect("create streamed preview workdir");
+    std::fs::write(&preview_abs_path, &long_json).expect("write streamed preview fixture");
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            set_test_file_status(
+                &mut repo,
+                file_rel.clone(),
+                gitcomet_core::domain::FileStatusKind::Added,
+                gitcomet_core::domain::DiffArea::Staged,
+            );
+            let next_state = app_state_with_repo(repo, repo_id);
+            push_test_state(this, Arc::clone(&next_state), cx);
+        });
+    });
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let lines = Arc::clone(&lines);
+            let preview_abs_path = preview_abs_path.clone();
+            this.main_pane.update(cx, |pane, cx| {
+                set_ready_worktree_preview(pane, preview_abs_path, lines, long_json.len(), cx);
+            });
+        });
+    });
+
+    cx.update(|window, app| {
+        rows::clear_diff_paint_log_for_tests();
+        window.refresh();
+        let _ = window.draw(app);
+    });
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let hitbox = pane
+            .diff_text_hitboxes
+            .get(&(0, DiffTextRegion::Inline))
+            .expect("streamed preview row should install a diff hitbox");
+        assert!(
+            hitbox.streamed_ascii_monospace_cell_width.is_some(),
+            "giant preview row should use streamed monospace hit-testing"
+        );
+        assert!(
+            pane.worktree_preview_segments_cache_get(0).is_none(),
+            "streamed preview rows should bypass the full-line styled row cache"
+        );
+
+        let paint_record = rows::diff_paint_log_for_tests()
+            .into_iter()
+            .find(|record| record.visible_ix == 0 && record.region == DiffTextRegion::Inline)
+            .expect("streamed preview draw should record the visible line paint");
+        assert!(
+            paint_record.text.len() < long_json.len(),
+            "streamed preview should paint only a visible slice, got {} of {} bytes",
+            paint_record.text.len(),
+            long_json.len()
+        );
+        assert!(
+            !paint_record.text.is_empty(),
+            "streamed preview should still paint a non-empty visible slice"
+        );
+    });
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup streamed preview fixture");
+}
+
+#[gpui::test]
+fn minified_json_preview_partial_copy_uses_streamed_line_slice(cx: &mut gpui::TestAppContext) {
+    const PAYLOAD_BYTES: usize = 256 * 1024;
+
+    let _clipboard_guard = lock_clipboard_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    disable_view_poller_for_test(cx, &view);
+
+    let repo_id = gitcomet_state::model::RepoId(191);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_minified_json_preview_partial_copy",
+        std::process::id()
+    ));
+    let file_rel = std::path::PathBuf::from("streamed_preview_copy.json");
+    let preview_abs_path = workdir.join(&file_rel);
+    let needle = "preview-streamed-copy";
+    let long_json = format!(
+        r#"{{"needle":"{needle}","payload":"{}","tail":true}}"#,
+        "x".repeat(PAYLOAD_BYTES)
+    );
+    let lines: Arc<Vec<String>> = Arc::new(vec![long_json.clone()]);
+    let start = long_json
+        .find(needle)
+        .expect("streamed preview copy needle should exist");
+    let end = start + needle.len();
+
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(&workdir).expect("create streamed preview copy workdir");
+    std::fs::write(&preview_abs_path, &long_json).expect("write streamed preview copy fixture");
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            set_test_file_status(
+                &mut repo,
+                file_rel.clone(),
+                gitcomet_core::domain::FileStatusKind::Added,
+                gitcomet_core::domain::DiffArea::Staged,
+            );
+            let next_state = app_state_with_repo(repo, repo_id);
+            push_test_state(this, Arc::clone(&next_state), cx);
+        });
+    });
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let lines = Arc::clone(&lines);
+            let preview_abs_path = preview_abs_path.clone();
+            this.main_pane.update(cx, |pane, cx| {
+                set_ready_worktree_preview(pane, preview_abs_path, lines, long_json.len(), cx);
+            });
+        });
+    });
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.diff_text_anchor = Some(DiffTextPos {
+                    visible_ix: 0,
+                    region: DiffTextRegion::Inline,
+                    offset: start,
+                });
+                pane.diff_text_head = Some(DiffTextPos {
+                    visible_ix: 0,
+                    region: DiffTextRegion::Inline,
+                    offset: end,
+                });
+                pane.copy_selected_diff_text_to_clipboard(cx);
+            });
+        });
+    });
+
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|item| item.text()),
+        Some(needle.to_string())
+    );
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert!(
+            pane.worktree_preview_segments_cache_get(0).is_none(),
+            "streamed preview partial copy should not populate the styled row cache"
+        );
+    });
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup streamed preview copy fixture");
+}
+
+#[gpui::test]
+fn minified_json_preview_context_menu_copy_uses_streamed_line_source(
+    cx: &mut gpui::TestAppContext,
+) {
+    const PAYLOAD_BYTES: usize = 96 * 1024;
+
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    disable_view_poller_for_test(cx, &view);
+
+    let repo_id = gitcomet_state::model::RepoId(192);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_minified_json_preview_context_menu_copy",
+        std::process::id()
+    ));
+    let file_rel = std::path::PathBuf::from("streamed_preview_context_menu.json");
+    let preview_abs_path = workdir.join(&file_rel);
+    let long_json = format!(
+        r#"{{"needle":"preview-streamed-context-menu","payload":"{}","tail":true}}"#,
+        "x".repeat(PAYLOAD_BYTES)
+    );
+    let lines: Arc<Vec<String>> = Arc::new(vec![long_json.clone()]);
+
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(&workdir).expect("create streamed preview context-menu workdir");
+    std::fs::write(&preview_abs_path, &long_json)
+        .expect("write streamed preview context-menu fixture");
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            set_test_file_status(
+                &mut repo,
+                file_rel.clone(),
+                gitcomet_core::domain::FileStatusKind::Added,
+                gitcomet_core::domain::DiffArea::Staged,
+            );
+            let next_state = app_state_with_repo(repo, repo_id);
+            push_test_state(this, Arc::clone(&next_state), cx);
+        });
+    });
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let lines = Arc::clone(&lines);
+            let preview_abs_path = preview_abs_path.clone();
+            this.main_pane.update(cx, |pane, cx| {
+                set_ready_worktree_preview(pane, preview_abs_path, lines, long_json.len(), cx);
+            });
+        });
+    });
+
+    cx.update(|window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, cx| {
+            pane.open_diff_editor_context_menu(
+                0,
+                DiffTextRegion::Inline,
+                gpui::point(px(24.0), px(24.0)),
+                window,
+                cx,
+            );
+        });
+    });
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, _cx| {
+                let Some(popover_kind) = host.popover_kind_for_tests() else {
+                    panic!("expected streamed preview context menu popover");
+                };
+
+                match popover_kind {
+                    PopoverKind::DiffEditorMenu { copy_text, .. } => {
+                        assert_eq!(copy_text, Some(long_json.clone()));
+                    }
+                    _ => panic!("expected streamed preview diff editor menu"),
+                }
+            });
+        });
+    });
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert!(
+            pane.worktree_preview_segments_cache_get(0).is_none(),
+            "streamed preview context-menu copy should not populate the styled row cache"
+        );
+    });
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup streamed preview context-menu fixture");
+}
+
+#[gpui::test]
 fn large_file_preview_renders_plain_text_then_upgrades_after_background_syntax(
     cx: &mut gpui::TestAppContext,
 ) {

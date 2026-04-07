@@ -396,11 +396,26 @@ pub enum BenchmarkReplacementDistanceBackend {
 pub fn side_by_side_plan(old: &str, new: &str) -> FileDiffPlan {
     let old_lines = split_lines(old);
     let new_lines = split_lines(new);
+    side_by_side_plan_from_lines(old, new, old_lines.as_slice(), new_lines.as_slice())
+}
+
+/// Build a side-by-side diff plan from precomputed `str::lines()` slices.
+///
+/// Callers must ensure `old_lines` and `new_lines` were derived from
+/// `old_text`/`new_text` using the same line-splitting semantics as
+/// [`str::lines`], because EOF newline handling still comes from the full
+/// source texts.
+pub fn side_by_side_plan_from_lines(
+    old_text: &str,
+    new_text: &str,
+    old_lines: &[&str],
+    new_lines: &[&str],
+) -> FileDiffPlan {
     build_side_by_side_plan_with_pair_cost(
-        old,
-        new,
-        old_lines.as_slice(),
-        new_lines.as_slice(),
+        old_text,
+        new_text,
+        old_lines,
+        new_lines,
         replacement_pair_cost,
     )
 }
@@ -2213,11 +2228,14 @@ fn replacement_pair_cost_with_shared_boundary<T: Eq>(
     let max_len = max_len_usize as u32;
     let old_trimmed = &old_units[shared_prefix..old_units.len().saturating_sub(shared_suffix)];
     let new_trimmed = &new_units[shared_prefix..new_units.len().saturating_sub(shared_suffix)];
+    let trimmed_cells = old_trimmed.len().saturating_mul(new_trimmed.len());
 
     // Fast path: if either trimmed side is empty, the distance is exactly
     // the length of the other side — skip the O(n*m) Levenshtein DP.
     let distance = if old_trimmed.is_empty() || new_trimmed.is_empty() {
         (old_trimmed.len() + new_trimmed.len()) as u32
+    } else if trimmed_cells > REPLACEMENT_ALIGN_CELL_BUDGET {
+        u32::try_from(old_trimmed.len().max(new_trimmed.len())).unwrap_or(u32::MAX)
     } else {
         distance_fn(old_trimmed, new_trimmed)
     };
