@@ -284,6 +284,142 @@ pub(super) fn schedule_remove_submodule(
     );
 }
 
+pub(super) fn schedule_add_subtree(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: mpsc::Sender<Msg>,
+    repo_id: RepoId,
+    repository: String,
+    reference: String,
+    path: PathBuf,
+    squash: bool,
+    auth: Option<StagedGitAuth>,
+) {
+    let command_repository = repository.clone();
+    let command_reference = reference.clone();
+    let command_path = path.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::AddSubtree {
+            repository: command_repository,
+            reference: command_reference,
+            path: command_path,
+            squash,
+        },
+        move |repo| {
+            run_with_git_auth(auth, || {
+                repo.add_subtree_with_output(&repository, &reference, &path, squash)
+            })
+        },
+    );
+}
+
+pub(super) fn schedule_pull_subtree(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: mpsc::Sender<Msg>,
+    repo_id: RepoId,
+    repository: String,
+    reference: String,
+    path: PathBuf,
+    squash: bool,
+    auth: Option<StagedGitAuth>,
+) {
+    let command_repository = repository.clone();
+    let command_reference = reference.clone();
+    let command_path = path.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::PullSubtree {
+            repository: command_repository,
+            reference: command_reference,
+            path: command_path,
+            squash,
+        },
+        move |repo| {
+            run_with_git_auth(auth, || {
+                repo.pull_subtree_with_output(&repository, &reference, &path, squash)
+            })
+        },
+    );
+}
+
+pub(super) fn schedule_push_subtree(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: mpsc::Sender<Msg>,
+    repo_id: RepoId,
+    repository: String,
+    refspec: String,
+    path: PathBuf,
+    auth: Option<StagedGitAuth>,
+) {
+    let command_repository = repository.clone();
+    let command_refspec = refspec.clone();
+    let command_path = path.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::PushSubtree {
+            repository: command_repository,
+            refspec: command_refspec,
+            path: command_path,
+        },
+        move |repo| {
+            run_with_git_auth(auth, || repo.push_subtree_with_output(&repository, &refspec, &path))
+        },
+    );
+}
+
+pub(super) fn schedule_split_subtree(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: mpsc::Sender<Msg>,
+    repo_id: RepoId,
+    path: PathBuf,
+    branch: Option<String>,
+) {
+    let command_path = path.clone();
+    let command_branch = branch.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::SplitSubtree {
+            path: command_path,
+            branch: command_branch,
+        },
+        move |repo| repo.split_subtree_with_output(&path, branch.as_deref()),
+    );
+}
+
+pub(super) fn schedule_remove_subtree(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: mpsc::Sender<Msg>,
+    repo_id: RepoId,
+    path: PathBuf,
+) {
+    let command_path = path.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::RemoveSubtree { path: command_path },
+        move |repo| repo.remove_subtree_with_output(&path),
+    );
+}
+
 pub(super) fn schedule_stage_hunk(
     executor: &TaskExecutor,
     repos: &RepoMap,

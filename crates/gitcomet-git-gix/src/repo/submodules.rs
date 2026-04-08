@@ -21,24 +21,23 @@ impl GixRepo {
         path: &Path,
     ) -> Result<CommandOutput> {
         let mut cmd = self.git_workdir_cmd();
-        cmd.arg("submodule")
+        cmd.arg("-c")
+            .arg("protocol.file.allow=always")
+            .arg("submodule")
             .arg("add")
             .arg(url)
-            .arg(path)
-            // Local-path submodule URLs are used in tests and supported workflows.
-            // Explicitly allow `file` transport for this command.
-            .env("GIT_ALLOW_PROTOCOL", "file");
+            .arg(path);
         run_git_with_output(cmd, &format!("git submodule add {url} {}", path.display()))
     }
 
     pub(super) fn update_submodules_with_output_impl(&self) -> Result<CommandOutput> {
         let mut cmd = self.git_workdir_cmd();
-        cmd.arg("submodule")
+        cmd.arg("-c")
+            .arg("protocol.file.allow=always")
+            .arg("submodule")
             .arg("update")
             .arg("--init")
-            .arg("--recursive")
-            // Keep behavior consistent with add: allow local-path submodule URLs.
-            .env("GIT_ALLOW_PROTOCOL", "file");
+            .arg("--recursive");
         run_git_with_output(cmd, "git submodule update --init --recursive")
     }
 

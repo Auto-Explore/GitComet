@@ -156,6 +156,11 @@ impl std::fmt::Debug for InternalMsg {
                 .field("repo_id", repo_id)
                 .field("result", result)
                 .finish(),
+            InternalMsg::SubtreesLoaded { repo_id, result } => f
+                .debug_struct("SubtreesLoaded")
+                .field("repo_id", repo_id)
+                .field("result", result)
+                .finish(),
             InternalMsg::CommitDetailsLoaded {
                 repo_id,
                 commit_id,

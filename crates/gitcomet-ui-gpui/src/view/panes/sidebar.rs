@@ -38,6 +38,7 @@ struct SidebarNotifyFingerprint {
 struct SidebarLazyLoadPlan {
     worktrees: bool,
     submodules: bool,
+    subtrees: bool,
     stashes: bool,
 }
 
@@ -213,6 +214,9 @@ impl SidebarPaneView {
         }
         if lazy_loads.submodules {
             self.store.dispatch(Msg::LoadSubmodules { repo_id });
+        }
+        if lazy_loads.subtrees {
+            self.store.dispatch(Msg::LoadSubtrees { repo_id });
         }
         if lazy_loads.stashes {
             self.store.dispatch(Msg::LoadStashes { repo_id });
@@ -402,6 +406,10 @@ fn pending_sidebar_lazy_loads(
             collapsed_items,
             branch_sidebar::submodules_section_storage_key(),
         ) && matches!(repo.submodules, Loadable::NotLoaded),
+        subtrees: !branch_sidebar::is_collapsed(
+            collapsed_items,
+            branch_sidebar::subtrees_section_storage_key(),
+        ) && matches!(repo.subtrees, Loadable::NotLoaded),
         stashes: !branch_sidebar::is_collapsed(
             collapsed_items,
             branch_sidebar::stash_section_storage_key(),
@@ -496,6 +504,10 @@ mod tests {
             )
             .expect("submodules should support explicit expansion"),
             branch_sidebar::expanded_default_section_storage_key(
+                branch_sidebar::subtrees_section_storage_key(),
+            )
+            .expect("subtrees should support explicit expansion"),
+            branch_sidebar::expanded_default_section_storage_key(
                 branch_sidebar::stash_section_storage_key(),
             )
             .expect("stash should support explicit expansion"),
@@ -506,6 +518,7 @@ mod tests {
             SidebarLazyLoadPlan {
                 worktrees: true,
                 submodules: true,
+                subtrees: true,
                 stashes: true,
             }
         );
@@ -521,10 +534,12 @@ mod tests {
         );
         repo.worktrees = Loadable::Ready(Arc::new(Vec::new()));
         repo.submodules = Loadable::Loading;
+        repo.subtrees = Loadable::NotLoaded;
         repo.stashes = Loadable::NotLoaded;
 
         let collapsed = BTreeSet::from([
             branch_sidebar::submodules_section_storage_key().to_string(),
+            branch_sidebar::subtrees_section_storage_key().to_string(),
             branch_sidebar::expanded_default_section_storage_key(
                 branch_sidebar::stash_section_storage_key(),
             )
@@ -536,6 +551,7 @@ mod tests {
             SidebarLazyLoadPlan {
                 worktrees: false,
                 submodules: false,
+                subtrees: false,
                 stashes: true,
             }
         );

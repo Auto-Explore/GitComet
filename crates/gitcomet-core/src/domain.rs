@@ -157,6 +157,20 @@ pub struct Submodule {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SubtreeSourceConfig {
+    pub repository: String,
+    pub reference: String,
+    pub push_refspec: Option<String>,
+    pub squash: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Subtree {
+    pub path: PathBuf,
+    pub source: Option<SubtreeSourceConfig>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RemoteBranch {
     pub remote: String,
     pub name: String,

@@ -137,6 +137,67 @@ pub(super) fn remove_submodule(repo_id: RepoId, path: PathBuf) -> Vec<Effect> {
     vec![Effect::RemoveSubmodule { repo_id, path }]
 }
 
+pub(super) fn add_subtree(
+    repo_id: RepoId,
+    repository: String,
+    reference: String,
+    path: PathBuf,
+    squash: bool,
+) -> Vec<Effect> {
+    vec![Effect::AddSubtree {
+        repo_id,
+        repository,
+        reference,
+        path,
+        squash,
+        auth: None,
+    }]
+}
+
+pub(super) fn pull_subtree(
+    repo_id: RepoId,
+    repository: String,
+    reference: String,
+    path: PathBuf,
+    squash: bool,
+) -> Vec<Effect> {
+    vec![Effect::PullSubtree {
+        repo_id,
+        repository,
+        reference,
+        path,
+        squash,
+        auth: None,
+    }]
+}
+
+pub(super) fn push_subtree(
+    repo_id: RepoId,
+    repository: String,
+    refspec: String,
+    path: PathBuf,
+) -> Vec<Effect> {
+    vec![Effect::PushSubtree {
+        repo_id,
+        repository,
+        refspec,
+        path,
+        auth: None,
+    }]
+}
+
+pub(super) fn split_subtree(repo_id: RepoId, path: PathBuf, branch: Option<String>) -> Vec<Effect> {
+    vec![Effect::SplitSubtree {
+        repo_id,
+        path,
+        branch,
+    }]
+}
+
+pub(super) fn remove_subtree(repo_id: RepoId, path: PathBuf) -> Vec<Effect> {
+    vec![Effect::RemoveSubtree { repo_id, path }]
+}
+
 pub(super) fn stage_path(repo_id: RepoId, path: PathBuf) -> Vec<Effect> {
     vec![Effect::StagePath { repo_id, path }]
 }
@@ -623,6 +684,11 @@ fn tracks_local_actions_in_flight(command: &RepoCommandKind) -> bool {
             | RepoCommandKind::AddSubmodule { .. }
             | RepoCommandKind::UpdateSubmodules
             | RepoCommandKind::RemoveSubmodule { .. }
+            | RepoCommandKind::AddSubtree { .. }
+            | RepoCommandKind::PullSubtree { .. }
+            | RepoCommandKind::PushSubtree { .. }
+            | RepoCommandKind::SplitSubtree { .. }
+            | RepoCommandKind::RemoveSubtree { .. }
             | RepoCommandKind::StageHunk
             | RepoCommandKind::UnstageHunk
             | RepoCommandKind::ApplyWorktreePatch { .. }
@@ -646,6 +712,13 @@ pub(super) fn repo_command_finished(
         RepoCommandKind::AddSubmodule { .. }
             | RepoCommandKind::UpdateSubmodules
             | RepoCommandKind::RemoveSubmodule { .. }
+    ) && result.is_ok();
+    let refresh_subtrees = matches!(
+        &command,
+        RepoCommandKind::AddSubtree { .. }
+            | RepoCommandKind::PullSubtree { .. }
+            | RepoCommandKind::PushSubtree { .. }
+            | RepoCommandKind::RemoveSubtree { .. }
     ) && result.is_ok();
     let command_succeeded = result.is_ok();
     let mut clear_banner = false;
@@ -731,6 +804,10 @@ pub(super) fn repo_command_finished(
     if refresh_submodules {
         repo_state.set_submodules(Loadable::Loading);
         extra_effects.push(Effect::LoadSubmodules { repo_id });
+    }
+    if refresh_subtrees {
+        repo_state.set_subtrees(Loadable::Loading);
+        extra_effects.push(Effect::LoadSubtrees { repo_id });
     }
     if matches!(
         &command,

@@ -412,7 +412,7 @@ impl Default for ConflictState {
 const BRANCH_SIDEBAR_REV_MIX: u64 = 0x9e37_79b9_7f4a_7c15;
 
 #[inline]
-fn mix_branch_sidebar_revs(values: [u64; 7]) -> u64 {
+fn mix_branch_sidebar_revs(values: [u64; 8]) -> u64 {
     let mut acc = BRANCH_SIDEBAR_REV_MIX;
     for value in values {
         acc ^= value.wrapping_mul(BRANCH_SIDEBAR_REV_MIX);
@@ -469,6 +469,8 @@ pub struct RepoState {
     pub worktrees_rev: u64,
     pub submodules: Loadable<Arc<Vec<Submodule>>>,
     pub submodules_rev: u64,
+    pub subtrees: Loadable<Arc<Vec<Subtree>>>,
+    pub subtrees_rev: u64,
     /// Invalidates cached branch-sidebar rows when any sidebar-relevant source changes.
     pub branch_sidebar_rev: u64,
 
@@ -534,6 +536,8 @@ impl RepoState {
             worktrees_rev: 0,
             submodules: Loadable::NotLoaded,
             submodules_rev: 0,
+            subtrees: Loadable::NotLoaded,
+            subtrees_rev: 0,
             branch_sidebar_rev: 0,
             diff_state: DiffState::default(),
             conflict_state: ConflictState::default(),
@@ -651,6 +655,16 @@ impl RepoState {
         self.bump_branch_sidebar_rev();
     }
 
+    pub(crate) fn set_subtrees(&mut self, subtrees: Loadable<Vec<Subtree>>) {
+        let subtrees = loadable_into_arc(subtrees);
+        if self.subtrees == subtrees {
+            return;
+        }
+        self.subtrees = subtrees;
+        self.subtrees_rev = self.subtrees_rev.wrapping_add(1);
+        self.bump_branch_sidebar_rev();
+    }
+
     #[inline]
     fn bump_branch_sidebar_rev(&mut self) {
         self.branch_sidebar_rev = self.branch_sidebar_rev.wrapping_add(1);
@@ -669,6 +683,7 @@ impl RepoState {
                 self.remote_branches_rev,
                 self.worktrees_rev,
                 self.submodules_rev,
+                self.subtrees_rev,
                 self.stashes_rev,
             ])
         }
@@ -1301,6 +1316,15 @@ mod tests {
     }
 
     #[test]
+    fn set_subtrees_skips_rev_bump_when_unchanged() {
+        let mut repo = new_repo();
+        repo.set_subtrees(Loadable::Loading);
+        let rev = repo.subtrees_rev;
+        repo.set_subtrees(Loadable::Loading);
+        assert_eq!(repo.subtrees_rev, rev);
+    }
+
+    #[test]
     fn set_status_skips_rev_bump_when_unchanged() {
         let mut repo = new_repo();
         repo.set_status(Loadable::Loading);
@@ -1388,6 +1412,7 @@ mod tests {
         assert_eq!(repo.stashes_rev, 0);
         assert_eq!(repo.worktrees_rev, 0);
         assert_eq!(repo.submodules_rev, 0);
+        assert_eq!(repo.subtrees_rev, 0);
         assert_eq!(repo.branch_sidebar_rev, 0);
     }
 

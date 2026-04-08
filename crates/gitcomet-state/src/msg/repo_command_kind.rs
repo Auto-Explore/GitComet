@@ -116,6 +116,30 @@ pub enum RepoCommandKind {
     RemoveSubmodule {
         path: PathBuf,
     },
+    AddSubtree {
+        repository: String,
+        reference: String,
+        path: PathBuf,
+        squash: bool,
+    },
+    PullSubtree {
+        repository: String,
+        reference: String,
+        path: PathBuf,
+        squash: bool,
+    },
+    PushSubtree {
+        repository: String,
+        refspec: String,
+        path: PathBuf,
+    },
+    SplitSubtree {
+        path: PathBuf,
+        branch: Option<String>,
+    },
+    RemoveSubtree {
+        path: PathBuf,
+    },
     StageHunk,
     UnstageHunk,
     ApplyWorktreePatch {

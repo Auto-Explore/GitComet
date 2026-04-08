@@ -292,7 +292,7 @@ fn git_command() -> Command {
     cmd.env("GIT_TERMINAL_PROMPT", "0");
     cmd.env("GCM_INTERACTIVE", "Never");
     // Some scenarios clone local file:// remotes (submodules, temp-origin repos).
-    cmd.env("GIT_ALLOW_PROTOCOL", "file");
+    cmd.arg("-c").arg("protocol.file.allow=always");
     cmd
 }
 

@@ -33,6 +33,17 @@ mod submodule_add_prompt;
 mod submodule_open_picker;
 mod submodule_remove_confirm;
 mod submodule_remove_picker;
+mod subtree_add_prompt;
+mod subtree_open_picker;
+mod subtree_pull_picker;
+mod subtree_pull_prompt;
+mod subtree_push_picker;
+mod subtree_push_prompt;
+mod subtree_remove_confirm;
+mod subtree_remove_picker;
+mod subtree_reveal_picker;
+mod subtree_split_picker;
+mod subtree_split_prompt;
 mod worktree_add_prompt;
 mod worktree_open_picker;
 mod worktree_remove_confirm;
@@ -78,6 +89,7 @@ pub(in super::super) struct PopoverHost {
     file_history_search_input: Option<Entity<components::TextInput>>,
     worktree_picker_search_input: Option<Entity<components::TextInput>>,
     submodule_picker_search_input: Option<Entity<components::TextInput>>,
+    subtree_picker_search_input: Option<Entity<components::TextInput>>,
     diff_hunk_picker_search_input: Option<Entity<components::TextInput>>,
     picker_prompt_scroll: ScrollHandle,
 
@@ -96,6 +108,12 @@ pub(in super::super) struct PopoverHost {
     worktree_ref_input: Entity<components::TextInput>,
     submodule_url_input: Entity<components::TextInput>,
     submodule_path_input: Entity<components::TextInput>,
+    subtree_repository_input: Entity<components::TextInput>,
+    subtree_reference_input: Entity<components::TextInput>,
+    subtree_path_input: Entity<components::TextInput>,
+    subtree_push_refspec_input: Entity<components::TextInput>,
+    subtree_split_branch_input: Entity<components::TextInput>,
+    subtree_squash_enabled: bool,
 }
 
 impl PopoverHost {
@@ -461,6 +479,76 @@ impl PopoverHost {
             )
         });
 
+        let subtree_repository_input = cx.new(|cx| {
+            components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "https://example.com/org/repo.git".into(),
+                    multiline: false,
+                    read_only: false,
+                    chromeless: false,
+                    soft_wrap: false,
+                },
+                window,
+                cx,
+            )
+        });
+
+        let subtree_reference_input = cx.new(|cx| {
+            components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "main".into(),
+                    multiline: false,
+                    read_only: false,
+                    chromeless: false,
+                    soft_wrap: false,
+                },
+                window,
+                cx,
+            )
+        });
+
+        let subtree_path_input = cx.new(|cx| {
+            components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "path/in/repo".into(),
+                    multiline: false,
+                    read_only: false,
+                    chromeless: false,
+                    soft_wrap: false,
+                },
+                window,
+                cx,
+            )
+        });
+
+        let subtree_push_refspec_input = cx.new(|cx| {
+            components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "refs/heads/main".into(),
+                    multiline: false,
+                    read_only: false,
+                    chromeless: false,
+                    soft_wrap: false,
+                },
+                window,
+                cx,
+            )
+        });
+
+        let subtree_split_branch_input = cx.new(|cx| {
+            components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "Optional branch name".into(),
+                    multiline: false,
+                    read_only: false,
+                    chromeless: false,
+                    soft_wrap: false,
+                },
+                window,
+                cx,
+            )
+        });
+
         let context_menu_focus_handle = cx.focus_handle().tab_index(0).tab_stop(false);
 
         Self {
@@ -495,6 +583,7 @@ impl PopoverHost {
             file_history_search_input: None,
             worktree_picker_search_input: None,
             submodule_picker_search_input: None,
+            subtree_picker_search_input: None,
             diff_hunk_picker_search_input: None,
             picker_prompt_scroll: ScrollHandle::new(),
             clone_repo_url_input,
@@ -512,6 +601,12 @@ impl PopoverHost {
             worktree_ref_input,
             submodule_url_input,
             submodule_path_input,
+            subtree_repository_input,
+            subtree_reference_input,
+            subtree_path_input,
+            subtree_push_refspec_input,
+            subtree_split_branch_input,
+            subtree_squash_enabled: true,
         }
     }
 
@@ -546,6 +641,16 @@ impl PopoverHost {
             .update(cx, |input, cx| input.set_theme(theme, cx));
         self.submodule_path_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.subtree_repository_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.subtree_reference_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.subtree_path_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.subtree_push_refspec_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.subtree_split_branch_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
 
         if let Some(input) = &self.repo_picker_search_input {
             input.update(cx, |input, cx| input.set_theme(theme, cx));
@@ -566,6 +671,9 @@ impl PopoverHost {
             input.update(cx, |input, cx| input.set_theme(theme, cx));
         }
         if let Some(input) = &self.submodule_picker_search_input {
+            input.update(cx, |input, cx| input.set_theme(theme, cx));
+        }
+        if let Some(input) = &self.subtree_picker_search_input {
             input.update(cx, |input, cx| input.set_theme(theme, cx));
         }
         if let Some(input) = &self.diff_hunk_picker_search_input {
@@ -816,6 +924,12 @@ impl PopoverHost {
                     ),
                     ..
                 }
+                | PopoverKind::Repo {
+                    kind: RepoPopoverKind::Subtree(
+                        SubtreePopoverKind::SectionMenu | SubtreePopoverKind::Menu { .. },
+                    ),
+                    ..
+                }
                 | PopoverKind::CommitFileMenu { .. }
                 | PopoverKind::TagMenu { .. }
         );
@@ -1050,6 +1164,148 @@ impl PopoverHost {
                     let _ = self.ensure_submodule_picker_search_input(window, cx);
                     self.store
                         .dispatch(Msg::LoadSubmodules { repo_id: *repo_id });
+                }
+                PopoverKind::Repo {
+                    kind: RepoPopoverKind::Subtree(SubtreePopoverKind::AddPrompt),
+                    ..
+                } => {
+                    let theme = self.theme;
+                    self.subtree_repository_input.update(cx, |input, cx| {
+                        input.set_theme(theme, cx);
+                        input.set_text("", cx);
+                        cx.notify();
+                    });
+                    self.subtree_reference_input.update(cx, |input, cx| {
+                        input.set_theme(theme, cx);
+                        input.set_text("", cx);
+                        cx.notify();
+                    });
+                    self.subtree_path_input.update(cx, |input, cx| {
+                        input.set_theme(theme, cx);
+                        input.set_text("", cx);
+                        cx.notify();
+                    });
+                    self.subtree_squash_enabled = true;
+                    let focus = self
+                        .subtree_repository_input
+                        .read_with(cx, |i, _| i.focus_handle());
+                    window.focus(&focus);
+                }
+                PopoverKind::Repo {
+                    repo_id,
+                    kind:
+                        RepoPopoverKind::Subtree(
+                            SubtreePopoverKind::OpenPicker
+                            | SubtreePopoverKind::RevealPicker
+                            | SubtreePopoverKind::PullPicker
+                            | SubtreePopoverKind::PushPicker
+                            | SubtreePopoverKind::SplitPicker
+                            | SubtreePopoverKind::RemovePicker,
+                        ),
+                } => {
+                    let _ = self.ensure_subtree_picker_search_input(window, cx);
+                    self.store.dispatch(Msg::LoadSubtrees { repo_id: *repo_id });
+                }
+                PopoverKind::Repo {
+                    repo_id,
+                    kind: RepoPopoverKind::Subtree(SubtreePopoverKind::PullPrompt { path }),
+                } => {
+                    let theme = self.theme;
+                    let source = self
+                        .state
+                        .repos
+                        .iter()
+                        .find(|repo| repo.id == *repo_id)
+                        .and_then(|repo| match &repo.subtrees {
+                            Loadable::Ready(subtrees) => subtrees
+                                .iter()
+                                .find(|subtree| subtree.path == *path)
+                                .and_then(|subtree| subtree.source.clone()),
+                            _ => None,
+                        });
+                    let repository = source
+                        .as_ref()
+                        .map(|source| source.repository.clone())
+                        .unwrap_or_default();
+                    let reference = source
+                        .as_ref()
+                        .map(|source| source.reference.clone())
+                        .unwrap_or_default();
+                    self.subtree_repository_input.update(cx, |input, cx| {
+                        input.set_theme(theme, cx);
+                        input.set_text(repository, cx);
+                        cx.notify();
+                    });
+                    self.subtree_reference_input.update(cx, |input, cx| {
+                        input.set_theme(theme, cx);
+                        input.set_text(reference, cx);
+                        cx.notify();
+                    });
+                    self.subtree_squash_enabled = source.is_none_or(|source| source.squash);
+                    let focus = self
+                        .subtree_repository_input
+                        .read_with(cx, |i, _| i.focus_handle());
+                    window.focus(&focus);
+                }
+                PopoverKind::Repo {
+                    repo_id,
+                    kind: RepoPopoverKind::Subtree(SubtreePopoverKind::PushPrompt { path }),
+                } => {
+                    let theme = self.theme;
+                    let source = self
+                        .state
+                        .repos
+                        .iter()
+                        .find(|repo| repo.id == *repo_id)
+                        .and_then(|repo| match &repo.subtrees {
+                            Loadable::Ready(subtrees) => subtrees
+                                .iter()
+                                .find(|subtree| subtree.path == *path)
+                                .and_then(|subtree| subtree.source.clone()),
+                            _ => None,
+                        });
+                    let repository = source
+                        .as_ref()
+                        .map(|source| source.repository.clone())
+                        .unwrap_or_default();
+                    let refspec = source
+                        .as_ref()
+                        .and_then(|source| source.push_refspec.clone())
+                        .unwrap_or_else(|| {
+                            source
+                                .as_ref()
+                                .map(|source| source.reference.clone())
+                                .unwrap_or_default()
+                        });
+                    self.subtree_repository_input.update(cx, |input, cx| {
+                        input.set_theme(theme, cx);
+                        input.set_text(repository, cx);
+                        cx.notify();
+                    });
+                    self.subtree_push_refspec_input.update(cx, |input, cx| {
+                        input.set_theme(theme, cx);
+                        input.set_text(refspec, cx);
+                        cx.notify();
+                    });
+                    let focus = self
+                        .subtree_repository_input
+                        .read_with(cx, |i, _| i.focus_handle());
+                    window.focus(&focus);
+                }
+                PopoverKind::Repo {
+                    kind: RepoPopoverKind::Subtree(SubtreePopoverKind::SplitPrompt { .. }),
+                    ..
+                } => {
+                    let theme = self.theme;
+                    self.subtree_split_branch_input.update(cx, |input, cx| {
+                        input.set_theme(theme, cx);
+                        input.set_text("", cx);
+                        cx.notify();
+                    });
+                    let focus = self
+                        .subtree_split_branch_input
+                        .read_with(cx, |i, _| i.focus_handle());
+                    window.focus(&focus);
                 }
                 PopoverKind::FileHistory { repo_id, path } => {
                     self.ensure_file_history_search_input(window, cx);
@@ -1354,6 +1610,23 @@ impl PopoverHost {
                     ),
                 ..
             }
+            | PopoverKind::Repo {
+                kind:
+                    RepoPopoverKind::Subtree(
+                        SubtreePopoverKind::AddPrompt
+                        | SubtreePopoverKind::OpenPicker
+                        | SubtreePopoverKind::RevealPicker
+                        | SubtreePopoverKind::PullPicker
+                        | SubtreePopoverKind::PullPrompt { .. }
+                        | SubtreePopoverKind::PushPicker
+                        | SubtreePopoverKind::PushPrompt { .. }
+                        | SubtreePopoverKind::SplitPicker
+                        | SubtreePopoverKind::SplitPrompt { .. }
+                        | SubtreePopoverKind::RemovePicker
+                        | SubtreePopoverKind::RemoveConfirm { .. },
+                    ),
+                ..
+            }
             | PopoverKind::PushSetUpstreamPrompt { .. }
             | PopoverKind::ForcePushConfirm { .. }
             | PopoverKind::MergeAbortConfirm { .. }
@@ -1504,6 +1777,53 @@ impl PopoverHost {
                     }
                     SubmodulePopoverKind::RemoveConfirm { path } => {
                         submodule_remove_confirm::panel(self, repo_id, path, cx)
+                    }
+                },
+                RepoPopoverKind::Subtree(subtree_kind) => match subtree_kind {
+                    SubtreePopoverKind::SectionMenu => self
+                        .context_menu_view(
+                            PopoverKind::subtree(repo_id, SubtreePopoverKind::SectionMenu),
+                            cx,
+                        )
+                        .min_w(px(180.0))
+                        .max_w(px(360.0)),
+                    SubtreePopoverKind::Menu { path } => self
+                        .context_menu_view(
+                            PopoverKind::subtree(repo_id, SubtreePopoverKind::Menu { path }),
+                            cx,
+                        )
+                        .min_w(px(180.0))
+                        .max_w(px(360.0)),
+                    SubtreePopoverKind::AddPrompt => subtree_add_prompt::panel(self, repo_id, cx),
+                    SubtreePopoverKind::OpenPicker => {
+                        subtree_open_picker::panel(self, repo_id, cx)
+                    }
+                    SubtreePopoverKind::RevealPicker => {
+                        subtree_reveal_picker::panel(self, repo_id, cx)
+                    }
+                    SubtreePopoverKind::PullPicker => {
+                        subtree_pull_picker::panel(self, repo_id, cx)
+                    }
+                    SubtreePopoverKind::PullPrompt { path } => {
+                        subtree_pull_prompt::panel(self, repo_id, path, cx)
+                    }
+                    SubtreePopoverKind::PushPicker => {
+                        subtree_push_picker::panel(self, repo_id, cx)
+                    }
+                    SubtreePopoverKind::PushPrompt { path } => {
+                        subtree_push_prompt::panel(self, repo_id, path, cx)
+                    }
+                    SubtreePopoverKind::SplitPicker => {
+                        subtree_split_picker::panel(self, repo_id, cx)
+                    }
+                    SubtreePopoverKind::SplitPrompt { path } => {
+                        subtree_split_prompt::panel(self, repo_id, path, cx)
+                    }
+                    SubtreePopoverKind::RemovePicker => {
+                        subtree_remove_picker::panel(self, repo_id, cx)
+                    }
+                    SubtreePopoverKind::RemoveConfirm { path } => {
+                        subtree_remove_confirm::panel(self, repo_id, path, cx)
                     }
                 },
             },

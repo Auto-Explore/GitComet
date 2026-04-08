@@ -707,6 +707,11 @@ fn summarize_command(
             RepoCommandKind::AddSubmodule { .. }
             | RepoCommandKind::UpdateSubmodules
             | RepoCommandKind::RemoveSubmodule { .. } => "Submodule",
+            RepoCommandKind::AddSubtree { .. }
+            | RepoCommandKind::PullSubtree { .. }
+            | RepoCommandKind::PushSubtree { .. }
+            | RepoCommandKind::SplitSubtree { .. }
+            | RepoCommandKind::RemoveSubtree { .. } => "Subtree",
             RepoCommandKind::StageHunk | RepoCommandKind::UnstageHunk => "Hunk",
             RepoCommandKind::ApplyWorktreePatch { reverse } => {
                 if *reverse {
@@ -900,6 +905,35 @@ fn summarize_command(
         RepoCommandKind::UpdateSubmodules => "Submodules: Updated".to_string(),
         RepoCommandKind::RemoveSubmodule { path } => {
             format!("Submodule removed → {}", path.display())
+        }
+        RepoCommandKind::AddSubtree { path, squash, .. } => {
+            if *squash {
+                format!("Subtree added → {} (--squash)", path.display())
+            } else {
+                format!("Subtree added → {}", path.display())
+            }
+        }
+        RepoCommandKind::PullSubtree { path, squash, .. } => {
+            if output.stdout.contains("Already up to date") {
+                format!("Subtree pull: Already up to date → {}", path.display())
+            } else if *squash {
+                format!("Subtree pulled → {} (--squash)", path.display())
+            } else {
+                format!("Subtree pulled → {}", path.display())
+            }
+        }
+        RepoCommandKind::PushSubtree { path, refspec, .. } => {
+            format!("Subtree pushed → {} ({refspec})", path.display())
+        }
+        RepoCommandKind::SplitSubtree { path, branch } => {
+            if let Some(branch) = branch {
+                format!("Subtree split → {} ({branch})", path.display())
+            } else {
+                format!("Subtree split → {}", path.display())
+            }
+        }
+        RepoCommandKind::RemoveSubtree { path } => {
+            format!("Subtree removed → {}", path.display())
         }
         RepoCommandKind::StageHunk => "Hunk staged".to_string(),
         RepoCommandKind::UnstageHunk => "Hunk unstaged".to_string(),

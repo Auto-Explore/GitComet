@@ -70,6 +70,9 @@ pub enum Effect {
     LoadSubmodules {
         repo_id: RepoId,
     },
+    LoadSubtrees {
+        repo_id: RepoId,
+    },
     LoadRebaseAndMergeState {
         repo_id: RepoId,
     },
@@ -194,6 +197,38 @@ pub enum Effect {
         auth: Option<StagedGitAuth>,
     },
     RemoveSubmodule {
+        repo_id: RepoId,
+        path: PathBuf,
+    },
+    AddSubtree {
+        repo_id: RepoId,
+        repository: String,
+        reference: String,
+        path: PathBuf,
+        squash: bool,
+        auth: Option<StagedGitAuth>,
+    },
+    PullSubtree {
+        repo_id: RepoId,
+        repository: String,
+        reference: String,
+        path: PathBuf,
+        squash: bool,
+        auth: Option<StagedGitAuth>,
+    },
+    PushSubtree {
+        repo_id: RepoId,
+        repository: String,
+        refspec: String,
+        path: PathBuf,
+        auth: Option<StagedGitAuth>,
+    },
+    SplitSubtree {
+        repo_id: RepoId,
+        path: PathBuf,
+        branch: Option<String>,
+    },
+    RemoveSubtree {
         repo_id: RepoId,
         path: PathBuf,
     },

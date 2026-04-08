@@ -710,6 +710,113 @@ fn submodule_commands_reload_submodules_on_success() {
 }
 
 #[test]
+fn subtree_commands_reload_subtrees_on_success() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.repos[0].set_subtrees(Loadable::Ready(Vec::new()));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::AddSubtree {
+                repository: "https://example.com/sub.git".to_string(),
+                reference: "main".to_string(),
+                path: PathBuf::from("vendor/lib"),
+                squash: true,
+            },
+            result: Ok(CommandOutput::empty_success("git subtree add")),
+        }),
+    );
+
+    assert!(state.repos[0].subtrees.is_loading());
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadSubtrees { repo_id: id } if *id == repo_id))
+    );
+
+    state.repos[0].set_subtrees(Loadable::Ready(Vec::new()));
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::PullSubtree {
+                repository: "https://example.com/sub.git".to_string(),
+                reference: "main".to_string(),
+                path: PathBuf::from("vendor/lib"),
+                squash: true,
+            },
+            result: Ok(CommandOutput::empty_success("git subtree pull")),
+        }),
+    );
+
+    assert!(state.repos[0].subtrees.is_loading());
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadSubtrees { repo_id: id } if *id == repo_id))
+    );
+
+    state.repos[0].set_subtrees(Loadable::Ready(Vec::new()));
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::PushSubtree {
+                repository: "https://example.com/sub.git".to_string(),
+                refspec: "main".to_string(),
+                path: PathBuf::from("vendor/lib"),
+            },
+            result: Ok(CommandOutput::empty_success("git subtree push")),
+        }),
+    );
+
+    assert!(state.repos[0].subtrees.is_loading());
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadSubtrees { repo_id: id } if *id == repo_id))
+    );
+
+    state.repos[0].set_subtrees(Loadable::Ready(Vec::new()));
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::RemoveSubtree {
+                path: PathBuf::from("vendor/lib"),
+            },
+            result: Ok(CommandOutput::empty_success("git rm -r vendor/lib")),
+        }),
+    );
+
+    assert!(state.repos[0].subtrees.is_loading());
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadSubtrees { repo_id: id } if *id == repo_id))
+    );
+}
+
+#[test]
 fn merge_ref_emits_effect() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);
@@ -2224,6 +2331,45 @@ fn repo_command_finished_error_summaries_cover_additional_labels() {
             },
             "Submodule",
         ),
+        (
+            RepoCommandKind::AddSubtree {
+                repository: "https://example.com/sub.git".to_string(),
+                reference: "main".to_string(),
+                path: PathBuf::from("vendor/lib"),
+                squash: true,
+            },
+            "Subtree",
+        ),
+        (
+            RepoCommandKind::PullSubtree {
+                repository: "https://example.com/sub.git".to_string(),
+                reference: "main".to_string(),
+                path: PathBuf::from("vendor/lib"),
+                squash: true,
+            },
+            "Subtree",
+        ),
+        (
+            RepoCommandKind::PushSubtree {
+                repository: "https://example.com/sub.git".to_string(),
+                refspec: "main".to_string(),
+                path: PathBuf::from("vendor/lib"),
+            },
+            "Subtree",
+        ),
+        (
+            RepoCommandKind::SplitSubtree {
+                path: PathBuf::from("vendor/lib"),
+                branch: Some("subtree-split".to_string()),
+            },
+            "Subtree",
+        ),
+        (
+            RepoCommandKind::RemoveSubtree {
+                path: PathBuf::from("vendor/lib"),
+            },
+            "Subtree",
+        ),
         (RepoCommandKind::StageHunk, "Hunk"),
         (RepoCommandKind::UnstageHunk, "Hunk"),
         (
@@ -2336,6 +2482,45 @@ fn repo_command_finished_success_summaries_cover_additional_commands() {
                 path: PathBuf::from("mods/sub"),
             },
             "Submodule removed → mods/sub",
+        ),
+        (
+            RepoCommandKind::AddSubtree {
+                repository: "https://example.com/sub.git".to_string(),
+                reference: "main".to_string(),
+                path: PathBuf::from("vendor/lib"),
+                squash: true,
+            },
+            "Subtree added → vendor/lib (--squash)",
+        ),
+        (
+            RepoCommandKind::PullSubtree {
+                repository: "https://example.com/sub.git".to_string(),
+                reference: "main".to_string(),
+                path: PathBuf::from("vendor/lib"),
+                squash: true,
+            },
+            "Subtree pulled → vendor/lib (--squash)",
+        ),
+        (
+            RepoCommandKind::PushSubtree {
+                repository: "https://example.com/sub.git".to_string(),
+                refspec: "main".to_string(),
+                path: PathBuf::from("vendor/lib"),
+            },
+            "Subtree pushed → vendor/lib (main)",
+        ),
+        (
+            RepoCommandKind::SplitSubtree {
+                path: PathBuf::from("vendor/lib"),
+                branch: Some("subtree-split".to_string()),
+            },
+            "Subtree split → vendor/lib (subtree-split)",
+        ),
+        (
+            RepoCommandKind::RemoveSubtree {
+                path: PathBuf::from("vendor/lib"),
+            },
+            "Subtree removed → vendor/lib",
         ),
         (RepoCommandKind::StageHunk, "Hunk staged"),
         (RepoCommandKind::UnstageHunk, "Hunk unstaged"),
@@ -2521,6 +2706,118 @@ fn checkout_branch_and_submodule_messages_emit_effects() {
             repo_id: RepoId(1),
             path
         }] if path == &PathBuf::from("mods/sub")
+    ));
+
+    let add_subtree = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::AddSubtree {
+            repo_id: RepoId(1),
+            repository: "https://example.com/sub.git".to_string(),
+            reference: "main".to_string(),
+            path: PathBuf::from("vendor/lib"),
+            squash: true,
+        },
+    );
+    assert!(matches!(
+        add_subtree.as_slice(),
+        [Effect::AddSubtree {
+            repo_id: RepoId(1),
+            repository,
+            reference,
+            path,
+            squash: true,
+            auth: None,
+        }] if repository == "https://example.com/sub.git"
+            && reference == "main"
+            && path == &PathBuf::from("vendor/lib")
+    ));
+
+    let pull_subtree = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::PullSubtree {
+            repo_id: RepoId(1),
+            repository: "https://example.com/sub.git".to_string(),
+            reference: "main".to_string(),
+            path: PathBuf::from("vendor/lib"),
+            squash: false,
+        },
+    );
+    assert!(matches!(
+        pull_subtree.as_slice(),
+        [Effect::PullSubtree {
+            repo_id: RepoId(1),
+            repository,
+            reference,
+            path,
+            squash: false,
+            auth: None,
+        }] if repository == "https://example.com/sub.git"
+            && reference == "main"
+            && path == &PathBuf::from("vendor/lib")
+    ));
+
+    let push_subtree = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::PushSubtree {
+            repo_id: RepoId(1),
+            repository: "https://example.com/sub.git".to_string(),
+            refspec: "main".to_string(),
+            path: PathBuf::from("vendor/lib"),
+        },
+    );
+    assert!(matches!(
+        push_subtree.as_slice(),
+        [Effect::PushSubtree {
+            repo_id: RepoId(1),
+            repository,
+            refspec,
+            path,
+            auth: None,
+        }] if repository == "https://example.com/sub.git"
+            && refspec == "main"
+            && path == &PathBuf::from("vendor/lib")
+    ));
+
+    let split_subtree = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SplitSubtree {
+            repo_id: RepoId(1),
+            path: PathBuf::from("vendor/lib"),
+            branch: Some("subtree-split".to_string()),
+        },
+    );
+    assert!(matches!(
+        split_subtree.as_slice(),
+        [Effect::SplitSubtree {
+            repo_id: RepoId(1),
+            path,
+            branch: Some(branch),
+        }] if path == &PathBuf::from("vendor/lib") && branch == "subtree-split"
+    ));
+
+    let remove_subtree = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RemoveSubtree {
+            repo_id: RepoId(1),
+            path: PathBuf::from("vendor/lib"),
+        },
+    );
+    assert!(matches!(
+        remove_subtree.as_slice(),
+        [Effect::RemoveSubtree {
+            repo_id: RepoId(1),
+            path,
+        }] if path == &PathBuf::from("vendor/lib")
     ));
 }
 

@@ -136,6 +136,9 @@ pub(super) fn schedule_effect(
         Effect::LoadSubmodules { repo_id } => {
             repo_load::schedule_load_submodules(executor, repos, msg_tx, repo_id);
         }
+        Effect::LoadSubtrees { repo_id } => {
+            repo_load::schedule_load_subtrees(executor, repos, msg_tx, repo_id);
+        }
         Effect::LoadRebaseAndMergeState { repo_id } => {
             repo_load::schedule_load_rebase_and_merge_state(executor, repos, msg_tx, repo_id);
         }
@@ -270,6 +273,43 @@ pub(super) fn schedule_effect(
         }
         Effect::RemoveSubmodule { repo_id, path } => {
             repo_commands::schedule_remove_submodule(executor, repos, msg_tx, repo_id, path);
+        }
+        Effect::AddSubtree {
+            repo_id,
+            repository,
+            reference,
+            path,
+            squash,
+            auth,
+        } => repo_commands::schedule_add_subtree(
+            executor, repos, msg_tx, repo_id, repository, reference, path, squash, auth,
+        ),
+        Effect::PullSubtree {
+            repo_id,
+            repository,
+            reference,
+            path,
+            squash,
+            auth,
+        } => repo_commands::schedule_pull_subtree(
+            executor, repos, msg_tx, repo_id, repository, reference, path, squash, auth,
+        ),
+        Effect::PushSubtree {
+            repo_id,
+            repository,
+            refspec,
+            path,
+            auth,
+        } => repo_commands::schedule_push_subtree(
+            executor, repos, msg_tx, repo_id, repository, refspec, path, auth,
+        ),
+        Effect::SplitSubtree {
+            repo_id,
+            path,
+            branch,
+        } => repo_commands::schedule_split_subtree(executor, repos, msg_tx, repo_id, path, branch),
+        Effect::RemoveSubtree { repo_id, path } => {
+            repo_commands::schedule_remove_subtree(executor, repos, msg_tx, repo_id, path);
         }
         Effect::StageHunk { repo_id, patch } => {
             repo_commands::schedule_stage_hunk(executor, repos, msg_tx, repo_id, patch);

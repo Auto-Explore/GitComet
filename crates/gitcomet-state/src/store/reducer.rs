@@ -252,6 +252,44 @@ fn retry_msg_for_repo_command(repo_id: RepoId, command: RepoCommandKind) -> Opti
         RepoCommandKind::AddSubmodule { url, path } => Msg::AddSubmodule { repo_id, url, path },
         RepoCommandKind::UpdateSubmodules => Msg::UpdateSubmodules { repo_id },
         RepoCommandKind::RemoveSubmodule { path } => Msg::RemoveSubmodule { repo_id, path },
+        RepoCommandKind::AddSubtree {
+            repository,
+            reference,
+            path,
+            squash,
+        } => Msg::AddSubtree {
+            repo_id,
+            repository,
+            reference,
+            path,
+            squash,
+        },
+        RepoCommandKind::PullSubtree {
+            repository,
+            reference,
+            path,
+            squash,
+        } => Msg::PullSubtree {
+            repo_id,
+            repository,
+            reference,
+            path,
+            squash,
+        },
+        RepoCommandKind::PushSubtree {
+            repository,
+            refspec,
+            path,
+        } => Msg::PushSubtree {
+            repo_id,
+            repository,
+            refspec,
+            path,
+        },
+        RepoCommandKind::SplitSubtree { path, branch } => {
+            Msg::SplitSubtree { repo_id, path, branch }
+        }
+        RepoCommandKind::RemoveSubtree { path } => Msg::RemoveSubtree { repo_id, path },
         // Not replayable because command metadata does not retain original content.
         RepoCommandKind::SaveWorktreeFile { .. }
         | RepoCommandKind::StageHunk
@@ -269,6 +307,9 @@ fn attach_git_auth_to_effects(mut effects: Vec<Effect>, auth: StagedGitAuth) -> 
         Effect::CloneRepo { auth: slot, .. }
         | Effect::AddSubmodule { auth: slot, .. }
         | Effect::UpdateSubmodules { auth: slot, .. }
+        | Effect::AddSubtree { auth: slot, .. }
+        | Effect::PullSubtree { auth: slot, .. }
+        | Effect::PushSubtree { auth: slot, .. }
         | Effect::Commit { auth: slot, .. }
         | Effect::CommitAmend { auth: slot, .. }
         | Effect::FetchAll { auth: slot, .. }
@@ -513,6 +554,7 @@ pub(super) fn reduce(
         Msg::LoadBlame { repo_id, path, rev } => effects::load_blame(state, repo_id, path, rev),
         Msg::LoadWorktrees { repo_id } => effects::load_worktrees(state, repo_id),
         Msg::LoadSubmodules { repo_id } => effects::load_submodules(state, repo_id),
+        Msg::LoadSubtrees { repo_id } => effects::load_subtrees(state, repo_id),
         Msg::RefreshBranches { repo_id } => effects::refresh_branches(state, repo_id),
         Msg::StageHunk { repo_id, patch } => {
             begin_local_action(state, repo_id);
@@ -662,6 +704,47 @@ pub(super) fn reduce(
         Msg::RemoveSubmodule { repo_id, path } => {
             begin_local_action(state, repo_id);
             actions_emit_effects::remove_submodule(repo_id, path)
+        }
+        Msg::AddSubtree {
+            repo_id,
+            repository,
+            reference,
+            path,
+            squash,
+        } => {
+            begin_local_action(state, repo_id);
+            actions_emit_effects::add_subtree(repo_id, repository, reference, path, squash)
+        }
+        Msg::PullSubtree {
+            repo_id,
+            repository,
+            reference,
+            path,
+            squash,
+        } => {
+            begin_local_action(state, repo_id);
+            actions_emit_effects::pull_subtree(repo_id, repository, reference, path, squash)
+        }
+        Msg::PushSubtree {
+            repo_id,
+            repository,
+            refspec,
+            path,
+        } => {
+            begin_local_action(state, repo_id);
+            actions_emit_effects::push_subtree(repo_id, repository, refspec, path)
+        }
+        Msg::SplitSubtree {
+            repo_id,
+            path,
+            branch,
+        } => {
+            begin_local_action(state, repo_id);
+            actions_emit_effects::split_subtree(repo_id, path, branch)
+        }
+        Msg::RemoveSubtree { repo_id, path } => {
+            begin_local_action(state, repo_id);
+            actions_emit_effects::remove_subtree(repo_id, path)
         }
         Msg::StagePath { repo_id, path } => {
             begin_local_action(state, repo_id);
@@ -999,6 +1082,9 @@ pub(super) fn reduce(
         }
         Msg::Internal(crate::msg::InternalMsg::SubmodulesLoaded { repo_id, result }) => {
             effects::submodules_loaded(state, repo_id, result)
+        }
+        Msg::Internal(crate::msg::InternalMsg::SubtreesLoaded { repo_id, result }) => {
+            effects::subtrees_loaded(state, repo_id, result)
         }
         Msg::Internal(crate::msg::InternalMsg::CommitDetailsLoaded {
             repo_id,

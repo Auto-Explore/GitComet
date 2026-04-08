@@ -12,7 +12,7 @@ fn git_command() -> Command {
     // Keep tests deterministic by isolating from host git config.
     test_git_env::apply(&mut cmd);
     // Local bare remotes require file protocol to be permitted.
-    cmd.env("GIT_ALLOW_PROTOCOL", "file");
+    cmd.arg("-c").arg("protocol.file.allow=always");
     cmd
 }
 

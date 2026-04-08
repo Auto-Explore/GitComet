@@ -3,7 +3,7 @@ use gitcomet_core::conflict_session::ConflictSession;
 use gitcomet_core::domain::{
     Branch, CommitDetails, CommitId, Diff, DiffTarget, FileDiffImage, FileDiffText, LogCursor,
     LogPage, ReflogEntry, Remote, RemoteBranch, RemoteTag, RepoSpec, RepoStatus, StashEntry,
-    Submodule, Tag, UpstreamDivergence, Worktree,
+    Submodule, Subtree, Tag, UpstreamDivergence, Worktree,
 };
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::git_ops_trace::{self, GitOpTraceKind};
@@ -47,6 +47,7 @@ mod porcelain;
 mod remotes;
 mod status;
 mod submodules;
+mod subtrees;
 mod tags;
 mod worktrees;
 
@@ -521,6 +522,51 @@ impl GitRepository for GixRepo {
 
     fn remove_submodule_with_output(&self, path: &Path) -> Result<CommandOutput> {
         self.remove_submodule_with_output_impl(path)
+    }
+
+    fn list_subtrees(&self) -> Result<Vec<Subtree>> {
+        self.list_subtrees_impl()
+    }
+
+    fn add_subtree_with_output(
+        &self,
+        repository: &str,
+        reference: &str,
+        path: &Path,
+        squash: bool,
+    ) -> Result<CommandOutput> {
+        self.add_subtree_with_output_impl(repository, reference, path, squash)
+    }
+
+    fn pull_subtree_with_output(
+        &self,
+        repository: &str,
+        reference: &str,
+        path: &Path,
+        squash: bool,
+    ) -> Result<CommandOutput> {
+        self.pull_subtree_with_output_impl(repository, reference, path, squash)
+    }
+
+    fn push_subtree_with_output(
+        &self,
+        repository: &str,
+        refspec: &str,
+        path: &Path,
+    ) -> Result<CommandOutput> {
+        self.push_subtree_with_output_impl(repository, refspec, path)
+    }
+
+    fn split_subtree_with_output(
+        &self,
+        path: &Path,
+        branch: Option<&str>,
+    ) -> Result<CommandOutput> {
+        self.split_subtree_with_output_impl(path, branch)
+    }
+
+    fn remove_subtree_with_output(&self, path: &Path) -> Result<CommandOutput> {
+        self.remove_subtree_with_output_impl(path)
     }
 
     fn discard_worktree_changes(&self, paths: &[&Path]) -> Result<()> {

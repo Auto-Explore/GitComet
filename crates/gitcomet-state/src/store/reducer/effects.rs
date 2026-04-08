@@ -6,7 +6,7 @@ use crate::msg::Effect;
 use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession};
 use gitcomet_core::domain::{
     Branch, CommitDetails, CommitId, FileStatusKind, LogPage, ReflogEntry, Remote, RemoteBranch,
-    RemoteTag, RepoStatus, StashEntry, Submodule, Tag, UpstreamDivergence, Worktree,
+    RemoteTag, RepoStatus, StashEntry, Submodule, Subtree, Tag, UpstreamDivergence, Worktree,
 };
 use gitcomet_core::error::Error;
 use std::path::PathBuf;
@@ -188,6 +188,24 @@ pub(super) fn submodules_loaded(
     Vec::new()
 }
 
+pub(super) fn subtrees_loaded(
+    state: &mut AppState,
+    repo_id: RepoId,
+    result: std::result::Result<Vec<Subtree>, Error>,
+) -> Vec<Effect> {
+    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+        let subtrees = match result {
+            Ok(v) => Loadable::Ready(v),
+            Err(e) => {
+                push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                Loadable::Error(e.to_string())
+            }
+        };
+        repo_state.set_subtrees(subtrees);
+    }
+    Vec::new()
+}
+
 pub(super) fn select_commit(
     state: &mut AppState,
     repo_id: RepoId,
@@ -345,6 +363,14 @@ pub(super) fn load_submodules(state: &mut AppState, repo_id: RepoId) -> Vec<Effe
     };
     repo_state.set_submodules(Loadable::Loading);
     vec![Effect::LoadSubmodules { repo_id }]
+}
+
+pub(super) fn load_subtrees(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
+    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+    repo_state.set_subtrees(Loadable::Loading);
+    vec![Effect::LoadSubtrees { repo_id }]
 }
 
 pub(super) fn branches_loaded(

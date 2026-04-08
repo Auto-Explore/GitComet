@@ -2135,6 +2135,7 @@ pub(super) enum RepoPopoverKind {
     Remote(RemotePopoverKind),
     Worktree(WorktreePopoverKind),
     Submodule(SubmodulePopoverKind),
+    Subtree(SubtreePopoverKind),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -2172,6 +2173,23 @@ pub(super) enum SubmodulePopoverKind {
     RemoveConfirm { path: std::path::PathBuf },
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum SubtreePopoverKind {
+    SectionMenu,
+    Menu { path: std::path::PathBuf },
+    AddPrompt,
+    OpenPicker,
+    RevealPicker,
+    PullPicker,
+    PullPrompt { path: std::path::PathBuf },
+    PushPicker,
+    PushPrompt { path: std::path::PathBuf },
+    SplitPicker,
+    SplitPrompt { path: std::path::PathBuf },
+    RemovePicker,
+    RemoveConfirm { path: std::path::PathBuf },
+}
+
 impl PopoverKind {
     pub(super) fn remote(repo_id: RepoId, kind: RemotePopoverKind) -> Self {
         Self::Repo {
@@ -2191,6 +2209,13 @@ impl PopoverKind {
         Self::Repo {
             repo_id,
             kind: RepoPopoverKind::Submodule(kind),
+        }
+    }
+
+    pub(super) fn subtree(repo_id: RepoId, kind: SubtreePopoverKind) -> Self {
+        Self::Repo {
+            repo_id,
+            kind: RepoPopoverKind::Subtree(kind),
         }
     }
 }
@@ -2361,6 +2386,53 @@ pub(super) fn canonicalize_path(path: std::path::PathBuf) -> std::path::PathBuf 
     canonicalize_or_original(path)
 }
 
+pub(super) fn local_repository_source_path(
+    repo_workdir: &std::path::Path,
+    repository: &str,
+) -> Option<std::path::PathBuf> {
+    let repository = repository.trim();
+    if repository.is_empty() {
+        return None;
+    }
+
+    let path = if repository.starts_with("file://") {
+        let url = url::Url::parse(repository).ok()?;
+        let path = url.to_file_path().ok()?;
+        if path.as_os_str().is_empty() {
+            return None;
+        }
+        path
+    } else if repository.contains("://") {
+        return None;
+    } else {
+        std::path::PathBuf::from(repository)
+    };
+
+    let path = if path.is_relative() {
+        repo_workdir.join(path)
+    } else {
+        path
+    };
+    let path = canonicalize_or_original(path);
+    path.exists().then_some(path)
+}
+
+pub(super) fn local_subtree_source_repo_path(
+    repo: &RepoState,
+    subtree_path: &std::path::Path,
+) -> Option<std::path::PathBuf> {
+    let Loadable::Ready(subtrees) = &repo.subtrees else {
+        return None;
+    };
+
+    let repository = subtrees
+        .iter()
+        .find(|subtree| subtree.path == subtree_path)
+        .and_then(|subtree| subtree.source.as_ref())
+        .map(|source| source.repository.as_str())?;
+    local_repository_source_path(&repo.spec.workdir, repository)
+}
+
 pub(super) fn focused_mergetool_bootstrap_action(
     state: &AppState,
     bootstrap: &FocusedMergetoolBootstrap,
@@ -2502,6 +2574,82 @@ impl ThemeMode {
 
     pub(super) const fn is_automatic(&self) -> bool {
         matches!(self, Self::Automatic)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gitcomet_core::domain::{RepoSpec, Subtree, SubtreeSourceConfig};
+    use std::path::PathBuf;
+
+    #[test]
+    fn local_repository_source_path_resolves_relative_paths_against_repo_workdir() {
+        let dir = tempfile::tempdir().expect("create tempdir");
+        let workdir = dir.path().join("parent");
+        let source = dir.path().join("source");
+        std::fs::create_dir_all(&workdir).expect("create repo workdir");
+        std::fs::create_dir_all(&source).expect("create source repo");
+
+        let resolved = local_repository_source_path(&workdir, "../source")
+            .expect("relative local source should resolve");
+
+        assert_eq!(resolved, canonicalize_or_original(source));
+    }
+
+    #[test]
+    fn local_repository_source_path_accepts_file_urls() {
+        let dir = tempfile::tempdir().expect("create tempdir");
+        let source = dir.path().join("source");
+        std::fs::create_dir_all(&source).expect("create source repo");
+        let url = url::Url::from_file_path(&source)
+            .expect("file path should convert to file url")
+            .to_string();
+
+        let resolved = local_repository_source_path(dir.path(), &url)
+            .expect("file url should resolve to local path");
+
+        assert_eq!(resolved, canonicalize_or_original(source));
+    }
+
+    #[test]
+    fn local_repository_source_path_rejects_remote_urls() {
+        let dir = tempfile::tempdir().expect("create tempdir");
+
+        assert_eq!(
+            local_repository_source_path(dir.path(), "https://example.com/repo.git"),
+            None
+        );
+    }
+
+    #[test]
+    fn local_subtree_source_repo_path_uses_stored_repository_source() {
+        let dir = tempfile::tempdir().expect("create tempdir");
+        let workdir = dir.path().join("parent");
+        let source = dir.path().join("source");
+        std::fs::create_dir_all(&workdir).expect("create repo workdir");
+        std::fs::create_dir_all(&source).expect("create source repo");
+
+        let mut repo = RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: workdir.clone(),
+            },
+        );
+        repo.subtrees = Loadable::Ready(std::sync::Arc::new(vec![Subtree {
+            path: PathBuf::from("vendor/lib"),
+            source: Some(SubtreeSourceConfig {
+                repository: "../source".to_string(),
+                reference: "main".to_string(),
+                push_refspec: None,
+                squash: true,
+            }),
+        }]));
+
+        let resolved = local_subtree_source_repo_path(&repo, std::path::Path::new("vendor/lib"))
+            .expect("subtree source should resolve");
+
+        assert_eq!(resolved, canonicalize_or_original(source));
     }
 }
 

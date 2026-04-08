@@ -1221,6 +1221,278 @@ impl SidebarPaneView {
                         }))
                         .into_any_element()
                 }
+                BranchSidebarRow::SubtreesHeader {
+                    top_border,
+                    collapsed,
+                    collapse_key,
+                } => {
+                    let show_subtrees_spinner = this.active_repo().is_some_and(|r| {
+                        matches!(r.subtrees, Loadable::Loading)
+                            || (!collapsed && matches!(r.subtrees, Loadable::NotLoaded))
+                    });
+                    let context_menu_invoker: SharedString =
+                        format!("subtrees_section_menu_{}", repo_id.0).into();
+                    let context_menu_active =
+                        this.active_context_menu_invoker.as_ref() == Some(&context_menu_invoker);
+                    let context_menu_invoker_for_right_click = context_menu_invoker.clone();
+                    let context_menu_invoker_for_indicator = context_menu_invoker.clone();
+                    let row_group: SharedString =
+                        format!("subtrees_section_row_{}", repo_id.0).into();
+
+                    div()
+                        .id(("subtrees_section", ix))
+                        .relative()
+                        .h(px(24.0))
+                        .w_full()
+                        .pl(indent_px(0))
+                        .pr_2()
+                        .group(row_group.clone())
+                        .flex()
+                        .items_center()
+                        .gap(px(BRANCH_TREE_GAP_PX))
+                        .bg(theme.colors.surface_bg_elevated)
+                        .cursor(CursorStyle::PointingHand)
+                        .when(context_menu_active, |d| d.bg(theme.colors.active))
+                        .hover(move |s| {
+                            if context_menu_active {
+                                s.bg(theme.colors.active)
+                            } else {
+                                s.bg(theme.colors.hover)
+                            }
+                        })
+                        .active(move |s| s.bg(theme.colors.active))
+                        .when(top_border, |d| d.child(top_divider(theme.colors.border)))
+                        .child(tree_toggle_slot(Some(collapsed)))
+                        .child(tree_icon_slot("icons/box.svg", icon_primary, 14.0))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w(px(0.0))
+                                .text_sm()
+                                .line_clamp(1)
+                                .whitespace_nowrap()
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(theme.colors.text)
+                                .child("Subtrees"),
+                        )
+                        .when(show_subtrees_spinner, |d| {
+                            d.child(
+                                div()
+                                    .debug_selector(move || {
+                                        format!("subtrees_spinner_{}", repo_id.0)
+                                    })
+                                    .child(svg_spinner(
+                                        ("subtrees_spinner", repo_id.0),
+                                        icon_muted,
+                                        12.0,
+                                    )),
+                            )
+                        })
+                        .child(
+                            context_menu_indicator(
+                                format!("subtrees_section_menu_indicator_{}", repo_id.0).into(),
+                                row_group.clone(),
+                                context_menu_active,
+                                context_menu_active,
+                            )
+                            .on_click(cx.listener(
+                                move |this, e: &ClickEvent, window, cx| {
+                                    if !e.standard_click() || e.click_count() != 1 {
+                                        return;
+                                    }
+                                    cx.stop_propagation();
+                                    this.activate_context_menu_invoker(
+                                        context_menu_invoker_for_indicator.clone(),
+                                        cx,
+                                    );
+                                    this.open_popover_at(
+                                        PopoverKind::subtree(
+                                            repo_id,
+                                            SubtreePopoverKind::SectionMenu,
+                                        ),
+                                        e.position(),
+                                        window,
+                                        cx,
+                                    );
+                                },
+                            )),
+                        )
+                        .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
+                            let text: SharedString =
+                                "Subtrees (Add / Pull / Push / Split / Open / Reveal / Remove)"
+                                    .into();
+                            let mut changed = false;
+                            if *hovering {
+                                changed |= this.set_tooltip_text_if_changed(Some(text), cx);
+                            } else {
+                                changed |= this.clear_tooltip_if_matches(&text, cx);
+                            }
+                            if changed {
+                                cx.notify();
+                            }
+                        }))
+                        .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
+                            if !e.standard_click() || e.click_count() != 1 {
+                                return;
+                            }
+                            this.toggle_active_repo_collapse_key(collapse_key.clone(), cx);
+                        }))
+                        .on_mouse_down(
+                            MouseButton::Right,
+                            cx.listener(move |this, e: &MouseDownEvent, window, cx| {
+                                cx.stop_propagation();
+                                this.activate_context_menu_invoker(
+                                    context_menu_invoker_for_right_click.clone(),
+                                    cx,
+                                );
+                                this.open_popover_at(
+                                    PopoverKind::subtree(
+                                        repo_id,
+                                        SubtreePopoverKind::SectionMenu,
+                                    ),
+                                    e.position,
+                                    window,
+                                    cx,
+                                );
+                            }),
+                        )
+                        .into_any_element()
+                }
+                BranchSidebarRow::SubtreePlaceholder { message } => div()
+                    .id(("subtree_placeholder", ix))
+                    .h(px(22.0))
+                    .w_full()
+                    .px_2()
+                    .text_sm()
+                    .text_color(theme.colors.text_muted)
+                    .child(message)
+                    .into_any_element(),
+                BranchSidebarRow::SubtreeItem { path } => {
+                    let open_repo_path = this
+                        .active_repo()
+                        .and_then(|repo| local_subtree_source_repo_path(repo, &path));
+                    let open_repo_path_for_click = open_repo_path.clone();
+                    let path_for_menu = path.clone();
+                    let path_label = this.cached_path_display(&path);
+                    let tooltip = path_label.clone();
+                    let context_menu_invoker: SharedString =
+                        format!("subtree_menu_{}_{}", repo_id.0, path.display()).into();
+                    let context_menu_active =
+                        this.active_context_menu_invoker.as_ref() == Some(&context_menu_invoker);
+                    let context_menu_invoker_for_right_click = context_menu_invoker.clone();
+                    let context_menu_invoker_for_indicator = context_menu_invoker.clone();
+                    let path_for_indicator = path.clone();
+                    let row_group: SharedString =
+                        format!("subtree_row_{}_{}", repo_id.0, ix).into();
+
+                    div()
+                        .id(("subtree_item", ix))
+                        .relative()
+                        .h(px(22.0))
+                        .w_full()
+                        .group(row_group.clone())
+                        .flex()
+                        .items_center()
+                        .gap(px(BRANCH_TREE_GAP_PX))
+                        .pl(indent_px(0))
+                        .pr_2()
+                        .rounded(px(theme.radii.row))
+                        .when(context_menu_active, |d| d.bg(theme.colors.active))
+                        .hover(move |s| {
+                            if context_menu_active {
+                                s.bg(theme.colors.active)
+                            } else {
+                                s.bg(theme.colors.hover)
+                            }
+                        })
+                        .active(move |s| s.bg(theme.colors.active))
+                        .child(tree_toggle_slot(None))
+                        .child(tree_icon_slot("icons/box.svg", icon_primary, 12.0))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w(px(0.0))
+                                .text_sm()
+                                .line_clamp(1)
+                                .whitespace_nowrap()
+                                .child(path_label),
+                        )
+                        .child(
+                            context_menu_indicator(
+                                format!("subtree_menu_indicator_{}_{}", repo_id.0, ix).into(),
+                                row_group.clone(),
+                                context_menu_active,
+                                context_menu_active,
+                            )
+                            .on_click(cx.listener(
+                                move |this, e: &ClickEvent, window, cx| {
+                                    if !e.standard_click() || e.click_count() != 1 {
+                                        return;
+                                    }
+                                    cx.stop_propagation();
+                                    this.activate_context_menu_invoker(
+                                        context_menu_invoker_for_indicator.clone(),
+                                        cx,
+                                    );
+                                    this.open_popover_at(
+                                        PopoverKind::subtree(
+                                            repo_id,
+                                            SubtreePopoverKind::Menu {
+                                                path: path_for_indicator.clone(),
+                                            },
+                                        ),
+                                        e.position(),
+                                        window,
+                                        cx,
+                                    );
+                                },
+                            )),
+                        )
+                        .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
+                            if !e.standard_click() || e.click_count() < 2 {
+                                return;
+                            }
+                            let Some(path) = open_repo_path_for_click.clone() else {
+                                return;
+                            };
+                            this.store.dispatch(Msg::OpenRepo(path));
+                            cx.notify();
+                        }))
+                        .on_mouse_down(
+                            MouseButton::Right,
+                            cx.listener(move |this, e: &MouseDownEvent, window, cx| {
+                                cx.stop_propagation();
+                                this.activate_context_menu_invoker(
+                                    context_menu_invoker_for_right_click.clone(),
+                                    cx,
+                                );
+                                this.open_popover_at(
+                                    PopoverKind::subtree(
+                                        repo_id,
+                                        SubtreePopoverKind::Menu {
+                                            path: path_for_menu.clone(),
+                                        },
+                                    ),
+                                    e.position,
+                                    window,
+                                    cx,
+                                );
+                            }),
+                        )
+                        .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
+                            let mut changed = false;
+                            if *hovering {
+                                changed |=
+                                    this.set_tooltip_text_if_changed(Some(tooltip.clone()), cx);
+                            } else {
+                                changed |= this.clear_tooltip_if_matches(&tooltip, cx);
+                            }
+                            if changed {
+                                cx.notify();
+                            }
+                        }))
+                        .into_any_element()
+                }
                 BranchSidebarRow::RemoteHeader {
                     name,
                     collapsed,

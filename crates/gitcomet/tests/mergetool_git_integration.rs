@@ -16,7 +16,7 @@ fn apply_isolated_git_config_env(cmd: &mut Command) {
     cmd.env("LC_ALL", "C");
     cmd.env("LANG", "C");
     // Submodule scenarios in this suite clone from local file:// URLs.
-    cmd.env("GIT_ALLOW_PROTOCOL", "file");
+    cmd.arg("-c").arg("protocol.file.allow=always");
 }
 #[cfg(windows)]
 fn is_git_shell_startup_failure(text: &str) -> bool {

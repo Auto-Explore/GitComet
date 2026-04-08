@@ -32,6 +32,9 @@ fn effect_git_auth(effect: &Effect) -> Option<&StagedGitAuth> {
         Effect::CloneRepo { auth, .. }
         | Effect::AddSubmodule { auth, .. }
         | Effect::UpdateSubmodules { auth, .. }
+        | Effect::AddSubtree { auth, .. }
+        | Effect::PullSubtree { auth, .. }
+        | Effect::PushSubtree { auth, .. }
         | Effect::Commit { auth, .. }
         | Effect::CommitAmend { auth, .. }
         | Effect::FetchAll { auth, .. }
@@ -842,6 +845,88 @@ fn submit_auth_prompt_replays_expected_repo_command_mappings() {
     assert!(matches!(
         remove_submodule_effects.as_slice(),
         [Effect::RemoveSubmodule {
+            repo_id: RepoId(1),
+            path,
+        }] if path == &PathBuf::from("vendor/lib")
+    ));
+
+    let add_subtree_effects = replay_case(RepoCommandKind::AddSubtree {
+        repository: "https://example.com/sub.git".to_string(),
+        reference: "main".to_string(),
+        path: PathBuf::from("vendor/lib"),
+        squash: true,
+    });
+    assert!(matches!(
+        add_subtree_effects.as_slice(),
+        [Effect::AddSubtree {
+            repo_id: RepoId(1),
+            repository,
+            reference,
+            path,
+            squash: true,
+            auth: Some(_),
+        }] if repository == "https://example.com/sub.git"
+            && reference == "main"
+            && path == &PathBuf::from("vendor/lib")
+    ));
+
+    let pull_subtree_effects = replay_case(RepoCommandKind::PullSubtree {
+        repository: "https://example.com/sub.git".to_string(),
+        reference: "main".to_string(),
+        path: PathBuf::from("vendor/lib"),
+        squash: false,
+    });
+    assert!(matches!(
+        pull_subtree_effects.as_slice(),
+        [Effect::PullSubtree {
+            repo_id: RepoId(1),
+            repository,
+            reference,
+            path,
+            squash: false,
+            auth: Some(_),
+        }] if repository == "https://example.com/sub.git"
+            && reference == "main"
+            && path == &PathBuf::from("vendor/lib")
+    ));
+
+    let push_subtree_effects = replay_case(RepoCommandKind::PushSubtree {
+        repository: "https://example.com/sub.git".to_string(),
+        refspec: "main".to_string(),
+        path: PathBuf::from("vendor/lib"),
+    });
+    assert!(matches!(
+        push_subtree_effects.as_slice(),
+        [Effect::PushSubtree {
+            repo_id: RepoId(1),
+            repository,
+            refspec,
+            path,
+            auth: Some(_),
+        }] if repository == "https://example.com/sub.git"
+            && refspec == "main"
+            && path == &PathBuf::from("vendor/lib")
+    ));
+
+    let split_subtree_effects = replay_case(RepoCommandKind::SplitSubtree {
+        path: PathBuf::from("vendor/lib"),
+        branch: Some("subtree-split".to_string()),
+    });
+    assert!(matches!(
+        split_subtree_effects.as_slice(),
+        [Effect::SplitSubtree {
+            repo_id: RepoId(1),
+            path,
+            branch: Some(branch),
+        }] if path == &PathBuf::from("vendor/lib") && branch == "subtree-split"
+    ));
+
+    let remove_subtree_effects = replay_case(RepoCommandKind::RemoveSubtree {
+        path: PathBuf::from("vendor/lib"),
+    });
+    assert!(matches!(
+        remove_subtree_effects.as_slice(),
+        [Effect::RemoveSubtree {
             repo_id: RepoId(1),
             path,
         }] if path == &PathBuf::from("vendor/lib")

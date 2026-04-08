@@ -3126,6 +3126,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
         ),
         (Effect::LoadWorktrees { repo_id }, 1),
         (Effect::LoadSubmodules { repo_id }, 1),
+        (Effect::LoadSubtrees { repo_id }, 1),
         (Effect::LoadRebaseAndMergeState { repo_id }, 2),
         (Effect::LoadRebaseState { repo_id }, 1),
         (Effect::LoadMergeCommitMessage { repo_id }, 1),
@@ -3306,6 +3307,53 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
             Effect::RemoveSubmodule {
                 repo_id,
                 path: PathBuf::from("sub"),
+            },
+            1,
+        ),
+        (
+            Effect::AddSubtree {
+                repo_id,
+                repository: "https://example.com/repo.git".to_string(),
+                reference: "main".to_string(),
+                path: PathBuf::from("vendor/lib"),
+                squash: true,
+                auth: None,
+            },
+            1,
+        ),
+        (
+            Effect::PullSubtree {
+                repo_id,
+                repository: "https://example.com/repo.git".to_string(),
+                reference: "main".to_string(),
+                path: PathBuf::from("vendor/lib"),
+                squash: true,
+                auth: None,
+            },
+            1,
+        ),
+        (
+            Effect::PushSubtree {
+                repo_id,
+                repository: "https://example.com/repo.git".to_string(),
+                refspec: "main".to_string(),
+                path: PathBuf::from("vendor/lib"),
+                auth: None,
+            },
+            1,
+        ),
+        (
+            Effect::SplitSubtree {
+                repo_id,
+                path: PathBuf::from("vendor/lib"),
+                branch: Some("subtree-split".to_string()),
+            },
+            1,
+        ),
+        (
+            Effect::RemoveSubtree {
+                repo_id,
+                path: PathBuf::from("vendor/lib"),
             },
             1,
         ),

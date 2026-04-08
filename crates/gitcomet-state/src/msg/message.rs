@@ -158,6 +158,9 @@ pub enum Msg {
     LoadSubmodules {
         repo_id: RepoId,
     },
+    LoadSubtrees {
+        repo_id: RepoId,
+    },
     RefreshBranches {
         repo_id: RepoId,
     },
@@ -249,6 +252,35 @@ pub enum Msg {
         repo_id: RepoId,
     },
     RemoveSubmodule {
+        repo_id: RepoId,
+        path: PathBuf,
+    },
+    AddSubtree {
+        repo_id: RepoId,
+        repository: String,
+        reference: String,
+        path: PathBuf,
+        squash: bool,
+    },
+    PullSubtree {
+        repo_id: RepoId,
+        repository: String,
+        reference: String,
+        path: PathBuf,
+        squash: bool,
+    },
+    PushSubtree {
+        repo_id: RepoId,
+        repository: String,
+        refspec: String,
+        path: PathBuf,
+    },
+    SplitSubtree {
+        repo_id: RepoId,
+        path: PathBuf,
+        branch: Option<String>,
+    },
+    RemoveSubtree {
         repo_id: RepoId,
         path: PathBuf,
     },
@@ -574,6 +606,10 @@ pub enum InternalMsg {
     SubmodulesLoaded {
         repo_id: RepoId,
         result: Result<Vec<Submodule>, Error>,
+    },
+    SubtreesLoaded {
+        repo_id: RepoId,
+        result: Result<Vec<Subtree>, Error>,
     },
     CommitDetailsLoaded {
         repo_id: RepoId,

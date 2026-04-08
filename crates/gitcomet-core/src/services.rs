@@ -544,6 +544,63 @@ pub trait GitRepository: Send + Sync {
         )))
     }
 
+    fn list_subtrees(&self) -> Result<Vec<Subtree>> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "subtree listing is not implemented for this backend",
+        )))
+    }
+
+    fn add_subtree_with_output(
+        &self,
+        _repository: &str,
+        _reference: &str,
+        _path: &Path,
+        _squash: bool,
+    ) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "subtree add is not implemented for this backend",
+        )))
+    }
+
+    fn pull_subtree_with_output(
+        &self,
+        _repository: &str,
+        _reference: &str,
+        _path: &Path,
+        _squash: bool,
+    ) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "subtree pull is not implemented for this backend",
+        )))
+    }
+
+    fn push_subtree_with_output(
+        &self,
+        _repository: &str,
+        _refspec: &str,
+        _path: &Path,
+    ) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "subtree push is not implemented for this backend",
+        )))
+    }
+
+    fn split_subtree_with_output(
+        &self,
+        _path: &Path,
+        _branch: Option<&str>,
+    ) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "subtree split is not implemented for this backend",
+        )))
+    }
+
+    fn remove_subtree_with_output(&self, _path: &Path) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "subtree remove is not implemented for this backend",
+        )))
+    }
+
     fn discard_worktree_changes(&self, paths: &[&Path]) -> Result<()>;
 }
 

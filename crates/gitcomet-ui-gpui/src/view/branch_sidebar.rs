@@ -12,6 +12,7 @@ const LOCAL_SECTION_KEY: &str = "section:branches/local";
 const REMOTE_SECTION_KEY: &str = "section:branches/remote";
 const WORKTREES_SECTION_KEY: &str = "section:worktrees";
 const SUBMODULES_SECTION_KEY: &str = "section:submodules";
+const SUBTREES_SECTION_KEY: &str = "section:subtrees";
 const STASH_SECTION_KEY: &str = "section:stash";
 const EXPANDED_DEFAULT_SECTION_PREFIX: &str = "expanded:";
 const TRAILING_BOTTOM_SPACERS: usize = 3;
@@ -41,6 +42,10 @@ pub(super) const fn worktrees_section_storage_key() -> &'static str {
 
 pub(super) const fn submodules_section_storage_key() -> &'static str {
     SUBMODULES_SECTION_KEY
+}
+
+pub(super) const fn subtrees_section_storage_key() -> &'static str {
+    SUBTREES_SECTION_KEY
 }
 
 pub(super) const fn stash_section_storage_key() -> &'static str {
@@ -128,6 +133,17 @@ pub(super) enum BranchSidebarRow {
         message: SharedString,
     },
     SubmoduleItem {
+        path: std::path::PathBuf,
+    },
+    SubtreesHeader {
+        top_border: bool,
+        collapsed: bool,
+        collapse_key: SharedString,
+    },
+    SubtreePlaceholder {
+        message: SharedString,
+    },
+    SubtreeItem {
         path: std::path::PathBuf,
     },
     StashHeader {
@@ -272,6 +288,9 @@ pub(in crate::view) struct BranchSidebarSourceFingerprintParts {
     submodule_rev: u64,
     submodule_hash: u64,
     submodule_reuse_identity: fingerprint::LoadableArcIdentity,
+    subtree_rev: u64,
+    subtree_hash: u64,
+    subtree_reuse_identity: fingerprint::LoadableArcIdentity,
     stash_rev: u64,
     stash_hash: u64,
     stash_reuse_identity: fingerprint::LoadableArcIdentity,
@@ -292,6 +311,8 @@ impl BranchSidebarSourceFingerprintParts {
         let worktree_reuse_identity = fingerprint::loadable_arc_identity(&repo.worktrees);
         let submodule_rev = repo.submodules_rev;
         let submodule_reuse_identity = fingerprint::loadable_arc_identity(&repo.submodules);
+        let subtree_rev = repo.subtrees_rev;
+        let subtree_reuse_identity = fingerprint::loadable_arc_identity(&repo.subtrees);
         let stash_rev = repo.stashes_rev;
         let stash_reuse_identity = fingerprint::loadable_arc_identity(&repo.stashes);
 
@@ -338,6 +359,17 @@ impl BranchSidebarSourceFingerprintParts {
                     || branch_sidebar_submodule_source_hash(repo),
                     |parts| parts.submodule_hash,
                 ),
+            subtree_rev,
+            subtree_reuse_identity,
+            subtree_hash: reuse
+                .filter(|parts| {
+                    parts.subtree_rev == subtree_rev
+                        || parts.subtree_reuse_identity == subtree_reuse_identity
+                })
+                .map_or_else(
+                    || branch_sidebar_subtree_source_hash(repo),
+                    |parts| parts.subtree_hash,
+                ),
             stash_rev,
             stash_reuse_identity,
             stash_hash: reuse
@@ -363,6 +395,8 @@ impl BranchSidebarSourceFingerprintParts {
         3u8.hash(&mut hasher);
         self.submodule_hash.hash(&mut hasher);
         4u8.hash(&mut hasher);
+        self.subtree_hash.hash(&mut hasher);
+        5u8.hash(&mut hasher);
         self.stash_hash.hash(&mut hasher);
         BranchSidebarSourceFingerprint(hasher.finish())
     }
@@ -413,6 +447,13 @@ pub(in crate::view) fn branch_sidebar_source_matches_cached(
     let submodule_rev = repo.submodules_rev;
     if cached.submodule_rev != submodule_rev
         && cached.submodule_reuse_identity != fingerprint::loadable_arc_identity(&repo.submodules)
+    {
+        return false;
+    }
+
+    let subtree_rev = repo.subtrees_rev;
+    if cached.subtree_rev != subtree_rev
+        && cached.subtree_reuse_identity != fingerprint::loadable_arc_identity(&repo.subtrees)
     {
         return false;
     }
@@ -558,6 +599,31 @@ fn branch_sidebar_submodule_source_hash(repo: &RepoState) -> u64 {
     hasher.finish()
 }
 
+fn hash_branch_sidebar_subtree_source<H: Hasher>(repo: &RepoState, hasher: &mut H) {
+    fingerprint::hash_loadable_kind(&repo.subtrees, hasher);
+    if let Loadable::Ready(subtrees) = &repo.subtrees {
+        for subtree in subtrees.iter() {
+            subtree.path.hash(hasher);
+            match &subtree.source {
+                Some(source) => {
+                    1u8.hash(hasher);
+                    source.repository.hash(hasher);
+                    source.reference.hash(hasher);
+                    source.push_refspec.hash(hasher);
+                    source.squash.hash(hasher);
+                }
+                None => 0u8.hash(hasher),
+            }
+        }
+    }
+}
+
+fn branch_sidebar_subtree_source_hash(repo: &RepoState) -> u64 {
+    let mut hasher = FxHasher::default();
+    hash_branch_sidebar_subtree_source(repo, &mut hasher);
+    hasher.finish()
+}
+
 fn hash_branch_sidebar_stash_source<H: Hasher>(repo: &RepoState, hasher: &mut H) {
     fingerprint::hash_loadable_kind(&repo.stashes, hasher);
     if let Loadable::Ready(stashes) = &repo.stashes {
@@ -613,7 +679,7 @@ fn branch_sidebar_divergence_count(count: usize) -> Option<NonZeroU32> {
 fn defaults_to_collapsed(collapse_key: &str) -> bool {
     matches!(
         collapse_key,
-        WORKTREES_SECTION_KEY | SUBMODULES_SECTION_KEY | STASH_SECTION_KEY
+        WORKTREES_SECTION_KEY | SUBMODULES_SECTION_KEY | SUBTREES_SECTION_KEY | STASH_SECTION_KEY
     )
 }
 
@@ -660,6 +726,7 @@ pub(super) fn branch_sidebar_rows(
     let remote_collapsed = is_collapsed(collapsed_items, remote_section_storage_key());
     let worktrees_collapsed = is_collapsed(collapsed_items, worktrees_section_storage_key());
     let submodules_collapsed = is_collapsed(collapsed_items, submodules_section_storage_key());
+    let subtrees_collapsed = is_collapsed(collapsed_items, subtrees_section_storage_key());
     let stash_collapsed = is_collapsed(collapsed_items, stash_section_storage_key());
     let visible_rows = if local_collapsed {
         0
@@ -687,6 +754,13 @@ pub(super) fn branch_sidebar_rows(
     } else {
         match &repo.submodules {
             Loadable::Ready(submodules) => submodules.len(),
+            _ => 0,
+        }
+    } + if subtrees_collapsed {
+        0
+    } else {
+        match &repo.subtrees {
+            Loadable::Ready(subtrees) => subtrees.len(),
             _ => 0,
         }
     } + if stash_collapsed {
@@ -944,6 +1018,40 @@ pub(super) fn branch_sidebar_rows(
                 message: "Loading".into(),
             }),
             Loadable::Error(error) => rows.push(BranchSidebarRow::SubmodulePlaceholder {
+                message: error.clone().into(),
+            }),
+        }
+    }
+
+    rows.push(BranchSidebarRow::SectionSpacer);
+
+    rows.push(BranchSidebarRow::SubtreesHeader {
+        top_border: true,
+        collapsed: subtrees_collapsed,
+        collapse_key: subtrees_section_storage_key().into(),
+    });
+
+    if !subtrees_collapsed {
+        match &repo.subtrees {
+            Loadable::Ready(subtrees) if subtrees.is_empty() => {
+                rows.push(BranchSidebarRow::SubtreePlaceholder {
+                    message: "No subtrees".into(),
+                });
+            }
+            Loadable::Ready(subtrees) => {
+                for subtree in subtrees.iter() {
+                    rows.push(BranchSidebarRow::SubtreeItem {
+                        path: subtree.path.clone(),
+                    });
+                }
+            }
+            Loadable::Loading => rows.push(BranchSidebarRow::SubtreePlaceholder {
+                message: "Loading".into(),
+            }),
+            Loadable::NotLoaded => rows.push(BranchSidebarRow::SubtreePlaceholder {
+                message: "Loading".into(),
+            }),
+            Loadable::Error(error) => rows.push(BranchSidebarRow::SubtreePlaceholder {
                 message: error.clone().into(),
             }),
         }

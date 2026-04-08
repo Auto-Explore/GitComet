@@ -19,6 +19,8 @@ mod stash;
 mod status_file;
 mod submodule;
 mod submodule_section;
+mod subtree;
+mod subtree_section;
 mod tag;
 mod worktree;
 mod worktree_section;
@@ -174,6 +176,60 @@ impl PopoverHost {
         super::super::super::platform_open::open_file_location(path)
     }
 
+    pub(super) fn open_repo_relative_path(
+        &mut self,
+        repo_id: RepoId,
+        path: &std::path::Path,
+        reveal_in_file_manager: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let full_path = match self.resolve_workdir_path(repo_id, path) {
+            Ok(path) => path,
+            Err(err) => {
+                self.push_toast(components::ToastKind::Error, err, cx);
+                return;
+            }
+        };
+
+        let target = if reveal_in_file_manager && !full_path.exists() {
+            full_path
+                .parent()
+                .map(ToOwned::to_owned)
+                .unwrap_or_else(|| {
+                    self.workdir_for_repo(repo_id)
+                        .unwrap_or_else(|| full_path.clone())
+                })
+        } else {
+            full_path.clone()
+        };
+
+        if !target.exists() {
+            self.push_toast(
+                components::ToastKind::Error,
+                format!("Path not found: {}", target.display()),
+                cx,
+            );
+            return;
+        }
+
+        let result = if reveal_in_file_manager {
+            self.open_file_location(&target)
+        } else {
+            self.open_path_default(&target)
+        };
+        if let Err(err) = result {
+            self.push_toast(
+                components::ToastKind::Error,
+                if reveal_in_file_manager {
+                    format!("Failed to open location: {err}")
+                } else {
+                    format!("Failed to open: {err}")
+                },
+                cx,
+            );
+        }
+    }
+
     fn take_status_paths_for_action(
         &mut self,
         repo_id: RepoId,
@@ -256,6 +312,18 @@ impl PopoverHost {
                 repo_id,
                 kind: RepoPopoverKind::Submodule(SubmodulePopoverKind::Menu { path }),
             } => Some(submodule::model(self, *repo_id, path)),
+            PopoverKind::Repo {
+                repo_id,
+                kind: RepoPopoverKind::Subtree(SubtreePopoverKind::SectionMenu),
+            } => Some(subtree_section::model(*repo_id)),
+            PopoverKind::Repo {
+                repo_id,
+                kind: RepoPopoverKind::Subtree(SubtreePopoverKind::Menu { path }),
+            } => Some(subtree::model(
+                self.state.repos.iter().find(|repo| repo.id == *repo_id),
+                *repo_id,
+                path,
+            )),
             PopoverKind::CommitFileMenu {
                 repo_id,
                 commit_id,

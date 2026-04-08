@@ -150,6 +150,13 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
             repo.submodules_rev.hash(hasher);
         }
 
+        PopoverKind::Repo {
+            kind: RepoPopoverKind::Subtree(_),
+            ..
+        } => {
+            repo.subtrees_rev.hash(hasher);
+        }
+
         PopoverKind::StashPrompt => {
             repo.stashes_rev.hash(hasher);
             view_fingerprint::hash_loadable_arc(&repo.status, hasher);
@@ -556,6 +563,65 @@ fn hash_repo_popover_kind<H: Hasher>(repo_id: RepoId, kind: &RepoPopoverKind, ha
             }
             SubmodulePopoverKind::RemoveConfirm { path } => {
                 27u8.hash(hasher);
+                repo_id.hash(hasher);
+                path.hash(hasher);
+            }
+        },
+        RepoPopoverKind::Subtree(subtree_kind) => match subtree_kind {
+            SubtreePopoverKind::SectionMenu => {
+                28u8.hash(hasher);
+                repo_id.hash(hasher);
+            }
+            SubtreePopoverKind::Menu { path } => {
+                29u8.hash(hasher);
+                repo_id.hash(hasher);
+                path.hash(hasher);
+            }
+            SubtreePopoverKind::AddPrompt => {
+                30u8.hash(hasher);
+                repo_id.hash(hasher);
+            }
+            SubtreePopoverKind::OpenPicker => {
+                31u8.hash(hasher);
+                repo_id.hash(hasher);
+            }
+            SubtreePopoverKind::RevealPicker => {
+                32u8.hash(hasher);
+                repo_id.hash(hasher);
+            }
+            SubtreePopoverKind::PullPicker => {
+                33u8.hash(hasher);
+                repo_id.hash(hasher);
+            }
+            SubtreePopoverKind::PullPrompt { path } => {
+                34u8.hash(hasher);
+                repo_id.hash(hasher);
+                path.hash(hasher);
+            }
+            SubtreePopoverKind::PushPicker => {
+                35u8.hash(hasher);
+                repo_id.hash(hasher);
+            }
+            SubtreePopoverKind::PushPrompt { path } => {
+                36u8.hash(hasher);
+                repo_id.hash(hasher);
+                path.hash(hasher);
+            }
+            SubtreePopoverKind::SplitPicker => {
+                37u8.hash(hasher);
+                repo_id.hash(hasher);
+            }
+            SubtreePopoverKind::SplitPrompt { path } => {
+                38u8.hash(hasher);
+                repo_id.hash(hasher);
+                path.hash(hasher);
+            }
+            SubtreePopoverKind::RemovePicker => {
+                39u8.hash(hasher);
+                repo_id.hash(hasher);
+            }
+            SubtreePopoverKind::RemoveConfirm { path } => {
+                40u8.hash(hasher);
                 repo_id.hash(hasher);
                 path.hash(hasher);
             }
