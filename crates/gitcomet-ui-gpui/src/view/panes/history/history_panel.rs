@@ -15,6 +15,7 @@ impl HistoryView {
     fn history_view_inner(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
         let theme = self.theme;
         self.ensure_history_cache(cx);
+        self.drive_pending_history_reveal(cx);
         let (show_working_tree_summary_row, _) = self.ensure_history_worktree_summary_cache();
         let repo = self.active_repo();
         let commits_count = self

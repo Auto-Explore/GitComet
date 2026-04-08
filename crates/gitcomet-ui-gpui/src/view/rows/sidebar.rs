@@ -1,4 +1,5 @@
 use super::*;
+use gitcomet_core::domain::LogScope;
 
 fn worktree_paths_by_branch(repo: &RepoState) -> HashMap<String, std::path::PathBuf> {
     let Loadable::Ready(worktrees) = &repo.worktrees else {
@@ -90,6 +91,69 @@ fn local_branch_double_click_action(
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct BranchHistoryRevealTarget {
+    commit_id: CommitId,
+    desired_scope: LogScope,
+}
+
+fn branch_commit_id(repo: &RepoState, section: BranchSection, name: &str) -> Option<CommitId> {
+    match section {
+        BranchSection::Local => match &repo.branches {
+            Loadable::Ready(branches) => branches
+                .iter()
+                .find(|branch| branch.name == name)
+                .map(|branch| branch.target.clone()),
+            _ => None,
+        },
+        BranchSection::Remote => {
+            let (remote, branch_name) = name.split_once('/')?;
+            match &repo.remote_branches {
+                Loadable::Ready(branches) => branches
+                    .iter()
+                    .find(|branch| branch.remote == remote && branch.name == branch_name)
+                    .map(|branch| branch.target.clone()),
+                _ => None,
+            }
+        }
+    }
+}
+
+fn branch_click_history_reveal_target(
+    repo: &RepoState,
+    section: BranchSection,
+    name: &str,
+    is_head: bool,
+) -> Option<BranchHistoryRevealTarget> {
+    let commit_id = branch_commit_id(repo, section, name)?;
+
+    let desired_scope = match section {
+        BranchSection::Local if is_head => repo.history_state.history_scope,
+        BranchSection::Local | BranchSection::Remote => LogScope::AllBranches,
+    };
+
+    Some(BranchHistoryRevealTarget {
+        commit_id,
+        desired_scope,
+    })
+}
+
+fn branch_row_is_selected(
+    selected_branch: Option<&SelectedBranch>,
+    repo_id: RepoId,
+    section: BranchSection,
+    name: &str,
+    selected_commit: Option<&CommitId>,
+    selected_branch_commit_id: Option<&CommitId>,
+) -> bool {
+    selected_branch.is_some_and(|selected_branch| {
+        selected_branch.repo_id == repo_id
+            && selected_branch.section == section
+            && selected_branch.name == name
+            && selected_branch_commit_id.is_some_and(|commit_id| selected_commit == Some(commit_id))
+    })
+}
+
 impl SidebarPaneView {
     pub(in super::super) fn render_branch_sidebar_rows(
         this: &mut Self,
@@ -120,6 +184,18 @@ impl SidebarPaneView {
         let theme = this.theme;
         let icon_primary = theme.colors.accent;
         let icon_muted = with_alpha(theme.colors.accent, if theme.is_dark { 0.72 } else { 0.82 });
+        let selected_branch = this.selected_branch().cloned();
+        let (selected_commit, selected_branch_commit_id) =
+            this.active_repo().map_or((None, None), |repo| {
+                let selected_commit = repo.history_state.selected_commit.clone();
+                let selected_branch_commit_id = selected_branch
+                    .as_ref()
+                    .filter(|selected| selected.repo_id == repo_id)
+                    .and_then(|selected| {
+                        branch_commit_id(repo, selected.section, selected.name.as_str())
+                    });
+                (selected_commit, selected_branch_commit_id)
+            });
 
         let svg_icon = |path: &'static str, color: gpui::Rgba, size_px: f32| {
             super::super::icons::svg_icon(path, color, px(size_px))
@@ -1384,6 +1460,7 @@ impl SidebarPaneView {
                     is_upstream,
                 } => {
                     let full_name_for_checkout: SharedString = name.clone();
+                    let full_name_for_reveal: SharedString = name.clone();
                     let full_name_for_menu: SharedString = name.clone();
                     let full_name_for_tooltip: SharedString = name.clone();
                     let section_key = match section {
@@ -1418,6 +1495,14 @@ impl SidebarPaneView {
                         workspace_path.as_deref(),
                         active_workspace_path.as_deref(),
                     );
+                    let branch_selected = branch_row_is_selected(
+                        selected_branch.as_ref(),
+                        repo_id,
+                        section,
+                        full_name_for_reveal.as_ref(),
+                        selected_commit.as_ref(),
+                        selected_branch_commit_id.as_ref(),
+                    );
                     let has_worktree = workspace_badge_path.is_some();
                     let has_active_workspace = active_workspace_path.is_some();
                     let show_workspace_badge = has_worktree;
@@ -1441,6 +1526,12 @@ impl SidebarPaneView {
                         theme.colors.text_muted
                     } else {
                         branch_tree_color(section)
+                    };
+                    let branch_selected_bg = selected_branch_row_bg(theme);
+                    let branch_selected_label_color = if branch_selected {
+                        selected_branch_label_color(theme)
+                    } else {
+                        branch_text_color
                     };
                     let branch_icon_color = match section {
                         BranchSection::Local => {
@@ -1504,15 +1595,26 @@ impl SidebarPaneView {
                                 px(theme.radii.row),
                             ))
                         })
+                        .when(branch_selected, |d| d.bg(branch_selected_bg))
                         .when(context_menu_active, |d| d.bg(theme.colors.active))
                         .hover(move |s| {
                             if context_menu_active {
                                 s.bg(theme.colors.active)
+                            } else if branch_selected {
+                                s.bg(branch_selected_bg)
                             } else {
                                 s.bg(theme.colors.hover)
                             }
                         })
-                        .active(move |s| s.bg(theme.colors.active))
+                        .active(move |s| {
+                            if context_menu_active {
+                                s.bg(theme.colors.active)
+                            } else if branch_selected {
+                                s.bg(branch_selected_bg)
+                            } else {
+                                s.bg(theme.colors.active)
+                            }
+                        })
                         .text_color(branch_text_color)
                         .child(tree_toggle_slot(None))
                         .child(tree_icon_slot(
@@ -1527,6 +1629,7 @@ impl SidebarPaneView {
                                 .text_sm()
                                 .line_clamp(1)
                                 .whitespace_nowrap()
+                                .text_color(branch_selected_label_color)
                                 .child(label),
                         );
 
@@ -1773,7 +1876,38 @@ impl SidebarPaneView {
 
                     row = row
                         .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
-                            if !e.standard_click() || e.click_count() < 2 {
+                            if !e.standard_click() {
+                                return;
+                            }
+                            if e.click_count() == 1 {
+                                let Some(target) = this.active_repo().and_then(|repo| {
+                                    branch_click_history_reveal_target(
+                                        repo,
+                                        section,
+                                        full_name_for_reveal.as_ref(),
+                                        is_head,
+                                    )
+                                }) else {
+                                    return;
+                                };
+                                this.set_selected_branch(
+                                    repo_id,
+                                    section,
+                                    full_name_for_reveal.as_ref(),
+                                    cx,
+                                );
+                                this.reveal_branch_commit_in_history(
+                                    repo_id,
+                                    section,
+                                    full_name_for_reveal.as_ref(),
+                                    target.commit_id,
+                                    target.desired_scope,
+                                    cx,
+                                );
+                                cx.notify();
+                                return;
+                            }
+                            if e.click_count() < 2 {
                                 return;
                             }
                             match section {
@@ -2033,7 +2167,59 @@ impl DetailsPaneView {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gitcomet_core::domain::{RepoSpec, Worktree};
+    use gitcomet_core::domain::{
+        Branch, Commit, CommitId, DiffTarget, LogPage, RemoteBranch, RepoSpec, Worktree,
+    };
+    use gitcomet_core::services::{GitBackend, GitRepository, Result};
+    use gitcomet_state::msg::{InternalMsg, Msg};
+    use gitcomet_state::store::AppStore;
+    use std::path::{Path, PathBuf};
+    use std::time::{Duration, Instant, SystemTime};
+
+    struct BlockingBackend;
+
+    impl GitBackend for BlockingBackend {
+        fn open(&self, _workdir: &Path) -> Result<Arc<dyn GitRepository>> {
+            loop {
+                std::thread::park();
+            }
+        }
+    }
+
+    fn wait_until(
+        cx: &mut gpui::VisualTestContext,
+        description: &str,
+        ready: impl Fn(&mut gpui::VisualTestContext) -> bool,
+    ) {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            cx.update(|window, app| {
+                let _ = window.draw(app);
+            });
+            cx.run_until_parked();
+            if ready(cx) {
+                return;
+            }
+            if Instant::now() >= deadline {
+                panic!("timed out waiting for {description}");
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    fn commit_id(id: &str) -> CommitId {
+        CommitId(id.into())
+    }
+
+    fn commit(id: &str) -> Commit {
+        Commit {
+            id: commit_id(id),
+            parent_ids: gitcomet_core::domain::CommitParentIds::new(),
+            summary: id.into(),
+            author: "author".into(),
+            time: SystemTime::UNIX_EPOCH,
+        }
+    }
 
     #[test]
     fn worktree_paths_by_branch_includes_closed_worktrees() {
@@ -2358,5 +2544,260 @@ mod tests {
                 path: std::path::PathBuf::from("/tmp/repo-feature"),
             }
         );
+    }
+
+    #[test]
+    fn branch_row_selection_requires_matching_clicked_branch_identity() {
+        let target = commit_id("shared-tip");
+        let selected_branch = SelectedBranch {
+            repo_id: RepoId(1),
+            section: BranchSection::Local,
+            name: "main".into(),
+        };
+
+        assert!(branch_row_is_selected(
+            Some(&selected_branch),
+            RepoId(1),
+            BranchSection::Local,
+            "main",
+            Some(&target),
+            Some(&target)
+        ));
+        assert!(!branch_row_is_selected(
+            Some(&selected_branch),
+            RepoId(1),
+            BranchSection::Remote,
+            "origin/main",
+            Some(&target),
+            Some(&target)
+        ));
+    }
+
+    #[test]
+    fn branch_row_selection_requires_matching_selected_commit() {
+        let target = commit_id("main-tip");
+        let other = commit_id("other-tip");
+        let selected_branch = SelectedBranch {
+            repo_id: RepoId(1),
+            section: BranchSection::Local,
+            name: "main".into(),
+        };
+
+        assert!(!branch_row_is_selected(
+            Some(&selected_branch),
+            RepoId(1),
+            BranchSection::Local,
+            "main",
+            Some(&other),
+            Some(&target)
+        ));
+        assert!(!branch_row_is_selected(
+            Some(&selected_branch),
+            RepoId(1),
+            BranchSection::Local,
+            "main",
+            None,
+            Some(&target)
+        ));
+    }
+
+    #[test]
+    fn branch_row_selection_requires_resolved_selected_branch_tip() {
+        let target = commit_id("main-tip");
+        let selected_branch = SelectedBranch {
+            repo_id: RepoId(1),
+            section: BranchSection::Local,
+            name: "main".into(),
+        };
+
+        assert!(!branch_row_is_selected(
+            Some(&selected_branch),
+            RepoId(1),
+            BranchSection::Local,
+            "main",
+            Some(&target),
+            None
+        ));
+    }
+
+    #[test]
+    fn branch_click_history_reveal_target_keeps_current_scope_for_head_local_branch() {
+        let target = commit_id("main-tip");
+        let mut repo = RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+        );
+        repo.history_state.history_scope = LogScope::CurrentBranch;
+        repo.branches = Loadable::Ready(Arc::new(vec![Branch {
+            name: "main".to_string(),
+            target: target.clone(),
+            upstream: None,
+            divergence: None,
+        }]));
+
+        assert_eq!(
+            branch_click_history_reveal_target(&repo, BranchSection::Local, "main", true),
+            Some(BranchHistoryRevealTarget {
+                commit_id: target,
+                desired_scope: LogScope::CurrentBranch,
+            })
+        );
+    }
+
+    #[test]
+    fn branch_click_history_reveal_target_switches_non_head_local_branch_to_all_branches() {
+        let target = commit_id("feature-tip");
+        let mut repo = RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+        );
+        repo.history_state.history_scope = LogScope::CurrentBranch;
+        repo.branches = Loadable::Ready(Arc::new(vec![Branch {
+            name: "feature".to_string(),
+            target: target.clone(),
+            upstream: None,
+            divergence: None,
+        }]));
+
+        assert_eq!(
+            branch_click_history_reveal_target(&repo, BranchSection::Local, "feature", false),
+            Some(BranchHistoryRevealTarget {
+                commit_id: target,
+                desired_scope: LogScope::AllBranches,
+            })
+        );
+    }
+
+    #[test]
+    fn branch_click_history_reveal_target_switches_remote_branch_to_all_branches() {
+        let target = commit_id("origin-feature-tip");
+        let mut repo = RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+        );
+        repo.history_state.history_scope = LogScope::CurrentBranch;
+        repo.remote_branches = Loadable::Ready(Arc::new(vec![RemoteBranch {
+            remote: "origin".to_string(),
+            name: "feature/topic".to_string(),
+            target: target.clone(),
+        }]));
+
+        assert_eq!(
+            branch_click_history_reveal_target(
+                &repo,
+                BranchSection::Remote,
+                "origin/feature/topic",
+                false,
+            ),
+            Some(BranchHistoryRevealTarget {
+                commit_id: target,
+                desired_scope: LogScope::AllBranches,
+            })
+        );
+    }
+
+    #[gpui::test]
+    fn branch_reveal_routes_through_main_pane_and_selects_commit(cx: &mut gpui::TestAppContext) {
+        let (store, events) = AppStore::new(Arc::new(BlockingBackend));
+        let store_for_assert = store.clone();
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        let repo_id = RepoId(1);
+        let target = commit_id("main-tip");
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        store_for_assert.dispatch(Msg::OpenRepo(PathBuf::from("/tmp/repo")));
+        wait_until(cx, "opened repo placeholder", |_cx| {
+            let snapshot = store_for_assert.snapshot();
+            snapshot.active_repo == Some(repo_id)
+                && snapshot.repos.iter().any(|repo| repo.id == repo_id)
+        });
+
+        store_for_assert.dispatch(Msg::Internal(InternalMsg::HeadBranchLoaded {
+            repo_id,
+            result: Ok("main".to_string()),
+        }));
+        store_for_assert.dispatch(Msg::Internal(InternalMsg::BranchesLoaded {
+            repo_id,
+            result: Ok(vec![Branch {
+                name: "main".to_string(),
+                target: target.clone(),
+                upstream: None,
+                divergence: None,
+            }]),
+        }));
+        store_for_assert.dispatch(Msg::Internal(InternalMsg::LogLoaded {
+            repo_id,
+            scope: LogScope::CurrentBranch,
+            cursor: None,
+            result: Ok(LogPage {
+                commits: vec![commit("main-tip")],
+                next_cursor: None,
+            }),
+        }));
+        store_for_assert.dispatch(Msg::SelectDiff {
+            repo_id,
+            target: DiffTarget::Commit {
+                commit_id: commit_id("previous"),
+                path: None,
+            },
+        });
+        wait_until(cx, "sidebar repo data", |_cx| {
+            let snapshot = store_for_assert.snapshot();
+            let Some(repo) = snapshot.repos.iter().find(|repo| repo.id == repo_id) else {
+                return false;
+            };
+            matches!(repo.head_branch, Loadable::Ready(ref head) if head == "main")
+                && matches!(repo.branches, Loadable::Ready(_))
+                && matches!(repo.log, Loadable::Ready(_))
+                && repo.diff_state.diff_target.is_some()
+        });
+
+        wait_until(cx, "history view active repo", |cx| {
+            cx.update(|_window, app| {
+                let (sidebar_pane, main_pane) = {
+                    let root = view.read(app);
+                    (root.sidebar_pane.clone(), root.main_pane.clone())
+                };
+                let history_view = main_pane.read(app).history_view.clone();
+
+                sidebar_pane.read(app).active_repo_id() == Some(repo_id)
+                    && main_pane.read(app).active_repo_id() == Some(repo_id)
+                    && history_view.read(app).active_repo_id() == Some(repo_id)
+            })
+        });
+
+        let sidebar_pane = cx.update(|_window, app| view.read(app).sidebar_pane.clone());
+        cx.update(|window, app| {
+            sidebar_pane.update(app, |pane, cx| {
+                pane.reveal_branch_commit_in_history(
+                    repo_id,
+                    BranchSection::Local,
+                    "main",
+                    target.clone(),
+                    LogScope::CurrentBranch,
+                    cx,
+                );
+            });
+            let _ = window.draw(app);
+        });
+
+        wait_until(cx, "branch reveal store state", |_cx| {
+            let snapshot = store_for_assert.snapshot();
+            let Some(repo) = snapshot.repos.iter().find(|repo| repo.id == repo_id) else {
+                return false;
+            };
+            repo.diff_state.diff_target.is_none()
+                && repo.history_state.history_scope == LogScope::CurrentBranch
+                && repo.history_state.selected_commit.as_ref() == Some(&target)
+        });
     }
 }

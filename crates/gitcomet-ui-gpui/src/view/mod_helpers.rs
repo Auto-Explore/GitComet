@@ -13,6 +13,48 @@ pub(super) fn toast_total_lifetime(ttl: Duration) -> Duration {
     toast_fade_in_duration() + ttl + toast_fade_out_duration()
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::view) struct SelectedBranch {
+    pub(in crate::view) repo_id: RepoId,
+    pub(in crate::view) section: BranchSection,
+    pub(in crate::view) name: String,
+}
+
+pub(in crate::view) fn selected_branch_label_color(theme: AppTheme) -> gpui::Rgba {
+    if theme.is_dark {
+        gpui::rgba(0xffffffff)
+    } else {
+        gpui::rgba(0x000000ff)
+    }
+}
+
+pub(in crate::view) fn selected_branch_row_bg(theme: AppTheme) -> gpui::Rgba {
+    with_alpha(theme.colors.text, if theme.is_dark { 0.16 } else { 0.10 })
+}
+
+pub(in crate::view) fn selected_branch_history_entry_text(
+    selected_branch: Option<&SelectedBranch>,
+    repo_id: RepoId,
+    is_head: bool,
+    selected: bool,
+) -> Option<SharedString> {
+    if !selected {
+        return None;
+    }
+
+    let selected_branch = selected_branch?;
+    if selected_branch.repo_id != repo_id {
+        return None;
+    }
+
+    match selected_branch.section {
+        BranchSection::Local if is_head => Some(format!("HEAD → {}", selected_branch.name).into()),
+        BranchSection::Local | BranchSection::Remote => {
+            Some(SharedString::from(selected_branch.name.clone()))
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum HistoryColResizeHandle {
     Branch,
