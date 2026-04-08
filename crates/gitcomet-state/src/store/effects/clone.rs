@@ -47,9 +47,10 @@ impl ActiveCloneHandle {
         let mut slot = self.child.lock().unwrap_or_else(|e| e.into_inner());
         *slot = Some(child);
         if self.cancel_requested.load(Ordering::Relaxed)
-            && let Some(child) = slot.as_mut() {
-                let _ = child.kill();
-            }
+            && let Some(child) = slot.as_mut()
+        {
+            let _ = child.kill();
+        }
     }
 
     fn take_stdio(&self) -> (Option<ChildStdout>, Option<ChildStderr>) {
