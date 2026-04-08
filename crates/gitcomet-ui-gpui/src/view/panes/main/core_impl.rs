@@ -572,7 +572,9 @@ fn sync_synced_scroll_offsets<const N: usize>(
     );
 
     for ix in 0..N {
-        handles[ix].set_offset(axis.with_offset_component(offsets[ix], targets[ix]));
+        if axis.offset_component(offsets[ix]) != targets[ix] {
+            handles[ix].set_offset(axis.with_offset_component(offsets[ix], targets[ix]));
+        }
     }
     *last_synced = targets;
 }
