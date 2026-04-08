@@ -12,7 +12,7 @@ use crate::model::{
 };
 use crate::msg::Effect;
 use crate::session;
-use gitcomet_core::domain::{DiffTarget, RepoSpec};
+use gitcomet_core::domain::RepoSpec;
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{CommandOutput, GitRepository};
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
