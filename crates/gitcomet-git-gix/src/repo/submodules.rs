@@ -6,6 +6,14 @@ use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{CommandOutput, Result};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::process::Command;
+
+fn allow_file_submodule_transport(cmd: &mut Command) {
+    // `git submodule` blocks local-path remotes unless `protocol.file.allow` is enabled.
+    // Use per-command config so local workflows keep working without disabling `https`/`ssh`.
+    cmd.arg("-c").arg("protocol.file.allow=always");
+}
+
 impl GixRepo {
     pub(super) fn list_submodules_impl(&self) -> Result<Vec<Submodule>> {
         let repo = self.reopen_repo()?;
@@ -21,24 +29,18 @@ impl GixRepo {
         path: &Path,
     ) -> Result<CommandOutput> {
         let mut cmd = self.git_workdir_cmd();
-        cmd.arg("submodule")
-            .arg("add")
-            .arg(url)
-            .arg(path)
-            // Local-path submodule URLs are used in tests and supported workflows.
-            // Explicitly allow `file` transport for this command.
-            .env("GIT_ALLOW_PROTOCOL", "file");
+        allow_file_submodule_transport(&mut cmd);
+        cmd.arg("submodule").arg("add").arg(url).arg(path);
         run_git_with_output(cmd, &format!("git submodule add {url} {}", path.display()))
     }
 
     pub(super) fn update_submodules_with_output_impl(&self) -> Result<CommandOutput> {
         let mut cmd = self.git_workdir_cmd();
+        allow_file_submodule_transport(&mut cmd);
         cmd.arg("submodule")
             .arg("update")
             .arg("--init")
-            .arg("--recursive")
-            // Keep behavior consistent with add: allow local-path submodule URLs.
-            .env("GIT_ALLOW_PROTOCOL", "file");
+            .arg("--recursive");
         run_git_with_output(cmd, "git submodule update --init --recursive")
     }
 
@@ -254,4 +256,28 @@ fn pathbuf_from_gix_path(path: &gix::bstr::BStr) -> Result<PathBuf> {
 
 fn object_id_to_commit_id(id: gix::ObjectId) -> CommitId {
     CommitId(id.to_string().into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::allow_file_submodule_transport;
+    use std::ffi::OsStr;
+    use std::process::Command;
+
+    #[test]
+    fn allow_file_submodule_transport_uses_git_config_not_protocol_allowlist() {
+        let mut cmd = Command::new("git");
+
+        allow_file_submodule_transport(&mut cmd);
+
+        let args = cmd
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(args, ["-c", "protocol.file.allow=always"]);
+        assert!(
+            !cmd.get_envs()
+                .any(|(key, _)| key == OsStr::new("GIT_ALLOW_PROTOCOL"))
+        );
+    }
 }

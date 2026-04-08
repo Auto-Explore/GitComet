@@ -169,7 +169,7 @@ fn apply_test_git_command_environment(cmd: &mut Command) {
     cmd.env("HOME", &env.home_dir);
     cmd.env("XDG_CONFIG_HOME", &env.xdg_config_home);
     cmd.env("GNUPGHOME", &env.gnupg_home);
-    cmd.env("GIT_ALLOW_PROTOCOL", "file");
+    cmd.arg("-c").arg("protocol.file.allow=always");
 }
 
 pub(crate) fn git_workdir_cmd_for(workdir: &Path) -> Command {

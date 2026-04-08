@@ -568,3 +568,31 @@ fn submodule_add_update_remove_round_trip() {
     assert!(listed_after_remove.is_empty());
     assert!(!parent_repo.join("mods/sub-one").exists());
 }
+
+#[test]
+fn add_submodule_does_not_restrict_https_or_ssh_transports() {
+    if !require_git_shell_for_submodule_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("parent");
+    fs::create_dir_all(&repo).expect("create parent repository directory");
+    init_repo_with_seed(&repo, "seed.txt", "seed\n", "seed parent");
+
+    let backend = GixBackend;
+    let opened = backend.open(&repo).expect("open parent repository");
+
+    for (url, blocked_transport) in [
+        ("https://127.0.0.1:1/repo.git", "https"),
+        ("ssh://git@127.0.0.1:1/repo.git", "ssh"),
+    ] {
+        let err = opened
+            .add_submodule_with_output(url, Path::new("mods/sub-one"))
+            .expect_err("dummy remote should fail without a reachable server");
+        let rendered = err.to_string();
+        assert!(
+            !rendered.contains(&format!("transport '{blocked_transport}' not allowed")),
+            "unexpected protocol allowlist failure for {url}: {rendered}"
+        );
+    }
+}
