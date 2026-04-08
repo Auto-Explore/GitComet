@@ -48,26 +48,18 @@ impl MainPaneView {
 
         let title = self.diff_panel_title(theme);
 
-        let untracked_preview_path = self.untracked_worktree_preview_path();
-        let added_preview_path = self.added_file_preview_abs_path();
-        let deleted_preview_path = self.deleted_file_preview_abs_path();
         let untracked_directory_notice = self.untracked_directory_notice();
 
         let is_file_preview = self.is_file_preview_active() && untracked_directory_notice.is_none();
 
         if is_file_preview {
-            if let Some(path) = untracked_preview_path.clone() {
-                self.ensure_worktree_preview_loaded(path, cx);
-            } else if let Some(path) = added_preview_path.clone().or(deleted_preview_path.clone()) {
-                self.ensure_preview_loading(path);
-            }
+            self.ensure_selected_file_preview_loaded(cx);
         } else if untracked_directory_notice.is_some()
             && matches!(self.worktree_preview, Loadable::Loading)
         {
             self.worktree_preview_path = None;
             self.worktree_preview = Loadable::NotLoaded;
-            self.worktree_preview_segments_cache_path = None;
-            self.worktree_preview_segments_cache.clear();
+            self.reset_worktree_preview_source_state();
             self.diff_horizontal_min_width = px(0.0);
         }
         let wants_file_diff = !is_file_preview
@@ -627,9 +619,6 @@ impl MainPaneView {
         let body: AnyElement = if let Some(message) = untracked_directory_notice {
             components::empty_state(theme, "Directory", message).into_any_element()
         } else if is_file_preview {
-            if added_preview_path.is_some() || deleted_preview_path.is_some() {
-                self.try_populate_worktree_preview_from_diff_file(cx);
-            }
             if is_markdown_preview_view {
                 match &self.worktree_preview {
                     Loadable::NotLoaded | Loadable::Loading => {

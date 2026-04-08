@@ -1,5 +1,7 @@
 use super::*;
-use gitcomet_core::domain::{CommitId, FileConflictKind, FileStatus, FileStatusKind};
+use gitcomet_core::domain::{
+    CommitDetails, CommitFileChange, CommitId, FileConflictKind, FileStatus, FileStatusKind,
+};
 
 #[test]
 fn select_diff_sets_loading_and_emits_effect() {
@@ -37,8 +39,10 @@ fn select_diff_sets_loading_and_emits_effect() {
         effects.as_slice(),
         [Effect::LoadSelectedDiff {
             repo_id: RepoId(1),
+            load_patch_diff: true,
             load_file_text: true,
             load_file_image: false,
+            preview_text_side: None,
         }]
     ));
 }
@@ -83,8 +87,10 @@ fn select_diff_for_image_sets_loading_and_emits_effect() {
         effects.as_slice(),
         [Effect::LoadSelectedDiff {
             repo_id: RepoId(1),
+            load_patch_diff: true,
             load_file_text: false,
             load_file_image: true,
+            preview_text_side: None,
         }]
     ));
 }
@@ -129,8 +135,10 @@ fn select_diff_for_ico_sets_loading_and_emits_effect() {
         effects.as_slice(),
         [Effect::LoadSelectedDiff {
             repo_id: RepoId(1),
+            load_patch_diff: true,
             load_file_text: false,
             load_file_image: true,
+            preview_text_side: None,
         }]
     ));
 }
@@ -172,9 +180,216 @@ fn select_diff_for_svg_loads_image_and_text() {
         effects.as_slice(),
         [Effect::LoadSelectedDiff {
             repo_id: RepoId(1),
+            load_patch_diff: true,
             load_file_text: true,
             load_file_image: true,
+            preview_text_side: None,
         }]
+    ));
+}
+
+#[test]
+fn select_diff_for_untracked_file_skips_patch_diff_and_loads_file_preview() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(2);
+    let mut state = AppState::default();
+    let mut repo_state = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    );
+    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
+        path: PathBuf::from("report.json"),
+        area: gitcomet_core::domain::DiffArea::Unstaged,
+    };
+    repo_state.set_status(Loadable::Ready(Arc::new(RepoStatus {
+        unstaged: vec![FileStatus {
+            path: PathBuf::from("report.json"),
+            kind: FileStatusKind::Untracked,
+            conflict: None,
+        }],
+        staged: vec![],
+    })));
+    state.repos.push(repo_state);
+    state.active_repo = Some(RepoId(1));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SelectDiff {
+            repo_id: RepoId(1),
+            target,
+        },
+    );
+
+    let repo_state = state.repos.first().expect("repo state to exist");
+    assert!(matches!(repo_state.diff_state.diff, Loadable::NotLoaded));
+    assert!(matches!(
+        repo_state.diff_state.diff_file,
+        Loadable::NotLoaded
+    ));
+    assert!(repo_state.diff_state.diff_preview_text_file.is_loading());
+    assert!(matches!(
+        repo_state.diff_state.diff_file_image,
+        Loadable::NotLoaded
+    ));
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::LoadSelectedDiff {
+            repo_id: RepoId(1),
+            load_patch_diff: false,
+            load_file_text: false,
+            preview_text_side: Some(gitcomet_core::domain::DiffPreviewTextSide::New),
+            load_file_image: false,
+        }]
+    ));
+}
+
+#[test]
+fn select_diff_for_deleted_commit_file_skips_patch_diff_and_loads_file_preview() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(2);
+    let mut state = AppState::default();
+    let mut repo_state = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    );
+    let commit_id = CommitId("deadbeef".into());
+    let target = gitcomet_core::domain::DiffTarget::Commit {
+        commit_id: commit_id.clone(),
+        path: Some(PathBuf::from("report.json")),
+    };
+    repo_state.history_state.commit_details = Loadable::Ready(Arc::new(CommitDetails {
+        id: commit_id,
+        message: "remove report".to_string(),
+        committed_at: "2026-04-07T12:00:00Z".to_string(),
+        parent_ids: vec![],
+        files: vec![CommitFileChange {
+            path: PathBuf::from("report.json"),
+            kind: FileStatusKind::Deleted,
+        }],
+    }));
+    state.repos.push(repo_state);
+    state.active_repo = Some(RepoId(1));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SelectDiff {
+            repo_id: RepoId(1),
+            target,
+        },
+    );
+
+    let repo_state = state.repos.first().expect("repo state to exist");
+    assert!(matches!(repo_state.diff_state.diff, Loadable::NotLoaded));
+    assert!(matches!(
+        repo_state.diff_state.diff_file,
+        Loadable::NotLoaded
+    ));
+    assert!(repo_state.diff_state.diff_preview_text_file.is_loading());
+    assert!(matches!(
+        repo_state.diff_state.diff_file_image,
+        Loadable::NotLoaded
+    ));
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::LoadSelectedDiff {
+            repo_id: RepoId(1),
+            load_patch_diff: false,
+            load_file_text: false,
+            preview_text_side: Some(gitcomet_core::domain::DiffPreviewTextSide::Old),
+            load_file_image: false,
+        }]
+    ));
+}
+
+#[test]
+fn commit_details_loaded_replans_selected_deleted_commit_file_to_preview_text_file() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(2);
+    let mut state = AppState::default();
+    let mut repo_state = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    );
+    let commit_id = CommitId("deadbeef".into());
+    let target = gitcomet_core::domain::DiffTarget::Commit {
+        commit_id: commit_id.clone(),
+        path: Some(PathBuf::from("report.json")),
+    };
+    repo_state.set_selected_commit(Some(commit_id.clone()));
+    repo_state.diff_state.diff_target = Some(target.clone());
+    repo_state.diff_state.diff = Loadable::Loading;
+    repo_state.diff_state.diff_file = Loadable::Loading;
+    state.repos.push(repo_state);
+    state.active_repo = Some(RepoId(1));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::CommitDetailsLoaded {
+            repo_id: RepoId(1),
+            commit_id: commit_id.clone(),
+            result: Ok(CommitDetails {
+                id: commit_id,
+                message: "remove report".to_string(),
+                committed_at: "2026-04-07T12:00:00Z".to_string(),
+                parent_ids: vec![],
+                files: vec![CommitFileChange {
+                    path: PathBuf::from("report.json"),
+                    kind: FileStatusKind::Deleted,
+                }],
+            }),
+        }),
+    );
+
+    let repo_state = state.repos.first().expect("repo state to exist");
+    assert!(matches!(
+        repo_state.history_state.commit_details,
+        Loadable::Ready(_)
+    ));
+    assert!(matches!(repo_state.diff_state.diff, Loadable::NotLoaded));
+    assert!(matches!(
+        repo_state.diff_state.diff_file,
+        Loadable::NotLoaded
+    ));
+    assert!(repo_state.diff_state.diff_preview_text_file.is_loading());
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::LoadDiffPreviewTextFile {
+            repo_id: RepoId(1),
+            target: effect_target,
+            side: gitcomet_core::domain::DiffPreviewTextSide::Old,
+        }] if effect_target == &target
+    ));
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::DiffFileLoaded {
+            repo_id: RepoId(1),
+            target,
+            result: Ok(Some(gitcomet_core::domain::FileDiffText::new(
+                PathBuf::from("report.json"),
+                Some("old".to_string()),
+                None,
+            ))),
+        }),
+    );
+
+    assert!(matches!(
+        state.repos[0].diff_state.diff_file,
+        Loadable::NotLoaded
     ));
 }
 
@@ -337,8 +552,10 @@ fn select_diff_for_commit_without_path_only_loads_patch() {
         effects.as_slice(),
         [Effect::LoadSelectedDiff {
             repo_id: RepoId(1),
+            load_patch_diff: true,
             load_file_text: false,
             load_file_image: false,
+            preview_text_side: None,
         }]
     ));
 }
@@ -380,8 +597,10 @@ fn select_diff_for_commit_svg_path_loads_text_and_image_previews() {
         effects.as_slice(),
         [Effect::LoadSelectedDiff {
             repo_id: RepoId(1),
+            load_patch_diff: true,
             load_file_text: true,
             load_file_image: true,
+            preview_text_side: None,
         }]
     ));
 }
@@ -810,7 +1029,7 @@ fn diff_file_loaded_and_image_loaded_cover_success_and_error_paths() {
         },
     );
     let target = DiffTarget::WorkingTree {
-        path: PathBuf::from("img.png"),
+        path: PathBuf::from("icon.svg"),
         area: DiffArea::Unstaged,
     };
     repo_state.diff_state.diff_target = Some(target.clone());
@@ -827,7 +1046,7 @@ fn diff_file_loaded_and_image_loaded_cover_success_and_error_paths() {
             repo_id: RepoId(1),
             target: target.clone(),
             result: Ok(Some(gitcomet_core::domain::FileDiffText::new(
-                PathBuf::from("img.png"),
+                PathBuf::from("icon.svg"),
                 Some("old".to_string()),
                 Some("new".to_string()),
             ))),
@@ -846,7 +1065,7 @@ fn diff_file_loaded_and_image_loaded_cover_success_and_error_paths() {
             repo_id: RepoId(1),
             target: target.clone(),
             result: Ok(Some(gitcomet_core::domain::FileDiffImage {
-                path: PathBuf::from("img.png"),
+                path: PathBuf::from("icon.svg"),
                 old: Some(vec![0x01]),
                 new: Some(vec![0x02]),
             })),

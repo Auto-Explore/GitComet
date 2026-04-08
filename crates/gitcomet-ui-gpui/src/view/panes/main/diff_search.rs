@@ -134,23 +134,6 @@ impl DiffSearchVisibleTrigramIndex {
     }
 }
 
-pub(in crate::view) fn build_resolved_output_trigram_index(
-    text: &str,
-    line_starts: &[usize],
-    line_count: usize,
-) -> DiffSearchVisibleTrigramIndex {
-    let mut index = DiffSearchVisibleTrigramIndex::default();
-    let mut trigrams = SmallVec::<[u32; 64]>::new();
-    for line_ix in 0..line_count {
-        index.insert_text(
-            line_ix as u32,
-            rows::resolved_output_line_text(text, line_starts, line_ix),
-            &mut trigrams,
-        );
-    }
-    index.finish()
-}
-
 #[inline]
 fn diff_search_displayed_text_matches_query(
     query: AsciiCaseInsensitiveNeedle<'_>,
@@ -296,12 +279,35 @@ fn inline_patch_diff_visible_ix_matches_query(
 }
 
 fn resolved_output_line_ix_matches_query(
-    text: &str,
-    line_starts: &[usize],
+    raw_text: &gitcomet_core::file_diff::FileDiffLineText,
     query: AsciiCaseInsensitiveNeedle<'_>,
-    line_ix: usize,
 ) -> bool {
-    query.is_match(rows::resolved_output_line_text(text, line_starts, line_ix))
+    const FILE_PREVIEW_SEARCH_SCAN_CHUNK_BYTES: usize = 32 * 1024;
+
+    if raw_text.len() <= FILE_PREVIEW_SEARCH_SCAN_CHUNK_BYTES {
+        return query.is_match(raw_text.as_ref());
+    }
+
+    let overlap = query.as_bytes().len().saturating_sub(1);
+    let mut chunk_start = 0usize;
+    while chunk_start < raw_text.len() {
+        let scan_start = chunk_start.saturating_sub(overlap);
+        let scan_end = chunk_start
+            .saturating_add(FILE_PREVIEW_SEARCH_SCAN_CHUNK_BYTES)
+            .min(raw_text.len());
+        let slice = raw_text
+            .slice_text(scan_start..scan_end)
+            .unwrap_or_default();
+        if query.is_match(slice.as_ref()) {
+            return true;
+        }
+        if scan_end >= raw_text.len() {
+            break;
+        }
+        chunk_start = scan_end;
+    }
+
+    false
 }
 
 fn retain_refined_visible_matches(
@@ -460,19 +466,14 @@ impl MainPaneView {
             let Some(line_count) = self.worktree_preview_line_count() else {
                 return;
             };
-            let source_text = self.worktree_preview_text.as_ref();
-            let line_starts = self.worktree_preview_line_starts.as_ref();
             if let Some(index) = self.worktree_preview_search_trigram_index.as_ref() {
                 match index.candidates(query.as_bytes()) {
                     DiffSearchVisibleCandidates::None => {}
                     DiffSearchVisibleCandidates::All => {
                         for ix in 0..line_count {
-                            if resolved_output_line_ix_matches_query(
-                                source_text,
-                                line_starts,
-                                query,
-                                ix,
-                            ) {
+                            if self.worktree_preview_line_raw_text(ix).is_some_and(|line| {
+                                resolved_output_line_ix_matches_query(&line, query)
+                            }) {
                                 self.diff_search_matches.push(ix);
                             }
                         }
@@ -480,12 +481,9 @@ impl MainPaneView {
                     DiffSearchVisibleCandidates::Indexed(candidate_rows) => {
                         for &ix in candidate_rows {
                             let ix = ix as usize;
-                            if resolved_output_line_ix_matches_query(
-                                source_text,
-                                line_starts,
-                                query,
-                                ix,
-                            ) {
+                            if self.worktree_preview_line_raw_text(ix).is_some_and(|line| {
+                                resolved_output_line_ix_matches_query(&line, query)
+                            }) {
                                 self.diff_search_matches.push(ix);
                             }
                         }
@@ -493,7 +491,10 @@ impl MainPaneView {
                 }
             } else {
                 for ix in 0..line_count {
-                    if resolved_output_line_ix_matches_query(source_text, line_starts, query, ix) {
+                    if self
+                        .worktree_preview_line_raw_text(ix)
+                        .is_some_and(|line| resolved_output_line_ix_matches_query(&line, query))
+                    {
                         self.diff_search_matches.push(ix);
                     }
                 }
@@ -514,6 +515,16 @@ impl MainPaneView {
             }
 
             let total = self.diff_visible_len();
+            if self.diff_view == DiffViewMode::Inline && self.is_file_diff_view_active() {
+                for visible_ix in 0..total {
+                    if self
+                        .diff_search_file_diff_inline_visible_row_matches_query(query, visible_ix)
+                    {
+                        self.diff_search_matches.push(visible_ix);
+                    }
+                }
+                return;
+            }
             if self.diff_view == DiffViewMode::Split && self.is_file_diff_view_active() {
                 let mut expanded_tabs = String::new();
                 for visible_ix in 0..total {
@@ -661,6 +672,21 @@ impl MainPaneView {
         diff_search_split_row_texts_match_query(query, left, right, expanded_tabs)
     }
 
+    fn diff_search_file_diff_inline_visible_row_matches_query(
+        &self,
+        query: AsciiCaseInsensitiveNeedle<'_>,
+        visible_ix: usize,
+    ) -> bool {
+        if !self.is_file_diff_view_active() || self.diff_view != DiffViewMode::Inline {
+            return false;
+        }
+        let Some(mapped_ix) = self.diff_mapped_ix_for_visible_ix(visible_ix) else {
+            return false;
+        };
+        self.file_diff_inline_render_data(mapped_ix)
+            .is_some_and(|row| query.is_match(row.text.as_ref()))
+    }
+
     fn diff_search_can_refine_current_matches(&self) -> bool {
         self.is_file_preview_active() || self.active_conflict_target().is_none()
     }
@@ -722,13 +748,12 @@ impl MainPaneView {
             return false;
         };
 
-        let source_text = self.worktree_preview_text.as_ref();
-        let line_starts = self.worktree_preview_line_starts.as_ref();
         retain_refined_visible_matches(
             previous_matches,
             index.candidates(query.as_bytes()),
             |line_ix| {
-                resolved_output_line_ix_matches_query(source_text, line_starts, query, line_ix)
+                self.worktree_preview_line_raw_text(line_ix)
+                    .is_some_and(|line| resolved_output_line_ix_matches_query(&line, query))
             },
         );
         true
@@ -741,15 +766,21 @@ impl MainPaneView {
     ) -> bool {
         if self.is_file_preview_active() {
             return self
-                .worktree_preview_line_text(visible_ix)
-                .is_some_and(|line| query.is_match(line));
+                .worktree_preview_line_raw_text(visible_ix)
+                .is_some_and(|line| resolved_output_line_ix_matches_query(&line, query));
         }
 
         match self.diff_view {
-            DiffViewMode::Inline => query.is_match(
-                self.diff_text_line_for_region(visible_ix, DiffTextRegion::Inline)
-                    .as_ref(),
-            ),
+            DiffViewMode::Inline => {
+                if self.is_file_diff_view_active() {
+                    return self
+                        .diff_search_file_diff_inline_visible_row_matches_query(query, visible_ix);
+                }
+                query.is_match(
+                    self.diff_text_line_for_region(visible_ix, DiffTextRegion::Inline)
+                        .as_ref(),
+                )
+            }
             DiffViewMode::Split => {
                 if self.is_file_diff_view_active() {
                     let mut expanded_tabs = String::new();

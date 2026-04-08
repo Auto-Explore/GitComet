@@ -64,6 +64,26 @@ pub(in crate::view) use syntax::{
     diff_syntax_language_for_code_fence_info, diff_syntax_language_for_path,
 };
 
+pub(super) fn syntax_highlights_for_streamed_line_slice_heuristic(
+    theme: AppTheme,
+    raw_text: &gitcomet_core::file_diff::FileDiffLineText,
+    language: DiffSyntaxLanguage,
+    requested_slice_range: Range<usize>,
+    resolved_slice_range: Range<usize>,
+) -> Option<Vec<(Range<usize>, gpui::HighlightStyle)>> {
+    let tokens = syntax::syntax_tokens_for_streamed_line_slice_heuristic(
+        raw_text,
+        language,
+        requested_slice_range,
+        resolved_slice_range.clone(),
+    )?;
+    Some(prepared_document_line_highlights_from_tokens(
+        theme,
+        resolved_slice_range.len(),
+        tokens.as_slice(),
+    ))
+}
+
 /// Extracts the text content of a specific line from a document using precomputed
 /// line starts. Returns an empty string if the line index is out of bounds.
 /// Strips trailing newline.

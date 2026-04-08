@@ -1,6 +1,7 @@
 use gitcomet_core::conflict_session::{ConflictPayload, ConflictResolverStrategy};
 use gitcomet_core::domain::{
-    CommitId, DiffArea, DiffLineKind, DiffTarget, FileConflictKind, FileStatusKind,
+    CommitId, DiffArea, DiffLineKind, DiffPreviewTextSide, DiffTarget, FileConflictKind,
+    FileStatusKind,
 };
 use gitcomet_core::error::{Error, ErrorKind, GitFailureId};
 use gitcomet_core::services::ConflictSide;
@@ -1253,6 +1254,134 @@ fn diff_file_text_staged_add_and_delete_report_missing_sides() {
     assert_eq!(deleted.path, PathBuf::from("a.txt"));
     assert_eq!(deleted.old.as_deref(), Some("one\n"));
     assert_eq!(deleted.new.as_deref(), None);
+}
+
+#[test]
+fn diff_preview_text_file_commit_added_file_returns_new_side_blob_path() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    write(repo, "docs/added.txt", "one\ntwo");
+    run_git(repo, &["add", "docs/added.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "add file"],
+    );
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    let commit_id = CommitId(run_git_output(repo, &["rev-parse", "HEAD"]).into());
+    let preview_path = opened
+        .diff_preview_text_file(
+            &DiffTarget::Commit {
+                commit_id,
+                path: Some(PathBuf::from("docs/added.txt")),
+            },
+            DiffPreviewTextSide::New,
+        )
+        .unwrap()
+        .expect("preview text file for committed added file");
+
+    assert!(preview_path.is_file());
+    assert_eq!(
+        fs::read_to_string(&preview_path).expect("read committed added preview text file"),
+        "one\ntwo"
+    );
+}
+
+#[test]
+fn diff_preview_text_file_commit_deleted_file_returns_old_side_blob_path() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    write(repo, "docs/delete-me.txt", "one\ntwo");
+    run_git(repo, &["add", "docs/delete-me.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "seed"],
+    );
+    run_git(repo, &["rm", "docs/delete-me.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "delete file"],
+    );
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    let commit_id = CommitId(run_git_output(repo, &["rev-parse", "HEAD"]).into());
+    let preview_path = opened
+        .diff_preview_text_file(
+            &DiffTarget::Commit {
+                commit_id,
+                path: Some(PathBuf::from("docs/delete-me.txt")),
+            },
+            DiffPreviewTextSide::Old,
+        )
+        .unwrap()
+        .expect("preview text file for committed deleted file");
+
+    assert!(preview_path.is_file());
+    assert_eq!(
+        fs::read_to_string(&preview_path).expect("read committed deleted preview text file"),
+        "one\ntwo"
+    );
+}
+
+#[test]
+fn diff_preview_text_file_staged_deleted_file_returns_head_blob_path() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    write(repo, "a.txt", "one\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "init"],
+    );
+    run_git(repo, &["rm", "a.txt"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    let preview_path = opened
+        .diff_preview_text_file(
+            &DiffTarget::WorkingTree {
+                path: PathBuf::from("a.txt"),
+                area: DiffArea::Staged,
+            },
+            DiffPreviewTextSide::Old,
+        )
+        .unwrap()
+        .expect("preview text file for staged deleted file");
+
+    assert!(preview_path.is_file());
+    assert_eq!(
+        fs::read_to_string(&preview_path).expect("read staged deleted preview text file"),
+        "one\n"
+    );
 }
 
 #[test]

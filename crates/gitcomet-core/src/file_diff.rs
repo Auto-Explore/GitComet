@@ -1,8 +1,14 @@
 use crate::domain::SharedLineText;
+use rustc_hash::FxHasher;
+use std::borrow::Cow;
 use std::cell::OnceCell;
+use std::fs::File;
 use std::hash::{Hash, Hasher};
+use std::io::{Read, Seek, SeekFrom};
 use std::ops::Range;
+use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::OnceLock;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FileDiffRowKind {
@@ -24,6 +30,9 @@ const SIDE_BY_SIDE_LINEAR_FALLBACK_LINE_THRESHOLD: usize = 100_000;
 const PATIENCE_POSITIONAL_FALLBACK_LINE_THRESHOLD: usize = 2_048;
 const SIDE_BY_SIDE_SPARSE_POSITIONAL_MAX_CHANGED_RATIO_DENOMINATOR: usize = 4;
 const SIDE_BY_SIDE_SPARSE_POSITIONAL_MAX_BLOCK_LEN: usize = 1;
+// UTF-8 code points are at most 4 bytes wide, so 3 bytes of lookaround is
+// enough to recover the nearest character boundary around any requested slice.
+const UTF8_SUBSLICE_BOUNDARY_LOOKAROUND_BYTES: usize = 3;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FileDiffEofNewline {
@@ -36,11 +45,129 @@ enum FileDiffLineTextStorage {
     Owned(Arc<str>),
     SharedSlice { text: Arc<str>, range: Range<usize> },
     SharedLine(SharedLineText),
+    FileSlice(Arc<FileDiffLineFileSlice>),
 }
 
 #[derive(Clone, Debug)]
 pub struct FileDiffLineText {
     storage: FileDiffLineTextStorage,
+}
+
+#[derive(Debug)]
+struct FileDiffLineFileSlice {
+    path: Arc<PathBuf>,
+    range: Range<usize>,
+    ascii_only: bool,
+    has_tabs: bool,
+    text: OnceLock<Arc<str>>,
+}
+
+fn read_file_bytes(path: &PathBuf, range: Range<usize>) -> Option<Vec<u8>> {
+    if range.start > range.end {
+        return None;
+    }
+
+    let mut file = File::open(path).ok()?;
+    file.seek(SeekFrom::Start(u64::try_from(range.start).ok()?))
+        .ok()?;
+    let mut bytes = vec![0u8; range.end.saturating_sub(range.start)];
+    file.read_exact(&mut bytes).ok()?;
+    Some(bytes)
+}
+
+fn read_utf8_file_slice(path: &PathBuf, range: Range<usize>) -> Option<Arc<str>> {
+    let bytes = read_file_bytes(path, range)?;
+    let text = String::from_utf8(bytes).ok()?;
+    Some(Arc::from(text))
+}
+
+fn read_utf8_file_subslice(
+    path: &PathBuf,
+    base_range: &Range<usize>,
+    subrange: Range<usize>,
+    ascii_only: bool,
+) -> Option<Arc<str>> {
+    read_utf8_file_subslice_with_range(path, base_range, subrange, ascii_only).map(|(text, _)| text)
+}
+
+fn clamp_byte_up_to_char_boundary(text: &str, mut offset: usize) -> usize {
+    offset = offset.min(text.len());
+    while offset < text.len() && !text.is_char_boundary(offset) {
+        offset += 1;
+    }
+    offset
+}
+
+fn clamp_byte_down_to_char_boundary(text: &str, mut offset: usize) -> usize {
+    offset = offset.min(text.len());
+    while offset > 0 && !text.is_char_boundary(offset) {
+        offset -= 1;
+    }
+    offset
+}
+
+fn resolved_utf8_text_subslice_range(text: &str, range: Range<usize>) -> Option<Range<usize>> {
+    if range.start > range.end || range.end > text.len() {
+        return None;
+    }
+
+    let start = clamp_byte_up_to_char_boundary(text, range.start);
+    let end = clamp_byte_down_to_char_boundary(text, range.end).max(start);
+    Some(start..end)
+}
+
+fn read_utf8_file_subslice_with_range(
+    path: &PathBuf,
+    base_range: &Range<usize>,
+    subrange: Range<usize>,
+    ascii_only: bool,
+) -> Option<(Arc<str>, Range<usize>)> {
+    if subrange.start > subrange.end
+        || subrange.end > base_range.end.saturating_sub(base_range.start)
+    {
+        return None;
+    }
+
+    let start = base_range.start.saturating_add(subrange.start);
+    let end = base_range.start.saturating_add(subrange.end);
+    if ascii_only {
+        return read_utf8_file_slice(path, start..end).map(|text| (text, subrange));
+    }
+
+    let read_start = start
+        .saturating_sub(UTF8_SUBSLICE_BOUNDARY_LOOKAROUND_BYTES)
+        .max(base_range.start);
+    let read_end = end
+        .saturating_add(UTF8_SUBSLICE_BOUNDARY_LOOKAROUND_BYTES)
+        .min(base_range.end);
+    let bytes = read_file_bytes(path, read_start..read_end)?;
+    let requested_start = start.saturating_sub(read_start).min(bytes.len());
+    let requested_end = end.saturating_sub(read_start).min(bytes.len());
+
+    let mut local_start = requested_start;
+    while local_start < bytes.len() && (bytes[local_start] & 0b1100_0000) == 0b1000_0000 {
+        local_start += 1;
+    }
+
+    let mut local_end = requested_end.max(local_start).min(bytes.len());
+    while local_end > local_start && std::str::from_utf8(&bytes[local_start..local_end]).is_err() {
+        local_end -= 1;
+    }
+
+    let resolved_range = read_start
+        .saturating_add(local_start)
+        .saturating_sub(base_range.start)
+        ..read_start
+            .saturating_add(local_end)
+            .saturating_sub(base_range.start);
+    if local_end <= local_start {
+        return Some((Arc::from(""), resolved_range));
+    }
+
+    String::from_utf8(bytes[local_start..local_end].to_vec())
+        .ok()
+        .map(Arc::from)
+        .map(|text| (text, resolved_range))
 }
 
 impl FileDiffLineText {
@@ -66,6 +193,23 @@ impl FileDiffLineText {
         }
     }
 
+    pub fn file_slice(
+        path: Arc<PathBuf>,
+        range: Range<usize>,
+        ascii_only: bool,
+        has_tabs: bool,
+    ) -> Self {
+        Self {
+            storage: FileDiffLineTextStorage::FileSlice(Arc::new(FileDiffLineFileSlice {
+                path,
+                range,
+                ascii_only,
+                has_tabs,
+                text: OnceLock::new(),
+            })),
+        }
+    }
+
     pub fn as_str(&self) -> &str {
         match &self.storage {
             FileDiffLineTextStorage::Owned(text) => text.as_ref(),
@@ -73,6 +217,13 @@ impl FileDiffLineText {
                 .get(range.clone())
                 .expect("shared file-diff line range should stay valid"),
             FileDiffLineTextStorage::SharedLine(text) => text.as_ref(),
+            FileDiffLineTextStorage::FileSlice(slice) => slice
+                .text
+                .get_or_init(|| {
+                    read_utf8_file_slice(slice.path.as_ref(), slice.range.clone())
+                        .unwrap_or_else(|| Arc::<str>::from(""))
+                })
+                .as_ref(),
         }
     }
 
@@ -81,7 +232,137 @@ impl FileDiffLineText {
     }
 
     pub fn len(&self) -> usize {
-        self.as_str().len()
+        match &self.storage {
+            FileDiffLineTextStorage::Owned(text) => text.len(),
+            FileDiffLineTextStorage::SharedSlice { range, .. } => {
+                range.end.saturating_sub(range.start)
+            }
+            FileDiffLineTextStorage::SharedLine(text) => text.len(),
+            FileDiffLineTextStorage::FileSlice(slice) => {
+                slice.range.end.saturating_sub(slice.range.start)
+            }
+        }
+    }
+
+    pub fn is_ascii_without_loading(&self) -> bool {
+        match &self.storage {
+            FileDiffLineTextStorage::Owned(text) => text.is_ascii(),
+            FileDiffLineTextStorage::SharedSlice { text, range } => text
+                .as_bytes()
+                .get(range.clone())
+                .is_some_and(|bytes| bytes.is_ascii()),
+            FileDiffLineTextStorage::SharedLine(text) => text.as_ref().is_ascii(),
+            FileDiffLineTextStorage::FileSlice(slice) => slice.ascii_only,
+        }
+    }
+
+    pub fn has_tabs_without_loading(&self) -> bool {
+        match &self.storage {
+            FileDiffLineTextStorage::Owned(text) => text.contains('\t'),
+            FileDiffLineTextStorage::SharedSlice { text, range } => text
+                .as_bytes()
+                .get(range.clone())
+                .is_some_and(|bytes| bytes.contains(&b'\t')),
+            FileDiffLineTextStorage::SharedLine(text) => text.as_ref().contains('\t'),
+            FileDiffLineTextStorage::FileSlice(slice) => slice.has_tabs,
+        }
+    }
+
+    pub fn slice_bytes(&self, range: Range<usize>) -> Option<Cow<'_, [u8]>> {
+        if range.start > range.end || range.end > self.len() {
+            return None;
+        }
+
+        match &self.storage {
+            FileDiffLineTextStorage::Owned(text) => Some(Cow::Borrowed(
+                text.as_bytes().get(range).unwrap_or_default(),
+            )),
+            FileDiffLineTextStorage::SharedSlice { text, range: base } => {
+                let start = base.start.saturating_add(range.start);
+                let end = base.start.saturating_add(range.end);
+                Some(Cow::Borrowed(
+                    text.as_bytes().get(start..end).unwrap_or_default(),
+                ))
+            }
+            FileDiffLineTextStorage::SharedLine(text) => Some(Cow::Borrowed(
+                text.as_ref().as_bytes().get(range).unwrap_or_default(),
+            )),
+            FileDiffLineTextStorage::FileSlice(slice) => {
+                let start = slice.range.start.saturating_add(range.start);
+                let end = slice.range.start.saturating_add(range.end);
+                read_file_bytes(slice.path.as_ref(), start..end).map(Cow::Owned)
+            }
+        }
+    }
+
+    pub fn slice_text(&self, range: Range<usize>) -> Option<Cow<'_, str>> {
+        if range.start > range.end || range.end > self.len() {
+            return None;
+        }
+
+        match &self.storage {
+            FileDiffLineTextStorage::Owned(text) => {
+                Some(Cow::Borrowed(text.get(range).unwrap_or_default()))
+            }
+            FileDiffLineTextStorage::SharedSlice { text, range: base } => {
+                let start = base.start.saturating_add(range.start);
+                let end = base.start.saturating_add(range.end);
+                Some(Cow::Borrowed(text.get(start..end).unwrap_or_default()))
+            }
+            FileDiffLineTextStorage::SharedLine(text) => {
+                Some(Cow::Borrowed(text.as_ref().get(range).unwrap_or_default()))
+            }
+            FileDiffLineTextStorage::FileSlice(slice) => {
+                read_utf8_file_subslice(slice.path.as_ref(), &slice.range, range, slice.ascii_only)
+                    .map(|text| Cow::Owned(text.as_ref().to_string()))
+            }
+        }
+    }
+
+    pub fn slice_text_resolved(&self, range: Range<usize>) -> Option<(Cow<'_, str>, Range<usize>)> {
+        if range.start > range.end || range.end > self.len() {
+            return None;
+        }
+
+        match &self.storage {
+            FileDiffLineTextStorage::Owned(text) => {
+                let resolved_range = resolved_utf8_text_subslice_range(text.as_ref(), range)?;
+                Some((
+                    Cow::Borrowed(text.get(resolved_range.clone()).unwrap_or_default()),
+                    resolved_range,
+                ))
+            }
+            FileDiffLineTextStorage::SharedSlice { text, range: base } => {
+                let start = base.start.saturating_add(range.start);
+                let end = base.start.saturating_add(range.end);
+                let resolved_absolute =
+                    resolved_utf8_text_subslice_range(text.as_ref(), start..end)?;
+                let resolved_relative = resolved_absolute.start.saturating_sub(base.start)
+                    ..resolved_absolute.end.saturating_sub(base.start);
+                Some((
+                    Cow::Borrowed(text.get(resolved_absolute).unwrap_or_default()),
+                    resolved_relative,
+                ))
+            }
+            FileDiffLineTextStorage::SharedLine(text) => {
+                let resolved_range = resolved_utf8_text_subslice_range(text.as_ref(), range)?;
+                Some((
+                    Cow::Borrowed(
+                        text.as_ref()
+                            .get(resolved_range.clone())
+                            .unwrap_or_default(),
+                    ),
+                    resolved_range,
+                ))
+            }
+            FileDiffLineTextStorage::FileSlice(slice) => read_utf8_file_subslice_with_range(
+                slice.path.as_ref(),
+                &slice.range,
+                range,
+                slice.ascii_only,
+            )
+            .map(|(text, resolved_range)| (Cow::Owned(text.as_ref().to_string()), resolved_range)),
+        }
     }
 
     pub fn shares_backing_with(&self, other: &Self) -> bool {
@@ -102,8 +383,42 @@ impl FileDiffLineText {
             (FileDiffLineTextStorage::SharedLine(a), FileDiffLineTextStorage::SharedLine(b)) => {
                 a.shares_storage_with(b)
             }
+            (FileDiffLineTextStorage::FileSlice(a), FileDiffLineTextStorage::FileSlice(b)) => {
+                Arc::ptr_eq(a, b)
+            }
             _ => false,
         }
+    }
+
+    pub fn identity_hash_without_loading(&self) -> u64 {
+        let mut hasher = FxHasher::default();
+        match &self.storage {
+            FileDiffLineTextStorage::Owned(text) => {
+                0u8.hash(&mut hasher);
+                (text.as_ptr() as usize).hash(&mut hasher);
+                text.len().hash(&mut hasher);
+            }
+            FileDiffLineTextStorage::SharedSlice { text, range } => {
+                1u8.hash(&mut hasher);
+                (text.as_ptr() as usize).hash(&mut hasher);
+                text.len().hash(&mut hasher);
+                range.start.hash(&mut hasher);
+                range.end.hash(&mut hasher);
+            }
+            FileDiffLineTextStorage::SharedLine(text) => {
+                2u8.hash(&mut hasher);
+                text.as_ref().hash(&mut hasher);
+            }
+            FileDiffLineTextStorage::FileSlice(slice) => {
+                3u8.hash(&mut hasher);
+                slice.path.hash(&mut hasher);
+                slice.range.start.hash(&mut hasher);
+                slice.range.end.hash(&mut hasher);
+                slice.ascii_only.hash(&mut hasher);
+                slice.has_tabs.hash(&mut hasher);
+            }
+        }
+        hasher.finish()
     }
 }
 
@@ -168,6 +483,13 @@ impl From<FileDiffLineText> for Arc<str> {
                     .expect("shared file-diff line range should stay valid"),
             ),
             FileDiffLineTextStorage::SharedLine(text) => text.to_arc(),
+            FileDiffLineTextStorage::FileSlice(slice) => slice
+                .text
+                .get_or_init(|| {
+                    read_utf8_file_slice(slice.path.as_ref(), slice.range.clone())
+                        .unwrap_or_else(|| Arc::<str>::from(""))
+                })
+                .clone(),
         }
     }
 }
@@ -396,11 +718,26 @@ pub enum BenchmarkReplacementDistanceBackend {
 pub fn side_by_side_plan(old: &str, new: &str) -> FileDiffPlan {
     let old_lines = split_lines(old);
     let new_lines = split_lines(new);
+    side_by_side_plan_from_lines(old, new, old_lines.as_slice(), new_lines.as_slice())
+}
+
+/// Build a side-by-side diff plan from precomputed `str::lines()` slices.
+///
+/// Callers must ensure `old_lines` and `new_lines` were derived from
+/// `old_text`/`new_text` using the same line-splitting semantics as
+/// [`str::lines`], because EOF newline handling still comes from the full
+/// source texts.
+pub fn side_by_side_plan_from_lines(
+    old_text: &str,
+    new_text: &str,
+    old_lines: &[&str],
+    new_lines: &[&str],
+) -> FileDiffPlan {
     build_side_by_side_plan_with_pair_cost(
-        old,
-        new,
-        old_lines.as_slice(),
-        new_lines.as_slice(),
+        old_text,
+        new_text,
+        old_lines,
+        new_lines,
         replacement_pair_cost,
     )
 }
@@ -2213,11 +2550,14 @@ fn replacement_pair_cost_with_shared_boundary<T: Eq>(
     let max_len = max_len_usize as u32;
     let old_trimmed = &old_units[shared_prefix..old_units.len().saturating_sub(shared_suffix)];
     let new_trimmed = &new_units[shared_prefix..new_units.len().saturating_sub(shared_suffix)];
+    let trimmed_cells = old_trimmed.len().saturating_mul(new_trimmed.len());
 
     // Fast path: if either trimmed side is empty, the distance is exactly
     // the length of the other side — skip the O(n*m) Levenshtein DP.
     let distance = if old_trimmed.is_empty() || new_trimmed.is_empty() {
         (old_trimmed.len() + new_trimmed.len()) as u32
+    } else if trimmed_cells > REPLACEMENT_ALIGN_CELL_BUDGET {
+        u32::try_from(old_trimmed.len().max(new_trimmed.len())).unwrap_or(u32::MAX)
     } else {
         distance_fn(old_trimmed, new_trimmed)
     };
@@ -2933,6 +3273,37 @@ mod tests {
         }
 
         (old_line_to_row, new_line_to_row)
+    }
+
+    #[test]
+    fn file_slice_text_resolved_clamps_to_utf8_char_boundaries() {
+        let text = "aÄ日z";
+        let temp_path = std::env::temp_dir().join(format!(
+            "gitcomet_file_diff_utf8_slice_{}_{}.txt",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock should be monotonic enough for test temp path")
+                .as_nanos()
+        ));
+        std::fs::write(&temp_path, text.as_bytes()).expect("write UTF-8 file slice fixture");
+
+        let raw_text =
+            FileDiffLineText::file_slice(Arc::new(temp_path.clone()), 0..text.len(), false, false);
+
+        let (slice_text, resolved_range) = raw_text
+            .slice_text_resolved(2..6)
+            .expect("UTF-8 file slice should resolve");
+        assert_eq!(slice_text.as_ref(), "日");
+        assert_eq!(resolved_range, 3..6);
+
+        let (empty_slice, empty_range) = raw_text
+            .slice_text_resolved(2..5)
+            .expect("partial UTF-8 slice should still resolve");
+        assert!(empty_slice.is_empty());
+        assert_eq!(empty_range, 3..3);
+
+        let _ = std::fs::remove_file(&temp_path);
     }
 
     #[test]

@@ -517,6 +517,24 @@ impl MainPaneView {
         if let Some(repo_id) = state.active_repo
             && let Some(repo) = state.repos.iter().find(|r| r.id == repo_id)
         {
+            match repo.diff_state.diff_target.as_ref() {
+                Some(DiffTarget::WorkingTree { path, area }) => {
+                    0u8.hash(&mut hasher);
+                    path.hash(&mut hasher);
+                    match area {
+                        DiffArea::Staged => 0u8.hash(&mut hasher),
+                        DiffArea::Unstaged => 1u8.hash(&mut hasher),
+                    }
+                }
+                Some(DiffTarget::Commit { commit_id, path }) => {
+                    1u8.hash(&mut hasher);
+                    commit_id.hash(&mut hasher);
+                    path.hash(&mut hasher);
+                }
+                None => {
+                    2u8.hash(&mut hasher);
+                }
+            }
             repo.diff_state.diff_state_rev.hash(&mut hasher);
             repo.conflict_state.conflict_rev.hash(&mut hasher);
 
@@ -530,6 +548,15 @@ impl MainPaneView {
                 0
             };
             status_rev.hash(&mut hasher);
+            let commit_details_rev = if matches!(
+                repo.diff_state.diff_target,
+                Some(DiffTarget::Commit { path: Some(_), .. })
+            ) {
+                repo.history_state.commit_details_rev
+            } else {
+                0
+            };
+            commit_details_rev.hash(&mut hasher);
         }
 
         hasher.finish()
@@ -900,9 +927,12 @@ impl MainPaneView {
             file_image_diff_cache_old_svg_path: None,
             file_image_diff_cache_new_svg_path: None,
             worktree_preview_path: None,
+            worktree_preview_source_path: None,
             worktree_preview: Loadable::NotLoaded,
+            worktree_preview_source_len: 0,
             worktree_preview_text: SharedString::default(),
             worktree_preview_line_starts: Arc::default(),
+            worktree_preview_line_flags: Arc::default(),
             worktree_preview_search_trigram_index: None,
             worktree_preview_content_rev: 0,
             worktree_markdown_preview_path: None,

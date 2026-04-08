@@ -91,13 +91,20 @@ pub enum Effect {
         repo_id: RepoId,
         target: DiffTarget,
     },
+    LoadDiffPreviewTextFile {
+        repo_id: RepoId,
+        target: DiffTarget,
+        side: DiffPreviewTextSide,
+    },
     LoadDiffFileImage {
         repo_id: RepoId,
         target: DiffTarget,
     },
     LoadSelectedDiff {
         repo_id: RepoId,
+        load_patch_diff: bool,
         load_file_text: bool,
+        preview_text_side: Option<DiffPreviewTextSide>,
         load_file_image: bool,
     },
     LoadSelectedConflictFile {

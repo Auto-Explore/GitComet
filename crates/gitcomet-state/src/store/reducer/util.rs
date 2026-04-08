@@ -48,6 +48,14 @@ pub(super) struct DiffTargetPreviewFlags {
     pub is_svg: bool,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) struct SelectedDiffLoadPlan {
+    pub load_patch_diff: bool,
+    pub load_file_text: bool,
+    pub preview_text_side: Option<gitcomet_core::domain::DiffPreviewTextSide>,
+    pub load_file_image: bool,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum SelectedConflictTarget<'a> {
     Current,
@@ -118,6 +126,149 @@ pub(super) fn diff_target_wants_image_preview(target: &DiffTarget) -> bool {
 #[cfg(test)]
 pub(super) fn diff_target_is_svg(target: &DiffTarget) -> bool {
     diff_target_preview_flags(target).is_svg
+}
+
+fn diff_target_is_preview_only(repo_state: &RepoState, target: &DiffTarget) -> bool {
+    match target {
+        DiffTarget::WorkingTree { path, area } => {
+            let Loadable::Ready(status) = &repo_state.status else {
+                return false;
+            };
+            let entries = match area {
+                DiffArea::Unstaged => status.unstaged.as_slice(),
+                DiffArea::Staged => status.staged.as_slice(),
+            };
+
+            entries.iter().any(|entry| {
+                entry.path == *path
+                    && matches!(
+                        entry.kind,
+                        FileStatusKind::Untracked | FileStatusKind::Added | FileStatusKind::Deleted
+                    )
+            })
+        }
+        DiffTarget::Commit {
+            commit_id,
+            path: Some(path),
+        } => {
+            let Loadable::Ready(details) = &repo_state.history_state.commit_details else {
+                return false;
+            };
+            if &details.id != commit_id {
+                return false;
+            }
+
+            details.files.iter().any(|file| {
+                file.path == *path
+                    && matches!(file.kind, FileStatusKind::Added | FileStatusKind::Deleted)
+            })
+        }
+        DiffTarget::Commit { path: None, .. } => false,
+    }
+}
+
+fn diff_target_preview_text_side(
+    repo_state: &RepoState,
+    target: &DiffTarget,
+) -> Option<gitcomet_core::domain::DiffPreviewTextSide> {
+    match target {
+        DiffTarget::WorkingTree { path, area } => {
+            let Loadable::Ready(status) = &repo_state.status else {
+                return None;
+            };
+            let entries = match area {
+                DiffArea::Unstaged => status.unstaged.as_slice(),
+                DiffArea::Staged => status.staged.as_slice(),
+            };
+
+            entries.iter().find_map(|entry| {
+                (entry.path == *path).then_some(match entry.kind {
+                    FileStatusKind::Untracked | FileStatusKind::Added => {
+                        Some(gitcomet_core::domain::DiffPreviewTextSide::New)
+                    }
+                    FileStatusKind::Deleted => {
+                        Some(gitcomet_core::domain::DiffPreviewTextSide::Old)
+                    }
+                    FileStatusKind::Modified
+                    | FileStatusKind::Renamed
+                    | FileStatusKind::Conflicted => None,
+                })?
+            })
+        }
+        DiffTarget::Commit {
+            commit_id,
+            path: Some(path),
+        } => {
+            let Loadable::Ready(details) = &repo_state.history_state.commit_details else {
+                return None;
+            };
+            if &details.id != commit_id {
+                return None;
+            }
+
+            details.files.iter().find_map(|file| {
+                (file.path == *path).then_some(match file.kind {
+                    FileStatusKind::Added => Some(gitcomet_core::domain::DiffPreviewTextSide::New),
+                    FileStatusKind::Deleted => {
+                        Some(gitcomet_core::domain::DiffPreviewTextSide::Old)
+                    }
+                    FileStatusKind::Modified
+                    | FileStatusKind::Renamed
+                    | FileStatusKind::Conflicted
+                    | FileStatusKind::Untracked => None,
+                })?
+            })
+        }
+        DiffTarget::Commit { path: None, .. } => None,
+    }
+}
+
+pub(super) fn selected_diff_load_plan(
+    repo_state: &RepoState,
+    target: &DiffTarget,
+) -> SelectedDiffLoadPlan {
+    let supports_file = matches!(
+        target,
+        DiffTarget::WorkingTree { .. } | DiffTarget::Commit { path: Some(_), .. }
+    );
+    let preview = diff_target_preview_flags(target);
+    let preview_only = diff_target_is_preview_only(repo_state, target);
+    let preview_text_side = (supports_file && (!preview.wants_image || preview.is_svg))
+        .then(|| diff_target_preview_text_side(repo_state, target))
+        .flatten();
+
+    SelectedDiffLoadPlan {
+        load_patch_diff: !preview_only,
+        load_file_text: supports_file && !preview_only && (!preview.wants_image || preview.is_svg),
+        preview_text_side,
+        load_file_image: supports_file && preview.wants_image,
+    }
+}
+
+pub(super) fn apply_selected_diff_load_plan_state(
+    repo_state: &mut RepoState,
+    load_plan: SelectedDiffLoadPlan,
+) {
+    repo_state.diff_state.diff = if load_plan.load_patch_diff {
+        Loadable::Loading
+    } else {
+        Loadable::NotLoaded
+    };
+    repo_state.diff_state.diff_file = if load_plan.load_file_text {
+        Loadable::Loading
+    } else {
+        Loadable::NotLoaded
+    };
+    repo_state.diff_state.diff_preview_text_file = if load_plan.preview_text_side.is_some() {
+        Loadable::Loading
+    } else {
+        Loadable::NotLoaded
+    };
+    repo_state.diff_state.diff_file_image = if load_plan.load_file_image {
+        Loadable::Loading
+    } else {
+        Loadable::NotLoaded
+    };
 }
 
 pub(super) fn selected_conflict_target<'a>(
@@ -234,58 +385,63 @@ fn append_start_conflict_target_reload_with_mode(
     });
 }
 
-pub(super) fn diff_reload_effect_count(target: &DiffTarget) -> usize {
-    let supports_file = matches!(
-        target,
-        DiffTarget::WorkingTree { .. } | DiffTarget::Commit { path: Some(_), .. }
-    );
-    let preview = diff_target_preview_flags(target);
+pub(super) fn diff_reload_effect_count(repo_state: &RepoState, target: &DiffTarget) -> usize {
+    let plan = selected_diff_load_plan(repo_state, target);
 
-    let mut count = 1;
-    if supports_file {
-        if preview.wants_image {
-            count += 1;
-        }
-        if !preview.wants_image || preview.is_svg {
-            count += 1;
-        }
+    let mut count = usize::from(plan.load_patch_diff);
+    if plan.load_file_image {
+        count += 1;
+    }
+    if plan.load_file_text {
+        count += 1;
+    }
+    if plan.preview_text_side.is_some() {
+        count += 1;
     }
 
     debug_assert!(count <= DIFF_RELOAD_MAX_EFFECTS);
     count
 }
 
-pub(super) fn diff_reload_effects(repo_id: RepoId, target: DiffTarget) -> Vec<Effect> {
-    let mut effects = Vec::with_capacity(diff_reload_effect_count(&target));
-    append_diff_reload_effects(&mut effects, repo_id, target);
+pub(super) fn diff_reload_effects(
+    repo_state: &RepoState,
+    repo_id: RepoId,
+    target: DiffTarget,
+) -> Vec<Effect> {
+    let mut effects = Vec::with_capacity(diff_reload_effect_count(repo_state, &target));
+    append_diff_reload_effects(&mut effects, repo_state, repo_id, target);
     effects
 }
 
 pub(super) fn append_diff_reload_effects(
     effects: &mut impl EffectAccumulator,
+    repo_state: &RepoState,
     repo_id: RepoId,
     target: DiffTarget,
 ) {
-    let supports_file = matches!(
-        &target,
-        DiffTarget::WorkingTree { .. } | DiffTarget::Commit { path: Some(_), .. }
-    );
-    let preview = diff_target_preview_flags(&target);
+    let plan = selected_diff_load_plan(repo_state, &target);
 
-    effects.push_effect(Effect::LoadDiff {
-        repo_id,
-        target: target.clone(),
-    });
-    if supports_file {
-        if preview.wants_image {
-            effects.push_effect(Effect::LoadDiffFileImage {
-                repo_id,
-                target: target.clone(),
-            });
-        }
-        if !preview.wants_image || preview.is_svg {
-            effects.push_effect(Effect::LoadDiffFile { repo_id, target });
-        }
+    if plan.load_patch_diff {
+        effects.push_effect(Effect::LoadDiff {
+            repo_id,
+            target: target.clone(),
+        });
+    }
+    if plan.load_file_image {
+        effects.push_effect(Effect::LoadDiffFileImage {
+            repo_id,
+            target: target.clone(),
+        });
+    }
+    if let Some(side) = plan.preview_text_side {
+        effects.push_effect(Effect::LoadDiffPreviewTextFile {
+            repo_id,
+            target: target.clone(),
+            side,
+        });
+    }
+    if plan.load_file_text {
+        effects.push_effect(Effect::LoadDiffFile { repo_id, target });
     }
 }
 
@@ -1167,11 +1323,12 @@ mod tests {
     #[test]
     fn diff_reload_effects_cover_image_svg_and_non_file_targets() {
         let repo_id = RepoId(7);
+        let repo_state = repo_state(repo_id.0);
         let png = DiffTarget::WorkingTree {
             path: PathBuf::from("img.PNG"),
             area: DiffArea::Unstaged,
         };
-        let png_effects = diff_reload_effects(repo_id, png.clone());
+        let png_effects = diff_reload_effects(&repo_state, repo_id, png.clone());
         assert!(diff_target_wants_image_preview(&png));
         assert!(!diff_target_is_svg(&png));
         assert_eq!(png_effects.len(), 2);
@@ -1182,7 +1339,7 @@ mod tests {
             path: PathBuf::from("diagram.svg"),
             area: DiffArea::Unstaged,
         };
-        let svg_effects = diff_reload_effects(repo_id, svg.clone());
+        let svg_effects = diff_reload_effects(&repo_state, repo_id, svg.clone());
         assert!(diff_target_wants_image_preview(&svg));
         assert!(diff_target_is_svg(&svg));
         assert_eq!(svg_effects.len(), 3);
@@ -1193,7 +1350,10 @@ mod tests {
             area: DiffArea::Unstaged,
         };
         assert!(!diff_target_wants_image_preview(&text_no_ext));
-        assert_eq!(diff_reload_effects(repo_id, text_no_ext).len(), 2);
+        assert_eq!(
+            diff_reload_effects(&repo_state, repo_id, text_no_ext).len(),
+            2
+        );
 
         let commit_without_path = DiffTarget::Commit {
             commit_id: CommitId("abc123".into()),
@@ -1201,7 +1361,10 @@ mod tests {
         };
         assert!(!diff_target_wants_image_preview(&commit_without_path));
         assert!(!diff_target_is_svg(&commit_without_path));
-        assert_eq!(diff_reload_effects(repo_id, commit_without_path).len(), 1);
+        assert_eq!(
+            diff_reload_effects(&repo_state, repo_id, commit_without_path).len(),
+            1
+        );
     }
 
     #[test]

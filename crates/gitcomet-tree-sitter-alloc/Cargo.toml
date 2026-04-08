@@ -1,0 +1,11 @@
+[package]
+name = "gitcomet-tree-sitter-alloc"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+tree-sitter = { workspace = true }

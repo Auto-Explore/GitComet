@@ -948,6 +948,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
                 discard_lines_patch: Some("discard patch".into()),
                 lines_count: 3,
                 copy_text: Some("copied selection".into()),
+                copy_target: None,
             },
         )
     });
@@ -990,6 +991,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
                 discard_lines_patch: None,
                 lines_count: 1,
                 copy_text: Some("staged copy".into()),
+                copy_target: None,
             },
         )
     });

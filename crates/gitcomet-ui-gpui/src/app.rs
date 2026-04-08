@@ -213,6 +213,7 @@ pub(crate) fn show_window_system_menu(window: &Window, position: Point<Pixels>) 
     window.show_window_menu(position);
 }
 
+#[cfg(any(target_os = "windows", test))]
 fn window_menu_position(position: Point<Pixels>, scale_factor: f32) -> (i32, i32) {
     (
         (f32::from(position.x) * scale_factor).round() as i32,

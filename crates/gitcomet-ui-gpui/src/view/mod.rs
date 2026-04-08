@@ -1,5 +1,7 @@
 use crate::theme::AppTheme;
-use gitcomet_core::diff::{AnnotatedDiffLine, annotate_unified};
+use gitcomet_core::diff::AnnotatedDiffLine;
+#[cfg(test)]
+use gitcomet_core::diff::annotate_unified;
 use gitcomet_core::domain::{
     Branch, Commit, CommitId, DiffArea, DiffTarget, FileStatus, FileStatusKind, RepoStatus, Tag,
     UpstreamDivergence,
@@ -85,7 +87,7 @@ use date_time::format_datetime;
 #[cfg(test)]
 use date_time::format_datetime_utc;
 use date_time::{DateTimeFormat, Timezone, format_datetime_into};
-use diff_preview::{build_deleted_file_preview_from_diff, build_new_file_preview_from_diff};
+use diff_preview::build_new_file_preview_from_diff;
 use patch_split::build_patch_split_rows;
 use poller::Poller;
 use word_diff::capped_word_diff_ranges;

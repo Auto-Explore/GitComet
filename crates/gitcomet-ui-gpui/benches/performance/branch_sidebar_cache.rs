@@ -28,12 +28,12 @@ pub(crate) fn bench_branch_sidebar_cache(c: &mut Criterion) {
 
     let mut cache_invalidation =
         BranchSidebarCacheFixture::balanced(local_branches, remote_branches, remotes, 0, 0, 0);
-    // Warm the cache so each iteration measures invalidation + rebuild.
+    // Warm the cache so each iteration measures a source-changing rebuild.
     cache_invalidation.run_cached();
     cache_invalidation.reset_metrics();
 
-    // Worktrees-ready invalidation: includes worktrees + submodules so the
-    // rebuild reflects the full sidebar shape after async worktree loads land.
+    // Worktrees-ready invalidation: keep the aux sections expanded and mutate
+    // the worktree snapshot so the rebuild reflects the full sidebar shape.
     let mut cache_invalidation_wt = BranchSidebarCacheFixture::balanced(
         local_branches,
         remote_branches,
@@ -61,6 +61,7 @@ pub(crate) fn bench_branch_sidebar_cache(c: &mut Criterion) {
             measure_sidecar_allocations(|| {
                 cache_hit_balanced.run_cached();
             });
+            cache_hit_balanced.capture_cached_row_breakdown();
             emit_branch_sidebar_cache_sidecar("cache_hit_balanced", &cache_hit_balanced.metrics());
             elapsed
         });
@@ -73,14 +74,14 @@ pub(crate) fn bench_branch_sidebar_cache(c: &mut Criterion) {
                 cache_miss_remote_fanout.reset_metrics();
                 let start = Instant::now();
                 for _ in 0..iters {
-                    // Invalidate before each iteration so every call is a miss.
-                    cache_miss_remote_fanout.run_invalidate_single_ref();
+                    cache_miss_remote_fanout.run_rebuild_remote_fanout();
                 }
                 let elapsed = start.elapsed();
                 cache_miss_remote_fanout.reset_metrics();
                 measure_sidecar_allocations(|| {
-                    cache_miss_remote_fanout.run_invalidate_single_ref();
+                    cache_miss_remote_fanout.run_rebuild_remote_fanout();
                 });
+                cache_miss_remote_fanout.capture_cached_row_breakdown();
                 emit_branch_sidebar_cache_sidecar(
                     "cache_miss_remote_fanout",
                     &cache_miss_remote_fanout.metrics(),
@@ -97,13 +98,14 @@ pub(crate) fn bench_branch_sidebar_cache(c: &mut Criterion) {
                 cache_invalidation.reset_metrics();
                 let start = Instant::now();
                 for _ in 0..iters {
-                    cache_invalidation.run_invalidate_single_ref();
+                    cache_invalidation.run_rebuild_single_ref_change();
                 }
                 let elapsed = start.elapsed();
                 cache_invalidation.reset_metrics();
                 measure_sidecar_allocations(|| {
-                    cache_invalidation.run_invalidate_single_ref();
+                    cache_invalidation.run_rebuild_single_ref_change();
                 });
+                cache_invalidation.capture_cached_row_breakdown();
                 emit_branch_sidebar_cache_sidecar(
                     "cache_invalidation_single_ref_change",
                     &cache_invalidation.metrics(),
@@ -120,13 +122,14 @@ pub(crate) fn bench_branch_sidebar_cache(c: &mut Criterion) {
                 cache_invalidation_wt.reset_metrics();
                 let start = Instant::now();
                 for _ in 0..iters {
-                    cache_invalidation_wt.run_invalidate_worktrees_ready();
+                    cache_invalidation_wt.run_rebuild_worktrees_ready();
                 }
                 let elapsed = start.elapsed();
                 cache_invalidation_wt.reset_metrics();
                 measure_sidecar_allocations(|| {
-                    cache_invalidation_wt.run_invalidate_worktrees_ready();
+                    cache_invalidation_wt.run_rebuild_worktrees_ready();
                 });
+                cache_invalidation_wt.capture_cached_row_breakdown();
                 emit_branch_sidebar_cache_sidecar(
                     "cache_invalidation_worktrees_ready",
                     &cache_invalidation_wt.metrics(),

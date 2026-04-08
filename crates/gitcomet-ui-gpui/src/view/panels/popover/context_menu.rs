@@ -274,6 +274,7 @@ impl PopoverHost {
                 discard_lines_patch,
                 lines_count,
                 copy_text,
+                copy_target,
             } => Some(diff_editor::model(
                 *repo_id,
                 *area,
@@ -284,6 +285,7 @@ impl PopoverHost {
                 discard_lines_patch,
                 *lines_count,
                 copy_text,
+                *copy_target,
             )),
             PopoverKind::ConflictResolverInputRowMenu {
                 line_label,
@@ -333,7 +335,7 @@ impl PopoverHost {
         }
     }
 
-    pub(super) fn context_menu_activate_action(
+    pub(in crate::view) fn context_menu_activate_action(
         &mut self,
         action: ContextMenuAction,
         window: &mut Window,
@@ -717,6 +719,11 @@ impl PopoverHost {
             }
             ContextMenuAction::CopyText { text } => {
                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+            }
+            ContextMenuAction::CopyDiffText { visible_ix, region } => {
+                self.main_pane.update(cx, |pane, cx| {
+                    pane.copy_diff_text_for_context_menu_to_clipboard(visible_ix, region, cx);
+                });
             }
             ContextMenuAction::ApplyIndexPatch {
                 repo_id,

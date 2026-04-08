@@ -3299,8 +3299,10 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
         (
             Effect::LoadSelectedDiff {
                 repo_id,
+                load_patch_diff: true,
                 load_file_text: true,
                 load_file_image: false,
+                preview_text_side: None,
             },
             2,
         ),

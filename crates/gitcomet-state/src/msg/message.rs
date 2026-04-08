@@ -593,6 +593,12 @@ pub enum InternalMsg {
         target: DiffTarget,
         result: Result<Option<FileDiffText>, Error>,
     },
+    DiffPreviewTextFileLoaded {
+        repo_id: RepoId,
+        target: DiffTarget,
+        side: DiffPreviewTextSide,
+        result: Result<Option<PathBuf>, Error>,
+    },
     DiffFileImageLoaded {
         repo_id: RepoId,
         target: DiffTarget,

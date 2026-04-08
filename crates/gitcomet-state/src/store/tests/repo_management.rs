@@ -1018,8 +1018,10 @@ fn set_active_repo_refreshes_repo_state_and_selected_diff() {
             e,
             Effect::LoadSelectedDiff {
                 repo_id,
+                load_patch_diff: true,
                 load_file_text: true,
                 load_file_image: false,
+                preview_text_side: None,
             } if *repo_id == repo1
         )
     });
@@ -1091,8 +1093,10 @@ fn set_active_repo_reloads_selected_image_diff_via_image_effect() {
         e,
         Effect::LoadSelectedDiff {
             repo_id,
+            load_patch_diff: true,
             load_file_text: false,
             load_file_image: true,
+            preview_text_side: None,
         } if *repo_id == repo1
     )));
 }
@@ -1139,6 +1143,7 @@ fn set_active_repo_png_diff_enqueues_image_preview_only() {
             e,
             Effect::LoadSelectedDiff {
                 repo_id,
+                load_patch_diff: true,
                 load_file_text: false,
                 load_file_image: true,
                 ..
@@ -1190,6 +1195,7 @@ fn set_active_repo_svg_diff_enqueues_image_and_text_previews() {
             e,
             Effect::LoadSelectedDiff {
                 repo_id,
+                load_patch_diff: true,
                 load_file_text: true,
                 load_file_image: true,
                 ..

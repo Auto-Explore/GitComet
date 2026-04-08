@@ -1016,6 +1016,12 @@ pub(super) fn reduce(
             target,
             result,
         }) => diff_selection::diff_file_loaded(state, repo_id, target, result),
+        Msg::Internal(crate::msg::InternalMsg::DiffPreviewTextFileLoaded {
+            repo_id,
+            target,
+            side,
+            result,
+        }) => diff_selection::diff_preview_text_file_loaded(state, repo_id, target, side, result),
         Msg::Internal(crate::msg::InternalMsg::DiffFileImageLoaded {
             repo_id,
             target,

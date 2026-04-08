@@ -1,11 +1,14 @@
 use super::util::{
-    SelectedConflictTarget, diff_target_preview_flags, selected_conflict_target,
-    start_conflict_target_reload, start_conflict_target_reload_with_mode,
+    SelectedConflictTarget, apply_selected_diff_load_plan_state, selected_conflict_target,
+    selected_diff_load_plan, start_conflict_target_reload, start_conflict_target_reload_with_mode,
     start_current_conflict_target_reload,
 };
 use crate::model::{AppState, ConflictFileLoadMode, DiagnosticKind, Loadable, RepoId};
 use crate::msg::Effect;
-use gitcomet_core::domain::{Diff, DiffArea, DiffTarget, FileDiffImage, FileDiffText};
+use gitcomet_core::domain::{
+    Diff, DiffArea, DiffPreviewTextFile, DiffPreviewTextSide, DiffTarget, FileDiffImage,
+    FileDiffText,
+};
 use gitcomet_core::error::Error;
 use smallvec::SmallVec;
 use std::sync::Arc;
@@ -37,6 +40,7 @@ pub(super) fn fill_select_diff_inline(
         repo_state.diff_state.diff_target = Some(target.clone());
         repo_state.diff_state.diff = Loadable::NotLoaded;
         repo_state.diff_state.diff_file = Loadable::NotLoaded;
+        repo_state.diff_state.diff_preview_text_file = Loadable::NotLoaded;
         repo_state.diff_state.diff_file_image = Loadable::NotLoaded;
         repo_state.bump_diff_state_rev();
         let conflict_effects = match conflict_target {
@@ -49,36 +53,23 @@ pub(super) fn fill_select_diff_inline(
     }
 
     repo_state.diff_state.diff_target = Some(target);
-    repo_state.diff_state.diff = Loadable::Loading;
-    let supports_file = matches!(
-        repo_state.diff_state.diff_target.as_ref(),
-        Some(DiffTarget::WorkingTree { .. } | DiffTarget::Commit { path: Some(_), .. })
-    );
-    let preview = diff_target_preview_flags(
-        repo_state
+    let load_plan = {
+        let target = repo_state
             .diff_state
             .diff_target
             .as_ref()
-            .expect("diff target set before load planning"),
-    );
-    let load_file_text = supports_file && (!preview.wants_image || preview.is_svg);
-    let load_file_image = supports_file && preview.wants_image;
-    repo_state.diff_state.diff_file = if load_file_text {
-        Loadable::Loading
-    } else {
-        Loadable::NotLoaded
+            .expect("diff target set before load planning");
+        selected_diff_load_plan(repo_state, target)
     };
-    repo_state.diff_state.diff_file_image = if load_file_image {
-        Loadable::Loading
-    } else {
-        Loadable::NotLoaded
-    };
+    apply_selected_diff_load_plan_state(repo_state, load_plan);
     repo_state.bump_diff_state_rev();
 
     effects.push(Effect::LoadSelectedDiff {
         repo_id,
-        load_file_text,
-        load_file_image,
+        load_patch_diff: load_plan.load_patch_diff,
+        load_file_text: load_plan.load_file_text,
+        preview_text_side: load_plan.preview_text_side,
+        load_file_image: load_plan.load_file_image,
     });
 }
 
@@ -98,6 +89,7 @@ pub(super) fn select_conflict_diff(
     repo_state.diff_state.diff_target = Some(target);
     repo_state.diff_state.diff = Loadable::NotLoaded;
     repo_state.diff_state.diff_file = Loadable::NotLoaded;
+    repo_state.diff_state.diff_preview_text_file = Loadable::NotLoaded;
     repo_state.diff_state.diff_file_image = Loadable::NotLoaded;
     repo_state.bump_diff_state_rev();
 
@@ -112,6 +104,7 @@ pub(super) fn clear_diff_selection(state: &mut AppState, repo_id: RepoId) -> Vec
     repo_state.diff_state.diff_target = None;
     repo_state.diff_state.diff = Loadable::NotLoaded;
     repo_state.diff_state.diff_file = Loadable::NotLoaded;
+    repo_state.diff_state.diff_preview_text_file = Loadable::NotLoaded;
     repo_state.diff_state.diff_file_image = Loadable::NotLoaded;
     repo_state.bump_diff_state_rev();
     Vec::new()
@@ -142,6 +135,13 @@ pub(super) fn diff_loaded(
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
         && repo_state.diff_state.diff_target.as_ref() == Some(&target)
     {
+        if selected_conflict_target(repo_state, &target).is_some() {
+            return Vec::new();
+        }
+        let current_plan = selected_diff_load_plan(repo_state, &target);
+        if !current_plan.load_patch_diff {
+            return Vec::new();
+        }
         repo_state.diff_state.diff_rev = repo_state.diff_state.diff_rev.wrapping_add(1);
         repo_state.diff_state.diff = match result {
             Ok(v) => Loadable::Ready(Arc::new(v)),
@@ -164,6 +164,13 @@ pub(super) fn diff_file_loaded(
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
         && repo_state.diff_state.diff_target.as_ref() == Some(&target)
     {
+        if selected_conflict_target(repo_state, &target).is_some() {
+            return Vec::new();
+        }
+        let current_plan = selected_diff_load_plan(repo_state, &target);
+        if !current_plan.load_file_text {
+            return Vec::new();
+        }
         repo_state.diff_state.diff_file_rev = repo_state.diff_state.diff_file_rev.wrapping_add(1);
         repo_state.diff_state.diff_file = match result {
             Ok(v) => Loadable::Ready(v.map(Arc::new)),
@@ -186,9 +193,49 @@ pub(super) fn diff_file_image_loaded(
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
         && repo_state.diff_state.diff_target.as_ref() == Some(&target)
     {
+        if selected_conflict_target(repo_state, &target).is_some() {
+            return Vec::new();
+        }
+        let current_plan = selected_diff_load_plan(repo_state, &target);
+        if !current_plan.load_file_image {
+            return Vec::new();
+        }
         repo_state.diff_state.diff_file_rev = repo_state.diff_state.diff_file_rev.wrapping_add(1);
         repo_state.diff_state.diff_file_image = match result {
             Ok(v) => Loadable::Ready(v.map(Arc::new)),
+            Err(e) => {
+                super::util::push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                Loadable::Error(e.to_string())
+            }
+        };
+        repo_state.bump_diff_state_rev();
+    }
+    Vec::new()
+}
+
+pub(super) fn diff_preview_text_file_loaded(
+    state: &mut AppState,
+    repo_id: RepoId,
+    target: DiffTarget,
+    side: DiffPreviewTextSide,
+    result: std::result::Result<Option<std::path::PathBuf>, Error>,
+) -> Vec<Effect> {
+    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
+        && repo_state.diff_state.diff_target.as_ref() == Some(&target)
+    {
+        let current_plan = selected_diff_load_plan(repo_state, &target);
+        if current_plan.preview_text_side != Some(side) {
+            return Vec::new();
+        }
+
+        repo_state.diff_state.diff_preview_text_file_rev = repo_state
+            .diff_state
+            .diff_preview_text_file_rev
+            .wrapping_add(1);
+        repo_state.diff_state.diff_preview_text_file = match result {
+            Ok(path) => {
+                Loadable::Ready(path.map(|path| Arc::new(DiffPreviewTextFile { path, side })))
+            }
             Err(e) => {
                 super::util::push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
                 Loadable::Error(e.to_string())

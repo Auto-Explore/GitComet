@@ -141,6 +141,32 @@ pub(super) fn set_ready_worktree_preview(
     cx.notify();
 }
 
+pub(super) fn build_large_json_array_lines(
+    object_count: usize,
+    payload_bytes: usize,
+) -> Vec<String> {
+    assert!(
+        object_count >= 2,
+        "need at least two objects to build a stable large-JSON test fixture"
+    );
+
+    let payload = "x".repeat(payload_bytes);
+    let mut lines = Vec::with_capacity(object_count + 2);
+    lines.push("[".to_string());
+    lines.push(r#"  {"first": true, "count": 1},"#.to_string());
+    for ix in 1..object_count - 1 {
+        lines.push(format!(
+            r#"  {{"line": {ix}, "flag": true, "payload": "{payload}"}},"#
+        ));
+    }
+    lines.push(format!(
+        r#"  {{"line": {}, "flag": true, "payload": "{payload}"}}"#,
+        object_count - 1
+    ));
+    lines.push("]".to_string());
+    lines
+}
+
 pub(super) fn highlights_include_range(
     highlights: &[(std::ops::Range<usize>, gpui::HighlightStyle)],
     target: std::ops::Range<usize>,
@@ -454,10 +480,17 @@ pub(super) fn assert_file_preview_ctrl_a_ctrl_c_copies_all(
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
+    disable_view_poller_for_test(cx, &view);
 
     // Create the file on disk so is_file_preview_active() can detect it.
     let _ = std::fs::create_dir_all(&workdir);
     std::fs::write(workdir.join(&file_rel), lines.join("\n")).expect("write preview fixture file");
+    let deleted_preview_source_path = (status_kind
+        == gitcomet_core::domain::FileStatusKind::Deleted)
+        .then(|| workdir.join(".deleted_preview_source.txt"));
+    if let Some(source_path) = deleted_preview_source_path.as_ref() {
+        std::fs::write(source_path, &expected).expect("write deleted preview source fixture");
+    }
 
     // Push state through the model first; the observer will clear stale
     // worktree_preview on diff-target change.
@@ -470,6 +503,15 @@ pub(super) fn assert_file_preview_ctrl_a_ctrl_c_copies_all(
                 status_kind,
                 gitcomet_core::domain::DiffArea::Staged,
             );
+            if let Some(source_path) = deleted_preview_source_path.as_ref() {
+                repo.diff_state.diff_preview_text_file = gitcomet_state::model::Loadable::Ready(
+                    Some(Arc::new(gitcomet_core::domain::DiffPreviewTextFile {
+                        path: source_path.clone(),
+                        side: gitcomet_core::domain::DiffPreviewTextSide::Old,
+                    })),
+                );
+                repo.diff_state.diff_state_rev = repo.diff_state.diff_state_rev.wrapping_add(1);
+            }
 
             let next_state = app_state_with_repo(repo, repo_id);
 
@@ -502,6 +544,30 @@ pub(super) fn assert_file_preview_ctrl_a_ctrl_c_copies_all(
         window.focus(&focus);
         let _ = window.draw(app);
     });
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "file preview copy selection state",
+        |pane| {
+            pane.is_file_preview_active()
+                && pane.worktree_preview_line_count() == Some(lines.len())
+                && matches!(
+                    pane.worktree_preview,
+                    gitcomet_state::model::Loadable::Ready(_)
+                )
+        },
+        |pane| {
+            format!(
+                "active={} preview={:?} preview_path={:?} source_path={:?} line_count={:?}",
+                pane.is_file_preview_active(),
+                pane.worktree_preview,
+                pane.worktree_preview_path,
+                pane.worktree_preview_source_path,
+                pane.worktree_preview_line_count(),
+            )
+        },
+    );
 
     cx.simulate_keystrokes("ctrl-a ctrl-c");
     assert_eq!(
@@ -545,13 +611,38 @@ pub(super) fn assert_markdown_file_preview_toggle_visible(
                 status_kind,
                 gitcomet_core::domain::DiffArea::Staged,
             );
-            repo.diff_state.diff_file = gitcomet_state::model::Loadable::Ready(Some(Arc::new(
-                gitcomet_core::domain::FileDiffText::new(
-                    file_rel.clone(),
-                    old_text.map(|text| text.to_string()),
-                    new_text.map(|text| text.to_string()),
-                ),
-            )));
+            let preview_side = match status_kind {
+                gitcomet_core::domain::FileStatusKind::Added
+                | gitcomet_core::domain::FileStatusKind::Untracked => {
+                    Some(gitcomet_core::domain::DiffPreviewTextSide::New)
+                }
+                gitcomet_core::domain::FileStatusKind::Deleted => {
+                    Some(gitcomet_core::domain::DiffPreviewTextSide::Old)
+                }
+                _ => None,
+            };
+            if let Some(side) = preview_side {
+                let preview_source_path = workdir.join(format!(
+                    ".markdown_preview_source_{}_{}.md",
+                    repo_id.0,
+                    match side {
+                        gitcomet_core::domain::DiffPreviewTextSide::New => "new",
+                        gitcomet_core::domain::DiffPreviewTextSide::Old => "old",
+                    }
+                ));
+                let contents = match side {
+                    gitcomet_core::domain::DiffPreviewTextSide::New => new_text.unwrap_or_default(),
+                    gitcomet_core::domain::DiffPreviewTextSide::Old => old_text.unwrap_or_default(),
+                };
+                std::fs::write(&preview_source_path, contents)
+                    .expect("write markdown preview source fixture");
+                repo.diff_state.diff_preview_text_file = gitcomet_state::model::Loadable::Ready(
+                    Some(Arc::new(gitcomet_core::domain::DiffPreviewTextFile {
+                        path: preview_source_path,
+                        side,
+                    })),
+                );
+            }
 
             let next_state = app_state_with_repo(repo, repo_id);
 
@@ -726,8 +817,18 @@ pub(super) fn set_test_file_status_with_conflict(
     repo.status = gitcomet_state::model::Loadable::Ready(
         gitcomet_core::domain::RepoStatus { staged, unstaged }.into(),
     );
+    repo.status_rev = repo.status_rev.wrapping_add(1);
+    repo.has_unstaged_conflicts = matches!(
+        (area, kind, conflict),
+        (
+            gitcomet_core::domain::DiffArea::Unstaged,
+            gitcomet_core::domain::FileStatusKind::Conflicted,
+            Some(_)
+        )
+    );
     repo.diff_state.diff_target =
         Some(gitcomet_core::domain::DiffTarget::WorkingTree { path, area });
+    repo.diff_state.diff_state_rev = repo.diff_state.diff_state_rev.wrapping_add(1);
 }
 
 /// Sets `repo.conflict_state.conflict_file_path` and `repo.conflict_state.conflict_file`.
