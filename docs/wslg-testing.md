@@ -7,6 +7,8 @@ GitComet's Linux build can run inside WSL with WSLg.
 - Launch the Linux binary from a WSL distro with `WAYLAND_DISPLAY` or `DISPLAY` available.
 - Prefer repositories stored inside the distro filesystem such as `~/src/repo` instead of `/mnt/c/...`.
 - If Linux desktop openers are unavailable, install `wslu` to provide `wslview` for URL and file-opening fallbacks.
+- For prebuilt Linux binaries on Debian/Ubuntu/WSLg, install the GUI runtime libraries: `libxcb1`, `libxkbcommon0`, and `libxkbcommon-x11-0`.
+- If GPUI panics with `UnsupportedVersion` under WSLg, force the X11 backend by unsetting `WAYLAND_DISPLAY` and `WAYLAND_SOCKET`, then export `XDG_SESSION_TYPE=x11` before launch.
 - For source builds inside WSL, install the Linux UI dependencies used elsewhere in this repo: `pkg-config`, `libxcb1-dev`, `libxkbcommon-dev`, and `libxkbcommon-x11-dev`.
 - GUI `git difftool` and `git mergetool` work under WSLg because `gitcomet setup` already selects the GUI tool when display environment variables are present.
 - Manual validation steps for developers live in `docs/wslg-testing.md`.
@@ -59,7 +61,13 @@ Run these commands inside the WSL distro:
 
 ```bash
 sudo apt update
-sudo apt install -y git pkg-config libxcb1-dev libxkbcommon-dev libxkbcommon-x11-dev wslu
+sudo apt install -y git libxcb1 libxkbcommon0 libxkbcommon-x11-0 wslu
+```
+
+If you are building GitComet from source inside WSL, also install the development headers:
+
+```bash
+sudo apt install -y pkg-config libxcb1-dev libxkbcommon-dev libxkbcommon-x11-dev
 ```
 
 If you are building from source, install the Rust toolchain normally for this repository before continuing.

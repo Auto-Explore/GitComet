@@ -12,10 +12,17 @@ mod cli;
 mod crashlog;
 mod difftool_mode;
 mod extract_fixtures_mode;
+#[cfg(any(
+    all(target_os = "linux", feature = "ui-gpui-runtime"),
+    all(test, feature = "ui-gpui-runtime")
+))]
+mod linux_wayland_fallback;
 mod mergetool_mode;
 mod setup_mode;
 
 use cli::{AppMode, exit_code};
+#[cfg(all(target_os = "linux", feature = "ui-gpui-runtime"))]
+use linux_wayland_fallback::maybe_relaunch_with_linux_x11_fallback;
 use mimalloc::MiMalloc;
 
 pub(crate) fn hex_encode(bytes: &[u8]) -> String {
@@ -148,6 +155,11 @@ fn main() {
             std::process::exit(exit_code::ERROR);
         }
     };
+
+    #[cfg(all(target_os = "linux", feature = "ui-gpui-runtime"))]
+    if let Some(code) = maybe_relaunch_with_linux_x11_fallback(&mode) {
+        std::process::exit(code);
+    }
 
     #[cfg(feature = "ui")]
     crashlog::install();

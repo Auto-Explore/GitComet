@@ -1,4 +1,4 @@
-use std::ffi::OsStr;
+use gpui::Decorations;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct LinuxGuiEnvironment {
@@ -24,11 +24,7 @@ impl LinuxGuiEnvironment {
         )
     }
 
-    #[cfg(not(target_os = "linux"))]
-    pub(crate) fn detect() -> Self {
-        Self::default()
-    }
-
+    #[cfg(any(target_os = "linux", test))]
     fn from_sources(
         is_wsl: bool,
         has_x11: bool,
@@ -43,10 +39,16 @@ impl LinuxGuiEnvironment {
         }
     }
 
+    #[cfg(any(target_os = "linux", test))]
     pub(crate) fn session_is_gui_capable(&self) -> bool {
         self.has_x11 || (self.has_wayland && self.has_xdg_runtime_dir)
     }
 
+    pub(crate) fn should_suppress_custom_window_frame(decorations: Decorations) -> bool {
+        !cfg!(target_os = "macos") && matches!(decorations, Decorations::Server)
+    }
+
+    #[cfg(any(target_os = "linux", test))]
     pub(crate) fn launch_failure_message(&self) -> String {
         if self.is_wsl {
             if self.has_wayland && !self.has_xdg_runtime_dir && !self.has_x11 {
@@ -63,10 +65,12 @@ impl LinuxGuiEnvironment {
     }
 }
 
-fn env_has_non_empty_os(value: Option<&OsStr>) -> bool {
+#[cfg(any(target_os = "linux", test))]
+fn env_has_non_empty_os(value: Option<&std::ffi::OsStr>) -> bool {
     value.is_some_and(|value| !value.is_empty())
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn detect_is_wsl(
     has_wsl_distro_name: bool,
     has_wsl_interop: bool,
@@ -75,6 +79,7 @@ fn detect_is_wsl(
     has_wsl_distro_name || has_wsl_interop || osrelease_mentions_microsoft(osrelease)
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn osrelease_mentions_microsoft(osrelease: Option<&str>) -> bool {
     osrelease
         .map(|value| value.to_ascii_lowercase().contains("microsoft"))
@@ -89,6 +94,7 @@ fn read_linux_osrelease() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gpui::Tiling;
 
     #[test]
     fn detect_is_wsl_prefers_explicit_wsl_environment_variables() {
@@ -116,6 +122,18 @@ mod tests {
     fn session_is_gui_capable_requires_xdg_runtime_dir_for_wayland_only_sessions() {
         let env = LinuxGuiEnvironment::from_sources(false, false, true, false);
         assert!(!env.session_is_gui_capable());
+    }
+
+    #[test]
+    fn suppresses_custom_window_frame_for_server_decorations() {
+        assert!(LinuxGuiEnvironment::should_suppress_custom_window_frame(
+            Decorations::Server
+        ));
+        assert!(!LinuxGuiEnvironment::should_suppress_custom_window_frame(
+            Decorations::Client {
+                tiling: Tiling::default(),
+            }
+        ));
     }
 
     #[test]
