@@ -16,18 +16,12 @@ struct UpdateNotice {
     releases_url: String,
 }
 
-#[cfg(not(test))]
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(not(test), derive(Deserialize))]
 struct GitHubRelease {
     tag_name: String,
-    #[serde(default)]
+    #[cfg_attr(not(test), serde(default))]
     html_url: Option<String>,
-}
-
-#[cfg(not(test))]
-#[derive(Debug, Deserialize)]
-struct GitHubTag {
-    name: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -90,76 +84,35 @@ fn fetch_update_notice(current_version: &'static str) -> Option<UpdateNotice> {
         .build()
         .ok()?;
 
-    let release_response = client
+    let release: GitHubRelease = client
         .get(repo.releases_latest_api_url())
-        .header(zed_reqwest::header::ACCEPT, "application/vnd.github+json")
-        .header(zed_reqwest::header::USER_AGENT, user_agent.clone())
-        .send()
-        .ok()?;
-
-    let (release_tag, release_html_url): (Option<String>, Option<String>) =
-        if release_response.status().is_success() {
-            let release = release_response.json::<GitHubRelease>().ok()?;
-            (Some(release.tag_name), release.html_url)
-        } else {
-            (None, None)
-        };
-
-    let tag_names: Vec<String> = client
-        .get(repo.tags_api_url())
         .header(zed_reqwest::header::ACCEPT, "application/vnd.github+json")
         .header(zed_reqwest::header::USER_AGENT, user_agent)
         .send()
         .ok()
         .and_then(|response| response.error_for_status().ok())
-        .and_then(|response| response.json::<Vec<GitHubTag>>().ok())
-        .map(|tags| tags.into_iter().map(|tag| tag.name).collect())
-        .unwrap_or_default();
+        .and_then(|response| response.json::<GitHubRelease>().ok())?;
 
-    build_update_notice(
-        current_version,
-        release_tag.as_deref(),
-        release_html_url.as_deref(),
-        &tag_names,
-        &repo,
-    )
+    build_update_notice(current_version, &release, &repo)
 }
 
 fn build_update_notice(
     current_version: &str,
-    release_tag: Option<&str>,
-    release_html_url: Option<&str>,
-    tag_names: &[String],
+    release: &GitHubRelease,
     repo: &GitHubRepo,
 ) -> Option<UpdateNotice> {
     let current = parse_semver_tag(current_version)?;
-
-    let mut latest: Option<(Version, String)> = release_tag.and_then(|tag| {
-        parse_semver_tag(tag).map(|version| {
-            let url = release_html_url
-                .map(str::trim)
-                .filter(|url| !url.is_empty())
-                .map(ToOwned::to_owned)
-                .unwrap_or_else(|| repo.releases_page_url());
-            (version, url)
-        })
-    });
-
-    for tag_name in tag_names {
-        let Some(version) = parse_semver_tag(tag_name) else {
-            continue;
-        };
-
-        let should_promote = latest
-            .as_ref()
-            .map(|(best, _)| version > *best)
-            .unwrap_or(true);
-        if should_promote {
-            latest = Some((version, repo.releases_page_url()));
-        }
+    let latest_version = parse_semver_tag(&release.tag_name)?;
+    if !latest_version.pre.is_empty() {
+        return None;
     }
-
-    let (latest_version, latest_url) = latest?;
+    let latest_url = release
+        .html_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|url| !url.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| repo.releases_page_url());
 
     if latest_version <= current {
         return None;
@@ -252,14 +205,6 @@ impl GitHubRepo {
         )
     }
 
-    #[cfg(not(test))]
-    fn tags_api_url(&self) -> String {
-        format!(
-            "https://api.github.com/repos/{}/{}/tags?per_page=20",
-            self.owner, self.repo
-        )
-    }
-
     fn releases_page_url(&self) -> String {
         format!("https://github.com/{}/{}/releases", self.owner, self.repo)
     }
@@ -268,6 +213,13 @@ impl GitHubRepo {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn github_release(tag_name: &str, html_url: Option<&str>) -> GitHubRelease {
+        GitHubRelease {
+            tag_name: tag_name.to_string(),
+            html_url: html_url.map(ToOwned::to_owned),
+        }
+    }
 
     #[test]
     fn parse_semver_tag_accepts_plain_and_prefixed_versions() {
@@ -279,8 +231,8 @@ mod tests {
     #[test]
     fn build_update_notice_returns_none_when_release_is_not_newer() {
         let repo = GitHubRepo::from_slug("Auto-Explore/GitComet");
-        let tags = vec!["0.0.9".to_string()];
-        assert!(build_update_notice("0.1.0", Some("v0.1.0"), None, &tags, &repo).is_none());
+        let release = github_release("v0.1.0", None);
+        assert!(build_update_notice("0.1.0", &release, &repo).is_none());
     }
 
     #[test]
@@ -288,9 +240,7 @@ mod tests {
         let repo = GitHubRepo::from_slug("Auto-Explore/GitComet");
         let notice = build_update_notice(
             "0.2.0",
-            Some("v0.2.1"),
-            Some("https://example.invalid/releases/0.2.1"),
-            &[],
+            &github_release("v0.2.1", Some("https://example.invalid/releases/0.2.1")),
             &repo,
         )
         .expect("update notice expected");
@@ -305,7 +255,7 @@ mod tests {
     #[test]
     fn build_update_notice_falls_back_to_repo_releases_page_when_no_release_url() {
         let repo = GitHubRepo::from_slug("Auto-Explore/GitComet");
-        let notice = build_update_notice("0.2.0", Some("0.2.1"), None, &[], &repo)
+        let notice = build_update_notice("0.2.0", &github_release("0.2.1", None), &repo)
             .expect("update notice expected");
         assert_eq!(
             notice.releases_url,
@@ -314,16 +264,13 @@ mod tests {
     }
 
     #[test]
-    fn build_update_notice_promotes_newer_tag_over_older_release() {
+    fn build_update_notice_returns_none_for_non_stable_release_tag() {
         let repo = GitHubRepo::from_slug("Auto-Explore/GitComet");
-        let tags = vec!["v0.2.0".to_string()];
-        let notice = build_update_notice("0.1.0", Some("v0.1.0"), None, &tags, &repo)
-            .expect("update notice expected");
-        assert_eq!(notice.latest_version, "0.2.0");
-        assert_eq!(
-            notice.releases_url,
-            "https://github.com/Auto-Explore/GitComet/releases"
+        let release = github_release(
+            "v0.3.0-beta.1",
+            Some("https://example.invalid/releases/0.3.0-beta.1"),
         );
+        assert!(build_update_notice("0.2.0", &release, &repo).is_none());
     }
 
     #[test]
