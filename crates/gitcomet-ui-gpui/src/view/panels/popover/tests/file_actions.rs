@@ -90,6 +90,89 @@ fn commit_menu_has_add_tag_entry(cx: &mut gpui::TestAppContext) {
 }
 
 #[gpui::test]
+fn large_files_menu_exposes_supported_repo_actions(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    let repo_id = RepoId(41);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_large_files_menu",
+        std::process::id()
+    ));
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = RepoState::new_opening(
+                repo_id,
+                gitcomet_core::domain::RepoSpec {
+                    workdir: workdir.clone(),
+                },
+            );
+            repo.large_file_capabilities = Loadable::Ready(
+                gitcomet_core::services::RepoLargeFileCapabilities {
+                    uses_git_lfs: true,
+                    git_lfs_available: true,
+                    uses_git_annex: true,
+                    git_annex_available: true,
+                },
+            );
+            repo.large_file_capabilities_rev = 1;
+
+            let state = Arc::new(AppState {
+                repos: vec![repo],
+                active_repo: Some(repo_id),
+                ..Default::default()
+            });
+            this.state = Arc::clone(&state);
+            this._ui_model
+                .update(cx, |model, cx| model.set_state(state, cx));
+            cx.notify();
+        });
+    });
+
+    cx.update(|_window, app| {
+        let model = view
+            .update(app, |this, cx| {
+                this.popover_host.update(cx, |host, cx| {
+                    host.context_menu_model(&PopoverKind::LargeFilesMenu, cx)
+                })
+            })
+            .expect("expected large files context menu model");
+
+        let lfs_track = model.items.iter().find_map(|item| match item {
+            ContextMenuItem::Entry { label, action, .. } if label.as_ref() == "LFS track…" => {
+                Some((**action).clone())
+            }
+            _ => None,
+        });
+        match lfs_track {
+            Some(ContextMenuAction::OpenPopover {
+                kind:
+                    PopoverKind::LfsPatternPrompt {
+                        repo_id: rid,
+                        kind: LfsPatternPromptKind::Track,
+                    },
+            }) => assert_eq!(rid, repo_id),
+            _ => panic!("expected LFS track… to open the track prompt"),
+        }
+
+        let annex_sync = model.items.iter().find_map(|item| match item {
+            ContextMenuItem::Entry { label, action, .. } if label.as_ref() == "Annex sync" => {
+                Some((**action).clone())
+            }
+            _ => None,
+        });
+        match annex_sync {
+            Some(ContextMenuAction::AnnexSync { repo_id: rid }) => {
+                assert_eq!(rid, repo_id);
+            }
+            _ => panic!("expected Annex sync repo action"),
+        }
+    });
+}
+
+#[gpui::test]
 fn commit_file_menu_has_open_file_entries(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) =

@@ -17,6 +17,7 @@ mod fingerprint;
 mod force_delete_branch_confirm;
 mod force_push_confirm;
 mod force_remove_worktree_confirm;
+mod lfs_pattern_prompt;
 mod merge_abort_confirm;
 mod pull_reconcile_prompt;
 mod push_set_upstream_prompt;
@@ -57,6 +58,7 @@ pub(in super::super) struct PopoverHost {
     _clone_repo_url_input_subscription: gpui::Subscription,
     _clone_repo_parent_dir_input_subscription: gpui::Subscription,
     _create_tag_input_subscription: gpui::Subscription,
+    _lfs_pattern_input_subscription: gpui::Subscription,
     _repo_picker_search_input_subscription: Option<gpui::Subscription>,
     _branch_picker_search_input_subscription: Option<gpui::Subscription>,
     _create_branch_input_subscription: gpui::Subscription,
@@ -85,6 +87,7 @@ pub(in super::super) struct PopoverHost {
     clone_repo_parent_dir_input: Entity<components::TextInput>,
     rebase_onto_input: Entity<components::TextInput>,
     create_tag_input: Entity<components::TextInput>,
+    lfs_pattern_input: Entity<components::TextInput>,
     remote_name_input: Entity<components::TextInput>,
     remote_url_input: Entity<components::TextInput>,
     remote_url_edit_input: Entity<components::TextInput>,
@@ -251,6 +254,20 @@ impl PopoverHost {
             )
         });
 
+        let lfs_pattern_input = cx.new(|cx| {
+            components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "path/pattern".into(),
+                    multiline: false,
+                    read_only: false,
+                    chromeless: false,
+                    soft_wrap: false,
+                },
+                window,
+                cx,
+            )
+        });
+
         let remote_name_input = cx.new(|cx| {
             components::TextInput::new(
                 components::TextInputOptions {
@@ -336,6 +353,27 @@ impl PopoverHost {
 
             if enter_pressed {
                 this.submit_create_tag(cx);
+                return;
+            }
+
+            cx.notify();
+        });
+
+        let lfs_pattern_input_subscription = cx.observe(&lfs_pattern_input, |this, input, cx| {
+            let enter_pressed = input.update(cx, |input, _| input.take_enter_pressed());
+            let escape_pressed = input.update(cx, |input, _| input.take_escape_pressed());
+
+            if !matches!(this.popover, Some(PopoverKind::LfsPatternPrompt { .. })) {
+                return;
+            }
+
+            if escape_pressed {
+                this.close_popover(cx);
+                return;
+            }
+
+            if enter_pressed {
+                this.submit_lfs_pattern_prompt(cx);
                 return;
             }
 
@@ -476,6 +514,7 @@ impl PopoverHost {
             _clone_repo_url_input_subscription: clone_repo_url_input_subscription,
             _clone_repo_parent_dir_input_subscription: clone_repo_parent_dir_input_subscription,
             _create_tag_input_subscription: create_tag_input_subscription,
+            _lfs_pattern_input_subscription: lfs_pattern_input_subscription,
             _repo_picker_search_input_subscription: None,
             _branch_picker_search_input_subscription: None,
             _create_branch_input_subscription: create_branch_input_subscription,
@@ -501,6 +540,7 @@ impl PopoverHost {
             clone_repo_parent_dir_input,
             rebase_onto_input,
             create_tag_input,
+            lfs_pattern_input,
             remote_name_input,
             remote_url_input,
             remote_url_edit_input,
@@ -525,6 +565,8 @@ impl PopoverHost {
         self.rebase_onto_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
         self.create_tag_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.lfs_pattern_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
         self.remote_name_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
@@ -660,6 +702,37 @@ impl PopoverHost {
         self.close_popover(cx);
     }
 
+    fn can_submit_lfs_pattern_prompt(&self, cx: &mut gpui::Context<Self>) -> bool {
+        matches!(self.popover, Some(PopoverKind::LfsPatternPrompt { .. }))
+            && self
+                .lfs_pattern_input
+                .read_with(cx, |input, _| !input.text().trim().is_empty())
+    }
+
+    fn submit_lfs_pattern_prompt(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(PopoverKind::LfsPatternPrompt { repo_id, kind }) = self.popover.clone() else {
+            return;
+        };
+
+        let pattern = self
+            .lfs_pattern_input
+            .read_with(cx, |input, _| input.text().trim().to_string());
+        if pattern.is_empty() {
+            return;
+        }
+
+        match kind {
+            LfsPatternPromptKind::Track => self.store.dispatch(Msg::LfsTrack { repo_id, pattern }),
+            LfsPatternPromptKind::Untrack => {
+                self.store.dispatch(Msg::LfsUntrack { repo_id, pattern })
+            }
+            LfsPatternPromptKind::MigrateImport => self
+                .store
+                .dispatch(Msg::LfsMigrateImport { repo_id, pattern }),
+        }
+        self.close_popover(cx);
+    }
+
     fn submit_clone_repo(&mut self, cx: &mut gpui::Context<Self>) {
         if !matches!(self.popover, Some(PopoverKind::CloneRepo)) {
             return;
@@ -792,6 +865,7 @@ impl PopoverHost {
             &kind,
             PopoverKind::PullPicker
                 | PopoverKind::PushPicker
+                | PopoverKind::LargeFilesMenu
                 | PopoverKind::HistoryBranchFilter { .. }
                 | PopoverKind::HistoryColumnSettings
                 | PopoverKind::ChangeTrackingSettings
@@ -830,6 +904,7 @@ impl PopoverHost {
                 PopoverKind::CreateBranch
                     | PopoverKind::CreateBranchFromRefPrompt { .. }
                     | PopoverKind::StashPrompt
+                    | PopoverKind::LfsPatternPrompt { .. }
             );
         if !keep_active_invoker {
             self.clear_active_context_menu_invoker(cx);
@@ -944,6 +1019,19 @@ impl PopoverHost {
                         cx.notify();
                     });
                     let focus = self.create_tag_input.read_with(cx, |i, _| i.focus_handle());
+                    window.focus(&focus);
+                }
+                PopoverKind::LfsPatternPrompt { .. } => {
+                    let theme = self.theme;
+                    self.lfs_pattern_input.update(cx, |input, cx| {
+                        input.clear_transient_key_presses();
+                        input.set_theme(theme, cx);
+                        input.set_text("", cx);
+                        cx.notify();
+                    });
+                    let focus = self
+                        .lfs_pattern_input
+                        .read_with(cx, |i, _| i.focus_handle());
                     window.focus(&focus);
                 }
                 PopoverKind::Repo {
@@ -1062,6 +1150,12 @@ impl PopoverHost {
                         repo_id: *repo_id,
                         path: path.clone(),
                         limit: 200,
+                    });
+                }
+                PopoverKind::StatusFileMenu { repo_id, path, .. } => {
+                    self.store.dispatch(Msg::LoadLargeFilePathInfo {
+                        repo_id: *repo_id,
+                        path: path.clone(),
                     });
                 }
                 PopoverKind::PushSetUpstreamPrompt { repo_id, .. } => {
@@ -1282,11 +1376,13 @@ impl PopoverHost {
             PopoverKind::CreateBranch
                 | PopoverKind::CreateBranchFromRefPrompt { .. }
                 | PopoverKind::StashPrompt
+                | PopoverKind::LfsPatternPrompt { .. }
         );
         let is_context_menu = matches!(
             &kind,
             PopoverKind::PullPicker
                 | PopoverKind::PushPicker
+                | PopoverKind::LargeFilesMenu
                 | PopoverKind::HistoryBranchFilter { .. }
                 | PopoverKind::HistoryColumnSettings
                 | PopoverKind::ChangeTrackingSettings
@@ -1323,6 +1419,7 @@ impl PopoverHost {
         let mut anchor_corner = match &kind {
             PopoverKind::PullPicker
             | PopoverKind::PushPicker
+            | PopoverKind::LargeFilesMenu
             | PopoverKind::CreateBranch
             | PopoverKind::CreateBranchFromRefPrompt { .. }
             | PopoverKind::StashPrompt
@@ -1330,6 +1427,7 @@ impl PopoverHost {
             | PopoverKind::CloneRepo
             | PopoverKind::ResetPrompt { .. }
             | PopoverKind::CreateTagPrompt { .. }
+            | PopoverKind::LfsPatternPrompt { .. }
             | PopoverKind::Repo {
                 kind:
                     RepoPopoverKind::Remote(
@@ -1433,6 +1531,9 @@ impl PopoverHost {
             } => reset_prompt::panel(self, repo_id, target, mode, cx),
             PopoverKind::CreateTagPrompt { repo_id, target } => {
                 create_tag_prompt::panel(self, repo_id, target, cx)
+            }
+            PopoverKind::LfsPatternPrompt { repo_id, kind } => {
+                lfs_pattern_prompt::panel(self, repo_id, kind, cx)
             }
             PopoverKind::Repo { repo_id, kind } => match kind {
                 RepoPopoverKind::Remote(remote_kind) => match remote_kind {
@@ -1565,6 +1666,10 @@ impl PopoverHost {
                 .context_menu_view(PopoverKind::ChangeTrackingSettings, cx)
                 .min_w(px(220.0))
                 .max_w(px(320.0)),
+            PopoverKind::LargeFilesMenu => self
+                .context_menu_view(PopoverKind::LargeFilesMenu, cx)
+                .min_w(px(220.0))
+                .max_w(px(340.0)),
             PopoverKind::PullPicker => self.context_menu_view(PopoverKind::PullPicker, cx),
             PopoverKind::PushPicker => self.context_menu_view(PopoverKind::PushPicker, cx),
             PopoverKind::DiffHunks => diff_hunks::panel(self, cx),

@@ -3,7 +3,10 @@ use gitcomet_core::conflict_session::ConflictSession;
 use gitcomet_core::domain::*;
 use gitcomet_core::error::Error;
 use gitcomet_core::services::GitRepository;
-use gitcomet_core::services::{CommandOutput, ConflictSide, PullMode, RemoteUrlKind, ResetMode};
+use gitcomet_core::services::{
+    CommandOutput, ConflictSide, PathLargeFileInfo, PullMode, RemoteUrlKind,
+    RepoLargeFileCapabilities, ResetMode,
+};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -158,6 +161,13 @@ pub enum Msg {
     LoadSubmodules {
         repo_id: RepoId,
     },
+    LoadLargeFileCapabilities {
+        repo_id: RepoId,
+    },
+    LoadLargeFilePathInfo {
+        repo_id: RepoId,
+        path: PathBuf,
+    },
     RefreshBranches {
         repo_id: RepoId,
     },
@@ -249,6 +259,53 @@ pub enum Msg {
         repo_id: RepoId,
     },
     RemoveSubmodule {
+        repo_id: RepoId,
+        path: PathBuf,
+    },
+    LfsFetch {
+        repo_id: RepoId,
+    },
+    LfsPull {
+        repo_id: RepoId,
+    },
+    LfsTrack {
+        repo_id: RepoId,
+        pattern: String,
+    },
+    LfsUntrack {
+        repo_id: RepoId,
+        pattern: String,
+    },
+    LfsPrune {
+        repo_id: RepoId,
+    },
+    LfsMigrateImport {
+        repo_id: RepoId,
+        pattern: String,
+    },
+    AnnexInit {
+        repo_id: RepoId,
+    },
+    AnnexSync {
+        repo_id: RepoId,
+    },
+    AnnexGet {
+        repo_id: RepoId,
+        path: PathBuf,
+    },
+    AnnexUnlock {
+        repo_id: RepoId,
+        path: PathBuf,
+    },
+    AnnexLock {
+        repo_id: RepoId,
+        path: PathBuf,
+    },
+    AnnexAdd {
+        repo_id: RepoId,
+        path: PathBuf,
+    },
+    AnnexDrop {
         repo_id: RepoId,
         path: PathBuf,
     },
@@ -511,6 +568,16 @@ pub enum InternalMsg {
     StatusLoaded {
         repo_id: RepoId,
         result: Result<RepoStatus, Error>,
+    },
+    LargeFileCapabilitiesLoaded {
+        repo_id: RepoId,
+        result: Result<RepoLargeFileCapabilities, Error>,
+    },
+    LargeFilePathInfoLoaded {
+        repo_id: RepoId,
+        path: PathBuf,
+        generation: u64,
+        result: Result<PathLargeFileInfo, Error>,
     },
     HeadBranchLoaded {
         repo_id: RepoId,

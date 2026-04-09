@@ -22,7 +22,6 @@ use std::time::{Duration, Instant, SystemTime};
 // Used by test-only helpers below.
 #[cfg(test)]
 use gitcomet_core::domain::RemoteBranch;
-#[cfg(test)]
 use std::ffi::OsString;
 
 const GIT_COMMAND_TIMEOUT_ENV: &str = "GITCOMET_GIT_COMMAND_TIMEOUT_SECS";
@@ -701,14 +700,7 @@ pub(crate) fn path_buf_from_git_bytes(path_bytes: &[u8], context: &str) -> Resul
     }
 }
 
-// Test helper: constructs a git stage:path blob spec for index stage testing.
-#[cfg(test)]
-pub(crate) fn git_stage_blob_spec(stage: u8, path: &Path) -> Result<OsString> {
-    git_revision_with_path(&format!(":{stage}:"), path, "build conflict stage revision")
-}
-
-#[cfg(test)]
-fn git_revision_with_path(prefix: &str, path: &Path, context: &str) -> Result<OsString> {
+pub(crate) fn git_object_spec_with_path(prefix: &str, path: &Path, context: &str) -> Result<OsString> {
     #[cfg(unix)]
     {
         use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
@@ -733,6 +725,22 @@ fn git_revision_with_path(prefix: &str, path: &Path, context: &str) -> Result<Os
             path_text.replace('\\', "/")
         )))
     }
+}
+
+pub(crate) fn git_index_blob_spec(path: &Path) -> Result<OsString> {
+    git_object_spec_with_path(":", path, "build index blob revision")
+}
+
+pub(crate) fn git_stage_blob_spec(stage: u8, path: &Path) -> Result<OsString> {
+    git_object_spec_with_path(&format!(":{stage}:"), path, "build conflict stage revision")
+}
+
+pub(crate) fn git_revision_blob_spec(revision: &str, path: &Path) -> Result<OsString> {
+    git_object_spec_with_path(
+        &format!("{revision}:"),
+        path,
+        "build revision blob spec",
+    )
 }
 
 fn command_path_budget_len(path: &Path) -> usize {

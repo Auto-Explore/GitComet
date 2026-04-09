@@ -60,6 +60,23 @@ impl std::fmt::Debug for InternalMsg {
                 .field("repo_id", repo_id)
                 .field("result", result)
                 .finish(),
+            InternalMsg::LargeFileCapabilitiesLoaded { repo_id, result } => f
+                .debug_struct("LargeFileCapabilitiesLoaded")
+                .field("repo_id", repo_id)
+                .field("result", result)
+                .finish(),
+            InternalMsg::LargeFilePathInfoLoaded {
+                repo_id,
+                path,
+                generation,
+                result,
+            } => f
+                .debug_struct("LargeFilePathInfoLoaded")
+                .field("repo_id", repo_id)
+                .field("path", path)
+                .field("generation", generation)
+                .field("result", result)
+                .finish(),
             InternalMsg::HeadBranchLoaded { repo_id, result } => f
                 .debug_struct("HeadBranchLoaded")
                 .field("repo_id", repo_id)

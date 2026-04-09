@@ -45,6 +45,55 @@ pub enum ConflictSide {
     Theirs,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum LargeFilePathKind {
+    #[default]
+    Plain,
+    GitLfs,
+    GitAnnexUnlocked,
+    GitAnnexLocked,
+}
+
+impl LargeFilePathKind {
+    pub fn is_annex(self) -> bool {
+        matches!(self, Self::GitAnnexUnlocked | Self::GitAnnexLocked)
+    }
+
+    pub fn is_locked_annex(self) -> bool {
+        matches!(self, Self::GitAnnexLocked)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct RepoLargeFileCapabilities {
+    pub uses_git_lfs: bool,
+    pub git_lfs_available: bool,
+    pub uses_git_annex: bool,
+    pub git_annex_available: bool,
+}
+
+impl RepoLargeFileCapabilities {
+    pub fn uses_large_files(self) -> bool {
+        self.uses_git_lfs || self.uses_git_annex
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct PathLargeFileInfo {
+    pub path: PathBuf,
+    pub kind: LargeFilePathKind,
+}
+
+impl PathLargeFileInfo {
+    pub fn is_annex(&self) -> bool {
+        self.kind.is_annex()
+    }
+
+    pub fn is_locked_annex(&self) -> bool {
+        self.kind.is_locked_annex()
+    }
+}
+
 /// Result of launching an external mergetool.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MergetoolResult {
@@ -124,6 +173,17 @@ pub struct BlameLine {
 
 pub trait GitRepository: Send + Sync {
     fn spec(&self) -> &RepoSpec;
+
+    fn large_file_capabilities(&self) -> Result<RepoLargeFileCapabilities> {
+        Ok(RepoLargeFileCapabilities::default())
+    }
+
+    fn large_file_path_info(&self, path: &Path) -> Result<PathLargeFileInfo> {
+        Ok(PathLargeFileInfo {
+            path: path.to_path_buf(),
+            kind: LargeFilePathKind::Plain,
+        })
+    }
 
     fn log_head_page(&self, limit: usize, cursor: Option<&LogCursor>) -> Result<LogPage>;
     fn log_all_branches_page(&self, _limit: usize, _cursor: Option<&LogCursor>) -> Result<LogPage> {
@@ -550,6 +610,84 @@ pub trait GitRepository: Send + Sync {
     fn remove_submodule_with_output(&self, _path: &Path) -> Result<CommandOutput> {
         Err(Error::new(ErrorKind::Unsupported(
             "submodule remove is not implemented for this backend",
+        )))
+    }
+
+    fn lfs_fetch_with_output(&self) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "git lfs fetch is not implemented for this backend",
+        )))
+    }
+
+    fn lfs_pull_with_output(&self) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "git lfs pull is not implemented for this backend",
+        )))
+    }
+
+    fn lfs_track_with_output(&self, _pattern: &str) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "git lfs track is not implemented for this backend",
+        )))
+    }
+
+    fn lfs_untrack_with_output(&self, _pattern: &str) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "git lfs untrack is not implemented for this backend",
+        )))
+    }
+
+    fn lfs_prune_with_output(&self) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "git lfs prune is not implemented for this backend",
+        )))
+    }
+
+    fn lfs_migrate_import_with_output(&self, _pattern: &str) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "git lfs migrate import is not implemented for this backend",
+        )))
+    }
+
+    fn annex_init_with_output(&self) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "git annex init is not implemented for this backend",
+        )))
+    }
+
+    fn annex_sync_with_output(&self) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "git annex sync is not implemented for this backend",
+        )))
+    }
+
+    fn annex_get_with_output(&self, _path: &Path) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "git annex get is not implemented for this backend",
+        )))
+    }
+
+    fn annex_unlock_with_output(&self, _path: &Path) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "git annex unlock is not implemented for this backend",
+        )))
+    }
+
+    fn annex_lock_with_output(&self, _path: &Path) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "git annex lock is not implemented for this backend",
+        )))
+    }
+
+    fn annex_add_with_output(&self, _path: &Path) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "git annex add is not implemented for this backend",
+        )))
+    }
+
+    fn annex_drop_with_output(&self, _path: &Path) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "git annex drop is not implemented for this backend",
         )))
     }
 

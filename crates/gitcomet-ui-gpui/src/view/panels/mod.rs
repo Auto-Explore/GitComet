@@ -98,6 +98,41 @@ pub(in crate::view) enum ContextMenuAction {
     UpdateSubmodules {
         repo_id: RepoId,
     },
+    LfsFetch {
+        repo_id: RepoId,
+    },
+    LfsPull {
+        repo_id: RepoId,
+    },
+    LfsPrune {
+        repo_id: RepoId,
+    },
+    AnnexInit {
+        repo_id: RepoId,
+    },
+    AnnexSync {
+        repo_id: RepoId,
+    },
+    AnnexGet {
+        repo_id: RepoId,
+        path: std::path::PathBuf,
+    },
+    AnnexUnlock {
+        repo_id: RepoId,
+        path: std::path::PathBuf,
+    },
+    AnnexLock {
+        repo_id: RepoId,
+        path: std::path::PathBuf,
+    },
+    AnnexAdd {
+        repo_id: RepoId,
+        path: std::path::PathBuf,
+    },
+    AnnexDrop {
+        repo_id: RepoId,
+        path: std::path::PathBuf,
+    },
     LoadWorktrees {
         repo_id: RepoId,
     },

@@ -252,6 +252,21 @@ fn retry_msg_for_repo_command(repo_id: RepoId, command: RepoCommandKind) -> Opti
         RepoCommandKind::AddSubmodule { url, path } => Msg::AddSubmodule { repo_id, url, path },
         RepoCommandKind::UpdateSubmodules => Msg::UpdateSubmodules { repo_id },
         RepoCommandKind::RemoveSubmodule { path } => Msg::RemoveSubmodule { repo_id, path },
+        RepoCommandKind::LfsFetch => Msg::LfsFetch { repo_id },
+        RepoCommandKind::LfsPull => Msg::LfsPull { repo_id },
+        RepoCommandKind::LfsTrack { pattern } => Msg::LfsTrack { repo_id, pattern },
+        RepoCommandKind::LfsUntrack { pattern } => Msg::LfsUntrack { repo_id, pattern },
+        RepoCommandKind::LfsPrune => Msg::LfsPrune { repo_id },
+        RepoCommandKind::LfsMigrateImport { pattern } => {
+            Msg::LfsMigrateImport { repo_id, pattern }
+        }
+        RepoCommandKind::AnnexInit => Msg::AnnexInit { repo_id },
+        RepoCommandKind::AnnexSync => Msg::AnnexSync { repo_id },
+        RepoCommandKind::AnnexGet { path } => Msg::AnnexGet { repo_id, path },
+        RepoCommandKind::AnnexUnlock { path } => Msg::AnnexUnlock { repo_id, path },
+        RepoCommandKind::AnnexLock { path } => Msg::AnnexLock { repo_id, path },
+        RepoCommandKind::AnnexAdd { path } => Msg::AnnexAdd { repo_id, path },
+        RepoCommandKind::AnnexDrop { path } => Msg::AnnexDrop { repo_id, path },
         // Not replayable because command metadata does not retain original content.
         RepoCommandKind::SaveWorktreeFile { .. }
         | RepoCommandKind::StageHunk
@@ -279,7 +294,20 @@ fn attach_git_auth_to_effects(mut effects: Vec<Effect>, auth: StagedGitAuth) -> 
         | Effect::PushSetUpstream { auth: slot, .. }
         | Effect::DeleteRemoteBranch { auth: slot, .. }
         | Effect::PushTag { auth: slot, .. }
-        | Effect::DeleteRemoteTag { auth: slot, .. } => {
+        | Effect::DeleteRemoteTag { auth: slot, .. }
+        | Effect::LfsFetch { auth: slot, .. }
+        | Effect::LfsPull { auth: slot, .. }
+        | Effect::LfsTrack { auth: slot, .. }
+        | Effect::LfsUntrack { auth: slot, .. }
+        | Effect::LfsPrune { auth: slot, .. }
+        | Effect::LfsMigrateImport { auth: slot, .. }
+        | Effect::AnnexInit { auth: slot, .. }
+        | Effect::AnnexSync { auth: slot, .. }
+        | Effect::AnnexGet { auth: slot, .. }
+        | Effect::AnnexUnlock { auth: slot, .. }
+        | Effect::AnnexLock { auth: slot, .. }
+        | Effect::AnnexAdd { auth: slot, .. }
+        | Effect::AnnexDrop { auth: slot, .. } => {
             *slot = Some(auth);
         }
         _ => {}
@@ -513,6 +541,12 @@ pub(super) fn reduce(
         Msg::LoadBlame { repo_id, path, rev } => effects::load_blame(state, repo_id, path, rev),
         Msg::LoadWorktrees { repo_id } => effects::load_worktrees(state, repo_id),
         Msg::LoadSubmodules { repo_id } => effects::load_submodules(state, repo_id),
+        Msg::LoadLargeFileCapabilities { repo_id } => {
+            effects::load_large_file_capabilities(state, repo_id)
+        }
+        Msg::LoadLargeFilePathInfo { repo_id, path } => {
+            effects::load_large_file_path_info(state, repo_id, path)
+        }
         Msg::RefreshBranches { repo_id } => effects::refresh_branches(state, repo_id),
         Msg::StageHunk { repo_id, patch } => {
             begin_local_action(state, repo_id);
@@ -662,6 +696,58 @@ pub(super) fn reduce(
         Msg::RemoveSubmodule { repo_id, path } => {
             begin_local_action(state, repo_id);
             actions_emit_effects::remove_submodule(repo_id, path)
+        }
+        Msg::LfsFetch { repo_id } => {
+            begin_local_action(state, repo_id);
+            actions_emit_effects::lfs_fetch(repo_id)
+        }
+        Msg::LfsPull { repo_id } => {
+            begin_local_action(state, repo_id);
+            actions_emit_effects::lfs_pull(repo_id)
+        }
+        Msg::LfsTrack { repo_id, pattern } => {
+            begin_local_action(state, repo_id);
+            actions_emit_effects::lfs_track(repo_id, pattern)
+        }
+        Msg::LfsUntrack { repo_id, pattern } => {
+            begin_local_action(state, repo_id);
+            actions_emit_effects::lfs_untrack(repo_id, pattern)
+        }
+        Msg::LfsPrune { repo_id } => {
+            begin_local_action(state, repo_id);
+            actions_emit_effects::lfs_prune(repo_id)
+        }
+        Msg::LfsMigrateImport { repo_id, pattern } => {
+            begin_local_action(state, repo_id);
+            actions_emit_effects::lfs_migrate_import(repo_id, pattern)
+        }
+        Msg::AnnexInit { repo_id } => {
+            begin_local_action(state, repo_id);
+            actions_emit_effects::annex_init(repo_id)
+        }
+        Msg::AnnexSync { repo_id } => {
+            begin_local_action(state, repo_id);
+            actions_emit_effects::annex_sync(repo_id)
+        }
+        Msg::AnnexGet { repo_id, path } => {
+            begin_local_action(state, repo_id);
+            actions_emit_effects::annex_get(repo_id, path)
+        }
+        Msg::AnnexUnlock { repo_id, path } => {
+            begin_local_action(state, repo_id);
+            actions_emit_effects::annex_unlock(repo_id, path)
+        }
+        Msg::AnnexLock { repo_id, path } => {
+            begin_local_action(state, repo_id);
+            actions_emit_effects::annex_lock(repo_id, path)
+        }
+        Msg::AnnexAdd { repo_id, path } => {
+            begin_local_action(state, repo_id);
+            actions_emit_effects::annex_add(repo_id, path)
+        }
+        Msg::AnnexDrop { repo_id, path } => {
+            begin_local_action(state, repo_id);
+            actions_emit_effects::annex_drop(repo_id, path)
         }
         Msg::StagePath { repo_id, path } => {
             begin_local_action(state, repo_id);
@@ -1000,6 +1086,16 @@ pub(super) fn reduce(
         Msg::Internal(crate::msg::InternalMsg::SubmodulesLoaded { repo_id, result }) => {
             effects::submodules_loaded(state, repo_id, result)
         }
+        Msg::Internal(crate::msg::InternalMsg::LargeFileCapabilitiesLoaded {
+            repo_id,
+            result,
+        }) => effects::large_file_capabilities_loaded(state, repo_id, result),
+        Msg::Internal(crate::msg::InternalMsg::LargeFilePathInfoLoaded {
+            repo_id,
+            path,
+            generation,
+            result,
+        }) => effects::large_file_path_info_loaded(state, repo_id, path, generation, result),
         Msg::Internal(crate::msg::InternalMsg::CommitDetailsLoaded {
             repo_id,
             commit_id,

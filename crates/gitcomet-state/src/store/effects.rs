@@ -136,6 +136,18 @@ pub(super) fn schedule_effect(
         Effect::LoadSubmodules { repo_id } => {
             repo_load::schedule_load_submodules(executor, repos, msg_tx, repo_id);
         }
+        Effect::LoadLargeFileCapabilities { repo_id } => {
+            repo_load::schedule_load_large_file_capabilities(executor, repos, msg_tx, repo_id);
+        }
+        Effect::LoadLargeFilePathInfo {
+            repo_id,
+            path,
+            generation,
+        } => {
+            repo_load::schedule_load_large_file_path_info(
+                executor, repos, msg_tx, repo_id, path, generation,
+            );
+        }
         Effect::LoadRebaseAndMergeState { repo_id } => {
             repo_load::schedule_load_rebase_and_merge_state(executor, repos, msg_tx, repo_id);
         }
@@ -283,6 +295,55 @@ pub(super) fn schedule_effect(
         }
         Effect::RemoveSubmodule { repo_id, path } => {
             repo_commands::schedule_remove_submodule(executor, repos, msg_tx, repo_id, path);
+        }
+        Effect::LfsFetch { repo_id, auth } => {
+            repo_commands::schedule_lfs_fetch(executor, repos, msg_tx, repo_id, auth);
+        }
+        Effect::LfsPull { repo_id, auth } => {
+            repo_commands::schedule_lfs_pull(executor, repos, msg_tx, repo_id, auth);
+        }
+        Effect::LfsTrack {
+            repo_id,
+            pattern,
+            auth,
+        } => repo_commands::schedule_lfs_track(executor, repos, msg_tx, repo_id, pattern, auth),
+        Effect::LfsUntrack {
+            repo_id,
+            pattern,
+            auth,
+        } => {
+            repo_commands::schedule_lfs_untrack(executor, repos, msg_tx, repo_id, pattern, auth);
+        }
+        Effect::LfsPrune { repo_id, auth } => {
+            repo_commands::schedule_lfs_prune(executor, repos, msg_tx, repo_id, auth);
+        }
+        Effect::LfsMigrateImport {
+            repo_id,
+            pattern,
+            auth,
+        } => repo_commands::schedule_lfs_migrate_import(
+            executor, repos, msg_tx, repo_id, pattern, auth,
+        ),
+        Effect::AnnexInit { repo_id, auth } => {
+            repo_commands::schedule_annex_init(executor, repos, msg_tx, repo_id, auth);
+        }
+        Effect::AnnexSync { repo_id, auth } => {
+            repo_commands::schedule_annex_sync(executor, repos, msg_tx, repo_id, auth);
+        }
+        Effect::AnnexGet { repo_id, path, auth } => {
+            repo_commands::schedule_annex_get(executor, repos, msg_tx, repo_id, path, auth);
+        }
+        Effect::AnnexUnlock { repo_id, path, auth } => {
+            repo_commands::schedule_annex_unlock(executor, repos, msg_tx, repo_id, path, auth);
+        }
+        Effect::AnnexLock { repo_id, path, auth } => {
+            repo_commands::schedule_annex_lock(executor, repos, msg_tx, repo_id, path, auth);
+        }
+        Effect::AnnexAdd { repo_id, path, auth } => {
+            repo_commands::schedule_annex_add(executor, repos, msg_tx, repo_id, path, auth);
+        }
+        Effect::AnnexDrop { repo_id, path, auth } => {
+            repo_commands::schedule_annex_drop(executor, repos, msg_tx, repo_id, path, auth);
         }
         Effect::StageHunk { repo_id, patch } => {
             repo_commands::schedule_stage_hunk(executor, repos, msg_tx, repo_id, patch);

@@ -457,7 +457,8 @@ pub(super) fn schedule_clone_repo(
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .stdin(Stdio::null())
-            .env("GIT_TERMINAL_PROMPT", "0");
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("GIT_LFS_SKIP_SMUDGE", "1");
 
         let (askpass_script, prompt_auth) = match (|| {
             let auth = resolve_git_auth(auth);

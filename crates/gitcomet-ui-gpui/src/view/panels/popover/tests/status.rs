@@ -108,6 +108,114 @@ fn status_file_menu_uses_multi_selection_for_stage(cx: &mut gpui::TestAppContext
 }
 
 #[gpui::test]
+fn status_file_menu_shows_annex_actions_for_locked_annex_file(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    let repo_id = RepoId(42);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_status_menu_annex_locked",
+        std::process::id()
+    ));
+    let path = std::path::PathBuf::from("media/video.mov");
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = RepoState::new_opening(
+                repo_id,
+                gitcomet_core::domain::RepoSpec {
+                    workdir: workdir.clone(),
+                },
+            );
+            repo.status = Loadable::Ready(
+                gitcomet_core::domain::RepoStatus {
+                    staged: vec![],
+                    unstaged: vec![gitcomet_core::domain::FileStatus {
+                        path: path.clone(),
+                        kind: gitcomet_core::domain::FileStatusKind::Modified,
+                        conflict: None,
+                    }],
+                }
+                .into(),
+            );
+            repo.large_file_capabilities = Loadable::Ready(
+                gitcomet_core::services::RepoLargeFileCapabilities {
+                    uses_git_lfs: false,
+                    git_lfs_available: false,
+                    uses_git_annex: true,
+                    git_annex_available: true,
+                },
+            );
+            repo.large_file_capabilities_rev = 1;
+            repo.large_file_path_infos.insert(
+                path.clone(),
+                Loadable::Ready(gitcomet_core::services::PathLargeFileInfo {
+                    path: path.clone(),
+                    kind: gitcomet_core::services::LargeFilePathKind::GitAnnexLocked,
+                }),
+            );
+            repo.large_file_path_info_rev = 1;
+
+            let state = Arc::new(AppState {
+                repos: vec![repo],
+                active_repo: Some(repo_id),
+                ..Default::default()
+            });
+            this.state = Arc::clone(&state);
+            this._ui_model
+                .update(cx, |model, cx| model.set_state(state, cx));
+            cx.notify();
+        });
+    });
+
+    cx.update(|_window, app| {
+        let model = view
+            .update(app, |this, cx| {
+                this.popover_host.update(cx, |host, cx| {
+                    host.context_menu_model(
+                        &PopoverKind::StatusFileMenu {
+                            repo_id,
+                            area: DiffArea::Unstaged,
+                            path: path.clone(),
+                        },
+                        cx,
+                    )
+                })
+            })
+            .expect("expected status file context menu model");
+
+        let has_unlock = model.items.iter().any(|item| match item {
+            ContextMenuItem::Entry { label, action, .. } if label.as_ref() == "Annex unlock" => {
+                matches!(
+                    action.as_ref(),
+                    ContextMenuAction::AnnexUnlock {
+                        repo_id: rid,
+                        path: p,
+                    } if *rid == repo_id && p.as_path() == path.as_path()
+                )
+            }
+            _ => false,
+        });
+        let has_drop = model.items.iter().any(|item| match item {
+            ContextMenuItem::Entry { label, action, .. } if label.as_ref() == "Annex drop" => {
+                matches!(
+                    action.as_ref(),
+                    ContextMenuAction::AnnexDrop {
+                        repo_id: rid,
+                        path: p,
+                    } if *rid == repo_id && p.as_path() == path.as_path()
+                )
+            }
+            _ => false,
+        });
+
+        assert!(has_unlock, "expected Annex unlock entry for locked annex file");
+        assert!(has_drop, "expected Annex drop entry for locked annex file");
+    });
+}
+
+#[gpui::test]
 fn status_file_menu_uses_multi_selection_for_unstage(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) =

@@ -69,6 +69,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
 
         // Popovers that implicitly use the currently active repo.
         PopoverKind::BranchPicker
+        | PopoverKind::LargeFilesMenu
         | PopoverKind::CreateBranch
         | PopoverKind::StashPrompt
         | PopoverKind::PullPicker
@@ -82,6 +83,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
 
         // Popovers that carry an explicit repo id.
         PopoverKind::CreateBranchFromRefPrompt { repo_id, .. }
+        | PopoverKind::LfsPatternPrompt { repo_id, .. }
         | PopoverKind::ResetPrompt { repo_id, .. }
         | PopoverKind::CheckoutRemoteBranchPrompt { repo_id, .. }
         | PopoverKind::StashDropConfirm { repo_id, .. }
@@ -202,6 +204,24 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
             repo.remote_branches_rev.hash(hasher);
         }
 
+        PopoverKind::LargeFilesMenu => {
+            repo.large_file_capabilities_rev.hash(hasher);
+            view_fingerprint::hash_loadable_kind(&repo.large_file_capabilities, hasher);
+        }
+
+        PopoverKind::LfsPatternPrompt { .. } => {
+            repo.large_file_capabilities_rev.hash(hasher);
+            view_fingerprint::hash_loadable_kind(&repo.large_file_capabilities, hasher);
+        }
+
+        PopoverKind::StatusFileMenu { .. } => {
+            repo.status_rev.hash(hasher);
+            view_fingerprint::hash_loadable_arc(&repo.status, hasher);
+            repo.large_file_capabilities_rev.hash(hasher);
+            view_fingerprint::hash_loadable_kind(&repo.large_file_capabilities, hasher);
+            repo.large_file_path_info_rev.hash(hasher);
+        }
+
         PopoverKind::TagMenu { .. } => {
             repo.tags_rev.hash(hasher);
             repo.remotes_rev.hash(hasher);
@@ -217,7 +237,6 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         | PopoverKind::ForceRemoveWorktreeConfirm { .. }
         | PopoverKind::CommitMenu { .. }
         | PopoverKind::CommitFileMenu { .. }
-        | PopoverKind::StatusFileMenu { .. }
         | PopoverKind::HistoryColumnSettings
         | PopoverKind::ChangeTrackingSettings
         | PopoverKind::ConflictResolverInputRowMenu { .. }
@@ -235,6 +254,7 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
         PopoverKind::RepoPicker => 0u8.hash(hasher),
         PopoverKind::RecentRepositoryPicker => 65u8.hash(hasher),
         PopoverKind::BranchPicker => 1u8.hash(hasher),
+        PopoverKind::LargeFilesMenu => 67u8.hash(hasher),
         PopoverKind::CreateBranch => 2u8.hash(hasher),
         PopoverKind::CreateBranchFromRefPrompt { repo_id, target } => {
             66u8.hash(hasher);
@@ -289,6 +309,11 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             8u8.hash(hasher);
             repo_id.hash(hasher);
             target.hash(hasher);
+        }
+        PopoverKind::LfsPatternPrompt { repo_id, kind } => {
+            68u8.hash(hasher);
+            repo_id.hash(hasher);
+            hash_lfs_pattern_prompt_kind(*kind, hasher);
         }
         PopoverKind::Repo { repo_id, kind } => {
             hash_repo_popover_kind(*repo_id, kind, hasher);
@@ -589,6 +614,14 @@ fn hash_reset_mode<H: Hasher>(mode: ResetMode, hasher: &mut H) {
         ResetMode::Soft => 0u8.hash(hasher),
         ResetMode::Mixed => 1u8.hash(hasher),
         ResetMode::Hard => 2u8.hash(hasher),
+    }
+}
+
+fn hash_lfs_pattern_prompt_kind<H: Hasher>(kind: LfsPatternPromptKind, hasher: &mut H) {
+    match kind {
+        LfsPatternPromptKind::Track => 0u8.hash(hasher),
+        LfsPatternPromptKind::Untrack => 1u8.hash(hasher),
+        LfsPatternPromptKind::MigrateImport => 2u8.hash(hasher),
     }
 }
 

@@ -42,6 +42,15 @@ fn push_tooltip_text(push_count: usize, tracking_branch_name: Option<&str>) -> S
     }
 }
 
+fn repo_uses_large_files(repo: Option<&RepoState>) -> bool {
+    repo.is_some_and(|repo| {
+        matches!(
+            &repo.large_file_capabilities,
+            Loadable::Ready(capabilities) if capabilities.uses_large_files()
+        )
+    })
+}
+
 pub(in super::super) struct ActionBarView {
     store: Arc<AppStore>,
     state: Arc<AppState>,
@@ -68,6 +77,7 @@ impl ActionBarView {
             repo.merge_message_rev.hash(&mut hasher);
             repo.ops_rev.hash(&mut hasher);
             repo.status_rev.hash(&mut hasher);
+            repo.large_file_capabilities_rev.hash(&mut hasher);
             repo.loads_in_flight.any_in_flight().hash(&mut hasher);
         }
 
@@ -268,6 +278,7 @@ impl Render for ActionBarView {
                 _ => None,
             })
             .unwrap_or(false);
+        let show_large_files_button = repo_uses_large_files(self.active_repo());
 
         let repo_busy = self.active_repo().is_some_and(|repo| {
             matches!(repo.open, Loadable::Loading)
@@ -602,6 +613,29 @@ impl Render for ActionBarView {
                 }
             }));
 
+        let large_files_invoker: SharedString = "large_files_btn".into();
+        let large_files_active = self
+            .active_context_menu_invoker
+            .as_ref()
+            .is_some_and(|id| id.as_ref() == large_files_invoker.as_ref());
+        let large_files = components::Button::new("large_files", "Large files")
+            .start_slot(icon("icons/cloud.svg", icon_primary))
+            .style(components::ButtonStyle::Outlined)
+            .selected(large_files_active)
+            .selected_bg(menu_selected_bg)
+            .on_click_with_bounds(theme, cx, move |this, _e, bounds, window, cx| {
+                this.activate_context_menu_invoker(large_files_invoker.clone(), cx);
+                this.open_popover_for_bounds(PopoverKind::LargeFilesMenu, bounds, window, cx);
+            })
+            .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
+                let text: SharedString = "Git LFS / git-annex actions".into();
+                if *hovering {
+                    this.set_tooltip_text_if_changed(Some(text), cx);
+                } else {
+                    this.clear_tooltip_if_matches(&text, cx);
+                }
+            }));
+
         let create_branch_invoker: SharedString = "create_branch_btn".into();
         let create_branch_active = self
             .active_context_menu_invoker
@@ -708,6 +742,7 @@ impl Render for ActionBarView {
                     .gap_2()
                     .child(pull)
                     .child(push)
+                    .when(show_large_files_button, |d| d.child(large_files))
                     .child(create_branch)
                     .child(stash),
             )
@@ -821,6 +856,62 @@ mod tests {
             }),
         )]));
         state.repos[0].branches_rev = state.repos[0].branches_rev.wrapping_add(1);
+        let after = ActionBarView::notify_fingerprint(&state);
+
+        assert_ne!(before, after);
+    }
+
+    #[test]
+    fn repo_uses_large_files_returns_true_only_for_ready_large_file_repos() {
+        let repo_id = RepoId(2);
+        let mut repo = RepoState::new_opening(
+            repo_id,
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/repo-large-files"),
+            },
+        );
+        assert!(!repo_uses_large_files(Some(&repo)));
+
+        repo.large_file_capabilities = Loadable::Loading;
+        assert!(!repo_uses_large_files(Some(&repo)));
+
+        repo.large_file_capabilities = Loadable::Ready(
+            gitcomet_core::services::RepoLargeFileCapabilities {
+                uses_git_lfs: true,
+                git_lfs_available: true,
+                uses_git_annex: false,
+                git_annex_available: false,
+            },
+        );
+        assert!(repo_uses_large_files(Some(&repo)));
+    }
+
+    #[test]
+    fn notify_fingerprint_changes_when_large_file_capabilities_rev_changes() {
+        let repo_id = RepoId(3);
+        let mut state = AppState {
+            active_repo: Some(repo_id),
+            ..AppState::default()
+        };
+        state.repos.push(RepoState::new_opening(
+            repo_id,
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/repo-lfs"),
+            },
+        ));
+
+        let before = ActionBarView::notify_fingerprint(&state);
+        state.repos[0].large_file_capabilities = Loadable::Ready(
+            gitcomet_core::services::RepoLargeFileCapabilities {
+                uses_git_lfs: true,
+                git_lfs_available: true,
+                uses_git_annex: false,
+                git_annex_available: false,
+            },
+        );
+        state.repos[0].large_file_capabilities_rev = state.repos[0]
+            .large_file_capabilities_rev
+            .wrapping_add(1);
         let after = ActionBarView::notify_fingerprint(&state);
 
         assert_ne!(before, after);

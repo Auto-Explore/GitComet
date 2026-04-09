@@ -531,6 +531,7 @@ pub(super) fn repo_opened_ok(
         repo_state.history_state.blame = Loadable::NotLoaded;
         repo_state.set_worktrees(Loadable::NotLoaded);
         repo_state.set_submodules(Loadable::NotLoaded);
+        repo_state.set_large_file_capabilities(Loadable::Loading);
         repo_state.set_selected_commit(None);
         repo_state.set_commit_details(Loadable::NotLoaded);
         repo_state.diff_state.diff_target = None;
@@ -548,7 +549,9 @@ pub(super) fn repo_opened_ok(
     }
 
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-        return refresh_full_effects(repo_state);
+        let mut effects = refresh_full_effects(repo_state);
+        effects.push(Effect::LoadLargeFileCapabilities { repo_id });
+        return effects;
     }
 
     Vec::new()

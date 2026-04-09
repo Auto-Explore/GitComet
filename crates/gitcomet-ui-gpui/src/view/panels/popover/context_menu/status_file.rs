@@ -61,6 +61,28 @@ pub(super) fn model(
         })
         .unwrap_or((false, false, false, false));
 
+    let (
+        large_file_capabilities,
+        large_file_path_info,
+    ): (
+        Option<gitcomet_core::services::RepoLargeFileCapabilities>,
+        Option<Loadable<gitcomet_core::services::PathLargeFileInfo>>,
+    ) = this
+        .state
+        .repos
+        .iter()
+        .find(|r| r.id == repo_id)
+        .map(|repo| {
+            (
+                match &repo.large_file_capabilities {
+                    Loadable::Ready(capabilities) => Some(*capabilities),
+                    _ => None,
+                },
+                repo.large_file_path_info(path).cloned(),
+            )
+        })
+        .unwrap_or((None, None));
+
     // Keep context menu opening fast. Validate precisely when the action runs instead.
     let can_discard_worktree_changes = if is_conflicted {
         false
@@ -252,6 +274,108 @@ pub(super) fn model(
                 path: path.clone(),
             }),
         });
+    }
+
+    let annex_available = large_file_capabilities.is_some_and(|cap| cap.git_annex_available);
+    match large_file_path_info {
+        Some(Loadable::Ready(info)) => match info.kind {
+            gitcomet_core::services::LargeFilePathKind::Plain => {}
+            gitcomet_core::services::LargeFilePathKind::GitLfs => {
+                items.push(ContextMenuItem::Separator);
+                items.push(ContextMenuItem::Label("Git LFS tracked file".into()));
+            }
+            gitcomet_core::services::LargeFilePathKind::GitAnnexLocked => {
+                items.push(ContextMenuItem::Separator);
+                items.push(ContextMenuItem::Label("git-annex locked file".into()));
+                items.push(ContextMenuItem::Entry {
+                    label: "Annex get".into(),
+                    icon: Some("icons/cloud.svg".into()),
+                    shortcut: None,
+                    disabled: !annex_available,
+                    action: Box::new(ContextMenuAction::AnnexGet {
+                        repo_id,
+                        path: path.clone(),
+                    }),
+                });
+                items.push(ContextMenuItem::Entry {
+                    label: "Annex unlock".into(),
+                    icon: Some("icons/link.svg".into()),
+                    shortcut: None,
+                    disabled: !annex_available,
+                    action: Box::new(ContextMenuAction::AnnexUnlock {
+                        repo_id,
+                        path: path.clone(),
+                    }),
+                });
+                items.push(ContextMenuItem::Entry {
+                    label: "Annex drop".into(),
+                    icon: Some("icons/minus.svg".into()),
+                    shortcut: None,
+                    disabled: !annex_available,
+                    action: Box::new(ContextMenuAction::AnnexDrop {
+                        repo_id,
+                        path: path.clone(),
+                    }),
+                });
+            }
+            gitcomet_core::services::LargeFilePathKind::GitAnnexUnlocked => {
+                items.push(ContextMenuItem::Separator);
+                items.push(ContextMenuItem::Label("git-annex unlocked file".into()));
+                items.push(ContextMenuItem::Entry {
+                    label: "Annex get".into(),
+                    icon: Some("icons/cloud.svg".into()),
+                    shortcut: None,
+                    disabled: !annex_available,
+                    action: Box::new(ContextMenuAction::AnnexGet {
+                        repo_id,
+                        path: path.clone(),
+                    }),
+                });
+                items.push(ContextMenuItem::Entry {
+                    label: "Annex lock".into(),
+                    icon: Some("icons/unlink.svg".into()),
+                    shortcut: None,
+                    disabled: !annex_available,
+                    action: Box::new(ContextMenuAction::AnnexLock {
+                        repo_id,
+                        path: path.clone(),
+                    }),
+                });
+                items.push(ContextMenuItem::Entry {
+                    label: "Annex add".into(),
+                    icon: Some("icons/plus.svg".into()),
+                    shortcut: None,
+                    disabled: !annex_available,
+                    action: Box::new(ContextMenuAction::AnnexAdd {
+                        repo_id,
+                        path: path.clone(),
+                    }),
+                });
+                items.push(ContextMenuItem::Entry {
+                    label: "Annex drop".into(),
+                    icon: Some("icons/minus.svg".into()),
+                    shortcut: None,
+                    disabled: !annex_available,
+                    action: Box::new(ContextMenuAction::AnnexDrop {
+                        repo_id,
+                        path: path.clone(),
+                    }),
+                });
+            }
+        },
+        Some(Loadable::Loading)
+            if large_file_capabilities.is_some_and(|cap| cap.uses_large_files()) =>
+        {
+            items.push(ContextMenuItem::Separator);
+            items.push(ContextMenuItem::Label("Detecting large-file info…".into()));
+        }
+        Some(Loadable::Error(_))
+            if large_file_capabilities.is_some_and(|cap| cap.uses_large_files()) =>
+        {
+            items.push(ContextMenuItem::Separator);
+            items.push(ContextMenuItem::Label("Large-file info unavailable".into()));
+        }
+        _ => {}
     }
 
     items.push(ContextMenuItem::Separator);

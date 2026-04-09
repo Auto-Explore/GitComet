@@ -116,6 +116,35 @@ pub enum RepoCommandKind {
     RemoveSubmodule {
         path: PathBuf,
     },
+    LfsFetch,
+    LfsPull,
+    LfsTrack {
+        pattern: String,
+    },
+    LfsUntrack {
+        pattern: String,
+    },
+    LfsPrune,
+    LfsMigrateImport {
+        pattern: String,
+    },
+    AnnexInit,
+    AnnexSync,
+    AnnexGet {
+        path: PathBuf,
+    },
+    AnnexUnlock {
+        path: PathBuf,
+    },
+    AnnexLock {
+        path: PathBuf,
+    },
+    AnnexAdd {
+        path: PathBuf,
+    },
+    AnnexDrop {
+        path: PathBuf,
+    },
     StageHunk,
     UnstageHunk,
     ApplyWorktreePatch {

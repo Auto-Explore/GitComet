@@ -6,9 +6,6 @@ use std::path::Path;
 #[derive(Default)]
 pub(super) struct ConflictStageData {
     pub(super) conflict_kind: Option<FileConflictKind>,
-    pub(super) base_bytes: Option<Vec<u8>>,
-    pub(super) ours_bytes: Option<Vec<u8>>,
-    pub(super) theirs_bytes: Option<Vec<u8>>,
 }
 
 fn gix_index_stage_from_u8(stage: u8) -> Option<gix::index::entry::Stage> {
@@ -92,35 +89,6 @@ pub(super) fn gix_index_stage_blob_bytes_optional(
     Ok(Some(blob.take_data()))
 }
 
-fn gix_blob_bytes_from_object_id_optional(
-    repo: &gix::Repository,
-    path: &Path,
-    stage: u8,
-    object_id: Option<gix::ObjectId>,
-) -> Result<Option<Vec<u8>>> {
-    let Some(object_id) = object_id else {
-        return Ok(None);
-    };
-
-    let Some(object) = repo
-        .try_find_object(object_id)
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix try_find_object: {e}"))))?
-    else {
-        return Err(Error::new(ErrorKind::Backend(format!(
-            "missing conflict stage object for :{stage}:{}",
-            path.display()
-        ))));
-    };
-
-    let mut blob = object.try_into_blob().map_err(|_| {
-        Error::new(ErrorKind::Backend(format!(
-            "conflict stage object for :{stage}:{} is not a blob",
-            path.display()
-        )))
-    })?;
-    Ok(Some(blob.take_data()))
-}
-
 pub(super) fn gix_index_conflict_stage_data(
     repo: &gix::Repository,
     path: &Path,
@@ -154,8 +122,5 @@ pub(super) fn gix_index_conflict_stage_data(
 
     Ok(ConflictStageData {
         conflict_kind: conflict_kind_from_stage_mask(stage_mask),
-        base_bytes: gix_blob_bytes_from_object_id_optional(repo, path, 1, base_id)?,
-        ours_bytes: gix_blob_bytes_from_object_id_optional(repo, path, 2, ours_id)?,
-        theirs_bytes: gix_blob_bytes_from_object_id_optional(repo, path, 3, theirs_id)?,
     })
 }

@@ -685,6 +685,78 @@ pub(super) fn schedule_load_submodules(
     });
 }
 
+pub(super) fn schedule_load_large_file_capabilities(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: mpsc::Sender<Msg>,
+    repo_id: RepoId,
+) {
+    spawn_with_repo_or_else(
+        executor,
+        repos,
+        repo_id,
+        msg_tx,
+        move |repo, msg_tx| {
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(crate::msg::InternalMsg::LargeFileCapabilitiesLoaded {
+                    repo_id,
+                    result: repo.large_file_capabilities(),
+                }),
+            );
+        },
+        move |msg_tx| {
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(crate::msg::InternalMsg::LargeFileCapabilitiesLoaded {
+                    repo_id,
+                    result: Err(missing_repo_error(repo_id)),
+                }),
+            );
+        },
+    );
+}
+
+pub(super) fn schedule_load_large_file_path_info(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: mpsc::Sender<Msg>,
+    repo_id: RepoId,
+    path: PathBuf,
+    generation: u64,
+) {
+    let missing_path = path.clone();
+    spawn_with_repo_or_else(
+        executor,
+        repos,
+        repo_id,
+        msg_tx,
+        move |repo, msg_tx| {
+            let result = repo.large_file_path_info(&path);
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(crate::msg::InternalMsg::LargeFilePathInfoLoaded {
+                    repo_id,
+                    path,
+                    generation,
+                    result,
+                }),
+            );
+        },
+        move |msg_tx| {
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(crate::msg::InternalMsg::LargeFilePathInfoLoaded {
+                    repo_id,
+                    path: missing_path,
+                    generation,
+                    result: Err(missing_repo_error(repo_id)),
+                }),
+            );
+        },
+    );
+}
+
 pub(super) fn schedule_load_rebase_state(
     executor: &TaskExecutor,
     repos: &RepoMap,

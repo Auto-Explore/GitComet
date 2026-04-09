@@ -137,6 +137,105 @@ pub(super) fn remove_submodule(repo_id: RepoId, path: PathBuf) -> Vec<Effect> {
     vec![Effect::RemoveSubmodule { repo_id, path }]
 }
 
+pub(super) fn lfs_fetch(repo_id: RepoId) -> Vec<Effect> {
+    vec![Effect::LfsFetch {
+        repo_id,
+        auth: None,
+    }]
+}
+
+pub(super) fn lfs_pull(repo_id: RepoId) -> Vec<Effect> {
+    vec![Effect::LfsPull {
+        repo_id,
+        auth: None,
+    }]
+}
+
+pub(super) fn lfs_track(repo_id: RepoId, pattern: String) -> Vec<Effect> {
+    vec![Effect::LfsTrack {
+        repo_id,
+        pattern,
+        auth: None,
+    }]
+}
+
+pub(super) fn lfs_untrack(repo_id: RepoId, pattern: String) -> Vec<Effect> {
+    vec![Effect::LfsUntrack {
+        repo_id,
+        pattern,
+        auth: None,
+    }]
+}
+
+pub(super) fn lfs_prune(repo_id: RepoId) -> Vec<Effect> {
+    vec![Effect::LfsPrune {
+        repo_id,
+        auth: None,
+    }]
+}
+
+pub(super) fn lfs_migrate_import(repo_id: RepoId, pattern: String) -> Vec<Effect> {
+    vec![Effect::LfsMigrateImport {
+        repo_id,
+        pattern,
+        auth: None,
+    }]
+}
+
+pub(super) fn annex_init(repo_id: RepoId) -> Vec<Effect> {
+    vec![Effect::AnnexInit {
+        repo_id,
+        auth: None,
+    }]
+}
+
+pub(super) fn annex_sync(repo_id: RepoId) -> Vec<Effect> {
+    vec![Effect::AnnexSync {
+        repo_id,
+        auth: None,
+    }]
+}
+
+pub(super) fn annex_get(repo_id: RepoId, path: PathBuf) -> Vec<Effect> {
+    vec![Effect::AnnexGet {
+        repo_id,
+        path,
+        auth: None,
+    }]
+}
+
+pub(super) fn annex_unlock(repo_id: RepoId, path: PathBuf) -> Vec<Effect> {
+    vec![Effect::AnnexUnlock {
+        repo_id,
+        path,
+        auth: None,
+    }]
+}
+
+pub(super) fn annex_lock(repo_id: RepoId, path: PathBuf) -> Vec<Effect> {
+    vec![Effect::AnnexLock {
+        repo_id,
+        path,
+        auth: None,
+    }]
+}
+
+pub(super) fn annex_add(repo_id: RepoId, path: PathBuf) -> Vec<Effect> {
+    vec![Effect::AnnexAdd {
+        repo_id,
+        path,
+        auth: None,
+    }]
+}
+
+pub(super) fn annex_drop(repo_id: RepoId, path: PathBuf) -> Vec<Effect> {
+    vec![Effect::AnnexDrop {
+        repo_id,
+        path,
+        auth: None,
+    }]
+}
+
 pub(super) fn stage_path(repo_id: RepoId, path: PathBuf) -> Vec<Effect> {
     vec![Effect::StagePath { repo_id, path }]
 }
@@ -625,6 +724,19 @@ fn tracks_local_actions_in_flight(command: &RepoCommandKind) -> bool {
             | RepoCommandKind::AddSubmodule { .. }
             | RepoCommandKind::UpdateSubmodules
             | RepoCommandKind::RemoveSubmodule { .. }
+            | RepoCommandKind::LfsFetch
+            | RepoCommandKind::LfsPull
+            | RepoCommandKind::LfsTrack { .. }
+            | RepoCommandKind::LfsUntrack { .. }
+            | RepoCommandKind::LfsPrune
+            | RepoCommandKind::LfsMigrateImport { .. }
+            | RepoCommandKind::AnnexInit
+            | RepoCommandKind::AnnexSync
+            | RepoCommandKind::AnnexGet { .. }
+            | RepoCommandKind::AnnexUnlock { .. }
+            | RepoCommandKind::AnnexLock { .. }
+            | RepoCommandKind::AnnexAdd { .. }
+            | RepoCommandKind::AnnexDrop { .. }
             | RepoCommandKind::StageHunk
             | RepoCommandKind::UnstageHunk
             | RepoCommandKind::ApplyWorktreePatch { .. }
@@ -648,6 +760,22 @@ pub(super) fn repo_command_finished(
         RepoCommandKind::AddSubmodule { .. }
             | RepoCommandKind::UpdateSubmodules
             | RepoCommandKind::RemoveSubmodule { .. }
+    ) && result.is_ok();
+    let refresh_large_file_capabilities = matches!(
+        &command,
+        RepoCommandKind::LfsFetch
+            | RepoCommandKind::LfsPull
+            | RepoCommandKind::LfsTrack { .. }
+            | RepoCommandKind::LfsUntrack { .. }
+            | RepoCommandKind::LfsPrune
+            | RepoCommandKind::LfsMigrateImport { .. }
+            | RepoCommandKind::AnnexInit
+            | RepoCommandKind::AnnexSync
+            | RepoCommandKind::AnnexGet { .. }
+            | RepoCommandKind::AnnexUnlock { .. }
+            | RepoCommandKind::AnnexLock { .. }
+            | RepoCommandKind::AnnexAdd { .. }
+            | RepoCommandKind::AnnexDrop { .. }
     ) && result.is_ok();
     let command_succeeded = result.is_ok();
     let mut clear_banner = false;
@@ -735,12 +863,33 @@ pub(super) fn repo_command_finished(
         repo_state.set_submodules(Loadable::Loading);
         extra_effects.push(Effect::LoadSubmodules { repo_id });
     }
-    if matches!(
+    if refresh_large_file_capabilities {
+        extra_effects.push(Effect::LoadLargeFileCapabilities { repo_id });
+    }
+    let should_reload_selected_diff = matches!(
         &command,
         RepoCommandKind::StageHunk
             | RepoCommandKind::UnstageHunk
             | RepoCommandKind::ApplyWorktreePatch { .. }
-    ) && let Some(target) = repo_state.diff_state.diff_target.clone()
+    ) || (command_succeeded
+        && matches!(
+            &command,
+            RepoCommandKind::LfsFetch
+                | RepoCommandKind::LfsPull
+                | RepoCommandKind::LfsTrack { .. }
+                | RepoCommandKind::LfsUntrack { .. }
+                | RepoCommandKind::LfsPrune
+                | RepoCommandKind::LfsMigrateImport { .. }
+                | RepoCommandKind::AnnexInit
+                | RepoCommandKind::AnnexSync
+                | RepoCommandKind::AnnexGet { .. }
+                | RepoCommandKind::AnnexUnlock { .. }
+                | RepoCommandKind::AnnexLock { .. }
+                | RepoCommandKind::AnnexAdd { .. }
+                | RepoCommandKind::AnnexDrop { .. }
+        ));
+    if should_reload_selected_diff
+        && let Some(target) = repo_state.diff_state.diff_target.clone()
     {
         if let Some(conflict_target) = selected_conflict_target(repo_state, &target) {
             repo_state.diff_state.diff = Loadable::NotLoaded;

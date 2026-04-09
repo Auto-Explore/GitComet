@@ -191,6 +191,48 @@ pub(super) fn submodules_loaded(
     Vec::new()
 }
 
+pub(super) fn large_file_capabilities_loaded(
+    state: &mut AppState,
+    repo_id: RepoId,
+    result: std::result::Result<gitcomet_core::services::RepoLargeFileCapabilities, Error>,
+) -> Vec<Effect> {
+    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+        let capabilities = match result {
+            Ok(v) => Loadable::Ready(v),
+            Err(e) => {
+                push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                Loadable::Error(e.to_string())
+            }
+        };
+        repo_state.set_large_file_capabilities(capabilities);
+    }
+    Vec::new()
+}
+
+pub(super) fn large_file_path_info_loaded(
+    state: &mut AppState,
+    repo_id: RepoId,
+    path: std::path::PathBuf,
+    generation: u64,
+    result: std::result::Result<gitcomet_core::services::PathLargeFileInfo, Error>,
+) -> Vec<Effect> {
+    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+        if repo_state.large_file_path_info_generation != generation {
+            return Vec::new();
+        }
+
+        let info = match result {
+            Ok(v) => Loadable::Ready(v),
+            Err(e) => {
+                push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                Loadable::Error(e.to_string())
+            }
+        };
+        repo_state.set_large_file_path_info(path, info);
+    }
+    Vec::new()
+}
+
 pub(super) fn select_commit(
     state: &mut AppState,
     repo_id: RepoId,
@@ -348,6 +390,36 @@ pub(super) fn load_submodules(state: &mut AppState, repo_id: RepoId) -> Vec<Effe
     };
     repo_state.set_submodules(Loadable::Loading);
     vec![Effect::LoadSubmodules { repo_id }]
+}
+
+pub(super) fn load_large_file_capabilities(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
+    let Some(_repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+    vec![Effect::LoadLargeFileCapabilities { repo_id }]
+}
+
+pub(super) fn load_large_file_path_info(
+    state: &mut AppState,
+    repo_id: RepoId,
+    path: std::path::PathBuf,
+) -> Vec<Effect> {
+    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+    if matches!(
+        repo_state.large_file_path_info(&path),
+        Some(Loadable::Loading) | Some(Loadable::Ready(_))
+    ) {
+        return Vec::new();
+    }
+
+    repo_state.set_large_file_path_info_loading(path.clone());
+    vec![Effect::LoadLargeFilePathInfo {
+        repo_id,
+        path,
+        generation: repo_state.large_file_path_info_generation,
+    }]
 }
 
 pub(super) fn branches_loaded(

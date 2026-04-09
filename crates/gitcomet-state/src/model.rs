@@ -5,9 +5,9 @@ use gitcomet_core::conflict_session::{
     ConflictPayload, ConflictSession, ConflictStageParts, canonicalize_stage_parts,
 };
 use gitcomet_core::domain::*;
-use gitcomet_core::services::BlameLine;
-use std::collections::VecDeque;
-use std::path::PathBuf;
+use gitcomet_core::services::{BlameLine, PathLargeFileInfo, RepoLargeFileCapabilities};
+use std::collections::{BTreeMap, VecDeque};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::SystemTime;
 
@@ -473,6 +473,11 @@ pub struct RepoState {
     pub worktrees_rev: u64,
     pub submodules: Loadable<Arc<Vec<Submodule>>>,
     pub submodules_rev: u64,
+    pub large_file_capabilities: Loadable<RepoLargeFileCapabilities>,
+    pub large_file_capabilities_rev: u64,
+    pub large_file_path_infos: BTreeMap<PathBuf, Loadable<PathLargeFileInfo>>,
+    pub large_file_path_info_rev: u64,
+    pub large_file_path_info_generation: u64,
     /// Invalidates cached branch-sidebar rows when any sidebar-relevant source changes.
     pub branch_sidebar_rev: u64,
 
@@ -538,6 +543,11 @@ impl RepoState {
             worktrees_rev: 0,
             submodules: Loadable::NotLoaded,
             submodules_rev: 0,
+            large_file_capabilities: Loadable::NotLoaded,
+            large_file_capabilities_rev: 0,
+            large_file_path_infos: BTreeMap::new(),
+            large_file_path_info_rev: 0,
+            large_file_path_info_generation: 0,
             branch_sidebar_rev: 0,
             diff_state: DiffState::default(),
             conflict_state: ConflictState::default(),
@@ -655,6 +665,60 @@ impl RepoState {
         self.bump_branch_sidebar_rev();
     }
 
+    pub(crate) fn set_large_file_capabilities(
+        &mut self,
+        large_file_capabilities: Loadable<RepoLargeFileCapabilities>,
+    ) {
+        if self.large_file_capabilities == large_file_capabilities {
+            return;
+        }
+        self.large_file_capabilities = large_file_capabilities;
+        self.large_file_capabilities_rev = self.large_file_capabilities_rev.wrapping_add(1);
+        self.invalidate_large_file_path_infos();
+    }
+
+    pub fn large_file_path_info(
+        &self,
+        path: &Path,
+    ) -> Option<&Loadable<PathLargeFileInfo>> {
+        self.large_file_path_infos.get(path)
+    }
+
+    pub(crate) fn set_large_file_path_info_loading(&mut self, path: PathBuf) {
+        if matches!(
+            self.large_file_path_infos.get(&path),
+            Some(Loadable::Loading) | Some(Loadable::Ready(_))
+        ) {
+            return;
+        }
+
+        self.large_file_path_infos.insert(path, Loadable::Loading);
+        self.large_file_path_info_rev = self.large_file_path_info_rev.wrapping_add(1);
+    }
+
+    pub(crate) fn set_large_file_path_info(
+        &mut self,
+        path: PathBuf,
+        info: Loadable<PathLargeFileInfo>,
+    ) {
+        if self.large_file_path_infos.get(&path) == Some(&info) {
+            return;
+        }
+
+        self.large_file_path_infos.insert(path, info);
+        self.large_file_path_info_rev = self.large_file_path_info_rev.wrapping_add(1);
+    }
+
+    pub(crate) fn invalidate_large_file_path_infos(&mut self) {
+        self.large_file_path_info_generation = self.large_file_path_info_generation.wrapping_add(1);
+        if self.large_file_path_infos.is_empty() {
+            return;
+        }
+
+        self.large_file_path_infos.clear();
+        self.large_file_path_info_rev = self.large_file_path_info_rev.wrapping_add(1);
+    }
+
     #[inline]
     fn bump_branch_sidebar_rev(&mut self) {
         self.branch_sidebar_rev = self.branch_sidebar_rev.wrapping_add(1);
@@ -688,6 +752,7 @@ impl RepoState {
         );
         self.status = status;
         self.status_rev = self.status_rev.wrapping_add(1);
+        self.invalidate_large_file_path_infos();
     }
 
     pub(crate) fn set_log(&mut self, log: Loadable<Shared<LogPage>>) {

@@ -99,6 +99,13 @@ pub(super) fn schedule_save_worktree_file(
         },
         move |repo| {
             let relative_path = normalize_worktree_relative_path(&path)?;
+            let path_info = repo.large_file_path_info(&relative_path)?;
+            if path_info.is_locked_annex() {
+                return Err(Error::new(ErrorKind::Backend(format!(
+                    "cannot save '{}': git-annex locked files must be explicitly unlocked first",
+                    relative_path.display()
+                ))));
+            }
             let full = repo.spec().workdir.join(&relative_path);
             if let Some(parent) = full.parent() {
                 std::fs::create_dir_all(parent).map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
@@ -281,6 +288,249 @@ pub(super) fn schedule_remove_submodule(
         repo_id,
         RepoCommandKind::RemoveSubmodule { path: command_path },
         move |repo| repo.remove_submodule_with_output(&path),
+    );
+}
+
+pub(super) fn schedule_lfs_fetch(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: mpsc::Sender<Msg>,
+    repo_id: RepoId,
+    auth: Option<StagedGitAuth>,
+) {
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::LfsFetch,
+        move |repo| run_with_git_auth(auth, || repo.lfs_fetch_with_output()),
+    );
+}
+
+pub(super) fn schedule_lfs_pull(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: mpsc::Sender<Msg>,
+    repo_id: RepoId,
+    auth: Option<StagedGitAuth>,
+) {
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::LfsPull,
+        move |repo| run_with_git_auth(auth, || repo.lfs_pull_with_output()),
+    );
+}
+
+pub(super) fn schedule_lfs_track(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: mpsc::Sender<Msg>,
+    repo_id: RepoId,
+    pattern: String,
+    auth: Option<StagedGitAuth>,
+) {
+    let command_pattern = pattern.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::LfsTrack {
+            pattern: command_pattern,
+        },
+        move |repo| run_with_git_auth(auth, || repo.lfs_track_with_output(&pattern)),
+    );
+}
+
+pub(super) fn schedule_lfs_untrack(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: mpsc::Sender<Msg>,
+    repo_id: RepoId,
+    pattern: String,
+    auth: Option<StagedGitAuth>,
+) {
+    let command_pattern = pattern.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::LfsUntrack {
+            pattern: command_pattern,
+        },
+        move |repo| run_with_git_auth(auth, || repo.lfs_untrack_with_output(&pattern)),
+    );
+}
+
+pub(super) fn schedule_lfs_prune(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: mpsc::Sender<Msg>,
+    repo_id: RepoId,
+    auth: Option<StagedGitAuth>,
+) {
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::LfsPrune,
+        move |repo| run_with_git_auth(auth, || repo.lfs_prune_with_output()),
+    );
+}
+
+pub(super) fn schedule_lfs_migrate_import(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: mpsc::Sender<Msg>,
+    repo_id: RepoId,
+    pattern: String,
+    auth: Option<StagedGitAuth>,
+) {
+    let command_pattern = pattern.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::LfsMigrateImport {
+            pattern: command_pattern,
+        },
+        move |repo| run_with_git_auth(auth, || repo.lfs_migrate_import_with_output(&pattern)),
+    );
+}
+
+pub(super) fn schedule_annex_init(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: mpsc::Sender<Msg>,
+    repo_id: RepoId,
+    auth: Option<StagedGitAuth>,
+) {
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::AnnexInit,
+        move |repo| run_with_git_auth(auth, || repo.annex_init_with_output()),
+    );
+}
+
+pub(super) fn schedule_annex_sync(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: mpsc::Sender<Msg>,
+    repo_id: RepoId,
+    auth: Option<StagedGitAuth>,
+) {
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::AnnexSync,
+        move |repo| run_with_git_auth(auth, || repo.annex_sync_with_output()),
+    );
+}
+
+pub(super) fn schedule_annex_get(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: mpsc::Sender<Msg>,
+    repo_id: RepoId,
+    path: PathBuf,
+    auth: Option<StagedGitAuth>,
+) {
+    let command_path = path.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::AnnexGet { path: command_path },
+        move |repo| run_with_git_auth(auth, || repo.annex_get_with_output(&path)),
+    );
+}
+
+pub(super) fn schedule_annex_unlock(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: mpsc::Sender<Msg>,
+    repo_id: RepoId,
+    path: PathBuf,
+    auth: Option<StagedGitAuth>,
+) {
+    let command_path = path.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::AnnexUnlock { path: command_path },
+        move |repo| run_with_git_auth(auth, || repo.annex_unlock_with_output(&path)),
+    );
+}
+
+pub(super) fn schedule_annex_lock(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: mpsc::Sender<Msg>,
+    repo_id: RepoId,
+    path: PathBuf,
+    auth: Option<StagedGitAuth>,
+) {
+    let command_path = path.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::AnnexLock { path: command_path },
+        move |repo| run_with_git_auth(auth, || repo.annex_lock_with_output(&path)),
+    );
+}
+
+pub(super) fn schedule_annex_add(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: mpsc::Sender<Msg>,
+    repo_id: RepoId,
+    path: PathBuf,
+    auth: Option<StagedGitAuth>,
+) {
+    let command_path = path.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::AnnexAdd { path: command_path },
+        move |repo| run_with_git_auth(auth, || repo.annex_add_with_output(&path)),
+    );
+}
+
+pub(super) fn schedule_annex_drop(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: mpsc::Sender<Msg>,
+    repo_id: RepoId,
+    path: PathBuf,
+    auth: Option<StagedGitAuth>,
+) {
+    let command_path = path.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::AnnexDrop { path: command_path },
+        move |repo| run_with_git_auth(auth, || repo.annex_drop_with_output(&path)),
     );
 }
 

@@ -492,6 +492,7 @@ pub(super) fn append_refresh_primary_effects(
         effects.push_effect(Effect::LoadUpstreamDivergence { repo_id });
         push_rebase_and_merge_refresh_effect(effects, repo_id);
         effects.push_effect(Effect::LoadStatus { repo_id });
+        effects.push_effect(Effect::LoadLargeFileCapabilities { repo_id });
         effects.push_effect(Effect::LoadLog {
             repo_id,
             scope,
@@ -520,6 +521,7 @@ pub(super) fn append_refresh_primary_effects(
     {
         effects.push_effect(Effect::LoadStatus { repo_id });
     }
+    effects.push_effect(Effect::LoadLargeFileCapabilities { repo_id });
     if repo_state
         .loads_in_flight
         .request_log(scope, DEFAULT_LOG_PAGE_SIZE, None)
@@ -572,6 +574,7 @@ pub(super) fn append_refresh_full_effects(
     {
         effects.push_effect(Effect::LoadStatus { repo_id });
     }
+    effects.push_effect(Effect::LoadLargeFileCapabilities { repo_id });
     if repo_state.loads_in_flight.request_log(
         repo_state.history_state.history_scope,
         DEFAULT_LOG_PAGE_SIZE,
@@ -863,6 +866,19 @@ fn summarize_command(
             RepoCommandKind::AddSubmodule { .. }
             | RepoCommandKind::UpdateSubmodules
             | RepoCommandKind::RemoveSubmodule { .. } => "Submodule",
+            RepoCommandKind::LfsFetch => "LFS fetch",
+            RepoCommandKind::LfsPull => "LFS pull",
+            RepoCommandKind::LfsTrack { .. } => "LFS track",
+            RepoCommandKind::LfsUntrack { .. } => "LFS untrack",
+            RepoCommandKind::LfsPrune => "LFS prune",
+            RepoCommandKind::LfsMigrateImport { .. } => "LFS migrate",
+            RepoCommandKind::AnnexInit => "Annex init",
+            RepoCommandKind::AnnexSync => "Annex sync",
+            RepoCommandKind::AnnexGet { .. } => "Annex get",
+            RepoCommandKind::AnnexUnlock { .. } => "Annex unlock",
+            RepoCommandKind::AnnexLock { .. } => "Annex lock",
+            RepoCommandKind::AnnexAdd { .. } => "Annex add",
+            RepoCommandKind::AnnexDrop { .. } => "Annex drop",
             RepoCommandKind::StageHunk | RepoCommandKind::UnstageHunk => "Hunk",
             RepoCommandKind::ApplyWorktreePatch { reverse } => {
                 if *reverse {
@@ -1057,6 +1073,21 @@ fn summarize_command(
         RepoCommandKind::RemoveSubmodule { path } => {
             format!("Submodule removed → {}", path.display())
         }
+        RepoCommandKind::LfsFetch => "LFS fetch: Completed".to_string(),
+        RepoCommandKind::LfsPull => "LFS pull: Completed".to_string(),
+        RepoCommandKind::LfsTrack { pattern } => format!("LFS track {pattern}: Updated"),
+        RepoCommandKind::LfsUntrack { pattern } => format!("LFS untrack {pattern}: Updated"),
+        RepoCommandKind::LfsPrune => "LFS prune: Completed".to_string(),
+        RepoCommandKind::LfsMigrateImport { pattern } => {
+            format!("LFS migrate import ({pattern}): Completed")
+        }
+        RepoCommandKind::AnnexInit => "Annex: Initialized".to_string(),
+        RepoCommandKind::AnnexSync => "Annex: Synchronized".to_string(),
+        RepoCommandKind::AnnexGet { path } => format!("Annex get → {}", path.display()),
+        RepoCommandKind::AnnexUnlock { path } => format!("Annex unlocked → {}", path.display()),
+        RepoCommandKind::AnnexLock { path } => format!("Annex locked → {}", path.display()),
+        RepoCommandKind::AnnexAdd { path } => format!("Annex add → {}", path.display()),
+        RepoCommandKind::AnnexDrop { path } => format!("Annex drop → {}", path.display()),
         RepoCommandKind::StageHunk => "Hunk staged".to_string(),
         RepoCommandKind::UnstageHunk => "Hunk unstaged".to_string(),
         RepoCommandKind::ApplyWorktreePatch { reverse } => {

@@ -8,8 +8,9 @@ use gitcomet_core::domain::{
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::git_ops_trace::{self, GitOpTraceKind};
 use gitcomet_core::services::{
-    BlameLine, CommandOutput, ConflictFileStages, ConflictSide, GitRepository, MergetoolResult,
-    PullMode, RemoteUrlKind, ResetMode, Result,
+    BlameLine, CommandOutput, ConflictFileStages, ConflictSide, GitRepository,
+    MergetoolResult, PathLargeFileInfo, PullMode, RemoteUrlKind, RepoLargeFileCapabilities,
+    ResetMode, Result,
 };
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -40,6 +41,7 @@ mod diff;
 mod discard;
 mod git_ops;
 mod history;
+mod large_files;
 mod log;
 mod mergetool;
 mod patch;
@@ -139,6 +141,14 @@ pub(crate) fn allow_test_repo_local_mergetool_command(workdir: &Path, tool_name:
 impl GitRepository for GixRepo {
     fn spec(&self) -> &RepoSpec {
         &self.spec
+    }
+
+    fn large_file_capabilities(&self) -> Result<RepoLargeFileCapabilities> {
+        self.large_file_capabilities_impl()
+    }
+
+    fn large_file_path_info(&self, path: &Path) -> Result<PathLargeFileInfo> {
+        self.large_file_path_info_impl(path)
     }
 
     fn log_head_page(&self, limit: usize, cursor: Option<&LogCursor>) -> Result<LogPage> {
@@ -529,6 +539,58 @@ impl GitRepository for GixRepo {
 
     fn remove_submodule_with_output(&self, path: &Path) -> Result<CommandOutput> {
         self.remove_submodule_with_output_impl(path)
+    }
+
+    fn lfs_fetch_with_output(&self) -> Result<CommandOutput> {
+        self.lfs_fetch_with_output_impl()
+    }
+
+    fn lfs_pull_with_output(&self) -> Result<CommandOutput> {
+        self.lfs_pull_with_output_impl()
+    }
+
+    fn lfs_track_with_output(&self, pattern: &str) -> Result<CommandOutput> {
+        self.lfs_track_with_output_impl(pattern)
+    }
+
+    fn lfs_untrack_with_output(&self, pattern: &str) -> Result<CommandOutput> {
+        self.lfs_untrack_with_output_impl(pattern)
+    }
+
+    fn lfs_prune_with_output(&self) -> Result<CommandOutput> {
+        self.lfs_prune_with_output_impl()
+    }
+
+    fn lfs_migrate_import_with_output(&self, pattern: &str) -> Result<CommandOutput> {
+        self.lfs_migrate_import_with_output_impl(pattern)
+    }
+
+    fn annex_init_with_output(&self) -> Result<CommandOutput> {
+        self.annex_init_with_output_impl()
+    }
+
+    fn annex_sync_with_output(&self) -> Result<CommandOutput> {
+        self.annex_sync_with_output_impl()
+    }
+
+    fn annex_get_with_output(&self, path: &Path) -> Result<CommandOutput> {
+        self.annex_get_with_output_impl(path)
+    }
+
+    fn annex_unlock_with_output(&self, path: &Path) -> Result<CommandOutput> {
+        self.annex_unlock_with_output_impl(path)
+    }
+
+    fn annex_lock_with_output(&self, path: &Path) -> Result<CommandOutput> {
+        self.annex_lock_with_output_impl(path)
+    }
+
+    fn annex_add_with_output(&self, path: &Path) -> Result<CommandOutput> {
+        self.annex_add_with_output_impl(path)
+    }
+
+    fn annex_drop_with_output(&self, path: &Path) -> Result<CommandOutput> {
+        self.annex_drop_with_output_impl(path)
     }
 
     fn discard_worktree_changes(&self, paths: &[&Path]) -> Result<()> {

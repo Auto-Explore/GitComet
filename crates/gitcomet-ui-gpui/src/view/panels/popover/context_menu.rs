@@ -12,6 +12,7 @@ mod diff_editor;
 mod diff_hunk;
 mod history_branch_filter;
 mod history_column_settings;
+mod large_files;
 mod pull;
 mod push;
 mod remote;
@@ -210,6 +211,7 @@ impl PopoverHost {
         cx: &gpui::Context<Self>,
     ) -> Option<ContextMenuModel> {
         match kind {
+            PopoverKind::LargeFilesMenu => Some(large_files::model(self)),
             PopoverKind::PullPicker => Some(pull::model(self)),
             PopoverKind::PushPicker => Some(push::model(self)),
             PopoverKind::CommitMenu { repo_id, commit_id } => {
@@ -611,6 +613,36 @@ impl PopoverHost {
             }
             ContextMenuAction::UpdateSubmodules { repo_id } => {
                 self.store.dispatch(Msg::UpdateSubmodules { repo_id });
+            }
+            ContextMenuAction::LfsFetch { repo_id } => {
+                self.store.dispatch(Msg::LfsFetch { repo_id });
+            }
+            ContextMenuAction::LfsPull { repo_id } => {
+                self.store.dispatch(Msg::LfsPull { repo_id });
+            }
+            ContextMenuAction::LfsPrune { repo_id } => {
+                self.store.dispatch(Msg::LfsPrune { repo_id });
+            }
+            ContextMenuAction::AnnexInit { repo_id } => {
+                self.store.dispatch(Msg::AnnexInit { repo_id });
+            }
+            ContextMenuAction::AnnexSync { repo_id } => {
+                self.store.dispatch(Msg::AnnexSync { repo_id });
+            }
+            ContextMenuAction::AnnexGet { repo_id, path } => {
+                self.store.dispatch(Msg::AnnexGet { repo_id, path });
+            }
+            ContextMenuAction::AnnexUnlock { repo_id, path } => {
+                self.store.dispatch(Msg::AnnexUnlock { repo_id, path });
+            }
+            ContextMenuAction::AnnexLock { repo_id, path } => {
+                self.store.dispatch(Msg::AnnexLock { repo_id, path });
+            }
+            ContextMenuAction::AnnexAdd { repo_id, path } => {
+                self.store.dispatch(Msg::AnnexAdd { repo_id, path });
+            }
+            ContextMenuAction::AnnexDrop { repo_id, path } => {
+                self.store.dispatch(Msg::AnnexDrop { repo_id, path });
             }
             ContextMenuAction::LoadWorktrees { repo_id } => {
                 self.store.dispatch(Msg::LoadWorktrees { repo_id });

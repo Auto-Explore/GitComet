@@ -70,6 +70,14 @@ pub enum Effect {
     LoadSubmodules {
         repo_id: RepoId,
     },
+    LoadLargeFileCapabilities {
+        repo_id: RepoId,
+    },
+    LoadLargeFilePathInfo {
+        repo_id: RepoId,
+        path: PathBuf,
+        generation: u64,
+    },
     LoadRebaseAndMergeState {
         repo_id: RepoId,
     },
@@ -203,6 +211,66 @@ pub enum Effect {
     RemoveSubmodule {
         repo_id: RepoId,
         path: PathBuf,
+    },
+    LfsFetch {
+        repo_id: RepoId,
+        auth: Option<StagedGitAuth>,
+    },
+    LfsPull {
+        repo_id: RepoId,
+        auth: Option<StagedGitAuth>,
+    },
+    LfsTrack {
+        repo_id: RepoId,
+        pattern: String,
+        auth: Option<StagedGitAuth>,
+    },
+    LfsUntrack {
+        repo_id: RepoId,
+        pattern: String,
+        auth: Option<StagedGitAuth>,
+    },
+    LfsPrune {
+        repo_id: RepoId,
+        auth: Option<StagedGitAuth>,
+    },
+    LfsMigrateImport {
+        repo_id: RepoId,
+        pattern: String,
+        auth: Option<StagedGitAuth>,
+    },
+    AnnexInit {
+        repo_id: RepoId,
+        auth: Option<StagedGitAuth>,
+    },
+    AnnexSync {
+        repo_id: RepoId,
+        auth: Option<StagedGitAuth>,
+    },
+    AnnexGet {
+        repo_id: RepoId,
+        path: PathBuf,
+        auth: Option<StagedGitAuth>,
+    },
+    AnnexUnlock {
+        repo_id: RepoId,
+        path: PathBuf,
+        auth: Option<StagedGitAuth>,
+    },
+    AnnexLock {
+        repo_id: RepoId,
+        path: PathBuf,
+        auth: Option<StagedGitAuth>,
+    },
+    AnnexAdd {
+        repo_id: RepoId,
+        path: PathBuf,
+        auth: Option<StagedGitAuth>,
+    },
+    AnnexDrop {
+        repo_id: RepoId,
+        path: PathBuf,
+        auth: Option<StagedGitAuth>,
     },
     StageHunk {
         repo_id: RepoId,
