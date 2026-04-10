@@ -58,6 +58,7 @@ Each theme file is a bundle with a bundle name and one or more themes. The examp
         "diff_remove_text": "#ffc4ccff",                // Optional
         "input_placeholder": "#ffffff59",               // Optional
         "accent_text": "#08111cff",                     // Optional
+        "emphasis_text": "#f5f7fbff",                   // Optional
         "graph_lane_palette": [                         // Optional
           "#ff6b6bff",
           "#ffd166ff",
@@ -141,7 +142,7 @@ The bundle root supports:
 
 ### Optional color fields
 
-`tooltip_bg`, `tooltip_text`, `diff_add_bg`, `diff_add_text`, `diff_remove_bg`, `diff_remove_text`, `input_placeholder`, `accent_text`, `graph_lane_palette`, `graph_lane_hues`
+`tooltip_bg`, `tooltip_text`, `diff_add_bg`, `diff_add_text`, `diff_remove_bg`, `diff_remove_text`, `input_placeholder`, `accent_text`, `emphasis_text`, `graph_lane_palette`, `graph_lane_hues`
 
 ### Color value format
 
@@ -152,7 +153,7 @@ Most color fields accept either:
 
 Use `graph_lane_palette` for an explicit list of colors, or `graph_lane_hues` for a list of hue values that GitComet turns into graph lane colors automatically.
 
-If you omit optional diff colors, tooltip colors, placeholder color, accent text color, or syntax colors, GitComet falls back to built-in defaults.
+If you omit optional diff colors, tooltip colors, placeholder color, accent text color, emphasis text color, or syntax colors, GitComet falls back to built-in defaults.
 
 More generally, omitted optional values are either derived from the theme's base colors or filled with built-in defaults, depending on the field.
 

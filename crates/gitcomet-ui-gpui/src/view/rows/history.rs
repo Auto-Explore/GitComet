@@ -1610,6 +1610,11 @@ impl HistoryView {
                 let connect_from_top_col =
                     (show_working_tree_summary_row && visible_ix == 0).then_some(0);
                 let selected = repo.history_state.selected_commit.as_ref() == Some(&commit.id);
+                let selected_branch_entry_text = this.selected_branch_entry_text_for_history_row(
+                    repo.id,
+                    row_vm.is_head,
+                    selected,
+                );
                 let show_graph_color_marker = repo.history_state.history_scope
                     == gitcomet_core::domain::LogScope::AllBranches;
                 let is_stash_node = row_vm.is_stash
@@ -1636,6 +1641,7 @@ impl HistoryView {
                     connect_from_top_col,
                     Arc::clone(&row_vm.tag_names),
                     row_vm.branches_text.clone(),
+                    selected_branch_entry_text,
                     row_vm.author.clone(),
                     row_vm.summary.clone(),
                     row_vm.when.resolve(&cache.request),
@@ -1652,6 +1658,45 @@ impl HistoryView {
 }
 
 const HISTORY_ROW_HEIGHT_PX: f32 = 24.0;
+
+fn history_selected_branch_entry_range(
+    branches_text: &str,
+    selected_branch_entry_text: &str,
+) -> Option<Range<usize>> {
+    let mut start = 0usize;
+    for part in branches_text.split(", ") {
+        let end = start + part.len();
+        if part == selected_branch_entry_text {
+            return Some(start..end);
+        }
+        start = end + 2;
+    }
+    None
+}
+
+fn history_branch_text_highlights(
+    branches_text: &SharedString,
+    selected_branch_entry_text: Option<&SharedString>,
+    theme: AppTheme,
+) -> Arc<[(Range<usize>, gpui::HighlightStyle)]> {
+    let Some(selected_branch_entry_text) = selected_branch_entry_text else {
+        return Arc::from([]);
+    };
+    let Some(range) =
+        history_selected_branch_entry_range(branches_text.as_ref(), selected_branch_entry_text)
+    else {
+        return Arc::from([]);
+    };
+
+    vec![(
+        range,
+        gpui::HighlightStyle {
+            color: Some(selected_branch_label_color(theme).into()),
+            ..gpui::HighlightStyle::default()
+        },
+    )]
+    .into()
+}
 
 #[allow(clippy::too_many_arguments)]
 fn history_table_row(
@@ -1673,6 +1718,7 @@ fn history_table_row(
     connect_from_top_col: Option<usize>,
     tag_names: Arc<[SharedString]>,
     branches_text: SharedString,
+    selected_branch_entry_text: Option<SharedString>,
     author: SharedString,
     summary: SharedString,
     when: SharedString,
@@ -1686,6 +1732,8 @@ fn history_table_row(
     let context_menu_invoker: SharedString =
         format!("history_commit_menu_{}_{}", repo_id.0, commit.id.as_ref()).into();
     let context_menu_active = active_context_menu_invoker == Some(&context_menu_invoker);
+    let branch_highlights =
+        history_branch_text_highlights(&branches_text, selected_branch_entry_text.as_ref(), theme);
     let commit_row = history_canvas::history_commit_row_canvas(
         theme,
         cx.entity(),
@@ -1707,6 +1755,7 @@ fn history_table_row(
         graph_row_ix,
         tag_names,
         branches_text,
+        branch_highlights,
         author,
         summary,
         when,
@@ -1969,6 +2018,7 @@ fn working_tree_summary_history_row(
 mod tests {
     use super::{
         MarkdownChangeHint, MarkdownInlineStyle, MarkdownPreviewRow, MarkdownPreviewRowKind,
+        history_branch_text_highlights, history_selected_branch_entry_range,
         markdown_preview_alert_title_label, markdown_preview_inline_highlight,
         markdown_preview_row_background, markdown_preview_row_horizontal_padding,
         markdown_preview_row_layout, markdown_preview_row_marker, markdown_preview_row_styled_text,
@@ -1998,6 +2048,89 @@ mod tests {
             styled_text_cache: Default::default(),
             measured_width_px: Default::default(),
         }
+    }
+
+    #[test]
+    fn history_selected_branch_entry_range_matches_head_branch_entry() {
+        let text = "HEAD → main, origin/main";
+        let range = history_selected_branch_entry_range(text, "HEAD → main")
+            .expect("expected head branch entry range");
+
+        assert_eq!(&text[range], "HEAD → main");
+    }
+
+    #[test]
+    fn history_branch_text_highlights_use_theme_emphasis_text_color() {
+        let text: SharedString = "HEAD → main, origin/main".into();
+        let selected: SharedString = "origin/main".into();
+        let theme = AppTheme::from_json_str(
+            r##"{
+                "name": "Fixture",
+                "themes": [
+                    {
+                        "key": "fixture",
+                        "name": "Fixture",
+                        "appearance": "dark",
+                        "colors": {
+                            "window_bg": "#0d1016ff",
+                            "surface_bg": "#1f2127ff",
+                            "surface_bg_elevated": "#1f2127ff",
+                            "active_section": "#2d2f34ff",
+                            "border": "#2d2f34ff",
+                            "text": "#bfbdb6ff",
+                            "text_muted": "#8a8986ff",
+                            "accent": "#5ac1feff",
+                            "hover": "#2d2f34ff",
+                            "active": { "hex": "#2d2f34ff", "alpha": 0.78 },
+                            "focus_ring": { "hex": "#5ac1feff", "alpha": 0.60 },
+                            "focus_ring_bg": { "hex": "#5ac1feff", "alpha": 0.16 },
+                            "scrollbar_thumb": { "hex": "#8a8986ff", "alpha": 0.30 },
+                            "scrollbar_thumb_hover": { "hex": "#8a8986ff", "alpha": 0.42 },
+                            "scrollbar_thumb_active": { "hex": "#8a8986ff", "alpha": 0.52 },
+                            "danger": "#ef7177ff",
+                            "warning": "#feb454ff",
+                            "success": "#aad84cff",
+                            "emphasis_text": "#123456ff"
+                        },
+                        "radii": {
+                            "panel": 2.0,
+                            "pill": 2.0,
+                            "row": 2.0
+                        }
+                    }
+                ]
+            }"##,
+        )
+        .expect("theme JSON should parse");
+        let highlights = history_branch_text_highlights(&text, Some(&selected), theme);
+
+        assert_eq!(highlights.len(), 1);
+        let (range, style) = &highlights[0];
+        assert_eq!(&text.as_ref()[range.clone()], "origin/main");
+        assert_eq!(style.color, Some(gpui::rgba(0x123456ff).into()));
+    }
+
+    #[test]
+    fn history_branch_text_highlights_uses_black_text_on_light_theme() {
+        let text: SharedString = "HEAD → main, origin/main".into();
+        let selected: SharedString = "HEAD → main".into();
+        let highlights =
+            history_branch_text_highlights(&text, Some(&selected), AppTheme::gitcomet_light());
+
+        assert_eq!(highlights.len(), 1);
+        let (range, style) = &highlights[0];
+        assert_eq!(&text.as_ref()[range.clone()], "HEAD → main");
+        assert_eq!(style.color, Some(gpui::rgba(0x000000ff).into()));
+    }
+
+    #[test]
+    fn history_branch_text_highlights_is_empty_when_selected_entry_is_missing() {
+        let text: SharedString = "HEAD → main, origin/main".into();
+        let selected: SharedString = "origin/feature".into();
+        let highlights =
+            history_branch_text_highlights(&text, Some(&selected), AppTheme::gitcomet_dark());
+
+        assert!(highlights.is_empty());
     }
 
     #[test]

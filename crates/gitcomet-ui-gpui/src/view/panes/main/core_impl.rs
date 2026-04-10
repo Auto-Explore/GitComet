@@ -1,6 +1,8 @@
 use super::helpers::*;
 use super::*;
 use crate::kit::text_model::TextModelSnapshot;
+use crate::view::branch_sidebar::BranchSection;
+use gitcomet_core::domain::LogScope;
 use gitcomet_core::mergetool_trace::{
     self, MergetoolTraceEvent, MergetoolTraceSideStats, MergetoolTraceStage,
 };
@@ -661,6 +663,44 @@ impl MainPaneView {
                 cx.quit();
             }
         }
+    }
+
+    pub(in crate::view) fn reveal_history_commit(
+        &mut self,
+        repo_id: RepoId,
+        commit_id: CommitId,
+        desired_scope: LogScope,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if matches!(
+            clear_diff_selection_action(self.view_mode),
+            ClearDiffSelectionAction::ExitFocusedMergetool
+        ) {
+            self.clear_diff_selection_or_exit(repo_id, cx);
+            return;
+        }
+
+        self.clear_diff_selection_or_exit(repo_id, cx);
+        self.history_view.update(cx, |view, cx| {
+            view.request_reveal_commit(repo_id, commit_id, desired_scope, cx);
+        });
+        cx.notify();
+    }
+
+    pub(in crate::view) fn reveal_history_branch_commit(
+        &mut self,
+        repo_id: RepoId,
+        section: BranchSection,
+        branch_name: &str,
+        commit_id: CommitId,
+        desired_scope: LogScope,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let branch_name = branch_name.to_string();
+        self.history_view.update(cx, |view, cx| {
+            view.set_selected_branch(repo_id, section, &branch_name, cx);
+        });
+        self.reveal_history_commit(repo_id, commit_id, desired_scope, cx);
     }
 
     pub(super) fn set_focused_mergetool_exit_code(&self, code: i32) {

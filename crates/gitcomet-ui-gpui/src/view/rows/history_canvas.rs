@@ -75,6 +75,55 @@ fn shape_truncated_line_cached(
     shaped
 }
 
+fn shape_truncated_line_with_highlights(
+    window: &mut Window,
+    base_style: &gpui::TextStyle,
+    font_size: Pixels,
+    text: &SharedString,
+    max_width: Pixels,
+    color: gpui::Rgba,
+    highlights: &[(Range<usize>, gpui::HighlightStyle)],
+    font_family: Option<&'static str>,
+) -> gpui::ShapedLine {
+    let mut style = base_style.clone();
+    style.color = color.into();
+    if let Some(family) = font_family {
+        style.font_family = family.into();
+    }
+
+    let mut runs = compute_highlight_runs(text.as_ref(), &style, highlights);
+    let mut wrapper = window.text_system().line_wrapper(style.font(), font_size);
+    let truncated = wrapper.truncate_line(text.clone(), max_width.max(px(0.0)), "…", &mut runs);
+    window
+        .text_system()
+        .shape_line(truncated, font_size, &runs, None)
+}
+
+fn compute_highlight_runs(
+    text: &str,
+    default_style: &gpui::TextStyle,
+    highlights: &[(Range<usize>, gpui::HighlightStyle)],
+) -> Vec<TextRun> {
+    let mut runs = Vec::with_capacity(highlights.len() * 2 + 1);
+    let mut ix = 0usize;
+    for (range, highlight) in highlights {
+        if ix < range.start {
+            runs.push(default_style.clone().to_run(range.start - ix));
+        }
+        runs.push(
+            default_style
+                .clone()
+                .highlight(*highlight)
+                .to_run(range.len()),
+        );
+        ix = range.end;
+    }
+    if ix < text.len() {
+        runs.push(default_style.clone().to_run(text.len() - ix));
+    }
+    runs
+}
+
 fn layout_chip_bounds(
     branch_bounds: Bounds<Pixels>,
     row_bounds: Bounds<Pixels>,
@@ -125,6 +174,7 @@ pub(super) fn history_commit_row_canvas(
     graph_row_ix: usize,
     tag_names: Arc<[SharedString]>,
     branches_text: SharedString,
+    branch_highlights: Arc<[(Range<usize>, gpui::HighlightStyle)]>,
     author: SharedString,
     summary: SharedString,
     when: SharedString,
@@ -344,15 +394,28 @@ pub(super) fn history_commit_row_canvas(
                             && x < branch_content_bounds.right()
                         {
                             let remaining = (branch_content_bounds.right() - x).max(px(0.0));
-                            let shaped = shape_truncated_line_cached(
-                                window,
-                                &base_style,
-                                xs_font,
-                                &branches_text,
-                                remaining,
-                                theme.colors.text_muted,
-                                None,
-                            );
+                            let shaped = if branch_highlights.is_empty() {
+                                shape_truncated_line_cached(
+                                    window,
+                                    &base_style,
+                                    xs_font,
+                                    &branches_text,
+                                    remaining,
+                                    theme.colors.text_muted,
+                                    None,
+                                )
+                            } else {
+                                shape_truncated_line_with_highlights(
+                                    window,
+                                    &base_style,
+                                    xs_font,
+                                    &branches_text,
+                                    remaining,
+                                    theme.colors.text_muted,
+                                    branch_highlights.as_ref(),
+                                    None,
+                                )
+                            };
                             let _ = shaped.paint(
                                 point(x, center_y(xs_line_height)),
                                 xs_line_height,
