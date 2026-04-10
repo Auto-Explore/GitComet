@@ -253,11 +253,17 @@ fn retry_msg_for_repo_command(repo_id: RepoId, command: RepoCommandKind) -> Opti
         RepoCommandKind::AddSubmodule {
             url,
             path,
+            branch,
+            name,
+            force,
             approved_sources,
         } => Msg::AddSubmoduleTrusted {
             repo_id,
             url,
             path,
+            branch,
+            name,
+            force,
             approved_sources,
         },
         RepoCommandKind::UpdateSubmodules { approved_sources } => Msg::UpdateSubmodulesTrusted {
@@ -664,18 +670,43 @@ pub(super) fn reduce(
             };
             actions_emit_effects::force_remove_worktree(repo_id, normalized_path)
         }
-        Msg::AddSubmodule { repo_id, url, path } => {
+        Msg::AddSubmodule {
+            repo_id,
+            url,
+            path,
+            branch,
+            name,
+            force,
+        } => {
             state.submodule_trust_prompt = None;
-            vec![Effect::CheckSubmoduleAddTrust { repo_id, url, path }]
+            vec![Effect::CheckSubmoduleAddTrust {
+                repo_id,
+                url,
+                path,
+                branch,
+                name,
+                force,
+            }]
         }
         Msg::AddSubmoduleTrusted {
             repo_id,
             url,
             path,
+            branch,
+            name,
+            force,
             approved_sources,
         } => {
             begin_local_action(state, repo_id);
-            actions_emit_effects::add_submodule(repo_id, url, path, approved_sources)
+            actions_emit_effects::add_submodule(
+                repo_id,
+                url,
+                path,
+                branch,
+                name,
+                force,
+                approved_sources,
+            )
         }
         Msg::UpdateSubmodules { repo_id } => {
             state.submodule_trust_prompt = None;
@@ -693,9 +724,23 @@ pub(super) fn reduce(
                 return Vec::new();
             };
             match prompt.operation {
-                SubmoduleTrustPromptOperation::Add { url, path } => {
+                SubmoduleTrustPromptOperation::Add {
+                    url,
+                    path,
+                    branch,
+                    name,
+                    force,
+                } => {
                     begin_local_action(state, prompt.repo_id);
-                    actions_emit_effects::add_submodule(prompt.repo_id, url, path, prompt.sources)
+                    actions_emit_effects::add_submodule(
+                        prompt.repo_id,
+                        url,
+                        path,
+                        branch,
+                        name,
+                        force,
+                        prompt.sources,
+                    )
                 }
                 SubmoduleTrustPromptOperation::Update => {
                     begin_local_action(state, prompt.repo_id);
@@ -1052,16 +1097,33 @@ pub(super) fn reduce(
             repo_id,
             url,
             path,
+            branch,
+            name,
+            force,
             result,
         }) => match result {
             Ok(gitcomet_core::services::SubmoduleTrustDecision::Proceed) => {
                 begin_local_action(state, repo_id);
-                actions_emit_effects::add_submodule(repo_id, url, path, Vec::new())
+                actions_emit_effects::add_submodule(
+                    repo_id,
+                    url,
+                    path,
+                    branch,
+                    name,
+                    force,
+                    Vec::new(),
+                )
             }
             Ok(gitcomet_core::services::SubmoduleTrustDecision::Prompt { sources }) => {
                 state.submodule_trust_prompt = Some(SubmoduleTrustPromptState {
                     repo_id,
-                    operation: SubmoduleTrustPromptOperation::Add { url, path },
+                    operation: SubmoduleTrustPromptOperation::Add {
+                        url,
+                        path,
+                        branch,
+                        name,
+                        force,
+                    },
                     sources,
                 });
                 Vec::new()

@@ -247,11 +247,17 @@ pub enum Msg {
         repo_id: RepoId,
         url: String,
         path: PathBuf,
+        branch: Option<String>,
+        name: Option<String>,
+        force: bool,
     },
     AddSubmoduleTrusted {
         repo_id: RepoId,
         url: String,
         path: PathBuf,
+        branch: Option<String>,
+        name: Option<String>,
+        force: bool,
         approved_sources: Vec<SubmoduleTrustTarget>,
     },
     UpdateSubmodules {
@@ -594,6 +600,9 @@ pub enum InternalMsg {
         repo_id: RepoId,
         url: String,
         path: PathBuf,
+        branch: Option<String>,
+        name: Option<String>,
+        force: bool,
         result: Result<SubmoduleTrustDecision, Error>,
     },
     SubmoduleUpdateTrustChecked {

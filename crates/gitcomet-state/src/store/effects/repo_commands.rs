@@ -233,11 +233,16 @@ pub(super) fn schedule_add_submodule(
     repo_id: RepoId,
     url: String,
     path: PathBuf,
+    branch: Option<String>,
+    name: Option<String>,
+    force: bool,
     approved_sources: Vec<SubmoduleTrustTarget>,
     auth: Option<StagedGitAuth>,
 ) {
     let command_url = url.clone();
     let command_path = path.clone();
+    let command_branch = branch.clone();
+    let command_name = name.clone();
     let command_sources = approved_sources.clone();
     schedule_repo_command(
         executor,
@@ -247,11 +252,21 @@ pub(super) fn schedule_add_submodule(
         RepoCommandKind::AddSubmodule {
             url: command_url,
             path: command_path,
+            branch: command_branch,
+            name: command_name,
+            force,
             approved_sources: command_sources,
         },
         move |repo| {
             run_with_git_auth(auth, || {
-                repo.add_submodule_with_output(&url, &path, &approved_sources)
+                repo.add_submodule_with_output(
+                    &url,
+                    &path,
+                    branch.as_deref(),
+                    name.as_deref(),
+                    force,
+                    &approved_sources,
+                )
             })
         },
     );
@@ -275,7 +290,9 @@ pub(super) fn schedule_update_submodules(
             approved_sources: command_sources,
         },
         move |repo| {
-            run_with_git_auth(auth, || repo.update_submodules_with_output(&approved_sources))
+            run_with_git_auth(auth, || {
+                repo.update_submodules_with_output(&approved_sources)
+            })
         },
     );
 }
@@ -287,6 +304,9 @@ pub(super) fn schedule_check_submodule_add_trust(
     repo_id: RepoId,
     url: String,
     path: PathBuf,
+    branch: Option<String>,
+    name: Option<String>,
+    force: bool,
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
         let result = repo.check_submodule_add_trust(&url, &path);
@@ -296,6 +316,9 @@ pub(super) fn schedule_check_submodule_add_trust(
                 repo_id,
                 url,
                 path,
+                branch,
+                name,
+                force,
                 result,
             }),
         );

@@ -652,6 +652,9 @@ fn submodule_commands_reload_submodules_on_success() {
             command: RepoCommandKind::AddSubmodule {
                 url: "https://example.com/sub.git".to_string(),
                 path: PathBuf::from("submodule"),
+                branch: None,
+                name: None,
+                force: false,
                 approved_sources: Vec::new(),
             },
             result: Ok(CommandOutput::empty_success("git submodule add")),
@@ -2217,6 +2220,9 @@ fn repo_command_finished_error_summaries_cover_additional_labels() {
             RepoCommandKind::AddSubmodule {
                 url: "https://example.com/sub.git".to_string(),
                 path: PathBuf::from("mods/sub"),
+                branch: None,
+                name: None,
+                force: false,
                 approved_sources: Vec::new(),
             },
             "Submodule",
@@ -2336,6 +2342,9 @@ fn repo_command_finished_success_summaries_cover_additional_commands() {
             RepoCommandKind::AddSubmodule {
                 url: "https://example.com/sub.git".to_string(),
                 path: PathBuf::from("mods/sub"),
+                branch: None,
+                name: None,
+                force: false,
                 approved_sources: Vec::new(),
             },
             "Submodule added → mods/sub",
@@ -2496,6 +2505,9 @@ fn checkout_branch_and_submodule_messages_emit_effects() {
             repo_id: RepoId(1),
             url: "https://example.com/sub.git".to_string(),
             path: PathBuf::from("mods/sub"),
+            branch: Some("feature".to_string()),
+            name: None,
+            force: false,
         },
     );
     assert!(matches!(
@@ -2504,7 +2516,11 @@ fn checkout_branch_and_submodule_messages_emit_effects() {
             repo_id: RepoId(1),
             url,
             path,
-        }] if url == "https://example.com/sub.git" && path == &PathBuf::from("mods/sub")
+            branch,
+            ..
+        }] if url == "https://example.com/sub.git"
+            && path == &PathBuf::from("mods/sub")
+            && branch.as_deref() == Some("feature")
     ));
 
     let update_submodules = reduce(
@@ -2563,6 +2579,9 @@ fn local_submodule_add_trust_prompt_confirms_into_add_effect() {
             repo_id,
             url: "../local-sub".to_string(),
             path: PathBuf::from("mods/sub"),
+            branch: Some("feature".to_string()),
+            name: None,
+            force: false,
             result: Ok(gitcomet_core::services::SubmoduleTrustDecision::Prompt {
                 sources: vec![source.clone()],
             }),
@@ -2576,6 +2595,9 @@ fn local_submodule_add_trust_prompt_confirms_into_add_effect() {
             operation: crate::model::SubmoduleTrustPromptOperation::Add {
                 url: "../local-sub".to_string(),
                 path: PathBuf::from("mods/sub"),
+                branch: Some("feature".to_string()),
+                name: None,
+                force: false,
             },
             sources: vec![source.clone()],
         })
@@ -2594,10 +2616,12 @@ fn local_submodule_add_trust_prompt_confirms_into_add_effect() {
             repo_id: RepoId(1),
             url,
             path,
+            branch,
             approved_sources,
             ..
         }] if url == "../local-sub"
             && path == &PathBuf::from("mods/sub")
+            && branch.as_deref() == Some("feature")
             && approved_sources == &vec![source]
     ));
 }

@@ -511,11 +511,7 @@ impl GitRepository for GixRepo {
         self.list_submodules_impl()
     }
 
-    fn check_submodule_add_trust(
-        &self,
-        url: &str,
-        path: &Path,
-    ) -> Result<SubmoduleTrustDecision> {
+    fn check_submodule_add_trust(&self, url: &str, path: &Path) -> Result<SubmoduleTrustDecision> {
         self.check_submodule_add_trust_impl(url, path)
     }
 
@@ -527,9 +523,12 @@ impl GitRepository for GixRepo {
         &self,
         url: &str,
         path: &Path,
+        branch: Option<&str>,
+        name: Option<&str>,
+        force: bool,
         approved_sources: &[SubmoduleTrustTarget],
     ) -> Result<CommandOutput> {
-        self.add_submodule_with_output_impl(url, path, approved_sources)
+        self.add_submodule_with_output_impl(url, path, branch, name, force, approved_sources)
     }
 
     fn update_submodules_with_output(

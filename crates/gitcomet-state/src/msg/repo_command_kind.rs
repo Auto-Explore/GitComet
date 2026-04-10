@@ -113,6 +113,9 @@ pub enum RepoCommandKind {
     AddSubmodule {
         url: String,
         path: PathBuf,
+        branch: Option<String>,
+        name: Option<String>,
+        force: bool,
         approved_sources: Vec<SubmoduleTrustTarget>,
     },
     UpdateSubmodules {

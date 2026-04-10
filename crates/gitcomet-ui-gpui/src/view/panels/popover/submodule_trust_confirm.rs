@@ -23,9 +23,20 @@ pub(super) fn panel(
         SubmoduleTrustPromptOperation::Add { .. } => {
             ("Trust local submodule?", "Trust and add", "Back")
         }
-        SubmoduleTrustPromptOperation::Update => {
-            ("Trust local submodule sources?", "Trust and update", "Cancel")
-        }
+        SubmoduleTrustPromptOperation::Update => (
+            "Trust local submodule sources?",
+            "Trust and update",
+            "Cancel",
+        ),
+    };
+    let (add_branch, add_name, add_force) = match &prompt.operation {
+        SubmoduleTrustPromptOperation::Add {
+            branch,
+            name,
+            force,
+            ..
+        } => (branch.clone(), name.clone(), *force),
+        SubmoduleTrustPromptOperation::Update => (None, None, false),
     };
     let sources = prompt.sources.clone();
     let operation = prompt.operation.clone();
@@ -102,6 +113,42 @@ pub(super) fn panel(
                         )),
                 )
         }))
+        .when(add_branch.is_some() || add_name.is_some() || add_force, |panel| {
+            panel.child(
+                div()
+                    .px_2()
+                    .pb_1()
+                    .flex()
+                    .flex_col()
+                    .gap_0p5()
+                    .when_some(add_branch.clone(), |details, branch| {
+                        details.child(
+                            div()
+                                .text_xs()
+                                .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
+                                .text_color(theme.colors.text_muted)
+                                .child(format!("Branch: {branch}")),
+                        )
+                    })
+                    .when_some(add_name.clone(), |details, name| {
+                        details.child(
+                            div()
+                                .text_xs()
+                                .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
+                                .text_color(theme.colors.text_muted)
+                                .child(format!("Logical name: {name}")),
+                        )
+                    })
+                    .when(add_force, |details| {
+                        details.child(
+                            div()
+                                .text_xs()
+                                .text_color(theme.colors.text_muted)
+                                .child("Force: enabled"),
+                        )
+                    }),
+            )
+        })
         .child(div().border_t_1().border_color(theme.colors.border))
         .child(
             div()
@@ -115,12 +162,22 @@ pub(super) fn panel(
                         .style(components::ButtonStyle::Outlined)
                         .on_click(theme, cx, move |this, _e, window, cx| {
                             this.store.dispatch(Msg::CancelSubmoduleTrustPrompt);
-                            match &operation {
-                                SubmoduleTrustPromptOperation::Add { url, path } => {
+                            match operation.clone() {
+                                SubmoduleTrustPromptOperation::Add {
+                                    url,
+                                    path,
+                                    branch,
+                                    name,
+                                    force,
+                                } => {
                                     let theme = this.theme;
+                                    let restored_branch = branch.unwrap_or_default();
+                                    let restored_branch_for_input = restored_branch.clone();
+                                    let restored_name = name.unwrap_or_default();
+                                    let restored_name_for_input = restored_name.clone();
                                     this.submodule_url_input.update(cx, |input, cx| {
                                         input.set_theme(theme, cx);
-                                        input.set_text(url, cx);
+                                        input.set_text(&url, cx);
                                         cx.notify();
                                     });
                                     this.submodule_path_input.update(cx, |input, cx| {
@@ -128,6 +185,19 @@ pub(super) fn panel(
                                         input.set_text(&path.display().to_string(), cx);
                                         cx.notify();
                                     });
+                                    this.submodule_branch_input.update(cx, move |input, cx| {
+                                        input.set_theme(theme, cx);
+                                        input.set_text(&restored_branch_for_input, cx);
+                                        cx.notify();
+                                    });
+                                    this.submodule_name_input.update(cx, move |input, cx| {
+                                        input.set_theme(theme, cx);
+                                        input.set_text(&restored_name_for_input, cx);
+                                        cx.notify();
+                                    });
+                                    this.submodule_add_advanced_expanded =
+                                        !restored_name.is_empty() || force;
+                                    this.submodule_force_enabled = force;
                                     this.popover = Some(PopoverKind::submodule(
                                         repo_id,
                                         SubmodulePopoverKind::AddPrompt,

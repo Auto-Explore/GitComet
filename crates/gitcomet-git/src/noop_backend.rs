@@ -292,7 +292,14 @@ mod tests {
         assert_unsupported(repo.list_submodules());
         assert_unsupported(repo.check_submodule_add_trust("https://example.com/repo.git", path));
         assert_unsupported(repo.check_submodule_update_trust());
-        assert_unsupported(repo.add_submodule_with_output("https://example.com/repo.git", path, &[]));
+        assert_unsupported(repo.add_submodule_with_output(
+            "https://example.com/repo.git",
+            path,
+            None,
+            None,
+            false,
+            &[],
+        ));
         assert_unsupported(repo.update_submodules_with_output(&[]));
         assert_unsupported(repo.remove_submodule_with_output(path));
     }

@@ -35,11 +35,8 @@ impl GixRepo {
         path: &Path,
     ) -> Result<SubmoduleTrustDecision> {
         let repo = self.reopen_repo()?;
-        let Some(target) = trust_target_from_raw_source(
-            repo_workdir_for_submodule_trust(&repo),
-            path,
-            url,
-        )?
+        let Some(target) =
+            trust_target_from_raw_source(repo_workdir_for_submodule_trust(&repo), path, url)?
         else {
             return Ok(SubmoduleTrustDecision::Proceed);
         };
@@ -71,6 +68,9 @@ impl GixRepo {
         &self,
         url: &str,
         path: &Path,
+        branch: Option<&str>,
+        name: Option<&str>,
+        force: bool,
         approved_sources: &[SubmoduleTrustTarget],
     ) -> Result<CommandOutput> {
         let repo = self.reopen_repo()?;
@@ -85,8 +85,23 @@ impl GixRepo {
             allow_file_submodule_transport(&mut cmd);
         }
 
-        cmd.arg("submodule").arg("add").arg(url).arg(path);
-        run_git_with_output(cmd, &format!("git submodule add {url} {}", path.display()))
+        cmd.arg("submodule").arg("add");
+        let mut command = "git submodule add".to_string();
+        if let Some(branch) = branch {
+            cmd.arg("--branch").arg(branch);
+            command.push_str(&format!(" --branch {branch}"));
+        }
+        if force {
+            cmd.arg("--force");
+            command.push_str(" --force");
+        }
+        if let Some(name) = name {
+            cmd.arg("--name").arg(name);
+            command.push_str(&format!(" --name {name}"));
+        }
+        cmd.arg(url).arg(path);
+        command.push_str(&format!(" {url} {}", path.display()));
+        run_git_with_output(cmd, &command)
     }
 
     pub(super) fn update_submodules_with_output_impl(
@@ -236,7 +251,8 @@ fn collect_repo_untrusted_submodule_sources(
             .and_then(|path| pathbuf_from_gix_path(path.as_ref()))?;
         let full_path = prefix.join(&relative_path);
 
-        if let Some(target) = trust_target_from_submodule(current_workdir, &full_path, &submodule)? {
+        if let Some(target) = trust_target_from_submodule(current_workdir, &full_path, &submodule)?
+        {
             if !submodule_source_trusted(trust_root, &target)? {
                 out.insert(full_path.clone(), target);
             }
@@ -272,8 +288,7 @@ fn update_repo_submodules_recursive(
             .and_then(|path| pathbuf_from_gix_path(path.as_ref()))?;
         let full_path = prefix.join(&relative_path);
 
-        let local_target =
-            trust_target_from_submodule(current_workdir, &full_path, &submodule)?;
+        let local_target = trust_target_from_submodule(current_workdir, &full_path, &submodule)?;
 
         let mut cmd = git_workdir_cmd_for(current_workdir);
         if let Some(target) = local_target.as_ref() {
@@ -402,7 +417,9 @@ fn open_gitlink_repo(
     }
 }
 
-fn open_configured_submodule_repo(submodule: &gix::Submodule<'_>) -> Result<Option<gix::Repository>> {
+fn open_configured_submodule_repo(
+    submodule: &gix::Submodule<'_>,
+) -> Result<Option<gix::Repository>> {
     let state = submodule
         .state()
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix submodule state: {e}"))))?;
@@ -458,8 +475,10 @@ fn trust_target_from_parsed_url(
         return Ok(None);
     }
 
-    let local_source_path =
-        canonicalize_or_original(resolve_local_file_transport_path(current_repo_workdir, url)?);
+    let local_source_path = canonicalize_or_original(resolve_local_file_transport_path(
+        current_repo_workdir,
+        url,
+    )?);
     Ok(Some(SubmoduleTrustTarget {
         submodule_path: submodule_path.to_path_buf(),
         display_source,
@@ -467,7 +486,10 @@ fn trust_target_from_parsed_url(
     }))
 }
 
-fn resolve_local_file_transport_path(current_repo_workdir: &Path, url: &gix::Url) -> Result<PathBuf> {
+fn resolve_local_file_transport_path(
+    current_repo_workdir: &Path,
+    url: &gix::Url,
+) -> Result<PathBuf> {
     let mut path = pathbuf_from_gix_path(url.path.as_ref())?;
     if let Some(host) = url.host.as_deref() {
         if !host.eq_ignore_ascii_case("localhost") {
@@ -498,10 +520,7 @@ fn persist_submodule_trust_approvals(
     Ok(())
 }
 
-fn submodule_source_trusted(
-    trust_root: &Path,
-    source: &SubmoduleTrustTarget,
-) -> Result<bool> {
+fn submodule_source_trusted(trust_root: &Path, source: &SubmoduleTrustTarget) -> Result<bool> {
     let key = submodule_file_transport_consent_key(trust_root, &source.local_source_path);
     Ok(git_config_get_bool_global(trust_root, &key)?.unwrap_or(false))
 }
@@ -544,7 +563,10 @@ fn submodule_file_transport_consent_key(trust_root: &Path, source_path: &Path) -
     let mut bytes = stable_path_bytes(&root);
     bytes.push(0);
     bytes.extend_from_slice(&stable_path_bytes(&source));
-    format!("gitcomet.submodule.allowfiletransport-{:016x}", fnv1a_64(&bytes))
+    format!(
+        "gitcomet.submodule.allowfiletransport-{:016x}",
+        fnv1a_64(&bytes)
+    )
 }
 
 fn git_config_get_bool_global(trust_root: &Path, key: &str) -> Result<Option<bool>> {

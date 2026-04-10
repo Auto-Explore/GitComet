@@ -539,7 +539,11 @@ pub trait GitRepository: Send + Sync {
         )))
     }
 
-    fn check_submodule_add_trust(&self, _url: &str, _path: &Path) -> Result<SubmoduleTrustDecision> {
+    fn check_submodule_add_trust(
+        &self,
+        _url: &str,
+        _path: &Path,
+    ) -> Result<SubmoduleTrustDecision> {
         Err(Error::new(ErrorKind::Unsupported(
             "submodule trust checks are not implemented for this backend",
         )))
@@ -555,6 +559,9 @@ pub trait GitRepository: Send + Sync {
         &self,
         _url: &str,
         _path: &Path,
+        _branch: Option<&str>,
+        _name: Option<&str>,
+        _force: bool,
         _approved_sources: &[SubmoduleTrustTarget],
     ) -> Result<CommandOutput> {
         Err(Error::new(ErrorKind::Unsupported(

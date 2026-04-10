@@ -278,7 +278,13 @@ pub struct AuthPromptState {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SubmoduleTrustPromptOperation {
-    Add { url: String, path: PathBuf },
+    Add {
+        url: String,
+        path: PathBuf,
+        branch: Option<String>,
+        name: Option<String>,
+        force: bool,
+    },
     Update,
 }
 

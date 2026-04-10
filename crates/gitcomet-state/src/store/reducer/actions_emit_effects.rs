@@ -121,12 +121,18 @@ pub(super) fn add_submodule(
     repo_id: RepoId,
     url: String,
     path: PathBuf,
+    branch: Option<String>,
+    name: Option<String>,
+    force: bool,
     approved_sources: Vec<gitcomet_core::services::SubmoduleTrustTarget>,
 ) -> Vec<Effect> {
     vec![Effect::AddSubmodule {
         repo_id,
         url,
         path,
+        branch,
+        name,
+        force,
         approved_sources,
         auth: None,
     }]

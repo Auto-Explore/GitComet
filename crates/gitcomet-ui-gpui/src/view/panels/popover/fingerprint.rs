@@ -60,10 +60,19 @@ pub(super) fn notify_fingerprint(state: &AppState, popover: &PopoverKind) -> u64
             if let Some(prompt) = state.submodule_trust_prompt.as_ref() {
                 prompt.repo_id.hash(&mut hasher);
                 match &prompt.operation {
-                    SubmoduleTrustPromptOperation::Add { url, path } => {
+                    SubmoduleTrustPromptOperation::Add {
+                        url,
+                        path,
+                        branch,
+                        name,
+                        force,
+                    } => {
                         0u8.hash(&mut hasher);
                         url.hash(&mut hasher);
                         path.hash(&mut hasher);
+                        branch.hash(&mut hasher);
+                        name.hash(&mut hasher);
+                        force.hash(&mut hasher);
                     }
                     SubmoduleTrustPromptOperation::Update => {
                         1u8.hash(&mut hasher);
