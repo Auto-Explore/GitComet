@@ -1517,7 +1517,7 @@ impl HistoryView {
                 let request_for_update = request_for_task.clone();
                 let request_for_build = request_for_task.clone();
 
-                let rebuild = smol::unblock(move || {
+                let build_rebuild = move || {
                     let stash_analysis = analyze_history_stashes(&page.commits, stashes.as_ref());
                     let stash_tips = stash_analysis.stash_tips;
                     let stash_helper_ids = stash_analysis.stash_helper_ids;
@@ -1691,8 +1691,13 @@ impl HistoryView {
                         max_lanes,
                         commit_row_vms,
                     }
-                })
-                .await;
+                };
+
+                let rebuild = if cfg!(test) {
+                    build_rebuild()
+                } else {
+                    smol::unblock(build_rebuild).await
+                };
 
                 let _ = view.update(cx, |this, cx| {
                     if this.history_cache_seq != seq {

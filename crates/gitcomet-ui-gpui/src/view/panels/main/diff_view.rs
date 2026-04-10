@@ -36,7 +36,7 @@ impl MainPaneView {
         self.clear_conflict_diff_query_overlay_caches();
         self.diff_search_recompute_matches();
         let focus = self.diff_search_input.read(cx).focus_handle();
-        window.focus(&focus);
+        window.focus(&focus, cx);
     }
 
     pub(in crate::view) fn diff_view(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
@@ -593,7 +593,7 @@ impl MainPaneView {
                             this.clear_diff_text_query_overlay_cache();
                             this.clear_worktree_preview_segments_cache();
                             this.clear_conflict_diff_query_overlay_caches();
-                            window.focus(&this.diff_panel_focus_handle);
+                            window.focus(&this.diff_panel_focus_handle, cx);
                             cx.notify();
                         }),
                 );
@@ -655,7 +655,7 @@ impl MainPaneView {
                                     )
                                     .h_full()
                                     .min_h(px(0.0))
-                                    .track_scroll(self.worktree_preview_scroll.clone())
+                                    .track_scroll(&self.worktree_preview_scroll)
                                     .with_horizontal_sizing_behavior(
                                         gpui::ListHorizontalSizingBehavior::Unconstrained,
                                     );
@@ -737,7 +737,7 @@ impl MainPaneView {
                             )
                             .h_full()
                             .min_h(px(0.0))
-                            .track_scroll(self.worktree_preview_scroll.clone())
+                            .track_scroll(&self.worktree_preview_scroll)
                             .with_horizontal_sizing_behavior(
                                 gpui::ListHorizontalSizingBehavior::Unconstrained,
                             );
@@ -1599,7 +1599,7 @@ impl MainPaneView {
                                         .with_horizontal_sizing_behavior(
                                             gpui::ListHorizontalSizingBehavior::Unconstrained,
                                         )
-                                        .track_scroll(self.conflict_resolver_diff_scroll.clone());
+                                        .track_scroll(&self.conflict_resolver_diff_scroll);
 
                                         let ours_list = uniform_list(
                                             "conflict_three_way_ours_list",
@@ -1617,7 +1617,7 @@ impl MainPaneView {
                                         .with_horizontal_sizing_behavior(
                                             gpui::ListHorizontalSizingBehavior::Unconstrained,
                                         )
-                                        .track_scroll(self.conflict_preview_ours_scroll.clone());
+                                        .track_scroll(&self.conflict_preview_ours_scroll);
 
                                         let theirs_list = uniform_list(
                                             "conflict_three_way_theirs_list",
@@ -1635,7 +1635,7 @@ impl MainPaneView {
                                         .with_horizontal_sizing_behavior(
                                             gpui::ListHorizontalSizingBehavior::Unconstrained,
                                         )
-                                        .track_scroll(self.conflict_preview_theirs_scroll.clone());
+                                        .track_scroll(&self.conflict_preview_theirs_scroll);
 
                                         let shared_scrollbar_gutter =
                                             if vertical_sync_enabled {
@@ -1825,7 +1825,7 @@ impl MainPaneView {
                                         .with_horizontal_sizing_behavior(
                                             gpui::ListHorizontalSizingBehavior::Unconstrained,
                                         )
-                                        .track_scroll(self.conflict_resolver_diff_scroll.clone());
+                                        .track_scroll(&self.conflict_resolver_diff_scroll);
 
                                         let right_list = uniform_list(
                                             "conflict_diff_right_list",
@@ -1843,7 +1843,7 @@ impl MainPaneView {
                                         .with_horizontal_sizing_behavior(
                                             gpui::ListHorizontalSizingBehavior::Unconstrained,
                                         )
-                                        .track_scroll(self.conflict_preview_theirs_scroll.clone());
+                                        .track_scroll(&self.conflict_preview_theirs_scroll);
 
                                         let shared_scrollbar_gutter =
                                             if vertical_sync_enabled {
@@ -2129,8 +2129,7 @@ impl MainPaneView {
                                                     .h_full()
                                                     .min_h(px(0.0))
                                                     .track_scroll(
-                                                        self.conflict_resolved_preview_gutter_scroll
-                                                            .clone(),
+                                                        &self.conflict_resolved_preview_gutter_scroll,
                                                     );
 
                                                     div()
@@ -2217,9 +2216,7 @@ impl MainPaneView {
                                                                                     ))
                                                                                     .h_full()
                                                                                     .min_h(px(0.0))
-                                                                                    .track_scroll(
-                                                                                        self.conflict_resolved_preview_scroll.clone(),
-                                                                                    )
+                                                                                    .track_scroll(&self.conflict_resolved_preview_scroll)
                                                                                     .with_horizontal_sizing_behavior(
                                                                                         gpui::ListHorizontalSizingBehavior::Unconstrained,
                                                                                     )
@@ -2317,7 +2314,7 @@ impl MainPaneView {
                                 )
                                 .h_full()
                                 .min_h(px(0.0))
-                                .track_scroll(self.diff_scroll.clone())
+                                .track_scroll(&self.diff_scroll)
                                 .with_horizontal_sizing_behavior(
                                     gpui::ListHorizontalSizingBehavior::Unconstrained,
                                 );
@@ -2464,7 +2461,7 @@ impl MainPaneView {
                                             )
                                             .h_full()
                                             .min_h(px(0.0))
-                                            .track_scroll(self.diff_scroll.clone())
+                                            .track_scroll(&self.diff_scroll)
                                             .with_horizontal_sizing_behavior(
                                                 gpui::ListHorizontalSizingBehavior::Unconstrained,
                                             );
@@ -2522,7 +2519,7 @@ impl MainPaneView {
                                             )
                                             .h_full()
                                             .min_h(px(0.0))
-                                            .track_scroll(self.diff_scroll.clone())
+                                            .track_scroll(&self.diff_scroll)
                                             .with_horizontal_sizing_behavior(
                                                 gpui::ListHorizontalSizingBehavior::Unconstrained,
                                             );
@@ -2533,7 +2530,7 @@ impl MainPaneView {
                                             )
                                             .h_full()
                                             .min_h(px(0.0))
-                                            .track_scroll(self.diff_split_right_scroll.clone())
+                                            .track_scroll(&self.diff_split_right_scroll)
                                             .with_horizontal_sizing_behavior(
                                                 gpui::ListHorizontalSizingBehavior::Unconstrained,
                                             );
@@ -2866,8 +2863,8 @@ impl MainPaneView {
             .track_focus(&self.diff_panel_focus_handle)
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|this, _e: &MouseDownEvent, window, _cx| {
-                    window.focus(&this.diff_panel_focus_handle);
+                cx.listener(|this, _e: &MouseDownEvent, window, cx| {
+                    window.focus(&this.diff_panel_focus_handle, cx);
                 }),
             )
             .on_key_down(cx.listener(|this, e: &gpui::KeyDownEvent, window, cx| {
@@ -2885,7 +2882,7 @@ impl MainPaneView {
                         this.clear_diff_text_query_overlay_cache();
                         this.clear_worktree_preview_segments_cache();
                         this.clear_conflict_diff_query_overlay_caches();
-                        window.focus(&this.diff_panel_focus_handle);
+                        window.focus(&this.diff_panel_focus_handle, cx);
                         handled = true;
                     }
                     if !handled && let Some(repo_id) = this.active_repo_id() {
@@ -3461,7 +3458,7 @@ impl MainPaneView {
                 let list = uniform_list(list_id, $document.rows.len(), cx.processor($processor))
                     .h_full()
                     .min_h(px(0.0))
-                    .track_scroll(scroll.clone())
+                    .track_scroll(&scroll)
                     .with_horizontal_sizing_behavior(
                         gpui::ListHorizontalSizingBehavior::Unconstrained,
                     );

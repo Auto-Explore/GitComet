@@ -83,11 +83,18 @@ impl TooltipHost {
 
         let anchor = self.last_mouse_pos;
         self.tooltip_pending_pos = Some(anchor);
+
+        if cfg!(test) {
+            self.tooltip_visible_text = Some(text);
+            self.tooltip_visible_pos = Some(anchor);
+            return;
+        }
+
         let seq = self.tooltip_delay_seq;
 
         cx.spawn(
             async move |view: WeakEntity<TooltipHost>, cx: &mut gpui::AsyncApp| {
-                Timer::after(Duration::from_millis(500)).await;
+                smol::Timer::after(Duration::from_millis(500)).await;
                 let _ = view.update(cx, |this, cx| {
                     if this.tooltip_delay_seq != seq {
                         return;
@@ -147,11 +154,19 @@ impl TooltipHost {
         self.tooltip_visible_pos = None;
         self.tooltip_pending_pos = Some(self.last_mouse_pos);
         self.tooltip_delay_seq = self.tooltip_delay_seq.wrapping_add(1);
+
+        if cfg!(test) {
+            self.tooltip_visible_text = Some(candidate);
+            self.tooltip_visible_pos = self.tooltip_pending_pos;
+            cx.notify();
+            return;
+        }
+
         let seq = self.tooltip_delay_seq;
 
         cx.spawn(
             async move |view: WeakEntity<TooltipHost>, cx: &mut gpui::AsyncApp| {
-                Timer::after(Duration::from_millis(500)).await;
+                smol::Timer::after(Duration::from_millis(500)).await;
                 let _ = view.update(cx, |this, cx| {
                     if this.tooltip_delay_seq != seq {
                         return;

@@ -401,14 +401,18 @@ impl MainPaneView {
 
         cx.spawn(
             async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
-                let (base_payload, ours_payload, theirs_payload) = smol::unblock(move || {
+                let rasterize_payloads = move || {
                     (
                         rasterize_conflict_preview_svg_payload(base_bytes),
                         rasterize_conflict_preview_svg_payload(ours_bytes),
                         rasterize_conflict_preview_svg_payload(theirs_bytes),
                     )
-                })
-                .await;
+                };
+                let (base_payload, ours_payload, theirs_payload) = if cfg!(test) {
+                    rasterize_payloads()
+                } else {
+                    smol::unblock(rasterize_payloads).await
+                };
 
                 let _ = view.update(cx, |this, cx| {
                     if this.conflict_resolver.image_preview.source_hash != Some(source_hash)
@@ -810,11 +814,15 @@ impl MainPaneView {
             .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
 
         cx.spawn(async move |view, cx| {
-            let result = smol::unblock({
+            let index_preview = {
                 let source_path_for_task = source_path.clone();
                 move || index_utf8_worktree_preview_file(&source_path_for_task)
-            })
-            .await;
+            };
+            let result = if cfg!(test) {
+                index_preview()
+            } else {
+                smol::unblock(index_preview).await
+            };
             let _ = view.update(cx, |this, cx| {
                 if this.worktree_preview_path.as_ref() != Some(&display_path)
                     || this.worktree_preview_source_path.as_ref() != Some(&source_path)

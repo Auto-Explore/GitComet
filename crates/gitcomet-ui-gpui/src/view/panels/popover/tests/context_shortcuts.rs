@@ -42,6 +42,10 @@ fn context_menu_default_actions_do_not_render_enter_shortcuts(cx: &mut gpui::Tes
     ));
 
     cx.update(|_window, app| {
+        view.update(app, |this, _cx| this.disable_poller_for_tests());
+    });
+
+    cx.update(|_window, app| {
         view.update(app, |this, cx| {
             let mut repo = RepoState::new_opening(repo_id, RepoSpec { workdir });
             repo.open = Loadable::Ready(());

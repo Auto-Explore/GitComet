@@ -17,6 +17,9 @@ fn tag_menu_lists_delete_entries_for_commit_tags(cx: &mut gpui::TestAppContext) 
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|_window, app| {
+        view.update(app, |this, _cx| this.disable_poller_for_tests());
+    });
 
     let repo_id = RepoId(2);
     let commit_id = CommitId("0123456789abcdef".into());
@@ -125,6 +128,9 @@ fn tag_menu_lists_remote_push_and_delete_entries(cx: &mut gpui::TestAppContext) 
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|_window, app| {
+        view.update(app, |this, _cx| this.disable_poller_for_tests());
+    });
 
     let repo_id = RepoId(20);
     let commit_id = CommitId("fedcba9876543210".into());
@@ -643,6 +649,9 @@ fn remote_menu_lists_fetch_and_prune_actions(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|_window, app| {
+        view.update(app, |this, _cx| this.disable_poller_for_tests());
+    });
 
     let repo_id = RepoId(21);
     let remote_name = "origin".to_string();
@@ -737,6 +746,9 @@ fn local_branch_menu_has_pull_merge_and_squash_actions(cx: &mut gpui::TestAppCon
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|_window, app| {
+        view.update(app, |this, _cx| this.disable_poller_for_tests());
+    });
 
     let repo_id = RepoId(22);
     let branch_name = "feature/awesome".to_string();
@@ -889,6 +901,9 @@ fn remote_branch_menu_has_pull_merge_and_squash_actions(cx: &mut gpui::TestAppCo
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|_window, app| {
+        view.update(app, |this, _cx| this.disable_poller_for_tests());
+    });
 
     let repo_id = RepoId(23);
     let branch_name = "origin/feature/awesome".to_string();
@@ -1035,6 +1050,9 @@ fn remote_branch_menu_renders_squash_entry_without_panic(cx: &mut gpui::TestAppC
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|_window, app| {
+        view.update(app, |this, _cx| this.disable_poller_for_tests());
+    });
 
     let repo_id = RepoId(232);
     let branch_name = "origin/feature/awesome".to_string();
@@ -1100,6 +1118,9 @@ fn remote_branch_menu_only_enables_unlink_for_active_branch_upstream(
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|_window, app| {
+        view.update(app, |this, _cx| this.disable_poller_for_tests());
+    });
 
     let repo_id = RepoId(230);
     let enabled_name = "origin/feature/awesome".to_string();
@@ -1234,6 +1255,9 @@ fn remote_branch_menu_offers_set_tracking_upstream_only_without_current_upstream
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|_window, app| {
+        view.update(app, |this, _cx| this.disable_poller_for_tests());
+    });
 
     let repo_id = RepoId(231);
     let branch_name = "origin/feature/awesome".to_string();
@@ -1387,6 +1411,9 @@ fn pull_and_push_picker_headers_include_tracking_branch_name(cx: &mut gpui::Test
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|_window, app| {
+        view.update(app, |this, _cx| this.disable_poller_for_tests());
+    });
 
     let repo_id = RepoId(401);
     let workdir = std::env::temp_dir().join(format!(
@@ -1461,6 +1488,9 @@ fn local_branch_menu_excludes_pull_merge_and_squash_for_current_branch(
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|_window, app| {
+        view.update(app, |this, _cx| this.disable_poller_for_tests());
+    });
 
     let repo_id = RepoId(24);
     let branch_name = "main".to_string();

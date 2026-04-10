@@ -129,7 +129,7 @@ impl MainPaneView {
             return false;
         };
 
-        window.focus(&self.diff_panel_focus_handle);
+        window.focus(&self.diff_panel_focus_handle, cx);
         self.clear_status_multi_selection(repo_id, cx);
         if is_conflicted {
             self.store.dispatch(Msg::SelectConflictDiff {

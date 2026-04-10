@@ -415,7 +415,7 @@ struct InterpolatedWrapPatch {
     new_rows: Vec<usize>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 enum TextInputLayout {
     Plain(Vec<ShapedLine>),
     Wrapped {
@@ -464,7 +464,7 @@ pub struct TextInput {
     shape_style_epoch: u64,
     prepaint_highlight_runs_cache: Option<PrepaintHighlightRunsCache>,
     plain_line_cache: HashMap<ShapedRowCacheKey, ShapedLine>,
-    wrapped_line_cache: HashMap<ShapedRowCacheKey, WrappedLine>,
+    wrapped_line_cache: HashMap<ShapedRowCacheKey, ()>,
     is_selecting: bool,
     suppress_right_click: bool,
     context_menu: Option<TextInputContextMenuState>,
@@ -860,7 +860,7 @@ impl TextInput {
 
         let task = cx.spawn(
             async move |input: gpui::WeakEntity<TextInput>, cx: &mut gpui::AsyncApp| loop {
-                gpui::Timer::after(Duration::from_millis(16)).await;
+                smol::Timer::after(Duration::from_millis(16)).await;
 
                 let should_continue = input
                     .update(cx, |input, cx| {
@@ -995,10 +995,6 @@ impl TextInput {
             line_ix: line.line_ix,
             wrap_width_key: wrap_width_cache_key(wrap_width),
         };
-        if let Some(cached) = self.wrapped_line_cache.get(&key) {
-            return cached.clone();
-        }
-
         let capped_text = build_shaping_text(line.line_text, TEXT_INPUT_MAX_LINE_SHAPE_BYTES);
         let owned_runs;
         let runs = if let Some(precomputed_runs) = precomputed_runs {
@@ -1024,7 +1020,7 @@ impl TextInput {
             )
             .unwrap_or_default();
         let wrapped = shaped.into_iter().next().unwrap_or_default();
-        self.wrapped_line_cache.insert(key, wrapped.clone());
+        self.wrapped_line_cache.insert(key, ());
         self.trim_shape_caches();
         wrapped
     }
@@ -1698,7 +1694,7 @@ impl TextInput {
         let negative_axis = current.y < px(0.0);
         let mut scroll_y = if negative_axis { -current.y } else { current.y };
 
-        let max_offset = handle.max_offset().height.max(px(0.0));
+        let max_offset = handle.max_offset().y.max(px(0.0));
         if max_offset <= px(0.0) {
             let cursor_out_of_view = cursor_top < scroll_y + caret_margin
                 || cursor_bottom > scroll_y + viewport_height - caret_margin;
@@ -2214,7 +2210,7 @@ impl TextInput {
             cx.notify();
         }
         cx.stop_propagation();
-        window.focus(&self.focus_handle);
+        window.focus(&self.focus_handle, cx);
         self.cursor_blink_visible = true;
         let index = self.index_for_mouse_position(event.position);
         self.vertical_motion_x = None;
@@ -2278,7 +2274,7 @@ impl TextInput {
         }
 
         cx.stop_propagation();
-        window.focus(&self.focus_handle);
+        window.focus(&self.focus_handle, cx);
         self.cursor_blink_visible = true;
         self.is_selecting = false;
         self.vertical_motion_x = None;
@@ -3224,7 +3220,9 @@ impl Element for TextElement {
                 visible_bottom,
                 TEXT_INPUT_GUARD_ROWS,
             );
-            let mut lines = vec![WrappedLine::default(); line_count];
+            let mut lines = (0..line_count)
+                .map(|_| WrappedLine::default())
+                .collect::<Vec<_>>();
             let mut shaped_mask = vec![false; line_count];
             let job_accepts_interpolation = pending_wrap_job_accepts_interpolated_patch(
                 input.pending_wrap_job.as_ref(),
@@ -3543,6 +3541,8 @@ impl Element for TextElement {
                                 bounds.origin.y + line_height * ix as f32,
                             ),
                             line_height,
+                            TextAlign::Left,
+                            None,
                             window,
                             cx,
                         );
@@ -3650,11 +3650,11 @@ impl Render for TextInput {
             }
         }
 
-        if is_focused && self.cursor_blink_task.is_none() {
+        if is_focused && self.cursor_blink_task.is_none() && !cfg!(test) {
             let task = cx.spawn(
                 async move |input: gpui::WeakEntity<TextInput>, cx: &mut gpui::AsyncApp| {
                     loop {
-                        gpui::Timer::after(Duration::from_millis(800)).await;
+                        smol::Timer::after(Duration::from_millis(800)).await;
                         let should_continue = input
                             .update(cx, |input, cx| {
                                 if !input.has_focus {
@@ -5818,7 +5818,7 @@ mod tests {
                         line_ix: 0,
                         wrap_width_key: wrap_width_cache_key(px(320.0)),
                     },
-                    WrappedLine::default(),
+                    (),
                 );
 
                 assert_eq!(input.plain_line_cache.len(), 1);

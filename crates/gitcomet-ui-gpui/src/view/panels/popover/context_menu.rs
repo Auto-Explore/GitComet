@@ -955,8 +955,8 @@ impl PopoverHost {
                 .key_context("ContextMenu")
                 .on_mouse_down(
                     MouseButton::Left,
-                    cx.listener(|this, _e: &MouseDownEvent, window, _cx| {
-                        window.focus(&this.context_menu_focus_handle);
+                    cx.listener(|this, _e: &MouseDownEvent, window, cx| {
+                        window.focus(&this.context_menu_focus_handle, cx);
                     }),
                 )
                 .on_key_down(

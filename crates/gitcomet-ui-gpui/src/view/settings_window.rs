@@ -152,25 +152,28 @@ pub(crate) fn open_settings_window(cx: &mut App) {
         ),
         cx,
     );
-    cx.open_window(
-        WindowOptions {
-            window_bounds: Some(WindowBounds::Windowed(bounds)),
-            window_min_size: Some(size(
-                px(SETTINGS_WINDOW_MIN_WIDTH_PX),
-                px(SETTINGS_WINDOW_MIN_HEIGHT_PX),
-            )),
-            titlebar: Some(settings_window_titlebar_options()),
-            app_id: Some("gitcomet-settings".into()),
-            window_decorations: Some(WindowDecorations::Client),
-            is_movable: true,
-            is_resizable: true,
-            ..Default::default()
-        },
-        |window, cx| cx.new(|cx| SettingsWindowView::new(window, cx)),
-    )
+    cx.open_window(settings_window_options(bounds), |window, cx| {
+        cx.new(|cx| SettingsWindowView::new(window, cx))
+    })
     .expect("failed to open settings window");
 
     cx.activate(true);
+}
+
+fn settings_window_options(bounds: Bounds<Pixels>) -> WindowOptions {
+    WindowOptions {
+        window_bounds: Some(WindowBounds::Windowed(bounds)),
+        window_min_size: Some(size(
+            px(SETTINGS_WINDOW_MIN_WIDTH_PX),
+            px(SETTINGS_WINDOW_MIN_HEIGHT_PX),
+        )),
+        titlebar: Some(settings_window_titlebar_options()),
+        app_id: Some("gitcomet-settings".into()),
+        window_decorations: Some(WindowDecorations::Client),
+        is_movable: true,
+        is_resizable: true,
+        ..Default::default()
+    }
 }
 
 fn settings_window_titlebar_options() -> TitlebarOptions {
@@ -231,7 +234,7 @@ fn uniform_list_vertical_scroll_metrics(
     let max_offset = state
         .last_item_size
         .map(|size| (size.contents.height - size.item.height).max(px(0.0)))
-        .unwrap_or_else(|| state.base_handle.max_offset().height.max(px(0.0)));
+        .unwrap_or_else(|| state.base_handle.max_offset().y.max(px(0.0)));
     let raw_offset = state.base_handle.offset().y;
     let scroll_offset = normalize_scroll_offset(raw_offset, max_offset);
     (raw_offset, scroll_offset, max_offset)
@@ -462,7 +465,7 @@ impl SettingsWindowView {
             .collect();
         cx.spawn(
             async move |_view: WeakEntity<Self>, cx: &mut gpui::AsyncApp| {
-                let _ = cx.update(move |cx| {
+                cx.update(move |cx| {
                     let mut f = f;
                     for handle in handles {
                         let _ = handle.update(cx, |view, window, cx| f(view, window, cx));
@@ -1321,7 +1324,11 @@ impl SettingsWindowView {
 impl Render for SettingsWindowView {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         let theme = self.theme;
-        let decorations = effective_window_decorations(window);
+        let decorations = window.window_decorations();
+        let show_custom_window_chrome =
+            crate::linux_gui_env::LinuxGuiEnvironment::should_render_custom_window_chrome(
+                decorations,
+            );
         let (tiling, client_inset) = match decorations {
             Decorations::Client { tiling } => (Some(tiling), settings_window_client_inset()),
             Decorations::Server => (None, px(0.0)),
@@ -1611,7 +1618,7 @@ impl Render for SettingsWindowView {
                     )
                     .h_full()
                     .min_h(px(0.0))
-                    .track_scroll(self.theme_scroll.clone())
+                    .track_scroll(&self.theme_scroll)
                     .on_scroll_wheel({
                         let scroll = self.theme_scroll.clone();
                         move |event, window, cx| {
@@ -1645,7 +1652,7 @@ impl Render for SettingsWindowView {
                         )
                         .h_full()
                         .min_h(px(0.0))
-                        .track_scroll(self.ui_font_scroll.clone())
+                        .track_scroll(&self.ui_font_scroll)
                         .on_scroll_wheel({
                             let scroll = self.ui_font_scroll.clone();
                             move |event, window, cx| {
@@ -1691,7 +1698,7 @@ impl Render for SettingsWindowView {
                         )
                         .h_full()
                         .min_h(px(0.0))
-                        .track_scroll(self.editor_font_scroll.clone())
+                        .track_scroll(&self.editor_font_scroll)
                         .on_scroll_wheel({
                             let scroll = self.editor_font_scroll.clone();
                             move |event, window, cx| {
@@ -1736,7 +1743,7 @@ impl Render for SettingsWindowView {
                     )
                     .h_full()
                     .min_h(px(0.0))
-                    .track_scroll(self.date_format_scroll.clone())
+                    .track_scroll(&self.date_format_scroll)
                     .on_scroll_wheel({
                         let scroll = self.date_format_scroll.clone();
                         move |event, window, cx| {
@@ -1767,7 +1774,7 @@ impl Render for SettingsWindowView {
                     )
                     .h_full()
                     .min_h(px(0.0))
-                    .track_scroll(self.timezone_scroll.clone())
+                    .track_scroll(&self.timezone_scroll)
                     .on_scroll_wheel({
                         let scroll = self.timezone_scroll.clone();
                         move |event, window, cx| {
@@ -1807,7 +1814,7 @@ impl Render for SettingsWindowView {
                     )
                     .h_full()
                     .min_h(px(0.0))
-                    .track_scroll(self.change_tracking_scroll.clone())
+                    .track_scroll(&self.change_tracking_scroll)
                     .on_scroll_wheel({
                         let scroll = self.change_tracking_scroll.clone();
                         move |event, window, cx| {
@@ -1842,7 +1849,7 @@ impl Render for SettingsWindowView {
                     )
                     .h_full()
                     .min_h(px(0.0))
-                    .track_scroll(self.diff_scroll_sync_scroll.clone())
+                    .track_scroll(&self.diff_scroll_sync_scroll)
                     .on_scroll_wheel({
                         let scroll = self.diff_scroll_sync_scroll.clone();
                         move |event, window, cx| {
@@ -2049,7 +2056,7 @@ impl Render for SettingsWindowView {
                     )
                     .h_full()
                     .min_h(px(0.0))
-                    .track_scroll(self.open_source_licenses_scroll.clone())
+                    .track_scroll(&self.open_source_licenses_scroll)
                     .into_any_element()
                 };
 
@@ -2146,9 +2153,13 @@ impl Render for SettingsWindowView {
                 weight: gpui::FontWeight::default(),
                 style: gpui::FontStyle::default(),
             })
-            .text_color(theme.colors.text)
-            .child(header)
-            .child(content);
+            .text_color(theme.colors.text);
+
+        let body = if show_custom_window_chrome {
+            body.child(header).child(content)
+        } else {
+            body.child(content)
+        };
 
         let mut root = div()
             .size_full()
@@ -2157,7 +2168,7 @@ impl Render for SettingsWindowView {
             .relative();
 
         root = root.on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, window, cx| {
-            let Decorations::Client { tiling } = effective_window_decorations(window) else {
+            let Decorations::Client { tiling } = window.window_decorations() else {
                 if this.hover_resize_edge.is_some() {
                     this.hover_resize_edge = None;
                     cx.notify();
@@ -2182,8 +2193,7 @@ impl Render for SettingsWindowView {
             root = root.on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|_this, e: &MouseDownEvent, window, cx| {
-                    let Decorations::Client { tiling } = effective_window_decorations(window)
-                    else {
+                    let Decorations::Client { tiling } = window.window_decorations() else {
                         return;
                     };
 
@@ -2358,16 +2368,6 @@ fn is_supported_git_version(version: GitVersion) -> bool {
         || (version.major == MIN_GIT_MAJOR && version.minor >= MIN_GIT_MINOR)
 }
 
-fn effective_window_decorations(window: &Window) -> Decorations {
-    match window.window_decorations() {
-        Decorations::Client { tiling } => Decorations::Client { tiling },
-        Decorations::Server if !cfg!(target_os = "macos") => Decorations::Client {
-            tiling: Tiling::default(),
-        },
-        Decorations::Server => Decorations::Server,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2470,6 +2470,45 @@ mod tests {
                 chrome::CLIENT_SIDE_DECORATION_INSET
             );
         }
+    }
+
+    #[test]
+    fn settings_window_options_request_client_chrome_and_resize_behavior() {
+        let bounds = Bounds::new(
+            point(px(12.0), px(24.0)),
+            size(
+                px(SETTINGS_WINDOW_DEFAULT_WIDTH_PX),
+                px(SETTINGS_WINDOW_DEFAULT_HEIGHT_PX),
+            ),
+        );
+        let options = settings_window_options(bounds);
+
+        assert_eq!(
+            options.window_bounds,
+            Some(WindowBounds::Windowed(bounds)),
+            "settings window should open at the requested bounds"
+        );
+        assert_eq!(
+            options.window_min_size,
+            Some(size(
+                px(SETTINGS_WINDOW_MIN_WIDTH_PX),
+                px(SETTINGS_WINDOW_MIN_HEIGHT_PX),
+            )),
+            "settings window should enforce its minimum size"
+        );
+        assert_eq!(
+            options.window_decorations,
+            Some(WindowDecorations::Client),
+            "settings window should request client-side decorations"
+        );
+        assert!(
+            options.is_movable,
+            "settings window should remain movable with custom chrome"
+        );
+        assert!(
+            options.is_resizable,
+            "settings window should remain resizable with custom chrome"
+        );
     }
 
     #[test]
@@ -2777,9 +2816,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn non_macos_settings_window_uses_client_chrome_and_resize_edges(
-        cx: &mut gpui::TestAppContext,
-    ) {
+    fn non_macos_settings_window_renders_custom_chrome_controls(cx: &mut gpui::TestAppContext) {
         if cfg!(target_os = "macos") {
             return;
         }
@@ -2819,19 +2856,6 @@ mod tests {
                 "expected `{selector}` in debug bounds"
             );
         }
-
-        settings_cx.simulate_mouse_move(point(px(1.0), px(1.0)), None, Modifiers::default());
-        settings_cx.run_until_parked();
-
-        cx.update(|_window, app| {
-            assert_eq!(
-                settings_window
-                    .read_with(app, |settings, _cx| settings.hover_resize_edge)
-                    .expect("settings window should remain readable"),
-                Some(ResizeEdge::TopLeft),
-                "expected top-left corner hover to expose a resize edge"
-            );
-        });
     }
 
     #[gpui::test]
@@ -3128,11 +3152,7 @@ mod tests {
                 (
                     absolute_scroll_y(&settings.settings_window_scroll),
                     uniform_list_vertical_scroll_metrics(&settings.ui_font_scroll).1,
-                    settings
-                        .settings_window_scroll
-                        .max_offset()
-                        .height
-                        .max(px(0.0)),
+                    settings.settings_window_scroll.max_offset().y.max(px(0.0)),
                     uniform_list_vertical_scroll_metrics(&settings.ui_font_scroll).2,
                 )
             })

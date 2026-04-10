@@ -1161,7 +1161,8 @@ pub(super) fn worktree_preview_row_canvas(
                     }
 
                     if event.button == gpui::MouseButton::Left {
-                        window.focus(&view.read(cx).diff_panel_focus_handle);
+                        let focus = view.read(cx).diff_panel_focus_handle.clone();
+                        window.focus(&focus, cx);
                         let click_count = event.click_count;
                         let position = event.position;
                         view.update(cx, |this, cx| {
@@ -1338,7 +1339,8 @@ fn install_diff_row_mouse_handlers(
             let region = regions.region_at(event.position);
 
             if event.button == gpui::MouseButton::Left {
-                window.focus(&view.read(cx).diff_panel_focus_handle);
+                let focus = view.read(cx).diff_panel_focus_handle.clone();
+                window.focus(&focus, cx);
                 if let Some(region) = region {
                     let click_count = event.click_count;
                     let position = event.position;
@@ -1520,7 +1522,14 @@ fn paint_gutter_text(
 
         shaped
     });
-    let _ = shaped.paint(point(x, y), metrics.line_height, window, cx);
+    let _ = shaped.paint(
+        point(x, y),
+        metrics.line_height,
+        gpui::TextAlign::Left,
+        None,
+        window,
+        cx,
+    );
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1690,12 +1699,33 @@ fn paint_selectable_diff_text(
     }
 
     if paint_highlights.is_empty() {
-        let _ = layout.paint(point(paint_x, y), metrics.line_height, window, cx);
+        let _ = layout.paint(
+            point(paint_x, y),
+            metrics.line_height,
+            gpui::TextAlign::Left,
+            None,
+            window,
+            cx,
+        );
         return;
     }
 
-    let _ = layout.paint_background(point(paint_x, y), metrics.line_height, window, cx);
-    let _ = layout.paint(point(paint_x, y), metrics.line_height, window, cx);
+    let _ = layout.paint_background(
+        point(paint_x, y),
+        metrics.line_height,
+        gpui::TextAlign::Left,
+        None,
+        window,
+        cx,
+    );
+    let _ = layout.paint(
+        point(paint_x, y),
+        metrics.line_height,
+        gpui::TextAlign::Left,
+        None,
+        window,
+        cx,
+    );
 }
 
 fn diff_layout_base_key(

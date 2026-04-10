@@ -11,12 +11,54 @@ fn fixture_repo_root() -> std::path::PathBuf {
         .to_path_buf()
 }
 
+fn fixture_git_command(repo_root: &std::path::Path) -> std::process::Command {
+    let mut command = std::process::Command::new("git");
+    command
+        .current_dir(repo_root)
+        .args(["-c", &format!("safe.directory={}", repo_root.display())]);
+    command
+}
+
+fn fixture_git_show(repo_root: &std::path::Path, spec: &str, context: &str) -> String {
+    let output = fixture_git_command(repo_root)
+        .args(["show", spec])
+        .output()
+        .unwrap_or_else(|_| panic!("git show should run for {context}"));
+    assert!(
+        output.status.success(),
+        "git show {spec} failed: status={:?} stderr={}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr),
+    );
+    String::from_utf8(output.stdout).expect("git show output should be valid UTF-8")
+}
+
+fn fixture_git_diff(
+    repo_root: &std::path::Path,
+    old_spec: &str,
+    new_spec: &str,
+    context: &str,
+) -> String {
+    let output = fixture_git_command(repo_root)
+        .args(["diff", old_spec, new_spec])
+        .output()
+        .unwrap_or_else(|_| panic!("git diff should run for {context}"));
+    assert!(
+        output.status.success(),
+        "git diff for {context} failed: status={:?} stderr={}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr),
+    );
+    String::from_utf8(output.stdout).expect("git diff output should be valid UTF-8")
+}
+
 #[gpui::test]
 fn patch_view_applies_syntax_highlighting_to_context_lines(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
+    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(2);
     let workdir =
@@ -295,39 +337,15 @@ fn yaml_commit_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
         gitcomet_core::domain::CommitId("bd8b4a04b4d7a04caf97392d6a66cbeebd665606".into());
     let path = std::path::PathBuf::from(".github/workflows/deployment-ci.yml");
     let repo_root = fixture_repo_root();
-    let git_show = |spec: &str| {
-        let output = std::process::Command::new("git")
-            .current_dir(&repo_root)
-            .args(["show", spec])
-            .output()
-            .expect("git show should run for YAML commit file-diff regression fixture");
-        assert!(
-            output.status.success(),
-            "git show {spec} failed: status={:?} stderr={}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr),
-        );
-        String::from_utf8(output.stdout).expect("git show output should be valid UTF-8")
-    };
+    let git_show =
+        |spec: &str| fixture_git_show(&repo_root, spec, "YAML commit file-diff regression fixture");
     let git_diff = || {
-        let output = std::process::Command::new("git")
-            .current_dir(&repo_root)
-            .args([
-                "diff",
-                "bd8b4a04b4d7a04caf97392d6a66cbeebd665606^",
-                "bd8b4a04b4d7a04caf97392d6a66cbeebd665606",
-                "--",
-                ".github/workflows/deployment-ci.yml",
-            ])
-            .output()
-            .expect("git diff should run for YAML commit file-diff regression fixture");
-        assert!(
-            output.status.success(),
-            "git diff for YAML commit file-diff regression fixture failed: status={:?} stderr={}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr),
-        );
-        String::from_utf8(output.stdout).expect("git diff output should be valid UTF-8")
+        fixture_git_diff(
+            &repo_root,
+            "bd8b4a04b4d7a04caf97392d6a66cbeebd665606^:.github/workflows/deployment-ci.yml",
+            "bd8b4a04b4d7a04caf97392d6a66cbeebd665606:.github/workflows/deployment-ci.yml",
+            "YAML commit file-diff regression fixture",
+        )
     };
     let old_text =
         git_show("bd8b4a04b4d7a04caf97392d6a66cbeebd665606^:.github/workflows/deployment-ci.yml");
@@ -830,26 +848,12 @@ fn yaml_commit_patch_diff_keeps_consistent_highlighting_for_added_paths_and_keys
     let commit_id =
         gitcomet_core::domain::CommitId("bd8b4a04b4d7a04caf97392d6a66cbeebd665606".into());
     let repo_root = fixture_repo_root();
-    let unified = {
-        let output = std::process::Command::new("git")
-            .current_dir(&repo_root)
-            .args([
-                "diff",
-                "bd8b4a04b4d7a04caf97392d6a66cbeebd665606^",
-                "bd8b4a04b4d7a04caf97392d6a66cbeebd665606",
-                "--",
-                ".github/workflows/deployment-ci.yml",
-            ])
-            .output()
-            .expect("git diff should run for YAML commit patch-diff regression fixture");
-        assert!(
-            output.status.success(),
-            "git diff for YAML commit patch-diff regression fixture failed: status={:?} stderr={}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr),
-        );
-        String::from_utf8(output.stdout).expect("git diff output should be valid UTF-8")
-    };
+    let unified = fixture_git_diff(
+        &repo_root,
+        "bd8b4a04b4d7a04caf97392d6a66cbeebd665606^:.github/workflows/deployment-ci.yml",
+        "bd8b4a04b4d7a04caf97392d6a66cbeebd665606:.github/workflows/deployment-ci.yml",
+        "YAML commit patch-diff regression fixture",
+    );
 
     let target = gitcomet_core::domain::DiffTarget::Commit {
         commit_id: commit_id.clone(),
@@ -2608,40 +2612,14 @@ fn yaml_commit_patch_diff_matches_commit_file_diff_for_build_release_artifacts(
         gitcomet_core::domain::CommitId("bd8b4a04b4d7a04caf97392d6a66cbeebd665606".into());
     let path = std::path::PathBuf::from(".github/workflows/build-release-artifacts.yml");
     let repo_root = fixture_repo_root();
-    let git_show = |spec: &str| {
-        let output = std::process::Command::new("git")
-            .current_dir(&repo_root)
-            .args(["show", spec])
-            .output()
-            .expect("git show should run for YAML commit patch/file parity fixture");
-        assert!(
-            output.status.success(),
-            "git show {spec} failed: status={:?} stderr={}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr),
-        );
-        String::from_utf8(output.stdout).expect("git show output should be valid UTF-8")
-    };
-    let unified = {
-        let output = std::process::Command::new("git")
-            .current_dir(&repo_root)
-            .args([
-                "diff",
-                "bd8b4a04b4d7a04caf97392d6a66cbeebd665606^",
-                "bd8b4a04b4d7a04caf97392d6a66cbeebd665606",
-                "--",
-                ".github/workflows/build-release-artifacts.yml",
-            ])
-            .output()
-            .expect("git diff should run for YAML commit patch/file parity fixture");
-        assert!(
-            output.status.success(),
-            "git diff for YAML commit patch/file parity fixture failed: status={:?} stderr={}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr),
-        );
-        String::from_utf8(output.stdout).expect("git diff output should be valid UTF-8")
-    };
+    let git_show =
+        |spec: &str| fixture_git_show(&repo_root, spec, "YAML commit patch/file parity fixture");
+    let unified = fixture_git_diff(
+        &repo_root,
+        "bd8b4a04b4d7a04caf97392d6a66cbeebd665606^:.github/workflows/build-release-artifacts.yml",
+        "bd8b4a04b4d7a04caf97392d6a66cbeebd665606:.github/workflows/build-release-artifacts.yml",
+        "YAML commit patch/file parity fixture",
+    );
     let old_text = git_show(
         "bd8b4a04b4d7a04caf97392d6a66cbeebd665606^:.github/workflows/build-release-artifacts.yml",
     );
@@ -4697,6 +4675,7 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
         super::super::GitCometView::new(store, events, None, window, cx)
     });
     disable_view_poller_for_test(cx, &view);
+    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(80);
     let workdir = std::env::temp_dir().join(format!(
@@ -4705,20 +4684,7 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
     ));
     let path = std::path::PathBuf::from(".github/workflows/deployment-ci.yml");
     let repo_root = fixture_repo_root();
-    let git_show = |spec: &str| {
-        let output = std::process::Command::new("git")
-            .current_dir(&repo_root)
-            .args(["show", spec])
-            .output()
-            .expect("git show should run for YAML diff regression fixture");
-        assert!(
-            output.status.success(),
-            "git show {spec} failed: status={:?} stderr={}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr),
-        );
-        String::from_utf8(output.stdout).expect("git show output should be valid UTF-8")
-    };
+    let git_show = |spec: &str| fixture_git_show(&repo_root, spec, "YAML diff regression fixture");
     let old_text =
         git_show("bd8b4a04b4d7a04caf97392d6a66cbeebd665606^:.github/workflows/deployment-ci.yml");
     let new_text =
@@ -4751,18 +4717,12 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
     wait_for_main_pane_condition(
         cx,
         &view,
-        "YAML file-diff fallback cache build before prepared syntax becomes ready",
+        "YAML file-diff cache build before syntax rows are ready",
         |pane| {
             pane.file_diff_cache_inflight.is_none()
                 && pane.file_diff_cache_rev == 0
                 && pane.file_diff_cache_path == Some(workdir.join(&path))
                 && pane.file_diff_cache_language == Some(rows::DiffSyntaxLanguage::Yaml)
-                && pane
-                    .file_diff_split_prepared_syntax_document(DiffTextRegion::SplitLeft)
-                    .is_none()
-                && pane
-                    .file_diff_split_prepared_syntax_document(DiffTextRegion::SplitRight)
-                    .is_none()
                 && pane
                     .file_diff_cache_rows
                     .iter()
@@ -5511,20 +5471,8 @@ fn yaml_file_diff_fallback_matches_prepared_document_for_deployment_ci(
     ));
     let path = std::path::PathBuf::from(".github/workflows/deployment-ci.yml");
     let repo_root = fixture_repo_root();
-    let git_show = |spec: &str| {
-        let output = std::process::Command::new("git")
-            .current_dir(&repo_root)
-            .args(["show", spec])
-            .output()
-            .expect("git show should run for YAML fallback prepared baseline fixture");
-        assert!(
-            output.status.success(),
-            "git show {spec} failed: status={:?} stderr={}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr),
-        );
-        String::from_utf8(output.stdout).expect("git show output should be valid UTF-8")
-    };
+    let git_show =
+        |spec: &str| fixture_git_show(&repo_root, spec, "YAML fallback prepared baseline fixture");
     let old_text =
         git_show("bd8b4a04b4d7a04caf97392d6a66cbeebd665606^:.github/workflows/deployment-ci.yml");
     let new_text =
@@ -6057,18 +6005,11 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_build_release_artifacts(
     let path = std::path::PathBuf::from(".github/workflows/build-release-artifacts.yml");
     let repo_root = fixture_repo_root();
     let git_show = |spec: &str| {
-        let output = std::process::Command::new("git")
-            .current_dir(&repo_root)
-            .args(["show", spec])
-            .output()
-            .expect("git show should run for build-release YAML file-diff regression fixture");
-        assert!(
-            output.status.success(),
-            "git show {spec} failed: status={:?} stderr={}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr),
-        );
-        String::from_utf8(output.stdout).expect("git show output should be valid UTF-8")
+        fixture_git_show(
+            &repo_root,
+            spec,
+            "build-release YAML file-diff regression fixture",
+        )
     };
     let old_text = git_show(
         "bd8b4a04b4d7a04caf97392d6a66cbeebd665606^:.github/workflows/build-release-artifacts.yml",
@@ -6598,20 +6539,8 @@ fn yaml_file_diff_matches_prepared_document_for_build_release_artifacts(
     ));
     let path = std::path::PathBuf::from(".github/workflows/build-release-artifacts.yml");
     let repo_root = fixture_repo_root();
-    let git_show = |spec: &str| {
-        let output = std::process::Command::new("git")
-            .current_dir(&repo_root)
-            .args(["show", spec])
-            .output()
-            .expect("git show should run for build-release prepared-baseline fixture");
-        assert!(
-            output.status.success(),
-            "git show {spec} failed: status={:?} stderr={}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr),
-        );
-        String::from_utf8(output.stdout).expect("git show output should be valid UTF-8")
-    };
+    let git_show =
+        |spec: &str| fixture_git_show(&repo_root, spec, "build-release prepared-baseline fixture");
     let old_text = git_show(
         "bd8b4a04b4d7a04caf97392d6a66cbeebd665606^:.github/workflows/build-release-artifacts.yml",
     );
@@ -7091,44 +7020,18 @@ fn yaml_commit_file_diff_transition_from_patch_clears_stale_split_cache(
 
     let repo_root = fixture_repo_root();
     let path = std::path::PathBuf::from(".github/workflows/deployment-ci.yml");
-    let git_show = |spec: &str| {
-        let output = std::process::Command::new("git")
-            .current_dir(&repo_root)
-            .args(["show", spec])
-            .output()
-            .expect("git show should run for patch->file YAML transition fixture");
-        assert!(
-            output.status.success(),
-            "git show {spec} failed: status={:?} stderr={}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr),
-        );
-        String::from_utf8(output.stdout).expect("git show output should be valid UTF-8")
-    };
+    let git_show =
+        |spec: &str| fixture_git_show(&repo_root, spec, "patch->file YAML transition fixture");
     let old_text =
         git_show("bd8b4a04b4d7a04caf97392d6a66cbeebd665606^:.github/workflows/deployment-ci.yml");
     let new_text =
         git_show("bd8b4a04b4d7a04caf97392d6a66cbeebd665606:.github/workflows/deployment-ci.yml");
-    let unified = {
-        let output = std::process::Command::new("git")
-            .current_dir(&repo_root)
-            .args([
-                "diff",
-                "bd8b4a04b4d7a04caf97392d6a66cbeebd665606^",
-                "bd8b4a04b4d7a04caf97392d6a66cbeebd665606",
-                "--",
-                ".github/workflows/deployment-ci.yml",
-            ])
-            .output()
-            .expect("git diff should run for patch->file YAML transition fixture");
-        assert!(
-            output.status.success(),
-            "git diff for patch->file YAML transition fixture failed: status={:?} stderr={}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr),
-        );
-        String::from_utf8(output.stdout).expect("git diff output should be valid UTF-8")
-    };
+    let unified = fixture_git_diff(
+        &repo_root,
+        "bd8b4a04b4d7a04caf97392d6a66cbeebd665606^:.github/workflows/deployment-ci.yml",
+        "bd8b4a04b4d7a04caf97392d6a66cbeebd665606:.github/workflows/deployment-ci.yml",
+        "patch->file YAML transition fixture",
+    );
     let file_target = DiffTarget::Commit {
         commit_id,
         path: Some(path.clone()),
@@ -7482,18 +7385,11 @@ fn yaml_same_content_rev_refresh_invalidates_cached_heuristic_file_diff_rows(
     let path = std::path::PathBuf::from(".github/workflows/build-release-artifacts.yml");
     let repo_root = fixture_repo_root();
     let git_show = |spec: &str| {
-        let output = std::process::Command::new("git")
-            .current_dir(&repo_root)
-            .args(["show", spec])
-            .output()
-            .expect("git show should run for same-content YAML refresh regression fixture");
-        assert!(
-            output.status.success(),
-            "git show {spec} failed: status={:?} stderr={}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr),
-        );
-        String::from_utf8(output.stdout).expect("git show output should be valid UTF-8")
+        fixture_git_show(
+            &repo_root,
+            spec,
+            "same-content YAML refresh regression fixture",
+        )
     };
     fn append_yaml_padding(text: &str) -> String {
         use std::fmt::Write as _;

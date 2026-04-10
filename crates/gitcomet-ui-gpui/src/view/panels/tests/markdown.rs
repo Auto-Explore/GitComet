@@ -8,6 +8,7 @@ fn markdown_diff_preview_cache_does_not_rebuild_when_rev_changes_with_identical_
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
+    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(48);
     let workdir = std::env::temp_dir().join(format!(
@@ -250,6 +251,7 @@ fn ctrl_f_from_markdown_file_preview_switches_back_to_text_search(cx: &mut gpui:
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
+    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(47);
     let workdir = std::env::temp_dir().join(format!(
@@ -767,6 +769,7 @@ fn ctrl_f_from_conflict_markdown_preview_switches_back_to_text_search(
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
+    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(48);
     let workdir = std::env::temp_dir().join(format!(
@@ -850,6 +853,7 @@ fn markdown_file_preview_over_limit_shows_fallback_instead_of_rendering(
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
+    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(51);
     let workdir = std::env::temp_dir().join(format!(
@@ -936,6 +940,7 @@ fn markdown_file_preview_uses_exact_source_length_for_over_limit_fallback(
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
+    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(56);
     let workdir = std::env::temp_dir().join(format!(
@@ -1154,6 +1159,7 @@ fn markdown_diff_preview_over_limit_shows_fallback_instead_of_rendering(
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
+    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(52);
     let workdir = std::env::temp_dir().join(format!(
@@ -1228,6 +1234,7 @@ fn markdown_diff_preview_row_limit_shows_fallback_instead_of_rendering(
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
+    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(54);
     let workdir = std::env::temp_dir().join(format!(
@@ -1333,6 +1340,7 @@ fn markdown_diff_preview_hides_text_controls_and_ignores_text_hotkeys(
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
+    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(49);
     let workdir = std::env::temp_dir().join(format!(

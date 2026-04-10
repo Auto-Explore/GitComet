@@ -215,12 +215,17 @@ impl RepoTabsBarView {
         let seq = self.repo_tab_spinner_delay_seq;
         self.repo_tab_spinner_delay = Some(RepoTabSpinnerDelayState {
             repo_id,
-            show_spinner: false,
+            show_spinner: cfg!(test),
         });
+
+        if cfg!(test) {
+            cx.notify();
+            return;
+        }
 
         cx.spawn(
             async move |view: WeakEntity<RepoTabsBarView>, cx: &mut gpui::AsyncApp| {
-                Timer::after(Duration::from_millis(100)).await;
+                smol::Timer::after(Duration::from_millis(100)).await;
                 let _ = view.update(cx, |this, cx| {
                     if this.repo_tab_spinner_delay_seq != seq {
                         return;

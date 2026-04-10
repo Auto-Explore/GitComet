@@ -319,7 +319,7 @@ impl SidebarPaneView {
         )
         .h_full()
         .min_h(px(0.0))
-        .track_scroll(self.branches_scroll.clone());
+        .track_scroll(&self.branches_scroll);
         let scrollbar_gutter = components::Scrollbar::visible_gutter(
             self.branches_scroll.clone(),
             components::ScrollbarAxis::Vertical,
@@ -594,8 +594,10 @@ mod tests {
 
     #[test]
     fn sidebar_notify_fingerprint_tracks_open_repo_workdirs() {
-        let mut state = AppState::default();
-        state.active_repo = Some(RepoId(1));
+        let mut state = AppState {
+            active_repo: Some(RepoId(1)),
+            ..AppState::default()
+        };
         state.repos.push(repo_state(RepoId(1), "/tmp/repo"));
 
         let initial = SidebarNotifyFingerprint::from_state(&state);
@@ -685,13 +687,17 @@ mod tests {
 
     #[test]
     fn sidebar_notify_fingerprint_ignores_repo_tab_order() {
-        let mut state_a = AppState::default();
-        state_a.active_repo = Some(RepoId(1));
+        let mut state_a = AppState {
+            active_repo: Some(RepoId(1)),
+            ..AppState::default()
+        };
         state_a.repos.push(repo_state(RepoId(1), "/tmp/repo"));
         state_a.repos.push(repo_state(RepoId(2), "/tmp/repo-wt"));
 
-        let mut state_b = AppState::default();
-        state_b.active_repo = Some(RepoId(1));
+        let mut state_b = AppState {
+            active_repo: Some(RepoId(1)),
+            ..AppState::default()
+        };
         state_b.repos.push(repo_state(RepoId(2), "/tmp/repo-wt"));
         state_b.repos.push(repo_state(RepoId(1), "/tmp/repo"));
 

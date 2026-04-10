@@ -1,7 +1,7 @@
 use super::*;
 use gpui::{
-    Bounds, ContentMask, CursorStyle, DispatchPhase, HitboxBehavior, MouseButton, fill, point, px,
-    size,
+    Bounds, ContentMask, CursorStyle, DispatchPhase, HitboxBehavior, MouseButton, TruncateFrom,
+    fill, point, px, size,
 };
 use rustc_hash::FxHasher;
 use std::cell::RefCell;
@@ -55,12 +55,18 @@ fn shape_truncated_line_cached(
     if let Some(family) = font_family {
         style.font_family = family.into();
     }
-    let mut runs = vec![style.to_run(text.len())];
+    let runs = vec![style.to_run(text.len())];
     let mut wrapper = window.text_system().line_wrapper(style.font(), font_size);
-    let truncated = wrapper.truncate_line(text.clone(), max_width.max(px(0.0)), "…", &mut runs);
+    let (truncated, runs) = wrapper.truncate_line(
+        text.clone(),
+        max_width.max(px(0.0)),
+        "…",
+        &runs,
+        TruncateFrom::End,
+    );
     let shaped = window
         .text_system()
-        .shape_line(truncated, font_size, &runs, None);
+        .shape_line(truncated, font_size, runs.as_ref(), None);
 
     HISTORY_TEXT_LAYOUT_CACHE.with(|cache| {
         cache.borrow_mut().put(key, shaped.clone());
@@ -85,12 +91,18 @@ fn shape_truncated_line_with_highlights(
         style.font_family = family.into();
     }
 
-    let mut runs = compute_highlight_runs(text.as_ref(), &style, highlights);
+    let runs = compute_highlight_runs(text.as_ref(), &style, highlights);
     let mut wrapper = window.text_system().line_wrapper(style.font(), font_size);
-    let truncated = wrapper.truncate_line(text.clone(), max_width.max(px(0.0)), "…", &mut runs);
+    let (truncated, runs) = wrapper.truncate_line(
+        text.clone(),
+        max_width.max(px(0.0)),
+        "…",
+        &runs,
+        TruncateFrom::End,
+    );
     window
         .text_system()
-        .shape_line(truncated, font_size, &runs, None)
+        .shape_line(truncated, font_size, runs.as_ref(), None)
 }
 
 fn compute_highlight_runs(
@@ -371,6 +383,8 @@ pub(super) fn history_commit_row_canvas(
                             let _ = shaped.paint(
                                 point(chip_bounds.left() + chip_pad_x, text_y),
                                 xs_line_height,
+                                gpui::TextAlign::Left,
+                                None,
                                 window,
                                 cx,
                             );
@@ -411,6 +425,8 @@ pub(super) fn history_commit_row_canvas(
                             let _ = shaped.paint(
                                 point(x, center_y(xs_line_height)),
                                 xs_line_height,
+                                gpui::TextAlign::Left,
+                                None,
                                 window,
                                 cx,
                             );
@@ -463,6 +479,8 @@ pub(super) fn history_commit_row_canvas(
                         let _ = shaped.paint(
                             point(summary_text_bounds.left(), center_y(sm_line_height)),
                             sm_line_height,
+                            gpui::TextAlign::Left,
+                            None,
                             window,
                             cx,
                         );
@@ -497,6 +515,8 @@ pub(super) fn history_commit_row_canvas(
                         let _ = shaped.paint(
                             point(origin_x, center_y(xs_line_height)),
                             xs_line_height,
+                            gpui::TextAlign::Left,
+                            None,
                             window,
                             cx,
                         );
@@ -531,6 +551,8 @@ pub(super) fn history_commit_row_canvas(
                         let _ = shaped.paint(
                             point(origin_x, center_y(xxs_line_height)),
                             xxs_line_height,
+                            gpui::TextAlign::Left,
+                            None,
                             window,
                             cx,
                         );
@@ -564,6 +586,8 @@ pub(super) fn history_commit_row_canvas(
                         let _ = shaped.paint(
                             point(origin_x, center_y(xxs_line_height)),
                             xxs_line_height,
+                            gpui::TextAlign::Left,
+                            None,
                             window,
                             cx,
                         );

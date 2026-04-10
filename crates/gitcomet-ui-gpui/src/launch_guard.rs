@@ -25,7 +25,7 @@ impl UiLaunchError {
         }
     }
 
-    #[cfg(any(test, target_os = "macos"))]
+    #[cfg(any(test, target_os = "linux", target_os = "macos"))]
     pub(crate) fn from_launch_failure(context: &'static str, message: impl Into<String>) -> Self {
         Self {
             context,

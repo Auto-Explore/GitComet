@@ -579,7 +579,7 @@ impl MainPaneView {
 
         cx.spawn(
             async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
-                let result = smol::unblock(move || {
+                let build_preview = move || {
                     let _perf_scope = perf::span(ViewPerfSpan::MarkdownPreviewParse);
                     let source_text = match source_text {
                         Some(source_text) => source_text,
@@ -599,8 +599,12 @@ impl MainPaneView {
                         }
                     };
                     build_single_markdown_preview_document(source_text.as_ref())
-                })
-                .await;
+                };
+                let result = if cfg!(test) {
+                    build_preview()
+                } else {
+                    smol::unblock(build_preview).await
+                };
 
                 let _ = view.update(cx, |this, cx| {
                     if this.worktree_markdown_preview_inflight != Some(seq) {
@@ -674,18 +678,25 @@ impl MainPaneView {
         if same_path_source_refresh {
             let blocked_rev = self.worktree_preview_content_rev;
             self.worktree_preview_cache_write_blocked_until_rev = Some(blocked_rev);
-            cx.spawn(
-                async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
-                    gpui::Timer::after(std::time::Duration::from_millis(1)).await;
-                    let _ = view.update(cx, |this, _cx| {
-                        if this.worktree_preview_cache_write_blocked_until_rev == Some(blocked_rev)
-                        {
-                            this.worktree_preview_cache_write_blocked_until_rev = None;
-                        }
-                    });
-                },
-            )
-            .detach();
+            if cfg!(test) {
+                if self.worktree_preview_cache_write_blocked_until_rev == Some(blocked_rev) {
+                    self.worktree_preview_cache_write_blocked_until_rev = None;
+                }
+            } else {
+                cx.spawn(
+                    async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
+                        smol::Timer::after(std::time::Duration::from_millis(1)).await;
+                        let _ = view.update(cx, |this, _cx| {
+                            if this.worktree_preview_cache_write_blocked_until_rev
+                                == Some(blocked_rev)
+                            {
+                                this.worktree_preview_cache_write_blocked_until_rev = None;
+                            }
+                        });
+                    },
+                )
+                .detach();
+            }
         }
 
         self.refresh_worktree_preview_syntax_document(cx);
@@ -784,7 +795,7 @@ impl MainPaneView {
             rows::PrepareDiffSyntaxDocumentResult::TimedOut => {
                 cx.spawn(
                     async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
-                        let parsed_document = smol::unblock(move || {
+                        let prepare_document = move || {
                             rows::prepare_diff_syntax_document_in_background_text_with_reuse(
                                 language,
                                 FULL_DOCUMENT_SYNTAX_MODE,
@@ -793,8 +804,12 @@ impl MainPaneView {
                                 background_reparse_seed,
                                 None,
                             )
-                        })
-                        .await;
+                        };
+                        let parsed_document = if cfg!(test) {
+                            prepare_document()
+                        } else {
+                            smol::unblock(prepare_document).await
+                        };
 
                         let _ = view.update(cx, |this, cx| {
                             let Some(parsed_document) = parsed_document else {
@@ -987,30 +1002,33 @@ impl MainPaneView {
 
         cx.spawn(
             async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
-                let parsed_documents =
-                    smol::unblock(move || FileDiffBackgroundPreparedSyntaxDocuments {
-                        split_left: split_left_source.and_then(|(text, line_starts)| {
-                            rows::prepare_diff_syntax_document_in_background_text_with_reuse(
-                                language,
-                                FULL_DOCUMENT_SYNTAX_MODE,
-                                text,
-                                line_starts,
-                                split_left_background_reparse_seed,
-                                split_left_edit_hint,
-                            )
-                        }),
-                        split_right: split_right_source.and_then(|(text, line_starts)| {
-                            rows::prepare_diff_syntax_document_in_background_text_with_reuse(
-                                language,
-                                FULL_DOCUMENT_SYNTAX_MODE,
-                                text,
-                                line_starts,
-                                split_right_background_reparse_seed,
-                                split_right_edit_hint,
-                            )
-                        }),
-                    })
-                    .await;
+                let prepare_documents = move || FileDiffBackgroundPreparedSyntaxDocuments {
+                    split_left: split_left_source.and_then(|(text, line_starts)| {
+                        rows::prepare_diff_syntax_document_in_background_text_with_reuse(
+                            language,
+                            FULL_DOCUMENT_SYNTAX_MODE,
+                            text,
+                            line_starts,
+                            split_left_background_reparse_seed,
+                            split_left_edit_hint,
+                        )
+                    }),
+                    split_right: split_right_source.and_then(|(text, line_starts)| {
+                        rows::prepare_diff_syntax_document_in_background_text_with_reuse(
+                            language,
+                            FULL_DOCUMENT_SYNTAX_MODE,
+                            text,
+                            line_starts,
+                            split_right_background_reparse_seed,
+                            split_right_edit_hint,
+                        )
+                    }),
+                };
+                let parsed_documents = if cfg!(test) {
+                    prepare_documents()
+                } else {
+                    smol::unblock(prepare_documents).await
+                };
 
                 let _ = view.update(cx, |this, cx| {
                     if this.file_diff_syntax_generation != syntax_generation {
@@ -1150,9 +1168,12 @@ impl MainPaneView {
 
         cx.spawn(
             async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
-                let rebuild =
-                    smol::unblock(move || build_file_diff_cache_rebuild(file.as_ref(), &workdir))
-                        .await;
+                let rebuild_cache = move || build_file_diff_cache_rebuild(file.as_ref(), &workdir);
+                let rebuild = if cfg!(test) {
+                    rebuild_cache()
+                } else {
+                    smol::unblock(rebuild_cache).await
+                };
 
                 let _ = view.update(cx, |this, cx| {
                     if this.file_diff_cache_inflight != Some(seq) {
@@ -1297,7 +1318,7 @@ impl MainPaneView {
 
         cx.spawn(
             async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
-                let result = smol::unblock(move || {
+                let build_preview = move || {
                     let _perf_scope = perf::span(ViewPerfSpan::MarkdownPreviewParse);
                     markdown_preview::build_markdown_diff_preview(
                         old_source.as_ref(),
@@ -1310,8 +1331,12 @@ impl MainPaneView {
                         )
                         .to_string()
                     })
-                })
-                .await;
+                };
+                let result = if cfg!(test) {
+                    build_preview()
+                } else {
+                    smol::unblock(build_preview).await
+                };
 
                 let _ = view.update(cx, |this, cx| {
                     if this.file_markdown_preview_inflight != Some(seq) {

@@ -10,6 +10,7 @@ fn commit_menu_has_add_tag_entry(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    disable_view_poller_for_test(cx, &view);
 
     let repo_id = RepoId(1);
     let commit_id = CommitId("deadbeefdeadbeef".into());
@@ -94,6 +95,7 @@ fn commit_file_menu_has_open_file_entries(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    disable_view_poller_for_test(cx, &view);
 
     let repo_id = RepoId(2);
     let commit_id = CommitId("deadbeefdeadbeef".into());
@@ -158,6 +160,7 @@ fn status_file_menu_has_open_file_entries(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    disable_view_poller_for_test(cx, &view);
 
     let repo_id = RepoId(3);
     let workdir = std::env::temp_dir().join(format!(
@@ -253,6 +256,7 @@ fn status_file_menu_copy_path_uses_os_native_separators(cx: &mut gpui::TestAppCo
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    disable_view_poller_for_test(cx, &view);
 
     let repo_id = RepoId(33);
     let workdir = std::env::temp_dir().join(format!(
@@ -341,6 +345,7 @@ fn commit_file_menu_copy_path_uses_os_native_separators(cx: &mut gpui::TestAppCo
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    disable_view_poller_for_test(cx, &view);
 
     let repo_id = RepoId(34);
     let commit_id = CommitId("beadbeadbeadbead".into());
@@ -613,6 +618,7 @@ fn diff_editor_menu_has_open_file_entries(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    disable_view_poller_for_test(cx, &view);
 
     let repo_id = RepoId(4);
     let path = std::path::PathBuf::from("a.txt");
