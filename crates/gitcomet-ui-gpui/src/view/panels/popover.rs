@@ -580,6 +580,11 @@ impl PopoverHost {
         self.state = state;
     }
 
+    #[cfg(test)]
+    pub(in super::super) fn popover_kind_for_tests(&self) -> Option<PopoverKind> {
+        self.popover.clone()
+    }
+
     pub(in super::super) fn close_popover(&mut self, cx: &mut gpui::Context<Self>) {
         self.popover = None;
         self.popover_anchor = None;
@@ -600,7 +605,7 @@ impl PopoverHost {
         self.close_popover(cx);
         if restore_diff_panel_focus {
             let focus = self.main_pane.read(cx).diff_panel_focus_handle.clone();
-            window.focus(&focus);
+            window.focus(&focus, cx);
         }
     }
 
@@ -614,7 +619,7 @@ impl PopoverHost {
         self.popover_anchor = None;
         self.clear_active_context_menu_invoker(cx);
         let focus = self.main_pane.read(cx).diff_panel_focus_handle.clone();
-        window.focus(&focus);
+        window.focus(&focus, cx);
         cx.notify();
     }
 
@@ -839,7 +844,7 @@ impl PopoverHost {
                 .as_ref()
                 .and_then(|kind| self.context_menu_model(kind, cx))
                 .and_then(|m| m.first_selectable());
-            window.focus(&self.context_menu_focus_handle);
+            window.focus(&self.context_menu_focus_handle, cx);
         } else {
             match &kind {
                 PopoverKind::RepoPicker => {
@@ -863,7 +868,7 @@ impl PopoverHost {
                     let focus = self
                         .create_branch_input
                         .read_with(cx, |i, _| i.focus_handle());
-                    window.focus(&focus);
+                    window.focus(&focus, cx);
                 }
                 PopoverKind::CreateBranchFromRefPrompt { .. } => {
                     let theme = self.theme;
@@ -877,7 +882,7 @@ impl PopoverHost {
                     let focus = self
                         .create_branch_input
                         .read_with(cx, |i, _| i.focus_handle());
-                    window.focus(&focus);
+                    window.focus(&focus, cx);
                 }
                 PopoverKind::CheckoutRemoteBranchPrompt { branch, .. } => {
                     let theme = self.theme;
@@ -890,7 +895,7 @@ impl PopoverHost {
                     let focus = self
                         .create_branch_input
                         .read_with(cx, |i, _| i.focus_handle());
-                    window.focus(&focus);
+                    window.focus(&focus, cx);
                 }
                 PopoverKind::StashPrompt => {
                     let theme = self.theme;
@@ -903,7 +908,7 @@ impl PopoverHost {
                     let focus = self
                         .stash_message_input
                         .read_with(cx, |i, _| i.focus_handle());
-                    window.focus(&focus);
+                    window.focus(&focus, cx);
                 }
                 PopoverKind::CloneRepo => {
                     let theme = self.theme;
@@ -928,7 +933,7 @@ impl PopoverHost {
                     let focus = self
                         .clone_repo_url_input
                         .read_with(cx, |i, _| i.focus_handle());
-                    window.focus(&focus);
+                    window.focus(&focus, cx);
                 }
                 PopoverKind::CreateTagPrompt { .. } => {
                     let theme = self.theme;
@@ -939,7 +944,7 @@ impl PopoverHost {
                         cx.notify();
                     });
                     let focus = self.create_tag_input.read_with(cx, |i, _| i.focus_handle());
-                    window.focus(&focus);
+                    window.focus(&focus, cx);
                 }
                 PopoverKind::Repo {
                     kind: RepoPopoverKind::Remote(RemotePopoverKind::AddPrompt),
@@ -959,7 +964,7 @@ impl PopoverHost {
                     let focus = self
                         .remote_name_input
                         .read_with(cx, |i, _| i.focus_handle());
-                    window.focus(&focus);
+                    window.focus(&focus, cx);
                 }
                 PopoverKind::Repo {
                     repo_id,
@@ -987,7 +992,7 @@ impl PopoverHost {
                     let focus = self
                         .remote_url_edit_input
                         .read_with(cx, |i, _| i.focus_handle());
-                    window.focus(&focus);
+                    window.focus(&focus, cx);
                 }
                 PopoverKind::Repo {
                     kind: RepoPopoverKind::Worktree(WorktreePopoverKind::AddPrompt),
@@ -1007,7 +1012,7 @@ impl PopoverHost {
                     let focus = self
                         .worktree_path_input
                         .read_with(cx, |i, _| i.focus_handle());
-                    window.focus(&focus);
+                    window.focus(&focus, cx);
                 }
                 PopoverKind::Repo {
                     repo_id,
@@ -1038,7 +1043,7 @@ impl PopoverHost {
                     let focus = self
                         .submodule_url_input
                         .read_with(cx, |i, _| i.focus_handle());
-                    window.focus(&focus);
+                    window.focus(&focus, cx);
                 }
                 PopoverKind::Repo {
                     repo_id,
@@ -1082,7 +1087,7 @@ impl PopoverHost {
                     let focus = self
                         .push_upstream_branch_input
                         .read_with(cx, |i, _| i.focus_handle());
-                    window.focus(&focus);
+                    window.focus(&focus, cx);
                 }
                 PopoverKind::DiffHunks => {
                     let _ = self.ensure_diff_hunk_picker_search_input(window, cx);
@@ -1585,6 +1590,7 @@ impl PopoverHost {
                 discard_lines_patch,
                 lines_count,
                 copy_text,
+                copy_target,
             } => self
                 .context_menu_view(
                     PopoverKind::DiffEditorMenu {
@@ -1597,6 +1603,7 @@ impl PopoverHost {
                         discard_lines_patch,
                         lines_count,
                         copy_text,
+                        copy_target,
                     },
                     cx,
                 )

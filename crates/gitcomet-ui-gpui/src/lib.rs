@@ -5,6 +5,7 @@ pub mod focused_diff;
 mod font_preferences;
 mod kit;
 mod launch_guard;
+mod linux_gui_env;
 #[doc(hidden)]
 pub mod perf_alloc;
 #[doc(hidden)]

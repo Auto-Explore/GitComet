@@ -158,6 +158,9 @@ fn recent_repository_picker_selecting_recent_repo_does_not_panic_subprocess(
     let store_for_assert = store.clone();
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|_window, app| {
+        view.update(app, |this, _cx| this.disable_poller_for_tests());
+    });
 
     cx.update(|window, app| {
         view.update(app, |this, cx| {

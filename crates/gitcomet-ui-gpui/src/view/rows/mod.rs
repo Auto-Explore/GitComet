@@ -155,26 +155,11 @@ fn commit_file_row_presentation_signature(
     }
 }
 
-#[cfg(any(test, feature = "benchmarks"))]
-fn hash_commit_file_row_presentations(rows: &[CommitFileRowPresentation]) -> u64 {
-    let mut hasher = rustc_hash::FxHasher::default();
-    rows.len().hash(&mut hasher);
-    for row in rows {
-        row.visuals.kind_key.hash(&mut hasher);
-        let label = row.label.as_ref();
-        label.as_ptr().hash(&mut hasher);
-        label.len().hash(&mut hasher);
-    }
-    hasher.finish()
-}
-
 #[derive(Clone, Debug)]
 struct CommitFileRowPresentationCacheEntry<K: Eq + Clone> {
     key: K,
     signature: CommitFileRowPresentationSignature,
     rows: Arc<[CommitFileRowPresentation]>,
-    #[cfg(any(test, feature = "benchmarks"))]
-    row_hash: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -206,8 +191,6 @@ impl<K: Eq + Clone> CommitFileRowPresentationCache<K> {
         CommitFileRowPresentationCacheEntry {
             key: key.clone(),
             signature,
-            #[cfg(any(test, feature = "benchmarks"))]
-            row_hash: hash_commit_file_row_presentations(&rows),
             rows,
         }
     }
@@ -228,12 +211,6 @@ impl<K: Eq + Clone> CommitFileRowPresentationCache<K> {
             self.cached = Some(CommitFileRowPresentationCacheEntry {
                 key: key.clone(),
                 signature,
-                #[cfg(any(test, feature = "benchmarks"))]
-                row_hash: self
-                    .cached
-                    .as_ref()
-                    .map(|entry| entry.row_hash)
-                    .unwrap_or_default(),
                 rows: reused_rows.clone(),
             });
             return reused_rows;
@@ -243,36 +220,6 @@ impl<K: Eq + Clone> CommitFileRowPresentationCache<K> {
         let rows = entry.rows.clone();
         self.cached = Some(entry);
         rows
-    }
-
-    #[cfg(feature = "benchmarks")]
-    pub(in crate::view) fn bench_row_hash_for(
-        &mut self,
-        key: &K,
-        files: &[gitcomet_core::domain::CommitFileChange],
-    ) -> u64 {
-        let signature = commit_file_row_presentation_signature(files);
-        if let Some(reused_hash) = self.cached.as_ref().and_then(|entry| {
-            if entry.key == *key || entry.signature == signature {
-                Some((entry.rows.clone(), entry.row_hash))
-            } else {
-                None
-            }
-        }) {
-            let (rows, row_hash) = reused_hash;
-            self.cached = Some(CommitFileRowPresentationCacheEntry {
-                key: key.clone(),
-                signature,
-                row_hash,
-                rows,
-            });
-            return row_hash;
-        }
-
-        let entry = Self::build_entry(key, files, signature);
-        let row_hash = entry.row_hash;
-        self.cached = Some(entry);
-        row_hash
     }
 
     #[cfg(any(test, feature = "benchmarks"))]
@@ -418,6 +365,7 @@ pub(in crate::view) use diff_text::{
     resolved_output_line_text, syntax_highlights_for_line,
 };
 
+pub(in crate::view) use self::diff_canvas::is_streamable_diff_text;
 #[cfg(test)]
 pub(in crate::view) use self::diff_canvas::{
     DiffPaintRecord, clear_diff_paint_log_for_tests, diff_paint_log_for_tests,

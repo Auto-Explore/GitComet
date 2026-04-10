@@ -95,6 +95,7 @@ pub(super) fn build_new_file_preview_from_diff(
     })
 }
 
+#[cfg(test)]
 pub(super) fn build_deleted_file_preview_from_diff(
     diff: &[impl UnifiedDiffLine],
     workdir: &std::path::Path,

@@ -4,7 +4,7 @@ const COMMIT_DETAILS_MESSAGE_MAX_HEIGHT_PX: f32 = 240.0;
 const COMMIT_MESSAGE_INPUT_MAX_HEIGHT_PX: f32 = 200.0;
 
 #[derive(Clone)]
-enum ContextMenuAction {
+pub(in crate::view) enum ContextMenuAction {
     SelectDiff {
         repo_id: RepoId,
         target: DiffTarget,
@@ -155,6 +155,10 @@ enum ContextMenuAction {
     ConflictResolverOutputPaste,
     CopyText {
         text: String,
+    },
+    CopyDiffText {
+        visible_ix: usize,
+        region: DiffTextRegion,
     },
     ApplyIndexPatch {
         repo_id: RepoId,

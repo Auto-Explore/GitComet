@@ -347,7 +347,7 @@ jobs:
           - target_platform: x86_64-linux
             artifact_arch: x86_64
             deb_arch: amd64
-            runs_on: ubuntu-22.04
+            runs_on: ubuntu-24.04
             build_appimage: true
           - target_platform: aarch64-linux
             artifact_arch: arm64
@@ -371,6 +371,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             desktop-file-utils \
+            dpkg-dev \
             pkg-config \
             libxcb1-dev \
             libxkbcommon-dev \
@@ -420,12 +421,18 @@ jobs:
           install -m644 dist/gitcomet.desktop "${pkg_root}/usr/share/applications/gitcomet.desktop"
           install -m644 assets/gitcomet-512.png "${pkg_root}/usr/share/icons/hicolor/512x512/apps/gitcomet.png"
 
+          shlib_depends="$(dpkg-shlibdeps -O "${pkg_root}/usr/bin/gitcomet" | sed -n 's/^shlibs:Depends=//p')"
+          depends="git"
+          if [[ -n "${shlib_depends}" ]]; then
+            depends="${depends}, ${shlib_depends}"
+          fi
+
           {
             echo "Package: gitcomet"
             echo "Version: ${deb_version}"
             echo "Architecture: ${DEB_ARCH}"
             echo "Maintainer: AutoExplore Oy <info@autoexplore.ai>"
-            echo "Depends: git"
+            echo "Depends: ${depends}"
             echo "Section: utils"
             echo "Priority: optional"
             echo "Description: Fast, resource-efficient Git GUI written in Rust."
@@ -555,7 +562,7 @@ jobs:
           keychain_password="$(openssl rand -hex 24)"
           cert_path="${RUNNER_TEMP}/gitcomet-signing-cert.p12"
           api_key_path="${RUNNER_TEMP}/AuthKey_${MACOS_NOTARY_KEY_ID}.p8"
-          default_keychain="$(security default-keychain -d user | tr -d '"')"
+          default_keychain="$(security default-keychain -d user | tr -d '"' | xargs)"
 
           if base64 --help 2>&1 | grep -q -- '--decode'; then
             printf '%s' "$MACOS_SIGNING_CERT_BASE64" | base64 --decode > "$cert_path"

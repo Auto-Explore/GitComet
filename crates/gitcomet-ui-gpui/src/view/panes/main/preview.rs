@@ -1,23 +1,123 @@
 use super::*;
+use std::borrow::Cow;
+use std::io::Read;
 
-struct ReadyWorktreePreview {
-    text: SharedString,
+const WORKTREE_PREVIEW_INDEX_SCAN_BUFFER_BYTES: usize = 64 * 1024;
+
+struct IndexedWorktreePreview {
+    source_len: usize,
     line_starts: Arc<[usize]>,
+    line_flags: Arc<[u8]>,
 }
 
-impl ReadyWorktreePreview {
-    fn from_text(text: String) -> Self {
-        let line_starts = Arc::from(build_line_starts(&text));
-        Self {
-            text: text.into(),
-            line_starts,
+#[inline]
+fn packed_preview_line_flags(ascii_only: bool, has_tabs: bool) -> u8 {
+    preview_line_flags_from_bools(ascii_only, has_tabs)
+}
+
+fn validate_utf8_chunk_streaming(
+    utf8_tail: &mut Vec<u8>,
+    validation_buffer: &mut Vec<u8>,
+    chunk: &[u8],
+) -> Result<(), String> {
+    validation_buffer.clear();
+    if !utf8_tail.is_empty() {
+        validation_buffer.extend_from_slice(utf8_tail.as_slice());
+    }
+    validation_buffer.extend_from_slice(chunk);
+
+    match std::str::from_utf8(validation_buffer.as_slice()) {
+        Ok(_) => {
+            utf8_tail.clear();
+            Ok(())
+        }
+        Err(error) => {
+            if error.error_len().is_some() {
+                return Err("File is not valid UTF-8; binary preview is not supported.".to_string());
+            }
+
+            let valid_up_to = error.valid_up_to();
+            utf8_tail.clear();
+            utf8_tail.extend_from_slice(&validation_buffer[valid_up_to..]);
+            Ok(())
+        }
+    }
+}
+
+fn index_utf8_worktree_preview_file(
+    path: &std::path::Path,
+) -> Result<IndexedWorktreePreview, String> {
+    let metadata = std::fs::metadata(path).map_err(|e| e.to_string())?;
+    if metadata.is_dir() {
+        return Err(
+            "Selected path is a directory. Select a file inside to preview, or stage the directory to add its contents.".to_string(),
+        );
+    }
+
+    let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    let mut reader =
+        std::io::BufReader::with_capacity(WORKTREE_PREVIEW_INDEX_SCAN_BUFFER_BYTES, file);
+    let source_len_hint = usize::try_from(metadata.len()).unwrap_or(0);
+    let mut line_starts = Vec::with_capacity(source_len_hint.saturating_div(64).saturating_add(1));
+    let mut line_flags = Vec::with_capacity(source_len_hint.saturating_div(64).saturating_add(1));
+    let mut validation_buffer =
+        Vec::with_capacity(WORKTREE_PREVIEW_INDEX_SCAN_BUFFER_BYTES.saturating_add(4));
+    let mut utf8_tail = Vec::with_capacity(4);
+    let mut scan_buffer = vec![0u8; WORKTREE_PREVIEW_INDEX_SCAN_BUFFER_BYTES];
+    let mut source_len = 0usize;
+    let mut line_ascii_only = true;
+    let mut line_has_tabs = false;
+
+    if source_len_hint > 0 {
+        line_starts.push(0);
+    }
+
+    loop {
+        let read_len = reader
+            .read(scan_buffer.as_mut_slice())
+            .map_err(|e| e.to_string())?;
+        if read_len == 0 {
+            break;
+        }
+        if source_len == 0 && line_starts.is_empty() {
+            line_starts.push(0);
+        }
+        let chunk = &scan_buffer[..read_len];
+        validate_utf8_chunk_streaming(&mut utf8_tail, &mut validation_buffer, chunk)?;
+
+        for &byte in chunk {
+            if byte == b'\n' {
+                line_flags.push(packed_preview_line_flags(line_ascii_only, line_has_tabs));
+                source_len = source_len.saturating_add(1);
+                line_starts.push(source_len);
+                line_ascii_only = true;
+                line_has_tabs = false;
+                continue;
+            }
+
+            if !byte.is_ascii() {
+                line_ascii_only = false;
+            }
+            if byte == b'\t' {
+                line_has_tabs = true;
+            }
+            source_len = source_len.saturating_add(1);
         }
     }
 
-    fn from_lines(lines: &[String], source_len: usize) -> Self {
-        let (text, line_starts) = preview_source_text_and_line_starts_from_lines(lines, source_len);
-        Self { text, line_starts }
+    if !utf8_tail.is_empty() {
+        return Err("File is not valid UTF-8; binary preview is not supported.".to_string());
     }
+
+    if source_len > 0 {
+        line_flags.push(packed_preview_line_flags(line_ascii_only, line_has_tabs));
+    }
+
+    Ok(IndexedWorktreePreview {
+        source_len,
+        line_starts: Arc::from(line_starts),
+        line_flags: Arc::from(line_flags),
+    })
 }
 
 type ConflictPreviewImagePayload = (gpui::ImageFormat, Vec<u8>);
@@ -98,9 +198,12 @@ impl MainPaneView {
     /// cache. Use this when the preview content is invalidated but the caller
     /// still needs to set identity fields (path, loadable state, syntax
     /// language) separately.
-    pub(super) fn reset_worktree_preview_source_state(&mut self) {
+    pub(in crate::view) fn reset_worktree_preview_source_state(&mut self) {
+        self.worktree_preview_source_path = None;
+        self.worktree_preview_source_len = 0;
         self.worktree_preview_text = SharedString::default();
         self.worktree_preview_line_starts = Arc::default();
+        self.worktree_preview_line_flags = Arc::default();
         self.worktree_preview_search_trigram_index = None;
         self.worktree_preview_segments_cache_path = None;
         self.worktree_preview_cache_write_blocked_until_rev = None;
@@ -115,10 +218,10 @@ impl MainPaneView {
     }
 
     pub(in crate::view) fn is_file_preview_active(&self) -> bool {
-        let is_commit_file_target = self.active_repo().is_some_and(|repo| {
+        let preview_text_file_available = self.active_repo().is_some_and(|repo| {
             matches!(
-                repo.diff_state.diff_target.as_ref(),
-                Some(DiffTarget::Commit { path: Some(_), .. })
+                repo.diff_state.diff_preview_text_file,
+                Loadable::Loading | Loadable::Error(_) | Loadable::Ready(Some(_))
             )
         });
         let has_untracked_preview = self.untracked_worktree_preview_path().is_some_and(|p| {
@@ -127,10 +230,12 @@ impl MainPaneView {
         let has_added_preview = self.added_file_preview_abs_path().is_some_and(|p| {
             !crate::view::should_bypass_text_file_preview_for_path(&p)
                 && !p.is_dir()
-                && (p.is_file() || is_commit_file_target)
+                && (p.is_file() || preview_text_file_available)
         });
         let has_deleted_preview = self.deleted_file_preview_abs_path().is_some_and(|p| {
-            !crate::view::should_bypass_text_file_preview_for_path(&p) && !p.is_dir()
+            !crate::view::should_bypass_text_file_preview_for_path(&p)
+                && !p.is_dir()
+                && preview_text_file_available
         });
         has_untracked_preview || has_added_preview || has_deleted_preview
     }
@@ -296,14 +401,18 @@ impl MainPaneView {
 
         cx.spawn(
             async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
-                let (base_payload, ours_payload, theirs_payload) = smol::unblock(move || {
+                let rasterize_payloads = move || {
                     (
                         rasterize_conflict_preview_svg_payload(base_bytes),
                         rasterize_conflict_preview_svg_payload(ours_bytes),
                         rasterize_conflict_preview_svg_payload(theirs_bytes),
                     )
-                })
-                .await;
+                };
+                let (base_payload, ours_payload, theirs_payload) = if cfg!(test) {
+                    rasterize_payloads()
+                } else {
+                    smol::unblock(rasterize_payloads).await
+                };
 
                 let _ = view.update(cx, |this, cx| {
                     if this.conflict_resolver.image_preview.source_hash != Some(source_hash)
@@ -380,15 +489,58 @@ impl MainPaneView {
         }
     }
 
-    pub(in crate::view) fn worktree_preview_line_text(&self, line_ix: usize) -> Option<&str> {
-        let line_count = self.worktree_preview_line_count()?;
-        if line_ix >= line_count {
-            return None;
-        }
-        Some(rows::resolved_output_line_text(
-            self.worktree_preview_text.as_ref(),
+    pub(in crate::view) fn worktree_preview_line_raw_text(
+        &self,
+        line_ix: usize,
+    ) -> Option<gitcomet_core::file_diff::FileDiffLineText> {
+        let range = indexed_line_byte_range(
             self.worktree_preview_line_starts.as_ref(),
+            self.worktree_preview_source_len,
             line_ix,
+        )?;
+
+        if self.worktree_preview_source_len > 0 && self.worktree_preview_text.is_empty() {
+            let source_path = Arc::new(self.worktree_preview_source_path.clone()?);
+            let flags = self
+                .worktree_preview_line_flags
+                .get(line_ix)
+                .copied()
+                .unwrap_or_default();
+            return Some(gitcomet_core::file_diff::FileDiffLineText::file_slice(
+                source_path,
+                range,
+                preview_line_is_ascii_without_loading(flags),
+                preview_line_has_tabs_without_loading(flags),
+            ));
+        }
+
+        let source_text: Arc<str> = Arc::from(self.worktree_preview_text.as_ref());
+        Some(gitcomet_core::file_diff::FileDiffLineText::shared_slice(
+            source_text,
+            range,
+        ))
+    }
+
+    pub(in crate::view) fn worktree_preview_line_text(
+        &self,
+        line_ix: usize,
+    ) -> Option<Cow<'_, str>> {
+        if self.worktree_preview_source_len > 0 && self.worktree_preview_text.is_empty() {
+            return self
+                .worktree_preview_line_raw_text(line_ix)
+                .map(|line| Cow::Owned(line.as_ref().to_string()));
+        }
+
+        let range = indexed_line_byte_range(
+            self.worktree_preview_line_starts.as_ref(),
+            self.worktree_preview_source_len,
+            line_ix,
+        )?;
+        Some(Cow::Borrowed(
+            self.worktree_preview_text
+                .as_ref()
+                .get(range)
+                .unwrap_or_default(),
         ))
     }
 
@@ -594,6 +746,31 @@ impl MainPaneView {
         }
     }
 
+    fn preview_text_file_source_path_for_side(
+        &self,
+        side: gitcomet_core::domain::DiffPreviewTextSide,
+    ) -> Option<std::path::PathBuf> {
+        let repo = self.active_repo()?;
+        match &repo.diff_state.diff_preview_text_file {
+            Loadable::Ready(Some(file)) if file.side == side => Some(file.path.clone()),
+            _ => None,
+        }
+    }
+
+    pub(in super::super::super) fn added_file_preview_source_path(
+        &self,
+    ) -> Option<std::path::PathBuf> {
+        self.added_file_preview_abs_path()?;
+        self.preview_text_file_source_path_for_side(gitcomet_core::domain::DiffPreviewTextSide::New)
+    }
+
+    pub(in super::super::super) fn deleted_file_preview_source_path(
+        &self,
+    ) -> Option<std::path::PathBuf> {
+        self.deleted_file_preview_abs_path()?;
+        self.preview_text_file_source_path_for_side(gitcomet_core::domain::DiffPreviewTextSide::Old)
+    }
+
     pub(in super::super::super) fn ensure_preview_loading(&mut self, path: std::path::PathBuf) {
         let should_reset = match self.worktree_preview_path.as_ref() {
             Some(p) => p != &path,
@@ -616,61 +793,51 @@ impl MainPaneView {
 
     pub(in super::super::super) fn ensure_worktree_preview_loaded(
         &mut self,
-        path: std::path::PathBuf,
+        display_path: std::path::PathBuf,
+        source_path: std::path::PathBuf,
         cx: &mut gpui::Context<Self>,
     ) {
-        let should_reload = match self.worktree_preview_path.as_ref() {
-            Some(p) => p != &path,
-            None => true,
-        } || matches!(self.worktree_preview, Loadable::NotLoaded);
+        let should_reload = self.worktree_preview_path.as_ref() != Some(&display_path)
+            || self.worktree_preview_source_path.as_ref() != Some(&source_path)
+            || matches!(self.worktree_preview, Loadable::NotLoaded);
         if !should_reload {
             return;
         }
 
-        self.worktree_preview_syntax_language = rows::diff_syntax_language_for_path(&path);
-        self.worktree_preview_path = Some(path.clone());
+        self.worktree_preview_syntax_language = rows::diff_syntax_language_for_path(&display_path);
+        self.worktree_preview_path = Some(display_path.clone());
         self.worktree_preview = Loadable::Loading;
         self.reset_worktree_preview_source_state();
+        self.worktree_preview_source_path = Some(source_path.clone());
         self.diff_horizontal_min_width = px(0.0);
         self.worktree_preview_scroll
             .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
 
         cx.spawn(async move |view, cx| {
-            const MAX_BYTES: u64 = 2 * 1024 * 1024;
-            let result = smol::unblock({
-                let path_for_task = path.clone();
-                move || {
-                let meta = std::fs::metadata(&path_for_task).map_err(|e| e.to_string())?;
-                if meta.is_dir() {
-                    return Err("Selected path is a directory. Select a file inside to preview, or stage the directory to add its contents.".to_string());
-                }
-                if meta.len() > MAX_BYTES {
-                    return Err(format!(
-                        "File is too large to preview ({} bytes).",
-                        meta.len()
-                    ));
-                }
-
-                let bytes = std::fs::read(&path_for_task).map_err(|e| e.to_string())?;
-                let text = String::from_utf8(bytes).map_err(|_| {
-                    "File is not valid UTF-8; binary preview is not supported.".to_string()
-                })?;
-
-                Ok::<ReadyWorktreePreview, String>(ReadyWorktreePreview::from_text(text))
-                }
-            })
-            .await;
+            let index_preview = {
+                let source_path_for_task = source_path.clone();
+                move || index_utf8_worktree_preview_file(&source_path_for_task)
+            };
+            let result = if cfg!(test) {
+                index_preview()
+            } else {
+                smol::unblock(index_preview).await
+            };
             let _ = view.update(cx, |this, cx| {
-                if this.worktree_preview_path.as_ref() != Some(&path) {
+                if this.worktree_preview_path.as_ref() != Some(&display_path)
+                    || this.worktree_preview_source_path.as_ref() != Some(&source_path)
+                {
                     return;
                 }
                 this.worktree_preview_scroll
                     .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
                 match result {
-                    Ok(preview) => this.set_worktree_preview_ready_source(
-                        path.clone(),
-                        preview.text,
+                    Ok(preview) => this.set_worktree_preview_ready_indexed_source(
+                        display_path.clone(),
+                        source_path.clone(),
+                        preview.source_len,
                         preview.line_starts,
+                        preview.line_flags,
                         cx,
                     ),
                     Err(e) => {
@@ -684,149 +851,28 @@ impl MainPaneView {
         .detach();
     }
 
-    pub(in super::super::super) fn try_populate_worktree_preview_from_diff_file(
+    pub(in super::super::super) fn ensure_selected_file_preview_loaded(
         &mut self,
         cx: &mut gpui::Context<Self>,
     ) {
-        let Some((abs_path, preview_result)) = (|| {
-            let repo = self.active_repo()?;
-            let path_from_target = match repo.diff_state.diff_target.as_ref()? {
-                DiffTarget::WorkingTree { path, .. } => Some(path),
-                DiffTarget::Commit {
-                    path: Some(path), ..
-                } => Some(path),
-                _ => None,
-            }?;
-
-            let abs_path = if path_from_target.is_absolute() {
-                path_from_target.clone()
-            } else {
-                repo.spec.workdir.join(path_from_target)
-            };
-
-            let prefer_old = match repo.diff_state.diff_target.as_ref()? {
-                DiffTarget::WorkingTree { path, area } => match &repo.status {
-                    Loadable::Ready(status) => {
-                        let entries = match area {
-                            DiffArea::Unstaged => status.unstaged.as_slice(),
-                            DiffArea::Staged => status.staged.as_slice(),
-                        };
-                        entries
-                            .iter()
-                            .any(|e| e.kind == FileStatusKind::Deleted && &e.path == path)
-                    }
-                    _ => false,
-                },
-                DiffTarget::Commit {
-                    commit_id,
-                    path: Some(path),
-                } => match &repo.history_state.commit_details {
-                    Loadable::Ready(details) if &details.id == commit_id => details
-                        .files
-                        .iter()
-                        .any(|f| f.kind == FileStatusKind::Deleted && &f.path == path),
-                    _ => false,
-                },
-                _ => false,
-            };
-
-            let mut diff_file_error: Option<String> = None;
-            let mut preview_result: Option<Result<ReadyWorktreePreview, String>> =
-                match &repo.diff_state.diff_file {
-                    Loadable::NotLoaded | Loadable::Loading => None,
-                    Loadable::Error(e) => {
-                        diff_file_error = Some(e.clone());
-                        None
-                    }
-                    Loadable::Ready(file) => file.as_ref().and_then(|file| {
-                        let text = if prefer_old {
-                            file.old.as_deref()
-                        } else {
-                            file.new.as_deref()
-                        };
-                        text.map(|text| Ok(ReadyWorktreePreview::from_text(text.to_owned())))
-                    }),
-                };
-
-            if preview_result.is_none() {
-                match &repo.diff_state.diff {
-                    Loadable::Ready(diff) => {
-                        let annotated = annotate_unified(diff);
-                        if prefer_old {
-                            if let Some(preview) = build_deleted_file_preview_from_diff(
-                                &annotated,
-                                &repo.spec.workdir,
-                                repo.diff_state.diff_target.as_ref(),
-                            ) {
-                                preview_result = Some(Ok(ReadyWorktreePreview::from_lines(
-                                    preview.lines.as_slice(),
-                                    preview.source_len,
-                                )));
-                            }
-                        } else if let Some(preview) = build_new_file_preview_from_diff(
-                            &annotated,
-                            &repo.spec.workdir,
-                            repo.diff_state.diff_target.as_ref(),
-                        ) {
-                            preview_result = Some(Ok(ReadyWorktreePreview::from_lines(
-                                preview.lines.as_slice(),
-                                preview.source_len,
-                            )));
-                        } else if let Some(e) = diff_file_error {
-                            preview_result = Some(Err(e));
-                        } else {
-                            preview_result =
-                                Some(Err("No text preview available for this file.".to_string()));
-                        }
-                    }
-                    Loadable::Error(e) => preview_result = Some(Err(e.clone())),
-                    Loadable::NotLoaded | Loadable::Loading => {}
-                }
-            }
-
-            Some((abs_path, preview_result))
-        })() else {
-            return;
-        };
-
-        if matches!(self.worktree_preview, Loadable::Ready(_))
-            && self.worktree_preview_path.as_ref() == Some(&abs_path)
-        {
+        if let Some(path) = self.untracked_worktree_preview_path() {
+            self.ensure_worktree_preview_loaded(path.clone(), path, cx);
             return;
         }
 
-        let Some(preview_result) = preview_result else {
-            return;
-        };
+        let display_path = self
+            .added_file_preview_abs_path()
+            .or_else(|| self.deleted_file_preview_abs_path());
+        let source_path = self
+            .added_file_preview_source_path()
+            .or_else(|| self.deleted_file_preview_source_path());
 
-        match preview_result {
-            Ok(preview) => {
-                self.worktree_preview_scroll
-                    .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
-                self.set_worktree_preview_ready_source(
-                    abs_path,
-                    preview.text,
-                    preview.line_starts,
-                    cx,
-                );
-                self.diff_horizontal_min_width = px(0.0);
+        match (display_path, source_path) {
+            (Some(display_path), Some(source_path)) => {
+                self.ensure_worktree_preview_loaded(display_path, source_path, cx);
             }
-            Err(e) => {
-                if self.worktree_preview_path.as_ref() != Some(&abs_path)
-                    || matches!(
-                        self.worktree_preview,
-                        Loadable::NotLoaded | Loadable::Loading
-                    )
-                {
-                    self.worktree_preview_scroll
-                        .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
-                    self.worktree_preview_path = Some(abs_path);
-                    self.worktree_preview = Loadable::Error(e);
-                    self.worktree_preview_syntax_language = None;
-                    self.reset_worktree_preview_source_state();
-                    self.diff_horizontal_min_width = px(0.0);
-                }
-            }
+            (Some(display_path), None) => self.ensure_preview_loading(display_path),
+            (None, _) => {}
         }
     }
 }

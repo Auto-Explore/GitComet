@@ -15,6 +15,20 @@ use crate::view::markdown_preview::{
     MarkdownPreviewRowStyledTextCache, MarkdownPreviewRowWidthCache,
 };
 use crate::view::panes::main::diff_cache::render_svg_image_diff_preview;
+pub struct FileDiffSyntaxPrepareSource {
+    text: SharedString,
+    line_starts: Arc<[usize]>,
+}
+
+impl FileDiffSyntaxPrepareSource {
+    fn line_count(&self) -> usize {
+        if self.text.is_empty() {
+            0
+        } else {
+            self.line_starts.len().max(1)
+        }
+    }
+}
 
 pub struct FileDiffSyntaxPrepareFixture {
     lines: Vec<String>,
@@ -29,22 +43,30 @@ impl FileDiffSyntaxPrepareFixture {
     pub fn new(lines: usize, line_bytes: usize) -> Self {
         let language =
             diff_syntax_language_for_path("src/lib.rs").unwrap_or(DiffSyntaxLanguage::Rust);
-        let lines = build_synthetic_source_lines(lines, line_bytes);
-        let (warm_text, warm_line_starts) = shared_source_text_and_line_starts(&lines);
-        Self {
-            lines,
-            warm_text,
-            warm_line_starts,
-            language,
-            theme: AppTheme::gitcomet_dark(),
-            budget: DiffSyntaxBudget::default(),
-        }
+        Self::from_lines(language, build_synthetic_source_lines(lines, line_bytes))
+    }
+
+    pub fn new_json_proxy(lines: usize, line_bytes: usize) -> Self {
+        Self::from_lines(
+            DiffSyntaxLanguage::Json,
+            build_synthetic_json_proxy_lines(lines, line_bytes),
+        )
     }
 
     pub fn new_query_stress(lines: usize, line_bytes: usize, nesting_depth: usize) -> Self {
         let language =
             diff_syntax_language_for_path("src/lib.rs").unwrap_or(DiffSyntaxLanguage::Rust);
         let lines = build_synthetic_nested_query_stress_lines(lines, line_bytes, nesting_depth);
+        Self::from_lines(language, lines)
+    }
+
+    pub fn new_json_query_stress(lines: usize, line_bytes: usize, nesting_depth: usize) -> Self {
+        let lines =
+            build_synthetic_nested_json_query_stress_lines(lines, line_bytes, nesting_depth);
+        Self::from_lines(DiffSyntaxLanguage::Json, lines)
+    }
+
+    fn from_lines(language: DiffSyntaxLanguage, lines: Vec<String>) -> Self {
         let (warm_text, warm_line_starts) = shared_source_text_and_line_starts(&lines);
         Self {
             lines,
@@ -61,14 +83,33 @@ impl FileDiffSyntaxPrepareFixture {
     }
 
     pub fn run_prepare_cold(&self, nonce: u64) -> u64 {
-        let lines = self
-            .lines
-            .iter()
-            .enumerate()
-            .map(|(ix, line)| format!("{line} // cold_{nonce}_{ix}"))
-            .collect::<Vec<_>>();
-        let document = self.prepare_document(&lines);
-        self.hash_prepared(&lines, document)
+        let source = self.prepare_cold_source(nonce);
+        self.run_prepare_cold_from_source(&source)
+    }
+
+    pub fn prepare_cold_source(&self, nonce: u64) -> FileDiffSyntaxPrepareSource {
+        let mut text =
+            String::with_capacity(self.warm_text.len().saturating_add(self.lines.len() * 32));
+        let mut line_starts = Vec::with_capacity(self.lines.len());
+
+        for (ix, line) in self.lines.iter().enumerate() {
+            line_starts.push(text.len());
+            push_cold_variant_line(&mut text, line, self.language, nonce, ix);
+            if ix + 1 < self.lines.len() {
+                text.push('\n');
+            }
+        }
+
+        FileDiffSyntaxPrepareSource {
+            text: text.into(),
+            line_starts: Arc::from(line_starts),
+        }
+    }
+
+    pub fn run_prepare_cold_from_source(&self, source: &FileDiffSyntaxPrepareSource) -> u64 {
+        let document =
+            self.prepare_document_from_shared(source.text.clone(), Arc::clone(&source.line_starts));
+        self.hash_prepared_source(source, document)
     }
 
     pub fn run_prepare_warm(&self) -> u64 {
@@ -201,6 +242,20 @@ impl FileDiffSyntaxPrepareFixture {
         self.hash_prepared_line(lines, document, 0)
     }
 
+    fn hash_prepared_source(
+        &self,
+        source: &FileDiffSyntaxPrepareSource,
+        document: Option<super::diff_text::PreparedDiffSyntaxDocument>,
+    ) -> u64 {
+        self.hash_prepared_shared(
+            source.text.as_ref(),
+            source.line_starts.as_ref(),
+            source.line_count(),
+            document,
+            0,
+        )
+    }
+
     fn hash_prepared_line(
         &self,
         lines: &[String],
@@ -231,6 +286,64 @@ impl FileDiffSyntaxPrepareFixture {
         styled.highlights_hash.hash(&mut h);
         h.finish()
     }
+
+    fn hash_prepared_shared(
+        &self,
+        text: &str,
+        line_starts: &[usize],
+        line_count: usize,
+        document: Option<super::diff_text::PreparedDiffSyntaxDocument>,
+        line_ix: usize,
+    ) -> u64 {
+        let line_ix = line_ix.min(line_count.saturating_sub(1));
+        let text = super::diff_text::resolved_output_line_text(text, line_starts, line_ix);
+        let styled =
+            super::diff_text::build_cached_diff_styled_text_for_prepared_document_line_nonblocking(
+                self.theme,
+                text,
+                &[],
+                "",
+                super::diff_text::DiffSyntaxConfig {
+                    language: Some(self.language),
+                    mode: DiffSyntaxMode::Auto,
+                },
+                None,
+                super::diff_text::PreparedDiffSyntaxLine { document, line_ix },
+            )
+            .into_inner();
+
+        let mut h = FxHasher::default();
+        line_count.hash(&mut h);
+        line_ix.hash(&mut h);
+        styled.text_hash.hash(&mut h);
+        styled.highlights_hash.hash(&mut h);
+        h.finish()
+    }
+}
+
+fn push_cold_variant_line(
+    text: &mut String,
+    line: &str,
+    language: DiffSyntaxLanguage,
+    nonce: u64,
+    ix: usize,
+) {
+    use std::fmt::Write;
+
+    if language == DiffSyntaxLanguage::Json {
+        for marker in ["\"payload\":\"", "\"value\":\""] {
+            if let Some(start) = line.find(marker) {
+                let insert_at = start + marker.len();
+                text.push_str(&line[..insert_at]);
+                let _ = write!(text, "cold_{nonce}_{ix}_");
+                text.push_str(&line[insert_at..]);
+                return;
+            }
+        }
+    }
+
+    text.push_str(line);
+    let _ = write!(text, " // cold_{nonce}_{ix}");
 }
 
 fn shared_source_text_and_line_starts(lines: &[String]) -> (SharedString, Arc<[usize]>) {
@@ -2196,25 +2309,9 @@ impl SvgDualPathFirstWindowFixture {
         }
     }
 
-    pub fn measure_first_window(&self) -> SvgDualPathFirstWindowMetrics {
-        let rasterize_success = u64::from(self.old_rasterized_png_len > 0);
-        let fallback_triggered = 1u64; // new_svg always fails rasterization
-        SvgDualPathFirstWindowMetrics {
-            old_svg_bytes: bench_counter_u64(self.old_svg.len()),
-            new_svg_bytes: bench_counter_u64(self.new_svg.len()),
-            rasterize_success,
-            fallback_triggered,
-            rasterized_png_bytes: bench_counter_u64(self.old_rasterized_png_len),
-            images_rendered: rasterize_success, // only the successfully rasterized side
-            divider_count: 1,
-        }
-    }
-
-    /// Hot-path step exercising both SVG paths.
-    ///
-    /// Returns a deterministic hash to prevent dead-code elimination.
-    pub fn run_first_window_step(&self, _window: usize) -> u64 {
+    fn exercise_first_window(&self) -> (u64, SvgDualPathFirstWindowMetrics) {
         let mut h = FxHasher::default();
+        let mut rasterize_success = 0u64;
 
         // Path 1: render the valid SVG through the live file-diff preview path.
         if let Some(render) = render_svg_image_diff_preview(&self.old_svg) {
@@ -2222,6 +2319,7 @@ impl SvgDualPathFirstWindowFixture {
             1u8.hash(&mut h); // rasterize-success marker
             size.width.0.hash(&mut h);
             size.height.0.hash(&mut h);
+            rasterize_success = 1;
         } else {
             0u8.hash(&mut h); // should not happen for valid SVG
         }
@@ -2239,7 +2337,30 @@ impl SvgDualPathFirstWindowFixture {
         // Divider between before/after columns.
         1u8.hash(&mut h);
 
-        h.finish()
+        let metrics = SvgDualPathFirstWindowMetrics {
+            old_svg_bytes: bench_counter_u64(self.old_svg.len()),
+            new_svg_bytes: bench_counter_u64(self.new_svg.len()),
+            rasterize_success,
+            fallback_triggered: 1,
+            rasterized_png_bytes: bench_counter_u64(self.old_rasterized_png_len),
+            images_rendered: rasterize_success,
+            divider_count: 1,
+        };
+
+        (h.finish(), metrics)
+    }
+
+    pub fn measure_first_window(&self) -> SvgDualPathFirstWindowMetrics {
+        let (_hash, metrics) = self.exercise_first_window();
+        metrics
+    }
+
+    /// Hot-path step exercising both SVG paths.
+    ///
+    /// Returns a deterministic hash to prevent dead-code elimination.
+    pub fn run_first_window_step(&self, _window: usize) -> u64 {
+        let (hash, _metrics) = self.exercise_first_window();
+        hash
     }
 }
 
@@ -2327,6 +2448,88 @@ fn build_synthetic_nested_query_stress_lines(
             line.push_str(" (deep_token_");
             line.push_str(&(ix % 101).to_string());
             line.push(')');
+        }
+        lines.push(line);
+    }
+    lines
+}
+
+fn build_synthetic_json_proxy_lines(count: usize, target_line_bytes: usize) -> Vec<String> {
+    use std::fmt::Write;
+
+    let count = count.max(1);
+    let target_line_bytes = target_line_bytes.max(96);
+    let mut lines = Vec::with_capacity(count);
+    for ix in 0..count {
+        let mut line = String::with_capacity(target_line_bytes.saturating_add(128));
+        if ix == 0 {
+            line.push('{');
+        }
+        let _ = write!(
+            line,
+            "\"row_{ix:06}\":{{\"id\":{ix},\"active\":{},\"kind\":\"record\",\"payload\":\"",
+            if ix % 2 == 0 { "true" } else { "false" },
+        );
+        while line.len().saturating_add(96) < target_line_bytes {
+            line.push_str("json_token_");
+            let _ = write!(line, "{:03}", ix % 997);
+            line.push('_');
+        }
+        let _ = write!(
+            line,
+            "\",\"metrics\":{{\"count\":{},\"score\":{},\"tags\":[\"alpha\",\"beta\",\"gamma\"]}}}}",
+            ix.saturating_mul(3).saturating_add(1),
+            ix.saturating_mul(17).saturating_add(5),
+        );
+        if ix + 1 < count {
+            line.push(',');
+        } else {
+            line.push('}');
+        }
+        lines.push(line);
+    }
+    lines
+}
+
+fn build_synthetic_nested_json_query_stress_lines(
+    count: usize,
+    target_line_bytes: usize,
+    nesting_depth: usize,
+) -> Vec<String> {
+    use std::fmt::Write;
+
+    let count = count.max(1);
+    let target_line_bytes = target_line_bytes.max(256);
+    let nesting_depth = nesting_depth.max(32);
+    let mut lines = Vec::with_capacity(count);
+    for ix in 0..count {
+        let mut line =
+            String::with_capacity(target_line_bytes.saturating_add(nesting_depth * 24 + 192));
+        if ix == 0 {
+            line.push('{');
+        }
+        let _ = write!(line, "\"row_{ix:06}\":");
+        for depth in 0..nesting_depth {
+            let _ = write!(line, "{{\"level_{depth:03}\":");
+        }
+        line.push_str("{\"value\":\"");
+        while line.len().saturating_add(nesting_depth * 14 + 160) < target_line_bytes {
+            line.push_str("nested_json_token_");
+            let _ = write!(line, "{:03}", (ix + nesting_depth) % 997);
+            line.push('_');
+        }
+        let _ = write!(
+            line,
+            "\",\"index\":{ix},\"flags\":[true,false,null],\"items\":[{{\"leaf\":{},\"kind\":\"deep\"}}]}}",
+            if ix % 2 == 0 { "true" } else { "false" },
+        );
+        for _ in 0..nesting_depth {
+            line.push('}');
+        }
+        if ix + 1 < count {
+            line.push(',');
+        } else {
+            line.push('}');
         }
         lines.push(line);
     }

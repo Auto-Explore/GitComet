@@ -1,3 +1,8 @@
+use gitcomet_tree_sitter_alloc::{
+    AllocMetrics as TreeSitterAllocMetrics,
+    install_tracking_allocator as install_tree_sitter_tracking_allocator_impl,
+    measure_allocations as measure_tree_sitter_allocations,
+};
 use mimalloc::MiMalloc;
 use serde_json::{Map, Value, json};
 use stats_alloc::{Region, Stats, StatsAlloc};
@@ -15,6 +20,12 @@ pub struct PerfAllocMetrics {
     pub dealloc_bytes: u64,
     pub realloc_bytes_delta: i64,
     pub net_alloc_bytes: i64,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct PerfAllocChannels {
+    pub rust: PerfAllocMetrics,
+    pub tree_sitter: PerfAllocMetrics,
 }
 
 impl PerfAllocMetrics {
@@ -37,18 +48,74 @@ impl PerfAllocMetrics {
             json!(self.net_alloc_bytes),
         );
     }
+
+    pub fn is_zero(self) -> bool {
+        self.alloc_ops == 0
+            && self.dealloc_ops == 0
+            && self.realloc_ops == 0
+            && self.alloc_bytes == 0
+            && self.dealloc_bytes == 0
+            && self.realloc_bytes_delta == 0
+            && self.net_alloc_bytes == 0
+    }
+
+    pub fn delta_since(self, earlier: Self) -> Self {
+        let alloc_bytes = self.alloc_bytes.saturating_sub(earlier.alloc_bytes);
+        let dealloc_bytes = self.dealloc_bytes.saturating_sub(earlier.dealloc_bytes);
+        Self {
+            alloc_ops: self.alloc_ops.saturating_sub(earlier.alloc_ops),
+            dealloc_ops: self.dealloc_ops.saturating_sub(earlier.dealloc_ops),
+            realloc_ops: self.realloc_ops.saturating_sub(earlier.realloc_ops),
+            alloc_bytes,
+            dealloc_bytes,
+            realloc_bytes_delta: clamp_i128_to_i64(
+                i128::from(self.realloc_bytes_delta) - i128::from(earlier.realloc_bytes_delta),
+            ),
+            net_alloc_bytes: clamp_i128_to_i64(i128::from(alloc_bytes) - i128::from(dealloc_bytes)),
+        }
+    }
+
+    pub fn saturating_add(self, other: Self) -> Self {
+        let alloc_bytes = self.alloc_bytes.saturating_add(other.alloc_bytes);
+        let dealloc_bytes = self.dealloc_bytes.saturating_add(other.dealloc_bytes);
+        Self {
+            alloc_ops: self.alloc_ops.saturating_add(other.alloc_ops),
+            dealloc_ops: self.dealloc_ops.saturating_add(other.dealloc_ops),
+            realloc_ops: self.realloc_ops.saturating_add(other.realloc_ops),
+            alloc_bytes,
+            dealloc_bytes,
+            realloc_bytes_delta: clamp_i128_to_i64(
+                i128::from(self.realloc_bytes_delta) + i128::from(other.realloc_bytes_delta),
+            ),
+            net_alloc_bytes: clamp_i128_to_i64(i128::from(alloc_bytes) - i128::from(dealloc_bytes)),
+        }
+    }
 }
 
 pub fn current_alloc_metrics() -> PerfAllocMetrics {
     TRACKING_MIMALLOC.stats().into()
 }
 
+pub fn install_tree_sitter_tracking_allocator() {
+    install_tree_sitter_tracking_allocator_impl();
+}
+
+pub fn measure_allocation_channels<T>(f: impl FnOnce() -> T) -> (T, PerfAllocChannels) {
+    let rust_region = Region::new(&TRACKING_MIMALLOC);
+    let (value, tree_sitter) = measure_tree_sitter_allocations(f);
+    let rust = rust_region.change().into();
+    (
+        value,
+        PerfAllocChannels {
+            rust,
+            tree_sitter: tree_sitter.into(),
+        },
+    )
+}
+
 pub fn measure_allocations<T>(f: impl FnOnce() -> T) -> (T, PerfAllocMetrics) {
-    let region = Region::new(&TRACKING_MIMALLOC);
-    let value = f();
-    std::hint::black_box(&value);
-    let metrics = region.change().into();
-    (value, metrics)
+    let (value, channels) = measure_allocation_channels(f);
+    (value, channels.rust)
 }
 
 impl From<Stats> for PerfAllocMetrics {
@@ -68,6 +135,24 @@ impl From<Stats> for PerfAllocMetrics {
             net_alloc_bytes: (i128::from(alloc_bytes) - i128::from(dealloc_bytes))
                 .clamp(i128::from(i64::MIN), i128::from(i64::MAX))
                 as i64,
+        }
+    }
+}
+
+fn clamp_i128_to_i64(value: i128) -> i64 {
+    value.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64
+}
+
+impl From<TreeSitterAllocMetrics> for PerfAllocMetrics {
+    fn from(value: TreeSitterAllocMetrics) -> Self {
+        Self {
+            alloc_ops: value.alloc_ops,
+            dealloc_ops: value.dealloc_ops,
+            realloc_ops: value.realloc_ops,
+            alloc_bytes: value.alloc_bytes,
+            dealloc_bytes: value.dealloc_bytes,
+            realloc_bytes_delta: value.realloc_bytes_delta,
+            net_alloc_bytes: value.net_alloc_bytes,
         }
     }
 }
@@ -132,5 +217,67 @@ mod tests {
             payload.get("first_interactive_net_alloc_bytes"),
             Some(&json!(384))
         );
+    }
+
+    #[test]
+    fn delta_since_subtracts_metric_snapshots() {
+        let current = PerfAllocMetrics {
+            alloc_ops: 7,
+            dealloc_ops: 4,
+            realloc_ops: 3,
+            alloc_bytes: 1_024,
+            dealloc_bytes: 256,
+            realloc_bytes_delta: 128,
+            net_alloc_bytes: 768,
+        };
+        let earlier = PerfAllocMetrics {
+            alloc_ops: 2,
+            dealloc_ops: 1,
+            realloc_ops: 1,
+            alloc_bytes: 128,
+            dealloc_bytes: 64,
+            realloc_bytes_delta: 32,
+            net_alloc_bytes: 64,
+        };
+
+        let delta = current.delta_since(earlier);
+
+        assert_eq!(delta.alloc_ops, 5);
+        assert_eq!(delta.dealloc_ops, 3);
+        assert_eq!(delta.realloc_ops, 2);
+        assert_eq!(delta.alloc_bytes, 896);
+        assert_eq!(delta.dealloc_bytes, 192);
+        assert_eq!(delta.realloc_bytes_delta, 96);
+        assert_eq!(delta.net_alloc_bytes, 704);
+    }
+
+    #[test]
+    fn saturating_add_combines_metric_channels() {
+        let combined = PerfAllocMetrics {
+            alloc_ops: 3,
+            dealloc_ops: 1,
+            realloc_ops: 1,
+            alloc_bytes: 256,
+            dealloc_bytes: 64,
+            realloc_bytes_delta: 64,
+            net_alloc_bytes: 192,
+        }
+        .saturating_add(PerfAllocMetrics {
+            alloc_ops: 2,
+            dealloc_ops: 3,
+            realloc_ops: 4,
+            alloc_bytes: 128,
+            dealloc_bytes: 256,
+            realloc_bytes_delta: -32,
+            net_alloc_bytes: -128,
+        });
+
+        assert_eq!(combined.alloc_ops, 5);
+        assert_eq!(combined.dealloc_ops, 4);
+        assert_eq!(combined.realloc_ops, 5);
+        assert_eq!(combined.alloc_bytes, 384);
+        assert_eq!(combined.dealloc_bytes, 320);
+        assert_eq!(combined.realloc_bytes_delta, 32);
+        assert_eq!(combined.net_alloc_bytes, 64);
     }
 }

@@ -1,10 +1,16 @@
 use super::*;
+use crate::view::panels::tests::wait_for_main_pane_condition;
+use crate::view::panels::tests::{
+    app_state_with_repo, disable_view_poller_for_test, opening_repo_state, push_test_state,
+    set_test_file_status,
+};
 
 #[gpui::test]
 fn commit_menu_has_add_tag_entry(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    disable_view_poller_for_test(cx, &view);
 
     let repo_id = RepoId(1);
     let commit_id = CommitId("deadbeefdeadbeef".into());
@@ -89,6 +95,7 @@ fn commit_file_menu_has_open_file_entries(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    disable_view_poller_for_test(cx, &view);
 
     let repo_id = RepoId(2);
     let commit_id = CommitId("deadbeefdeadbeef".into());
@@ -153,6 +160,7 @@ fn status_file_menu_has_open_file_entries(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    disable_view_poller_for_test(cx, &view);
 
     let repo_id = RepoId(3);
     let workdir = std::env::temp_dir().join(format!(
@@ -248,6 +256,7 @@ fn status_file_menu_copy_path_uses_os_native_separators(cx: &mut gpui::TestAppCo
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    disable_view_poller_for_test(cx, &view);
 
     let repo_id = RepoId(33);
     let workdir = std::env::temp_dir().join(format!(
@@ -336,6 +345,7 @@ fn commit_file_menu_copy_path_uses_os_native_separators(cx: &mut gpui::TestAppCo
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    disable_view_poller_for_test(cx, &view);
 
     let repo_id = RepoId(34);
     let commit_id = CommitId("beadbeadbeadbead".into());
@@ -608,6 +618,7 @@ fn diff_editor_menu_has_open_file_entries(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    disable_view_poller_for_test(cx, &view);
 
     let repo_id = RepoId(4);
     let path = std::path::PathBuf::from("a.txt");
@@ -627,6 +638,7 @@ fn diff_editor_menu_has_open_file_entries(cx: &mut gpui::TestAppContext) {
                             discard_lines_patch: None,
                             lines_count: 0,
                             copy_text: Some("x".to_string()),
+                            copy_target: None,
                         },
                         cx,
                     )
@@ -677,6 +689,7 @@ fn file_preview_context_menu_matches_diff_editor_actions(cx: &mut gpui::TestAppC
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    disable_view_poller_for_test(cx, &view);
 
     let repo_id = RepoId(44);
     let workdir = std::env::temp_dir().join(format!(
@@ -689,49 +702,51 @@ fn file_preview_context_menu_matches_diff_editor_actions(cx: &mut gpui::TestAppC
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            let mut repo = RepoState::new_opening(
-                repo_id,
-                gitcomet_core::domain::RepoSpec {
-                    workdir: workdir.clone(),
-                },
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            set_test_file_status(
+                &mut repo,
+                path.clone(),
+                gitcomet_core::domain::FileStatusKind::Added,
+                DiffArea::Staged,
             );
-            repo.status = Loadable::Ready(
-                gitcomet_core::domain::RepoStatus {
-                    staged: vec![gitcomet_core::domain::FileStatus {
-                        path: path.clone(),
-                        kind: gitcomet_core::domain::FileStatusKind::Added,
-                        conflict: None,
-                    }],
-                    unstaged: vec![],
-                }
-                .into(),
+            repo.diff_state.diff_file = Loadable::Error(
+                "materialized diff_file should not be consulted for file preview".into(),
             );
-            repo.diff_state.diff_target = Some(gitcomet_core::domain::DiffTarget::WorkingTree {
-                path: path.clone(),
-                area: DiffArea::Staged,
-            });
-            repo.diff_state.diff_file =
-                Loadable::Ready(Some(Arc::new(gitcomet_core::domain::FileDiffText::new(
-                    path.clone(),
-                    None,
-                    Some("alpha\nbeta\n".to_string()),
-                ))));
+            repo.diff_state.diff_preview_text_file =
+                Loadable::Ready(Some(Arc::new(gitcomet_core::domain::DiffPreviewTextFile {
+                    path: workdir.join(&path),
+                    side: gitcomet_core::domain::DiffPreviewTextSide::New,
+                })));
+            repo.diff_state.diff_state_rev = repo.diff_state.diff_state_rev.wrapping_add(1);
 
-            let next_state = Arc::new(AppState {
-                repos: vec![repo],
-                active_repo: Some(repo_id),
-                ..Default::default()
-            });
-            this._ui_model.update(cx, |model, cx| {
-                model.set_state(next_state, cx);
-            });
+            let next_state = app_state_with_repo(repo, repo_id);
+            push_test_state(this, next_state, cx);
         });
     });
 
     cx.update(|window, app| {
+        window.refresh();
+        let _ = window.draw(app);
+    });
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "file preview ready before opening preview context menu",
+        |pane| matches!(pane.worktree_preview, Loadable::Ready(3)),
+        |pane| {
+            format!(
+                "preview={:?} preview_path={:?} source_path={:?}",
+                pane.worktree_preview,
+                pane.worktree_preview_path,
+                pane.worktree_preview_source_path
+            )
+        },
+    );
+
+    cx.update(|window, app| {
         let main_pane = view.read(app).main_pane.clone();
         main_pane.update(app, |pane, cx| {
-            pane.try_populate_worktree_preview_from_diff_file(cx);
             pane.open_diff_editor_context_menu(
                 1,
                 DiffTextRegion::Inline,

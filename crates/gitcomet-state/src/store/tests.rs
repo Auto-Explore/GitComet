@@ -1,5 +1,5 @@
 use super::*;
-use crate::model::{CloneOpStatus, DiagnosticKind, Loadable, RepoState};
+use crate::model::{CloneOpStatus, CloneProgressStage, DiagnosticKind, Loadable, RepoState};
 use crate::msg::{Effect, RepoCommandKind};
 use gitcomet_core::domain::{
     Branch, Commit, CommitDetails, CommitId, DiffArea, DiffTarget, LogCursor, LogPage, LogScope,

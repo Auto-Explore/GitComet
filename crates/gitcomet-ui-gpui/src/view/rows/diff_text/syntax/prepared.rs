@@ -2085,10 +2085,7 @@ fn treesitter_document_parse_request_from_input_with_reuse(
     old_tree_state: Option<&PreparedSyntaxTreeState>,
     reparse_plan: Option<&TreesitterReparsePlan>,
 ) -> Option<TreesitterDocumentParseRequest> {
-    if mode != DiffSyntaxMode::Auto {
-        return None;
-    }
-    if matches!(language, DiffSyntaxLanguage::Markdown) {
+    if !should_prepare_treesitter_document(language, mode, input.text.len()) {
         return None;
     }
 
@@ -2106,6 +2103,16 @@ fn treesitter_document_parse_request_from_input_with_reuse(
         input,
         cache_key,
     })
+}
+
+fn should_prepare_treesitter_document(
+    language: DiffSyntaxLanguage,
+    mode: DiffSyntaxMode,
+    text_len: usize,
+) -> bool {
+    mode == DiffSyntaxMode::Auto
+        && !matches!(language, DiffSyntaxLanguage::Markdown)
+        && text_len <= TS_PREPARED_DOCUMENT_MAX_TEXT_BYTES
 }
 
 pub(super) fn treesitter_document_input_from_shared_text(
@@ -2684,10 +2691,7 @@ fn prepared_document_source_identity_for_shared_text(
     text: &str,
     line_count: usize,
 ) -> Option<PreparedSyntaxSourceIdentity> {
-    if mode != DiffSyntaxMode::Auto {
-        return None;
-    }
-    if matches!(language, DiffSyntaxLanguage::Markdown) {
+    if !should_prepare_treesitter_document(language, mode, text.len()) {
         return None;
     }
 

@@ -6,6 +6,7 @@ fn patch_diff_search_query_keeps_stable_style_cache_entries(cx: &mut gpui::TestA
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
+    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(22);
     let workdir = std::env::temp_dir().join(format!(
@@ -354,6 +355,9 @@ fn worktree_preview_identical_refresh_preserves_row_cache(cx: &mut gpui::TestApp
             let lines = Arc::clone(&lines);
             let preview_abs_path = preview_abs_path.clone();
             this.main_pane.update(cx, |pane, cx| {
+                pane.set_full_document_syntax_budget_override_for_tests(rows::DiffSyntaxBudget {
+                    foreground_parse: std::time::Duration::from_secs(1),
+                });
                 set_ready_worktree_preview(
                     pane,
                     preview_abs_path.clone(),
@@ -385,9 +389,10 @@ fn worktree_preview_identical_refresh_preserves_row_cache(cx: &mut gpui::TestApp
         },
         |pane| {
             format!(
-                "preview_path={:?} cache_path={:?} row_cache_present={} style_epoch={}",
+                "preview_path={:?} cache_path={:?} prepared_document={:?} row_cache_present={} style_epoch={}",
                 pane.worktree_preview_path.clone(),
                 pane.worktree_preview_segments_cache_path.clone(),
+                pane.worktree_preview_prepared_syntax_document(),
                 pane.worktree_preview_segments_cache_get(0).is_some(),
                 pane.worktree_preview_style_cache_epoch,
             )
@@ -396,6 +401,7 @@ fn worktree_preview_identical_refresh_preserves_row_cache(cx: &mut gpui::TestApp
 
     let mut base_highlights_hash = 0u64;
     let mut base_style_epoch = 0u64;
+    let mut base_prepared_syntax_ready = false;
     cx.update(|_window, app| {
         let main_pane = view.read(app).main_pane.clone();
         let pane = main_pane.read(app);
@@ -404,6 +410,7 @@ fn worktree_preview_identical_refresh_preserves_row_cache(cx: &mut gpui::TestApp
             .expect("expected worktree preview row cache before identical refresh");
         base_highlights_hash = base.highlights_hash;
         base_style_epoch = pane.worktree_preview_style_cache_epoch;
+        base_prepared_syntax_ready = pane.worktree_preview_prepared_syntax_document().is_some();
     });
 
     cx.update(|_window, app| {
@@ -433,14 +440,21 @@ fn worktree_preview_identical_refresh_preserves_row_cache(cx: &mut gpui::TestApp
             Some(&preview_abs_path),
             "identical refresh should keep the preview cache bound to the current source"
         );
-        assert_eq!(
-            pane.worktree_preview_style_cache_epoch, base_style_epoch,
-            "identical refresh should not bump the preview syntax/style epoch"
-        );
-        assert_eq!(
-            refreshed.highlights_hash, base_highlights_hash,
-            "identical refresh should preserve the existing cached row styling"
-        );
+        if base_prepared_syntax_ready {
+            assert_eq!(
+                pane.worktree_preview_style_cache_epoch, base_style_epoch,
+                "identical refresh should not bump the preview syntax/style epoch once syntax is already ready"
+            );
+            assert_eq!(
+                refreshed.highlights_hash, base_highlights_hash,
+                "identical refresh should preserve the existing cached row styling once syntax is already ready"
+            );
+        } else if pane.worktree_preview_style_cache_epoch == base_style_epoch {
+            assert_eq!(
+                refreshed.highlights_hash, base_highlights_hash,
+                "identical refresh should preserve the fallback cached row styling while syntax is still pending"
+            );
+        }
     });
 
     // Phase 2: refresh with different content — cache must be invalidated.
@@ -473,10 +487,17 @@ fn worktree_preview_identical_refresh_preserves_row_cache(cx: &mut gpui::TestApp
             pane.worktree_preview_style_cache_epoch, base_style_epoch,
             "changed source should bump the preview syntax/style epoch"
         );
-        assert!(
-            pane.worktree_preview_segments_cache_get(0).is_none(),
-            "changed source should clear the cached preview rows"
-        );
+        if let Some(refreshed) = pane.worktree_preview_segments_cache_get(0) {
+            assert_eq!(
+                refreshed.text.as_ref(),
+                changed_lines[0].as_str(),
+                "changed source may repopulate the cache immediately, but it must render the new preview contents"
+            );
+            assert_ne!(
+                refreshed.highlights_hash, base_highlights_hash,
+                "changed source must not retain the old cached preview styling"
+            );
+        }
     });
 
     let _ = std::fs::remove_dir_all(&workdir);
@@ -488,6 +509,7 @@ fn staged_deleted_file_preview_uses_old_contents(cx: &mut gpui::TestAppContext) 
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
+    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(3);
     let workdir =
@@ -504,13 +526,20 @@ fn staged_deleted_file_preview_uses_old_contents(cx: &mut gpui::TestAppContext) 
                 gitcomet_core::domain::FileStatusKind::Deleted,
                 gitcomet_core::domain::DiffArea::Staged,
             );
-            repo.diff_state.diff_file = gitcomet_state::model::Loadable::Ready(Some(Arc::new(
-                gitcomet_core::domain::FileDiffText::new(
-                    file_rel.clone(),
-                    Some("one\ntwo\n".to_string()),
-                    None,
-                ),
-            )));
+            let preview_source_path = workdir.join(".deleted_preview_source.txt");
+            let _ = std::fs::create_dir_all(&workdir);
+            std::fs::write(&preview_source_path, "one\ntwo\n")
+                .expect("write staged deleted preview source");
+            repo.diff_state.diff_file = gitcomet_state::model::Loadable::Error(
+                "materialized diff_file should not be consulted for deleted preview".into(),
+            );
+            repo.diff_state.diff_preview_text_file = gitcomet_state::model::Loadable::Ready(Some(
+                Arc::new(gitcomet_core::domain::DiffPreviewTextFile {
+                    path: preview_source_path,
+                    side: gitcomet_core::domain::DiffPreviewTextSide::Old,
+                }),
+            ));
+            repo.diff_state.diff_state_rev = repo.diff_state.diff_state_rev.wrapping_add(1);
 
             let next_state = app_state_with_repo(repo, repo_id);
 
@@ -518,14 +547,36 @@ fn staged_deleted_file_preview_uses_old_contents(cx: &mut gpui::TestAppContext) 
         });
     });
 
-    cx.update(|_window, app| {
-        view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
-                pane.try_populate_worktree_preview_from_diff_file(cx);
-                cx.notify();
-            });
-        });
+    cx.update(|window, app| {
+        window.refresh();
+        let _ = window.draw(app);
     });
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "staged deleted preview loads from preview text file",
+        |pane| {
+            pane.worktree_preview_path.as_ref() == Some(&workdir.join(&file_rel))
+                && pane.worktree_preview_source_path.as_ref()
+                    == Some(&workdir.join(".deleted_preview_source.txt"))
+                && matches!(
+                    pane.worktree_preview,
+                    gitcomet_state::model::Loadable::Ready(3)
+                )
+                && pane.worktree_preview_text.is_empty()
+        },
+        |pane| {
+            format!(
+                "preview_path={:?} source_path={:?} preview={:?} text_len={} line_count={:?}",
+                pane.worktree_preview_path,
+                pane.worktree_preview_source_path,
+                pane.worktree_preview,
+                pane.worktree_preview_text.len(),
+                pane.worktree_preview_line_count(),
+            )
+        },
+    );
 
     cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
@@ -541,9 +592,122 @@ fn staged_deleted_file_preview_uses_old_contents(cx: &mut gpui::TestAppContext) 
             "expected worktree preview to be ready"
         );
         assert_eq!(pane.worktree_preview_line_count(), Some(3));
-        assert_eq!(pane.worktree_preview_line_text(0), Some("one"));
-        assert_eq!(pane.worktree_preview_line_text(1), Some("two"));
-        assert_eq!(pane.worktree_preview_line_text(2), Some(""));
+        assert_eq!(pane.worktree_preview_line_text(0).as_deref(), Some("one"));
+        assert_eq!(pane.worktree_preview_line_text(1).as_deref(), Some("two"));
+        assert_eq!(pane.worktree_preview_line_text(2).as_deref(), Some(""));
+    });
+}
+
+#[gpui::test]
+fn committed_deleted_file_preview_uses_preview_text_file_without_patch_fallback(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    disable_view_poller_for_test(cx, &view);
+
+    let repo_id = gitcomet_state::model::RepoId(303);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_committed_deleted",
+        std::process::id()
+    ));
+    let file_rel = std::path::PathBuf::from("report.json");
+    let commit_id = gitcomet_core::domain::CommitId("deadbeef".into());
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            repo.diff_state.diff_target = Some(gitcomet_core::domain::DiffTarget::Commit {
+                commit_id: commit_id.clone(),
+                path: Some(file_rel.clone()),
+            });
+            repo.diff_state.diff = gitcomet_state::model::Loadable::Error(
+                "parsed patch diff should not be consulted for deleted file preview".into(),
+            );
+            let preview_source_path = workdir.join(".committed_deleted_preview_source.json");
+            let _ = std::fs::create_dir_all(&workdir);
+            std::fs::write(&preview_source_path, "{\"removed\":true}\n")
+                .expect("write committed deleted preview source");
+            repo.diff_state.diff_file = gitcomet_state::model::Loadable::Error(
+                "materialized diff_file should not be consulted for committed deleted preview"
+                    .into(),
+            );
+            repo.diff_state.diff_preview_text_file = gitcomet_state::model::Loadable::Ready(Some(
+                Arc::new(gitcomet_core::domain::DiffPreviewTextFile {
+                    path: preview_source_path,
+                    side: gitcomet_core::domain::DiffPreviewTextSide::Old,
+                }),
+            ));
+            repo.diff_state.diff_state_rev = repo.diff_state.diff_state_rev.wrapping_add(1);
+            repo.history_state.commit_details = gitcomet_state::model::Loadable::Ready(Arc::new(
+                gitcomet_core::domain::CommitDetails {
+                    id: commit_id.clone(),
+                    message: "remove report".to_string(),
+                    committed_at: "2026-04-07T12:00:00Z".to_string(),
+                    parent_ids: vec![],
+                    files: vec![gitcomet_core::domain::CommitFileChange {
+                        path: file_rel.clone(),
+                        kind: gitcomet_core::domain::FileStatusKind::Deleted,
+                    }],
+                },
+            ));
+            repo.history_state.commit_details_rev =
+                repo.history_state.commit_details_rev.wrapping_add(1);
+
+            let next_state = app_state_with_repo(repo, repo_id);
+            push_test_state(this, Arc::clone(&next_state), cx);
+        });
+    });
+
+    cx.update(|window, app| {
+        window.refresh();
+        let _ = window.draw(app);
+    });
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "committed deleted preview loads from preview text file",
+        |pane| {
+            pane.worktree_preview_path.as_ref() == Some(&workdir.join(&file_rel))
+                && pane.worktree_preview_source_path.as_ref()
+                    == Some(&workdir.join(".committed_deleted_preview_source.json"))
+                && matches!(
+                    pane.worktree_preview,
+                    gitcomet_state::model::Loadable::Ready(2)
+                )
+                && pane.worktree_preview_text.is_empty()
+        },
+        |pane| {
+            format!(
+                "preview_path={:?} source_path={:?} preview={:?} text_len={} line_count={:?}",
+                pane.worktree_preview_path,
+                pane.worktree_preview_source_path,
+                pane.worktree_preview,
+                pane.worktree_preview_text.len(),
+                pane.worktree_preview_line_count(),
+            )
+        },
+    );
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(
+            pane.deleted_file_preview_abs_path(),
+            Some(workdir.join(&file_rel))
+        );
+        assert!(matches!(
+            pane.worktree_preview,
+            gitcomet_state::model::Loadable::Ready(_)
+        ));
+        assert_eq!(pane.worktree_preview_line_count(), Some(2));
+        assert_eq!(
+            pane.worktree_preview_line_text(0).as_deref(),
+            Some("{\"removed\":true}")
+        );
+        assert_eq!(pane.worktree_preview_line_text(1).as_deref(), Some(""));
     });
 }
 
@@ -729,6 +893,7 @@ fn unstaged_deleted_gitlink_preview_does_not_stay_loading(cx: &mut gpui::TestApp
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
+    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(44);
     let workdir = std::env::temp_dir().join(format!(
@@ -797,6 +962,7 @@ fn unstaged_modified_gitlink_target_uses_unified_diff_mode(cx: &mut gpui::TestAp
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
+    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(45);
     let workdir = std::env::temp_dir().join(format!(
@@ -930,6 +1096,7 @@ fn switching_diff_target_clears_stale_worktree_preview_loading(cx: &mut gpui::Te
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
+    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(36);
     let workdir = std::env::temp_dir().join(format!(
@@ -1018,6 +1185,7 @@ fn staged_directory_target_uses_unified_diff_mode(cx: &mut gpui::TestAppContext)
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
+    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(34);
     let workdir = std::env::temp_dir().join(format!(
@@ -1066,6 +1234,7 @@ fn staged_added_missing_target_uses_unified_diff_mode(cx: &mut gpui::TestAppCont
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
+    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(43);
     let workdir = std::env::temp_dir().join(format!(
@@ -1110,6 +1279,7 @@ fn untracked_directory_target_uses_unified_diff_mode(cx: &mut gpui::TestAppConte
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
+    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(35);
     let workdir = std::env::temp_dir().join(format!(
@@ -1158,6 +1328,7 @@ fn untracked_directory_target_clears_stale_file_loading_state(cx: &mut gpui::Tes
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
+    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(46);
     let workdir = std::env::temp_dir().join(format!(
@@ -1229,6 +1400,7 @@ fn directory_target_with_loading_status_clears_stale_file_loading_state(
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
+    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(47);
     let workdir = std::env::temp_dir().join(format!(
@@ -1327,6 +1499,7 @@ fn commit_details_metadata_fields_are_selectable(cx: &mut gpui::TestAppContext) 
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
+    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(33);
     let commit_sha = "0123456789abcdef0123456789abcdef01234567".to_string();
@@ -1493,6 +1666,7 @@ fn switching_active_repo_restores_commit_message_draft_per_repo(cx: &mut gpui::T
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
+    disable_view_poller_for_test(cx, &view);
 
     let repo_a = gitcomet_state::model::RepoId(41);
     let repo_b = gitcomet_state::model::RepoId(42);
@@ -1582,6 +1756,7 @@ fn merge_start_prefills_default_commit_message(cx: &mut gpui::TestAppContext) {
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
+    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(43);
     let make_state = |merge_message: Option<&str>| {
@@ -1634,6 +1809,7 @@ fn commit_click_dispatches_after_state_update_without_intermediate_redraw(
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
+    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(44);
     let make_state = |staged_count: usize, local_actions_in_flight: u32| {
@@ -1710,6 +1886,7 @@ fn theme_change_clears_conflict_three_way_segments_cache(cx: &mut gpui::TestAppC
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
+    disable_view_poller_for_test(cx, &view);
 
     // Seed the three-way segments cache with dummy entries, then change theme
     // and verify the cache was cleared. Before this fix, set_theme() cleared
@@ -1758,6 +1935,7 @@ fn status_section_drag_updates_saved_height(cx: &mut gpui::TestAppContext) {
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
+    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(46);
     let workdir = std::env::temp_dir().join(format!(
@@ -1871,6 +2049,7 @@ fn staged_section_remains_visible_after_window_resize_with_saved_split_height(
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
+    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(51);
     let workdir = std::env::temp_dir().join(format!(
@@ -1988,6 +2167,7 @@ fn split_status_section_resize_moves_untracked_section(cx: &mut gpui::TestAppCon
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
+    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(47);
     let workdir = std::env::temp_dir().join(format!(
@@ -2147,6 +2327,7 @@ fn unstaged_scroll_viewport_tracks_resized_section_height(cx: &mut gpui::TestApp
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
+    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(48);
     let workdir = std::env::temp_dir().join(format!(
@@ -2244,6 +2425,7 @@ fn split_unstaged_scroll_viewport_tracks_resized_section_height(cx: &mut gpui::T
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
+    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(49);
     let workdir = std::env::temp_dir().join(format!(
@@ -2345,6 +2527,7 @@ fn split_unstaged_scroll_viewport_updates_after_outer_resize_shrink(cx: &mut gpu
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
+    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(50);
     let workdir = std::env::temp_dir().join(format!(

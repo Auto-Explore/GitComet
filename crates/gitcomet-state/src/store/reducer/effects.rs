@@ -1,4 +1,7 @@
-use super::util::push_diagnostic;
+use super::util::{
+    apply_selected_diff_load_plan_state, diff_reload_effects, push_diagnostic,
+    selected_diff_load_plan,
+};
 use crate::model::{
     AppState, ConflictFileLoadMode, DiagnosticKind, Loadable, RepoId, RepoLoadsInFlight,
 };
@@ -661,6 +664,10 @@ pub(super) fn commit_details_loaded(
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
         && repo_state.history_state.selected_commit.as_ref() == Some(&commit_id)
     {
+        let selected_target = repo_state.diff_state.diff_target.clone();
+        let previous_plan = selected_target
+            .as_ref()
+            .map(|target| selected_diff_load_plan(repo_state, target));
         let value = match result {
             Ok(v) => Loadable::Ready(Arc::new(v)),
             Err(e) => {
@@ -669,6 +676,15 @@ pub(super) fn commit_details_loaded(
             }
         };
         repo_state.set_commit_details(value);
+
+        if let Some(target @ gitcomet_core::domain::DiffTarget::Commit { .. }) = selected_target {
+            let next_plan = selected_diff_load_plan(repo_state, &target);
+            if previous_plan != Some(next_plan) {
+                apply_selected_diff_load_plan_state(repo_state, next_plan);
+                repo_state.bump_diff_state_rev();
+                return diff_reload_effects(repo_state, repo_id, target);
+            }
+        }
     }
     Vec::new()
 }

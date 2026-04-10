@@ -11,6 +11,7 @@ pub(super) fn model(
     discard_lines_patch: &Option<String>,
     lines_count: usize,
     copy_text: &Option<String>,
+    copy_target: Option<(usize, DiffTextRegion)>,
 ) -> ContextMenuModel {
     let title = path
         .as_ref()
@@ -135,10 +136,14 @@ pub(super) fn model(
         shortcut: Some("C".into()),
         disabled: copy_text
             .as_ref()
-            .map(|t| t.trim().is_empty())
-            .unwrap_or(true),
-        action: Box::new(ContextMenuAction::CopyText {
-            text: copy_text.clone().unwrap_or_default(),
+            .map(|text| text.trim().is_empty())
+            .unwrap_or(copy_target.is_none()),
+        action: Box::new(match copy_text {
+            Some(text) => ContextMenuAction::CopyText { text: text.clone() },
+            None => {
+                let (visible_ix, region) = copy_target.unwrap_or((0, DiffTextRegion::Inline));
+                ContextMenuAction::CopyDiffText { visible_ix, region }
+            }
         }),
     });
 

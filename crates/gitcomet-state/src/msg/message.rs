@@ -218,6 +218,9 @@ pub enum Msg {
         url: String,
         dest: PathBuf,
     },
+    AbortCloneRepo {
+        dest: PathBuf,
+    },
     ExportPatch {
         repo_id: RepoId,
         commit_id: CommitId,
@@ -589,6 +592,12 @@ pub enum InternalMsg {
         repo_id: RepoId,
         target: DiffTarget,
         result: Result<Option<FileDiffText>, Error>,
+    },
+    DiffPreviewTextFileLoaded {
+        repo_id: RepoId,
+        target: DiffTarget,
+        side: DiffPreviewTextSide,
+        result: Result<Option<PathBuf>, Error>,
     },
     DiffFileImageLoaded {
         repo_id: RepoId,

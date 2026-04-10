@@ -908,11 +908,40 @@ pub(crate) fn commit_details_cached_row_hash(
     let mut h = FxHasher::default();
     details.id.as_ref().hash(&mut h);
     commit_details_message_hash(details.message.len(), message_render, &mut h);
-    file_rows
-        .bench_row_hash_for(&details.id, &details.files)
-        .hash(&mut h);
+    let rows = file_rows.rows_for(&details.id, &details.files);
+    hash_commit_file_row_presentations(rows.as_ref()).hash(&mut h);
     details.files.len().hash(&mut h);
     h.finish()
+}
+
+pub(crate) fn hash_commit_file_row_presentations(
+    rows: &[crate::view::rows::CommitFileRowPresentation],
+) -> u64 {
+    let mut hasher = FxHasher::default();
+    rows.len().hash(&mut hasher);
+    for row in rows {
+        row.visuals.kind_key.hash(&mut hasher);
+        let label = row.label.as_ref();
+        label.as_ptr().hash(&mut hasher);
+        label.len().hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+pub(crate) fn build_bench_file_diff_rebuild_from_text(
+    path: impl Into<std::path::PathBuf>,
+    old: &str,
+    new: &str,
+) -> (
+    Arc<crate::view::panes::main::diff_cache::PagedFileDiffRows>,
+    Arc<crate::view::panes::main::diff_cache::PagedFileDiffInlineRows>,
+) {
+    let file = FileDiffText::new(path.into(), Some(old.to_owned()), Some(new.to_owned()));
+    let rebuild = crate::view::panes::main::diff_cache::build_file_diff_cache_rebuild(
+        &file,
+        Path::new("/tmp/gitcomet-bench"),
+    );
+    (rebuild.row_provider, rebuild.inline_row_provider)
 }
 
 pub(crate) fn build_synthetic_source_lines(count: usize, target_line_bytes: usize) -> Vec<String> {

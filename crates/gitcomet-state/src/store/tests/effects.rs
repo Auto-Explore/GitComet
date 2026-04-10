@@ -3,6 +3,38 @@ use super::*;
 static MERGETOOL_TRACE_TEST_LOCK: std::sync::LazyLock<std::sync::Mutex<()>> =
     std::sync::LazyLock::new(|| std::sync::Mutex::new(()));
 
+fn write_deterministic_blob(path: &Path, total_bytes: usize) {
+    use std::io::Write as _;
+
+    let mut file = std::fs::File::create(path).expect("blob file should be creatable");
+    let mut remaining = total_bytes;
+    let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+    let mut buf = [0u8; 8192];
+
+    while remaining > 0 {
+        for byte in &mut buf {
+            state ^= state << 7;
+            state ^= state >> 9;
+            state = state.wrapping_mul(0x2545_f491_4f6c_dd1d);
+            *byte = (state >> 24) as u8;
+        }
+
+        let chunk_len = remaining.min(buf.len());
+        file.write_all(&buf[..chunk_len])
+            .expect("blob chunk should be writable");
+        remaining -= chunk_len;
+    }
+}
+
+fn local_file_url(path: &Path) -> String {
+    let normalized = path.to_string_lossy().replace('\\', "/");
+    if normalized.starts_with('/') {
+        format!("file://{normalized}")
+    } else {
+        format!("file:///{normalized}")
+    }
+}
+
 fn schedule_effect_with_state_for_test(
     executor: &super::executor::TaskExecutor,
     session_persist_executor: &super::executor::TaskExecutor,
@@ -131,6 +163,113 @@ fn clone_repo_effect_clones_local_repo_and_emits_finished_and_open_repo() {
     assert!(saw_finished_ok, "did not observe CloneRepoFinished");
     assert!(saw_open_repo, "did not observe OpenRepo after clone");
     assert!(dest.join(".git").exists(), "expected .git at cloned dest");
+}
+
+#[test]
+fn clone_repo_effect_abort_removes_partially_created_destination() {
+    if !super::require_git_shell_for_store_tests() {
+        return;
+    }
+    struct Backend;
+    impl GitBackend for Backend {
+        fn open(&self, _path: &Path) -> std::result::Result<Arc<dyn GitRepository>, Error> {
+            Err(Error::new(ErrorKind::Unsupported("test backend")))
+        }
+    }
+
+    const LARGE_BLOB_BYTES: usize = 64 * 1024 * 1024;
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let src = temp.path().join("src");
+    let dest = temp.path().join("dest");
+    std::fs::create_dir_all(&src).expect("source dir");
+
+    run_git(&src, &["init"]);
+    run_git(&src, &["config", "user.email", "you@example.com"]);
+    run_git(&src, &["config", "user.name", "You"]);
+    run_git(&src, &["config", "commit.gpgsign", "false"]);
+    write_deterministic_blob(&src.join("payload.bin"), LARGE_BLOB_BYTES);
+    run_git(&src, &["add", "payload.bin"]);
+    run_git(
+        &src,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "init"],
+    );
+
+    let executor = super::executor::TaskExecutor::new(1);
+    let backend: Arc<dyn GitBackend> = Arc::new(Backend);
+    let repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
+
+    schedule_effect_for_test(
+        &executor,
+        &executor,
+        &backend,
+        &repos,
+        msg_tx.clone(),
+        Effect::CloneRepo {
+            url: local_file_url(&src),
+            dest: dest.clone(),
+            auth: None,
+        },
+    );
+
+    let start = Instant::now();
+    let mut abort_sent = false;
+    let mut saw_finished_err = false;
+    let mut saw_open_repo = false;
+
+    while start.elapsed() < Duration::from_secs(30) {
+        if !abort_sent && dest.exists() {
+            schedule_effect_for_test(
+                &executor,
+                &executor,
+                &backend,
+                &repos,
+                msg_tx.clone(),
+                Effect::AbortCloneRepo { dest: dest.clone() },
+            );
+            abort_sent = true;
+        }
+
+        let msg = match msg_rx.recv_timeout(Duration::from_millis(10)) {
+            Ok(m) => m,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(e) => panic!("channel closed: {e:?}"),
+        };
+
+        match msg {
+            Msg::Internal(crate::msg::InternalMsg::CloneRepoFinished {
+                dest: finished_dest,
+                result,
+                ..
+            }) if finished_dest == dest => {
+                assert!(abort_sent, "clone finished before abort could be sent");
+                let err = result.expect_err("aborted clone should not succeed");
+                let err_text = err.to_string();
+                assert!(
+                    err_text.contains("clone aborted"),
+                    "unexpected abort error: {err_text}"
+                );
+                saw_finished_err = true;
+                break;
+            }
+            Msg::OpenRepo(path) if path == dest => {
+                saw_open_repo = true;
+            }
+            _ => {}
+        }
+    }
+
+    assert!(abort_sent, "did not send abort request");
+    assert!(saw_finished_err, "did not observe CloneRepoFinished error");
+    assert!(
+        !saw_open_repo,
+        "aborted clone should not open the repository"
+    );
+    assert!(
+        !dest.exists(),
+        "aborted clone should clean up the destination directory"
+    );
 }
 
 #[test]
@@ -3160,8 +3299,10 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
         (
             Effect::LoadSelectedDiff {
                 repo_id,
+                load_patch_diff: true,
                 load_file_text: true,
                 load_file_image: false,
+                preview_text_side: None,
             },
             2,
         ),

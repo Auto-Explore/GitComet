@@ -6,6 +6,7 @@ members = [
   "crates/gitcomet-git",
   "crates/gitcomet-git-gix",
   "crates/gitcomet-state",
+  "crates/gitcomet-tree-sitter-alloc",
   "crates/gitcomet-ui",
   "crates/gitcomet-ui-gpui",
 ]
@@ -43,7 +44,8 @@ clap = { version = "4.6.0", features = ["derive"] }
 criterion = "0.8.2"
 fontdb = "0.23.0"
 gix = { version = "0.81.0", default-features = false, features = ["max-performance-safe", "comfort", "basic", "auto-chain-error", "status", "blame", "sha1"] }
-gpui = { version = "0.2.2" }
+# Load gpui-ce directly from GitHub at commit 1679dc543d880e6562d84afe316a1b192a064b08.
+gpui = { package = "gpui-ce", git = "https://github.com/Havunen/gpui-ce.git", rev = "1679dc543d880e6562d84afe316a1b192a064b08" }
 image = "0.25.10"
 lru = "0.16"
 memchr = "2.8.0"
@@ -56,7 +58,7 @@ regex = "1.12.3"
 resvg = { version = "0.47.0", default-features = false, features = ["text", "system-fonts", "raster-images"] }
 rustc-hash = "2.1.2"
 rustix = { version = "1.1.4", default-features = false, features = ["std", "process"] }
-semver = "1.0.27"
+semver = "1.0.28"
 schemars = "1.2.1"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
@@ -81,7 +83,8 @@ tree-sitter-yaml = "0.7.2"
 unicode-segmentation = "1.13.2"
 url = "2.5.8"
 windows = "0.62.2"
-zed-reqwest = { version = "0.12.15-zed", default-features = false, features = ["blocking", "json", "rustls-tls-native-roots"] }
+wayland-client = "0.31.14"
+reqwest = { version = "0.13.2", default-features = false, features = ["blocking", "json", "rustls"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

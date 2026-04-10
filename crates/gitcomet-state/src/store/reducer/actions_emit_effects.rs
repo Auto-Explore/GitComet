@@ -1,13 +1,13 @@
 use super::util::{
-    SelectedConflictTarget, clear_banner_error_for_repo, diff_reload_effects,
-    diff_target_preview_flags, format_failure_summary, push_action_log, push_command_log,
+    SelectedConflictTarget, apply_selected_diff_load_plan_state, clear_banner_error_for_repo,
+    diff_reload_effects, format_failure_summary, push_action_log, push_command_log,
     refresh_full_effects, refresh_primary_effects, selected_conflict_target,
-    start_conflict_target_reload, start_current_conflict_target_reload,
+    selected_diff_load_plan, start_conflict_target_reload, start_current_conflict_target_reload,
 };
 use crate::model::{AppState, Loadable, RepoId, RepoState};
 use crate::msg::{Effect, RepoCommandKind, RepoPathList};
 use gitcomet_core::conflict_session::{ConflictRegionResolution, ConflictResolverStrategy};
-use gitcomet_core::domain::{DiffTarget, FileConflictKind};
+use gitcomet_core::domain::FileConflictKind;
 use gitcomet_core::error::Error;
 use gitcomet_core::services::{CommandOutput, GitRepository, PullMode, RemoteUrlKind, ResetMode};
 use rustc_hash::FxHashMap as HashMap;
@@ -517,6 +517,7 @@ pub(super) fn commit_finished(
             repo_state.diff_state.diff_target = None;
             repo_state.diff_state.diff = Loadable::NotLoaded;
             repo_state.diff_state.diff_file = Loadable::NotLoaded;
+            repo_state.diff_state.diff_preview_text_file = Loadable::NotLoaded;
             repo_state.diff_state.diff_file_image = Loadable::NotLoaded;
             repo_state.bump_diff_state_rev();
             push_action_log(
@@ -566,6 +567,7 @@ pub(super) fn commit_amend_finished(
             repo_state.diff_state.diff_target = None;
             repo_state.diff_state.diff = Loadable::NotLoaded;
             repo_state.diff_state.diff_file = Loadable::NotLoaded;
+            repo_state.diff_state.diff_preview_text_file = Loadable::NotLoaded;
             repo_state.diff_state.diff_file_image = Loadable::NotLoaded;
             repo_state.bump_diff_state_rev();
             push_action_log(
@@ -701,6 +703,7 @@ pub(super) fn repo_command_finished(
                 repo_state.diff_state.diff_target = None;
                 repo_state.diff_state.diff = Loadable::NotLoaded;
                 repo_state.diff_state.diff_file = Loadable::NotLoaded;
+                repo_state.diff_state.diff_preview_text_file = Loadable::NotLoaded;
                 repo_state.diff_state.diff_file_image = Loadable::NotLoaded;
                 repo_state.bump_diff_state_rev();
             }
@@ -742,6 +745,7 @@ pub(super) fn repo_command_finished(
         if let Some(conflict_target) = selected_conflict_target(repo_state, &target) {
             repo_state.diff_state.diff = Loadable::NotLoaded;
             repo_state.diff_state.diff_file = Loadable::NotLoaded;
+            repo_state.diff_state.diff_preview_text_file = Loadable::NotLoaded;
             repo_state.diff_state.diff_file_image = Loadable::NotLoaded;
             repo_state.bump_diff_state_rev();
             match conflict_target {
@@ -753,25 +757,10 @@ pub(super) fn repo_command_finished(
                 }
             }
         } else {
-            repo_state.diff_state.diff = Loadable::Loading;
-            let supports_file = matches!(
-                &target,
-                DiffTarget::WorkingTree { .. } | DiffTarget::Commit { path: Some(_), .. }
-            );
-            let preview = diff_target_preview_flags(&target);
-            repo_state.diff_state.diff_file =
-                if supports_file && (!preview.wants_image || preview.is_svg) {
-                    Loadable::Loading
-                } else {
-                    Loadable::NotLoaded
-                };
-            repo_state.diff_state.diff_file_image = if supports_file && preview.wants_image {
-                Loadable::Loading
-            } else {
-                Loadable::NotLoaded
-            };
+            let load_plan = selected_diff_load_plan(repo_state, &target);
+            apply_selected_diff_load_plan_state(repo_state, load_plan);
             repo_state.bump_diff_state_rev();
-            extra_effects.extend(diff_reload_effects(repo_id, target));
+            extra_effects.extend(diff_reload_effects(repo_state, repo_id, target));
         }
     }
     let mut effects = refresh_full_effects(repo_state);

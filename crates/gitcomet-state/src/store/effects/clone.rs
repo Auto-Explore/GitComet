@@ -12,11 +12,12 @@ use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::process::configure_background_command;
 use gitcomet_core::services::CommandOutput;
 use std::fs;
-use std::io::{BufRead as _, BufReader, Read as _};
-use std::path::PathBuf;
-use std::process::{Command, Stdio};
-use std::sync::Arc;
+use std::io::Read as _;
+use std::path::{Path, PathBuf};
+use std::process::{Child, ChildStderr, ChildStdout, Command, ExitStatus, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use super::super::executor::TaskExecutor;
@@ -28,6 +29,100 @@ const GIT_COMMAND_WAIT_POLL: Duration = Duration::from_millis(100);
 const GITCOMET_ASKPASS_PROMPT_LOG_ENV: &str = "GITCOMET_ASKPASS_PROMPT_LOG";
 const GITCOMET_ASKPASS_PASSPHRASE_PROMPT_LOG_ENV: &str = "GITCOMET_ASKPASS_PASSPHRASE_PROMPT_LOG";
 const ALLOWED_CLONE_URL_SCHEMES: [&str; 4] = ["https", "ssh", "git", "file"];
+
+struct ActiveCloneHandle {
+    cancel_requested: AtomicBool,
+    child: Mutex<Option<Child>>,
+}
+
+impl ActiveCloneHandle {
+    fn new() -> Self {
+        Self {
+            cancel_requested: AtomicBool::new(false),
+            child: Mutex::new(None),
+        }
+    }
+
+    fn set_child(&self, child: Child) {
+        let mut slot = self.child.lock().unwrap_or_else(|e| e.into_inner());
+        *slot = Some(child);
+        if self.cancel_requested.load(Ordering::Relaxed)
+            && let Some(child) = slot.as_mut()
+        {
+            let _ = child.kill();
+        }
+    }
+
+    fn take_stdio(&self) -> (Option<ChildStdout>, Option<ChildStderr>) {
+        let mut slot = self.child.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(child) = slot.as_mut() else {
+            return (None, None);
+        };
+        (child.stdout.take(), child.stderr.take())
+    }
+
+    fn try_wait(&self) -> std::io::Result<Option<ExitStatus>> {
+        let mut slot = self.child.lock().unwrap_or_else(|e| e.into_inner());
+        match slot.as_mut() {
+            Some(child) => child.try_wait(),
+            None => Err(std::io::Error::other("clone child missing")),
+        }
+    }
+
+    fn wait(&self) -> std::io::Result<ExitStatus> {
+        let mut slot = self.child.lock().unwrap_or_else(|e| e.into_inner());
+        match slot.as_mut() {
+            Some(child) => child.wait(),
+            None => Err(std::io::Error::other("clone child missing")),
+        }
+    }
+
+    fn request_cancel(&self) {
+        self.cancel_requested.store(true, Ordering::Relaxed);
+        let mut slot = self.child.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(child) = slot.as_mut() {
+            let _ = child.kill();
+        }
+    }
+
+    fn cancel_requested(&self) -> bool {
+        self.cancel_requested.load(Ordering::Relaxed)
+    }
+}
+
+struct ActiveCloneRegistration {
+    dest: PathBuf,
+    handle: Arc<ActiveCloneHandle>,
+}
+
+impl ActiveCloneRegistration {
+    fn new(dest: PathBuf, handle: Arc<ActiveCloneHandle>) -> Self {
+        active_clones()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(dest.clone(), Arc::clone(&handle));
+        Self { dest, handle }
+    }
+}
+
+impl Drop for ActiveCloneRegistration {
+    fn drop(&mut self) {
+        let mut clones = active_clones().lock().unwrap_or_else(|e| e.into_inner());
+        if clones
+            .get(&self.dest)
+            .is_some_and(|current| Arc::ptr_eq(current, &self.handle))
+        {
+            clones.remove(&self.dest);
+        }
+    }
+}
+
+fn active_clones() -> &'static Mutex<std::collections::HashMap<PathBuf, Arc<ActiveCloneHandle>>> {
+    static ACTIVE_CLONES: OnceLock<
+        Mutex<std::collections::HashMap<PathBuf, Arc<ActiveCloneHandle>>>,
+    > = OnceLock::new();
+    ACTIVE_CLONES.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+}
 
 struct AskPassScript {
     _dir: tempfile::TempDir,
@@ -426,6 +521,80 @@ fn append_host_prompt_to_stderr(stderr: &mut String, askpass: &AskPassScript) {
     stderr.push('\n');
 }
 
+fn decode_clone_progress_fragment(fragment: &[u8]) -> Option<String> {
+    let fragment = bytes_to_text_preserving_utf8(fragment);
+    let fragment = fragment.trim_matches(|ch| matches!(ch, '\r' | '\n'));
+    (!fragment.is_empty()).then(|| fragment.to_string())
+}
+
+fn take_clone_progress_fragments(pending: &mut Vec<u8>, eof: bool) -> Vec<String> {
+    let mut fragments = Vec::new();
+    let mut start = 0usize;
+    let mut ix = 0usize;
+
+    while ix < pending.len() {
+        if matches!(pending[ix], b'\r' | b'\n') {
+            if ix > start
+                && let Some(fragment) = decode_clone_progress_fragment(&pending[start..ix])
+            {
+                fragments.push(fragment);
+            }
+
+            start = ix + 1;
+            if pending[ix] == b'\r' && start < pending.len() && pending[start] == b'\n' {
+                start += 1;
+                ix += 1;
+            }
+        }
+        ix += 1;
+    }
+
+    if eof {
+        if start < pending.len()
+            && let Some(fragment) = decode_clone_progress_fragment(&pending[start..])
+        {
+            fragments.push(fragment);
+        }
+        pending.clear();
+    } else if start > 0 {
+        let remainder = pending[start..].to_vec();
+        pending.clear();
+        pending.extend_from_slice(&remainder);
+    }
+
+    fragments
+}
+
+fn cleanup_aborted_clone_destination(dest: &Path, dest_preexisted: bool) -> Result<(), Error> {
+    if dest_preexisted {
+        return Ok(());
+    }
+
+    let metadata = match fs::symlink_metadata(dest) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => {
+            return Err(Error::new(ErrorKind::Backend(format!(
+                "clone aborted, but failed to inspect partially created destination `{}`: {err}",
+                dest.display()
+            ))));
+        }
+    };
+
+    let removal_result = if metadata.file_type().is_dir() {
+        fs::remove_dir_all(dest)
+    } else {
+        fs::remove_file(dest)
+    };
+
+    removal_result.map_err(|err| {
+        Error::new(ErrorKind::Backend(format!(
+            "clone aborted, but failed to remove partially created destination `{}`: {err}",
+            dest.display()
+        )))
+    })
+}
+
 pub(super) fn schedule_clone_repo(
     executor: &TaskExecutor,
     msg_tx: mpsc::Sender<Msg>,
@@ -433,7 +602,13 @@ pub(super) fn schedule_clone_repo(
     dest: PathBuf,
     auth: Option<StagedGitAuth>,
 ) {
+    let active_clone = Arc::new(ActiveCloneHandle::new());
+    let registration = ActiveCloneRegistration::new(dest.clone(), Arc::clone(&active_clone));
+    let dest_preexisted = dest.exists();
+
     executor.spawn(move || {
+        let _registration = registration;
+
         if let Err(err) = validate_clone_url(&url) {
             send_or_log(
                 &msg_tx,
@@ -481,7 +656,7 @@ pub(super) fn schedule_clone_repo(
 
         let command_str = format!("git clone --progress {} {}", url, dest.display());
 
-        let mut child = match cmd.spawn() {
+        let child = match cmd.spawn() {
             Ok(child) => child,
             Err(e) => {
                 let err = Error::new(ErrorKind::Io(e.kind()));
@@ -496,7 +671,9 @@ pub(super) fn schedule_clone_repo(
                 return;
             }
         };
-        let stdout = child.stdout.take();
+        active_clone.set_child(child);
+
+        let (stdout, stderr) = active_clone.take_stdio();
         let stdout_handle = std::thread::spawn(move || {
             let mut buf = Vec::new();
             if let Some(mut stdout) = stdout {
@@ -505,39 +682,57 @@ pub(super) fn schedule_clone_repo(
             bytes_to_text_preserving_utf8(&buf)
         });
 
-        let stderr = child.stderr.take();
         let progress_dest = Arc::new(dest.clone());
         let progress_tx = msg_tx.clone();
         let stderr_handle = std::thread::spawn(move || {
-            let mut stderr_acc = String::new();
-            if let Some(stderr) = stderr {
-                let reader = BufReader::new(stderr);
-                for line in reader.lines().map_while(Result::ok) {
-                    stderr_acc.push_str(&line);
-                    stderr_acc.push('\n');
-                    send_or_log(
-                        &progress_tx,
-                        Msg::Internal(crate::msg::InternalMsg::CloneRepoProgress {
-                            dest: Arc::clone(&progress_dest),
-                            line,
-                        }),
-                    );
+            let mut stderr_bytes = Vec::new();
+            let mut pending = Vec::new();
+            if let Some(mut stderr) = stderr {
+                let mut buf = [0u8; 4096];
+                loop {
+                    match stderr.read(&mut buf) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            let chunk = &buf[..n];
+                            stderr_bytes.extend_from_slice(chunk);
+                            pending.extend_from_slice(chunk);
+                            for line in take_clone_progress_fragments(&mut pending, false) {
+                                send_or_log(
+                                    &progress_tx,
+                                    Msg::Internal(crate::msg::InternalMsg::CloneRepoProgress {
+                                        dest: Arc::clone(&progress_dest),
+                                        line,
+                                    }),
+                                );
+                            }
+                        }
+                        Err(_) => break,
+                    }
                 }
             }
-            stderr_acc
+            for line in take_clone_progress_fragments(&mut pending, true) {
+                send_or_log(
+                    &progress_tx,
+                    Msg::Internal(crate::msg::InternalMsg::CloneRepoProgress {
+                        dest: Arc::clone(&progress_dest),
+                        line,
+                    }),
+                );
+            }
+            bytes_to_text_preserving_utf8(&stderr_bytes)
         });
 
         let timeout = git_command_timeout();
         let start = Instant::now();
         let mut timed_out = false;
         let status = loop {
-            match child.try_wait() {
+            match active_clone.try_wait() {
                 Ok(Some(status)) => break Ok(status),
                 Ok(None) => {
                     if start.elapsed() >= timeout {
                         timed_out = true;
-                        let _ = child.kill();
-                        break child.wait();
+                        active_clone.request_cancel();
+                        break active_clone.wait();
                     }
                     std::thread::sleep(GIT_COMMAND_WAIT_POLL);
                 }
@@ -548,13 +743,15 @@ pub(super) fn schedule_clone_repo(
         let mut stderr_acc = stderr_handle.join().unwrap_or_default();
         append_host_prompt_to_stderr(&mut stderr_acc, &askpass_script);
 
-        let result = match status {
+        let mut result = match status {
             Ok(status) => {
                 if timed_out {
                     Err(Error::new(ErrorKind::Backend(format!(
                         "{command_str} timed out after {} seconds (set {GIT_COMMAND_TIMEOUT_ENV} to override)",
                         timeout.as_secs()
                     ))))
+                } else if active_clone.cancel_requested() && !status.success() {
+                    Err(Error::new(ErrorKind::Backend("clone aborted".to_string())))
                 } else {
                     let out = CommandOutput {
                         command: command_str,
@@ -578,6 +775,14 @@ pub(super) fn schedule_clone_repo(
             Err(e) => Err(Error::new(ErrorKind::Io(e.kind()))),
         };
 
+        if result.is_err() && active_clone.cancel_requested()
+            && let Err(cleanup_err) = cleanup_aborted_clone_destination(&dest, dest_preexisted) {
+                result = Err(match result {
+                    Ok(_) => cleanup_err,
+                    Err(err) => Error::new(ErrorKind::Backend(format!("{err}; {cleanup_err}"))),
+                });
+            }
+
         if result.is_ok() {
             remember_successful_prompt_auth(prompt_auth.as_ref(), &askpass_script);
         }
@@ -596,6 +801,17 @@ pub(super) fn schedule_clone_repo(
             send_or_log(&msg_tx, Msg::OpenRepo(dest));
         }
     });
+}
+
+pub(super) fn schedule_abort_clone_repo(_msg_tx: mpsc::Sender<Msg>, dest: PathBuf) {
+    let handle = active_clones()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&dest)
+        .cloned();
+    if let Some(handle) = handle {
+        handle.request_cancel();
+    }
 }
 
 #[cfg(test)]
@@ -676,6 +892,76 @@ mod tests {
 
         assert_eq!(stderr.matches("SSH host verification prompt:").count(), 0);
         assert_eq!(stderr.matches(prompt).count(), 1);
+    }
+
+    #[test]
+    fn take_clone_progress_fragments_streams_carriage_return_updates() {
+        let mut pending =
+            b"Receiving objects:   1% (1/100)\rReceiving objects:  20% (20/100)".to_vec();
+
+        let fragments = take_clone_progress_fragments(&mut pending, false);
+        assert_eq!(fragments, vec!["Receiving objects:   1% (1/100)"]);
+        assert_eq!(pending, b"Receiving objects:  20% (20/100)".to_vec());
+
+        pending.extend_from_slice(b"\rResolving deltas:   5% (1/20)\n");
+        let fragments = take_clone_progress_fragments(&mut pending, false);
+        assert_eq!(
+            fragments,
+            vec![
+                "Receiving objects:  20% (20/100)",
+                "Resolving deltas:   5% (1/20)",
+            ]
+        );
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn take_clone_progress_fragments_flushes_remainder_at_eof() {
+        let mut pending = b"Updating files: 100% (4/4), done.".to_vec();
+        let fragments = take_clone_progress_fragments(&mut pending, true);
+        assert_eq!(fragments, vec!["Updating files: 100% (4/4), done."]);
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn cleanup_aborted_clone_destination_removes_new_directory() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let dest = temp.path().join("clone");
+        std::fs::create_dir_all(dest.join(".git").join("objects")).expect("create clone dir");
+        std::fs::write(dest.join(".git").join("HEAD"), "ref: refs/heads/main\n")
+            .expect("write head");
+
+        cleanup_aborted_clone_destination(&dest, false).expect("cleanup succeeds");
+
+        assert!(
+            !dest.exists(),
+            "aborted clone destination should be removed"
+        );
+    }
+
+    #[test]
+    fn cleanup_aborted_clone_destination_preserves_preexisting_directory() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let dest = temp.path().join("clone");
+        std::fs::create_dir_all(&dest).expect("create preexisting dest");
+        let sentinel = dest.join("keep.txt");
+        std::fs::write(&sentinel, "keep\n").expect("write sentinel");
+
+        cleanup_aborted_clone_destination(&dest, true).expect("cleanup succeeds");
+
+        assert!(dest.exists(), "preexisting destination should be preserved");
+        assert!(sentinel.exists(), "preexisting contents should remain");
+    }
+
+    #[test]
+    fn cleanup_aborted_clone_destination_removes_new_file_like_paths() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let dest = temp.path().join("clone");
+        std::fs::write(&dest, "partial\n").expect("create partial file");
+
+        cleanup_aborted_clone_destination(&dest, false).expect("cleanup succeeds");
+
+        assert!(!dest.exists(), "partial file should be removed");
     }
 
     #[test]

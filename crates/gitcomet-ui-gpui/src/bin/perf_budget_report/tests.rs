@@ -740,6 +740,10 @@ fn structural_budgets_include_status_select_diff_open_targets() {
         .map(|spec| (spec.bench, spec.metric))
         .collect::<Vec<_>>();
     assert!(specs.contains(&("status_select_diff_open/unstaged", "effect_count")));
+    assert!(specs.contains(&(
+        "status_select_diff_open/unstaged",
+        "load_selected_diff_effect_count"
+    )));
     assert!(specs.contains(&("status_select_diff_open/unstaged", "load_diff_effect_count")));
     assert!(specs.contains(&(
         "status_select_diff_open/unstaged",
@@ -747,6 +751,10 @@ fn structural_budgets_include_status_select_diff_open_targets() {
     )));
     assert!(specs.contains(&("status_select_diff_open/unstaged", "diff_state_rev_delta")));
     assert!(specs.contains(&("status_select_diff_open/staged", "effect_count")));
+    assert!(specs.contains(&(
+        "status_select_diff_open/staged",
+        "load_selected_diff_effect_count"
+    )));
     assert!(specs.contains(&("status_select_diff_open/staged", "load_diff_effect_count")));
     assert!(specs.contains(&(
         "status_select_diff_open/staged",
