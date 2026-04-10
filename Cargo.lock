@@ -3265,7 +3265,7 @@ dependencies = [
 [[package]]
 name = "gpui-ce"
 version = "0.3.3"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=c91b51064714781a7a087dc42edc562a8eb9193b#c91b51064714781a7a087dc42edc562a8eb9193b"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=1679dc543d880e6562d84afe316a1b192a064b08#1679dc543d880e6562d84afe316a1b192a064b08"
 dependencies = [
  "anyhow",
  "as-raw-xcb-connection",
@@ -3370,7 +3370,7 @@ dependencies = [
 [[package]]
 name = "gpui-ce-macros"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=c91b51064714781a7a087dc42edc562a8eb9193b#c91b51064714781a7a087dc42edc562a8eb9193b"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=1679dc543d880e6562d84afe316a1b192a064b08#1679dc543d880e6562d84afe316a1b192a064b08"
 dependencies = [
  "heck",
  "proc-macro2",
