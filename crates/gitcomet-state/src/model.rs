@@ -315,14 +315,38 @@ pub struct CloneOpState {
     pub url: Arc<str>,
     pub dest: Arc<PathBuf>,
     pub status: CloneOpStatus,
+    pub progress: CloneProgressMeter,
     pub seq: u64,
     pub output_tail: VecDeque<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CloneProgressStage {
+    Loading,
+    RemoteObjects,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CloneProgressMeter {
+    pub stage: CloneProgressStage,
+    pub percent: u8,
+}
+
+impl Default for CloneProgressMeter {
+    fn default() -> Self {
+        Self {
+            stage: CloneProgressStage::Loading,
+            percent: 0,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CloneOpStatus {
     Running,
+    Cancelling,
     FinishedOk,
+    Cancelled,
     FinishedErr(String),
 }
 
@@ -389,6 +413,8 @@ pub struct DiffState {
     pub diff: Loadable<Shared<Diff>>,
     pub diff_file_rev: u64,
     pub diff_file: Loadable<Option<Shared<FileDiffText>>>,
+    pub diff_preview_text_file_rev: u64,
+    pub diff_preview_text_file: Loadable<Option<Shared<DiffPreviewTextFile>>>,
     pub diff_file_image: Loadable<Option<Shared<FileDiffImage>>>,
 }
 
@@ -401,6 +427,8 @@ impl Default for DiffState {
             diff: Loadable::NotLoaded,
             diff_file_rev: 0,
             diff_file: Loadable::NotLoaded,
+            diff_preview_text_file_rev: 0,
+            diff_preview_text_file: Loadable::NotLoaded,
             diff_file_image: Loadable::NotLoaded,
         }
     }

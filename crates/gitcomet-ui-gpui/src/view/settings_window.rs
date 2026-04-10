@@ -34,6 +34,29 @@ const CHANGE_TRACKING_OPTIONS: &[(&str, ChangeTrackingView, &str)] = &[
     ),
 ];
 
+const DIFF_SCROLL_SYNC_OPTIONS: &[(&str, DiffScrollSync, &str)] = &[
+    (
+        "settings_window_diff_scroll_sync_vertical",
+        DiffScrollSync::Vertical,
+        "Lock vertical scrolling only.",
+    ),
+    (
+        "settings_window_diff_scroll_sync_horizontal",
+        DiffScrollSync::Horizontal,
+        "Lock horizontal scrolling only.",
+    ),
+    (
+        "settings_window_diff_scroll_sync_none",
+        DiffScrollSync::None,
+        "Keep split and merge panes independent.",
+    ),
+    (
+        "settings_window_diff_scroll_sync_both",
+        DiffScrollSync::Both,
+        "Lock both vertical and horizontal scrolling.",
+    ),
+];
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SettingsSection {
     Theme,
@@ -42,6 +65,7 @@ enum SettingsSection {
     DateFormat,
     Timezone,
     ChangeTracking,
+    Diff,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -92,10 +116,12 @@ pub(crate) struct SettingsWindowView {
     date_format_scroll: UniformListScrollHandle,
     timezone_scroll: UniformListScrollHandle,
     change_tracking_scroll: UniformListScrollHandle,
+    diff_scroll_sync_scroll: UniformListScrollHandle,
     date_time_format: DateTimeFormat,
     timezone: Timezone,
     show_timezone: bool,
     change_tracking_view: ChangeTrackingView,
+    diff_scroll_sync: DiffScrollSync,
     current_view: SettingsView,
     open_source_licenses_scroll: UniformListScrollHandle,
     runtime_info: SettingsRuntimeInfo,
@@ -310,6 +336,11 @@ impl SettingsWindowView {
             .as_deref()
             .and_then(ChangeTrackingView::from_key)
             .unwrap_or_default();
+        let diff_scroll_sync = ui_session
+            .diff_scroll_sync
+            .as_deref()
+            .and_then(DiffScrollSync::from_key)
+            .unwrap_or_default();
         let theme = theme_mode.resolve_theme(window.appearance());
 
         let appearance_subscription = {
@@ -346,10 +377,12 @@ impl SettingsWindowView {
             date_format_scroll: UniformListScrollHandle::default(),
             timezone_scroll: UniformListScrollHandle::default(),
             change_tracking_scroll: UniformListScrollHandle::default(),
+            diff_scroll_sync_scroll: UniformListScrollHandle::default(),
             date_time_format,
             timezone,
             show_timezone,
             change_tracking_view,
+            diff_scroll_sync,
             current_view: SettingsView::Root,
             open_source_licenses_scroll: UniformListScrollHandle::default(),
             runtime_info: SettingsRuntimeInfo::detect(),
@@ -384,6 +417,7 @@ impl SettingsWindowView {
             timezone: Some(self.timezone.key()),
             show_timezone: Some(self.show_timezone),
             change_tracking_view: Some(self.change_tracking_view.key().to_string()),
+            diff_scroll_sync: Some(self.diff_scroll_sync.key().to_string()),
             change_tracking_height: None,
             untracked_height: None,
             history_show_author: None,
@@ -608,6 +642,20 @@ impl SettingsWindowView {
         self.persist_preferences(cx);
         self.update_main_windows(cx, move |view, _window, cx| {
             view.set_change_tracking_view(next, cx);
+        });
+        cx.notify();
+    }
+
+    fn set_diff_scroll_sync(&mut self, next: DiffScrollSync, cx: &mut gpui::Context<Self>) {
+        if self.diff_scroll_sync == next {
+            return;
+        }
+
+        self.diff_scroll_sync = next;
+        self.expanded_section = None;
+        self.persist_preferences(cx);
+        self.update_main_windows(cx, move |view, _window, cx| {
+            view.set_diff_scroll_sync(next, cx);
         });
         cx.notify();
     }
@@ -1221,6 +1269,31 @@ impl SettingsWindowView {
             .collect()
     }
 
+    fn render_diff_scroll_sync_option_rows(
+        this: &mut Self,
+        range: Range<usize>,
+        _window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> Vec<AnyElement> {
+        let theme = this.theme;
+        range
+            .filter_map(|ix| DIFF_SCROLL_SYNC_OPTIONS.get(ix).copied())
+            .map(|(id, option, detail)| {
+                this.option_row(
+                    id,
+                    option.label(),
+                    Some(detail.into()),
+                    this.diff_scroll_sync == option,
+                    theme,
+                )
+                .on_click(cx.listener(move |this, _e: &ClickEvent, _window, cx| {
+                    this.set_diff_scroll_sync(option, cx);
+                }))
+                .into_any_element()
+            })
+            .collect()
+    }
+
     fn card(&self, id: &'static str, title: &'static str, theme: AppTheme) -> Stateful<gpui::Div> {
         div()
             .id(id)
@@ -1513,6 +1586,18 @@ impl Render for SettingsWindowView {
                         this.toggle_section(SettingsSection::ChangeTracking, cx);
                     }));
 
+                let diff_scroll_sync_row = self
+                    .summary_row(
+                        "settings_window_diff_scroll_sync",
+                        "Scroll sync",
+                        self.diff_scroll_sync.label().into(),
+                        self.expanded_section == Some(SettingsSection::Diff),
+                        theme,
+                    )
+                    .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                        this.toggle_section(SettingsSection::Diff, cx);
+                    }));
+
                 let mut general_card = self
                     .card("settings_window_general", "General", theme)
                     .child(theme_row);
@@ -1745,6 +1830,40 @@ impl Render for SettingsWindowView {
                         ));
                 }
 
+                let mut diff_card = self
+                    .card("settings_window_diff_card", "Diff", theme)
+                    .child(diff_scroll_sync_row);
+
+                if self.expanded_section == Some(SettingsSection::Diff) {
+                    let list = uniform_list(
+                        "settings_window_diff_scroll_sync_list",
+                        DIFF_SCROLL_SYNC_OPTIONS.len(),
+                        cx.processor(Self::render_diff_scroll_sync_option_rows),
+                    )
+                    .h_full()
+                    .min_h(px(0.0))
+                    .track_scroll(self.diff_scroll_sync_scroll.clone())
+                    .on_scroll_wheel({
+                        let scroll = self.diff_scroll_sync_scroll.clone();
+                        move |event, window, cx| {
+                            if uniform_list_should_stop_scroll_propagation(&scroll, event, window) {
+                                cx.stop_propagation();
+                            }
+                        }
+                    })
+                    .into_any_element();
+                    diff_card = diff_card.child(self.dropdown_list_container(
+                        "settings_window_diff_scroll_sync_list_container",
+                        "settings_window_diff_scroll_sync_scrollbar",
+                        self.diff_scroll_sync_scroll.clone(),
+                        DIFF_SCROLL_SYNC_OPTIONS.len(),
+                        SETTINGS_DROPDOWN_DETAIL_ROW_HEIGHT_PX,
+                        SETTINGS_DROPDOWN_DETAIL_LIST_EXTRA_HEIGHT_PX + 18.0,
+                        list,
+                        theme,
+                    ));
+                }
+
                 let min_git_version = format!("{MIN_GIT_MAJOR}.{MIN_GIT_MINOR}");
                 let (git_icon_path, git_icon_color, git_status_text): (
                     &'static str,
@@ -1870,6 +1989,7 @@ impl Render for SettingsWindowView {
                     .p_3()
                     .child(general_card)
                     .child(change_tracking_card)
+                    .child(diff_card)
                     .child(environment_card)
                     .child(links_card)
             }
@@ -2473,6 +2593,10 @@ mod tests {
                 SettingsSection::ChangeTracking,
                 "settings_window_change_tracking_list_container",
             ),
+            (
+                SettingsSection::Diff,
+                "settings_window_diff_scroll_sync_list_container",
+            ),
         ] {
             let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
                 settings.expanded_section = Some(section);
@@ -2519,6 +2643,7 @@ mod tests {
             (SettingsSection::Theme, "Theme"),
             (SettingsSection::DateFormat, "Date time format"),
             (SettingsSection::ChangeTracking, "Untracked files"),
+            (SettingsSection::Diff, "Diff scroll sync"),
         ] {
             let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
                 settings.expanded_section = Some(section);
@@ -2539,6 +2664,9 @@ mod tests {
                     }
                     SettingsSection::ChangeTracking => {
                         uniform_list_vertical_scroll_metrics(&settings.change_tracking_scroll).2
+                    }
+                    SettingsSection::Diff => {
+                        uniform_list_vertical_scroll_metrics(&settings.diff_scroll_sync_scroll).2
                     }
                     _ => px(0.0),
                 })
@@ -2882,6 +3010,65 @@ mod tests {
                     .read_with(app, |settings, _cx| settings.change_tracking_view)
                     .expect("settings window should remain readable"),
                 next_view
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn diff_scroll_sync_setting_defers_main_window_update(cx: &mut gpui::TestAppContext) {
+        let _visual_guard = lock_visual_test();
+        let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+        let (main_view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+            open_settings_window(app);
+        });
+        cx.run_until_parked();
+
+        let settings_window = cx.update(|_window, app| {
+            app.windows()
+                .into_iter()
+                .find_map(|window| window.downcast::<SettingsWindowView>())
+                .expect("settings window should be open")
+        });
+
+        let next_mode = cx.update(|_window, app| {
+            let current = settings_window
+                .read_with(app, |settings, _cx| settings.diff_scroll_sync)
+                .expect("settings window should be readable");
+            match current {
+                DiffScrollSync::Both => DiffScrollSync::Vertical,
+                DiffScrollSync::Vertical => DiffScrollSync::Horizontal,
+                DiffScrollSync::Horizontal => DiffScrollSync::None,
+                DiffScrollSync::None => DiffScrollSync::Both,
+            }
+        });
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            cx.update(|_window, app| {
+                main_view.update(app, |_view, cx| {
+                    let _ = settings_window.update(cx, |settings, _window, cx| {
+                        settings.set_diff_scroll_sync(next_mode, cx);
+                    });
+                });
+            });
+        }));
+        assert!(
+            result.is_ok(),
+            "diff scroll sync update should not re-enter GitCometView updates"
+        );
+
+        cx.run_until_parked();
+
+        cx.update(|_window, app| {
+            assert_eq!(main_view.read(app).diff_scroll_sync_for_test(), next_mode);
+            assert_eq!(
+                settings_window
+                    .read_with(app, |settings, _cx| settings.diff_scroll_sync)
+                    .expect("settings window should remain readable"),
+                next_mode
             );
         });
     }

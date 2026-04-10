@@ -1,109 +1,34 @@
 use super::*;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct BranchSidebarFingerprint {
-    head_branch_rev: u64,
-    branches_rev: u64,
-    remotes_rev: u64,
-    remote_branches_rev: u64,
-    worktrees_rev: u64,
-    submodules_rev: u64,
-    stashes_rev: u64,
-}
-
-impl BranchSidebarFingerprint {
-    fn from_repo(repo: &RepoState) -> Self {
-        Self {
-            head_branch_rev: repo.head_branch_rev,
-            branches_rev: repo.branches_rev,
-            remotes_rev: repo.remotes_rev,
-            remote_branches_rev: repo.remote_branches_rev,
-            worktrees_rev: repo.worktrees_rev,
-            submodules_rev: repo.submodules_rev,
-            stashes_rev: repo.stashes_rev,
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-struct BranchSidebarCache {
-    repo_id: RepoId,
-    fingerprint: BranchSidebarFingerprint,
-    source_fingerprint: u64,
-    source_parts: BranchSidebarSourceParts,
-    rows: Rc<[BranchSidebarRow]>,
-}
-
-type BranchSidebarSourceParts = ();
+use crate::view::branch_sidebar;
+use crate::view::caches::{
+    BranchSidebarCache, BranchSidebarFingerprint, branch_sidebar_cache_lookup,
+    branch_sidebar_cache_lookup_by_cached_source, branch_sidebar_cache_lookup_by_source,
+    branch_sidebar_cache_store,
+};
+use std::collections::BTreeSet;
 
 fn branch_sidebar_branch_label(name: &str) -> SharedString {
     SharedString::from(name.rsplit('/').next().unwrap_or(name).to_string())
 }
 
-fn branch_sidebar_source_fingerprint(
-    repo: &RepoState,
-    _cached_source_parts: Option<&BranchSidebarSourceParts>,
-) -> (u64, BranchSidebarSourceParts) {
-    let mut hasher = FxHasher::default();
-    repo.head_branch_rev.hash(&mut hasher);
-    repo.branches_rev.hash(&mut hasher);
-    repo.remotes_rev.hash(&mut hasher);
-    repo.remote_branches_rev.hash(&mut hasher);
-    repo.worktrees_rev.hash(&mut hasher);
-    repo.submodules_rev.hash(&mut hasher);
-    repo.stashes_rev.hash(&mut hasher);
-    (hasher.finish(), ())
+fn branch_sidebar_expanded_default_items() -> BTreeSet<String> {
+    [
+        branch_sidebar::worktrees_section_storage_key(),
+        branch_sidebar::submodules_section_storage_key(),
+        branch_sidebar::stash_section_storage_key(),
+    ]
+    .into_iter()
+    .filter_map(branch_sidebar::expanded_default_section_storage_key)
+    .collect()
 }
 
-fn branch_sidebar_cache_lookup(
-    cache: &mut Option<BranchSidebarCache>,
-    repo_id: RepoId,
-    fingerprint: BranchSidebarFingerprint,
-) -> Option<Rc<[BranchSidebarRow]>> {
-    cache.as_ref().and_then(|cached| {
-        (cached.repo_id == repo_id && cached.fingerprint == fingerprint)
-            .then(|| Rc::clone(&cached.rows))
-    })
-}
-
-fn branch_sidebar_cache_lookup_by_cached_source(
-    _cache: &mut Option<BranchSidebarCache>,
-    _repo: &RepoState,
-    _fingerprint: BranchSidebarFingerprint,
-) -> Option<Rc<[BranchSidebarRow]>> {
-    None
-}
-
-fn branch_sidebar_cache_lookup_by_source(
-    cache: &mut Option<BranchSidebarCache>,
-    repo_id: RepoId,
-    fingerprint: BranchSidebarFingerprint,
-    source_fingerprint: u64,
-    _source_parts: &BranchSidebarSourceParts,
-) -> Option<Rc<[BranchSidebarRow]>> {
-    cache.as_ref().and_then(|cached| {
-        (cached.repo_id == repo_id
-            && cached.fingerprint == fingerprint
-            && cached.source_fingerprint == source_fingerprint)
-            .then(|| Rc::clone(&cached.rows))
-    })
-}
-
-fn branch_sidebar_cache_store(
-    cache: &mut Option<BranchSidebarCache>,
-    repo_id: RepoId,
-    fingerprint: BranchSidebarFingerprint,
-    source_fingerprint: u64,
-    source_parts: BranchSidebarSourceParts,
-    rows: Rc<[BranchSidebarRow]>,
-) {
-    *cache = Some(BranchSidebarCache {
-        repo_id,
-        fingerprint,
-        source_fingerprint,
-        source_parts,
-        rows,
-    });
+fn toggle_benchmark_suffix(value: &mut String, suffix: &str) {
+    if value.ends_with(suffix) {
+        let next_len = value.len().saturating_sub(suffix.len());
+        value.truncate(next_len);
+    } else {
+        value.push_str(suffix);
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -163,39 +88,99 @@ struct BenchHistoryStashAnalysis {
     stash_helper_ids: HashSet<CommitId>,
 }
 
+#[inline]
+fn history_commit_is_probable_stash_tip(commit: &Commit) -> bool {
+    if !(2..=3).contains(&commit.parent_ids.len()) {
+        return false;
+    }
+    let summary: &str = &commit.summary;
+    (summary.starts_with("WIP on ") || summary.starts_with("On ")) && summary.contains(": ")
+}
+
 fn analyze_history_stashes(
     commits: &[Commit],
     stashes: &[StashEntry],
 ) -> BenchHistoryStashAnalysis {
-    let commit_ix_by_id = commits
-        .iter()
-        .enumerate()
-        .map(|(ix, commit)| (commit.id.clone(), ix))
-        .collect::<HashMap<_, _>>();
-    let mut stash_tips = stashes
-        .iter()
-        .filter_map(|stash| {
-            commit_ix_by_id
-                .get(&stash.id)
-                .copied()
-                .map(|commit_ix| BenchHistoryStashTip {
-                    commit_ix,
-                    message: Some(Arc::clone(&stash.message)),
-                })
-        })
-        .collect::<Vec<_>>();
-    stash_tips.sort_by_key(|tip| tip.commit_ix);
+    if stashes.is_empty() {
+        let mut stash_tips = Vec::new();
+        let mut stash_helper_ids = HashSet::default();
+        for (commit_ix, commit) in commits.iter().enumerate() {
+            if !history_commit_is_probable_stash_tip(commit) {
+                continue;
+            }
+            if stash_tips.is_empty() {
+                stash_tips.reserve(4);
+                stash_helper_ids.reserve(4);
+            }
+            stash_tips.push(BenchHistoryStashTip {
+                commit_ix,
+                message: None,
+            });
+            for parent_id in commit.parent_ids.iter().skip(1) {
+                stash_helper_ids.insert(parent_id.clone());
+            }
+        }
+
+        return BenchHistoryStashAnalysis {
+            stash_tips,
+            stash_helper_ids,
+        };
+    }
+
+    let mut listed_stash_messages_by_id: HashMap<&str, Option<&Arc<str>>> =
+        HashMap::with_capacity_and_hasher(stashes.len(), Default::default());
+    for stash in stashes.iter() {
+        listed_stash_messages_by_id.insert(
+            stash.id.as_ref(),
+            (!stash.message.trim().is_empty()).then_some(&stash.message),
+        );
+    }
+
+    let mut stash_tips = Vec::with_capacity(stashes.len());
+    let mut stash_helper_ids =
+        HashSet::with_capacity_and_hasher(stashes.len().max(4), Default::default());
+    for (commit_ix, commit) in commits.iter().enumerate() {
+        let commit_id = commit.id.as_ref();
+        let is_probable_stash = history_commit_is_probable_stash_tip(commit);
+        let listed_stash_message = listed_stash_messages_by_id.get(commit_id).copied();
+        let listed_stash_tip = listed_stash_message.is_some();
+        if listed_stash_tip || is_probable_stash {
+            stash_tips.push(BenchHistoryStashTip {
+                commit_ix,
+                message: listed_stash_message.flatten().map(Arc::clone),
+            });
+        }
+
+        if listed_stash_tip {
+            for parent_id in commit.parent_ids.iter().skip(1) {
+                stash_helper_ids.insert(parent_id.clone());
+            }
+        }
+    }
+
     BenchHistoryStashAnalysis {
         stash_tips,
-        stash_helper_ids: HashSet::default(),
+        stash_helper_ids,
     }
 }
 
 fn build_history_visible_indices(
     commits: &[Commit],
-    _stash_helper_ids: &HashSet<CommitId>,
+    stash_helper_ids: &HashSet<CommitId>,
 ) -> Vec<usize> {
-    (0..commits.len()).collect()
+    if stash_helper_ids.is_empty() {
+        return (0..commits.len()).collect();
+    }
+
+    let mut visible_indices =
+        Vec::with_capacity(commits.len().saturating_sub(stash_helper_ids.len()));
+    for (ix, commit) in commits.iter().enumerate() {
+        if stash_helper_ids.contains(&commit.id) {
+            continue;
+        }
+        visible_indices.push(ix);
+    }
+    visible_indices
 }
 
 fn build_history_branch_text_by_target<'a>(
@@ -649,6 +634,9 @@ pub struct BranchSidebarCacheMetrics {
     pub cache_misses: usize,
     pub rows_count: usize,
     pub invalidations: usize,
+    pub worktree_rows: usize,
+    pub submodule_rows: usize,
+    pub stash_rows: usize,
 }
 
 /// Simulates the `branch_sidebar_rows_cached()` path from `SidebarPaneView`
@@ -658,6 +646,7 @@ pub struct BranchSidebarCacheMetrics {
 pub struct BranchSidebarCacheFixture {
     pub(crate) repo: RepoState,
     cache: Option<BranchSidebarCache>,
+    collapsed_items: BTreeSet<String>,
     metrics: BranchSidebarCacheMetrics,
 }
 
@@ -684,6 +673,7 @@ impl BranchSidebarCacheFixture {
         Self {
             repo,
             cache: None,
+            collapsed_items: branch_sidebar_expanded_default_items(),
             metrics: BranchSidebarCacheMetrics::default(),
         }
     }
@@ -696,8 +686,63 @@ impl BranchSidebarCacheFixture {
         Self {
             repo,
             cache: None,
+            collapsed_items: branch_sidebar_expanded_default_items(),
             metrics: BranchSidebarCacheMetrics::default(),
         }
+    }
+
+    fn mutate_single_ref_source(&mut self) {
+        let Loadable::Ready(branches) = &self.repo.branches else {
+            return;
+        };
+        let mut next_branches = branches.as_ref().clone();
+        let Some(branch) = next_branches
+            .iter_mut()
+            .find(|branch| branch.name != "main")
+        else {
+            return;
+        };
+        branch.divergence = match branch.divergence {
+            Some(_) => None,
+            None => Some(UpstreamDivergence {
+                ahead: 3,
+                behind: 1,
+            }),
+        };
+        self.repo.branches = Loadable::Ready(Arc::new(next_branches));
+        self.repo.branches_rev = self.repo.branches_rev.wrapping_add(1);
+        self.repo.branch_sidebar_rev = self.repo.branch_sidebar_rev.wrapping_add(1);
+    }
+
+    fn mutate_remote_fanout_source(&mut self) {
+        let Loadable::Ready(remote_branches) = &self.repo.remote_branches else {
+            return;
+        };
+        let mut next_remote_branches = remote_branches.as_ref().clone();
+        let Some(branch) = next_remote_branches.first_mut() else {
+            return;
+        };
+        toggle_benchmark_suffix(&mut branch.name, "-cache-miss");
+        self.repo.remote_branches = Loadable::Ready(Arc::new(next_remote_branches));
+        self.repo.remote_branches_rev = self.repo.remote_branches_rev.wrapping_add(1);
+        self.repo.branch_sidebar_rev = self.repo.branch_sidebar_rev.wrapping_add(1);
+    }
+
+    fn mutate_worktrees_ready_source(&mut self) {
+        let Loadable::Ready(worktrees) = &self.repo.worktrees else {
+            return;
+        };
+        let mut next_worktrees = worktrees.as_ref().clone();
+        let Some(worktree) = next_worktrees.first_mut() else {
+            return;
+        };
+        match &mut worktree.branch {
+            Some(branch) => toggle_benchmark_suffix(branch, "-ready"),
+            None => worktree.branch = Some("worktree-ready".to_string()),
+        }
+        self.repo.worktrees = Loadable::Ready(Arc::new(next_worktrees));
+        self.repo.worktrees_rev = self.repo.worktrees_rev.wrapping_add(1);
+        self.repo.branch_sidebar_rev = self.repo.branch_sidebar_rev.wrapping_add(1);
     }
 
     /// Execute the cached path.  On fingerprint match → returns the cached
@@ -732,7 +777,7 @@ impl BranchSidebarCacheFixture {
             .filter(|cached| cached.repo_id == repo_id)
             .map(|cached| &cached.source_parts);
         let (source_fingerprint, source_parts) =
-            branch_sidebar_source_fingerprint(&self.repo, cached_source_parts);
+            branch_sidebar::branch_sidebar_source_fingerprint(&self.repo, cached_source_parts);
 
         if let Some(cached_rows) = branch_sidebar_cache_lookup_by_source(
             &mut self.cache,
@@ -750,7 +795,8 @@ impl BranchSidebarCacheFixture {
 
         // Cache miss — full rebuild.
         self.metrics.cache_misses += 1;
-        let rows: Rc<[BranchSidebarRow]> = GitCometView::branch_sidebar_rows(&self.repo).into();
+        let rows: Rc<[BranchSidebarRow]> =
+            branch_sidebar::branch_sidebar_rows(&self.repo, &self.collapsed_items).into();
         self.metrics.rows_count = rows.len();
 
         let mut h = FxHasher::default();
@@ -771,21 +817,81 @@ impl BranchSidebarCacheFixture {
         hash
     }
 
-    /// Invalidate the cache by bumping one rev counter (simulating a single
-    /// ref change) and then rebuild.  Returns row-count hash.
+    /// Invalidate the cache by bumping one rev counter without changing the
+    /// rendered branch source. This exercises the cached-source reuse path.
     pub fn run_invalidate_single_ref(&mut self) -> u64 {
         self.repo.branches_rev = self.repo.branches_rev.wrapping_add(1);
+        self.repo.branch_sidebar_rev = self.repo.branch_sidebar_rev.wrapping_add(1);
         self.metrics.invalidations += 1;
         self.run_cached()
     }
 
-    /// Invalidate the cache by bumping `worktrees_rev` (simulating worktree
-    /// placeholders completing their async load) and then rebuild.  Returns
-    /// row-count hash.
+    /// Invalidate the cache by bumping `worktrees_rev` without changing the
+    /// rendered worktree source. This exercises cached-source reuse after
+    /// a rev-only worktree refresh.
     pub fn run_invalidate_worktrees_ready(&mut self) -> u64 {
         self.repo.worktrees_rev = self.repo.worktrees_rev.wrapping_add(1);
+        self.repo.branch_sidebar_rev = self.repo.branch_sidebar_rev.wrapping_add(1);
         self.metrics.invalidations += 1;
         self.run_cached()
+    }
+
+    /// Mutate the remote-branch source so every call takes the miss path.
+    pub fn run_rebuild_remote_fanout(&mut self) -> u64 {
+        self.mutate_remote_fanout_source();
+        self.metrics.invalidations += 1;
+        self.run_cached()
+    }
+
+    /// Mutate one local branch's rendered metadata so every call takes the
+    /// miss path while keeping the overall row shape stable.
+    pub fn run_rebuild_single_ref_change(&mut self) -> u64 {
+        self.mutate_single_ref_source();
+        self.metrics.invalidations += 1;
+        self.run_cached()
+    }
+
+    /// Mutate the ready worktree snapshot so every call rebuilds while the
+    /// cached row slice still includes worktree/submodule/stash rows.
+    pub fn run_rebuild_worktrees_ready(&mut self) -> u64 {
+        self.mutate_worktrees_ready_source();
+        self.metrics.invalidations += 1;
+        self.run_cached()
+    }
+
+    /// Inspect the cached row slice after a representative sidecar run so the
+    /// emitted metrics prove whether aux-list rows actually participated in the
+    /// rebuild path.
+    pub fn capture_cached_row_breakdown(&mut self) {
+        let Some(cache) = self.cache.as_ref() else {
+            self.metrics.worktree_rows = 0;
+            self.metrics.submodule_rows = 0;
+            self.metrics.stash_rows = 0;
+            return;
+        };
+
+        let mut worktree_rows = 0usize;
+        let mut submodule_rows = 0usize;
+        let mut stash_rows = 0usize;
+
+        for row in cache.rows.iter() {
+            match row {
+                BranchSidebarRow::WorktreeItem { .. } => {
+                    worktree_rows = worktree_rows.saturating_add(1);
+                }
+                BranchSidebarRow::SubmoduleItem { .. } => {
+                    submodule_rows = submodule_rows.saturating_add(1);
+                }
+                BranchSidebarRow::StashItem { .. } => {
+                    stash_rows = stash_rows.saturating_add(1);
+                }
+                _ => {}
+            }
+        }
+
+        self.metrics.worktree_rows = worktree_rows;
+        self.metrics.submodule_rows = submodule_rows;
+        self.metrics.stash_rows = stash_rows;
     }
 
     /// Reset metrics for a fresh measurement interval.
@@ -840,7 +946,9 @@ impl RepoSwitchMetrics {
                     metrics.persist_session_effect_count =
                         metrics.persist_session_effect_count.saturating_add(1);
                 }
-                Effect::LoadDiff { .. }
+                Effect::LoadSelectedDiff { .. }
+                | Effect::LoadSelectedConflictFile { .. }
+                | Effect::LoadDiff { .. }
                 | Effect::LoadDiffFile { .. }
                 | Effect::LoadDiffFileImage { .. }
                 | Effect::LoadConflictFile { .. } => {
@@ -854,6 +962,7 @@ impl RepoSwitchMetrics {
                 | Effect::LoadHeadBranch { .. }
                 | Effect::LoadUpstreamDivergence { .. }
                 | Effect::LoadLog { .. }
+                | Effect::LoadRebaseAndMergeState { .. }
                 | Effect::LoadTags { .. }
                 | Effect::LoadRemoteTags { .. }
                 | Effect::LoadStashes { .. }
@@ -1325,7 +1434,12 @@ impl RepoSwitchFixture {
     }
 
     pub fn fresh_state(&self) -> AppState {
-        self.baseline.clone()
+        let mut state = self.baseline.clone();
+        let now = SystemTime::now();
+        for repo in &mut state.repos {
+            repo.last_active_at = repo_switch_repo_is_hydrated(repo).then_some(now);
+        }
+        state
     }
 
     pub fn run_with_state(&self, state: &mut AppState) -> (u64, RepoSwitchMetrics) {

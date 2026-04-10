@@ -1,5 +1,7 @@
 use crate::theme::AppTheme;
-use gitcomet_core::diff::{AnnotatedDiffLine, annotate_unified};
+use gitcomet_core::diff::AnnotatedDiffLine;
+#[cfg(test)]
+use gitcomet_core::diff::annotate_unified;
 use gitcomet_core::domain::{
     Branch, Commit, CommitId, DiffArea, DiffTarget, FileStatus, FileStatusKind, RepoStatus, Tag,
     UpstreamDivergence,
@@ -85,7 +87,7 @@ use date_time::format_datetime;
 #[cfg(test)]
 use date_time::format_datetime_utc;
 use date_time::{DateTimeFormat, Timezone, format_datetime_into};
-use diff_preview::{build_deleted_file_preview_from_diff, build_new_file_preview_from_diff};
+use diff_preview::build_new_file_preview_from_diff;
 use patch_split::build_patch_split_rows;
 use poller::Poller;
 use word_diff::capped_word_diff_ranges;
@@ -446,6 +448,11 @@ impl GitCometView {
             .as_deref()
             .and_then(ChangeTrackingView::from_key)
             .unwrap_or_default();
+        let diff_scroll_sync = ui_session
+            .diff_scroll_sync
+            .as_deref()
+            .and_then(DiffScrollSync::from_key)
+            .unwrap_or_default();
         let restored_change_tracking_height = ui_session.change_tracking_height;
         let restored_untracked_height = ui_session.untracked_height;
 
@@ -551,6 +558,7 @@ impl GitCometView {
                 date_time_format,
                 timezone,
                 show_timezone,
+                diff_scroll_sync,
                 history_show_author,
                 history_show_date,
                 history_show_sha,
@@ -729,6 +737,7 @@ impl GitCometView {
             timezone,
             show_timezone,
             change_tracking_view,
+            diff_scroll_sync,
             open_repo_panel: false,
             open_repo_input,
             hover_resize_edge: None,
@@ -861,6 +870,21 @@ impl GitCometView {
             .update(cx, |pane, cx| pane.set_change_tracking_view(next, cx));
         self.popover_host
             .update(cx, |host, cx| host.sync_change_tracking_view(next, cx));
+        self.schedule_ui_settings_persist(cx);
+    }
+
+    pub(in crate::view) fn set_diff_scroll_sync(
+        &mut self,
+        next: DiffScrollSync,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.diff_scroll_sync == next {
+            return;
+        }
+
+        self.diff_scroll_sync = next;
+        self.main_pane
+            .update(cx, |pane, cx| pane.set_diff_scroll_sync(next, cx));
         self.schedule_ui_settings_persist(cx);
     }
 
@@ -1387,6 +1411,11 @@ impl GitCometView {
     #[cfg(test)]
     pub(in crate::view) fn change_tracking_view_for_test(&self) -> ChangeTrackingView {
         self.change_tracking_view
+    }
+
+    #[cfg(test)]
+    pub(in crate::view) fn diff_scroll_sync_for_test(&self) -> DiffScrollSync {
+        self.diff_scroll_sync
     }
 }
 

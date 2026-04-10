@@ -347,7 +347,7 @@ jobs:
           - target_platform: x86_64-linux
             artifact_arch: x86_64
             deb_arch: amd64
-            runs_on: ubuntu-22.04
+            runs_on: ubuntu-24.04
             build_appimage: true
           - target_platform: aarch64-linux
             artifact_arch: arm64

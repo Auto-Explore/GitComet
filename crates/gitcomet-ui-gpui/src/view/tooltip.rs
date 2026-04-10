@@ -48,6 +48,7 @@ impl GitCometView {
                             timezone: Some(this.timezone.key()),
                             show_timezone: Some(this.show_timezone),
                             change_tracking_view: Some(this.change_tracking_view.key().to_string()),
+                            diff_scroll_sync: Some(this.diff_scroll_sync.key().to_string()),
                             change_tracking_height,
                             untracked_height,
                             history_show_author: Some(history_show_author),

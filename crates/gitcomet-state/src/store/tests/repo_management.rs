@@ -229,6 +229,8 @@ fn clone_repo_sets_running_state_and_emits_effect() {
 
     let op = state.clone.as_ref().expect("clone op set");
     assert!(matches!(op.status, CloneOpStatus::Running));
+    assert_eq!(op.progress.stage, CloneProgressStage::Loading);
+    assert_eq!(op.progress.percent, 0);
     assert_eq!(op.seq, 0);
     assert!(matches!(effects.as_slice(), [Effect::CloneRepo { .. }]));
 }
@@ -276,6 +278,55 @@ fn clone_repo_progress_trims_tail_and_skips_blank_lines() {
     assert_eq!(op.output_tail.len(), 80);
     assert_eq!(op.output_tail.front().map(String::as_str), Some("line-4"));
     assert_eq!(op.output_tail.back().map(String::as_str), Some("line-83"));
+    assert_eq!(op.progress.stage, CloneProgressStage::Loading);
+    assert_eq!(op.progress.percent, 0);
+}
+
+#[test]
+fn clone_repo_progress_tracks_loading_and_remote_object_phases() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let dest = PathBuf::from("/tmp/example");
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::CloneRepo {
+            url: "file:///tmp/example.git".to_string(),
+            dest: dest.clone(),
+        },
+    );
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::CloneRepoProgress {
+            dest: Arc::new(dest.clone()),
+            line: "Receiving objects:  42% (52/123), 1.23 MiB | 2.00 MiB/s".to_string(),
+        }),
+    );
+    {
+        let op = state.clone.as_ref().expect("clone op set");
+        assert_eq!(op.progress.stage, CloneProgressStage::Loading);
+        assert_eq!(op.progress.percent, 42);
+    }
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::CloneRepoProgress {
+            dest: Arc::new(dest),
+            line: "Resolving deltas:  17% (5/29)".to_string(),
+        }),
+    );
+
+    let op = state.clone.as_ref().expect("clone op set");
+    assert_eq!(op.progress.stage, CloneProgressStage::RemoteObjects);
+    assert_eq!(op.progress.percent, 17);
 }
 
 #[test]
@@ -342,6 +393,38 @@ fn clone_repo_progress_ignores_mismatched_or_non_running_operation() {
 }
 
 #[test]
+fn abort_clone_repo_marks_operation_cancelling_and_emits_effect() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let dest = PathBuf::from("/tmp/example");
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::CloneRepo {
+            url: "file:///tmp/example.git".to_string(),
+            dest: dest.clone(),
+        },
+    );
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::AbortCloneRepo { dest: dest.clone() },
+    );
+
+    let op = state.clone.as_ref().expect("clone op set");
+    assert!(matches!(op.status, CloneOpStatus::Cancelling));
+    assert_eq!(op.seq, 1);
+    assert!(
+        matches!(effects.as_slice(), [Effect::AbortCloneRepo { dest: effect_dest }] if effect_dest == &dest)
+    );
+}
+
+#[test]
 fn clone_repo_finished_updates_existing_operation_for_success_and_error() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);
@@ -396,6 +479,93 @@ fn clone_repo_finished_updates_existing_operation_for_success_and_error() {
         }
         other => panic!("expected clone error status, got {other:?}"),
     }
+}
+
+#[test]
+fn clone_repo_finished_maps_cancelling_error_to_cancelled() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let dest = PathBuf::from("/tmp/example");
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::CloneRepo {
+            url: "file:///tmp/example.git".to_string(),
+            dest: dest.clone(),
+        },
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::AbortCloneRepo { dest: dest.clone() },
+    );
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::CloneRepoFinished {
+            url: "file:///tmp/example.git".to_string(),
+            dest,
+            result: Err(Error::new(ErrorKind::Backend("clone aborted".to_string()))),
+        }),
+    );
+
+    let op = state.clone.as_ref().expect("clone op set");
+    assert!(matches!(op.status, CloneOpStatus::Cancelled));
+    assert_eq!(op.seq, 2);
+}
+
+#[test]
+fn clone_repo_finished_preserves_cleanup_failure_when_cancelling() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let dest = PathBuf::from("/tmp/example");
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::CloneRepo {
+            url: "file:///tmp/example.git".to_string(),
+            dest: dest.clone(),
+        },
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::AbortCloneRepo { dest: dest.clone() },
+    );
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::CloneRepoFinished {
+            url: "file:///tmp/example.git".to_string(),
+            dest,
+            result: Err(Error::new(ErrorKind::Backend(
+                "clone aborted, but failed to remove partially created destination `/tmp/example`: permission denied"
+                    .to_string(),
+            ))),
+        }),
+    );
+
+    let op = state.clone.as_ref().expect("clone op set");
+    match &op.status {
+        CloneOpStatus::FinishedErr(message) => {
+            assert!(message.contains("Clone failed"));
+            assert!(message.contains("failed to remove partially created destination"));
+        }
+        other => panic!("expected cleanup failure to remain visible, got {other:?}"),
+    }
+    assert_eq!(op.seq, 2);
 }
 
 #[test]
@@ -848,8 +1018,10 @@ fn set_active_repo_refreshes_repo_state_and_selected_diff() {
             e,
             Effect::LoadSelectedDiff {
                 repo_id,
+                load_patch_diff: true,
                 load_file_text: true,
                 load_file_image: false,
+                preview_text_side: None,
             } if *repo_id == repo1
         )
     });
@@ -921,8 +1093,10 @@ fn set_active_repo_reloads_selected_image_diff_via_image_effect() {
         e,
         Effect::LoadSelectedDiff {
             repo_id,
+            load_patch_diff: true,
             load_file_text: false,
             load_file_image: true,
+            preview_text_side: None,
         } if *repo_id == repo1
     )));
 }
@@ -969,6 +1143,7 @@ fn set_active_repo_png_diff_enqueues_image_preview_only() {
             e,
             Effect::LoadSelectedDiff {
                 repo_id,
+                load_patch_diff: true,
                 load_file_text: false,
                 load_file_image: true,
                 ..
@@ -1020,6 +1195,7 @@ fn set_active_repo_svg_diff_enqueues_image_and_text_previews() {
             e,
             Effect::LoadSelectedDiff {
                 repo_id,
+                load_patch_diff: true,
                 load_file_text: true,
                 load_file_image: true,
                 ..

@@ -1,5 +1,6 @@
 use super::*;
 use crate::view::fingerprint as view_fingerprint;
+use gitcomet_state::model::CloneProgressStage;
 use rustc_hash::FxHasher;
 use std::hash::{Hash, Hasher};
 
@@ -17,11 +18,18 @@ pub(super) fn notify_fingerprint(state: &AppState, popover: &PopoverKind) -> u64
                 clone.dest.hash(&mut hasher);
                 match &clone.status {
                     CloneOpStatus::Running => 0u8.hash(&mut hasher),
-                    CloneOpStatus::FinishedOk => 1u8.hash(&mut hasher),
+                    CloneOpStatus::Cancelling => 1u8.hash(&mut hasher),
+                    CloneOpStatus::FinishedOk => 2u8.hash(&mut hasher),
+                    CloneOpStatus::Cancelled => 3u8.hash(&mut hasher),
                     CloneOpStatus::FinishedErr(err) => {
-                        2u8.hash(&mut hasher);
+                        4u8.hash(&mut hasher);
                         err.hash(&mut hasher);
                     }
+                }
+                clone.progress.percent.hash(&mut hasher);
+                match clone.progress.stage {
+                    CloneProgressStage::Loading => 0u8.hash(&mut hasher),
+                    CloneProgressStage::RemoteObjects => 1u8.hash(&mut hasher),
                 }
             }
         },

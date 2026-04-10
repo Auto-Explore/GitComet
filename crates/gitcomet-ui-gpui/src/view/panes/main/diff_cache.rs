@@ -9,10 +9,10 @@ mod file_diff;
 mod image_cache;
 mod patch_diff;
 
-#[cfg(feature = "benchmarks")]
-pub(in crate::view) use self::file_diff::bench_build_file_diff_providers;
-pub(in crate::view) use self::file_diff::{PagedFileDiffInlineRows, PagedFileDiffRows};
-use self::file_diff::{build_file_diff_cache_rebuild, build_inline_text, file_diff_text_signature};
+pub(in crate::view) use self::file_diff::{
+    PagedFileDiffInlineRows, PagedFileDiffRows, build_file_diff_cache_rebuild,
+};
+use self::file_diff::{build_inline_text, file_diff_text_signature};
 #[cfg(feature = "benchmarks")]
 pub(in crate::view) use self::image_cache::render_svg_image_diff_preview;
 
@@ -154,6 +154,23 @@ impl MainPaneView {
             provider.row(inline_ix)
         } else {
             self.file_diff_inline_cache.get(inline_ix).cloned()
+        }
+    }
+
+    pub(in crate::view) fn file_diff_inline_render_data(
+        &self,
+        inline_ix: usize,
+    ) -> Option<self::file_diff::InlineFileDiffRowRenderData> {
+        if let Some(provider) = self.file_diff_inline_row_provider.as_ref() {
+            provider.render_data(inline_ix)
+        } else {
+            let line = self.file_diff_inline_cache.get(inline_ix)?.clone();
+            Some(self::file_diff::InlineFileDiffRowRenderData {
+                kind: line.kind,
+                old_line: line.old_line,
+                new_line: line.new_line,
+                text: crate::view::diff_utils::diff_content_line_text(&line),
+            })
         }
     }
 
@@ -539,10 +556,14 @@ impl MainPaneView {
         self.worktree_markdown_preview_path = Some(path.clone());
         self.worktree_markdown_preview_source_rev = source_rev;
 
-        let source_text = self.worktree_preview_text.clone();
-        if source_text.len() > markdown_preview::MAX_PREVIEW_SOURCE_BYTES {
+        let source_len = if self.worktree_preview_text.is_empty() {
+            self.worktree_preview_source_len
+        } else {
+            self.worktree_preview_text.len()
+        };
+        if source_len > markdown_preview::MAX_PREVIEW_SOURCE_BYTES {
             self.worktree_markdown_preview = Loadable::Error(
-                markdown_preview::single_preview_unavailable_reason(source_text.len()).to_string(),
+                markdown_preview::single_preview_unavailable_reason(source_len).to_string(),
             );
             self.worktree_markdown_preview_inflight = None;
             return;
@@ -552,11 +573,31 @@ impl MainPaneView {
         self.worktree_markdown_preview_seq = self.worktree_markdown_preview_seq.wrapping_add(1);
         let seq = self.worktree_markdown_preview_seq;
         self.worktree_markdown_preview_inflight = Some(seq);
+        let source_text =
+            (!self.worktree_preview_text.is_empty()).then_some(self.worktree_preview_text.clone());
+        let source_path = self.worktree_preview_source_path.clone();
 
         cx.spawn(
             async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
                 let result = smol::unblock(move || {
                     let _perf_scope = perf::span(ViewPerfSpan::MarkdownPreviewParse);
+                    let source_text = match source_text {
+                        Some(source_text) => source_text,
+                        None => {
+                            let source_path = source_path
+                                .ok_or_else(|| "Preview source path is unavailable.".to_string())?;
+                            std::fs::read_to_string(&source_path)
+                                .map(SharedString::from)
+                                .map_err(|e| {
+                                    if e.kind() == std::io::ErrorKind::InvalidData {
+                                        "File is not valid UTF-8; binary preview is not supported."
+                                            .to_string()
+                                    } else {
+                                        e.to_string()
+                                    }
+                                })?
+                        }
+                    };
                     build_single_markdown_preview_document(source_text.as_ref())
                 })
                 .await;
@@ -583,39 +624,38 @@ impl MainPaneView {
         .detach();
     }
 
-    pub(in crate::view) fn set_worktree_preview_ready_source(
+    fn apply_worktree_preview_ready_state(
         &mut self,
-        path: std::path::PathBuf,
+        display_path: std::path::PathBuf,
+        source_path: std::path::PathBuf,
+        source_len: usize,
         source_text: SharedString,
         line_starts: Arc<[usize]>,
+        line_flags: Arc<[u8]>,
         cx: &mut gpui::Context<Self>,
     ) {
-        let line_count = indexed_line_count(source_text.as_ref(), line_starts.as_ref());
-        let source_changed = self.worktree_preview_path.as_ref() != Some(&path)
+        let line_count = indexed_line_count_from_len(source_len, line_starts.as_ref());
+        let source_changed = self.worktree_preview_path.as_ref() != Some(&display_path)
+            || self.worktree_preview_source_path.as_ref() != Some(&source_path)
             || self.worktree_preview_line_count() != Some(line_count)
-            || self.worktree_preview_text.len() != source_text.len()
-            || self.worktree_preview_text.as_ref() != source_text.as_ref();
-        let search_trigram_index =
-            (source_changed || self.worktree_preview_search_trigram_index.is_none()).then(|| {
-                super::diff_search::build_resolved_output_trigram_index(
-                    source_text.as_ref(),
-                    line_starts.as_ref(),
-                    line_count,
-                )
-            });
+            || self.worktree_preview_source_len != source_len
+            || self.worktree_preview_text.as_ref() != source_text.as_ref()
+            || self.worktree_preview_line_starts.as_ref() != line_starts.as_ref()
+            || self.worktree_preview_line_flags.as_ref() != line_flags.as_ref();
         let cache_binding_changed =
-            self.worktree_preview_segments_cache_path.as_ref() != Some(&path);
+            self.worktree_preview_segments_cache_path.as_ref() != Some(&display_path);
         let same_path_source_refresh = source_changed && !cache_binding_changed;
 
-        self.worktree_preview_path = Some(path.clone());
+        self.worktree_preview_path = Some(display_path.clone());
+        self.worktree_preview_source_path = Some(source_path);
         self.worktree_preview = Loadable::Ready(line_count);
+        self.worktree_preview_source_len = source_len;
         self.worktree_preview_text = source_text;
         self.worktree_preview_line_starts = line_starts;
-        if let Some(search_trigram_index) = search_trigram_index {
-            self.worktree_preview_search_trigram_index = Some(search_trigram_index);
-        }
-        self.worktree_preview_syntax_language = rows::diff_syntax_language_for_path(&path);
-        self.worktree_preview_segments_cache_path = Some(path);
+        self.worktree_preview_line_flags = line_flags;
+        self.worktree_preview_search_trigram_index = None;
+        self.worktree_preview_syntax_language = rows::diff_syntax_language_for_path(&display_path);
+        self.worktree_preview_segments_cache_path = Some(display_path);
         self.worktree_preview_cache_write_blocked_until_rev = None;
         if source_changed || cache_binding_changed {
             self.worktree_preview_segments_cache.clear();
@@ -651,6 +691,45 @@ impl MainPaneView {
         self.refresh_worktree_preview_syntax_document(cx);
     }
 
+    pub(in crate::view) fn set_worktree_preview_ready_source(
+        &mut self,
+        path: std::path::PathBuf,
+        source_text: SharedString,
+        line_starts: Arc<[usize]>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let line_flags = preview_line_flags_from_source(source_text.as_ref(), line_starts.as_ref());
+        self.apply_worktree_preview_ready_state(
+            path.clone(),
+            path,
+            source_text.len(),
+            source_text,
+            line_starts,
+            line_flags,
+            cx,
+        );
+    }
+
+    pub(in crate::view) fn set_worktree_preview_ready_indexed_source(
+        &mut self,
+        display_path: std::path::PathBuf,
+        source_path: std::path::PathBuf,
+        source_len: usize,
+        line_starts: Arc<[usize]>,
+        line_flags: Arc<[u8]>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.apply_worktree_preview_ready_state(
+            display_path,
+            source_path,
+            source_len,
+            SharedString::default(),
+            line_starts,
+            line_flags,
+            cx,
+        );
+    }
+
     pub(in crate::view) fn set_worktree_preview_ready_rows(
         &mut self,
         path: std::path::PathBuf,
@@ -674,6 +753,9 @@ impl MainPaneView {
             return;
         };
         if !matches!(self.worktree_preview, Loadable::Ready(_)) {
+            return;
+        }
+        if self.worktree_preview_text.is_empty() {
             return;
         }
         let source_text = self.worktree_preview_text.clone();
@@ -1218,8 +1300,8 @@ impl MainPaneView {
                 let result = smol::unblock(move || {
                     let _perf_scope = perf::span(ViewPerfSpan::MarkdownPreviewParse);
                     markdown_preview::build_markdown_diff_preview(
-                        old_source.as_str(),
-                        new_source.as_str(),
+                        old_source.as_ref(),
+                        new_source.as_ref(),
                     )
                     .map(Arc::new)
                     .ok_or_else(|| {

@@ -496,6 +496,7 @@ pub(super) struct DiffTextHitbox {
     pub(super) bounds: Bounds<Pixels>,
     pub(super) layout_key: u64,
     pub(super) text_len: usize,
+    pub(super) streamed_ascii_monospace_cell_width: Option<Pixels>,
 }
 
 #[derive(Clone)]
@@ -2074,6 +2075,7 @@ pub(super) enum PopoverKind {
         discard_lines_patch: Option<String>,
         lines_count: usize,
         copy_text: Option<String>,
+        copy_target: Option<(usize, DiffTextRegion)>,
     },
     ConflictResolverInputRowMenu {
         line_label: SharedString,
@@ -2551,6 +2553,53 @@ impl ChangeTrackingView {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) enum DiffScrollSync {
+    Vertical,
+    Horizontal,
+    None,
+    #[default]
+    Both,
+}
+
+impl DiffScrollSync {
+    pub(super) const fn key(self) -> &'static str {
+        match self {
+            Self::Vertical => "vertical",
+            Self::Horizontal => "horizontal",
+            Self::None => "none",
+            Self::Both => "both",
+        }
+    }
+
+    pub(super) fn from_key(raw: &str) -> Option<Self> {
+        match raw {
+            "vertical" => Some(Self::Vertical),
+            "horizontal" => Some(Self::Horizontal),
+            "none" => Some(Self::None),
+            "both" => Some(Self::Both),
+            _ => None,
+        }
+    }
+
+    pub(super) const fn label(self) -> &'static str {
+        match self {
+            Self::Vertical => "Vertical",
+            Self::Horizontal => "Horizontal",
+            Self::None => "None",
+            Self::Both => "Both",
+        }
+    }
+
+    pub(super) const fn includes_vertical(self) -> bool {
+        matches!(self, Self::Vertical | Self::Both)
+    }
+
+    pub(super) const fn includes_horizontal(self) -> bool {
+        matches!(self, Self::Horizontal | Self::Both)
+    }
+}
+
 pub struct GitCometView {
     pub(super) store: Arc<AppStore>,
     pub(super) state: Arc<AppState>,
@@ -2584,6 +2633,7 @@ pub struct GitCometView {
     pub(super) timezone: Timezone,
     pub(super) show_timezone: bool,
     pub(super) change_tracking_view: ChangeTrackingView,
+    pub(super) diff_scroll_sync: DiffScrollSync,
 
     pub(super) open_repo_panel: bool,
     pub(super) open_repo_input: Entity<components::TextInput>,

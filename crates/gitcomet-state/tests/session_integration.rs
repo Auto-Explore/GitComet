@@ -299,6 +299,7 @@ fn persist_ui_settings_to_path_updates_optional_fields_and_requires_both_window_
             timezone: Some("UTC".to_string()),
             show_timezone: Some(true),
             change_tracking_view: Some("split_untracked".to_string()),
+            diff_scroll_sync: Some("both".to_string()),
             change_tracking_height: Some(222),
             untracked_height: Some(111),
             history_show_author: Some(false),
@@ -325,6 +326,7 @@ fn persist_ui_settings_to_path_updates_optional_fields_and_requires_both_window_
         loaded.change_tracking_view.as_deref(),
         Some("split_untracked")
     );
+    assert_eq!(loaded.diff_scroll_sync.as_deref(), Some("both"));
     assert_eq!(loaded.change_tracking_height, Some(222));
     assert_eq!(loaded.untracked_height, Some(111));
     assert_eq!(loaded.history_show_author, Some(false));

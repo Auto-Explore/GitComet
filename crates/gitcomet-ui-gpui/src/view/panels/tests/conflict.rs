@@ -652,6 +652,695 @@ fn conflict_resolver_input_lists_measure_later_long_rows_for_horizontal_scroll(
     std::fs::remove_dir_all(&workdir).expect("cleanup resolver hscroll fixture");
 }
 
+fn build_conflict_scroll_matrix_current_text(ours_text: &str, theirs_text: &str) -> String {
+    format!("<<<<<<< ours\n{ours_text}\n=======\n{theirs_text}\n>>>>>>> theirs\n")
+}
+
+fn build_conflict_scroll_matrix_text(label: &str, fill: char) -> String {
+    (0..160)
+        .map(|ix| format!("{label} line {ix:03} {}", fill.to_string().repeat(240)))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn seed_conflict_scroll_matrix_state(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    repo_id: gitcomet_state::model::RepoId,
+    workdir: &std::path::Path,
+    file_rel: &std::path::Path,
+    base_text: &str,
+    ours_text: &str,
+    theirs_text: &str,
+    current_text: &str,
+) {
+    use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession};
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            set_test_conflict_status(
+                &mut repo,
+                file_rel.to_path_buf(),
+                gitcomet_core::domain::DiffArea::Unstaged,
+            );
+            set_test_conflict_file(
+                &mut repo,
+                file_rel.to_path_buf(),
+                base_text.to_string(),
+                ours_text.to_string(),
+                theirs_text.to_string(),
+                current_text.to_string(),
+            );
+            repo.conflict_state.conflict_session = Some(ConflictSession::from_merged_text(
+                file_rel.to_path_buf(),
+                gitcomet_core::domain::FileConflictKind::BothModified,
+                ConflictPayload::Text(base_text.to_string().into()),
+                ConflictPayload::Text(ours_text.to_string().into()),
+                ConflictPayload::Text(theirs_text.to_string().into()),
+                current_text,
+            ));
+
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+}
+
+fn reset_conflict_scroll_matrix_offsets(pane: &mut MainPaneView) {
+    reset_uniform_list_offsets(&[
+        &pane.conflict_resolver_diff_scroll,
+        &pane.conflict_preview_ours_scroll,
+        &pane.conflict_preview_theirs_scroll,
+        &pane.conflict_resolved_preview_scroll,
+        &pane.conflict_resolved_preview_gutter_scroll,
+    ]);
+}
+
+#[gpui::test]
+fn conflict_resolver_output_gutter_tracks_output_scroll_when_diff_sync_is_disabled(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    disable_view_poller_for_test(cx, &view);
+
+    let repo_id = gitcomet_state::model::RepoId(163);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_resolver_output_gutter_scroll_sync",
+        std::process::id()
+    ));
+    let file_rel = std::path::PathBuf::from("fixtures/conflict_output_gutter_scroll_sync.txt");
+    let abs_path = workdir.join(&file_rel);
+    let base_text = build_conflict_scroll_matrix_text("base", 'B');
+    let ours_text = build_conflict_scroll_matrix_text("ours", 'O');
+    let theirs_text = build_conflict_scroll_matrix_text("theirs", 'T');
+    let current_text = build_conflict_scroll_matrix_current_text(&ours_text, &theirs_text);
+
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(abs_path.parent().expect("fixture file parent"))
+        .expect("create resolver output gutter fixture dir");
+    std::fs::write(&abs_path, &current_text).expect("write resolver output gutter fixture");
+
+    seed_conflict_scroll_matrix_state(
+        cx,
+        &view,
+        repo_id,
+        &workdir,
+        &file_rel,
+        &base_text,
+        &ours_text,
+        &theirs_text,
+        &current_text,
+    );
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "resolver output gutter fixture initialized",
+        |pane| {
+            pane.conflict_resolver.path.as_ref() == Some(&file_rel)
+                && pane.conflict_resolved_preview_line_count >= 1
+        },
+        |pane| {
+            format!(
+                "path={:?} resolved_lines={}",
+                pane.conflict_resolver.path.clone(),
+                pane.conflict_resolved_preview_line_count,
+            )
+        },
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::ThreeWay, cx);
+                cx.notify();
+            });
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    wait_for_main_pane_condition_with_timeout(
+        cx,
+        &view,
+        "resolver output gutter overflow",
+        BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
+        |pane| {
+            pane.conflict_resolver.view_mode == ConflictResolverViewMode::ThreeWay
+                && uniform_list_max_offset(&pane.conflict_resolved_preview_scroll).width > px(120.0)
+                && uniform_list_max_offset(&pane.conflict_resolved_preview_scroll).height
+                    > px(120.0)
+        },
+        |pane| {
+            format!(
+                "view_mode={:?} output_offset={:?} output_max={:?} gutter_offset={:?} gutter_max={:?}",
+                pane.conflict_resolver.view_mode,
+                uniform_list_offset(&pane.conflict_resolved_preview_scroll),
+                uniform_list_max_offset(&pane.conflict_resolved_preview_scroll),
+                uniform_list_offset(&pane.conflict_resolved_preview_gutter_scroll),
+                uniform_list_max_offset(&pane.conflict_resolved_preview_gutter_scroll),
+            )
+        },
+    );
+
+    set_diff_scroll_sync_for_test(cx, &view, DiffScrollSync::None);
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                reset_conflict_scroll_matrix_offsets(pane);
+                set_uniform_list_offset(
+                    &pane.conflict_resolved_preview_scroll,
+                    point(px(-72.0), px(-48.0)),
+                );
+                cx.notify();
+            });
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(
+            uniform_list_offset(&pane.conflict_resolved_preview_scroll),
+            point(px(-72.0), px(-48.0)),
+            "resolved output should keep its own scroll offset when diff sync is disabled",
+        );
+        assert_eq!(
+            uniform_list_offset(&pane.conflict_resolved_preview_gutter_scroll),
+            point(px(0.0), px(-48.0)),
+            "resolved output gutter should follow only the editor's vertical scroll",
+        );
+        assert_eq!(
+            uniform_list_offset(&pane.conflict_resolver_diff_scroll),
+            point(px(0.0), px(0.0)),
+            "base pane should remain independent when diff sync is disabled",
+        );
+        assert_eq!(
+            uniform_list_offset(&pane.conflict_preview_ours_scroll),
+            point(px(0.0), px(0.0)),
+            "ours pane should remain independent when diff sync is disabled",
+        );
+        assert_eq!(
+            uniform_list_offset(&pane.conflict_preview_theirs_scroll),
+            point(px(0.0), px(0.0)),
+            "theirs pane should remain independent when diff sync is disabled",
+        );
+    });
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup resolver output gutter fixture");
+}
+
+#[gpui::test]
+fn conflict_resolver_three_way_scroll_sync_matrix_covers_all_modes_and_axes(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    disable_view_poller_for_test(cx, &view);
+
+    let repo_id = gitcomet_state::model::RepoId(164);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_resolver_three_way_scroll_sync_matrix",
+        std::process::id()
+    ));
+    let file_rel = std::path::PathBuf::from("fixtures/conflict_scroll_sync_matrix.txt");
+    let abs_path = workdir.join(&file_rel);
+    let base_text = build_conflict_scroll_matrix_text("base", 'B');
+    let ours_text = build_conflict_scroll_matrix_text("ours", 'O');
+    let theirs_text = build_conflict_scroll_matrix_text("theirs", 'T');
+    let current_text = build_conflict_scroll_matrix_current_text(&ours_text, &theirs_text);
+
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(abs_path.parent().expect("fixture file parent"))
+        .expect("create resolver three-way matrix fixture dir");
+    std::fs::write(&abs_path, &current_text).expect("write resolver three-way matrix fixture");
+
+    seed_conflict_scroll_matrix_state(
+        cx,
+        &view,
+        repo_id,
+        &workdir,
+        &file_rel,
+        &base_text,
+        &ours_text,
+        &theirs_text,
+        &current_text,
+    );
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "resolver three-way matrix fixture initialized",
+        |pane| {
+            pane.conflict_resolver.path.as_ref() == Some(&file_rel)
+                && pane.conflict_resolver.three_way_visible_len() >= 4
+                && pane.conflict_resolved_preview_line_count >= 1
+        },
+        |pane| {
+            format!(
+                "path={:?} three_way_visible={} resolved_lines={} base_max={:?} ours_max={:?} theirs_max={:?} output_max={:?}",
+                pane.conflict_resolver.path.clone(),
+                pane.conflict_resolver.three_way_visible_len(),
+                pane.conflict_resolved_preview_line_count,
+                pane.conflict_resolver_diff_scroll
+                    .0
+                    .borrow()
+                    .base_handle
+                    .max_offset(),
+                pane.conflict_preview_ours_scroll
+                    .0
+                    .borrow()
+                    .base_handle
+                    .max_offset(),
+                pane.conflict_preview_theirs_scroll
+                    .0
+                    .borrow()
+                    .base_handle
+                    .max_offset(),
+                pane.conflict_resolved_preview_scroll
+                    .0
+                    .borrow()
+                    .base_handle
+                    .max_offset(),
+            )
+        },
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::ThreeWay, cx);
+                cx.notify();
+            });
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    wait_for_main_pane_condition_with_timeout(
+        cx,
+        &view,
+        "resolver three-way matrix overflow",
+        BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
+        |pane| {
+            pane.conflict_resolver.view_mode == ConflictResolverViewMode::ThreeWay
+                && uniform_list_max_offset(&pane.conflict_resolver_diff_scroll).width > px(120.0)
+                && uniform_list_max_offset(&pane.conflict_preview_ours_scroll).width > px(120.0)
+                && uniform_list_max_offset(&pane.conflict_preview_theirs_scroll).width > px(120.0)
+                && uniform_list_max_offset(&pane.conflict_resolved_preview_scroll).width > px(120.0)
+                && uniform_list_max_offset(&pane.conflict_resolver_diff_scroll).height > px(120.0)
+                && uniform_list_max_offset(&pane.conflict_preview_ours_scroll).height > px(120.0)
+                && uniform_list_max_offset(&pane.conflict_preview_theirs_scroll).height > px(120.0)
+                && uniform_list_max_offset(&pane.conflict_resolved_preview_scroll).height
+                    > px(120.0)
+        },
+        |pane| {
+            format!(
+                "view_mode={:?} base_offset={:?} ours_offset={:?} theirs_offset={:?} output_offset={:?} base_max={:?} ours_max={:?} theirs_max={:?} output_max={:?}",
+                pane.conflict_resolver.view_mode,
+                uniform_list_offset(&pane.conflict_resolver_diff_scroll),
+                uniform_list_offset(&pane.conflict_preview_ours_scroll),
+                uniform_list_offset(&pane.conflict_preview_theirs_scroll),
+                uniform_list_offset(&pane.conflict_resolved_preview_scroll),
+                uniform_list_max_offset(&pane.conflict_resolver_diff_scroll),
+                uniform_list_max_offset(&pane.conflict_preview_ours_scroll),
+                uniform_list_max_offset(&pane.conflict_preview_theirs_scroll),
+                uniform_list_max_offset(&pane.conflict_resolved_preview_scroll),
+            )
+        },
+    );
+
+    let reset_offsets = |cx: &mut gpui::VisualTestContext,
+                         view: &gpui::Entity<super::super::GitCometView>| {
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                this.main_pane.update(cx, |pane, cx| {
+                    reset_conflict_scroll_matrix_offsets(pane);
+                    cx.notify();
+                });
+            });
+        });
+        draw_and_drain_test_window(cx);
+    };
+
+    for mode in ALL_DIFF_SCROLL_SYNC_MODES {
+        set_diff_scroll_sync_for_test(cx, &view, mode);
+
+        for axis in ScrollSyncAxis::ALL {
+            let output_offset = axis.offset(px(72.0));
+            reset_offsets(cx, &view);
+            cx.update(|_window, app| {
+                view.update(app, |this, cx| {
+                    this.main_pane.update(cx, |pane, cx| {
+                        set_uniform_list_offset(
+                            &pane.conflict_resolved_preview_scroll,
+                            output_offset,
+                        );
+                        cx.notify();
+                    });
+                });
+            });
+            draw_and_drain_test_window(cx);
+
+            cx.update(|_window, app| {
+                let pane = view.read(app).main_pane.read(app);
+                let expected = if axis.includes(mode) {
+                    axis.component(output_offset)
+                } else {
+                    px(0.0)
+                };
+                assert_eq!(
+                    axis.component(uniform_list_offset(&pane.conflict_resolved_preview_scroll)),
+                    axis.component(output_offset),
+                    "resolved output should keep its {} offset in {:?} mode",
+                    axis.label(),
+                    mode,
+                );
+                assert_eq!(
+                    axis.component(uniform_list_offset(&pane.conflict_resolver_diff_scroll)),
+                    expected,
+                    "three-way base pane should {} {} scrolling from resolved output in {:?} mode",
+                    if axis.includes(mode) { "sync" } else { "not sync" },
+                    axis.label(),
+                    mode,
+                );
+                assert_eq!(
+                    axis.component(uniform_list_offset(&pane.conflict_preview_ours_scroll)),
+                    expected,
+                    "three-way ours pane should {} {} scrolling from resolved output in {:?} mode",
+                    if axis.includes(mode) { "sync" } else { "not sync" },
+                    axis.label(),
+                    mode,
+                );
+                assert_eq!(
+                    axis.component(uniform_list_offset(&pane.conflict_preview_theirs_scroll)),
+                    expected,
+                    "three-way theirs pane should {} {} scrolling from resolved output in {:?} mode",
+                    if axis.includes(mode) { "sync" } else { "not sync" },
+                    axis.label(),
+                    mode,
+                );
+            });
+
+            let base_offset = axis.offset(px(96.0));
+            reset_offsets(cx, &view);
+            cx.update(|_window, app| {
+                view.update(app, |this, cx| {
+                    this.main_pane.update(cx, |pane, cx| {
+                        set_uniform_list_offset(&pane.conflict_resolver_diff_scroll, base_offset);
+                        cx.notify();
+                    });
+                });
+            });
+            draw_and_drain_test_window(cx);
+
+            cx.update(|_window, app| {
+                let pane = view.read(app).main_pane.read(app);
+                let expected = if axis.includes(mode) {
+                    axis.component(base_offset)
+                } else {
+                    px(0.0)
+                };
+                assert_eq!(
+                    axis.component(uniform_list_offset(&pane.conflict_resolver_diff_scroll)),
+                    axis.component(base_offset),
+                    "three-way base pane should keep its {} offset in {:?} mode",
+                    axis.label(),
+                    mode,
+                );
+                assert_eq!(
+                    axis.component(uniform_list_offset(&pane.conflict_preview_ours_scroll)),
+                    expected,
+                    "three-way ours pane should {} {} scrolling from the base pane in {:?} mode",
+                    if axis.includes(mode) {
+                        "sync"
+                    } else {
+                        "not sync"
+                    },
+                    axis.label(),
+                    mode,
+                );
+                assert_eq!(
+                    axis.component(uniform_list_offset(&pane.conflict_preview_theirs_scroll)),
+                    expected,
+                    "three-way theirs pane should {} {} scrolling from the base pane in {:?} mode",
+                    if axis.includes(mode) {
+                        "sync"
+                    } else {
+                        "not sync"
+                    },
+                    axis.label(),
+                    mode,
+                );
+                assert_eq!(
+                    axis.component(uniform_list_offset(&pane.conflict_resolved_preview_scroll)),
+                    expected,
+                    "resolved output should {} {} scrolling from the base pane in {:?} mode",
+                    if axis.includes(mode) {
+                        "sync"
+                    } else {
+                        "not sync"
+                    },
+                    axis.label(),
+                    mode,
+                );
+            });
+        }
+    }
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup resolver three-way matrix fixture");
+}
+
+#[gpui::test]
+fn conflict_resolver_two_way_scroll_sync_matrix_covers_all_modes_and_axes(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    disable_view_poller_for_test(cx, &view);
+
+    let repo_id = gitcomet_state::model::RepoId(165);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_resolver_two_way_scroll_sync_matrix",
+        std::process::id()
+    ));
+    let file_rel = std::path::PathBuf::from("fixtures/conflict_scroll_sync_two_way.txt");
+    let abs_path = workdir.join(&file_rel);
+    let base_text = build_conflict_scroll_matrix_text("base", 'B');
+    let ours_text = build_conflict_scroll_matrix_text("ours", 'O');
+    let theirs_text = build_conflict_scroll_matrix_text("theirs", 'T');
+    let current_text = build_conflict_scroll_matrix_current_text(&ours_text, &theirs_text);
+
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(abs_path.parent().expect("fixture file parent"))
+        .expect("create resolver two-way matrix fixture dir");
+    std::fs::write(&abs_path, &current_text).expect("write resolver two-way matrix fixture");
+
+    seed_conflict_scroll_matrix_state(
+        cx,
+        &view,
+        repo_id,
+        &workdir,
+        &file_rel,
+        &base_text,
+        &ours_text,
+        &theirs_text,
+        &current_text,
+    );
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "resolver two-way matrix fixture initialized",
+        |pane| {
+            pane.conflict_resolver.path.as_ref() == Some(&file_rel)
+                && pane.conflict_resolver.two_way_split_visible_len() >= 4
+                && pane.conflict_resolved_preview_line_count >= 1
+        },
+        |pane| {
+            format!(
+                "path={:?} two_way_visible={} resolved_lines={}",
+                pane.conflict_resolver.path.clone(),
+                pane.conflict_resolver.two_way_split_visible_len(),
+                pane.conflict_resolved_preview_line_count,
+            )
+        },
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::TwoWayDiff, cx);
+                cx.notify();
+            });
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    wait_for_main_pane_condition_with_timeout(
+        cx,
+        &view,
+        "resolver two-way matrix overflow",
+        BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
+        |pane| {
+            pane.conflict_resolver.view_mode == ConflictResolverViewMode::TwoWayDiff
+                && uniform_list_max_offset(&pane.conflict_resolver_diff_scroll).width > px(120.0)
+                && uniform_list_max_offset(&pane.conflict_preview_theirs_scroll).width > px(120.0)
+                && uniform_list_max_offset(&pane.conflict_resolved_preview_scroll).width > px(120.0)
+                && uniform_list_max_offset(&pane.conflict_resolver_diff_scroll).height > px(120.0)
+                && uniform_list_max_offset(&pane.conflict_preview_theirs_scroll).height > px(120.0)
+                && uniform_list_max_offset(&pane.conflict_resolved_preview_scroll).height
+                    > px(120.0)
+        },
+        |pane| {
+            format!(
+                "view_mode={:?} left_offset={:?} right_offset={:?} output_offset={:?} left_max={:?} right_max={:?} output_max={:?}",
+                pane.conflict_resolver.view_mode,
+                uniform_list_offset(&pane.conflict_resolver_diff_scroll),
+                uniform_list_offset(&pane.conflict_preview_theirs_scroll),
+                uniform_list_offset(&pane.conflict_resolved_preview_scroll),
+                uniform_list_max_offset(&pane.conflict_resolver_diff_scroll),
+                uniform_list_max_offset(&pane.conflict_preview_theirs_scroll),
+                uniform_list_max_offset(&pane.conflict_resolved_preview_scroll),
+            )
+        },
+    );
+
+    let reset_offsets = |cx: &mut gpui::VisualTestContext,
+                         view: &gpui::Entity<super::super::GitCometView>| {
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                this.main_pane.update(cx, |pane, cx| {
+                    reset_conflict_scroll_matrix_offsets(pane);
+                    cx.notify();
+                });
+            });
+        });
+        draw_and_drain_test_window(cx);
+    };
+
+    for mode in ALL_DIFF_SCROLL_SYNC_MODES {
+        set_diff_scroll_sync_for_test(cx, &view, mode);
+
+        for axis in ScrollSyncAxis::ALL {
+            let output_offset = axis.offset(px(72.0));
+            reset_offsets(cx, &view);
+            cx.update(|_window, app| {
+                view.update(app, |this, cx| {
+                    this.main_pane.update(cx, |pane, cx| {
+                        set_uniform_list_offset(
+                            &pane.conflict_resolved_preview_scroll,
+                            output_offset,
+                        );
+                        cx.notify();
+                    });
+                });
+            });
+            draw_and_drain_test_window(cx);
+
+            cx.update(|_window, app| {
+                let pane = view.read(app).main_pane.read(app);
+                let expected = if axis.includes(mode) {
+                    axis.component(output_offset)
+                } else {
+                    px(0.0)
+                };
+                assert_eq!(
+                    axis.component(uniform_list_offset(&pane.conflict_resolved_preview_scroll)),
+                    axis.component(output_offset),
+                    "two-way resolved output should keep its {} offset in {:?} mode",
+                    axis.label(),
+                    mode,
+                );
+                assert_eq!(
+                    axis.component(uniform_list_offset(&pane.conflict_resolver_diff_scroll)),
+                    expected,
+                    "two-way left pane should {} {} scrolling from resolved output in {:?} mode",
+                    if axis.includes(mode) {
+                        "sync"
+                    } else {
+                        "not sync"
+                    },
+                    axis.label(),
+                    mode,
+                );
+                assert_eq!(
+                    axis.component(uniform_list_offset(&pane.conflict_preview_theirs_scroll)),
+                    expected,
+                    "two-way right pane should {} {} scrolling from resolved output in {:?} mode",
+                    if axis.includes(mode) {
+                        "sync"
+                    } else {
+                        "not sync"
+                    },
+                    axis.label(),
+                    mode,
+                );
+            });
+
+            let right_offset = axis.offset(px(96.0));
+            reset_offsets(cx, &view);
+            cx.update(|_window, app| {
+                view.update(app, |this, cx| {
+                    this.main_pane.update(cx, |pane, cx| {
+                        set_uniform_list_offset(&pane.conflict_preview_theirs_scroll, right_offset);
+                        cx.notify();
+                    });
+                });
+            });
+            draw_and_drain_test_window(cx);
+
+            cx.update(|_window, app| {
+                let pane = view.read(app).main_pane.read(app);
+                let expected = if axis.includes(mode) {
+                    axis.component(right_offset)
+                } else {
+                    px(0.0)
+                };
+                assert_eq!(
+                    axis.component(uniform_list_offset(&pane.conflict_preview_theirs_scroll)),
+                    axis.component(right_offset),
+                    "two-way right pane should keep its {} offset in {:?} mode",
+                    axis.label(),
+                    mode,
+                );
+                assert_eq!(
+                    axis.component(uniform_list_offset(&pane.conflict_resolver_diff_scroll)),
+                    expected,
+                    "two-way left pane should {} {} scrolling from the right pane in {:?} mode",
+                    if axis.includes(mode) {
+                        "sync"
+                    } else {
+                        "not sync"
+                    },
+                    axis.label(),
+                    mode,
+                );
+                assert_eq!(
+                    axis.component(uniform_list_offset(&pane.conflict_resolved_preview_scroll)),
+                    expected,
+                    "resolved output should {} {} scrolling from the right pane in {:?} mode",
+                    if axis.includes(mode) {
+                        "sync"
+                    } else {
+                        "not sync"
+                    },
+                    axis.label(),
+                    mode,
+                );
+            });
+        }
+    }
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup resolver two-way matrix fixture");
+}
+
 struct SyntheticLargeConflictFixture {
     workdir: std::path::PathBuf,
     file_rel: std::path::PathBuf,

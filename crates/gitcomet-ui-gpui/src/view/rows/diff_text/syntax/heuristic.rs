@@ -1,5 +1,109 @@
 use super::*;
 
+const STREAMED_HEURISTIC_LINE_CACHE_MAX_ENTRIES: usize = 16;
+const STREAMED_HEURISTIC_CHECKPOINT_SPACING_BYTES: usize = 32 * 1024;
+const STREAMED_HEURISTIC_SCAN_CHUNK_BYTES: usize = 256 * 1024;
+const STREAMED_HEURISTIC_SCAN_CHUNK_LOOKAHEAD_BYTES: usize = 4;
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum HeuristicBlockCommentKind {
+    Html,
+    FSharp,
+    Lua,
+    C,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum HeuristicOpenState {
+    #[default]
+    Normal,
+    String {
+        quote: u8,
+        escaped: bool,
+    },
+    LineComment,
+    BlockComment {
+        kind: HeuristicBlockCommentKind,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct StreamedHeuristicLineCacheKey {
+    language: DiffSyntaxLanguage,
+    line_identity_hash: u64,
+    line_len: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct StreamedHeuristicCheckpoint {
+    offset: usize,
+    state: HeuristicOpenState,
+}
+
+#[derive(Clone, Debug)]
+struct StreamedHeuristicLineStateCache {
+    checkpoints: Vec<StreamedHeuristicCheckpoint>,
+    next_checkpoint_offset: usize,
+    scanned_to: usize,
+    tail_state: HeuristicOpenState,
+}
+
+impl Default for StreamedHeuristicLineStateCache {
+    fn default() -> Self {
+        Self {
+            checkpoints: vec![StreamedHeuristicCheckpoint {
+                offset: 0,
+                state: HeuristicOpenState::Normal,
+            }],
+            next_checkpoint_offset: STREAMED_HEURISTIC_CHECKPOINT_SPACING_BYTES,
+            scanned_to: 0,
+            tail_state: HeuristicOpenState::Normal,
+        }
+    }
+}
+
+struct HeuristicCheckpointRecorder<'a> {
+    next_offset: usize,
+    unsafe_until: usize,
+    checkpoints: &'a mut Vec<StreamedHeuristicCheckpoint>,
+}
+
+impl<'a> HeuristicCheckpointRecorder<'a> {
+    fn new(next_offset: usize, checkpoints: &'a mut Vec<StreamedHeuristicCheckpoint>) -> Self {
+        Self {
+            next_offset,
+            unsafe_until: 0,
+            checkpoints,
+        }
+    }
+
+    fn defer_until(&mut self, offset: usize) {
+        self.unsafe_until = self.unsafe_until.max(offset);
+    }
+
+    fn record_constant_state_until(&mut self, end_abs: usize, state: HeuristicOpenState) {
+        while self.next_offset <= end_abs {
+            if self.next_offset < self.unsafe_until {
+                self.next_offset = self.unsafe_until;
+                continue;
+            }
+            self.checkpoints.push(StreamedHeuristicCheckpoint {
+                offset: self.next_offset,
+                state,
+            });
+            self.next_offset = self
+                .next_offset
+                .saturating_add(STREAMED_HEURISTIC_CHECKPOINT_SPACING_BYTES);
+        }
+    }
+}
+
+thread_local! {
+    static STREAMED_HEURISTIC_LINE_CACHE: RefCell<
+        FxLruCache<StreamedHeuristicLineCacheKey, StreamedHeuristicLineStateCache>,
+    > = RefCell::new(new_fx_lru_cache(STREAMED_HEURISTIC_LINE_CACHE_MAX_ENTRIES));
+}
+
 #[derive(Clone, Copy)]
 pub(super) struct HeuristicBlockCommentSpec {
     pub(super) start: &'static str,
@@ -12,6 +116,23 @@ pub(super) struct HeuristicCommentConfig {
     pub(super) hash_comment: bool,
     pub(super) block_comment: Option<HeuristicBlockCommentSpec>,
     pub(super) visual_basic_line_comment: bool,
+}
+
+#[derive(Clone, Copy)]
+struct HeuristicOpenStateScanConfig {
+    comment: HeuristicCommentConfig,
+    block_comment_kind: Option<HeuristicBlockCommentKind>,
+    allow_backtick_strings: bool,
+}
+
+impl HeuristicOpenStateScanConfig {
+    fn for_language(language: DiffSyntaxLanguage) -> Self {
+        Self {
+            comment: heuristic_comment_config(language),
+            block_comment_kind: heuristic_block_comment_kind(language),
+            allow_backtick_strings: heuristic_allows_backtick_strings(language),
+        }
+    }
 }
 
 const HEURISTIC_HTML_BLOCK_COMMENT: HeuristicBlockCommentSpec = HeuristicBlockCommentSpec {
@@ -106,6 +227,567 @@ pub(super) fn heuristic_comment_config(language: DiffSyntaxLanguage) -> Heuristi
             }
         }
     }
+}
+
+fn heuristic_block_comment_kind(language: DiffSyntaxLanguage) -> Option<HeuristicBlockCommentKind> {
+    match language {
+        DiffSyntaxLanguage::Html | DiffSyntaxLanguage::Xml => Some(HeuristicBlockCommentKind::Html),
+        DiffSyntaxLanguage::FSharp => Some(HeuristicBlockCommentKind::FSharp),
+        DiffSyntaxLanguage::Lua => Some(HeuristicBlockCommentKind::Lua),
+        DiffSyntaxLanguage::Sql
+        | DiffSyntaxLanguage::Rust
+        | DiffSyntaxLanguage::JavaScript
+        | DiffSyntaxLanguage::TypeScript
+        | DiffSyntaxLanguage::Tsx
+        | DiffSyntaxLanguage::Go
+        | DiffSyntaxLanguage::C
+        | DiffSyntaxLanguage::Cpp
+        | DiffSyntaxLanguage::CSharp
+        | DiffSyntaxLanguage::Java
+        | DiffSyntaxLanguage::Kotlin
+        | DiffSyntaxLanguage::Zig
+        | DiffSyntaxLanguage::Bicep
+        | DiffSyntaxLanguage::Hcl
+        | DiffSyntaxLanguage::Php => Some(HeuristicBlockCommentKind::C),
+        _ => None,
+    }
+}
+
+fn heuristic_block_comment_start_bytes(kind: HeuristicBlockCommentKind) -> &'static [u8] {
+    match kind {
+        HeuristicBlockCommentKind::Html => b"<!--",
+        HeuristicBlockCommentKind::FSharp => b"(*",
+        HeuristicBlockCommentKind::Lua => b"--[[",
+        HeuristicBlockCommentKind::C => b"/*",
+    }
+}
+
+fn heuristic_block_comment_end_bytes(kind: HeuristicBlockCommentKind) -> &'static [u8] {
+    match kind {
+        HeuristicBlockCommentKind::Html => b"-->",
+        HeuristicBlockCommentKind::FSharp => b"*)",
+        HeuristicBlockCommentKind::Lua => b"]]",
+        HeuristicBlockCommentKind::C => b"*/",
+    }
+}
+
+fn matches_ascii_bytes_at(bytes: &[u8], start: usize, needle: &[u8]) -> bool {
+    start
+        .checked_add(needle.len())
+        .and_then(|end| bytes.get(start..end))
+        .is_some_and(|candidate| candidate == needle)
+}
+
+fn visual_basic_rem_comment_prefix_len(bytes: &[u8], start: usize) -> Option<usize> {
+    let prefix = bytes.get(start..start.saturating_add(4))?;
+    let rem = prefix.get(..3)?;
+    if rem.eq_ignore_ascii_case(b"rem") && prefix[3].is_ascii_whitespace() {
+        Some(4)
+    } else {
+        None
+    }
+}
+
+fn visual_basic_line_comment_start_len(bytes: &[u8], start: usize) -> Option<usize> {
+    if bytes.get(start) == Some(&b'\'') {
+        return Some(1);
+    }
+    visual_basic_rem_comment_prefix_len(bytes, start)
+}
+
+fn line_comment_start_len(
+    bytes: &[u8],
+    start: usize,
+    config: HeuristicCommentConfig,
+) -> Option<usize> {
+    if config.visual_basic_line_comment {
+        return visual_basic_line_comment_start_len(bytes, start);
+    }
+    if let Some(prefix) = config.line_comment
+        && matches_ascii_bytes_at(bytes, start, prefix.as_bytes())
+    {
+        return Some(prefix.len());
+    }
+    if config.hash_comment && bytes.get(start) == Some(&b'#') {
+        return Some(1);
+    }
+    None
+}
+
+fn comment_prefix_state_at_ascii(
+    config: HeuristicOpenStateScanConfig,
+    bytes: &[u8],
+    start: usize,
+) -> Option<(usize, HeuristicOpenState)> {
+    if let Some(kind) = config.block_comment_kind {
+        let start_bytes = heuristic_block_comment_start_bytes(kind);
+        if matches_ascii_bytes_at(bytes, start, start_bytes) {
+            return Some((start_bytes.len(), HeuristicOpenState::BlockComment { kind }));
+        }
+    }
+    line_comment_start_len(bytes, start, config.comment)
+        .map(|len| (len, HeuristicOpenState::LineComment))
+}
+
+fn potential_open_state_lead(config: HeuristicOpenStateScanConfig, byte: u8) -> bool {
+    if matches!(byte, b'"' | b'\'') || (config.allow_backtick_strings && byte == b'`') {
+        return true;
+    }
+    if config.comment.hash_comment && byte == b'#' {
+        return true;
+    }
+    if config
+        .comment
+        .line_comment
+        .is_some_and(|prefix| prefix.as_bytes().first().copied() == Some(byte))
+    {
+        return true;
+    }
+    if config.block_comment_kind.is_some_and(|kind| {
+        heuristic_block_comment_start_bytes(kind).first().copied() == Some(byte)
+    }) {
+        return true;
+    }
+    config.comment.visual_basic_line_comment && (byte == b'\'' || byte.eq_ignore_ascii_case(&b'r'))
+}
+
+fn open_state_token_kind(state: HeuristicOpenState) -> Option<SyntaxTokenKind> {
+    match state {
+        HeuristicOpenState::Normal => None,
+        HeuristicOpenState::String { .. } => Some(SyntaxTokenKind::String),
+        HeuristicOpenState::LineComment | HeuristicOpenState::BlockComment { .. } => {
+            Some(SyntaxTokenKind::Comment)
+        }
+    }
+}
+
+fn push_relative_token_if_intersects(
+    tokens: &mut Vec<SyntaxToken>,
+    token_start: usize,
+    token_end: usize,
+    visible_range: &Range<usize>,
+    kind: SyntaxTokenKind,
+) {
+    let start = token_start.max(visible_range.start);
+    let end = token_end.min(visible_range.end);
+    if start < end {
+        tokens.push(SyntaxToken {
+            range: start.saturating_sub(visible_range.start)
+                ..end.saturating_sub(visible_range.start),
+            kind,
+        });
+    }
+}
+
+fn emit_segment_tokens_relative(
+    tokens: &mut Vec<SyntaxToken>,
+    segment_text: &str,
+    segment_start: usize,
+    visible_range: &Range<usize>,
+    language: DiffSyntaxLanguage,
+) {
+    if segment_text.is_empty() {
+        return;
+    }
+
+    let mut segment_tokens = Vec::new();
+    syntax_tokens_for_line_heuristic_into(segment_text, language, &mut segment_tokens);
+    for token in segment_tokens {
+        push_relative_token_if_intersects(
+            tokens,
+            segment_start.saturating_add(token.range.start),
+            segment_start.saturating_add(token.range.end),
+            visible_range,
+            token.kind,
+        );
+    }
+}
+
+fn consume_open_state_ascii_prefix(
+    segment_text: &str,
+    state: HeuristicOpenState,
+) -> (usize, HeuristicOpenState) {
+    let bytes = segment_text.as_bytes();
+    match state {
+        HeuristicOpenState::Normal => (0, HeuristicOpenState::Normal),
+        HeuristicOpenState::LineComment => (bytes.len(), HeuristicOpenState::LineComment),
+        HeuristicOpenState::String { quote, mut escaped } => {
+            let mut ix = 0usize;
+            while ix < bytes.len() {
+                if escaped {
+                    escaped = false;
+                    ix += 1;
+                    continue;
+                }
+                match bytes[ix] {
+                    b'\\' => {
+                        escaped = true;
+                        ix += 1;
+                    }
+                    byte if byte == quote => {
+                        return (ix + 1, HeuristicOpenState::Normal);
+                    }
+                    _ => ix += 1,
+                }
+            }
+            (bytes.len(), HeuristicOpenState::String { quote, escaped })
+        }
+        HeuristicOpenState::BlockComment { kind } => {
+            let end_bytes = heuristic_block_comment_end_bytes(kind);
+            let end_first = end_bytes[0];
+            let mut ix = 0usize;
+            while ix < bytes.len() {
+                let remaining = &bytes[ix..];
+                if let Some(found) = memchr::memchr(end_first, remaining) {
+                    ix += found;
+                    if matches_ascii_bytes_at(bytes, ix, end_bytes) {
+                        return (ix + end_bytes.len(), HeuristicOpenState::Normal);
+                    }
+                    ix += 1;
+                } else {
+                    break;
+                }
+            }
+            (bytes.len(), HeuristicOpenState::BlockComment { kind })
+        }
+    }
+}
+
+fn advance_streamed_heuristic_open_state_ascii(
+    bytes: &[u8],
+    process_len: usize,
+    language: DiffSyntaxLanguage,
+    state: &mut HeuristicOpenState,
+    abs: &mut usize,
+    recorder: &mut Option<HeuristicCheckpointRecorder<'_>>,
+) {
+    macro_rules! record_constant {
+        ($end_abs:expr, $state:expr) => {
+            if let Some(recorder) = recorder.as_mut() {
+                recorder.record_constant_state_until($end_abs, $state);
+            }
+        };
+    }
+
+    macro_rules! defer_until {
+        ($offset:expr) => {
+            if let Some(recorder) = recorder.as_mut() {
+                recorder.defer_until($offset);
+            }
+        };
+    }
+
+    // This scanner only tracks ASCII delimiter bytes that can open or close the
+    // heuristic string/comment states. UTF-8 continuation bytes are opaque data,
+    // so scanning raw bytes here is sufficient for restoring the correct state.
+    let scan_config = HeuristicOpenStateScanConfig::for_language(language);
+    let mut local = 0usize;
+
+    while local < process_len {
+        match *state {
+            HeuristicOpenState::Normal => {
+                let run_start = local;
+                while local < process_len && !potential_open_state_lead(scan_config, bytes[local]) {
+                    local += 1;
+                }
+                if local > run_start {
+                    *abs = abs.saturating_add(local.saturating_sub(run_start));
+                    record_constant!(*abs, HeuristicOpenState::Normal);
+                    continue;
+                }
+
+                if let Some((prefix_len, next_state)) =
+                    comment_prefix_state_at_ascii(scan_config, bytes, local)
+                {
+                    if prefix_len > 1 {
+                        defer_until!(abs.saturating_add(prefix_len));
+                    }
+                    for prefix_ix in 0..prefix_len {
+                        local += 1;
+                        *abs = abs.saturating_add(1);
+                        *state = if prefix_ix + 1 == prefix_len {
+                            next_state
+                        } else {
+                            HeuristicOpenState::Normal
+                        };
+                        record_constant!(*abs, *state);
+                    }
+                    continue;
+                }
+
+                let byte = bytes[local];
+                if matches!(byte, b'"' | b'\'')
+                    || (scan_config.allow_backtick_strings && byte == b'`')
+                {
+                    local += 1;
+                    *abs = abs.saturating_add(1);
+                    *state = HeuristicOpenState::String {
+                        quote: byte,
+                        escaped: false,
+                    };
+                    record_constant!(*abs, *state);
+                    continue;
+                }
+
+                local += 1;
+                *abs = abs.saturating_add(1);
+                record_constant!(*abs, HeuristicOpenState::Normal);
+            }
+            HeuristicOpenState::LineComment => {
+                let remaining = process_len.saturating_sub(local);
+                local = process_len;
+                *abs = abs.saturating_add(remaining);
+                record_constant!(*abs, HeuristicOpenState::LineComment);
+            }
+            HeuristicOpenState::String {
+                quote,
+                escaped: true,
+            } => {
+                local += 1;
+                *abs = abs.saturating_add(1);
+                *state = HeuristicOpenState::String {
+                    quote,
+                    escaped: false,
+                };
+                record_constant!(*abs, *state);
+            }
+            HeuristicOpenState::String {
+                quote,
+                escaped: false,
+            } => {
+                let remainder = &bytes[local..process_len];
+                let Some(found) = memchr::memchr2(quote, b'\\', remainder) else {
+                    let remaining = process_len.saturating_sub(local);
+                    local = process_len;
+                    *abs = abs.saturating_add(remaining);
+                    record_constant!(*abs, *state);
+                    continue;
+                };
+                if found > 0 {
+                    local = local.saturating_add(found);
+                    *abs = abs.saturating_add(found);
+                    record_constant!(*abs, *state);
+                }
+                let byte = bytes[local];
+                local += 1;
+                *abs = abs.saturating_add(1);
+                *state = if byte == b'\\' {
+                    HeuristicOpenState::String {
+                        quote,
+                        escaped: true,
+                    }
+                } else {
+                    HeuristicOpenState::Normal
+                };
+                record_constant!(*abs, *state);
+            }
+            HeuristicOpenState::BlockComment { kind } => {
+                let end_bytes = heuristic_block_comment_end_bytes(kind);
+                let end_first = end_bytes[0];
+                let remainder = &bytes[local..process_len];
+                let Some(found) = memchr::memchr(end_first, remainder) else {
+                    let remaining = process_len.saturating_sub(local);
+                    local = process_len;
+                    *abs = abs.saturating_add(remaining);
+                    record_constant!(*abs, *state);
+                    continue;
+                };
+                if found > 0 {
+                    local = local.saturating_add(found);
+                    *abs = abs.saturating_add(found);
+                    record_constant!(*abs, *state);
+                }
+                if matches_ascii_bytes_at(bytes, local, end_bytes) {
+                    if end_bytes.len() > 1 {
+                        defer_until!(abs.saturating_add(end_bytes.len()));
+                    }
+                    for end_ix in 0..end_bytes.len() {
+                        local += 1;
+                        *abs = abs.saturating_add(1);
+                        *state = if end_ix + 1 == end_bytes.len() {
+                            HeuristicOpenState::Normal
+                        } else {
+                            HeuristicOpenState::BlockComment { kind }
+                        };
+                        record_constant!(*abs, *state);
+                    }
+                    continue;
+                }
+                local += 1;
+                *abs = abs.saturating_add(1);
+                record_constant!(*abs, *state);
+            }
+        }
+    }
+}
+
+fn load_streamed_heuristic_line_segment_bytes(
+    raw_text: &gitcomet_core::file_diff::FileDiffLineText,
+    start: usize,
+    process_end: usize,
+) -> Option<Cow<'_, [u8]>> {
+    let read_end = process_end
+        .saturating_add(STREAMED_HEURISTIC_SCAN_CHUNK_LOOKAHEAD_BYTES)
+        .min(raw_text.len());
+    let bytes = raw_text.slice_bytes(start..read_end)?;
+    (bytes.len() >= process_end.saturating_sub(start)).then_some(bytes)
+}
+
+fn ensure_streamed_heuristic_line_checkpoints(
+    cache: &mut StreamedHeuristicLineStateCache,
+    raw_text: &gitcomet_core::file_diff::FileDiffLineText,
+    language: DiffSyntaxLanguage,
+    target_offset: usize,
+) -> bool {
+    let target_offset = target_offset.min(raw_text.len());
+    while cache.scanned_to < target_offset {
+        let desired_end = cache
+            .scanned_to
+            .saturating_add(STREAMED_HEURISTIC_SCAN_CHUNK_BYTES)
+            .min(target_offset);
+        let chunk = match load_streamed_heuristic_line_segment_bytes(
+            raw_text,
+            cache.scanned_to,
+            desired_end,
+        ) {
+            Some(chunk) => chunk,
+            None => return false,
+        };
+
+        let mut abs = cache.scanned_to;
+        let mut state = cache.tail_state;
+        let mut recorder = Some(HeuristicCheckpointRecorder::new(
+            cache.next_checkpoint_offset,
+            &mut cache.checkpoints,
+        ));
+        advance_streamed_heuristic_open_state_ascii(
+            chunk.as_ref(),
+            desired_end.saturating_sub(cache.scanned_to),
+            language,
+            &mut state,
+            &mut abs,
+            &mut recorder,
+        );
+        cache.scanned_to = abs;
+        cache.tail_state = state;
+        if let Some(recorder) = recorder.take() {
+            cache.next_checkpoint_offset = recorder.next_offset;
+        }
+    }
+    true
+}
+
+fn streamed_heuristic_checkpoint_for_offset(
+    checkpoints: &[StreamedHeuristicCheckpoint],
+    offset: usize,
+) -> StreamedHeuristicCheckpoint {
+    checkpoints
+        .iter()
+        .rev()
+        .find(|checkpoint| checkpoint.offset <= offset)
+        .copied()
+        .unwrap_or(StreamedHeuristicCheckpoint {
+            offset: 0,
+            state: HeuristicOpenState::Normal,
+        })
+}
+
+fn streamed_heuristic_line_cache_key(
+    raw_text: &gitcomet_core::file_diff::FileDiffLineText,
+    language: DiffSyntaxLanguage,
+) -> StreamedHeuristicLineCacheKey {
+    StreamedHeuristicLineCacheKey {
+        language,
+        line_identity_hash: raw_text.identity_hash_without_loading(),
+        line_len: raw_text.len(),
+    }
+}
+
+pub(super) fn syntax_tokens_for_streamed_line_slice_heuristic(
+    raw_text: &gitcomet_core::file_diff::FileDiffLineText,
+    language: DiffSyntaxLanguage,
+    requested_slice_range: Range<usize>,
+    resolved_visible_range: Range<usize>,
+) -> Option<Vec<SyntaxToken>> {
+    let line_len = raw_text.len();
+    let requested_visible_range =
+        requested_slice_range.start.min(line_len)..requested_slice_range.end.min(line_len);
+    if requested_visible_range.is_empty() {
+        return Some(Vec::new());
+    }
+
+    let visible_range =
+        resolved_visible_range.start.min(line_len)..resolved_visible_range.end.min(line_len);
+    if visible_range.is_empty() {
+        return Some(Vec::new());
+    }
+
+    let cache_key = streamed_heuristic_line_cache_key(raw_text, language);
+    let checkpoint = STREAMED_HEURISTIC_LINE_CACHE.with(|cache| {
+        let mut cache_ref = cache.borrow_mut();
+        let mut entry = cache_ref
+            .get(&cache_key)
+            .cloned()
+            .unwrap_or_else(StreamedHeuristicLineStateCache::default);
+        let ready = ensure_streamed_heuristic_line_checkpoints(
+            &mut entry,
+            raw_text,
+            language,
+            requested_visible_range.start,
+        );
+        let checkpoint = ready.then(|| {
+            streamed_heuristic_checkpoint_for_offset(&entry.checkpoints, visible_range.start)
+        });
+        cache_ref.put(cache_key, entry);
+        checkpoint
+    })?;
+
+    let (segment_text, resolved_segment_range) =
+        raw_text.slice_text_resolved(checkpoint.offset..visible_range.end)?;
+    let mut tokens = Vec::new();
+    match checkpoint.state {
+        HeuristicOpenState::Normal => {
+            emit_segment_tokens_relative(
+                &mut tokens,
+                segment_text.as_ref(),
+                resolved_segment_range.start,
+                &visible_range,
+                language,
+            );
+        }
+        open_state => {
+            if let Some(kind) = open_state_token_kind(open_state) {
+                let (open_prefix_len, next_state) =
+                    consume_open_state_ascii_prefix(segment_text.as_ref(), open_state);
+                push_relative_token_if_intersects(
+                    &mut tokens,
+                    resolved_segment_range.start,
+                    resolved_segment_range.start.saturating_add(open_prefix_len),
+                    &visible_range,
+                    kind,
+                );
+                if next_state == HeuristicOpenState::Normal {
+                    let tail_text = segment_text.get(open_prefix_len..).unwrap_or("");
+                    emit_segment_tokens_relative(
+                        &mut tokens,
+                        tail_text,
+                        resolved_segment_range.start.saturating_add(open_prefix_len),
+                        &visible_range,
+                        language,
+                    );
+                }
+            }
+        }
+    }
+
+    Some(tokens)
+}
+
+#[cfg(test)]
+pub(super) fn reset_streamed_heuristic_line_cache() {
+    STREAMED_HEURISTIC_LINE_CACHE.with(|cache| {
+        *cache.borrow_mut() = new_fx_lru_cache(STREAMED_HEURISTIC_LINE_CACHE_MAX_ENTRIES);
+    });
 }
 
 fn heuristic_comment_range(
