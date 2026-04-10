@@ -6,6 +6,9 @@ fn stash_menu_has_apply_pop_and_drop_entries(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|_window, app| {
+        view.update(app, |this, _cx| this.disable_poller_for_tests());
+    });
 
     let repo_id = RepoId(8);
     let index = 3usize;
@@ -77,6 +80,9 @@ fn stash_menu_drop_action_opens_drop_confirm_popover(cx: &mut gpui::TestAppConte
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|_window, app| {
+        view.update(app, |this, _cx| this.disable_poller_for_tests());
+    });
 
     let repo_id = RepoId(9);
     let index = 1usize;

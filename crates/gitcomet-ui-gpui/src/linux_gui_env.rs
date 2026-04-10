@@ -65,7 +65,7 @@ impl LinuxGuiEnvironment {
     }
 }
 
-#[cfg(any(target_os = "linux", test))]
+#[cfg(target_os = "linux")]
 fn env_has_non_empty_os(value: Option<&std::ffi::OsStr>) -> bool {
     value.is_some_and(|value| !value.is_empty())
 }

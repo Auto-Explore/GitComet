@@ -383,7 +383,7 @@ impl MainPaneView {
                                     )
                                     .h_full()
                                     .min_h(px(0.0))
-                                    .track_scroll(self.diff_scroll.clone())
+                                    .track_scroll(&self.diff_scroll)
                                     .with_horizontal_sizing_behavior(
                                         gpui::ListHorizontalSizingBehavior::Unconstrained,
                                     );
@@ -438,7 +438,7 @@ impl MainPaneView {
                                     )
                                     .h_full()
                                     .min_h(px(0.0))
-                                    .track_scroll(self.diff_scroll.clone())
+                                    .track_scroll(&self.diff_scroll)
                                     .with_horizontal_sizing_behavior(
                                         gpui::ListHorizontalSizingBehavior::Unconstrained,
                                     );
@@ -449,7 +449,7 @@ impl MainPaneView {
                                     )
                                     .h_full()
                                     .min_h(px(0.0))
-                                    .track_scroll(self.diff_split_right_scroll.clone())
+                                    .track_scroll(&self.diff_split_right_scroll)
                                     .with_horizontal_sizing_behavior(
                                         gpui::ListHorizontalSizingBehavior::Unconstrained,
                                     );
@@ -845,7 +845,7 @@ impl MainPaneView {
                 uniform_list($name, $len, $proc)
                     .h_full()
                     .min_h(px(0.0))
-                    .track_scroll($scroll)
+                    .track_scroll(&$scroll)
                     .with_horizontal_sizing_behavior(
                         gpui::ListHorizontalSizingBehavior::Unconstrained,
                     )

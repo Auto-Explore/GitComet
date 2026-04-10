@@ -614,11 +614,13 @@ fn cmd_write_gui_to_merged() -> &'static str {
     "printf 'gui\\n' > \"$MERGED\""
 }
 
+#[allow(dead_code)]
 #[cfg(windows)]
 fn cmd_write_cmd_to_merged() -> &'static str {
     r#"powershell -NoProfile -Command "[System.IO.File]::WriteAllText($env:MERGED, 'cmd' + [char]10)""#
 }
 
+#[allow(dead_code)]
 #[cfg(not(windows))]
 fn cmd_write_cmd_to_merged() -> &'static str {
     "printf 'cmd\\n' > \"$MERGED\"; exit 0"

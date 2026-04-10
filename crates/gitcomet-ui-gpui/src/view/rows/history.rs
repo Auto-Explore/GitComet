@@ -845,7 +845,8 @@ fn markdown_preview_row_element(
             .on_mouse_down(gpui::MouseButton::Left, {
                 let view = view.clone();
                 move |event, window, cx| {
-                    window.focus(&view.read(cx).diff_panel_focus_handle);
+                    let focus = view.read(cx).diff_panel_focus_handle.clone();
+                    window.focus(&focus, cx);
                     let click_count = event.click_count;
                     let position = event.position;
                     view.update(cx, |this, cx| {

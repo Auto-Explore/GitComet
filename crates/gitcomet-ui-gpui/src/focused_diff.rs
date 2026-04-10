@@ -9,9 +9,9 @@ use crate::theme::AppTheme;
 use gitcomet_state::session;
 use gpui::prelude::*;
 use gpui::{
-    App, Application, Bounds, FocusHandle, Focusable, FontWeight, KeyBinding, Render, ScrollHandle,
-    SharedString, TitlebarOptions, Window, WindowBounds, WindowDecorations, WindowOptions, actions,
-    div, point, px, size,
+    App, Bounds, FocusHandle, Focusable, FontWeight, KeyBinding, Render, ScrollHandle,
+    SharedString, TitlebarOptions, Window, WindowBounds, WindowDecorations, WindowOptions,
+    actions, div, point, px, size,
 };
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI32, Ordering};
@@ -283,13 +283,13 @@ pub fn run_focused_diff(config: FocusedDiffConfig) -> i32 {
     let exit_code_for_app = exit_code.clone();
 
     if let Err(err) = run_with_panic_guard("focused diff GPUI launch", move || {
-        Application::new()
+        crate::app::application()
             .with_assets(GitCometAssets)
             .run(move |cx: &mut App| {
                 if let Err(err) = crate::bundled_fonts::register(cx) {
                     eprintln!("Failed to register bundled fonts: {err:#}");
                 }
-                cx.on_window_closed(|cx| {
+                cx.on_window_closed(|cx, _window_id| {
                     if cx.windows().is_empty() {
                         cx.quit();
                     }
@@ -430,7 +430,7 @@ index 1234567..abcdef0 100644
             app.clear_key_bindings();
             bind_focused_diff_keys(app);
             let focus = view.update(app, |view, _cx| view.focus_handle());
-            window.focus(&focus);
+            window.focus(&focus, app);
             let _ = window.draw(app);
         });
 

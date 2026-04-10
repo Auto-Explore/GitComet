@@ -1,14 +1,14 @@
 use std::io;
 use std::path::Path;
 
-#[cfg(any(target_os = "linux", target_os = "freebsd", test))]
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum LinuxOpenTarget {
     ExternalResource,
     FilePath,
 }
 
-#[cfg(any(target_os = "linux", target_os = "freebsd", test))]
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum LinuxOpenHelper {
     XdgOpen,
@@ -16,10 +16,10 @@ enum LinuxOpenHelper {
     WslView,
 }
 
-#[cfg(any(target_os = "linux", target_os = "freebsd", test))]
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 const DEFAULT_LINUX_OPEN_HELPERS: [LinuxOpenHelper; 2] =
     [LinuxOpenHelper::XdgOpen, LinuxOpenHelper::GioOpen];
-#[cfg(any(target_os = "linux", target_os = "freebsd", test))]
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 const WSL_LINUX_OPEN_HELPERS: [LinuxOpenHelper; 3] = [
     LinuxOpenHelper::XdgOpen,
     LinuxOpenHelper::GioOpen,
@@ -220,7 +220,7 @@ fn is_allowed_url_scheme(scheme: &str) -> bool {
         || scheme.eq_ignore_ascii_case("mailto")
 }
 
-#[cfg(any(target_os = "linux", target_os = "freebsd", test))]
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 fn linux_open_helpers(is_wsl: bool) -> &'static [LinuxOpenHelper] {
     if is_wsl {
         &WSL_LINUX_OPEN_HELPERS
@@ -229,7 +229,7 @@ fn linux_open_helpers(is_wsl: bool) -> &'static [LinuxOpenHelper] {
     }
 }
 
-#[cfg(any(target_os = "linux", target_os = "freebsd", test))]
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 fn linux_missing_opener_error(target: LinuxOpenTarget, is_wsl: bool) -> io::Error {
     let subject = match target {
         LinuxOpenTarget::ExternalResource => "open external resources",
@@ -244,7 +244,7 @@ fn linux_missing_opener_error(target: LinuxOpenTarget, is_wsl: bool) -> io::Erro
     io::Error::new(io::ErrorKind::NotFound, message)
 }
 
-#[cfg(any(target_os = "linux", target_os = "freebsd", test))]
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 fn run_linux_open_with_fallbacks(
     is_wsl: bool,
     target: LinuxOpenTarget,

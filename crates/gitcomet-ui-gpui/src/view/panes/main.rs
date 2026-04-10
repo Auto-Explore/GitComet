@@ -18,6 +18,7 @@ pub(in crate::view) use diff_search::{
 };
 pub(in crate::view) use helpers::*;
 
+#[cfg(not(test))]
 const CONFLICT_RESOLVED_OUTLINE_DEBOUNCE_MS: u64 = 140;
 const CONFLICT_RESOLVED_OUTPUT_ROW_HEIGHT_PX: f32 = 20.0;
 const FOCUSED_MERGETOOL_EXIT_SUCCESS: i32 = 0;

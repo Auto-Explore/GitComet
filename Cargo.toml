@@ -44,7 +44,7 @@ clap = { version = "4.6.0", features = ["derive"] }
 criterion = "0.8.2"
 fontdb = "0.23.0"
 gix = { version = "0.81.0", default-features = false, features = ["max-performance-safe", "comfort", "basic", "auto-chain-error", "status", "blame", "sha1"] }
-gpui = { version = "0.2.2" }
+gpui = { package = "gpui-unofficial", version = "0.231.1" }
 image = "0.25.10"
 lru = "0.16"
 memchr = "2.8.0"
@@ -83,7 +83,11 @@ unicode-segmentation = "1.13.2"
 url = "2.5.8"
 windows = "0.62.2"
 wayland-client = "0.31.14"
-zed-reqwest = { version = "0.12.15-zed", default-features = false, features = ["blocking", "json", "rustls-tls-native-roots"] }
+reqwest = { version = "0.13.2", default-features = false, features = ["blocking", "json", "rustls"] }
+
+[patch.crates-io]
+gpui-unofficial = { git = "https://github.com/Havunen/gpui-unofficial.git", rev = "05d2b0fdf14e97bc063ab6df41f0919ee637b9d7" }
+gpui-windows-gpui-unofficial = { git = "https://github.com/Havunen/gpui-unofficial.git", rev = "05d2b0fdf14e97bc063ab6df41f0919ee637b9d7" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

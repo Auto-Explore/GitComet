@@ -248,6 +248,8 @@ impl ToastHost {
             input.set_read_only(true, cx);
         });
 
+        let ttl = if cfg!(test) { None } else { ttl };
+
         let (action_url, action_label) = action
             .map(|(url, label)| (Some(url), Some(label)))
             .unwrap_or((None, None));
@@ -266,7 +268,7 @@ impl ToastHost {
             let lifetime = toast_total_lifetime(ttl);
             cx.spawn(
                 async move |view: WeakEntity<ToastHost>, cx: &mut gpui::AsyncApp| {
-                    Timer::after(lifetime).await;
+                    smol::Timer::after(lifetime).await;
                     let _ = view.update(cx, |this, cx| {
                         this.remove_toast(id, cx);
                     });

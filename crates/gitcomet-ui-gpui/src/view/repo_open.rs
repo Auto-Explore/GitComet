@@ -72,7 +72,7 @@ impl GitCometView {
             let focus = self
                 .open_repo_input
                 .read_with(cx, |input, _| input.focus_handle());
-            window.focus(&focus);
+            window.focus(&focus, cx);
         }
         if show_notice {
             self.push_toast(

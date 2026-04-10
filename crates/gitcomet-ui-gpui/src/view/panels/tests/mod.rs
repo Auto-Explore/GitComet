@@ -491,7 +491,7 @@ pub(super) fn uniform_list_offset(handle: &gpui::UniformListScrollHandle) -> gpu
 pub(super) fn uniform_list_max_offset(
     handle: &gpui::UniformListScrollHandle,
 ) -> gpui::Size<Pixels> {
-    handle.0.borrow().base_handle.max_offset()
+    handle.0.borrow().base_handle.max_offset().into()
 }
 
 pub(super) fn set_uniform_list_offset(
@@ -622,7 +622,7 @@ pub(super) fn assert_file_preview_ctrl_a_ctrl_c_copies_all(
     cx.update(|window, app| {
         let main_pane = view.read(app).main_pane.clone();
         let focus = main_pane.read(app).diff_panel_focus_handle.clone();
-        window.focus(&focus);
+        window.focus(&focus, app);
         let _ = window.draw(app);
     });
 
@@ -944,7 +944,7 @@ pub(super) fn focus_diff_panel(
     cx.update(|window, app| {
         let main_pane = view.read(app).main_pane.clone();
         let focus = main_pane.read(app).diff_panel_focus_handle.clone();
-        window.focus(&focus);
+        window.focus(&focus, app);
         let _ = window.draw(app);
     });
 }

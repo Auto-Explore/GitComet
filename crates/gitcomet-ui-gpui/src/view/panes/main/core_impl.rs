@@ -561,7 +561,7 @@ fn sync_synced_scroll_offsets<const N: usize>(
 ) {
     let offsets: [Point<Pixels>; N] = std::array::from_fn(|ix| handles[ix].offset());
     let max_scrolls = std::array::from_fn(|ix| {
-        axis.max_scroll_component(handles[ix].max_offset())
+        axis.max_scroll_component(handles[ix].max_offset().into())
             .max(px(0.0))
     });
     let targets = compute_synced_scroll_offsets(
@@ -1291,75 +1291,85 @@ impl MainPaneView {
             return;
         }
 
+        if cfg!(test) {
+            while self.apply_prepared_syntax_chunk_updates(cx) {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            self.syntax_chunk_poll_task = None;
+            return;
+        }
+
         let task = cx.spawn(
             async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| loop {
                 let should_continue = view
-                    .update(cx, |this, cx| {
-                        let mut applied = false;
-
-                        let split_left_applied = this
-                            .file_diff_split_prepared_syntax_document(DiffTextRegion::SplitLeft)
-                            .map(rows::drain_completed_prepared_diff_syntax_chunk_builds_for_document)
-                            .unwrap_or(0);
-                        if split_left_applied > 0 {
-                            this.file_diff_style_cache_epochs.bump_left();
-                            applied = true;
-                        }
-
-                        let split_right_applied = this
-                            .file_diff_split_prepared_syntax_document(DiffTextRegion::SplitRight)
-                            .map(rows::drain_completed_prepared_diff_syntax_chunk_builds_for_document)
-                            .unwrap_or(0);
-                        if split_right_applied > 0 {
-                            this.file_diff_style_cache_epochs.bump_right();
-                            applied = true;
-                        }
-
-                        let worktree_preview_applied = this
-                            .worktree_preview_prepared_syntax_document()
-                            .map(rows::drain_completed_prepared_diff_syntax_chunk_builds_for_document)
-                            .unwrap_or(0);
-                        if worktree_preview_applied > 0 {
-                            this.worktree_preview_style_cache_epoch =
-                                this.worktree_preview_style_cache_epoch.wrapping_add(1);
-                            applied = true;
-                        }
-
-                        let resolved_preview_applied = this
-                            .conflict_resolved_preview_prepared_syntax_document
-                            .map(rows::drain_completed_prepared_diff_syntax_chunk_builds_for_document)
-                            .unwrap_or(0);
-                        if resolved_preview_applied > 0 {
-                            this.conflict_resolved_preview_style_cache_epoch = this
-                                .conflict_resolved_preview_style_cache_epoch
-                                .wrapping_add(1);
-                            applied = true;
-                        }
-
-                        if rows::drain_completed_prepared_diff_syntax_chunk_builds() > 0 {
-                            applied = true;
-                        }
-
-                        if applied {
-                            cx.notify();
-                        }
-
-                        let pending = rows::has_pending_prepared_diff_syntax_chunk_builds();
-                        if !pending {
-                            this.syntax_chunk_poll_task = None;
-                        }
-                        pending
-                    })
+                    .update(cx, |this, cx| this.apply_prepared_syntax_chunk_updates(cx))
                     .unwrap_or(false);
 
                 if !should_continue {
                     break;
                 }
 
-                gpui::Timer::after(std::time::Duration::from_millis(16)).await;
+                smol::Timer::after(std::time::Duration::from_millis(16)).await;
             },
         );
         self.syntax_chunk_poll_task = Some(task);
+    }
+
+    fn apply_prepared_syntax_chunk_updates(&mut self, cx: &mut gpui::Context<Self>) -> bool {
+        let mut applied = false;
+
+        let split_left_applied = self
+            .file_diff_split_prepared_syntax_document(DiffTextRegion::SplitLeft)
+            .map(rows::drain_completed_prepared_diff_syntax_chunk_builds_for_document)
+            .unwrap_or(0);
+        if split_left_applied > 0 {
+            self.file_diff_style_cache_epochs.bump_left();
+            applied = true;
+        }
+
+        let split_right_applied = self
+            .file_diff_split_prepared_syntax_document(DiffTextRegion::SplitRight)
+            .map(rows::drain_completed_prepared_diff_syntax_chunk_builds_for_document)
+            .unwrap_or(0);
+        if split_right_applied > 0 {
+            self.file_diff_style_cache_epochs.bump_right();
+            applied = true;
+        }
+
+        let worktree_preview_applied = self
+            .worktree_preview_prepared_syntax_document()
+            .map(rows::drain_completed_prepared_diff_syntax_chunk_builds_for_document)
+            .unwrap_or(0);
+        if worktree_preview_applied > 0 {
+            self.worktree_preview_style_cache_epoch =
+                self.worktree_preview_style_cache_epoch.wrapping_add(1);
+            applied = true;
+        }
+
+        let resolved_preview_applied = self
+            .conflict_resolved_preview_prepared_syntax_document
+            .map(rows::drain_completed_prepared_diff_syntax_chunk_builds_for_document)
+            .unwrap_or(0);
+        if resolved_preview_applied > 0 {
+            self.conflict_resolved_preview_style_cache_epoch = self
+                .conflict_resolved_preview_style_cache_epoch
+                .wrapping_add(1);
+            applied = true;
+        }
+
+        if rows::drain_completed_prepared_diff_syntax_chunk_builds() > 0 {
+            applied = true;
+        }
+
+        if applied {
+            cx.notify();
+        }
+
+        let pending = rows::has_pending_prepared_diff_syntax_chunk_builds();
+        if !pending {
+            self.syntax_chunk_poll_task = None;
+        }
+        pending
     }
 
     fn refresh_conflict_resolved_output_syntax(
@@ -1451,7 +1461,7 @@ impl MainPaneView {
         let old_reparse_seed = old_document.and_then(rows::prepared_diff_syntax_reparse_seed);
         cx.spawn(
             async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
-                let parsed_document = smol::unblock(move || {
+                let prepare_document = move || {
                     rows::prepare_diff_syntax_document_in_background_text_with_reuse(
                         request_key.language,
                         rows::DiffSyntaxMode::Auto,
@@ -1460,8 +1470,12 @@ impl MainPaneView {
                         old_reparse_seed,
                         syntax_edit,
                     )
-                })
-                .await;
+                };
+                let parsed_document = if cfg!(test) {
+                    prepare_document()
+                } else {
+                    smol::unblock(prepare_document).await
+                };
 
                 let _ = view.update(cx, |this, cx| {
                     if this.conflict_resolved_preview_syntax_inflight != Some(request_key) {
@@ -1514,7 +1528,7 @@ impl MainPaneView {
         let expected_source_hash = source_hash;
         cx.spawn(
             async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
-                let parsed = smol::unblock(move || {
+                let prepare_document = move || {
                     rows::prepare_diff_syntax_document_in_background_text_with_reuse(
                         language,
                         rows::DiffSyntaxMode::Auto,
@@ -1523,8 +1537,12 @@ impl MainPaneView {
                         None,
                         None,
                     )
-                })
-                .await;
+                };
+                let parsed = if cfg!(test) {
+                    prepare_document()
+                } else {
+                    smol::unblock(prepare_document).await
+                };
 
                 let _ = view.update(cx, |this, cx| {
                     this.conflict_three_way_syntax_inflight[side] = false;
@@ -2177,88 +2195,134 @@ impl MainPaneView {
             .wrapping_add(1);
         let seq = self.conflict_resolver.resolver_pending_recompute_seq;
 
-        cx.spawn(
-            async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
-                Timer::after(Duration::from_millis(CONFLICT_RESOLVED_OUTLINE_DEBOUNCE_MS)).await;
-                let request = view.update(cx, |this, cx| {
-                    if this.conflict_resolver.resolver_pending_recompute_seq != seq {
-                        return None;
-                    }
-                    if this.conflict_resolved_preview_source_hash != Some(output_hash)
-                        || this.conflict_resolved_preview_path.as_ref() != path.as_ref()
-                    {
-                        return None;
-                    }
-                    let did_incremental = delta.clone().is_some_and(|delta| {
-                        this.recompute_conflict_resolved_outline_and_provenance_incremental(
-                            path.as_ref(),
-                            delta,
-                            cx,
-                        )
-                    });
-                    if !did_incremental {
-                        let trace_started = Instant::now();
-                        let output_snapshot = this
-                            .conflict_resolver_input
-                            .read_with(cx, |input, _| input.text_snapshot());
-                        let syntax_edit = delta.clone().map(diff_syntax_edit_from_outline_delta);
-                        let request =
-                            this.background_resolved_outline_recompute_request(&output_snapshot);
-                        #[cfg(test)]
-                        let background_delay = this
-                            .conflict_resolved_outline_background_delay_override
-                            .unwrap_or_default();
-                        #[cfg(not(test))]
-                        let background_delay = Duration::default();
-                        this.sync_conflict_resolved_preview_snapshot(
-                            &output_snapshot,
-                            path.as_ref(),
-                            syntax_edit,
-                            true,
-                            cx,
-                        );
+        #[cfg(test)]
+        {
+            let did_incremental = delta.clone().is_some_and(|delta| {
+                self.recompute_conflict_resolved_outline_and_provenance_incremental(
+                    path.as_ref(),
+                    delta,
+                    cx,
+                )
+            });
+            if did_incremental {
+                cx.notify();
+                return;
+            }
+
+            let trace_started = Instant::now();
+            let output_snapshot = self
+                .conflict_resolver_input
+                .read_with(cx, |input, _| input.text_snapshot());
+            let syntax_edit = delta.clone().map(diff_syntax_edit_from_outline_delta);
+            let request = self.background_resolved_outline_recompute_request(&output_snapshot);
+            let background_delay = self
+                .conflict_resolved_outline_background_delay_override
+                .unwrap_or_default();
+            self.sync_conflict_resolved_preview_snapshot(
+                &output_snapshot,
+                path.as_ref(),
+                syntax_edit,
+                true,
+                cx,
+            );
+
+            if background_delay.is_zero()
+                && self.conflict_resolver.resolver_pending_recompute_seq == seq
+                && self.conflict_resolved_preview_source_hash == Some(output_hash)
+                && self.conflict_resolved_preview_path.as_ref() == path.as_ref()
+            {
+                let computed = compute_resolved_outline_computation(
+                    request.output_text.as_ref(),
+                    request.output_line_count,
+                    &request.marker_segments,
+                    request.sources.as_view(),
+                );
+                self.apply_resolved_outline_computation(path.as_ref(), trace_started, computed);
+            }
+
+            cx.notify();
+        }
+
+        #[cfg(not(test))]
+        {
+            cx.spawn(
+                async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
+                    smol::Timer::after(Duration::from_millis(CONFLICT_RESOLVED_OUTLINE_DEBOUNCE_MS)).await;
+                    let request = view.update(cx, |this, cx| {
+                        if this.conflict_resolver.resolver_pending_recompute_seq != seq {
+                            return None;
+                        }
+                        if this.conflict_resolved_preview_source_hash != Some(output_hash)
+                            || this.conflict_resolved_preview_path.as_ref() != path.as_ref()
+                        {
+                            return None;
+                        }
+                        let did_incremental = delta.clone().is_some_and(|delta| {
+                            this.recompute_conflict_resolved_outline_and_provenance_incremental(
+                                path.as_ref(),
+                                delta,
+                                cx,
+                            )
+                        });
+                        if !did_incremental {
+                            let trace_started = Instant::now();
+                            let output_snapshot = this
+                                .conflict_resolver_input
+                                .read_with(cx, |input, _| input.text_snapshot());
+                            let syntax_edit = delta.clone().map(diff_syntax_edit_from_outline_delta);
+                            let request =
+                                this.background_resolved_outline_recompute_request(&output_snapshot);
+                            let background_delay = Duration::default();
+                            this.sync_conflict_resolved_preview_snapshot(
+                                &output_snapshot,
+                                path.as_ref(),
+                                syntax_edit,
+                                true,
+                                cx,
+                            );
+                            cx.notify();
+                            return Some((request, trace_started, background_delay));
+                        }
+
                         cx.notify();
-                        return Some((request, trace_started, background_delay));
-                    }
-
-                    cx.notify();
-                    None
-                });
-                let Some((request, trace_started, background_delay)) = request.ok().flatten()
-                else {
-                    return;
-                };
-
-                if !background_delay.is_zero() {
-                    Timer::after(background_delay).await;
-                }
-
-                let computed = smol::unblock(move || {
-                    compute_resolved_outline_computation(
-                        request.output_text.as_ref(),
-                        request.output_line_count,
-                        &request.marker_segments,
-                        request.sources.as_view(),
-                    )
-                })
-                .await;
-
-                let _ = view.update(cx, |this, cx| {
-                    if this.conflict_resolver.resolver_pending_recompute_seq != seq {
+                        None
+                    });
+                    let Some((request, trace_started, background_delay)) = request.ok().flatten()
+                    else {
                         return;
-                    }
-                    if this.conflict_resolved_preview_source_hash != Some(output_hash)
-                        || this.conflict_resolved_preview_path.as_ref() != path.as_ref()
-                    {
-                        return;
+                    };
+
+                    if !background_delay.is_zero() {
+                        smol::Timer::after(background_delay).await;
                     }
 
-                    this.apply_resolved_outline_computation(path.as_ref(), trace_started, computed);
-                    cx.notify();
-                });
-            },
-        )
-        .detach();
+                    let compute_outline = move || {
+                        compute_resolved_outline_computation(
+                            request.output_text.as_ref(),
+                            request.output_line_count,
+                            &request.marker_segments,
+                            request.sources.as_view(),
+                        )
+                    };
+                    let computed = smol::unblock(compute_outline).await;
+
+                    let _ = view.update(cx, |this, cx| {
+                        if this.conflict_resolver.resolver_pending_recompute_seq != seq {
+                            return;
+                        }
+                        if this.conflict_resolved_preview_source_hash != Some(output_hash)
+                            || this.conflict_resolved_preview_path.as_ref() != path.as_ref()
+                        {
+                            return;
+                        }
+
+                        this.apply_resolved_outline_computation(path.as_ref(), trace_started, computed);
+                        cx.notify();
+                    });
+                },
+            )
+            .detach();
+        }
     }
 
     #[cfg(test)]

@@ -60,7 +60,7 @@ pub(super) fn absolute_scroll_y(handle: &ScrollHandle) -> Pixels {
 }
 
 pub(super) fn scroll_is_near_bottom(handle: &ScrollHandle, threshold: Pixels) -> bool {
-    let max_offset = handle.max_offset().height.max(px(0.0));
+    let max_offset = handle.max_offset().y.max(px(0.0));
     if max_offset <= px(0.0) {
         return true;
     }

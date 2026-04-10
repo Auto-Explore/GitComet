@@ -11,10 +11,12 @@ use gitcomet_state::store::AppStore;
 #[cfg(target_os = "macos")]
 use gpui::{Action, Menu, MenuItem, OsAction, SystemMenuType};
 use gpui::{
-    App, AppContext, Application, BorrowAppContext, Bounds, KeyBinding, Pixels, Point,
+    App, AppContext, BorrowAppContext, Bounds, KeyBinding, Pixels, Point,
     TitlebarOptions, Window, WindowBounds, WindowDecorations, WindowOptions, actions, point, px,
     size,
 };
+#[cfg(target_os = "windows")]
+use gpui_windows::WindowsPlatform;
 #[cfg(target_os = "windows")]
 use raw_window_handle::RawWindowHandle;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -23,6 +25,8 @@ use schemars::JsonSchema;
 #[cfg(target_os = "macos")]
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
+#[cfg(target_os = "windows")]
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI32, Ordering};
 
@@ -213,6 +217,13 @@ pub(crate) fn show_window_system_menu(window: &Window, position: Point<Pixels>) 
     window.show_window_menu(position);
 }
 
+#[cfg(target_os = "windows")]
+pub(crate) fn application() -> gpui::Application {
+    gpui::Application::with_platform(Rc::new(
+        WindowsPlatform::new(false).expect("failed to initialize Windows platform"),
+    ))
+}
+
 #[cfg(any(target_os = "windows", test))]
 fn window_menu_position(position: Point<Pixels>, scale_factor: f32) -> (i32, i32) {
     (
@@ -275,7 +286,7 @@ pub(crate) fn window_system_menu_request(
 
 fn run_windowed_app(backend: Arc<dyn GitBackend>, launch: WindowLaunchConfig) {
     let quit_when_all_windows_closed = should_quit_when_all_windows_closed(&launch);
-    let application = Application::new().with_assets(GitCometAssets);
+    let application = application().with_assets(GitCometAssets);
 
     #[cfg(target_os = "macos")]
     let open_urls_rx = if launch.view_config.view_mode == GitCometViewMode::Normal {
@@ -306,7 +317,7 @@ fn run_windowed_app(backend: Arc<dyn GitBackend>, launch: WindowLaunchConfig) {
         }
         bind_text_input_keys(cx);
         if quit_when_all_windows_closed {
-            cx.on_window_closed(|cx| {
+            cx.on_window_closed(|cx, _window_id| {
                 if cx.windows().is_empty() {
                     cx.quit();
                 }
@@ -977,7 +988,7 @@ fn prompt_open_repository(cx: &mut App, backend: Arc<dyn GitBackend>) {
             Ok(Ok(Some(paths))) => paths,
             Ok(Ok(None)) => return,
             Ok(Err(_)) | Err(_) => {
-                let _ = cx.update(move |cx| {
+                cx.update(move |cx| {
                     show_open_repository_manual_entry_in_existing_or_new_window(
                         cx,
                         Arc::clone(&backend),
@@ -990,7 +1001,7 @@ fn prompt_open_repository(cx: &mut App, backend: Arc<dyn GitBackend>) {
             return;
         };
 
-        let _ = cx.update(move |cx| {
+        cx.update(move |cx| {
             open_repository_in_existing_or_new_window(cx, Arc::clone(&backend), path);
         });
     })
@@ -1192,11 +1203,16 @@ mod tests {
         store: &AppStore,
         view: gpui::Entity<GitCometView>,
     ) {
+        cx.update(|_window, app| {
+            view.update(app, |this, _cx| this.disable_poller_for_tests());
+        });
+
         store.dispatch(Msg::OpenRepo(PathBuf::from("/tmp/gitcomet-app-test-repo")));
 
         let deadline = Instant::now() + Duration::from_secs(3);
         loop {
             cx.update(|window, app| {
+                view.update(app, |this, cx| this.sync_store_snapshot_for_tests(cx));
                 let _ = window.draw(app);
             });
             cx.run_until_parked();
@@ -1393,7 +1409,7 @@ mod tests {
             app.clear_key_bindings();
             bind_text_input_keys(app);
             let focus = view.update(app, |view, _cx| view.focus_handle());
-            window.focus(&focus);
+            window.focus(&focus, app);
             let _ = window.draw(app);
         });
 
@@ -1491,7 +1507,7 @@ mod tests {
             app.clear_key_bindings();
             bind_text_input_keys(app);
             let focus = input.read(app).focus_handle();
-            window.focus(&focus);
+            window.focus(&focus, app);
 
             input.update(app, |input, cx| {
                 input.set_text("alpha", cx);
@@ -1531,7 +1547,7 @@ mod tests {
             app.clear_key_bindings();
             bind_text_input_keys(app);
             let focus = input.read(app).focus_handle();
-            window.focus(&focus);
+            window.focus(&focus, app);
 
             input.update(app, |input, cx| {
                 input.set_text("alpha", cx);
@@ -1631,7 +1647,7 @@ mod tests {
             app.clear_key_bindings();
             bind_app_keys(app);
             let focus = view.update(app, |view, _cx| view.focus_handle());
-            window.focus(&focus);
+            window.focus(&focus, app);
             let _ = window.draw(app);
         });
 

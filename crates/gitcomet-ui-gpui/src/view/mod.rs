@@ -21,7 +21,7 @@ use gpui::{
     Element, ElementId, Entity, FocusHandle, FontWeight, GlobalElementId, InspectorElementId,
     IsZero, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point,
     Render, ResizeEdge, ScrollHandle, ShapedLine, SharedString, Size, Style, TextRun, Tiling,
-    Timer, UniformListScrollHandle, WeakEntity, Window, WindowControlArea, anchored, div, fill,
+    UniformListScrollHandle, WeakEntity, Window, WindowControlArea, anchored, div, fill,
     point, px, relative, size, uniform_list,
 };
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
@@ -50,6 +50,7 @@ mod diff_utils;
 mod fingerprint;
 mod history_graph;
 mod icons;
+#[cfg(any(test, target_os = "linux", target_os = "freebsd"))]
 mod linux_desktop_integration;
 mod markdown_preview;
 mod mod_helpers;
@@ -285,8 +286,14 @@ pub(crate) const UI_MONOSPACE_FONT_FAMILY: &str = crate::bundled_fonts::LILEX_FO
 
 impl GitCometView {
     #[cfg(test)]
-    pub(in crate::view) fn disable_poller_for_tests(&mut self) {
+    pub(crate) fn disable_poller_for_tests(&mut self) {
         self._poller = Poller::disabled();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn sync_store_snapshot_for_tests(&self, cx: &mut gpui::Context<Self>) {
+        self._ui_model
+            .update(cx, |model, cx| model.set_state(self.store.snapshot(), cx));
     }
 
     pub(in crate::view) fn open_popover_at(
@@ -911,13 +918,21 @@ impl GitCometView {
             return;
         }
 
+        if cfg!(test) {
+            self.sidebar_render_width = target;
+            self.sidebar_width_animating = false;
+            self.refresh_main_pane_after_panel_animation(cx);
+            cx.notify();
+            return;
+        }
+
         self.sidebar_width_animating = true;
         let started = Instant::now();
         let duration = Duration::from_millis(PANE_COLLAPSE_ANIM_MS);
 
         cx.spawn(
             async move |view: WeakEntity<GitCometView>, cx: &mut gpui::AsyncApp| loop {
-                Timer::after(Duration::from_millis(16)).await;
+                smol::Timer::after(Duration::from_millis(16)).await;
 
                 let mut t =
                     started.elapsed().as_secs_f32() / duration.as_secs_f32().max(f32::EPSILON);
@@ -973,13 +988,21 @@ impl GitCometView {
             return;
         }
 
+        if cfg!(test) {
+            self.details_render_width = target;
+            self.details_width_animating = false;
+            self.refresh_main_pane_after_panel_animation(cx);
+            cx.notify();
+            return;
+        }
+
         self.details_width_animating = true;
         let started = Instant::now();
         let duration = Duration::from_millis(PANE_COLLAPSE_ANIM_MS);
 
         cx.spawn(
             async move |view: WeakEntity<GitCometView>, cx: &mut gpui::AsyncApp| loop {
-                Timer::after(Duration::from_millis(16)).await;
+                smol::Timer::after(Duration::from_millis(16)).await;
 
                 let mut t =
                     started.elapsed().as_secs_f32() / duration.as_secs_f32().max(f32::EPSILON);

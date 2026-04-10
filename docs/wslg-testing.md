@@ -8,7 +8,8 @@ GitComet's Linux build can run inside WSL with WSLg.
 - Prefer repositories stored inside the distro filesystem such as `~/src/repo` instead of `/mnt/c/...`.
 - If Linux desktop openers are unavailable, install `wslu` to provide `wslview` for URL and file-opening fallbacks.
 - For prebuilt Linux binaries on Debian/Ubuntu/WSLg, install the GUI runtime libraries: `libxcb1`, `libxkbcommon0`, and `libxkbcommon-x11-0`.
-- If GPUI panics with `UnsupportedVersion` under WSLg, force the X11 backend by unsetting `WAYLAND_DISPLAY` and `WAYLAND_SOCKET`, then export `XDG_SESSION_TYPE=x11` before launch.
+- GitComet prefers X11 automatically under WSLg when both `DISPLAY` and `WAYLAND_DISPLAY` are present, because GPUI's Wayland path can still trip protocol-version issues in some WSLg sessions.
+- If you need to force the X11 backend manually, unset `WAYLAND_DISPLAY` and `WAYLAND_SOCKET`, then export `XDG_SESSION_TYPE=x11` before launch.
 - For source builds inside WSL, install the Linux UI dependencies used elsewhere in this repo: `pkg-config`, `libxcb1-dev`, `libxkbcommon-dev`, and `libxkbcommon-x11-dev`.
 - GUI `git difftool` and `git mergetool` work under WSLg because `gitcomet setup` already selects the GUI tool when display environment variables are present.
 - Manual validation steps for developers live in `docs/wslg-testing.md`.

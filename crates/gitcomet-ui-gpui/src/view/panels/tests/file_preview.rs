@@ -117,8 +117,8 @@ fn file_preview_renders_scrollable_syntax_highlighted_rows(cx: &mut gpui::TestAp
                 .borrow()
                 .base_handle
                 .max_offset();
-            max_offset.height > px(0.0)
-                && max_offset.width > px(0.0)
+            max_offset.y > px(0.0)
+                && max_offset.x > px(0.0)
                 && pane
                     .worktree_preview_segments_cache_get(0)
                     .is_some_and(|styled| !styled.highlights.is_empty())
@@ -642,7 +642,7 @@ fn minified_json_preview_streams_visible_slice_for_giant_line(cx: &mut gpui::Tes
                     .borrow()
                     .base_handle
                     .max_offset()
-                    .width
+                    .x
                     > px(0.0)
         },
         |pane| {
@@ -701,7 +701,7 @@ fn minified_json_preview_streams_visible_slice_for_giant_line(cx: &mut gpui::Tes
             this.main_pane.update(cx, |pane, cx| {
                 let handle = pane.worktree_preview_scroll.0.borrow().base_handle.clone();
                 let max_offset = handle.max_offset();
-                handle.set_offset(point(-max_offset.width.min(px(2400.0)), px(0.0)));
+                handle.set_offset(point(-max_offset.x.min(px(2400.0)), px(0.0)));
                 cx.notify();
             });
         });
@@ -857,7 +857,7 @@ fn committed_deleted_minified_utf8_json_preview_streams_from_indexed_source(
                     .borrow()
                     .base_handle
                     .max_offset()
-                    .width
+                    .x
                     > px(0.0)
         },
         |pane| {
@@ -919,7 +919,7 @@ fn committed_deleted_minified_utf8_json_preview_streams_from_indexed_source(
             this.main_pane.update(cx, |pane, cx| {
                 let handle = pane.worktree_preview_scroll.0.borrow().base_handle.clone();
                 let max_offset = handle.max_offset();
-                handle.set_offset(point(-max_offset.width.min(px(2400.0)), px(0.0)));
+                handle.set_offset(point(-max_offset.x.min(px(2400.0)), px(0.0)));
                 cx.notify();
             });
         });

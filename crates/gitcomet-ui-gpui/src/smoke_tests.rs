@@ -381,7 +381,7 @@ fn text_input_supports_basic_clipboard_and_word_shortcuts(cx: &mut gpui::TestApp
         ]);
 
         let focus = view.update(app, |this, cx| this.input.read(cx).focus_handle());
-        window.focus(&focus);
+        window.focus(&focus, app);
 
         view.update(app, |this, cx| {
             this.input
@@ -406,7 +406,7 @@ fn text_input_supports_basic_clipboard_and_word_shortcuts(cx: &mut gpui::TestApp
 
     cx.update(|window, app| {
         let focus = view.update(app, |this, cx| this.input.read(cx).focus_handle());
-        window.focus(&focus);
+        window.focus(&focus, app);
         view.update(app, |this, cx| {
             this.input
                 .update(cx, |input, cx| input.set_text("hello world", cx));
@@ -420,7 +420,7 @@ fn text_input_supports_basic_clipboard_and_word_shortcuts(cx: &mut gpui::TestApp
 
     cx.update(|window, app| {
         let focus = view.update(app, |this, cx| this.input.read(cx).focus_handle());
-        window.focus(&focus);
+        window.focus(&focus, app);
         view.update(app, |this, cx| {
             this.input
                 .update(cx, |input, cx| input.set_text("hello brave world", cx));
@@ -433,7 +433,7 @@ fn text_input_supports_basic_clipboard_and_word_shortcuts(cx: &mut gpui::TestApp
 
     cx.update(|window, app| {
         let focus = view.update(app, |this, cx| this.input.read(cx).focus_handle());
-        window.focus(&focus);
+        window.focus(&focus, app);
         view.update(app, |this, cx| {
             this.input
                 .update(cx, |input, cx| input.set_text("hello brave world", cx));
@@ -456,7 +456,7 @@ fn text_input_shift_backspace_deletes_like_backspace(cx: &mut gpui::TestAppConte
         ]);
 
         let focus = view.update(app, |this, cx| this.input.read(cx).focus_handle());
-        window.focus(&focus);
+        window.focus(&focus, app);
 
         view.update(app, |this, cx| {
             this.input
@@ -471,7 +471,7 @@ fn text_input_shift_backspace_deletes_like_backspace(cx: &mut gpui::TestAppConte
 
     cx.update(|window, app| {
         let focus = view.update(app, |this, cx| this.input.read(cx).focus_handle());
-        window.focus(&focus);
+        window.focus(&focus, app);
 
         view.update(app, |this, cx| {
             this.input
@@ -497,7 +497,7 @@ fn multiline_text_input_cursor_navigation_keeps_scroll_in_view(cx: &mut gpui::Te
         ]);
 
         let focus = view.update(app, |this, cx| this.input.read(cx).focus_handle());
-        window.focus(&focus);
+        window.focus(&focus, app);
 
         view.update(app, |this, cx| {
             this.input
@@ -514,7 +514,7 @@ fn multiline_text_input_cursor_navigation_keeps_scroll_in_view(cx: &mut gpui::Te
         let v = view.read(app);
         (
             abs_scroll_y(v.scroll_handle.offset().y),
-            v.scroll_handle.max_offset().height,
+            v.scroll_handle.max_offset().y,
         )
     });
     assert!(
@@ -563,7 +563,7 @@ fn multiline_text_input_mousewheel_does_not_trigger_cursor_autoscroll(
         )]);
 
         let focus = view.update(app, |this, cx| this.input.read(cx).focus_handle());
-        window.focus(&focus);
+        window.focus(&focus, app);
 
         let long_text = (0..40)
             .map(|ix| format!("line {ix}"))
@@ -584,7 +584,7 @@ fn multiline_text_input_mousewheel_does_not_trigger_cursor_autoscroll(
             let v = view.read(app);
             (
                 v.scroll_handle.clone(),
-                v.scroll_handle.max_offset().height.max(px(0.0)),
+                v.scroll_handle.max_offset().y.max(px(0.0)),
             )
         };
         let baseline = (max_offset * 0.5).max(px(1.0));
@@ -640,7 +640,7 @@ fn text_input_right_click_context_menu_supports_copy(cx: &mut gpui::TestAppConte
 
     cx.update(|window, app| {
         let focus = view.update(app, |this, cx| this.input.read(cx).focus_handle());
-        window.focus(&focus);
+        window.focus(&focus, app);
 
         view.update(app, |this, cx| {
             this.input
@@ -794,7 +794,7 @@ fn text_input_supports_ctrl_z_undo(cx: &mut gpui::TestAppContext) {
         ]);
 
         let focus = view.update(app, |this, cx| this.input.read(cx).focus_handle());
-        window.focus(&focus);
+        window.focus(&focus, app);
 
         view.update(app, |this, cx| {
             this.input
@@ -820,7 +820,7 @@ fn text_input_double_click_selects_word(cx: &mut gpui::TestAppContext) {
 
     cx.update(|window, app| {
         let focus = view.update(app, |this, cx| this.input.read(cx).focus_handle());
-        window.focus(&focus);
+        window.focus(&focus, app);
 
         view.update(app, |this, cx| {
             this.input
@@ -878,7 +878,7 @@ fn text_input_supports_shift_home_end_row_selection(cx: &mut gpui::TestAppContex
         ]);
 
         let focus = view.update(app, |this, cx| this.input.read(cx).focus_handle());
-        window.focus(&focus);
+        window.focus(&focus, app);
 
         view.update(app, |this, cx| {
             this.input
@@ -921,7 +921,7 @@ fn text_input_supports_shift_pageup_pagedown_selection(cx: &mut gpui::TestAppCon
         ]);
 
         let focus = view.update(app, |this, cx| this.input.read(cx).focus_handle());
-        window.focus(&focus);
+        window.focus(&focus, app);
 
         view.update(app, |this, cx| {
             this.input
@@ -962,7 +962,7 @@ fn text_input_supports_up_down_with_sticky_column(cx: &mut gpui::TestAppContext)
         ]);
 
         let focus = view.update(app, |this, cx| this.input.read(cx).focus_handle());
-        window.focus(&focus);
+        window.focus(&focus, app);
 
         view.update(app, |this, cx| {
             this.input
@@ -1003,7 +1003,7 @@ fn text_input_supports_shift_up_down_selection(cx: &mut gpui::TestAppContext) {
         ]);
 
         let focus = view.update(app, |this, cx| this.input.read(cx).focus_handle());
-        window.focus(&focus);
+        window.focus(&focus, app);
 
         view.update(app, |this, cx| {
             this.input
@@ -1244,11 +1244,16 @@ fn seed_workspace_repo(
     view: gpui::Entity<crate::view::GitCometView>,
     path: PathBuf,
 ) {
+    cx.update(|_window, app| {
+        view.update(app, |this, _cx| this.disable_poller_for_tests());
+    });
+
     store.dispatch(Msg::OpenRepo(path));
 
     let deadline = Instant::now() + Duration::from_secs(3);
     loop {
         cx.update(|window, app| {
+            view.update(app, |this, cx| this.sync_store_snapshot_for_tests(cx));
             let _ = window.draw(app);
         });
         cx.run_until_parked();
@@ -1266,11 +1271,26 @@ fn seed_workspace_repo(
     }
 }
 
+fn sync_view_for_tests(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<crate::view::GitCometView>,
+) {
+    cx.update(|window, app| {
+        view.update(app, |this, cx| this.sync_store_snapshot_for_tests(cx));
+        let _ = window.draw(app);
+    });
+}
+
 fn restore_session_and_draw(
     cx: &mut gpui::VisualTestContext,
     store: &AppStore,
+    view: gpui::Entity<crate::view::GitCometView>,
     repos: Vec<PathBuf>,
 ) -> Vec<RepoId> {
+    cx.update(|_window, app| {
+        view.update(app, |this, _cx| this.disable_poller_for_tests());
+    });
+
     store.dispatch(Msg::RestoreSession {
         open_repos: repos.clone(),
         active_repo: repos.first().cloned(),
@@ -1286,9 +1306,7 @@ fn restore_session_and_draw(
 
     let deadline = Instant::now() + Duration::from_secs(1);
     loop {
-        cx.update(|window, app| {
-            let _ = window.draw(app);
-        });
+        sync_view_for_tests(cx, &view);
 
         if selectors
             .iter()
@@ -1338,6 +1356,7 @@ fn repo_tabs_can_drag_reorder_by_right_half(cx: &mut gpui::TestAppContext) {
     let repo_ids = restore_session_and_draw(
         cx,
         &store_for_test,
+        _view.clone(),
         vec![base.join("repo1"), base.join("repo2"), base.join("repo3")],
     );
 
@@ -1383,6 +1402,7 @@ fn repo_tabs_can_drag_reorder_by_left_half(cx: &mut gpui::TestAppContext) {
     let repo_ids = restore_session_and_draw(
         cx,
         &store_for_test,
+        _view.clone(),
         vec![base.join("repo1"), base.join("repo2"), base.join("repo3")],
     );
 
@@ -1428,6 +1448,7 @@ fn repo_tabs_drop_on_self_is_noop(cx: &mut gpui::TestAppContext) {
     let repo_ids = restore_session_and_draw(
         cx,
         &store_for_test,
+        _view.clone(),
         vec![base.join("repo1"), base.join("repo2"), base.join("repo3")],
     );
 
@@ -1466,7 +1487,7 @@ fn worktrees_section_shows_spinner_while_removing_worktree(cx: &mut gpui::TestAp
         "gitcomet_ui_test_worktrees_spinner_{}",
         std::process::id()
     ));
-    let repo_ids = restore_session_and_draw(cx, &store_for_test, vec![base.join("repo1")]);
+    let repo_ids = restore_session_and_draw(cx, &store_for_test, _view.clone(), vec![base.join("repo1")]);
     let repo_id = repo_ids[0];
 
     store_for_test.dispatch(Msg::RemoveWorktree {
@@ -1477,9 +1498,7 @@ fn worktrees_section_shows_spinner_while_removing_worktree(cx: &mut gpui::TestAp
     let selector = worktrees_spinner_selector(repo_id);
     let deadline = Instant::now() + Duration::from_secs(1);
     loop {
-        cx.update(|window, app| {
-            let _ = window.draw(app);
-        });
+        sync_view_for_tests(cx, &_view);
 
         if cx.debug_bounds(selector).is_some() {
             break;
@@ -1506,7 +1525,7 @@ fn submodules_section_shows_spinner_while_loading(cx: &mut gpui::TestAppContext)
         "gitcomet_ui_test_submodules_spinner_{}",
         std::process::id()
     ));
-    let repo_ids = restore_session_and_draw(cx, &store_for_test, vec![base.join("repo1")]);
+    let repo_ids = restore_session_and_draw(cx, &store_for_test, _view.clone(), vec![base.join("repo1")]);
     let repo_id = repo_ids[0];
 
     store_for_test.dispatch(Msg::LoadSubmodules { repo_id });
@@ -1514,9 +1533,7 @@ fn submodules_section_shows_spinner_while_loading(cx: &mut gpui::TestAppContext)
     let selector = submodules_spinner_selector(repo_id);
     let deadline = Instant::now() + Duration::from_secs(1);
     loop {
-        cx.update(|window, app| {
-            let _ = window.draw(app);
-        });
+        sync_view_for_tests(cx, &_view);
 
         if cx.debug_bounds(selector).is_some() {
             break;
@@ -1543,7 +1560,7 @@ fn stash_section_shows_spinner_while_loading(cx: &mut gpui::TestAppContext) {
         "gitcomet_ui_test_stash_spinner_{}",
         std::process::id()
     ));
-    let repo_ids = restore_session_and_draw(cx, &store_for_test, vec![base.join("repo1")]);
+    let repo_ids = restore_session_and_draw(cx, &store_for_test, _view.clone(), vec![base.join("repo1")]);
     let repo_id = repo_ids[0];
     wait_for_repo_open(&store_for_test, repo_id);
 
@@ -1552,9 +1569,7 @@ fn stash_section_shows_spinner_while_loading(cx: &mut gpui::TestAppContext) {
     let selector = stash_spinner_selector(repo_id);
     let deadline = Instant::now() + Duration::from_secs(1);
     loop {
-        cx.update(|window, app| {
-            let _ = window.draw(app);
-        });
+        sync_view_for_tests(cx, &_view);
 
         if cx.debug_bounds(selector).is_some() {
             break;
@@ -1614,7 +1629,7 @@ impl gpui::Render for PanelLayoutTestView {
             ),
         )
         .h_full()
-        .track_scroll(self.handle.clone());
+        .track_scroll(&self.handle);
 
         let body = div()
             .id("diff_body")

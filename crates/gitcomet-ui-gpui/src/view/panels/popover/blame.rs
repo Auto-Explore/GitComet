@@ -73,7 +73,7 @@ pub(super) fn panel(
                 cx.processor(render_blame_popover_rows),
             )
             .h(px(360.0))
-            .track_scroll(this.blame_scroll.clone());
+            .track_scroll(&this.blame_scroll);
             let scrollbar_gutter = components::Scrollbar::visible_gutter(
                 this.blame_scroll.clone(),
                 components::ScrollbarAxis::Vertical,

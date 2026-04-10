@@ -152,10 +152,9 @@ pub(crate) fn open_settings_window(cx: &mut App) {
         ),
         cx,
     );
-    cx.open_window(
-        settings_window_options(bounds),
-        |window, cx| cx.new(|cx| SettingsWindowView::new(window, cx)),
-    )
+    cx.open_window(settings_window_options(bounds), |window, cx| {
+        cx.new(|cx| SettingsWindowView::new(window, cx))
+    })
     .expect("failed to open settings window");
 
     cx.activate(true);
@@ -235,7 +234,7 @@ fn uniform_list_vertical_scroll_metrics(
     let max_offset = state
         .last_item_size
         .map(|size| (size.contents.height - size.item.height).max(px(0.0)))
-        .unwrap_or_else(|| state.base_handle.max_offset().height.max(px(0.0)));
+        .unwrap_or_else(|| state.base_handle.max_offset().y.max(px(0.0)));
     let raw_offset = state.base_handle.offset().y;
     let scroll_offset = normalize_scroll_offset(raw_offset, max_offset);
     (raw_offset, scroll_offset, max_offset)
@@ -466,7 +465,7 @@ impl SettingsWindowView {
             .collect();
         cx.spawn(
             async move |_view: WeakEntity<Self>, cx: &mut gpui::AsyncApp| {
-                let _ = cx.update(move |cx| {
+                cx.update(move |cx| {
                     let mut f = f;
                     for handle in handles {
                         let _ = handle.update(cx, |view, window, cx| f(view, window, cx));
@@ -1615,7 +1614,7 @@ impl Render for SettingsWindowView {
                     )
                     .h_full()
                     .min_h(px(0.0))
-                    .track_scroll(self.theme_scroll.clone())
+                    .track_scroll(&self.theme_scroll)
                     .on_scroll_wheel({
                         let scroll = self.theme_scroll.clone();
                         move |event, window, cx| {
@@ -1649,7 +1648,7 @@ impl Render for SettingsWindowView {
                         )
                         .h_full()
                         .min_h(px(0.0))
-                        .track_scroll(self.ui_font_scroll.clone())
+                        .track_scroll(&self.ui_font_scroll)
                         .on_scroll_wheel({
                             let scroll = self.ui_font_scroll.clone();
                             move |event, window, cx| {
@@ -1695,7 +1694,7 @@ impl Render for SettingsWindowView {
                         )
                         .h_full()
                         .min_h(px(0.0))
-                        .track_scroll(self.editor_font_scroll.clone())
+                        .track_scroll(&self.editor_font_scroll)
                         .on_scroll_wheel({
                             let scroll = self.editor_font_scroll.clone();
                             move |event, window, cx| {
@@ -1740,7 +1739,7 @@ impl Render for SettingsWindowView {
                     )
                     .h_full()
                     .min_h(px(0.0))
-                    .track_scroll(self.date_format_scroll.clone())
+                    .track_scroll(&self.date_format_scroll)
                     .on_scroll_wheel({
                         let scroll = self.date_format_scroll.clone();
                         move |event, window, cx| {
@@ -1771,7 +1770,7 @@ impl Render for SettingsWindowView {
                     )
                     .h_full()
                     .min_h(px(0.0))
-                    .track_scroll(self.timezone_scroll.clone())
+                    .track_scroll(&self.timezone_scroll)
                     .on_scroll_wheel({
                         let scroll = self.timezone_scroll.clone();
                         move |event, window, cx| {
@@ -1811,7 +1810,7 @@ impl Render for SettingsWindowView {
                     )
                     .h_full()
                     .min_h(px(0.0))
-                    .track_scroll(self.change_tracking_scroll.clone())
+                    .track_scroll(&self.change_tracking_scroll)
                     .on_scroll_wheel({
                         let scroll = self.change_tracking_scroll.clone();
                         move |event, window, cx| {
@@ -1846,7 +1845,7 @@ impl Render for SettingsWindowView {
                     )
                     .h_full()
                     .min_h(px(0.0))
-                    .track_scroll(self.diff_scroll_sync_scroll.clone())
+                    .track_scroll(&self.diff_scroll_sync_scroll)
                     .on_scroll_wheel({
                         let scroll = self.diff_scroll_sync_scroll.clone();
                         move |event, window, cx| {
@@ -2053,7 +2052,7 @@ impl Render for SettingsWindowView {
                     )
                     .h_full()
                     .min_h(px(0.0))
-                    .track_scroll(self.open_source_licenses_scroll.clone())
+                    .track_scroll(&self.open_source_licenses_scroll)
                     .into_any_element()
                 };
 
@@ -2809,9 +2808,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn non_macos_settings_window_renders_custom_chrome_controls(
-        cx: &mut gpui::TestAppContext,
-    ) {
+    fn non_macos_settings_window_renders_custom_chrome_controls(cx: &mut gpui::TestAppContext) {
         if cfg!(target_os = "macos") {
             return;
         }
@@ -3150,7 +3147,7 @@ mod tests {
                     settings
                         .settings_window_scroll
                         .max_offset()
-                        .height
+                        .y
                         .max(px(0.0)),
                     uniform_list_vertical_scroll_metrics(&settings.ui_font_scroll).2,
                 )

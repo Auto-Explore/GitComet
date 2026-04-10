@@ -539,7 +539,7 @@ impl DetailsPaneView {
                                 .w_full()
                                 .h_full()
                                 .min_h(px(0.0))
-                                .track_scroll(self.commit_files_scroll.clone());
+                                .track_scroll(&self.commit_files_scroll);
                                 let files_scrollbar_gutter = components::Scrollbar::visible_gutter(
                                     self.commit_files_scroll.clone(),
                                     components::ScrollbarAxis::Vertical,
@@ -697,7 +697,7 @@ impl DetailsPaneView {
                             .w_full()
                             .h_full()
                             .min_h(px(0.0))
-                            .track_scroll(self.commit_files_scroll.clone());
+                            .track_scroll(&self.commit_files_scroll);
                             let files_scrollbar_gutter = components::Scrollbar::visible_gutter(
                                 self.commit_files_scroll.clone(),
                                 components::ScrollbarAxis::Vertical,
@@ -1721,7 +1721,7 @@ impl DetailsPaneView {
                     uniform_list("unstaged", count, cx.processor(Self::render_unstaged_rows))
                         .h_full()
                         .min_h(px(0.0))
-                        .track_scroll(self.unstaged_scroll.clone());
+                        .track_scroll(&self.unstaged_scroll);
                 let list = div()
                     .flex_1()
                     .h_full()
@@ -1758,7 +1758,7 @@ impl DetailsPaneView {
                 )
                 .h_full()
                 .min_h(px(0.0))
-                .track_scroll(self.untracked_scroll.clone());
+                .track_scroll(&self.untracked_scroll);
                 let list = div()
                     .flex_1()
                     .h_full()
@@ -1795,7 +1795,7 @@ impl DetailsPaneView {
                 )
                 .h_full()
                 .min_h(px(0.0))
-                .track_scroll(self.unstaged_scroll.clone());
+                .track_scroll(&self.unstaged_scroll);
                 let list = div()
                     .flex_1()
                     .h_full()
@@ -1828,7 +1828,7 @@ impl DetailsPaneView {
                 let list = uniform_list("staged", count, cx.processor(Self::render_staged_rows))
                     .h_full()
                     .min_h(px(0.0))
-                    .track_scroll(self.staged_scroll.clone());
+                    .track_scroll(&self.staged_scroll);
                 let list = div()
                     .flex_1()
                     .h_full()

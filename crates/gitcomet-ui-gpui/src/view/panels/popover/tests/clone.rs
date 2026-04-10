@@ -87,7 +87,7 @@ fn clone_repo_popover_escape_closes_from_parent_input(cx: &mut gpui::TestAppCont
                 let focus = host
                     .clone_repo_parent_dir_input
                     .read_with(cx, |input, _| input.focus_handle());
-                window.focus(&focus);
+                window.focus(&focus, cx);
             });
         });
     });
@@ -146,7 +146,7 @@ fn clone_repo_popover_enter_from_parent_input_submits_and_closes(cx: &mut gpui::
                 let focus = host
                     .clone_repo_parent_dir_input
                     .read_with(cx, |input, _| input.focus_handle());
-                window.focus(&focus);
+                window.focus(&focus, cx);
             });
         });
     });
