@@ -119,7 +119,11 @@ impl GixRepo {
                         let new = if path.is_absolute() {
                             read_worktree_file_utf8_optional(&self.spec.workdir, path)?
                         } else {
-                            read_worktree_file_utf8_as_git_optional(&repo, &self.spec.workdir, path)?
+                            read_worktree_file_utf8_as_git_optional(
+                                &repo,
+                                &self.spec.workdir,
+                                path,
+                            )?
                         };
                         (old, new)
                     }
