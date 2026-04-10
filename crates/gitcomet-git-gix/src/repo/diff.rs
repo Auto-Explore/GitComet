@@ -12,7 +12,7 @@ use gitcomet_core::domain::{
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{ConflictFileStages, Result};
 use std::hash::{Hash, Hasher};
-use std::io::{BufReader, Write};
+use std::io::{BufReader, Read, Write};
 use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
@@ -25,6 +25,11 @@ impl GixRepo {
         match target {
             DiffTarget::WorkingTree { path, area } => {
                 cmd.arg("diff").arg("--no-ext-diff");
+                if matches!(area, DiffArea::Unstaged) {
+                    // Match the staged view on Windows by suppressing CR-at-EOL-only
+                    // worktree noise before content is normalized into the index.
+                    cmd.arg("--ignore-cr-at-eol");
+                }
                 if matches!(area, DiffArea::Staged) {
                     cmd.arg("--cached");
                 }
@@ -111,7 +116,11 @@ impl GixRepo {
                                 return Ok(Some(FileDiffText::new(path.clone(), ours, theirs)));
                             }
                         };
-                        let new = read_worktree_file_utf8_optional(&self.spec.workdir, path)?;
+                        let new = if path.is_absolute() {
+                            read_worktree_file_utf8_optional(&self.spec.workdir, path)?
+                        } else {
+                            read_worktree_file_utf8_as_git_optional(&repo, &self.spec.workdir, path)?
+                        };
                         (old, new)
                     }
                     DiffArea::Staged => {
@@ -503,6 +512,50 @@ fn read_worktree_file_utf8_optional(workdir: &Path, path: &Path) -> Result<Optio
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(Error::new(ErrorKind::Io(e.kind()))),
     }
+}
+
+fn read_worktree_file_utf8_as_git_optional(
+    repo: &gix::Repository,
+    workdir: &Path,
+    path: &Path,
+) -> Result<Option<String>> {
+    let full = workdir.join(path);
+    let metadata = match std::fs::metadata(&full) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(Error::new(ErrorKind::Io(err.kind()))),
+    };
+    if !metadata.is_file() {
+        return Ok(None);
+    }
+
+    let (mut pipeline, index) = repo.filter_pipeline(None).map_err(|e| {
+        Error::new(ErrorKind::Backend(format!(
+            "gix worktree filter pipeline: {e}"
+        )))
+    })?;
+    let file = std::fs::File::open(&full).map_err(io_err_to_error)?;
+    let normalized = pipeline.convert_to_git(file, path, &index).map_err(|e| {
+        Error::new(ErrorKind::Backend(format!(
+            "gix worktree-to-git conversion: {e}"
+        )))
+    })?;
+
+    let bytes = match normalized {
+        gix::filter::plumbing::pipeline::convert::ToGitOutcome::Unchanged(mut file) => {
+            let mut buf = Vec::new();
+            file.read_to_end(&mut buf).map_err(io_err_to_error)?;
+            buf
+        }
+        gix::filter::plumbing::pipeline::convert::ToGitOutcome::Process(mut file) => {
+            let mut buf = Vec::new();
+            file.read_to_end(&mut buf).map_err(io_err_to_error)?;
+            buf
+        }
+        gix::filter::plumbing::pipeline::convert::ToGitOutcome::Buffer(buf) => buf.to_vec(),
+    };
+
+    decode_utf8_bytes(bytes).map(Some)
 }
 
 fn read_worktree_file_bytes_optional(workdir: &Path, path: &Path) -> Result<Option<Vec<u8>>> {
