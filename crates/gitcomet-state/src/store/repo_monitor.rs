@@ -128,7 +128,11 @@ fn panic_payload_to_string(payload: Box<dyn Any + Send + 'static>) -> String {
     }
 }
 
-fn join_monitor_or_log(join: thread::JoinHandle<()>, repo_id: RepoId, context: &'static str) {
+pub(super) fn join_monitor_or_log(
+    join: thread::JoinHandle<()>,
+    repo_id: RepoId,
+    context: &'static str,
+) {
     if let Err(error) = join.join() {
         record_monitor_failure(
             MonitorFailureKind::Join,
@@ -182,19 +186,10 @@ pub(super) fn repo_monitor_ignore_lookup_stats() -> RepoMonitorIgnoreLookupStats
 }
 
 #[cfg(test)]
-pub(super) fn record_stop_send_failure_for_test(repo_id: RepoId, context: &'static str) {
+pub(super) fn record_stop_send_failure(repo_id: RepoId, context: &'static str) {
     let (tx, rx) = mpsc::channel::<MonitorMsg>();
     drop(rx);
     send_stop_or_log(&tx, repo_id, context);
-}
-
-#[cfg(test)]
-pub(super) fn join_monitor_for_test(
-    join: thread::JoinHandle<()>,
-    repo_id: RepoId,
-    context: &'static str,
-) {
-    join_monitor_or_log(join, repo_id, context);
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

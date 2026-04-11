@@ -58,7 +58,6 @@ fn patch_view_applies_syntax_highlighting_to_context_lines(cx: &mut gpui::TestAp
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(2);
     let workdir =
@@ -326,7 +325,6 @@ fn yaml_commit_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(81);
     let workdir = std::env::temp_dir().join(format!(
@@ -838,7 +836,6 @@ fn yaml_commit_patch_diff_keeps_consistent_highlighting_for_added_paths_and_keys
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(82);
     let workdir = std::env::temp_dir().join(format!(
@@ -1678,7 +1675,6 @@ fn yaml_commit_patch_diff_full_fixture_keeps_consistent_highlighting_across_file
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(85);
     let workdir = std::env::temp_dir().join(format!(
@@ -2591,7 +2587,6 @@ fn yaml_commit_patch_diff_matches_commit_file_diff_for_build_release_artifacts(
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
     let theme = cx.update(|_window, app| view.read(app).main_pane.read(app).theme);
     let yaml_string_color = rows::syntax_highlights_for_line(
         theme,
@@ -2994,7 +2989,6 @@ fn smoke_tests_diff_draw_stabilizes_without_notify_churn(cx: &mut gpui::TestAppC
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(46);
     let workdir = std::env::temp_dir().join(format!(
@@ -3116,7 +3110,6 @@ fn file_diff_cache_does_not_rebuild_when_rev_changes_with_identical_payload(
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(47);
     let workdir = std::env::temp_dir().join(format!(
@@ -3388,7 +3381,6 @@ fn file_image_diff_cache_does_not_rebuild_when_rev_changes_with_identical_payloa
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(147);
     let workdir = std::env::temp_dir().join(format!(
@@ -3457,7 +3449,6 @@ fn file_image_diff_cache_keeps_valid_svg_on_render_fast_path_across_rev_refreshe
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(148);
     let workdir = std::env::temp_dir().join(format!(
@@ -3539,7 +3530,6 @@ fn file_image_diff_cache_keeps_distinct_valid_svg_sides_on_render_fast_path(
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(149);
     let workdir = std::env::temp_dir().join(format!(
@@ -3597,7 +3587,6 @@ fn file_image_diff_cache_falls_back_to_cached_svg_paths_for_invalid_svg_payloads
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(150);
     let workdir = std::env::temp_dir().join(format!(
@@ -3651,7 +3640,6 @@ fn file_diff_view_renders_split_and_inline_syntax_from_real_documents(
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(49);
     let workdir = std::env::temp_dir().join(format!(
@@ -3855,7 +3843,6 @@ fn html_file_diff_renders_injected_attribute_syntax_from_real_documents(
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(77);
     let workdir = std::env::temp_dir().join(format!(
@@ -4065,7 +4052,6 @@ fn xml_file_diff_renders_syntax_highlights_from_real_documents(cx: &mut gpui::Te
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(79);
     let workdir = std::env::temp_dir().join(format!(
@@ -4674,8 +4660,6 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(80);
     let workdir = std::env::temp_dir().join(format!(
@@ -5461,7 +5445,6 @@ fn yaml_file_diff_fallback_matches_prepared_document_for_deployment_ci(
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
     let theme = cx.update(|_window, app| view.read(app).main_pane.read(app).theme);
 
     let repo_id = gitcomet_state::model::RepoId(180);
@@ -5994,7 +5977,6 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_build_release_artifacts(
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
     let theme = cx.update(|_window, app| view.read(app).main_pane.read(app).theme);
 
     let repo_id = gitcomet_state::model::RepoId(84);
@@ -6529,7 +6511,6 @@ fn yaml_file_diff_matches_prepared_document_for_build_release_artifacts(
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
     let theme = cx.update(|_window, app| view.read(app).main_pane.read(app).theme);
 
     let repo_id = gitcomet_state::model::RepoId(184);
@@ -6955,7 +6936,6 @@ fn yaml_commit_file_diff_transition_from_patch_clears_stale_split_cache(
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let theme = cx.update(|_window, app| view.read(app).main_pane.read(app).theme);
     let repo_id = gitcomet_state::model::RepoId(85);
@@ -7374,7 +7354,6 @@ fn yaml_same_content_rev_refresh_invalidates_cached_heuristic_file_diff_rows(
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let theme = cx.update(|_window, app| view.read(app).main_pane.read(app).theme);
     let repo_id = gitcomet_state::model::RepoId(87);

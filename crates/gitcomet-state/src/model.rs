@@ -13,6 +13,13 @@ use std::time::SystemTime;
 
 pub type Shared<T> = Arc<T>;
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct SidebarDataRequest {
+    pub worktrees: bool,
+    pub submodules: bool,
+    pub stashes: bool,
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct RepoLoadsInFlight {
     in_flight: u32,
@@ -498,6 +505,7 @@ pub struct RepoState {
     pub worktrees_rev: u64,
     pub submodules: Loadable<Arc<Vec<Submodule>>>,
     pub submodules_rev: u64,
+    pub sidebar_data_request: SidebarDataRequest,
     /// Invalidates cached branch-sidebar rows when any sidebar-relevant source changes.
     pub branch_sidebar_rev: u64,
 
@@ -563,6 +571,7 @@ impl RepoState {
             worktrees_rev: 0,
             submodules: Loadable::NotLoaded,
             submodules_rev: 0,
+            sidebar_data_request: SidebarDataRequest::default(),
             branch_sidebar_rev: 0,
             diff_state: DiffState::default(),
             conflict_state: ConflictState::default(),
@@ -701,6 +710,10 @@ impl RepoState {
                 self.stashes_rev,
             ])
         }
+    }
+
+    pub(crate) fn set_sidebar_data_request(&mut self, request: SidebarDataRequest) {
+        self.sidebar_data_request = request;
     }
 
     pub(crate) fn set_status(&mut self, status: Loadable<Shared<RepoStatus>>) {
@@ -1447,5 +1460,6 @@ mod tests {
         assert!(repo.conflict_state.conflict_session.is_none());
         assert!(!repo.conflict_state.conflict_hide_resolved);
         assert!(repo.detached_head_commit.is_none());
+        assert_eq!(repo.sidebar_data_request, SidebarDataRequest::default());
     }
 }

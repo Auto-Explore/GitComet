@@ -1,3 +1,4 @@
+use super::effects::append_ensure_sidebar_data_effects;
 use super::util::{
     SelectedConflictTarget, append_refresh_full_effects, append_refresh_primary_effects,
     append_start_conflict_target_reload, append_start_current_conflict_target_reload,
@@ -319,7 +320,10 @@ pub(super) fn fill_set_active_repo_inline(
     let extra_effect_capacity = usize::from(selected_diff_reload.is_some())
         + usize::from(persist_effect.is_some())
         + usize::from(changed)
-        + usize::from(changed && !use_full_refresh);
+        + usize::from(changed && !use_full_refresh)
+        + usize::from(repo_state.sidebar_data_request.worktrees)
+        + usize::from(repo_state.sidebar_data_request.submodules)
+        + usize::from(repo_state.sidebar_data_request.stashes);
     let base_effect_capacity = if use_full_refresh {
         refresh_full_effect_capacity()
     } else {
@@ -344,6 +348,7 @@ pub(super) fn fill_set_active_repo_inline(
     if changed {
         append_repo_switch_worktree_refresh_effect(repo_state, effects);
     }
+    append_ensure_sidebar_data_effects(repo_state, effects);
 
     if let Some(selected_diff_reload) = selected_diff_reload {
         match selected_diff_reload {
@@ -662,6 +667,9 @@ pub(super) fn repo_opened_ok(
         {
             repo_state.set_worktrees(Loadable::Loading);
             effects.push(Effect::LoadWorktrees { repo_id });
+        }
+        if should_refresh_worktrees {
+            append_ensure_sidebar_data_effects(repo_state, &mut effects);
         }
         return effects;
     }

@@ -213,12 +213,13 @@ impl RepoTabsBarView {
 
         self.repo_tab_spinner_delay_seq = self.repo_tab_spinner_delay_seq.wrapping_add(1);
         let seq = self.repo_tab_spinner_delay_seq;
+        let uses_spinner_delay = crate::ui_runtime::current().uses_repo_tab_spinner_delay();
         self.repo_tab_spinner_delay = Some(RepoTabSpinnerDelayState {
             repo_id,
-            show_spinner: cfg!(test),
+            show_spinner: !uses_spinner_delay,
         });
 
-        if cfg!(test) {
+        if !uses_spinner_delay {
             cx.notify();
             return;
         }

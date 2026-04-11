@@ -3650,7 +3650,10 @@ impl Render for TextInput {
             }
         }
 
-        if is_focused && self.cursor_blink_task.is_none() && !cfg!(test) {
+        if is_focused
+            && self.cursor_blink_task.is_none()
+            && crate::ui_runtime::current().uses_cursor_blink()
+        {
             let task = cx.spawn(
                 async move |input: gpui::WeakEntity<TextInput>, cx: &mut gpui::AsyncApp| {
                     loop {

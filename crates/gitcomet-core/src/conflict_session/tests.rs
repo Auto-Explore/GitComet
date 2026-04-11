@@ -356,7 +356,8 @@ end
 fn parse_regions_from_merged_text_replaces_existing_regions() {
     let mut session = make_session(vec![make_region(Some("b"), "o", "t")]);
     assert_eq!(session.total_regions(), 1);
-    let parsed = session.parse_regions_from_merged_text("plain text without markers\n");
+    let parsed =
+        session.parse_regions_from_shared_text(Arc::<str>::from("plain text without markers\n"));
     assert_eq!(parsed, 0);
     assert!(session.regions.is_empty());
 }

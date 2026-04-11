@@ -576,11 +576,6 @@ impl PopoverHost {
     }
 
     #[cfg(test)]
-    pub(in super::super) fn set_state_for_test(&mut self, state: Arc<AppState>) {
-        self.state = state;
-    }
-
-    #[cfg(test)]
     pub(in super::super) fn popover_kind_for_tests(&self) -> Option<PopoverKind> {
         self.popover.clone()
     }

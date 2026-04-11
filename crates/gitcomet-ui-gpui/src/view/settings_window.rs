@@ -2966,7 +2966,7 @@ mod tests {
 
         cx.update(|_window, app| {
             assert_eq!(
-                main_view.read(app).show_timezone_for_test(),
+                crate::view::test_support::show_timezone(main_view.read(app)),
                 next_show_timezone
             );
             assert_eq!(
@@ -3026,7 +3026,7 @@ mod tests {
 
         cx.update(|_window, app| {
             assert_eq!(
-                main_view.read(app).change_tracking_view_for_test(),
+                crate::view::test_support::change_tracking_view(main_view.read(app)),
                 next_view
             );
             assert_eq!(
@@ -3087,7 +3087,10 @@ mod tests {
         cx.run_until_parked();
 
         cx.update(|_window, app| {
-            assert_eq!(main_view.read(app).diff_scroll_sync_for_test(), next_mode);
+            assert_eq!(
+                crate::view::test_support::diff_scroll_sync(main_view.read(app)),
+                next_mode
+            );
             assert_eq!(
                 settings_window
                     .read_with(app, |settings, _cx| settings.diff_scroll_sync)

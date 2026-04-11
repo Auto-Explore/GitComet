@@ -34,10 +34,6 @@ fn recent_repository_picker_opens_and_initializes_search_input(cx: &mut gpui::Te
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
-    cx.update(|_window, app| {
-        view.update(app, |this, _cx| this.disable_poller_for_tests());
-    });
-
     cx.update(|window, app| {
         view.update(app, |this, cx| {
             this.open_recent_repository_picker(window, cx);
@@ -51,7 +47,10 @@ fn recent_repository_picker_opens_and_initializes_search_input(cx: &mut gpui::Te
 
     cx.update(|_window, app| {
         let popover_host = { view.read(app).popover_host.clone() };
-        assert!(view.read(app).is_popover_open(app));
+        assert!(crate::view::test_support::popover_is_open(
+            view.read(app),
+            app
+        ));
 
         let host = popover_host.read(app);
         assert!(matches!(
@@ -72,10 +71,6 @@ fn recent_repository_picker_reopen_clears_previous_search_text(cx: &mut gpui::Te
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
-
-    cx.update(|_window, app| {
-        view.update(app, |this, _cx| this.disable_poller_for_tests());
-    });
 
     cx.update(|window, app| {
         view.update(app, |this, cx| {
@@ -158,9 +153,6 @@ fn recent_repository_picker_selecting_recent_repo_does_not_panic_subprocess(
     let store_for_assert = store.clone();
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
-    cx.update(|_window, app| {
-        view.update(app, |this, _cx| this.disable_poller_for_tests());
-    });
 
     cx.update(|window, app| {
         view.update(app, |this, cx| {
@@ -192,7 +184,7 @@ fn recent_repository_picker_selecting_recent_repo_does_not_panic_subprocess(
 
     cx.update(|_window, app| {
         assert!(
-            !view.read(app).is_popover_open(app),
+            !crate::view::test_support::popover_is_open(view.read(app), app),
             "expected recent repository picker to close after selection"
         );
     });

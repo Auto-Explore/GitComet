@@ -3,7 +3,9 @@ use gitcomet_core::domain::LogScope;
 
 const WORKTREE_ICON_PATH: &str = "icons/git_worktree.svg";
 
-fn worktree_paths_by_branch(repo: &RepoState) -> HashMap<String, std::path::PathBuf> {
+pub(in crate::view) fn listed_workspace_paths_by_branch(
+    repo: &RepoState,
+) -> HashMap<String, std::path::PathBuf> {
     let Loadable::Ready(worktrees) = &repo.worktrees else {
         return HashMap::default();
     };
@@ -174,15 +176,12 @@ impl SidebarPaneView {
         let Some(repo_id) = this.active_repo_id() else {
             return Vec::new();
         };
-        let Some(rows) = this.branch_sidebar_rows_cached() else {
+        let Some(presentation) = this.branch_sidebar_presentation_cached() else {
             return Vec::new();
         };
+        let rows = presentation.rows;
+        let workspace_badges = presentation.workspace_badges;
         let repo_workdir = this.active_repo().map(|r| r.spec.workdir.clone());
-        let worktree_paths_by_branch = this
-            .active_repo()
-            .map(worktree_paths_by_branch)
-            .unwrap_or_default();
-        let active_workspace_paths_by_branch = this.active_workspace_paths_by_branch();
         let theme = this.theme;
         let icon_primary = theme.colors.accent;
         let icon_muted = with_alpha(theme.colors.accent, if theme.is_dark { 0.72 } else { 0.82 });
@@ -488,6 +487,7 @@ impl SidebarPaneView {
 
                     div()
                         .id(("stash_section", ix))
+                        .debug_selector(move || format!("stash_section_{ix}"))
                         .relative()
                         .h(px(24.0))
                         .w_full()
@@ -760,6 +760,7 @@ impl SidebarPaneView {
 
                     div()
                         .id(("worktrees_section", ix))
+                        .debug_selector(move || format!("worktrees_section_{ix}"))
                         .relative()
                         .h(px(24.0))
                         .w_full()
@@ -1049,6 +1050,7 @@ impl SidebarPaneView {
 
                     div()
                         .id(("submodules_section", ix))
+                        .debug_selector(move || format!("submodules_section_{ix}"))
                         .relative()
                         .h(px(24.0))
                         .w_full()
@@ -1483,16 +1485,12 @@ impl SidebarPaneView {
                         super::super::branch_sidebar::branch_sidebar_branch_label(name.as_ref())
                             .to_owned()
                             .into();
-                    let workspace_path = if section == BranchSection::Local {
-                        worktree_paths_by_branch.get(name.as_ref()).cloned()
-                    } else {
-                        None
-                    };
-                    let active_workspace_path = if section == BranchSection::Local {
-                        active_workspace_paths_by_branch.get(name.as_ref()).cloned()
-                    } else {
-                        None
-                    };
+                    let workspace_path = (section == BranchSection::Local)
+                        .then(|| workspace_badges.listed_path(name.as_ref()).cloned())
+                        .flatten();
+                    let active_workspace_path = (section == BranchSection::Local)
+                        .then(|| workspace_badges.active_path(name.as_ref()).cloned())
+                        .flatten();
                     let workspace_badge_path = branch_workspace_badge_path(
                         workspace_path.as_deref(),
                         active_workspace_path.as_deref(),
@@ -1742,6 +1740,7 @@ impl SidebarPaneView {
                         right = right.child(
                             div()
                                 .id(("branch_workspace_badge", ix))
+                                .debug_selector(move || format!("branch_workspace_badge_{ix}"))
                                 .flex()
                                 .items_center()
                                 .gap(px(3.0))
@@ -2211,6 +2210,16 @@ mod tests {
         }
     }
 
+    fn sync_view_for_tests(cx: &mut gpui::VisualTestContext, view: &gpui::Entity<GitCometView>) {
+        cx.update(|window, app| {
+            view.update(app, |this, cx| {
+                crate::view::test_support::sync_store_snapshot(this, cx)
+            });
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+    }
+
     fn commit_id(id: &str) -> CommitId {
         CommitId(id.into())
     }
@@ -2226,7 +2235,7 @@ mod tests {
     }
 
     #[test]
-    fn worktree_paths_by_branch_includes_closed_worktrees() {
+    fn listed_workspace_paths_by_branch_includes_closed_worktrees() {
         let mut repo = RepoState::new_opening(
             RepoId(1),
             RepoSpec {
@@ -2254,7 +2263,7 @@ mod tests {
             },
         ]));
 
-        let paths = worktree_paths_by_branch(&repo);
+        let paths = listed_workspace_paths_by_branch(&repo);
 
         assert_eq!(
             paths.get("feature"),
@@ -2265,7 +2274,7 @@ mod tests {
     }
 
     #[test]
-    fn worktree_paths_by_branch_prefers_first_branch_match() {
+    fn listed_workspace_paths_by_branch_prefers_first_branch_match() {
         let mut repo = RepoState::new_opening(
             RepoId(1),
             RepoSpec {
@@ -2287,7 +2296,7 @@ mod tests {
             },
         ]));
 
-        let paths = worktree_paths_by_branch(&repo);
+        let paths = listed_workspace_paths_by_branch(&repo);
 
         assert_eq!(
             paths.get("feature/shared"),
@@ -2766,6 +2775,7 @@ mod tests {
         });
 
         wait_until(cx, "history view active repo", |cx| {
+            sync_view_for_tests(cx, &view);
             cx.update(|_window, app| {
                 let (sidebar_pane, main_pane) = {
                     let root = view.read(app);
@@ -2779,6 +2789,7 @@ mod tests {
             })
         });
 
+        sync_view_for_tests(cx, &view);
         let sidebar_pane = cx.update(|_window, app| view.read(app).sidebar_pane.clone());
         cx.update(|window, app| {
             sidebar_pane.update(app, |pane, cx| {

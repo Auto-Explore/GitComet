@@ -1,4 +1,4 @@
-use crate::model::{ConflictFileLoadMode, RepoId};
+use crate::model::{ConflictFileLoadMode, RepoId, SidebarDataRequest};
 use gitcomet_core::conflict_session::ConflictSession;
 use gitcomet_core::domain::*;
 use gitcomet_core::error::Error;
@@ -130,6 +130,10 @@ pub enum Msg {
     },
     ClearDiffSelection {
         repo_id: RepoId,
+    },
+    EnsureSidebarData {
+        repo_id: RepoId,
+        request: SidebarDataRequest,
     },
     LoadStashes {
         repo_id: RepoId,

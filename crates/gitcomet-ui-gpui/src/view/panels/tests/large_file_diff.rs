@@ -8,7 +8,6 @@ fn large_file_diff_keeps_prepared_syntax_documents_above_old_line_gate(
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(53);
     let workdir = std::env::temp_dir().join(format!(
@@ -104,7 +103,6 @@ fn oversized_json_file_diff_uses_visible_line_fallback_without_prepared_syntax_d
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(82);
     let workdir = std::env::temp_dir().join(format!(
@@ -335,7 +333,6 @@ fn minified_json_file_diff_streams_visible_slices_and_inline_search(cx: &mut gpu
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(92);
     let workdir = std::env::temp_dir().join(format!(
@@ -638,7 +635,6 @@ fn split_file_diff_scroll_sync_matrix_covers_all_modes_and_axes(cx: &mut gpui::T
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(214);
     let workdir = std::env::temp_dir().join(format!(
@@ -735,7 +731,10 @@ fn split_file_diff_scroll_sync_matrix_covers_all_modes_and_axes(cx: &mut gpui::T
     for mode in ALL_DIFF_SCROLL_SYNC_MODES {
         set_diff_scroll_sync_for_test(cx, &view, mode);
         cx.update(|_window, app| {
-            assert_eq!(view.read(app).diff_scroll_sync_for_test(), mode);
+            assert_eq!(
+                crate::view::test_support::diff_scroll_sync(view.read(app)),
+                mode
+            );
         });
 
         for axis in ScrollSyncAxis::ALL {
@@ -839,7 +838,6 @@ fn minified_json_file_diff_partial_copy_uses_streamed_inline_row_source(
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(193);
     let workdir = std::env::temp_dir().join(format!(
@@ -930,7 +928,6 @@ fn minified_json_file_diff_context_menu_copy_uses_streamed_inline_row_source(
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(194);
     let workdir = std::env::temp_dir().join(format!(
@@ -1028,7 +1025,6 @@ fn minified_json_file_diff_split_partial_copy_uses_streamed_row_source(
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(195);
     let workdir = std::env::temp_dir().join(format!(
@@ -1118,7 +1114,6 @@ fn large_file_diff_renders_plain_text_then_upgrades_after_background_syntax(
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(61);
     let workdir = std::env::temp_dir().join(format!(
@@ -1385,7 +1380,6 @@ fn edited_large_file_diff_reparses_incrementally_in_background_after_timeout(
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(64);
     let workdir = std::env::temp_dir().join(format!(
@@ -1790,7 +1784,6 @@ fn file_diff_background_left_syntax_upgrade_preserves_right_cached_rows(
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(65);
     let workdir = std::env::temp_dir().join(format!(

@@ -1,5 +1,5 @@
 use super::*;
-use crate::model::RepoLoadsInFlight;
+use crate::model::{RepoLoadsInFlight, SidebarDataRequest};
 
 fn mark_repo_switch_secondary_metadata_ready(repo: &mut RepoState) {
     repo.branches = Loadable::Ready(Arc::new(Vec::new()));
@@ -32,6 +32,35 @@ fn has_worktree_refresh_effect(effects: &[Effect], repo_id: RepoId) -> bool {
             Effect::LoadWorktrees { repo_id: candidate } if *candidate == repo_id
         )
     })
+}
+
+fn has_submodule_load_effect(effects: &[Effect], repo_id: RepoId) -> bool {
+    effects.iter().any(|effect| {
+        matches!(
+            effect,
+            Effect::LoadSubmodules { repo_id: candidate } if *candidate == repo_id
+        )
+    })
+}
+
+fn has_stash_load_effect(effects: &[Effect], repo_id: RepoId) -> bool {
+    effects.iter().any(|effect| {
+        matches!(
+            effect,
+            Effect::LoadStashes {
+                repo_id: candidate,
+                limit: 50
+            } if *candidate == repo_id
+        )
+    })
+}
+
+fn has_effect_for_repo(
+    effects: &[Effect],
+    repo_id: RepoId,
+    matches_effect: impl Fn(&Effect, RepoId) -> bool,
+) -> bool {
+    effects.iter().any(|effect| matches_effect(effect, repo_id))
 }
 
 fn mark_repo_open_ready(
@@ -1147,6 +1176,173 @@ fn pre_open_submodule_lazy_load_can_retry_after_repo_opened() {
 }
 
 #[test]
+fn pre_open_stash_lazy_load_can_retry_after_repo_opened() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo")),
+    );
+
+    let repo_id = RepoId(1);
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::LoadStashes { repo_id },
+    );
+    assert!(effects.is_empty());
+    assert!(matches!(state.repos[0].stashes, Loadable::NotLoaded));
+    assert!(
+        !state.repos[0]
+            .loads_in_flight
+            .is_in_flight(RepoLoadsInFlight::STASHES)
+    );
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            repo_id,
+            spec: RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+            repo: Arc::new(DummyRepo::new("/tmp/repo")),
+        }),
+    );
+
+    assert!(!effects.iter().any(|effect| matches!(
+        effect,
+        Effect::LoadStashes {
+            repo_id: rid,
+            limit: 50
+        } if *rid == repo_id
+    )));
+    assert!(matches!(state.repos[0].stashes, Loadable::NotLoaded));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::LoadStashes { repo_id },
+    );
+    assert!(effects.iter().any(|effect| matches!(
+        effect,
+        Effect::LoadStashes {
+            repo_id: rid,
+            limit: 50
+        } if *rid == repo_id
+    )));
+    assert!(state.repos[0].stashes.is_loading());
+}
+
+#[test]
+fn ensure_sidebar_data_retries_requested_sections_after_repo_opened() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo")),
+    );
+
+    let repo_id = RepoId(1);
+    let request = SidebarDataRequest {
+        worktrees: true,
+        submodules: true,
+        stashes: true,
+    };
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::EnsureSidebarData { repo_id, request },
+    );
+    assert!(effects.is_empty());
+    assert_eq!(state.repos[0].sidebar_data_request, request);
+    assert!(matches!(state.repos[0].worktrees, Loadable::NotLoaded));
+    assert!(matches!(state.repos[0].submodules, Loadable::NotLoaded));
+    assert!(matches!(state.repos[0].stashes, Loadable::NotLoaded));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            repo_id,
+            spec: RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+            repo: Arc::new(DummyRepo::new("/tmp/repo")),
+        }),
+    );
+
+    assert!(has_worktree_refresh_effect(&effects, repo_id));
+    assert!(has_submodule_load_effect(&effects, repo_id));
+    assert!(has_stash_load_effect(&effects, repo_id));
+    assert!(state.repos[0].worktrees.is_loading());
+    assert!(state.repos[0].submodules.is_loading());
+    assert!(state.repos[0].stashes.is_loading());
+}
+
+#[test]
+fn set_active_repo_replays_stored_sidebar_data_request() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/repo1");
+    open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/repo2");
+
+    let repo1 = RepoId(1);
+    let repo2 = RepoId(2);
+    assert_eq!(state.active_repo, Some(repo2));
+
+    let request = SidebarDataRequest {
+        worktrees: true,
+        submodules: true,
+        stashes: true,
+    };
+    let repo1_state = state
+        .repos
+        .iter_mut()
+        .find(|repo| repo.id == repo1)
+        .expect("repo1 exists");
+    repo1_state.set_sidebar_data_request(request);
+    repo1_state.set_worktrees(Loadable::NotLoaded);
+    repo1_state.set_submodules(Loadable::NotLoaded);
+    repo1_state.set_stashes(Loadable::NotLoaded);
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SetActiveRepo { repo_id: repo1 },
+    );
+
+    assert_eq!(state.active_repo, Some(repo1));
+    assert!(has_worktree_refresh_effect(&effects, repo1));
+    assert!(has_submodule_load_effect(&effects, repo1));
+    assert!(has_stash_load_effect(&effects, repo1));
+    let repo1_state = state
+        .repos
+        .iter()
+        .find(|repo| repo.id == repo1)
+        .expect("repo1 exists");
+    assert!(repo1_state.worktrees.is_loading());
+    assert!(repo1_state.submodules.is_loading());
+    assert!(repo1_state.stashes.is_loading());
+}
+
+#[test]
 fn set_active_repo_refreshes_repo_state_and_selected_diff() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);
@@ -1652,22 +1848,97 @@ fn repo_opened_ok_sets_loading_and_emits_refresh_effects() {
         repo_state.history_state.blame,
         Loadable::NotLoaded
     ));
-    assert!(matches!(
-        effects.as_slice(),
-        [
-            Effect::LoadHeadBranch { .. },
-            Effect::LoadUpstreamDivergence { .. },
-            Effect::LoadStatus { .. },
-            Effect::LoadLog { .. },
-            Effect::LoadBranches { .. },
-            Effect::LoadTags { .. },
-            Effect::LoadRemoteTags { .. },
-            Effect::LoadRemotes { .. },
-            Effect::LoadRemoteBranches { .. },
-            Effect::LoadRebaseAndMergeState { .. },
-            Effect::LoadWorktrees { .. },
-        ]
+    assert!(has_effect_for_repo(
+        &effects,
+        RepoId(1),
+        |effect, repo_id| {
+            matches!(effect, Effect::LoadHeadBranch { repo_id: candidate } if *candidate == repo_id)
+        }
     ));
+    assert!(has_effect_for_repo(
+        &effects,
+        RepoId(1),
+        |effect, repo_id| {
+            matches!(
+                effect,
+                Effect::LoadUpstreamDivergence {
+                    repo_id: candidate
+                } if *candidate == repo_id
+            )
+        }
+    ));
+    assert!(has_effect_for_repo(
+        &effects,
+        RepoId(1),
+        |effect, repo_id| {
+            matches!(effect, Effect::LoadStatus { repo_id: candidate } if *candidate == repo_id)
+        }
+    ));
+    assert!(has_effect_for_repo(
+        &effects,
+        RepoId(1),
+        |effect, repo_id| {
+            matches!(effect, Effect::LoadLog { repo_id: candidate, .. } if *candidate == repo_id)
+        }
+    ));
+    assert!(has_effect_for_repo(
+        &effects,
+        RepoId(1),
+        |effect, repo_id| {
+            matches!(effect, Effect::LoadBranches { repo_id: candidate } if *candidate == repo_id)
+        }
+    ));
+    assert!(has_effect_for_repo(
+        &effects,
+        RepoId(1),
+        |effect, repo_id| {
+            matches!(effect, Effect::LoadTags { repo_id: candidate } if *candidate == repo_id)
+        }
+    ));
+    assert!(has_effect_for_repo(
+        &effects,
+        RepoId(1),
+        |effect, repo_id| {
+            matches!(
+                effect,
+                Effect::LoadRemoteTags {
+                    repo_id: candidate
+                } if *candidate == repo_id
+            )
+        }
+    ));
+    assert!(has_effect_for_repo(
+        &effects,
+        RepoId(1),
+        |effect, repo_id| {
+            matches!(effect, Effect::LoadRemotes { repo_id: candidate } if *candidate == repo_id)
+        }
+    ));
+    assert!(has_effect_for_repo(
+        &effects,
+        RepoId(1),
+        |effect, repo_id| {
+            matches!(
+                effect,
+                Effect::LoadRemoteBranches {
+                    repo_id: candidate
+                } if *candidate == repo_id
+            )
+        }
+    ));
+    assert!(has_effect_for_repo(
+        &effects,
+        RepoId(1),
+        |effect, repo_id| {
+            matches!(
+                effect,
+                Effect::LoadRebaseAndMergeState {
+                    repo_id: candidate
+                } if *candidate == repo_id
+            )
+        }
+    ));
+    assert!(has_worktree_refresh_effect(&effects, RepoId(1)));
 }
 
 #[test]

@@ -600,10 +600,10 @@ impl MainPaneView {
                     };
                     build_single_markdown_preview_document(source_text.as_ref())
                 };
-                let result = if cfg!(test) {
-                    build_preview()
-                } else {
+                let result = if crate::ui_runtime::current().uses_background_compute() {
                     smol::unblock(build_preview).await
+                } else {
+                    build_preview()
                 };
 
                 let _ = view.update(cx, |this, cx| {
@@ -678,7 +678,7 @@ impl MainPaneView {
         if same_path_source_refresh {
             let blocked_rev = self.worktree_preview_content_rev;
             self.worktree_preview_cache_write_blocked_until_rev = Some(blocked_rev);
-            if cfg!(test) {
+            if !crate::ui_runtime::current().uses_background_compute() {
                 if self.worktree_preview_cache_write_blocked_until_rev == Some(blocked_rev) {
                     self.worktree_preview_cache_write_blocked_until_rev = None;
                 }
@@ -805,11 +805,12 @@ impl MainPaneView {
                                 None,
                             )
                         };
-                        let parsed_document = if cfg!(test) {
-                            prepare_document()
-                        } else {
-                            smol::unblock(prepare_document).await
-                        };
+                        let parsed_document =
+                            if crate::ui_runtime::current().uses_background_compute() {
+                                smol::unblock(prepare_document).await
+                            } else {
+                                prepare_document()
+                            };
 
                         let _ = view.update(cx, |this, cx| {
                             let Some(parsed_document) = parsed_document else {
@@ -1024,10 +1025,10 @@ impl MainPaneView {
                         )
                     }),
                 };
-                let parsed_documents = if cfg!(test) {
-                    prepare_documents()
-                } else {
+                let parsed_documents = if crate::ui_runtime::current().uses_background_compute() {
                     smol::unblock(prepare_documents).await
+                } else {
+                    prepare_documents()
                 };
 
                 let _ = view.update(cx, |this, cx| {
@@ -1169,10 +1170,10 @@ impl MainPaneView {
         cx.spawn(
             async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
                 let rebuild_cache = move || build_file_diff_cache_rebuild(file.as_ref(), &workdir);
-                let rebuild = if cfg!(test) {
-                    rebuild_cache()
-                } else {
+                let rebuild = if crate::ui_runtime::current().uses_background_compute() {
                     smol::unblock(rebuild_cache).await
+                } else {
+                    rebuild_cache()
                 };
 
                 let _ = view.update(cx, |this, cx| {
@@ -1332,10 +1333,10 @@ impl MainPaneView {
                         .to_string()
                     })
                 };
-                let result = if cfg!(test) {
-                    build_preview()
-                } else {
+                let result = if crate::ui_runtime::current().uses_background_compute() {
                     smol::unblock(build_preview).await
+                } else {
+                    build_preview()
                 };
 
                 let _ = view.update(cx, |this, cx| {

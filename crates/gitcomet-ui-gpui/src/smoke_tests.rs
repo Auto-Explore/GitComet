@@ -1036,6 +1036,145 @@ impl GitBackend for TestBackend {
     }
 }
 
+struct SlowSubmoduleBackend;
+
+impl GitBackend for SlowSubmoduleBackend {
+    fn open(&self, workdir: &Path) -> Result<Arc<dyn GitRepository>> {
+        Ok(Arc::new(SlowSubmoduleRepo {
+            spec: RepoSpec {
+                workdir: workdir.to_path_buf(),
+            },
+        }))
+    }
+}
+
+struct SlowSubmoduleRepo {
+    spec: RepoSpec,
+}
+
+impl SlowSubmoduleRepo {
+    fn unsupported<T>() -> Result<T> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "Slow submodule test repo does not implement this operation",
+        )))
+    }
+}
+
+impl GitRepository for SlowSubmoduleRepo {
+    fn spec(&self) -> &RepoSpec {
+        &self.spec
+    }
+
+    fn log_head_page(&self, _limit: usize, _cursor: Option<&LogCursor>) -> Result<LogPage> {
+        Self::unsupported()
+    }
+
+    fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
+        Self::unsupported()
+    }
+
+    fn reflog_head(&self, _limit: usize) -> Result<Vec<ReflogEntry>> {
+        Self::unsupported()
+    }
+
+    fn current_branch(&self) -> Result<String> {
+        Self::unsupported()
+    }
+
+    fn list_branches(&self) -> Result<Vec<Branch>> {
+        Self::unsupported()
+    }
+
+    fn list_remotes(&self) -> Result<Vec<Remote>> {
+        Self::unsupported()
+    }
+
+    fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
+        Self::unsupported()
+    }
+
+    fn status(&self) -> Result<RepoStatus> {
+        Self::unsupported()
+    }
+
+    fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
+        Self::unsupported()
+    }
+
+    fn create_branch(&self, _name: &str, _target: &CommitId) -> Result<()> {
+        Self::unsupported()
+    }
+
+    fn delete_branch(&self, _name: &str) -> Result<()> {
+        Self::unsupported()
+    }
+
+    fn checkout_branch(&self, _name: &str) -> Result<()> {
+        Self::unsupported()
+    }
+
+    fn checkout_commit(&self, _id: &CommitId) -> Result<()> {
+        Self::unsupported()
+    }
+
+    fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
+        Self::unsupported()
+    }
+
+    fn revert(&self, _id: &CommitId) -> Result<()> {
+        Self::unsupported()
+    }
+
+    fn list_submodules(&self) -> Result<Vec<Submodule>> {
+        std::thread::sleep(Duration::from_millis(250));
+        Ok(Vec::new())
+    }
+
+    fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
+        Self::unsupported()
+    }
+
+    fn stash_list(&self) -> Result<Vec<StashEntry>> {
+        Self::unsupported()
+    }
+
+    fn stash_apply(&self, _index: usize) -> Result<()> {
+        Self::unsupported()
+    }
+
+    fn stash_drop(&self, _index: usize) -> Result<()> {
+        Self::unsupported()
+    }
+
+    fn stage(&self, _paths: &[&Path]) -> Result<()> {
+        Self::unsupported()
+    }
+
+    fn unstage(&self, _paths: &[&Path]) -> Result<()> {
+        Self::unsupported()
+    }
+
+    fn commit(&self, _message: &str) -> Result<()> {
+        Self::unsupported()
+    }
+
+    fn fetch_all(&self) -> Result<()> {
+        Self::unsupported()
+    }
+
+    fn pull(&self, _mode: PullMode) -> Result<()> {
+        Self::unsupported()
+    }
+
+    fn push(&self) -> Result<()> {
+        Self::unsupported()
+    }
+
+    fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {
+        Self::unsupported()
+    }
+}
+
 struct SlowStashBackend;
 
 impl GitBackend for SlowStashBackend {
@@ -1187,6 +1326,10 @@ fn stash_spinner_selector(repo_id: RepoId) -> &'static str {
     Box::leak(format!("stash_spinner_{}", repo_id.0).into_boxed_str())
 }
 
+fn debug_selector(prefix: &str, ix: usize) -> &'static str {
+    Box::leak(format!("{prefix}_{ix}").into_boxed_str())
+}
+
 fn wait_for_repo_count(store: &AppStore, expected: usize) -> Arc<gitcomet_state::model::AppState> {
     let deadline = Instant::now() + Duration::from_secs(1);
     loop {
@@ -1238,22 +1381,33 @@ fn wait_for_repo_open(store: &AppStore, repo_id: RepoId) {
     }
 }
 
+fn wait_until(description: &str, ready: impl Fn() -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(1);
+    loop {
+        if ready() {
+            return;
+        }
+        if Instant::now() >= deadline {
+            panic!("timed out waiting for {description}");
+        }
+        std::thread::yield_now();
+    }
+}
+
 fn seed_workspace_repo(
     cx: &mut gpui::VisualTestContext,
     store: &AppStore,
     view: gpui::Entity<crate::view::GitCometView>,
     path: PathBuf,
 ) {
-    cx.update(|_window, app| {
-        view.update(app, |this, _cx| this.disable_poller_for_tests());
-    });
-
     store.dispatch(Msg::OpenRepo(path));
 
     let deadline = Instant::now() + Duration::from_secs(3);
     loop {
         cx.update(|window, app| {
-            view.update(app, |this, cx| this.sync_store_snapshot_for_tests(cx));
+            view.update(app, |this, cx| {
+                crate::view::test_support::sync_store_snapshot(this, cx)
+            });
             let _ = window.draw(app);
         });
         cx.run_until_parked();
@@ -1276,8 +1430,66 @@ fn sync_view_for_tests(
     view: &gpui::Entity<crate::view::GitCometView>,
 ) {
     cx.update(|window, app| {
-        view.update(app, |this, cx| this.sync_store_snapshot_for_tests(cx));
+        view.update(app, |this, cx| {
+            crate::view::test_support::sync_store_snapshot(this, cx)
+        });
         let _ = window.draw(app);
+    });
+}
+
+fn find_debug_index(
+    cx: &mut gpui::VisualTestContext,
+    prefix: &str,
+    max_ix: usize,
+) -> Option<usize> {
+    (0..max_ix).find(|ix| cx.debug_bounds(debug_selector(prefix, *ix)).is_some())
+}
+
+fn wait_for_debug_index(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<crate::view::GitCometView>,
+    prefix: &str,
+    max_ix: usize,
+) -> usize {
+    let deadline = Instant::now() + Duration::from_secs(1);
+    loop {
+        sync_view_for_tests(cx, view);
+
+        if let Some(ix) = find_debug_index(cx, prefix, max_ix) {
+            return ix;
+        }
+
+        if Instant::now() >= deadline {
+            panic!("timed out waiting for debug selector prefix {prefix}");
+        }
+
+        cx.run_until_parked();
+        std::thread::yield_now();
+    }
+}
+
+fn click_debug_selector(
+    cx: &mut gpui::VisualTestContext,
+    selector: &'static str,
+    click_count: usize,
+) {
+    let bounds = cx
+        .debug_bounds(selector)
+        .unwrap_or_else(|| panic!("expected debug selector {selector}"));
+    let center = bounds.center();
+    cx.simulate_mouse_move(center, None, Modifiers::default());
+    cx.simulate_event(MouseDownEvent {
+        position: center,
+        modifiers: Modifiers::default(),
+        button: MouseButton::Left,
+        click_count,
+        first_mouse: false,
+    });
+    cx.simulate_event(MouseUpEvent {
+        position: center,
+        modifiers: Modifiers::default(),
+        button: MouseButton::Left,
+        click_count,
     });
 }
 
@@ -1287,10 +1499,6 @@ fn restore_session_and_draw(
     view: gpui::Entity<crate::view::GitCometView>,
     repos: Vec<PathBuf>,
 ) -> Vec<RepoId> {
-    cx.update(|_window, app| {
-        view.update(app, |this, _cx| this.disable_poller_for_tests());
-    });
-
     store.dispatch(Msg::RestoreSession {
         open_repos: repos.clone(),
         active_repo: repos.first().cloned(),
@@ -1516,7 +1724,7 @@ fn worktrees_section_shows_spinner_while_removing_worktree(cx: &mut gpui::TestAp
 
 #[gpui::test]
 fn submodules_section_shows_spinner_while_loading(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (store, events) = AppStore::new(Arc::new(SlowSubmoduleBackend));
     let store_for_test = store.clone();
     let (_view, cx) = cx.add_window_view(|window, cx| {
         crate::view::GitCometView::new(store, events, None, window, cx)
@@ -1529,15 +1737,27 @@ fn submodules_section_shows_spinner_while_loading(cx: &mut gpui::TestAppContext)
     let repo_ids =
         restore_session_and_draw(cx, &store_for_test, _view.clone(), vec![base.join("repo1")]);
     let repo_id = repo_ids[0];
+    wait_for_repo_open(&store_for_test, repo_id);
 
-    store_for_test.dispatch(Msg::LoadSubmodules { repo_id });
+    let section_ix = wait_for_debug_index(cx, &_view, "submodules_section", 64);
+    let section_selector = debug_selector("submodules_section", section_ix);
+    click_debug_selector(cx, section_selector, 1);
 
     let selector = submodules_spinner_selector(repo_id);
     let deadline = Instant::now() + Duration::from_secs(1);
     loop {
         sync_view_for_tests(cx, &_view);
 
-        if cx.debug_bounds(selector).is_some() {
+        let repo_requested = store_for_test
+            .snapshot()
+            .repos
+            .iter()
+            .find(|repo| repo.id == repo_id)
+            .is_some_and(|repo| {
+                repo.sidebar_data_request.submodules && matches!(repo.submodules, Loadable::Loading)
+            });
+
+        if repo_requested && cx.debug_bounds(selector).is_some() {
             break;
         }
 
@@ -1567,14 +1787,25 @@ fn stash_section_shows_spinner_while_loading(cx: &mut gpui::TestAppContext) {
     let repo_id = repo_ids[0];
     wait_for_repo_open(&store_for_test, repo_id);
 
-    store_for_test.dispatch(Msg::LoadStashes { repo_id });
+    let section_ix = wait_for_debug_index(cx, &_view, "stash_section", 64);
+    let section_selector = debug_selector("stash_section", section_ix);
+    click_debug_selector(cx, section_selector, 1);
 
     let selector = stash_spinner_selector(repo_id);
     let deadline = Instant::now() + Duration::from_secs(1);
     loop {
         sync_view_for_tests(cx, &_view);
 
-        if cx.debug_bounds(selector).is_some() {
+        let repo_requested = store_for_test
+            .snapshot()
+            .repos
+            .iter()
+            .find(|repo| repo.id == repo_id)
+            .is_some_and(|repo| {
+                repo.sidebar_data_request.stashes && matches!(repo.stashes, Loadable::Loading)
+            });
+
+        if repo_requested && cx.debug_bounds(selector).is_some() {
             break;
         }
 
@@ -1585,6 +1816,64 @@ fn stash_section_shows_spinner_while_loading(cx: &mut gpui::TestAppContext) {
         cx.run_until_parked();
         std::thread::yield_now();
     }
+}
+
+#[gpui::test]
+fn listed_workspace_badge_double_click_opens_closed_repo_tab(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(SlowSubmoduleBackend));
+    let store_for_test = store.clone();
+    let (_view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let base = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_badge_open_{}",
+        std::process::id()
+    ));
+    let repo_ids =
+        restore_session_and_draw(cx, &store_for_test, _view.clone(), vec![base.join("repo1")]);
+    let repo_id = repo_ids[0];
+    wait_for_repo_open(&store_for_test, repo_id);
+
+    let linked_repo = base.join("repo-feature");
+    store_for_test.dispatch(Msg::Internal(
+        gitcomet_state::msg::InternalMsg::BranchesLoaded {
+            repo_id,
+            result: Ok(vec![Branch {
+                name: "feature/workspace".to_string(),
+                target: CommitId("deadbeef".into()),
+                upstream: None,
+                divergence: None,
+            }]),
+        },
+    ));
+    store_for_test.dispatch(Msg::Internal(
+        gitcomet_state::msg::InternalMsg::WorktreesLoaded {
+            repo_id,
+            result: Ok(vec![Worktree {
+                path: linked_repo.clone(),
+                head: None,
+                branch: Some("feature/workspace".to_string()),
+                detached: false,
+            }]),
+        },
+    ));
+
+    let badge_ix = wait_for_debug_index(cx, &_view, "branch_workspace_badge", 64);
+    let badge_selector = debug_selector("branch_workspace_badge", badge_ix);
+    click_debug_selector(cx, badge_selector, 2);
+
+    wait_until("linked repository tab to open from badge", || {
+        let snapshot = store_for_test.snapshot();
+        snapshot
+            .repos
+            .iter()
+            .any(|repo| repo.spec.workdir == linked_repo)
+            && snapshot
+                .active_repo
+                .and_then(|active_repo| snapshot.repos.iter().find(|repo| repo.id == active_repo))
+                .is_some_and(|repo| repo.spec.workdir == linked_repo)
+    });
 }
 
 struct PanelLayoutTestView {
@@ -1884,7 +2173,7 @@ fn popover_is_clickable_above_content(cx: &mut gpui::TestAppContext) {
 
     cx.update(|_window, app| {
         assert!(
-            !view.read(app).is_popover_open(app),
+            !crate::view::test_support::popover_is_open(view.read(app), app),
             "expected popover to close on click"
         );
     });
@@ -1922,7 +2211,7 @@ fn popover_closes_when_clicking_outside(cx: &mut gpui::TestAppContext) {
 
     cx.update(|_window, app| {
         assert!(
-            view.read(app).is_popover_open(app),
+            crate::view::test_support::popover_is_open(view.read(app), app),
             "expected popover to open"
         );
     });
@@ -1936,7 +2225,7 @@ fn popover_closes_when_clicking_outside(cx: &mut gpui::TestAppContext) {
 
     cx.update(|_window, app| {
         assert!(
-            !view.read(app).is_popover_open(app),
+            !crate::view::test_support::popover_is_open(view.read(app), app),
             "expected popover to close when clicking outside"
         );
     });
@@ -1985,7 +2274,7 @@ fn titlebar_hamburger_opens_app_menu_but_brand_pill_does_not(cx: &mut gpui::Test
     });
     cx.update(|_window, app| {
         assert!(
-            !view.read(app).is_popover_open(app),
+            !crate::view::test_support::popover_is_open(view.read(app), app),
             "expected titlebar brand pill click to leave the app menu closed"
         );
     });
@@ -2010,7 +2299,7 @@ fn titlebar_hamburger_opens_app_menu_but_brand_pill_does_not(cx: &mut gpui::Test
     });
     cx.update(|_window, app| {
         assert!(
-            view.read(app).is_popover_open(app),
+            crate::view::test_support::popover_is_open(view.read(app), app),
             "expected hamburger click to open the app menu"
         );
     });
@@ -2039,7 +2328,7 @@ fn titlebar_window_controls_update_tooltip_on_hover(cx: &mut gpui::TestAppContex
     cx.run_until_parked();
     cx.update(|_window, app| {
         assert_eq!(
-            view.read(app).tooltip_text_for_test(app),
+            crate::view::test_support::tooltip_text(view.read(app), app),
             Some("Minimize window".into())
         );
     });
@@ -2058,7 +2347,7 @@ fn titlebar_window_controls_update_tooltip_on_hover(cx: &mut gpui::TestAppContex
     cx.run_until_parked();
     cx.update(|_window, app| {
         assert_eq!(
-            view.read(app).tooltip_text_for_test(app),
+            crate::view::test_support::tooltip_text(view.read(app), app),
             Some(expected_max)
         );
     });
@@ -2070,7 +2359,7 @@ fn titlebar_window_controls_update_tooltip_on_hover(cx: &mut gpui::TestAppContex
     cx.run_until_parked();
     cx.update(|_window, app| {
         assert_eq!(
-            view.read(app).tooltip_text_for_test(app),
+            crate::view::test_support::tooltip_text(view.read(app), app),
             Some("Close window".into())
         );
     });
@@ -2078,7 +2367,10 @@ fn titlebar_window_controls_update_tooltip_on_hover(cx: &mut gpui::TestAppContex
     cx.simulate_mouse_move(gpui::point(px(120.0), px(18.0)), None, Modifiers::default());
     cx.run_until_parked();
     cx.update(|_window, app| {
-        assert_eq!(view.read(app).tooltip_text_for_test(app), None);
+        assert_eq!(
+            crate::view::test_support::tooltip_text(view.read(app), app),
+            None
+        );
     });
 }
 

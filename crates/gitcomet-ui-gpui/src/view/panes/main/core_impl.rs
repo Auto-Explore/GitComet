@@ -1331,7 +1331,7 @@ impl MainPaneView {
             return;
         }
 
-        if cfg!(test) {
+        if !crate::ui_runtime::current().uses_background_compute() {
             while self.apply_prepared_syntax_chunk_updates(cx) {
                 std::thread::sleep(std::time::Duration::from_millis(1));
             }
@@ -1511,10 +1511,10 @@ impl MainPaneView {
                         syntax_edit,
                     )
                 };
-                let parsed_document = if cfg!(test) {
-                    prepare_document()
-                } else {
+                let parsed_document = if crate::ui_runtime::current().uses_background_compute() {
                     smol::unblock(prepare_document).await
+                } else {
+                    prepare_document()
                 };
 
                 let _ = view.update(cx, |this, cx| {
@@ -1578,10 +1578,10 @@ impl MainPaneView {
                         None,
                     )
                 };
-                let parsed = if cfg!(test) {
-                    prepare_document()
-                } else {
+                let parsed = if crate::ui_runtime::current().uses_background_compute() {
                     smol::unblock(prepare_document).await
+                } else {
+                    prepare_document()
                 };
 
                 let _ = view.update(cx, |this, cx| {

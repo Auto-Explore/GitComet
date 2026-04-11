@@ -479,7 +479,7 @@ impl MainPaneView {
         let seq = self.file_image_diff_cache_seq;
         self.file_image_diff_cache_inflight = Some(seq);
 
-        if cfg!(test) {
+        if !crate::ui_runtime::current().uses_background_compute() {
             let rebuild = build_file_image_diff_cache_rebuild(file.as_ref(), &workdir);
             if self.file_image_diff_cache_inflight == Some(seq)
                 && self.file_image_diff_cache_repo_id == Some(repo_id)

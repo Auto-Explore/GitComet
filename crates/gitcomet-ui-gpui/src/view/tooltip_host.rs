@@ -84,7 +84,7 @@ impl TooltipHost {
         let anchor = self.last_mouse_pos;
         self.tooltip_pending_pos = Some(anchor);
 
-        if cfg!(test) {
+        if !crate::ui_runtime::current().uses_tooltip_delay() {
             self.tooltip_visible_text = Some(text);
             self.tooltip_visible_pos = Some(anchor);
             return;
@@ -155,7 +155,7 @@ impl TooltipHost {
         self.tooltip_pending_pos = Some(self.last_mouse_pos);
         self.tooltip_delay_seq = self.tooltip_delay_seq.wrapping_add(1);
 
-        if cfg!(test) {
+        if !crate::ui_runtime::current().uses_tooltip_delay() {
             self.tooltip_visible_text = Some(candidate);
             self.tooltip_visible_pos = self.tooltip_pending_pos;
             cx.notify();

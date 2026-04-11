@@ -21,7 +21,6 @@ fn large_conflict_bootstrap_trace_records_stage_counts(cx: &mut gpui::TestAppCon
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(161);
     let fixture = SyntheticLargeConflictFixture::new(
@@ -223,7 +222,6 @@ fn focused_mergetool_bootstrap_reuses_shared_text_arcs(cx: &mut gpui::TestAppCon
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(162);
     let workdir = std::env::temp_dir().join(format!(
@@ -353,7 +351,6 @@ fn svg_conflict_preview_rasterizes_off_the_ui_thread(cx: &mut gpui::TestAppConte
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(163);
     let workdir = std::env::temp_dir().join(format!(
@@ -504,7 +501,6 @@ fn conflict_resolver_input_lists_measure_later_long_rows_for_horizontal_scroll(
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(163);
     let workdir = std::env::temp_dir().join(format!(
@@ -724,7 +720,6 @@ fn conflict_resolver_output_gutter_tracks_output_scroll_when_diff_sync_is_disabl
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(163);
     let workdir = std::env::temp_dir().join(format!(
@@ -861,7 +856,6 @@ fn conflict_resolver_three_way_scroll_sync_matrix_covers_all_modes_and_axes(
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(164);
     let workdir = std::env::temp_dir().join(format!(
@@ -1123,7 +1117,6 @@ fn conflict_resolver_two_way_scroll_sync_matrix_covers_all_modes_and_axes(
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(165);
     let workdir = std::env::temp_dir().join(format!(
@@ -1764,7 +1757,6 @@ fn whole_file_conflict_bootstrap_uses_streamed_large_file_mode(cx: &mut gpui::Te
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(169);
     let fixture = SyntheticWholeFileConflictFixture::new(
@@ -1838,7 +1830,6 @@ fn whole_file_conflict_stage_anyway_uses_streamed_output_without_materializing(
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(172);
     let fixture = SyntheticWholeFileConflictFixture::new(
@@ -1921,7 +1912,6 @@ fn whole_file_conflict_switch_to_three_way_stays_fully_reviewable(cx: &mut gpui:
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(171);
     let fixture = SyntheticWholeFileConflictFixture::new(
@@ -1975,7 +1965,6 @@ fn whole_file_conflict_streamed_three_way_syntax_survives_view_mode_switch(
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(172);
     let fixture = SyntheticWholeFileConflictFixture::new(
@@ -2145,7 +2134,6 @@ fn three_way_view_survives_incomplete_line_syntax_fragments(cx: &mut gpui::TestA
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(173);
     let workdir = std::env::temp_dir().join(format!(
@@ -2273,7 +2261,6 @@ fn large_conflict_bootstrap_stays_streamed_for_huge_files(cx: &mut gpui::TestApp
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(162);
     let fixture = SyntheticLargeConflictFixture::new(
@@ -2440,7 +2427,6 @@ fn large_conflict_bootstrap_uses_streamed_split_index_for_dense_huge_files(
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(163);
     let fixture = SyntheticLargeConflictFixture::new(
@@ -2543,7 +2529,6 @@ fn large_conflict_three_way_sides_get_background_syntax_documents(cx: &mut gpui:
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(165);
     let fixture_line_count = rows::MAX_LINES_FOR_SYNTAX_HIGHLIGHTING + 101;
@@ -2738,7 +2723,6 @@ fn large_conflict_two_way_views_upgrade_to_prepared_document_syntax(cx: &mut gpu
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(166);
     let fixture_line_count = rows::MAX_LINES_FOR_SYNTAX_HIGHLIGHTING + 101;
@@ -3057,7 +3041,6 @@ fn conflict_compare_split_renderer_uses_streamed_visible_rows_for_large_conflict
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(176);
     let fixture = SyntheticWholeFileConflictFixture::new(
@@ -3159,7 +3142,6 @@ fn conflict_compare_split_renderer_uses_visible_projection_when_rows_are_hidden(
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(177);
     let workdir = std::env::temp_dir().join(format!(
@@ -3346,7 +3328,6 @@ fn very_large_whole_file_conflict_bootstrap_manual_regression_stays_streamed(
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(170);
     let fixture = SyntheticWholeFileConflictFixture::new(
@@ -3433,7 +3414,6 @@ fn very_large_conflict_bootstrap_manual_regression_stays_sparse(cx: &mut gpui::T
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(164);
     let fixture = SyntheticLargeConflictFixture::new(
@@ -3532,7 +3512,6 @@ fn large_conflict_bootstrap_populates_resolved_outline_in_background(
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(167);
     let fixture = SyntheticLargeConflictFixture::new(
@@ -3636,7 +3615,6 @@ fn large_conflict_two_way_resolved_outline_uses_indexed_sources_in_streamed_mode
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(168);
     let fixture = SyntheticLargeConflictFixture::new(
@@ -3728,7 +3706,6 @@ fn structured_conflict_edit_reuses_stashed_outline_base_while_background_recompu
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(168);
     let fixture = SyntheticLargeConflictFixture::new(
@@ -3935,7 +3912,6 @@ fn giant_two_way_paged_provider_generates_rows_on_demand(cx: &mut gpui::TestAppC
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(170);
     let fixture = SyntheticWholeFileConflictFixture::new(
@@ -4019,7 +3995,6 @@ fn giant_two_way_search_finds_text_in_middle_of_large_block(cx: &mut gpui::TestA
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(171);
     let fixture = SyntheticWholeFileConflictFixture::new(
@@ -4121,7 +4096,6 @@ fn giant_two_way_resync_rebuilds_split_index_after_manual_session_edit(
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(172);
     let fixture = SyntheticLargeConflictFixture::new(
@@ -4353,7 +4327,6 @@ fn large_conflict_resolved_output_renders_plain_text_then_upgrades_after_backgro
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(62);
     let workdir = std::env::temp_dir().join(format!(
@@ -4579,7 +4552,6 @@ fn edited_conflict_resolved_output_renders_plain_text_then_upgrades_after_backgr
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(63);
     let workdir = std::env::temp_dir().join(format!(

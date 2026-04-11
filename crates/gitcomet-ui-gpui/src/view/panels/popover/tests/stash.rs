@@ -6,10 +6,6 @@ fn stash_menu_has_apply_pop_and_drop_entries(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
-    cx.update(|_window, app| {
-        view.update(app, |this, _cx| this.disable_poller_for_tests());
-    });
-
     let repo_id = RepoId(8);
     let index = 3usize;
     let message = "WIP".to_string();
@@ -80,10 +76,6 @@ fn stash_menu_drop_action_opens_drop_confirm_popover(cx: &mut gpui::TestAppConte
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
-    cx.update(|_window, app| {
-        view.update(app, |this, _cx| this.disable_poller_for_tests());
-    });
-
     let repo_id = RepoId(9);
     let index = 1usize;
     let message = "Drop me".to_string();
@@ -132,7 +124,6 @@ fn stash_prompt_escape_cancels(cx: &mut gpui::TestAppContext) {
             crate::kit::Enter,
             Some("TextInput"),
         )]);
-        view.update(app, |this, _cx| this.disable_poller_for_tests());
         let _ = window.draw(app);
     });
 
@@ -205,7 +196,6 @@ fn stash_prompt_renders_shortcut_hints_and_separators(cx: &mut gpui::TestAppCont
         .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
 
     cx.update(|window, app| {
-        view.update(app, |this, _cx| this.disable_poller_for_tests());
         let _ = window.draw(app);
     });
 
@@ -248,7 +238,6 @@ fn stash_prompt_enter_stashes_and_closes(cx: &mut gpui::TestAppContext) {
             crate::kit::Enter,
             Some("TextInput"),
         )]);
-        view.update(app, |this, _cx| this.disable_poller_for_tests());
         let _ = window.draw(app);
     });
 
@@ -324,7 +313,6 @@ fn stash_prompt_enter_with_empty_input_does_not_close_or_stash(cx: &mut gpui::Te
             crate::kit::Enter,
             Some("TextInput"),
         )]);
-        view.update(app, |this, _cx| this.disable_poller_for_tests());
         let _ = window.draw(app);
     });
 
