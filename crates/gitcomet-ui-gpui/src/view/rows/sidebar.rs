@@ -2704,10 +2704,22 @@ mod tests {
 
     #[gpui::test]
     fn branch_reveal_routes_through_main_pane_and_selects_commit(cx: &mut gpui::TestAppContext) {
+        let _visual_guard = crate::test_support::lock_visual_test();
         let (store, events) = AppStore::new(Arc::new(BlockingBackend));
         let store_for_assert = store.clone();
         let (view, cx) =
             cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+        cx.update(|_window, app| {
+            view.update(app, |this, _cx| this.disable_poller_for_tests());
+        });
+
+        let sync_view_from_store = |cx: &mut gpui::VisualTestContext| {
+            cx.update(|window, app| {
+                view.update(app, |this, cx| this.sync_store_snapshot_for_tests(cx));
+                window.refresh();
+                let _ = window.draw(app);
+            });
+        };
 
         let repo_id = RepoId(1);
         let target = commit_id("main-tip");
@@ -2720,6 +2732,7 @@ mod tests {
             snapshot.active_repo == Some(repo_id)
                 && snapshot.repos.iter().any(|repo| repo.id == repo_id)
         });
+        sync_view_from_store(cx);
 
         store_for_assert.dispatch(Msg::Internal(InternalMsg::HeadBranchLoaded {
             repo_id,
@@ -2760,6 +2773,7 @@ mod tests {
                 && matches!(repo.log, Loadable::Ready(_))
                 && repo.diff_state.diff_target.is_some()
         });
+        sync_view_from_store(cx);
 
         wait_until(cx, "history view active repo", |cx| {
             cx.update(|_window, app| {

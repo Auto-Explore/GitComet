@@ -4,6 +4,8 @@ use rustc_hash::FxHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
+pub(in super::super) const ACTION_BAR_HEIGHT: Pixels = px(components::CONTROL_HEIGHT_PX + 8.0);
+
 fn head_branch_has_tracking_upstream(
     head_branch: &Loadable<String>,
     branches: &Loadable<Arc<Vec<Branch>>>,
@@ -626,6 +628,9 @@ impl Render for ActionBarView {
             }));
 
         div()
+            .w_full()
+            .h(ACTION_BAR_HEIGHT)
+            .flex_none()
             .flex()
             .items_center()
             .justify_between()

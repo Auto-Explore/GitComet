@@ -267,7 +267,7 @@ mod main;
 mod popover;
 mod repo_tabs_bar;
 
-pub(super) use action_bar::ActionBarView;
+pub(super) use action_bar::{ACTION_BAR_HEIGHT, ActionBarView};
 pub(super) use popover::PopoverHost;
 pub(super) use repo_tabs_bar::RepoTabsBarView;
 #[allow(unused_imports)]

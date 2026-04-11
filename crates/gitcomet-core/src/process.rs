@@ -6,14 +6,12 @@ use std::process::Command;
 use std::sync::Mutex;
 use std::sync::{OnceLock, RwLock};
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-#[derive(Default)]
+#[derive(Clone, Debug, Eq, PartialEq, Default)]
 pub enum GitExecutablePreference {
     #[default]
     SystemPath,
     Custom(PathBuf),
 }
-
 
 impl GitExecutablePreference {
     pub fn from_optional_path(path: Option<PathBuf>) -> Self {

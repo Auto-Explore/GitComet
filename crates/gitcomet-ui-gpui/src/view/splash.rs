@@ -796,9 +796,15 @@ impl GitCometView {
                 .flex_col()
                 .flex_1()
                 .min_h(px(0.0))
-                .child(self.repo_tabs_bar.clone())
+                .child(stable_cached_fixed_height_view(
+                    self.repo_tabs_bar.clone(),
+                    components::Tab::container_height(),
+                ))
                 .child(self.open_repo_panel(cx))
-                .child(self.action_bar.clone())
+                .child(stable_cached_fixed_height_view(
+                    self.action_bar.clone(),
+                    ACTION_BAR_HEIGHT,
+                ))
                 .child(
                     div()
                         .flex()
@@ -851,7 +857,7 @@ impl GitCometView {
                                 .flex_1()
                                 .min_w(px(0.0))
                                 .min_h(px(0.0))
-                                .child(self.main_pane.clone()),
+                                .child(stable_cached_fill_view(self.main_pane.clone())),
                         )
                         .child(self.pane_resize_handle(
                             theme,
@@ -928,7 +934,7 @@ impl GitCometView {
                     .flex_1()
                     .min_w(px(0.0))
                     .min_h(px(0.0))
-                    .child(self.main_pane.clone()),
+                    .child(stable_cached_fill_view(self.main_pane.clone())),
             )
             .into_any_element()
     }

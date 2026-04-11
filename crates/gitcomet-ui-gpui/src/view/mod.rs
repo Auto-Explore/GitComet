@@ -18,12 +18,12 @@ use gitcomet_state::session;
 use gitcomet_state::store::AppStore;
 use gpui::prelude::*;
 use gpui::{
-    Animation, AnimationExt, AnyElement, App, Bounds, ClickEvent, Corner, CursorStyle, Decorations,
-    Element, ElementId, Entity, FocusHandle, FontWeight, GlobalElementId, InspectorElementId,
-    IsZero, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point,
-    Render, ResizeEdge, ScrollHandle, ShapedLine, SharedString, Size, Style, TextRun, Tiling,
-    UniformListScrollHandle, WeakEntity, Window, WindowControlArea, anchored, div, fill, point, px,
-    relative, size, uniform_list,
+    Animation, AnimationExt, AnyElement, AnyView, App, Bounds, ClickEvent, Corner, CursorStyle,
+    Decorations, Element, ElementId, Entity, FocusHandle, FontWeight, GlobalElementId,
+    InspectorElementId, IsZero, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, Pixels, Point, Render, ResizeEdge, ScrollHandle, ShapedLine, SharedString, Size,
+    Style, StyleRefinement, TextRun, Tiling, UniformListScrollHandle, WeakEntity, Window,
+    WindowControlArea, anchored, div, fill, point, px, relative, size, uniform_list,
 };
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 #[cfg(test)]
@@ -81,7 +81,8 @@ use caches::{
     HistoryStashIdsCache, HistoryWorktreeSummaryCache,
 };
 use chrome::{
-    CLIENT_SIDE_DECORATION_INSET, TitleBarView, cursor_style_for_resize_edge, resize_edge,
+    CLIENT_SIDE_DECORATION_INSET, TITLE_BAR_HEIGHT, TitleBarView, cursor_style_for_resize_edge,
+    resize_edge,
 };
 use conflict_resolver::{ConflictPickSide, ConflictResolverViewMode};
 #[cfg(test)]
@@ -111,7 +112,7 @@ pub use mod_helpers::{
     FocusedMergetoolLabels, FocusedMergetoolViewConfig, GitCometView, GitCometViewConfig,
     GitCometViewMode, InitialRepositoryLaunchMode, StartupCrashReport,
 };
-use panels::{ActionBarView, PopoverHost, RepoTabsBarView};
+use panels::{ACTION_BAR_HEIGHT, ActionBarView, PopoverHost, RepoTabsBarView};
 use panes::{DetailsPaneInit, DetailsPaneView, HistoryView, MainPaneView, SidebarPaneView};
 pub(crate) use settings_window::open_settings_window;
 use toast_host::ToastHost;
@@ -157,6 +158,36 @@ const DIFF_TEXT_LAYOUT_CACHE_PRUNE_OVERAGE: usize = 256;
 const TOAST_FADE_IN_MS: u64 = 180;
 const TOAST_FADE_OUT_MS: u64 = 220;
 const TOAST_SLIDE_PX: f32 = 12.0;
+
+// Only use these wrappers for views that remain mounted while their parent is mounted.
+// Parent-controlled mount/unmount boundaries, like collapsible panes, must rebuild their child.
+fn stable_cached_view<V: Render>(view: Entity<V>, style: StyleRefinement) -> AnyView {
+    let view = AnyView::from(view);
+    // GPUI's cached mount path skips some test-only debug bounds and paint tracking.
+    if cfg!(test) { view } else { view.cached(style) }
+}
+
+fn stable_cached_fill_view<V: Render>(view: Entity<V>) -> AnyView {
+    stable_cached_view(view, StyleRefinement::default().size_full())
+}
+
+fn stable_cached_fixed_height_view<V: Render>(view: Entity<V>, height: Pixels) -> AnyView {
+    stable_cached_view(
+        view,
+        StyleRefinement::default().w_full().h(height).flex_none(),
+    )
+}
+
+fn stable_cached_overlay_view<V: Render>(view: Entity<V>) -> AnyView {
+    stable_cached_view(
+        view,
+        StyleRefinement::default()
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full(),
+    )
+}
 
 pub(in crate::view) fn pane_resize_handles_width(
     sidebar_collapsed: bool,
@@ -1590,7 +1621,10 @@ impl Render for GitCometView {
             .text_color(theme.colors.text);
 
         if show_custom_window_chrome {
-            body = body.child(self.title_bar.clone());
+            body = body.child(stable_cached_fixed_height_view(
+                self.title_bar.clone(),
+                TITLE_BAR_HEIGHT,
+            ));
         }
 
         body = body.child(center_content);
@@ -1948,11 +1982,11 @@ impl Render for GitCometView {
 
         root = root.child(window_frame(theme, decorations, body.into_any_element()));
 
-        root = root.child(self.toast_host.clone());
+        root = root.child(stable_cached_overlay_view(self.toast_host.clone()));
 
-        root = root.child(self.popover_host.clone());
+        root = root.child(stable_cached_overlay_view(self.popover_host.clone()));
 
-        root = root.child(self.tooltip_host.clone());
+        root = root.child(stable_cached_overlay_view(self.tooltip_host.clone()));
 
         if crate::startup_probe::is_enabled() {
             root = root.on_children_prepainted(|_children_bounds, window, _cx| {
