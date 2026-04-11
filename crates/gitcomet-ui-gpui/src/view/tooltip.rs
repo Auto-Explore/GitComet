@@ -2,7 +2,7 @@ use super::*;
 
 impl GitCometView {
     pub(super) fn schedule_ui_settings_persist(&mut self, cx: &mut gpui::Context<Self>) {
-        if cfg!(test) {
+        if !crate::ui_runtime::current().persists_ui_settings() {
             let _ = cx;
             return;
         }

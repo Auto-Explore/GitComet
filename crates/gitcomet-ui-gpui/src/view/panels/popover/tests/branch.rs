@@ -298,7 +298,6 @@ fn create_branch_popover_escape_cancels(cx: &mut gpui::TestAppContext) {
             crate::kit::Enter,
             Some("TextInput"),
         )]);
-        view.update(app, |this, _cx| this.disable_poller_for_tests());
         let _ = window.draw(app);
     });
 
@@ -371,7 +370,6 @@ fn create_branch_popover_renders_shortcut_hints_and_separators(cx: &mut gpui::Te
         .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
 
     cx.update(|window, app| {
-        view.update(app, |this, _cx| this.disable_poller_for_tests());
         let _ = window.draw(app);
     });
 
@@ -414,7 +412,6 @@ fn create_branch_popover_enter_creates_and_closes(cx: &mut gpui::TestAppContext)
             crate::kit::Enter,
             Some("TextInput"),
         )]);
-        view.update(app, |this, _cx| this.disable_poller_for_tests());
         let _ = window.draw(app);
     });
 
@@ -492,7 +489,6 @@ fn create_branch_popover_enter_with_empty_input_does_not_close_or_create(
             crate::kit::Enter,
             Some("TextInput"),
         )]);
-        view.update(app, |this, _cx| this.disable_poller_for_tests());
         let _ = window.draw(app);
     });
 

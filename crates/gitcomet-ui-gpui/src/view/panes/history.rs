@@ -1693,10 +1693,10 @@ impl HistoryView {
                     }
                 };
 
-                let rebuild = if cfg!(test) {
-                    build_rebuild()
-                } else {
+                let rebuild = if crate::ui_runtime::current().uses_background_compute() {
                     smol::unblock(build_rebuild).await
+                } else {
+                    build_rebuild()
                 };
 
                 let _ = view.update(cx, |this, cx| {

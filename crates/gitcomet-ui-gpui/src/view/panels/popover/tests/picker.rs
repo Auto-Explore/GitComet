@@ -8,7 +8,6 @@ fn repo_picker_escape_closes(cx: &mut gpui::TestAppContext) {
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
     cx.update(|window, app| {
-        view.update(app, |this, _cx| this.disable_poller_for_tests());
         let _ = window.draw(app);
     });
 
@@ -49,7 +48,6 @@ fn branch_picker_escape_closes(cx: &mut gpui::TestAppContext) {
         .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
 
     cx.update(|window, app| {
-        view.update(app, |this, _cx| this.disable_poller_for_tests());
         let _ = window.draw(app);
     });
 

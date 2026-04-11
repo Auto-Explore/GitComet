@@ -66,8 +66,11 @@ mod poller;
 mod repo_open;
 pub(crate) mod rows;
 mod settings_window;
+mod sidebar_presentation;
 mod splash;
 mod state_apply;
+#[cfg(test)]
+pub(crate) mod test_support;
 mod toast_host;
 mod tooltip;
 mod tooltip_host;
@@ -77,8 +80,8 @@ mod word_diff;
 use app_model::AppUiModel;
 use branch_sidebar::{BranchSection, BranchSidebarRow};
 use caches::{
-    BranchSidebarCache, HistoryCache, HistoryCacheRequest, HistoryCommitRowVm,
-    HistoryStashIdsCache, HistoryWorktreeSummaryCache,
+    HistoryCache, HistoryCacheRequest, HistoryCommitRowVm, HistoryStashIdsCache,
+    HistoryWorktreeSummaryCache,
 };
 use chrome::{
     CLIENT_SIDE_DECORATION_INSET, TITLE_BAR_HEIGHT, TitleBarView, cursor_style_for_resize_edge,
@@ -317,17 +320,6 @@ pub(in crate::view) fn diff_split_column_widths(
 pub(crate) const UI_MONOSPACE_FONT_FAMILY: &str = crate::bundled_fonts::LILEX_FONT_FAMILY;
 
 impl GitCometView {
-    #[cfg(test)]
-    pub(crate) fn disable_poller_for_tests(&mut self) {
-        self._poller = Poller::disabled();
-    }
-
-    #[cfg(test)]
-    pub(crate) fn sync_store_snapshot_for_tests(&self, cx: &mut gpui::Context<Self>) {
-        self._ui_model
-            .update(cx, |model, cx| model.set_state(self.store.snapshot(), cx));
-    }
-
     pub(in crate::view) fn open_popover_at(
         &mut self,
         kind: PopoverKind,
@@ -509,7 +501,7 @@ impl GitCometView {
         let git_runtime_available = initial_store_state.git_runtime.is_available();
         let should_auto_restore = !crate::startup_probe::disable_auto_restore()
             && view_mode != GitCometViewMode::FocusedMergetool
-            && cfg!(not(test))
+            && crate::ui_runtime::current().auto_restores_session()
             && !store_preloaded;
 
         if should_auto_restore {
@@ -979,7 +971,7 @@ impl GitCometView {
             return;
         }
 
-        if cfg!(test) {
+        if !crate::ui_runtime::current().uses_pane_animations() {
             self.sidebar_render_width = target;
             self.sidebar_width_animating = false;
             self.refresh_main_pane_after_panel_animation(cx);
@@ -1049,7 +1041,7 @@ impl GitCometView {
             return;
         }
 
-        if cfg!(test) {
+        if !crate::ui_runtime::current().uses_pane_animations() {
             self.details_render_width = target;
             self.details_width_animating = false;
             self.refresh_main_pane_after_panel_animation(cx);
@@ -1451,7 +1443,7 @@ impl GitCometView {
             .update(cx, |host, cx| host.push_toast(kind, message, cx));
     }
 
-    #[cfg(not(test))]
+    #[cfg_attr(test, allow(dead_code))]
     fn push_toast_with_link(
         &mut self,
         kind: components::ToastKind,

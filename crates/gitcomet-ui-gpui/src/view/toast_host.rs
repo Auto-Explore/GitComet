@@ -188,7 +188,7 @@ impl ToastHost {
         let _ = self.push_toast_inner(kind, message, None, Some(ttl), cx);
     }
 
-    #[cfg(not(test))]
+    #[cfg_attr(test, allow(dead_code))]
     pub(super) fn push_toast_with_link(
         &mut self,
         kind: components::ToastKind,
@@ -248,7 +248,11 @@ impl ToastHost {
             input.set_read_only(true, cx);
         });
 
-        let ttl = if cfg!(test) { None } else { ttl };
+        let ttl = if crate::ui_runtime::current().uses_toast_ttl() {
+            ttl
+        } else {
+            None
+        };
 
         let (action_url, action_label) = action
             .map(|(url, label)| (Some(url), Some(label)))

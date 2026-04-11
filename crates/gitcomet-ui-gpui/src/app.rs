@@ -1215,16 +1215,14 @@ mod tests {
         store: &AppStore,
         view: gpui::Entity<GitCometView>,
     ) {
-        cx.update(|_window, app| {
-            view.update(app, |this, _cx| this.disable_poller_for_tests());
-        });
-
         store.dispatch(Msg::OpenRepo(PathBuf::from("/tmp/gitcomet-app-test-repo")));
 
         let deadline = Instant::now() + Duration::from_secs(3);
         loop {
             cx.update(|window, app| {
-                view.update(app, |this, cx| this.sync_store_snapshot_for_tests(cx));
+                view.update(app, |this, cx| {
+                    crate::view::test_support::sync_store_snapshot(this, cx)
+                });
                 let _ = window.draw(app);
             });
             cx.run_until_parked();
@@ -1967,7 +1965,9 @@ mod tests {
 
         assert_eq!(cx.cx.update(|app| app.windows().len()), 1);
         cx.update(|_window, app| {
-            assert!(view.read(app).open_repo_panel_visible_for_test());
+            assert!(crate::view::test_support::open_repo_panel_visible(
+                view.read(app)
+            ));
         });
     }
 
@@ -1989,7 +1989,9 @@ mod tests {
                 .expect("expected a normal GitComet window for manual repository entry");
             entry
                 .view
-                .update(app, |view, _cx| view.open_repo_panel_visible_for_test())
+                .update(app, |view, _cx| {
+                    crate::view::test_support::open_repo_panel_visible(view)
+                })
                 .expect("expected to inspect the new GitComet window")
         });
         assert_eq!(cx.update(|app| app.windows().len()), 1);

@@ -46,7 +46,6 @@ fn file_preview_renders_scrollable_syntax_highlighted_rows(cx: &mut gpui::TestAp
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(1);
     let workdir = std::env::temp_dir().join(format!("gitcomet_ui_test_{}", std::process::id()));
@@ -151,7 +150,6 @@ fn html_file_preview_renders_injected_javascript_and_css_from_real_document(
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(75);
     let workdir = std::env::temp_dir().join(format!(
@@ -255,7 +253,6 @@ fn html_file_preview_renders_injected_attribute_syntax_from_real_document(
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(76);
     let workdir = std::env::temp_dir().join(format!(
@@ -353,7 +350,6 @@ fn large_file_preview_keeps_prepared_syntax_document_above_old_line_gate(
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(52);
     let workdir = std::env::temp_dir().join(format!(
@@ -449,7 +445,6 @@ fn oversized_json_preview_uses_visible_line_fallback_without_prepared_syntax_doc
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(81);
     let workdir = std::env::temp_dir().join(format!(
@@ -570,7 +565,6 @@ fn minified_json_preview_streams_visible_slice_for_giant_line(cx: &mut gpui::Tes
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(91);
     let workdir = std::env::temp_dir().join(format!(
@@ -750,7 +744,6 @@ fn committed_deleted_minified_utf8_json_preview_streams_from_indexed_source(
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(193);
     let workdir = std::env::temp_dir().join(format!(
@@ -967,7 +960,6 @@ fn minified_json_preview_partial_copy_uses_streamed_line_slice(cx: &mut gpui::Te
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(191);
     let workdir = std::env::temp_dir().join(format!(
@@ -1060,7 +1052,6 @@ fn minified_json_preview_context_menu_copy_uses_streamed_line_source(
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(192);
     let workdir = std::env::temp_dir().join(format!(
@@ -1226,7 +1217,6 @@ fn large_file_preview_renders_plain_text_then_upgrades_after_background_syntax(
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(60);
     let workdir = std::env::temp_dir().join(format!(
@@ -1369,7 +1359,6 @@ fn xml_file_preview_renders_syntax_highlights_from_real_document(cx: &mut gpui::
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(78);
     let workdir = std::env::temp_dir().join(format!(

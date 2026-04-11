@@ -213,12 +213,13 @@ impl RepoTabsBarView {
 
         self.repo_tab_spinner_delay_seq = self.repo_tab_spinner_delay_seq.wrapping_add(1);
         let seq = self.repo_tab_spinner_delay_seq;
+        let uses_spinner_delay = crate::ui_runtime::current().uses_repo_tab_spinner_delay();
         self.repo_tab_spinner_delay = Some(RepoTabSpinnerDelayState {
             repo_id,
-            show_spinner: cfg!(test),
+            show_spinner: !uses_spinner_delay,
         });
 
-        if cfg!(test) {
+        if !uses_spinner_delay {
             cx.notify();
             return;
         }
@@ -277,14 +278,7 @@ impl Render for RepoTabsBarView {
                     .as_ref()
                     .is_some_and(|s| s.repo_id == repo_id && s.show_spinner);
             let show_close = self.hovered_repo_tab == Some(repo_id);
-            let label: SharedString = repo
-                .spec
-                .workdir
-                .file_name()
-                .and_then(|s| s.to_str())
-                .map(ToOwned::to_owned)
-                .unwrap_or_else(|| path_display::path_display_string(&repo.spec.workdir))
-                .into();
+            let label = path_display::repo_path_name(&repo.spec.workdir);
             let label_for_drag = label.clone();
 
             let position = if ix == 0 {

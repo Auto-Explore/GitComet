@@ -14,6 +14,7 @@ pub mod perf_ram_guard;
 pub mod perf_sidecar;
 mod startup_probe;
 mod theme;
+mod ui_runtime;
 mod view;
 
 pub use app::{FocusedMergetoolConfig, run, run_focused_mergetool, run_with_startup_crash_report};

@@ -1097,6 +1097,50 @@ fn diff_unified_works_for_staged_and_unstaged() {
 }
 
 #[test]
+fn diff_working_tree_unstaged_ignores_crlf_only_line_ending_changes() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+    run_git(repo, &["config", "core.autocrlf", "false"]);
+    run_git(repo, &["config", "core.eol", "lf"]);
+
+    write(repo, "a.txt", "one\ntwo\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "init"],
+    );
+
+    write(repo, "a.txt", "one\r\ntwo\r\n");
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    let target = DiffTarget::WorkingTree {
+        path: PathBuf::from("a.txt"),
+        area: DiffArea::Unstaged,
+    };
+
+    let unified = opened.diff_unified(&target).unwrap();
+    assert!(
+        unified.trim().is_empty(),
+        "expected CRLF-only unstaged diff to be suppressed:\n{unified}"
+    );
+
+    let parsed = opened.diff_parsed(&target).unwrap();
+    assert!(
+        parsed.lines.is_empty(),
+        "expected parsed diff to be empty for CRLF-only unstaged change: {parsed:?}"
+    );
+}
+
+#[test]
 fn diff_file_text_reports_old_and_new_for_working_tree_and_commits() {
     if !require_git_shell_for_status_integration_tests() {
         return;
@@ -1166,6 +1210,47 @@ fn diff_file_text_reports_old_and_new_for_working_tree_and_commits() {
         .expect("file diff for commit");
     assert_eq!(commit.old.as_deref(), Some("one\n"));
     assert_eq!(commit.new.as_deref(), Some("one\ntwo\n"));
+}
+
+#[test]
+fn diff_file_text_unstaged_uses_git_normalized_worktree_content() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+    run_git(repo, &["config", "core.autocrlf", "true"]);
+
+    write(repo, "a.txt", "one\ntwo\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "init"],
+    );
+
+    write(repo, "a.txt", "one\r\ntwo\r\n");
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    let diff = opened
+        .diff_file_text(&DiffTarget::WorkingTree {
+            path: PathBuf::from("a.txt"),
+            area: DiffArea::Unstaged,
+        })
+        .unwrap()
+        .expect("file diff for unstaged crlf-only change");
+
+    assert_eq!(diff.old.as_deref(), Some("one\ntwo\n"));
+    assert_eq!(
+        diff.new.as_deref(),
+        Some("one\ntwo\n"),
+        "expected worktree text to match Git-normalized staged content"
+    );
 }
 
 #[test]

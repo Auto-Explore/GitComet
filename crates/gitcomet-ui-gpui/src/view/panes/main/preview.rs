@@ -408,11 +408,12 @@ impl MainPaneView {
                         rasterize_conflict_preview_svg_payload(theirs_bytes),
                     )
                 };
-                let (base_payload, ours_payload, theirs_payload) = if cfg!(test) {
-                    rasterize_payloads()
-                } else {
-                    smol::unblock(rasterize_payloads).await
-                };
+                let (base_payload, ours_payload, theirs_payload) =
+                    if crate::ui_runtime::current().uses_background_compute() {
+                        smol::unblock(rasterize_payloads).await
+                    } else {
+                        rasterize_payloads()
+                    };
 
                 let _ = view.update(cx, |this, cx| {
                     if this.conflict_resolver.image_preview.source_hash != Some(source_hash)
@@ -818,10 +819,10 @@ impl MainPaneView {
                 let source_path_for_task = source_path.clone();
                 move || index_utf8_worktree_preview_file(&source_path_for_task)
             };
-            let result = if cfg!(test) {
-                index_preview()
-            } else {
+            let result = if crate::ui_runtime::current().uses_background_compute() {
                 smol::unblock(index_preview).await
+            } else {
+                index_preview()
             };
             let _ = view.update(cx, |this, cx| {
                 if this.worktree_preview_path.as_ref() != Some(&display_path)
