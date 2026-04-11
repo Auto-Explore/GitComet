@@ -2722,13 +2722,12 @@ mod tests {
         let store_for_assert = store.clone();
         let (view, cx) =
             cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
-        cx.update(|_window, app| {
-            view.update(app, |this, _cx| this.disable_poller_for_tests());
-        });
 
         let sync_view_from_store = |cx: &mut gpui::VisualTestContext| {
             cx.update(|window, app| {
-                view.update(app, |this, cx| this.sync_store_snapshot_for_tests(cx));
+                view.update(app, |this, cx| {
+                    crate::view::test_support::sync_store_snapshot(this, cx)
+                });
                 window.refresh();
                 let _ = window.draw(app);
             });

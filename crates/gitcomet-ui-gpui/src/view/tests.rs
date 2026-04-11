@@ -1679,9 +1679,6 @@ fn details_expand_after_collapse_does_not_reenter_root_update(cx: &mut gpui::Tes
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
-    cx.update(|_window, app| {
-        view.update(app, |this, _cx| this.disable_poller_for_tests());
-    });
 
     cx.update(|window, app| {
         let _ = window.draw(app);
@@ -1794,7 +1791,6 @@ fn git_unavailable_splash_renders_open_settings_call_to_action(cx: &mut gpui::Te
 
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.disable_poller_for_tests();
             this.apply_state_snapshot(Arc::clone(&next), cx);
         });
         let _ = window.draw(app);
@@ -1834,7 +1830,6 @@ fn git_unavailable_overlay_blocks_open_repositories(cx: &mut gpui::TestAppContex
 
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.disable_poller_for_tests();
             this.apply_state_snapshot(Arc::clone(&next), cx);
         });
         let _ = window.draw(app);
@@ -1878,7 +1873,6 @@ fn git_unavailable_overlay_clears_after_runtime_recovery(cx: &mut gpui::TestAppC
 
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.disable_poller_for_tests();
             this.apply_state_snapshot(Arc::clone(&unavailable), cx);
         });
         let _ = window.draw(app);
