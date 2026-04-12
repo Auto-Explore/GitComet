@@ -69,7 +69,7 @@ impl ActionBarView {
             repo.upstream_divergence_rev.hash(&mut hasher);
             repo.merge_message_rev.hash(&mut hasher);
             repo.ops_rev.hash(&mut hasher);
-            repo.status_rev.hash(&mut hasher);
+            repo.status_cache_rev().hash(&mut hasher);
             repo.loads_in_flight.any_in_flight().hash(&mut hasher);
         }
 
@@ -265,9 +265,12 @@ impl Render for ActionBarView {
 
         let can_stash = self
             .active_repo()
-            .and_then(|r| match &r.status {
-                Loadable::Ready(s) => Some(!s.staged.is_empty() || !s.unstaged.is_empty()),
-                _ => None,
+            .map(|repo| {
+                repo.worktree_status_entries()
+                    .is_some_and(|entries| !entries.is_empty())
+                    || repo
+                        .staged_status_entries()
+                        .is_some_and(|entries| !entries.is_empty())
             })
             .unwrap_or(false);
 

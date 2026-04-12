@@ -160,7 +160,7 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
 
         PopoverKind::StashPrompt => {
             repo.stashes_rev.hash(hasher);
-            view_fingerprint::hash_loadable_arc(&repo.status, hasher);
+            repo.status_cache_rev().hash(hasher);
         }
         PopoverKind::StashDropConfirm { .. } | PopoverKind::StashMenu { .. } => {
             repo.stashes_rev.hash(hasher);
@@ -189,7 +189,7 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
                 repo.diff_state.diff_target,
                 Some(DiffTarget::WorkingTree { .. })
             ) {
-                view_fingerprint::hash_loadable_arc(&repo.status, hasher);
+                repo.status_cache_rev().hash(hasher);
             }
         }
 

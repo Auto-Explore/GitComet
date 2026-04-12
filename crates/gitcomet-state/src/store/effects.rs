@@ -93,6 +93,18 @@ fn send_unavailable_git_effect_result(
                 result: Err(git_unavailable_error(runtime)),
             },
         )),
+        Effect::LoadWorktreeStatus { repo_id } => send(Msg::Internal(
+            crate::msg::InternalMsg::WorktreeStatusLoaded {
+                repo_id,
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
+        Effect::LoadStagedStatus { repo_id } => {
+            send(Msg::Internal(crate::msg::InternalMsg::StagedStatusLoaded {
+                repo_id,
+                result: Err(git_unavailable_error(runtime)),
+            }))
+        }
         Effect::LoadStatus { repo_id } => {
             send(Msg::Internal(crate::msg::InternalMsg::StatusLoaded {
                 repo_id,
@@ -747,6 +759,12 @@ pub(super) fn schedule_effect(
         }
         Effect::LoadRemoteBranches { repo_id } => {
             repo_load::schedule_load_remote_branches(executor, repos, msg_tx, repo_id);
+        }
+        Effect::LoadWorktreeStatus { repo_id } => {
+            repo_load::schedule_load_worktree_status(executor, repos, msg_tx, repo_id);
+        }
+        Effect::LoadStagedStatus { repo_id } => {
+            repo_load::schedule_load_staged_status(executor, repos, msg_tx, repo_id);
         }
         Effect::LoadStatus { repo_id } => {
             repo_load::schedule_load_status(executor, repos, msg_tx, repo_id)

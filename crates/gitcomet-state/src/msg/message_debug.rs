@@ -55,6 +55,16 @@ impl std::fmt::Debug for InternalMsg {
                 .field("repo_id", repo_id)
                 .field("result", result)
                 .finish(),
+            InternalMsg::WorktreeStatusLoaded { repo_id, result } => f
+                .debug_struct("WorktreeStatusLoaded")
+                .field("repo_id", repo_id)
+                .field("result", result)
+                .finish(),
+            InternalMsg::StagedStatusLoaded { repo_id, result } => f
+                .debug_struct("StagedStatusLoaded")
+                .field("repo_id", repo_id)
+                .field("result", result)
+                .finish(),
             InternalMsg::StatusLoaded { repo_id, result } => f
                 .debug_struct("StatusLoaded")
                 .field("repo_id", repo_id)

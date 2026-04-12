@@ -517,6 +517,14 @@ pub enum InternalMsg {
         repo_id: RepoId,
         result: Result<Vec<RemoteBranch>, Error>,
     },
+    WorktreeStatusLoaded {
+        repo_id: RepoId,
+        result: Result<Vec<FileStatus>, Error>,
+    },
+    StagedStatusLoaded {
+        repo_id: RepoId,
+        result: Result<Vec<FileStatus>, Error>,
+    },
     StatusLoaded {
         repo_id: RepoId,
         result: Result<RepoStatus, Error>,

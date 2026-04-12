@@ -121,7 +121,7 @@ fn explicit_status_section_action_paths(
 }
 
 fn active_status_section_action_path(
-    status: &RepoStatus,
+    repo: &RepoState,
     diff_target: Option<&DiffTarget>,
     section: StatusSection,
 ) -> Option<std::path::PathBuf> {
@@ -132,24 +132,13 @@ fn active_status_section_action_path(
         return None;
     }
 
-    let matches_section = match section {
-        StatusSection::CombinedUnstaged => status.unstaged.iter().any(|entry| entry.path == *path),
-        StatusSection::Untracked => status
-            .unstaged
-            .iter()
-            .any(|entry| entry.path == *path && entry.kind == FileStatusKind::Untracked),
-        StatusSection::Unstaged => status
-            .unstaged
-            .iter()
-            .any(|entry| entry.path == *path && entry.kind != FileStatusKind::Untracked),
-        StatusSection::Staged => status.staged.iter().any(|entry| entry.path == *path),
-    };
-
-    matches_section.then(|| path.clone())
+    StatusSectionEntries::from_repo(repo, section)
+        .is_some_and(|entries| entries.contains_path(path.as_path()))
+        .then(|| path.clone())
 }
 
 fn status_section_action_selection(
-    status: &RepoStatus,
+    repo: &RepoState,
     diff_target: Option<&DiffTarget>,
     selection: Option<&StatusMultiSelection>,
     section: StatusSection,
@@ -164,7 +153,7 @@ fn status_section_action_selection(
         }
     }
 
-    active_status_section_action_path(status, diff_target, section)
+    active_status_section_action_path(repo, diff_target, section)
         .map(|path| StatusSectionActionSelection {
             paths: vec![path],
             from_explicit_selection: false,
@@ -181,12 +170,9 @@ impl DetailsPaneView {
         let Some(repo) = self.active_repo().filter(|repo| repo.id == repo_id) else {
             return StatusSectionActionSelection::default();
         };
-        let Loadable::Ready(status) = &repo.status else {
-            return StatusSectionActionSelection::default();
-        };
 
         status_section_action_selection(
-            status,
+            repo,
             repo.diff_state.diff_target.as_ref(),
             self.status_multi_selection.get(&repo_id),
             section,
@@ -406,10 +392,9 @@ impl DetailsPaneView {
         if repo.commit_in_flight > 0 {
             return false;
         }
-        let staged_count = match &repo.status {
-            Loadable::Ready(status) => status.staged.len(),
-            _ => 0,
-        };
+        let staged_count = repo
+            .staged_status_entries()
+            .map_or(0, |entries| entries.len());
         let is_merge_active = merge_active(Some(repo));
         commit_allowed(is_merge_active, staged_count) && !message.trim().is_empty()
     }
@@ -863,31 +848,43 @@ impl DetailsPaneView {
             .active_repo()
             .map(|r| r.local_actions_in_flight > 0)
             .unwrap_or(false);
-        let (staged_count, unstaged_count) = self
+        let (staged_count, unstaged_count, untracked_count, split_unstaged_count) = self
             .active_repo()
-            .and_then(|r| match &r.status {
-                Loadable::Ready(s) => Some((s.staged.len(), s.unstaged.len())),
-                _ => None,
+            .map(|repo| {
+                (
+                    StatusSectionEntries::from_repo(repo, StatusSection::Staged)
+                        .map_or(0, StatusSectionEntries::len),
+                    StatusSectionEntries::from_repo(repo, StatusSection::CombinedUnstaged)
+                        .map_or(0, StatusSectionEntries::len),
+                    StatusSectionEntries::from_repo(repo, StatusSection::Untracked)
+                        .map_or(0, StatusSectionEntries::len),
+                    StatusSectionEntries::from_repo(repo, StatusSection::Unstaged)
+                        .map_or(0, StatusSectionEntries::len),
+                )
             })
-            .unwrap_or((0, 0));
-        let (untracked_count, split_unstaged_count, untracked_paths, split_unstaged_paths) = self
+            .unwrap_or((0, 0, 0, 0));
+        let (untracked_paths, split_unstaged_paths) = self
             .active_repo()
-            .and_then(|r| match &r.status {
-                Loadable::Ready(s) => {
-                    let mut untracked = Vec::new();
-                    let mut tracked = Vec::new();
-                    for entry in &s.unstaged {
-                        if entry.kind == FileStatusKind::Untracked {
-                            untracked.push(entry.path.clone());
-                        } else {
-                            tracked.push(entry.path.clone());
-                        }
-                    }
-                    Some((untracked.len(), tracked.len(), untracked, tracked))
-                }
-                _ => None,
+            .map(|repo| {
+                (
+                    StatusSectionEntries::from_repo(repo, StatusSection::Untracked)
+                        .map_or_else(Vec::new, StatusSectionEntries::path_vec),
+                    StatusSectionEntries::from_repo(repo, StatusSection::Unstaged)
+                        .map_or_else(Vec::new, StatusSectionEntries::path_vec),
+                )
             })
-            .unwrap_or_else(|| (0, 0, Vec::new(), Vec::new()));
+            .unwrap_or_else(|| (Vec::new(), Vec::new()));
+        let (unstaged_loading, untracked_loading, split_unstaged_loading, staged_loading) = self
+            .active_repo()
+            .map(|repo| {
+                (
+                    status_section_is_loading(repo, StatusSection::CombinedUnstaged),
+                    status_section_is_loading(repo, StatusSection::Untracked),
+                    status_section_is_loading(repo, StatusSection::Unstaged),
+                    status_section_is_loading(repo, StatusSection::Staged),
+                )
+            })
+            .unwrap_or((false, false, false, false));
 
         let repo_id = self.active_repo_id();
         let selected_combined_unstaged = repo_id
@@ -1299,25 +1296,33 @@ impl DetailsPaneView {
             actions.child(unstage_all).into_any_element()
         };
 
-        let unstaged_body = if unstaged_count == 0 {
+        let unstaged_body = if unstaged_loading {
+            components::empty_state(theme, "Unstaged", "Loading").into_any_element()
+        } else if unstaged_count == 0 {
             components::empty_state(theme, "Unstaged", "Clean.").into_any_element()
         } else {
             self.status_list(cx, StatusSection::CombinedUnstaged, unstaged_count)
         };
 
-        let untracked_body = if untracked_count == 0 {
+        let untracked_body = if untracked_loading {
+            components::empty_state(theme, "Untracked", "Loading").into_any_element()
+        } else if untracked_count == 0 {
             components::empty_state(theme, "Untracked", "No untracked files.").into_any_element()
         } else {
             self.status_list(cx, StatusSection::Untracked, untracked_count)
         };
 
-        let split_unstaged_body = if split_unstaged_count == 0 {
+        let split_unstaged_body = if split_unstaged_loading {
+            components::empty_state(theme, "Unstaged", "Loading").into_any_element()
+        } else if split_unstaged_count == 0 {
             components::empty_state(theme, "Unstaged", "Clean.").into_any_element()
         } else {
             self.status_list(cx, StatusSection::Unstaged, split_unstaged_count)
         };
 
-        let staged_list = if staged_count == 0 {
+        let staged_list = if staged_loading {
+            components::empty_state(theme, "Staged", "Loading").into_any_element()
+        } else if staged_count == 0 {
             components::empty_state(theme, "Staged", "No staged changes.").into_any_element()
         } else {
             self.status_list(cx, StatusSection::Staged, staged_count)
@@ -1951,6 +1956,7 @@ mod tests {
     use gitcomet_core::domain::RepoSpec;
     use gitcomet_state::model::{Loadable, RepoId, RepoState};
     use std::path::PathBuf;
+    use std::sync::Arc;
 
     fn test_repo() -> RepoState {
         RepoState::new_opening(
@@ -1967,6 +1973,17 @@ mod tests {
             kind,
             conflict: None,
         }
+    }
+
+    fn repo_with_status(status: RepoStatus) -> RepoState {
+        let mut repo = test_repo();
+        repo.worktree_status = Loadable::Ready(Arc::new(status.unstaged.clone()));
+        repo.worktree_status_rev = 1;
+        repo.staged_status = Loadable::Ready(Arc::new(status.staged.clone()));
+        repo.staged_status_rev = 1;
+        repo.status = Loadable::Ready(status.into());
+        repo.status_rev = 1;
+        repo
     }
 
     #[test]
@@ -2047,17 +2064,17 @@ mod tests {
 
     #[test]
     fn status_section_action_selection_falls_back_to_active_combined_unstaged_row() {
-        let status = RepoStatus {
+        let repo = repo_with_status(RepoStatus {
             unstaged: vec![file_status("src/lib.rs", FileStatusKind::Modified)],
             staged: Vec::new(),
-        };
+        });
         let diff_target = DiffTarget::WorkingTree {
             path: PathBuf::from("src/lib.rs"),
             area: DiffArea::Unstaged,
         };
 
         let selection = status_section_action_selection(
-            &status,
+            &repo,
             Some(&diff_target),
             None,
             StatusSection::CombinedUnstaged,
@@ -2075,26 +2092,26 @@ mod tests {
 
     #[test]
     fn status_section_action_selection_limits_active_row_to_matching_split_section() {
-        let status = RepoStatus {
+        let repo = repo_with_status(RepoStatus {
             unstaged: vec![
                 file_status("new.txt", FileStatusKind::Untracked),
                 file_status("src/lib.rs", FileStatusKind::Modified),
             ],
             staged: Vec::new(),
-        };
+        });
         let diff_target = DiffTarget::WorkingTree {
             path: PathBuf::from("new.txt"),
             area: DiffArea::Unstaged,
         };
 
         let untracked = status_section_action_selection(
-            &status,
+            &repo,
             Some(&diff_target),
             None,
             StatusSection::Untracked,
         );
         let unstaged = status_section_action_selection(
-            &status,
+            &repo,
             Some(&diff_target),
             None,
             StatusSection::Unstaged,
@@ -2114,7 +2131,7 @@ mod tests {
     fn status_section_action_selection_prefers_explicit_selection_over_active_row() {
         let selected_a = PathBuf::from("src/lib.rs");
         let selected_b = PathBuf::from("src/main.rs");
-        let status = RepoStatus {
+        let repo = repo_with_status(RepoStatus {
             unstaged: vec![
                 file_status(
                     selected_a.to_string_lossy().as_ref(),
@@ -2126,7 +2143,7 @@ mod tests {
                 ),
             ],
             staged: Vec::new(),
-        };
+        });
         let diff_target = DiffTarget::WorkingTree {
             path: PathBuf::from("src/other.rs"),
             area: DiffArea::Unstaged,
@@ -2137,7 +2154,7 @@ mod tests {
         };
 
         let action_selection = status_section_action_selection(
-            &status,
+            &repo,
             Some(&diff_target),
             Some(&selection),
             StatusSection::CombinedUnstaged,

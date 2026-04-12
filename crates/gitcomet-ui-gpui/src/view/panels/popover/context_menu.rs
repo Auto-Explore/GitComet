@@ -880,14 +880,10 @@ impl PopoverHost {
             .repos
             .iter()
             .find(|r| r.id == repo_id)
-            .and_then(|r| match &r.status {
-                Loadable::Ready(status) => status
-                    .unstaged
-                    .iter()
-                    .chain(status.staged.iter())
-                    .find(|s| s.path == path)
-                    .map(|s| s.kind),
-                _ => None,
+            .and_then(|repo| {
+                repo.status_entry_for_path(DiffArea::Unstaged, path.as_path())
+                    .or_else(|| repo.status_entry_for_path(DiffArea::Staged, path.as_path()))
+                    .map(|status| status.kind)
             })
             .is_some_and(|kind| matches!(kind, FileStatusKind::Untracked | FileStatusKind::Added));
 

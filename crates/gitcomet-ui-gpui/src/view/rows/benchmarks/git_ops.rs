@@ -420,7 +420,7 @@ impl GitOpsFixture {
     fn execute(&self) -> (u64, GitOpsOutcome) {
         match &self.scenario {
             GitOpsScenario::StatusDirty { .. } | GitOpsScenario::StatusClean { .. } => {
-                let status = self.repo.status().expect("git_ops status benchmark");
+                let status = load_split_repo_status(self.repo.as_ref(), "git_ops status benchmark");
                 let dirty_files = status.staged.len().saturating_add(status.unstaged.len());
                 (
                     hash_repo_status(&status),

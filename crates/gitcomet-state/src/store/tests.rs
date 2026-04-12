@@ -204,6 +204,28 @@ pub(crate) fn staged_auth_test_lock() -> MutexGuard<'static, ()> {
         .unwrap_or_else(|e| e.into_inner())
 }
 
+fn has_worktree_status_effect(effects: &[Effect], repo_id: RepoId) -> bool {
+    effects.iter().any(|effect| {
+        matches!(
+            effect,
+            Effect::LoadWorktreeStatus { repo_id: candidate } if *candidate == repo_id
+        )
+    })
+}
+
+fn has_staged_status_effect(effects: &[Effect], repo_id: RepoId) -> bool {
+    effects.iter().any(|effect| {
+        matches!(
+            effect,
+            Effect::LoadStagedStatus { repo_id: candidate } if *candidate == repo_id
+        )
+    })
+}
+
+fn has_status_refresh_effects(effects: &[Effect], repo_id: RepoId) -> bool {
+    has_worktree_status_effect(effects, repo_id) && has_staged_status_effect(effects, repo_id)
+}
+
 #[test]
 fn app_store_clone_dispatches_restore_and_close_paths() {
     let backend: Arc<dyn GitBackend> = Arc::new(FailingBackend);

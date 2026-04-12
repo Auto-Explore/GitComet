@@ -253,10 +253,8 @@ impl RealRepoFixture {
     }
 
     fn run_monorepo_open_and_history(&self) -> (u64, RealRepoMetrics) {
-        let status = self
-            .repo
-            .status()
-            .expect("real_repo monorepo status benchmark");
+        let status =
+            load_split_repo_status(self.repo.as_ref(), "real_repo monorepo status benchmark");
         let branches = self
             .repo
             .list_branches()
@@ -377,10 +375,8 @@ impl RealRepoFixture {
     }
 
     fn run_mid_merge_conflict_list_and_open(&self) -> (u64, RealRepoMetrics) {
-        let status = self
-            .repo
-            .status()
-            .expect("real_repo mid-merge status benchmark");
+        let status =
+            load_split_repo_status(self.repo.as_ref(), "real_repo mid-merge status benchmark");
         let conflict_paths =
             conflict_paths_from_status_or_git(&status, self.repo.spec().workdir.as_path());
         let selected_path = self
@@ -703,8 +699,7 @@ fn build_real_repo_state(
     repo.remotes_rev = 1;
     repo.remote_branches = Loadable::Ready(Arc::new(remote_branches));
     repo.remote_branches_rev = 1;
-    repo.status = Loadable::Ready(Arc::new(status));
-    repo.status_rev = 1;
+    seed_repo_status(&mut repo, status);
     repo.stashes = Loadable::Ready(Arc::new(Vec::new()));
     repo.stashes_rev = 1;
     repo.worktrees = Loadable::Ready(Arc::new(Vec::new()));

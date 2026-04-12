@@ -2,8 +2,10 @@ use crate::theme::AppTheme;
 use gitcomet_core::diff::AnnotatedDiffLine;
 #[cfg(test)]
 use gitcomet_core::diff::annotate_unified;
+#[cfg(test)]
+use gitcomet_core::domain::RepoStatus;
 use gitcomet_core::domain::{
-    Branch, Commit, CommitId, DiffArea, DiffTarget, FileStatus, FileStatusKind, RepoStatus, Tag,
+    Branch, Commit, CommitId, DiffArea, DiffTarget, FileStatus, FileStatusKind, Tag,
     UpstreamDivergence,
 };
 use gitcomet_core::file_diff::FileDiffRow;

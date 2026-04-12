@@ -77,16 +77,10 @@ impl MainPaneView {
             if *area != DiffArea::Unstaged {
                 return None;
             }
-            match &repo.status {
-                Loadable::Ready(status) => {
-                    let conflict = status
-                        .unstaged
-                        .iter()
-                        .find(|e| e.path == *path && e.kind == FileStatusKind::Conflicted)?;
-                    Some((path.clone(), conflict.conflict))
-                }
-                _ => None,
-            }
+            let conflict = repo
+                .status_entry_for_path(DiffArea::Unstaged, path.as_path())
+                .filter(|entry| entry.kind == FileStatusKind::Conflicted)?;
+            Some((path.clone(), conflict.conflict))
         });
         let (conflict_target_path, conflict_kind) = conflict_target
             .map(|(path, kind)| (Some(path), kind))
@@ -2937,18 +2931,16 @@ impl MainPaneView {
                     let path = path.clone();
                     let area = *area;
                     let change_tracking_view = this.active_change_tracking_view(cx);
-                    let next_path_in_section = match &repo.status {
-                        Loadable::Ready(status) => status_nav::status_navigation_context(
-                            status,
-                            &diff_target,
-                            change_tracking_view,
-                        )
-                        .and_then(|navigation| navigation.next_or_prev_path()),
-                        _ => None,
-                    };
+                    let next_path_in_section = status_nav::status_navigation_context_for_repo(
+                        repo,
+                        &diff_target,
+                        change_tracking_view,
+                    )
+                    .and_then(|navigation| navigation.next_or_prev_path());
+                    let status_ready = repo.status_entries_for_area(area).is_some();
 
-                    match (&repo.status, area) {
-                        (Loadable::Ready(_status), DiffArea::Unstaged) => {
+                    match (status_ready, area) {
+                        (true, DiffArea::Unstaged) => {
                             this.store.dispatch(Msg::StagePath {
                                 repo_id,
                                 path: path.clone(),
@@ -2965,7 +2957,7 @@ impl MainPaneView {
                                 this.clear_diff_selection_or_exit(repo_id, cx);
                             }
                         }
-                        (Loadable::Ready(_status), DiffArea::Staged) => {
+                        (true, DiffArea::Staged) => {
                             this.store.dispatch(Msg::UnstagePath {
                                 repo_id,
                                 path: path.clone(),
@@ -2982,13 +2974,13 @@ impl MainPaneView {
                                 this.clear_diff_selection_or_exit(repo_id, cx);
                             }
                         }
-                        (_, DiffArea::Unstaged) => {
+                        (false, DiffArea::Unstaged) => {
                             this.store.dispatch(Msg::StagePath {
                                 repo_id,
                                 path: path.clone(),
                             });
                         }
-                        (_, DiffArea::Staged) => {
+                        (false, DiffArea::Staged) => {
                             this.store.dispatch(Msg::UnstagePath {
                                 repo_id,
                                 path: path.clone(),

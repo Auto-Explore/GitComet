@@ -113,14 +113,11 @@ fn build_conflict_session(
     file: &crate::model::ConflictFile,
 ) -> Option<ConflictSession> {
     // Look up the conflict kind from the repo's status entries.
-    let conflict_kind = match &repo_state.status {
-        Loadable::Ready(status) => status
-            .unstaged
-            .iter()
-            .find(|e| e.path == file.path && e.kind == FileStatusKind::Conflicted)
-            .and_then(|e| e.conflict),
-        _ => None,
-    }?;
+    let conflict_kind = repo_state
+        .worktree_status_entries()?
+        .iter()
+        .find(|e| e.path == file.path && e.kind == FileStatusKind::Conflicted)
+        .and_then(|e| e.conflict)?;
 
     let base = ConflictPayload::from_stage_parts(file.base_bytes.clone(), file.base.clone());
     let ours = ConflictPayload::from_stage_parts(file.ours_bytes.clone(), file.ours.clone());
@@ -526,19 +523,112 @@ pub(super) fn status_loaded(
                 true
             }
         };
-        // Replaying an unchanged status payload can self-sustain refresh loops when file-system
-        // events are produced by the status read itself (for example `.git/index` churn).
-        if repo_state.loads_in_flight.finish(RepoLoadsInFlight::STATUS) {
-            if should_replay_pending {
-                effects.push(Effect::LoadStatus { repo_id });
-            } else {
-                // `finish` marks STATUS back as in-flight when there was pending work. We are
-                // intentionally dropping that replay request, so clear the in-flight bit too.
-                let _ = repo_state.loads_in_flight.finish(RepoLoadsInFlight::STATUS);
-            }
-        }
+        finish_status_lane_replay(
+            repo_state,
+            RepoLoadsInFlight::WORKTREE_STATUS,
+            repo_id,
+            should_replay_pending,
+            Effect::LoadWorktreeStatus { repo_id },
+            &mut effects,
+        );
+        finish_status_lane_replay(
+            repo_state,
+            RepoLoadsInFlight::STAGED_STATUS,
+            repo_id,
+            should_replay_pending,
+            Effect::LoadStagedStatus { repo_id },
+            &mut effects,
+        );
     }
     effects
+}
+
+pub(super) fn worktree_status_loaded(
+    state: &mut AppState,
+    repo_id: RepoId,
+    result: std::result::Result<Vec<gitcomet_core::domain::FileStatus>, Error>,
+) -> Vec<Effect> {
+    let mut effects = Vec::new();
+    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+        let should_replay_pending = match result {
+            Ok(next) => {
+                let status_unchanged = matches!(&repo_state.worktree_status, Loadable::Ready(prev) if prev.as_slice() == next.as_slice());
+                if !status_unchanged {
+                    repo_state.set_worktree_status(Loadable::Ready(next));
+                }
+                clear_resolved_conflict_context(repo_state);
+                !status_unchanged
+            }
+            Err(e) => {
+                push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                repo_state.set_worktree_status(Loadable::Error(e.to_string()));
+                true
+            }
+        };
+        finish_status_lane_replay(
+            repo_state,
+            RepoLoadsInFlight::WORKTREE_STATUS,
+            repo_id,
+            should_replay_pending,
+            Effect::LoadWorktreeStatus { repo_id },
+            &mut effects,
+        );
+    }
+    effects
+}
+
+pub(super) fn staged_status_loaded(
+    state: &mut AppState,
+    repo_id: RepoId,
+    result: std::result::Result<Vec<gitcomet_core::domain::FileStatus>, Error>,
+) -> Vec<Effect> {
+    let mut effects = Vec::new();
+    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+        let should_replay_pending = match result {
+            Ok(next) => {
+                let status_unchanged = matches!(&repo_state.staged_status, Loadable::Ready(prev) if prev.as_slice() == next.as_slice());
+                if !status_unchanged {
+                    repo_state.set_staged_status(Loadable::Ready(next));
+                }
+                !status_unchanged
+            }
+            Err(e) => {
+                push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                repo_state.set_staged_status(Loadable::Error(e.to_string()));
+                true
+            }
+        };
+        finish_status_lane_replay(
+            repo_state,
+            RepoLoadsInFlight::STAGED_STATUS,
+            repo_id,
+            should_replay_pending,
+            Effect::LoadStagedStatus { repo_id },
+            &mut effects,
+        );
+    }
+    effects
+}
+
+fn finish_status_lane_replay(
+    repo_state: &mut crate::model::RepoState,
+    flag: u32,
+    _repo_id: RepoId,
+    should_replay_pending: bool,
+    replay_effect: Effect,
+    effects: &mut Vec<Effect>,
+) {
+    // Replaying an unchanged status payload can self-sustain refresh loops when file-system
+    // events are produced by the status read itself (for example `.git/index` churn).
+    if repo_state.loads_in_flight.finish(flag) {
+        if should_replay_pending {
+            effects.push(replay_effect);
+        } else {
+            // `finish` marks the flag back as in-flight when there was pending work. We are
+            // intentionally dropping that replay request, so clear the in-flight bit too.
+            let _ = repo_state.loads_in_flight.finish(flag);
+        }
+    }
 }
 
 /// Clear conflict-file/session state when the tracked conflict path is no longer
@@ -547,13 +637,11 @@ fn clear_resolved_conflict_context(repo_state: &mut crate::model::RepoState) {
     let Some(conflict_path) = repo_state.conflict_state.conflict_file_path.as_ref() else {
         return;
     };
-    let still_conflicted = match &repo_state.status {
-        Loadable::Ready(status) => status
-            .unstaged
+    let still_conflicted = repo_state.worktree_status_entries().is_none_or(|status| {
+        status
             .iter()
-            .any(|entry| entry.path == *conflict_path && entry.kind == FileStatusKind::Conflicted),
-        _ => true,
-    };
+            .any(|entry| entry.path == *conflict_path && entry.kind == FileStatusKind::Conflicted)
+    });
     if still_conflicted {
         return;
     }
@@ -1692,7 +1780,7 @@ mod tests {
         assert_eq!(effects.len(), 1);
         assert!(matches!(
             effects[0],
-            Effect::LoadStatus { repo_id: rid } if rid == repo_id
+            Effect::LoadWorktreeStatus { repo_id: rid } if rid == repo_id
         ));
         {
             let repo = repo_mut(&mut state, repo_id);

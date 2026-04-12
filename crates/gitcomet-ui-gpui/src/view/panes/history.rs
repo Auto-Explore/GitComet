@@ -752,7 +752,8 @@ impl HistoryView {
             repo.tags_rev.hash(&mut hasher);
             repo.stashes_rev.hash(&mut hasher);
             repo.history_state.selected_commit_rev.hash(&mut hasher);
-            repo.status_rev.hash(&mut hasher);
+            repo.worktree_status_cache_rev().hash(&mut hasher);
+            repo.staged_status_cache_rev().hash(&mut hasher);
         }
 
         hasher.finish()
@@ -1263,7 +1264,8 @@ impl HistoryView {
             },
             Rebuild {
                 repo_id: RepoId,
-                status: Arc<RepoStatus>,
+                worktree_status_rev: u64,
+                staged_status_rev: u64,
                 show_row: bool,
                 counts: (usize, usize, usize),
             },
@@ -1273,13 +1275,19 @@ impl HistoryView {
             let Some(repo) = self.active_repo() else {
                 return Action::Clear;
             };
-            let Loadable::Ready(status) = &repo.status else {
+            let worktree = repo.worktree_status_entries();
+            let staged = repo.staged_status_entries();
+            if worktree.is_none() && staged.is_none() {
                 return Action::Clear;
-            };
+            }
+
+            let worktree_status_rev = repo.worktree_status_cache_rev();
+            let staged_status_rev = repo.staged_status_cache_rev();
 
             if let Some(cache) = &self.history_worktree_summary_cache
                 && cache.repo_id == repo.id
-                && Arc::ptr_eq(&cache.status, status)
+                && cache.worktree_status_rev == worktree_status_rev
+                && cache.staged_status_rev == staged_status_rev
             {
                 return Action::CacheOk {
                     show_row: cache.show_row,
@@ -1303,9 +1311,10 @@ impl HistoryView {
                 (added, modified, deleted)
             };
 
-            let unstaged_counts = count_for(&status.unstaged);
-            let staged_counts = count_for(&status.staged);
-            let show_row = !status.unstaged.is_empty() || !status.staged.is_empty();
+            let unstaged_counts = worktree.map_or((0, 0, 0), count_for);
+            let staged_counts = staged.map_or((0, 0, 0), count_for);
+            let show_row = worktree.is_some_and(|entries| !entries.is_empty())
+                || staged.is_some_and(|entries| !entries.is_empty());
             let counts = (
                 unstaged_counts.0 + staged_counts.0,
                 unstaged_counts.1 + staged_counts.1,
@@ -1314,7 +1323,8 @@ impl HistoryView {
 
             Action::Rebuild {
                 repo_id: repo.id,
-                status: Arc::clone(status),
+                worktree_status_rev,
+                staged_status_rev,
                 show_row,
                 counts,
             }
@@ -1328,13 +1338,15 @@ impl HistoryView {
             Action::CacheOk { show_row, counts } => (show_row, counts),
             Action::Rebuild {
                 repo_id,
-                status,
+                worktree_status_rev,
+                staged_status_rev,
                 show_row,
                 counts,
             } => {
                 self.history_worktree_summary_cache = Some(HistoryWorktreeSummaryCache {
                     repo_id,
-                    status,
+                    worktree_status_rev,
+                    staged_status_rev,
                     show_row,
                     counts,
                 });

@@ -630,7 +630,7 @@ impl MainPaneView {
                 repo.diff_state.diff_target,
                 Some(DiffTarget::WorkingTree { .. })
             ) {
-                repo.status_rev
+                repo.status_cache_rev()
             } else {
                 0
             };

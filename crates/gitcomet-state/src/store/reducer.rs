@@ -1042,6 +1042,12 @@ pub(super) fn reduce(
         Msg::Internal(crate::msg::InternalMsg::RemoteBranchesLoaded { repo_id, result }) => {
             effects::remote_branches_loaded(state, repo_id, result)
         }
+        Msg::Internal(crate::msg::InternalMsg::WorktreeStatusLoaded { repo_id, result }) => {
+            effects::worktree_status_loaded(state, repo_id, result)
+        }
+        Msg::Internal(crate::msg::InternalMsg::StagedStatusLoaded { repo_id, result }) => {
+            effects::staged_status_loaded(state, repo_id, result)
+        }
         Msg::Internal(crate::msg::InternalMsg::StatusLoaded { repo_id, result }) => {
             effects::status_loaded(state, repo_id, result)
         }

@@ -6,7 +6,7 @@ use super::util::{
 use crate::model::{AppState, DiagnosticKind, Loadable, RepoLoadsInFlight};
 use crate::msg::{Effect, RepoExternalChange};
 use crate::session;
-use gitcomet_core::domain::{DiffTarget, LogCursor, LogPage, LogScope};
+use gitcomet_core::domain::{DiffArea, DiffTarget, LogCursor, LogPage, LogScope};
 use gitcomet_core::error::Error;
 use std::sync::Arc;
 
@@ -93,35 +93,50 @@ pub(super) fn repo_externally_changed(
     };
 
     // Coalesce refreshes while a refresh is already in flight.
-    let (mut effects, should_reload_diff) = match change {
-        RepoExternalChange::Worktree => {
-            if repo_state
-                .loads_in_flight
-                .request(RepoLoadsInFlight::STATUS)
-            {
-                (vec![Effect::LoadStatus { repo_id }], true)
-            } else {
-                (Vec::new(), false)
-            }
+    let mut effects = if change.git_state {
+        let mut effects = refresh_primary_effects(repo_state);
+        if repo_state
+            .loads_in_flight
+            .request(RepoLoadsInFlight::BRANCHES)
+        {
+            effects.push(Effect::LoadBranches { repo_id });
         }
-        RepoExternalChange::GitState | RepoExternalChange::Both => {
-            let mut effects = refresh_primary_effects(repo_state);
-            if repo_state
-                .loads_in_flight
-                .request(RepoLoadsInFlight::BRANCHES)
-            {
-                effects.push(Effect::LoadBranches { repo_id });
-            }
-            if repo_state
-                .loads_in_flight
-                .request(RepoLoadsInFlight::REMOTE_BRANCHES)
-            {
-                effects.push(Effect::LoadRemoteBranches { repo_id });
-            }
-            let should_reload_diff = !effects.is_empty();
-            (effects, should_reload_diff)
+        if repo_state
+            .loads_in_flight
+            .request(RepoLoadsInFlight::REMOTE_BRANCHES)
+        {
+            effects.push(Effect::LoadRemoteBranches { repo_id });
         }
+        effects
+    } else {
+        let mut effects = Vec::new();
+        if (change.worktree || change.index)
+            && repo_state
+                .loads_in_flight
+                .request(RepoLoadsInFlight::WORKTREE_STATUS)
+        {
+            effects.push(Effect::LoadWorktreeStatus { repo_id });
+        }
+        if change.index
+            && repo_state
+                .loads_in_flight
+                .request(RepoLoadsInFlight::STAGED_STATUS)
+        {
+            effects.push(Effect::LoadStagedStatus { repo_id });
+        }
+        effects
     };
+
+    let should_reload_diff = repo_state
+        .diff_state
+        .diff_target
+        .as_ref()
+        .is_some_and(|target| match target {
+            DiffTarget::WorkingTree { area, .. } => {
+                change.git_state || change.index || (*area == DiffArea::Unstaged && change.worktree)
+            }
+            DiffTarget::Commit { .. } => false,
+        });
 
     if should_reload_diff
         && let Some(target) = repo_state.diff_state.diff_target.clone()

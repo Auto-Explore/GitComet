@@ -20,8 +20,8 @@ use std::time::SystemTime;
 pub(super) const DEFAULT_LOG_PAGE_SIZE: usize = 200;
 const CONFLICT_RELOAD_EFFECT_COUNT: usize = 1;
 const DIFF_RELOAD_MAX_EFFECTS: usize = 3;
-const PRIMARY_REFRESH_MAX_EFFECTS: usize = 5;
-const FULL_REFRESH_MAX_EFFECTS: usize = 10;
+const PRIMARY_REFRESH_MAX_EFFECTS: usize = 6;
+const FULL_REFRESH_MAX_EFFECTS: usize = 11;
 
 pub(super) trait EffectAccumulator {
     fn push_effect(&mut self, effect: Effect);
@@ -131,12 +131,8 @@ pub(super) fn diff_target_is_svg(target: &DiffTarget) -> bool {
 fn diff_target_is_preview_only(repo_state: &RepoState, target: &DiffTarget) -> bool {
     match target {
         DiffTarget::WorkingTree { path, area } => {
-            let Loadable::Ready(status) = &repo_state.status else {
+            let Some(entries) = repo_state.status_entries_for_area(*area) else {
                 return false;
-            };
-            let entries = match area {
-                DiffArea::Unstaged => status.unstaged.as_slice(),
-                DiffArea::Staged => status.staged.as_slice(),
             };
 
             entries.iter().any(|entry| {
@@ -173,13 +169,7 @@ fn diff_target_preview_text_side(
 ) -> Option<gitcomet_core::domain::DiffPreviewTextSide> {
     match target {
         DiffTarget::WorkingTree { path, area } => {
-            let Loadable::Ready(status) = &repo_state.status else {
-                return None;
-            };
-            let entries = match area {
-                DiffArea::Unstaged => status.unstaged.as_slice(),
-                DiffArea::Staged => status.staged.as_slice(),
-            };
+            let entries = repo_state.status_entries_for_area(*area)?;
 
             entries.iter().find_map(|entry| {
                 (entry.path == *path).then_some(match entry.kind {
@@ -291,11 +281,8 @@ pub(super) fn selected_conflict_target<'a>(
         return None;
     }
 
-    let Loadable::Ready(status) = &repo_state.status else {
-        return None;
-    };
-    status
-        .unstaged
+    repo_state
+        .worktree_status_entries()?
         .iter()
         .find(|entry| entry.path == *path && entry.kind == FileStatusKind::Conflicted)
         .map(|_| SelectedConflictTarget::Path(path.as_path()))
@@ -491,13 +478,14 @@ pub(super) fn append_refresh_primary_effects(
         effects.push_effect(Effect::LoadHeadBranch { repo_id });
         effects.push_effect(Effect::LoadUpstreamDivergence { repo_id });
         push_rebase_and_merge_refresh_effect(effects, repo_id);
-        effects.push_effect(Effect::LoadStatus { repo_id });
+        effects.push_effect(Effect::LoadWorktreeStatus { repo_id });
         effects.push_effect(Effect::LoadLog {
             repo_id,
             scope,
             limit: DEFAULT_LOG_PAGE_SIZE,
             cursor: None,
         });
+        effects.push_effect(Effect::LoadStagedStatus { repo_id });
         return;
     }
 
@@ -516,9 +504,9 @@ pub(super) fn append_refresh_primary_effects(
     append_requested_rebase_and_merge_refresh_effects(repo_state, effects);
     if repo_state
         .loads_in_flight
-        .request(RepoLoadsInFlight::STATUS)
+        .request(RepoLoadsInFlight::WORKTREE_STATUS)
     {
-        effects.push_effect(Effect::LoadStatus { repo_id });
+        effects.push_effect(Effect::LoadWorktreeStatus { repo_id });
     }
     if repo_state
         .loads_in_flight
@@ -533,6 +521,12 @@ pub(super) fn append_refresh_primary_effects(
             limit: DEFAULT_LOG_PAGE_SIZE,
             cursor: None,
         });
+    }
+    if repo_state
+        .loads_in_flight
+        .request(RepoLoadsInFlight::STAGED_STATUS)
+    {
+        effects.push_effect(Effect::LoadStagedStatus { repo_id });
     }
 }
 
@@ -568,9 +562,9 @@ pub(super) fn append_refresh_full_effects(
     }
     if repo_state
         .loads_in_flight
-        .request(RepoLoadsInFlight::STATUS)
+        .request(RepoLoadsInFlight::WORKTREE_STATUS)
     {
-        effects.push_effect(Effect::LoadStatus { repo_id });
+        effects.push_effect(Effect::LoadWorktreeStatus { repo_id });
     }
     if repo_state.loads_in_flight.request_log(
         repo_state.history_state.history_scope,
@@ -584,6 +578,12 @@ pub(super) fn append_refresh_full_effects(
             limit: DEFAULT_LOG_PAGE_SIZE,
             cursor: None,
         });
+    }
+    if repo_state
+        .loads_in_flight
+        .request(RepoLoadsInFlight::STAGED_STATUS)
+    {
+        effects.push_effect(Effect::LoadStagedStatus { repo_id });
     }
     if repo_state
         .loads_in_flight
@@ -1372,9 +1372,14 @@ mod tests {
         let mut primary = repo_state(1);
         primary.set_log_loading_more(true);
         let primary_effects = refresh_primary_effects(&mut primary);
-        assert_eq!(primary_effects.len(), 5);
+        assert_eq!(primary_effects.len(), 6);
         assert!(!primary.log_loading_more);
         assert!(matches!(primary_effects[0], Effect::LoadHeadBranch { .. }));
+        assert!(
+            primary_effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::LoadWorktreeStatus { .. }))
+        );
         assert!(matches!(
             primary_effects[4],
             Effect::LoadLog {
@@ -1385,14 +1390,29 @@ mod tests {
         assert!(
             primary_effects
                 .iter()
+                .any(|effect| matches!(effect, Effect::LoadStagedStatus { .. }))
+        );
+        assert!(
+            primary_effects
+                .iter()
                 .any(|effect| matches!(effect, Effect::LoadRebaseAndMergeState { .. }))
         );
 
         let mut full = repo_state(2);
         full.set_log_loading_more(true);
         let full_effects = refresh_full_effects(&mut full);
-        assert_eq!(full_effects.len(), 10);
+        assert_eq!(full_effects.len(), 11);
         assert!(!full.log_loading_more);
+        assert!(
+            full_effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::LoadWorktreeStatus { .. }))
+        );
+        assert!(
+            full_effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::LoadStagedStatus { .. }))
+        );
         assert!(
             full_effects
                 .iter()
