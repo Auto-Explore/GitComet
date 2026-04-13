@@ -97,13 +97,8 @@ fn apply_state(
     state: Arc<AppState>,
 ) {
     cx.update(|window, app| {
-        let state_for_host = Arc::clone(&state);
         view.update(app, |this, cx| {
-            this.disable_poller_for_tests();
             push_test_state(this, state, cx);
-            this.popover_host.update(cx, |host, _cx| {
-                host.set_state_for_test(state_for_host);
-            });
         });
         let _ = window.draw(app);
     });
@@ -1258,7 +1253,9 @@ fn switching_change_tracking_view_restores_diff_panel_focus_for_adjacent_navigat
     draw_and_drain_test_window(cx);
 
     assert_eq!(
-        cx.update(|_window, app| view.read(app).change_tracking_view_for_test()),
+        cx.update(|_window, app| {
+            crate::view::test_support::change_tracking_view(view.read(app))
+        }),
         ChangeTrackingView::SplitUntracked,
         "expected selecting the split view menu entry to update the change-tracking layout"
     );

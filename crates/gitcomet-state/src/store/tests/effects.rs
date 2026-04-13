@@ -3063,6 +3063,343 @@ impl GitRepository for UnsupportedRepo {
     }
 }
 
+struct PanicOpenBackend;
+
+impl GitBackend for PanicOpenBackend {
+    fn open(&self, _path: &Path) -> std::result::Result<Arc<dyn GitRepository>, Error> {
+        panic!("open should not be called in effect scheduler tests")
+    }
+}
+
+struct RecordingCheckoutRepo {
+    spec: RepoSpec,
+    calls: Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+impl GitRepository for RecordingCheckoutRepo {
+    fn spec(&self) -> &RepoSpec {
+        &self.spec
+    }
+
+    fn log_head_page(&self, _limit: usize, _cursor: Option<&LogCursor>) -> Result<LogPage> {
+        unsupported_repo_result()
+    }
+    fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
+        unsupported_repo_result()
+    }
+    fn reflog_head(&self, _limit: usize) -> Result<Vec<ReflogEntry>> {
+        unsupported_repo_result()
+    }
+    fn current_branch(&self) -> Result<String> {
+        unsupported_repo_result()
+    }
+    fn list_branches(&self) -> Result<Vec<Branch>> {
+        unsupported_repo_result()
+    }
+    fn list_remotes(&self) -> Result<Vec<Remote>> {
+        unsupported_repo_result()
+    }
+    fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
+        unsupported_repo_result()
+    }
+    fn status(&self) -> Result<RepoStatus> {
+        unsupported_repo_result()
+    }
+    fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
+        unsupported_repo_result()
+    }
+
+    fn create_branch(&self, name: &str, target: &CommitId) -> Result<()> {
+        self.calls
+            .lock()
+            .expect("checkout recording mutex")
+            .push(format!("create {name} {}", target.as_ref()));
+        Ok(())
+    }
+    fn delete_branch(&self, _name: &str) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn checkout_branch(&self, name: &str) -> Result<()> {
+        self.calls
+            .lock()
+            .expect("checkout recording mutex")
+            .push(format!("checkout {name}"));
+        Ok(())
+    }
+    fn checkout_remote_branch(&self, remote: &str, branch: &str, local_branch: &str) -> Result<()> {
+        self.calls
+            .lock()
+            .expect("checkout recording mutex")
+            .push(format!(
+                "checkout_remote {remote}/{branch} -> {local_branch}"
+            ));
+        Ok(())
+    }
+    fn checkout_commit(&self, id: &CommitId) -> Result<()> {
+        self.calls
+            .lock()
+            .expect("checkout recording mutex")
+            .push(format!("checkout_commit {}", id.as_ref()));
+        Ok(())
+    }
+    fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn revert(&self, _id: &CommitId) -> Result<()> {
+        unsupported_repo_result()
+    }
+
+    fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn stash_list(&self) -> Result<Vec<StashEntry>> {
+        unsupported_repo_result()
+    }
+    fn stash_apply(&self, _index: usize) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn stash_drop(&self, _index: usize) -> Result<()> {
+        unsupported_repo_result()
+    }
+
+    fn stage(&self, _paths: &[&Path]) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn unstage(&self, _paths: &[&Path]) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn commit(&self, _message: &str) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn fetch_all(&self) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn pull(&self, _mode: PullMode) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn push(&self) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {
+        unsupported_repo_result()
+    }
+}
+
+fn wait_for_checkout_refresh_messages(
+    msg_rx: &std::sync::mpsc::Receiver<Msg>,
+    repo_id: RepoId,
+    expect_refresh_branches: bool,
+    expect_load_worktrees: bool,
+) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut saw_refresh_branches = false;
+    let mut saw_load_worktrees = false;
+    let mut saw_finished = false;
+
+    while Instant::now() < deadline {
+        let msg = match msg_rx.recv_timeout(Duration::from_millis(50)) {
+            Ok(msg) => msg,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(err) => panic!("channel closed: {err:?}"),
+        };
+
+        match msg {
+            Msg::RefreshBranches { repo_id: rid } if rid == repo_id => {
+                saw_refresh_branches = true;
+            }
+            Msg::LoadWorktrees { repo_id: rid } if rid == repo_id => {
+                saw_load_worktrees = true;
+            }
+            Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
+                repo_id: rid,
+                result: Ok(()),
+            }) if rid == repo_id => {
+                saw_finished = true;
+            }
+            _ => {}
+        }
+
+        if saw_finished
+            && saw_refresh_branches == expect_refresh_branches
+            && saw_load_worktrees == expect_load_worktrees
+        {
+            return;
+        }
+    }
+
+    assert_eq!(
+        saw_refresh_branches, expect_refresh_branches,
+        "unexpected RefreshBranches emission for repo {repo_id:?}"
+    );
+    assert_eq!(
+        saw_load_worktrees, expect_load_worktrees,
+        "unexpected LoadWorktrees emission for repo {repo_id:?}"
+    );
+    assert!(
+        saw_finished,
+        "expected RepoActionFinished for repo {repo_id:?}"
+    );
+}
+
+#[test]
+fn checkout_branch_effect_requests_branch_and_worktree_reload_on_success() {
+    let repo_id = RepoId(700);
+    let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let backend: Arc<dyn GitBackend> = Arc::new(PanicOpenBackend);
+    let repo: Arc<dyn GitRepository> = Arc::new(RecordingCheckoutRepo {
+        spec: RepoSpec {
+            workdir: unique_temp_path("gitcomet-checkout-branch-effect"),
+        },
+        calls: Arc::clone(&calls),
+    });
+    let repos: HashMap<RepoId, Arc<dyn GitRepository>> = {
+        let mut repos = HashMap::default();
+        repos.insert(repo_id, repo);
+        repos
+    };
+    let executor = super::executor::TaskExecutor::new(1);
+    let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
+
+    schedule_effect_for_test(
+        &executor,
+        &executor,
+        &backend,
+        &repos,
+        msg_tx,
+        Effect::CheckoutBranch {
+            repo_id,
+            name: "feature".to_string(),
+        },
+    );
+
+    wait_for_checkout_refresh_messages(&msg_rx, repo_id, true, true);
+    assert_eq!(
+        *calls.lock().expect("checkout recording mutex"),
+        vec!["checkout feature".to_string()]
+    );
+}
+
+#[test]
+fn checkout_remote_branch_effect_requests_branch_and_worktree_reload_on_success() {
+    let repo_id = RepoId(701);
+    let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let backend: Arc<dyn GitBackend> = Arc::new(PanicOpenBackend);
+    let repo: Arc<dyn GitRepository> = Arc::new(RecordingCheckoutRepo {
+        spec: RepoSpec {
+            workdir: unique_temp_path("gitcomet-checkout-remote-branch-effect"),
+        },
+        calls: Arc::clone(&calls),
+    });
+    let repos: HashMap<RepoId, Arc<dyn GitRepository>> = {
+        let mut repos = HashMap::default();
+        repos.insert(repo_id, repo);
+        repos
+    };
+    let executor = super::executor::TaskExecutor::new(1);
+    let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
+
+    schedule_effect_for_test(
+        &executor,
+        &executor,
+        &backend,
+        &repos,
+        msg_tx,
+        Effect::CheckoutRemoteBranch {
+            repo_id,
+            remote: "origin".to_string(),
+            branch: "feature".to_string(),
+            local_branch: "feature".to_string(),
+        },
+    );
+
+    wait_for_checkout_refresh_messages(&msg_rx, repo_id, true, true);
+    assert_eq!(
+        *calls.lock().expect("checkout recording mutex"),
+        vec!["checkout_remote origin/feature -> feature".to_string()]
+    );
+}
+
+#[test]
+fn checkout_commit_effect_requests_worktree_reload_on_success() {
+    let repo_id = RepoId(702);
+    let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let backend: Arc<dyn GitBackend> = Arc::new(PanicOpenBackend);
+    let repo: Arc<dyn GitRepository> = Arc::new(RecordingCheckoutRepo {
+        spec: RepoSpec {
+            workdir: unique_temp_path("gitcomet-checkout-commit-effect"),
+        },
+        calls: Arc::clone(&calls),
+    });
+    let repos: HashMap<RepoId, Arc<dyn GitRepository>> = {
+        let mut repos = HashMap::default();
+        repos.insert(repo_id, repo);
+        repos
+    };
+    let executor = super::executor::TaskExecutor::new(1);
+    let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
+    let commit_id = CommitId("deadbeef".into());
+
+    schedule_effect_for_test(
+        &executor,
+        &executor,
+        &backend,
+        &repos,
+        msg_tx,
+        Effect::CheckoutCommit {
+            repo_id,
+            commit_id: commit_id.clone(),
+        },
+    );
+
+    wait_for_checkout_refresh_messages(&msg_rx, repo_id, false, true);
+    assert_eq!(
+        *calls.lock().expect("checkout recording mutex"),
+        vec![format!("checkout_commit {}", commit_id.as_ref())]
+    );
+}
+
+#[test]
+fn create_branch_and_checkout_effect_requests_branch_and_worktree_reload_on_success() {
+    let repo_id = RepoId(703);
+    let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let backend: Arc<dyn GitBackend> = Arc::new(PanicOpenBackend);
+    let repo: Arc<dyn GitRepository> = Arc::new(RecordingCheckoutRepo {
+        spec: RepoSpec {
+            workdir: unique_temp_path("gitcomet-create-branch-and-checkout-effect"),
+        },
+        calls: Arc::clone(&calls),
+    });
+    let repos: HashMap<RepoId, Arc<dyn GitRepository>> = {
+        let mut repos = HashMap::default();
+        repos.insert(repo_id, repo);
+        repos
+    };
+    let executor = super::executor::TaskExecutor::new(1);
+    let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
+
+    schedule_effect_for_test(
+        &executor,
+        &executor,
+        &backend,
+        &repos,
+        msg_tx,
+        Effect::CreateBranchAndCheckout {
+            repo_id,
+            name: "feature".to_string(),
+            target: "HEAD".to_string(),
+        },
+    );
+
+    wait_for_checkout_refresh_messages(&msg_rx, repo_id, true, true);
+    assert_eq!(
+        *calls.lock().expect("checkout recording mutex"),
+        vec![
+            "create feature HEAD".to_string(),
+            "checkout feature".to_string()
+        ]
+    );
+}
+
 fn recv_n_msgs(msg_rx: &std::sync::mpsc::Receiver<Msg>, n: usize) {
     for _ in 0..n {
         msg_rx
@@ -3168,6 +3505,72 @@ fn open_repo_effect_emits_repo_opened_err() {
             assert!(matches!(error.kind(), ErrorKind::Backend(_)));
         }
         _ => panic!("expected RepoOpenedErr"),
+    }
+}
+
+#[test]
+fn worktree_and_submodule_effects_report_missing_repo_handle() {
+    struct Backend;
+    impl GitBackend for Backend {
+        fn open(&self, _path: &Path) -> std::result::Result<Arc<dyn GitRepository>, Error> {
+            panic!("open should not be called in this test")
+        }
+    }
+
+    let repo_id = RepoId(77);
+    let executor = super::executor::TaskExecutor::new(1);
+    let backend: Arc<dyn GitBackend> = Arc::new(Backend);
+    let repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
+
+    schedule_effect_for_test(
+        &executor,
+        &executor,
+        &backend,
+        &repos,
+        msg_tx.clone(),
+        Effect::LoadWorktrees { repo_id },
+    );
+    schedule_effect_for_test(
+        &executor,
+        &executor,
+        &backend,
+        &repos,
+        msg_tx,
+        Effect::LoadSubmodules { repo_id },
+    );
+
+    let first = msg_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("expected WorktreesLoaded");
+    let second = msg_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("expected SubmodulesLoaded");
+
+    match first {
+        Msg::Internal(crate::msg::InternalMsg::WorktreesLoaded {
+            repo_id: got_repo_id,
+            result: Err(error),
+        }) => {
+            assert_eq!(got_repo_id, repo_id);
+            assert!(
+                matches!(error.kind(), ErrorKind::Backend(message) if message.contains("Repository handle not found"))
+            );
+        }
+        _ => panic!("expected WorktreesLoaded missing-handle error"),
+    }
+
+    match second {
+        Msg::Internal(crate::msg::InternalMsg::SubmodulesLoaded {
+            repo_id: got_repo_id,
+            result: Err(error),
+        }) => {
+            assert_eq!(got_repo_id, repo_id);
+            assert!(
+                matches!(error.kind(), ErrorKind::Backend(message) if message.contains("Repository handle not found"))
+            );
+        }
+        _ => panic!("expected SubmodulesLoaded missing-handle error"),
     }
 }
 

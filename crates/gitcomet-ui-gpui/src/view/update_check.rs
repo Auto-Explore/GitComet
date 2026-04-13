@@ -47,7 +47,8 @@ impl GitCometView {
         #[cfg(not(test))]
         cx.spawn(
             async move |view: WeakEntity<GitCometView>, cx: &mut gpui::AsyncApp| {
-                let notice = smol::unblock(|| fetch_update_notice(env!("CARGO_PKG_VERSION"))).await;
+                let notice =
+                    fetch_update_notice(env!("CARGO_PKG_VERSION"), resolve_update_repo()).await;
                 let Some(notice) = notice else {
                     return;
                 };
@@ -71,23 +72,33 @@ impl GitCometView {
 }
 
 #[cfg(not(test))]
-fn fetch_update_notice(current_version: &'static str) -> Option<UpdateNotice> {
+async fn fetch_update_notice(
+    current_version: &'static str,
+    repo: GitHubRepo,
+) -> Option<UpdateNotice> {
+    smol::unblock(move || fetch_update_notice_blocking(current_version, repo)).await
+}
+
+#[cfg(not(test))]
+fn fetch_update_notice_blocking(
+    current_version: &'static str,
+    repo: GitHubRepo,
+) -> Option<UpdateNotice> {
     const UPDATE_CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(4);
 
-    let repo = resolve_update_repo();
     let user_agent = format!(
         "GitComet/{current_version} (+{})",
         env!("CARGO_PKG_REPOSITORY")
     );
-    let client = zed_reqwest::blocking::Client::builder()
+    let client = reqwest::blocking::Client::builder()
         .timeout(UPDATE_CHECK_TIMEOUT)
         .build()
         .ok()?;
 
     let release: GitHubRelease = client
         .get(repo.releases_latest_api_url())
-        .header(zed_reqwest::header::ACCEPT, "application/vnd.github+json")
-        .header(zed_reqwest::header::USER_AGENT, user_agent)
+        .header(reqwest::header::ACCEPT, "application/vnd.github+json")
+        .header(reqwest::header::USER_AGENT, user_agent)
         .send()
         .ok()
         .and_then(|response| response.error_for_status().ok())

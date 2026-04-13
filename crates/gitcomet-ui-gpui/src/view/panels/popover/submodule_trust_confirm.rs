@@ -205,7 +205,7 @@ pub(super) fn panel(
                                     let focus = this
                                         .submodule_url_input
                                         .read_with(cx, |input, _| input.focus_handle());
-                                    window.focus(&focus);
+                                    window.focus(&focus, cx);
                                 }
                                 SubmoduleTrustPromptOperation::Update => {
                                     this.popover = None;

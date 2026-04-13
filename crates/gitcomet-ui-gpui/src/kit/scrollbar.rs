@@ -100,15 +100,15 @@ impl ScrollbarHandle {
                 .borrow()
                 .last_item_size
                 .map(|size| (size.contents.height - size.item.height).max(px(0.0)))
-                .unwrap_or_else(|| handle.0.borrow().base_handle.max_offset().height),
+                .unwrap_or_else(|| handle.0.borrow().base_handle.max_offset().y),
             (ScrollbarAxis::Horizontal, Self::UniformList(handle)) => handle
                 .0
                 .borrow()
                 .last_item_size
                 .map(|size| (size.contents.width - size.item.width).max(px(0.0)))
-                .unwrap_or_else(|| handle.0.borrow().base_handle.max_offset().width),
-            (ScrollbarAxis::Vertical, _) => self.base_handle().max_offset().height.max(px(0.0)),
-            (ScrollbarAxis::Horizontal, _) => self.base_handle().max_offset().width.max(px(0.0)),
+                .unwrap_or_else(|| handle.0.borrow().base_handle.max_offset().x),
+            (ScrollbarAxis::Vertical, _) => self.base_handle().max_offset().y.max(px(0.0)),
+            (ScrollbarAxis::Horizontal, _) => self.base_handle().max_offset().x.max(px(0.0)),
         }
     }
 
@@ -381,7 +381,7 @@ impl Scrollbar {
                             let task = cx.spawn(
                                 async move |state: gpui::WeakEntity<ScrollbarInteractionState>,
                                             cx: &mut gpui::AsyncApp| {
-                                    gpui::Timer::after(Duration::from_millis(1000)).await;
+                                    smol::Timer::after(Duration::from_millis(1000)).await;
                                     let _ = state.update(cx, |s, cx| {
                                         if s.drag_offset.is_none() {
                                             s.showing = false;
@@ -599,7 +599,7 @@ impl Scrollbar {
 impl Scrollbar {
     pub fn thumb_visible_for_test(handle: &ScrollHandle, viewport_h_fallback: Pixels) -> bool {
         let viewport_h = viewport_h_fallback;
-        let max_offset = handle.max_offset().height.max(px(0.0));
+        let max_offset = handle.max_offset().y.max(px(0.0));
         let raw_offset_y = handle.offset().y;
         let scroll_y = if raw_offset_y < px(0.0) {
             (-raw_offset_y).max(px(0.0)).min(max_offset)

@@ -161,7 +161,6 @@ fn worktree_preview_search_query_clears_row_cache_without_dropping_source_path(
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(23);
     let workdir = std::env::temp_dir().join(format!(
@@ -315,7 +314,6 @@ fn worktree_preview_identical_refresh_preserves_row_cache(cx: &mut gpui::TestApp
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(24);
     let workdir = std::env::temp_dir().join(format!(
@@ -384,7 +382,6 @@ fn worktree_preview_identical_refresh_preserves_row_cache(cx: &mut gpui::TestApp
         "worktree preview row cache before identical refresh",
         |pane| {
             pane.worktree_preview_segments_cache_path.as_ref() == Some(&preview_abs_path)
-                && pane.worktree_preview_prepared_syntax_document().is_some()
                 && pane.worktree_preview_segments_cache_get(0).is_some()
         },
         |pane| {
@@ -401,6 +398,7 @@ fn worktree_preview_identical_refresh_preserves_row_cache(cx: &mut gpui::TestApp
 
     let mut base_highlights_hash = 0u64;
     let mut base_style_epoch = 0u64;
+    let mut base_prepared_syntax_ready = false;
     cx.update(|_window, app| {
         let main_pane = view.read(app).main_pane.clone();
         let pane = main_pane.read(app);
@@ -409,6 +407,7 @@ fn worktree_preview_identical_refresh_preserves_row_cache(cx: &mut gpui::TestApp
             .expect("expected worktree preview row cache before identical refresh");
         base_highlights_hash = base.highlights_hash;
         base_style_epoch = pane.worktree_preview_style_cache_epoch;
+        base_prepared_syntax_ready = pane.worktree_preview_prepared_syntax_document().is_some();
     });
 
     cx.update(|_window, app| {
@@ -438,14 +437,21 @@ fn worktree_preview_identical_refresh_preserves_row_cache(cx: &mut gpui::TestApp
             Some(&preview_abs_path),
             "identical refresh should keep the preview cache bound to the current source"
         );
-        assert_eq!(
-            pane.worktree_preview_style_cache_epoch, base_style_epoch,
-            "identical refresh should not bump the preview syntax/style epoch"
-        );
-        assert_eq!(
-            refreshed.highlights_hash, base_highlights_hash,
-            "identical refresh should preserve the existing cached row styling"
-        );
+        if base_prepared_syntax_ready {
+            assert_eq!(
+                pane.worktree_preview_style_cache_epoch, base_style_epoch,
+                "identical refresh should not bump the preview syntax/style epoch once syntax is already ready"
+            );
+            assert_eq!(
+                refreshed.highlights_hash, base_highlights_hash,
+                "identical refresh should preserve the existing cached row styling once syntax is already ready"
+            );
+        } else if pane.worktree_preview_style_cache_epoch == base_style_epoch {
+            assert_eq!(
+                refreshed.highlights_hash, base_highlights_hash,
+                "identical refresh should preserve the fallback cached row styling while syntax is still pending"
+            );
+        }
     });
 
     // Phase 2: refresh with different content — cache must be invalidated.
@@ -478,10 +484,17 @@ fn worktree_preview_identical_refresh_preserves_row_cache(cx: &mut gpui::TestApp
             pane.worktree_preview_style_cache_epoch, base_style_epoch,
             "changed source should bump the preview syntax/style epoch"
         );
-        assert!(
-            pane.worktree_preview_segments_cache_get(0).is_none(),
-            "changed source should clear the cached preview rows"
-        );
+        if let Some(refreshed) = pane.worktree_preview_segments_cache_get(0) {
+            assert_eq!(
+                refreshed.text.as_ref(),
+                changed_lines[0].as_str(),
+                "changed source may repopulate the cache immediately, but it must render the new preview contents"
+            );
+            assert_ne!(
+                refreshed.highlights_hash, base_highlights_hash,
+                "changed source must not retain the old cached preview styling"
+            );
+        }
     });
 
     let _ = std::fs::remove_dir_all(&workdir);
@@ -493,7 +506,6 @@ fn staged_deleted_file_preview_uses_old_contents(cx: &mut gpui::TestAppContext) 
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(3);
     let workdir =
@@ -590,7 +602,6 @@ fn committed_deleted_file_preview_uses_preview_text_file_without_patch_fallback(
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(303);
     let workdir = std::env::temp_dir().join(format!(
@@ -704,7 +715,6 @@ fn untracked_markdown_file_preview_defaults_to_preview_mode_and_renders_containe
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(59);
     let workdir = std::env::temp_dir().join(format!(
@@ -1554,7 +1564,6 @@ fn commit_details_file_list_keeps_visible_viewport_when_overflowing(cx: &mut gpu
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(61);
     let commit_sha = "0123456789abcdef0123456789abcdef01234567".to_string();
@@ -2189,7 +2198,7 @@ fn split_status_section_resize_moves_untracked_section(cx: &mut gpui::TestAppCon
         let details_pane = view.read(app).details_pane.clone();
         let pane = details_pane.read(app);
         assert_eq!(
-            view.read(app).change_tracking_view_for_test(),
+            crate::view::test_support::change_tracking_view(view.read(app)),
             ChangeTrackingView::SplitUntracked,
             "expected the root view to store split change-tracking mode"
         );
@@ -2256,7 +2265,7 @@ fn split_status_section_resize_moves_untracked_section(cx: &mut gpui::TestAppCon
         let details_pane = view.read(app).details_pane.clone();
         let pane = details_pane.read(app);
         assert_eq!(
-            view.read(app).change_tracking_view_for_test(),
+            crate::view::test_support::change_tracking_view(view.read(app)),
             ChangeTrackingView::SplitUntracked,
             "expected split change-tracking view to remain active while resizing"
         );

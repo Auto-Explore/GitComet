@@ -657,15 +657,30 @@ pub(super) fn schedule_load_worktrees(
     msg_tx: mpsc::Sender<Msg>,
     repo_id: RepoId,
 ) {
-    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        send_or_log(
-            &msg_tx,
-            Msg::Internal(crate::msg::InternalMsg::WorktreesLoaded {
-                repo_id,
-                result: repo.list_worktrees(),
-            }),
-        );
-    });
+    spawn_with_repo_or_else(
+        executor,
+        repos,
+        repo_id,
+        msg_tx,
+        move |repo, msg_tx| {
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(crate::msg::InternalMsg::WorktreesLoaded {
+                    repo_id,
+                    result: repo.list_worktrees(),
+                }),
+            );
+        },
+        move |msg_tx| {
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(crate::msg::InternalMsg::WorktreesLoaded {
+                    repo_id,
+                    result: Err(missing_repo_error(repo_id)),
+                }),
+            );
+        },
+    );
 }
 
 pub(super) fn schedule_load_submodules(
@@ -674,15 +689,30 @@ pub(super) fn schedule_load_submodules(
     msg_tx: mpsc::Sender<Msg>,
     repo_id: RepoId,
 ) {
-    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        send_or_log(
-            &msg_tx,
-            Msg::Internal(crate::msg::InternalMsg::SubmodulesLoaded {
-                repo_id,
-                result: repo.list_submodules(),
-            }),
-        );
-    });
+    spawn_with_repo_or_else(
+        executor,
+        repos,
+        repo_id,
+        msg_tx,
+        move |repo, msg_tx| {
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(crate::msg::InternalMsg::SubmodulesLoaded {
+                    repo_id,
+                    result: repo.list_submodules(),
+                }),
+            );
+        },
+        move |msg_tx| {
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(crate::msg::InternalMsg::SubmodulesLoaded {
+                    repo_id,
+                    result: Err(missing_repo_error(repo_id)),
+                }),
+            );
+        },
+    );
 }
 
 pub(super) fn schedule_load_rebase_state(

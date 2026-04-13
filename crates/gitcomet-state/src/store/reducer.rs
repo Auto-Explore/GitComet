@@ -517,6 +517,9 @@ pub(super) fn reduce(
             diff_selection::select_conflict_diff(state, repo_id, path)
         }
         Msg::ClearDiffSelection { repo_id } => diff_selection::clear_diff_selection(state, repo_id),
+        Msg::EnsureSidebarData { repo_id, request } => {
+            effects::ensure_sidebar_data(state, repo_id, request)
+        }
         Msg::LoadStashes { repo_id } => effects::load_stashes(state, repo_id),
         Msg::LoadConflictFile {
             repo_id,

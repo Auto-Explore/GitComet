@@ -592,7 +592,7 @@ impl DetailsPaneView {
         let selected_id = selected_id.clone();
         cx.spawn(
             async move |view: WeakEntity<DetailsPaneView>, cx: &mut gpui::AsyncApp| {
-                Timer::after(Duration::from_millis(100)).await;
+                smol::Timer::after(Duration::from_millis(100)).await;
                 let _ = view.update(cx, |this, cx| {
                     if this.commit_details_delay_seq != seq {
                         return;
@@ -695,7 +695,7 @@ impl DetailsPaneView {
     ) {
         let _ = self.root_view.update(cx, |root, cx| {
             let handle = root.main_pane.read(cx).diff_panel_focus_handle.clone();
-            window.focus(&handle);
+            window.focus(&handle, cx);
         });
     }
 }

@@ -33,7 +33,6 @@ fn clone_repo_popover_renders_shortcut_hints_and_separators(cx: &mut gpui::TestA
         .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
 
     cx.update(|window, app| {
-        view.update(app, |this, _cx| this.disable_poller_for_tests());
         let _ = window.draw(app);
     });
 
@@ -71,7 +70,6 @@ fn clone_repo_popover_escape_closes_from_parent_input(cx: &mut gpui::TestAppCont
         .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
 
     cx.update(|window, app| {
-        view.update(app, |this, _cx| this.disable_poller_for_tests());
         let _ = window.draw(app);
     });
 
@@ -87,7 +85,7 @@ fn clone_repo_popover_escape_closes_from_parent_input(cx: &mut gpui::TestAppCont
                 let focus = host
                     .clone_repo_parent_dir_input
                     .read_with(cx, |input, _| input.focus_handle());
-                window.focus(&focus);
+                window.focus(&focus, cx);
             });
         });
     });
@@ -125,7 +123,6 @@ fn clone_repo_popover_enter_from_parent_input_submits_and_closes(cx: &mut gpui::
             crate::kit::Enter,
             Some("TextInput"),
         )]);
-        view.update(app, |this, _cx| this.disable_poller_for_tests());
         let _ = window.draw(app);
     });
 
@@ -146,7 +143,7 @@ fn clone_repo_popover_enter_from_parent_input_submits_and_closes(cx: &mut gpui::
                 let focus = host
                     .clone_repo_parent_dir_input
                     .read_with(cx, |input, _| input.focus_handle());
-                window.focus(&focus);
+                window.focus(&focus, cx);
             });
         });
     });
@@ -190,7 +187,6 @@ fn clone_repo_popover_clone_button_requires_parent_path(cx: &mut gpui::TestAppCo
     let url = "http://example.com/org/repo.git";
 
     cx.update(|window, app| {
-        view.update(app, |this, _cx| this.disable_poller_for_tests());
         let _ = window.draw(app);
     });
 

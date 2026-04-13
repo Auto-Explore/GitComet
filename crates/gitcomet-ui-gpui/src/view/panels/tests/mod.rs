@@ -491,7 +491,7 @@ pub(super) fn uniform_list_offset(handle: &gpui::UniformListScrollHandle) -> gpu
 pub(super) fn uniform_list_max_offset(
     handle: &gpui::UniformListScrollHandle,
 ) -> gpui::Size<Pixels> {
-    handle.0.borrow().base_handle.max_offset()
+    handle.0.borrow().base_handle.max_offset().into()
 }
 
 pub(super) fn set_uniform_list_offset(
@@ -561,7 +561,6 @@ pub(super) fn assert_file_preview_ctrl_a_ctrl_c_copies_all(
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     // Create the file on disk so is_file_preview_active() can detect it.
     let _ = std::fs::create_dir_all(&workdir);
@@ -622,7 +621,7 @@ pub(super) fn assert_file_preview_ctrl_a_ctrl_c_copies_all(
     cx.update(|window, app| {
         let main_pane = view.read(app).main_pane.clone();
         let focus = main_pane.read(app).diff_panel_focus_handle.clone();
-        window.focus(&focus);
+        window.focus(&focus, app);
         let _ = window.draw(app);
     });
 
@@ -674,7 +673,6 @@ pub(super) fn assert_markdown_file_preview_toggle_visible(
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let _ = std::fs::remove_dir_all(&workdir);
     std::fs::create_dir_all(&workdir).expect("create markdown preview workdir");
@@ -944,17 +942,8 @@ pub(super) fn focus_diff_panel(
     cx.update(|window, app| {
         let main_pane = view.read(app).main_pane.clone();
         let focus = main_pane.read(app).diff_panel_focus_handle.clone();
-        window.focus(&focus);
+        window.focus(&focus, app);
         let _ = window.draw(app);
-    });
-}
-
-pub(super) fn disable_view_poller_for_test(
-    cx: &mut gpui::VisualTestContext,
-    view: &gpui::Entity<super::super::GitCometView>,
-) {
-    cx.update(|_window, app| {
-        view.update(app, |this, _cx| this.disable_poller_for_tests());
     });
 }
 

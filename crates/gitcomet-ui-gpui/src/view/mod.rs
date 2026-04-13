@@ -21,8 +21,8 @@ use gpui::{
     Element, ElementId, Entity, FocusHandle, FontWeight, GlobalElementId, InspectorElementId,
     IsZero, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point,
     Render, ResizeEdge, ScrollHandle, ShapedLine, SharedString, Size, Style, TextRun, Tiling,
-    Timer, UniformListScrollHandle, WeakEntity, Window, WindowControlArea, anchored, div, fill,
-    point, px, relative, size, uniform_list,
+    UniformListScrollHandle, WeakEntity, Window, WindowControlArea, anchored, div, fill, point, px,
+    relative, size, uniform_list,
 };
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 #[cfg(test)]
@@ -50,6 +50,7 @@ mod diff_utils;
 mod fingerprint;
 mod history_graph;
 mod icons;
+#[cfg(any(test, target_os = "linux", target_os = "freebsd"))]
 mod linux_desktop_integration;
 mod markdown_preview;
 mod mod_helpers;
@@ -64,8 +65,11 @@ mod poller;
 mod repo_open;
 pub(crate) mod rows;
 mod settings_window;
+mod sidebar_presentation;
 mod splash;
 mod state_apply;
+#[cfg(test)]
+pub(crate) mod test_support;
 mod toast_host;
 mod tooltip;
 mod tooltip_host;
@@ -75,8 +79,8 @@ mod word_diff;
 use app_model::AppUiModel;
 use branch_sidebar::{BranchSection, BranchSidebarRow};
 use caches::{
-    BranchSidebarCache, HistoryCache, HistoryCacheRequest, HistoryCommitRowVm,
-    HistoryStashIdsCache, HistoryWorktreeSummaryCache,
+    HistoryCache, HistoryCacheRequest, HistoryCommitRowVm, HistoryStashIdsCache,
+    HistoryWorktreeSummaryCache,
 };
 use chrome::{
     CLIENT_SIDE_DECORATION_INSET, TitleBarView, cursor_style_for_resize_edge, resize_edge,
@@ -286,11 +290,6 @@ pub(in crate::view) fn diff_split_column_widths(
 pub(crate) const UI_MONOSPACE_FONT_FAMILY: &str = crate::bundled_fonts::LILEX_FONT_FAMILY;
 
 impl GitCometView {
-    #[cfg(test)]
-    pub(in crate::view) fn disable_poller_for_tests(&mut self) {
-        self._poller = Poller::disabled();
-    }
-
     pub(in crate::view) fn open_popover_at(
         &mut self,
         kind: PopoverKind,
@@ -467,7 +466,7 @@ impl GitCometView {
         let store_preloaded = !store.snapshot().repos.is_empty();
         let should_auto_restore = !crate::startup_probe::disable_auto_restore()
             && view_mode != GitCometViewMode::FocusedMergetool
-            && cfg!(not(test))
+            && crate::ui_runtime::current().auto_restores_session()
             && !store_preloaded;
 
         if should_auto_restore {
@@ -914,13 +913,21 @@ impl GitCometView {
             return;
         }
 
+        if !crate::ui_runtime::current().uses_pane_animations() {
+            self.sidebar_render_width = target;
+            self.sidebar_width_animating = false;
+            self.refresh_main_pane_after_panel_animation(cx);
+            cx.notify();
+            return;
+        }
+
         self.sidebar_width_animating = true;
         let started = Instant::now();
         let duration = Duration::from_millis(PANE_COLLAPSE_ANIM_MS);
 
         cx.spawn(
             async move |view: WeakEntity<GitCometView>, cx: &mut gpui::AsyncApp| loop {
-                Timer::after(Duration::from_millis(16)).await;
+                smol::Timer::after(Duration::from_millis(16)).await;
 
                 let mut t =
                     started.elapsed().as_secs_f32() / duration.as_secs_f32().max(f32::EPSILON);
@@ -976,13 +983,21 @@ impl GitCometView {
             return;
         }
 
+        if !crate::ui_runtime::current().uses_pane_animations() {
+            self.details_render_width = target;
+            self.details_width_animating = false;
+            self.refresh_main_pane_after_panel_animation(cx);
+            cx.notify();
+            return;
+        }
+
         self.details_width_animating = true;
         let started = Instant::now();
         let duration = Duration::from_millis(PANE_COLLAPSE_ANIM_MS);
 
         cx.spawn(
             async move |view: WeakEntity<GitCometView>, cx: &mut gpui::AsyncApp| loop {
-                Timer::after(Duration::from_millis(16)).await;
+                smol::Timer::after(Duration::from_millis(16)).await;
 
                 let mut t =
                     started.elapsed().as_secs_f32() / duration.as_secs_f32().max(f32::EPSILON);
@@ -1371,7 +1386,7 @@ impl GitCometView {
             .update(cx, |host, cx| host.push_toast(kind, message, cx));
     }
 
-    #[cfg(not(test))]
+    #[cfg_attr(test, allow(dead_code))]
     fn push_toast_with_link(
         &mut self,
         kind: components::ToastKind,
@@ -1391,31 +1406,6 @@ impl GitCometView {
 
     fn open_external_url(&mut self, url: &str) -> Result<(), std::io::Error> {
         platform_open::open_url(url)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn is_popover_open(&self, app: &App) -> bool {
-        self.popover_host.read(app).is_open()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn tooltip_text_for_test(&self, app: &App) -> Option<SharedString> {
-        self.tooltip_host.read(app).tooltip_text_for_test()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn show_timezone_for_test(&self) -> bool {
-        self.show_timezone
-    }
-
-    #[cfg(test)]
-    pub(in crate::view) fn change_tracking_view_for_test(&self) -> ChangeTrackingView {
-        self.change_tracking_view
-    }
-
-    #[cfg(test)]
-    pub(in crate::view) fn diff_scroll_sync_for_test(&self) -> DiffScrollSync {
-        self.diff_scroll_sync
     }
 }
 
@@ -1496,6 +1486,10 @@ impl Render for GitCometView {
 
         let center_content = self.center_content(window, cx);
         let font_features = crate::font_preferences::current_font_features(cx);
+        let show_custom_window_chrome =
+            crate::linux_gui_env::LinuxGuiEnvironment::should_render_custom_window_chrome(
+                decorations,
+            );
 
         let mut body = div()
             .flex()
@@ -1511,9 +1505,13 @@ impl Render for GitCometView {
                 weight: gpui::FontWeight::default(),
                 style: gpui::FontStyle::default(),
             })
-            .text_color(theme.colors.text)
-            .child(self.title_bar.clone())
-            .child(center_content);
+            .text_color(theme.colors.text);
+
+        if show_custom_window_chrome {
+            body = body.child(self.title_bar.clone());
+        }
+
+        body = body.child(center_content);
 
         if let Some(report) = self.startup_crash_report.clone()
             && self.view_mode == GitCometViewMode::Normal
