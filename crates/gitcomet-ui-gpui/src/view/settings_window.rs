@@ -4,6 +4,7 @@ use gitcomet_core::process::{
 };
 use gitcomet_state::model::GitLogTagFetchMode;
 use gpui::{Stateful, TitlebarOptions, WindowBounds, WindowDecorations, WindowOptions};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 const SETTINGS_WINDOW_MIN_WIDTH_PX: f32 = 620.0;
@@ -377,6 +378,17 @@ fn git_log_tag_fetch_mode_label(mode: GitLogTagFetchMode) -> &'static str {
     }
 }
 
+fn applied_git_executable_path(runtime: &GitRuntimeState) -> Option<PathBuf> {
+    match &runtime.preference {
+        GitExecutablePreference::SystemPath => None,
+        GitExecutablePreference::Custom(path) => Some(path.clone()),
+    }
+}
+
+fn git_executable_scope_note() -> &'static str {
+    "Applies only to the main GitComet browser window. Git-invoked command modes keep using git from System PATH."
+}
+
 impl SettingsWindowView {
     fn new(window: &mut Window, cx: &mut gpui::Context<Self>) -> Self {
         window.set_window_title(SETTINGS_WINDOW_TITLE);
@@ -549,7 +561,7 @@ impl SettingsWindowView {
             history_show_sha: Some(self.history_show_sha),
             history_show_tags: Some(self.history_show_tags),
             history_tag_fetch_mode: Some(self.history_tag_fetch_mode),
-            git_executable_path: Some(self.selected_git_executable_path()),
+            git_executable_path: Some(applied_git_executable_path(&self.runtime_info.git.runtime)),
         };
 
         cx.background_spawn(async move {
@@ -2371,6 +2383,15 @@ impl Render for SettingsWindowView {
 
                 let mut git_executable_card = self
                     .card("settings_window_git_executable", "Git executable", theme)
+                    .child(
+                        div()
+                            .id("settings_window_git_executable_scope_note")
+                            .px_2()
+                            .pb_1()
+                            .text_xs()
+                            .text_color(theme.colors.text_muted)
+                            .child(git_executable_scope_note()),
+                    )
                     .child(system_git_row)
                     .child(custom_git_row);
 
@@ -2548,9 +2569,10 @@ impl Render for SettingsWindowView {
                         )),
                     );
 
-                div()
+                let scroll_surface = div()
                     .id("settings_window_scroll")
-                    .flex_1()
+                    .h_full()
+                    .min_h(px(0.0))
                     .overflow_y_scroll()
                     .track_scroll(&self.settings_window_scroll)
                     .flex()
@@ -2563,7 +2585,37 @@ impl Render for SettingsWindowView {
                     .child(git_log_card)
                     .child(git_executable_card)
                     .child(environment_card)
-                    .child(links_card)
+                    .child(links_card);
+
+                div()
+                    .id("settings_window_root_view")
+                    .relative()
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .child(
+                        div()
+                            .flex_1()
+                            .h_full()
+                            .min_h(px(0.0))
+                            .pr(components::Scrollbar::visible_gutter(
+                                self.settings_window_scroll.clone(),
+                                components::ScrollbarAxis::Vertical,
+                            ))
+                            .child(scroll_surface),
+                    )
+                    .child(
+                        {
+                            let scrollbar = components::Scrollbar::new(
+                                "settings_window_scrollbar",
+                                self.settings_window_scroll.clone(),
+                            )
+                            .always_visible();
+                            #[cfg(test)]
+                            let scrollbar = scrollbar.debug_selector("settings_window_scrollbar");
+                            scrollbar
+                        }
+                        .render(theme),
+                    )
             }
             SettingsView::OpenSourceLicenses => {
                 let rows = crate::view::open_source_licenses_data::open_source_license_rows();
@@ -2926,6 +2978,50 @@ mod tests {
             Some(
                 "Custom Git executable is not configured. Choose an executable or switch back to System PATH."
             )
+        );
+    }
+
+    #[test]
+    fn applied_git_executable_path_tracks_runtime_preference() {
+        assert_eq!(
+            applied_git_executable_path(&GitRuntimeState {
+                preference: GitExecutablePreference::SystemPath,
+                availability: GitExecutableAvailability::Available {
+                    version_output: "git version 2.51.0".to_string(),
+                },
+            }),
+            None
+        );
+        assert_eq!(
+            applied_git_executable_path(&GitRuntimeState {
+                preference: GitExecutablePreference::Custom(PathBuf::from("/opt/git/bin/git")),
+                availability: GitExecutableAvailability::Available {
+                    version_output: "git version 2.51.0".to_string(),
+                },
+            }),
+            Some(PathBuf::from("/opt/git/bin/git"))
+        );
+        assert_eq!(
+            applied_git_executable_path(&GitRuntimeState {
+                preference: GitExecutablePreference::Custom(PathBuf::new()),
+                availability: GitExecutableAvailability::Unavailable {
+                    detail: "missing".to_string(),
+                },
+            }),
+            Some(PathBuf::new())
+        );
+    }
+
+    #[test]
+    fn git_executable_scope_note_mentions_browser_only_scope() {
+        let note = git_executable_scope_note();
+        assert!(
+            note.contains("browser window"),
+            "expected browser-only scope note, got: {note}"
+        );
+        assert!(
+            note.contains("System PATH"),
+            "expected command-mode fallback note, got: {note}"
         );
     }
 
@@ -3346,6 +3442,70 @@ mod tests {
                 "expected the breadcrumb back control to return to the root settings view"
             );
         });
+    }
+
+    #[gpui::test]
+    fn settings_window_root_view_renders_visible_scrollbar(cx: &mut gpui::TestAppContext) {
+        let _visual_guard = lock_visual_test();
+        let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+        let (_main_view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+            open_settings_window(app);
+        });
+        cx.run_until_parked();
+
+        let settings_window = cx.update(|_window, app| {
+            app.windows()
+                .into_iter()
+                .find_map(|window| window.downcast::<SettingsWindowView>())
+                .expect("settings window should be open")
+        });
+
+        let synthetic_fonts: Arc<[String]> = (0..200)
+            .map(|ix| format!("Test UI Font {ix:03}"))
+            .collect::<Vec<_>>()
+            .into();
+
+        cx.update(|_window, app| {
+            let _ = settings_window.update(app, |settings, _window, cx| {
+                settings.ui_font_options = synthetic_fonts.clone();
+                settings.ui_font_family = synthetic_fonts[0].clone();
+                settings.expanded_section = Some(SettingsSection::UiFont);
+                settings.settings_window_scroll = ScrollHandle::default();
+                settings.ui_font_scroll = UniformListScrollHandle::default();
+                cx.notify();
+            });
+        });
+
+        let mut settings_cx = gpui::VisualTestContext::from_window(*settings_window.deref(), cx);
+        settings_cx.run_until_parked();
+        settings_cx.simulate_resize(size(
+            px(SETTINGS_WINDOW_DEFAULT_WIDTH_PX),
+            px(SETTINGS_WINDOW_MIN_HEIGHT_PX),
+        ));
+        settings_cx.run_until_parked();
+        settings_cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+
+        let max_offset = settings_window
+            .update(&mut settings_cx, |settings, _window, _cx| {
+                settings.settings_window_scroll.max_offset().y.max(px(0.0))
+            })
+            .expect("settings window should remain readable");
+        assert!(
+            max_offset > px(0.0),
+            "expected the root settings page to be scrollable during the test"
+        );
+        assert!(
+            settings_cx
+                .debug_bounds("settings_window_scrollbar")
+                .is_some(),
+            "expected a visible scrollbar in the root settings view"
+        );
     }
 
     #[gpui::test]

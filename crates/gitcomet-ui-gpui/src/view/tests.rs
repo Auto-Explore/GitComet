@@ -1798,6 +1798,8 @@ fn git_unavailable_splash_renders_open_settings_call_to_action(cx: &mut gpui::Te
 
     cx.debug_bounds("git_unavailable_screen")
         .expect("expected git unavailable splash screen");
+    cx.debug_bounds("git_unavailable_status_icon")
+        .expect("expected git unavailable status icon");
     cx.debug_bounds("git_unavailable_open_settings")
         .expect("expected open settings call to action");
     assert!(
@@ -1808,6 +1810,55 @@ fn git_unavailable_splash_renders_open_settings_call_to_action(cx: &mut gpui::Te
     cx.update(|_window, app| {
         assert!(view.read(app).is_splash_screen_active());
         assert!(view.read(app).blocks_non_repository_actions());
+    });
+}
+
+#[gpui::test]
+fn git_unavailable_open_settings_button_publishes_expected_tooltip(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    let next = Arc::new(AppState {
+        git_runtime: unavailable_git_runtime_state(),
+        ..AppState::default()
+    });
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.apply_state_snapshot(Arc::clone(&next), cx);
+        });
+        let _ = window.draw(app);
+    });
+
+    let button_center = cx
+        .debug_bounds("git_unavailable_open_settings")
+        .expect("expected open settings call to action")
+        .center();
+    cx.simulate_mouse_move(button_center, None, gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    cx.update(|_window, app| {
+        assert_eq!(
+            test_support::tooltip_text(view.read(app), app).map(|text| text.to_string()),
+            Some("Open settings".to_string())
+        );
+    });
+
+    let icon_center = cx
+        .debug_bounds("git_unavailable_status_icon")
+        .expect("expected git unavailable status icon")
+        .center();
+    cx.simulate_mouse_move(icon_center, None, gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    cx.update(|_window, app| {
+        assert_eq!(
+            test_support::tooltip_text(view.read(app), app),
+            None,
+            "expected the open settings tooltip to clear after leaving the button"
+        );
     });
 }
 

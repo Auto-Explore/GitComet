@@ -24,15 +24,11 @@ pub struct SidebarDataRequest {
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum GitLogTagFetchMode {
+    #[default]
     OnRepositoryActivation,
     Disabled,
-}
-
-impl Default for GitLogTagFetchMode {
-    fn default() -> Self {
-        Self::OnRepositoryActivation
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -80,7 +76,6 @@ impl RepoLoadsInFlight {
     pub const TAGS: u32 = 1 << 3;
     pub const REMOTES: u32 = 1 << 4;
     pub const REMOTE_BRANCHES: u32 = 1 << 5;
-    pub const STATUS: u32 = Self::WORKTREE_STATUS;
     pub const WORKTREE_STATUS: u32 = 1 << 6;
     pub const STAGED_STATUS: u32 = 1 << 7;
     pub const STASHES: u32 = 1 << 8;
@@ -1176,18 +1171,19 @@ mod tests {
         assert!(loads.is_in_flight(RepoLoadsInFlight::UPSTREAM_DIVERGENCE));
         assert!(loads.is_in_flight(RepoLoadsInFlight::REBASE_STATE));
         assert!(loads.is_in_flight(RepoLoadsInFlight::MERGE_COMMIT_MESSAGE));
-        assert!(loads.is_in_flight(RepoLoadsInFlight::STATUS));
+        assert!(loads.is_in_flight(RepoLoadsInFlight::WORKTREE_STATUS));
+        assert!(loads.is_in_flight(RepoLoadsInFlight::STAGED_STATUS));
         assert!(loads.is_in_flight(RepoLoadsInFlight::LOG));
     }
 
     #[test]
     fn request_primary_refresh_batch_skips_when_any_load_is_already_in_flight() {
         let mut loads = RepoLoadsInFlight::default();
-        assert!(loads.request(RepoLoadsInFlight::STATUS));
+        assert!(loads.request(RepoLoadsInFlight::WORKTREE_STATUS));
 
         assert!(!loads.request_primary_refresh_batch());
         assert!(!loads.is_in_flight(RepoLoadsInFlight::HEAD_BRANCH));
-        assert!(loads.is_in_flight(RepoLoadsInFlight::STATUS));
+        assert!(loads.is_in_flight(RepoLoadsInFlight::WORKTREE_STATUS));
         assert!(!loads.is_in_flight(RepoLoadsInFlight::LOG));
     }
 

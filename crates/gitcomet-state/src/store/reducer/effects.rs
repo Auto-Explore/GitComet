@@ -1808,7 +1808,7 @@ mod tests {
             )));
             repo.set_conflict_hide_resolved(true);
         }
-        mark_pending(&mut state, repo_id, RepoLoadsInFlight::STATUS);
+        mark_pending(&mut state, repo_id, RepoLoadsInFlight::WORKTREE_STATUS);
         let effects = status_loaded(&mut state, repo_id, Ok(RepoStatus::default()));
         assert_eq!(effects.len(), 1);
         assert!(matches!(

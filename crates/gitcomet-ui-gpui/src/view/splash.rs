@@ -67,13 +67,43 @@ impl GitCometView {
         !self.state.git_runtime.is_available()
     }
 
-    fn git_runtime_unavailable_detail(&self) -> SharedString {
+    fn git_runtime_unavailable_detail(&self) -> String {
         self.state
             .git_runtime
             .unavailable_detail()
             .unwrap_or("GitComet could not find a usable Git executable.")
             .to_string()
-            .into()
+    }
+
+    fn git_unavailable_status_icon(theme: AppTheme) -> AnyElement {
+        div()
+            .id("git_unavailable_status_icon")
+            .debug_selector(|| "git_unavailable_status_icon".to_string())
+            .size(px(56.0))
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(svg_icon(
+                "icons/warning.svg",
+                theme.colors.warning,
+                px(36.0),
+            ))
+            .into_any_element()
+    }
+
+    fn git_runtime_unavailable_detail_content(&self) -> AnyElement {
+        let detail = self.git_runtime_unavailable_detail();
+        if let Some((summary, recovery)) = detail.split_once(". ") {
+            return div()
+                .flex()
+                .flex_col()
+                .gap(px(0.0))
+                .child(format!("{summary}."))
+                .child(recovery.to_string())
+                .into_any_element();
+        }
+
+        div().child(detail).into_any_element()
     }
 
     fn should_show_git_unavailable_overlay(&self) -> bool {
@@ -252,6 +282,7 @@ impl GitCometView {
         let primary_hover = gpui::rgba(0x72c7ffff);
         let primary_active = gpui::rgba(0x48b6eeff);
         let primary_text = gpui::rgba(0x04172bff);
+        let settings_tooltip: SharedString = "Open settings".into();
 
         Self::splash_cta_button(
             "git_unavailable_open_settings",
@@ -277,6 +308,16 @@ impl GitCometView {
             cx.defer(crate::view::open_settings_window);
             cx.notify();
         }))
+        .on_hover(cx.listener({
+            let settings_tooltip = settings_tooltip.clone();
+            move |this, hovering: &bool, _w, cx| {
+                if *hovering {
+                    this.set_tooltip_text_if_changed(Some(settings_tooltip.clone()), cx);
+                } else {
+                    this.clear_tooltip_if_matches(&settings_tooltip, cx);
+                }
+            }
+        }))
     }
 
     fn git_unavailable_panel_content(
@@ -297,7 +338,7 @@ impl GitCometView {
             .flex_col()
             .items_center()
             .gap_3()
-            .child(Self::interstitial_logo(theme, px(84.0)))
+            .child(Self::git_unavailable_status_icon(theme))
             .child(
                 div()
                     .text_lg()
@@ -330,7 +371,7 @@ impl GitCometView {
                     .text_xs()
                     .line_height(px(18.0))
                     .text_color(theme.colors.text_muted)
-                    .child(self.git_runtime_unavailable_detail()),
+                    .child(self.git_runtime_unavailable_detail_content()),
             )
             .child(
                 div()

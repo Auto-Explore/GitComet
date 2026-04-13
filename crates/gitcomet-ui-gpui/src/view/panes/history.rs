@@ -888,10 +888,11 @@ impl HistoryView {
             detached_head_commit: repo.detached_head_commit.clone(),
             branches_rev: repo.branches_rev,
             remote_branches_rev: repo.remote_branches_rev,
-            tags_rev: self
-                .history_show_tags
-                .then_some(repo.tags_rev)
-                .unwrap_or_default(),
+            tags_rev: if self.history_show_tags {
+                repo.tags_rev
+            } else {
+                Default::default()
+            },
             stashes_rev: repo.stashes_rev,
             date_time_format: self.date_time_format,
             timezone: self.timezone,

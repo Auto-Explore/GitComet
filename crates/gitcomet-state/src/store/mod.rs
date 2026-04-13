@@ -1,7 +1,6 @@
 use crate::model::{AppState, RepoId};
 use crate::msg::{Msg, StoreEvent};
 use gitcomet_core::path_utils::canonicalize_or_original;
-use gitcomet_core::process::refresh_git_runtime;
 use gitcomet_core::services::{GitBackend, GitRepository};
 use rustc_hash::FxHashMap as HashMap;
 use std::path::PathBuf;
@@ -446,22 +445,6 @@ impl AppStore {
     }
 
     pub fn dispatch(&self, msg: Msg) {
-        if reducer::msg_requires_available_git(&msg) {
-            let runtime = refresh_git_runtime();
-            let current_runtime = {
-                let state = self.state.read().unwrap_or_else(|e| e.into_inner());
-                state.git_runtime.clone()
-            };
-            if current_runtime != runtime {
-                send_or_log(
-                    &self.msg_tx,
-                    Msg::SetGitRuntimeState(runtime),
-                    SendFailureKind::StoreDispatch,
-                    "AppStore::dispatch/set-git-runtime-state",
-                );
-            }
-        }
-
         send_or_log(
             &self.msg_tx,
             msg,
