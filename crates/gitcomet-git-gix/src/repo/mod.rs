@@ -1,9 +1,9 @@
 use crate::util::git_workdir_cmd_for as util_git_workdir_cmd_for;
 use gitcomet_core::conflict_session::ConflictSession;
 use gitcomet_core::domain::{
-    Branch, CommitDetails, CommitId, Diff, DiffTarget, FileDiffImage, FileDiffText, LogCursor,
-    LogPage, ReflogEntry, Remote, RemoteBranch, RemoteTag, RepoSpec, RepoStatus, StashEntry,
-    Submodule, Subtree, Tag, UpstreamDivergence, Worktree,
+    Branch, CommitDetails, CommitId, Diff, DiffPreviewTextSide, DiffTarget, FileDiffImage,
+    FileDiffText, LogCursor, LogPage, ReflogEntry, Remote, RemoteBranch, RemoteTag, RepoSpec,
+    RepoStatus, StashEntry, Submodule, Subtree, Tag, UpstreamDivergence, Worktree,
 };
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::git_ops_trace::{self, GitOpTraceKind};
@@ -232,6 +232,14 @@ impl GitRepository for GixRepo {
 
     fn diff_file_text(&self, target: &DiffTarget) -> Result<Option<FileDiffText>> {
         self.diff_file_text_impl(target)
+    }
+
+    fn diff_preview_text_file(
+        &self,
+        target: &DiffTarget,
+        side: DiffPreviewTextSide,
+    ) -> Result<Option<PathBuf>> {
+        self.diff_preview_text_file_impl(target, side)
     }
 
     fn diff_file_image(&self, target: &DiffTarget) -> Result<Option<FileDiffImage>> {

@@ -42,9 +42,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: x86_64-linux / ubuntu-22.04
-            target_platform: x86_64-linux
-            runs_on: ubuntu-22.04
           - name: x86_64-linux / ubuntu-24.04
             target_platform: x86_64-linux
             runs_on: ubuntu-24.04

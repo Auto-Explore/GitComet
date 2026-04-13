@@ -1,6 +1,7 @@
 use super::GixRepo;
 use crate::util::{
-    bytes_to_text_preserving_utf8, git_command_failed_error, run_git_raw_output, run_git_with_output,
+    bytes_to_text_preserving_utf8, git_command_failed_error, run_git_raw_output,
+    run_git_with_output,
 };
 use gitcomet_core::domain::{Subtree, SubtreeSourceConfig};
 use gitcomet_core::error::{Error, ErrorKind};
@@ -396,16 +397,12 @@ impl GixRepo {
             .arg("--replace-all")
             .arg(&key)
             .arg(value);
-        run_git_with_output(cmd, &format!("git config --local --replace-all {key}"))
-            .map(|_| ())
+        run_git_with_output(cmd, &format!("git config --local --replace-all {key}")).map(|_| ())
     }
 
     fn unset_local_config_key(&self, key: &str) -> Result<()> {
         let mut cmd = self.git_workdir_cmd();
-        cmd.arg("config")
-            .arg("--local")
-            .arg("--unset-all")
-            .arg(key);
+        cmd.arg("config").arg("--local").arg("--unset-all").arg(key);
         let output = run_git_raw_output(cmd, &format!("git config --local --unset-all {key}"))?;
         if output.status.success() || output.status.code() == Some(5) {
             return Ok(());

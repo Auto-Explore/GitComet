@@ -696,10 +696,11 @@ impl FileDiffCtrlFOpenTypeFixture {
         let visible_window_rows = visible_window_rows.max(1);
         let (old_text, new_text) = build_synthetic_file_diff_search_texts(total_lines);
         #[cfg(feature = "benchmarks")]
-        let (split, _inline) =
-            crate::view::panes::main::diff_cache::bench_build_file_diff_providers(
-                &old_text, &new_text, 256,
-            );
+        let (split, _inline) = build_bench_file_diff_rebuild_from_text(
+            "src/bench_file_diff_search.rs",
+            &old_text,
+            &new_text,
+        );
         #[cfg(not(feature = "benchmarks"))]
         let (split, _inline) =
             unreachable!("FileDiffCtrlFOpenTypeFixture requires benchmarks feature");

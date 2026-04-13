@@ -1,19 +1,20 @@
+use super::effects::append_ensure_sidebar_data_effects;
 use super::util::{
     SelectedConflictTarget, append_refresh_full_effects, append_refresh_primary_effects,
     append_start_conflict_target_reload, append_start_current_conflict_target_reload,
-    clear_banner_error_for_repo, dedup_paths_in_order, diff_target_preview_flags,
-    format_failure_summary, handle_session_persist_result, normalize_repo_path, push_diagnostic,
-    push_notification, refresh_full_effect_capacity, refresh_full_effects,
-    refresh_primary_effect_capacity, selected_conflict_target,
+    clear_banner_error_for_repo, dedup_paths_in_order, format_failure_summary,
+    handle_session_persist_result, normalize_repo_path, push_diagnostic, push_notification,
+    refresh_full_effect_capacity, refresh_full_effects, refresh_primary_effect_capacity,
+    selected_conflict_target, selected_diff_load_plan,
 };
 use crate::model::{
-    AppNotificationKind, AppState, CloneOpState, CloneOpStatus, DiagnosticKind, Loadable, RepoId,
-    RepoState,
+    AppNotificationKind, AppState, CloneOpState, CloneOpStatus, CloneProgressMeter,
+    CloneProgressStage, DiagnosticKind, Loadable, RepoId, RepoLoadsInFlight, RepoState,
 };
 use crate::msg::Effect;
 use crate::session;
-use gitcomet_core::domain::{DiffTarget, RepoSpec};
-use gitcomet_core::error::Error;
+use gitcomet_core::domain::RepoSpec;
+use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{CommandOutput, GitRepository};
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use smallvec::SmallVec;
@@ -24,7 +25,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
 
 const HOT_REPO_SWITCH_SECONDARY_REFRESH_WINDOW: Duration = Duration::from_secs(5);
-pub(crate) const SET_ACTIVE_REPO_INLINE_EFFECT_CAPACITY: usize = 16;
+pub(crate) const SET_ACTIVE_REPO_INLINE_EFFECT_CAPACITY: usize = 17;
 pub(crate) type SetActiveRepoEffects = SmallVec<[Effect; SET_ACTIVE_REPO_INLINE_EFFECT_CAPACITY]>;
 pub(crate) const REORDER_REPO_TABS_INLINE_EFFECT_CAPACITY: usize = 1;
 pub(crate) type ReorderRepoTabsEffects =
@@ -56,12 +57,33 @@ fn is_missing_repo_error(error: &Error) -> bool {
     )
 }
 
+fn is_plain_clone_abort_error(error: &Error) -> bool {
+    matches!(error.kind(), ErrorKind::Backend(message) if message == "clone aborted")
+}
+
 fn persist_session_effect(
     _state: &AppState,
     repo_id: Option<RepoId>,
     action: &'static str,
 ) -> Effect {
     Effect::PersistSession { repo_id, action }
+}
+
+fn append_repo_switch_worktree_refresh_effect(
+    repo_state: &mut RepoState,
+    effects: &mut SetActiveRepoEffects,
+) {
+    if repo_state
+        .loads_in_flight
+        .request(RepoLoadsInFlight::WORKTREES)
+    {
+        if !matches!(repo_state.worktrees, Loadable::Ready(_)) {
+            repo_state.set_worktrees(Loadable::Loading);
+        }
+        effects.push(Effect::LoadWorktrees {
+            repo_id: repo_state.id,
+        });
+    }
 }
 
 pub(super) fn open_repo(id_alloc: &AtomicU64, state: &mut AppState, path: PathBuf) -> Vec<Effect> {
@@ -242,10 +264,7 @@ pub(super) fn fill_set_active_repo_inline(
     enum SelectedDiffReload {
         Conflict(PathBuf),
         ConflictCurrent,
-        Diff {
-            load_file_text: bool,
-            load_file_image: bool,
-        },
+        Diff(super::util::SelectedDiffLoadPlan),
     }
 
     effects.clear();
@@ -261,7 +280,20 @@ pub(super) fn fill_set_active_repo_inline(
         .then(|| persist_session_effect(state, Some(repo_id), "switching active repository"));
 
     let repo_state = &mut state.repos[repo_ix];
+
+    // Session-restore placeholders and repos still opening do not have a backend handle yet.
+    // Defer handle-dependent refreshes until RepoOpenedOk installs the handle and schedules the
+    // initial refresh for the active repo.
+    if !matches!(repo_state.open, Loadable::Ready(())) {
+        repo_state.last_active_at = Some(now);
+        if let Some(effect) = persist_effect {
+            effects.push(effect);
+        }
+        return;
+    }
+
     let use_full_refresh = changed && !repo_switch_can_use_primary_refresh(repo_state, now);
+    repo_state.last_active_at = Some(now);
 
     // Reload the selected diff when switching repos; steady-state refreshes rely on the
     // filesystem watcher (`RepoExternallyChanged`) for diff invalidation.
@@ -275,17 +307,7 @@ pub(super) fn fill_set_active_repo_inline(
                     }
                 }
             } else {
-                let supports_file = matches!(
-                    target,
-                    DiffTarget::WorkingTree { .. } | DiffTarget::Commit { path: Some(_), .. }
-                );
-                let preview = diff_target_preview_flags(target);
-                let load_file_image = supports_file && preview.wants_image;
-                let load_file_text = supports_file && (!preview.wants_image || preview.is_svg);
-                SelectedDiffReload::Diff {
-                    load_file_text,
-                    load_file_image,
-                }
+                SelectedDiffReload::Diff(selected_diff_load_plan(repo_state, target))
             }
         })
     } else {
@@ -295,8 +317,14 @@ pub(super) fn fill_set_active_repo_inline(
     // On focus events the UI can re-send SetActiveRepo for the already-active repo. Avoid
     // re-running the full refresh fan-out in that case: prioritize the minimum set that
     // keeps the UI correct and responsive.
-    let extra_effect_capacity =
-        usize::from(selected_diff_reload.is_some()) + usize::from(persist_effect.is_some());
+    let extra_effect_capacity = usize::from(selected_diff_reload.is_some())
+        + usize::from(persist_effect.is_some())
+        + usize::from(changed)
+        + usize::from(changed && !use_full_refresh)
+        + usize::from(repo_state.sidebar_data_request.worktrees)
+        + usize::from(repo_state.sidebar_data_request.submodules)
+        + usize::from(repo_state.sidebar_data_request.subtrees)
+        + usize::from(repo_state.sidebar_data_request.stashes);
     let base_effect_capacity = if use_full_refresh {
         refresh_full_effect_capacity()
     } else {
@@ -310,7 +338,18 @@ pub(super) fn fill_set_active_repo_inline(
     } else {
         append_refresh_primary_effects(repo_state, effects);
     }
-    repo_state.last_active_at = Some(now);
+    if changed
+        && !use_full_refresh
+        && repo_state
+            .loads_in_flight
+            .request(RepoLoadsInFlight::BRANCHES)
+    {
+        effects.push(Effect::LoadBranches { repo_id });
+    }
+    if changed {
+        append_repo_switch_worktree_refresh_effect(repo_state, effects);
+    }
+    append_ensure_sidebar_data_effects(repo_state, effects);
 
     if let Some(selected_diff_reload) = selected_diff_reload {
         match selected_diff_reload {
@@ -320,14 +359,13 @@ pub(super) fn fill_set_active_repo_inline(
             SelectedDiffReload::Conflict(conflict_path) => {
                 append_start_conflict_target_reload(effects, repo_state, &conflict_path);
             }
-            SelectedDiffReload::Diff {
-                load_file_text,
-                load_file_image,
-            } => {
+            SelectedDiffReload::Diff(load_plan) => {
                 effects.push(Effect::LoadSelectedDiff {
                     repo_id,
-                    load_file_text,
-                    load_file_image,
+                    load_patch_diff: load_plan.load_patch_diff,
+                    load_file_text: load_plan.load_file_text,
+                    preview_text_side: load_plan.preview_text_side,
+                    load_file_image: load_plan.load_file_image,
                 });
             }
         }
@@ -440,6 +478,7 @@ pub(super) fn clone_repo(state: &mut AppState, url: String, dest: PathBuf) -> Ve
         url: Arc::<str>::from(url.as_str()),
         dest: Arc::new(dest.clone()),
         status: CloneOpStatus::Running,
+        progress: CloneProgressMeter::default(),
         seq: 0,
         output_tail: VecDeque::new(),
     });
@@ -448,6 +487,54 @@ pub(super) fn clone_repo(state: &mut AppState, url: String, dest: PathBuf) -> Ve
         dest,
         auth: None,
     }]
+}
+
+fn parse_clone_progress_percent(line: &str) -> Option<u8> {
+    let percent_ix = line.find('%')?;
+    let digits = line[..percent_ix]
+        .chars()
+        .rev()
+        .skip_while(|ch| ch.is_ascii_whitespace())
+        .take_while(|ch| ch.is_ascii_digit())
+        .collect::<String>();
+    if digits.is_empty() {
+        return None;
+    }
+    digits
+        .chars()
+        .rev()
+        .collect::<String>()
+        .parse::<u8>()
+        .ok()
+        .map(|percent| percent.min(100))
+}
+
+fn parse_clone_progress_meter(line: &str) -> Option<CloneProgressMeter> {
+    let stage = if line.starts_with("Resolving deltas:") || line.starts_with("Updating files:") {
+        CloneProgressStage::RemoteObjects
+    } else if line.starts_with("Receiving objects:")
+        || line.starts_with("remote: Counting objects:")
+        || line.starts_with("remote: Compressing objects:")
+    {
+        CloneProgressStage::Loading
+    } else {
+        return None;
+    };
+    let percent = parse_clone_progress_percent(line)?;
+    Some(CloneProgressMeter { stage, percent })
+}
+
+pub(super) fn abort_clone_repo(state: &mut AppState, dest: PathBuf) -> Vec<Effect> {
+    let Some(op) = state.clone.as_mut() else {
+        return Vec::new();
+    };
+    if op.dest.as_ref() != &dest || !matches!(op.status, CloneOpStatus::Running) {
+        return Vec::new();
+    }
+
+    op.status = CloneOpStatus::Cancelling;
+    op.seq = op.seq.wrapping_add(1);
+    vec![Effect::AbortCloneRepo { dest }]
 }
 
 pub(super) fn clone_repo_progress(
@@ -462,6 +549,9 @@ pub(super) fn clone_repo_progress(
         && op.dest.as_ref() == dest.as_ref()
     {
         op.seq = op.seq.wrapping_add(1);
+        if let Some(progress) = parse_clone_progress_meter(&line) {
+            op.progress = progress;
+        }
         if !line.trim().is_empty() {
             if op.output_tail.capacity() < MAX_LINES {
                 op.output_tail
@@ -488,6 +578,12 @@ pub(super) fn clone_repo_finished(
         op.url = Arc::<str>::from(url.as_str());
         op.status = match result {
             Ok(_) => CloneOpStatus::FinishedOk,
+            Err(ref error)
+                if matches!(op.status, CloneOpStatus::Cancelling)
+                    && is_plain_clone_abort_error(error) =>
+            {
+                CloneOpStatus::Cancelled
+            }
             Err(e) => CloneOpStatus::FinishedErr(format_failure_summary("Clone", &e)),
         };
         op.seq = op.seq.wrapping_add(1);
@@ -499,6 +595,7 @@ pub(super) fn clone_repo_finished(
                 Ok(_) => CloneOpStatus::FinishedOk,
                 Err(e) => CloneOpStatus::FinishedErr(format_failure_summary("Clone", &e)),
             },
+            progress: CloneProgressMeter::default(),
             seq: 1,
             output_tail: VecDeque::new(),
         });
@@ -550,6 +647,7 @@ pub(super) fn repo_opened_ok(
         repo_state.diff_state.diff_target = None;
         repo_state.diff_state.diff = Loadable::NotLoaded;
         repo_state.diff_state.diff_file = Loadable::NotLoaded;
+        repo_state.diff_state.diff_preview_text_file = Loadable::NotLoaded;
         repo_state.diff_state.diff_file_image = Loadable::NotLoaded;
         repo_state.bump_diff_state_rev();
         repo_state.last_error = None;
@@ -560,8 +658,21 @@ pub(super) fn repo_opened_ok(
         clear_banner_error_for_repo(state, repo_id);
     }
 
+    let should_refresh_worktrees = state.active_repo == Some(repo_id);
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-        return refresh_full_effects(repo_state);
+        let mut effects = refresh_full_effects(repo_state);
+        if should_refresh_worktrees
+            && repo_state
+                .loads_in_flight
+                .request(RepoLoadsInFlight::WORKTREES)
+        {
+            repo_state.set_worktrees(Loadable::Loading);
+            effects.push(Effect::LoadWorktrees { repo_id });
+        }
+        if should_refresh_worktrees {
+            append_ensure_sidebar_data_effects(repo_state, &mut effects);
+        }
+        return effects;
     }
 
     Vec::new()

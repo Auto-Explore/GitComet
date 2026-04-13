@@ -374,7 +374,9 @@ pub(super) fn schedule_push_subtree(
             path: command_path,
         },
         move |repo| {
-            run_with_git_auth(auth, || repo.push_subtree_with_output(&repository, &refspec, &path))
+            run_with_git_auth(auth, || {
+                repo.push_subtree_with_output(&repository, &refspec, &path)
+            })
         },
     );
 }

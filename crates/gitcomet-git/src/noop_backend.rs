@@ -294,15 +294,23 @@ mod tests {
         assert_unsupported(repo.update_submodules_with_output());
         assert_unsupported(repo.remove_submodule_with_output(path));
         assert_unsupported(repo.list_subtrees());
-        assert_unsupported(
-            repo.add_subtree_with_output("https://example.com/repo.git", "main", path, true),
-        );
-        assert_unsupported(
-            repo.pull_subtree_with_output("https://example.com/repo.git", "main", path, true),
-        );
-        assert_unsupported(
-            repo.push_subtree_with_output("https://example.com/repo.git", "main", path),
-        );
+        assert_unsupported(repo.add_subtree_with_output(
+            "https://example.com/repo.git",
+            "main",
+            path,
+            true,
+        ));
+        assert_unsupported(repo.pull_subtree_with_output(
+            "https://example.com/repo.git",
+            "main",
+            path,
+            true,
+        ));
+        assert_unsupported(repo.push_subtree_with_output(
+            "https://example.com/repo.git",
+            "main",
+            path,
+        ));
         assert_unsupported(repo.split_subtree_with_output(path, Some("subtree-split")));
         assert_unsupported(repo.remove_subtree_with_output(path));
     }

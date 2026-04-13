@@ -1630,7 +1630,6 @@ fn sidebar_expand_after_collapse_does_not_reenter_root_update(cx: &mut gpui::Tes
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
-
     cx.update(|window, app| {
         let _ = window.draw(app);
         view.update(app, |this, cx| this.set_sidebar_collapsed(true, cx));
@@ -1661,7 +1660,6 @@ fn splash_screen_renders_when_no_repositories_are_open(cx: &mut gpui::TestAppCon
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
     cx.update(|window, app| {
-        view.update(app, |this, _cx| this.disable_poller_for_tests());
         let _ = window.draw(app);
     });
 
@@ -1691,7 +1689,6 @@ fn splash_backdrop_renders_native_layers(cx: &mut gpui::TestAppContext) {
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
     cx.update(|window, app| {
-        view.update(app, |this, _cx| this.disable_poller_for_tests());
         let _ = window.draw(app);
     });
 
@@ -1730,7 +1727,6 @@ fn splash_screen_buttons_publish_expected_tooltips(cx: &mut gpui::TestAppContext
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
     cx.update(|window, app| {
-        view.update(app, |this, _cx| this.disable_poller_for_tests());
         let _ = window.draw(app);
     });
 
@@ -1742,9 +1738,7 @@ fn splash_screen_buttons_publish_expected_tooltips(cx: &mut gpui::TestAppContext
     cx.run_until_parked();
     cx.update(|_window, app| {
         assert_eq!(
-            view.read(app)
-                .tooltip_text_for_test(app)
-                .map(|text| text.to_string()),
+            test_support::tooltip_text(view.read(app), app).map(|text| text.to_string()),
             Some("Open repository".to_string())
         );
     });
@@ -1757,9 +1751,7 @@ fn splash_screen_buttons_publish_expected_tooltips(cx: &mut gpui::TestAppContext
     cx.run_until_parked();
     cx.update(|_window, app| {
         assert_eq!(
-            view.read(app)
-                .tooltip_text_for_test(app)
-                .map(|text| text.to_string()),
+            test_support::tooltip_text(view.read(app), app).map(|text| text.to_string()),
             Some("Clone repository".to_string())
         );
     });
@@ -1771,7 +1763,6 @@ fn closing_last_repository_tab_returns_to_splash_screen(cx: &mut gpui::TestAppCo
     let store_for_assert = store.clone();
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
-
     cx.update(|window, app| {
         let _ = window.draw(app);
     });
@@ -1781,6 +1772,9 @@ fn closing_last_repository_tab_returns_to_splash_screen(cx: &mut gpui::TestAppCo
     )));
     wait_until("repository tab to be added", || {
         !store_for_assert.snapshot().repos.is_empty()
+    });
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| test_support::sync_store_snapshot(this, cx));
     });
     pump_for(cx, Duration::from_millis(120));
 
@@ -1812,6 +1806,9 @@ fn closing_last_repository_tab_returns_to_splash_screen(cx: &mut gpui::TestAppCo
     wait_until("last repository tab to close", || {
         store_for_assert.snapshot().repos.is_empty()
     });
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| test_support::sync_store_snapshot(this, cx));
+    });
     pump_for(cx, Duration::from_millis(120));
 
     cx.update(|window, app| {
@@ -1834,7 +1831,6 @@ fn splash_screen_clears_stale_close_repository_tooltip(cx: &mut gpui::TestAppCon
     let store_for_assert = store.clone();
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
-
     cx.update(|window, app| {
         let _ = window.draw(app);
     });
@@ -1845,6 +1841,9 @@ fn splash_screen_clears_stale_close_repository_tooltip(cx: &mut gpui::TestAppCon
     wait_until("repository tab to be added", || {
         !store_for_assert.snapshot().repos.is_empty()
     });
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| test_support::sync_store_snapshot(this, cx));
+    });
     pump_for(cx, Duration::from_millis(120));
 
     cx.update(|_window, app| {
@@ -1854,9 +1853,7 @@ fn splash_screen_clears_stale_close_repository_tooltip(cx: &mut gpui::TestAppCon
             });
         });
         assert_eq!(
-            view.read(app)
-                .tooltip_text_for_test(app)
-                .map(|text| text.to_string()),
+            test_support::tooltip_text(view.read(app), app).map(|text| text.to_string()),
             Some("Close repository".to_string())
         );
     });
@@ -1873,6 +1870,9 @@ fn splash_screen_clears_stale_close_repository_tooltip(cx: &mut gpui::TestAppCon
     wait_until("last repository tab to close", || {
         store_for_assert.snapshot().repos.is_empty()
     });
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| test_support::sync_store_snapshot(this, cx));
+    });
     pump_for(cx, Duration::from_millis(120));
 
     cx.update(|window, app| {
@@ -1881,7 +1881,7 @@ fn splash_screen_clears_stale_close_repository_tooltip(cx: &mut gpui::TestAppCon
 
     cx.update(|_window, app| {
         assert_eq!(
-            view.read(app).tooltip_text_for_test(app),
+            test_support::tooltip_text(view.read(app), app),
             None,
             "expected splash transition to clear stale repository-close tooltip text"
         );
@@ -1911,7 +1911,6 @@ fn apply_state_snapshot_routes_command_errors_into_store_backed_banner(
     let store_for_assert = store.clone();
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
-
     let repo_id = RepoId(1);
     let error = "Fetch failed".to_string();
     let mut next = AppState::default();

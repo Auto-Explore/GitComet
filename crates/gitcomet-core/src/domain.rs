@@ -230,6 +230,18 @@ pub enum DiffTarget {
     },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DiffPreviewTextSide {
+    Old,
+    New,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DiffPreviewTextFile {
+    pub path: PathBuf,
+    pub side: DiffPreviewTextSide,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Diff {
     pub target: DiffTarget,
@@ -352,13 +364,17 @@ impl From<SharedLineText> for Arc<str> {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FileDiffText {
     pub path: PathBuf,
-    pub old: Option<String>,
-    pub new: Option<String>,
+    pub old: Option<Arc<str>>,
+    pub new: Option<Arc<str>>,
     content_signature: u64,
 }
 
 impl FileDiffText {
     pub fn new(path: PathBuf, old: Option<String>, new: Option<String>) -> Self {
+        Self::new_shared(path, old.map(Arc::<str>::from), new.map(Arc::<str>::from))
+    }
+
+    pub fn new_shared(path: PathBuf, old: Option<Arc<str>>, new: Option<Arc<str>>) -> Self {
         let content_signature =
             Self::content_signature_for_parts(&path, old.as_deref(), new.as_deref());
         Self {

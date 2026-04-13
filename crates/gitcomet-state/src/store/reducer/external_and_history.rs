@@ -138,7 +138,7 @@ pub(super) fn repo_externally_changed(
                 }
             }
         } else {
-            effects.extend(diff_reload_effects(repo_id, target));
+            effects.extend(diff_reload_effects(repo_state, repo_id, target));
         }
     }
 
@@ -398,7 +398,7 @@ pub(super) fn repo_action_finished(
                 }
             }
         } else {
-            effects.extend(diff_reload_effects(repo_id, target));
+            effects.extend(diff_reload_effects(repo_state, repo_id, target));
         }
     }
     effects

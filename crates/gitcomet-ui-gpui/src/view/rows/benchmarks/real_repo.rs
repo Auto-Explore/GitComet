@@ -9,7 +9,6 @@ const DEFAULT_MONOREPO_HISTORY_LIMIT: usize = 10_000;
 const DEFAULT_DEEP_HISTORY_LIMIT: usize = 50_000;
 const DEFAULT_HISTORY_PAGE_SIZE: usize = 1_000;
 const DEFAULT_HISTORY_WINDOW: usize = 200;
-const DEFAULT_FILE_DIFF_PAGE_SIZE: usize = 256;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RealRepoScenario {
@@ -429,11 +428,12 @@ impl RealRepoFixture {
 
         let old_text = file.old.as_deref().unwrap_or("");
         let new_text = file.new.as_deref().unwrap_or("");
-        let (split, inline) = crate::view::panes::main::diff_cache::bench_build_file_diff_providers(
-            old_text,
-            new_text,
-            DEFAULT_FILE_DIFF_PAGE_SIZE,
+        let rebuild = crate::view::panes::main::diff_cache::build_file_diff_cache_rebuild(
+            &file,
+            self._repo_root.path(),
         );
+        let split = rebuild.row_provider;
+        let inline = rebuild.inline_row_provider;
         let split_rows_painted = split
             .slice(0, DEFAULT_HISTORY_WINDOW)
             .take(DEFAULT_HISTORY_WINDOW)

@@ -13,6 +13,14 @@ use std::time::SystemTime;
 
 pub type Shared<T> = Arc<T>;
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct SidebarDataRequest {
+    pub worktrees: bool,
+    pub submodules: bool,
+    pub subtrees: bool,
+    pub stashes: bool,
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct RepoLoadsInFlight {
     in_flight: u32,
@@ -41,6 +49,7 @@ impl RepoLoadsInFlight {
     pub const LOG: u32 = 1 << 10;
     pub const MERGE_COMMIT_MESSAGE: u32 = 1 << 11;
     pub const REMOTE_TAGS: u32 = 1 << 12;
+    pub const WORKTREES: u32 = 1 << 13;
     const PRIMARY_REFRESH_FLAGS: u32 = Self::HEAD_BRANCH
         | Self::UPSTREAM_DIVERGENCE
         | Self::REBASE_STATE
@@ -295,14 +304,38 @@ pub struct CloneOpState {
     pub url: Arc<str>,
     pub dest: Arc<PathBuf>,
     pub status: CloneOpStatus,
+    pub progress: CloneProgressMeter,
     pub seq: u64,
     pub output_tail: VecDeque<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CloneProgressStage {
+    Loading,
+    RemoteObjects,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CloneProgressMeter {
+    pub stage: CloneProgressStage,
+    pub percent: u8,
+}
+
+impl Default for CloneProgressMeter {
+    fn default() -> Self {
+        Self {
+            stage: CloneProgressStage::Loading,
+            percent: 0,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CloneOpStatus {
     Running,
+    Cancelling,
     FinishedOk,
+    Cancelled,
     FinishedErr(String),
 }
 
@@ -369,6 +402,8 @@ pub struct DiffState {
     pub diff: Loadable<Shared<Diff>>,
     pub diff_file_rev: u64,
     pub diff_file: Loadable<Option<Shared<FileDiffText>>>,
+    pub diff_preview_text_file_rev: u64,
+    pub diff_preview_text_file: Loadable<Option<Shared<DiffPreviewTextFile>>>,
     pub diff_file_image: Loadable<Option<Shared<FileDiffImage>>>,
 }
 
@@ -381,6 +416,8 @@ impl Default for DiffState {
             diff: Loadable::NotLoaded,
             diff_file_rev: 0,
             diff_file: Loadable::NotLoaded,
+            diff_preview_text_file_rev: 0,
+            diff_preview_text_file: Loadable::NotLoaded,
             diff_file_image: Loadable::NotLoaded,
         }
     }
@@ -471,6 +508,7 @@ pub struct RepoState {
     pub submodules_rev: u64,
     pub subtrees: Loadable<Arc<Vec<Subtree>>>,
     pub subtrees_rev: u64,
+    pub sidebar_data_request: SidebarDataRequest,
     /// Invalidates cached branch-sidebar rows when any sidebar-relevant source changes.
     pub branch_sidebar_rev: u64,
 
@@ -538,6 +576,7 @@ impl RepoState {
             submodules_rev: 0,
             subtrees: Loadable::NotLoaded,
             subtrees_rev: 0,
+            sidebar_data_request: SidebarDataRequest::default(),
             branch_sidebar_rev: 0,
             diff_state: DiffState::default(),
             conflict_state: ConflictState::default(),
@@ -687,6 +726,10 @@ impl RepoState {
                 self.stashes_rev,
             ])
         }
+    }
+
+    pub(crate) fn set_sidebar_data_request(&mut self, request: SidebarDataRequest) {
+        self.sidebar_data_request = request;
     }
 
     pub(crate) fn set_status(&mut self, status: Loadable<Shared<RepoStatus>>) {
@@ -1443,5 +1486,6 @@ mod tests {
         assert!(repo.conflict_state.conflict_session.is_none());
         assert!(!repo.conflict_state.conflict_hide_resolved);
         assert!(repo.detached_head_commit.is_none());
+        assert_eq!(repo.sidebar_data_request, SidebarDataRequest::default());
     }
 }

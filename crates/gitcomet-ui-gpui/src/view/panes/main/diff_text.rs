@@ -1,5 +1,39 @@
 use super::*;
 
+fn expanded_diff_display_text<'a>(text: &'a str, expanded_tabs: &'a mut String) -> &'a str {
+    if !text.contains('\t') {
+        return text;
+    }
+
+    expanded_tabs.clear();
+    expanded_tabs.reserve(crate::view::diff_utils::diff_text_display_len(text));
+    for ch in text.chars() {
+        match ch {
+            '\t' => expanded_tabs.push_str("    "),
+            _ => expanded_tabs.push(ch),
+        }
+    }
+    expanded_tabs.as_str()
+}
+
+fn append_diff_display_text_slice(
+    out: &mut String,
+    text: &str,
+    range: Range<usize>,
+    expanded_tabs: &mut String,
+) {
+    if range.start >= range.end {
+        return;
+    }
+
+    let display = expanded_diff_display_text(text, expanded_tabs);
+    let start = range.start.min(display.len());
+    let end = range.end.min(display.len());
+    if start < end {
+        out.push_str(&display[start..end]);
+    }
+}
+
 impl MainPaneView {
     fn diff_text_normalized_selection(&self) -> Option<(DiffTextPos, DiffTextPos)> {
         let a = self.diff_text_anchor?;
@@ -34,13 +68,21 @@ impl MainPaneView {
         position: Point<Pixels>,
     ) -> Option<DiffTextPos> {
         let hitbox = self.diff_text_hitboxes.get(&(visible_ix, region))?;
-        let layout = &self.diff_text_layout_cache.get(&hitbox.layout_key)?.layout;
         let local = hitbox.bounds.localize(&position)?;
         let x = local.x.max(px(0.0));
-        let offset = layout
-            .closest_index_for_x(x)
-            .min(layout.len())
-            .min(hitbox.text_len);
+        let offset = if let Some(cell_width) = hitbox.streamed_ascii_monospace_cell_width {
+            if cell_width <= px(0.0) {
+                0
+            } else {
+                (((x / cell_width) + 0.5).floor() as usize).min(hitbox.text_len)
+            }
+        } else {
+            let layout = &self.diff_text_layout_cache.get(&hitbox.layout_key)?.layout;
+            layout
+                .closest_index_for_x(x)
+                .min(layout.len())
+                .min(hitbox.text_len)
+        };
         Some(DiffTextPos {
             visible_ix,
             region,
@@ -130,7 +172,7 @@ impl MainPaneView {
         let autoscroll_seq = self.diff_text_autoscroll_seq;
         cx.spawn(
             async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| loop {
-                Timer::after(Duration::from_millis(16)).await;
+                smol::Timer::after(Duration::from_millis(16)).await;
                 let mut keep_going = false;
                 let _ = view.update(cx, |this, cx| {
                     if !this.diff_text_selecting {
@@ -284,7 +326,7 @@ impl MainPaneView {
             }
             return self
                 .worktree_preview_line_text(visible_ix)
-                .map(expand_tabs)
+                .map(|line| expand_tabs(line.as_ref()))
                 .unwrap_or(fallback);
         }
 
@@ -397,8 +439,14 @@ impl MainPaneView {
                 return 0;
             }
             return self
-                .worktree_preview_line_text(visible_ix)
-                .map(display_len)
+                .worktree_preview_line_raw_text(visible_ix)
+                .map(|line| {
+                    if line.has_tabs_without_loading() {
+                        display_len(line.as_ref())
+                    } else {
+                        line.len()
+                    }
+                })
                 .unwrap_or(0);
         }
 
@@ -504,6 +552,133 @@ impl MainPaneView {
         }
     }
 
+    fn append_diff_text_region_slice(
+        &self,
+        out: &mut String,
+        visible_ix: usize,
+        region: DiffTextRegion,
+        range: Range<usize>,
+        expanded_tabs: &mut String,
+    ) {
+        if range.start >= range.end {
+            return;
+        }
+
+        if self.is_markdown_preview_active() {
+            let text = self.markdown_preview_row_text(visible_ix, region);
+            append_diff_display_text_slice(out, text.as_ref(), range, expanded_tabs);
+            return;
+        }
+
+        if self.is_file_preview_active() {
+            if region != DiffTextRegion::Inline {
+                return;
+            }
+            if let Some(raw_text) = self.worktree_preview_line_raw_text(visible_ix)
+                && !raw_text.has_tabs_without_loading()
+                && let Some(slice) = raw_text.slice_text(range.clone())
+            {
+                out.push_str(slice.as_ref());
+                return;
+            }
+            if let Some(text) = self.worktree_preview_line_text(visible_ix) {
+                append_diff_display_text_slice(out, text.as_ref(), range, expanded_tabs);
+            }
+            return;
+        }
+
+        let Some(mapped_ix) = self.diff_mapped_ix_for_visible_ix(visible_ix) else {
+            return;
+        };
+
+        if self.diff_view == DiffViewMode::Inline && self.is_file_diff_view_active() {
+            if region != DiffTextRegion::Inline {
+                return;
+            }
+            if let Some(row) = self.file_diff_inline_render_data(mapped_ix) {
+                append_diff_display_text_slice(out, row.text.as_ref(), range, expanded_tabs);
+            }
+            return;
+        }
+
+        if self.diff_view == DiffViewMode::Split && self.is_file_diff_view_active() {
+            let Some(row) = self.file_diff_split_row(mapped_ix) else {
+                return;
+            };
+            let text = match region {
+                DiffTextRegion::SplitLeft => row.old.as_deref().unwrap_or(""),
+                DiffTextRegion::SplitRight => row.new.as_deref().unwrap_or(""),
+                DiffTextRegion::Inline => return,
+            };
+            append_diff_display_text_slice(out, text, range, expanded_tabs);
+            return;
+        }
+
+        let text = self.diff_text_line_for_region(visible_ix, region);
+        append_diff_display_text_slice(out, text.as_ref(), range, expanded_tabs);
+    }
+
+    fn append_diff_text_split_combined_slice(
+        &self,
+        out: &mut String,
+        visible_ix: usize,
+        range: Range<usize>,
+        expanded_tabs: &mut String,
+    ) {
+        if range.start >= range.end {
+            return;
+        }
+
+        let left_len = self.diff_text_line_len_for_region(visible_ix, DiffTextRegion::SplitLeft);
+        let right_start = left_len.saturating_add(1);
+
+        if range.start < left_len {
+            self.append_diff_text_region_slice(
+                out,
+                visible_ix,
+                DiffTextRegion::SplitLeft,
+                range.start..range.end.min(left_len),
+                expanded_tabs,
+            );
+        }
+
+        if range.start < right_start && range.end > left_len {
+            out.push('\t');
+        }
+
+        if range.end > right_start {
+            self.append_diff_text_region_slice(
+                out,
+                visible_ix,
+                DiffTextRegion::SplitRight,
+                range.start.saturating_sub(right_start)..range.end.saturating_sub(right_start),
+                expanded_tabs,
+            );
+        }
+    }
+
+    fn diff_text_string_for_region(
+        &self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+    ) -> Option<String> {
+        let line_len = self.diff_text_line_len_for_region(visible_ix, region);
+        if line_len == 0 {
+            return None;
+        }
+
+        let mut out = String::with_capacity(line_len);
+        let mut expanded_tabs = String::new();
+        self.append_diff_text_region_slice(
+            &mut out,
+            visible_ix,
+            region,
+            0..line_len,
+            &mut expanded_tabs,
+        );
+        (!out.is_empty()).then_some(out)
+    }
+
     fn selected_diff_text_string(&self) -> Option<String> {
         let (start, end) = self.diff_text_normalized_selection()?;
         if start == end {
@@ -519,10 +694,11 @@ impl MainPaneView {
         let mut out = String::with_capacity(
             crate::view::diff_utils::multiline_text_copy_capacity_hint(selected_line_count),
         );
+        let mut expanded_tabs = String::new();
         for visible_ix in start.visible_ix..=end.visible_ix {
             if force_inline || self.diff_view == DiffViewMode::Inline {
-                let text = self.diff_text_line_for_region(visible_ix, DiffTextRegion::Inline);
-                let line_len = text.len();
+                let line_len =
+                    self.diff_text_line_len_for_region(visible_ix, DiffTextRegion::Inline);
                 let a = if visible_ix == start.visible_ix {
                     start.offset.min(line_len)
                 } else {
@@ -536,9 +712,13 @@ impl MainPaneView {
                 if !out.is_empty() {
                     out.push('\n');
                 }
-                if a < b {
-                    out.push_str(&text[a..b]);
-                }
+                self.append_diff_text_region_slice(
+                    &mut out,
+                    visible_ix,
+                    DiffTextRegion::Inline,
+                    a..b,
+                    &mut expanded_tabs,
+                );
                 continue;
             }
 
@@ -550,8 +730,7 @@ impl MainPaneView {
             .then_some(start.region);
 
             if let Some(region) = split_region {
-                let text = self.diff_text_line_for_region(visible_ix, region);
-                let line_len = text.len();
+                let line_len = self.diff_text_line_len_for_region(visible_ix, region);
                 let a = if visible_ix == start.visible_ix {
                     start.offset.min(line_len)
                 } else {
@@ -565,15 +744,19 @@ impl MainPaneView {
                 if !out.is_empty() {
                     out.push('\n');
                 }
-                if a < b {
-                    out.push_str(&text[a..b]);
-                }
+                self.append_diff_text_region_slice(
+                    &mut out,
+                    visible_ix,
+                    region,
+                    a..b,
+                    &mut expanded_tabs,
+                );
             } else {
-                let left = self.diff_text_line_for_region(visible_ix, DiffTextRegion::SplitLeft);
-                let right = self.diff_text_line_for_region(visible_ix, DiffTextRegion::SplitRight);
-                let combined = format!("{}\t{}", left.as_ref(), right.as_ref());
-                let left_len = left.len();
-                let combined_len = combined.len();
+                let left_len =
+                    self.diff_text_line_len_for_region(visible_ix, DiffTextRegion::SplitLeft);
+                let right_len =
+                    self.diff_text_line_len_for_region(visible_ix, DiffTextRegion::SplitRight);
+                let combined_len = left_len.saturating_add(1).saturating_add(right_len);
 
                 let a = if visible_ix == start.visible_ix {
                     self.diff_text_combined_offset(start, left_len)
@@ -591,9 +774,12 @@ impl MainPaneView {
                 if !out.is_empty() {
                     out.push('\n');
                 }
-                if a < b {
-                    out.push_str(&combined[a..b]);
-                }
+                self.append_diff_text_split_combined_slice(
+                    &mut out,
+                    visible_ix,
+                    a..b,
+                    &mut expanded_tabs,
+                );
             }
         }
 
@@ -605,6 +791,21 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) {
         let Some(text) = self.selected_diff_text_string() else {
+            return;
+        };
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+    }
+
+    pub(in super::super::super) fn copy_diff_text_for_context_menu_to_clipboard(
+        &mut self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let Some(text) = self
+            .selected_diff_text_string()
+            .or_else(|| self.diff_text_string_for_region(visible_ix, region))
+        else {
             return;
         };
         cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
@@ -630,10 +831,23 @@ impl MainPaneView {
         };
         let is_file_preview = self.is_file_preview_active();
 
-        let copy_text = self.selected_diff_text_string().or_else(|| {
-            let text = self.diff_text_line_for_region(visible_ix, region);
-            (!text.is_empty()).then_some(text.to_string())
-        });
+        let selected_copy_text = self.selected_diff_text_string();
+        let copy_target = if selected_copy_text.is_none()
+            && self.is_file_preview_active()
+            && region == DiffTextRegion::Inline
+            && self
+                .worktree_preview_line_raw_text(visible_ix)
+                .is_some_and(|line| rows::is_streamable_diff_text(&line))
+        {
+            Some((visible_ix, region))
+        } else {
+            None
+        };
+        let copy_text = if copy_target.is_some() {
+            selected_copy_text
+        } else {
+            selected_copy_text.or_else(|| self.diff_text_string_for_region(visible_ix, region))
+        };
 
         let list_len = if is_file_preview {
             self.worktree_preview_line_count().unwrap_or(0)
@@ -920,6 +1134,7 @@ impl MainPaneView {
                 discard_lines_patch,
                 lines_count,
                 copy_text,
+                copy_target,
             },
             anchor,
             window,
@@ -954,8 +1169,8 @@ impl MainPaneView {
         let delta_x = autoscroll_delta_for_axis(mouse.x, bounds.left(), bounds.right());
         let delta_y = autoscroll_delta_for_axis(mouse.y, bounds.top(), bounds.bottom());
 
-        let new_x = (old_offset.x + delta_x).clamp(-max_offset.width, px(0.0));
-        let new_y = (old_offset.y + delta_y).clamp(-max_offset.height, px(0.0));
+        let new_x = (old_offset.x + delta_x).clamp(-max_offset.x, px(0.0));
+        let new_y = (old_offset.y + delta_y).clamp(-max_offset.y, px(0.0));
 
         let scrolled = new_x != old_offset.x || new_y != old_offset.y;
         if scrolled {

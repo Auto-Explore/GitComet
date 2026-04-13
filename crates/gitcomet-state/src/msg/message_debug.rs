@@ -191,6 +191,18 @@ impl std::fmt::Debug for InternalMsg {
                 .field("target", target)
                 .field("result", result)
                 .finish(),
+            InternalMsg::DiffPreviewTextFileLoaded {
+                repo_id,
+                target,
+                side,
+                result,
+            } => f
+                .debug_struct("DiffPreviewTextFileLoaded")
+                .field("repo_id", repo_id)
+                .field("target", target)
+                .field("side", side)
+                .field("result", result)
+                .finish(),
             InternalMsg::DiffFileImageLoaded {
                 repo_id,
                 target,

@@ -1,10 +1,16 @@
 use super::canvas::keyed_canvas;
+use super::diff_text::{
+    PreparedDocumentByteRangeHighlights, build_cached_diff_query_overlay_styled_text,
+    build_cached_diff_styled_text, build_cached_diff_styled_text_from_relative_highlights,
+    syntax_highlights_for_streamed_line_slice_heuristic,
+};
 use super::*;
 use gpui::{
     App, Bounds, CursorStyle, DispatchPhase, HighlightStyle, Hitbox, HitboxBehavior, Pixels,
     Styled, TextRun, TextStyle, Window, fill, point, px, size,
 };
-use rustc_hash::FxHasher;
+use rustc_hash::{FxHashMap, FxHasher};
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
@@ -14,12 +20,42 @@ use std::sync::OnceLock;
 const DIFF_FONT_SCALE: f32 = 0.80;
 
 const GUTTER_TEXT_LAYOUT_CACHE_MAX_ENTRIES: usize = 16_384;
+const STREAMED_DIFF_TEXT_MIN_BYTES: usize = 64 * 1024;
+const STREAMED_DIFF_TEXT_OVERSCAN_COLUMNS: usize = 64;
+const STREAMED_DIFF_TEXT_CELL_WIDTH_SAMPLE: &str = "0000000000";
 
 type HighlightSpans = Arc<[(Range<usize>, HighlightStyle)]>;
 
 thread_local! {
     static GUTTER_TEXT_LAYOUT_CACHE: RefCell<FxLruCache<u64, gpui::ShapedLine>> =
         RefCell::new(new_fx_lru_cache(GUTTER_TEXT_LAYOUT_CACHE_MAX_ENTRIES));
+    static STREAMED_DIFF_TEXT_CELL_WIDTH_CACHE: RefCell<FxHashMap<u64, Pixels>> =
+        RefCell::new(FxHashMap::default());
+}
+
+#[derive(Clone)]
+pub(super) enum StreamedDiffTextSyntaxSource {
+    None,
+    Heuristic {
+        language: rows::DiffSyntaxLanguage,
+        mode: rows::DiffSyntaxMode,
+    },
+    Prepared {
+        document_text: Arc<str>,
+        line_starts: Arc<[usize]>,
+        document: rows::PreparedDiffSyntaxDocument,
+        language: rows::DiffSyntaxLanguage,
+        line_ix: usize,
+    },
+}
+
+#[derive(Clone)]
+pub(super) struct StreamedDiffTextPaintSpec {
+    pub(super) raw_text: gitcomet_core::file_diff::FileDiffLineText,
+    pub(super) query: SharedString,
+    pub(super) word_ranges: Arc<[Range<usize>]>,
+    pub(super) word_color: Option<gpui::Rgba>,
+    pub(super) syntax: StreamedDiffTextSyntaxSource,
 }
 
 fn hash_rgba(hasher: &mut FxHasher, color: gpui::Rgba) {
@@ -153,6 +189,453 @@ pub(in crate::view) fn diff_paint_log_for_tests() -> Vec<DiffPaintRecord> {
     DIFF_PAINT_LOG.with(|log| log.borrow().clone())
 }
 
+pub(in crate::view) fn is_streamable_diff_text(
+    text: &gitcomet_core::file_diff::FileDiffLineText,
+) -> bool {
+    text.len() >= STREAMED_DIFF_TEXT_MIN_BYTES && !text.has_tabs_without_loading()
+}
+
+fn should_stream_diff_text(spec: Option<&StreamedDiffTextPaintSpec>) -> bool {
+    let Some(spec) = spec else {
+        return false;
+    };
+    is_streamable_diff_text(&spec.raw_text)
+}
+
+fn streamed_diff_text_cell_width_cache_key(base_style: &TextStyle, font_size: Pixels) -> u64 {
+    let mut hasher = FxHasher::default();
+    font_size.hash(&mut hasher);
+    base_style.font_family.hash(&mut hasher);
+    base_style.font_weight.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn streamed_diff_text_ascii_cell_width(
+    base_style: &TextStyle,
+    font_size: Pixels,
+    window: &mut Window,
+) -> Pixels {
+    let key = streamed_diff_text_cell_width_cache_key(base_style, font_size);
+    if let Some(width) =
+        STREAMED_DIFF_TEXT_CELL_WIDTH_CACHE.with(|cache| cache.borrow().get(&key).copied())
+    {
+        return width;
+    }
+
+    let run = base_style.to_run(STREAMED_DIFF_TEXT_CELL_WIDTH_SAMPLE.len());
+    let layout = window.text_system().shape_line(
+        STREAMED_DIFF_TEXT_CELL_WIDTH_SAMPLE.into(),
+        font_size,
+        &[run],
+        None,
+    );
+    let width = if STREAMED_DIFF_TEXT_CELL_WIDTH_SAMPLE.is_empty() {
+        px(0.0)
+    } else {
+        layout.width / STREAMED_DIFF_TEXT_CELL_WIDTH_SAMPLE.len() as f32
+    };
+    STREAMED_DIFF_TEXT_CELL_WIDTH_CACHE.with(|cache| {
+        cache.borrow_mut().insert(key, width);
+    });
+    width
+}
+
+fn streamed_diff_text_visible_slice_range(
+    bounds: Bounds<Pixels>,
+    clip_bounds: Bounds<Pixels>,
+    total_len: usize,
+    cell_width: Pixels,
+    overscan_columns: usize,
+) -> Range<usize> {
+    if total_len == 0 || cell_width <= px(0.0) {
+        return 0..0;
+    }
+
+    let visible = bounds.intersect(&clip_bounds);
+    let left = if visible.size.width > px(0.0) {
+        (visible.left() - bounds.left()).max(px(0.0))
+    } else {
+        px(0.0)
+    };
+    let right = if visible.size.width > px(0.0) {
+        (visible.right() - bounds.left()).max(left)
+    } else {
+        left
+    };
+
+    let start = ((left / cell_width).floor() as usize).saturating_sub(overscan_columns);
+    let mut end = ((right / cell_width).ceil() as usize)
+        .saturating_add(overscan_columns)
+        .min(total_len);
+    if end <= start {
+        end = (start + 1).min(total_len);
+    }
+    start.min(total_len)..end
+}
+
+fn clip_ranges_to_slice(ranges: &[Range<usize>], slice_range: &Range<usize>) -> Vec<Range<usize>> {
+    if ranges.is_empty() || slice_range.is_empty() {
+        return Vec::new();
+    }
+
+    let mut clipped = Vec::new();
+    for range in ranges {
+        let start = range.start.max(slice_range.start);
+        let end = range.end.min(slice_range.end);
+        if start < end {
+            clipped.push(
+                start.saturating_sub(slice_range.start)..end.saturating_sub(slice_range.start),
+            );
+        }
+    }
+    clipped
+}
+
+fn push_or_extend_highlight(
+    merged: &mut Vec<(Range<usize>, HighlightStyle)>,
+    range: Range<usize>,
+    style: HighlightStyle,
+) {
+    if range.is_empty() {
+        return;
+    }
+
+    if let Some(last) = merged.last_mut()
+        && last.0.end == range.start
+        && last.1 == style
+    {
+        last.0.end = range.end;
+        return;
+    }
+
+    merged.push((range, style));
+}
+
+fn hash_range(hasher: &mut FxHasher, range: &Range<usize>) {
+    range.start.hash(hasher);
+    range.end.hash(hasher);
+}
+
+fn streamed_diff_text_text_hash(spec: &StreamedDiffTextPaintSpec) -> u64 {
+    spec.raw_text.identity_hash_without_loading()
+}
+
+fn streamed_diff_text_highlights_hash(spec: &StreamedDiffTextPaintSpec) -> u64 {
+    let mut hasher = FxHasher::default();
+    spec.query.as_ref().hash(&mut hasher);
+    for range in spec.word_ranges.iter() {
+        hash_range(&mut hasher, range);
+    }
+    if let Some(color) = spec.word_color {
+        hash_rgba(&mut hasher, color);
+    }
+    match &spec.syntax {
+        StreamedDiffTextSyntaxSource::None => {
+            0u8.hash(&mut hasher);
+        }
+        StreamedDiffTextSyntaxSource::Heuristic { language, mode } => {
+            1u8.hash(&mut hasher);
+            language.hash(&mut hasher);
+            mode.hash(&mut hasher);
+        }
+        StreamedDiffTextSyntaxSource::Prepared {
+            document_text,
+            line_starts,
+            language,
+            line_ix,
+            ..
+        } => {
+            2u8.hash(&mut hasher);
+            language.hash(&mut hasher);
+            line_ix.hash(&mut hasher);
+            (document_text.as_ptr() as usize).hash(&mut hasher);
+            document_text.len().hash(&mut hasher);
+            (line_starts.as_ptr() as usize).hash(&mut hasher);
+            line_starts.len().hash(&mut hasher);
+        }
+    }
+    hasher.finish()
+}
+
+fn hash_overlay_ranges(
+    base_highlights_hash: u64,
+    ranges: &[Range<usize>],
+    background_color: gpui::Hsla,
+) -> u64 {
+    let mut hasher = FxHasher::default();
+    base_highlights_hash.hash(&mut hasher);
+    hash_rgba(&mut hasher, background_color.into());
+    for range in ranges {
+        range.start.hash(&mut hasher);
+        range.end.hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+fn overlay_background_ranges_on_styled_text(
+    base: &CachedDiffStyledText,
+    ranges: &[Range<usize>],
+    background_color: gpui::Hsla,
+) -> CachedDiffStyledText {
+    if ranges.is_empty() || base.text.is_empty() {
+        return base.clone();
+    }
+
+    let base_highlights = base.highlights.as_ref();
+    if base_highlights.is_empty() {
+        let mut merged = Vec::with_capacity(ranges.len());
+        for range in ranges.iter().cloned() {
+            push_or_extend_highlight(
+                &mut merged,
+                range,
+                HighlightStyle {
+                    background_color: Some(background_color),
+                    ..HighlightStyle::default()
+                },
+            );
+        }
+        return CachedDiffStyledText {
+            text: base.text.clone(),
+            highlights: Arc::from(merged),
+            highlights_hash: hash_overlay_ranges(base.highlights_hash, ranges, background_color),
+            text_hash: base.text_hash,
+        };
+    }
+
+    let mut merged = Vec::with_capacity(base_highlights.len() + ranges.len() * 2);
+    let mut base_ix = 0usize;
+    let mut range_ix = 0usize;
+    let mut cursor = 0usize;
+    let text_len = base.text.len();
+    let default_style = HighlightStyle::default();
+
+    while cursor < text_len {
+        while base_ix < base_highlights.len() && base_highlights[base_ix].0.end <= cursor {
+            base_ix += 1;
+        }
+        while range_ix < ranges.len() && ranges[range_ix].end <= cursor {
+            range_ix += 1;
+        }
+
+        let active_base = base_highlights
+            .get(base_ix)
+            .filter(|(range, _)| range.start <= cursor && range.end > cursor);
+        let active_range = ranges
+            .get(range_ix)
+            .filter(|range| range.start <= cursor && range.end > cursor);
+
+        let mut next_boundary = text_len;
+        if let Some((range, _)) = active_base {
+            next_boundary = next_boundary.min(range.end.min(text_len));
+        } else if let Some((range, _)) = base_highlights.get(base_ix) {
+            next_boundary = next_boundary.min(range.start.min(text_len));
+        }
+        if let Some(range) = active_range {
+            next_boundary = next_boundary.min(range.end.min(text_len));
+        } else if let Some(range) = ranges.get(range_ix) {
+            next_boundary = next_boundary.min(range.start.min(text_len));
+        }
+
+        if next_boundary <= cursor {
+            break;
+        }
+
+        let mut style = active_base.map(|(_, style)| *style).unwrap_or_default();
+        if active_range.is_some() {
+            style.background_color = Some(background_color);
+        }
+
+        if style != default_style {
+            push_or_extend_highlight(&mut merged, cursor..next_boundary, style);
+        }
+
+        cursor = next_boundary;
+    }
+
+    CachedDiffStyledText {
+        text: base.text.clone(),
+        highlights: Arc::from(merged),
+        highlights_hash: hash_overlay_ranges(base.highlights_hash, ranges, background_color),
+        text_hash: base.text_hash,
+    }
+}
+
+fn streamed_diff_text_relative_prepared_highlights(
+    theme: AppTheme,
+    spec: &StreamedDiffTextPaintSpec,
+    slice_range: &Range<usize>,
+) -> Option<PreparedDocumentByteRangeHighlights> {
+    let StreamedDiffTextSyntaxSource::Prepared {
+        document_text,
+        line_starts,
+        document,
+        language,
+        line_ix,
+    } = &spec.syntax
+    else {
+        return None;
+    };
+
+    let text_len = document_text.len();
+    let line_start = line_starts
+        .get(*line_ix)
+        .copied()
+        .unwrap_or(text_len)
+        .min(text_len);
+    let abs_start = line_start.saturating_add(slice_range.start).min(text_len);
+    let abs_end = line_start.saturating_add(slice_range.end).min(text_len);
+    if abs_start >= abs_end {
+        return Some(PreparedDocumentByteRangeHighlights::default());
+    }
+
+    rows::request_syntax_highlights_for_prepared_document_byte_range(
+        theme,
+        document_text.as_ref(),
+        line_starts.as_ref(),
+        *document,
+        *language,
+        abs_start..abs_end,
+    )
+}
+
+fn build_streamed_diff_slice_styled_text(
+    theme: AppTheme,
+    spec: &StreamedDiffTextPaintSpec,
+    requested_slice_range: &Range<usize>,
+) -> (CachedDiffStyledText, bool, Range<usize>) {
+    let (slice_text, resolved_slice_range) = spec
+        .raw_text
+        .slice_text_resolved(requested_slice_range.clone())
+        .unwrap_or((Cow::Borrowed(""), 0..0));
+    let slice_text_ref = slice_text.as_ref();
+
+    let mut pending = false;
+    let mut base = match &spec.syntax {
+        StreamedDiffTextSyntaxSource::None => build_cached_diff_styled_text(
+            theme,
+            slice_text_ref,
+            &[],
+            "",
+            None,
+            rows::DiffSyntaxMode::HeuristicOnly,
+            None,
+        ),
+        StreamedDiffTextSyntaxSource::Heuristic { language, mode } => {
+            match syntax_highlights_for_streamed_line_slice_heuristic(
+                theme,
+                &spec.raw_text,
+                *language,
+                requested_slice_range.clone(),
+                resolved_slice_range.clone(),
+            ) {
+                Some(highlights) => build_cached_diff_styled_text_from_relative_highlights(
+                    slice_text_ref,
+                    highlights.as_slice(),
+                ),
+                None => build_cached_diff_styled_text(
+                    theme,
+                    slice_text_ref,
+                    &[],
+                    "",
+                    Some(*language),
+                    *mode,
+                    None,
+                ),
+            }
+        }
+        StreamedDiffTextSyntaxSource::Prepared { language, .. } => {
+            match streamed_diff_text_relative_prepared_highlights(
+                theme,
+                spec,
+                &resolved_slice_range,
+            ) {
+                Some(result) => {
+                    pending = result.pending;
+                    let StreamedDiffTextSyntaxSource::Prepared {
+                        line_starts,
+                        line_ix,
+                        ..
+                    } = &spec.syntax
+                    else {
+                        unreachable!();
+                    };
+                    let line_start = line_starts
+                        .get(*line_ix)
+                        .copied()
+                        .unwrap_or_default()
+                        .saturating_add(resolved_slice_range.start);
+                    let mut relative = Vec::with_capacity(result.highlights.len());
+                    for (range, style) in result.highlights {
+                        let start = range.start.max(line_start);
+                        let end = range
+                            .end
+                            .min(line_start.saturating_add(resolved_slice_range.len()));
+                        if start < end {
+                            relative.push((
+                                start.saturating_sub(line_start)..end.saturating_sub(line_start),
+                                style,
+                            ));
+                        }
+                    }
+                    build_cached_diff_styled_text_from_relative_highlights(
+                        slice_text_ref,
+                        relative.as_slice(),
+                    )
+                }
+                None => build_cached_diff_styled_text(
+                    theme,
+                    slice_text_ref,
+                    &[],
+                    "",
+                    Some(*language),
+                    rows::DiffSyntaxMode::HeuristicOnly,
+                    None,
+                ),
+            }
+        }
+    };
+
+    if !spec.word_ranges.is_empty()
+        && let Some(mut color) = spec.word_color
+    {
+        let clipped = clip_ranges_to_slice(spec.word_ranges.as_ref(), &resolved_slice_range);
+        if !clipped.is_empty() {
+            color.a = if theme.is_dark { 0.22 } else { 0.16 };
+            base =
+                overlay_background_ranges_on_styled_text(&base, clipped.as_slice(), color.into());
+        }
+    }
+
+    if !spec.query.as_ref().trim().is_empty() {
+        base = build_cached_diff_query_overlay_styled_text(theme, &base, spec.query.as_ref());
+    }
+
+    (base, pending, resolved_slice_range)
+}
+
+fn diff_text_paint_payload(
+    styled: Option<&CachedDiffStyledText>,
+    streamed_spec: Option<&StreamedDiffTextPaintSpec>,
+) -> (SharedString, HighlightSpans, u64, u64) {
+    if should_stream_diff_text(streamed_spec) {
+        let spec = streamed_spec.expect("streamed spec checked above");
+        return (
+            SharedString::default(),
+            empty_highlights(),
+            streamed_diff_text_highlights_hash(spec),
+            streamed_diff_text_text_hash(spec),
+        );
+    }
+
+    let text = styled.map(|s| s.text.clone()).unwrap_or_default();
+    let highlights = styled
+        .map(|s| Arc::clone(&s.highlights))
+        .unwrap_or_else(empty_highlights);
+    let highlights_hash = styled.map(|s| s.highlights_hash).unwrap_or(0);
+    let text_hash = styled.map(|s| s.text_hash).unwrap_or(0);
+    (text, highlights, highlights_hash, text_hash)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn inline_diff_line_row_canvas(
     theme: AppTheme,
@@ -166,13 +649,10 @@ pub(super) fn inline_diff_line_row_canvas(
     fg: gpui::Rgba,
     gutter_fg: gpui::Rgba,
     styled: Option<&CachedDiffStyledText>,
+    streamed_spec: Option<StreamedDiffTextPaintSpec>,
 ) -> AnyElement {
-    let text = styled.map(|s| s.text.clone()).unwrap_or_default();
-    let highlights = styled
-        .map(|s| Arc::clone(&s.highlights))
-        .unwrap_or_else(empty_highlights);
-    let highlights_hash = styled.map(|s| s.highlights_hash).unwrap_or(0);
-    let text_hash = styled.map(|s| s.text_hash).unwrap_or(0);
+    let (text, highlights, highlights_hash, text_hash) =
+        diff_text_paint_payload(styled, streamed_spec.as_ref());
     let revision =
         inline_row_canvas_revision_key(&old, &new, bg, fg, gutter_fg, text_hash, highlights_hash);
     let canvas_id: gpui::ElementId = ("diff_row_canvas_inline", visible_ix).into();
@@ -227,12 +707,14 @@ pub(super) fn inline_diff_line_row_canvas(
                     prepaint.text_bounds,
                     &text,
                     &highlights,
+                    streamed_spec.as_ref(),
                     test_row_bg,
                     highlights_hash,
                     text_hash,
                     y,
                     fg,
                     line_metrics,
+                    theme,
                     window,
                     cx,
                 );
@@ -293,19 +775,13 @@ pub(super) fn split_diff_line_row_canvas(
     right_gutter: gpui::Rgba,
     left_styled: Option<&CachedDiffStyledText>,
     right_styled: Option<&CachedDiffStyledText>,
+    left_streamed_spec: Option<StreamedDiffTextPaintSpec>,
+    right_streamed_spec: Option<StreamedDiffTextPaintSpec>,
 ) -> AnyElement {
-    let left_text = left_styled.map(|s| s.text.clone()).unwrap_or_default();
-    let left_highlights = left_styled
-        .map(|s| Arc::clone(&s.highlights))
-        .unwrap_or_else(empty_highlights);
-    let left_highlights_hash = left_styled.map(|s| s.highlights_hash).unwrap_or(0);
-    let left_text_hash = left_styled.map(|s| s.text_hash).unwrap_or(0);
-    let right_text = right_styled.map(|s| s.text.clone()).unwrap_or_default();
-    let right_highlights = right_styled
-        .map(|s| Arc::clone(&s.highlights))
-        .unwrap_or_else(empty_highlights);
-    let right_highlights_hash = right_styled.map(|s| s.highlights_hash).unwrap_or(0);
-    let right_text_hash = right_styled.map(|s| s.text_hash).unwrap_or(0);
+    let (left_text, left_highlights, left_highlights_hash, left_text_hash) =
+        diff_text_paint_payload(left_styled, left_streamed_spec.as_ref());
+    let (right_text, right_highlights, right_highlights_hash, right_text_hash) =
+        diff_text_paint_payload(right_styled, right_streamed_spec.as_ref());
     let revision = split_row_canvas_revision_key(
         &old,
         &new,
@@ -386,12 +862,14 @@ pub(super) fn split_diff_line_row_canvas(
                     prepaint.left_text_bounds,
                     &left_text,
                     &left_highlights,
+                    left_streamed_spec.as_ref(),
                     left_test_row_bg,
                     left_highlights_hash,
                     left_text_hash,
                     y,
                     left_fg,
                     line_metrics,
+                    theme,
                     window,
                     cx,
                 );
@@ -405,12 +883,14 @@ pub(super) fn split_diff_line_row_canvas(
                     prepaint.right_text_bounds,
                     &right_text,
                     &right_highlights,
+                    right_streamed_spec.as_ref(),
                     right_test_row_bg,
                     right_highlights_hash,
                     right_text_hash,
                     y,
                     right_fg,
                     line_metrics,
+                    theme,
                     window,
                     cx,
                 );
@@ -468,17 +948,14 @@ pub(super) fn patch_split_column_row_canvas(
     gutter_fg: gpui::Rgba,
     line_no: SharedString,
     styled: Option<&CachedDiffStyledText>,
+    streamed_spec: Option<StreamedDiffTextPaintSpec>,
 ) -> AnyElement {
     let region = match column {
         super::diff::PatchSplitColumn::Left => DiffTextRegion::SplitLeft,
         super::diff::PatchSplitColumn::Right => DiffTextRegion::SplitRight,
     };
-    let text = styled.map(|s| s.text.clone()).unwrap_or_default();
-    let highlights = styled
-        .map(|s| Arc::clone(&s.highlights))
-        .unwrap_or_else(empty_highlights);
-    let highlights_hash = styled.map(|s| s.highlights_hash).unwrap_or(0);
-    let text_hash = styled.map(|s| s.text_hash).unwrap_or(0);
+    let (text, highlights, highlights_hash, text_hash) =
+        diff_text_paint_payload(styled, streamed_spec.as_ref());
     let revision = patch_split_row_canvas_revision_key(
         &line_no,
         bg,
@@ -537,12 +1014,14 @@ pub(super) fn patch_split_column_row_canvas(
                     prepaint.text_bounds,
                     &text,
                     &highlights,
+                    streamed_spec.as_ref(),
                     test_row_bg,
                     highlights_hash,
                     text_hash,
                     y,
                     fg,
                     line_metrics,
+                    theme,
                     window,
                     cx,
                 );
@@ -589,12 +1068,11 @@ pub(super) fn worktree_preview_row_canvas(
     min_width: Pixels,
     bar_color: Option<gpui::Rgba>,
     line_no: SharedString,
-    styled: &CachedDiffStyledText,
+    styled: Option<&CachedDiffStyledText>,
+    streamed_spec: Option<StreamedDiffTextPaintSpec>,
 ) -> AnyElement {
-    let text = styled.text.clone();
-    let highlights = Arc::clone(&styled.highlights);
-    let highlights_hash = styled.highlights_hash;
-    let text_hash = styled.text_hash;
+    let (text, highlights, highlights_hash, text_hash) =
+        diff_text_paint_payload(styled, streamed_spec.as_ref());
 
     keyed_canvas(
         ("worktree_preview_row_canvas", ix),
@@ -657,12 +1135,14 @@ pub(super) fn worktree_preview_row_canvas(
                     prepaint.text_bounds,
                     &text,
                     &highlights,
+                    streamed_spec.as_ref(),
                     None,
                     highlights_hash,
                     text_hash,
                     y,
                     theme.colors.text,
                     line_metrics,
+                    theme,
                     window,
                     cx,
                 );
@@ -681,7 +1161,8 @@ pub(super) fn worktree_preview_row_canvas(
                     }
 
                     if event.button == gpui::MouseButton::Left {
-                        window.focus(&view.read(cx).diff_panel_focus_handle);
+                        let focus = view.read(cx).diff_panel_focus_handle.clone();
+                        window.focus(&focus, cx);
                         let click_count = event.click_count;
                         let position = event.position;
                         view.update(cx, |this, cx| {
@@ -858,7 +1339,8 @@ fn install_diff_row_mouse_handlers(
             let region = regions.region_at(event.position);
 
             if event.button == gpui::MouseButton::Left {
-                window.focus(&view.read(cx).diff_panel_focus_handle);
+                let focus = view.read(cx).diff_panel_focus_handle.clone();
+                window.focus(&focus, cx);
                 if let Some(region) = region {
                     let click_count = event.click_count;
                     let position = event.position;
@@ -1040,7 +1522,14 @@ fn paint_gutter_text(
 
         shaped
     });
-    let _ = shaped.paint(point(x, y), metrics.line_height, window, cx);
+    let _ = shaped.paint(
+        point(x, y),
+        metrics.line_height,
+        gpui::TextAlign::Left,
+        None,
+        window,
+        cx,
+    );
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1051,12 +1540,14 @@ fn paint_selectable_diff_text(
     bounds: Bounds<Pixels>,
     text: &SharedString,
     highlights: &Arc<[(Range<usize>, HighlightStyle)]>,
+    streamed_spec: Option<&StreamedDiffTextPaintSpec>,
     row_bg: Option<gpui::Rgba>,
     highlights_hash: u64,
     text_hash: u64,
     y: Pixels,
     base_fg: gpui::Rgba,
     metrics: LineMetrics,
+    theme: AppTheme,
     window: &mut Window,
     cx: &mut App,
 ) {
@@ -1065,39 +1556,113 @@ fn paint_selectable_diff_text(
     base_style.white_space = gpui::WhiteSpace::Nowrap;
     base_style.text_overflow = None;
 
-    #[cfg(test)]
-    record_diff_paint_for_tests(visible_ix, region, text, highlights.as_ref(), row_bg);
-    #[cfg(not(test))]
-    let _ = row_bg;
-
-    let selection = view
-        .read(cx)
-        .diff_text_local_selection_range(visible_ix, region, text.len());
-
-    let (layout_key, layout, shaped_new) = ensure_layout_cached(
-        view,
-        text_hash,
-        text,
-        &base_style,
-        base_fg,
-        highlights.as_ref(),
-        highlights_hash,
-        metrics,
-        window,
-        cx,
-    );
-
     let pad = px_2(window);
     let gutter_total = gutter_cell_total_width(window, pad);
     let row_extra = match region {
         DiffTextRegion::Inline => gutter_total * 2.0 + pad * 2.0,
         DiffTextRegion::SplitLeft | DiffTextRegion::SplitRight => gutter_total + pad * 2.0,
     };
-    let required_row_w = (row_extra + layout.width + px(16.0)).round();
+    let total_text_len = streamed_spec
+        .filter(|spec| should_stream_diff_text(Some(spec)))
+        .map(|spec| spec.raw_text.len())
+        .unwrap_or_else(|| text.len());
+    let selection =
+        view.read(cx)
+            .diff_text_local_selection_range(visible_ix, region, total_text_len);
+
+    let mut streamed_styled = None;
+    let mut streamed_slice_range = None;
+    let mut paint_x = bounds.left();
+    let mut hitbox_cell_width = None;
+    let mut pending_prepared_syntax = false;
+
+    let (layout_key, layout, shaped_new, required_row_w) = if let Some(spec) =
+        streamed_spec.filter(|spec| should_stream_diff_text(Some(spec)))
+    {
+        let cell_width =
+            streamed_diff_text_ascii_cell_width(&base_style, metrics.font_size, window);
+        let clip_bounds = window.content_mask().bounds;
+        let overscan_columns = STREAMED_DIFF_TEXT_OVERSCAN_COLUMNS.max(spec.query.as_ref().len());
+        let slice_range = streamed_diff_text_visible_slice_range(
+            bounds,
+            clip_bounds,
+            spec.raw_text.len(),
+            cell_width,
+            overscan_columns,
+        );
+        let (slice_styled, pending, resolved_slice_range) =
+            build_streamed_diff_slice_styled_text(theme, spec, &slice_range);
+        let (layout_key, layout, shaped_new) = ensure_layout_cached(
+            view,
+            slice_styled.text_hash,
+            &slice_styled.text,
+            &base_style,
+            base_fg,
+            slice_styled.highlights.as_ref(),
+            slice_styled.highlights_hash,
+            metrics,
+            window,
+            cx,
+        );
+        paint_x = bounds.left() + cell_width * resolved_slice_range.start as f32;
+        hitbox_cell_width = Some(cell_width);
+        pending_prepared_syntax = pending;
+        streamed_slice_range = Some(resolved_slice_range);
+        let required_row_w =
+            (row_extra + cell_width * spec.raw_text.len() as f32 + px(16.0)).round();
+        streamed_styled = Some(slice_styled);
+        (layout_key, layout, shaped_new, required_row_w)
+    } else {
+        let (layout_key, layout, shaped_new) = ensure_layout_cached(
+            view,
+            text_hash,
+            text,
+            &base_style,
+            base_fg,
+            highlights.as_ref(),
+            highlights_hash,
+            metrics,
+            window,
+            cx,
+        );
+        let required_row_w = (row_extra + layout.width + px(16.0)).round();
+        (layout_key, layout, shaped_new, required_row_w)
+    };
+
+    let paint_text = streamed_styled
+        .as_ref()
+        .map(|styled| &styled.text)
+        .unwrap_or(text);
+    let paint_highlights = streamed_styled
+        .as_ref()
+        .map(|styled| styled.highlights.as_ref())
+        .unwrap_or_else(|| highlights.as_ref());
+
+    #[cfg(test)]
+    record_diff_paint_for_tests(visible_ix, region, paint_text, paint_highlights, row_bg);
+    #[cfg(not(test))]
+    let _ = row_bg;
 
     if let Some(r) = selection {
-        let x0 = layout.x_for_index(r.start.min(text.len()));
-        let x1 = layout.x_for_index(r.end.min(text.len()));
+        let (x0, x1) = if let Some(cell_width) = hitbox_cell_width {
+            let start = streamed_slice_range
+                .as_ref()
+                .map(|slice_range| r.start.max(slice_range.start))
+                .unwrap_or(r.start)
+                .min(total_text_len);
+            let end = streamed_slice_range
+                .as_ref()
+                .map(|slice_range| r.end.min(slice_range.end))
+                .unwrap_or(r.end)
+                .min(total_text_len);
+            (cell_width * start as f32, cell_width * end as f32)
+        } else {
+            (
+                layout.x_for_index(r.start.min(total_text_len)),
+                layout.x_for_index(r.end.min(total_text_len)),
+            )
+        };
+
         if x1 > x0 {
             let color = view.read(cx).diff_text_selection_color();
             window.paint_quad(fill(
@@ -1113,29 +1678,54 @@ fn paint_selectable_diff_text(
     let hitbox = DiffTextHitbox {
         bounds,
         layout_key,
-        text_len: text.len(),
+        text_len: total_text_len,
+        streamed_ascii_monospace_cell_width: hitbox_cell_width,
     };
 
     view.update(cx, |this, cx| {
         this.set_diff_text_hitbox(visible_ix, region, hitbox);
         this.touch_diff_text_layout_cache(layout_key, shaped_new);
+        if pending_prepared_syntax {
+            this.ensure_prepared_syntax_chunk_poll(cx);
+        }
         if required_row_w > this.diff_horizontal_min_width {
             this.diff_horizontal_min_width = required_row_w;
             cx.notify();
         }
     });
 
-    if text.is_empty() {
+    if paint_text.is_empty() {
         return;
     }
 
-    if highlights.is_empty() {
-        let _ = layout.paint(point(bounds.left(), y), metrics.line_height, window, cx);
+    if paint_highlights.is_empty() {
+        let _ = layout.paint(
+            point(paint_x, y),
+            metrics.line_height,
+            gpui::TextAlign::Left,
+            None,
+            window,
+            cx,
+        );
         return;
     }
 
-    let _ = layout.paint_background(point(bounds.left(), y), metrics.line_height, window, cx);
-    let _ = layout.paint(point(bounds.left(), y), metrics.line_height, window, cx);
+    let _ = layout.paint_background(
+        point(paint_x, y),
+        metrics.line_height,
+        gpui::TextAlign::Left,
+        None,
+        window,
+        cx,
+    );
+    let _ = layout.paint(
+        point(paint_x, y),
+        metrics.line_height,
+        gpui::TextAlign::Left,
+        None,
+        window,
+        cx,
+    );
 }
 
 fn diff_layout_base_key(

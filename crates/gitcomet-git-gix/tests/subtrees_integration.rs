@@ -95,7 +95,12 @@ fn list_subtrees_discovers_squash_and_full_history_without_metadata() {
     fs::create_dir_all(&upstream_squash).expect("create upstream-squash");
     fs::create_dir_all(&parent_repo).expect("create parent");
 
-    init_repo_with_seed(&upstream_full, "lib.txt", "full\n", "seed full history subtree");
+    init_repo_with_seed(
+        &upstream_full,
+        "lib.txt",
+        "full\n",
+        "seed full history subtree",
+    );
     init_repo_with_seed(
         &upstream_squash,
         "lib.txt",
@@ -206,10 +211,15 @@ fn subtree_commands_round_trip_and_persist_source_metadata() {
         "published ref should exist in push target"
     );
 
-    let reopened = backend.open(&parent_repo).expect("reopen parent repository");
+    let reopened = backend
+        .open(&parent_repo)
+        .expect("reopen parent repository");
     let persisted = reopened.list_subtrees().expect("list persisted subtree");
     assert_eq!(persisted.len(), 1);
-    let source = persisted[0].source.as_ref().expect("persisted source config");
+    let source = persisted[0]
+        .source
+        .as_ref()
+        .expect("persisted source config");
     assert_eq!(source.repository, upstream_text);
     assert_eq!(source.reference, "main");
     assert_eq!(source.push_refspec.as_deref(), Some("refs/heads/published"));
@@ -219,9 +229,17 @@ fn subtree_commands_round_trip_and_persist_source_metadata() {
         .remove_subtree_with_output(subtree_path)
         .expect("remove subtree");
     assert!(!parent_repo.join(subtree_path).exists());
-    assert!(reopened.list_subtrees().expect("list after removal").is_empty());
+    assert!(
+        reopened
+            .list_subtrees()
+            .expect("list after removal")
+            .is_empty()
+    );
 
-    let config_output = git_output(&parent_repo, &["config", "--local", "--get-regexp", r"^gitcomet\.subtree\."]);
+    let config_output = git_output(
+        &parent_repo,
+        &["config", "--local", "--get-regexp", r"^gitcomet\.subtree\."],
+    );
     assert_eq!(
         config_output.status.code(),
         Some(1),

@@ -175,6 +175,15 @@ pub trait GitRepository: Send + Sync {
             "file diff view is not implemented for this backend",
         )))
     }
+    fn diff_preview_text_file(
+        &self,
+        _target: &DiffTarget,
+        _side: DiffPreviewTextSide,
+    ) -> Result<Option<PathBuf>> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "preview text file loading is not implemented for this backend",
+        )))
+    }
     fn diff_file_image(&self, _target: &DiffTarget) -> Result<Option<FileDiffImage>> {
         Err(Error::new(ErrorKind::Unsupported(
             "image diff view is not implemented for this backend",

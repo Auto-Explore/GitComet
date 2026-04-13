@@ -15,6 +15,7 @@ impl HistoryView {
     fn history_view_inner(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
         let theme = self.theme;
         self.ensure_history_cache(cx);
+        self.drive_pending_history_reveal(cx);
         let (show_working_tree_summary_row, _) = self.ensure_history_worktree_summary_cache();
         let repo = self.active_repo();
         let commits_count = self
@@ -48,11 +49,11 @@ impl HistoryView {
                 cx.processor(Self::render_history_table_rows),
             )
             .h_full()
-            .track_scroll(self.history_scroll.clone());
+            .track_scroll(&self.history_scroll);
             let should_load_more = {
                 let state = self.history_scroll.0.borrow();
                 let scroll_handle = state.base_handle.clone();
-                let max_offset = scroll_handle.max_offset().height.max(px(0.0));
+                let max_offset = scroll_handle.max_offset().y.max(px(0.0));
                 let should_load_by_scroll = if max_offset > px(0.0) {
                     scroll_is_near_bottom(&scroll_handle, px(240.0))
                 } else {
@@ -108,8 +109,8 @@ impl HistoryView {
             .track_focus(&self.history_panel_focus_handle)
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|this, _e: &MouseDownEvent, window, _cx| {
-                    window.focus(&this.history_panel_focus_handle);
+                cx.listener(|this, _e: &MouseDownEvent, window, cx| {
+                    window.focus(&this.history_panel_focus_handle, cx);
                 }),
             )
             .on_key_down(cx.listener(|this, e: &gpui::KeyDownEvent, _window, cx| {

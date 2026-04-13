@@ -1,4 +1,4 @@
-use crate::model::{ConflictFileLoadMode, RepoId};
+use crate::model::{ConflictFileLoadMode, RepoId, SidebarDataRequest};
 use gitcomet_core::conflict_session::ConflictSession;
 use gitcomet_core::domain::*;
 use gitcomet_core::error::Error;
@@ -131,6 +131,10 @@ pub enum Msg {
     ClearDiffSelection {
         repo_id: RepoId,
     },
+    EnsureSidebarData {
+        repo_id: RepoId,
+        request: SidebarDataRequest,
+    },
     LoadStashes {
         repo_id: RepoId,
     },
@@ -219,6 +223,9 @@ pub enum Msg {
     },
     CloneRepo {
         url: String,
+        dest: PathBuf,
+    },
+    AbortCloneRepo {
         dest: PathBuf,
     },
     ExportPatch {
@@ -625,6 +632,12 @@ pub enum InternalMsg {
         repo_id: RepoId,
         target: DiffTarget,
         result: Result<Option<FileDiffText>, Error>,
+    },
+    DiffPreviewTextFileLoaded {
+        repo_id: RepoId,
+        target: DiffTarget,
+        side: DiffPreviewTextSide,
+        result: Result<Option<PathBuf>, Error>,
     },
     DiffFileImageLoaded {
         repo_id: RepoId,

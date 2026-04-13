@@ -604,7 +604,14 @@ fn paint_gutter_text(
 
         shaped
     });
-    let _ = shaped.paint(point(x, y), metrics.line_height, window, cx);
+    let _ = shaped.paint(
+        point(x, y),
+        metrics.line_height,
+        gpui::TextAlign::Left,
+        None,
+        window,
+        cx,
+    );
 }
 
 fn paint_conflict_text(
@@ -628,12 +635,33 @@ fn paint_conflict_text(
     let layout = ensure_layout_cached(prepared, &base_style, fg, metrics, window);
 
     if prepared.highlights.is_empty() {
-        let _ = layout.paint(point(bounds.left(), y), metrics.line_height, window, cx);
+        let _ = layout.paint(
+            point(bounds.left(), y),
+            metrics.line_height,
+            gpui::TextAlign::Left,
+            None,
+            window,
+            cx,
+        );
         return;
     }
 
-    let _ = layout.paint_background(point(bounds.left(), y), metrics.line_height, window, cx);
-    let _ = layout.paint(point(bounds.left(), y), metrics.line_height, window, cx);
+    let _ = layout.paint_background(
+        point(bounds.left(), y),
+        metrics.line_height,
+        gpui::TextAlign::Left,
+        None,
+        window,
+        cx,
+    );
+    let _ = layout.paint(
+        point(bounds.left(), y),
+        metrics.line_height,
+        gpui::TextAlign::Left,
+        None,
+        window,
+        cx,
+    );
 }
 
 fn ensure_layout_cached(

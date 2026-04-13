@@ -36,7 +36,7 @@ impl MainPaneView {
         self.clear_conflict_diff_query_overlay_caches();
         self.diff_search_recompute_matches();
         let focus = self.diff_search_input.read(cx).focus_handle();
-        window.focus(&focus);
+        window.focus(&focus, cx);
     }
 
     pub(in crate::view) fn diff_view(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
@@ -48,26 +48,18 @@ impl MainPaneView {
 
         let title = self.diff_panel_title(theme);
 
-        let untracked_preview_path = self.untracked_worktree_preview_path();
-        let added_preview_path = self.added_file_preview_abs_path();
-        let deleted_preview_path = self.deleted_file_preview_abs_path();
         let untracked_directory_notice = self.untracked_directory_notice();
 
         let is_file_preview = self.is_file_preview_active() && untracked_directory_notice.is_none();
 
         if is_file_preview {
-            if let Some(path) = untracked_preview_path.clone() {
-                self.ensure_worktree_preview_loaded(path, cx);
-            } else if let Some(path) = added_preview_path.clone().or(deleted_preview_path.clone()) {
-                self.ensure_preview_loading(path);
-            }
+            self.ensure_selected_file_preview_loaded(cx);
         } else if untracked_directory_notice.is_some()
             && matches!(self.worktree_preview, Loadable::Loading)
         {
             self.worktree_preview_path = None;
             self.worktree_preview = Loadable::NotLoaded;
-            self.worktree_preview_segments_cache_path = None;
-            self.worktree_preview_segments_cache.clear();
+            self.reset_worktree_preview_source_state();
             self.diff_horizontal_min_width = px(0.0);
         }
         let wants_file_diff = !is_file_preview
@@ -601,7 +593,7 @@ impl MainPaneView {
                             this.clear_diff_text_query_overlay_cache();
                             this.clear_worktree_preview_segments_cache();
                             this.clear_conflict_diff_query_overlay_caches();
-                            window.focus(&this.diff_panel_focus_handle);
+                            window.focus(&this.diff_panel_focus_handle, cx);
                             cx.notify();
                         }),
                 );
@@ -627,9 +619,6 @@ impl MainPaneView {
         let body: AnyElement = if let Some(message) = untracked_directory_notice {
             components::empty_state(theme, "Directory", message).into_any_element()
         } else if is_file_preview {
-            if added_preview_path.is_some() || deleted_preview_path.is_some() {
-                self.try_populate_worktree_preview_from_diff_file(cx);
-            }
             if is_markdown_preview_view {
                 match &self.worktree_preview {
                     Loadable::NotLoaded | Loadable::Loading => {
@@ -666,7 +655,7 @@ impl MainPaneView {
                                     )
                                     .h_full()
                                     .min_h(px(0.0))
-                                    .track_scroll(self.worktree_preview_scroll.clone())
+                                    .track_scroll(&self.worktree_preview_scroll)
                                     .with_horizontal_sizing_behavior(
                                         gpui::ListHorizontalSizingBehavior::Unconstrained,
                                     );
@@ -748,7 +737,7 @@ impl MainPaneView {
                             )
                             .h_full()
                             .min_h(px(0.0))
-                            .track_scroll(self.worktree_preview_scroll.clone())
+                            .track_scroll(&self.worktree_preview_scroll)
                             .with_horizontal_sizing_behavior(
                                 gpui::ListHorizontalSizingBehavior::Unconstrained,
                             );
@@ -1218,10 +1207,16 @@ impl MainPaneView {
                                 );
 
                             // Compute three-way column widths
-                            let scrollbar_gutter = components::Scrollbar::visible_gutter(
-                                self.conflict_resolver_diff_scroll.clone(),
-                                components::ScrollbarAxis::Vertical,
-                            );
+                            let vertical_sync_enabled =
+                                self.diff_scroll_sync.includes_vertical();
+                            let scrollbar_gutter = if vertical_sync_enabled {
+                                components::Scrollbar::visible_gutter(
+                                    self.conflict_resolver_diff_scroll.clone(),
+                                    components::ScrollbarAxis::Vertical,
+                                )
+                            } else {
+                                px(0.0)
+                            };
                             let handle_w = px(PANE_RESIZE_HANDLE_PX);
                             let min_col_w = px(DIFF_SPLIT_COL_MIN_PX);
                             let main_w =
@@ -1305,11 +1300,17 @@ impl MainPaneView {
                                                     return;
                                                 }
 
-                                                let scrollbar_gutter =
+                                                let scrollbar_gutter = if this
+                                                    .diff_scroll_sync
+                                                    .includes_vertical()
+                                                {
                                                     components::Scrollbar::visible_gutter(
                                                         this.conflict_resolver_diff_scroll.clone(),
                                                         components::ScrollbarAxis::Vertical,
-                                                    );
+                                                    )
+                                                } else {
+                                                    px(0.0)
+                                                };
                                                 let main_w =
                                                     (this.main_pane_content_width(cx)
                                                         - scrollbar_gutter)
@@ -1563,10 +1564,25 @@ impl MainPaneView {
                                 }
                             } else {
                                 // Sync vertical scrolling across per-column lists.
-                                self.sync_conflict_preview_vertical_scroll();
+                                self.sync_conflict_preview_scroll();
 
                                 match view_mode {
                                     ConflictResolverViewMode::ThreeWay => {
+                                        let base_scrollbar_gutter =
+                                            components::Scrollbar::visible_gutter(
+                                                self.conflict_resolver_diff_scroll.clone(),
+                                                components::ScrollbarAxis::Vertical,
+                                            );
+                                        let ours_scrollbar_gutter =
+                                            components::Scrollbar::visible_gutter(
+                                                self.conflict_preview_ours_scroll.clone(),
+                                                components::ScrollbarAxis::Vertical,
+                                            );
+                                        let theirs_scrollbar_gutter =
+                                            components::Scrollbar::visible_gutter(
+                                                self.conflict_preview_theirs_scroll.clone(),
+                                                components::ScrollbarAxis::Vertical,
+                                            );
                                         let base_list = uniform_list(
                                             "conflict_three_way_base_list",
                                             diff_len,
@@ -1583,7 +1599,7 @@ impl MainPaneView {
                                         .with_horizontal_sizing_behavior(
                                             gpui::ListHorizontalSizingBehavior::Unconstrained,
                                         )
-                                        .track_scroll(self.conflict_resolver_diff_scroll.clone());
+                                        .track_scroll(&self.conflict_resolver_diff_scroll);
 
                                         let ours_list = uniform_list(
                                             "conflict_three_way_ours_list",
@@ -1601,7 +1617,7 @@ impl MainPaneView {
                                         .with_horizontal_sizing_behavior(
                                             gpui::ListHorizontalSizingBehavior::Unconstrained,
                                         )
-                                        .track_scroll(self.conflict_preview_ours_scroll.clone());
+                                        .track_scroll(&self.conflict_preview_ours_scroll);
 
                                         let theirs_list = uniform_list(
                                             "conflict_three_way_theirs_list",
@@ -1619,13 +1635,14 @@ impl MainPaneView {
                                         .with_horizontal_sizing_behavior(
                                             gpui::ListHorizontalSizingBehavior::Unconstrained,
                                         )
-                                        .track_scroll(self.conflict_preview_theirs_scroll.clone());
+                                        .track_scroll(&self.conflict_preview_theirs_scroll);
 
-                                        let scrollbar_gutter =
-                                            components::Scrollbar::visible_gutter(
-                                                self.conflict_resolver_diff_scroll.clone(),
-                                                components::ScrollbarAxis::Vertical,
-                                            );
+                                        let shared_scrollbar_gutter =
+                                            if vertical_sync_enabled {
+                                                base_scrollbar_gutter
+                                            } else {
+                                                px(0.0)
+                                            };
                                         div()
                                             .id("conflict_resolver_diff_scroll")
                                             .relative()
@@ -1641,14 +1658,36 @@ impl MainPaneView {
                                                     .h_full()
                                                     .min_h(px(0.0))
                                                     .flex()
-                                                    .pr(scrollbar_gutter)
+                                                    .pr(shared_scrollbar_gutter)
                                                     .child(
                                                         div()
                                                             .relative()
                                                             .w(col_a_w)
                                                             .min_w(px(0.0))
                                                             .h_full()
-                                                            .child(base_list)
+                                                            .child(
+                                                                div()
+                                                                    .h_full()
+                                                                    .min_h(px(0.0))
+                                                                    .pr(
+                                                                        if vertical_sync_enabled {
+                                                                            px(0.0)
+                                                                        } else {
+                                                                            base_scrollbar_gutter
+                                                                        },
+                                                                    )
+                                                                    .child(base_list),
+                                                            )
+                                                            .when(!vertical_sync_enabled, |d| {
+                                                                d.child(
+                                                                    components::Scrollbar::new(
+                                                                        "conflict_base_scrollbar",
+                                                                        self.conflict_resolver_diff_scroll.clone(),
+                                                                    )
+                                                                    .always_visible()
+                                                                    .render(theme),
+                                                                )
+                                                            })
                                                             .child(
                                                                 components::Scrollbar::horizontal(
                                                                     "conflict_base_hscrollbar",
@@ -1668,7 +1707,29 @@ impl MainPaneView {
                                                             .w(col_b_w)
                                                             .min_w(px(0.0))
                                                             .h_full()
-                                                            .child(ours_list)
+                                                            .child(
+                                                                div()
+                                                                    .h_full()
+                                                                    .min_h(px(0.0))
+                                                                    .pr(
+                                                                        if vertical_sync_enabled {
+                                                                            px(0.0)
+                                                                        } else {
+                                                                            ours_scrollbar_gutter
+                                                                        },
+                                                                    )
+                                                                    .child(ours_list),
+                                                            )
+                                                            .when(!vertical_sync_enabled, |d| {
+                                                                d.child(
+                                                                    components::Scrollbar::new(
+                                                                        "conflict_ours_scrollbar",
+                                                                        self.conflict_preview_ours_scroll.clone(),
+                                                                    )
+                                                                    .always_visible()
+                                                                    .render(theme),
+                                                                )
+                                                            })
                                                             .child(
                                                                 components::Scrollbar::horizontal(
                                                                     "conflict_ours_hscrollbar",
@@ -1689,7 +1750,29 @@ impl MainPaneView {
                                                             .flex_grow()
                                                             .min_w(px(0.0))
                                                             .h_full()
-                                                            .child(theirs_list)
+                                                            .child(
+                                                                div()
+                                                                    .h_full()
+                                                                    .min_h(px(0.0))
+                                                                    .pr(
+                                                                        if vertical_sync_enabled {
+                                                                            px(0.0)
+                                                                        } else {
+                                                                            theirs_scrollbar_gutter
+                                                                        },
+                                                                    )
+                                                                    .child(theirs_list),
+                                                            )
+                                                            .when(!vertical_sync_enabled, |d| {
+                                                                d.child(
+                                                                    components::Scrollbar::new(
+                                                                        "conflict_theirs_scrollbar",
+                                                                        self.conflict_preview_theirs_scroll.clone(),
+                                                                    )
+                                                                    .always_visible()
+                                                                    .render(theme),
+                                                                )
+                                                            })
                                                             .child(
                                                                 components::Scrollbar::horizontal(
                                                                     "conflict_theirs_hscrollbar",
@@ -1700,19 +1783,31 @@ impl MainPaneView {
                                                             ),
                                                     ),
                                             )
-                                            .child(
-                                                components::Scrollbar::new(
-                                                    "conflict_resolver_diff_scrollbar",
-                                                    self.conflict_resolver_diff_scroll.clone(),
+                                            .when(vertical_sync_enabled, |d| {
+                                                d.child(
+                                                    components::Scrollbar::new(
+                                                        "conflict_resolver_diff_scrollbar",
+                                                        self.conflict_resolver_diff_scroll.clone(),
+                                                    )
+                                                    .always_visible()
+                                                    .render(theme),
                                                 )
-                                                .always_visible()
-                                                .render(theme),
-                                            )
+                                            })
                                             .into_any_element()
                                     }
                                     ConflictResolverViewMode::TwoWayDiff => {
                                         let [left_w, right_w] =
                                             self.conflict_diff_split_col_widths;
+                                        let left_scrollbar_gutter =
+                                            components::Scrollbar::visible_gutter(
+                                                self.conflict_resolver_diff_scroll.clone(),
+                                                components::ScrollbarAxis::Vertical,
+                                            );
+                                        let right_scrollbar_gutter =
+                                            components::Scrollbar::visible_gutter(
+                                                self.conflict_preview_theirs_scroll.clone(),
+                                                components::ScrollbarAxis::Vertical,
+                                            );
 
                                         let left_list = uniform_list(
                                             "conflict_diff_left_list",
@@ -1730,7 +1825,7 @@ impl MainPaneView {
                                         .with_horizontal_sizing_behavior(
                                             gpui::ListHorizontalSizingBehavior::Unconstrained,
                                         )
-                                        .track_scroll(self.conflict_resolver_diff_scroll.clone());
+                                        .track_scroll(&self.conflict_resolver_diff_scroll);
 
                                         let right_list = uniform_list(
                                             "conflict_diff_right_list",
@@ -1748,13 +1843,14 @@ impl MainPaneView {
                                         .with_horizontal_sizing_behavior(
                                             gpui::ListHorizontalSizingBehavior::Unconstrained,
                                         )
-                                        .track_scroll(self.conflict_preview_theirs_scroll.clone());
+                                        .track_scroll(&self.conflict_preview_theirs_scroll);
 
-                                        let scrollbar_gutter =
-                                            components::Scrollbar::visible_gutter(
-                                                self.conflict_resolver_diff_scroll.clone(),
-                                                components::ScrollbarAxis::Vertical,
-                                            );
+                                        let shared_scrollbar_gutter =
+                                            if vertical_sync_enabled {
+                                                left_scrollbar_gutter
+                                            } else {
+                                                px(0.0)
+                                            };
                                         div()
                                             .id("conflict_resolver_diff_scroll")
                                             .relative()
@@ -1770,14 +1866,36 @@ impl MainPaneView {
                                                     .h_full()
                                                     .min_h(px(0.0))
                                                     .flex()
-                                                    .pr(scrollbar_gutter)
+                                                    .pr(shared_scrollbar_gutter)
                                                     .child(
                                                         div()
                                                             .relative()
                                                             .w(left_w)
                                                             .min_w(px(0.0))
                                                             .h_full()
-                                                            .child(left_list)
+                                                            .child(
+                                                                div()
+                                                                    .h_full()
+                                                                    .min_h(px(0.0))
+                                                                    .pr(
+                                                                        if vertical_sync_enabled {
+                                                                            px(0.0)
+                                                                        } else {
+                                                                            left_scrollbar_gutter
+                                                                        },
+                                                                    )
+                                                                    .child(left_list),
+                                                            )
+                                                            .when(!vertical_sync_enabled, |d| {
+                                                                d.child(
+                                                                    components::Scrollbar::new(
+                                                                        "conflict_diff_left_scrollbar",
+                                                                        self.conflict_resolver_diff_scroll.clone(),
+                                                                    )
+                                                                    .always_visible()
+                                                                    .render(theme),
+                                                                )
+                                                            })
                                                             .child(
                                                                 components::Scrollbar::horizontal(
                                                                     "conflict_diff_left_hscrollbar",
@@ -1809,7 +1927,29 @@ impl MainPaneView {
                                                             .flex_grow()
                                                             .min_w(px(0.0))
                                                             .h_full()
-                                                            .child(right_list)
+                                                            .child(
+                                                                div()
+                                                                    .h_full()
+                                                                    .min_h(px(0.0))
+                                                                    .pr(
+                                                                        if vertical_sync_enabled {
+                                                                            px(0.0)
+                                                                        } else {
+                                                                            right_scrollbar_gutter
+                                                                        },
+                                                                    )
+                                                                    .child(right_list),
+                                                            )
+                                                            .when(!vertical_sync_enabled, |d| {
+                                                                d.child(
+                                                                    components::Scrollbar::new(
+                                                                        "conflict_diff_right_scrollbar",
+                                                                        self.conflict_preview_theirs_scroll.clone(),
+                                                                    )
+                                                                    .always_visible()
+                                                                    .render(theme),
+                                                                )
+                                                            })
                                                             .child(
                                                                 components::Scrollbar::horizontal(
                                                                     "conflict_diff_right_hscrollbar",
@@ -1820,14 +1960,16 @@ impl MainPaneView {
                                                             ),
                                                     ),
                                             )
-                                            .child(
-                                                components::Scrollbar::new(
-                                                    "conflict_resolver_diff_scrollbar",
-                                                    self.conflict_resolver_diff_scroll.clone(),
+                                            .when(vertical_sync_enabled, |d| {
+                                                d.child(
+                                                    components::Scrollbar::new(
+                                                        "conflict_resolver_diff_scrollbar",
+                                                        self.conflict_resolver_diff_scroll.clone(),
+                                                    )
+                                                    .always_visible()
+                                                    .render(theme),
                                                 )
-                                                .always_visible()
-                                                .render(theme),
-                                            )
+                                            })
                                             .into_any_element()
                                     }
                                 }
@@ -1961,6 +2103,7 @@ impl MainPaneView {
                                     )
                                 })
                                 .child({
+                                    self.sync_conflict_resolved_output_gutter_scroll();
                                     let mut bottom_section =
                                         div()
                                             .id("conflict_resolver_output")
@@ -1986,7 +2129,7 @@ impl MainPaneView {
                                                     .h_full()
                                                     .min_h(px(0.0))
                                                     .track_scroll(
-                                                        self.conflict_resolved_preview_scroll.clone(),
+                                                        &self.conflict_resolved_preview_gutter_scroll,
                                                     );
 
                                                     div()
@@ -2073,9 +2216,7 @@ impl MainPaneView {
                                                                                     ))
                                                                                     .h_full()
                                                                                     .min_h(px(0.0))
-                                                                                    .track_scroll(
-                                                                                        self.conflict_resolved_preview_scroll.clone(),
-                                                                                    )
+                                                                                    .track_scroll(&self.conflict_resolved_preview_scroll)
                                                                                     .with_horizontal_sizing_behavior(
                                                                                         gpui::ListHorizontalSizingBehavior::Unconstrained,
                                                                                     )
@@ -2173,7 +2314,7 @@ impl MainPaneView {
                                 )
                                 .h_full()
                                 .min_h(px(0.0))
-                                .track_scroll(self.diff_scroll.clone())
+                                .track_scroll(&self.diff_scroll)
                                 .with_horizontal_sizing_behavior(
                                     gpui::ListHorizontalSizingBehavior::Unconstrained,
                                 );
@@ -2320,7 +2461,7 @@ impl MainPaneView {
                                             )
                                             .h_full()
                                             .min_h(px(0.0))
-                                            .track_scroll(self.diff_scroll.clone())
+                                            .track_scroll(&self.diff_scroll)
                                             .with_horizontal_sizing_behavior(
                                                 gpui::ListHorizontalSizingBehavior::Unconstrained,
                                             );
@@ -2361,7 +2502,9 @@ impl MainPaneView {
                                                 .into_any_element()
                                         }
                                         DiffViewMode::Split => {
-                                            self.sync_diff_split_vertical_scroll();
+                                            self.sync_diff_split_scroll();
+                                            let vertical_sync_enabled =
+                                                self.diff_scroll_sync.includes_vertical();
                                             let right_scroll_handle = self
                                                 .diff_split_right_scroll
                                                 .0
@@ -2376,7 +2519,7 @@ impl MainPaneView {
                                             )
                                             .h_full()
                                             .min_h(px(0.0))
-                                            .track_scroll(self.diff_scroll.clone())
+                                            .track_scroll(&self.diff_scroll)
                                             .with_horizontal_sizing_behavior(
                                                 gpui::ListHorizontalSizingBehavior::Unconstrained,
                                             );
@@ -2387,19 +2530,29 @@ impl MainPaneView {
                                             )
                                             .h_full()
                                             .min_h(px(0.0))
-                                            .track_scroll(self.diff_split_right_scroll.clone())
+                                            .track_scroll(&self.diff_split_right_scroll)
                                             .with_horizontal_sizing_behavior(
                                                 gpui::ListHorizontalSizingBehavior::Unconstrained,
                                             );
 
-                                            let scrollbar_gutter =
+                                            let left_scrollbar_gutter =
                                                 components::Scrollbar::visible_gutter(
                                                     self.diff_scroll.clone(),
                                                     components::ScrollbarAxis::Vertical,
                                                 );
+                                            let right_scrollbar_gutter =
+                                                components::Scrollbar::visible_gutter(
+                                                    self.diff_split_right_scroll.clone(),
+                                                    components::ScrollbarAxis::Vertical,
+                                                );
+                                            let shared_scrollbar_gutter = if vertical_sync_enabled {
+                                                left_scrollbar_gutter
+                                            } else {
+                                                px(0.0)
+                                            };
                                             let handle_w = px(PANE_RESIZE_HANDLE_PX);
                                             let main_w = (self.main_pane_content_width(cx)
-                                                - scrollbar_gutter)
+                                                - shared_scrollbar_gutter)
                                                 .max(px(0.0));
                                             let (_, min_col_w) = diff_split_drag_params(main_w);
                                             let (left_w, right_w) = diff_split_column_widths(
@@ -2468,11 +2621,17 @@ impl MainPaneView {
                                                                 return;
                                                             }
 
-                                                            let scrollbar_gutter =
+                                                            let scrollbar_gutter = if this
+                                                                .diff_scroll_sync
+                                                                .includes_vertical()
+                                                            {
                                                                 components::Scrollbar::visible_gutter(
                                                                     this.diff_scroll.clone(),
                                                                     components::ScrollbarAxis::Vertical,
-                                                                );
+                                                                )
+                                                            } else {
+                                                                px(0.0)
+                                                            };
                                                             let main_w = (this
                                                                 .main_pane_content_width(cx)
                                                                 - scrollbar_gutter)
@@ -2557,7 +2716,7 @@ impl MainPaneView {
                                                 .font_family(editor_font_family.clone())
                                                 .child(
                                                     div()
-                                                        .pr(scrollbar_gutter)
+                                                        .pr(shared_scrollbar_gutter)
                                                         .flex()
                                                         .flex_col()
                                                         .h_full()
@@ -2574,7 +2733,36 @@ impl MainPaneView {
                                                                         .w(left_w)
                                                                         .min_w(px(0.0))
                                                                         .h_full()
-                                                                        .child(left)
+                                                                        .child(
+                                                                            div()
+                                                                                .h_full()
+                                                                                .min_h(px(0.0))
+                                                                                .pr(
+                                                                                    if vertical_sync_enabled {
+                                                                                        px(0.0)
+                                                                                    } else {
+                                                                                        left_scrollbar_gutter
+                                                                                    },
+                                                                                )
+                                                                                .child(left),
+                                                                        )
+                                                                        .when(
+                                                                            !vertical_sync_enabled,
+                                                                            |d| {
+                                                                                d.child(
+                                                                                    components::Scrollbar::new(
+                                                                                        "diff_split_left_scrollbar",
+                                                                                        self.diff_scroll.clone(),
+                                                                                    )
+                                                                                    .markers(
+                                                                                        markers
+                                                                                            .clone(),
+                                                                                    )
+                                                                                    .always_visible()
+                                                                                    .render(theme),
+                                                                                )
+                                                                            },
+                                                                        )
                                                                         .child(
                                                                             components::Scrollbar::horizontal(
                                                                                 "diff_split_left_hscrollbar",
@@ -2593,7 +2781,36 @@ impl MainPaneView {
                                                                         .w(right_w)
                                                                         .min_w(px(0.0))
                                                                         .h_full()
-                                                                        .child(right)
+                                                                        .child(
+                                                                            div()
+                                                                                .h_full()
+                                                                                .min_h(px(0.0))
+                                                                                .pr(
+                                                                                    if vertical_sync_enabled {
+                                                                                        px(0.0)
+                                                                                    } else {
+                                                                                        right_scrollbar_gutter
+                                                                                    },
+                                                                                )
+                                                                                .child(right),
+                                                                        )
+                                                                        .when(
+                                                                            !vertical_sync_enabled,
+                                                                            |d| {
+                                                                                d.child(
+                                                                                    components::Scrollbar::new(
+                                                                                        "diff_split_right_scrollbar",
+                                                                                        self.diff_split_right_scroll.clone(),
+                                                                                    )
+                                                                                    .markers(
+                                                                                        markers
+                                                                                            .clone(),
+                                                                                    )
+                                                                                    .always_visible()
+                                                                                    .render(theme),
+                                                                                )
+                                                                            },
+                                                                        )
                                                                         .child(
                                                                             components::Scrollbar::horizontal(
                                                                                 "diff_split_right_hscrollbar",
@@ -2605,15 +2822,17 @@ impl MainPaneView {
                                                                 ),
                                                         ),
                                                 )
-                                                .child(
-                                                    components::Scrollbar::new(
-                                                        "diff_scrollbar",
-                                                        self.diff_scroll.clone(),
+                                                .when(vertical_sync_enabled, |d| {
+                                                    d.child(
+                                                        components::Scrollbar::new(
+                                                            "diff_scrollbar",
+                                                            self.diff_scroll.clone(),
+                                                        )
+                                                        .markers(markers)
+                                                        .always_visible()
+                                                        .render(theme),
                                                     )
-                                                    .markers(markers)
-                                                    .always_visible()
-                                                    .render(theme),
-                                                )
+                                                })
                                                 .into_any_element()
                                         }
                                     }
@@ -2644,8 +2863,8 @@ impl MainPaneView {
             .track_focus(&self.diff_panel_focus_handle)
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|this, _e: &MouseDownEvent, window, _cx| {
-                    window.focus(&this.diff_panel_focus_handle);
+                cx.listener(|this, _e: &MouseDownEvent, window, cx| {
+                    window.focus(&this.diff_panel_focus_handle, cx);
                 }),
             )
             .on_key_down(cx.listener(|this, e: &gpui::KeyDownEvent, window, cx| {
@@ -2663,7 +2882,7 @@ impl MainPaneView {
                         this.clear_diff_text_query_overlay_cache();
                         this.clear_worktree_preview_segments_cache();
                         this.clear_conflict_diff_query_overlay_caches();
-                        window.focus(&this.diff_panel_focus_handle);
+                        window.focus(&this.diff_panel_focus_handle, cx);
                         handled = true;
                     }
                     if !handled && let Some(repo_id) = this.active_repo_id() {
@@ -3101,7 +3320,7 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         self.ensure_conflict_markdown_preview_cache();
-        self.sync_conflict_preview_vertical_scroll();
+        self.sync_conflict_preview_scroll();
 
         let scroll_for = |side: ThreeWayColumn| -> ScrollHandle {
             match side {
@@ -3130,10 +3349,15 @@ impl MainPaneView {
         .max_by_key(|s| row_count(*s))
         .unwrap_or(ThreeWayColumn::Base);
         let vertical_handle = scroll_for(tallest);
-        let scrollbar_gutter = components::Scrollbar::visible_gutter(
-            vertical_handle.clone(),
-            components::ScrollbarAxis::Vertical,
-        );
+        let vertical_sync_enabled = self.diff_scroll_sync.includes_vertical();
+        let scrollbar_gutter = if vertical_sync_enabled {
+            components::Scrollbar::visible_gutter(
+                vertical_handle.clone(),
+                components::ScrollbarAxis::Vertical,
+            )
+        } else {
+            px(0.0)
+        };
 
         div()
             .id("conflict_resolver_preview")
@@ -3167,11 +3391,16 @@ impl MainPaneView {
                         cx,
                     )),
             )
-            .child(
-                components::Scrollbar::new("conflict_markdown_preview_scrollbar", vertical_handle)
+            .when(vertical_sync_enabled, |d| {
+                d.child(
+                    components::Scrollbar::new(
+                        "conflict_markdown_preview_scrollbar",
+                        vertical_handle,
+                    )
                     .always_visible()
                     .render(theme),
-            )
+                )
+            })
             .into_any_element()
     }
 
@@ -3181,10 +3410,11 @@ impl MainPaneView {
         side: ThreeWayColumn,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
-        let (id, list_id, hscrollbar_id, label, scroll) = match side {
+        let (id, list_id, vscrollbar_id, hscrollbar_id, label, scroll) = match side {
             ThreeWayColumn::Base => (
                 "conflict_preview_base",
                 "conflict_preview_base_list",
+                "conflict_preview_base_scrollbar",
                 "conflict_preview_base_hscrollbar",
                 "Base (A)",
                 self.conflict_resolver_diff_scroll.clone(),
@@ -3192,6 +3422,7 @@ impl MainPaneView {
             ThreeWayColumn::Ours => (
                 "conflict_preview_ours",
                 "conflict_preview_ours_list",
+                "conflict_preview_ours_scrollbar",
                 "conflict_preview_ours_hscrollbar",
                 "Local (B)",
                 self.conflict_preview_ours_scroll.clone(),
@@ -3199,11 +3430,13 @@ impl MainPaneView {
             ThreeWayColumn::Theirs => (
                 "conflict_preview_theirs",
                 "conflict_preview_theirs_list",
+                "conflict_preview_theirs_scrollbar",
                 "conflict_preview_theirs_hscrollbar",
                 "Remote (C)",
                 self.conflict_preview_theirs_scroll.clone(),
             ),
         };
+        let vertical_sync_enabled = self.diff_scroll_sync.includes_vertical();
         let status = |message: SharedString| {
             div()
                 .flex_1()
@@ -3225,17 +3458,38 @@ impl MainPaneView {
                 let list = uniform_list(list_id, $document.rows.len(), cx.processor($processor))
                     .h_full()
                     .min_h(px(0.0))
-                    .track_scroll(scroll.clone())
+                    .track_scroll(&scroll)
                     .with_horizontal_sizing_behavior(
                         gpui::ListHorizontalSizingBehavior::Unconstrained,
                     );
+                let vertical_scrollbar_gutter = if vertical_sync_enabled {
+                    px(0.0)
+                } else {
+                    components::Scrollbar::visible_gutter(
+                        scroll.clone(),
+                        components::ScrollbarAxis::Vertical,
+                    )
+                };
                 div()
                     .relative()
                     .flex_1()
                     .min_h(px(0.0))
-                    .child(list)
                     .child(
-                        components::Scrollbar::horizontal(hscrollbar_id, scroll)
+                        div()
+                            .h_full()
+                            .min_h(px(0.0))
+                            .pr(vertical_scrollbar_gutter)
+                            .child(list),
+                    )
+                    .when(!vertical_sync_enabled, |d| {
+                        d.child(
+                            components::Scrollbar::new(vscrollbar_id, scroll.clone())
+                                .always_visible()
+                                .render(theme),
+                        )
+                    })
+                    .child(
+                        components::Scrollbar::horizontal(hscrollbar_id, scroll.clone())
                             .always_visible()
                             .render(theme),
                     )

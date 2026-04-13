@@ -47,7 +47,7 @@ impl PopoverHost {
         self.picker_prompt_scroll
             .set_offset(point(px(0.0), px(0.0)));
         let focus_handle = input.read_with(cx, |input, _| input.focus_handle());
-        window.focus(&focus_handle);
+        window.focus(&focus_handle, cx);
         input.clone()
     }
 
@@ -79,7 +79,7 @@ impl PopoverHost {
         self.picker_prompt_scroll
             .set_offset(point(px(0.0), px(0.0)));
         let focus_handle = input.read_with(cx, |input, _| input.focus_handle());
-        window.focus(&focus_handle);
+        window.focus(&focus_handle, cx);
         input.clone()
     }
 
@@ -129,7 +129,7 @@ impl PopoverHost {
         self.picker_prompt_scroll
             .set_offset(point(px(0.0), px(0.0)));
         let focus_handle = input.read_with(cx, |input, _| input.focus_handle());
-        window.focus(&focus_handle);
+        window.focus(&focus_handle, cx);
         input.clone()
     }
 
@@ -161,7 +161,7 @@ impl PopoverHost {
         self.picker_prompt_scroll
             .set_offset(point(px(0.0), px(0.0)));
         let focus_handle = input.read_with(cx, |input, _| input.focus_handle());
-        window.focus(&focus_handle);
+        window.focus(&focus_handle, cx);
         input.clone()
     }
 
@@ -193,7 +193,7 @@ impl PopoverHost {
         self.picker_prompt_scroll
             .set_offset(point(px(0.0), px(0.0)));
         let focus_handle = input.read_with(cx, |input, _| input.focus_handle());
-        window.focus(&focus_handle);
+        window.focus(&focus_handle, cx);
         input.clone()
     }
 
@@ -225,7 +225,7 @@ impl PopoverHost {
         self.picker_prompt_scroll
             .set_offset(point(px(0.0), px(0.0)));
         let focus_handle = input.read_with(cx, |input, _| input.focus_handle());
-        window.focus(&focus_handle);
+        window.focus(&focus_handle, cx);
         input.clone()
     }
 
@@ -257,7 +257,7 @@ impl PopoverHost {
         self.picker_prompt_scroll
             .set_offset(point(px(0.0), px(0.0)));
         let focus_handle = input.read_with(cx, |input, _| input.focus_handle());
-        window.focus(&focus_handle);
+        window.focus(&focus_handle, cx);
         input.clone()
     }
 
@@ -289,7 +289,7 @@ impl PopoverHost {
         self.picker_prompt_scroll
             .set_offset(point(px(0.0), px(0.0)));
         let focus_handle = input.read_with(cx, |input, _| input.focus_handle());
-        window.focus(&focus_handle);
+        window.focus(&focus_handle, cx);
         input.clone()
     }
 }

@@ -86,7 +86,7 @@ pub(crate) use branch_sidebar_cache::bench_branch_sidebar_cache;
 pub(crate) use branch_sidebar_extreme_scale::bench_branch_sidebar_extreme_scale;
 pub(crate) use clipboard::bench_clipboard;
 pub(crate) use commit_details::bench_commit_details;
-pub(crate) use common::benchmark_criterion;
+pub(crate) use common::{benchmark_criterion, benchmark_selectors_match_filter};
 pub(crate) use conflict_load_duplication::bench_conflict_load_duplication;
 pub(crate) use conflict_resolved_output_gutter_scroll::bench_conflict_resolved_output_gutter_scroll;
 pub(crate) use conflict_search_query_update::bench_conflict_search_query_update;

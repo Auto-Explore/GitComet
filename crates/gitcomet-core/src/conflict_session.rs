@@ -675,19 +675,6 @@ impl ConflictSession {
         )
     }
 
-    /// Parse marker-based conflict regions from merged text and replace the
-    /// current region list.
-    ///
-    /// Recognizes both 2-way (`<<<<<<<` / `=======` / `>>>>>>>`) and
-    /// diff3-style (`|||||||` base section) markers.
-    ///
-    /// Returns the number of parsed regions.
-    // Public for tests only; thin wrapper around parse_regions_from_shared_text.
-    #[cfg(test)]
-    pub fn parse_regions_from_merged_text(&mut self, merged_text: &str) -> usize {
-        self.parse_regions_from_shared_text(Arc::<str>::from(merged_text))
-    }
-
     /// Parse marker-based conflict regions from shared merged text and replace
     /// the current region list without copying each block payload.
     pub fn parse_regions_from_shared_text(&mut self, merged_text: Arc<str>) -> usize {

@@ -149,6 +149,7 @@ fn image_rs_format_for_diff_preview(format: gpui::ImageFormat) -> Option<image::
         gpui::ImageFormat::Webp => Some(image::ImageFormat::WebP),
         gpui::ImageFormat::Bmp => Some(image::ImageFormat::Bmp),
         gpui::ImageFormat::Tiff => Some(image::ImageFormat::Tiff),
+        gpui::ImageFormat::Ico => Some(image::ImageFormat::Ico),
         gpui::ImageFormat::Svg => None,
     }
 }
@@ -477,6 +478,25 @@ impl MainPaneView {
         self.file_image_diff_cache_seq = self.file_image_diff_cache_seq.wrapping_add(1);
         let seq = self.file_image_diff_cache_seq;
         self.file_image_diff_cache_inflight = Some(seq);
+
+        if !crate::ui_runtime::current().uses_background_compute() {
+            let rebuild = build_file_image_diff_cache_rebuild(file.as_ref(), &workdir);
+            if self.file_image_diff_cache_inflight == Some(seq)
+                && self.file_image_diff_cache_repo_id == Some(repo_id)
+                && self.file_image_diff_cache_rev == diff_file_rev
+                && self.file_image_diff_cache_target == diff_target_for_task
+            {
+                self.file_image_diff_cache_inflight = None;
+                self.file_image_diff_cache_content_signature = Some(content_signature);
+                self.file_image_diff_cache_path = rebuild.file_path;
+                self.file_image_diff_cache_old = rebuild.old;
+                self.file_image_diff_cache_new = rebuild.new;
+                self.file_image_diff_cache_old_svg_path = rebuild.old_svg_path;
+                self.file_image_diff_cache_new_svg_path = rebuild.new_svg_path;
+                cx.notify();
+            }
+            return;
+        }
 
         cx.spawn(
             async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {

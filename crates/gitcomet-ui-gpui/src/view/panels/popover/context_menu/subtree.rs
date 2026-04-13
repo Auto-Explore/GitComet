@@ -1,10 +1,7 @@
 use super::*;
+use std::path::Path;
 
-pub(super) fn model(
-    repo: Option<&RepoState>,
-    repo_id: RepoId,
-    path: &std::path::PathBuf,
-) -> ContextMenuModel {
+pub(super) fn model(repo: Option<&RepoState>, repo_id: RepoId, path: &Path) -> ContextMenuModel {
     let mut items = vec![ContextMenuItem::Header("Subtree".into())];
     items.push(ContextMenuItem::Label(path.display().to_string().into()));
     items.push(ContextMenuItem::Separator);
@@ -28,7 +25,7 @@ pub(super) fn model(
         disabled: reveal_disabled,
         action: Box::new(ContextMenuAction::OpenFileLocation {
             repo_id,
-            path: path.clone(),
+            path: path.to_path_buf(),
         }),
     });
 
@@ -41,7 +38,9 @@ pub(super) fn model(
         action: Box::new(ContextMenuAction::OpenPopover {
             kind: PopoverKind::subtree(
                 repo_id,
-                SubtreePopoverKind::PullPrompt { path: path.clone() },
+                SubtreePopoverKind::PullPrompt {
+                    path: path.to_path_buf(),
+                },
             ),
         }),
     });
@@ -53,7 +52,9 @@ pub(super) fn model(
         action: Box::new(ContextMenuAction::OpenPopover {
             kind: PopoverKind::subtree(
                 repo_id,
-                SubtreePopoverKind::PushPrompt { path: path.clone() },
+                SubtreePopoverKind::PushPrompt {
+                    path: path.to_path_buf(),
+                },
             ),
         }),
     });
@@ -65,7 +66,9 @@ pub(super) fn model(
         action: Box::new(ContextMenuAction::OpenPopover {
             kind: PopoverKind::subtree(
                 repo_id,
-                SubtreePopoverKind::SplitPrompt { path: path.clone() },
+                SubtreePopoverKind::SplitPrompt {
+                    path: path.to_path_buf(),
+                },
             ),
         }),
     });
@@ -77,7 +80,9 @@ pub(super) fn model(
         action: Box::new(ContextMenuAction::OpenPopover {
             kind: PopoverKind::subtree(
                 repo_id,
-                SubtreePopoverKind::RemoveConfirm { path: path.clone() },
+                SubtreePopoverKind::RemoveConfirm {
+                    path: path.to_path_buf(),
+                },
             ),
         }),
     });
@@ -88,8 +93,8 @@ pub(super) fn model(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gitcomet_core::path_utils::canonicalize_or_original;
     use gitcomet_core::domain::{RepoSpec, Subtree, SubtreeSourceConfig};
+    use gitcomet_core::path_utils::canonicalize_or_original;
 
     fn repo_with_subtree_source(source_repository: Option<&str>) -> RepoState {
         let dir = tempfile::tempdir().expect("create tempdir");
@@ -140,7 +145,11 @@ mod tests {
             }),
         }]));
 
-        let model = model(Some(&repo), RepoId(1), &std::path::PathBuf::from("vendor/lib"));
+        let model = model(
+            Some(&repo),
+            RepoId(1),
+            &std::path::PathBuf::from("vendor/lib"),
+        );
         let open_action = model
             .items
             .iter()
@@ -164,30 +173,44 @@ mod tests {
     #[test]
     fn model_disables_open_for_remote_sources() {
         let repo = repo_with_subtree_source(Some("https://example.com/repo.git"));
-        let model = model(Some(&repo), RepoId(1), &std::path::PathBuf::from("vendor/lib"));
+        let model = model(
+            Some(&repo),
+            RepoId(1),
+            &std::path::PathBuf::from("vendor/lib"),
+        );
 
-        assert!(matches!(
-            model.items.iter().find(|item| matches!(
-                item,
-                ContextMenuItem::Entry { label, disabled, .. }
-                    if label.as_ref() == "Open source repo in new tab" && *disabled
-            )),
-            Some(_)
-        ));
+        assert!(
+            model
+                .items
+                .iter()
+                .find(|item| matches!(
+                    item,
+                    ContextMenuItem::Entry { label, disabled, .. }
+                        if label.as_ref() == "Open source repo in new tab" && *disabled
+                ))
+                .is_some()
+        );
     }
 
     #[test]
     fn model_disables_open_without_stored_source() {
         let repo = repo_with_subtree_source(None);
-        let model = model(Some(&repo), RepoId(1), &std::path::PathBuf::from("vendor/lib"));
+        let model = model(
+            Some(&repo),
+            RepoId(1),
+            &std::path::PathBuf::from("vendor/lib"),
+        );
 
-        assert!(matches!(
-            model.items.iter().find(|item| matches!(
-                item,
-                ContextMenuItem::Entry { label, disabled, .. }
-                    if label.as_ref() == "Open source repo in new tab" && *disabled
-            )),
-            Some(_)
-        ));
+        assert!(
+            model
+                .items
+                .iter()
+                .find(|item| matches!(
+                    item,
+                    ContextMenuItem::Entry { label, disabled, .. }
+                        if label.as_ref() == "Open source repo in new tab" && *disabled
+                ))
+                .is_some()
+        );
     }
 }

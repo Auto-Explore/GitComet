@@ -157,12 +157,23 @@ pub(super) fn schedule_effect(
         Effect::LoadDiffFile { repo_id, target } => {
             repo_load::schedule_load_diff_file(executor, repos, msg_tx, repo_id, target);
         }
+        Effect::LoadDiffPreviewTextFile {
+            repo_id,
+            target,
+            side,
+        } => {
+            repo_load::schedule_load_diff_preview_text_file(
+                executor, repos, msg_tx, repo_id, target, side,
+            );
+        }
         Effect::LoadDiffFileImage { repo_id, target } => {
             repo_load::schedule_load_diff_file_image(executor, repos, msg_tx, repo_id, target);
         }
         Effect::LoadSelectedDiff {
             repo_id,
+            load_patch_diff,
             load_file_text,
+            preview_text_side,
             load_file_image,
         } => {
             if let Some(target) = selected_diff_target(thread_state, repo_id) {
@@ -172,7 +183,9 @@ pub(super) fn schedule_effect(
                     msg_tx,
                     repo_id,
                     target,
+                    load_patch_diff,
                     load_file_text,
+                    preview_text_side,
                     load_file_image,
                 );
             }
@@ -235,6 +248,7 @@ pub(super) fn schedule_effect(
         Effect::CloneRepo { url, dest, auth } => {
             clone::schedule_clone_repo(executor, msg_tx, url, dest, auth)
         }
+        Effect::AbortCloneRepo { dest } => clone::schedule_abort_clone_repo(msg_tx, dest),
         Effect::ExportPatch {
             repo_id,
             commit_id,

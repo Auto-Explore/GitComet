@@ -1,4 +1,4 @@
-pub(crate) use criterion::{BenchmarkId, Criterion};
+pub(crate) use criterion::{BatchSize, BenchmarkFilter, BenchmarkId, Criterion};
 pub(crate) use gitcomet_core::file_diff::BenchmarkReplacementDistanceBackend;
 pub(crate) use gitcomet_ui_gpui::benchmarks::{
     BranchSidebarCacheFixture, BranchSidebarCacheMetrics, BranchSidebarFixture,
@@ -51,17 +51,21 @@ pub(crate) use gitcomet_ui_gpui::benchmarks::{
     WindowResizeLayoutFixture, WindowResizeLayoutMetrics, WorktreePreviewRenderFixture,
     WorktreePreviewRenderMetrics,
 };
-use gitcomet_ui_gpui::perf_alloc::{PerfAllocMetrics, measure_allocations};
+use gitcomet_ui_gpui::perf_alloc::{
+    PerfAllocChannels, install_tree_sitter_tracking_allocator, measure_allocation_channels,
+};
 use gitcomet_ui_gpui::perf_ram_guard::install_benchmark_process_ram_guard;
 use gitcomet_ui_gpui::perf_sidecar::{PerfSidecarReport, write_criterion_sidecar};
+use regex::Regex;
 pub(crate) use serde_json::{Map, Value, json};
 use std::cell::RefCell;
 use std::collections::VecDeque;
 pub(crate) use std::env;
+use std::sync::OnceLock;
 pub(crate) use std::time::{Duration, Instant};
 
 thread_local! {
-    static PENDING_SIDECAR_ALLOCATIONS: RefCell<VecDeque<PerfAllocMetrics>> = const {
+    static PENDING_SIDECAR_ALLOCATIONS: RefCell<VecDeque<PerfAllocChannels>> = const {
         RefCell::new(VecDeque::new())
     };
 }
@@ -90,6 +94,113 @@ pub(crate) fn env_flag(key: &str) -> bool {
         .unwrap_or(false)
 }
 
+fn current_sidecar_benchmark_filter() -> &'static BenchmarkFilter {
+    static FILTER: OnceLock<BenchmarkFilter> = OnceLock::new();
+
+    FILTER.get_or_init(|| parse_sidecar_benchmark_filter(env::args().skip(1)))
+}
+
+fn parse_sidecar_benchmark_filter(args: impl IntoIterator<Item = String>) -> BenchmarkFilter {
+    let mut args = args.into_iter();
+    let mut exact = false;
+
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--ignored" => return BenchmarkFilter::RejectAll,
+            "--exact" => exact = true,
+            "-v" | "--verbose" | "--quiet" | "-n" | "--noplot" | "--discard-baseline"
+            | "--list" | "--quick" | "--test" | "--bench" | "--nocapture" | "--show-output" => {}
+            flag if sidecar_cli_flag_takes_value(flag) => {
+                let _ = args.next();
+            }
+            _ if sidecar_cli_flag_has_inline_value(arg.as_str()) => {}
+            _ if arg.starts_with('-') => {}
+            _ => {
+                return if exact {
+                    BenchmarkFilter::Exact(arg)
+                } else {
+                    BenchmarkFilter::Regex(Regex::new(&arg).unwrap_or_else(|err| {
+                        panic!("Unable to parse '{arg}' as a regular expression: {err}")
+                    }))
+                };
+            }
+        }
+    }
+
+    BenchmarkFilter::AcceptAll
+}
+
+fn sidecar_cli_flag_takes_value(flag: &str) -> bool {
+    matches!(
+        flag,
+        "-c" | "--color"
+            | "-s"
+            | "--save-baseline"
+            | "-b"
+            | "--baseline"
+            | "--baseline-lenient"
+            | "--format"
+            | "--profile-time"
+            | "--load-baseline"
+            | "--sample-size"
+            | "--warm-up-time"
+            | "--measurement-time"
+            | "--nresamples"
+            | "--noise-threshold"
+            | "--confidence-level"
+            | "--significance-level"
+            | "--plotting-backend"
+            | "--output-format"
+    )
+}
+
+fn sidecar_cli_flag_has_inline_value(flag: &str) -> bool {
+    matches!(
+        flag,
+        _ if flag.starts_with("--color=")
+            || flag.starts_with("--save-baseline=")
+            || flag.starts_with("--baseline=")
+            || flag.starts_with("--baseline-lenient=")
+            || flag.starts_with("--format=")
+            || flag.starts_with("--profile-time=")
+            || flag.starts_with("--load-baseline=")
+            || flag.starts_with("--sample-size=")
+            || flag.starts_with("--warm-up-time=")
+            || flag.starts_with("--measurement-time=")
+            || flag.starts_with("--nresamples=")
+            || flag.starts_with("--noise-threshold=")
+            || flag.starts_with("--confidence-level=")
+            || flag.starts_with("--significance-level=")
+            || flag.starts_with("--plotting-backend=")
+            || flag.starts_with("--output-format=")
+    )
+}
+
+pub(crate) fn sidecar_benchmark_matches_filter(bench: &str) -> bool {
+    match current_sidecar_benchmark_filter() {
+        BenchmarkFilter::AcceptAll => true,
+        BenchmarkFilter::Exact(exact) => bench == exact,
+        BenchmarkFilter::Regex(regex) => regex.is_match(bench),
+        BenchmarkFilter::RejectAll => false,
+    }
+}
+
+pub(crate) fn benchmark_selectors_match_filter(selectors: &[&str]) -> bool {
+    match current_sidecar_benchmark_filter() {
+        BenchmarkFilter::AcceptAll => true,
+        BenchmarkFilter::Exact(exact) => selectors.iter().copied().any(|selector| {
+            exact == selector
+                || exact
+                    .strip_prefix(selector)
+                    .is_some_and(|suffix| suffix.starts_with('/'))
+        }),
+        // Regex filters may match any case segment, so keep the broader module
+        // registration path for non-exact runs.
+        BenchmarkFilter::Regex(_) => true,
+        BenchmarkFilter::RejectAll => false,
+    }
+}
+
 pub(crate) fn parse_bool_flag(value: &str) -> bool {
     matches!(
         value.trim().to_ascii_lowercase().as_str(),
@@ -105,6 +216,7 @@ pub(crate) fn markdown_preview_measurement_time() -> Duration {
 
 pub(crate) fn benchmark_criterion() -> Criterion {
     install_benchmark_process_ram_guard();
+    install_tree_sitter_tracking_allocator();
     Criterion::default()
 }
 
@@ -116,12 +228,19 @@ pub(crate) fn settle_markdown_allocator_pages() {
 }
 
 pub(crate) fn measure_sidecar_allocations<T>(f: impl FnOnce() -> T) -> T {
-    let (value, allocations) = measure_allocations(f);
+    let (value, allocations) = measure_allocation_channels(f);
     PENDING_SIDECAR_ALLOCATIONS.with(|pending| pending.borrow_mut().push_back(allocations));
     value
 }
 
-pub(crate) fn take_pending_sidecar_allocations() -> PerfAllocMetrics {
+pub(crate) fn measure_sidecar_allocations_if_selected<T>(
+    bench: &str,
+    f: impl FnOnce() -> T,
+) -> Option<T> {
+    sidecar_benchmark_matches_filter(bench).then(|| measure_sidecar_allocations(f))
+}
+
+pub(crate) fn take_pending_sidecar_allocations() -> PerfAllocChannels {
     PENDING_SIDECAR_ALLOCATIONS
         .with(|pending| pending.borrow_mut().pop_front())
         .unwrap_or_else(|| {
@@ -131,7 +250,17 @@ pub(crate) fn take_pending_sidecar_allocations() -> PerfAllocMetrics {
 
 pub(crate) fn emit_sidecar_metrics(bench: &str, mut metrics: Map<String, Value>) {
     let allocations = take_pending_sidecar_allocations();
-    allocations.append_to_payload(&mut metrics);
+    // Filtered Criterion runs still invoke benchmark registration code, so only
+    // persist a sidecar when the bench id itself matches the active filter.
+    if !sidecar_benchmark_matches_filter(bench) {
+        return;
+    }
+    allocations.rust.append_to_payload(&mut metrics);
+    if !allocations.tree_sitter.is_zero() {
+        allocations
+            .tree_sitter
+            .append_to_payload_with_prefix(&mut metrics, "tree_sitter_");
+    }
     let report = PerfSidecarReport::new(bench, metrics);
     write_criterion_sidecar(&report).unwrap_or_else(|err| panic!("{err}"));
 }
@@ -246,6 +375,9 @@ pub(crate) fn emit_branch_sidebar_cache_sidecar(
     payload.insert("cache_misses".to_string(), json!(metrics.cache_misses));
     payload.insert("rows_count".to_string(), json!(metrics.rows_count));
     payload.insert("invalidations".to_string(), json!(metrics.invalidations));
+    payload.insert("worktree_rows".to_string(), json!(metrics.worktree_rows));
+    payload.insert("submodule_rows".to_string(), json!(metrics.submodule_rows));
+    payload.insert("stash_rows".to_string(), json!(metrics.stash_rows));
     emit_sidecar_metrics(&format!("branch_sidebar/{case_name}"), payload);
 }
 
@@ -413,6 +545,10 @@ pub(crate) fn emit_status_select_diff_open_sidecar(
 ) {
     let mut payload = Map::new();
     payload.insert("effect_count".to_string(), json!(metrics.effect_count));
+    payload.insert(
+        "load_selected_diff_effect_count".to_string(),
+        json!(metrics.load_selected_diff_effect_count),
+    );
     payload.insert(
         "load_diff_effect_count".to_string(),
         json!(metrics.load_diff_effect_count),
@@ -1371,6 +1507,20 @@ pub(crate) fn emit_diff_refresh_sidecar(sub: &str, metrics: &DiffRefreshMetrics)
     );
     payload.insert("rows_preserved".to_string(), json!(metrics.rows_preserved));
     payload.insert("rebuild_rows".to_string(), json!(metrics.rebuild_rows));
+    payload.insert(
+        "rebuild_inline_rows".to_string(),
+        json!(metrics.rebuild_inline_rows),
+    );
+    payload.insert("old_text_bytes".to_string(), json!(metrics.old_text_bytes));
+    payload.insert("new_text_bytes".to_string(), json!(metrics.new_text_bytes));
+    payload.insert(
+        "old_line_starts".to_string(),
+        json!(metrics.old_line_starts),
+    );
+    payload.insert(
+        "new_line_starts".to_string(),
+        json!(metrics.new_line_starts),
+    );
     emit_sidecar_metrics(
         &format!("diff_refresh_rev_only_same_content/{sub}"),
         payload,

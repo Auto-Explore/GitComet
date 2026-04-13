@@ -2,12 +2,17 @@ use super::*;
 
 impl GitCometView {
     pub(super) fn schedule_ui_settings_persist(&mut self, cx: &mut gpui::Context<Self>) {
+        if !crate::ui_runtime::current().persists_ui_settings() {
+            let _ = cx;
+            return;
+        }
+
         self.ui_settings_persist_seq = self.ui_settings_persist_seq.wrapping_add(1);
         let seq = self.ui_settings_persist_seq;
 
         cx.spawn(
             async move |view: WeakEntity<GitCometView>, cx: &mut gpui::AsyncApp| {
-                Timer::after(Duration::from_millis(250)).await;
+                smol::Timer::after(Duration::from_millis(250)).await;
                 let settings = view
                     .update(cx, |this, cx| {
                         if this.ui_settings_persist_seq != seq {
@@ -48,6 +53,7 @@ impl GitCometView {
                             timezone: Some(this.timezone.key()),
                             show_timezone: Some(this.show_timezone),
                             change_tracking_view: Some(this.change_tracking_view.key().to_string()),
+                            diff_scroll_sync: Some(this.diff_scroll_sync.key().to_string()),
                             change_tracking_height,
                             untracked_height,
                             history_show_author: Some(history_show_author),

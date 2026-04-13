@@ -99,8 +99,7 @@ pub(super) fn panel(
                             if repository.is_empty() || refspec.is_empty() {
                                 this.push_toast(
                                     components::ToastKind::Error,
-                                    "Subtree repository and push refspec are required"
-                                        .to_string(),
+                                    "Subtree repository and push refspec are required".to_string(),
                                     cx,
                                 );
                                 return;

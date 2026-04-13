@@ -286,9 +286,11 @@ fn retry_msg_for_repo_command(repo_id: RepoId, command: RepoCommandKind) -> Opti
             refspec,
             path,
         },
-        RepoCommandKind::SplitSubtree { path, branch } => {
-            Msg::SplitSubtree { repo_id, path, branch }
-        }
+        RepoCommandKind::SplitSubtree { path, branch } => Msg::SplitSubtree {
+            repo_id,
+            path,
+            branch,
+        },
         RepoCommandKind::RemoveSubtree { path } => Msg::RemoveSubtree { repo_id, path },
         // Not replayable because command metadata does not retain original content.
         RepoCommandKind::SaveWorktreeFile { .. }
@@ -539,6 +541,9 @@ pub(super) fn reduce(
             diff_selection::select_conflict_diff(state, repo_id, path)
         }
         Msg::ClearDiffSelection { repo_id } => diff_selection::clear_diff_selection(state, repo_id),
+        Msg::EnsureSidebarData { repo_id, request } => {
+            effects::ensure_sidebar_data(state, repo_id, request)
+        }
         Msg::LoadStashes { repo_id } => effects::load_stashes(state, repo_id),
         Msg::LoadConflictFile {
             repo_id,
@@ -634,6 +639,7 @@ pub(super) fn reduce(
             actions_emit_effects::force_delete_branch(repo_id, name)
         }
         Msg::CloneRepo { url, dest } => repo_management::clone_repo(state, url, dest),
+        Msg::AbortCloneRepo { dest } => repo_management::abort_clone_repo(state, dest),
         Msg::Internal(crate::msg::InternalMsg::CloneRepoProgress { dest, line }) => {
             repo_management::clone_repo_progress(state, dest, line)
         }
@@ -1101,6 +1107,12 @@ pub(super) fn reduce(
             target,
             result,
         }) => diff_selection::diff_file_loaded(state, repo_id, target, result),
+        Msg::Internal(crate::msg::InternalMsg::DiffPreviewTextFileLoaded {
+            repo_id,
+            target,
+            side,
+            result,
+        }) => diff_selection::diff_preview_text_file_loaded(state, repo_id, target, side, result),
         Msg::Internal(crate::msg::InternalMsg::DiffFileImageLoaded {
             repo_id,
             target,
