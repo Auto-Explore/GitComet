@@ -803,12 +803,9 @@ impl MainPaneView {
             return;
         }
 
-        let conflict_entry = match &repo.status {
-            Loadable::Ready(status) => status.unstaged.iter().find(|e| {
-                e.path == *path && e.kind == gitcomet_core::domain::FileStatusKind::Conflicted
-            }),
-            _ => None,
-        };
+        let conflict_entry = repo
+            .status_entry_for_path(DiffArea::Unstaged, path.as_path())
+            .filter(|entry| entry.kind == gitcomet_core::domain::FileStatusKind::Conflicted);
         let Some(conflict_entry) = conflict_entry else {
             self.clear_conflict_resolver_state();
             return;

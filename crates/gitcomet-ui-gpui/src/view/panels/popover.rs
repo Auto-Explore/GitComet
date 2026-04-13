@@ -817,6 +817,26 @@ impl PopoverHost {
         self.open_popover(kind, PopoverAnchor::Bounds(anchor_bounds), window, cx);
     }
 
+    fn request_lazy_popover_repo_data(&self, kind: &PopoverKind) {
+        let repo_id = match kind {
+            PopoverKind::TagMenu { repo_id, .. } => Some(*repo_id),
+            _ => None,
+        };
+        let Some(repo_id) = repo_id else {
+            return;
+        };
+        let Some(repo) = self.state.repos.iter().find(|repo| repo.id == repo_id) else {
+            return;
+        };
+
+        if matches!(repo.tags, Loadable::NotLoaded | Loadable::Error(_)) {
+            self.store.dispatch(Msg::LoadTags { repo_id });
+        }
+        if matches!(repo.remote_tags, Loadable::NotLoaded | Loadable::Error(_)) {
+            self.store.dispatch(Msg::LoadRemoteTags { repo_id });
+        }
+    }
+
     fn open_popover(
         &mut self,
         kind: PopoverKind,
@@ -824,12 +844,12 @@ impl PopoverHost {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        self.request_lazy_popover_repo_data(&kind);
         let is_context_menu = matches!(
             &kind,
             PopoverKind::PullPicker
                 | PopoverKind::PushPicker
                 | PopoverKind::HistoryBranchFilter { .. }
-                | PopoverKind::HistoryColumnSettings
                 | PopoverKind::ChangeTrackingSettings
                 | PopoverKind::DiffHunkMenu { .. }
                 | PopoverKind::DiffEditorMenu { .. }
@@ -1340,7 +1360,6 @@ impl PopoverHost {
             PopoverKind::PullPicker
                 | PopoverKind::PushPicker
                 | PopoverKind::HistoryBranchFilter { .. }
-                | PopoverKind::HistoryColumnSettings
                 | PopoverKind::ChangeTrackingSettings
                 | PopoverKind::DiffHunkMenu { .. }
                 | PopoverKind::DiffEditorMenu { .. }
@@ -1420,7 +1439,6 @@ impl PopoverHost {
             | PopoverKind::ForceRemoveWorktreeConfirm { .. }
             | PopoverKind::PullReconcilePrompt { .. }
             | PopoverKind::HistoryBranchFilter { .. }
-            | PopoverKind::HistoryColumnSettings
             | PopoverKind::ChangeTrackingSettings => Corner::TopRight,
             _ => Corner::TopLeft,
         };
@@ -1611,10 +1629,6 @@ impl PopoverHost {
             }
             PopoverKind::HistoryBranchFilter { repo_id } => self
                 .context_menu_view(PopoverKind::HistoryBranchFilter { repo_id }, cx)
-                .min_w(px(160.0))
-                .max_w(px(220.0)),
-            PopoverKind::HistoryColumnSettings => self
-                .context_menu_view(PopoverKind::HistoryColumnSettings, cx)
                 .min_w(px(160.0))
                 .max_w(px(220.0)),
             PopoverKind::ChangeTrackingSettings => self

@@ -31,6 +31,7 @@ impl<'a> StatusNavigationContext<'a> {
     }
 }
 
+#[cfg(test)]
 fn status_navigation_section_for_target(
     status: &gitcomet_core::domain::RepoStatus,
     change_tracking_view: ChangeTrackingView,
@@ -56,6 +57,7 @@ fn status_navigation_section_for_target(
     }
 }
 
+#[cfg(test)]
 fn status_navigation_entries_for_section(
     status: &gitcomet_core::domain::RepoStatus,
     section: StatusSection,
@@ -76,6 +78,7 @@ fn status_navigation_entries_for_section(
     }
 }
 
+#[cfg(test)]
 pub(super) fn status_navigation_context<'a>(
     status: &'a gitcomet_core::domain::RepoStatus,
     diff_target: &DiffTarget,
@@ -95,6 +98,39 @@ pub(super) fn status_navigation_context<'a>(
     })
 }
 
+pub(super) fn status_navigation_context_for_repo<'a>(
+    repo: &'a RepoState,
+    diff_target: &DiffTarget,
+    change_tracking_view: ChangeTrackingView,
+) -> Option<StatusNavigationContext<'a>> {
+    let DiffTarget::WorkingTree { path, area } = diff_target else {
+        return None;
+    };
+    let section = match area {
+        DiffArea::Staged => StatusSection::Staged,
+        DiffArea::Unstaged => match change_tracking_view {
+            ChangeTrackingView::Combined => StatusSection::CombinedUnstaged,
+            ChangeTrackingView::SplitUntracked => {
+                let entry = repo.status_entry_for_path(DiffArea::Unstaged, path.as_path())?;
+                if entry.kind == gitcomet_core::domain::FileStatusKind::Untracked {
+                    StatusSection::Untracked
+                } else {
+                    StatusSection::Unstaged
+                }
+            }
+        },
+    };
+    let entries: Vec<_> = StatusSectionEntries::from_repo(repo, section)?
+        .iter()
+        .collect();
+    let current_ix = entries.iter().position(|entry| entry.path == *path)?;
+    Some(StatusNavigationContext {
+        section,
+        entries,
+        current_ix,
+    })
+}
+
 impl MainPaneView {
     pub(in crate::view) fn try_select_adjacent_status_file(
         &mut self,
@@ -106,11 +142,9 @@ impl MainPaneView {
         let change_tracking_view = self.active_change_tracking_view(cx);
         let Some((section, area, target_ix, target_path, is_conflicted)) = (|| {
             let repo = self.active_repo()?;
-            let Loadable::Ready(status) = &repo.status else {
-                return None;
-            };
             let diff_target = repo.diff_state.diff_target.as_ref()?;
-            let navigation = status_navigation_context(status, diff_target, change_tracking_view)?;
+            let navigation =
+                status_navigation_context_for_repo(repo, diff_target, change_tracking_view)?;
             let target_ix = navigation.adjacent_ix(direction)?;
             let entry = navigation.entries.get(target_ix)?;
             let target_path = entry.path.clone();

@@ -1808,15 +1808,7 @@ impl RepoTabDragFixture {
         Self {
             tab_count,
             tab_width_px: 120.0,
-            baseline: AppState {
-                repos,
-                active_repo: active,
-                clone: None,
-                notifications: Vec::new(),
-                banner_error: None,
-                auth_prompt: None,
-                submodule_trust_prompt: None,
-            },
+            baseline: bench_app_state(repos, active),
             #[cfg(test)]
             hit_test_steps,
         }
@@ -1864,6 +1856,24 @@ impl RepoTabDragFixture {
         };
 
         (h.finish(), metrics)
+    }
+
+    #[cfg(test)]
+    pub fn hit_test_target_repo_ids(&self) -> Vec<RepoId> {
+        let repos = &self.baseline.repos;
+        let steps = self.tab_count * 3;
+        let total_bar_width = self.tab_count as f32 * self.tab_width_px;
+        let mut ids = Vec::with_capacity(steps);
+
+        for step in 0..steps {
+            let frac = (step as f32) / (steps.max(1) as f32);
+            let cursor_x = frac * total_bar_width;
+            let tab_ix = (cursor_x / self.tab_width_px) as usize;
+            let tab_ix = tab_ix.min(self.tab_count.saturating_sub(1));
+            ids.push(repos[tab_ix].id);
+        }
+
+        ids
     }
 
     /// Full reducer dispatch — hit-test + reorder_repo_tabs for each step.

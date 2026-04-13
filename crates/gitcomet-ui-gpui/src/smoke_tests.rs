@@ -352,6 +352,29 @@ fn text_input_constructs_without_panicking(cx: &mut gpui::TestAppContext) {
 }
 
 #[gpui::test]
+fn text_input_focus_after_initial_draw_accepts_typed_input(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = cx.add_window_view(TextInputHostView::new);
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    cx.update(|window, app| {
+        let focus = view.update(app, |this, cx| this.input.read(cx).focus_handle());
+        window.focus(&focus, app);
+        let _ = window.draw(app);
+    });
+
+    cx.simulate_input("x");
+
+    let text = cx.update(|window, app| {
+        let _ = window.draw(app);
+        view.read(app).input.read(app).text().to_string()
+    });
+    assert_eq!(text, "x");
+}
+
+#[gpui::test]
 fn text_input_supports_basic_clipboard_and_word_shortcuts(cx: &mut gpui::TestAppContext) {
     let _clipboard_guard = lock_clipboard_test();
     let (view, cx) = cx.add_window_view(SmokeView::new);

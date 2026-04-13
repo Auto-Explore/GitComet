@@ -11,6 +11,11 @@ pub(super) struct ToastHost {
     clone_progress_dest: Option<std::sync::Arc<std::path::PathBuf>>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ToastViewportCorner {
+    BottomRight,
+}
+
 #[derive(Debug, Eq, PartialEq)]
 struct CloneProgressSyncAction {
     progress_changed: bool,
@@ -23,6 +28,10 @@ fn clone_progress_shell_border_color(theme: AppTheme) -> gpui::Rgba {
 
 fn clone_progress_shell_accent_color(theme: AppTheme) -> gpui::Rgba {
     with_alpha(theme.colors.accent, if theme.is_dark { 0.20 } else { 0.14 })
+}
+
+fn toast_viewport_corner() -> ToastViewportCorner {
+    ToastViewportCorner::BottomRight
 }
 
 fn looks_like_code_message(message: &str) -> bool {
@@ -608,20 +617,29 @@ impl Render for ToastHost {
             children.push(progress_toast);
         }
 
-        div()
+        let root = div()
             .id("toast_layer")
-            .on_any_mouse_down(|_e, _w, cx| cx.stop_propagation())
-            .occlude()
             .absolute()
-            .right_0()
-            .bottom_0()
+            .top_0()
+            .left_0()
+            .size_full()
             .p(px(16.0))
             .flex()
-            .flex_col()
-            .items_end()
-            .gap(px(12.0))
-            .children(children)
-            .into_any_element()
+            .child(
+                div()
+                    .id("toast_stack")
+                    .on_any_mouse_down(|_e, _w, cx| cx.stop_propagation())
+                    .occlude()
+                    .flex()
+                    .flex_col()
+                    .items_end()
+                    .gap(px(12.0))
+                    .children(children),
+            );
+
+        match toast_viewport_corner() {
+            ToastViewportCorner::BottomRight => root.justify_end().items_end().into_any_element(),
+        }
     }
 }
 
@@ -920,5 +938,10 @@ mod tests {
             clone_progress_shell_accent_color(light),
             with_alpha(light.colors.accent, 0.14)
         );
+    }
+
+    #[test]
+    fn toast_stack_anchor_is_bottom_right() {
+        assert_eq!(toast_viewport_corner(), ToastViewportCorner::BottomRight);
     }
 }

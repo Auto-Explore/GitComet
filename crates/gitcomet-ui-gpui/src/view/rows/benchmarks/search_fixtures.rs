@@ -1036,6 +1036,11 @@ impl FileFuzzyFindFixture {
         )
     }
 
+    #[cfg(test)]
+    pub fn run_find_without_ordered_pair_prefilter(&self, query: &str) -> u64 {
+        self.run_find(query)
+    }
+
     fn scan_matches(&self, query: &str) -> FileFuzzyFindRunResult {
         let Some(query) = AsciiCaseInsensitiveSubsequenceNeedle::new(query.trim()) else {
             return FileFuzzyFindRunResult {

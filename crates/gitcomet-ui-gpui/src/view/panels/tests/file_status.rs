@@ -1784,6 +1784,62 @@ fn merge_start_prefills_default_commit_message(cx: &mut gpui::TestAppContext) {
 }
 
 #[gpui::test]
+fn commit_message_focus_after_initial_draw_accepts_typed_input(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(44);
+    let make_state = || {
+        let mut repo = opening_repo_state(repo_id, Path::new("/tmp/repo-commit-message-focus"));
+        repo.status = gitcomet_state::model::Loadable::Ready(
+            gitcomet_core::domain::RepoStatus {
+                staged: vec![gitcomet_core::domain::FileStatus {
+                    path: std::path::PathBuf::from("staged.txt"),
+                    kind: gitcomet_core::domain::FileStatusKind::Modified,
+                    conflict: None,
+                }],
+                unstaged: Vec::new(),
+            }
+            .into(),
+        );
+        app_state_with_repo(repo, repo_id)
+    };
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            push_test_state(this, make_state(), cx);
+        });
+        let _ = window.draw(app);
+    });
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.details_pane.update(cx, |pane, cx| {
+                let focus = pane.commit_message_input.read(cx).focus_handle();
+                window.focus(&focus, cx);
+            });
+        });
+        let _ = window.draw(app);
+    });
+
+    cx.simulate_input("x");
+
+    let text = cx.update(|window, app| {
+        let _ = window.draw(app);
+        view.read(app)
+            .details_pane
+            .read(app)
+            .commit_message_input
+            .read(app)
+            .text()
+            .to_string()
+    });
+    assert_eq!(text, "x");
+}
+
+#[gpui::test]
 fn commit_click_dispatches_after_state_update_without_intermediate_redraw(
     cx: &mut gpui::TestAppContext,
 ) {

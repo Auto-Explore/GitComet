@@ -9,7 +9,8 @@ use super::util::{
 };
 use crate::model::{
     AppNotificationKind, AppState, CloneOpState, CloneOpStatus, CloneProgressMeter,
-    CloneProgressStage, DiagnosticKind, Loadable, RepoId, RepoLoadsInFlight, RepoState,
+    CloneProgressStage, DiagnosticKind, GitLogSettings, Loadable, RepoId, RepoLoadsInFlight,
+    RepoState,
 };
 use crate::msg::Effect;
 use crate::session;
@@ -31,10 +32,14 @@ pub(crate) const REORDER_REPO_TABS_INLINE_EFFECT_CAPACITY: usize = 1;
 pub(crate) type ReorderRepoTabsEffects =
     SmallVec<[Effect; REORDER_REPO_TABS_INLINE_EFFECT_CAPACITY]>;
 
-fn repo_switch_secondary_metadata_ready(repo_state: &RepoState) -> bool {
+fn repo_switch_secondary_metadata_ready(
+    repo_state: &RepoState,
+    git_log_settings: GitLogSettings,
+) -> bool {
     matches!(repo_state.branches, Loadable::Ready(_))
-        && matches!(repo_state.tags, Loadable::Ready(_))
-        && matches!(repo_state.remote_tags, Loadable::Ready(_))
+        && (!git_log_settings.show_history_tags
+            || !git_log_settings.auto_fetch_tags_on_repo_activation()
+            || matches!(repo_state.tags, Loadable::Ready(_)))
         && matches!(repo_state.remotes, Loadable::Ready(_))
         && matches!(repo_state.remote_branches, Loadable::Ready(_))
         && matches!(repo_state.stashes, Loadable::Ready(_))
@@ -42,8 +47,12 @@ fn repo_switch_secondary_metadata_ready(repo_state: &RepoState) -> bool {
         && matches!(repo_state.merge_commit_message, Loadable::Ready(_))
 }
 
-fn repo_switch_can_use_primary_refresh(repo_state: &RepoState, now: SystemTime) -> bool {
-    repo_switch_secondary_metadata_ready(repo_state)
+fn repo_switch_can_use_primary_refresh(
+    repo_state: &RepoState,
+    git_log_settings: GitLogSettings,
+    now: SystemTime,
+) -> bool {
+    repo_switch_secondary_metadata_ready(repo_state, git_log_settings)
         && repo_state
             .last_active_at
             .and_then(|last_active_at| now.duration_since(last_active_at).ok())
@@ -278,6 +287,7 @@ pub(super) fn fill_set_active_repo_inline(
     state.active_repo = Some(repo_id);
     let persist_effect = changed
         .then(|| persist_session_effect(state, Some(repo_id), "switching active repository"));
+    let git_log_settings = state.git_log_settings;
 
     let repo_state = &mut state.repos[repo_ix];
 
@@ -292,7 +302,8 @@ pub(super) fn fill_set_active_repo_inline(
         return;
     }
 
-    let use_full_refresh = changed && !repo_switch_can_use_primary_refresh(repo_state, now);
+    let use_full_refresh =
+        changed && !repo_switch_can_use_primary_refresh(repo_state, git_log_settings, now);
     repo_state.last_active_at = Some(now);
 
     // Reload the selected diff when switching repos; steady-state refreshes rely on the
@@ -333,7 +344,7 @@ pub(super) fn fill_set_active_repo_inline(
         base_effect_capacity + extra_effect_capacity <= SET_ACTIVE_REPO_INLINE_EFFECT_CAPACITY
     );
     if use_full_refresh {
-        append_refresh_full_effects(repo_state, effects);
+        append_refresh_full_effects(repo_state, git_log_settings, effects);
     } else {
         append_refresh_primary_effects(repo_state, effects);
     }
@@ -610,6 +621,7 @@ pub(super) fn repo_opened_ok(
     repo: Arc<dyn GitRepository>,
 ) -> Vec<Effect> {
     repos.insert(repo_id, repo);
+    let git_log_settings = state.git_log_settings;
 
     let spec = RepoSpec {
         workdir: normalize_repo_path(spec.workdir),
@@ -623,8 +635,14 @@ pub(super) fn repo_opened_ok(
         repo_state.set_detached_head_commit(None);
         repo_state.set_upstream_divergence(Loadable::Loading);
         repo_state.set_branches(Loadable::Loading);
-        repo_state.set_tags(Loadable::Loading);
-        repo_state.set_remote_tags(Loadable::Loading);
+        if git_log_settings.show_history_tags
+            && git_log_settings.auto_fetch_tags_on_repo_activation()
+        {
+            repo_state.set_tags(Loadable::Loading);
+        } else {
+            repo_state.set_tags(Loadable::NotLoaded);
+        }
+        repo_state.set_remote_tags(Loadable::NotLoaded);
         repo_state.set_remotes(Loadable::Loading);
         repo_state.set_remote_branches(Loadable::Loading);
         repo_state.set_status(Loadable::Loading);
@@ -659,7 +677,7 @@ pub(super) fn repo_opened_ok(
 
     let should_refresh_worktrees = state.active_repo == Some(repo_id);
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-        let mut effects = refresh_full_effects(repo_state);
+        let mut effects = refresh_full_effects(repo_state, git_log_settings);
         if should_refresh_worktrees
             && repo_state
                 .loads_in_flight

@@ -630,7 +630,7 @@ impl MainPaneView {
                 repo.diff_state.diff_target,
                 Some(DiffTarget::WorkingTree { .. })
             ) {
-                repo.status_rev
+                repo.status_cache_rev()
             } else {
                 0
             };
@@ -790,9 +790,12 @@ impl MainPaneView {
         timezone: Timezone,
         show_timezone: bool,
         diff_scroll_sync: DiffScrollSync,
+        history_show_graph: bool,
         history_show_author: bool,
         history_show_date: bool,
         history_show_sha: bool,
+        history_show_tags: bool,
+        history_auto_fetch_tags_on_repo_activation: bool,
         view_mode: GitCometViewMode,
         focused_mergetool_labels: Option<FocusedMergetoolLabels>,
         focused_mergetool_exit_code: Option<Arc<AtomicI32>>,
@@ -920,9 +923,12 @@ impl MainPaneView {
                 date_time_format,
                 timezone,
                 show_timezone,
+                history_show_graph,
                 history_show_author,
                 history_show_date,
                 history_show_sha,
+                history_show_tags,
+                history_auto_fetch_tags_on_repo_activation,
                 root_view.clone(),
                 tooltip_host.clone(),
                 last_window_size,
@@ -2466,10 +2472,48 @@ impl MainPaneView {
     pub(in crate::view) fn history_visible_column_preferences(
         &self,
         cx: &gpui::App,
-    ) -> (bool, bool, bool) {
+    ) -> (bool, bool, bool, bool) {
         self.history_view
             .read(cx)
             .history_visible_column_preferences()
+    }
+
+    pub(in crate::view) fn history_tag_preferences(&self, cx: &gpui::App) -> (bool, bool) {
+        self.history_view.read(cx).history_tag_preferences()
+    }
+
+    pub(in crate::view) fn set_history_column_preferences(
+        &mut self,
+        show_graph: bool,
+        show_author: bool,
+        show_date: bool,
+        show_sha: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.history_view.update(cx, |view, cx| {
+            view.set_history_column_preferences(show_graph, show_author, show_date, show_sha, cx);
+        });
+        cx.notify();
+    }
+
+    pub(in crate::view) fn set_history_tag_preferences(
+        &mut self,
+        show_tags: bool,
+        auto_fetch_tags_on_repo_activation: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.history_view.update(cx, |view, cx| {
+            view.set_history_tag_preferences(show_tags, auto_fetch_tags_on_repo_activation, cx);
+        });
+        cx.notify();
+    }
+
+    pub(in crate::view) fn reset_history_column_widths(&mut self, cx: &mut gpui::Context<Self>) {
+        self.history_view.update(cx, |view, cx| {
+            view.reset_history_column_widths();
+            cx.notify();
+        });
+        cx.notify();
     }
 
     pub(in crate::view) fn open_popover_at(

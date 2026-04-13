@@ -9,7 +9,7 @@ use gitcomet_core::auth::{
 };
 use gitcomet_core::domain::{Commit, CommitId, CommitParentIds, LogPage};
 use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
-use gitcomet_core::process::configure_background_command;
+use gitcomet_core::process::{configure_background_command, git_command};
 use gitcomet_core::services::{CommandOutput, Result};
 use std::fs;
 use std::io;
@@ -173,8 +173,7 @@ fn apply_test_git_command_environment(cmd: &mut Command) {
 }
 
 pub(crate) fn git_workdir_cmd_for(workdir: &Path) -> Command {
-    let mut cmd = Command::new("git");
-    configure_background_command(&mut cmd);
+    let mut cmd = git_command();
     apply_test_git_command_environment(&mut cmd);
     cmd.arg("-C").arg(workdir);
     cmd

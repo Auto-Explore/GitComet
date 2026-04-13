@@ -152,13 +152,10 @@ impl FsEventFixture {
                 metrics.mutation_files = 1;
 
                 // 2. Run git status.
-                let start = std::time::Instant::now();
-                let status = self
-                    .repo
-                    .status()
-                    .expect("fs_event single_file_save status");
-                metrics.status_ms = start.elapsed().as_secs_f64() * 1_000.0;
-                metrics.status_calls = 1;
+                let (status, status_calls, status_ms) =
+                    measure_split_repo_status(self.repo.as_ref(), "fs_event single_file_save");
+                metrics.status_ms = status_ms;
+                metrics.status_calls = status_calls;
 
                 let dirty = status.staged.len().saturating_add(status.unstaged.len());
                 metrics.dirty_files_detected = u64::try_from(dirty).unwrap_or(u64::MAX);
@@ -189,13 +186,10 @@ impl FsEventFixture {
                 metrics.mutation_files = u64::try_from(checkout_files).unwrap_or(u64::MAX);
 
                 // 2. Run git status.
-                let start = std::time::Instant::now();
-                let status = self
-                    .repo
-                    .status()
-                    .expect("fs_event git_checkout_batch status");
-                metrics.status_ms = start.elapsed().as_secs_f64() * 1_000.0;
-                metrics.status_calls = 1;
+                let (status, status_calls, status_ms) =
+                    measure_split_repo_status(self.repo.as_ref(), "fs_event git_checkout_batch");
+                metrics.status_ms = status_ms;
+                metrics.status_calls = status_calls;
 
                 let dirty = status.staged.len().saturating_add(status.unstaged.len());
                 metrics.dirty_files_detected = u64::try_from(dirty).unwrap_or(u64::MAX);
@@ -229,13 +223,10 @@ impl FsEventFixture {
                 metrics.coalesced_saves = metrics.mutation_files;
 
                 // 2. Single coalesced status call (debounce model).
-                let start = std::time::Instant::now();
-                let status = self
-                    .repo
-                    .status()
-                    .expect("fs_event rapid_saves_debounce status");
-                metrics.status_ms = start.elapsed().as_secs_f64() * 1_000.0;
-                metrics.status_calls = 1;
+                let (status, status_calls, status_ms) =
+                    measure_split_repo_status(self.repo.as_ref(), "fs_event rapid_saves_debounce");
+                metrics.status_ms = status_ms;
+                metrics.status_calls = status_calls;
 
                 let dirty = status.staged.len().saturating_add(status.unstaged.len());
                 metrics.dirty_files_detected = u64::try_from(dirty).unwrap_or(u64::MAX);
@@ -271,13 +262,12 @@ impl FsEventFixture {
                 metrics.mutation_files = u64::try_from(churn_files).unwrap_or(u64::MAX);
 
                 // 3. Status should find 0 dirty files — the FS events were false positives.
-                let start = std::time::Instant::now();
-                let status = self
-                    .repo
-                    .status()
-                    .expect("fs_event false_positive_under_churn status");
-                metrics.status_ms = start.elapsed().as_secs_f64() * 1_000.0;
-                metrics.status_calls = 1;
+                let (status, status_calls, status_ms) = measure_split_repo_status(
+                    self.repo.as_ref(),
+                    "fs_event false_positive_under_churn",
+                );
+                metrics.status_ms = status_ms;
+                metrics.status_calls = status_calls;
 
                 let dirty = status.staged.len().saturating_add(status.unstaged.len());
                 metrics.dirty_files_detected = u64::try_from(dirty).unwrap_or(u64::MAX);
@@ -702,10 +692,10 @@ impl IdleResourceFixture {
         let mut status_calls = 0u64;
         let mut status_ms = 0.0f64;
         for repo in &self.repos {
-            let started_at = Instant::now();
-            let status = repo.status().expect("idle_resource repo refresh status");
-            status_ms += started_at.elapsed().as_secs_f64() * 1_000.0;
-            status_calls = status_calls.saturating_add(1);
+            let (status, repo_calls, repo_status_ms) =
+                measure_split_repo_status(repo.as_ref(), "idle_resource repo refresh");
+            status_ms += repo_status_ms;
+            status_calls = status_calls.saturating_add(repo_calls);
             hash_repo_status(&status).hash(&mut h);
         }
         (h.finish(), status_calls, status_ms)
@@ -722,6 +712,26 @@ fn idle_sample_steps(window: Duration, interval: Duration) -> usize {
     let window_nanos = window.as_nanos();
     let steps = window_nanos.saturating_add(interval_nanos.saturating_sub(1)) / interval_nanos;
     usize::try_from(steps.max(1)).unwrap_or(usize::MAX)
+}
+
+#[cfg(target_os = "linux")]
+#[cfg(any(test, feature = "benchmarks"))]
+pub(crate) fn parse_first_u64_ascii_token(bytes: &[u8]) -> Option<u64> {
+    std::str::from_utf8(bytes)
+        .ok()?
+        .split_ascii_whitespace()
+        .next()?
+        .parse::<u64>()
+        .ok()
+}
+
+#[cfg(target_os = "linux")]
+#[cfg(any(test, feature = "benchmarks"))]
+pub(crate) fn parse_vmrss_kib(bytes: &[u8]) -> Option<u64> {
+    std::str::from_utf8(bytes).ok()?.lines().find_map(|line| {
+        let value = line.strip_prefix("VmRSS:")?.split_whitespace().next()?;
+        value.parse::<u64>().ok()
+    })
 }
 
 #[cfg(target_os = "linux")]

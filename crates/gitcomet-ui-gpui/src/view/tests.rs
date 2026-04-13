@@ -4,6 +4,7 @@ use gitcomet_core::domain::{
     Upstream, Worktree,
 };
 use gitcomet_core::error::{Error, ErrorKind};
+use gitcomet_core::process::{GitExecutableAvailability, GitExecutablePreference, GitRuntimeState};
 use gitcomet_core::services::{GitBackend, GitRepository, Result};
 use gitcomet_state::store::AppStore;
 use std::path::Path;
@@ -42,6 +43,24 @@ fn wait_until(description: &str, ready: impl Fn() -> bool) {
             panic!("timed out waiting for {description}");
         }
         std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn available_git_runtime_state() -> GitRuntimeState {
+    GitRuntimeState {
+        preference: GitExecutablePreference::SystemPath,
+        availability: GitExecutableAvailability::Available {
+            version_output: "git version 2.51.0".to_string(),
+        },
+    }
+}
+
+fn unavailable_git_runtime_state() -> GitRuntimeState {
+    GitRuntimeState {
+        preference: GitExecutablePreference::Custom(PathBuf::new()),
+        availability: GitExecutableAvailability::Unavailable {
+            detail: "Custom Git executable is not configured. Choose an executable or switch back to System PATH.".to_string(),
+        },
     }
 }
 
@@ -1627,6 +1646,7 @@ fn ease_out_cubic_is_monotonic_in_unit_interval() {
 
 #[gpui::test]
 fn sidebar_expand_after_collapse_does_not_reenter_root_update(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -1654,7 +1674,82 @@ fn sidebar_expand_after_collapse_does_not_reenter_root_update(cx: &mut gpui::Tes
 }
 
 #[gpui::test]
+fn details_expand_after_collapse_does_not_reenter_root_update(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+        view.update(app, |this, cx| this.set_details_collapsed(true, cx));
+    });
+    pump_for(
+        cx,
+        Duration::from_millis(PANE_COLLAPSE_ANIM_MS.saturating_add(180)),
+    );
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+        view.update(app, |this, cx| this.set_details_collapsed(false, cx));
+    });
+    pump_for(
+        cx,
+        Duration::from_millis(PANE_COLLAPSE_ANIM_MS.saturating_add(180)),
+    );
+
+    cx.update(|_window, app| {
+        assert!(!view.read(app).details_collapsed);
+    });
+}
+
+#[test]
+fn full_chrome_layout_only_caches_always_mounted_subviews() {
+    let splash_source = include_str!("splash.rs");
+    let normalized: String = splash_source
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+
+    assert!(
+        normalized.contains(
+            "stable_cached_fixed_height_view(self.repo_tabs_bar.clone(),components::Tab::container_height("
+        ),
+        "expected repo tabs bar to stay behind the stable cache boundary"
+    );
+    assert!(
+        normalized
+            .contains("stable_cached_fixed_height_view(self.action_bar.clone(),ACTION_BAR_HEIGHT"),
+        "expected action bar to stay behind the stable cache boundary"
+    );
+    assert!(
+        normalized
+            .matches("stable_cached_fill_view(self.main_pane.clone())")
+            .count()
+            >= 2,
+        "expected both full-chrome main pane mount sites to stay cached"
+    );
+    assert!(
+        normalized.contains("d.child(self.sidebar_pane.clone())"),
+        "expected the collapsible sidebar pane to mount directly"
+    );
+    assert!(
+        normalized.contains(".child(self.details_pane.clone())"),
+        "expected the collapsible details pane to mount directly"
+    );
+    assert!(
+        !normalized.contains("stable_cached_fill_view(self.sidebar_pane.clone())"),
+        "sidebar pane must stay outside the stable cache boundary"
+    );
+    assert!(
+        !normalized.contains("stable_cached_fill_view(self.details_pane.clone())"),
+        "details pane must stay outside the stable cache boundary"
+    );
+}
+
+#[gpui::test]
 fn splash_screen_renders_when_no_repositories_are_open(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -1683,7 +1778,178 @@ fn splash_screen_renders_when_no_repositories_are_open(cx: &mut gpui::TestAppCon
 }
 
 #[gpui::test]
+fn git_unavailable_splash_renders_open_settings_call_to_action(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    let next = Arc::new(AppState {
+        git_runtime: unavailable_git_runtime_state(),
+        ..AppState::default()
+    });
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.apply_state_snapshot(Arc::clone(&next), cx);
+        });
+        let _ = window.draw(app);
+    });
+
+    cx.debug_bounds("git_unavailable_screen")
+        .expect("expected git unavailable splash screen");
+    cx.debug_bounds("git_unavailable_status_icon")
+        .expect("expected git unavailable status icon");
+    cx.debug_bounds("git_unavailable_open_settings")
+        .expect("expected open settings call to action");
+    assert!(
+        cx.debug_bounds("splash_open_repo_action").is_none(),
+        "expected repository entry actions to be hidden while Git is unavailable"
+    );
+
+    cx.update(|_window, app| {
+        assert!(view.read(app).is_splash_screen_active());
+        assert!(view.read(app).blocks_non_repository_actions());
+    });
+}
+
+#[gpui::test]
+fn git_unavailable_open_settings_button_publishes_expected_tooltip(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    let next = Arc::new(AppState {
+        git_runtime: unavailable_git_runtime_state(),
+        ..AppState::default()
+    });
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.apply_state_snapshot(Arc::clone(&next), cx);
+        });
+        let _ = window.draw(app);
+    });
+
+    let button_center = cx
+        .debug_bounds("git_unavailable_open_settings")
+        .expect("expected open settings call to action")
+        .center();
+    cx.simulate_mouse_move(button_center, None, gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    cx.update(|_window, app| {
+        assert_eq!(
+            test_support::tooltip_text(view.read(app), app).map(|text| text.to_string()),
+            Some("Open settings".to_string())
+        );
+    });
+
+    let icon_center = cx
+        .debug_bounds("git_unavailable_status_icon")
+        .expect("expected git unavailable status icon")
+        .center();
+    cx.simulate_mouse_move(icon_center, None, gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    cx.update(|_window, app| {
+        assert_eq!(
+            test_support::tooltip_text(view.read(app), app),
+            None,
+            "expected the open settings tooltip to clear after leaving the button"
+        );
+    });
+}
+
+#[gpui::test]
+fn git_unavailable_overlay_blocks_open_repositories(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    let mut next = AppState {
+        git_runtime: unavailable_git_runtime_state(),
+        active_repo: Some(RepoId(1)),
+        ..AppState::default()
+    };
+    next.repos.push(open_repo_state_with_workdir(
+        "/tmp/git-unavailable-overlay-test",
+    ));
+    let next = Arc::new(next);
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.apply_state_snapshot(Arc::clone(&next), cx);
+        });
+        let _ = window.draw(app);
+    });
+
+    cx.debug_bounds("git_unavailable_overlay")
+        .expect("expected blocking git unavailable overlay");
+
+    cx.update(|_window, app| {
+        assert!(!view.read(app).is_splash_screen_active());
+        assert!(view.read(app).blocks_non_repository_actions());
+    });
+}
+
+#[gpui::test]
+fn git_unavailable_overlay_clears_after_runtime_recovery(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    let mut unavailable = AppState {
+        git_runtime: unavailable_git_runtime_state(),
+        active_repo: Some(RepoId(1)),
+        ..AppState::default()
+    };
+    unavailable.repos.push(open_repo_state_with_workdir(
+        "/tmp/git-unavailable-recovery-test",
+    ));
+    let unavailable = Arc::new(unavailable);
+
+    let mut recovered = AppState {
+        git_runtime: available_git_runtime_state(),
+        active_repo: Some(RepoId(1)),
+        ..AppState::default()
+    };
+    recovered.repos.push(open_repo_state_with_workdir(
+        "/tmp/git-unavailable-recovery-test",
+    ));
+    let recovered = Arc::new(recovered);
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.apply_state_snapshot(Arc::clone(&unavailable), cx);
+        });
+        let _ = window.draw(app);
+    });
+    cx.debug_bounds("git_unavailable_overlay")
+        .expect("expected overlay before runtime recovery");
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.apply_state_snapshot(Arc::clone(&recovered), cx);
+        });
+        let _ = window.draw(app);
+    });
+
+    assert!(
+        cx.debug_bounds("git_unavailable_overlay").is_none(),
+        "expected overlay to disappear after runtime recovery"
+    );
+    cx.update(|_window, app| {
+        assert!(!view.read(app).blocks_non_repository_actions());
+    });
+}
+
+#[gpui::test]
 fn splash_backdrop_renders_native_layers(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -1722,6 +1988,7 @@ fn splash_backdrop_renders_native_layers(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn splash_screen_buttons_publish_expected_tooltips(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
@@ -1759,6 +2026,7 @@ fn splash_screen_buttons_publish_expected_tooltips(cx: &mut gpui::TestAppContext
 
 #[gpui::test]
 fn closing_last_repository_tab_returns_to_splash_screen(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let store_for_assert = store.clone();
     let (view, cx) =
@@ -1827,6 +2095,7 @@ fn closing_last_repository_tab_returns_to_splash_screen(cx: &mut gpui::TestAppCo
 
 #[gpui::test]
 fn splash_screen_clears_stale_close_repository_tooltip(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let store_for_assert = store.clone();
     let (view, cx) =
@@ -1930,6 +2199,7 @@ fn auth_prompt_banner_colors_use_accent_palette() {
 fn apply_state_snapshot_routes_command_errors_into_store_backed_banner(
     cx: &mut gpui::TestAppContext,
 ) {
+    let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let store_for_assert = store.clone();
     let (view, cx) =

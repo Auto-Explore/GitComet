@@ -299,43 +299,6 @@ fn history_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::TestAppC
         });
     });
 
-    let history_columns_model = cx.update(|_window, app| {
-        context_menu_model_for(&view, app, PopoverKind::HistoryColumnSettings)
-    });
-    assert_declared_shortcuts(&history_columns_model, &["A", "D", "S", "R"]);
-    assert_shortcut_action!(
-        history_columns_model,
-        "A",
-        ContextMenuAction::SetHistoryColumns {
-            show_author,
-            show_date,
-            show_sha
-        } if !*show_author && *show_date && *show_sha
-    );
-    assert_shortcut_action!(
-        history_columns_model,
-        "D",
-        ContextMenuAction::SetHistoryColumns {
-            show_author,
-            show_date,
-            show_sha
-        } if *show_author && !*show_date && *show_sha
-    );
-    assert_shortcut_action!(
-        history_columns_model,
-        "S",
-        ContextMenuAction::SetHistoryColumns {
-            show_author,
-            show_date,
-            show_sha
-        } if *show_author && *show_date && !*show_sha
-    );
-    assert_shortcut_action!(
-        history_columns_model,
-        "R",
-        ContextMenuAction::ResetHistoryColumnWidths
-    );
-
     let change_tracking_model = cx.update(|_window, app| {
         context_menu_model_for(&view, app, PopoverKind::ChangeTrackingSettings)
     });

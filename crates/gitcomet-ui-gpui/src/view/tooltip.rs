@@ -27,10 +27,19 @@ impl GitCometView {
                         let sidebar_width: f32 = this.sidebar_width.round().into();
                         let details_width: f32 = this.details_width.round().into();
 
-                        let (history_show_author, history_show_date, history_show_sha) = this
+                        let (
+                            history_show_graph,
+                            history_show_author,
+                            history_show_date,
+                            history_show_sha,
+                        ) = this
                             .main_pane
                             .read(cx)
                             .history_visible_column_preferences(cx);
+                        let (history_show_tags, history_auto_fetch_tags_on_repo_activation) = this
+                            .main_pane
+                            .read(cx)
+                            .history_tag_preferences(cx);
                         let (change_tracking_height, untracked_height) =
                             this.details_pane.read(cx).saved_status_section_heights();
                         let repo_sidebar_collapsed_items =
@@ -56,9 +65,18 @@ impl GitCometView {
                             diff_scroll_sync: Some(this.diff_scroll_sync.key().to_string()),
                             change_tracking_height,
                             untracked_height,
+                            history_show_graph: Some(history_show_graph),
                             history_show_author: Some(history_show_author),
                             history_show_date: Some(history_show_date),
                             history_show_sha: Some(history_show_sha),
+                            history_show_tags: Some(history_show_tags),
+                            history_tag_fetch_mode: Some(if history_auto_fetch_tags_on_repo_activation
+                            {
+                                gitcomet_state::model::GitLogTagFetchMode::OnRepositoryActivation
+                            } else {
+                                gitcomet_state::model::GitLogTagFetchMode::Disabled
+                            }),
+                            git_executable_path: None,
                         };
 
                         Some(settings)

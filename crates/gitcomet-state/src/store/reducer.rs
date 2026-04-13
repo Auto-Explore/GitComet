@@ -60,6 +60,94 @@ fn begin_commit_action(state: &mut AppState, repo_id: RepoId) {
     }
 }
 
+pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
+    matches!(
+        msg,
+        Msg::OpenRepo(_)
+            | Msg::RestoreSession { .. }
+            | Msg::ReloadRepo { .. }
+            | Msg::RepoExternallyChanged { .. }
+            | Msg::SetHistoryScope { .. }
+            | Msg::LoadMoreHistory { .. }
+            | Msg::SelectCommit { .. }
+            | Msg::SelectDiff { .. }
+            | Msg::SelectConflictDiff { .. }
+            | Msg::LoadStashes { .. }
+            | Msg::LoadConflictFile { .. }
+            | Msg::LoadReflog { .. }
+            | Msg::LoadFileHistory { .. }
+            | Msg::LoadBlame { .. }
+            | Msg::LoadWorktrees { .. }
+            | Msg::LoadSubmodules { .. }
+            | Msg::LoadTags { .. }
+            | Msg::LoadRemoteTags { .. }
+            | Msg::RefreshBranches { .. }
+            | Msg::StageHunk { .. }
+            | Msg::UnstageHunk { .. }
+            | Msg::ApplyWorktreePatch { .. }
+            | Msg::CheckoutBranch { .. }
+            | Msg::CheckoutRemoteBranch { .. }
+            | Msg::CheckoutCommit { .. }
+            | Msg::CherryPickCommit { .. }
+            | Msg::RevertCommit { .. }
+            | Msg::CreateBranch { .. }
+            | Msg::CreateBranchAndCheckout { .. }
+            | Msg::DeleteBranch { .. }
+            | Msg::ForceDeleteBranch { .. }
+            | Msg::CloneRepo { .. }
+            | Msg::ExportPatch { .. }
+            | Msg::ApplyPatch { .. }
+            | Msg::AddWorktree { .. }
+            | Msg::RemoveWorktree { .. }
+            | Msg::ForceRemoveWorktree { .. }
+            | Msg::AddSubmodule { .. }
+            | Msg::UpdateSubmodules { .. }
+            | Msg::RemoveSubmodule { .. }
+            | Msg::StagePath { .. }
+            | Msg::StagePaths { .. }
+            | Msg::UnstagePath { .. }
+            | Msg::UnstagePaths { .. }
+            | Msg::DiscardWorktreeChangesPath { .. }
+            | Msg::DiscardWorktreeChangesPaths { .. }
+            | Msg::SaveWorktreeFile { .. }
+            | Msg::Commit { .. }
+            | Msg::CommitAmend { .. }
+            | Msg::FetchAll { .. }
+            | Msg::PruneMergedBranches { .. }
+            | Msg::PruneLocalTags { .. }
+            | Msg::Pull { .. }
+            | Msg::PullBranch { .. }
+            | Msg::MergeRef { .. }
+            | Msg::SquashRef { .. }
+            | Msg::Push { .. }
+            | Msg::ForcePush { .. }
+            | Msg::PushSetUpstream { .. }
+            | Msg::SetUpstreamBranch { .. }
+            | Msg::UnsetUpstreamBranch { .. }
+            | Msg::DeleteRemoteBranch { .. }
+            | Msg::Reset { .. }
+            | Msg::Rebase { .. }
+            | Msg::RebaseContinue { .. }
+            | Msg::RebaseAbort { .. }
+            | Msg::MergeAbort { .. }
+            | Msg::CreateTag { .. }
+            | Msg::DeleteTag { .. }
+            | Msg::PushTag { .. }
+            | Msg::DeleteRemoteTag { .. }
+            | Msg::AddRemote { .. }
+            | Msg::RemoveRemote { .. }
+            | Msg::SetRemoteUrl { .. }
+            | Msg::CheckoutConflictSide { .. }
+            | Msg::AcceptConflictDeletion { .. }
+            | Msg::CheckoutConflictBase { .. }
+            | Msg::LaunchMergetool { .. }
+            | Msg::Stash { .. }
+            | Msg::ApplyStash { .. }
+            | Msg::PopStash { .. }
+            | Msg::DropStash { .. }
+    )
+}
+
 #[cfg(test)]
 pub(super) fn push_diagnostic(
     repo_state: &mut crate::model::RepoState,
@@ -445,6 +533,10 @@ pub(super) fn reduce(
     state: &mut AppState,
     msg: Msg,
 ) -> Vec<Effect> {
+    if msg_requires_available_git(&msg) && !state.git_runtime.is_available() {
+        return Vec::new();
+    }
+
     match msg {
         Msg::OpenRepo(path) => repo_management::open_repo(id_alloc, state, path),
         Msg::RestoreSession {
@@ -475,6 +567,18 @@ pub(super) fn reduce(
         Msg::CancelAuthPrompt => {
             state.auth_prompt = None;
             util::clear_staged_git_auth_env();
+            Vec::new()
+        }
+        Msg::SetGitRuntimeState(runtime) => {
+            state.git_runtime = runtime;
+            Vec::new()
+        }
+        Msg::SetGitLogSettings {
+            show_history_tags,
+            tag_fetch_mode,
+        } => {
+            state.git_log_settings.show_history_tags = show_history_tags;
+            state.git_log_settings.tag_fetch_mode = tag_fetch_mode;
             Vec::new()
         }
         Msg::SetActiveRepo { repo_id } => repo_management::set_active_repo(state, repo_id),
@@ -535,6 +639,8 @@ pub(super) fn reduce(
         Msg::LoadBlame { repo_id, path, rev } => effects::load_blame(state, repo_id, path, rev),
         Msg::LoadWorktrees { repo_id } => effects::load_worktrees(state, repo_id),
         Msg::LoadSubmodules { repo_id } => effects::load_submodules(state, repo_id),
+        Msg::LoadTags { repo_id } => effects::load_tags(state, repo_id),
+        Msg::LoadRemoteTags { repo_id } => effects::load_remote_tags(state, repo_id),
         Msg::RefreshBranches { repo_id } => effects::refresh_branches(state, repo_id),
         Msg::StageHunk { repo_id, patch } => {
             begin_local_action(state, repo_id);
@@ -1040,6 +1146,12 @@ pub(super) fn reduce(
         }
         Msg::Internal(crate::msg::InternalMsg::RemoteBranchesLoaded { repo_id, result }) => {
             effects::remote_branches_loaded(state, repo_id, result)
+        }
+        Msg::Internal(crate::msg::InternalMsg::WorktreeStatusLoaded { repo_id, result }) => {
+            effects::worktree_status_loaded(state, repo_id, result)
+        }
+        Msg::Internal(crate::msg::InternalMsg::StagedStatusLoaded { repo_id, result }) => {
+            effects::staged_status_loaded(state, repo_id, result)
         }
         Msg::Internal(crate::msg::InternalMsg::StatusLoaded { repo_id, result }) => {
             effects::status_loaded(state, repo_id, result)

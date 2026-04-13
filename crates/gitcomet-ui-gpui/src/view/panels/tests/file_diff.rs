@@ -4274,6 +4274,19 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
         Some((styled.text.as_ref(), styled))
     }
 
+    fn force_file_diff_fallback_mode(pane: &mut MainPaneView) {
+        pane.file_diff_syntax_generation = pane.file_diff_syntax_generation.wrapping_add(1);
+        for view_mode in [
+            PreparedSyntaxViewMode::FileDiffSplitLeft,
+            PreparedSyntaxViewMode::FileDiffSplitRight,
+        ] {
+            if let Some(key) = pane.file_diff_prepared_syntax_key(view_mode) {
+                pane.prepared_syntax_documents.remove(&key);
+            }
+        }
+        pane.clear_diff_text_style_caches();
+    }
+
     fn quoted_scalar_style(
         styled: &super::CachedDiffStyledText,
         text: &str,
@@ -4701,12 +4714,62 @@ fn yaml_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
     wait_for_main_pane_condition(
         cx,
         &view,
-        "YAML file-diff cache build before syntax rows are ready",
+        "YAML file-diff cache build before fallback highlighting checks",
         |pane| {
             pane.file_diff_cache_inflight.is_none()
                 && pane.file_diff_cache_rev == 0
                 && pane.file_diff_cache_path == Some(workdir.join(&path))
                 && pane.file_diff_cache_language == Some(rows::DiffSyntaxLanguage::Yaml)
+                && pane
+                    .file_diff_cache_rows
+                    .iter()
+                    .any(|row| row.new_line == Some(36))
+                && pane
+                    .file_diff_inline_cache
+                    .iter()
+                    .any(|line| line.new_line == Some(36))
+        },
+        |pane| {
+            format!(
+                "rev={} inflight={:?} cache_path={:?} language={:?} left_doc={:?} right_doc={:?} rows={} inline_rows={}",
+                pane.file_diff_cache_rev,
+                pane.file_diff_cache_inflight,
+                pane.file_diff_cache_path.clone(),
+                pane.file_diff_cache_language,
+                pane.file_diff_split_prepared_syntax_document(DiffTextRegion::SplitLeft),
+                pane.file_diff_split_prepared_syntax_document(DiffTextRegion::SplitRight),
+                pane.file_diff_cache_rows.len(),
+                pane.file_diff_inline_cache.len(),
+            )
+        },
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                // Other YAML tests can warm the shared prepared-syntax cache before this
+                // test runs. Clear the local prepared documents and invalidate any in-flight
+                // background parse so the next draw deterministically exercises fallback mode.
+                force_file_diff_fallback_mode(pane);
+                cx.notify();
+            });
+        });
+    });
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "YAML file-diff fallback mode forced for highlight checks",
+        |pane| {
+            pane.file_diff_cache_rev == 0
+                && pane.file_diff_cache_path == Some(workdir.join(&path))
+                && pane.file_diff_cache_language == Some(rows::DiffSyntaxLanguage::Yaml)
+                && pane
+                    .file_diff_split_prepared_syntax_document(DiffTextRegion::SplitLeft)
+                    .is_none()
+                && pane
+                    .file_diff_split_prepared_syntax_document(DiffTextRegion::SplitRight)
+                    .is_none()
                 && pane
                     .file_diff_cache_rows
                     .iter()

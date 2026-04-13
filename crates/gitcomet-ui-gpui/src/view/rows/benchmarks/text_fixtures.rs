@@ -38,23 +38,11 @@ impl StagingFixture {
 
         let commits = build_synthetic_commits(100);
         let mut repo = build_synthetic_repo_state(20, 40, 2, 0, 0, 0, &commits);
-        repo.status = Loadable::Ready(Arc::new(RepoStatus {
-            staged: Vec::new(),
-            unstaged: entries,
-        }));
-        repo.status_rev = 1;
+        seed_repo_status_entries(&mut repo, entries, Vec::new());
         repo.open = Loadable::Ready(());
 
         Self {
-            baseline: AppState {
-                repos: vec![repo],
-                active_repo: Some(RepoId(1)),
-                clone: None,
-                notifications: Vec::new(),
-                banner_error: None,
-                auth_prompt: None,
-                submodule_trust_prompt: None,
-            },
+            baseline: bench_app_state(vec![repo], Some(RepoId(1))),
             paths,
             scenario: StagingScenario::StageAll,
         }
@@ -71,23 +59,11 @@ impl StagingFixture {
 
         let commits = build_synthetic_commits(100);
         let mut repo = build_synthetic_repo_state(20, 40, 2, 0, 0, 0, &commits);
-        repo.status = Loadable::Ready(Arc::new(RepoStatus {
-            staged: entries,
-            unstaged: Vec::new(),
-        }));
-        repo.status_rev = 1;
+        seed_repo_status_entries(&mut repo, Vec::new(), entries);
         repo.open = Loadable::Ready(());
 
         Self {
-            baseline: AppState {
-                repos: vec![repo],
-                active_repo: Some(RepoId(1)),
-                clone: None,
-                notifications: Vec::new(),
-                banner_error: None,
-                auth_prompt: None,
-                submodule_trust_prompt: None,
-            },
+            baseline: bench_app_state(vec![repo], Some(RepoId(1))),
             paths,
             scenario: StagingScenario::UnstageAll,
         }
@@ -108,20 +84,11 @@ impl StagingFixture {
 
         let commits = build_synthetic_commits(100);
         let mut repo = build_synthetic_repo_state(20, 40, 2, 0, 0, 0, &commits);
-        repo.status = Loadable::Ready(Arc::new(RepoStatus { unstaged, staged }));
-        repo.status_rev = 1;
+        seed_repo_status_entries(&mut repo, unstaged, staged);
         repo.open = Loadable::Ready(());
 
         Self {
-            baseline: AppState {
-                repos: vec![repo],
-                active_repo: Some(RepoId(1)),
-                clone: None,
-                notifications: Vec::new(),
-                banner_error: None,
-                auth_prompt: None,
-                submodule_trust_prompt: None,
-            },
+            baseline: bench_app_state(vec![repo], Some(RepoId(1))),
             paths,
             scenario: StagingScenario::Interleaved,
         }
@@ -421,15 +388,7 @@ fn build_undo_redo_baseline(region_count: usize) -> (AppState, RepoPath) {
     repo.conflict_state.conflict_rev = 1;
     repo.open = Loadable::Ready(());
 
-    let baseline = AppState {
-        repos: vec![repo],
-        active_repo: Some(RepoId(1)),
-        clone: None,
-        notifications: Vec::new(),
-        banner_error: None,
-        auth_prompt: None,
-        submodule_trust_prompt: None,
-    };
+    let baseline = bench_app_state(vec![repo], Some(RepoId(1)));
 
     (baseline, conflict_path)
 }

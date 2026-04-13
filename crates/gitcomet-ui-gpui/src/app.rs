@@ -419,6 +419,9 @@ fn install_app_actions(cx: &mut App, backend: Arc<dyn GitBackend>) {
     cx.on_action(move |_: &OpenRepository, cx| {
         let backend = Arc::clone(&repo_backend);
         cx.defer(move |cx| {
+            if active_normal_gitcomet_window_blocks_non_repository_actions(cx) {
+                return;
+            }
             prompt_open_repository(cx, backend);
         });
     });

@@ -277,13 +277,9 @@ impl MainPaneView {
             if *area != DiffArea::Unstaged {
                 return false;
             }
-            let Loadable::Ready(status) = &repo.status else {
-                return false;
-            };
-            let conflict_kind = status
-                .unstaged
-                .iter()
-                .find(|e| e.path == *path && e.kind == FileStatusKind::Conflicted)
+            let conflict_kind = repo
+                .status_entry_for_path(DiffArea::Unstaged, path.as_path())
+                .filter(|entry| entry.kind == FileStatusKind::Conflicted)
                 .and_then(|e| e.conflict);
             Self::conflict_resolver_strategy(conflict_kind, false).is_some()
         })
@@ -465,10 +461,9 @@ impl MainPaneView {
         }
 
         let is_untracked = *area == DiffArea::Unstaged
-            && matches!(&repo.status, Loadable::Ready(status) if status
-                .unstaged
-                .iter()
-                .any(|e| e.kind == FileStatusKind::Untracked && &e.path == path));
+            && repo
+                .status_entry_for_path(DiffArea::Unstaged, path.as_path())
+                .is_some_and(|entry| entry.kind == FileStatusKind::Untracked);
 
         if is_untracked {
             Some(
@@ -617,10 +612,6 @@ impl MainPaneView {
         &self,
     ) -> Option<std::path::PathBuf> {
         let repo = self.active_repo()?;
-        let status = match &repo.status {
-            Loadable::Ready(s) => s,
-            _ => return None,
-        };
         let workdir = repo.spec.workdir.clone();
         let DiffTarget::WorkingTree { path, area } = repo.diff_state.diff_target.as_ref()? else {
             return None;
@@ -628,10 +619,9 @@ impl MainPaneView {
         if *area != DiffArea::Unstaged {
             return None;
         }
-        let is_untracked = status
-            .unstaged
-            .iter()
-            .any(|e| e.kind == FileStatusKind::Untracked && &e.path == path);
+        let is_untracked = repo
+            .status_entry_for_path(DiffArea::Unstaged, path.as_path())
+            .is_some_and(|entry| entry.kind == FileStatusKind::Untracked);
         is_untracked.then(|| {
             if path.is_absolute() {
                 path.clone()
@@ -653,14 +643,9 @@ impl MainPaneView {
                 if *area != DiffArea::Staged {
                     return None;
                 }
-                let status = match &repo.status {
-                    Loadable::Ready(s) => s,
-                    _ => return None,
-                };
-                let is_added = status
-                    .staged
-                    .iter()
-                    .any(|e| e.kind == FileStatusKind::Added && &e.path == path);
+                let is_added = repo
+                    .status_entry_for_path(DiffArea::Staged, path.as_path())
+                    .is_some_and(|entry| entry.kind == FileStatusKind::Added);
                 if !is_added {
                     return None;
                 }
@@ -703,17 +688,9 @@ impl MainPaneView {
 
         match target {
             DiffTarget::WorkingTree { path, area } => {
-                let status = match &repo.status {
-                    Loadable::Ready(s) => s,
-                    _ => return None,
-                };
-                let entries = match area {
-                    DiffArea::Unstaged => status.unstaged.as_slice(),
-                    DiffArea::Staged => status.staged.as_slice(),
-                };
-                let is_deleted = entries
-                    .iter()
-                    .any(|e| e.kind == FileStatusKind::Deleted && &e.path == path);
+                let is_deleted = repo
+                    .status_entry_for_path(*area, path.as_path())
+                    .is_some_and(|entry| entry.kind == FileStatusKind::Deleted);
                 if !is_deleted {
                     return None;
                 }

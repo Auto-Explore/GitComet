@@ -120,7 +120,6 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::PushPicker
         | PopoverKind::AppMenu
         | PopoverKind::DiffHunks
-        | PopoverKind::HistoryColumnSettings
         | PopoverKind::ConflictResolverInputRowMenu { .. }
         | PopoverKind::ConflictResolverChunkMenu { .. }
         | PopoverKind::ConflictResolverOutputMenu { .. } => state.active_repo,
@@ -197,7 +196,7 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
 
         PopoverKind::StashPrompt => {
             repo.stashes_rev.hash(hasher);
-            view_fingerprint::hash_loadable_arc(&repo.status, hasher);
+            repo.status_cache_rev().hash(hasher);
         }
         PopoverKind::StashDropConfirm { .. } | PopoverKind::StashMenu { .. } => {
             repo.stashes_rev.hash(hasher);
@@ -226,7 +225,7 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
                 repo.diff_state.diff_target,
                 Some(DiffTarget::WorkingTree { .. })
             ) {
-                view_fingerprint::hash_loadable_arc(&repo.status, hasher);
+                repo.status_cache_rev().hash(hasher);
             }
         }
 
@@ -263,7 +262,6 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         | PopoverKind::CommitMenu { .. }
         | PopoverKind::CommitFileMenu { .. }
         | PopoverKind::StatusFileMenu { .. }
-        | PopoverKind::HistoryColumnSettings
         | PopoverKind::ChangeTrackingSettings
         | PopoverKind::ConflictResolverInputRowMenu { .. }
         | PopoverKind::ConflictResolverChunkMenu { .. }
@@ -497,7 +495,6 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             48u8.hash(hasher);
             repo_id.hash(hasher);
         }
-        PopoverKind::HistoryColumnSettings => 49u8.hash(hasher),
         PopoverKind::MergeAbortConfirm { repo_id } => {
             51u8.hash(hasher);
             repo_id.hash(hasher);

@@ -371,13 +371,9 @@ impl MainPaneView {
         if *area != DiffArea::Unstaged {
             return None;
         }
-        let Loadable::Ready(status) = &repo.status else {
-            return None;
-        };
-        let conflict = status
-            .unstaged
-            .iter()
-            .find(|e| e.path == *path && e.kind == FileStatusKind::Conflicted)?;
+        let conflict = repo
+            .status_entry_for_path(DiffArea::Unstaged, path.as_path())
+            .filter(|entry| entry.kind == FileStatusKind::Conflicted)?;
 
         Some((path.clone(), conflict.conflict))
     }

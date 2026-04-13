@@ -4,6 +4,8 @@ use rustc_hash::FxHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
+pub(in super::super) const ACTION_BAR_HEIGHT: Pixels = px(components::CONTROL_HEIGHT_PX + 8.0);
+
 fn head_branch_has_tracking_upstream(
     head_branch: &Loadable<String>,
     branches: &Loadable<Arc<Vec<Branch>>>,
@@ -67,7 +69,7 @@ impl ActionBarView {
             repo.upstream_divergence_rev.hash(&mut hasher);
             repo.merge_message_rev.hash(&mut hasher);
             repo.ops_rev.hash(&mut hasher);
-            repo.status_rev.hash(&mut hasher);
+            repo.status_cache_rev().hash(&mut hasher);
             repo.loads_in_flight.any_in_flight().hash(&mut hasher);
         }
 
@@ -263,9 +265,12 @@ impl Render for ActionBarView {
 
         let can_stash = self
             .active_repo()
-            .and_then(|r| match &r.status {
-                Loadable::Ready(s) => Some(!s.staged.is_empty() || !s.unstaged.is_empty()),
-                _ => None,
+            .map(|repo| {
+                repo.worktree_status_entries()
+                    .is_some_and(|entries| !entries.is_empty())
+                    || repo
+                        .staged_status_entries()
+                        .is_some_and(|entries| !entries.is_empty())
             })
             .unwrap_or(false);
 
@@ -626,6 +631,9 @@ impl Render for ActionBarView {
             }));
 
         div()
+            .w_full()
+            .h(ACTION_BAR_HEIGHT)
+            .flex_none()
             .flex()
             .items_center()
             .justify_between()

@@ -1556,7 +1556,7 @@ impl HistoryView {
         let col_author = this.history_col_author;
         let col_date = this.history_col_date;
         let col_sha = this.history_col_sha;
-        let (show_author, show_date, show_sha) = this.history_visible_columns();
+        let (show_graph, show_author, show_date, show_sha) = this.history_visible_columns();
 
         let page = match &repo.log {
             Loadable::Ready(page) => Some(page),
@@ -1586,6 +1586,7 @@ impl HistoryView {
                         col_author,
                         col_date,
                         col_sha,
+                        show_graph,
                         show_author,
                         show_date,
                         show_sha,
@@ -1629,6 +1630,7 @@ impl HistoryView {
                     col_author,
                     col_date,
                     col_sha,
+                    show_graph,
                     show_author,
                     show_date,
                     show_sha,
@@ -1706,6 +1708,7 @@ fn history_table_row(
     col_author: Pixels,
     col_date: Pixels,
     col_sha: Pixels,
+    show_graph: bool,
     show_author: bool,
     show_date: bool,
     show_sha: bool,
@@ -1745,6 +1748,7 @@ fn history_table_row(
         col_author,
         col_date,
         col_sha,
+        show_graph,
         show_author,
         show_date,
         show_sha,
@@ -1846,6 +1850,7 @@ fn working_tree_summary_history_row(
     col_author: Pixels,
     col_date: Pixels,
     col_sha: Pixels,
+    show_graph: bool,
     show_author: bool,
     show_date: bool,
     show_sha: bool,
@@ -1954,15 +1959,17 @@ fn working_tree_summary_history_row(
                 .whitespace_nowrap()
                 .child(div()),
         )
-        .child(
-            div()
-                .w(col_graph)
-                .h_full()
-                .flex()
-                .justify_center()
-                .overflow_hidden()
-                .child(circle),
-        )
+        .when(show_graph, |row| {
+            row.child(
+                div()
+                    .w(col_graph)
+                    .h_full()
+                    .flex()
+                    .justify_center()
+                    .overflow_hidden()
+                    .child(circle),
+            )
+        })
         .child({
             let mut summary = div()
                 .flex_1()

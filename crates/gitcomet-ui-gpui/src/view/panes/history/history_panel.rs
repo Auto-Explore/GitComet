@@ -272,7 +272,7 @@ impl HistoryView {
     fn history_column_headers(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
         let theme = self.theme;
         let icon_muted = with_alpha(theme.colors.accent, if theme.is_dark { 0.72 } else { 0.82 });
-        let (show_author, show_date, show_sha) = self.history_visible_columns();
+        let (show_graph, show_author, show_date, show_sha) = self.history_visible_columns();
         let col_author = self.history_col_author;
         let col_date = self.history_col_date;
         let col_sha = self.history_col_sha;
@@ -296,73 +296,6 @@ impl HistoryView {
             .active_context_menu_invoker
             .as_ref()
             .is_some_and(|id| id.as_ref() == scope_invoker.as_ref());
-        let column_settings_invoker: SharedString = "history_columns_settings_btn".into();
-        let column_settings_anchor_bounds: Rc<RefCell<Option<Bounds<Pixels>>>> =
-            Rc::new(RefCell::new(None));
-        let column_settings_anchor_bounds_for_prepaint = Rc::clone(&column_settings_anchor_bounds);
-        let column_settings_anchor_bounds_for_click = Rc::clone(&column_settings_anchor_bounds);
-        let column_settings_active =
-            self.active_context_menu_invoker.as_ref() == Some(&column_settings_invoker);
-        let open_column_settings = {
-            let column_settings_invoker = column_settings_invoker.clone();
-            cx.listener(move |this, e: &ClickEvent, window, cx| {
-                this.activate_context_menu_invoker(column_settings_invoker.clone(), cx);
-                if let Some(bounds) = *column_settings_anchor_bounds_for_click.borrow() {
-                    this.open_popover_for_bounds(
-                        PopoverKind::HistoryColumnSettings,
-                        bounds,
-                        window,
-                        cx,
-                    );
-                } else {
-                    this.open_popover_at(
-                        PopoverKind::HistoryColumnSettings,
-                        e.position(),
-                        window,
-                        cx,
-                    );
-                }
-            })
-        };
-        let column_settings_btn_inner = div()
-            .id("history_columns_settings_btn")
-            .flex()
-            .items_center()
-            .justify_center()
-            .w(px(18.0))
-            .h(px(18.0))
-            .rounded(px(theme.radii.row))
-            .when(column_settings_active, |d| d.bg(theme.colors.active))
-            .hover(move |s| {
-                if column_settings_active {
-                    s.bg(theme.colors.active)
-                } else {
-                    s.bg(with_alpha(theme.colors.hover, 0.55))
-                }
-            })
-            .active(move |s| s.bg(theme.colors.active))
-            .cursor(CursorStyle::PointingHand)
-            .child(svg_icon("icons/cog.svg", icon_muted, px(12.0)))
-            .on_click(open_column_settings)
-            .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
-                let text: SharedString = "History columns".into();
-                let mut changed = false;
-                if *hovering {
-                    changed |= this.set_tooltip_text_if_changed(Some(text.clone()), cx);
-                } else {
-                    changed |= this.clear_tooltip_if_matches(&text, cx);
-                }
-                if changed {
-                    cx.notify();
-                }
-            }));
-        let column_settings_btn = div()
-            .on_children_prepainted(move |children_bounds, _w, _cx| {
-                if let Some(bounds) = children_bounds.first() {
-                    *column_settings_anchor_bounds_for_prepaint.borrow_mut() = Some(*bounds);
-                }
-            })
-            .child(column_settings_btn_inner);
 
         let resize_handle = |id: &'static str, handle: HistoryColResizeHandle| {
             div()
@@ -390,6 +323,7 @@ impl HistoryView {
                         }
                         let available_width = this.history_content_width;
                         let drag_layout = super::HistoryColumnDragLayout {
+                            show_graph: this.history_show_graph,
                             show_author: this.history_show_author,
                             show_date: this.history_show_date,
                             show_sha: this.history_show_sha,
@@ -560,23 +494,23 @@ impl HistoryView {
                             ),
                     ),
             )
-            .child(
-                div()
-                    .w(self.history_col_graph)
-                    .flex()
-                    .justify_center()
-                    .px(cell_pad)
-                    .whitespace_nowrap()
-                    .overflow_hidden()
-                    .child("GRAPH"),
-            )
+            .when(show_graph, |header| {
+                header.child(
+                    div()
+                        .w(self.history_col_graph)
+                        .flex()
+                        .justify_center()
+                        .px(cell_pad)
+                        .whitespace_nowrap()
+                        .overflow_hidden()
+                        .child("GRAPH"),
+                )
+            })
             .child(
                 div()
                     .flex_1()
                     .min_w(px(0.0))
                     .flex()
-                    .items_center()
-                    .justify_between()
                     .px(cell_pad)
                     .whitespace_nowrap()
                     .overflow_hidden()
@@ -587,8 +521,7 @@ impl HistoryView {
                             .line_clamp(1)
                             .whitespace_nowrap()
                             .child("COMMIT MESSAGE"),
-                    )
-                    .child(column_settings_btn),
+                    ),
             )
             .when(show_author, |header| {
                 header.child(
@@ -634,16 +567,18 @@ impl HistoryView {
             );
         }
 
-        let mut header_with_handles = header
-            .child(
-                resize_handle("history_col_resize_branch", HistoryColResizeHandle::Branch)
-                    .left((self.history_col_branch - handle_half).max(px(0.0))),
-            )
-            .child(
+        let mut header_with_handles = header.child(
+            resize_handle("history_col_resize_branch", HistoryColResizeHandle::Branch)
+                .left((self.history_col_branch - handle_half).max(px(0.0))),
+        );
+
+        if show_graph {
+            header_with_handles = header_with_handles.child(
                 resize_handle("history_col_resize_graph", HistoryColResizeHandle::Graph).left(
                     (self.history_col_branch + self.history_col_graph - handle_half).max(px(0.0)),
                 ),
             );
+        }
 
         if show_author {
             let right_fixed = col_author

@@ -5,7 +5,9 @@ use gitcomet_core::conflict_session::{
     ConflictPayload, ConflictSession, ConflictStageParts, canonicalize_stage_parts,
 };
 use gitcomet_core::domain::*;
+use gitcomet_core::process::GitRuntimeState;
 use gitcomet_core::services::{BlameLine, SubmoduleTrustTarget};
+use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -18,6 +20,39 @@ pub struct SidebarDataRequest {
     pub worktrees: bool,
     pub submodules: bool,
     pub stashes: bool,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[derive(Default)]
+pub enum GitLogTagFetchMode {
+    #[default]
+    OnRepositoryActivation,
+    Disabled,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GitLogSettings {
+    pub show_history_tags: bool,
+    pub tag_fetch_mode: GitLogTagFetchMode,
+}
+
+impl Default for GitLogSettings {
+    fn default() -> Self {
+        Self {
+            show_history_tags: true,
+            tag_fetch_mode: GitLogTagFetchMode::OnRepositoryActivation,
+        }
+    }
+}
+
+impl GitLogSettings {
+    pub fn auto_fetch_tags_on_repo_activation(self) -> bool {
+        matches!(
+            self.tag_fetch_mode,
+            GitLogTagFetchMode::OnRepositoryActivation
+        )
+    }
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -41,19 +76,21 @@ impl RepoLoadsInFlight {
     pub const TAGS: u32 = 1 << 3;
     pub const REMOTES: u32 = 1 << 4;
     pub const REMOTE_BRANCHES: u32 = 1 << 5;
-    pub const STATUS: u32 = 1 << 6;
-    pub const STASHES: u32 = 1 << 7;
-    pub const REFLOG: u32 = 1 << 8;
-    pub const REBASE_STATE: u32 = 1 << 9;
-    pub const LOG: u32 = 1 << 10;
-    pub const MERGE_COMMIT_MESSAGE: u32 = 1 << 11;
-    pub const REMOTE_TAGS: u32 = 1 << 12;
-    pub const WORKTREES: u32 = 1 << 13;
+    pub const WORKTREE_STATUS: u32 = 1 << 6;
+    pub const STAGED_STATUS: u32 = 1 << 7;
+    pub const STASHES: u32 = 1 << 8;
+    pub const REFLOG: u32 = 1 << 9;
+    pub const REBASE_STATE: u32 = 1 << 10;
+    pub const LOG: u32 = 1 << 11;
+    pub const MERGE_COMMIT_MESSAGE: u32 = 1 << 12;
+    pub const REMOTE_TAGS: u32 = 1 << 13;
+    pub const WORKTREES: u32 = 1 << 14;
     const PRIMARY_REFRESH_FLAGS: u32 = Self::HEAD_BRANCH
         | Self::UPSTREAM_DIVERGENCE
         | Self::REBASE_STATE
         | Self::MERGE_COMMIT_MESSAGE
-        | Self::STATUS
+        | Self::WORKTREE_STATUS
+        | Self::STAGED_STATUS
         | Self::LOG;
 
     pub fn is_in_flight(&self, flag: u32) -> bool {
@@ -239,6 +276,8 @@ pub struct AppState {
     pub banner_error: Option<BannerErrorState>,
     pub auth_prompt: Option<AuthPromptState>,
     pub submodule_trust_prompt: Option<SubmoduleTrustPromptState>,
+    pub git_runtime: GitRuntimeState,
+    pub git_log_settings: GitLogSettings,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -466,6 +505,7 @@ impl Default for ConflictState {
 }
 
 const BRANCH_SIDEBAR_REV_MIX: u64 = 0x9e37_79b9_7f4a_7c15;
+const STATUS_CACHE_REV_MIX: u64 = 0x517c_c1b7_2722_0a95;
 
 #[inline]
 fn mix_branch_sidebar_revs(values: [u64; 7]) -> u64 {
@@ -473,6 +513,16 @@ fn mix_branch_sidebar_revs(values: [u64; 7]) -> u64 {
     for value in values {
         acc ^= value.wrapping_mul(BRANCH_SIDEBAR_REV_MIX);
         acc = acc.rotate_left(11).wrapping_add(BRANCH_SIDEBAR_REV_MIX);
+    }
+    acc
+}
+
+#[inline]
+fn mix_status_cache_revs(values: [u64; 2]) -> u64 {
+    let mut acc = STATUS_CACHE_REV_MIX;
+    for value in values {
+        acc ^= value.wrapping_mul(STATUS_CACHE_REV_MIX);
+        acc = acc.rotate_left(9).wrapping_add(STATUS_CACHE_REV_MIX);
     }
     acc
 }
@@ -507,10 +557,15 @@ pub struct RepoState {
     pub remotes_rev: u64,
     pub remote_branches: Loadable<Arc<Vec<RemoteBranch>>>,
     pub remote_branches_rev: u64,
+    pub worktree_status: Loadable<Arc<Vec<FileStatus>>>,
+    pub worktree_status_rev: u64,
+    pub staged_status: Loadable<Arc<Vec<FileStatus>>>,
+    pub staged_status_rev: u64,
     pub status: Loadable<Shared<RepoStatus>>,
     pub status_rev: u64,
-    /// Cached flag: true when `status` is `Ready` and at least one unstaged
-    /// entry has `FileStatusKind::Conflicted`. Recomputed in `set_status`.
+    /// Cached flag: true when the current unstaged/worktree lane contains at
+    /// least one `FileStatusKind::Conflicted` entry. Recomputed in
+    /// `set_worktree_status` and `set_status`.
     pub has_unstaged_conflicts: bool,
     pub log: Loadable<Shared<LogPage>>,
     pub log_loading_more: bool,
@@ -575,6 +630,10 @@ impl RepoState {
             remotes_rev: 0,
             remote_branches: Loadable::NotLoaded,
             remote_branches_rev: 0,
+            worktree_status: Loadable::NotLoaded,
+            worktree_status_rev: 0,
+            staged_status: Loadable::NotLoaded,
+            staged_status_rev: 0,
             status: Loadable::NotLoaded,
             status_rev: 0,
             has_unstaged_conflicts: false,
@@ -736,16 +795,134 @@ impl RepoState {
         self.sidebar_data_request = request;
     }
 
-    pub(crate) fn set_status(&mut self, status: Loadable<Shared<RepoStatus>>) {
-        if self.status == status {
+    pub(crate) fn set_worktree_status(&mut self, status: Loadable<Vec<FileStatus>>) {
+        let status = loadable_into_arc(status);
+        if self.worktree_status == status {
             return;
+        }
+        self.has_unstaged_conflicts = matches!(
+            &status,
+            Loadable::Ready(entries)
+                if entries.iter().any(|entry| entry.kind == FileStatusKind::Conflicted)
+        );
+        self.worktree_status = status;
+        self.worktree_status_rev = self.worktree_status_rev.wrapping_add(1);
+    }
+
+    pub(crate) fn set_staged_status(&mut self, status: Loadable<Vec<FileStatus>>) {
+        let status = loadable_into_arc(status);
+        if self.staged_status == status {
+            return;
+        }
+        self.staged_status = status;
+        self.staged_status_rev = self.staged_status_rev.wrapping_add(1);
+    }
+
+    pub(crate) fn set_status(&mut self, status: Loadable<Shared<RepoStatus>>) {
+        let next_worktree = match &status {
+            Loadable::NotLoaded => Loadable::NotLoaded,
+            Loadable::Loading => Loadable::Loading,
+            Loadable::Error(err) => Loadable::Error(err.clone()),
+            Loadable::Ready(status) => Loadable::Ready(Arc::new(status.unstaged.clone())),
+        };
+        let next_staged = match &status {
+            Loadable::NotLoaded => Loadable::NotLoaded,
+            Loadable::Loading => Loadable::Loading,
+            Loadable::Error(err) => Loadable::Error(err.clone()),
+            Loadable::Ready(status) => Loadable::Ready(Arc::new(status.staged.clone())),
+        };
+        if self.worktree_status != next_worktree {
+            self.worktree_status = next_worktree;
+            self.worktree_status_rev = self.worktree_status_rev.wrapping_add(1);
         }
         self.has_unstaged_conflicts = matches!(
             &status,
             Loadable::Ready(s) if s.unstaged.iter().any(|e| e.kind == FileStatusKind::Conflicted)
         );
+        if self.staged_status != next_staged {
+            self.staged_status = next_staged;
+            self.staged_status_rev = self.staged_status_rev.wrapping_add(1);
+        }
+        if self.status == status {
+            return;
+        }
         self.status = status;
         self.status_rev = self.status_rev.wrapping_add(1);
+    }
+
+    pub fn worktree_status_entries(&self) -> Option<&[FileStatus]> {
+        match &self.worktree_status {
+            Loadable::Ready(entries) => Some(entries.as_slice()),
+            _ => match &self.status {
+                Loadable::Ready(status) => Some(status.unstaged.as_slice()),
+                _ => None,
+            },
+        }
+    }
+
+    pub fn staged_status_entries(&self) -> Option<&[FileStatus]> {
+        match &self.staged_status {
+            Loadable::Ready(entries) => Some(entries.as_slice()),
+            _ => match &self.status {
+                Loadable::Ready(status) => Some(status.staged.as_slice()),
+                _ => None,
+            },
+        }
+    }
+
+    pub fn status_entries_for_area(&self, area: DiffArea) -> Option<&[FileStatus]> {
+        match area {
+            DiffArea::Unstaged => self.worktree_status_entries(),
+            DiffArea::Staged => self.staged_status_entries(),
+        }
+    }
+
+    pub fn status_entry_for_path(
+        &self,
+        area: DiffArea,
+        path: &std::path::Path,
+    ) -> Option<&FileStatus> {
+        self.status_entries_for_area(area)?
+            .iter()
+            .find(|entry| entry.path == path)
+    }
+
+    pub fn worktree_status_cache_rev(&self) -> u64 {
+        if self.worktree_status_rev != 0 || !matches!(self.worktree_status, Loadable::NotLoaded) {
+            self.worktree_status_rev
+        } else {
+            self.status_rev
+        }
+    }
+
+    pub fn staged_status_cache_rev(&self) -> u64 {
+        if self.staged_status_rev != 0 || !matches!(self.staged_status, Loadable::NotLoaded) {
+            self.staged_status_rev
+        } else {
+            self.status_rev
+        }
+    }
+
+    pub fn status_cache_rev(&self) -> u64 {
+        let worktree = self.worktree_status_cache_rev();
+        let staged = self.staged_status_cache_rev();
+        if worktree == 0 && staged == 0 {
+            0
+        } else {
+            mix_status_cache_revs([worktree, staged])
+        }
+    }
+
+    pub fn worktree_status_is_loading(&self) -> bool {
+        matches!(self.worktree_status, Loadable::Loading)
+            || (matches!(self.worktree_status, Loadable::NotLoaded)
+                && matches!(self.status, Loadable::Loading))
+    }
+
+    pub fn staged_status_is_loading(&self) -> bool {
+        matches!(self.staged_status, Loadable::Loading)
+            || (matches!(self.staged_status, Loadable::NotLoaded)
+                && matches!(self.status, Loadable::Loading))
     }
 
     pub(crate) fn set_log(&mut self, log: Loadable<Shared<LogPage>>) {
@@ -997,6 +1174,14 @@ mod tests {
         )
     }
 
+    fn file_status(path: &str, kind: FileStatusKind) -> FileStatus {
+        FileStatus {
+            path: PathBuf::from(path),
+            kind,
+            conflict: None,
+        }
+    }
+
     #[test]
     fn request_primary_refresh_batch_marks_all_primary_loads_when_idle() {
         let mut loads = RepoLoadsInFlight::default();
@@ -1006,18 +1191,19 @@ mod tests {
         assert!(loads.is_in_flight(RepoLoadsInFlight::UPSTREAM_DIVERGENCE));
         assert!(loads.is_in_flight(RepoLoadsInFlight::REBASE_STATE));
         assert!(loads.is_in_flight(RepoLoadsInFlight::MERGE_COMMIT_MESSAGE));
-        assert!(loads.is_in_flight(RepoLoadsInFlight::STATUS));
+        assert!(loads.is_in_flight(RepoLoadsInFlight::WORKTREE_STATUS));
+        assert!(loads.is_in_flight(RepoLoadsInFlight::STAGED_STATUS));
         assert!(loads.is_in_flight(RepoLoadsInFlight::LOG));
     }
 
     #[test]
     fn request_primary_refresh_batch_skips_when_any_load_is_already_in_flight() {
         let mut loads = RepoLoadsInFlight::default();
-        assert!(loads.request(RepoLoadsInFlight::STATUS));
+        assert!(loads.request(RepoLoadsInFlight::WORKTREE_STATUS));
 
         assert!(!loads.request_primary_refresh_batch());
         assert!(!loads.is_in_flight(RepoLoadsInFlight::HEAD_BRANCH));
-        assert!(loads.is_in_flight(RepoLoadsInFlight::STATUS));
+        assert!(loads.is_in_flight(RepoLoadsInFlight::WORKTREE_STATUS));
         assert!(!loads.is_in_flight(RepoLoadsInFlight::LOG));
     }
 
@@ -1049,6 +1235,60 @@ mod tests {
         assert_eq!(repo.status_rev, before + 1);
         repo.set_status(Loadable::Ready(Arc::new(RepoStatus::default())));
         assert_eq!(repo.status_rev, before + 2);
+    }
+
+    #[test]
+    fn split_status_setters_do_not_bump_legacy_status_rev() {
+        let mut repo = new_repo();
+        repo.set_status(Loadable::Loading);
+        let status_rev = repo.status_rev;
+
+        repo.set_worktree_status(Loadable::Ready(vec![file_status(
+            "src/lib.rs",
+            FileStatusKind::Modified,
+        )]));
+        assert_eq!(repo.status_rev, status_rev);
+
+        repo.set_staged_status(Loadable::Ready(vec![file_status(
+            "src/lib.rs",
+            FileStatusKind::Added,
+        )]));
+        assert_eq!(repo.status_rev, status_rev);
+    }
+
+    #[test]
+    fn status_entry_for_path_prefers_split_lane_entries() {
+        let mut repo = new_repo();
+        repo.status = Loadable::Ready(Arc::new(RepoStatus {
+            unstaged: vec![file_status("legacy.rs", FileStatusKind::Modified)],
+            staged: vec![file_status("legacy-stage.rs", FileStatusKind::Added)],
+        }));
+        repo.status_rev = 1;
+        repo.set_worktree_status(Loadable::Ready(vec![file_status(
+            "split.rs",
+            FileStatusKind::Deleted,
+        )]));
+
+        let entry = repo
+            .status_entry_for_path(DiffArea::Unstaged, std::path::Path::new("split.rs"))
+            .expect("split lane entry");
+        assert_eq!(entry.kind, FileStatusKind::Deleted);
+        assert!(
+            repo.status_entry_for_path(DiffArea::Unstaged, std::path::Path::new("legacy.rs"))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn status_cache_rev_changes_with_split_lane_revisions() {
+        let mut repo = new_repo();
+        let initial = repo.status_cache_rev();
+        repo.set_worktree_status(Loadable::Loading);
+        let after_worktree = repo.status_cache_rev();
+        assert_ne!(after_worktree, initial);
+
+        repo.set_staged_status(Loadable::Loading);
+        assert_ne!(repo.status_cache_rev(), after_worktree);
     }
 
     #[test]

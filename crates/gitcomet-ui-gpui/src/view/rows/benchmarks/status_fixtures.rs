@@ -305,23 +305,11 @@ impl StatusSelectDiffOpenFixture {
 
         let commits = build_synthetic_commits(100);
         let mut repo = build_synthetic_repo_state(20, 40, 2, 0, 0, 0, &commits);
-        repo.status = Loadable::Ready(Arc::new(RepoStatus {
-            unstaged: entries,
-            staged: Vec::new(),
-        }));
-        repo.status_rev = 1;
+        seed_repo_status_entries(&mut repo, entries, Vec::new());
         repo.open = Loadable::Ready(());
 
         Self {
-            baseline: AppState {
-                repos: vec![repo],
-                active_repo: Some(RepoId(1)),
-                clone: None,
-                notifications: Vec::new(),
-                banner_error: None,
-                auth_prompt: None,
-                submodule_trust_prompt: None,
-            },
+            baseline: bench_app_state(vec![repo], Some(RepoId(1))),
             diff_target: DiffTarget::WorkingTree {
                 path: target_path,
                 area: DiffArea::Unstaged,
@@ -335,23 +323,11 @@ impl StatusSelectDiffOpenFixture {
 
         let commits = build_synthetic_commits(100);
         let mut repo = build_synthetic_repo_state(20, 40, 2, 0, 0, 0, &commits);
-        repo.status = Loadable::Ready(Arc::new(RepoStatus {
-            staged: entries,
-            unstaged: Vec::new(),
-        }));
-        repo.status_rev = 1;
+        seed_repo_status_entries(&mut repo, Vec::new(), entries);
         repo.open = Loadable::Ready(());
 
         Self {
-            baseline: AppState {
-                repos: vec![repo],
-                active_repo: Some(RepoId(1)),
-                clone: None,
-                notifications: Vec::new(),
-                banner_error: None,
-                auth_prompt: None,
-                submodule_trust_prompt: None,
-            },
+            baseline: bench_app_state(vec![repo], Some(RepoId(1))),
             diff_target: DiffTarget::WorkingTree {
                 path: target_path,
                 area: DiffArea::Staged,

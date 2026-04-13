@@ -10,6 +10,7 @@ on:
       - ".github/workflows/deploy-apt-repo.yml"
       - ".github/workflows/release-manual-main.yml"
       - "scripts/update-aur.sh"
+      - "scripts/cargo-flatten-dupes.sh"
       - "scripts/package-macos.sh"
       - "scripts/macos-cargo-config.sh"
       - "scripts/generate-homebrew-formula.sh"
@@ -25,6 +26,7 @@ on:
       - ".github/workflows/deploy-apt-repo.yml"
       - ".github/workflows/release-manual-main.yml"
       - "scripts/update-aur.sh"
+      - "scripts/cargo-flatten-dupes.sh"
       - "scripts/package-macos.sh"
       - "scripts/macos-cargo-config.sh"
       - "scripts/generate-homebrew-formula.sh"
@@ -49,6 +51,7 @@ jobs:
 
       - name: Validate shell scripts syntax
         run: |
+          bash -n scripts/cargo-flatten-dupes.sh
           bash -n scripts/update-aur.sh
           bash -n scripts/package-macos.sh
           bash -n scripts/notarize-macos.sh

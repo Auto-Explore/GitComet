@@ -3631,6 +3631,7 @@ impl Render for TextInput {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let style = self.style;
         let focus = self.focus_handle.clone();
+        let entity_id = cx.entity().entity_id();
         let chromeless = self.chromeless;
         let multiline = self.multiline;
         let pad_x = if chromeless { px(0.0) } else { px(8.0) };
@@ -3763,7 +3764,19 @@ impl Render for TextInput {
             input = input.focus(move |s| s.border_color(style.focus_border));
         }
 
-        let mut outer = div().w_full().min_w(px(0.0)).flex().flex_col().child(input);
+        let render_id = ElementId::from(("text_input_root", entity_id));
+        let render_id =
+            ElementId::from((render_id, if is_focused { "focused" } else { "blurred" }));
+        let mut outer = div()
+            // Focus changes toggle GPUI platform input handler registration during paint.
+            // Key the subtree by focus state so GPUI doesn't reuse a stale unfocused paint
+            // range that contains no input handlers when the field becomes focused.
+            .id(render_id)
+            .w_full()
+            .min_w(px(0.0))
+            .flex()
+            .flex_col()
+            .child(input);
 
         if let Some(state) = self.context_menu {
             outer = outer.child(

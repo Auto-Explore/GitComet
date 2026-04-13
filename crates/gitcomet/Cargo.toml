@@ -30,6 +30,7 @@ clap = { workspace = true }
 gitcomet-core = { workspace = true }
 gitcomet-git = { workspace = true }
 gitcomet-git-gix = { workspace = true, optional = true }
+gitcomet-state = { workspace = true }
 gitcomet-ui = { workspace = true, optional = true }
 gitcomet-ui-gpui = { workspace = true, optional = true }
 mimalloc = { workspace = true }

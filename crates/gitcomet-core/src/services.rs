@@ -170,6 +170,12 @@ pub trait GitRepository: Send + Sync {
     }
     fn list_remotes(&self) -> Result<Vec<Remote>>;
     fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>>;
+    fn worktree_status(&self) -> Result<Vec<FileStatus>> {
+        self.status().map(|status| status.unstaged)
+    }
+    fn staged_status(&self) -> Result<Vec<FileStatus>> {
+        self.status().map(|status| status.staged)
+    }
     fn status(&self) -> Result<RepoStatus>;
     fn upstream_divergence(&self) -> Result<Option<UpstreamDivergence>> {
         Ok(None)

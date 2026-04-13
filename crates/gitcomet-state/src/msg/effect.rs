@@ -27,6 +27,12 @@ pub enum Effect {
     LoadRemoteBranches {
         repo_id: RepoId,
     },
+    LoadWorktreeStatus {
+        repo_id: RepoId,
+    },
+    LoadStagedStatus {
+        repo_id: RepoId,
+    },
     LoadStatus {
         repo_id: RepoId,
     },

@@ -1,10 +1,8 @@
 use super::*;
-use gitcomet_core::process::configure_background_command;
+use gitcomet_core::process::git_command as process_git_command;
 
 fn git_command() -> std::process::Command {
-    let mut command = std::process::Command::new("git");
-    configure_background_command(&mut command);
-    command
+    process_git_command()
 }
 
 fn trim_git_stdout_bytes(bytes: &[u8]) -> &[u8] {

@@ -1,5 +1,5 @@
 use super::*;
-use crate::view::diff_utils::image_format_for_path;
+use crate::view::diff_utils::{fill_svg_viewport_white, image_format_for_path};
 use std::hash::Hash;
 use std::hash::Hasher;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -200,6 +200,7 @@ pub(in crate::view) fn render_svg_image_diff_preview(
     let raster_width = raster_width.max(1.0) as u32;
     let raster_height = raster_height.max(1.0) as u32;
     let mut pixmap = resvg::tiny_skia::Pixmap::new(raster_width, raster_height)?;
+    fill_svg_viewport_white(&mut pixmap);
     let transform = resvg::tiny_skia::Transform::from_scale(
         raster_width as f32 / svg_width,
         raster_height as f32 / svg_height,
@@ -545,6 +546,30 @@ mod tests {
         .into_bytes()
     }
 
+    fn inset_rect_svg(width: u32, height: u32, inset_x: u32, inset_y: u32) -> Vec<u8> {
+        let inner_width = width.saturating_sub(inset_x.saturating_mul(2));
+        let inner_height = height.saturating_sub(inset_y.saturating_mul(2));
+        format!(
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">
+<rect x="{inset_x}" y="{inset_y}" width="{inner_width}" height="{inner_height}" fill="#00aaff"/>
+</svg>"##
+        )
+        .into_bytes()
+    }
+
+    fn render_pixel_bgra(render: &gpui::RenderImage, x: usize, y: usize) -> [u8; 4] {
+        let size = render.size(0);
+        let width = size.width.0 as usize;
+        let offset = (y.saturating_mul(width).saturating_add(x)).saturating_mul(4);
+        let bytes = render.as_bytes(0).expect("render bytes");
+        [
+            bytes[offset],
+            bytes[offset + 1],
+            bytes[offset + 2],
+            bytes[offset + 3],
+        ]
+    }
+
     fn write_test_file(dir: &Path, name: &str, bytes: &[u8]) -> std::path::PathBuf {
         let path = dir.join(name);
         std::fs::write(&path, bytes).expect("write test file");
@@ -624,6 +649,23 @@ mod tests {
             (IMAGE_DIFF_SVG_PREVIEW_MAX_EDGE_PX / 2.0) as i32
         );
         assert!(preview.cached_path.is_none());
+    }
+
+    #[test]
+    fn render_svg_image_diff_preview_fills_transparent_viewport_white() {
+        let svg = inset_rect_svg(4, 4, 1, 1);
+        let render = render_svg_image_diff_preview(&svg).expect("svg render image");
+        let size = render.size(0);
+
+        assert_eq!(render_pixel_bgra(&render, 0, 0), [255, 255, 255, 255]);
+        assert_eq!(
+            render_pixel_bgra(
+                &render,
+                (size.width.0 as usize) / 2,
+                (size.height.0 as usize) / 2,
+            ),
+            [255, 170, 0, 255]
+        );
     }
 
     #[test]

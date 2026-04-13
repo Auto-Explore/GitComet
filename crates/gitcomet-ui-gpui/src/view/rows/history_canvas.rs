@@ -170,6 +170,7 @@ pub(super) fn history_commit_row_canvas(
     col_author: Pixels,
     col_date: Pixels,
     col_sha: Pixels,
+    show_graph: bool,
     show_author: bool,
     show_date: bool,
     show_sha: bool,
@@ -235,11 +236,14 @@ pub(super) fn history_commit_row_canvas(
                 size(col_branch.max(px(0.0)), bounds.size.height),
             );
             x += col_branch;
-            let graph_bounds = Bounds::new(
-                point(x, bounds.top()),
-                size(col_graph.max(px(0.0)), bounds.size.height),
-            );
-            x += col_graph;
+            let graph_w = if show_graph {
+                col_graph.max(px(0.0))
+            } else {
+                px(0.0)
+            };
+            let graph_bounds =
+                Bounds::new(point(x, bounds.top()), size(graph_w, bounds.size.height));
+            x += graph_w;
 
             let mut right_x = inner.right();
             let sha_bounds = if show_sha {
@@ -285,23 +289,25 @@ pub(super) fn history_commit_row_canvas(
                 size((summary_right - x).max(px(0.0)), bounds.size.height),
             );
 
-            window.with_content_mask(
-                Some(ContentMask {
-                    bounds: graph_bounds,
-                }),
-                |window| {
-                    window.paint_layer(graph_bounds, |window| {
-                        super::history_graph_paint::paint_history_graph(
-                            theme,
-                            graph_row,
-                            connect_from_top_col,
-                            is_stash_node,
-                            graph_bounds,
-                            window,
-                        );
-                    });
-                },
-            );
+            if show_graph {
+                window.with_content_mask(
+                    Some(ContentMask {
+                        bounds: graph_bounds,
+                    }),
+                    |window| {
+                        window.paint_layer(graph_bounds, |window| {
+                            super::history_graph_paint::paint_history_graph(
+                                theme,
+                                graph_row,
+                                connect_from_top_col,
+                                is_stash_node,
+                                graph_bounds,
+                                window,
+                            );
+                        });
+                    },
+                );
+            }
 
             let chip_height = px(HISTORY_TAG_CHIP_HEIGHT_PX);
             let chip_pad_x = px(HISTORY_TAG_CHIP_PADDING_X_PX);

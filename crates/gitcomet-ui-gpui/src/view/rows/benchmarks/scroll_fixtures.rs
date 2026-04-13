@@ -852,11 +852,7 @@ impl KeyboardStageUnstageToggleFixture {
 
         let commits = build_synthetic_commits(100);
         let mut repo = build_synthetic_repo_state(20, 40, 2, 0, 0, 0, &commits);
-        repo.status = Loadable::Ready(Arc::new(RepoStatus {
-            unstaged: entries.clone(),
-            staged: entries,
-        }));
-        repo.status_rev = 1;
+        seed_repo_status_entries(&mut repo, entries.clone(), entries);
         repo.open = Loadable::Ready(());
         repo.diff_state.diff_target = Some(DiffTarget::WorkingTree {
             path: paths[0].clone(),
@@ -865,15 +861,7 @@ impl KeyboardStageUnstageToggleFixture {
         repo.diff_state.diff_state_rev = 1;
 
         Self {
-            baseline: AppState {
-                repos: vec![repo],
-                active_repo: Some(RepoId(1)),
-                clone: None,
-                notifications: Vec::new(),
-                banner_error: None,
-                auth_prompt: None,
-                submodule_trust_prompt: None,
-            },
+            baseline: bench_app_state(vec![repo], Some(RepoId(1))),
             paths,
             toggle_events: toggle_events.max(1),
             frame_budget_ns: frame_budget_ns.max(1),
