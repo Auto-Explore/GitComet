@@ -231,6 +231,8 @@ jobs:
         include:
           - target_platform: x86_64-windows
             runs_on: windows-latest
+          - target_platform: aarch64-windows
+            runs_on: windows-11-arm
     steps:
       - uses: actions/checkout@v6
       - name: Show Git version

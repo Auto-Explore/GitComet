@@ -146,6 +146,9 @@ jobs:
           - target_platform: x86_64-windows
             artifact_arch: x86_64
             runs_on: windows-latest
+          - target_platform: aarch64-windows
+            artifact_arch: arm64
+            runs_on: windows-11-arm
     env:
       TAG: ${{ needs.prepare.outputs.tag }}
       VERSION: ${{ needs.prepare.outputs.version }}
@@ -203,8 +206,10 @@ jobs:
           $ErrorActionPreference = "Stop"
 
           $kitsRoot = Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10\bin"
+          # Prefer arch-matched signtool (arm64 on ARM runners, x64 on x64 runners), fall back to any.
+          $hostArch = if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq 'Arm64') { 'arm64' } else { 'x64' }
           $signTool = Get-ChildItem -Path $kitsRoot -Recurse -Filter signtool.exe -ErrorAction SilentlyContinue |
-            Where-Object { $_.FullName -match '\\x64\\' } |
+            Where-Object { $_.FullName -match "\\$hostArch\\" } |
             Sort-Object FullName -Descending |
             Select-Object -First 1 -ExpandProperty FullName
 
