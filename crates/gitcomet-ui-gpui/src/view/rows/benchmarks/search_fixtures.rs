@@ -366,12 +366,13 @@ impl CommitSearchFilterFixture {
         seen.len()
     }
 
+    /// Number of distinct lowercased message trigrams in the fixture.
     #[cfg(test)]
     pub fn distinct_message_trigrams(&self) -> usize {
         let mut seen = std::collections::HashSet::new();
         for summary in &self.summaries_lower {
             for trigram in summary.as_bytes().windows(3) {
-                seen.insert(<[u8; 3]>::try_from(trigram).expect("3-byte trigram"));
+                seen.insert([trigram[0], trigram[1], trigram[2]]);
             }
         }
         seen.len()
@@ -1183,6 +1184,26 @@ impl FileFuzzyFindFixture {
     #[cfg(test)]
     pub fn total_files(&self) -> usize {
         self.total_files
+    }
+
+    #[cfg(test)]
+    pub fn run_find_without_ordered_pair_prefilter(&self, query: &str) -> u64 {
+        let Some(query) = AsciiCaseInsensitiveSubsequenceNeedle::new(query.trim()) else {
+            return 0;
+        };
+
+        let mut h = FxHasher::default();
+        let mut matches_found = 0u64;
+        for (ix, path) in self.paths.iter().enumerate() {
+            if query.is_match(path.lowercase_bytes.as_ref()) {
+                ix.hash(&mut h);
+                path.len.hash(&mut h);
+                matches_found = matches_found.saturating_add(1);
+            }
+        }
+        matches_found.hash(&mut h);
+        self.total_files.hash(&mut h);
+        h.finish()
     }
 }
 

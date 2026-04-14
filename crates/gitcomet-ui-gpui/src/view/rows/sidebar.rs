@@ -2097,7 +2097,8 @@ impl DetailsPaneView {
                             .whitespace_nowrap()
                             .child(path_label),
                     )
-                    .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+                    .on_click(cx.listener(move |this, _e: &ClickEvent, window, cx| {
+                        this.focus_diff_panel(window, cx);
                         this.store.dispatch(Msg::SelectDiff {
                             repo_id,
                             target: DiffTarget::Commit {

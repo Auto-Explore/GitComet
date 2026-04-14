@@ -1757,6 +1757,8 @@ pub struct RepoTabDragFixture {
     tab_count: usize,
     tab_width_px: f32,
     baseline: AppState,
+    #[cfg(test)]
+    pub hit_test_steps: Vec<RepoTabDragHitTestStep>,
 }
 
 /// Sidecar metrics for repo tab drag benchmarks.
@@ -1766,6 +1768,17 @@ pub struct RepoTabDragMetrics {
     pub reorder_steps: u64,
     pub effects_emitted: u64,
     pub noop_reorders: u64,
+}
+
+#[cfg(test)]
+pub struct RepoTabDragHitTestTarget {
+    pub repo_id: RepoId,
+}
+
+#[cfg(test)]
+pub struct RepoTabDragHitTestStep {
+    pub target: RepoTabDragHitTestTarget,
+    pub insert_before: Option<RepoId>,
 }
 
 impl RepoTabDragFixture {
@@ -1790,10 +1803,14 @@ impl RepoTabDragFixture {
             .collect();
 
         let active = repos.first().map(|r| r.id);
+        #[cfg(test)]
+        let hit_test_steps = build_repo_tab_drag_hit_test_steps(&repos, tab_count, 120.0);
         Self {
             tab_count,
             tab_width_px: 120.0,
             baseline: bench_app_state(repos, active),
+            #[cfg(test)]
+            hit_test_steps,
         }
     }
 
@@ -1924,6 +1941,41 @@ impl RepoTabDragFixture {
 
         (h.finish(), metrics)
     }
+}
+
+#[cfg(test)]
+fn build_repo_tab_drag_hit_test_steps(
+    repos: &[RepoState],
+    tab_count: usize,
+    tab_width_px: f32,
+) -> Vec<RepoTabDragHitTestStep> {
+    let steps = tab_count * 3;
+    let total_bar_width = tab_count as f32 * tab_width_px;
+    let mut out = Vec::with_capacity(steps);
+
+    for step in 0..steps {
+        let frac = (step as f32) / (steps.max(1) as f32);
+        let cursor_x = frac * total_bar_width;
+        let tab_ix = (cursor_x / tab_width_px) as usize;
+        let tab_ix = tab_ix.min(tab_count.saturating_sub(1));
+        let target_repo_id = repos[tab_ix].id;
+        let tab_left = tab_ix as f32 * tab_width_px;
+        let tab_center = tab_left + tab_width_px / 2.0;
+        let insert_before = if cursor_x <= tab_center {
+            Some(target_repo_id)
+        } else {
+            repos.get(tab_ix + 1).map(|repo| repo.id)
+        };
+
+        out.push(RepoTabDragHitTestStep {
+            target: RepoTabDragHitTestTarget {
+                repo_id: target_repo_id,
+            },
+            insert_before,
+        });
+    }
+
+    out
 }
 
 pub struct PatchDiffSearchQueryUpdateFixture {

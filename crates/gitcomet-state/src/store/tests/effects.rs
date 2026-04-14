@@ -3895,12 +3895,17 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
                 repo_id,
                 url: "https://example.com/repo.git".to_string(),
                 path: PathBuf::from("sub"),
+                branch: None,
+                name: None,
+                force: false,
+                approved_sources: Vec::new(),
                 auth: None,
             },
             1,
         ),
         (
             Effect::UpdateSubmodules {
+                approved_sources: Vec::new(),
                 repo_id,
                 auth: None,
             },

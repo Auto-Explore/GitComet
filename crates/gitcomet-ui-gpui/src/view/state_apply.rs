@@ -11,6 +11,7 @@ impl GitCometView {
         let prev_had_repos = !self.state.repos.is_empty();
         let prev_banner_error = self.state.banner_error.clone();
         let prev_auth_prompt = self.state.auth_prompt.clone();
+        let prev_submodule_trust_prompt = self.state.submodule_trust_prompt.clone();
         let next_banner_error = next.banner_error.clone();
         let mut follow_up_msgs = Vec::new();
 
@@ -129,8 +130,14 @@ impl GitCometView {
             }
         }
 
+        let next_submodule_add_progress = next
+            .repos
+            .iter()
+            .filter_map(|repo| repo.submodule_add_in_flight.clone())
+            .collect::<Vec<_>>();
         self.toast_host.update(cx, |host, cx| {
-            host.sync_clone_progress(next.clone.as_ref(), cx)
+            host.sync_clone_progress(next.clone.as_ref(), cx);
+            host.sync_submodule_add_progress(&next_submodule_add_progress, cx);
         });
 
         #[cfg(target_os = "macos")]
@@ -162,6 +169,9 @@ impl GitCometView {
         }
         if prev_auth_prompt != self.state.auth_prompt {
             self.auth_prompt_key = None;
+        }
+        if prev_submodule_trust_prompt != self.state.submodule_trust_prompt {
+            self.pending_submodule_trust_prompt = self.state.submodule_trust_prompt.clone();
         }
         if prev_had_repos && self.state.repos.is_empty() {
             self.popover_host

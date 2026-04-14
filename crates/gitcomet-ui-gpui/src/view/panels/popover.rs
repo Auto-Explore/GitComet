@@ -33,6 +33,7 @@ mod submodule_add_prompt;
 mod submodule_open_picker;
 mod submodule_remove_confirm;
 mod submodule_remove_picker;
+mod submodule_trust_confirm;
 mod worktree_add_prompt;
 mod worktree_open_picker;
 mod worktree_remove_confirm;
@@ -96,6 +97,10 @@ pub(in super::super) struct PopoverHost {
     worktree_ref_input: Entity<components::TextInput>,
     submodule_url_input: Entity<components::TextInput>,
     submodule_path_input: Entity<components::TextInput>,
+    submodule_branch_input: Entity<components::TextInput>,
+    submodule_name_input: Entity<components::TextInput>,
+    submodule_add_advanced_expanded: bool,
+    submodule_force_enabled: bool,
 }
 
 impl PopoverHost {
@@ -461,6 +466,34 @@ impl PopoverHost {
             )
         });
 
+        let submodule_name_input = cx.new(|cx| {
+            components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "submodule-logical-name".into(),
+                    multiline: false,
+                    read_only: false,
+                    chromeless: false,
+                    soft_wrap: false,
+                },
+                window,
+                cx,
+            )
+        });
+
+        let submodule_branch_input = cx.new(|cx| {
+            components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "feature".into(),
+                    multiline: false,
+                    read_only: false,
+                    chromeless: false,
+                    soft_wrap: false,
+                },
+                window,
+                cx,
+            )
+        });
+
         let context_menu_focus_handle = cx.focus_handle().tab_index(0).tab_stop(false);
 
         Self {
@@ -512,6 +545,10 @@ impl PopoverHost {
             worktree_ref_input,
             submodule_url_input,
             submodule_path_input,
+            submodule_branch_input,
+            submodule_name_input,
+            submodule_add_advanced_expanded: false,
+            submodule_force_enabled: false,
         }
     }
 
@@ -545,6 +582,10 @@ impl PopoverHost {
         self.submodule_url_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
         self.submodule_path_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.submodule_branch_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.submodule_name_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
 
         if let Some(input) = &self.repo_picker_search_input {
@@ -1045,6 +1086,8 @@ impl PopoverHost {
                     ..
                 } => {
                     let theme = self.theme;
+                    self.submodule_add_advanced_expanded = false;
+                    self.submodule_force_enabled = false;
                     self.submodule_url_input.update(cx, |input, cx| {
                         input.set_theme(theme, cx);
                         input.set_text("", cx);
@@ -1055,11 +1098,25 @@ impl PopoverHost {
                         input.set_text("", cx);
                         cx.notify();
                     });
+                    self.submodule_branch_input.update(cx, |input, cx| {
+                        input.set_theme(theme, cx);
+                        input.set_text("", cx);
+                        cx.notify();
+                    });
+                    self.submodule_name_input.update(cx, |input, cx| {
+                        input.set_theme(theme, cx);
+                        input.set_text("", cx);
+                        cx.notify();
+                    });
                     let focus = self
                         .submodule_url_input
                         .read_with(cx, |i, _| i.focus_handle());
                     window.focus(&focus, cx);
                 }
+                PopoverKind::Repo {
+                    kind: RepoPopoverKind::Submodule(SubmodulePopoverKind::TrustConfirm),
+                    ..
+                } => {}
                 PopoverKind::Repo {
                     repo_id,
                     kind:
@@ -1367,6 +1424,7 @@ impl PopoverHost {
                 kind:
                     RepoPopoverKind::Submodule(
                         SubmodulePopoverKind::AddPrompt
+                        | SubmodulePopoverKind::TrustConfirm
                         | SubmodulePopoverKind::OpenPicker
                         | SubmodulePopoverKind::RemovePicker
                         | SubmodulePopoverKind::RemoveConfirm { .. },
@@ -1513,6 +1571,9 @@ impl PopoverHost {
                         .max_w(px(320.0)),
                     SubmodulePopoverKind::AddPrompt => {
                         submodule_add_prompt::panel(self, repo_id, cx)
+                    }
+                    SubmodulePopoverKind::TrustConfirm => {
+                        submodule_trust_confirm::panel(self, repo_id, cx)
                     }
                     SubmodulePopoverKind::OpenPicker => {
                         submodule_open_picker::panel(self, repo_id, cx)

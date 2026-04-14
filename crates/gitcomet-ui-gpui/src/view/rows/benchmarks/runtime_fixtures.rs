@@ -716,26 +716,6 @@ fn idle_sample_steps(window: Duration, interval: Duration) -> usize {
 
 #[cfg(target_os = "linux")]
 #[cfg(any(test, feature = "benchmarks"))]
-pub(crate) fn parse_first_u64_ascii_token(bytes: &[u8]) -> Option<u64> {
-    std::str::from_utf8(bytes)
-        .ok()?
-        .split_ascii_whitespace()
-        .next()?
-        .parse::<u64>()
-        .ok()
-}
-
-#[cfg(target_os = "linux")]
-#[cfg(any(test, feature = "benchmarks"))]
-pub(crate) fn parse_vmrss_kib(bytes: &[u8]) -> Option<u64> {
-    std::str::from_utf8(bytes).ok()?.lines().find_map(|line| {
-        let value = line.strip_prefix("VmRSS:")?.split_whitespace().next()?;
-        value.parse::<u64>().ok()
-    })
-}
-
-#[cfg(target_os = "linux")]
-#[cfg(any(test, feature = "benchmarks"))]
 fn current_cpu_runtime_ns() -> Option<u64> {
     let schedstat = fs::read("/proc/self/schedstat").ok()?;
     parse_first_u64_ascii_token(&schedstat)
@@ -757,6 +737,32 @@ fn current_rss_kib() -> Option<u64> {
 #[cfg(not(target_os = "linux"))]
 #[cfg(any(test, feature = "benchmarks"))]
 fn current_rss_kib() -> Option<u64> {
+    None
+}
+
+#[cfg(target_os = "linux")]
+#[cfg(any(test, feature = "benchmarks"))]
+pub(crate) fn parse_first_u64_ascii_token(bytes: &[u8]) -> Option<u64> {
+    let start = bytes.iter().position(u8::is_ascii_digit)?;
+    let digits = &bytes[start..];
+    let end = digits
+        .iter()
+        .position(|byte| !byte.is_ascii_digit())
+        .unwrap_or(digits.len());
+    std::str::from_utf8(&digits[..end])
+        .ok()?
+        .parse::<u64>()
+        .ok()
+}
+
+#[cfg(target_os = "linux")]
+#[cfg(any(test, feature = "benchmarks"))]
+pub(crate) fn parse_vmrss_kib(status: &[u8]) -> Option<u64> {
+    for line in status.split(|byte| *byte == b'\n') {
+        if let Some(rest) = line.strip_prefix(b"VmRSS:") {
+            return parse_first_u64_ascii_token(rest);
+        }
+    }
     None
 }
 

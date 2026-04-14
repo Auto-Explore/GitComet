@@ -166,6 +166,29 @@ impl std::fmt::Debug for InternalMsg {
                 .field("repo_id", repo_id)
                 .field("result", result)
                 .finish(),
+            InternalMsg::SubmoduleAddTrustChecked {
+                repo_id,
+                url,
+                path,
+                branch,
+                name,
+                force,
+                result,
+            } => f
+                .debug_struct("SubmoduleAddTrustChecked")
+                .field("repo_id", repo_id)
+                .field("url", url)
+                .field("path", path)
+                .field("branch", branch)
+                .field("name", name)
+                .field("force", force)
+                .field("result", result)
+                .finish(),
+            InternalMsg::SubmoduleUpdateTrustChecked { repo_id, result } => f
+                .debug_struct("SubmoduleUpdateTrustChecked")
+                .field("repo_id", repo_id)
+                .field("result", result)
+                .finish(),
             InternalMsg::CommitDetailsLoaded {
                 repo_id,
                 commit_id,

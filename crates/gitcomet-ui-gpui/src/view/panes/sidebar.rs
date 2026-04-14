@@ -443,10 +443,10 @@ mod tests {
     #[test]
     fn sidebar_notify_fingerprint_tracks_open_repo_workdirs() {
         let mut state = AppState {
+            repos: vec![repo_state(RepoId(1), "/tmp/repo")],
             active_repo: Some(RepoId(1)),
             ..AppState::default()
         };
-        state.repos.push(repo_state(RepoId(1), "/tmp/repo"));
 
         let initial = SidebarNotifyFingerprint::from_state(&state);
 
@@ -535,19 +535,23 @@ mod tests {
 
     #[test]
     fn sidebar_notify_fingerprint_ignores_repo_tab_order() {
-        let mut state_a = AppState {
+        let state_a = AppState {
+            repos: vec![
+                repo_state(RepoId(1), "/tmp/repo"),
+                repo_state(RepoId(2), "/tmp/repo-wt"),
+            ],
             active_repo: Some(RepoId(1)),
             ..AppState::default()
         };
-        state_a.repos.push(repo_state(RepoId(1), "/tmp/repo"));
-        state_a.repos.push(repo_state(RepoId(2), "/tmp/repo-wt"));
 
-        let mut state_b = AppState {
+        let state_b = AppState {
+            repos: vec![
+                repo_state(RepoId(2), "/tmp/repo-wt"),
+                repo_state(RepoId(1), "/tmp/repo"),
+            ],
             active_repo: Some(RepoId(1)),
             ..AppState::default()
         };
-        state_b.repos.push(repo_state(RepoId(2), "/tmp/repo-wt"));
-        state_b.repos.push(repo_state(RepoId(1), "/tmp/repo"));
 
         assert_eq!(
             SidebarNotifyFingerprint::from_state(&state_a),

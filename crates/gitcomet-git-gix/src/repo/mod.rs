@@ -9,7 +9,7 @@ use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::git_ops_trace::{self, GitOpTraceKind};
 use gitcomet_core::services::{
     BlameLine, CommandOutput, ConflictFileStages, ConflictSide, GitRepository, MergetoolResult,
-    PullMode, RemoteUrlKind, ResetMode, Result,
+    PullMode, RemoteUrlKind, ResetMode, Result, SubmoduleTrustDecision, SubmoduleTrustTarget,
 };
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -529,12 +529,31 @@ impl GitRepository for GixRepo {
         self.list_submodules_impl()
     }
 
-    fn add_submodule_with_output(&self, url: &str, path: &Path) -> Result<CommandOutput> {
-        self.add_submodule_with_output_impl(url, path)
+    fn check_submodule_add_trust(&self, url: &str, path: &Path) -> Result<SubmoduleTrustDecision> {
+        self.check_submodule_add_trust_impl(url, path)
     }
 
-    fn update_submodules_with_output(&self) -> Result<CommandOutput> {
-        self.update_submodules_with_output_impl()
+    fn check_submodule_update_trust(&self) -> Result<SubmoduleTrustDecision> {
+        self.check_submodule_update_trust_impl()
+    }
+
+    fn add_submodule_with_output(
+        &self,
+        url: &str,
+        path: &Path,
+        branch: Option<&str>,
+        name: Option<&str>,
+        force: bool,
+        approved_sources: &[SubmoduleTrustTarget],
+    ) -> Result<CommandOutput> {
+        self.add_submodule_with_output_impl(url, path, branch, name, force, approved_sources)
+    }
+
+    fn update_submodules_with_output(
+        &self,
+        approved_sources: &[SubmoduleTrustTarget],
+    ) -> Result<CommandOutput> {
+        self.update_submodules_with_output_impl(approved_sources)
     }
 
     fn remove_submodule_with_output(&self, path: &Path) -> Result<CommandOutput> {

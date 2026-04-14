@@ -3,6 +3,10 @@ use crate::theme::AppTheme;
 use gitcomet_state::model::{CloneOpState, CloneOpStatus, CloneProgressStage};
 use std::path::Path;
 
+pub(crate) fn clone_progress_loading_color(theme: AppTheme) -> gpui::Rgba {
+    with_alpha(theme.colors.text, if theme.is_dark { 0.42 } else { 0.34 })
+}
+
 pub(crate) fn clone_progress_title(op: &CloneOpState) -> &'static str {
     match op.status {
         CloneOpStatus::Cancelling => "Aborting clone…",
@@ -26,9 +30,7 @@ pub(crate) fn clone_progress_color(theme: AppTheme, op: &CloneOpState) -> gpui::
             with_alpha(theme.colors.text, if theme.is_dark { 0.60 } else { 0.48 })
         }
         _ => match op.progress.stage {
-            CloneProgressStage::Loading => {
-                with_alpha(theme.colors.text, if theme.is_dark { 0.42 } else { 0.34 })
-            }
+            CloneProgressStage::Loading => clone_progress_loading_color(theme),
             CloneProgressStage::RemoteObjects => {
                 with_alpha(theme.colors.text, if theme.is_dark { 0.78 } else { 0.62 })
             }
@@ -120,6 +122,10 @@ mod tests {
             clone_progress_color(theme, &cancelling),
             with_alpha(theme.colors.text, 0.48)
         );
+        assert_eq!(
+            clone_progress_loading_color(theme),
+            with_alpha(theme.colors.text, 0.34)
+        );
     }
 
     #[test]
@@ -144,6 +150,10 @@ mod tests {
         assert_eq!(
             clone_progress_color(theme, &cancelling),
             with_alpha(theme.colors.text, 0.60)
+        );
+        assert_eq!(
+            clone_progress_loading_color(theme),
+            with_alpha(theme.colors.text, 0.42)
         );
     }
 

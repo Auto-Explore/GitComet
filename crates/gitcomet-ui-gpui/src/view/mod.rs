@@ -13,7 +13,7 @@ use gitcomet_core::process::refresh_git_runtime;
 use gitcomet_core::services::{PullMode, RemoteUrlKind, ResetMode};
 use gitcomet_state::model::{
     AppNotificationKind, AppState, AuthPromptKind, CloneOpState, CloneOpStatus, DiagnosticKind,
-    Loadable, RepoId, RepoState,
+    Loadable, RepoId, RepoState, SubmoduleTrustPromptOperation,
 };
 use gitcomet_state::msg::{Msg, RepoExternalChange, StoreEvent};
 use gitcomet_state::session;
@@ -152,6 +152,8 @@ const HISTORY_COL_DATE_MAX_PX: f32 = 240.0;
 const HISTORY_COL_SHA_MIN_PX: f32 = 60.0;
 const HISTORY_COL_SHA_MAX_PX: f32 = 160.0;
 const HISTORY_COL_MESSAGE_MIN_PX: f32 = 220.0;
+const ERROR_BANNER_OVERFLOW_HINT_MIN_LINES: usize = 8;
+const ERROR_BANNER_OVERFLOW_HINT_MIN_CHARS: usize = 240;
 
 const HISTORY_GRAPH_COL_GAP_PX: f32 = 16.0;
 const HISTORY_GRAPH_MARGIN_X_PX: f32 = 10.0;
@@ -193,15 +195,13 @@ fn stable_cached_fixed_height_view<V: Render>(view: Entity<V>, height: Pixels) -
     )
 }
 
-fn stable_cached_overlay_view<V: Render>(view: Entity<V>) -> AnyView {
-    stable_cached_view(
-        view,
-        StyleRefinement::default()
-            .absolute()
-            .top_0()
-            .left_0()
-            .size_full(),
-    )
+fn stable_overlay_view<V: Render>(view: Entity<V>) -> impl IntoElement {
+    // Keep overlay hosts uncached. Their paint ranges are recorded after focused
+    // TextInput views register platform input handlers, and Wayland text-input
+    // replace_text_in_range can trigger a redraw while that handler is
+    // temporarily unavailable. Reusing the cached overlay paint range then
+    // replays a stale input-handler index and panics inside GPUI reuse_paint.
+    div().absolute().top_0().left_0().size_full().child(view)
 }
 
 pub(in crate::view) fn pane_resize_handles_width(
@@ -850,6 +850,7 @@ impl GitCometView {
             pending_pull_reconcile_prompt: None,
             pending_force_delete_branch_prompt: None,
             pending_force_remove_worktree_prompt: None,
+            pending_submodule_trust_prompt: None,
             pending_worktree_branch_removals: HashMap::default(),
             startup_crash_report,
             #[cfg(target_os = "macos")]
@@ -1511,6 +1512,11 @@ impl GitCometView {
         (Some(command.into()), collapsed.join("\n").into())
     }
 
+    fn should_show_error_banner_overflow_hint(err_text: &str) -> bool {
+        err_text.lines().count() > ERROR_BANNER_OVERFLOW_HINT_MIN_LINES
+            || err_text.len() > ERROR_BANNER_OVERFLOW_HINT_MIN_CHARS
+    }
+
     fn should_render_generic_error_banner(auth_prompt_active: bool) -> bool {
         !auth_prompt_active
     }
@@ -1669,6 +1675,17 @@ impl Render for GitCometView {
                     path,
                     branch,
                 },
+                self.last_mouse_pos,
+                window,
+                cx,
+            );
+        }
+
+        if let Some(prompt) = self.pending_submodule_trust_prompt.take()
+            && self.active_repo_id() == Some(prompt.repo_id)
+        {
+            self.open_popover_at(
+                PopoverKind::submodule(prompt.repo_id, SubmodulePopoverKind::TrustConfirm),
                 self.last_mouse_pos,
                 window,
                 cx,
@@ -1961,6 +1978,8 @@ impl Render for GitCometView {
         if let Some(err_text) = banner_error {
             let (error_command, display_error) =
                 Self::split_error_banner_message(err_text.as_ref());
+            let show_overflow_hint =
+                Self::should_show_error_banner_overflow_hint(err_text.as_ref());
             self.error_banner_input.update(cx, |input, cx| {
                 input.set_theme(theme, cx);
                 input.set_text(display_error.clone(), cx);
@@ -2018,6 +2037,15 @@ impl Render for GitCometView {
                                     .child(self.error_banner_input.clone()),
                             ),
                     )
+                    .when(show_overflow_hint, |this| {
+                        this.child(
+                            div()
+                                .mt_1()
+                                .text_xs()
+                                .text_color(theme.colors.text_muted)
+                                .child("Scroll for full output"),
+                        )
+                    })
                     .child(div().absolute().top(px(6.0)).right(px(6.0)).child(dismiss)),
             );
         }
@@ -2072,11 +2100,11 @@ impl Render for GitCometView {
 
         root = root.child(window_frame(theme, decorations, body.into_any_element()));
 
-        root = root.child(stable_cached_overlay_view(self.toast_host.clone()));
+        root = root.child(stable_overlay_view(self.toast_host.clone()));
 
-        root = root.child(stable_cached_overlay_view(self.popover_host.clone()));
+        root = root.child(stable_overlay_view(self.popover_host.clone()));
 
-        root = root.child(stable_cached_overlay_view(self.tooltip_host.clone()));
+        root = root.child(stable_overlay_view(self.tooltip_host.clone()));
 
         if crate::startup_probe::is_enabled() {
             root = root.on_children_prepainted(|_children_bounds, window, _cx| {

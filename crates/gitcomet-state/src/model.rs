@@ -6,7 +6,7 @@ use gitcomet_core::conflict_session::{
 };
 use gitcomet_core::domain::*;
 use gitcomet_core::process::GitRuntimeState;
-use gitcomet_core::services::BlameLine;
+use gitcomet_core::services::{BlameLine, SubmoduleTrustTarget};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -275,6 +275,7 @@ pub struct AppState {
     pub notifications: Vec<AppNotification>,
     pub banner_error: Option<BannerErrorState>,
     pub auth_prompt: Option<AuthPromptState>,
+    pub submodule_trust_prompt: Option<SubmoduleTrustPromptState>,
     pub git_runtime: GitRuntimeState,
     pub git_log_settings: GitLogSettings,
 }
@@ -323,6 +324,25 @@ pub struct AuthPromptState {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SubmoduleTrustPromptOperation {
+    Add {
+        url: String,
+        path: PathBuf,
+        branch: Option<String>,
+        name: Option<String>,
+        force: bool,
+    },
+    Update,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SubmoduleTrustPromptState {
+    pub repo_id: RepoId,
+    pub operation: SubmoduleTrustPromptOperation,
+    pub sources: Vec<SubmoduleTrustTarget>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AppNotification {
     pub time: SystemTime,
     pub kind: AppNotificationKind,
@@ -345,6 +365,12 @@ pub struct CloneOpState {
     pub progress: CloneProgressMeter,
     pub seq: u64,
     pub output_tail: VecDeque<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SubmoduleAddProgressState {
+    pub url: String,
+    pub path: PathBuf,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -560,6 +586,7 @@ pub struct RepoState {
     pub worktrees_rev: u64,
     pub submodules: Loadable<Arc<Vec<Submodule>>>,
     pub submodules_rev: u64,
+    pub submodule_add_in_flight: Option<SubmoduleAddProgressState>,
     pub sidebar_data_request: SidebarDataRequest,
     /// Invalidates cached branch-sidebar rows when any sidebar-relevant source changes.
     pub branch_sidebar_rev: u64,
@@ -630,6 +657,7 @@ impl RepoState {
             worktrees_rev: 0,
             submodules: Loadable::NotLoaded,
             submodules_rev: 0,
+            submodule_add_in_flight: None,
             sidebar_data_request: SidebarDataRequest::default(),
             branch_sidebar_rev: 0,
             diff_state: DiffState::default(),

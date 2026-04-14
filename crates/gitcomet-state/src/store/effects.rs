@@ -203,6 +203,30 @@ fn send_unavailable_git_effect_result(
                 result: Err(git_unavailable_error(runtime)),
             }))
         }
+        Effect::CheckSubmoduleAddTrust {
+            repo_id,
+            url,
+            path,
+            branch,
+            name,
+            force,
+        } => send(Msg::Internal(
+            crate::msg::InternalMsg::SubmoduleAddTrustChecked {
+                repo_id,
+                url,
+                path,
+                branch,
+                name,
+                force,
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
+        Effect::CheckSubmoduleUpdateTrust { repo_id } => send(Msg::Internal(
+            crate::msg::InternalMsg::SubmoduleUpdateTrustChecked {
+                repo_id,
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
         Effect::LoadRebaseAndMergeState { repo_id } => {
             send(Msg::Internal(crate::msg::InternalMsg::RebaseStateLoaded {
                 repo_id,
@@ -398,18 +422,36 @@ fn send_unavailable_git_effect_result(
             },
         )),
         Effect::AddSubmodule {
-            repo_id, url, path, ..
+            repo_id,
+            url,
+            path,
+            branch,
+            name,
+            force,
+            approved_sources,
+            ..
         } => send(Msg::Internal(
             crate::msg::InternalMsg::RepoCommandFinished {
                 repo_id,
-                command: RepoCommandKind::AddSubmodule { url, path },
+                command: RepoCommandKind::AddSubmodule {
+                    url,
+                    path,
+                    branch,
+                    name,
+                    force,
+                    approved_sources,
+                },
                 result: Err(git_unavailable_error(runtime)),
             },
         )),
-        Effect::UpdateSubmodules { repo_id, .. } => send(Msg::Internal(
+        Effect::UpdateSubmodules {
+            repo_id,
+            approved_sources,
+            ..
+        } => send(Msg::Internal(
             crate::msg::InternalMsg::RepoCommandFinished {
                 repo_id,
-                command: RepoCommandKind::UpdateSubmodules,
+                command: RepoCommandKind::UpdateSubmodules { approved_sources },
                 result: Err(git_unavailable_error(runtime)),
             },
         )),
@@ -955,18 +997,60 @@ pub(super) fn schedule_effect(
         Effect::ForceRemoveWorktree { repo_id, path } => {
             repo_commands::schedule_force_remove_worktree(executor, repos, msg_tx, repo_id, path);
         }
+        Effect::CheckSubmoduleAddTrust {
+            repo_id,
+            url,
+            path,
+            branch,
+            name,
+            force,
+        } => {
+            repo_commands::schedule_check_submodule_add_trust(
+                executor, repos, msg_tx, repo_id, url, path, branch, name, force,
+            );
+        }
+        Effect::CheckSubmoduleUpdateTrust { repo_id } => {
+            repo_commands::schedule_check_submodule_update_trust(executor, repos, msg_tx, repo_id);
+        }
         Effect::AddSubmodule {
             repo_id,
             url,
             path,
+            branch,
+            name,
+            force,
+            approved_sources,
             auth,
         } => {
             repo_commands::schedule_add_submodule(
-                executor, repos, msg_tx, repo_id, url, path, auth,
+                executor,
+                repos,
+                msg_tx,
+                repo_id,
+                repo_commands::AddSubmoduleRequest {
+                    url,
+                    path,
+                    branch,
+                    name,
+                    force,
+                    approved_sources,
+                    auth,
+                },
             );
         }
-        Effect::UpdateSubmodules { repo_id, auth } => {
-            repo_commands::schedule_update_submodules(executor, repos, msg_tx, repo_id, auth);
+        Effect::UpdateSubmodules {
+            repo_id,
+            approved_sources,
+            auth,
+        } => {
+            repo_commands::schedule_update_submodules(
+                executor,
+                repos,
+                msg_tx,
+                repo_id,
+                approved_sources,
+                auth,
+            );
         }
         Effect::RemoveSubmodule { repo_id, path } => {
             repo_commands::schedule_remove_submodule(executor, repos, msg_tx, repo_id, path);

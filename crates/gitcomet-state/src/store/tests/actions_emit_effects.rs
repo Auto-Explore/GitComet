@@ -642,6 +642,10 @@ fn submodule_commands_reload_submodules_on_success() {
         },
     ));
     state.repos[0].set_submodules(Loadable::Ready(Vec::new()));
+    state.repos[0].submodule_add_in_flight = Some(crate::model::SubmoduleAddProgressState {
+        url: "https://example.com/sub.git".to_string(),
+        path: PathBuf::from("submodule"),
+    });
 
     let effects = reduce(
         &mut repos,
@@ -652,12 +656,17 @@ fn submodule_commands_reload_submodules_on_success() {
             command: RepoCommandKind::AddSubmodule {
                 url: "https://example.com/sub.git".to_string(),
                 path: PathBuf::from("submodule"),
+                branch: None,
+                name: None,
+                force: false,
+                approved_sources: Vec::new(),
             },
             result: Ok(CommandOutput::empty_success("git submodule add")),
         }),
     );
 
     assert!(state.repos[0].submodules.is_loading());
+    assert!(state.repos[0].submodule_add_in_flight.is_none());
     assert!(
         effects
             .iter()
@@ -671,7 +680,9 @@ fn submodule_commands_reload_submodules_on_success() {
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
             repo_id,
-            command: RepoCommandKind::UpdateSubmodules,
+            command: RepoCommandKind::UpdateSubmodules {
+                approved_sources: Vec::new(),
+            },
             result: Ok(CommandOutput::empty_success(
                 "git submodule update --init --recursive",
             )),
@@ -2214,10 +2225,19 @@ fn repo_command_finished_error_summaries_cover_additional_labels() {
             RepoCommandKind::AddSubmodule {
                 url: "https://example.com/sub.git".to_string(),
                 path: PathBuf::from("mods/sub"),
+                branch: None,
+                name: None,
+                force: false,
+                approved_sources: Vec::new(),
             },
             "Submodule",
         ),
-        (RepoCommandKind::UpdateSubmodules, "Submodule"),
+        (
+            RepoCommandKind::UpdateSubmodules {
+                approved_sources: Vec::new(),
+            },
+            "Submodule",
+        ),
         (
             RepoCommandKind::RemoveSubmodule {
                 path: PathBuf::from("mods/sub"),
@@ -2327,10 +2347,19 @@ fn repo_command_finished_success_summaries_cover_additional_commands() {
             RepoCommandKind::AddSubmodule {
                 url: "https://example.com/sub.git".to_string(),
                 path: PathBuf::from("mods/sub"),
+                branch: None,
+                name: None,
+                force: false,
+                approved_sources: Vec::new(),
             },
             "Submodule added → mods/sub",
         ),
-        (RepoCommandKind::UpdateSubmodules, "Submodules: Updated"),
+        (
+            RepoCommandKind::UpdateSubmodules {
+                approved_sources: Vec::new(),
+            },
+            "Submodules: Updated",
+        ),
         (
             RepoCommandKind::RemoveSubmodule {
                 path: PathBuf::from("mods/sub"),
@@ -2481,15 +2510,22 @@ fn checkout_branch_and_submodule_messages_emit_effects() {
             repo_id: RepoId(1),
             url: "https://example.com/sub.git".to_string(),
             path: PathBuf::from("mods/sub"),
+            branch: Some("feature".to_string()),
+            name: None,
+            force: false,
         },
     );
     assert!(matches!(
         add_submodule.as_slice(),
-        [Effect::AddSubmodule {
+        [Effect::CheckSubmoduleAddTrust {
             repo_id: RepoId(1),
+            url,
             path,
+            branch,
             ..
-        }] if path == &PathBuf::from("mods/sub")
+        }] if url == "https://example.com/sub.git"
+            && path == &PathBuf::from("mods/sub")
+            && branch.as_deref() == Some("feature")
     ));
 
     let update_submodules = reduce(
@@ -2500,10 +2536,7 @@ fn checkout_branch_and_submodule_messages_emit_effects() {
     );
     assert!(matches!(
         update_submodules.as_slice(),
-        [Effect::UpdateSubmodules {
-            repo_id: RepoId(1),
-            ..
-        }]
+        [Effect::CheckSubmoduleUpdateTrust { repo_id: RepoId(1) }]
     ));
 
     let remove_submodule = reduce(
@@ -2522,6 +2555,232 @@ fn checkout_branch_and_submodule_messages_emit_effects() {
             path
         }] if path == &PathBuf::from("mods/sub")
     ));
+}
+
+#[test]
+fn local_submodule_add_trust_prompt_confirms_into_add_effect() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+
+    let source = gitcomet_core::services::SubmoduleTrustTarget {
+        submodule_path: PathBuf::from("mods/sub"),
+        display_source: "../local-sub".to_string(),
+        local_source_path: PathBuf::from("/tmp/local-sub"),
+    };
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::SubmoduleAddTrustChecked {
+            repo_id,
+            url: "../local-sub".to_string(),
+            path: PathBuf::from("mods/sub"),
+            branch: Some("feature".to_string()),
+            name: None,
+            force: false,
+            result: Ok(gitcomet_core::services::SubmoduleTrustDecision::Prompt {
+                sources: vec![source.clone()],
+            }),
+        }),
+    );
+    assert!(effects.is_empty());
+    assert_eq!(
+        state.submodule_trust_prompt,
+        Some(crate::model::SubmoduleTrustPromptState {
+            repo_id,
+            operation: crate::model::SubmoduleTrustPromptOperation::Add {
+                url: "../local-sub".to_string(),
+                path: PathBuf::from("mods/sub"),
+                branch: Some("feature".to_string()),
+                name: None,
+                force: false,
+            },
+            sources: vec![source.clone()],
+        })
+    );
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ConfirmSubmoduleTrustPrompt,
+    );
+    assert!(state.submodule_trust_prompt.is_none());
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::AddSubmodule {
+            repo_id: RepoId(1),
+            url,
+            path,
+            branch,
+            approved_sources,
+            ..
+        }] if url == "../local-sub"
+            && path == &PathBuf::from("mods/sub")
+            && branch.as_deref() == Some("feature")
+            && approved_sources == &vec![source]
+    ));
+    assert_eq!(
+        state.repos[0].submodule_add_in_flight,
+        Some(crate::model::SubmoduleAddProgressState {
+            url: "../local-sub".to_string(),
+            path: PathBuf::from("mods/sub"),
+        })
+    );
+}
+
+#[test]
+fn submodule_add_progress_starts_when_trust_check_proceeds() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::SubmoduleAddTrustChecked {
+            repo_id,
+            url: "https://example.com/sub.git".to_string(),
+            path: PathBuf::from("mods/sub"),
+            branch: None,
+            name: Some("deps/sub".to_string()),
+            force: true,
+            result: Ok(gitcomet_core::services::SubmoduleTrustDecision::Proceed),
+        }),
+    );
+
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::AddSubmodule {
+            repo_id: RepoId(1),
+            url,
+            path,
+            name,
+            force,
+            ..
+        }] if url == "https://example.com/sub.git"
+            && path == &PathBuf::from("mods/sub")
+            && name.as_deref() == Some("deps/sub")
+            && *force
+    ));
+    assert_eq!(
+        state.repos[0].submodule_add_in_flight,
+        Some(crate::model::SubmoduleAddProgressState {
+            url: "https://example.com/sub.git".to_string(),
+            path: PathBuf::from("mods/sub"),
+        })
+    );
+}
+
+#[test]
+fn submodule_add_progress_clears_on_failed_add_command() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.repos[0].submodule_add_in_flight = Some(crate::model::SubmoduleAddProgressState {
+        url: "https://example.com/sub.git".to_string(),
+        path: PathBuf::from("mods/sub"),
+    });
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::AddSubmodule {
+                url: "https://example.com/sub.git".to_string(),
+                path: PathBuf::from("mods/sub"),
+                branch: None,
+                name: None,
+                force: false,
+                approved_sources: Vec::new(),
+            },
+            result: Err(gitcomet_core::error::Error::new(
+                gitcomet_core::error::ErrorKind::Backend("submodule add failed".to_string()),
+            )),
+        }),
+    );
+
+    assert!(state.repos[0].submodule_add_in_flight.is_none());
+    assert!(
+        !effects.iter().any(
+            |effect| matches!(effect, Effect::LoadSubmodules { repo_id: id } if *id == repo_id)
+        )
+    );
+}
+
+#[test]
+fn local_submodule_update_trust_prompt_cancels_cleanly() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+
+    let source = gitcomet_core::services::SubmoduleTrustTarget {
+        submodule_path: PathBuf::from("mods/sub"),
+        display_source: "../local-sub".to_string(),
+        local_source_path: PathBuf::from("/tmp/local-sub"),
+    };
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::SubmoduleUpdateTrustChecked {
+            repo_id,
+            result: Ok(gitcomet_core::services::SubmoduleTrustDecision::Prompt {
+                sources: vec![source],
+            }),
+        }),
+    );
+    assert!(matches!(
+        state.submodule_trust_prompt,
+        Some(crate::model::SubmoduleTrustPromptState {
+            repo_id: RepoId(1),
+            operation: crate::model::SubmoduleTrustPromptOperation::Update,
+            ..
+        })
+    ));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::CancelSubmoduleTrustPrompt,
+    );
+    assert!(effects.is_empty());
+    assert!(state.submodule_trust_prompt.is_none());
 }
 
 #[test]

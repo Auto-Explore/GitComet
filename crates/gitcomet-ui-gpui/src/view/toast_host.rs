@@ -1,4 +1,5 @@
 use super::*;
+use gitcomet_state::model::SubmoduleAddProgressState;
 
 pub(super) struct ToastHost {
     theme: AppTheme,
@@ -9,6 +10,7 @@ pub(super) struct ToastHost {
     clone_progress: Option<CloneOpState>,
     clone_progress_last_seq: u64,
     clone_progress_dest: Option<std::sync::Arc<std::path::PathBuf>>,
+    submodule_add_progress: Vec<SubmoduleAddProgressState>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -146,6 +148,17 @@ fn apply_clone_progress_sync(
     }
 }
 
+fn apply_submodule_add_progress_sync(
+    submodule_add_progress: &mut Vec<SubmoduleAddProgressState>,
+    next_submodule_add_progress: &[SubmoduleAddProgressState],
+) -> bool {
+    if submodule_add_progress == next_submodule_add_progress {
+        return false;
+    }
+    *submodule_add_progress = next_submodule_add_progress.to_vec();
+    true
+}
+
 impl ToastHost {
     pub(super) fn new(
         theme: AppTheme,
@@ -160,6 +173,7 @@ impl ToastHost {
             clone_progress: None,
             clone_progress_last_seq: 0,
             clone_progress_dest: None,
+            submodule_add_progress: Vec::new(),
         }
     }
 
@@ -320,6 +334,54 @@ impl ToastHost {
         }
     }
 
+    pub(super) fn sync_submodule_add_progress(
+        &mut self,
+        next_submodule_add_progress: &[SubmoduleAddProgressState],
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if apply_submodule_add_progress_sync(
+            &mut self.submodule_add_progress,
+            next_submodule_add_progress,
+        ) {
+            cx.notify();
+        }
+    }
+
+    fn render_progress_shell(&self, content: impl IntoElement) -> AnyElement {
+        let theme = self.theme;
+        let shell_bg = with_alpha(
+            theme.colors.surface_bg_elevated,
+            if theme.is_dark { 0.96 } else { 0.98 },
+        );
+        let shell_border = clone_progress_shell_border_color(theme);
+        let shell_accent = clone_progress_shell_accent_color(theme);
+
+        div()
+            .min_w(px(360.0))
+            .max_w(px(900.0))
+            .flex()
+            .gap(px(12.0))
+            .bg(shell_bg)
+            .border_1()
+            .border_color(shell_border)
+            .rounded(px(theme.radii.panel))
+            .overflow_hidden()
+            .shadow_sm()
+            .text_lg()
+            .text_color(theme.colors.text)
+            .child(div().w(px(5.0)).bg(shell_accent).flex_shrink_0())
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .pl(px(16.0))
+                    .pr(px(16.0))
+                    .py(px(12.0))
+                    .child(content),
+            )
+            .into_any_element()
+    }
+
     fn render_clone_progress_toast(
         &self,
         op: CloneOpState,
@@ -327,12 +389,6 @@ impl ToastHost {
     ) -> AnyElement {
         let theme = self.theme;
         let spinner_color = crate::view::clone_progress::clone_progress_color(theme, &op);
-        let shell_bg = with_alpha(
-            theme.colors.surface_bg_elevated,
-            if theme.is_dark { 0.96 } else { 0.98 },
-        );
-        let shell_border = clone_progress_shell_border_color(theme);
-        let shell_accent = clone_progress_shell_accent_color(theme);
         let percent = op.progress.percent.min(100);
         let bar_track = with_alpha(
             theme.colors.text_muted,
@@ -433,30 +489,53 @@ impl ToastHost {
             )
             .child(div().pt_1().child(abort_button));
 
-        div()
-            .min_w(px(360.0))
-            .max_w(px(900.0))
-            .flex()
-            .gap(px(12.0))
-            .bg(shell_bg)
-            .border_1()
-            .border_color(shell_border)
-            .rounded(px(theme.radii.panel))
-            .overflow_hidden()
-            .shadow_sm()
-            .text_lg()
-            .text_color(theme.colors.text)
-            .child(div().w(px(5.0)).bg(shell_accent).flex_shrink_0())
-            .child(
-                div()
-                    .flex_1()
-                    .min_w(px(0.0))
-                    .pl(px(16.0))
-                    .pr(px(16.0))
-                    .py(px(12.0))
-                    .child(content),
-            )
-            .into_any_element()
+        self.render_progress_shell(content)
+    }
+
+    fn render_submodule_add_progress_toast(
+        &self,
+        ix: u64,
+        progress: &SubmoduleAddProgressState,
+    ) -> AnyElement {
+        let theme = self.theme;
+        let spinner_color = crate::view::clone_progress::clone_progress_loading_color(theme);
+        let content = div().w_full().flex().flex_col().gap_2().child(
+            div()
+                .w_full()
+                .flex()
+                .items_start()
+                .gap_2()
+                .child(svg_spinner(
+                    ("submodule_add_progress_spinner", ix),
+                    spinner_color,
+                    px(16.0),
+                ))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .flex_col()
+                        .gap_0p5()
+                        .child(
+                            div()
+                                .font_weight(FontWeight::BOLD)
+                                .child("Adding submodule…"),
+                        )
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(progress.path.display().to_string()),
+                        )
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(theme.colors.text_muted)
+                                .child(progress.url.clone()),
+                        ),
+                ),
+        );
+        self.render_progress_shell(content)
     }
 
     fn set_tooltip_text_if_changed(
@@ -485,17 +564,28 @@ impl ToastHost {
 
 impl Render for ToastHost {
     fn render(&mut self, _window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
-        if self.toasts.is_empty() && self.clone_progress.is_none() {
+        if self.toasts.is_empty()
+            && self.clone_progress.is_none()
+            && self.submodule_add_progress.is_empty()
+        {
             return div().into_any_element();
         }
         let theme = self.theme;
 
-        let has_progress = self.clone_progress.is_some();
+        let mut progress_toasts = Vec::new();
+        if let Some(progress) = self.clone_progress.clone() {
+            progress_toasts.push(self.render_clone_progress_toast(progress, cx));
+        }
+        progress_toasts.extend(
+            self.submodule_add_progress
+                .iter()
+                .enumerate()
+                .map(|(ix, progress)| {
+                    self.render_submodule_add_progress_toast(ix as u64, progress)
+                }),
+        );
+        let has_progress = !progress_toasts.is_empty();
         let max_other = if has_progress { 2 } else { 3 };
-        let progress_toast = self
-            .clone_progress
-            .clone()
-            .map(|progress| self.render_clone_progress_toast(progress, cx));
         let mut displayed = self
             .toasts
             .iter()
@@ -613,9 +703,7 @@ impl Render for ToastHost {
                     .into_any_element()
             })
             .collect::<Vec<_>>();
-        if let Some(progress_toast) = progress_toast {
-            children.push(progress_toast);
-        }
+        children.extend(progress_toasts);
 
         let root = div()
             .id("toast_layer")
@@ -666,6 +754,13 @@ mod tests {
             progress: CloneProgressMeter { stage, percent },
             seq,
             output_tail: VecDeque::new(),
+        }
+    }
+
+    fn submodule_add_progress(url: &str, path: &str) -> SubmoduleAddProgressState {
+        SubmoduleAddProgressState {
+            url: url.to_string(),
+            path: PathBuf::from(path),
         }
     }
 
@@ -915,6 +1010,55 @@ mod tests {
         assert!(progress.is_none());
         assert_eq!(last_seq, 0);
         assert!(tracked_dest.is_none());
+    }
+
+    #[test]
+    fn apply_submodule_add_progress_sync_deduplicates_equal_snapshots() {
+        let mut progress = vec![submodule_add_progress(
+            "https://example.com/sub.git",
+            "mods/sub",
+        )];
+
+        assert!(!apply_submodule_add_progress_sync(
+            &mut progress,
+            &[submodule_add_progress(
+                "https://example.com/sub.git",
+                "mods/sub",
+            )],
+        ));
+        assert_eq!(
+            progress,
+            vec![submodule_add_progress(
+                "https://example.com/sub.git",
+                "mods/sub"
+            )]
+        );
+    }
+
+    #[test]
+    fn apply_submodule_add_progress_sync_replaces_and_clears_entries() {
+        let mut progress = vec![submodule_add_progress(
+            "https://example.com/one.git",
+            "mods/one",
+        )];
+
+        assert!(apply_submodule_add_progress_sync(
+            &mut progress,
+            &[
+                submodule_add_progress("https://example.com/two.git", "mods/two"),
+                submodule_add_progress("https://example.com/three.git", "mods/three"),
+            ],
+        ));
+        assert_eq!(
+            progress,
+            vec![
+                submodule_add_progress("https://example.com/two.git", "mods/two"),
+                submodule_add_progress("https://example.com/three.git", "mods/three"),
+            ]
+        );
+
+        assert!(apply_submodule_add_progress_sync(&mut progress, &[]));
+        assert!(progress.is_empty());
     }
 
     #[test]

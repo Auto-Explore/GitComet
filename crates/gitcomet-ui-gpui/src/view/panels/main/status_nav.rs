@@ -131,8 +131,82 @@ pub(super) fn status_navigation_context_for_repo<'a>(
     })
 }
 
+#[derive(Debug, Eq, PartialEq)]
+pub(super) enum AdjacentDiffFileTarget {
+    WorkingTree {
+        section: StatusSection,
+        area: DiffArea,
+        target_ix: usize,
+        path: std::path::PathBuf,
+        is_conflicted: bool,
+    },
+    Commit {
+        commit_id: CommitId,
+        target_ix: usize,
+        path: std::path::PathBuf,
+    },
+}
+
+pub(super) fn adjacent_diff_file_target_for_repo(
+    repo: &RepoState,
+    diff_target: &DiffTarget,
+    change_tracking_view: ChangeTrackingView,
+    direction: i8,
+) -> Option<AdjacentDiffFileTarget> {
+    if direction == 0 {
+        return None;
+    }
+
+    match diff_target {
+        DiffTarget::WorkingTree { .. } => {
+            let navigation =
+                status_navigation_context_for_repo(repo, diff_target, change_tracking_view)?;
+            let target_ix = navigation.adjacent_ix(direction)?;
+            let entry = navigation.entries.get(target_ix)?;
+            let path = entry.path.clone();
+            let area = navigation.section.diff_area();
+            let is_conflicted = area == DiffArea::Unstaged
+                && entry.kind == gitcomet_core::domain::FileStatusKind::Conflicted;
+
+            Some(AdjacentDiffFileTarget::WorkingTree {
+                section: navigation.section,
+                area,
+                target_ix,
+                path,
+                is_conflicted,
+            })
+        }
+        DiffTarget::Commit {
+            commit_id,
+            path: Some(path),
+        } => {
+            let Loadable::Ready(details) = &repo.history_state.commit_details else {
+                return None;
+            };
+            if &details.id != commit_id {
+                return None;
+            }
+
+            let current_ix = details.files.iter().position(|file| file.path == *path)?;
+            let target_ix = if direction < 0 {
+                current_ix.checked_sub(1)?
+            } else {
+                (current_ix + 1 < details.files.len()).then_some(current_ix + 1)?
+            };
+            let path = details.files.get(target_ix)?.path.clone();
+
+            Some(AdjacentDiffFileTarget::Commit {
+                commit_id: commit_id.clone(),
+                target_ix,
+                path,
+            })
+        }
+        DiffTarget::Commit { path: None, .. } => None,
+    }
+}
+
 impl MainPaneView {
-    pub(in crate::view) fn try_select_adjacent_status_file(
+    pub(in crate::view) fn try_select_adjacent_diff_file(
         &mut self,
         repo_id: RepoId,
         direction: i8,
@@ -140,46 +214,50 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) -> bool {
         let change_tracking_view = self.active_change_tracking_view(cx);
-        let Some((section, area, target_ix, target_path, is_conflicted)) = (|| {
+        let Some(target) = (|| {
             let repo = self.active_repo()?;
             let diff_target = repo.diff_state.diff_target.as_ref()?;
-            let navigation =
-                status_navigation_context_for_repo(repo, diff_target, change_tracking_view)?;
-            let target_ix = navigation.adjacent_ix(direction)?;
-            let entry = navigation.entries.get(target_ix)?;
-            let target_path = entry.path.clone();
-            let area = navigation.section.diff_area();
-            let is_conflicted = area == DiffArea::Unstaged
-                && entry.kind == gitcomet_core::domain::FileStatusKind::Conflicted;
-
-            Some((
-                navigation.section,
-                area,
-                target_ix,
-                target_path,
-                is_conflicted,
-            ))
+            adjacent_diff_file_target_for_repo(repo, diff_target, change_tracking_view, direction)
         })() else {
             return false;
         };
 
         window.focus(&self.diff_panel_focus_handle, cx);
-        self.clear_status_multi_selection(repo_id, cx);
-        if is_conflicted {
-            self.store.dispatch(Msg::SelectConflictDiff {
-                repo_id,
-                path: target_path,
-            });
-        } else {
-            self.store.dispatch(Msg::SelectDiff {
-                repo_id,
-                target: DiffTarget::WorkingTree {
-                    path: target_path,
-                    area,
-                },
-            });
+        match target {
+            AdjacentDiffFileTarget::WorkingTree {
+                section,
+                area,
+                target_ix,
+                path,
+                is_conflicted,
+            } => {
+                self.clear_status_multi_selection(repo_id, cx);
+                if is_conflicted {
+                    self.store
+                        .dispatch(Msg::SelectConflictDiff { repo_id, path });
+                } else {
+                    self.store.dispatch(Msg::SelectDiff {
+                        repo_id,
+                        target: DiffTarget::WorkingTree { path, area },
+                    });
+                }
+                self.scroll_status_section_to_ix(section, target_ix, cx);
+            }
+            AdjacentDiffFileTarget::Commit {
+                commit_id,
+                target_ix,
+                path,
+            } => {
+                self.store.dispatch(Msg::SelectDiff {
+                    repo_id,
+                    target: DiffTarget::Commit {
+                        commit_id,
+                        path: Some(path),
+                    },
+                });
+                self.scroll_commit_details_file_to_ix(target_ix, cx);
+            }
         }
-        self.scroll_status_section_to_ix(section, target_ix, cx);
 
         true
     }
@@ -191,6 +269,10 @@ mod tests {
 
     fn pb(path: &str) -> std::path::PathBuf {
         std::path::PathBuf::from(path)
+    }
+
+    fn repo_state(id: RepoId, path: &str) -> RepoState {
+        RepoState::new_opening(id, gitcomet_core::domain::RepoSpec { workdir: pb(path) })
     }
 
     fn file_status(
@@ -318,5 +400,58 @@ mod tests {
         assert_eq!(navigation.current_ix, 1);
         assert_eq!(navigation.prev_ix(), Some(0));
         assert_eq!(navigation.next_ix(), Some(2));
+    }
+
+    #[test]
+    fn commit_details_file_navigation_selects_adjacent_commit_files() {
+        let commit_id = CommitId("deadbeefdeadbeef".into());
+        let file_a = pb("src/a.rs");
+        let file_b = pb("src/b.rs");
+        let file_c = pb("src/c.rs");
+
+        let mut repo = repo_state(RepoId(1), "/tmp/repo");
+        repo.history_state.commit_details =
+            Loadable::Ready(std::sync::Arc::new(gitcomet_core::domain::CommitDetails {
+                id: commit_id.clone(),
+                message: "subject".into(),
+                committed_at: "2026-04-14 12:00:00 +0300".into(),
+                parent_ids: vec![],
+                files: vec![
+                    gitcomet_core::domain::CommitFileChange {
+                        path: file_a.clone(),
+                        kind: gitcomet_core::domain::FileStatusKind::Modified,
+                    },
+                    gitcomet_core::domain::CommitFileChange {
+                        path: file_b.clone(),
+                        kind: gitcomet_core::domain::FileStatusKind::Modified,
+                    },
+                    gitcomet_core::domain::CommitFileChange {
+                        path: file_c.clone(),
+                        kind: gitcomet_core::domain::FileStatusKind::Modified,
+                    },
+                ],
+            }));
+
+        let target = DiffTarget::Commit {
+            commit_id: commit_id.clone(),
+            path: Some(file_b.clone()),
+        };
+
+        assert_eq!(
+            adjacent_diff_file_target_for_repo(&repo, &target, ChangeTrackingView::Combined, -1),
+            Some(AdjacentDiffFileTarget::Commit {
+                commit_id: commit_id.clone(),
+                target_ix: 0,
+                path: file_a,
+            })
+        );
+        assert_eq!(
+            adjacent_diff_file_target_for_repo(&repo, &target, ChangeTrackingView::Combined, 1),
+            Some(AdjacentDiffFileTarget::Commit {
+                commit_id,
+                target_ix: 2,
+                path: file_c,
+            })
+        );
     }
 }

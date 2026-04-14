@@ -2367,6 +2367,7 @@ pub(super) enum SubmodulePopoverKind {
     SectionMenu,
     Menu { path: std::path::PathBuf },
     AddPrompt,
+    TrustConfirm,
     OpenPicker,
     RemovePicker,
     RemoveConfirm { path: std::path::PathBuf },
@@ -2992,6 +2993,8 @@ pub struct GitCometView {
     pub(super) pending_force_delete_branch_prompt: Option<(RepoId, String)>,
     pub(super) pending_force_remove_worktree_prompt:
         Option<(RepoId, std::path::PathBuf, Option<String>)>,
+    pub(super) pending_submodule_trust_prompt:
+        Option<gitcomet_state::model::SubmoduleTrustPromptState>,
     pub(super) pending_worktree_branch_removals: HashMap<(RepoId, std::path::PathBuf), String>,
     pub(super) startup_crash_report: Option<StartupCrashReport>,
     #[cfg(target_os = "macos")]

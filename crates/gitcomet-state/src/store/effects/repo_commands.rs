@@ -5,6 +5,7 @@ use gitcomet_core::auth::{
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{
     CommandOutput, ConflictSide, GitRepository, PullMode, RemoteUrlKind, ResetMode,
+    SubmoduleTrustTarget,
 };
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, mpsc};
@@ -76,6 +77,16 @@ fn run_with_git_auth<R>(
     } else {
         run()
     }
+}
+
+pub(super) struct AddSubmoduleRequest {
+    pub(super) url: String,
+    pub(super) path: PathBuf,
+    pub(super) branch: Option<String>,
+    pub(super) name: Option<String>,
+    pub(super) force: bool,
+    pub(super) approved_sources: Vec<SubmoduleTrustTarget>,
+    pub(super) auth: Option<StagedGitAuth>,
 }
 
 pub(super) fn schedule_save_worktree_file(
@@ -230,12 +241,22 @@ pub(super) fn schedule_add_submodule(
     repos: &RepoMap,
     msg_tx: mpsc::Sender<Msg>,
     repo_id: RepoId,
-    url: String,
-    path: PathBuf,
-    auth: Option<StagedGitAuth>,
+    request: AddSubmoduleRequest,
 ) {
+    let AddSubmoduleRequest {
+        url,
+        path,
+        branch,
+        name,
+        force,
+        approved_sources,
+        auth,
+    } = request;
     let command_url = url.clone();
     let command_path = path.clone();
+    let command_branch = branch.clone();
+    let command_name = name.clone();
+    let command_sources = approved_sources.clone();
     schedule_repo_command(
         executor,
         repos,
@@ -244,8 +265,23 @@ pub(super) fn schedule_add_submodule(
         RepoCommandKind::AddSubmodule {
             url: command_url,
             path: command_path,
+            branch: command_branch,
+            name: command_name,
+            force,
+            approved_sources: command_sources,
         },
-        move |repo| run_with_git_auth(auth, || repo.add_submodule_with_output(&url, &path)),
+        move |repo| {
+            run_with_git_auth(auth, || {
+                repo.add_submodule_with_output(
+                    &url,
+                    &path,
+                    branch.as_deref(),
+                    name.as_deref(),
+                    force,
+                    &approved_sources,
+                )
+            })
+        },
     );
 }
 
@@ -254,16 +290,67 @@ pub(super) fn schedule_update_submodules(
     repos: &RepoMap,
     msg_tx: mpsc::Sender<Msg>,
     repo_id: RepoId,
+    approved_sources: Vec<SubmoduleTrustTarget>,
     auth: Option<StagedGitAuth>,
 ) {
+    let command_sources = approved_sources.clone();
     schedule_repo_command(
         executor,
         repos,
         msg_tx,
         repo_id,
-        RepoCommandKind::UpdateSubmodules,
-        move |repo| run_with_git_auth(auth, || repo.update_submodules_with_output()),
+        RepoCommandKind::UpdateSubmodules {
+            approved_sources: command_sources,
+        },
+        move |repo| {
+            run_with_git_auth(auth, || {
+                repo.update_submodules_with_output(&approved_sources)
+            })
+        },
     );
+}
+
+pub(super) fn schedule_check_submodule_add_trust(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: mpsc::Sender<Msg>,
+    repo_id: RepoId,
+    url: String,
+    path: PathBuf,
+    branch: Option<String>,
+    name: Option<String>,
+    force: bool,
+) {
+    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
+        let result = repo.check_submodule_add_trust(&url, &path);
+        send_or_log(
+            &msg_tx,
+            Msg::Internal(crate::msg::InternalMsg::SubmoduleAddTrustChecked {
+                repo_id,
+                url,
+                path,
+                branch,
+                name,
+                force,
+                result,
+            }),
+        );
+    });
+}
+
+pub(super) fn schedule_check_submodule_update_trust(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: mpsc::Sender<Msg>,
+    repo_id: RepoId,
+) {
+    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
+        let result = repo.check_submodule_update_trust();
+        send_or_log(
+            &msg_tx,
+            Msg::Internal(crate::msg::InternalMsg::SubmoduleUpdateTrustChecked { repo_id, result }),
+        );
+    });
 }
 
 pub(super) fn schedule_remove_submodule(

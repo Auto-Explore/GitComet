@@ -2164,6 +2164,29 @@ fn generic_error_banner_is_hidden_when_auth_prompt_is_active() {
 }
 
 #[test]
+fn error_banner_overflow_hint_is_hidden_for_short_errors() {
+    assert!(!GitCometView::should_show_error_banner_overflow_hint(
+        "Submodule failed:\n\nfatal: branch not found"
+    ));
+}
+
+#[test]
+fn error_banner_overflow_hint_is_shown_for_long_command_failures() {
+    let error = [
+        "Submodule failed:",
+        "",
+        "    git submodule add --branch git-subtree /tmp/src comet2",
+        "",
+        "    Cloning into '/tmp/comet2'...",
+        "    done.",
+        "    fatal: 'origin/git-subtree' is not a commit and a branch 'git-subtree' cannot be created from it",
+        "    fatal: unable to checkout submodule 'comet2'",
+    ]
+    .join("\n");
+    assert!(GitCometView::should_show_error_banner_overflow_hint(&error));
+}
+
+#[test]
 fn auth_prompt_banner_colors_use_accent_palette() {
     let theme = AppTheme::gitcomet_light();
     let (bg, border) = GitCometView::auth_prompt_banner_colors(theme);
