@@ -265,7 +265,10 @@ impl TerminalViewportView {
     }
 
     fn schedule_cursor_blink_tick(&mut self, cx: &mut gpui::Context<Self>) {
-        if !self.cursor_blink_active || self.cursor_blink_task_scheduled {
+        if !crate::ui_runtime::current().uses_cursor_blink()
+            || !self.cursor_blink_active
+            || self.cursor_blink_task_scheduled
+        {
             return;
         }
 
@@ -292,6 +295,17 @@ impl TerminalViewportView {
     }
 
     fn sync_cursor_blink_activity(&mut self, window: &Window, cx: &mut gpui::Context<Self>) {
+        if !crate::ui_runtime::current().uses_cursor_blink() {
+            let was_hidden = !self.cursor_blink_visible;
+            if self.cursor_blink_active || self.cursor_blink_task_scheduled || was_hidden {
+                self.deactivate_cursor_blink();
+                if was_hidden {
+                    cx.notify();
+                }
+            }
+            return;
+        }
+
         if self.cursor_blink_should_run(window) {
             if !self.cursor_blink_active {
                 self.cursor_blink_active = true;
@@ -337,6 +351,10 @@ impl TerminalViewportView {
         self.cursor_blink_visible = true;
         self.cursor_blink_hold_until =
             Instant::now() + Duration::from_millis(TERMINAL_CARET_RESUME_DELAY_MS);
+        if !crate::ui_runtime::current().uses_cursor_blink() {
+            self.cursor_blink_active = false;
+            self.cursor_blink_task_scheduled = false;
+        }
         self.schedule_cursor_blink_tick(cx);
         if !was_visible {
             cx.notify();
@@ -651,7 +669,10 @@ impl GitCometView {
     }
 
     fn schedule_terminal_cursor_blink_tick(&mut self, cx: &mut gpui::Context<Self>) {
-        if !self.terminal_cursor_blink_active || self.terminal_cursor_blink_task_scheduled {
+        if !crate::ui_runtime::current().uses_cursor_blink()
+            || !self.terminal_cursor_blink_active
+            || self.terminal_cursor_blink_task_scheduled
+        {
             return;
         }
 
@@ -674,6 +695,20 @@ impl GitCometView {
         window: &Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        if !crate::ui_runtime::current().uses_cursor_blink() {
+            let was_hidden = !self.terminal_cursor_blink_visible;
+            if self.terminal_cursor_blink_active
+                || self.terminal_cursor_blink_task_scheduled
+                || was_hidden
+            {
+                self.deactivate_terminal_cursor_blink();
+                if was_hidden {
+                    cx.notify();
+                }
+            }
+            return;
+        }
+
         let should_run = self.terminal_cursor_blink_should_run(repo_id, window);
         if should_run {
             if !self.terminal_cursor_blink_active {
@@ -775,6 +810,10 @@ impl GitCometView {
         self.terminal_cursor_blink_visible = true;
         self.terminal_cursor_blink_hold_until =
             Instant::now() + Duration::from_millis(TERMINAL_CARET_RESUME_DELAY_MS);
+        if !crate::ui_runtime::current().uses_cursor_blink() {
+            self.terminal_cursor_blink_active = false;
+            self.terminal_cursor_blink_task_scheduled = false;
+        }
         self.schedule_terminal_cursor_blink_tick(cx);
         if !was_visible {
             cx.notify();
@@ -960,6 +999,7 @@ impl GitCometView {
         writer: Box<dyn Write + Send>,
         cx: &mut gpui::Context<Self>,
     ) {
+        let uses_background_compute = crate::ui_runtime::current().uses_background_compute();
         cx.spawn(
             async move |view: WeakEntity<GitCometView>, cx: &mut gpui::AsyncApp| {
                 let mut writer = writer;
@@ -990,8 +1030,11 @@ impl GitCometView {
                         }
                     }
 
-                    let (next_writer, result) =
-                        smol::unblock(move || write_terminal_bytes(writer, bytes)).await;
+                    let (next_writer, result) = if uses_background_compute {
+                        smol::unblock(move || write_terminal_bytes(writer, bytes)).await
+                    } else {
+                        write_terminal_bytes(writer, bytes)
+                    };
                     writer = next_writer;
                     if let Err(err) = result {
                         let _ = view.update(cx, |this, cx| {
@@ -1031,12 +1074,16 @@ impl GitCometView {
         cx: &mut gpui::Context<Self>,
     ) {
         let batch_state = Arc::new(Mutex::new(TerminalReadBatchState::default()));
+        let uses_background_compute = crate::ui_runtime::current().uses_background_compute();
         cx.spawn(
             async move |view: WeakEntity<GitCometView>, cx: &mut gpui::AsyncApp| {
                 let mut reader = reader;
                 loop {
-                    let (next_reader, result) =
-                        smol::unblock(move || read_next_terminal_chunk(reader)).await;
+                    let (next_reader, result) = if uses_background_compute {
+                        smol::unblock(move || read_next_terminal_chunk(reader)).await
+                    } else {
+                        read_next_terminal_chunk(reader)
+                    };
                     reader = next_reader;
                     match result {
                         Ok(Some(bytes)) => {
@@ -1047,15 +1094,17 @@ impl GitCometView {
                             match action {
                                 TerminalReadBatchAction::None => {}
                                 TerminalReadBatchAction::ScheduleFlush => {
-                                    let batch_state = batch_state.clone();
-                                    let _ = view.update(cx, |this, cx| {
-                                        this.spawn_terminal_read_flush_task(
-                                            repo_id,
-                                            session_seq,
-                                            batch_state,
-                                            cx,
-                                        );
-                                    });
+                                    if uses_background_compute {
+                                        let batch_state = batch_state.clone();
+                                        let _ = view.update(cx, |this, cx| {
+                                            this.spawn_terminal_read_flush_task(
+                                                repo_id,
+                                                session_seq,
+                                                batch_state,
+                                                cx,
+                                            );
+                                        });
+                                    }
                                 }
                                 TerminalReadBatchAction::FlushNow => {
                                     let batch_state = batch_state.clone();
@@ -1109,12 +1158,17 @@ impl GitCometView {
     }
 
     fn spawn_terminal_read_flush_task(
-        &self,
+        &mut self,
         repo_id: RepoId,
         session_seq: u64,
         batch_state: Arc<Mutex<TerminalReadBatchState>>,
         cx: &mut gpui::Context<Self>,
     ) {
+        if !crate::ui_runtime::current().uses_background_compute() {
+            self.flush_terminal_read_batch(repo_id, session_seq, &batch_state, cx);
+            return;
+        }
+
         cx.spawn(
             async move |view: WeakEntity<GitCometView>, cx: &mut gpui::AsyncApp| {
                 smol::Timer::after(Duration::from_millis(TERMINAL_READ_BATCH_DELAY_MS)).await;
@@ -1177,9 +1231,14 @@ impl GitCometView {
         mut child: Box<dyn portable_pty::Child + Send + Sync>,
         cx: &mut gpui::Context<Self>,
     ) {
+        let uses_background_compute = crate::ui_runtime::current().uses_background_compute();
         cx.spawn(
             async move |view: WeakEntity<GitCometView>, cx: &mut gpui::AsyncApp| {
-                let result = smol::unblock(move || child.wait()).await;
+                let result = if uses_background_compute {
+                    smol::unblock(move || child.wait()).await
+                } else {
+                    child.wait()
+                };
                 let _ = view.update(cx, |this, cx| {
                     let Some(session) = this.terminal_sessions.get_mut(&repo_id) else {
                         return;
@@ -2602,6 +2661,14 @@ impl TerminalGridSize {
 }
 
 #[cfg(test)]
+impl GitCometView {
+    fn disable_poller_for_tests(&mut self) {
+        // Test views now start under the deterministic UI runtime, which already
+        // disables the live store poller and requires explicit snapshot pushes.
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::test_support::lock_visual_test;
@@ -3519,7 +3586,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn terminal_cursor_blink_is_only_scheduled_while_cursor_can_render(
+    fn terminal_cursor_blink_stays_visible_without_scheduling_in_deterministic_runtime(
         cx: &mut gpui::TestAppContext,
     ) {
         let (store, events) = AppStore::new(Arc::new(TestBackend));
@@ -3555,11 +3622,13 @@ mod tests {
                 this.sync_terminal_cursor_blink_activity(repo_id, window, cx);
                 assert!(!this.terminal_cursor_blink_active);
                 assert!(!this.terminal_cursor_blink_task_scheduled);
+                assert!(this.terminal_cursor_blink_visible);
 
                 window.focus(&focus, cx);
                 this.sync_terminal_cursor_blink_activity(repo_id, window, cx);
-                assert!(this.terminal_cursor_blink_active);
-                assert!(this.terminal_cursor_blink_task_scheduled);
+                assert!(!this.terminal_cursor_blink_active);
+                assert!(!this.terminal_cursor_blink_task_scheduled);
+                assert!(this.terminal_cursor_blink_visible);
 
                 this.terminal_cursor_blink_visible = false;
                 window.focus(&other_focus, cx);
@@ -3568,6 +3637,90 @@ mod tests {
                 assert!(!this.terminal_cursor_blink_task_scheduled);
                 assert!(this.terminal_cursor_blink_visible);
             });
+        });
+    }
+
+    #[gpui::test]
+    fn spawn_terminal_writer_task_writes_bytes_and_flushes_in_deterministic_runtime(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (store, events) = AppStore::new(Arc::new(TestBackend));
+        let (view, mut cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        let repo_id = RepoId(1);
+        let workdir = PathBuf::from("/tmp/writer-task");
+        let state = app_state_with_repos(
+            vec![test_repo_state(repo_id, workdir.clone())],
+            Some(repo_id),
+        );
+        let writer_state = Arc::new(FakeWriterState::default());
+        let (writer_tx, writer_rx) =
+            smol::channel::bounded::<TerminalWriteRequest>(TERMINAL_WRITE_QUEUE_CAPACITY);
+
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                this.disable_poller_for_tests();
+                push_test_state(this, state, cx);
+                let (io, _master_state, _writer_state, _killer_state) = fake_session_io(PtySize {
+                    rows: TERMINAL_INITIAL_ROWS,
+                    cols: TERMINAL_INITIAL_COLS,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                });
+                let focus = cx.focus_handle().tab_index(0).tab_stop(false);
+                this.terminal_sessions.insert(
+                    repo_id,
+                    make_test_terminal_session(workdir.clone(), focus, io, 13, cx),
+                );
+                this.spawn_terminal_writer_task(
+                    repo_id,
+                    13,
+                    writer_rx,
+                    Box::new(FakeWriter::new(writer_state.clone())),
+                    cx,
+                );
+            });
+        });
+
+        writer_tx
+            .try_send(TerminalWriteRequest::Bytes(b"echo ".to_vec()))
+            .expect("first terminal write should enqueue");
+        writer_tx
+            .try_send(TerminalWriteRequest::Bytes(b"hi\r".to_vec()))
+            .expect("second terminal write should enqueue");
+        writer_tx
+            .try_send(TerminalWriteRequest::Shutdown)
+            .expect("writer shutdown should enqueue");
+
+        let writer_state_for_ready = writer_state.clone();
+        let writer_state_for_snapshot = writer_state.clone();
+        wait_for_view_condition(
+            &mut cx,
+            &view,
+            "terminal writer task to flush queued bytes",
+            move |_root| writer_state_for_ready.flush_count.load(Ordering::SeqCst) >= 1,
+            move |root| {
+                (
+                    writer_state_for_snapshot.flush_count.load(Ordering::SeqCst),
+                    writer_state_for_snapshot.bytes.lock().unwrap().clone(),
+                    root.terminal_sessions
+                        .get(&repo_id)
+                        .map(|session| (session.connected, session.exit_status.clone())),
+                )
+            },
+        );
+
+        assert_eq!(writer_state.bytes.lock().unwrap().as_slice(), b"echo hi\r");
+        assert_eq!(writer_state.flush_count.load(Ordering::SeqCst), 1);
+        cx.update(|_window, app| {
+            let root = view.read(app);
+            let session = root
+                .terminal_sessions
+                .get(&repo_id)
+                .expect("expected session to still be present");
+            assert!(session.connected);
+            assert_eq!(session.exit_status, None);
         });
     }
 
