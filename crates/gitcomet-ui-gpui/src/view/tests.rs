@@ -2242,3 +2242,49 @@ fn apply_state_snapshot_routes_command_errors_into_store_backed_banner(
             .is_some_and(|banner| banner.repo_id == Some(repo_id) && banner.message == error)
     });
 }
+
+#[gpui::test]
+fn apply_state_snapshot_routes_clone_progress_errors_into_global_banner(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_assert = store.clone();
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    let mut next = AppState {
+        active_repo: Some(RepoId(1)),
+        ..AppState::default()
+    };
+    next.repos
+        .push(open_repo_state_with_workdir("/tmp/existing-active-repo"));
+    next.clone = Some(gitcomet_state::model::CloneOpState {
+        url: Arc::<str>::from("git@github.com:private/repo.git"),
+        dest: Arc::new(PathBuf::from("/tmp/private-repo")),
+        status: gitcomet_state::model::CloneOpStatus::FinishedErr(
+            "Clone failed:\n\ngit@github.com: Permission denied (publickey).".to_string(),
+        ),
+        progress: gitcomet_state::model::CloneProgressMeter::default(),
+        seq: 1,
+        output_tail: std::collections::VecDeque::new(),
+    });
+    let next = Arc::new(next);
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+        view.update(app, |this, cx| {
+            this.apply_state_snapshot(Arc::clone(&next), cx);
+        });
+    });
+    cx.run_until_parked();
+
+    wait_until("global clone banner error", || {
+        let snapshot = store_for_assert.snapshot();
+        snapshot.banner_error.as_ref().is_some_and(|banner| {
+            banner.repo_id.is_none()
+                && banner.message
+                    == "Clone failed:\n\ngit@github.com: Permission denied (publickey)."
+        })
+    });
+}

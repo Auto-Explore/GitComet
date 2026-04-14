@@ -181,7 +181,8 @@ impl ToastHost {
         let root_view = self.root_view.clone();
         cx.defer(move |cx| {
             let _ = root_view.update(cx, |root, cx| {
-                root.push_toast(components::ToastKind::Error, message, cx);
+                root.show_error_banner(None, message);
+                cx.notify();
             });
         });
         true

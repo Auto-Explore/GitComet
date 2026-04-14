@@ -257,7 +257,17 @@ fn clear_banner_error_for_auth_operation(state: &mut AppState, operation: &AuthR
         | AuthRetryOperation::Commit { repo_id, .. } => {
             util::clear_banner_error_for_repo(state, *repo_id);
         }
-        AuthRetryOperation::Clone { .. } => {}
+        AuthRetryOperation::Clone { .. } => clear_stale_clone_banner_error(state),
+    }
+}
+
+fn clear_stale_clone_banner_error(state: &mut AppState) {
+    if state
+        .banner_error
+        .as_ref()
+        .is_some_and(|banner| banner.message.starts_with("Clone failed"))
+    {
+        state.banner_error = None;
     }
 }
 
