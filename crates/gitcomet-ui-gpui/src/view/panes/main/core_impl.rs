@@ -2848,6 +2848,21 @@ impl MainPaneView {
         });
     }
 
+    pub(in crate::view) fn scroll_commit_details_file_to_ix(
+        &mut self,
+        ix: usize,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let _ = self.root_view.update(cx, |root, cx| {
+            root.details_pane
+                .update(cx, |pane: &mut DetailsPaneView, cx| {
+                    pane.commit_files_scroll
+                        .scroll_to_item_strict(ix, gpui::ScrollStrategy::Center);
+                    cx.notify();
+                });
+        });
+    }
+
     pub(in crate::view) fn set_tooltip_text_if_changed(
         &mut self,
         next: Option<SharedString>,

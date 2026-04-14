@@ -3000,7 +3000,7 @@ impl MainPaneView {
                     && let Some(repo_id) = this.active_repo_id()
                 {
                     let direction = if key == "f1" { -1 } else { 1 };
-                    handled = this.try_select_adjacent_status_file(repo_id, direction, window, cx);
+                    handled = this.try_select_adjacent_diff_file(repo_id, direction, window, cx);
                 }
 
                 let copy_target_is_focused = this

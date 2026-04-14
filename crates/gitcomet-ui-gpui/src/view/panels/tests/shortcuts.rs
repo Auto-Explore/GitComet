@@ -1,4 +1,5 @@
 use super::*;
+use gitcomet_core::domain::{CommitDetails, CommitFileChange};
 
 fn copied_path_ends_with(text: &str, suffix: &std::path::Path) -> bool {
     let normalize = |value: &str| value.replace('\\', "/");
@@ -1075,7 +1076,7 @@ fn split_untracked_file_navigation_stays_within_untracked_section(cx: &mut gpui:
     let moved = cx.update(|window, app| {
         let main_pane = view.read(app).main_pane.clone();
         main_pane.update(app, |pane, cx| {
-            pane.try_select_adjacent_status_file(repo_id, 1, window, cx)
+            pane.try_select_adjacent_diff_file(repo_id, 1, window, cx)
         })
     });
     assert!(
@@ -1138,12 +1139,83 @@ fn split_tracked_file_navigation_does_not_cross_into_untracked_section(
     let moved = cx.update(|window, app| {
         let main_pane = view.read(app).main_pane.clone();
         main_pane.update(app, |pane, cx| {
-            pane.try_select_adjacent_status_file(repo_id, -1, window, cx)
+            pane.try_select_adjacent_diff_file(repo_id, -1, window, cx)
         })
     });
     assert!(
         !moved,
         "tracked-section navigation should not jump into the split untracked section"
+    );
+}
+
+#[gpui::test]
+fn commit_details_file_navigation_scrolls_selected_row_into_view(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(7051);
+    let commit_id = CommitId("fedcba0987654321".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_commit_details_file_nav_scroll",
+        std::process::id()
+    ));
+    let files = (0..64)
+        .map(|ix| CommitFileChange {
+            path: std::path::PathBuf::from(format!("src/commit_nav/file_{ix:02}.rs")),
+            kind: FileStatusKind::Modified,
+        })
+        .collect::<Vec<_>>();
+    let start_ix = 40usize;
+    let mut repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
+    repo.history_state.selected_commit = Some(commit_id.clone());
+    repo.history_state.commit_details = Loadable::Ready(Arc::new(CommitDetails {
+        id: commit_id.clone(),
+        message: "subject".into(),
+        committed_at: "2026-04-14 12:00:00 +0300".into(),
+        parent_ids: vec![],
+        files: files.clone(),
+    }));
+    repo.diff_state.diff_target = Some(DiffTarget::Commit {
+        commit_id: commit_id.clone(),
+        path: Some(files[start_ix].path.clone()),
+    });
+
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    cx.simulate_resize(gpui::size(px(1024.0), px(420.0)));
+    draw_and_drain_test_window(cx);
+
+    let initial_offset_y = cx.update(|_window, app| {
+        let pane = view.read(app).details_pane.read(app);
+        uniform_list_offset(&pane.commit_files_scroll).y
+    });
+    assert_eq!(
+        initial_offset_y,
+        px(0.0),
+        "expected the commit-details file list to start at the top"
+    );
+
+    let moved = cx.update(|window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, cx| {
+            pane.try_select_adjacent_diff_file(repo_id, 1, window, cx)
+        })
+    });
+    assert!(
+        moved,
+        "expected commit-details adjacent navigation to succeed"
+    );
+    draw_and_drain_test_window(cx);
+
+    let offset_y = cx.update(|_window, app| {
+        let pane = view.read(app).details_pane.read(app);
+        uniform_list_offset(&pane.commit_files_scroll).y
+    });
+    assert!(
+        offset_y < px(0.0),
+        "expected commit-details file navigation to scroll the selected row into view (offset_y={offset_y:?})",
     );
 }
 
@@ -1239,7 +1311,7 @@ fn switching_change_tracking_view_restores_diff_panel_focus_for_adjacent_navigat
     let moved = cx.update(|window, app| {
         let main_pane = view.read(app).main_pane.clone();
         main_pane.update(app, |pane, cx| {
-            pane.try_select_adjacent_status_file(repo_id, 1, window, cx)
+            pane.try_select_adjacent_diff_file(repo_id, 1, window, cx)
         })
     });
     assert!(
