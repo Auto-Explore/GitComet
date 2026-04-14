@@ -183,15 +183,13 @@ fn stable_cached_fixed_height_view<V: Render>(view: Entity<V>, height: Pixels) -
     )
 }
 
-fn stable_cached_overlay_view<V: Render>(view: Entity<V>) -> AnyView {
-    stable_cached_view(
-        view,
-        StyleRefinement::default()
-            .absolute()
-            .top_0()
-            .left_0()
-            .size_full(),
-    )
+fn stable_overlay_view<V: Render>(view: Entity<V>) -> impl IntoElement {
+    // Keep overlay hosts uncached. Their paint ranges are recorded after focused
+    // TextInput views register platform input handlers, and Wayland text-input
+    // replace_text_in_range can trigger a redraw while that handler is
+    // temporarily unavailable. Reusing the cached overlay paint range then
+    // replays a stale input-handler index and panics inside GPUI reuse_paint.
+    div().absolute().top_0().left_0().size_full().child(view)
 }
 
 pub(in crate::view) fn pane_resize_handles_width(
@@ -2035,11 +2033,11 @@ impl Render for GitCometView {
 
         root = root.child(window_frame(theme, decorations, body.into_any_element()));
 
-        root = root.child(stable_cached_overlay_view(self.toast_host.clone()));
+        root = root.child(stable_overlay_view(self.toast_host.clone()));
 
-        root = root.child(stable_cached_overlay_view(self.popover_host.clone()));
+        root = root.child(stable_overlay_view(self.popover_host.clone()));
 
-        root = root.child(stable_cached_overlay_view(self.tooltip_host.clone()));
+        root = root.child(stable_overlay_view(self.tooltip_host.clone()));
 
         if crate::startup_probe::is_enabled() {
             root = root.on_children_prepainted(|_children_bounds, window, _cx| {
