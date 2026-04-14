@@ -29,7 +29,10 @@ fn git_op_trace_captures_backend_entry_points_once_per_operation() {
 
     // Use an empty file instead of NUL/​/dev/null — Git on Windows ARM64
     // cannot access the NUL device as a config path.
-    let empty_config = dir.path().join("empty.gitconfig");
+    // Keep the config file in a separate tempdir so it does not appear as an
+    // untracked file inside the repo and skew the status assertion below.
+    let config_dir = tempfile::tempdir().expect("create config tempdir");
+    let empty_config = config_dir.path().join("empty.gitconfig");
     std::fs::write(&empty_config, "").expect("create empty git config");
 
     run_git(repo, &["init", "-b", "main"], &empty_config);
