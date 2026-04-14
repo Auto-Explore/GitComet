@@ -32,7 +32,6 @@ const ENVIRONMENT_BLOCKER_MARKER: &str = "This is an environment blocker, not a 
 #[cfg(any(test, target_os = "linux", target_os = "freebsd"))]
 const APP_LAUNCH_HEADLESS_NOTE: &str = "GPUI headless mode is not a substitute for app_launch because it cannot open the main window or emit comparable first_paint/first_interactive metrics.";
 
-
 #[global_allocator]
 static GLOBAL: &gitcomet_ui_gpui::perf_alloc::PerfTrackingAllocator = &TRACKING_MIMALLOC;
 

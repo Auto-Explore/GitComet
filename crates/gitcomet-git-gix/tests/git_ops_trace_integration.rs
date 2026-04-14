@@ -33,7 +33,11 @@ fn git_op_trace_captures_backend_entry_points_once_per_operation() {
     std::fs::write(&empty_config, "").expect("create empty git config");
 
     run_git(repo, &["init", "-b", "main"], &empty_config);
-    run_git(repo, &["config", "user.email", "you@example.com"], &empty_config);
+    run_git(
+        repo,
+        &["config", "user.email", "you@example.com"],
+        &empty_config,
+    );
     run_git(repo, &["config", "user.name", "You"], &empty_config);
     run_git(repo, &["config", "commit.gpgsign", "false"], &empty_config);
 
