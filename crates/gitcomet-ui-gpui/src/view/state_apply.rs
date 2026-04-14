@@ -144,6 +144,7 @@ impl GitCometView {
         }
 
         self.state = next;
+        self.sync_terminal_sessions_with_state(cx);
         for msg in follow_up_msgs {
             self.store.dispatch(msg);
         }

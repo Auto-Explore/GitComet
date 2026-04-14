@@ -1,5 +1,6 @@
 use super::*;
 use gitcomet_core::path_utils::canonicalize_or_original;
+use std::sync::Mutex;
 
 pub(super) fn toast_fade_in_duration() -> Duration {
     Duration::from_millis(TOAST_FADE_IN_MS)
@@ -2363,6 +2364,124 @@ pub(super) fn canonicalize_path(path: std::path::PathBuf) -> std::path::PathBuf 
     canonicalize_or_original(path)
 }
 
+pub(super) struct TerminalIo {
+    pub(super) master: Box<dyn portable_pty::MasterPty + Send>,
+    pub(super) writer: Option<Box<dyn std::io::Write + Send>>,
+    pub(super) killer: Box<dyn portable_pty::ChildKiller + Send + Sync>,
+    pub(super) size: portable_pty::PtySize,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct TerminalTextMetrics {
+    pub(super) font_size: Pixels,
+    pub(super) line_height: Pixels,
+    pub(super) cell_width: Pixels,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) struct TerminalGridSize {
+    pub(super) rows: u16,
+    pub(super) cols: u16,
+    pub(super) pixel_width: u16,
+    pub(super) pixel_height: u16,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) struct TerminalLayoutKey {
+    pub(super) font_size_bits: u32,
+    pub(super) line_height_bits: u32,
+    pub(super) cell_width_bits: u32,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct TerminalLayoutCache {
+    pub(super) rem_size: Pixels,
+    pub(super) key: TerminalLayoutKey,
+    pub(super) base_style: gpui::TextStyle,
+    pub(super) metrics: TerminalTextMetrics,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(super) struct TerminalCachedRow {
+    pub(super) fingerprint: u64,
+    pub(super) layout_key: TerminalLayoutKey,
+    pub(super) shaped: Option<ShapedLine>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) struct TerminalViewportCacheKey {
+    pub(super) content_epoch: u64,
+    pub(super) scrollback: usize,
+    pub(super) rows: u16,
+    pub(super) cols: u16,
+    pub(super) layout_key: TerminalLayoutKey,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(super) struct TerminalRenderCache {
+    pub(super) viewport_key: Option<TerminalViewportCacheKey>,
+    pub(super) rows: Vec<TerminalCachedRow>,
+    #[cfg(test)]
+    pub(super) rebuilt_rows: usize,
+}
+
+#[derive(Clone)]
+pub(super) struct TerminalSessionHandle {
+    pub(super) state: Arc<Mutex<TerminalSessionState>>,
+    pub(super) writer_tx: smol::channel::Sender<TerminalWriteRequest>,
+}
+
+pub(super) struct TerminalSessionState {
+    pub(super) parser: vt100::Parser,
+    pub(super) grid_size: TerminalGridSize,
+    pub(super) connected: bool,
+    pub(super) exit_status: Option<String>,
+    pub(super) row_fingerprints: Vec<u64>,
+    pub(super) dirty_rows: Vec<u16>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum TerminalWriteRequest {
+    Bytes(Vec<u8>),
+    Shutdown,
+}
+
+pub(super) struct TerminalViewportView {
+    pub(super) theme: AppTheme,
+    pub(super) focus_handle: FocusHandle,
+    pub(super) session: TerminalSessionHandle,
+    pub(super) io: Arc<Mutex<TerminalIo>>,
+    pub(super) layout_cache: Option<TerminalLayoutCache>,
+    pub(super) render_cache: TerminalRenderCache,
+    pub(super) cursor_blink_visible: bool,
+    pub(super) cursor_blink_hold_until: Instant,
+    pub(super) cursor_blink_active: bool,
+    pub(super) cursor_blink_task_scheduled: bool,
+    pub(super) cursor_blink_seq: u64,
+}
+
+pub(super) struct RepoTerminalSession {
+    pub(super) workdir: std::path::PathBuf,
+    pub(super) repo_name: String,
+    pub(super) focus_handle: FocusHandle,
+    pub(super) io: std::sync::Arc<std::sync::Mutex<TerminalIo>>,
+    pub(super) parser: vt100::Parser,
+    pub(super) grid_size: TerminalGridSize,
+    pub(super) content_epoch: u64,
+    pub(super) render_cache: TerminalRenderCache,
+    pub(super) connected: bool,
+    pub(super) exit_status: Option<String>,
+    pub(super) terminal: TerminalSessionHandle,
+    pub(super) viewport: Entity<TerminalViewportView>,
+    pub(super) session_seq: u64,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct TerminalPanelResizeState {
+    pub(super) start_y: Pixels,
+    pub(super) start_height: Pixels,
+}
+
 pub(super) fn focused_mergetool_bootstrap_action(
     state: &AppState,
     bootstrap: &FocusedMergetoolBootstrap,
@@ -2585,6 +2704,16 @@ pub struct GitCometView {
     pub(super) timezone: Timezone,
     pub(super) show_timezone: bool,
     pub(super) change_tracking_view: ChangeTrackingView,
+    pub(super) terminal_preferences: TerminalPreferences,
+    pub(super) terminal_sessions: HashMap<RepoId, RepoTerminalSession>,
+    pub(super) terminal_panel_height: Pixels,
+    pub(super) terminal_panel_resize: Option<TerminalPanelResizeState>,
+    pub(super) next_terminal_session_seq: u64,
+    pub(super) terminal_cursor_blink_visible: bool,
+    pub(super) terminal_cursor_blink_hold_until: Instant,
+    pub(super) terminal_cursor_blink_active: bool,
+    pub(super) terminal_cursor_blink_task_scheduled: bool,
+    pub(super) terminal_cursor_blink_seq: u64,
 
     pub(super) open_repo_panel: bool,
     pub(super) open_repo_input: Entity<components::TextInput>,

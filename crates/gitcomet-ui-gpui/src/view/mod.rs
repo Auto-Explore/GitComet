@@ -66,6 +66,8 @@ pub(crate) mod rows;
 mod settings_window;
 mod splash;
 mod state_apply;
+mod terminal_panel;
+mod terminal_preferences;
 mod toast_host;
 mod tooltip;
 mod tooltip_host;
@@ -90,6 +92,11 @@ use date_time::{DateTimeFormat, Timezone, format_datetime_into};
 use diff_preview::build_new_file_preview_from_diff;
 use patch_split::build_patch_split_rows;
 use poller::Poller;
+pub(in crate::view) use terminal_preferences::{
+    EmbeddedShellMode, ExternalTerminalLaunchContext, ExternalTerminalMode, TerminalPreferences,
+    launch_external_terminal_from_preferences, parse_terminal_args_multiline,
+    resolve_embedded_shell_program,
+};
 use word_diff::capped_word_diff_ranges;
 
 #[cfg(test)]
@@ -155,6 +162,9 @@ const DIFF_TEXT_LAYOUT_CACHE_PRUNE_OVERAGE: usize = 256;
 const TOAST_FADE_IN_MS: u64 = 180;
 const TOAST_FADE_OUT_MS: u64 = 220;
 const TOAST_SLIDE_PX: f32 = 12.0;
+const TERMINAL_PANEL_DEFAULT_HEIGHT_PX: f32 = 220.0;
+const TERMINAL_PANEL_MIN_HEIGHT_PX: f32 = 120.0;
+const TERMINAL_PANEL_RESIZE_HANDLE_PX: f32 = 6.0;
 
 pub(in crate::view) fn pane_resize_handles_width(
     sidebar_collapsed: bool,
@@ -446,6 +456,7 @@ impl GitCometView {
             .as_deref()
             .and_then(ChangeTrackingView::from_key)
             .unwrap_or_default();
+        let terminal_preferences = TerminalPreferences::from_ui_session(&ui_session);
         let restored_change_tracking_height = ui_session.change_tracking_height;
         let restored_untracked_height = ui_session.untracked_height;
 
@@ -729,6 +740,16 @@ impl GitCometView {
             timezone,
             show_timezone,
             change_tracking_view,
+            terminal_preferences,
+            terminal_sessions: HashMap::default(),
+            terminal_panel_height: px(TERMINAL_PANEL_DEFAULT_HEIGHT_PX),
+            terminal_panel_resize: None,
+            next_terminal_session_seq: 1,
+            terminal_cursor_blink_visible: true,
+            terminal_cursor_blink_hold_until: Instant::now(),
+            terminal_cursor_blink_active: false,
+            terminal_cursor_blink_task_scheduled: false,
+            terminal_cursor_blink_seq: 0,
             open_repo_panel: false,
             open_repo_input,
             hover_resize_edge: None,
@@ -783,6 +804,11 @@ impl GitCometView {
 
     fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
         self.theme = theme;
+        for session in self.terminal_sessions.values() {
+            session.viewport.update(cx, |viewport, cx| {
+                viewport.set_theme(theme, cx);
+            });
+        }
         self.title_bar
             .update(cx, |bar, cx| bar.set_theme(theme, cx));
         self.sidebar_pane
@@ -809,9 +835,15 @@ impl GitCometView {
             .update(cx, |input, cx| input.set_theme(theme, cx));
         self.auth_prompt_secret_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
+        cx.notify();
     }
 
     fn notify_font_preferences_changed(&mut self, cx: &mut gpui::Context<Self>) {
+        for session in self.terminal_sessions.values() {
+            session.viewport.update(cx, |viewport, cx| {
+                viewport.invalidate_layout(cx);
+            });
+        }
         self.title_bar.update(cx, |_bar, cx| cx.notify());
         self.sidebar_pane.update(cx, |_pane, cx| cx.notify());
         self.main_pane
@@ -1381,6 +1413,11 @@ impl GitCometView {
     #[cfg(test)]
     pub(in crate::view) fn change_tracking_view_for_test(&self) -> ChangeTrackingView {
         self.change_tracking_view
+    }
+
+    #[cfg(test)]
+    pub(in crate::view) fn terminal_preferences_for_test(&self) -> &TerminalPreferences {
+        &self.terminal_preferences
     }
 }
 

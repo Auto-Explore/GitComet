@@ -10,6 +10,7 @@ pub(in super::super) struct RepoTabsBarView {
     _ui_model_subscription: gpui::Subscription,
     root_view: WeakEntity<GitCometView>,
     tooltip_host: WeakEntity<TooltipHost>,
+    open_terminal_repo_ids: HashSet<RepoId>,
 
     hovered_repo_tab: Option<RepoId>,
     repo_tab_spinner_delay: Option<RepoTabSpinnerDelayState>,
@@ -147,6 +148,7 @@ impl RepoTabsBarView {
             _ui_model_subscription: subscription,
             root_view,
             tooltip_host,
+            open_terminal_repo_ids: HashSet::default(),
             hovered_repo_tab: None,
             repo_tab_spinner_delay: None,
             repo_tab_spinner_delay_seq: 0,
@@ -159,6 +161,23 @@ impl RepoTabsBarView {
     pub(in super::super) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
         self.theme = theme;
         cx.notify();
+    }
+
+    pub(in super::super) fn set_open_terminal_repo_ids(
+        &mut self,
+        next: HashSet<RepoId>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.open_terminal_repo_ids == next {
+            return;
+        }
+        self.open_terminal_repo_ids = next;
+        cx.notify();
+    }
+
+    #[cfg(test)]
+    pub(in super::super) fn open_terminal_repo_ids_for_test(&self) -> &HashSet<RepoId> {
+        &self.open_terminal_repo_ids
     }
 
     fn active_repo_id(&self) -> Option<RepoId> {
@@ -382,7 +401,18 @@ impl Render for RepoTabsBarView {
                         .text_sm()
                         .line_clamp(1)
                         .child(label),
-                );
+                )
+                .when(self.open_terminal_repo_ids.contains(&repo_id), |d| {
+                    d.child(
+                        div()
+                            .debug_selector(move || format!("repo_tab_terminal_{}", repo_id.0))
+                            .child(svg_icon(
+                                "icons/terminal.svg",
+                                theme.colors.accent,
+                                px(12.0),
+                            )),
+                    )
+                });
 
             let tab = tab
                 .child(tab_label)

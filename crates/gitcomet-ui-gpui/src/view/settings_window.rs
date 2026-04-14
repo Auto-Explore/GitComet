@@ -41,6 +41,8 @@ enum SettingsSection {
     EditorFont,
     DateFormat,
     Timezone,
+    TerminalEmbedded,
+    TerminalExternal,
     ChangeTracking,
 }
 
@@ -77,6 +79,18 @@ struct GitVersion {
     minor: u32,
 }
 
+#[derive(Clone, Debug)]
+struct TerminalSettingsStatus {
+    is_error: bool,
+    text: SharedString,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TerminalProgramInputTarget {
+    EmbeddedShell,
+    ExternalTerminal,
+}
+
 pub(crate) struct SettingsWindowView {
     theme_mode: ThemeMode,
     theme: AppTheme,
@@ -96,6 +110,11 @@ pub(crate) struct SettingsWindowView {
     timezone: Timezone,
     show_timezone: bool,
     change_tracking_view: ChangeTrackingView,
+    terminal_preferences: TerminalPreferences,
+    terminal_embedded_program_input: Entity<components::TextInput>,
+    terminal_external_program_input: Entity<components::TextInput>,
+    terminal_external_args_input: Entity<components::TextInput>,
+    terminal_status: Option<TerminalSettingsStatus>,
     current_view: SettingsView,
     open_source_licenses_scroll: UniformListScrollHandle,
     runtime_info: SettingsRuntimeInfo,
@@ -310,6 +329,7 @@ impl SettingsWindowView {
             .as_deref()
             .and_then(ChangeTrackingView::from_key)
             .unwrap_or_default();
+        let terminal_preferences = TerminalPreferences::from_ui_session(&ui_session);
         let theme = theme_mode.resolve_theme(window.appearance());
 
         let appearance_subscription = {
@@ -331,6 +351,58 @@ impl SettingsWindowView {
             })
         };
 
+        let terminal_embedded_program_input = cx.new(|cx| {
+            let mut input = components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "/path/to/shell".into(),
+                    multiline: false,
+                    read_only: false,
+                    chromeless: false,
+                    soft_wrap: false,
+                },
+                window,
+                cx,
+            );
+            input.set_theme(theme, cx);
+            input.set_text(terminal_preferences.embedded_shell_program.clone(), cx);
+            input
+        });
+
+        let terminal_external_program_input = cx.new(|cx| {
+            let mut input = components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "wezterm".into(),
+                    multiline: false,
+                    read_only: false,
+                    chromeless: false,
+                    soft_wrap: false,
+                },
+                window,
+                cx,
+            );
+            input.set_theme(theme, cx);
+            input.set_text(terminal_preferences.external_terminal_program.clone(), cx);
+            input
+        });
+
+        let terminal_external_args_input = cx.new(|cx| {
+            let mut input = components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "One argument per line".into(),
+                    multiline: true,
+                    read_only: false,
+                    chromeless: false,
+                    soft_wrap: false,
+                },
+                window,
+                cx,
+            );
+            input.set_theme(theme, cx);
+            input.set_line_height(Some(px(20.0)), cx);
+            input.set_text(terminal_preferences.external_args_multiline(), cx);
+            input
+        });
+
         Self {
             theme_mode,
             theme,
@@ -350,6 +422,11 @@ impl SettingsWindowView {
             timezone,
             show_timezone,
             change_tracking_view,
+            terminal_preferences,
+            terminal_embedded_program_input,
+            terminal_external_program_input,
+            terminal_external_args_input,
+            terminal_status: None,
             current_view: SettingsView::Root,
             open_source_licenses_scroll: UniformListScrollHandle::default(),
             runtime_info: SettingsRuntimeInfo::detect(),
@@ -370,7 +447,7 @@ impl SettingsWindowView {
     }
 
     fn persist_preferences(&self, cx: &mut gpui::Context<Self>) {
-        let settings = session::UiSettings {
+        let mut settings = session::UiSettings {
             window_width: None,
             window_height: None,
             sidebar_width: None,
@@ -389,12 +466,214 @@ impl SettingsWindowView {
             history_show_author: None,
             history_show_date: None,
             history_show_sha: None,
+            terminal_embedded_shell_mode: None,
+            terminal_embedded_shell_program: None,
+            terminal_external_mode: None,
+            terminal_external_program: None,
+            terminal_external_args: None,
+            terminal_external_fallback: None,
         };
+        self.terminal_preferences
+            .apply_to_ui_settings(&mut settings);
 
         cx.background_spawn(async move {
             let _ = session::persist_ui_settings(settings);
         })
         .detach();
+    }
+
+    fn apply_terminal_preferences_change(
+        &mut self,
+        next: TerminalPreferences,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.terminal_preferences == next {
+            return;
+        }
+
+        self.terminal_preferences = next.clone();
+        self.persist_preferences(cx);
+        self.update_main_windows(cx, move |view, _window, cx| {
+            view.apply_terminal_preferences(next.clone(), cx);
+        });
+        cx.notify();
+    }
+
+    fn set_terminal_status(
+        &mut self,
+        is_error: bool,
+        text: impl Into<SharedString>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.terminal_status = Some(TerminalSettingsStatus {
+            is_error,
+            text: text.into(),
+        });
+        cx.notify();
+    }
+
+    fn external_terminal_preferences_with_drafts(
+        &self,
+        cx: &gpui::Context<Self>,
+    ) -> TerminalPreferences {
+        let mut preferences = self.terminal_preferences.clone();
+        preferences.external_terminal_program = self
+            .terminal_external_program_input
+            .read_with(cx, |input, _| input.text().trim().to_string());
+        let args_raw = self
+            .terminal_external_args_input
+            .read_with(cx, |input, _| input.text().to_string());
+        preferences.external_terminal_args = parse_terminal_args_multiline(&args_raw);
+        preferences
+    }
+
+    fn set_embedded_shell_mode(&mut self, mode: EmbeddedShellMode, cx: &mut gpui::Context<Self>) {
+        if self.terminal_preferences.embedded_shell_mode == mode {
+            return;
+        }
+
+        let mut next = self.terminal_preferences.clone();
+        next.embedded_shell_mode = mode;
+        self.terminal_status = None;
+        self.apply_terminal_preferences_change(next, cx);
+    }
+
+    fn set_external_terminal_mode(
+        &mut self,
+        mode: ExternalTerminalMode,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.terminal_preferences.external_terminal_mode == mode {
+            return;
+        }
+
+        let mut next = self.terminal_preferences.clone();
+        next.external_terminal_mode = mode;
+        self.terminal_status = None;
+        self.apply_terminal_preferences_change(next, cx);
+    }
+
+    fn set_external_terminal_fallback(&mut self, enabled: bool, cx: &mut gpui::Context<Self>) {
+        if self.terminal_preferences.external_terminal_fallback == enabled {
+            return;
+        }
+
+        let mut next = self.terminal_preferences.clone();
+        next.external_terminal_fallback = enabled;
+        self.terminal_status = None;
+        self.apply_terminal_preferences_change(next, cx);
+    }
+
+    fn save_terminal_embedded_draft(&mut self, cx: &mut gpui::Context<Self>) {
+        let mut next = self.terminal_preferences.clone();
+        next.embedded_shell_program = self
+            .terminal_embedded_program_input
+            .read_with(cx, |input, _| input.text().trim().to_string());
+        self.apply_terminal_preferences_change(next, cx);
+        self.set_terminal_status(false, "Embedded shell settings saved.", cx);
+    }
+
+    fn reset_terminal_embedded_draft(&mut self, cx: &mut gpui::Context<Self>) {
+        let program = self.terminal_preferences.embedded_shell_program.clone();
+        self.terminal_embedded_program_input
+            .update(cx, |input, cx| input.set_text(program, cx));
+        self.set_terminal_status(false, "Embedded shell draft reset.", cx);
+    }
+
+    fn save_terminal_external_draft(&mut self, cx: &mut gpui::Context<Self>) {
+        let next = self.external_terminal_preferences_with_drafts(cx);
+        self.apply_terminal_preferences_change(next, cx);
+        self.set_terminal_status(false, "External terminal settings saved.", cx);
+    }
+
+    fn reset_terminal_external_draft(&mut self, cx: &mut gpui::Context<Self>) {
+        let program = self.terminal_preferences.external_terminal_program.clone();
+        self.terminal_external_program_input
+            .update(cx, |input, cx| input.set_text(program, cx));
+        let args = self.terminal_preferences.external_args_multiline();
+        self.terminal_external_args_input
+            .update(cx, |input, cx| input.set_text(args, cx));
+        self.set_terminal_status(false, "External terminal draft reset.", cx);
+    }
+
+    fn browse_terminal_program_input(
+        &mut self,
+        target: TerminalProgramInputTarget,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let prompt = match target {
+            TerminalProgramInputTarget::EmbeddedShell => "Select shell program",
+            TerminalProgramInputTarget::ExternalTerminal => "Select terminal launcher",
+        };
+        let allow_directories = cfg!(target_os = "macos");
+        let rx = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: true,
+            directories: allow_directories,
+            multiple: false,
+            prompt: Some(prompt.into()),
+        });
+        let view = cx.weak_entity();
+
+        window
+            .spawn(cx, async move |cx| {
+                let result = rx.await;
+                let paths = match result {
+                    Ok(Ok(Some(paths))) => paths,
+                    Ok(Ok(None)) => return,
+                    Ok(Err(_)) | Err(_) => return,
+                };
+                let Some(path) = paths.into_iter().next() else {
+                    return;
+                };
+                let rendered = path.display().to_string();
+                let _ = view.update(cx, |this, cx| {
+                    match target {
+                        TerminalProgramInputTarget::EmbeddedShell => {
+                            this.terminal_embedded_program_input
+                                .update(cx, |input, cx| input.set_text(rendered.clone(), cx));
+                        }
+                        TerminalProgramInputTarget::ExternalTerminal => {
+                            this.terminal_external_program_input
+                                .update(cx, |input, cx| input.set_text(rendered.clone(), cx));
+                        }
+                    }
+                    this.terminal_status = None;
+                    cx.notify();
+                });
+            })
+            .detach();
+    }
+
+    fn preferred_terminal_launch_context(
+        &self,
+        cx: &gpui::Context<Self>,
+    ) -> ExternalTerminalLaunchContext {
+        for handle in cx
+            .windows()
+            .into_iter()
+            .filter_map(|window| window.downcast::<GitCometView>())
+        {
+            if let Ok(Some(context)) = handle.read_with(cx, |view, _cx| {
+                view.terminal_launch_context_for_active_repo()
+            }) {
+                return context;
+            }
+        }
+
+        ExternalTerminalLaunchContext {
+            cwd: std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+            repo_name: None,
+        }
+    }
+
+    fn test_terminal_launch_from_draft(&mut self, cx: &mut gpui::Context<Self>) {
+        let preferences = self.external_terminal_preferences_with_drafts(cx);
+        let context = self.preferred_terminal_launch_context(cx);
+        match launch_external_terminal_from_preferences(&preferences, &context) {
+            Ok(()) => self.set_terminal_status(false, "Launch request sent.", cx),
+            Err(err) => self.set_terminal_status(true, format!("Test launch failed: {err}"), cx),
+        }
     }
 
     fn show_root(&mut self, cx: &mut gpui::Context<Self>) {
@@ -1248,6 +1527,12 @@ impl SettingsWindowView {
 impl Render for SettingsWindowView {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         let theme = self.theme;
+        self.terminal_embedded_program_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.terminal_external_program_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.terminal_external_args_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
         let decorations = effective_window_decorations(window);
         let (tiling, client_inset) = match decorations {
             Decorations::Client { tiling } => (Some(tiling), settings_window_client_inset()),
@@ -1501,6 +1786,44 @@ impl Render for SettingsWindowView {
                         this.set_show_timezone(!this.show_timezone, cx);
                     }));
 
+                let terminal_embedded_row = self
+                    .summary_row(
+                        "settings_window_terminal_embedded",
+                        "Embedded terminal",
+                        self.terminal_preferences.embedded_summary().into(),
+                        self.expanded_section == Some(SettingsSection::TerminalEmbedded),
+                        theme,
+                    )
+                    .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                        this.toggle_section(SettingsSection::TerminalEmbedded, cx);
+                    }));
+
+                let terminal_external_row = self
+                    .summary_row(
+                        "settings_window_terminal_external",
+                        "External terminal",
+                        self.terminal_preferences.external_summary().into(),
+                        self.expanded_section == Some(SettingsSection::TerminalExternal),
+                        theme,
+                    )
+                    .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                        this.toggle_section(SettingsSection::TerminalExternal, cx);
+                    }));
+
+                let terminal_fallback_row = self
+                    .toggle_row(
+                        "settings_window_terminal_fallback",
+                        "Fallback to external terminal if embedded terminal cannot start",
+                        self.terminal_preferences.external_terminal_fallback,
+                        theme,
+                    )
+                    .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                        this.set_external_terminal_fallback(
+                            !this.terminal_preferences.external_terminal_fallback,
+                            cx,
+                        );
+                    }));
+
                 let change_tracking_row = self
                     .summary_row(
                         "settings_window_change_tracking",
@@ -1706,6 +2029,349 @@ impl Render for SettingsWindowView {
 
                 general_card = general_card.child(show_timezone_row);
 
+                let mut terminal_card = self
+                    .card("settings_window_terminal_card", "Terminal", theme)
+                    .child(terminal_embedded_row);
+
+                if self.expanded_section == Some(SettingsSection::TerminalEmbedded) {
+                    terminal_card = terminal_card
+                        .child(
+                            div()
+                                .px_2()
+                                .pb_1()
+                                .text_xs()
+                                .text_color(theme.colors.text_muted)
+                                .child(
+                                    "Automatic uses the system shell. Custom lets you force a shell program for embedded commands.",
+                                ),
+                        )
+                        .child(
+                            div()
+                                .px_2()
+                                .flex()
+                                .flex_col()
+                                .gap_1()
+                                .child(
+                                    self.option_row(
+                                        "settings_window_terminal_embedded_auto",
+                                        EmbeddedShellMode::Automatic.label(),
+                                        Some("Use the system shell for embedded commands".into()),
+                                        self.terminal_preferences.embedded_shell_mode
+                                            == EmbeddedShellMode::Automatic,
+                                        theme,
+                                    )
+                                    .on_click(cx.listener(
+                                        |this, _e: &ClickEvent, _window, cx| {
+                                            this.set_embedded_shell_mode(
+                                                EmbeddedShellMode::Automatic,
+                                                cx,
+                                            );
+                                        },
+                                    )),
+                                )
+                                .child(
+                                    self.option_row(
+                                        "settings_window_terminal_embedded_custom",
+                                        EmbeddedShellMode::CustomProgram.label(),
+                                        Some("Use a specific shell program path".into()),
+                                        self.terminal_preferences.embedded_shell_mode
+                                            == EmbeddedShellMode::CustomProgram,
+                                        theme,
+                                    )
+                                    .on_click(cx.listener(
+                                        |this, _e: &ClickEvent, _window, cx| {
+                                            this.set_embedded_shell_mode(
+                                                EmbeddedShellMode::CustomProgram,
+                                                cx,
+                                            );
+                                        },
+                                    )),
+                                ),
+                        );
+
+                    if self.terminal_preferences.embedded_shell_mode
+                        == EmbeddedShellMode::CustomProgram
+                    {
+                        terminal_card = terminal_card
+                            .child(
+                                div()
+                                    .px_2()
+                                    .pt_1()
+                                    .text_xs()
+                                    .text_color(theme.colors.text_muted)
+                                    .child("Program"),
+                            )
+                            .child(
+                                div()
+                                    .px_2()
+                                    .pb_1()
+                                    .w_full()
+                                    .min_w(px(0.0))
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w(px(0.0))
+                                            .child(self.terminal_embedded_program_input.clone()),
+                                    )
+                                    .child(
+                                        components::Button::new(
+                                            "settings_window_terminal_embedded_browse",
+                                            "Browse",
+                                        )
+                                        .style(components::ButtonStyle::Outlined)
+                                        .on_click(
+                                            theme,
+                                            cx,
+                                            |this, _e, window, cx| {
+                                                this.browse_terminal_program_input(
+                                                    TerminalProgramInputTarget::EmbeddedShell,
+                                                    window,
+                                                    cx,
+                                                );
+                                            },
+                                        ),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .px_2()
+                                    .pb_1()
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .child(
+                                        components::Button::new(
+                                            "settings_window_terminal_embedded_save",
+                                            "Save",
+                                        )
+                                        .style(components::ButtonStyle::Filled)
+                                        .on_click(
+                                            theme,
+                                            cx,
+                                            |this, _e, _w, cx| {
+                                                this.save_terminal_embedded_draft(cx);
+                                            },
+                                        ),
+                                    )
+                                    .child(
+                                        components::Button::new(
+                                            "settings_window_terminal_embedded_reset",
+                                            "Reset",
+                                        )
+                                        .style(components::ButtonStyle::Outlined)
+                                        .on_click(
+                                            theme,
+                                            cx,
+                                            |this, _e, _w, cx| {
+                                                this.reset_terminal_embedded_draft(cx);
+                                            },
+                                        ),
+                                    ),
+                            );
+                    }
+                }
+
+                terminal_card = terminal_card.child(terminal_external_row);
+                if self.expanded_section == Some(SettingsSection::TerminalExternal) {
+                    terminal_card = terminal_card
+                        .child(
+                            div()
+                                .px_2()
+                                .pb_1()
+                                .text_xs()
+                                .text_color(theme.colors.text_muted)
+                                .child(
+                                    "Automatic and system default are best effort. Use a custom launcher for predictable cross-platform behavior.",
+                                ),
+                        )
+                        .child(
+                            div()
+                                .px_2()
+                                .flex()
+                                .flex_col()
+                                .gap_1()
+                                .child(
+                                    self.option_row(
+                                        "settings_window_terminal_external_auto",
+                                        ExternalTerminalMode::Automatic.label(),
+                                        Some("Detect a supported terminal launcher".into()),
+                                        self.terminal_preferences.external_terminal_mode
+                                            == ExternalTerminalMode::Automatic,
+                                        theme,
+                                    )
+                                    .on_click(cx.listener(
+                                        |this, _e: &ClickEvent, _window, cx| {
+                                            this.set_external_terminal_mode(
+                                                ExternalTerminalMode::Automatic,
+                                                cx,
+                                            );
+                                        },
+                                    )),
+                                )
+                                .child(
+                                    self.option_row(
+                                        "settings_window_terminal_external_default",
+                                        ExternalTerminalMode::SystemDefault.label(),
+                                        Some("Use the platform default when possible".into()),
+                                        self.terminal_preferences.external_terminal_mode
+                                            == ExternalTerminalMode::SystemDefault,
+                                        theme,
+                                    )
+                                    .on_click(cx.listener(
+                                        |this, _e: &ClickEvent, _window, cx| {
+                                            this.set_external_terminal_mode(
+                                                ExternalTerminalMode::SystemDefault,
+                                                cx,
+                                            );
+                                        },
+                                    )),
+                                )
+                                .child(
+                                    self.option_row(
+                                        "settings_window_terminal_external_custom",
+                                        ExternalTerminalMode::CustomProgram.label(),
+                                        Some("Choose a launcher and explicit arguments".into()),
+                                        self.terminal_preferences.external_terminal_mode
+                                            == ExternalTerminalMode::CustomProgram,
+                                        theme,
+                                    )
+                                    .on_click(cx.listener(
+                                        |this, _e: &ClickEvent, _window, cx| {
+                                            this.set_external_terminal_mode(
+                                                ExternalTerminalMode::CustomProgram,
+                                                cx,
+                                            );
+                                        },
+                                    )),
+                                ),
+                        );
+
+                    if self.terminal_preferences.external_terminal_mode
+                        == ExternalTerminalMode::CustomProgram
+                    {
+                        terminal_card = terminal_card
+                            .child(
+                                div()
+                                    .px_2()
+                                    .pt_1()
+                                    .text_xs()
+                                    .text_color(theme.colors.text_muted)
+                                    .child("Program"),
+                            )
+                            .child(
+                                div()
+                                    .px_2()
+                                    .pb_1()
+                                    .w_full()
+                                    .min_w(px(0.0))
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w(px(0.0))
+                                            .child(self.terminal_external_program_input.clone()),
+                                    )
+                                    .child(
+                                        components::Button::new(
+                                            "settings_window_terminal_external_browse",
+                                            "Browse",
+                                        )
+                                        .style(components::ButtonStyle::Outlined)
+                                        .on_click(theme, cx, |this, _e, window, cx| {
+                                            this.browse_terminal_program_input(
+                                                TerminalProgramInputTarget::ExternalTerminal,
+                                                window,
+                                                cx,
+                                            );
+                                        }),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .px_2()
+                                    .pt_1()
+                                    .text_xs()
+                                    .text_color(theme.colors.text_muted)
+                                    .child("Arguments"),
+                            )
+                            .child(
+                                div()
+                                    .px_2()
+                                    .pb_1()
+                                    .w_full()
+                                    .min_w(px(0.0))
+                                    .child(self.terminal_external_args_input.clone()),
+                            )
+                            .child(
+                                div()
+                                    .px_2()
+                                    .pb_1()
+                                    .text_xs()
+                                    .text_color(theme.colors.text_muted)
+                                    .child("One argument per line. Use {cwd} and {repo_name} placeholders."),
+                            )
+                            .child(
+                                div()
+                                    .px_2()
+                                    .pb_1()
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .child(
+                                        components::Button::new(
+                                            "settings_window_terminal_external_save",
+                                            "Save",
+                                        )
+                                        .style(components::ButtonStyle::Filled)
+                                        .on_click(theme, cx, |this, _e, _w, cx| {
+                                            this.save_terminal_external_draft(cx);
+                                        }),
+                                    )
+                                    .child(
+                                        components::Button::new(
+                                            "settings_window_terminal_external_reset",
+                                            "Reset",
+                                        )
+                                        .style(components::ButtonStyle::Outlined)
+                                        .on_click(theme, cx, |this, _e, _w, cx| {
+                                            this.reset_terminal_external_draft(cx);
+                                        }),
+                                    )
+                                    .child(
+                                        components::Button::new(
+                                            "settings_window_terminal_external_test",
+                                            "Test launch",
+                                        )
+                                        .style(components::ButtonStyle::Outlined)
+                                        .on_click(theme, cx, |this, _e, _w, cx| {
+                                            this.test_terminal_launch_from_draft(cx);
+                                        }),
+                                    ),
+                            );
+                    }
+                }
+
+                terminal_card = terminal_card.child(terminal_fallback_row);
+                if let Some(status) = self.terminal_status.clone() {
+                    terminal_card = terminal_card.child(
+                        div()
+                            .px_2()
+                            .pt_1()
+                            .text_xs()
+                            .text_color(if status.is_error {
+                                theme.colors.danger
+                            } else {
+                                theme.colors.success
+                            })
+                            .child(status.text),
+                    );
+                }
+
                 let mut change_tracking_card = self
                     .card(
                         "settings_window_change_tracking_card",
@@ -1869,6 +2535,7 @@ impl Render for SettingsWindowView {
                     .gap_3()
                     .p_3()
                     .child(general_card)
+                    .child(terminal_card)
                     .child(change_tracking_card)
                     .child(environment_card)
                     .child(links_card)
@@ -2883,6 +3550,590 @@ mod tests {
                     .expect("settings window should remain readable"),
                 next_view
             );
+        });
+    }
+
+    #[gpui::test]
+    fn terminal_settings_sections_toggle_and_render_controls(cx: &mut gpui::TestAppContext) {
+        let _visual_guard = lock_visual_test();
+        let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+        let (_main_view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+            open_settings_window(app);
+        });
+        cx.run_until_parked();
+
+        let settings_window = cx.update(|_window, app| {
+            app.windows()
+                .into_iter()
+                .find_map(|window| window.downcast::<SettingsWindowView>())
+                .expect("settings window should be open")
+        });
+
+        let mut settings_cx = gpui::VisualTestContext::from_window(*settings_window.deref(), cx);
+        settings_cx.run_until_parked();
+        settings_cx.simulate_resize(size(px(SETTINGS_WINDOW_DEFAULT_WIDTH_PX), px(1200.0)));
+        settings_cx.run_until_parked();
+        settings_cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+
+        assert!(
+            settings_cx
+                .debug_bounds("settings_window_terminal_embedded_auto")
+                .is_none(),
+            "expected embedded terminal options to stay collapsed until opened"
+        );
+
+        let embedded_bounds = settings_cx
+            .debug_bounds("settings_window_terminal_embedded")
+            .expect("expected embedded terminal row bounds");
+        settings_cx.simulate_click(embedded_bounds.center(), Modifiers::default());
+        settings_cx.run_until_parked();
+        settings_cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+
+        for selector in [
+            "settings_window_terminal_embedded_auto",
+            "settings_window_terminal_embedded_custom",
+        ] {
+            assert!(
+                settings_cx.debug_bounds(selector).is_some(),
+                "expected `{selector}` when the embedded terminal section is expanded"
+            );
+        }
+
+        let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
+            settings.toggle_section(SettingsSection::TerminalEmbedded, cx);
+        });
+        settings_cx.run_until_parked();
+        assert!(
+            settings_window
+                .update(&mut settings_cx, |settings, _window, _cx| {
+                    settings.expanded_section
+                })
+                .expect("settings window should remain readable")
+                != Some(SettingsSection::TerminalEmbedded),
+            "expected embedded terminal section state to collapse when toggled again"
+        );
+
+        let external_bounds = settings_cx
+            .debug_bounds("settings_window_terminal_external")
+            .expect("expected external terminal row bounds");
+        settings_cx.simulate_click(external_bounds.center(), Modifiers::default());
+        settings_cx.run_until_parked();
+        settings_cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+
+        for selector in [
+            "settings_window_terminal_external_auto",
+            "settings_window_terminal_external_default",
+            "settings_window_terminal_external_custom",
+        ] {
+            assert!(
+                settings_cx.debug_bounds(selector).is_some(),
+                "expected `{selector}` when the external terminal section is expanded"
+            );
+        }
+
+        let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
+            settings.toggle_section(SettingsSection::TerminalExternal, cx);
+        });
+        settings_cx.run_until_parked();
+        assert!(
+            settings_window
+                .update(&mut settings_cx, |settings, _window, _cx| {
+                    settings.expanded_section
+                })
+                .expect("settings window should remain readable")
+                != Some(SettingsSection::TerminalExternal),
+            "expected external terminal section state to collapse when toggled again"
+        );
+    }
+
+    #[gpui::test]
+    fn embedded_terminal_setting_defers_main_window_update(cx: &mut gpui::TestAppContext) {
+        let _visual_guard = lock_visual_test();
+        let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+        let (main_view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+            open_settings_window(app);
+        });
+        cx.run_until_parked();
+
+        let settings_window = cx.update(|_window, app| {
+            app.windows()
+                .into_iter()
+                .find_map(|window| window.downcast::<SettingsWindowView>())
+                .expect("settings window should be open")
+        });
+
+        let next_mode = cx.update(|_window, app| {
+            let current = settings_window
+                .read_with(app, |settings, _cx| {
+                    settings.terminal_preferences.embedded_shell_mode
+                })
+                .expect("settings window should be readable");
+            match current {
+                EmbeddedShellMode::Automatic => EmbeddedShellMode::CustomProgram,
+                EmbeddedShellMode::CustomProgram => EmbeddedShellMode::Automatic,
+            }
+        });
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            cx.update(|_window, app| {
+                main_view.update(app, |_view, cx| {
+                    let _ = settings_window.update(cx, |settings, _window, cx| {
+                        settings.set_embedded_shell_mode(next_mode, cx);
+                    });
+                });
+            });
+        }));
+        assert!(
+            result.is_ok(),
+            "embedded terminal mode updates should not re-enter GitCometView updates"
+        );
+
+        cx.run_until_parked();
+
+        cx.update(|_window, app| {
+            assert_eq!(
+                main_view
+                    .read(app)
+                    .terminal_preferences_for_test()
+                    .embedded_shell_mode,
+                next_mode
+            );
+            assert_eq!(
+                settings_window
+                    .read_with(app, |settings, _cx| {
+                        settings.terminal_preferences.embedded_shell_mode
+                    })
+                    .expect("settings window should remain readable"),
+                next_mode
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn external_terminal_fallback_setting_defers_main_window_update(cx: &mut gpui::TestAppContext) {
+        let _visual_guard = lock_visual_test();
+        let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+        let (main_view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+            open_settings_window(app);
+        });
+        cx.run_until_parked();
+
+        let settings_window = cx.update(|_window, app| {
+            app.windows()
+                .into_iter()
+                .find_map(|window| window.downcast::<SettingsWindowView>())
+                .expect("settings window should be open")
+        });
+
+        let next_fallback = cx.update(|_window, app| {
+            !settings_window
+                .read_with(app, |settings, _cx| {
+                    settings.terminal_preferences.external_terminal_fallback
+                })
+                .expect("settings window should be readable")
+        });
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            cx.update(|_window, app| {
+                main_view.update(app, |_view, cx| {
+                    let _ = settings_window.update(cx, |settings, _window, cx| {
+                        settings.set_external_terminal_fallback(next_fallback, cx);
+                    });
+                });
+            });
+        }));
+        assert!(
+            result.is_ok(),
+            "external terminal fallback updates should not re-enter GitCometView updates"
+        );
+
+        cx.run_until_parked();
+
+        cx.update(|_window, app| {
+            assert_eq!(
+                main_view
+                    .read(app)
+                    .terminal_preferences_for_test()
+                    .external_terminal_fallback,
+                next_fallback
+            );
+            assert_eq!(
+                settings_window
+                    .read_with(app, |settings, _cx| {
+                        settings.terminal_preferences.external_terminal_fallback
+                    })
+                    .expect("settings window should remain readable"),
+                next_fallback
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn external_terminal_mode_setting_defers_main_window_update(cx: &mut gpui::TestAppContext) {
+        let _visual_guard = lock_visual_test();
+        let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+        let (main_view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+            open_settings_window(app);
+        });
+        cx.run_until_parked();
+
+        let settings_window = cx.update(|_window, app| {
+            app.windows()
+                .into_iter()
+                .find_map(|window| window.downcast::<SettingsWindowView>())
+                .expect("settings window should be open")
+        });
+
+        let next_mode = cx.update(|_window, app| {
+            let current = settings_window
+                .read_with(app, |settings, _cx| {
+                    settings.terminal_preferences.external_terminal_mode
+                })
+                .expect("settings window should be readable");
+            match current {
+                ExternalTerminalMode::Automatic => ExternalTerminalMode::SystemDefault,
+                ExternalTerminalMode::SystemDefault => ExternalTerminalMode::CustomProgram,
+                ExternalTerminalMode::CustomProgram => ExternalTerminalMode::Automatic,
+            }
+        });
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            cx.update(|_window, app| {
+                main_view.update(app, |_view, cx| {
+                    let _ = settings_window.update(cx, |settings, _window, cx| {
+                        settings.set_external_terminal_mode(next_mode, cx);
+                    });
+                });
+            });
+        }));
+        assert!(
+            result.is_ok(),
+            "external terminal mode updates should not re-enter GitCometView updates"
+        );
+
+        cx.run_until_parked();
+
+        cx.update(|_window, app| {
+            assert_eq!(
+                main_view
+                    .read(app)
+                    .terminal_preferences_for_test()
+                    .external_terminal_mode,
+                next_mode
+            );
+            assert_eq!(
+                settings_window
+                    .read_with(app, |settings, _cx| {
+                        settings.terminal_preferences.external_terminal_mode
+                    })
+                    .expect("settings window should remain readable"),
+                next_mode
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn terminal_embedded_draft_save_and_reset(cx: &mut gpui::TestAppContext) {
+        let _visual_guard = lock_visual_test();
+        let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+        let (main_view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+            open_settings_window(app);
+        });
+        cx.run_until_parked();
+
+        let settings_window = cx.update(|_window, app| {
+            app.windows()
+                .into_iter()
+                .find_map(|window| window.downcast::<SettingsWindowView>())
+                .expect("settings window should be open")
+        });
+
+        cx.update(|_window, app| {
+            let _ = settings_window.update(app, |settings, _window, cx| {
+                settings.set_embedded_shell_mode(EmbeddedShellMode::CustomProgram, cx);
+                settings
+                    .terminal_embedded_program_input
+                    .update(cx, |input, cx| input.set_text("/bin/zsh", cx));
+                settings.save_terminal_embedded_draft(cx);
+                settings
+                    .terminal_embedded_program_input
+                    .update(cx, |input, cx| input.set_text("/bin/bash", cx));
+                settings.reset_terminal_embedded_draft(cx);
+            });
+        });
+        cx.run_until_parked();
+
+        cx.update(|_window, app| {
+            assert_eq!(
+                main_view
+                    .read(app)
+                    .terminal_preferences_for_test()
+                    .embedded_shell_mode,
+                EmbeddedShellMode::CustomProgram
+            );
+            assert_eq!(
+                main_view
+                    .read(app)
+                    .terminal_preferences_for_test()
+                    .embedded_shell_program,
+                "/bin/zsh"
+            );
+
+            let (embedded_program, embedded_input, status) = settings_window
+                .read_with(app, |settings, cx| {
+                    (
+                        settings.terminal_preferences.embedded_shell_program.clone(),
+                        settings
+                            .terminal_embedded_program_input
+                            .read_with(cx, |input, _| input.text().to_string()),
+                        settings
+                            .terminal_status
+                            .as_ref()
+                            .map(|status| status.text.to_string()),
+                    )
+                })
+                .expect("settings window should remain readable");
+
+            assert_eq!(embedded_program, "/bin/zsh");
+            assert_eq!(embedded_input, "/bin/zsh");
+            assert_eq!(status.as_deref(), Some("Embedded shell draft reset."));
+        });
+    }
+
+    #[gpui::test]
+    fn terminal_external_draft_save_trims_multiline_args_before_persistence(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let _visual_guard = lock_visual_test();
+        let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+        let (main_view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+            open_settings_window(app);
+        });
+        cx.run_until_parked();
+
+        let settings_window = cx.update(|_window, app| {
+            app.windows()
+                .into_iter()
+                .find_map(|window| window.downcast::<SettingsWindowView>())
+                .expect("settings window should be open")
+        });
+
+        cx.update(|_window, app| {
+            let _ = settings_window.update(app, |settings, _window, cx| {
+                settings.set_external_terminal_mode(ExternalTerminalMode::CustomProgram, cx);
+                settings
+                    .terminal_external_program_input
+                    .update(cx, |input, cx| input.set_text("  wezterm  ", cx));
+                settings
+                    .terminal_external_args_input
+                    .update(cx, |input, cx| {
+                        input.set_text("  start  \n\n  --cwd  \n  {cwd}  \n", cx);
+                    });
+                settings.save_terminal_external_draft(cx);
+            });
+        });
+        cx.run_until_parked();
+
+        cx.update(|_window, app| {
+            let root_preferences = main_view.read(app).terminal_preferences_for_test().clone();
+            assert_eq!(
+                root_preferences.external_terminal_mode,
+                ExternalTerminalMode::CustomProgram
+            );
+            assert_eq!(root_preferences.external_terminal_program, "wezterm");
+            assert_eq!(
+                root_preferences.external_terminal_args,
+                vec![
+                    "start".to_string(),
+                    "--cwd".to_string(),
+                    "{cwd}".to_string(),
+                ]
+            );
+
+            let (program, args, program_input, args_input, status) = settings_window
+                .read_with(app, |settings, cx| {
+                    (
+                        settings
+                            .terminal_preferences
+                            .external_terminal_program
+                            .clone(),
+                        settings.terminal_preferences.external_terminal_args.clone(),
+                        settings
+                            .terminal_external_program_input
+                            .read_with(cx, |input, _| input.text().to_string()),
+                        settings
+                            .terminal_external_args_input
+                            .read_with(cx, |input, _| input.text().to_string()),
+                        settings
+                            .terminal_status
+                            .as_ref()
+                            .map(|status| status.text.to_string()),
+                    )
+                })
+                .expect("settings window should remain readable");
+
+            assert_eq!(program, "wezterm");
+            assert_eq!(
+                args,
+                vec![
+                    "start".to_string(),
+                    "--cwd".to_string(),
+                    "{cwd}".to_string(),
+                ]
+            );
+            assert_eq!(program_input, "  wezterm  ");
+            assert_eq!(args_input, "  start  \n\n  --cwd  \n  {cwd}  \n");
+            assert_eq!(status.as_deref(), Some("External terminal settings saved."));
+        });
+    }
+
+    #[gpui::test]
+    fn terminal_external_draft_save_and_reset_do_not_touch_embedded_draft(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let _visual_guard = lock_visual_test();
+        let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+        let (main_view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+            open_settings_window(app);
+        });
+        cx.run_until_parked();
+
+        let settings_window = cx.update(|_window, app| {
+            app.windows()
+                .into_iter()
+                .find_map(|window| window.downcast::<SettingsWindowView>())
+                .expect("settings window should be open")
+        });
+
+        cx.update(|_window, app| {
+            let _ = settings_window.update(app, |settings, _window, cx| {
+                settings.set_embedded_shell_mode(EmbeddedShellMode::CustomProgram, cx);
+                settings
+                    .terminal_embedded_program_input
+                    .update(cx, |input, cx| input.set_text("/bin/zsh", cx));
+                settings.save_terminal_embedded_draft(cx);
+
+                settings.set_external_terminal_mode(ExternalTerminalMode::CustomProgram, cx);
+                settings
+                    .terminal_embedded_program_input
+                    .update(cx, |input, cx| input.set_text("/bin/fish", cx));
+                settings
+                    .terminal_external_program_input
+                    .update(cx, |input, cx| input.set_text("wezterm", cx));
+                settings
+                    .terminal_external_args_input
+                    .update(cx, |input, cx| {
+                        input.set_text("start\n--cwd\n{cwd}", cx);
+                    });
+                settings.save_terminal_external_draft(cx);
+
+                settings
+                    .terminal_external_program_input
+                    .update(cx, |input, cx| input.set_text("kitty", cx));
+                settings
+                    .terminal_external_args_input
+                    .update(cx, |input, cx| {
+                        input.set_text("--directory\n/tmp", cx);
+                    });
+                settings.reset_terminal_external_draft(cx);
+            });
+        });
+        cx.run_until_parked();
+
+        cx.update(|_window, app| {
+            let root_preferences = main_view.read(app).terminal_preferences_for_test().clone();
+            assert_eq!(root_preferences.embedded_shell_program, "/bin/zsh");
+            assert_eq!(
+                root_preferences.external_terminal_mode,
+                ExternalTerminalMode::CustomProgram
+            );
+            assert_eq!(root_preferences.external_terminal_program, "wezterm");
+            assert_eq!(
+                root_preferences.external_terminal_args,
+                vec![
+                    "start".to_string(),
+                    "--cwd".to_string(),
+                    "{cwd}".to_string(),
+                ]
+            );
+
+            let (
+                embedded_program,
+                external_program,
+                external_args,
+                external_program_input,
+                external_args_input,
+                status,
+            ) = settings_window
+                .read_with(app, |settings, cx| {
+                    (
+                        settings.terminal_preferences.embedded_shell_program.clone(),
+                        settings
+                            .terminal_preferences
+                            .external_terminal_program
+                            .clone(),
+                        settings.terminal_preferences.external_terminal_args.clone(),
+                        settings
+                            .terminal_external_program_input
+                            .read_with(cx, |input, _| input.text().to_string()),
+                        settings
+                            .terminal_external_args_input
+                            .read_with(cx, |input, _| input.text().to_string()),
+                        settings
+                            .terminal_status
+                            .as_ref()
+                            .map(|status| status.text.to_string()),
+                    )
+                })
+                .expect("settings window should remain readable");
+
+            assert_eq!(embedded_program, "/bin/zsh");
+            assert_eq!(external_program, "wezterm");
+            assert_eq!(
+                external_args,
+                vec![
+                    "start".to_string(),
+                    "--cwd".to_string(),
+                    "{cwd}".to_string(),
+                ]
+            );
+            assert_eq!(external_program_input, "wezterm");
+            assert_eq!(external_args_input, "start\n--cwd\n{cwd}");
+            assert_eq!(status.as_deref(), Some("External terminal draft reset."));
         });
     }
 

@@ -48,6 +48,9 @@ impl GitCometAssets {
             }
             "icons/undo.svg" => Some(Cow::Borrowed(include_bytes!("../assets/icons/undo.svg"))),
             "icons/tag.svg" => Some(Cow::Borrowed(include_bytes!("../assets/icons/tag.svg"))),
+            "icons/terminal.svg" => Some(Cow::Borrowed(include_bytes!(
+                "../assets/icons/terminal.svg"
+            ))),
             "icons/trash.svg" => Some(Cow::Borrowed(include_bytes!("../assets/icons/trash.svg"))),
             "icons/broom.svg" => Some(Cow::Borrowed(include_bytes!("../assets/icons/broom.svg"))),
             "icons/infinity.svg" => Some(Cow::Borrowed(include_bytes!(
@@ -120,6 +123,7 @@ impl GitCometAssets {
                 "icons/refresh.svg".into(),
                 "icons/undo.svg".into(),
                 "icons/tag.svg".into(),
+                "icons/terminal.svg".into(),
                 "icons/trash.svg".into(),
                 "icons/broom.svg".into(),
                 "icons/infinity.svg".into(),

@@ -53,6 +53,12 @@ impl GitCometView {
                             history_show_author: Some(history_show_author),
                             history_show_date: Some(history_show_date),
                             history_show_sha: Some(history_show_sha),
+                            terminal_embedded_shell_mode: None,
+                            terminal_embedded_shell_program: None,
+                            terminal_external_mode: None,
+                            terminal_external_program: None,
+                            terminal_external_args: None,
+                            terminal_external_fallback: None,
                         };
 
                         Some(settings)

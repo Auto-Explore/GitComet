@@ -304,6 +304,16 @@ fn persist_ui_settings_to_path_updates_optional_fields_and_requires_both_window_
             history_show_author: Some(false),
             history_show_date: Some(true),
             history_show_sha: Some(false),
+            terminal_embedded_shell_mode: Some("custom_program".to_string()),
+            terminal_embedded_shell_program: Some("/bin/zsh".to_string()),
+            terminal_external_mode: Some("custom_program".to_string()),
+            terminal_external_program: Some("wezterm".to_string()),
+            terminal_external_args: Some(vec![
+                "start".to_string(),
+                "--cwd".to_string(),
+                "{cwd}".to_string(),
+            ]),
+            terminal_external_fallback: Some(false),
         },
         &session_file,
     )
@@ -330,6 +340,28 @@ fn persist_ui_settings_to_path_updates_optional_fields_and_requires_both_window_
     assert_eq!(loaded.history_show_author, Some(false));
     assert_eq!(loaded.history_show_date, Some(true));
     assert_eq!(loaded.history_show_sha, Some(false));
+    assert_eq!(
+        loaded.terminal_embedded_shell_mode.as_deref(),
+        Some("custom_program")
+    );
+    assert_eq!(
+        loaded.terminal_embedded_shell_program.as_deref(),
+        Some("/bin/zsh")
+    );
+    assert_eq!(
+        loaded.terminal_external_mode.as_deref(),
+        Some("custom_program")
+    );
+    assert_eq!(loaded.terminal_external_program.as_deref(), Some("wezterm"));
+    assert_eq!(
+        loaded.terminal_external_args,
+        Some(vec![
+            "start".to_string(),
+            "--cwd".to_string(),
+            "{cwd}".to_string()
+        ])
+    );
+    assert_eq!(loaded.terminal_external_fallback, Some(false));
 
     session::persist_ui_settings_to_path(
         UiSettings {

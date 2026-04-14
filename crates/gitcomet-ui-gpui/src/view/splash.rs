@@ -89,7 +89,7 @@ impl GitCometView {
             .update(cx, |bar, cx| bar.set_workspace_actions_enabled(enabled, cx));
     }
 
-    fn set_tooltip_text_if_changed(
+    pub(in crate::view) fn set_tooltip_text_if_changed(
         &mut self,
         next: Option<SharedString>,
         cx: &mut gpui::Context<Self>,
@@ -99,7 +99,11 @@ impl GitCometView {
             .update(cx, |host, cx| host.set_tooltip_text_if_changed(next, cx));
     }
 
-    fn clear_tooltip_if_matches(&mut self, tooltip: &SharedString, cx: &mut gpui::Context<Self>) {
+    pub(in crate::view) fn clear_tooltip_if_matches(
+        &mut self,
+        tooltip: &SharedString,
+        cx: &mut gpui::Context<Self>,
+    ) {
         let tooltip = tooltip.clone();
         let _ = self
             .tooltip_host
@@ -597,7 +601,7 @@ impl GitCometView {
 
     pub(super) fn center_content(
         &mut self,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         let theme = self.theme;
@@ -611,6 +615,8 @@ impl GitCometView {
         }
 
         if renders_full_chrome(self.view_mode) {
+            let terminal_panel = self.render_terminal_panel(theme, window, cx);
+            let has_terminal_panel = terminal_panel.is_some();
             return div()
                 .flex()
                 .flex_col()
@@ -671,7 +677,19 @@ impl GitCometView {
                                 .flex_1()
                                 .min_w(px(0.0))
                                 .min_h(px(0.0))
-                                .child(self.main_pane.clone()),
+                                .when_some(terminal_panel, |d, terminal_panel| {
+                                    d.flex()
+                                        .flex_col()
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .min_h(px(0.0))
+                                                .child(self.main_pane.clone()),
+                                        )
+                                        .child(self.terminal_panel_resize_handle(theme, cx))
+                                        .child(terminal_panel)
+                                })
+                                .when(!has_terminal_panel, |d| d.child(self.main_pane.clone())),
                         )
                         .child(self.pane_resize_handle(
                             theme,

@@ -34,6 +34,12 @@ pub struct UiSession {
     pub history_show_author: Option<bool>,
     pub history_show_date: Option<bool>,
     pub history_show_sha: Option<bool>,
+    pub terminal_embedded_shell_mode: Option<String>,
+    pub terminal_embedded_shell_program: Option<String>,
+    pub terminal_external_mode: Option<String>,
+    pub terminal_external_program: Option<String>,
+    pub terminal_external_args: Option<Vec<String>>,
+    pub terminal_external_fallback: Option<bool>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -92,6 +98,12 @@ struct UiSessionFileV2 {
     history_show_author: Option<bool>,
     history_show_date: Option<bool>,
     history_show_sha: Option<bool>,
+    terminal_embedded_shell_mode: Option<String>,
+    terminal_embedded_shell_program: Option<String>,
+    terminal_external_mode: Option<String>,
+    terminal_external_program: Option<String>,
+    terminal_external_args: Option<Vec<String>>,
+    terminal_external_fallback: Option<bool>,
     repo_history_scopes: Option<BTreeMap<String, HistoryScopeSetting>>,
     repo_fetch_prune_deleted_remote_tracking_branches: Option<BTreeMap<String, bool>>,
 }
@@ -147,6 +159,12 @@ pub fn load_from_path(path: &Path) -> UiSession {
         history_show_author: file.history_show_author,
         history_show_date: file.history_show_date,
         history_show_sha: file.history_show_sha,
+        terminal_embedded_shell_mode: file.terminal_embedded_shell_mode,
+        terminal_embedded_shell_program: file.terminal_embedded_shell_program,
+        terminal_external_mode: file.terminal_external_mode,
+        terminal_external_program: file.terminal_external_program,
+        terminal_external_args: file.terminal_external_args,
+        terminal_external_fallback: file.terminal_external_fallback,
     }
 }
 
@@ -349,6 +367,12 @@ pub struct UiSettings {
     pub history_show_author: Option<bool>,
     pub history_show_date: Option<bool>,
     pub history_show_sha: Option<bool>,
+    pub terminal_embedded_shell_mode: Option<String>,
+    pub terminal_embedded_shell_program: Option<String>,
+    pub terminal_external_mode: Option<String>,
+    pub terminal_external_program: Option<String>,
+    pub terminal_external_args: Option<Vec<String>>,
+    pub terminal_external_fallback: Option<bool>,
 }
 
 pub fn persist_ui_settings(settings: UiSettings) -> io::Result<()> {
@@ -413,6 +437,29 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
     }
     if let Some(value) = settings.history_show_sha {
         file.history_show_sha = Some(value);
+    }
+    if let Some(value) = settings.terminal_embedded_shell_mode {
+        file.terminal_embedded_shell_mode = Some(value);
+    }
+    if let Some(value) = settings.terminal_embedded_shell_program {
+        file.terminal_embedded_shell_program = Some(value);
+    }
+    if let Some(value) = settings.terminal_external_mode {
+        file.terminal_external_mode = Some(value);
+    }
+    if let Some(value) = settings.terminal_external_program {
+        file.terminal_external_program = Some(value);
+    }
+    if let Some(value) = settings.terminal_external_args {
+        let values = value
+            .into_iter()
+            .map(|arg| arg.trim().to_string())
+            .filter(|arg| !arg.is_empty())
+            .collect::<Vec<_>>();
+        file.terminal_external_args = Some(values);
+    }
+    if let Some(value) = settings.terminal_external_fallback {
+        file.terminal_external_fallback = Some(value);
     }
 
     persist_to_path(path, &file)
@@ -1537,6 +1584,12 @@ mod tests {
                 history_show_author: None,
                 history_show_date: None,
                 history_show_sha: None,
+                terminal_embedded_shell_mode: None,
+                terminal_embedded_shell_program: None,
+                terminal_external_mode: None,
+                terminal_external_program: None,
+                terminal_external_args: None,
+                terminal_external_fallback: None,
             },
             &path,
         )
@@ -1593,6 +1646,12 @@ mod tests {
                 history_show_author: None,
                 history_show_date: None,
                 history_show_sha: None,
+                terminal_embedded_shell_mode: None,
+                terminal_embedded_shell_program: None,
+                terminal_external_mode: None,
+                terminal_external_program: None,
+                terminal_external_args: None,
+                terminal_external_fallback: None,
             },
             &path,
         )
@@ -1646,6 +1705,12 @@ mod tests {
                 history_show_author: None,
                 history_show_date: None,
                 history_show_sha: None,
+                terminal_embedded_shell_mode: None,
+                terminal_embedded_shell_program: None,
+                terminal_external_mode: None,
+                terminal_external_program: None,
+                terminal_external_args: None,
+                terminal_external_fallback: None,
             },
             &path,
         )
@@ -1699,6 +1764,12 @@ mod tests {
                 history_show_author: None,
                 history_show_date: None,
                 history_show_sha: None,
+                terminal_embedded_shell_mode: None,
+                terminal_embedded_shell_program: None,
+                terminal_external_mode: None,
+                terminal_external_program: None,
+                terminal_external_args: None,
+                terminal_external_fallback: None,
             },
             &path,
         )
@@ -1752,6 +1823,12 @@ mod tests {
                 history_show_author: None,
                 history_show_date: None,
                 history_show_sha: None,
+                terminal_embedded_shell_mode: None,
+                terminal_embedded_shell_program: None,
+                terminal_external_mode: None,
+                terminal_external_program: None,
+                terminal_external_args: None,
+                terminal_external_fallback: None,
             },
             &path,
         )
@@ -1808,6 +1885,12 @@ mod tests {
                 history_show_author: None,
                 history_show_date: None,
                 history_show_sha: None,
+                terminal_embedded_shell_mode: None,
+                terminal_embedded_shell_program: None,
+                terminal_external_mode: None,
+                terminal_external_program: None,
+                terminal_external_args: None,
+                terminal_external_fallback: None,
             },
             &path,
         )
@@ -1862,6 +1945,12 @@ mod tests {
                 history_show_author: None,
                 history_show_date: None,
                 history_show_sha: None,
+                terminal_embedded_shell_mode: None,
+                terminal_embedded_shell_program: None,
+                terminal_external_mode: None,
+                terminal_external_program: None,
+                terminal_external_args: None,
+                terminal_external_fallback: None,
             },
             &path,
         )
@@ -1870,6 +1959,91 @@ mod tests {
         let loaded = load_from_path(&path);
         assert_eq!(loaded.theme_mode.as_deref(), Some("dark"));
     }
+
+    #[test]
+    fn persist_ui_settings_round_trips_terminal_preferences() {
+        let dir = env::temp_dir().join(format!(
+            "gitcomet-ui-settings-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("session.json");
+
+        persist_to_path(
+            &path,
+            &UiSessionFileV2 {
+                version: CURRENT_SESSION_FILE_VERSION,
+                open_repos: Vec::new(),
+                active_repo: None,
+                ..UiSessionFileV2::default()
+            },
+        )
+        .expect("seed session file");
+
+        persist_ui_settings_to_path(
+            UiSettings {
+                window_width: None,
+                window_height: None,
+                sidebar_width: None,
+                details_width: None,
+                repo_sidebar_collapsed_items: None,
+                theme_mode: None,
+                ui_font_family: None,
+                editor_font_family: None,
+                use_font_ligatures: None,
+                date_time_format: None,
+                timezone: None,
+                show_timezone: None,
+                change_tracking_view: None,
+                change_tracking_height: None,
+                untracked_height: None,
+                history_show_author: None,
+                history_show_date: None,
+                history_show_sha: None,
+                terminal_embedded_shell_mode: Some("custom_program".to_string()),
+                terminal_embedded_shell_program: Some("/bin/zsh".to_string()),
+                terminal_external_mode: Some("custom_program".to_string()),
+                terminal_external_program: Some("wezterm".to_string()),
+                terminal_external_args: Some(vec![
+                    "start".to_string(),
+                    "--cwd".to_string(),
+                    "{cwd}".to_string(),
+                ]),
+                terminal_external_fallback: Some(false),
+            },
+            &path,
+        )
+        .expect("persist ui settings");
+
+        let loaded = load_from_path(&path);
+        assert_eq!(
+            loaded.terminal_embedded_shell_mode.as_deref(),
+            Some("custom_program")
+        );
+        assert_eq!(
+            loaded.terminal_embedded_shell_program.as_deref(),
+            Some("/bin/zsh")
+        );
+        assert_eq!(
+            loaded.terminal_external_mode.as_deref(),
+            Some("custom_program")
+        );
+        assert_eq!(loaded.terminal_external_program.as_deref(), Some("wezterm"));
+        assert_eq!(
+            loaded.terminal_external_args,
+            Some(vec![
+                "start".to_string(),
+                "--cwd".to_string(),
+                "{cwd}".to_string()
+            ])
+        );
+        assert_eq!(loaded.terminal_external_fallback, Some(false));
+    }
+
     #[test]
     fn persist_repo_history_scope_round_trips() {
         let dir = env::temp_dir().join(format!(
