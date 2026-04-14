@@ -62,7 +62,7 @@ bit-vec	0.8.0	Apache-2.0 OR MIT
 bit-vec	0.9.1	Apache-2.0 OR MIT
 bit_field	0.10.3	Apache-2.0/MIT
 bitflags	1.3.2	MIT/Apache-2.0
-bitflags	2.11.0	MIT OR Apache-2.0
+bitflags	2.11.1	MIT OR Apache-2.0
 bitstream-io	4.9.0	MIT/Apache-2.0
 block	0.1.6	MIT
 block-buffer	0.10.4	MIT OR Apache-2.0
@@ -193,7 +193,7 @@ flume	0.12.0	Apache-2.0/MIT
 fnv	1.0.7	Apache-2.0 / MIT
 foldhash	0.1.5	Zlib
 foldhash	0.2.0	Zlib
-font-types	0.11.2	MIT OR Apache-2.0
+font-types	0.11.3	MIT OR Apache-2.0
 fontconfig-parser	0.5.8	MIT
 fontdb	0.23.0	MIT
 foreign-types	0.5.0	MIT/Apache-2.0
@@ -317,7 +317,7 @@ http-body-util	0.1.3	MIT
 httparse	1.10.1	MIT OR Apache-2.0
 human_format	1.2.1	MIT
 hyper	1.9.0	MIT
-hyper-rustls	0.27.7	Apache-2.0 OR ISC OR MIT
+hyper-rustls	0.27.8	Apache-2.0 OR ISC OR MIT
 hyper-util	0.1.20	MIT
 iana-time-zone	0.1.65	MIT OR Apache-2.0
 iana-time-zone-haiku	0.1.2	MIT OR Apache-2.0
@@ -376,7 +376,7 @@ leak	0.1.2	Apache-2.0 OR MIT
 leaky-cow	0.1.1	MIT / Apache-2.0
 leb128fmt	0.1.0	MIT OR Apache-2.0
 lebe	0.5.3	BSD-3-Clause
-libc	0.2.184	MIT OR Apache-2.0
+libc	0.2.185	MIT OR Apache-2.0
 libfuzzer-sys	0.4.12	(MIT OR Apache-2.0) AND NCSA
 libgit2-sys	0.18.3+1.9.2	MIT OR Apache-2.0
 libloading	0.8.9	ISC
@@ -393,7 +393,7 @@ litrs	1.0.0	MIT OR Apache-2.0
 lock_api	0.4.14	MIT OR Apache-2.0
 log	0.4.29	MIT OR Apache-2.0
 loop9	0.1.5	MIT
-lru	0.16.3	MIT
+lru	0.16.4	MIT
 lru-slab	0.1.2	MIT OR Apache-2.0 OR Zlib
 lyon	1.0.19	MIT OR Apache-2.0
 lyon_algorithms	1.0.19	MIT OR Apache-2.0
@@ -472,7 +472,7 @@ pin-project-internal	1.1.11	Apache-2.0 OR MIT
 pin-project-lite	0.2.17	Apache-2.0 OR MIT
 pin-utils	0.1.0	MIT OR Apache-2.0
 piper	0.2.5	MIT OR Apache-2.0
-pkg-config	0.3.32	MIT OR Apache-2.0
+pkg-config	0.3.33	MIT OR Apache-2.0
 plain	0.2.3	MIT/Apache-2.0
 plotters	0.3.7	MIT
 plotters-backend	0.3.7	MIT
@@ -511,9 +511,9 @@ quote	1.0.45	MIT OR Apache-2.0
 r-efi	5.3.0	MIT OR Apache-2.0 OR LGPL-2.1-or-later
 r-efi	6.0.0	MIT OR Apache-2.0 OR LGPL-2.1-or-later
 rand	0.10.1	MIT OR Apache-2.0
-rand	0.9.3	MIT OR Apache-2.0
+rand	0.9.4	MIT OR Apache-2.0
 rand_chacha	0.9.0	MIT OR Apache-2.0
-rand_core	0.10.0	MIT OR Apache-2.0
+rand_core	0.10.1	MIT OR Apache-2.0
 rand_core	0.9.5	MIT OR Apache-2.0
 rand_xorshift	0.4.0	MIT OR Apache-2.0
 range-alloc	0.1.5	MIT OR Apache-2.0
@@ -522,7 +522,7 @@ rav1e	0.8.1	BSD-2-Clause
 ravif	0.13.0	BSD-3-Clause
 raw-window-handle	0.6.2	MIT OR Apache-2.0 OR Zlib
 raw-window-metal	1.1.0	MIT OR Apache-2.0
-rayon	1.11.0	MIT OR Apache-2.0
+rayon	1.12.0	MIT OR Apache-2.0
 rayon-core	1.13.0	MIT OR Apache-2.0
 read-fonts	0.37.0	MIT OR Apache-2.0
 redox_syscall	0.2.16	MIT
@@ -550,13 +550,13 @@ rustc-hash	2.1.2	Apache-2.0 OR MIT
 rustc_version	0.4.1	MIT OR Apache-2.0
 rustix	0.38.44	Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
 rustix	1.1.4	Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
-rustls	0.23.37	Apache-2.0 OR ISC OR MIT
+rustls	0.23.38	Apache-2.0 OR ISC OR MIT
 rustls-native-certs	0.8.3	Apache-2.0 OR ISC OR MIT
 rustls-pemfile	2.2.0	Apache-2.0 OR ISC OR MIT
 rustls-pki-types	1.14.0	MIT OR Apache-2.0
 rustls-platform-verifier	0.6.2	MIT OR Apache-2.0
 rustls-platform-verifier-android	0.1.1	MIT OR Apache-2.0
-rustls-webpki	0.103.11	ISC
+rustls-webpki	0.103.12	ISC
 rustversion	1.0.22	MIT OR Apache-2.0
 rusty-fork	0.3.1	MIT/Apache-2.0
 rustybuzz	0.20.1	MIT
@@ -756,26 +756,20 @@ winapi	0.3.9	MIT/Apache-2.0
 winapi-i686-pc-windows-gnu	0.4.0	MIT/Apache-2.0
 winapi-util	0.1.11	Unlicense OR MIT
 winapi-x86_64-pc-windows-gnu	0.4.0	MIT/Apache-2.0
-windows	0.61.3	MIT OR Apache-2.0
 windows	0.62.2	MIT OR Apache-2.0
-windows-collections	0.2.0	MIT OR Apache-2.0
 windows-collections	0.3.2	MIT OR Apache-2.0
-windows-core	0.61.2	MIT OR Apache-2.0
 windows-core	0.62.2	MIT OR Apache-2.0
-windows-future	0.2.1	MIT OR Apache-2.0
 windows-future	0.3.2	MIT OR Apache-2.0
 windows-implement	0.60.2	MIT OR Apache-2.0
 windows-interface	0.59.3	MIT OR Apache-2.0
 windows-link	0.1.3	MIT OR Apache-2.0
 windows-link	0.2.1	MIT OR Apache-2.0
-windows-numerics	0.2.0	MIT OR Apache-2.0
 windows-numerics	0.3.1	MIT OR Apache-2.0
 windows-registry	0.4.0	MIT OR Apache-2.0
 windows-registry	0.6.1	MIT OR Apache-2.0
 windows-result	0.3.4	MIT OR Apache-2.0
 windows-result	0.4.1	MIT OR Apache-2.0
 windows-strings	0.3.1	MIT OR Apache-2.0
-windows-strings	0.4.2	MIT OR Apache-2.0
 windows-strings	0.5.1	MIT OR Apache-2.0
 windows-sys	0.45.0	MIT OR Apache-2.0
 windows-sys	0.48.0	MIT OR Apache-2.0
@@ -787,7 +781,6 @@ windows-targets	0.42.2	MIT OR Apache-2.0
 windows-targets	0.48.5	MIT OR Apache-2.0
 windows-targets	0.52.6	MIT OR Apache-2.0
 windows-targets	0.53.5	MIT OR Apache-2.0
-windows-threading	0.1.0	MIT OR Apache-2.0
 windows-threading	0.2.1	MIT OR Apache-2.0
 windows_aarch64_gnullvm	0.42.2	MIT OR Apache-2.0
 windows_aarch64_gnullvm	0.48.5	MIT OR Apache-2.0
