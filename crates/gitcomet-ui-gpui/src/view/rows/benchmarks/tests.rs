@@ -86,7 +86,7 @@ fn git_ops_status_fixture_reports_dirty_status_metrics() {
     assert_eq!(hash_without_trace, hash_with_trace);
     assert_eq!(metrics.tracked_files, 32);
     assert_eq!(metrics.dirty_files, 8);
-    assert_eq!(metrics.status_calls, 1);
+    assert_eq!(metrics.status_calls, 2);
     assert_eq!(metrics.log_walk_calls, 0);
     assert_eq!(metrics.diff_calls, 0);
     assert_eq!(metrics.blame_calls, 0);
@@ -2171,15 +2171,10 @@ fn repo_tab_drag_hit_test_covers_all_tabs() {
 #[test]
 fn repo_tab_drag_hit_test_precomputes_expected_sweep() {
     let fixture = RepoTabDragFixture::new(4);
-    assert_eq!(fixture.hit_test_steps.len(), 12);
-    assert_eq!(
-        fixture.hit_test_steps.first().unwrap().target.repo_id,
-        RepoId(1)
-    );
-    assert_eq!(
-        fixture.hit_test_steps.last().unwrap().target.repo_id,
-        RepoId(4)
-    );
+    let target_ids = fixture.hit_test_target_repo_ids();
+    assert_eq!(target_ids.len(), 12);
+    assert_eq!(target_ids.first().copied(), Some(RepoId(1)));
+    assert_eq!(target_ids.last().copied(), Some(RepoId(4)));
 }
 
 #[test]
@@ -2711,7 +2706,7 @@ fn git_ops_status_clean_fixture_reports_zero_dirty_metrics() {
     assert_eq!(hash_without_trace, hash_with_trace);
     assert_eq!(metrics.tracked_files, 32);
     assert_eq!(metrics.dirty_files, 0);
-    assert_eq!(metrics.status_calls, 1);
+    assert_eq!(metrics.status_calls, 2);
     assert_eq!(metrics.log_walk_calls, 0);
     assert_eq!(metrics.ref_enumerate_calls, 0);
     assert!(metrics.status_ms > 0.0);
@@ -3086,7 +3081,7 @@ fn fs_event_single_file_save_detects_one_dirty_file() {
     assert_ne!(hash, 0);
     assert_eq!(metrics.mutation_files, 1);
     assert_eq!(metrics.dirty_files_detected, 1);
-    assert_eq!(metrics.status_calls, 1);
+    assert_eq!(metrics.status_calls, 2);
     assert!(metrics.tracked_files >= 50);
     assert!(metrics.status_ms > 0.0);
 }
@@ -3098,7 +3093,7 @@ fn fs_event_git_checkout_batch_detects_all_dirty_files() {
     assert_ne!(hash, 0);
     assert_eq!(metrics.mutation_files, 30);
     assert_eq!(metrics.dirty_files_detected, 30);
-    assert_eq!(metrics.status_calls, 1);
+    assert_eq!(metrics.status_calls, 2);
     assert!(metrics.tracked_files >= 100);
 }
 
@@ -3109,7 +3104,7 @@ fn fs_event_rapid_saves_debounce_coalesces_into_single_status() {
     assert_ne!(hash, 0);
     assert_eq!(metrics.coalesced_saves, 20);
     assert_eq!(metrics.dirty_files_detected, 20);
-    assert_eq!(metrics.status_calls, 1);
+    assert_eq!(metrics.status_calls, 2);
     assert!(metrics.tracked_files >= 80);
 }
 
@@ -3121,7 +3116,7 @@ fn fs_event_false_positive_under_churn_finds_zero_dirty() {
     assert_eq!(metrics.mutation_files, 20);
     assert_eq!(metrics.dirty_files_detected, 0);
     assert_eq!(metrics.false_positives, 20);
-    assert_eq!(metrics.status_calls, 1);
+    assert_eq!(metrics.status_calls, 2);
 }
 
 #[test]
@@ -3180,7 +3175,7 @@ fn idle_background_refresh_short_window_reports_status_calls() {
     assert_eq!(metrics.open_repos, 3);
     assert_eq!(metrics.refresh_cycles, 4);
     assert_eq!(metrics.repos_refreshed, 12);
-    assert_eq!(metrics.status_calls, 12);
+    assert_eq!(metrics.status_calls, 24);
     assert!(metrics.status_ms > 0.0);
     assert!(metrics.avg_refresh_cycle_ms > 0.0);
     assert!(metrics.max_refresh_cycle_ms >= metrics.avg_refresh_cycle_ms);
@@ -3205,7 +3200,7 @@ fn idle_wake_resume_reports_single_refresh_burst() {
     assert_eq!(metrics.open_repos, 2);
     assert_eq!(metrics.refresh_cycles, 1);
     assert_eq!(metrics.repos_refreshed, 2);
-    assert_eq!(metrics.status_calls, 2);
+    assert_eq!(metrics.status_calls, 4);
     assert!(metrics.status_ms > 0.0);
     assert!(metrics.wake_resume_ms > 0.0);
 }
@@ -3231,11 +3226,13 @@ fn idle_cpu_usage_hash_is_deterministic_for_fixed_config() {
 #[test]
 fn idle_linux_proc_parsers_extract_runtime_and_rss() {
     assert_eq!(
-        parse_first_u64_ascii_token(b"123456789 456 789\n"),
+        runtime_fixtures::parse_first_u64_ascii_token(b"123456789 456 789\n"),
         Some(123_456_789)
     );
     assert_eq!(
-        parse_vmrss_kib(b"Name:\ttest\nState:\tR\nVmRSS:\t  24696 kB\nThreads:\t1\n"),
+        runtime_fixtures::parse_vmrss_kib(
+            b"Name:\ttest\nState:\tR\nVmRSS:\t  24696 kB\nThreads:\t1\n",
+        ),
         Some(24_696)
     );
 }

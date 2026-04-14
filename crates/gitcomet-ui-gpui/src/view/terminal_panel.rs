@@ -273,7 +273,7 @@ impl TerminalViewportView {
         let blink_seq = self.cursor_blink_seq;
         cx.spawn(
             async move |view: WeakEntity<TerminalViewportView>, cx: &mut gpui::AsyncApp| {
-                Timer::after(Duration::from_millis(TERMINAL_CARET_BLINK_INTERVAL_MS)).await;
+                smol::Timer::after(Duration::from_millis(TERMINAL_CARET_BLINK_INTERVAL_MS)).await;
                 let _ = view.update(cx, |this, cx| this.advance_cursor_blink(blink_seq, cx));
             },
         )
@@ -578,7 +578,7 @@ impl Render for TerminalViewportView {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _e: &MouseDownEvent, window, cx| {
-                    window.focus(&this.focus_handle);
+                    window.focus(&this.focus_handle, cx);
                     this.reset_cursor_blink(cx);
                 }),
             )
@@ -659,7 +659,7 @@ impl GitCometView {
         let blink_seq = self.terminal_cursor_blink_seq;
         cx.spawn(
             async move |view: WeakEntity<GitCometView>, cx: &mut gpui::AsyncApp| {
-                Timer::after(Duration::from_millis(TERMINAL_CARET_BLINK_INTERVAL_MS)).await;
+                smol::Timer::after(Duration::from_millis(TERMINAL_CARET_BLINK_INTERVAL_MS)).await;
                 let _ = view.update(cx, |this, cx| {
                     this.advance_terminal_cursor_blink(blink_seq, cx)
                 });
@@ -948,7 +948,7 @@ impl GitCometView {
         else {
             return;
         };
-        window.focus(&focus_handle);
+        window.focus(&focus_handle, cx);
         self.reset_terminal_cursor_blink(cx);
     }
 
@@ -1117,7 +1117,7 @@ impl GitCometView {
     ) {
         cx.spawn(
             async move |view: WeakEntity<GitCometView>, cx: &mut gpui::AsyncApp| {
-                Timer::after(Duration::from_millis(TERMINAL_READ_BATCH_DELAY_MS)).await;
+                smol::Timer::after(Duration::from_millis(TERMINAL_READ_BATCH_DELAY_MS)).await;
                 let _ = view.update(cx, |this, cx| {
                     this.flush_terminal_read_batch(repo_id, session_seq, &batch_state, cx);
                 });
@@ -2214,7 +2214,7 @@ fn paint_terminal_canvas_state(
     cx: &mut App,
 ) {
     for (line, origin, line_height) in paint_state.lines {
-        let _ = line.paint(origin, line_height, window, cx);
+        let _ = line.paint(origin, line_height, gpui::TextAlign::Left, None, window, cx);
     }
 
     if let Some(cursor) = paint_state.cursor {
@@ -3551,18 +3551,18 @@ mod tests {
                     make_test_terminal_session(workdir.clone(), focus.clone(), io, 1, cx),
                 );
 
-                window.focus(&other_focus);
+                window.focus(&other_focus, cx);
                 this.sync_terminal_cursor_blink_activity(repo_id, window, cx);
                 assert!(!this.terminal_cursor_blink_active);
                 assert!(!this.terminal_cursor_blink_task_scheduled);
 
-                window.focus(&focus);
+                window.focus(&focus, cx);
                 this.sync_terminal_cursor_blink_activity(repo_id, window, cx);
                 assert!(this.terminal_cursor_blink_active);
                 assert!(this.terminal_cursor_blink_task_scheduled);
 
                 this.terminal_cursor_blink_visible = false;
-                window.focus(&other_focus);
+                window.focus(&other_focus, cx);
                 this.sync_terminal_cursor_blink_activity(repo_id, window, cx);
                 assert!(!this.terminal_cursor_blink_active);
                 assert!(!this.terminal_cursor_blink_task_scheduled);

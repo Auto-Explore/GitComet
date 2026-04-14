@@ -1,7 +1,9 @@
-use crate::model::{ConflictFileLoadMode, RepoId};
+use crate::model::GitLogTagFetchMode;
+use crate::model::{ConflictFileLoadMode, RepoId, SidebarDataRequest};
 use gitcomet_core::conflict_session::ConflictSession;
 use gitcomet_core::domain::*;
 use gitcomet_core::error::Error;
+use gitcomet_core::process::GitRuntimeState;
 use gitcomet_core::services::GitRepository;
 use gitcomet_core::services::{CommandOutput, ConflictSide, PullMode, RemoteUrlKind, ResetMode};
 use std::path::PathBuf;
@@ -88,6 +90,11 @@ pub enum Msg {
         secret: String,
     },
     CancelAuthPrompt,
+    SetGitRuntimeState(GitRuntimeState),
+    SetGitLogSettings {
+        show_history_tags: bool,
+        tag_fetch_mode: GitLogTagFetchMode,
+    },
     SetActiveRepo {
         repo_id: RepoId,
     },
@@ -131,6 +138,10 @@ pub enum Msg {
     ClearDiffSelection {
         repo_id: RepoId,
     },
+    EnsureSidebarData {
+        repo_id: RepoId,
+        request: SidebarDataRequest,
+    },
     LoadStashes {
         repo_id: RepoId,
     },
@@ -156,6 +167,12 @@ pub enum Msg {
         repo_id: RepoId,
     },
     LoadSubmodules {
+        repo_id: RepoId,
+    },
+    LoadTags {
+        repo_id: RepoId,
+    },
+    LoadRemoteTags {
         repo_id: RepoId,
     },
     RefreshBranches {
@@ -216,6 +233,9 @@ pub enum Msg {
     },
     CloneRepo {
         url: String,
+        dest: PathBuf,
+    },
+    AbortCloneRepo {
         dest: PathBuf,
     },
     ExportPatch {
@@ -507,6 +527,14 @@ pub enum InternalMsg {
     RemoteBranchesLoaded {
         repo_id: RepoId,
         result: Result<Vec<RemoteBranch>, Error>,
+    },
+    WorktreeStatusLoaded {
+        repo_id: RepoId,
+        result: Result<Vec<FileStatus>, Error>,
+    },
+    StagedStatusLoaded {
+        repo_id: RepoId,
+        result: Result<Vec<FileStatus>, Error>,
     },
     StatusLoaded {
         repo_id: RepoId,

@@ -1,8 +1,7 @@
 use super::*;
 use crate::view::panels::tests::wait_for_main_pane_condition;
 use crate::view::panels::tests::{
-    app_state_with_repo, disable_view_poller_for_test, opening_repo_state, push_test_state,
-    set_test_file_status,
+    app_state_with_repo, opening_repo_state, push_test_state, set_test_file_status,
 };
 
 #[gpui::test]
@@ -421,10 +420,6 @@ fn commit_file_menu_copy_path_supports_right_button_release(cx: &mut gpui::TestA
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
-    cx.update(|_window, app| {
-        view.update(app, |this, _cx| this.disable_poller_for_tests());
-    });
-
     let repo_id = RepoId(35);
     let commit_id = CommitId("feedfacefeedface".into());
     let workdir = std::env::temp_dir().join(format!(
@@ -512,10 +507,6 @@ fn status_file_menu_copy_path_supports_right_button_release(cx: &mut gpui::TestA
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
-
-    cx.update(|_window, app| {
-        view.update(app, |this, _cx| this.disable_poller_for_tests());
-    });
 
     let repo_id = RepoId(36);
     let workdir = std::env::temp_dir().join(format!(
@@ -683,7 +674,6 @@ fn file_preview_context_menu_matches_diff_editor_actions(cx: &mut gpui::TestAppC
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = RepoId(44);
     let workdir = std::env::temp_dir().join(format!(

@@ -172,7 +172,7 @@ impl MainPaneView {
         let autoscroll_seq = self.diff_text_autoscroll_seq;
         cx.spawn(
             async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| loop {
-                Timer::after(Duration::from_millis(16)).await;
+                smol::Timer::after(Duration::from_millis(16)).await;
                 let mut keep_going = false;
                 let _ = view.update(cx, |this, cx| {
                     if !this.diff_text_selecting {
@@ -1169,8 +1169,8 @@ impl MainPaneView {
         let delta_x = autoscroll_delta_for_axis(mouse.x, bounds.left(), bounds.right());
         let delta_y = autoscroll_delta_for_axis(mouse.y, bounds.top(), bounds.bottom());
 
-        let new_x = (old_offset.x + delta_x).clamp(-max_offset.width, px(0.0));
-        let new_y = (old_offset.y + delta_y).clamp(-max_offset.height, px(0.0));
+        let new_x = (old_offset.x + delta_x).clamp(-max_offset.x, px(0.0));
+        let new_y = (old_offset.y + delta_y).clamp(-max_offset.y, px(0.0));
 
         let scrolled = new_x != old_offset.x || new_y != old_offset.y;
         if scrolled {

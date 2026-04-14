@@ -347,6 +347,7 @@ mod status;
 pub(crate) mod benchmarks;
 
 pub(in crate::view) use self::sidebar::active_workspace_paths_by_branch;
+pub(in crate::view) use self::sidebar::listed_workspace_paths_by_branch;
 
 pub(in crate::view) use diff_text::{
     BackgroundPreparedDiffSyntaxDocument, DiffSyntaxBudget, DiffSyntaxEdit, DiffSyntaxLanguage,

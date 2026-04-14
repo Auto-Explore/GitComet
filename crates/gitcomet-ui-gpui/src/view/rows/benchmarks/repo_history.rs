@@ -1099,14 +1099,7 @@ impl RepoSwitchFixture {
         );
 
         Self {
-            baseline: AppState {
-                repos: vec![repo],
-                active_repo: Some(RepoId(1)),
-                clone: None,
-                notifications: Vec::new(),
-                banner_error: None,
-                auth_prompt: None,
-            },
+            baseline: bench_app_state(vec![repo], Some(RepoId(1))),
             target_repo_id: RepoId(1),
         }
     }
@@ -1140,14 +1133,7 @@ impl RepoSwitchFixture {
         );
 
         Self {
-            baseline: AppState {
-                repos: vec![repo1, repo2],
-                active_repo: Some(RepoId(1)),
-                clone: None,
-                notifications: Vec::new(),
-                banner_error: None,
-                auth_prompt: None,
-            },
+            baseline: bench_app_state(vec![repo1, repo2], Some(RepoId(1))),
             target_repo_id: RepoId(2),
         }
     }
@@ -1181,14 +1167,7 @@ impl RepoSwitchFixture {
         );
 
         Self {
-            baseline: AppState {
-                repos: vec![repo1, repo2],
-                active_repo: Some(RepoId(1)),
-                clone: None,
-                notifications: Vec::new(),
-                banner_error: None,
-                auth_prompt: None,
-            },
+            baseline: bench_app_state(vec![repo1, repo2], Some(RepoId(1))),
             target_repo_id: RepoId(2),
         }
     }
@@ -1224,14 +1203,7 @@ impl RepoSwitchFixture {
         }
 
         Self {
-            baseline: AppState {
-                repos,
-                active_repo: Some(RepoId(1)),
-                clone: None,
-                notifications: Vec::new(),
-                banner_error: None,
-                auth_prompt: None,
-            },
+            baseline: bench_app_state(repos, Some(RepoId(1))),
             target_repo_id: RepoId(u64::try_from(TAB_COUNT).unwrap_or(u64::MAX)),
         }
     }
@@ -1267,14 +1239,7 @@ impl RepoSwitchFixture {
         }
 
         Self {
-            baseline: AppState {
-                repos,
-                active_repo: Some(RepoId(1)),
-                clone: None,
-                notifications: Vec::new(),
-                banner_error: None,
-                auth_prompt: None,
-            },
+            baseline: bench_app_state(repos, Some(RepoId(1))),
             target_repo_id: RepoId(u64::try_from(REPO_COUNT).unwrap_or(u64::MAX)),
         }
     }
@@ -1313,14 +1278,7 @@ impl RepoSwitchFixture {
         populate_loaded_diff_state(&mut repo2, "src/lib.rs", 500);
 
         Self {
-            baseline: AppState {
-                repos: vec![repo1, repo2],
-                active_repo: Some(RepoId(1)),
-                clone: None,
-                notifications: Vec::new(),
-                banner_error: None,
-                auth_prompt: None,
-            },
+            baseline: bench_app_state(vec![repo1, repo2], Some(RepoId(1))),
             target_repo_id: RepoId(2),
         }
     }
@@ -1359,14 +1317,7 @@ impl RepoSwitchFixture {
         populate_conflict_state(&mut repo2, "src/conflict_b.rs", 200);
 
         Self {
-            baseline: AppState {
-                repos: vec![repo1, repo2],
-                active_repo: Some(RepoId(1)),
-                clone: None,
-                notifications: Vec::new(),
-                banner_error: None,
-                auth_prompt: None,
-            },
+            baseline: bench_app_state(vec![repo1, repo2], Some(RepoId(1))),
             target_repo_id: RepoId(2),
         }
     }
@@ -1413,14 +1364,7 @@ impl RepoSwitchFixture {
         repo2.merge_message_rev = 1;
 
         Self {
-            baseline: AppState {
-                repos: vec![repo1, repo2],
-                active_repo: Some(RepoId(1)),
-                clone: None,
-                notifications: Vec::new(),
-                banner_error: None,
-                auth_prompt: None,
-            },
+            baseline: bench_app_state(vec![repo1, repo2], Some(RepoId(1))),
             target_repo_id: RepoId(2),
         }
     }
@@ -1463,7 +1407,8 @@ pub struct HistoryGraphFixture {
 
 fn repo_switch_repo_is_hydrated(repo: &RepoState) -> bool {
     matches!(repo.open, Loadable::Ready(()))
-        && matches!(repo.status, Loadable::Ready(_))
+        && repo.worktree_status_entries().is_some()
+        && repo.staged_status_entries().is_some()
         && matches!(repo.log, Loadable::Ready(_))
         && matches!(repo.history_state.log, Loadable::Ready(_))
         && matches!(repo.branches, Loadable::Ready(_))

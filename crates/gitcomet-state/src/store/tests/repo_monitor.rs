@@ -34,7 +34,7 @@ fn repo_monitor_start_failures_are_recorded_for_missing_workdir() {
 fn repo_monitor_stop_send_failures_are_recorded() {
     let before = monitor_impl::monitor_failure_count(monitor_impl::MonitorFailureKind::Stop);
 
-    monitor_impl::record_stop_send_failure_for_test(RepoId(77), "repo monitor test stop send");
+    monitor_impl::record_stop_send_failure(RepoId(77), "repo monitor test stop send");
 
     let after = monitor_impl::monitor_failure_count(monitor_impl::MonitorFailureKind::Stop);
     assert_eq!(after, before + 1);
@@ -45,7 +45,7 @@ fn repo_monitor_join_failures_are_recorded() {
     let before = monitor_impl::monitor_failure_count(monitor_impl::MonitorFailureKind::Join);
 
     let join = std::thread::spawn(|| panic!("monitor panic test"));
-    monitor_impl::join_monitor_for_test(join, RepoId(88), "repo monitor test join");
+    monitor_impl::join_monitor_or_log(join, RepoId(88), "repo monitor test join");
 
     let after = monitor_impl::monitor_failure_count(monitor_impl::MonitorFailureKind::Join);
     assert_eq!(after, before + 1);

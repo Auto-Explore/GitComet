@@ -52,12 +52,6 @@ pub(in crate::view) enum ContextMenuAction {
         repo_id: RepoId,
         scope: gitcomet_core::domain::LogScope,
     },
-    SetHistoryColumns {
-        show_author: bool,
-        show_date: bool,
-        show_sha: bool,
-    },
-    ResetHistoryColumnWidths,
     SetChangeTrackingView {
         view: ChangeTrackingView,
     },
@@ -267,7 +261,7 @@ mod main;
 mod popover;
 mod repo_tabs_bar;
 
-pub(super) use action_bar::ActionBarView;
+pub(super) use action_bar::{ACTION_BAR_HEIGHT, ActionBarView};
 pub(super) use popover::PopoverHost;
 pub(super) use repo_tabs_bar::RepoTabsBarView;
 #[allow(unused_imports)]

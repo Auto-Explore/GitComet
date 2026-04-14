@@ -1,5 +1,6 @@
 use super::*;
 use crate::view::fingerprint as view_fingerprint;
+use gitcomet_state::model::CloneProgressStage;
 use rustc_hash::FxHasher;
 use std::hash::{Hash, Hasher};
 
@@ -17,11 +18,18 @@ pub(super) fn notify_fingerprint(state: &AppState, popover: &PopoverKind) -> u64
                 clone.dest.hash(&mut hasher);
                 match &clone.status {
                     CloneOpStatus::Running => 0u8.hash(&mut hasher),
-                    CloneOpStatus::FinishedOk => 1u8.hash(&mut hasher),
+                    CloneOpStatus::Cancelling => 1u8.hash(&mut hasher),
+                    CloneOpStatus::FinishedOk => 2u8.hash(&mut hasher),
+                    CloneOpStatus::Cancelled => 3u8.hash(&mut hasher),
                     CloneOpStatus::FinishedErr(err) => {
-                        2u8.hash(&mut hasher);
+                        4u8.hash(&mut hasher);
                         err.hash(&mut hasher);
                     }
+                }
+                clone.progress.percent.hash(&mut hasher);
+                match clone.progress.stage {
+                    CloneProgressStage::Loading => 0u8.hash(&mut hasher),
+                    CloneProgressStage::RemoteObjects => 1u8.hash(&mut hasher),
                 }
             }
         },
@@ -75,7 +83,6 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::PushPicker
         | PopoverKind::AppMenu
         | PopoverKind::DiffHunks
-        | PopoverKind::HistoryColumnSettings
         | PopoverKind::ConflictResolverInputRowMenu { .. }
         | PopoverKind::ConflictResolverChunkMenu { .. }
         | PopoverKind::ConflictResolverOutputMenu { .. } => state.active_repo,
@@ -152,7 +159,7 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
 
         PopoverKind::StashPrompt => {
             repo.stashes_rev.hash(hasher);
-            view_fingerprint::hash_loadable_arc(&repo.status, hasher);
+            repo.status_cache_rev().hash(hasher);
         }
         PopoverKind::StashDropConfirm { .. } | PopoverKind::StashMenu { .. } => {
             repo.stashes_rev.hash(hasher);
@@ -181,7 +188,7 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
                 repo.diff_state.diff_target,
                 Some(DiffTarget::WorkingTree { .. })
             ) {
-                view_fingerprint::hash_loadable_arc(&repo.status, hasher);
+                repo.status_cache_rev().hash(hasher);
             }
         }
 
@@ -218,7 +225,6 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         | PopoverKind::CommitMenu { .. }
         | PopoverKind::CommitFileMenu { .. }
         | PopoverKind::StatusFileMenu { .. }
-        | PopoverKind::HistoryColumnSettings
         | PopoverKind::ChangeTrackingSettings
         | PopoverKind::ConflictResolverInputRowMenu { .. }
         | PopoverKind::ConflictResolverChunkMenu { .. }
@@ -452,7 +458,6 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             48u8.hash(hasher);
             repo_id.hash(hasher);
         }
-        PopoverKind::HistoryColumnSettings => 49u8.hash(hasher),
         PopoverKind::MergeAbortConfirm { repo_id } => {
             51u8.hash(hasher);
             repo_id.hash(hasher);

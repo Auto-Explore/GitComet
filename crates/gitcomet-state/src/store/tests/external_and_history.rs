@@ -44,9 +44,18 @@ fn external_worktree_change_refreshes_status_and_selected_diff() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::Internal(crate::msg::InternalMsg::StatusLoaded {
+        Msg::Internal(crate::msg::InternalMsg::WorktreeStatusLoaded {
             repo_id: RepoId(1),
-            result: Ok(gitcomet_core::domain::RepoStatus::default()),
+            result: Ok(Vec::new()),
+        }),
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::StagedStatusLoaded {
+            repo_id: RepoId(1),
+            result: Ok(Vec::new()),
         }),
     );
 
@@ -61,9 +70,7 @@ fn external_worktree_change_refreshes_status_and_selected_diff() {
     );
 
     assert!(
-        effects
-            .iter()
-            .any(|e| matches!(e, Effect::LoadStatus { repo_id } if *repo_id == RepoId(1))),
+        has_worktree_status_effect(&effects, RepoId(1)),
         "expected status refresh"
     );
     assert!(
@@ -189,9 +196,18 @@ fn external_git_state_change_refreshes_history_and_selected_diff() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::Internal(crate::msg::InternalMsg::StatusLoaded {
+        Msg::Internal(crate::msg::InternalMsg::WorktreeStatusLoaded {
             repo_id: RepoId(1),
-            result: Ok(gitcomet_core::domain::RepoStatus::default()),
+            result: Ok(Vec::new()),
+        }),
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::StagedStatusLoaded {
+            repo_id: RepoId(1),
+            result: Ok(Vec::new()),
         }),
     );
     reduce(
@@ -244,9 +260,7 @@ fn external_git_state_change_refreshes_history_and_selected_diff() {
         "expected history refresh"
     );
     assert!(
-        effects
-            .iter()
-            .any(|e| matches!(e, Effect::LoadStatus { repo_id } if *repo_id == RepoId(1))),
+        has_status_refresh_effects(&effects, RepoId(1)),
         "expected status refresh"
     );
     assert!(
@@ -340,11 +354,7 @@ fn external_git_state_refresh_is_coalesced_and_replayed_once() {
             .iter()
             .any(|e| matches!(e, Effect::LoadRebaseAndMergeState { .. }))
     );
-    assert!(
-        effects1
-            .iter()
-            .any(|e| matches!(e, Effect::LoadStatus { .. }))
-    );
+    assert!(has_status_refresh_effects(&effects1, RepoId(1)));
     assert!(effects1.iter().any(|e| matches!(e, Effect::LoadLog { .. })));
 
     // Second refresh request while the first one is in flight is coalesced into a single pending
@@ -424,14 +434,28 @@ fn external_git_state_refresh_is_coalesced_and_replayed_once() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::Internal(crate::msg::InternalMsg::StatusLoaded {
+        Msg::Internal(crate::msg::InternalMsg::WorktreeStatusLoaded {
             repo_id: RepoId(1),
-            result: Ok(gitcomet_core::domain::RepoStatus::default()),
+            result: Ok(Vec::new()),
         }),
     );
     assert!(matches!(
         effects.as_slice(),
-        [Effect::LoadStatus { repo_id: RepoId(1) }]
+        [Effect::LoadWorktreeStatus { repo_id: RepoId(1) }]
+    ));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::StagedStatusLoaded {
+            repo_id: RepoId(1),
+            result: Ok(Vec::new()),
+        }),
+    );
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::LoadStagedStatus { repo_id: RepoId(1) }]
     ));
 
     let effects = reduce(
@@ -484,9 +508,7 @@ fn external_worktree_refresh_with_unchanged_status_settles_without_replay_loop()
         },
     );
     assert!(
-        effects
-            .iter()
-            .any(|e| matches!(e, Effect::LoadStatus { repo_id: rid } if *rid == repo_id)),
+        has_worktree_status_effect(&effects, repo_id),
         "expected first worktree event to request status refresh"
     );
 
@@ -508,15 +530,15 @@ fn external_worktree_refresh_with_unchanged_status_settles_without_replay_loop()
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::Internal(crate::msg::InternalMsg::StatusLoaded {
+        Msg::Internal(crate::msg::InternalMsg::WorktreeStatusLoaded {
             repo_id,
-            result: Ok(RepoStatus::default()),
+            result: Ok(Vec::new()),
         }),
     );
     assert!(
         effects
             .iter()
-            .all(|e| !matches!(e, Effect::LoadStatus { repo_id: rid } if *rid == repo_id)),
+            .all(|e| !matches!(e, Effect::LoadWorktreeStatus { repo_id: rid } if *rid == repo_id)),
         "unchanged status payload should not replay another status load, got {effects:?}"
     );
     assert!(
@@ -534,15 +556,13 @@ fn external_worktree_refresh_with_unchanged_status_settles_without_replay_loop()
         },
     );
     assert!(
-        effects
-            .iter()
-            .any(|e| matches!(e, Effect::LoadStatus { repo_id: rid } if *rid == repo_id)),
+        has_worktree_status_effect(&effects, repo_id),
         "subsequent real worktree events should still trigger status refresh"
     );
 }
 
 #[test]
-fn external_worktree_refresh_is_fully_coalesced_while_status_is_in_flight() {
+fn external_worktree_refresh_coalesces_status_while_status_is_in_flight() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
@@ -577,9 +597,7 @@ fn external_worktree_refresh_is_fully_coalesced_while_status_is_in_flight() {
         },
     );
     assert!(
-        effects1
-            .iter()
-            .any(|e| matches!(e, Effect::LoadStatus { repo_id: RepoId(1) })),
+        has_worktree_status_effect(&effects1, RepoId(1)),
         "expected first refresh to request status"
     );
     assert!(
@@ -603,8 +621,28 @@ fn external_worktree_refresh_is_fully_coalesced_while_status_is_in_flight() {
         },
     );
     assert!(
-        effects2.is_empty(),
-        "coalesced worktree refresh should not emit duplicate diff/status effects, got {effects2:?}"
+        !has_worktree_status_effect(&effects2, RepoId(1)),
+        "coalesced worktree refresh should not emit duplicate status effects, got {effects2:?}"
+    );
+    assert!(
+        effects2.iter().any(|e| matches!(
+            e,
+            Effect::LoadDiff {
+                repo_id: RepoId(1),
+                ..
+            }
+        )),
+        "selected diff should still refresh on subsequent worktree changes"
+    );
+    assert!(
+        effects2.iter().any(|e| matches!(
+            e,
+            Effect::LoadDiffFile {
+                repo_id: RepoId(1),
+                ..
+            }
+        )),
+        "selected diff file should still refresh on subsequent worktree changes"
     );
 }
 
@@ -632,17 +670,22 @@ fn reload_repo_sets_sections_loading_and_emits_refresh_effects() {
     assert!(repo_state.head_branch.is_loading());
     assert!(repo_state.branches.is_loading());
     assert!(repo_state.tags.is_loading());
-    assert!(repo_state.remote_tags.is_loading());
+    assert!(matches!(repo_state.remote_tags, Loadable::NotLoaded));
     assert!(repo_state.remotes.is_loading());
     assert!(repo_state.remote_branches.is_loading());
     assert!(repo_state.status.is_loading());
+    assert!(repo_state.worktree_status_is_loading());
+    assert!(repo_state.staged_status_is_loading());
     assert!(repo_state.log.is_loading());
     assert!(!repo_state.history_state.log_loading_more);
     assert!(repo_state.merge_commit_message.is_loading());
+    assert!(has_status_refresh_effects(&effects, RepoId(1)));
     assert!(
-        effects
-            .iter()
-            .any(|e| matches!(e, Effect::LoadStatus { repo_id: RepoId(1) }))
+        !effects.iter().any(|effect| matches!(
+            effect,
+            Effect::LoadRemoteTags { repo_id } if *repo_id == RepoId(1)
+        )),
+        "remote tags should lazy-load from tag UI, not repo reload"
     );
 }
 

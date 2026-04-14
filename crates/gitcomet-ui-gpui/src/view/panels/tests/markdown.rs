@@ -129,7 +129,6 @@ fn worktree_markdown_diff_defaults_to_preview_mode_and_shows_preview_toggle(
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(62);
     let workdir = std::env::temp_dir().join(format!(
@@ -325,15 +324,12 @@ fn ctrl_f_from_markdown_file_preview_switches_back_to_text_search(cx: &mut gpui:
 }
 
 #[gpui::test]
-fn split_markdown_diff_uses_preview_level_horizontal_overflow_without_local_code_scrollbar(
-    cx: &mut gpui::TestAppContext,
-) {
+fn split_markdown_diff_scroll_sync_matrix_covers_all_modes_and_axes(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(71);
     let workdir = std::env::temp_dir().join(format!(
@@ -341,9 +337,18 @@ fn split_markdown_diff_uses_preview_level_horizontal_overflow_without_local_code
         std::process::id()
     ));
     let file_rel = std::path::PathBuf::from("docs/overflow.md");
-    let long_code = "0123456789".repeat(8);
-    let old_text = "# Guide\n\n```rust\nlet value = 1;\n}\n```\n".to_string();
-    let new_text = format!("# Guide\n\n```rust\n{long_code}\n}}\n```\n");
+    let build_markdown = |label: &str, fill: char| {
+        let long_code = fill.to_string().repeat(160);
+        let mut out = String::from("# Guide\n");
+        for ix in 0..96 {
+            out.push_str(&format!(
+                "\n## Section {ix}\n\nParagraph {label} {ix}.\n\n```rust\nlet {label}_{ix} = \"{long_code}\";\n```\n"
+            ));
+        }
+        out
+    };
+    let old_text = build_markdown("old", 'L');
+    let new_text = build_markdown("new", 'R');
     let target = gitcomet_core::domain::DiffTarget::WorkingTree {
         path: file_rel.clone(),
         area: gitcomet_core::domain::DiffArea::Unstaged,
@@ -396,32 +401,133 @@ fn split_markdown_diff_uses_preview_level_horizontal_overflow_without_local_code
         });
     });
 
-    for _ in 0..3 {
-        cx.update(|window, app| {
-            let _ = window.draw(app);
-        });
-        cx.run_until_parked();
-    }
+    draw_and_drain_test_window(cx);
 
-    cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
-        assert!(pane.is_markdown_preview_active());
-        assert!(
-            pane.diff_split_right_scroll
-                .0
-                .borrow()
-                .base_handle
-                .max_offset()
-                .width
-                > px(0.0),
-            "expected split markdown preview to overflow horizontally for the 80-character code line"
-        );
-    });
+    wait_for_main_pane_condition_with_timeout(
+        cx,
+        &view,
+        "split markdown preview scroll-sync matrix overflow",
+        BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
+        |pane| {
+            pane.is_markdown_preview_active()
+                && pane.diff_view == DiffViewMode::Split
+                && uniform_list_max_offset(&pane.diff_scroll).width > px(120.0)
+                && uniform_list_max_offset(&pane.diff_split_right_scroll).width > px(120.0)
+                && uniform_list_max_offset(&pane.diff_scroll).height > px(120.0)
+                && uniform_list_max_offset(&pane.diff_split_right_scroll).height > px(120.0)
+        },
+        |pane| {
+            format!(
+                "preview_active={} diff_view={:?} left_offset={:?} right_offset={:?} left_max={:?} right_max={:?}",
+                pane.is_markdown_preview_active(),
+                pane.diff_view,
+                uniform_list_offset(&pane.diff_scroll),
+                uniform_list_offset(&pane.diff_split_right_scroll),
+                uniform_list_max_offset(&pane.diff_scroll),
+                uniform_list_max_offset(&pane.diff_split_right_scroll),
+            )
+        },
+    );
     assert!(
         cx.debug_bounds("markdown_preview_code_block_hscrollbar")
             .is_none(),
         "expected overflowing markdown preview code blocks to rely on preview-level horizontal scrolling, not a local code-block scrollbar"
     );
+
+    let reset_offsets = |cx: &mut gpui::VisualTestContext,
+                         view: &gpui::Entity<super::super::GitCometView>| {
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                this.main_pane.update(cx, |pane, cx| {
+                    reset_uniform_list_offsets(&[&pane.diff_scroll, &pane.diff_split_right_scroll]);
+                    cx.notify();
+                });
+            });
+        });
+        draw_and_drain_test_window(cx);
+    };
+
+    for mode in ALL_DIFF_SCROLL_SYNC_MODES {
+        set_diff_scroll_sync_for_test(cx, &view, mode);
+
+        for axis in ScrollSyncAxis::ALL {
+            let left_offset = axis.offset(px(72.0));
+            reset_offsets(cx, &view);
+            cx.update(|_window, app| {
+                view.update(app, |this, cx| {
+                    this.main_pane.update(cx, |pane, cx| {
+                        set_uniform_list_offset(&pane.diff_scroll, left_offset);
+                        cx.notify();
+                    });
+                });
+            });
+            draw_and_drain_test_window(cx);
+
+            cx.update(|_window, app| {
+                let pane = view.read(app).main_pane.read(app);
+                let left = uniform_list_offset(&pane.diff_scroll);
+                let right = uniform_list_offset(&pane.diff_split_right_scroll);
+                let expected = if axis.includes(mode) {
+                    axis.component(left_offset)
+                } else {
+                    px(0.0)
+                };
+                assert_eq!(
+                    axis.component(left),
+                    axis.component(left_offset),
+                    "split markdown preview left pane should keep its {} offset in {:?} mode",
+                    axis.label(),
+                    mode,
+                );
+                assert_eq!(
+                    axis.component(right),
+                    expected,
+                    "split markdown preview right pane should {} {} scrolling from the left pane in {:?} mode",
+                    if axis.includes(mode) { "sync" } else { "not sync" },
+                    axis.label(),
+                    mode,
+                );
+            });
+
+            let right_offset = axis.offset(px(96.0));
+            reset_offsets(cx, &view);
+            cx.update(|_window, app| {
+                view.update(app, |this, cx| {
+                    this.main_pane.update(cx, |pane, cx| {
+                        set_uniform_list_offset(&pane.diff_split_right_scroll, right_offset);
+                        cx.notify();
+                    });
+                });
+            });
+            draw_and_drain_test_window(cx);
+
+            cx.update(|_window, app| {
+                let pane = view.read(app).main_pane.read(app);
+                let left = uniform_list_offset(&pane.diff_scroll);
+                let right = uniform_list_offset(&pane.diff_split_right_scroll);
+                let expected = if axis.includes(mode) {
+                    axis.component(right_offset)
+                } else {
+                    px(0.0)
+                };
+                assert_eq!(
+                    axis.component(right),
+                    axis.component(right_offset),
+                    "split markdown preview right pane should keep its {} offset in {:?} mode",
+                    axis.label(),
+                    mode,
+                );
+                assert_eq!(
+                    axis.component(left),
+                    expected,
+                    "split markdown preview left pane should {} {} scrolling from the right pane in {:?} mode",
+                    if axis.includes(mode) { "sync" } else { "not sync" },
+                    axis.label(),
+                    mode,
+                );
+            });
+        }
+    }
 
     std::fs::remove_dir_all(&workdir).expect("cleanup markdown code block diff workdir");
 }
@@ -435,7 +541,6 @@ fn worktree_markdown_preview_short_code_block_shell_spans_preview_width(
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(72);
     let workdir = std::env::temp_dir().join(format!(
@@ -546,7 +651,6 @@ fn worktree_markdown_preview_list_text_box_stays_shorter_than_row_shell(
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(73);
     let workdir = std::env::temp_dir().join(format!(
@@ -928,7 +1032,6 @@ fn diff_target_change_clears_worktree_markdown_preview_cache_state(cx: &mut gpui
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(55);
     let workdir = std::env::temp_dir().join(format!(
@@ -1359,7 +1462,6 @@ fn conflict_markdown_preview_hides_text_controls_and_ignores_text_hotkeys(
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(50);
     let workdir = std::env::temp_dir().join(format!(
@@ -1514,4 +1616,268 @@ fn conflict_markdown_preview_hides_text_controls_and_ignores_text_hotkeys(
     });
 
     std::fs::remove_dir_all(&workdir).expect("cleanup conflict hotkey fixture");
+}
+
+#[gpui::test]
+fn conflict_markdown_preview_scroll_sync_matrix_covers_all_modes_and_axes(
+    cx: &mut gpui::TestAppContext,
+) {
+    use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession};
+
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(215);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_conflict_markdown_scroll_sync_matrix",
+        std::process::id()
+    ));
+    let file_rel = std::path::PathBuf::from("conflict_scroll_sync_matrix.md");
+    let abs_path = workdir.join(&file_rel);
+    let build_markdown = |label: &str, fill: char| {
+        let long_code = fill.to_string().repeat(160);
+        let mut out = String::from("# Guide\n");
+        for ix in 0..96 {
+            out.push_str(&format!(
+                "\n## Section {ix}\n\nParagraph {label} {ix}.\n\n```rust\nlet {label}_{ix} = \"{long_code}\";\n```\n"
+            ));
+        }
+        out
+    };
+    let base_text = build_markdown("base", 'B');
+    let ours_text = build_markdown("ours", 'O');
+    let theirs_text = build_markdown("theirs", 'T');
+    let current_text =
+        format!("<<<<<<< ours\n{ours_text}\n=======\n{theirs_text}\n>>>>>>> theirs\n");
+
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(&workdir).expect("create conflict markdown matrix workdir");
+    std::fs::write(&abs_path, &current_text).expect("write conflict markdown matrix fixture");
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            set_test_conflict_status(
+                &mut repo,
+                file_rel.clone(),
+                gitcomet_core::domain::DiffArea::Unstaged,
+            );
+            set_test_conflict_file(
+                &mut repo,
+                file_rel.clone(),
+                base_text.clone(),
+                ours_text.clone(),
+                theirs_text.clone(),
+                current_text.clone(),
+            );
+            repo.conflict_state.conflict_session = Some(ConflictSession::from_merged_text(
+                file_rel.clone(),
+                gitcomet_core::domain::FileConflictKind::BothModified,
+                ConflictPayload::Text(base_text.clone().into()),
+                ConflictPayload::Text(ours_text.clone().into()),
+                ConflictPayload::Text(theirs_text.clone().into()),
+                &current_text,
+            ));
+
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "conflict markdown matrix fixture initialized",
+        |pane| {
+            pane.conflict_resolver.path.as_ref() == Some(&file_rel)
+                && pane.conflict_resolved_preview_line_count >= 1
+        },
+        |pane| {
+            format!(
+                "path={:?} resolved_lines={} preview_active={}",
+                pane.conflict_resolver.path.clone(),
+                pane.conflict_resolved_preview_line_count,
+                pane.is_conflict_rendered_preview_active(),
+            )
+        },
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::ThreeWay, cx);
+                pane.conflict_resolver.resolver_preview_mode = ConflictResolverPreviewMode::Preview;
+                cx.notify();
+            });
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    wait_for_main_pane_condition_with_timeout(
+        cx,
+        &view,
+        "conflict markdown preview matrix overflow",
+        BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
+        |pane| {
+            pane.is_conflict_rendered_preview_active()
+                && uniform_list_max_offset(&pane.conflict_resolver_diff_scroll).width > px(120.0)
+                && uniform_list_max_offset(&pane.conflict_preview_ours_scroll).width > px(120.0)
+                && uniform_list_max_offset(&pane.conflict_preview_theirs_scroll).width > px(120.0)
+                && uniform_list_max_offset(&pane.conflict_resolved_preview_scroll).width > px(120.0)
+                && uniform_list_max_offset(&pane.conflict_resolver_diff_scroll).height > px(120.0)
+                && uniform_list_max_offset(&pane.conflict_preview_ours_scroll).height > px(120.0)
+                && uniform_list_max_offset(&pane.conflict_preview_theirs_scroll).height > px(120.0)
+                && uniform_list_max_offset(&pane.conflict_resolved_preview_scroll).height
+                    > px(120.0)
+        },
+        |pane| {
+            format!(
+                "preview_active={} base_offset={:?} ours_offset={:?} theirs_offset={:?} output_offset={:?} base_max={:?} ours_max={:?} theirs_max={:?} output_max={:?}",
+                pane.is_conflict_rendered_preview_active(),
+                uniform_list_offset(&pane.conflict_resolver_diff_scroll),
+                uniform_list_offset(&pane.conflict_preview_ours_scroll),
+                uniform_list_offset(&pane.conflict_preview_theirs_scroll),
+                uniform_list_offset(&pane.conflict_resolved_preview_scroll),
+                uniform_list_max_offset(&pane.conflict_resolver_diff_scroll),
+                uniform_list_max_offset(&pane.conflict_preview_ours_scroll),
+                uniform_list_max_offset(&pane.conflict_preview_theirs_scroll),
+                uniform_list_max_offset(&pane.conflict_resolved_preview_scroll),
+            )
+        },
+    );
+
+    let reset_offsets = |cx: &mut gpui::VisualTestContext,
+                         view: &gpui::Entity<super::super::GitCometView>| {
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                this.main_pane.update(cx, |pane, cx| {
+                    reset_uniform_list_offsets(&[
+                        &pane.conflict_resolver_diff_scroll,
+                        &pane.conflict_preview_ours_scroll,
+                        &pane.conflict_preview_theirs_scroll,
+                        &pane.conflict_resolved_preview_scroll,
+                        &pane.conflict_resolved_preview_gutter_scroll,
+                    ]);
+                    cx.notify();
+                });
+            });
+        });
+        draw_and_drain_test_window(cx);
+    };
+
+    for mode in ALL_DIFF_SCROLL_SYNC_MODES {
+        set_diff_scroll_sync_for_test(cx, &view, mode);
+
+        for axis in ScrollSyncAxis::ALL {
+            let output_offset = axis.offset(px(72.0));
+            reset_offsets(cx, &view);
+            cx.update(|_window, app| {
+                view.update(app, |this, cx| {
+                    this.main_pane.update(cx, |pane, cx| {
+                        set_uniform_list_offset(
+                            &pane.conflict_resolved_preview_scroll,
+                            output_offset,
+                        );
+                        cx.notify();
+                    });
+                });
+            });
+            draw_and_drain_test_window(cx);
+
+            cx.update(|_window, app| {
+                let pane = view.read(app).main_pane.read(app);
+                let expected = if axis.includes(mode) {
+                    axis.component(output_offset)
+                } else {
+                    px(0.0)
+                };
+                assert_eq!(
+                    axis.component(uniform_list_offset(&pane.conflict_resolved_preview_scroll)),
+                    axis.component(output_offset),
+                    "conflict markdown output should keep its {} offset in {:?} mode",
+                    axis.label(),
+                    mode,
+                );
+                assert_eq!(
+                    axis.component(uniform_list_offset(&pane.conflict_resolver_diff_scroll)),
+                    expected,
+                    "conflict markdown base preview should {} {} scrolling from resolved output in {:?} mode",
+                    if axis.includes(mode) { "sync" } else { "not sync" },
+                    axis.label(),
+                    mode,
+                );
+                assert_eq!(
+                    axis.component(uniform_list_offset(&pane.conflict_preview_ours_scroll)),
+                    expected,
+                    "conflict markdown ours preview should {} {} scrolling from resolved output in {:?} mode",
+                    if axis.includes(mode) { "sync" } else { "not sync" },
+                    axis.label(),
+                    mode,
+                );
+                assert_eq!(
+                    axis.component(uniform_list_offset(&pane.conflict_preview_theirs_scroll)),
+                    expected,
+                    "conflict markdown theirs preview should {} {} scrolling from resolved output in {:?} mode",
+                    if axis.includes(mode) { "sync" } else { "not sync" },
+                    axis.label(),
+                    mode,
+                );
+            });
+
+            let base_offset = axis.offset(px(96.0));
+            reset_offsets(cx, &view);
+            cx.update(|_window, app| {
+                view.update(app, |this, cx| {
+                    this.main_pane.update(cx, |pane, cx| {
+                        set_uniform_list_offset(&pane.conflict_resolver_diff_scroll, base_offset);
+                        cx.notify();
+                    });
+                });
+            });
+            draw_and_drain_test_window(cx);
+
+            cx.update(|_window, app| {
+                let pane = view.read(app).main_pane.read(app);
+                let expected = if axis.includes(mode) {
+                    axis.component(base_offset)
+                } else {
+                    px(0.0)
+                };
+                assert_eq!(
+                    axis.component(uniform_list_offset(&pane.conflict_resolver_diff_scroll)),
+                    axis.component(base_offset),
+                    "conflict markdown base preview should keep its {} offset in {:?} mode",
+                    axis.label(),
+                    mode,
+                );
+                assert_eq!(
+                    axis.component(uniform_list_offset(&pane.conflict_preview_ours_scroll)),
+                    expected,
+                    "conflict markdown ours preview should {} {} scrolling from the base preview in {:?} mode",
+                    if axis.includes(mode) { "sync" } else { "not sync" },
+                    axis.label(),
+                    mode,
+                );
+                assert_eq!(
+                    axis.component(uniform_list_offset(&pane.conflict_preview_theirs_scroll)),
+                    expected,
+                    "conflict markdown theirs preview should {} {} scrolling from the base preview in {:?} mode",
+                    if axis.includes(mode) { "sync" } else { "not sync" },
+                    axis.label(),
+                    mode,
+                );
+                assert_eq!(
+                    axis.component(uniform_list_offset(&pane.conflict_resolved_preview_scroll)),
+                    expected,
+                    "conflict markdown resolved output should {} {} scrolling from the base preview in {:?} mode",
+                    if axis.includes(mode) { "sync" } else { "not sync" },
+                    axis.label(),
+                    mode,
+                );
+            });
+        }
+    }
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup conflict markdown matrix fixture");
 }

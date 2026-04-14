@@ -177,6 +177,10 @@ fn window_frame_visual_inset() -> Pixels {
     }
 }
 
+fn should_suppress_window_frame(decorations: Decorations) -> bool {
+    crate::linux_gui_env::LinuxGuiEnvironment::should_suppress_custom_window_frame(decorations)
+}
+
 fn window_frame_outline_color(theme: AppTheme) -> gpui::Rgba {
     if cfg!(target_os = "macos") {
         with_alpha(theme.colors.border, if theme.is_dark { 0.96 } else { 0.90 })
@@ -683,13 +687,14 @@ pub(crate) fn window_frame(
     decorations: Decorations,
     content: AnyElement,
 ) -> AnyElement {
+    let suppress_frame = should_suppress_window_frame(decorations);
     let frame_inset = window_frame_visual_inset();
     let mut outer = div()
         .id("window_frame")
         .size_full()
         .bg(gpui::rgba(0x00000000));
 
-    if let Decorations::Client { tiling } = decorations {
+    if !suppress_frame && let Decorations::Client { tiling } = decorations {
         outer = outer
             .when(!tiling.top, |d| d.pt(frame_inset))
             .when(!tiling.bottom, |d| d.pb(frame_inset))
@@ -697,17 +702,22 @@ pub(crate) fn window_frame(
             .when(!tiling.right, |d| d.pr(frame_inset));
     }
 
-    let inner = div()
+    let mut inner = div()
         .id("window_surface")
         .size_full()
         .bg(theme.colors.window_bg)
-        .border_1()
-        .border_color(window_frame_outline_color(theme))
-        .overflow_hidden()
-        .when(!cfg!(target_os = "macos"), |d| {
-            d.rounded(px(theme.radii.panel)).shadow_lg()
-        })
-        .child(content);
+        .overflow_hidden();
+
+    if !suppress_frame {
+        inner = inner
+            .border_1()
+            .border_color(window_frame_outline_color(theme))
+            .when(!cfg!(target_os = "macos"), |d| {
+                d.rounded(px(theme.radii.panel)).shadow_lg()
+            });
+    }
+
+    let inner = inner.child(content);
 
     outer.child(inner).into_any_element()
 }

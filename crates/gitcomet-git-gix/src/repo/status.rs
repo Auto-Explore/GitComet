@@ -152,79 +152,110 @@ impl GixRepo {
             }
         }
 
-        let mut staged = staged;
+        finalize_status(
+            &self.spec.workdir,
+            &repo,
+            may_have_gitlinks,
+            staged,
+            unstaged,
+            has_conflicted_unstaged,
+        )
+    }
 
-        // Some platforms may omit certain unmerged shapes (notably stage-1-only
-        // both-deleted conflicts) from gix status output. Supplement conflict
-        // entries from the index's unmerged stages only when the repository is
-        // in an in-progress operation or gix already surfaced conflicts.
-        if should_supplement_unmerged_conflicts(repo.state().is_some(), has_conflicted_unstaged) {
-            for (path, conflict_kind) in gix_unmerged_conflicts(&repo)? {
-                if let Some(entry) = unstaged.iter_mut().find(|entry| entry.path == path) {
-                    entry.kind = FileStatusKind::Conflicted;
-                    entry.conflict = Some(conflict_kind);
-                } else {
-                    unstaged.push(FileStatus {
-                        path,
-                        kind: FileStatusKind::Conflicted,
-                        conflict: Some(conflict_kind),
-                    });
-                }
-            }
+    pub(super) fn worktree_status_impl(&self) -> Result<Vec<FileStatus>> {
+        let repo = self._repo.to_thread_local();
+        let may_have_gitlinks = self.may_have_gitlink_status_supplement(&repo);
+        let mut unstaged = Vec::new();
+        let direct = collect_index_worktree_status_direct(&repo, &mut unstaged, may_have_gitlinks)?;
+
+        if should_supplement_unmerged_conflicts(
+            repo.state().is_some(),
+            direct.has_conflicted_unstaged,
+        ) {
+            apply_unmerged_conflicts(&repo, &mut unstaged)?;
         }
 
-        // Only shell out for gitlink/submodule status when the repo is likely
-        // to contain submodules or gitlinks.  This avoids a full `git status`
-        // subprocess on every refresh for the common case.
         if may_have_gitlinks {
             supplement_gitlink_status_from_porcelain(
                 &self.spec.workdir,
-                &mut staged,
+                &mut Vec::new(),
                 &mut unstaged,
             )?;
         }
 
-        fn kind_priority(kind: FileStatusKind) -> u8 {
-            match kind {
-                FileStatusKind::Conflicted => 5,
-                FileStatusKind::Renamed => 4,
-                FileStatusKind::Deleted => 3,
-                FileStatusKind::Added => 2,
-                FileStatusKind::Modified => 1,
-                FileStatusKind::Untracked => 0,
-            }
+        sort_and_dedup_status_entries(&mut unstaged);
+        Ok(unstaged)
+    }
+
+    pub(super) fn staged_status_impl(&self) -> Result<Vec<FileStatus>> {
+        let repo = self._repo.to_thread_local();
+        let head_oid = super::history::gix_head_id_or_none(&repo)?;
+        let index_stamp = repo_file_stamp(repo.index_path().as_path());
+
+        if let Some(cached) = self.cached_staged_status(head_oid, &index_stamp) {
+            return Ok(cached);
         }
 
-        fn sort_and_dedup(entries: &mut Vec<FileStatus>) {
-            entries.sort_unstable_by(|a, b| {
-                a.path
-                    .cmp(&b.path)
-                    .then_with(|| kind_priority(b.kind).cmp(&kind_priority(a.kind)))
-            });
-            entries.dedup_by(|a, b| a.path == b.path);
+        let Some(head_oid) = head_oid else {
+            return self.status_impl().map(|status| status.staged);
+        };
+
+        // `tree_index_status()` diffs a tree against the index, so resolve HEAD to HEAD^{tree}
+        // while continuing to cache by commit id.
+        let head_tree_id = tree_id_for_commit(&repo, &head_oid)?;
+        let mut staged = collect_staged_status_from_tree_index(&repo, &head_tree_id)?;
+        if self.may_have_gitlink_status_supplement(&repo) {
+            supplement_gitlink_status_from_porcelain(
+                &self.spec.workdir,
+                &mut staged,
+                &mut Vec::new(),
+            )?;
         }
-
-        sort_and_dedup(&mut staged);
-        sort_and_dedup(&mut unstaged);
-
-        // gix may report unmerged entries (conflicts) as both Index/Worktree and Tree/Index
-        // changes, which causes the same path to show up in both sections in the UI. Mirror
-        // `git status` behavior by showing conflicted paths only once.
-        let conflicted: HashSet<std::path::PathBuf> = unstaged
-            .iter()
-            .filter(|e| e.kind == FileStatusKind::Conflicted)
-            .map(|e| e.path.clone())
-            .collect();
-        if !conflicted.is_empty() {
-            staged.retain(|e| !conflicted.contains(&e.path));
-        }
-
-        Ok(RepoStatus { staged, unstaged })
+        sort_and_dedup_status_entries(&mut staged);
+        remove_conflicted_paths_from_staged(
+            &mut staged,
+            gix_unmerged_conflicts(&repo)?
+                .into_iter()
+                .map(|(path, _)| path),
+        );
+        self.store_staged_status_cache(Some(head_oid), index_stamp, &staged);
+        Ok(staged)
     }
 
     pub(super) fn upstream_divergence_impl(&self) -> Result<Option<UpstreamDivergence>> {
         let repo = self.reopen_repo()?;
         head_upstream_divergence(&repo)
+    }
+
+    fn cached_staged_status(
+        &self,
+        head_oid: Option<gix::ObjectId>,
+        index_stamp: &RepoFileStamp,
+    ) -> Option<Vec<FileStatus>> {
+        let guard = self
+            .tree_index_cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        guard
+            .as_ref()
+            .filter(|cached| cached.head_oid == head_oid && &cached.index_stamp == index_stamp)
+            .map(|cached| cached.staged.clone())
+    }
+
+    fn store_staged_status_cache(
+        &self,
+        head_oid: Option<gix::ObjectId>,
+        index_stamp: RepoFileStamp,
+        staged: &[FileStatus],
+    ) {
+        *self
+            .tree_index_cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(TreeIndexCacheEntry {
+            head_oid,
+            index_stamp,
+            staged: staged.to_vec(),
+        });
     }
 }
 
@@ -233,6 +264,118 @@ fn should_supplement_unmerged_conflicts(
     has_conflicted_unstaged: bool,
 ) -> bool {
     repo_has_in_progress_state || has_conflicted_unstaged
+}
+
+fn finalize_status(
+    workdir: &Path,
+    repo: &gix::Repository,
+    may_have_gitlinks: bool,
+    mut staged: Vec<FileStatus>,
+    mut unstaged: Vec<FileStatus>,
+    has_conflicted_unstaged: bool,
+) -> Result<RepoStatus> {
+    // Some platforms may omit certain unmerged shapes (notably stage-1-only both-deleted
+    // conflicts) from gix status output. Supplement conflict entries from the index's unmerged
+    // stages only when the repository is in an in-progress operation or gix already surfaced
+    // conflicts.
+    if should_supplement_unmerged_conflicts(repo.state().is_some(), has_conflicted_unstaged) {
+        apply_unmerged_conflicts(repo, &mut unstaged)?;
+    }
+
+    // Only shell out for gitlink/submodule status when the repo is likely to contain submodules
+    // or gitlinks. This avoids a full `git status` subprocess on every refresh for the common
+    // case.
+    if may_have_gitlinks {
+        supplement_gitlink_status_from_porcelain(workdir, &mut staged, &mut unstaged)?;
+    }
+
+    sort_and_dedup_status_entries(&mut staged);
+    sort_and_dedup_status_entries(&mut unstaged);
+    remove_conflicted_paths_from_staged(
+        &mut staged,
+        unstaged
+            .iter()
+            .filter(|entry| entry.kind == FileStatusKind::Conflicted)
+            .map(|entry| entry.path.clone()),
+    );
+
+    Ok(RepoStatus { staged, unstaged })
+}
+
+fn apply_unmerged_conflicts(repo: &gix::Repository, unstaged: &mut Vec<FileStatus>) -> Result<()> {
+    for (path, conflict_kind) in gix_unmerged_conflicts(repo)? {
+        if let Some(entry) = unstaged.iter_mut().find(|entry| entry.path == path) {
+            entry.kind = FileStatusKind::Conflicted;
+            entry.conflict = Some(conflict_kind);
+        } else {
+            unstaged.push(FileStatus {
+                path,
+                kind: FileStatusKind::Conflicted,
+                conflict: Some(conflict_kind),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn tree_id_for_commit(repo: &gix::Repository, commit_id: &gix::ObjectId) -> Result<gix::ObjectId> {
+    repo.find_commit(*commit_id)
+        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix commit lookup: {e}"))))?
+        .tree_id()
+        .map(|id| id.detach())
+        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix commit tree id: {e}"))))
+}
+
+fn collect_staged_status_from_tree_index(
+    repo: &gix::Repository,
+    head_oid: &gix::ObjectId,
+) -> Result<Vec<FileStatus>> {
+    let index = repo
+        .index_or_empty()
+        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix index: {e}"))))?;
+    let mut staged = Vec::new();
+    repo.tree_index_status(
+        head_oid,
+        &index,
+        None,
+        gix::status::tree_index::TrackRenames::AsConfigured,
+        |change, _, _| {
+            collect_tree_index_change(change, &mut staged)?;
+            Ok::<_, Error>(std::ops::ControlFlow::Continue(()))
+        },
+    )
+    .map_err(|e| Error::new(ErrorKind::Backend(format!("gix tree/index status: {e}"))))?;
+    Ok(staged)
+}
+
+fn kind_priority(kind: FileStatusKind) -> u8 {
+    match kind {
+        FileStatusKind::Conflicted => 5,
+        FileStatusKind::Renamed => 4,
+        FileStatusKind::Deleted => 3,
+        FileStatusKind::Added => 2,
+        FileStatusKind::Modified => 1,
+        FileStatusKind::Untracked => 0,
+    }
+}
+
+fn sort_and_dedup_status_entries(entries: &mut Vec<FileStatus>) {
+    entries.sort_unstable_by(|a, b| {
+        a.path
+            .cmp(&b.path)
+            .then_with(|| kind_priority(b.kind).cmp(&kind_priority(a.kind)))
+    });
+    entries.dedup_by(|a, b| a.path == b.path);
+}
+
+fn remove_conflicted_paths_from_staged(
+    staged: &mut Vec<FileStatus>,
+    conflicted: impl IntoIterator<Item = PathBuf>,
+) {
+    let conflicted: HashSet<PathBuf> = conflicted.into_iter().collect();
+    if !conflicted.is_empty() {
+        staged.retain(|entry| !conflicted.contains(&entry.path));
+    }
 }
 
 fn repo_file_stamp(path: &Path) -> RepoFileStamp {
@@ -947,12 +1090,171 @@ fn supplement_gitlink_status_from_porcelain(
 mod tests {
     use super::{
         apply_porcelain_v2_gitlink_status_record, collect_unmerged_conflicts,
-        conflict_kind_from_stage_mask, map_directory_entry_status,
-        should_supplement_unmerged_conflicts,
+        conflict_kind_from_stage_mask, map_directory_entry_status, map_entry_status,
+        map_porcelain_v2_status_char, remove_conflicted_paths_from_staged,
+        should_supplement_unmerged_conflicts, sort_and_dedup_status_entries, tree_id_for_commit,
     };
-    use gitcomet_core::domain::{FileConflictKind, FileStatusKind};
+    use gitcomet_core::domain::{FileConflictKind, FileStatus, FileStatusKind};
     use rustc_hash::FxHashMap as HashMap;
-    use std::path::PathBuf;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::process::{Command, Output};
+    use std::sync::OnceLock;
+
+    #[cfg(unix)]
+    use std::{fs::Permissions, os::unix::fs::PermissionsExt as _};
+
+    struct TestGitEnv {
+        _root: tempfile::TempDir,
+        global_config: PathBuf,
+        home_dir: PathBuf,
+        xdg_config_home: PathBuf,
+        gnupg_home: PathBuf,
+    }
+
+    fn ensure_isolated_git_test_env() -> &'static TestGitEnv {
+        static ENV: OnceLock<TestGitEnv> = OnceLock::new();
+        ENV.get_or_init(|| {
+            let root = tempfile::tempdir().expect("test git env tempdir");
+            let home_dir = root.path().join("home");
+            let xdg_config_home = root.path().join("xdg");
+            let gnupg_home = root.path().join("gnupg");
+            let global_config = root.path().join("gitconfig");
+
+            fs::create_dir_all(&home_dir).expect("test git home");
+            fs::create_dir_all(&xdg_config_home).expect("test git xdg config home");
+            fs::create_dir_all(&gnupg_home).expect("test gnupg home");
+            fs::write(&global_config, "").expect("test global git config");
+
+            #[cfg(unix)]
+            fs::set_permissions(&gnupg_home, Permissions::from_mode(0o700))
+                .expect("test gnupg home permissions");
+
+            crate::install_test_git_command_environment(
+                global_config.clone(),
+                home_dir.clone(),
+                xdg_config_home.clone(),
+                gnupg_home.clone(),
+            );
+
+            TestGitEnv {
+                _root: root,
+                global_config,
+                home_dir,
+                xdg_config_home,
+                gnupg_home,
+            }
+        })
+    }
+
+    fn git_command() -> Command {
+        let env = ensure_isolated_git_test_env();
+        let mut cmd = Command::new("git");
+        cmd.env("GIT_CONFIG_NOSYSTEM", "1");
+        cmd.env("GIT_CONFIG_GLOBAL", &env.global_config);
+        cmd.env("HOME", &env.home_dir);
+        cmd.env("XDG_CONFIG_HOME", &env.xdg_config_home);
+        cmd.env("GNUPGHOME", &env.gnupg_home);
+        cmd.env("GIT_TERMINAL_PROMPT", "0");
+        cmd.env("GCM_INTERACTIVE", "Never");
+        cmd.env("GIT_ALLOW_PROTOCOL", "file");
+        cmd
+    }
+
+    fn git_output(workdir: &Path, args: &[&str]) -> Output {
+        git_command()
+            .arg("-C")
+            .arg(workdir)
+            .args(args)
+            .output()
+            .expect("spawn git")
+    }
+
+    fn git_success(workdir: &Path, args: &[&str]) {
+        let output = git_output(workdir, args);
+        assert!(
+            output.status.success(),
+            "git {:?} failed\nstdout:\n{}\nstderr:\n{}",
+            args,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn git_expect_failure(workdir: &Path, args: &[&str]) -> Output {
+        let output = git_output(workdir, args);
+        assert!(
+            !output.status.success(),
+            "expected git {:?} to fail\nstdout:\n{}\nstderr:\n{}",
+            args,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        output
+    }
+
+    fn init_test_repo(workdir: &Path) {
+        let _ = ensure_isolated_git_test_env();
+        git_success(workdir, &["init"]);
+        for args in [
+            ["config", "core.autocrlf", "false"].as_slice(),
+            ["config", "core.eol", "lf"].as_slice(),
+            ["config", "credential.helper", ""].as_slice(),
+            ["config", "credential.interactive", "never"].as_slice(),
+            ["config", "protocol.file.allow", "always"].as_slice(),
+            ["config", "commit.gpgsign", "false"].as_slice(),
+            ["config", "user.name", "Test User"].as_slice(),
+            ["config", "user.email", "test@example.com"].as_slice(),
+        ] {
+            git_success(workdir, args);
+        }
+    }
+
+    fn write_file(workdir: &Path, relative: &str, contents: &str) {
+        let path = workdir.join(relative);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("create parent directories");
+        }
+        fs::write(path, contents).expect("write file");
+    }
+
+    fn open_repo(workdir: &Path) -> super::super::GixRepo {
+        let thread_safe_repo = gix::open(workdir).expect("open repo").into_sync();
+        super::super::GixRepo::new(workdir.to_path_buf(), thread_safe_repo)
+    }
+
+    fn file_status(path: &str, kind: FileStatusKind) -> FileStatus {
+        FileStatus {
+            path: PathBuf::from(path),
+            kind,
+            conflict: None,
+        }
+    }
+
+    fn conflicted_file_status(path: &str, conflict: FileConflictKind) -> FileStatus {
+        FileStatus {
+            path: PathBuf::from(path),
+            kind: FileStatusKind::Conflicted,
+            conflict: Some(conflict),
+        }
+    }
+
+    fn setup_both_modified_text_conflict(workdir: &Path, path: &str) {
+        init_test_repo(workdir);
+        write_file(workdir, path, "base\n");
+        git_success(workdir, &["add", path]);
+        git_success(workdir, &["commit", "-m", "base"]);
+
+        git_success(workdir, &["checkout", "-b", "feature"]);
+        write_file(workdir, path, "theirs\n");
+        git_success(workdir, &["commit", "-am", "theirs"]);
+
+        git_success(workdir, &["checkout", "-"]);
+        write_file(workdir, path, "ours\n");
+        git_success(workdir, &["commit", "-am", "ours"]);
+
+        let _ = git_expect_failure(workdir, &["merge", "feature"]);
+    }
 
     #[test]
     fn conflict_kind_from_stage_mask_covers_all_shapes() {
@@ -1056,6 +1358,63 @@ mod tests {
     }
 
     #[test]
+    fn sort_and_dedup_status_entries_prefers_highest_priority_kind_per_path() {
+        let mut entries = vec![
+            file_status("b.txt", FileStatusKind::Modified),
+            file_status("a.txt", FileStatusKind::Untracked),
+            file_status("a.txt", FileStatusKind::Deleted),
+            file_status("c.txt", FileStatusKind::Modified),
+            file_status("c.txt", FileStatusKind::Added),
+            file_status("d.txt", FileStatusKind::Modified),
+            file_status("d.txt", FileStatusKind::Renamed),
+        ];
+
+        sort_and_dedup_status_entries(&mut entries);
+
+        assert_eq!(
+            entries,
+            vec![
+                file_status("a.txt", FileStatusKind::Deleted),
+                file_status("b.txt", FileStatusKind::Modified),
+                file_status("c.txt", FileStatusKind::Added),
+                file_status("d.txt", FileStatusKind::Renamed),
+            ]
+        );
+    }
+
+    #[test]
+    fn remove_conflicted_paths_from_staged_ignores_empty_input() {
+        let expected = vec![file_status("a.txt", FileStatusKind::Modified)];
+        let mut staged = expected.clone();
+
+        remove_conflicted_paths_from_staged(&mut staged, std::iter::empty::<PathBuf>());
+
+        assert_eq!(staged, expected);
+    }
+
+    #[test]
+    fn remove_conflicted_paths_from_staged_removes_only_matching_paths() {
+        let mut staged = vec![
+            file_status("a.txt", FileStatusKind::Modified),
+            file_status("b.txt", FileStatusKind::Added),
+            file_status("c.txt", FileStatusKind::Deleted),
+        ];
+
+        remove_conflicted_paths_from_staged(
+            &mut staged,
+            [PathBuf::from("b.txt"), PathBuf::from("missing.txt")],
+        );
+
+        assert_eq!(
+            staged,
+            vec![
+                file_status("a.txt", FileStatusKind::Modified),
+                file_status("c.txt", FileStatusKind::Deleted),
+            ]
+        );
+    }
+
+    #[test]
     fn map_directory_entry_status_only_reports_untracked_entries() {
         use gix::dir::entry::Status;
 
@@ -1073,6 +1432,83 @@ mod tests {
             None
         );
         assert_eq!(map_directory_entry_status(Status::Pruned), None);
+    }
+
+    #[test]
+    fn map_entry_status_maps_all_conflict_summaries() {
+        use gix::status::plumbing::index_as_worktree::{Conflict, EntryStatus};
+
+        for (summary, expected) in [
+            (Conflict::BothDeleted, FileConflictKind::BothDeleted),
+            (Conflict::AddedByUs, FileConflictKind::AddedByUs),
+            (Conflict::DeletedByThem, FileConflictKind::DeletedByThem),
+            (Conflict::AddedByThem, FileConflictKind::AddedByThem),
+            (Conflict::DeletedByUs, FileConflictKind::DeletedByUs),
+            (Conflict::BothAdded, FileConflictKind::BothAdded),
+            (Conflict::BothModified, FileConflictKind::BothModified),
+        ] {
+            assert_eq!(
+                map_entry_status::<(), ()>(EntryStatus::Conflict {
+                    summary,
+                    entries: Box::new([None, None, None]),
+                }),
+                (FileStatusKind::Conflicted, Some(expected))
+            );
+        }
+    }
+
+    #[test]
+    fn map_entry_status_maps_non_conflict_variants() {
+        use gix::status::plumbing::index_as_worktree::{Change, EntryStatus};
+
+        assert_eq!(
+            map_entry_status::<(), ()>(EntryStatus::IntentToAdd),
+            (FileStatusKind::Added, None)
+        );
+        assert_eq!(
+            map_entry_status::<(), ()>(
+                EntryStatus::NeedsUpdate(gix::index::entry::Stat::default())
+            ),
+            (FileStatusKind::Modified, None)
+        );
+        assert_eq!(
+            map_entry_status::<(), ()>(EntryStatus::Change(Change::Removed)),
+            (FileStatusKind::Deleted, None)
+        );
+        assert_eq!(
+            map_entry_status::<(), ()>(EntryStatus::Change(Change::Type {
+                worktree_mode: gix::index::entry::Mode::FILE,
+            })),
+            (FileStatusKind::Modified, None)
+        );
+        assert_eq!(
+            map_entry_status::<(), ()>(EntryStatus::Change(Change::Modification {
+                executable_bit_changed: false,
+                content_change: None,
+                set_entry_stat_size_zero: false,
+            })),
+            (FileStatusKind::Modified, None)
+        );
+        assert_eq!(
+            map_entry_status::<(), ()>(EntryStatus::Change(Change::SubmoduleModification(()))),
+            (FileStatusKind::Modified, None)
+        );
+    }
+
+    #[test]
+    fn map_porcelain_v2_status_char_maps_supported_values() {
+        for (ch, expected) in [
+            ('M', Some(FileStatusKind::Modified)),
+            ('T', Some(FileStatusKind::Modified)),
+            ('A', Some(FileStatusKind::Added)),
+            ('D', Some(FileStatusKind::Deleted)),
+            ('R', Some(FileStatusKind::Renamed)),
+            ('U', Some(FileStatusKind::Conflicted)),
+            ('.', None),
+            ('?', None),
+        ] {
+            assert_eq!(map_porcelain_v2_status_char(ch), expected);
+        }
     }
 
     #[test]
@@ -1108,6 +1544,27 @@ mod tests {
     }
 
     #[test]
+    fn porcelain_gitlink_record_maps_conflicted_status_chars_to_both_lanes() {
+        let mut staged = Vec::new();
+        let mut unstaged = Vec::new();
+        apply_porcelain_v2_gitlink_status_record(
+            b"1 UU SC.. 160000 160000 160000 1111111111111111111111111111111111111111 2222222222222222222222222222222222222222 chess3",
+            &mut staged,
+            &mut unstaged,
+        )
+        .unwrap();
+
+        assert_eq!(
+            staged,
+            vec![file_status("chess3", FileStatusKind::Conflicted)]
+        );
+        assert_eq!(
+            unstaged,
+            vec![file_status("chess3", FileStatusKind::Conflicted)]
+        );
+    }
+
+    #[test]
     fn porcelain_gitlink_record_maps_added_and_unstaged_modified() {
         let mut staged = Vec::new();
         let mut unstaged = Vec::new();
@@ -1125,6 +1582,51 @@ mod tests {
         assert_eq!(unstaged.len(), 1);
         assert_eq!(unstaged[0].path, PathBuf::from("chess3"));
         assert_eq!(unstaged[0].kind, FileStatusKind::Modified);
+    }
+
+    #[test]
+    fn porcelain_gitlink_record_ignores_non_type_one_records() {
+        let mut staged = Vec::new();
+        let mut unstaged = Vec::new();
+        apply_porcelain_v2_gitlink_status_record(
+            b"2 R. N... 160000 160000 160000 111 222 chess3",
+            &mut staged,
+            &mut unstaged,
+        )
+        .unwrap();
+
+        assert!(staged.is_empty());
+        assert!(unstaged.is_empty());
+    }
+
+    #[test]
+    fn porcelain_gitlink_record_ignores_non_gitlink_modes() {
+        let mut staged = Vec::new();
+        let mut unstaged = Vec::new();
+        apply_porcelain_v2_gitlink_status_record(
+            b"1 M. N... 100644 100644 100644 111 222 chess3",
+            &mut staged,
+            &mut unstaged,
+        )
+        .unwrap();
+
+        assert!(staged.is_empty());
+        assert!(unstaged.is_empty());
+    }
+
+    #[test]
+    fn porcelain_gitlink_record_ignores_missing_path() {
+        let mut staged = Vec::new();
+        let mut unstaged = Vec::new();
+        apply_porcelain_v2_gitlink_status_record(
+            b"1 M. SC.. 160000 160000 160000 111 222 ",
+            &mut staged,
+            &mut unstaged,
+        )
+        .unwrap();
+
+        assert!(staged.is_empty());
+        assert!(unstaged.is_empty());
     }
 
     #[test]
@@ -1159,5 +1661,116 @@ mod tests {
         assert_eq!(unstaged.len(), 1);
         assert_eq!(unstaged[0].path.as_os_str().as_bytes(), b"submodule-\xff");
         assert_eq!(unstaged[0].kind, FileStatusKind::Modified);
+    }
+
+    #[test]
+    fn status_impl_matches_lane_specific_statuses() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let workdir = tmp.path();
+        init_test_repo(workdir);
+
+        write_file(workdir, "staged.txt", "base\n");
+        write_file(workdir, "unstaged.txt", "base\n");
+        git_success(workdir, &["add", "staged.txt", "unstaged.txt"]);
+        git_success(workdir, &["commit", "-m", "initial"]);
+
+        write_file(workdir, "staged.txt", "staged change\n");
+        git_success(workdir, &["add", "staged.txt"]);
+        write_file(workdir, "unstaged.txt", "unstaged change\n");
+        write_file(workdir, "untracked.txt", "untracked\n");
+
+        let gix_repo = open_repo(workdir);
+        let combined = gix_repo.status_impl().expect("combined status");
+        let staged = gix_repo.staged_status_impl().expect("staged status");
+        let unstaged = gix_repo.worktree_status_impl().expect("worktree status");
+
+        assert_eq!(combined.staged, staged);
+        assert_eq!(combined.unstaged, unstaged);
+        assert_eq!(
+            staged,
+            vec![file_status("staged.txt", FileStatusKind::Modified)]
+        );
+        assert_eq!(
+            unstaged,
+            vec![
+                file_status("unstaged.txt", FileStatusKind::Modified),
+                file_status("untracked.txt", FileStatusKind::Untracked),
+            ]
+        );
+    }
+
+    #[test]
+    fn staged_status_impl_on_unborn_head_uses_combined_status() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let workdir = tmp.path();
+        init_test_repo(workdir);
+
+        write_file(workdir, "new.txt", "new\n");
+        git_success(workdir, &["add", "new.txt"]);
+
+        let gix_repo = open_repo(workdir);
+        let combined = gix_repo.status_impl().expect("combined status");
+        let staged = gix_repo.staged_status_impl().expect("staged status");
+
+        assert_eq!(combined.staged, staged);
+        assert_eq!(staged, vec![file_status("new.txt", FileStatusKind::Added)]);
+        assert!(combined.unstaged.is_empty());
+    }
+
+    #[test]
+    fn status_impl_removes_conflicted_paths_from_staged_lane() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let workdir = tmp.path();
+        setup_both_modified_text_conflict(workdir, "tracked.txt");
+
+        let gix_repo = open_repo(workdir);
+        let combined = gix_repo.status_impl().expect("combined status");
+        let staged = gix_repo.staged_status_impl().expect("staged status");
+        let worktree = gix_repo.worktree_status_impl().expect("worktree status");
+
+        assert!(combined.staged.is_empty());
+        assert!(staged.is_empty());
+        assert_eq!(combined.unstaged, worktree);
+        assert_eq!(
+            worktree,
+            vec![conflicted_file_status(
+                "tracked.txt",
+                FileConflictKind::BothModified,
+            )]
+        );
+    }
+
+    #[test]
+    fn staged_status_impl_resolves_head_to_tree_before_tree_index_diff() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let workdir = tmp.path();
+        init_test_repo(workdir);
+
+        fs::write(workdir.join("tracked.txt"), "base\n").expect("write tracked file");
+        git_success(workdir, &["add", "tracked.txt"]);
+        git_success(workdir, &["commit", "-m", "initial"]);
+
+        fs::write(workdir.join("tracked.txt"), "base\nchanged\n").expect("rewrite tracked file");
+        git_success(workdir, &["add", "tracked.txt"]);
+
+        let thread_safe_repo = gix::open(workdir).expect("open repo").into_sync();
+        let gix_repo = super::super::GixRepo::new(workdir.to_path_buf(), thread_safe_repo);
+
+        let head_commit_id = super::super::history::gix_head_id_or_none(
+            &gix_repo.reopen_repo().expect("reopen repo"),
+        )
+        .expect("head lookup")
+        .expect("head commit");
+        let head_tree_id = tree_id_for_commit(
+            &gix_repo.reopen_repo().expect("reopen repo"),
+            &head_commit_id,
+        )
+        .expect("head tree");
+        assert_ne!(head_commit_id, head_tree_id);
+
+        let staged = gix_repo.staged_status_impl().expect("staged status");
+        assert_eq!(staged.len(), 1);
+        assert_eq!(staged[0].path, PathBuf::from("tracked.txt"));
+        assert_eq!(staged[0].kind, FileStatusKind::Modified);
     }
 }

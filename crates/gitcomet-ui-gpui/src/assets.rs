@@ -88,6 +88,9 @@ impl GitCometAssets {
             "icons/git_branch.svg" => Some(Cow::Borrowed(include_bytes!(
                 "../assets/icons/git_branch.svg"
             ))),
+            "icons/git_worktree.svg" => Some(Cow::Borrowed(include_bytes!(
+                "../assets/icons/git_worktree.svg"
+            ))),
             "icons/gitcomet_mark.svg" => Some(Cow::Borrowed(include_bytes!(
                 "../assets/icons/gitcomet_mark.svg"
             ))),
@@ -141,6 +144,7 @@ impl GitCometAssets {
                 "icons/generic_close.svg".into(),
                 "icons/repo_tab_close.svg".into(),
                 "icons/git_branch.svg".into(),
+                "icons/git_worktree.svg".into(),
                 "icons/gitcomet_mark.svg".into(),
                 "icons/menu.svg".into(),
                 "icons/pencil.svg".into(),

@@ -365,6 +365,17 @@ impl CommitSearchFilterFixture {
         }
         seen.len()
     }
+
+    #[cfg(test)]
+    pub fn distinct_message_trigrams(&self) -> usize {
+        let mut seen = std::collections::HashSet::new();
+        for summary in &self.summaries_lower {
+            for trigram in summary.as_bytes().windows(3) {
+                seen.insert(<[u8; 3]>::try_from(trigram).expect("3-byte trigram"));
+            }
+        }
+        seen.len()
+    }
 }
 
 /// Metrics emitted as sidecar JSON for in-diff text search benchmarks.
@@ -1022,6 +1033,11 @@ impl FileFuzzyFindFixture {
                 files_scanned: run.files_scanned,
             },
         )
+    }
+
+    #[cfg(test)]
+    pub fn run_find_without_ordered_pair_prefilter(&self, query: &str) -> u64 {
+        self.run_find(query)
     }
 
     fn scan_matches(&self, query: &str) -> FileFuzzyFindRunResult {

@@ -14,6 +14,44 @@ pub(super) fn toast_total_lifetime(ttl: Duration) -> Duration {
     toast_fade_in_duration() + ttl + toast_fade_out_duration()
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::view) struct SelectedBranch {
+    pub(in crate::view) repo_id: RepoId,
+    pub(in crate::view) section: BranchSection,
+    pub(in crate::view) name: String,
+}
+
+pub(in crate::view) fn selected_branch_label_color(theme: AppTheme) -> gpui::Rgba {
+    theme.colors.emphasis_text
+}
+
+pub(in crate::view) fn selected_branch_row_bg(theme: AppTheme) -> gpui::Rgba {
+    with_alpha(theme.colors.text, if theme.is_dark { 0.16 } else { 0.10 })
+}
+
+pub(in crate::view) fn selected_branch_history_entry_text(
+    selected_branch: Option<&SelectedBranch>,
+    repo_id: RepoId,
+    is_head: bool,
+    selected: bool,
+) -> Option<SharedString> {
+    if !selected {
+        return None;
+    }
+
+    let selected_branch = selected_branch?;
+    if selected_branch.repo_id != repo_id {
+        return None;
+    }
+
+    match selected_branch.section {
+        BranchSection::Local if is_head => Some(format!("HEAD → {}", selected_branch.name).into()),
+        BranchSection::Local | BranchSection::Remote => {
+            Some(SharedString::from(selected_branch.name.clone()))
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum HistoryColResizeHandle {
     Branch,
@@ -61,7 +99,7 @@ pub(super) fn absolute_scroll_y(handle: &ScrollHandle) -> Pixels {
 }
 
 pub(super) fn scroll_is_near_bottom(handle: &ScrollHandle, threshold: Pixels) -> bool {
-    let max_offset = handle.max_offset().height.max(px(0.0));
+    let max_offset = handle.max_offset().y.max(px(0.0));
     if max_offset <= px(0.0) {
         return true;
     }
@@ -543,6 +581,102 @@ impl StatusSection {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum StatusSectionFilter {
+    All,
+    UntrackedOnly,
+    ExcludeUntracked,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct StatusSectionEntries<'a> {
+    entries: &'a [FileStatus],
+    filter: StatusSectionFilter,
+}
+
+impl<'a> StatusSectionEntries<'a> {
+    pub(super) fn from_repo(repo: &'a RepoState, section: StatusSection) -> Option<Self> {
+        let (entries, filter) = match section {
+            StatusSection::CombinedUnstaged => {
+                (repo.worktree_status_entries()?, StatusSectionFilter::All)
+            }
+            StatusSection::Untracked => (
+                repo.worktree_status_entries()?,
+                StatusSectionFilter::UntrackedOnly,
+            ),
+            StatusSection::Unstaged => (
+                repo.worktree_status_entries()?,
+                StatusSectionFilter::ExcludeUntracked,
+            ),
+            StatusSection::Staged => (repo.staged_status_entries()?, StatusSectionFilter::All),
+        };
+        Some(Self { entries, filter })
+    }
+
+    pub(super) fn iter(self) -> StatusSectionIter<'a> {
+        StatusSectionIter {
+            inner: self.entries.iter(),
+            filter: self.filter,
+        }
+    }
+
+    pub(super) fn len(self) -> usize {
+        self.iter().count()
+    }
+
+    pub(super) fn get(self, index: usize) -> Option<&'a FileStatus> {
+        self.iter().nth(index)
+    }
+
+    pub(super) fn path_vec(self) -> Vec<std::path::PathBuf> {
+        self.iter().map(|entry| entry.path.clone()).collect()
+    }
+
+    pub(super) fn contains_path(self, path: &std::path::Path) -> bool {
+        self.iter().any(|entry| entry.path == path)
+    }
+}
+
+pub(super) struct StatusSectionIter<'a> {
+    inner: std::slice::Iter<'a, FileStatus>,
+    filter: StatusSectionFilter,
+}
+
+impl<'a> Iterator for StatusSectionIter<'a> {
+    type Item = &'a FileStatus;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner
+            .find(|entry| status_section_filter_matches(self.filter, entry))
+    }
+}
+
+fn status_section_filter_matches(filter: StatusSectionFilter, entry: &FileStatus) -> bool {
+    match filter {
+        StatusSectionFilter::All => true,
+        StatusSectionFilter::UntrackedOnly => entry.kind == FileStatusKind::Untracked,
+        StatusSectionFilter::ExcludeUntracked => entry.kind != FileStatusKind::Untracked,
+    }
+}
+
+pub(super) fn status_section_rev(repo: &RepoState, section: StatusSection) -> u64 {
+    match section {
+        StatusSection::Staged => repo.staged_status_cache_rev(),
+        StatusSection::CombinedUnstaged | StatusSection::Untracked | StatusSection::Unstaged => {
+            repo.worktree_status_cache_rev()
+        }
+    }
+}
+
+pub(super) fn status_section_is_loading(repo: &RepoState, section: StatusSection) -> bool {
+    match section {
+        StatusSection::Staged => repo.staged_status_is_loading(),
+        StatusSection::CombinedUnstaged | StatusSection::Untracked | StatusSection::Unstaged => {
+            repo.worktree_status_is_loading()
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub(super) struct StatusMultiSelection {
     pub(super) untracked: Vec<std::path::PathBuf>,
@@ -597,9 +731,10 @@ impl StatusMultiSelection {
     }
 }
 
+#[cfg(test)]
 pub(super) fn reconcile_status_multi_selection(
     selection: &mut StatusMultiSelection,
-    status: &RepoStatus,
+    status: &gitcomet_core::domain::RepoStatus,
 ) {
     let mut untracked_paths: HashSet<&std::path::Path> =
         HashSet::with_capacity_and_hasher(status.unstaged.len(), Default::default());
@@ -653,6 +788,69 @@ pub(super) fn reconcile_status_multi_selection(
         selection.staged_anchor = None;
         selection.staged_anchor_index = None;
         selection.staged_anchor_status_rev = None;
+    }
+}
+
+pub(super) fn reconcile_status_multi_selection_with_repo(
+    selection: &mut StatusMultiSelection,
+    repo: &RepoState,
+) {
+    if let Some(worktree) = repo.worktree_status_entries() {
+        let mut untracked_paths: HashSet<&std::path::Path> =
+            HashSet::with_capacity_and_hasher(worktree.len(), Default::default());
+        let mut unstaged_paths: HashSet<&std::path::Path> =
+            HashSet::with_capacity_and_hasher(worktree.len(), Default::default());
+        for entry in worktree {
+            unstaged_paths.insert(entry.path.as_path());
+            if entry.kind == FileStatusKind::Untracked {
+                untracked_paths.insert(entry.path.as_path());
+            }
+        }
+
+        selection
+            .untracked
+            .retain(|p| untracked_paths.contains(&p.as_path()));
+        if selection
+            .untracked_anchor
+            .as_ref()
+            .is_some_and(|a| !untracked_paths.contains(&a.as_path()))
+        {
+            selection.untracked_anchor = None;
+        }
+
+        selection
+            .unstaged
+            .retain(|p| unstaged_paths.contains(&p.as_path()));
+        if selection
+            .unstaged_anchor
+            .as_ref()
+            .is_some_and(|a| !unstaged_paths.contains(&a.as_path()))
+        {
+            selection.unstaged_anchor = None;
+            selection.unstaged_anchor_index = None;
+            selection.unstaged_anchor_status_rev = None;
+        }
+    }
+
+    if let Some(staged) = repo.staged_status_entries() {
+        let mut staged_paths: HashSet<&std::path::Path> =
+            HashSet::with_capacity_and_hasher(staged.len(), Default::default());
+        for entry in staged {
+            staged_paths.insert(entry.path.as_path());
+        }
+
+        selection
+            .staged
+            .retain(|p| staged_paths.contains(&p.as_path()));
+        if selection
+            .staged_anchor
+            .as_ref()
+            .is_some_and(|a| !staged_paths.contains(&a.as_path()))
+        {
+            selection.staged_anchor = None;
+            selection.staged_anchor_index = None;
+            selection.staged_anchor_status_rev = None;
+        }
     }
 }
 
@@ -2129,7 +2327,6 @@ pub(super) enum PopoverKind {
     HistoryBranchFilter {
         repo_id: RepoId,
     },
-    HistoryColumnSettings,
     ChangeTrackingSettings,
 }
 
@@ -2327,6 +2524,15 @@ pub(super) enum FocusedMergetoolBootstrapAction {
         path: std::path::PathBuf,
     },
     Complete,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum DeferredRepoBootstrap {
+    RestoreSession {
+        open_repos: Vec<std::path::PathBuf>,
+        active_repo: Option<std::path::PathBuf>,
+    },
+    OpenRepo(std::path::PathBuf),
 }
 
 pub(super) fn normalize_bootstrap_repo_path(path: std::path::PathBuf) -> std::path::PathBuf {
@@ -2671,6 +2877,53 @@ impl ChangeTrackingView {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) enum DiffScrollSync {
+    Vertical,
+    Horizontal,
+    None,
+    #[default]
+    Both,
+}
+
+impl DiffScrollSync {
+    pub(super) const fn key(self) -> &'static str {
+        match self {
+            Self::Vertical => "vertical",
+            Self::Horizontal => "horizontal",
+            Self::None => "none",
+            Self::Both => "both",
+        }
+    }
+
+    pub(super) fn from_key(raw: &str) -> Option<Self> {
+        match raw {
+            "vertical" => Some(Self::Vertical),
+            "horizontal" => Some(Self::Horizontal),
+            "none" => Some(Self::None),
+            "both" => Some(Self::Both),
+            _ => None,
+        }
+    }
+
+    pub(super) const fn label(self) -> &'static str {
+        match self {
+            Self::Vertical => "Vertical",
+            Self::Horizontal => "Horizontal",
+            Self::None => "None",
+            Self::Both => "Both",
+        }
+    }
+
+    pub(super) const fn includes_vertical(self) -> bool {
+        matches!(self, Self::Vertical | Self::Both)
+    }
+
+    pub(super) const fn includes_horizontal(self) -> bool {
+        matches!(self, Self::Horizontal | Self::Both)
+    }
+}
+
 pub struct GitCometView {
     pub(super) store: Arc<AppStore>,
     pub(super) state: Arc<AppState>,
@@ -2693,6 +2946,7 @@ pub struct GitCometView {
     pub(super) toast_host: Entity<ToastHost>,
     pub(super) popover_host: Entity<PopoverHost>,
     pub(super) focused_mergetool_bootstrap: Option<FocusedMergetoolBootstrap>,
+    pub(super) deferred_repo_bootstrap: Option<DeferredRepoBootstrap>,
     pub(super) startup_repo_bootstrap_pending: bool,
     pub(super) splash_backdrop_image: Arc<gpui::Image>,
 
@@ -2714,6 +2968,7 @@ pub struct GitCometView {
     pub(super) terminal_cursor_blink_active: bool,
     pub(super) terminal_cursor_blink_task_scheduled: bool,
     pub(super) terminal_cursor_blink_seq: u64,
+    pub(super) diff_scroll_sync: DiffScrollSync,
 
     pub(super) open_repo_panel: bool,
     pub(super) open_repo_input: Entity<components::TextInput>,

@@ -243,6 +243,13 @@ pub(super) fn path_display_shared(path: &Path) -> SharedString {
     path_display_string(path).into()
 }
 
+pub(in crate::view) fn repo_path_name(path: &Path) -> SharedString {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .map(SharedString::new)
+        .unwrap_or_else(|| path_display_shared_fast(path))
+}
+
 /// Fast path that skips the intermediate `String` allocation on non-Windows
 /// by constructing `SharedString` directly from `&str` → `Arc<str>`.
 #[cfg(not(windows))]
@@ -485,7 +492,7 @@ fn format_windows_path_for_display(path: String) -> String {
 mod tests {
     use super::{
         PathDisplayBenchSnapshot, PathDisplayCache, bench_reset, bench_snapshot,
-        cached_path_display, format_windows_path_for_display,
+        cached_path_display, format_windows_path_for_display, path_display_string, repo_path_name,
     };
     use std::path::{Path, PathBuf};
     use std::sync::{Arc, Barrier};
@@ -697,6 +704,24 @@ mod tests {
         assert_eq!(display.as_ref(), recent_hot.to_str().unwrap_or_default());
         assert!(cache_contains_recent(&cache, &recent_hot));
         assert!(cache_contains_previous(&cache, &previous_hot));
+    }
+
+    #[test]
+    fn repo_path_name_uses_last_path_component_when_available() {
+        assert_eq!(
+            repo_path_name(Path::new("/tmp/repo-name")).as_ref(),
+            "repo-name"
+        );
+    }
+
+    #[test]
+    fn repo_path_name_falls_back_to_full_path_when_file_name_is_missing() {
+        #[cfg(not(windows))]
+        let path = Path::new("/");
+        #[cfg(windows)]
+        let path = Path::new(r"C:\");
+
+        assert_eq!(repo_path_name(path).as_ref(), path_display_string(path));
     }
 
     #[test]

@@ -6,6 +6,8 @@ impl GitCometView {
         next: Arc<AppState>,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
+        let git_runtime_changed = self.state.git_runtime != next.git_runtime;
+        let prev_git_runtime_available = self.state.git_runtime.is_available();
         let prev_had_repos = !self.state.repos.is_empty();
         let prev_banner_error = self.state.banner_error.clone();
         let prev_auth_prompt = self.state.auth_prompt.clone();
@@ -145,6 +147,13 @@ impl GitCometView {
 
         self.state = next;
         self.sync_terminal_sessions_with_state(cx);
+        if !prev_git_runtime_available && self.state.git_runtime.is_available() {
+            self.resume_after_git_runtime_recovery();
+        }
+        self.sync_terminal_sessions_with_state(cx);
+        if !prev_git_runtime_available && self.state.git_runtime.is_available() {
+            self.resume_after_git_runtime_recovery();
+        }
         for msg in follow_up_msgs {
             self.store.dispatch(msg);
         }
@@ -174,7 +183,9 @@ impl GitCometView {
                 .collect(),
         );
 
-        prev_banner_error != next_banner_error || prev_auth_prompt != self.state.auth_prompt
+        git_runtime_changed
+            || prev_banner_error != next_banner_error
+            || prev_auth_prompt != self.state.auth_prompt
     }
 }
 

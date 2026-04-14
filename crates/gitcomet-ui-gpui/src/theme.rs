@@ -64,6 +64,7 @@ pub struct Colors {
     pub diff_remove_text: Rgba,
     pub input_placeholder: Rgba,
     pub accent_text: Rgba,
+    pub emphasis_text: Rgba,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -433,6 +434,8 @@ struct ThemeFileColors {
     #[serde(default)]
     accent_text: Option<ThemeColor>,
     #[serde(default)]
+    emphasis_text: Option<ThemeColor>,
+    #[serde(default)]
     graph_lane_palette: Option<Vec<ThemeColor>>,
     #[serde(default)]
     graph_lane_hues: Option<Vec<f32>>,
@@ -548,6 +551,7 @@ impl From<ThemeFile> for AppTheme {
             diff_remove_text,
             input_placeholder,
             accent_text,
+            emphasis_text,
             graph_lane_palette,
             graph_lane_hues,
         } = colors;
@@ -593,6 +597,9 @@ impl From<ThemeFile> for AppTheme {
             accent_text: accent_text
                 .map(ThemeColor::into_rgba)
                 .unwrap_or_else(default_accent_text),
+            emphasis_text: emphasis_text
+                .map(ThemeColor::into_rgba)
+                .unwrap_or_else(|| default_emphasis_text(is_dark)),
         };
         let syntax = resolve_syntax_colors(is_dark, &colors, syntax.as_ref());
 
@@ -724,6 +731,14 @@ fn default_input_placeholder(is_dark: bool) -> Rgba {
 
 fn default_accent_text() -> Rgba {
     gpui::rgba(0xffffffff)
+}
+
+fn default_emphasis_text(is_dark: bool) -> Rgba {
+    if is_dark {
+        gpui::rgba(0xffffffff)
+    } else {
+        gpui::rgba(0x000000ff)
+    }
 }
 
 fn embedded_theme_cache() -> &'static HashMap<String, RuntimeThemeSpec> {
@@ -939,6 +954,7 @@ mod tests {
                         "diff_remove_text": "#506070ff",
                         "input_placeholder": "#708090ff",
                         "accent_text": "#112233ff",
+                        "emphasis_text": "#a1b2c3ff",
                         "graph_lane_hues": [0.25, 0.75]
                     },
                     "radii": {
@@ -971,6 +987,7 @@ mod tests {
         assert_eq!(theme.colors.diff_remove_text, gpui::rgba(0x506070ff));
         assert_eq!(theme.colors.input_placeholder, gpui::rgba(0x708090ff));
         assert_eq!(theme.colors.accent_text, gpui::rgba(0x112233ff));
+        assert_eq!(theme.colors.emphasis_text, gpui::rgba(0xa1b2c3ff));
         assert_eq!(theme.graph_lane_palette.as_slice().len(), 2);
         assert_eq!(
             theme.graph_lane_palette.as_slice()[0],
@@ -1100,10 +1117,93 @@ mod tests {
         assert_eq!(theme.colors.diff_remove_text, gpui::rgba(0xcb2431ff));
         assert_eq!(theme.colors.input_placeholder, gpui::rgba(0x00000033));
         assert_eq!(theme.colors.accent_text, gpui::rgba(0xffffffff));
+        assert_eq!(theme.colors.emphasis_text, gpui::rgba(0x000000ff));
         assert_eq!(
             theme.graph_lane_palette.as_slice().len(),
             GRAPH_LANE_PALETTE_SIZE
         );
+    }
+
+    #[test]
+    fn omitted_emphasis_text_uses_light_and_dark_defaults() {
+        let json = r##"{
+            "name": "Fixture",
+            "themes": [
+                {
+                    "key": "fixture_light",
+                    "name": "Fixture Light",
+                    "appearance": "light",
+                    "colors": {
+                        "window_bg": "#fafafaff",
+                        "surface_bg": "#ebebecff",
+                        "surface_bg_elevated": "#ebebecff",
+                        "active_section": "#fafafaff",
+                        "border": "#dfdfe0ff",
+                        "text": "#242529ff",
+                        "text_muted": "#58585aff",
+                        "accent": "#5c78e2ff",
+                        "hover": "#dfdfe0ff",
+                        "active": { "hex": "#dfdfe0ff", "alpha": 0.88 },
+                        "focus_ring": { "hex": "#5c78e2ff", "alpha": 0.52 },
+                        "focus_ring_bg": { "hex": "#5c78e2ff", "alpha": 0.12 },
+                        "scrollbar_thumb": { "hex": "#58585aff", "alpha": 0.26 },
+                        "scrollbar_thumb_hover": { "hex": "#58585aff", "alpha": 0.36 },
+                        "scrollbar_thumb_active": { "hex": "#58585aff", "alpha": 0.46 },
+                        "danger": "#de3e35ff",
+                        "warning": "#d2b67cff",
+                        "success": "#3f953aff"
+                    },
+                    "radii": {
+                        "panel": 2.0,
+                        "pill": 2.0,
+                        "row": 2.0
+                    }
+                },
+                {
+                    "key": "fixture_dark",
+                    "name": "Fixture Dark",
+                    "appearance": "dark",
+                    "colors": {
+                        "window_bg": "#0d1016ff",
+                        "surface_bg": "#1f2127ff",
+                        "surface_bg_elevated": "#1f2127ff",
+                        "active_section": "#2d2f34ff",
+                        "border": "#2d2f34ff",
+                        "text": "#bfbdb6ff",
+                        "text_muted": "#8a8986ff",
+                        "accent": "#5ac1feff",
+                        "hover": "#2d2f34ff",
+                        "active": { "hex": "#2d2f34ff", "alpha": 0.78 },
+                        "focus_ring": { "hex": "#5ac1feff", "alpha": 0.60 },
+                        "focus_ring_bg": { "hex": "#5ac1feff", "alpha": 0.16 },
+                        "scrollbar_thumb": { "hex": "#8a8986ff", "alpha": 0.30 },
+                        "scrollbar_thumb_hover": { "hex": "#8a8986ff", "alpha": 0.42 },
+                        "scrollbar_thumb_active": { "hex": "#8a8986ff", "alpha": 0.52 },
+                        "danger": "#ef7177ff",
+                        "warning": "#feb454ff",
+                        "success": "#aad84cff"
+                    },
+                    "radii": {
+                        "panel": 2.0,
+                        "pill": 2.0,
+                        "row": 2.0
+                    }
+                }
+            ]
+        }"##;
+
+        let themes = load_theme_specs_from_json(json).expect("theme JSON should parse");
+        let light = themes
+            .iter()
+            .find(|theme| theme.option.key == "fixture_light")
+            .expect("expected light theme");
+        let dark = themes
+            .iter()
+            .find(|theme| theme.option.key == "fixture_dark")
+            .expect("expected dark theme");
+
+        assert_eq!(light.theme.colors.emphasis_text, gpui::rgba(0x000000ff));
+        assert_eq!(dark.theme.colors.emphasis_text, gpui::rgba(0xffffffff));
     }
 
     #[test]
@@ -1125,6 +1225,8 @@ mod tests {
         assert_eq!(light.colors.diff_remove_text, gpui::rgba(0xcb2431ff));
         assert_eq!(dark.colors.input_placeholder, gpui::rgba(0xffffff59));
         assert_eq!(light.colors.accent_text, gpui::rgba(0xffffffff));
+        assert_eq!(dark.colors.emphasis_text, gpui::rgba(0xffffffff));
+        assert_eq!(light.colors.emphasis_text, gpui::rgba(0x000000ff));
         assert_eq!(
             dark.graph_lane_palette.as_slice().len(),
             GRAPH_LANE_PALETTE_SIZE
@@ -1137,6 +1239,7 @@ mod tests {
 
         assert!(theme.is_dark);
         assert_eq!(theme.colors.window_bg, gpui::rgba(0x1a1b26ff));
+        assert_eq!(theme.colors.emphasis_text, gpui::rgba(0xffffffff));
         assert_eq!(theme.syntax.keyword, gpui::rgba(0xbb9af7ff));
         assert_eq!(theme.syntax.string, gpui::rgba(0x9ece6aff));
         assert_eq!(theme.syntax.variable, Some(gpui::rgba(0xc0caf5ff)));

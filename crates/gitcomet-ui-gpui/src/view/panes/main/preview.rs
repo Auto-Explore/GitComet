@@ -277,13 +277,9 @@ impl MainPaneView {
             if *area != DiffArea::Unstaged {
                 return false;
             }
-            let Loadable::Ready(status) = &repo.status else {
-                return false;
-            };
-            let conflict_kind = status
-                .unstaged
-                .iter()
-                .find(|e| e.path == *path && e.kind == FileStatusKind::Conflicted)
+            let conflict_kind = repo
+                .status_entry_for_path(DiffArea::Unstaged, path.as_path())
+                .filter(|entry| entry.kind == FileStatusKind::Conflicted)
                 .and_then(|e| e.conflict);
             Self::conflict_resolver_strategy(conflict_kind, false).is_some()
         })
@@ -401,14 +397,19 @@ impl MainPaneView {
 
         cx.spawn(
             async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
-                let (base_payload, ours_payload, theirs_payload) = smol::unblock(move || {
+                let rasterize_payloads = move || {
                     (
                         rasterize_conflict_preview_svg_payload(base_bytes),
                         rasterize_conflict_preview_svg_payload(ours_bytes),
                         rasterize_conflict_preview_svg_payload(theirs_bytes),
                     )
-                })
-                .await;
+                };
+                let (base_payload, ours_payload, theirs_payload) =
+                    if crate::ui_runtime::current().uses_background_compute() {
+                        smol::unblock(rasterize_payloads).await
+                    } else {
+                        rasterize_payloads()
+                    };
 
                 let _ = view.update(cx, |this, cx| {
                     if this.conflict_resolver.image_preview.source_hash != Some(source_hash)
@@ -460,10 +461,9 @@ impl MainPaneView {
         }
 
         let is_untracked = *area == DiffArea::Unstaged
-            && matches!(&repo.status, Loadable::Ready(status) if status
-                .unstaged
-                .iter()
-                .any(|e| e.kind == FileStatusKind::Untracked && &e.path == path));
+            && repo
+                .status_entry_for_path(DiffArea::Unstaged, path.as_path())
+                .is_some_and(|entry| entry.kind == FileStatusKind::Untracked);
 
         if is_untracked {
             Some(
@@ -612,10 +612,6 @@ impl MainPaneView {
         &self,
     ) -> Option<std::path::PathBuf> {
         let repo = self.active_repo()?;
-        let status = match &repo.status {
-            Loadable::Ready(s) => s,
-            _ => return None,
-        };
         let workdir = repo.spec.workdir.clone();
         let DiffTarget::WorkingTree { path, area } = repo.diff_state.diff_target.as_ref()? else {
             return None;
@@ -623,10 +619,9 @@ impl MainPaneView {
         if *area != DiffArea::Unstaged {
             return None;
         }
-        let is_untracked = status
-            .unstaged
-            .iter()
-            .any(|e| e.kind == FileStatusKind::Untracked && &e.path == path);
+        let is_untracked = repo
+            .status_entry_for_path(DiffArea::Unstaged, path.as_path())
+            .is_some_and(|entry| entry.kind == FileStatusKind::Untracked);
         is_untracked.then(|| {
             if path.is_absolute() {
                 path.clone()
@@ -648,14 +643,9 @@ impl MainPaneView {
                 if *area != DiffArea::Staged {
                     return None;
                 }
-                let status = match &repo.status {
-                    Loadable::Ready(s) => s,
-                    _ => return None,
-                };
-                let is_added = status
-                    .staged
-                    .iter()
-                    .any(|e| e.kind == FileStatusKind::Added && &e.path == path);
+                let is_added = repo
+                    .status_entry_for_path(DiffArea::Staged, path.as_path())
+                    .is_some_and(|entry| entry.kind == FileStatusKind::Added);
                 if !is_added {
                     return None;
                 }
@@ -698,17 +688,9 @@ impl MainPaneView {
 
         match target {
             DiffTarget::WorkingTree { path, area } => {
-                let status = match &repo.status {
-                    Loadable::Ready(s) => s,
-                    _ => return None,
-                };
-                let entries = match area {
-                    DiffArea::Unstaged => status.unstaged.as_slice(),
-                    DiffArea::Staged => status.staged.as_slice(),
-                };
-                let is_deleted = entries
-                    .iter()
-                    .any(|e| e.kind == FileStatusKind::Deleted && &e.path == path);
+                let is_deleted = repo
+                    .status_entry_for_path(*area, path.as_path())
+                    .is_some_and(|entry| entry.kind == FileStatusKind::Deleted);
                 if !is_deleted {
                     return None;
                 }
@@ -810,11 +792,15 @@ impl MainPaneView {
             .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
 
         cx.spawn(async move |view, cx| {
-            let result = smol::unblock({
+            let index_preview = {
                 let source_path_for_task = source_path.clone();
                 move || index_utf8_worktree_preview_file(&source_path_for_task)
-            })
-            .await;
+            };
+            let result = if crate::ui_runtime::current().uses_background_compute() {
+                smol::unblock(index_preview).await
+            } else {
+                index_preview()
+            };
             let _ = view.update(cx, |this, cx| {
                 if this.worktree_preview_path.as_ref() != Some(&display_path)
                     || this.worktree_preview_source_path.as_ref() != Some(&source_path)

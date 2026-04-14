@@ -12,7 +12,6 @@ const TS_DOCUMENT_CACHE_MAX_ENTRIES: usize = 8;
 const TS_DOCUMENT_LINE_TOKEN_CHUNK_ROWS: usize = 64;
 const TS_DOCUMENT_LINE_TOKEN_PREFETCH_GUARD_CHUNKS: usize = 1;
 const DIFF_SYNTAX_FOREGROUND_PARSE_BUDGET_NON_TEST: Duration = Duration::from_millis(1);
-const DIFF_SYNTAX_FOREGROUND_PARSE_BUDGET_TEST: Duration = Duration::from_millis(2);
 const DIFF_SYNTAX_FOREGROUND_SKIP_TEXT_BYTES: usize = 128 * 1024;
 const DIFF_SYNTAX_FOREGROUND_SKIP_LINE_COUNT: usize = 2_048;
 const TS_QUERY_MATCH_LIMIT: u32 = 256;
@@ -261,11 +260,7 @@ pub(in crate::view) struct DiffSyntaxBudget {
 impl Default for DiffSyntaxBudget {
     fn default() -> Self {
         Self {
-            foreground_parse: if cfg!(test) {
-                DIFF_SYNTAX_FOREGROUND_PARSE_BUDGET_TEST
-            } else {
-                DIFF_SYNTAX_FOREGROUND_PARSE_BUDGET_NON_TEST
-            },
+            foreground_parse: crate::ui_runtime::current().diff_syntax_foreground_parse_budget(),
         }
     }
 }

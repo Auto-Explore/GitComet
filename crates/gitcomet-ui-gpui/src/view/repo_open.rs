@@ -59,6 +59,31 @@ impl GitCometView {
         );
     }
 
+    pub(crate) fn show_open_repo_panel_fallback(
+        &mut self,
+        window: Option<&mut Window>,
+        show_notice: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.open_repo_panel = true;
+        self.open_repo_input
+            .update(cx, |input, cx| input.set_text("", cx));
+        if let Some(window) = window {
+            let focus = self
+                .open_repo_input
+                .read_with(cx, |input, _| input.focus_handle());
+            window.focus(&focus, cx);
+        }
+        if show_notice {
+            self.push_toast(
+                components::ToastKind::Warning,
+                "Native folder picker unavailable. Enter a repository path manually.".to_string(),
+                cx,
+            );
+        }
+        cx.notify();
+    }
+
     pub(crate) fn activate_repo_path(
         &mut self,
         path: &std::path::Path,
@@ -165,8 +190,7 @@ impl GitCometView {
                     Ok(Ok(None)) => return,
                     Ok(Err(_)) | Err(_) => {
                         let _ = view.update(cx, |this, cx| {
-                            this.open_repo_panel = true;
-                            cx.notify();
+                            this.show_open_repo_panel_fallback(None, false, cx);
                         });
                         return;
                     }

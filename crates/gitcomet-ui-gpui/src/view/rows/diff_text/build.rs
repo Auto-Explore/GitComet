@@ -204,7 +204,7 @@ pub(in super::super) fn selectable_cached_diff_text(
         .on_mouse_down(
             MouseButton::Left,
             cx.listener(move |this, e: &MouseDownEvent, window, cx| {
-                window.focus(&this.diff_panel_focus_handle);
+                window.focus(&this.diff_panel_focus_handle, cx);
                 if e.click_count >= 2 {
                     cx.stop_propagation();
                     this.double_click_select_diff_text(visible_ix, region, double_click_kind);

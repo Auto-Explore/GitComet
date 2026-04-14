@@ -685,7 +685,8 @@ pub(super) fn branch_sidebar_cache_store(
 #[derive(Clone, Debug)]
 pub(super) struct HistoryWorktreeSummaryCache {
     pub(super) repo_id: RepoId,
-    pub(super) status: Arc<RepoStatus>,
+    pub(super) worktree_status_rev: u64,
+    pub(super) staged_status_rev: u64,
     pub(super) show_row: bool,
     pub(super) counts: (usize, usize, usize),
 }

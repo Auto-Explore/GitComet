@@ -259,7 +259,6 @@ fn create_tag_prompt_escape_cancels(cx: &mut gpui::TestAppContext) {
             crate::kit::Enter,
             Some("TextInput"),
         )]);
-        view.update(app, |this, _cx| this.disable_poller_for_tests());
         let _ = window.draw(app);
     });
 
@@ -305,7 +304,6 @@ fn create_tag_prompt_renders_shortcut_hints_and_separators(cx: &mut gpui::TestAp
         .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
 
     cx.update(|window, app| {
-        view.update(app, |this, _cx| this.disable_poller_for_tests());
         let _ = window.draw(app);
     });
 
@@ -347,7 +345,6 @@ fn create_tag_prompt_cancel_button_closes(cx: &mut gpui::TestAppContext) {
         .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
 
     cx.update(|window, app| {
-        view.update(app, |this, _cx| this.disable_poller_for_tests());
         let _ = window.draw(app);
     });
 
@@ -395,7 +392,6 @@ fn create_tag_prompt_create_button_click_creates_and_closes(cx: &mut gpui::TestA
         .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
 
     cx.update(|window, app| {
-        view.update(app, |this, _cx| this.disable_poller_for_tests());
         let _ = window.draw(app);
     });
 
@@ -457,7 +453,6 @@ fn create_tag_prompt_create_button_click_with_empty_input_does_not_close_or_crea
         .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
 
     cx.update(|window, app| {
-        view.update(app, |this, _cx| this.disable_poller_for_tests());
         let _ = window.draw(app);
     });
 
@@ -512,7 +507,6 @@ fn create_tag_prompt_enter_creates_and_closes(cx: &mut gpui::TestAppContext) {
             crate::kit::Enter,
             Some("TextInput"),
         )]);
-        view.update(app, |this, _cx| this.disable_poller_for_tests());
         let _ = window.draw(app);
     });
 
@@ -585,7 +579,6 @@ fn create_tag_prompt_enter_with_empty_input_does_not_close_or_create(
             crate::kit::Enter,
             Some("TextInput"),
         )]);
-        view.update(app, |this, _cx| this.disable_poller_for_tests());
         let _ = window.draw(app);
     });
 
@@ -1045,8 +1038,6 @@ fn remote_branch_menu_renders_squash_entry_without_panic(cx: &mut gpui::TestAppC
 
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.disable_poller_for_tests();
-
             let mut repo = RepoState::new_opening(
                 repo_id,
                 gitcomet_core::domain::RepoSpec {

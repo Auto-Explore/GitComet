@@ -1,6 +1,31 @@
 use std::io;
 use std::path::Path;
 
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LinuxOpenTarget {
+    ExternalResource,
+    FilePath,
+}
+
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LinuxOpenHelper {
+    XdgOpen,
+    GioOpen,
+    WslView,
+}
+
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+const DEFAULT_LINUX_OPEN_HELPERS: [LinuxOpenHelper; 2] =
+    [LinuxOpenHelper::XdgOpen, LinuxOpenHelper::GioOpen];
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+const WSL_LINUX_OPEN_HELPERS: [LinuxOpenHelper; 3] = [
+    LinuxOpenHelper::XdgOpen,
+    LinuxOpenHelper::GioOpen,
+    LinuxOpenHelper::WslView,
+];
+
 /// Open a URL in the user's default browser.
 pub(super) fn open_url(url: &str) -> Result<(), io::Error> {
     let url = validate_external_url(url)?;
@@ -105,17 +130,11 @@ fn open_with_default(arg: &str) -> Result<(), io::Error> {
 
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     {
-        match std::process::Command::new("xdg-open").arg(arg).spawn() {
-            Ok(_) => Ok(()),
-            Err(err) if err.kind() == io::ErrorKind::NotFound => {
-                let _ = std::process::Command::new("gio")
-                    .args(["open"])
-                    .arg(arg)
-                    .spawn()?;
-                Ok(())
-            }
-            Err(err) => Err(err),
-        }
+        run_linux_open_with_fallbacks(
+            current_linux_is_wsl(),
+            LinuxOpenTarget::ExternalResource,
+            |helper| launch_linux_open_helper_str(helper, arg),
+        )
     }
 
     #[cfg(not(any(
@@ -150,17 +169,11 @@ fn open_with_default_os_str(arg: &std::ffi::OsStr) -> Result<(), io::Error> {
 
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     {
-        match std::process::Command::new("xdg-open").arg(arg).spawn() {
-            Ok(_) => Ok(()),
-            Err(err) if err.kind() == io::ErrorKind::NotFound => {
-                let _ = std::process::Command::new("gio")
-                    .args(["open"])
-                    .arg(arg)
-                    .spawn()?;
-                Ok(())
-            }
-            Err(err) => Err(err),
-        }
+        run_linux_open_with_fallbacks(
+            current_linux_is_wsl(),
+            LinuxOpenTarget::FilePath,
+            |helper| launch_linux_open_helper_os_str(helper, arg),
+        )
     }
 
     #[cfg(not(any(
@@ -205,6 +218,103 @@ fn is_allowed_url_scheme(scheme: &str) -> bool {
     scheme.eq_ignore_ascii_case("http")
         || scheme.eq_ignore_ascii_case("https")
         || scheme.eq_ignore_ascii_case("mailto")
+}
+
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+fn linux_open_helpers(is_wsl: bool) -> &'static [LinuxOpenHelper] {
+    if is_wsl {
+        &WSL_LINUX_OPEN_HELPERS
+    } else {
+        &DEFAULT_LINUX_OPEN_HELPERS
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+fn linux_missing_opener_error(target: LinuxOpenTarget, is_wsl: bool) -> io::Error {
+    let subject = match target {
+        LinuxOpenTarget::ExternalResource => "open external resources",
+        LinuxOpenTarget::FilePath => "open files or folders",
+    };
+    let mut message = format!(
+        "Unable to {subject}: no supported desktop opener was found. Install `xdg-utils` or make `gio open` available."
+    );
+    if is_wsl {
+        message.push_str(" Under WSL, you can also install `wslu` to provide `wslview`.");
+    }
+    io::Error::new(io::ErrorKind::NotFound, message)
+}
+
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+fn run_linux_open_with_fallbacks(
+    is_wsl: bool,
+    target: LinuxOpenTarget,
+    mut launch: impl FnMut(LinuxOpenHelper) -> io::Result<()>,
+) -> io::Result<()> {
+    let mut deferred_spawn_error = None;
+
+    for helper in linux_open_helpers(is_wsl) {
+        match launch(*helper) {
+            Ok(()) => return Ok(()),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
+            Err(err) => {
+                if is_wsl && *helper != LinuxOpenHelper::WslView {
+                    if deferred_spawn_error.is_none() {
+                        deferred_spawn_error = Some(err);
+                    }
+                    continue;
+                }
+                return Err(err);
+            }
+        }
+    }
+
+    if let Some(err) = deferred_spawn_error {
+        return Err(err);
+    }
+
+    Err(linux_missing_opener_error(target, is_wsl))
+}
+
+#[cfg(target_os = "linux")]
+fn current_linux_is_wsl() -> bool {
+    crate::linux_gui_env::LinuxGuiEnvironment::detect().is_wsl
+}
+
+#[cfg(target_os = "freebsd")]
+fn current_linux_is_wsl() -> bool {
+    false
+}
+
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+fn launch_linux_open_helper_str(helper: LinuxOpenHelper, arg: &str) -> io::Result<()> {
+    let mut command = std::process::Command::new(linux_open_helper_program(helper));
+    if helper == LinuxOpenHelper::GioOpen {
+        command.arg("open");
+    }
+    let _ = command.arg(arg).spawn()?;
+    Ok(())
+}
+
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+fn launch_linux_open_helper_os_str(
+    helper: LinuxOpenHelper,
+    arg: &std::ffi::OsStr,
+) -> io::Result<()> {
+    let mut command = std::process::Command::new(linux_open_helper_program(helper));
+    if helper == LinuxOpenHelper::GioOpen {
+        command.arg("open");
+    }
+    let _ = command.arg(arg).spawn()?;
+    Ok(())
+}
+
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+fn linux_open_helper_program(helper: LinuxOpenHelper) -> &'static str {
+    match helper {
+        LinuxOpenHelper::XdgOpen => "xdg-open",
+        LinuxOpenHelper::GioOpen => "gio",
+        LinuxOpenHelper::WslView => "wslview",
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -281,7 +391,10 @@ fn file_uri_for_file_manager(path: &Path) -> Result<String, io::Error> {
 
 #[cfg(all(test, any(target_os = "linux", target_os = "freebsd")))]
 mod tests {
-    use super::file_uri_for_file_manager;
+    use super::{
+        DEFAULT_LINUX_OPEN_HELPERS, LinuxOpenHelper, LinuxOpenTarget, WSL_LINUX_OPEN_HELPERS,
+        file_uri_for_file_manager, linux_open_helpers, run_linux_open_with_fallbacks,
+    };
     use std::ffi::OsString;
     use std::os::unix::ffi::OsStringExt;
     use std::path::Path;
@@ -306,6 +419,67 @@ mod tests {
             .expect("uri for relative path");
         assert!(uri.starts_with("file:///"));
         assert!(uri.ends_with("/folder/with%20space.txt"));
+    }
+
+    #[test]
+    fn linux_open_helpers_only_include_wslview_inside_wsl() {
+        assert_eq!(linux_open_helpers(false), &DEFAULT_LINUX_OPEN_HELPERS);
+        assert_eq!(linux_open_helpers(true), &WSL_LINUX_OPEN_HELPERS);
+    }
+
+    #[test]
+    fn linux_open_fallback_tries_wslview_after_spawn_errors_inside_wsl() {
+        let mut seen = Vec::new();
+        let result =
+            run_linux_open_with_fallbacks(true, LinuxOpenTarget::ExternalResource, |helper| {
+                seen.push(helper);
+                match helper {
+                    LinuxOpenHelper::XdgOpen => {
+                        Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied))
+                    }
+                    LinuxOpenHelper::GioOpen => {
+                        Err(std::io::Error::from(std::io::ErrorKind::NotFound))
+                    }
+                    LinuxOpenHelper::WslView => Ok(()),
+                }
+            });
+
+        assert!(result.is_ok());
+        assert_eq!(
+            seen,
+            vec![
+                LinuxOpenHelper::XdgOpen,
+                LinuxOpenHelper::GioOpen,
+                LinuxOpenHelper::WslView
+            ]
+        );
+    }
+
+    #[test]
+    fn linux_open_missing_helper_error_mentions_wslview_under_wsl() {
+        let err = run_linux_open_with_fallbacks(true, LinuxOpenTarget::FilePath, |_helper| {
+            Err(std::io::Error::from(std::io::ErrorKind::NotFound))
+        })
+        .expect_err("expected missing-opener error");
+
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+        let message = err.to_string();
+        assert!(message.contains("xdg-utils"));
+        assert!(message.contains("wslview"));
+    }
+
+    #[test]
+    fn linux_open_missing_helper_error_omits_wslview_outside_wsl() {
+        let err =
+            run_linux_open_with_fallbacks(false, LinuxOpenTarget::ExternalResource, |_helper| {
+                Err(std::io::Error::from(std::io::ErrorKind::NotFound))
+            })
+            .expect_err("expected missing-opener error");
+
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+        let message = err.to_string();
+        assert!(message.contains("xdg-utils"));
+        assert!(!message.contains("wslview"));
     }
 }
 

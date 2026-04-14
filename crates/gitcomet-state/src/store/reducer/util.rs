@@ -1,7 +1,7 @@
 use crate::model::{
     AppNotification, AppNotificationKind, AppState, AuthPromptKind, CommandLogEntry,
-    ConflictFileLoadMode, DiagnosticEntry, DiagnosticKind, Loadable, RepoId, RepoLoadsInFlight,
-    RepoState,
+    ConflictFileLoadMode, DiagnosticEntry, DiagnosticKind, GitLogSettings, Loadable, RepoId,
+    RepoLoadsInFlight, RepoState,
 };
 use crate::msg::{ConflictAutosolveMode, ConflictAutosolveStats, Effect, RepoCommandKind};
 #[cfg(test)]
@@ -20,8 +20,8 @@ use std::time::SystemTime;
 pub(super) const DEFAULT_LOG_PAGE_SIZE: usize = 200;
 const CONFLICT_RELOAD_EFFECT_COUNT: usize = 1;
 const DIFF_RELOAD_MAX_EFFECTS: usize = 3;
-const PRIMARY_REFRESH_MAX_EFFECTS: usize = 5;
-const FULL_REFRESH_MAX_EFFECTS: usize = 10;
+const PRIMARY_REFRESH_MAX_EFFECTS: usize = 6;
+const FULL_REFRESH_MAX_EFFECTS: usize = 11;
 
 pub(super) trait EffectAccumulator {
     fn push_effect(&mut self, effect: Effect);
@@ -131,12 +131,8 @@ pub(super) fn diff_target_is_svg(target: &DiffTarget) -> bool {
 fn diff_target_is_preview_only(repo_state: &RepoState, target: &DiffTarget) -> bool {
     match target {
         DiffTarget::WorkingTree { path, area } => {
-            let Loadable::Ready(status) = &repo_state.status else {
+            let Some(entries) = repo_state.status_entries_for_area(*area) else {
                 return false;
-            };
-            let entries = match area {
-                DiffArea::Unstaged => status.unstaged.as_slice(),
-                DiffArea::Staged => status.staged.as_slice(),
             };
 
             entries.iter().any(|entry| {
@@ -173,13 +169,7 @@ fn diff_target_preview_text_side(
 ) -> Option<gitcomet_core::domain::DiffPreviewTextSide> {
     match target {
         DiffTarget::WorkingTree { path, area } => {
-            let Loadable::Ready(status) = &repo_state.status else {
-                return None;
-            };
-            let entries = match area {
-                DiffArea::Unstaged => status.unstaged.as_slice(),
-                DiffArea::Staged => status.staged.as_slice(),
-            };
+            let entries = repo_state.status_entries_for_area(*area)?;
 
             entries.iter().find_map(|entry| {
                 (entry.path == *path).then_some(match entry.kind {
@@ -291,11 +281,8 @@ pub(super) fn selected_conflict_target<'a>(
         return None;
     }
 
-    let Loadable::Ready(status) = &repo_state.status else {
-        return None;
-    };
-    status
-        .unstaged
+    repo_state
+        .worktree_status_entries()?
         .iter()
         .find(|entry| entry.path == *path && entry.kind == FileStatusKind::Conflicted)
         .map(|_| SelectedConflictTarget::Path(path.as_path()))
@@ -449,6 +436,30 @@ pub(super) fn refresh_primary_effect_capacity() -> usize {
     PRIMARY_REFRESH_MAX_EFFECTS
 }
 
+fn should_auto_fetch_history_tags(git_log_settings: GitLogSettings) -> bool {
+    git_log_settings.show_history_tags && git_log_settings.auto_fetch_tags_on_repo_activation()
+}
+
+pub(super) fn append_requested_status_refresh_effects(
+    repo_state: &mut RepoState,
+    effects: &mut impl EffectAccumulator,
+) {
+    let repo_id = repo_state.id;
+    let load_worktree = repo_state
+        .loads_in_flight
+        .request(RepoLoadsInFlight::WORKTREE_STATUS);
+    let load_staged = repo_state
+        .loads_in_flight
+        .request(RepoLoadsInFlight::STAGED_STATUS);
+
+    match (load_worktree, load_staged) {
+        (true, true) => effects.push_effect(Effect::LoadStatus { repo_id }),
+        (true, false) => effects.push_effect(Effect::LoadWorktreeStatus { repo_id }),
+        (false, true) => effects.push_effect(Effect::LoadStagedStatus { repo_id }),
+        (false, false) => {}
+    }
+}
+
 fn push_rebase_and_merge_refresh_effect(effects: &mut impl EffectAccumulator, repo_id: RepoId) {
     effects.push_effect(Effect::LoadRebaseAndMergeState { repo_id });
 }
@@ -514,12 +525,7 @@ pub(super) fn append_refresh_primary_effects(
         effects.push_effect(Effect::LoadUpstreamDivergence { repo_id });
     }
     append_requested_rebase_and_merge_refresh_effects(repo_state, effects);
-    if repo_state
-        .loads_in_flight
-        .request(RepoLoadsInFlight::STATUS)
-    {
-        effects.push_effect(Effect::LoadStatus { repo_id });
-    }
+    append_requested_status_refresh_effects(repo_state, effects);
     if repo_state
         .loads_in_flight
         .request_log(scope, DEFAULT_LOG_PAGE_SIZE, None)
@@ -540,14 +546,18 @@ pub(super) fn refresh_full_effect_capacity() -> usize {
     FULL_REFRESH_MAX_EFFECTS
 }
 
-pub(super) fn refresh_full_effects(repo_state: &mut RepoState) -> Vec<Effect> {
+pub(super) fn refresh_full_effects(
+    repo_state: &mut RepoState,
+    git_log_settings: GitLogSettings,
+) -> Vec<Effect> {
     let mut effects = Vec::with_capacity(refresh_full_effect_capacity());
-    append_refresh_full_effects(repo_state, &mut effects);
+    append_refresh_full_effects(repo_state, git_log_settings, &mut effects);
     effects
 }
 
 pub(super) fn append_refresh_full_effects(
     repo_state: &mut RepoState,
+    git_log_settings: GitLogSettings,
     effects: &mut impl EffectAccumulator,
 ) {
     let repo_id = repo_state.id;
@@ -566,12 +576,7 @@ pub(super) fn append_refresh_full_effects(
     {
         effects.push_effect(Effect::LoadUpstreamDivergence { repo_id });
     }
-    if repo_state
-        .loads_in_flight
-        .request(RepoLoadsInFlight::STATUS)
-    {
-        effects.push_effect(Effect::LoadStatus { repo_id });
-    }
+    append_requested_status_refresh_effects(repo_state, effects);
     if repo_state.loads_in_flight.request_log(
         repo_state.history_state.history_scope,
         DEFAULT_LOG_PAGE_SIZE,
@@ -591,14 +596,10 @@ pub(super) fn append_refresh_full_effects(
     {
         effects.push_effect(Effect::LoadBranches { repo_id });
     }
-    if repo_state.loads_in_flight.request(RepoLoadsInFlight::TAGS) {
-        effects.push_effect(Effect::LoadTags { repo_id });
-    }
-    if repo_state
-        .loads_in_flight
-        .request(RepoLoadsInFlight::REMOTE_TAGS)
+    if should_auto_fetch_history_tags(git_log_settings)
+        && repo_state.loads_in_flight.request(RepoLoadsInFlight::TAGS)
     {
-        effects.push_effect(Effect::LoadRemoteTags { repo_id });
+        effects.push_effect(Effect::LoadTags { repo_id });
     }
     if repo_state
         .loads_in_flight
@@ -1375,6 +1376,11 @@ mod tests {
         assert_eq!(primary_effects.len(), 5);
         assert!(!primary.log_loading_more);
         assert!(matches!(primary_effects[0], Effect::LoadHeadBranch { .. }));
+        assert!(
+            primary_effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::LoadStatus { .. }))
+        );
         assert!(matches!(
             primary_effects[4],
             Effect::LoadLog {
@@ -1383,6 +1389,15 @@ mod tests {
             }
         ));
         assert!(
+            !primary_effects.iter().any(|effect| {
+                matches!(
+                    effect,
+                    Effect::LoadWorktreeStatus { .. } | Effect::LoadStagedStatus { .. }
+                )
+            }),
+            "primary refresh should coalesce staged and worktree status into LoadStatus"
+        );
+        assert!(
             primary_effects
                 .iter()
                 .any(|effect| matches!(effect, Effect::LoadRebaseAndMergeState { .. }))
@@ -1390,13 +1405,33 @@ mod tests {
 
         let mut full = repo_state(2);
         full.set_log_loading_more(true);
-        let full_effects = refresh_full_effects(&mut full);
-        assert_eq!(full_effects.len(), 10);
+        let full_effects = refresh_full_effects(&mut full, GitLogSettings::default());
+        assert_eq!(full_effects.len(), 9);
         assert!(!full.log_loading_more);
         assert!(
             full_effects
                 .iter()
-                .any(|effect| matches!(effect, Effect::LoadRemoteTags { .. }))
+                .any(|effect| matches!(effect, Effect::LoadStatus { .. }))
+        );
+        assert!(
+            !full_effects.iter().any(|effect| {
+                matches!(
+                    effect,
+                    Effect::LoadWorktreeStatus { .. } | Effect::LoadStagedStatus { .. }
+                )
+            }),
+            "full refresh should coalesce staged and worktree status into LoadStatus"
+        );
+        assert!(
+            full_effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::LoadTags { .. }))
+        );
+        assert!(
+            !full_effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::LoadRemoteTags { .. })),
+            "remote tags should lazy-load from tag-specific UI instead of refresh_full_effects"
         );
         assert!(
             !full_effects

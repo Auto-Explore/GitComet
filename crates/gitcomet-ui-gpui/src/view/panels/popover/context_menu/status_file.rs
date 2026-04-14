@@ -25,39 +25,32 @@ pub(super) fn model(
         .repos
         .iter()
         .find(|r| r.id == repo_id)
-        .and_then(|r| match &r.status {
-            Loadable::Ready(status) => {
-                let unstaged_kind = status
-                    .unstaged
-                    .iter()
-                    .find(|s| &s.path == path)
-                    .map(|s| s.kind);
-                let staged_kind = status
-                    .staged
-                    .iter()
-                    .find(|s| &s.path == path)
-                    .map(|s| s.kind);
+        .map(|repo| {
+            let unstaged_kind = repo
+                .status_entry_for_path(DiffArea::Unstaged, path.as_path())
+                .map(|status| status.kind);
+            let staged_kind = repo
+                .status_entry_for_path(DiffArea::Staged, path.as_path())
+                .map(|status| status.kind);
 
-                Some((
-                    matches!(
-                        unstaged_kind,
-                        Some(gitcomet_core::domain::FileStatusKind::Conflicted)
-                    ) || matches!(
-                        staged_kind,
-                        Some(gitcomet_core::domain::FileStatusKind::Conflicted)
-                    ),
-                    matches!(
-                        unstaged_kind,
-                        Some(gitcomet_core::domain::FileStatusKind::Conflicted)
-                    ),
-                    unstaged_kind.is_some(),
-                    matches!(
-                        staged_kind,
-                        Some(gitcomet_core::domain::FileStatusKind::Added)
-                    ),
-                ))
-            }
-            _ => None,
+            (
+                matches!(
+                    unstaged_kind,
+                    Some(gitcomet_core::domain::FileStatusKind::Conflicted)
+                ) || matches!(
+                    staged_kind,
+                    Some(gitcomet_core::domain::FileStatusKind::Conflicted)
+                ),
+                matches!(
+                    unstaged_kind,
+                    Some(gitcomet_core::domain::FileStatusKind::Conflicted)
+                ),
+                unstaged_kind.is_some(),
+                matches!(
+                    staged_kind,
+                    Some(gitcomet_core::domain::FileStatusKind::Added)
+                ),
+            )
         })
         .unwrap_or((false, false, false, false));
 

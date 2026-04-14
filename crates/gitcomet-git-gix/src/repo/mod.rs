@@ -198,6 +198,16 @@ impl GitRepository for GixRepo {
         self.list_remote_branches_impl()
     }
 
+    fn worktree_status(&self) -> Result<Vec<gitcomet_core::domain::FileStatus>> {
+        let _scope = git_ops_trace::scope(GitOpTraceKind::Status);
+        self.worktree_status_impl()
+    }
+
+    fn staged_status(&self) -> Result<Vec<gitcomet_core::domain::FileStatus>> {
+        let _scope = git_ops_trace::scope(GitOpTraceKind::Status);
+        self.staged_status_impl()
+    }
+
     fn status(&self) -> Result<RepoStatus> {
         let _scope = git_ops_trace::scope(GitOpTraceKind::Status);
         self.status_impl()

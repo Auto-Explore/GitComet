@@ -25,6 +25,12 @@ pub enum Effect {
     LoadRemoteBranches {
         repo_id: RepoId,
     },
+    LoadWorktreeStatus {
+        repo_id: RepoId,
+    },
+    LoadStagedStatus {
+        repo_id: RepoId,
+    },
     LoadStatus {
         repo_id: RepoId,
     },
@@ -167,6 +173,9 @@ pub enum Effect {
         url: String,
         dest: PathBuf,
         auth: Option<StagedGitAuth>,
+    },
+    AbortCloneRepo {
+        dest: PathBuf,
     },
     ExportPatch {
         repo_id: RepoId,

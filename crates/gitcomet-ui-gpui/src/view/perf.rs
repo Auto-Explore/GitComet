@@ -1,3 +1,5 @@
+#![cfg_attr(any(test, feature = "benchmarks"), allow(dead_code))]
+
 #[cfg(any(test, feature = "benchmarks"))]
 use smallvec::SmallVec;
 #[cfg(any(debug_assertions, feature = "benchmarks"))]

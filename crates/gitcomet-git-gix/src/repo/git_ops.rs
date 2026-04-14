@@ -1,5 +1,5 @@
 use super::{BranchTrackingConfigCacheEntry, GixRepo, RepoFileStamp, oid_to_arc_str};
-use crate::util::{bytes_to_text_preserving_utf8, run_git_raw_output};
+use crate::util::{bytes_to_text_preserving_utf8, run_git_capture, run_git_raw_output};
 use gitcomet_core::domain::{Branch, CommitId, Upstream, UpstreamDivergence};
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::Result;
@@ -80,8 +80,17 @@ impl GixRepo {
             // Upstream tracking is config-driven (`branch.*`) and can change while the backend
             // stays open, e.g. after `push -u`. Re-open only while those sections exist so branch
             // listing reflects config edits without paying the reopen cost for ref-only repos.
-            let repo = self.reopen_repo()?;
-            return collect_local_branches(&repo, true);
+            return match self.list_branches_cli_with_tracking() {
+                Ok(branches) => Ok(branches),
+                Err(cli_err) => {
+                    let repo = self.reopen_repo()?;
+                    collect_local_branches(&repo, true).map_err(|gix_err| {
+                        Error::new(ErrorKind::Backend(format!(
+                            "list branches: git fallback failed ({cli_err}); gix fallback failed ({gix_err})"
+                        )))
+                    })
+                }
+            };
         }
 
         let repo = self._repo.to_thread_local();
@@ -136,6 +145,18 @@ impl GixRepo {
             "{symbolic_reason}; {verify_reason}"
         ))))
     }
+
+    fn list_branches_cli_with_tracking(&self) -> Result<Vec<Branch>> {
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("for-each-ref")
+            .arg("--format=%(refname:short)\t%(objectname)\t%(upstream:short)\t%(upstream:track)")
+            .arg("refs/heads");
+        let output = run_git_capture(
+            cmd,
+            "git for-each-ref --format=%(refname:short)\\t%(objectname)\\t%(upstream:short)\\t%(upstream:track) refs/heads",
+        )?;
+        parse_local_branches_for_each_ref(&output)
+    }
 }
 
 fn collect_local_branches(
@@ -161,7 +182,7 @@ fn collect_local_branches(
         let target = cached_commit_id(&mut target_ids, &mut last_target, target_id);
 
         let (upstream, divergence) = if has_branch_tracking {
-            branch_upstream_and_divergence(repo, &reference, target_id)?
+            branch_upstream_and_divergence_best_effort(repo, &reference, target_id)?
         } else {
             (None, None)
         };
@@ -202,6 +223,57 @@ fn try_collect_loose_local_branches_fast(repo: &gix::Repository) -> Result<Optio
     }
     branches.sort_unstable_by(|left, right| left.name.cmp(&right.name));
     Ok(Some(branches))
+}
+
+fn parse_local_branches_for_each_ref(output: &str) -> Result<Vec<Branch>> {
+    let mut branches = Vec::new();
+    let mut target_ids = HashMap::default();
+    let mut last_target = None;
+
+    for (line_ix, line) in output.lines().enumerate() {
+        if line.is_empty() {
+            continue;
+        }
+
+        let mut fields = line.split('\t');
+        let name = fields.next().unwrap_or_default();
+        let target_hex = fields.next().unwrap_or_default();
+        let upstream_short = fields.next().unwrap_or_default();
+        let upstream_track = fields.next().unwrap_or_default();
+        if fields.next().is_some() || name.is_empty() || target_hex.is_empty() {
+            return Err(Error::new(ErrorKind::Backend(format!(
+                "git for-each-ref branches line {} malformed: {line}",
+                line_ix + 1
+            ))));
+        }
+
+        let target_id = gix::ObjectId::from_hex(target_hex.as_bytes()).map_err(|e| {
+            Error::new(ErrorKind::Backend(format!(
+                "git for-each-ref branch target {} invalid: {e}",
+                target_hex
+            )))
+        })?;
+        let upstream = parse_upstream_short(upstream_short);
+        let divergence = upstream.as_ref().and_then(|_| {
+            if upstream_track.trim().is_empty() {
+                Some(UpstreamDivergence {
+                    ahead: 0,
+                    behind: 0,
+                })
+            } else {
+                parse_upstream_track_divergence(upstream_track)
+            }
+        });
+
+        branches.push(Branch {
+            name: name.to_string(),
+            target: cached_commit_id(&mut target_ids, &mut last_target, target_id),
+            upstream,
+            divergence,
+        });
+    }
+
+    Ok(branches)
 }
 
 fn collect_loose_local_branches_fast(
@@ -380,6 +452,41 @@ fn cached_commit_id(
     commit_id
 }
 
+fn parse_upstream_track_divergence(raw: &str) -> Option<UpstreamDivergence> {
+    let raw = raw.trim();
+    if raw.is_empty() || raw == "[gone]" || raw == "gone" {
+        return None;
+    }
+
+    let inner = raw
+        .strip_prefix('[')
+        .and_then(|raw| raw.strip_suffix(']'))
+        .unwrap_or(raw);
+
+    let mut ahead = 0usize;
+    let mut behind = 0usize;
+    let mut saw_count = false;
+    for component in inner
+        .split(',')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+    {
+        if let Some(value) = component.strip_prefix("ahead ") {
+            ahead = value.parse().ok()?;
+            saw_count = true;
+            continue;
+        }
+        if let Some(value) = component.strip_prefix("behind ") {
+            behind = value.parse().ok()?;
+            saw_count = true;
+            continue;
+        }
+        return None;
+    }
+
+    saw_count.then_some(UpstreamDivergence { ahead, behind })
+}
+
 fn count_unique_commits(
     repo: &gix::Repository,
     tip: gix::ObjectId,
@@ -414,41 +521,68 @@ fn branch_upstream_and_divergence(
     branch_ref: &gix::Reference<'_>,
     local_tip: gix::ObjectId,
 ) -> Result<(Option<Upstream>, Option<UpstreamDivergence>)> {
+    let Some((upstream, upstream_tip)) = branch_upstream_target(repo, branch_ref)? else {
+        return Ok((None, None));
+    };
+
+    let divergence = divergence_between(repo, local_tip, upstream_tip).map(Some)?;
+
+    Ok((Some(upstream), divergence))
+}
+
+fn branch_upstream_and_divergence_best_effort(
+    repo: &gix::Repository,
+    branch_ref: &gix::Reference<'_>,
+    local_tip: gix::ObjectId,
+) -> Result<(Option<Upstream>, Option<UpstreamDivergence>)> {
+    let Some((upstream, upstream_tip)) = branch_upstream_target(repo, branch_ref)? else {
+        return Ok((None, None));
+    };
+
+    let divergence = divergence_between(repo, local_tip, upstream_tip).ok();
+    Ok((Some(upstream), divergence))
+}
+
+fn branch_upstream_target(
+    repo: &gix::Repository,
+    branch_ref: &gix::Reference<'_>,
+) -> Result<Option<(Upstream, gix::ObjectId)>> {
     let tracking_ref_name = match branch_ref.remote_tracking_ref_name(gix::remote::Direction::Fetch)
     {
         Some(Ok(name)) => name,
-        Some(Err(_)) | None => return Ok((None, None)),
+        Some(Err(_)) | None => return Ok(None),
     };
 
     let upstream_short = tracking_ref_name.shorten().to_str_lossy().into_owned();
-    let upstream = parse_upstream_short(&upstream_short);
+    let Some(upstream) = parse_upstream_short(&upstream_short) else {
+        return Ok(None);
+    };
 
     let Some(mut tracking_ref) = repo
         .try_find_reference(tracking_ref_name.as_ref())
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix try_find_reference: {e}"))))?
     else {
-        return Ok((upstream, None));
+        return Ok(None);
     };
 
     let upstream_tip = match tracking_ref.try_id() {
         Some(id) => id.detach(),
         None => match tracking_ref.peel_to_id() {
             Ok(id) => id.detach(),
-            Err(_) => return Ok((upstream, None)),
+            Err(_) => return Ok(None),
         },
     };
 
-    let divergence = upstream
-        .as_ref()
-        .map(|_| divergence_between(repo, local_tip, upstream_tip))
-        .transpose()?;
-
-    Ok((upstream, divergence))
+    Ok(Some((upstream, upstream_tip)))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{LOCAL_BRANCH_PREFIX, cached_commit_id, local_branch_name, parse_upstream_short};
+    use super::{
+        LOCAL_BRANCH_PREFIX, cached_commit_id, local_branch_name,
+        parse_local_branches_for_each_ref, parse_upstream_short, parse_upstream_track_divergence,
+    };
+    use gitcomet_core::domain::UpstreamDivergence;
     use rustc_hash::FxHashMap as HashMap;
     use std::sync::Arc;
 
@@ -495,5 +629,76 @@ mod tests {
         .expect("valid ref name");
 
         assert_eq!(local_branch_name(full_name.as_ref()), "feature/topic");
+    }
+
+    #[test]
+    fn parse_upstream_track_divergence_supports_ahead_and_behind_counts() {
+        assert_eq!(
+            parse_upstream_track_divergence("[ahead 3, behind 2]"),
+            Some(UpstreamDivergence {
+                ahead: 3,
+                behind: 2,
+            })
+        );
+        assert_eq!(
+            parse_upstream_track_divergence("[ahead 4]"),
+            Some(UpstreamDivergence {
+                ahead: 4,
+                behind: 0,
+            })
+        );
+        assert_eq!(
+            parse_upstream_track_divergence("[behind 5]"),
+            Some(UpstreamDivergence {
+                ahead: 0,
+                behind: 5,
+            })
+        );
+        assert_eq!(parse_upstream_track_divergence("[gone]"), None);
+        assert_eq!(parse_upstream_track_divergence(""), None);
+    }
+
+    #[test]
+    fn parse_local_branches_for_each_ref_parses_upstream_metadata() {
+        let branches = parse_local_branches_for_each_ref(
+            "feature\t0123456789abcdef0123456789abcdef01234567\torigin/feature\t[ahead 1, behind 2]\nmain\t89abcdef0123456789abcdef0123456789abcdef\t\t\n",
+        )
+        .expect("parse branch output");
+
+        assert_eq!(branches.len(), 2);
+        assert_eq!(branches[0].name, "feature");
+        assert_eq!(
+            branches[0]
+                .upstream
+                .as_ref()
+                .map(|upstream| (upstream.remote.as_str(), upstream.branch.as_str(),)),
+            Some(("origin", "feature"))
+        );
+        assert_eq!(
+            branches[0].divergence,
+            Some(UpstreamDivergence {
+                ahead: 1,
+                behind: 2,
+            })
+        );
+        assert_eq!(branches[1].name, "main");
+        assert_eq!(branches[1].upstream, None);
+        assert_eq!(branches[1].divergence, None);
+    }
+
+    #[test]
+    fn parse_local_branches_for_each_ref_treats_empty_track_as_in_sync() {
+        let branches = parse_local_branches_for_each_ref(
+            "main\t0123456789abcdef0123456789abcdef01234567\torigin/main\t\n",
+        )
+        .expect("parse branch output");
+
+        assert_eq!(
+            branches[0].divergence,
+            Some(UpstreamDivergence {
+                ahead: 0,
+                behind: 0,
+            })
+        );
     }
 }

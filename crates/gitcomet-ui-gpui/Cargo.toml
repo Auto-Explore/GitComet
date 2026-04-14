@@ -48,6 +48,7 @@ memchr = { workspace = true }
 mimalloc = { workspace = true }
 portable-pty = { workspace = true }
 pulldown-cmark = { workspace = true }
+reqwest = { workspace = true }
 resvg = { workspace = true }
 rustc-hash = { workspace = true }
 semver = { workspace = true }
@@ -73,7 +74,6 @@ tree-sitter-yaml = { workspace = true, optional = true }
 unicode-segmentation = { workspace = true }
 url = { workspace = true }
 vt100 = { workspace = true }
-zed-reqwest = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 rustix = { workspace = true }

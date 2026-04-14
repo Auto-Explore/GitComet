@@ -763,7 +763,7 @@ pub(super) fn repo_command_finished(
             extra_effects.extend(diff_reload_effects(repo_state, repo_id, target));
         }
     }
-    let mut effects = refresh_full_effects(repo_state);
+    let mut effects = refresh_full_effects(repo_state, state.git_log_settings);
     effects.extend(extra_effects);
     if clear_banner {
         clear_banner_error_for_repo(state, repo_id);
