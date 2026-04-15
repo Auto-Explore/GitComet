@@ -84,8 +84,9 @@ Use `--skip-dmg` when running in restricted/sandboxed environments where `hdiuti
 The release workflow `.github/workflows/build-release-artifacts.yml` builds and publishes:
 
 - Windows: portable ZIP + MSI
-- Linux: tar.gz + AppImage + .deb
+- Linux: tar.gz + AppImage + .deb + Flatpak bundle
 - macOS: DMG + tar.gz for `arm64` and `x86_64`
+- Flathub assets: `gitcomet-v<VERSION>-source.tar.gz`, `gitcomet-v<VERSION>-cargo-vendor.tar.gz`, `dev.gitcomet.GitComet.yaml`, and `flathub.json`
 - Homebrew cask asset: `gitcomet.rb` (generated from macOS DMG artifacts and their SHA256 values)
 - Homebrew CLI formula asset: `gitcomet-cli.rb` (generated from macOS + Linux x86_64 tarballs and their SHA256 values)
 
@@ -132,3 +133,25 @@ This release flow will:
 The previous `AUR_REPO_TOKEN` secret is no longer used.
 
 You can also run `.github/workflows/deploy-aur.yml` manually for backfills or dry-runs.
+
+### Flathub deployment
+
+The app ID used for Flatpak/Flathub packaging is `dev.gitcomet.GitComet`.
+
+To push `dev.gitcomet.GitComet.yaml` and `flathub.json` into the Flathub packaging repo automatically on release:
+
+1. Complete the one-time Flathub onboarding so the app has a packaging repo, typically `flathub/dev.gitcomet.GitComet`.
+2. In this repo, configure:
+   - secret `FLATHUB_TOKEN`: GitHub token with `contents:write` access to the Flathub packaging repository.
+   - optional variable `FLATHUB_REPO`: packaging repository in `OWNER/REPO` form. Defaults to `flathub/dev.gitcomet.GitComet`.
+   - optional variable `FLATHUB_BRANCH`: target branch. If unset, the packaging repo default branch is used.
+   - optional variable `FLATHUB_MODE`: `pull_request` (default, opens/updates a PR against the packaging repo) or `push` (commits straight to the target branch).
+3. Run `.github/workflows/release-manual-main.yml` with `draft=false`.
+
+This release flow will:
+
+- build and upload the Flatpak bundle plus Flathub source/manifest assets
+- publish the GitHub release so the source tarball URL is public
+- call `.github/workflows/deploy-flathub.yml` to update the Flathub packaging repo, either by opening/updating a PR or by pushing directly depending on `FLATHUB_MODE`
+
+You can also run `.github/workflows/deploy-flathub.yml` manually for backfills or dry-runs.

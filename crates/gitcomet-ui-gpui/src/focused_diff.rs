@@ -6,6 +6,7 @@
 use crate::assets::GitCometAssets;
 use crate::launch_guard::run_with_panic_guard;
 use crate::theme::AppTheme;
+use gitcomet_core::platform::APP_ID;
 use gitcomet_state::session;
 use gpui::prelude::*;
 use gpui::{
@@ -310,7 +311,7 @@ pub fn run_focused_diff(config: FocusedDiffConfig) -> i32 {
                             appears_transparent: false,
                             traffic_light_position: Some(point(px(9.0), px(9.0))),
                         }),
-                        app_id: Some("gitcomet-diff".to_string()),
+                        app_id: Some(APP_ID.to_string()),
                         window_decorations: Some(WindowDecorations::Server),
                         is_movable: true,
                         is_resizable: true,

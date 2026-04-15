@@ -375,6 +375,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
+            appstream \
             desktop-file-utils \
             dpkg-dev \
             pkg-config \
@@ -395,9 +396,9 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          # Backward compatibility for older tags that used non-standard categories.
-          sed 's/VersionControl;/RevisionControl;/g' assets/linux/gitcomet.desktop > dist/gitcomet.desktop
-          desktop-file-validate dist/gitcomet.desktop
+          cp assets/linux/dev.gitcomet.GitComet.desktop dist/dev.gitcomet.GitComet.desktop
+          desktop-file-validate dist/dev.gitcomet.GitComet.desktop
+          appstreamcli validate --no-net flatpak/dev.gitcomet.GitComet.metainfo.xml
 
       - name: Package tar.gz
         run: |
@@ -429,8 +430,8 @@ jobs:
           mkdir -p "${pkg_root}/usr/share/icons/hicolor/512x512/apps"
 
           install -m755 target/release/gitcomet "${pkg_root}/usr/bin/gitcomet"
-          install -m644 dist/gitcomet.desktop "${pkg_root}/usr/share/applications/gitcomet.desktop"
-          install -m644 assets/gitcomet-512.png "${pkg_root}/usr/share/icons/hicolor/512x512/apps/gitcomet.png"
+          install -m644 dist/dev.gitcomet.GitComet.desktop "${pkg_root}/usr/share/applications/dev.gitcomet.GitComet.desktop"
+          install -m644 assets/gitcomet-512.png "${pkg_root}/usr/share/icons/hicolor/512x512/apps/dev.gitcomet.GitComet.png"
 
           {
             echo "Source: gitcomet"
@@ -494,8 +495,8 @@ jobs:
           appdir="dist/AppDir"
           mkdir -p "${appdir}/usr/bin"
           install -m755 target/release/gitcomet "${appdir}/usr/bin/gitcomet"
-          install -m644 dist/gitcomet.desktop "${appdir}/gitcomet.desktop"
-          install -m644 assets/gitcomet-512.png "${appdir}/gitcomet.png"
+          install -m644 dist/dev.gitcomet.GitComet.desktop "${appdir}/dev.gitcomet.GitComet.desktop"
+          install -m644 assets/gitcomet-512.png "${appdir}/dev.gitcomet.GitComet.png"
 
           {
             echo '#!/usr/bin/env bash'
@@ -521,6 +522,53 @@ jobs:
             dist/*.tar.gz
             dist/*.AppImage
             dist/*.deb
+          if-no-files-found: error
+          retention-days: 7
+
+  build_flatpak:
+    name: Build Flatpak artifact
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    needs: prepare
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-25.08
+      options: --privileged
+    env:
+      TAG: ${{ needs.prepare.outputs.tag }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.94.0
+
+      - name: Prepare vendored Cargo sources
+        run: |
+          set -euo pipefail
+          bash scripts/prepare-flatpak-local-cargo.sh
+
+      - name: Build Flatpak bundle
+        uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          bundle: dev.gitcomet.GitComet.flatpak
+          manifest-path: flatpak/dev.gitcomet.GitComet.local.yaml
+          cache-key: flatpak-builder-${{ needs.prepare.outputs.tag }}
+          upload-artifact: false
+
+      - name: Stage Flatpak artifact
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          mv dev.gitcomet.GitComet.flatpak "dist/gitcomet-v${VERSION}-linux-x86_64.flatpak"
+
+      - name: Upload Flatpak artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: flatpak-release-artifacts
+          path: dist/*.flatpak
           if-no-files-found: error
           retention-days: 7
 
@@ -702,7 +750,7 @@ jobs:
     name: Attach assets and checksums to GitHub release
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    needs: [prepare, build_windows, build_linux, build_macos]
+    needs: [prepare, build_windows, build_linux, build_flatpak, build_macos]
     env:
       TAG: ${{ needs.prepare.outputs.tag }}
       VERSION: ${{ needs.prepare.outputs.version }}
@@ -713,6 +761,9 @@ jobs:
         with:
           ref: ${{ needs.prepare.outputs.tag }}
           fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.94.0
 
       - uses: actions/download-artifact@v8
         with:
@@ -728,6 +779,11 @@ jobs:
 
       - uses: actions/download-artifact@v8
         with:
+          name: flatpak-release-artifacts
+          path: dist/flatpak
+
+      - uses: actions/download-artifact@v8
+        with:
           pattern: macos-release-artifacts-*
           path: dist/macos
           merge-multiple: true
@@ -738,6 +794,7 @@ jobs:
           mkdir -p dist/release
           find dist/windows -maxdepth 1 -type f -exec cp -f {} dist/release/ \;
           find dist/linux -maxdepth 1 -type f -exec cp -f {} dist/release/ \;
+          find dist/flatpak -maxdepth 1 -type f -exec cp -f {} dist/release/ \;
           find dist/macos -maxdepth 1 -type f -exec cp -f {} dist/release/ \;
           file_count="$(find dist/release -maxdepth 1 -type f | wc -l | tr -d '[:space:]')"
           if [ "${file_count}" = "0" ]; then
@@ -745,6 +802,38 @@ jobs:
             exit 1
           fi
           ls -lah dist/release
+
+      - name: Generate source tarball
+        run: |
+          set -euo pipefail
+          git archive \
+            --format=tar.gz \
+            --prefix="gitcomet-v${VERSION}-source/" \
+            "$TAG" \
+            -o "dist/release/gitcomet-v${VERSION}-source.tar.gz"
+
+      - name: Generate Flatpak cargo vendor tarball
+        run: |
+          set -euo pipefail
+          scripts/package-flatpak-cargo-vendor.sh \
+            --output "dist/release/gitcomet-v${VERSION}-cargo-vendor.tar.gz"
+
+      - name: Render Flathub manifest assets
+        run: |
+          set -euo pipefail
+          source_tar="dist/release/gitcomet-v${VERSION}-source.tar.gz"
+          source_sha256="$(sha256sum "$source_tar" | awk '{print $1}')"
+          source_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/gitcomet-v${VERSION}-source.tar.gz"
+          cargo_vendor_tar="dist/release/gitcomet-v${VERSION}-cargo-vendor.tar.gz"
+          cargo_vendor_sha256="$(sha256sum "$cargo_vendor_tar" | awk '{print $1}')"
+          cargo_vendor_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/gitcomet-v${VERSION}-cargo-vendor.tar.gz"
+          scripts/render-flathub-manifest.sh \
+            --source-url "$source_url" \
+            --source-sha256 "$source_sha256" \
+            --cargo-vendor-url "$cargo_vendor_url" \
+            --cargo-vendor-sha256 "$cargo_vendor_sha256" \
+            --output "dist/release/dev.gitcomet.GitComet.yaml"
+          cp flatpak/flathub.json dist/release/flathub.json
 
       - name: Generate Homebrew cask and formula
         run: |

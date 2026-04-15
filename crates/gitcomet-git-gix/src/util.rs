@@ -9,6 +9,7 @@ use gitcomet_core::auth::{
 };
 use gitcomet_core::domain::{Commit, CommitId, CommitParentIds, LogPage};
 use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
+use gitcomet_core::platform::host_tempdir;
 use gitcomet_core::process::{configure_background_command, git_command};
 use gitcomet_core::services::{CommandOutput, Result};
 use std::fs;
@@ -308,7 +309,7 @@ echo %GITCOMET_AUTH_SECRET%
 }
 
 fn create_askpass_script() -> Result<AskPassScript> {
-    let dir = tempfile::tempdir().map_err(io_err)?;
+    let dir = host_tempdir("gitcomet-askpass-").map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
     #[cfg(windows)]
     let script_name = "gitcomet-askpass.cmd";
     #[cfg(not(windows))]

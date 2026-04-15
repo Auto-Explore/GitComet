@@ -1,0 +1,52 @@
+app-id: dev.gitcomet.GitComet
+runtime: org.freedesktop.Platform
+runtime-version: "25.08"
+sdk: org.freedesktop.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: gitcomet
+finish-args:
+  - --device=dri
+  - --share=ipc
+  - --share=network
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --socket=ssh-auth
+  - --socket=gpg-agent
+  - --filesystem=host
+  - --talk-name=org.freedesktop.FileManager1
+  - --talk-name=org.freedesktop.Flatpak
+  - --talk-name=org.freedesktop.Notifications
+modules:
+  - name: gitcomet
+    buildsystem: simple
+    build-options:
+      append-path: /usr/lib/sdk/rust-stable/bin
+      env:
+        CARGO_HOME: /run/build/gitcomet/cargo
+        CARGO_NET_OFFLINE: "true"
+    build-commands:
+      - cargo --offline fetch --manifest-path Cargo.toml --locked --verbose
+      - cargo build --offline --release --locked -p gitcomet --features ui-gpui,gix
+      - install -Dm755 target/release/gitcomet ${FLATPAK_DEST}/bin/gitcomet
+      - install -Dm755 flatpak/git-wrapper.sh ${FLATPAK_DEST}/bin/git
+      - install -Dm644 assets/linux/dev.gitcomet.GitComet.desktop ${FLATPAK_DEST}/share/applications/dev.gitcomet.GitComet.desktop
+      - install -Dm644 flatpak/dev.gitcomet.GitComet.metainfo.xml ${FLATPAK_DEST}/share/metainfo/dev.gitcomet.GitComet.metainfo.xml
+      - install -Dm644 assets/linux/hicolor/32x32/apps/gitcomet.png ${FLATPAK_DEST}/share/icons/hicolor/32x32/apps/dev.gitcomet.GitComet.png
+      - install -Dm644 assets/linux/hicolor/48x48/apps/gitcomet.png ${FLATPAK_DEST}/share/icons/hicolor/48x48/apps/dev.gitcomet.GitComet.png
+      - install -Dm644 assets/linux/hicolor/128x128/apps/gitcomet.png ${FLATPAK_DEST}/share/icons/hicolor/128x128/apps/dev.gitcomet.GitComet.png
+      - install -Dm644 assets/linux/hicolor/256x256/apps/gitcomet.png ${FLATPAK_DEST}/share/icons/hicolor/256x256/apps/dev.gitcomet.GitComet.png
+      - install -Dm644 assets/linux/hicolor/512x512/apps/gitcomet.png ${FLATPAK_DEST}/share/icons/hicolor/512x512/apps/dev.gitcomet.GitComet.png
+    sources:
+      - type: archive
+        url: @SOURCE_URL@
+        sha256: @SOURCE_SHA256@
+        strip-components: 1
+        x-checker-data:
+          type: json
+          url: https://api.github.com/repos/Auto-Explore/GitComet/releases/latest
+          version-query: .tag_name | sub("^v"; "")
+          url-query: '"https://github.com/Auto-Explore/GitComet/releases/download/" + .tag_name + "/gitcomet-v" + (.tag_name | sub("^v"; "")) + "-source.tar.gz"'
+      - type: archive
+        url: @CARGO_VENDOR_URL@
+        sha256: @CARGO_VENDOR_SHA256@

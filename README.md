@@ -20,7 +20,7 @@ Available for Linux, Windows, and macOS.
 
 Download the latest prebuilt binaries/installers from [GitHub Releases](https://github.com/Auto-Explore/GitComet/releases).
 
-#### Homebrew (macOs / Linux)
+#### Homebrew (macOS / Linux)
 
 install app from tap (recommended):
 
@@ -29,11 +29,27 @@ brew tap auto-explore/gitcomet
 brew install --cask gitcomet
 ```
 
+**macOS Troubleshooting:** If you downloaded the app manually and macOS reports that GitComet *"is damaged and can't be opened"*, this is due to Apple's Gatekeeper quarantine for apps downloaded outside the App Store. To resolve this, run the following command in your terminal to remove the quarantine attribute:
+
+```bash
+xattr -d com.apple.quarantine /Applications/GitComet.app
+```
+
 optional CLI install:
 
 ```bash
 brew install gitcomet-cli
 ```
+
+#### Flatpak / Flathub
+
+GitHub releases also publish:
+
+- a Linux Flatpak bundle: `gitcomet-v<VERSION>-linux-x86_64.flatpak`
+- a source tarball for Flathub: `gitcomet-v<VERSION>-source.tar.gz`
+- a vendored Cargo tarball for Flathub: `gitcomet-v<VERSION>-cargo-vendor.tar.gz`
+- the rendered Flathub manifest: `dev.gitcomet.GitComet.yaml`
+- the Flathub control file: `flathub.json`
 
 #### AUR (Arch Linux)
 

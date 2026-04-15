@@ -11,6 +11,7 @@ pub mod merge;
 pub mod merge_extraction;
 pub mod mergetool_trace;
 pub mod path_utils;
+pub mod platform;
 pub mod process;
 pub mod services;
 pub mod text_utils;

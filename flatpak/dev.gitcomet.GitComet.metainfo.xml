@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>dev.gitcomet.GitComet</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>AGPL-3.0-only</project_license>
+  <name>GitComet</name>
+  <summary>Fast, resource-efficient Git GUI written in Rust</summary>
+  <developer id="dev.gitcomet">
+    <name>AutoExplore Oy</name>
+  </developer>
+  <launchable type="desktop-id">dev.gitcomet.GitComet.desktop</launchable>
+  <provides>
+    <binary>gitcomet</binary>
+  </provides>
+  <description>
+    <p>GitComet is a fast Git GUI built for large repositories, familiar history browsing, local-first privacy, and drop-in difftool and mergetool workflows.</p>
+    <p>It supports staging, commits, branches, remotes, worktrees, history, side-by-side diffs, and conflict resolution.</p>
+  </description>
+  <releases>
+    <release version="0.1.11" date="2026-04-15"/>
+  </releases>
+  <categories>
+    <category>Development</category>
+    <category>RevisionControl</category>
+  </categories>
+  <screenshots>
+    <screenshot type="default">
+      <image>https://raw.githubusercontent.com/Auto-Explore/GitComet/main/assets/gitcomet_screenshot.png</image>
+    </screenshot>
+  </screenshots>
+  <content_rating type="oars-1.1"/>
+  <url type="homepage">https://gitcomet.dev</url>
+  <url type="bugtracker">https://github.com/Auto-Explore/GitComet/issues</url>
+  <url type="vcs-browser">https://github.com/Auto-Explore/GitComet</url>
+</component>

@@ -17,11 +17,18 @@ bindir="${prefix}/bin"
 appdir="${XDG_DATA_HOME:-${HOME}/.local/share}/applications"
 iconsroot="${XDG_DATA_HOME:-${HOME}/.local/share}/icons/hicolor"
 icon_sizes=(32 48 128 256 512)
+desktop_files=("dev.gitcomet.GitComet.desktop" "gitcomet.desktop")
+icon_names=("dev.gitcomet.GitComet" "gitcomet")
 
 rm -f "${bindir}/gitcomet"
-rm -f "${appdir}/gitcomet.desktop"
+rm -f "${bindir}/gitcomet-app"
+for desktop_file in "${desktop_files[@]}"; do
+  rm -f "${appdir}/${desktop_file}"
+done
 for size in "${icon_sizes[@]}"; do
-  rm -f "${iconsroot}/${size}x${size}/apps/gitcomet.png"
+  for icon_name in "${icon_names[@]}"; do
+    rm -f "${iconsroot}/${size}x${size}/apps/${icon_name}.png"
+  done
 done
 
 command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$appdir" >/dev/null 2>&1 || true

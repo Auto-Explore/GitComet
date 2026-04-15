@@ -5,10 +5,17 @@ on:
     branches: ["main"]
     paths:
       - ".github/workflows/build-release-artifacts.yml"
+      - ".github/workflows/deployment-ci.yml"
       - ".github/workflows/deploy-aur.yml"
       - ".github/workflows/deploy-homebrew-tap.yml"
+      - ".github/workflows/deploy-flathub.yml"
       - ".github/workflows/deploy-apt-repo.yml"
       - ".github/workflows/release-manual-main.yml"
+      - "assets/linux/dev.gitcomet.GitComet.desktop"
+      - "flatpak/**"
+      - "scripts/generate-flatpak-cargo-sources.py"
+      - "scripts/package-flatpak-cargo-vendor.sh"
+      - "scripts/render-flathub-manifest.sh"
       - "scripts/update-aur.sh"
       - "scripts/cargo-flatten-dupes.sh"
       - "scripts/package-macos.sh"
@@ -21,10 +28,17 @@ on:
     branches: ["main"]
     paths:
       - ".github/workflows/build-release-artifacts.yml"
+      - ".github/workflows/deployment-ci.yml"
       - ".github/workflows/deploy-aur.yml"
       - ".github/workflows/deploy-homebrew-tap.yml"
+      - ".github/workflows/deploy-flathub.yml"
       - ".github/workflows/deploy-apt-repo.yml"
       - ".github/workflows/release-manual-main.yml"
+      - "assets/linux/dev.gitcomet.GitComet.desktop"
+      - "flatpak/**"
+      - "scripts/generate-flatpak-cargo-sources.py"
+      - "scripts/package-flatpak-cargo-vendor.sh"
+      - "scripts/render-flathub-manifest.sh"
       - "scripts/update-aur.sh"
       - "scripts/cargo-flatten-dupes.sh"
       - "scripts/package-macos.sh"
@@ -59,6 +73,8 @@ jobs:
           bash -n scripts/generate-homebrew-formula.sh
           bash -n scripts/generate-homebrew-cask.sh
           bash -n scripts/build-apt-repo.sh
+          bash -n scripts/package-flatpak-cargo-vendor.sh
+          bash -n scripts/render-flathub-manifest.sh
 
       - name: Validate Windows PowerShell helper syntax
         run: |
@@ -75,6 +91,7 @@ jobs:
         run: |
           ruby -e 'require "yaml"; %w[
             .github/workflows/build-release-artifacts.yml
+            .github/workflows/deploy-flathub.yml
             .github/workflows/deploy-aur.yml
             .github/workflows/deploy-homebrew-tap.yml
             .github/workflows/deploy-apt-repo.yml
@@ -87,6 +104,9 @@ jobs:
           set -euo pipefail
           grep -Fq 'vars.AUR_GIT_REPOSITORY' .github/workflows/release-manual-main.yml
           grep -Fq 'vars.AUR_GIT_BRANCH' .github/workflows/release-manual-main.yml
+          grep -Fq 'vars.FLATHUB_REPO' .github/workflows/release-manual-main.yml
+          grep -Fq 'vars.FLATHUB_BRANCH' .github/workflows/release-manual-main.yml
+          grep -Fq 'vars.FLATHUB_MODE' .github/workflows/release-manual-main.yml
           grep -Fq 'vars.APT_STORAGE_ACCOUNT' .github/workflows/release-manual-main.yml
           grep -Fq 'vars.APT_STORAGE_CONTAINER' .github/workflows/release-manual-main.yml
           grep -Fq 'vars.APT_REPO_DISTRIBUTION' .github/workflows/release-manual-main.yml
@@ -105,6 +125,8 @@ jobs:
           grep -Fq 'vars.APT_STORAGE_PUBLIC_ACCESS' .github/workflows/deploy-apt-repo.yml
           grep -Fq 'vars.AUR_GIT_REPOSITORY' .github/workflows/deploy-aur.yml
           grep -Fq 'vars.AUR_GIT_BRANCH' .github/workflows/deploy-aur.yml
+          grep -Fq 'FLATHUB_TOKEN' .github/workflows/deploy-flathub.yml
+          grep -Fq 'flathub/dev.gitcomet.GitComet' .github/workflows/deploy-flathub.yml
           grep -Fq 'vars.WINDOWS_SIGNING_ENDPOINT' .github/workflows/build-release-artifacts.yml
           grep -Fq 'vars.WINDOWS_SIGNING_ACCOUNT_NAME' .github/workflows/build-release-artifacts.yml
           grep -Fq 'AZURE_CREDENTIALS' .github/workflows/build-release-artifacts.yml
@@ -476,3 +498,47 @@ jobs:
 
           "${mount_point}/GitComet.app/Contents/MacOS/gitcomet" --help >/dev/null
           hdiutil detach "$mount_point"
+
+  flatpak-packaging-smoke:
+    name: Flatpak packaging smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-25.08
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.94.0
+
+      - name: Prepare vendored Cargo sources
+        run: |
+          set -euo pipefail
+          bash scripts/prepare-flatpak-local-cargo.sh
+          test -f flatpak/cargo/config.toml
+          test -d flatpak/cargo/vendor
+
+      - name: Render release manifest
+        run: |
+          set -euo pipefail
+          scripts/render-flathub-manifest.sh \
+            --source-url "https://example.invalid/gitcomet-v0.0.0-ci-source.tar.gz" \
+            --source-sha256 "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" \
+            --cargo-vendor-url "https://example.invalid/gitcomet-v0.0.0-ci-cargo-vendor.tar.gz" \
+            --cargo-vendor-sha256 "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210" \
+            --output /tmp/dev.gitcomet.GitComet.yaml
+          test -s /tmp/dev.gitcomet.GitComet.yaml
+
+      - name: Build Flatpak bundle
+        uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          bundle: dev.gitcomet.GitComet.flatpak
+          manifest-path: flatpak/dev.gitcomet.GitComet.local.yaml
+          cache-key: deployment-ci-flatpak
+          upload-artifact: false
+
+      - name: Verify Flatpak bundle output
+        run: |
+          set -euo pipefail
+          test -f dev.gitcomet.GitComet.flatpak

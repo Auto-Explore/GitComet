@@ -17,10 +17,8 @@ benchmarks = []
 [dependencies]
 memchr = { workspace = true }
 regex = { workspace = true }
+tempfile = { workspace = true }
 rustc-hash = { workspace = true }
 smallvec = { workspace = true }
 strsim = { workspace = true }
 thiserror = { workspace = true }
-
-[dev-dependencies]
-tempfile = { workspace = true }

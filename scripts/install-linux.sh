@@ -7,8 +7,8 @@ Usage: scripts/install-linux.sh [--release|--debug] [--prefix PATH] [--no-build]
 
 Installs:
   - binary to <prefix>/bin/gitcomet
-  - desktop entry to ~/.local/share/applications/gitcomet.desktop
-  - icons to ~/.local/share/icons/hicolor/<size>x<size>/apps/gitcomet.png
+  - desktop entry to ~/.local/share/applications/dev.gitcomet.GitComet.desktop
+  - icons to ~/.local/share/icons/hicolor/<size>x<size>/apps/dev.gitcomet.GitComet.png
     sizes: 32, 48, 128, 256, 512
 
 Defaults:
@@ -52,19 +52,27 @@ bindir="${prefix}/bin"
 appdir="${XDG_DATA_HOME:-${HOME}/.local/share}/applications"
 iconsroot="${XDG_DATA_HOME:-${HOME}/.local/share}/icons/hicolor"
 icon_sizes=(32 48 128 256 512)
+desktop_file="dev.gitcomet.GitComet.desktop"
+icon_name="dev.gitcomet.GitComet"
 
 install -Dm755 "$bin_src" "${bindir}/gitcomet"
+rm -f "${bindir}/gitcomet-app"
 
 # Install desktop file with absolute Exec path so it works even if ~/.local/bin isn't on PATH.
 tmp_desktop="$(mktemp)"
 trap 'rm -f "$tmp_desktop"' EXIT
 sed "s|^Exec=.*$|Exec=${bindir}/gitcomet|g" \
-  "${repo_root}/assets/linux/gitcomet.desktop" >"$tmp_desktop"
-install -Dm644 "$tmp_desktop" "${appdir}/gitcomet.desktop"
+  "${repo_root}/assets/linux/${desktop_file}" >"$tmp_desktop"
+install -Dm644 "$tmp_desktop" "${appdir}/${desktop_file}"
 
 for size in "${icon_sizes[@]}"; do
   install -Dm644 "${repo_root}/assets/linux/hicolor/${size}x${size}/apps/gitcomet.png" \
-    "${iconsroot}/${size}x${size}/apps/gitcomet.png"
+    "${iconsroot}/${size}x${size}/apps/${icon_name}.png"
+done
+
+rm -f "${appdir}/gitcomet.desktop"
+for size in "${icon_sizes[@]}"; do
+  rm -f "${iconsroot}/${size}x${size}/apps/gitcomet.png"
 done
 
 command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$appdir" >/dev/null 2>&1 || true
@@ -72,8 +80,8 @@ command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache "${ico
 
 echo "Installed GitComet:"
 echo "  ${bindir}/gitcomet"
-echo "  ${appdir}/gitcomet.desktop"
+echo "  ${appdir}/${desktop_file}"
 for size in "${icon_sizes[@]}"; do
-  echo "  ${iconsroot}/${size}x${size}/apps/gitcomet.png"
+  echo "  ${iconsroot}/${size}x${size}/apps/${icon_name}.png"
 done
 echo "If GNOME still shows a generic icon, log out/in (or restart GNOME Shell)."

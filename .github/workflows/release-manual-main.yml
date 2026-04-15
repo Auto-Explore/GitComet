@@ -89,6 +89,20 @@ jobs:
             exit 1
           fi
 
+      - name: Verify AppStream release version matches release version
+        run: |
+          set -euo pipefail
+          appstream_version="$(sed -n 's/.*<release version="\([^"]*\)".*/\1/p' flatpak/dev.gitcomet.GitComet.metainfo.xml | head -n1)"
+          wanted="${{ steps.norm.outputs.version }}"
+          if [ -z "$appstream_version" ]; then
+            echo "::error title=Missing AppStream release metadata::flatpak/dev.gitcomet.GitComet.metainfo.xml does not declare a <release> version."
+            exit 1
+          fi
+          if [ "$appstream_version" != "$wanted" ]; then
+            echo "::error title=Version mismatch::AppStream release version '$appstream_version' does not match requested release '$wanted'."
+            exit 1
+          fi
+
       - name: Ensure tag does not already exist on origin
         run: |
           set -euo pipefail
@@ -197,6 +211,20 @@ jobs:
       version: ${{ needs.validate.outputs.version }}
       aur_repo: ${{ vars.AUR_GIT_REPOSITORY }}
       aur_branch: ${{ vars.AUR_GIT_BRANCH }}
+      dry_run: false
+    secrets: inherit
+
+  deploy_flathub:
+    name: Deploy Flathub manifest
+    needs: [validate, build_and_upload, publish_release]
+    if: ${{ fromJSON(needs.validate.outputs.draft) == false && needs.build_and_upload.result == 'success' }}
+    uses: ./.github/workflows/deploy-flathub.yml
+    with:
+      tag: ${{ needs.validate.outputs.tag }}
+      version: ${{ needs.validate.outputs.version }}
+      flathub_repo: ${{ vars.FLATHUB_REPO }}
+      flathub_branch: ${{ vars.FLATHUB_BRANCH }}
+      mode: ${{ vars.FLATHUB_MODE }}
       dry_run: false
     secrets: inherit
 

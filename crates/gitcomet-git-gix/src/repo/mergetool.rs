@@ -2,7 +2,8 @@ use super::{GixRepo, conflict_stages::gix_index_stage_blob_bytes_optional};
 use crate::util::{bytes_to_text_preserving_utf8, run_git_simple};
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::path_utils::canonicalize_or_original;
-use gitcomet_core::process::background_command as no_window_command;
+use gitcomet_core::platform::{host_command, host_tempdir};
+use gitcomet_core::process::configure_background_command;
 use gitcomet_core::services::{
     CommandOutput, MergetoolResult, Result, validate_conflict_resolution_text,
 };
@@ -71,7 +72,9 @@ impl GixRepo {
             // No custom command — try invoking the tool name directly with
             // the standard argument convention used by many merge tools.
             let tool_executable = tool_path.as_deref().unwrap_or(&tool_name);
-            no_window_command(tool_executable)
+            let mut command = host_command(tool_executable);
+            configure_background_command(&mut command);
+            command
                 .arg(local_path)
                 .arg(base_path)
                 .arg(remote_path)
@@ -186,14 +189,15 @@ fn env_has_display() -> bool {
 
 #[cfg(all(windows, test))]
 fn shell_command(custom_cmd: &str) -> Command {
-    let mut command = no_window_command("cmd");
+    let mut command = host_command("cmd");
+    configure_background_command(&mut command);
     command.arg("/C").arg(custom_cmd);
     command
 }
 
 #[cfg(not(windows))]
 fn shell_command(custom_cmd: &str) -> Command {
-    let mut command = Command::new("sh");
+    let mut command = host_command("sh");
     command.arg("-c").arg(custom_cmd);
     command
 }
@@ -218,7 +222,8 @@ fn run_custom_mergetool_command(
         script.push_str("\r\n");
         std::fs::write(&script_path, script).map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
 
-        let mut command = no_window_command("cmd");
+        let mut command = host_command("cmd");
+        configure_background_command(&mut command);
         command.arg("/C").arg(&script_path);
         command
             .env("BASE", base_path)
@@ -513,10 +518,8 @@ fn build_stage_paths(
     let pid = std::process::id();
 
     if write_to_temp {
-        let tmp_dir = tempfile::Builder::new()
-            .prefix("gitcomet-mergetool-")
-            .tempdir()
-            .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+        let tmp_dir =
+            host_tempdir("gitcomet-mergetool-").map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
         let (tmp_dir_path, temp_dir_guard) = if keep_temporaries {
             (tmp_dir.keep(), None)
         } else {

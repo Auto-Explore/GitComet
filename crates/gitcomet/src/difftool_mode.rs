@@ -1,9 +1,10 @@
 use crate::cli::{DifftoolConfig, DifftoolInputKind, classify_difftool_input, exit_code};
+use gitcomet_core::platform::host_tempdir;
 use gitcomet_core::process::git_command;
 use rustc_hash::FxHashSet as HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use tempfile::{Builder, TempDir};
+use tempfile::TempDir;
 
 /// Format a `"Failed to {op} {path}: {err}"` message concisely.
 macro_rules! io_err {
@@ -255,9 +256,7 @@ fn prepare_diff_inputs(config: &DifftoolConfig) -> Result<PreparedDiffInputs, St
         });
     }
 
-    let tempdir = Builder::new()
-        .prefix("gitcomet-difftool-")
-        .tempdir()
+    let tempdir = host_tempdir("gitcomet-difftool-")
         .map_err(|e| io_err!("create temporary directory staging area", e))?;
 
     let staged_local = tempdir.path().join("left");

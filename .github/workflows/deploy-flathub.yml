@@ -1,0 +1,315 @@
+name: Deploy Flathub Manifest
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+      version:
+        required: true
+        type: string
+      flathub_repo:
+        required: false
+        type: string
+        default: ""
+      flathub_branch:
+        required: false
+        type: string
+        default: ""
+      mode:
+        required: false
+        type: string
+        default: "pull_request"
+      dry_run:
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      FLATHUB_TOKEN:
+        required: false
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (e.g. 0.2.0 or v0.2.0)"
+        required: true
+        type: string
+      tag:
+        description: "Optional tag override (e.g. v0.2.0). Defaults to v<version>."
+        required: false
+        type: string
+      flathub_repo:
+        description: "Target Flathub packaging repo in OWNER/REPO form"
+        required: false
+        default: ""
+        type: string
+      flathub_branch:
+        description: "Target branch in the Flathub packaging repo (defaults to that repo's default branch)"
+        required: false
+        default: ""
+        type: string
+      mode:
+        description: "Update mode: pull_request or push"
+        required: false
+        default: "pull_request"
+        type: string
+      dry_run:
+        description: "Validate and report manifest deployment without pushing"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-flathub-${{ inputs.tag || github.event.inputs.tag || inputs.version || github.event.inputs.version || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Publish manifest to Flathub packaging repo
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Normalize inputs
+        id: norm
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          DISPATCH_TAG: ${{ github.event.inputs.tag }}
+          INPUT_VERSION: ${{ inputs.version }}
+          DISPATCH_VERSION: ${{ github.event.inputs.version }}
+          INPUT_FLATHUB_REPO: ${{ inputs.flathub_repo }}
+          DISPATCH_FLATHUB_REPO: ${{ github.event.inputs.flathub_repo }}
+          INPUT_FLATHUB_BRANCH: ${{ inputs.flathub_branch }}
+          DISPATCH_FLATHUB_BRANCH: ${{ github.event.inputs.flathub_branch }}
+          INPUT_MODE: ${{ inputs.mode }}
+          DISPATCH_MODE: ${{ github.event.inputs.mode }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+          DISPATCH_DRY_RUN: ${{ github.event.inputs.dry_run }}
+        run: |
+          set -euo pipefail
+
+          tag="${INPUT_TAG:-${DISPATCH_TAG:-}}"
+          version="${INPUT_VERSION:-${DISPATCH_VERSION:-}}"
+          flathub_repo="${INPUT_FLATHUB_REPO:-${DISPATCH_FLATHUB_REPO:-}}"
+          flathub_branch="${INPUT_FLATHUB_BRANCH:-${DISPATCH_FLATHUB_BRANCH:-}}"
+          mode="${INPUT_MODE:-${DISPATCH_MODE:-pull_request}}"
+          dry_run="${INPUT_DRY_RUN:-${DISPATCH_DRY_RUN:-false}}"
+
+          tag="$(echo "$tag" | tr -d '[:space:]')"
+          version="$(echo "$version" | tr -d '[:space:]')"
+          flathub_repo="$(echo "$flathub_repo" | tr -d '[:space:]')"
+          flathub_branch="$(echo "$flathub_branch" | tr -d '[:space:]')"
+          mode="$(echo "$mode" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
+          dry_run="$(echo "$dry_run" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
+
+          if [ -z "$version" ]; then
+            echo "::error title=Missing version::Version is required."
+            exit 1
+          fi
+
+          version="${version#v}"
+          if [ -z "$tag" ]; then
+            tag="v${version}"
+          fi
+
+          if [[ "$tag" != v* ]]; then
+            tag="v${tag}"
+          fi
+
+          if [ "$tag" != "v${version}" ]; then
+            echo "::error title=Tag/version mismatch::Tag '$tag' does not match version '$version'."
+            exit 1
+          fi
+
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]]; then
+            echo "::error title=Invalid version::Expected semver like 1.2.3 or 1.2.3-rc.1."
+            exit 1
+          fi
+
+          if [ -z "$flathub_repo" ]; then
+            flathub_repo="flathub/dev.gitcomet.GitComet"
+          fi
+
+          if ! [[ "$flathub_repo" =~ ^[^/]+/[^/]+$ ]]; then
+            echo "::error title=Invalid Flathub repo::flathub_repo must be OWNER/REPO."
+            exit 1
+          fi
+
+          if [[ "$mode" != "pull_request" && "$mode" != "push" ]]; then
+            echo "::error title=Invalid mode::mode must be pull_request or push."
+            exit 1
+          fi
+
+          if [[ "$dry_run" != "true" && "$dry_run" != "false" ]]; then
+            echo "::error title=Invalid dry_run::dry_run must be true or false."
+            exit 1
+          fi
+
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "flathub_repo=$flathub_repo" >> "$GITHUB_OUTPUT"
+          echo "flathub_branch=$flathub_branch" >> "$GITHUB_OUTPUT"
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+          echo "dry_run=$dry_run" >> "$GITHUB_OUTPUT"
+
+      - name: Download Flathub assets from GitHub release
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          gh release view "${{ steps.norm.outputs.tag }}" --repo "$GITHUB_REPOSITORY" >/dev/null
+          gh release download "${{ steps.norm.outputs.tag }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "dev.gitcomet.GitComet.yaml" \
+            --pattern "flathub.json" \
+            --dir dist \
+            --clobber
+          test -f dist/dev.gitcomet.GitComet.yaml
+          test -f dist/flathub.json
+
+      - name: Emit dry-run summary
+        if: ${{ steps.norm.outputs.dry_run == 'true' }}
+        run: |
+          set -euo pipefail
+          branch_display="${{ steps.norm.outputs.flathub_branch }}"
+          if [ -z "$branch_display" ]; then
+            branch_display="default branch"
+          fi
+
+          {
+            echo "### Flathub deployment dry run"
+            echo ""
+            echo "- Source release: \`${{ steps.norm.outputs.tag }}\`"
+            echo "- Target repo: \`${{ steps.norm.outputs.flathub_repo }}\`"
+            echo "- Target branch: \`${branch_display}\`"
+            echo "- Mode: \`${{ steps.norm.outputs.mode }}\`"
+            echo ""
+            echo "Manifest SHA256: \`$(sha256sum dist/dev.gitcomet.GitComet.yaml | awk '{print $1}')\`"
+            echo "flathub.json SHA256: \`$(sha256sum dist/flathub.json | awk '{print $1}')\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish manifest to Flathub packaging repo
+        if: ${{ steps.norm.outputs.dry_run != 'true' }}
+        env:
+          FLATHUB_TOKEN: ${{ secrets.FLATHUB_TOKEN }}
+          FLATHUB_REPO: ${{ steps.norm.outputs.flathub_repo }}
+          FLATHUB_BRANCH: ${{ steps.norm.outputs.flathub_branch }}
+          FLATHUB_MODE: ${{ steps.norm.outputs.mode }}
+          TAG: ${{ steps.norm.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${FLATHUB_TOKEN:-}" ]; then
+            echo "::error title=Missing secret::Set FLATHUB_TOKEN to push to ${FLATHUB_REPO}."
+            exit 1
+          fi
+
+          clone_args=()
+          if [ -n "$FLATHUB_BRANCH" ]; then
+            clone_args+=(--branch "$FLATHUB_BRANCH")
+          fi
+
+          rm -rf flathub-repo
+          git clone "${clone_args[@]}" "https://x-access-token:${FLATHUB_TOKEN}@github.com/${FLATHUB_REPO}.git" flathub-repo
+
+          cp dist/dev.gitcomet.GitComet.yaml flathub-repo/dev.gitcomet.GitComet.yaml
+          cp dist/flathub.json flathub-repo/flathub.json
+          rm -f flathub-repo/cargo-sources.json
+
+          pushd flathub-repo >/dev/null
+          base_branch="$(git branch --show-current)"
+          if [ -z "$base_branch" ]; then
+            echo "::error title=Unknown branch::Could not determine the checked out branch for ${FLATHUB_REPO}."
+            popd >/dev/null
+            exit 1
+          fi
+
+          echo "FLATHUB_BASE_BRANCH=${base_branch}" >> "$GITHUB_ENV"
+          echo "FLATHUB_MODE_RESOLVED=${FLATHUB_MODE}" >> "$GITHUB_ENV"
+
+          if [ -z "$(git status --porcelain -- dev.gitcomet.GitComet.yaml cargo-sources.json flathub.json)" ]; then
+            echo "No Flathub manifest changes detected; packaging repo already up to date."
+            popd >/dev/null
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if [ "$FLATHUB_MODE" = "push" ]; then
+            git add dev.gitcomet.GitComet.yaml cargo-sources.json flathub.json
+            git commit -m "dev.gitcomet.GitComet ${TAG}"
+            git push origin "HEAD:${base_branch}"
+            echo "FLATHUB_TARGET_BRANCH=${base_branch}" >> "$GITHUB_ENV"
+          else
+            pr_branch="gitcomet/release-${TAG}"
+            git checkout -B "$pr_branch"
+            git add dev.gitcomet.GitComet.yaml cargo-sources.json flathub.json
+            git commit -m "dev.gitcomet.GitComet ${TAG}"
+
+            if git ls-remote --exit-code --heads origin "$pr_branch" >/dev/null 2>&1; then
+              git push --force-with-lease -u origin "$pr_branch"
+            else
+              git push -u origin "$pr_branch"
+            fi
+
+            {
+              printf 'Update GitComet to %s.\n\n' "$TAG"
+              printf 'Generated by `.github/workflows/deploy-flathub.yml` from GitHub release assets in %s.\n\n' "$GITHUB_REPOSITORY"
+              printf 'Files:\n- `dev.gitcomet.GitComet.yaml`\n- `flathub.json`\n\n'
+              printf 'The manifest references the source tarball and vendored Cargo archive attached to the same GitHub release.\n'
+            } > /tmp/flathub-pr-body.md
+
+            existing_pr="$(GH_TOKEN="$FLATHUB_TOKEN" gh pr list \
+              --repo "$FLATHUB_REPO" \
+              --head "$pr_branch" \
+              --base "$base_branch" \
+              --json number \
+              --jq '.[0].number // empty')"
+
+            if [ -n "$existing_pr" ]; then
+              GH_TOKEN="$FLATHUB_TOKEN" gh pr edit "$existing_pr" \
+                --repo "$FLATHUB_REPO" \
+                --title "dev.gitcomet.GitComet ${TAG}" \
+                --body-file /tmp/flathub-pr-body.md >/dev/null
+              pr_url="$(GH_TOKEN="$FLATHUB_TOKEN" gh pr view "$existing_pr" --repo "$FLATHUB_REPO" --json url --jq '.url')"
+            else
+              pr_url="$(GH_TOKEN="$FLATHUB_TOKEN" gh pr create \
+                --repo "$FLATHUB_REPO" \
+                --base "$base_branch" \
+                --head "$pr_branch" \
+                --title "dev.gitcomet.GitComet ${TAG}" \
+                --body-file /tmp/flathub-pr-body.md)"
+            fi
+
+            echo "FLATHUB_TARGET_BRANCH=${pr_branch}" >> "$GITHUB_ENV"
+            echo "FLATHUB_PR_URL=${pr_url}" >> "$GITHUB_ENV"
+          fi
+
+          popd >/dev/null
+
+      - name: Emit deployment summary
+        run: |
+          set -euo pipefail
+          branch_display="${FLATHUB_TARGET_BRANCH:-${{ steps.norm.outputs.flathub_branch }}}"
+          if [ -z "$branch_display" ]; then
+            branch_display="default branch"
+          fi
+          mode_display="${FLATHUB_MODE_RESOLVED:-${{ steps.norm.outputs.mode }}}"
+
+          {
+            echo "### Flathub deployment"
+            echo ""
+            echo "- Release: \`${{ steps.norm.outputs.tag }}\`"
+            echo "- Target repo: \`${{ steps.norm.outputs.flathub_repo }}\`"
+            echo "- Target branch: \`${branch_display}\`"
+            echo "- Base branch: \`${FLATHUB_BASE_BRANCH:-default branch}\`"
+            echo "- Mode: \`${mode_display}\`"
+            echo "- Dry run: \`${{ steps.norm.outputs.dry_run }}\`"
+            if [ -n "${FLATHUB_PR_URL:-}" ]; then
+              echo "- Pull request: ${FLATHUB_PR_URL}"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

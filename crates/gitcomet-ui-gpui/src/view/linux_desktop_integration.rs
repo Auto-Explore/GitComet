@@ -1,4 +1,6 @@
 use super::*;
+#[cfg(any(test, target_os = "linux", target_os = "freebsd"))]
+use gitcomet_core::platform::{APP_DESKTOP_FILE_NAME, APP_ICON_NAME, is_flatpak_sandbox};
 
 #[cfg(any(test, target_os = "linux", target_os = "freebsd"))]
 fn desktop_entry_exec_path_arg(exe: &std::path::Path) -> Result<String, String> {
@@ -29,9 +31,10 @@ fn desktop_entry_exec_path_arg(exe: &std::path::Path) -> Result<String, String> 
 fn should_auto_install_linux_desktop_integration(
     no_desktop_install_flag_present: bool,
     _xdg_current_desktop: Option<&str>,
+    is_flatpak: bool,
 ) -> bool {
     // `.desktop` entries follow the FreeDesktop spec, so installation is not GNOME-specific.
-    !no_desktop_install_flag_present
+    !no_desktop_install_flag_present && !is_flatpak
 }
 
 impl GitCometView {
@@ -47,6 +50,7 @@ impl GitCometView {
         if !should_auto_install_linux_desktop_integration(
             std::env::var_os("GITCOMET_NO_DESKTOP_INSTALL").is_some(),
             desktop.as_deref(),
+            is_flatpak_sandbox(),
         ) {
             return;
         }
@@ -59,10 +63,12 @@ impl GitCometView {
             return;
         };
 
-        let desktop_path = data_home.join("applications/gitcomet.desktop");
+        let desktop_path = data_home.join(format!("applications/{APP_DESKTOP_FILE_NAME}"));
         let all_icons_exist = ICON_SIZES.iter().all(|size| {
             data_home
-                .join(format!("icons/hicolor/{size}x{size}/apps/gitcomet.png"))
+                .join(format!(
+                    "icons/hicolor/{size}x{size}/apps/{APP_ICON_NAME}.png"
+                ))
                 .exists()
         });
         if desktop_path.exists() && all_icons_exist {
@@ -87,7 +93,7 @@ impl GitCometView {
 
                         const DESKTOP_TEMPLATE: &str = include_str!(concat!(
                             env!("CARGO_MANIFEST_DIR"),
-                            "/../../assets/linux/gitcomet.desktop"
+                            "/../../assets/linux/dev.gitcomet.GitComet.desktop"
                         ));
                         const ICON_32_PNG: &[u8] = include_bytes!(concat!(
                             env!("CARGO_MANIFEST_DIR"),
@@ -131,8 +137,9 @@ impl GitCometView {
 
                         let applications_dir = data_home.join("applications");
                         let icons_root = data_home.join("icons/hicolor");
-                        let desktop_path = applications_dir.join("gitcomet.desktop");
-                        let icon_path = icons_root.join("512x512/apps/gitcomet.png");
+                        let desktop_path = applications_dir.join(APP_DESKTOP_FILE_NAME);
+                        let icon_path =
+                            icons_root.join(format!("512x512/apps/{APP_ICON_NAME}.png"));
 
                         fs::create_dir_all(&applications_dir)
                             .map_err(|e| format!("Desktop install failed: {e}"))?;
@@ -159,7 +166,7 @@ impl GitCometView {
 
                         for (size, icon_bytes) in ICON_ASSETS {
                             let icon_dir = icons_root.join(format!("{size}x{size}/apps"));
-                            let icon_file = icon_dir.join("gitcomet.png");
+                            let icon_file = icon_dir.join(format!("{APP_ICON_NAME}.png"));
                             fs::create_dir_all(&icon_dir)
                                 .and_then(|_| fs::write(&icon_file, icon_bytes))
                                 .map_err(|e| format!("Desktop install failed: {e}"))?;
@@ -226,22 +233,35 @@ mod tests {
     fn auto_install_is_not_limited_to_gnome() {
         for desktop in ["GNOME", "KDE", "XFCE", "sway", ""] {
             assert!(
-                should_auto_install_linux_desktop_integration(false, Some(desktop)),
+                should_auto_install_linux_desktop_integration(false, Some(desktop), false),
                 "expected desktop '{desktop}' to allow auto install"
             );
         }
-        assert!(should_auto_install_linux_desktop_integration(false, None));
+        assert!(should_auto_install_linux_desktop_integration(
+            false, None, false
+        ));
     }
 
     #[test]
     fn auto_install_respects_opt_out_flag() {
         assert!(!should_auto_install_linux_desktop_integration(
             true,
-            Some("GNOME")
+            Some("GNOME"),
+            false
         ));
         assert!(!should_auto_install_linux_desktop_integration(
             true,
-            Some("KDE")
+            Some("KDE"),
+            false
+        ));
+    }
+
+    #[test]
+    fn auto_install_is_disabled_in_flatpak() {
+        assert!(!should_auto_install_linux_desktop_integration(
+            false,
+            Some("GNOME"),
+            true
         ));
     }
 }

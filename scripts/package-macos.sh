@@ -185,7 +185,7 @@ cat > "${contents_dir}/Info.plist" <<PLIST
   <key>CFBundleExecutable</key>
   <string>gitcomet</string>
   <key>CFBundleIdentifier</key>
-  <string>ai.autoexplore.gitcomet</string>
+  <string>dev.gitcomet.GitComet</string>
   <key>CFBundleIconFile</key>
   <string>GitComet.icns</string>
   <key>CFBundleInfoDictionaryVersion</key>

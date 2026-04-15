@@ -13,6 +13,8 @@ tmp/*
 feat/*
 .autoresearch/*
 dist/
+flatpak/cargo/
+repo/
 __pycache__/
 *.pyc
 criterion
