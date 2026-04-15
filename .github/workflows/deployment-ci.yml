@@ -13,7 +13,6 @@ on:
       - "scripts/cargo-flatten-dupes.sh"
       - "scripts/package-macos.sh"
       - "scripts/macos-cargo-config.sh"
-      - "scripts/generate-homebrew-formula.sh"
       - "scripts/generate-homebrew-cask.sh"
       - "scripts/build-apt-repo.sh"
       - "scripts/windows/verify-signed-artifact.ps1"
@@ -29,7 +28,6 @@ on:
       - "scripts/cargo-flatten-dupes.sh"
       - "scripts/package-macos.sh"
       - "scripts/macos-cargo-config.sh"
-      - "scripts/generate-homebrew-formula.sh"
       - "scripts/generate-homebrew-cask.sh"
       - "scripts/build-apt-repo.sh"
       - "scripts/windows/verify-signed-artifact.ps1"
@@ -56,7 +54,6 @@ jobs:
           bash -n scripts/package-macos.sh
           bash -n scripts/notarize-macos.sh
           bash -n scripts/macos-cargo-config.sh
-          bash -n scripts/generate-homebrew-formula.sh
           bash -n scripts/generate-homebrew-cask.sh
           bash -n scripts/build-apt-repo.sh
 
@@ -122,27 +119,14 @@ jobs:
           grep -Fq 'ssh://aur@aur.archlinux.org/gitcomet.git' .github/workflows/deploy-aur.yml
           grep -Fq 'HOMEBREW_TAP_TOKEN' .github/workflows/deploy-homebrew-tap.yml
 
-      - name: Generate Homebrew cask and formula from synthetic artifacts
+      - name: Generate Homebrew cask from synthetic artifacts
         run: |
           set -euo pipefail
           mkdir -p dist/deployment-ci
-          printf 'arm64-test' > dist/deployment-ci/gitcomet-v0.0.0-ci-macos-arm64.tar.gz
-          printf 'intel-test' > dist/deployment-ci/gitcomet-v0.0.0-ci-macos-x86_64.tar.gz
-          printf 'linux-arm-test' > dist/deployment-ci/gitcomet-v0.0.0-ci-linux-arm64.tar.gz
-          printf 'linux-test' > dist/deployment-ci/gitcomet-v0.0.0-ci-linux-x86_64.tar.gz
           printf 'linux-arm-appimage-test' > dist/deployment-ci/gitcomet-v0.0.0-ci-linux-arm64.AppImage
           printf 'linux-appimage-test' > dist/deployment-ci/gitcomet-v0.0.0-ci-linux-x86_64.AppImage
           printf 'arm64-dmg-test' > dist/deployment-ci/gitcomet-v0.0.0-ci-macos-arm64.dmg
           printf 'intel-dmg-test' > dist/deployment-ci/gitcomet-v0.0.0-ci-macos-x86_64.dmg
-
-          scripts/generate-homebrew-formula.sh \
-            --version "0.0.0-ci" \
-            --github-repo "Auto-Explore/GitComet" \
-            --arm-tar "dist/deployment-ci/gitcomet-v0.0.0-ci-macos-arm64.tar.gz" \
-            --intel-tar "dist/deployment-ci/gitcomet-v0.0.0-ci-macos-x86_64.tar.gz" \
-            --linux-arm-tar "dist/deployment-ci/gitcomet-v0.0.0-ci-linux-arm64.tar.gz" \
-            --linux-intel-tar "dist/deployment-ci/gitcomet-v0.0.0-ci-linux-x86_64.tar.gz" \
-            --output "dist/deployment-ci/gitcomet-cli.rb"
 
           scripts/generate-homebrew-cask.sh \
             --version "0.0.0-ci" \
@@ -154,22 +138,16 @@ jobs:
             --output "dist/deployment-ci/gitcomet.rb"
 
           ruby -c dist/deployment-ci/gitcomet.rb
-          ruby -c dist/deployment-ci/gitcomet-cli.rb
           grep -q 'cask "gitcomet" do' dist/deployment-ci/gitcomet.rb
           grep -q 'os macos: "macos", linux: "linux"' dist/deployment-ci/gitcomet.rb
           grep -q 'on_linux do' dist/deployment-ci/gitcomet.rb
           grep -q 'on_macos do' dist/deployment-ci/gitcomet.rb
           grep -q 'app "GitComet.app"' dist/deployment-ci/gitcomet.rb
+          grep -q 'binary "#{appdir}/GitComet.app/Contents/MacOS/gitcomet", target: "gitcomet"' dist/deployment-ci/gitcomet.rb
           grep -q 'container type: :naked' dist/deployment-ci/gitcomet.rb
           grep -q 'binary "gitcomet-v#{version}-linux-#{arch}.AppImage", target: "gitcomet"' dist/deployment-ci/gitcomet.rb
           grep -q 'gitcomet-v#{version}-linux-#{arch}.AppImage' dist/deployment-ci/gitcomet.rb
           grep -q 'depends_on macos:' dist/deployment-ci/gitcomet.rb
-          grep -q 'brew install gitcomet-cli' dist/deployment-ci/gitcomet.rb
-          grep -q 'class GitcometCli < Formula' dist/deployment-ci/gitcomet-cli.rb
-          grep -q "on_linux do" dist/deployment-ci/gitcomet-cli.rb
-          grep -q 'gitcomet-v0.0.0-ci-linux-arm64.tar.gz' dist/deployment-ci/gitcomet-cli.rb
-          grep -q 'gitcomet-v0.0.0-ci-linux-x86_64.tar.gz' dist/deployment-ci/gitcomet-cli.rb
-          grep -q 'bin.install "gitcomet"' dist/deployment-ci/gitcomet-cli.rb
 
       - name: Validate Homebrew tap publish detection
         run: |
@@ -191,21 +169,32 @@ jobs:
             version "0.0.0"
           end
           RUBY
+          cat > Formula/gitcomet-cli.rb <<'RUBY'
+          class GitcometCli < Formula
+            desc "Legacy GitComet CLI formula"
+            homepage "https://example.com"
+            url "https://example.com/gitcomet-cli.tar.gz"
+            sha256 "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            version "0.0.0"
+          end
+          RUBY
 
-          git add README.md Formula/gitcomet.rb
+          git add README.md Formula/gitcomet.rb Formula/gitcomet-cli.rb
           git commit -m "Initial tap repo"
 
-          mkdir -p Casks Formula
+          mkdir -p Casks
           cp ../gitcomet.rb Casks/gitcomet.rb
-          cp ../gitcomet-cli.rb Formula/gitcomet-cli.rb
 
-          git add Casks/gitcomet.rb Formula/gitcomet-cli.rb
+          git add Casks/gitcomet.rb
+          if git ls-files --error-unmatch Formula/gitcomet-cli.rb >/dev/null 2>&1; then
+            git rm -f Formula/gitcomet-cli.rb
+          fi
           if git ls-files --error-unmatch Formula/gitcomet.rb >/dev/null 2>&1; then
             git rm -f Formula/gitcomet.rb
           fi
 
           if git diff --cached --quiet -- Casks/gitcomet.rb Formula/gitcomet-cli.rb Formula/gitcomet.rb; then
-            echo "Expected Homebrew cask/formula publish to be detected as a change."
+            echo "Expected Homebrew cask publish and legacy formula removal to be detected as a change."
             exit 1
           fi
           popd >/dev/null

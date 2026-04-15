@@ -754,39 +754,22 @@ jobs:
           fi
           ls -lah dist/release
 
-      - name: Generate Homebrew cask and formula
+      - name: Generate Homebrew cask
         run: |
           set -euo pipefail
-          arm_tar="gitcomet-v${VERSION}-macos-arm64.tar.gz"
-          intel_tar="gitcomet-v${VERSION}-macos-x86_64.tar.gz"
-          linux_arm_tar="gitcomet-v${VERSION}-linux-arm64.tar.gz"
-          linux_intel_tar="gitcomet-v${VERSION}-linux-x86_64.tar.gz"
           linux_arm_appimage="gitcomet-v${VERSION}-linux-arm64.AppImage"
           linux_intel_appimage="gitcomet-v${VERSION}-linux-x86_64.AppImage"
           arm_dmg="gitcomet-v${VERSION}-macos-arm64.dmg"
           intel_dmg="gitcomet-v${VERSION}-macos-x86_64.dmg"
-          arm_path="dist/release/${arm_tar}"
-          intel_path="dist/release/${intel_tar}"
-          linux_arm_path="dist/release/${linux_arm_tar}"
-          linux_intel_path="dist/release/${linux_intel_tar}"
           linux_arm_appimage_path="dist/release/${linux_arm_appimage}"
           linux_intel_appimage_path="dist/release/${linux_intel_appimage}"
           arm_dmg_path="dist/release/${arm_dmg}"
           intel_dmg_path="dist/release/${intel_dmg}"
 
-          if [ ! -f "${arm_path}" ] || [ ! -f "${intel_path}" ] || [ ! -f "${linux_arm_path}" ] || [ ! -f "${linux_intel_path}" ] || [ ! -f "${linux_arm_appimage_path}" ] || [ ! -f "${linux_intel_appimage_path}" ] || [ ! -f "${arm_dmg_path}" ] || [ ! -f "${intel_dmg_path}" ]; then
-            echo "::error title=Missing release assets::Expected ${arm_tar}, ${intel_tar}, ${linux_arm_tar}, ${linux_intel_tar}, ${linux_arm_appimage}, ${linux_intel_appimage}, ${arm_dmg}, and ${intel_dmg} in dist/release."
+          if [ ! -f "${linux_arm_appimage_path}" ] || [ ! -f "${linux_intel_appimage_path}" ] || [ ! -f "${arm_dmg_path}" ] || [ ! -f "${intel_dmg_path}" ]; then
+            echo "::error title=Missing release assets::Expected ${linux_arm_appimage}, ${linux_intel_appimage}, ${arm_dmg}, and ${intel_dmg} in dist/release."
             exit 1
           fi
-
-          scripts/generate-homebrew-formula.sh \
-            --version "${VERSION}" \
-            --github-repo "${GITHUB_REPOSITORY}" \
-            --arm-tar "${arm_path}" \
-            --intel-tar "${intel_path}" \
-            --linux-arm-tar "${linux_arm_path}" \
-            --linux-intel-tar "${linux_intel_path}" \
-            --output "dist/release/gitcomet-cli.rb"
 
           scripts/generate-homebrew-cask.sh \
             --version "${VERSION}" \

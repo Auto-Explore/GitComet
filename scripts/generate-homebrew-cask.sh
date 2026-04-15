@@ -137,6 +137,7 @@ cask "gitcomet" do
     depends_on macos: ">= :ventura"
 
     app "GitComet.app"
+    binary "#{appdir}/GitComet.app/Contents/MacOS/gitcomet", target: "gitcomet"
   end
 
   on_linux do
@@ -157,13 +158,6 @@ cask "gitcomet" do
   name "GitComet"
   desc "Fast, resource-efficient Git GUI written in Rust"
   homepage "https://github.com/${github_repo}"
-
-  caveats do
-    <<~EOS
-      Optional CLI-only install:
-        brew install gitcomet-cli
-    EOS
-  end
 end
 EOF2
 

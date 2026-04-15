@@ -22,17 +22,11 @@ Download the latest prebuilt binaries/installers from [GitHub Releases](https://
 
 #### Homebrew (macOS / Linux)
 
-GUI app from tap:
+App and `gitcomet` command from tap:
 
 ```bash
 brew tap auto-explore/gitcomet
 brew install --cask gitcomet
-```
-
-CLI (macOS / Linux):
-
-```bash
-brew install gitcomet-cli
 ```
 
 On Linux, the cask installs the AppImage build. If your system cannot launch AppImages, use the APT repo, AUR package, release tarball, or `.deb` instead.
