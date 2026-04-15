@@ -11,6 +11,7 @@ enum HeuristicBlockCommentKind {
     FSharp,
     Lua,
     C,
+    PowerShell,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -151,6 +152,10 @@ const HEURISTIC_C_BLOCK_COMMENT: HeuristicBlockCommentSpec = HeuristicBlockComme
     start: "/*",
     end: "*/",
 };
+const HEURISTIC_POWERSHELL_BLOCK_COMMENT: HeuristicBlockCommentSpec = HeuristicBlockCommentSpec {
+    start: "<#",
+    end: "#>",
+};
 
 pub(super) fn heuristic_comment_config(language: DiffSyntaxLanguage) -> HeuristicCommentConfig {
     match language {
@@ -177,10 +182,19 @@ pub(super) fn heuristic_comment_config(language: DiffSyntaxLanguage) -> Heuristi
         | DiffSyntaxLanguage::Yaml
         | DiffSyntaxLanguage::Bash
         | DiffSyntaxLanguage::Makefile
-        | DiffSyntaxLanguage::Ruby => HeuristicCommentConfig {
+        | DiffSyntaxLanguage::Ruby
+        | DiffSyntaxLanguage::R
+        | DiffSyntaxLanguage::GitCommit
+        | DiffSyntaxLanguage::Perl => HeuristicCommentConfig {
             line_comment: None,
             hash_comment: true,
             block_comment: None,
+            visual_basic_line_comment: false,
+        },
+        DiffSyntaxLanguage::PowerShell => HeuristicCommentConfig {
+            line_comment: None,
+            hash_comment: true,
+            block_comment: Some(HEURISTIC_POWERSHELL_BLOCK_COMMENT),
             visual_basic_line_comment: false,
         },
         DiffSyntaxLanguage::Sql => HeuristicCommentConfig {
@@ -194,16 +208,25 @@ pub(super) fn heuristic_comment_config(language: DiffSyntaxLanguage) -> Heuristi
         | DiffSyntaxLanguage::TypeScript
         | DiffSyntaxLanguage::Tsx
         | DiffSyntaxLanguage::Go
+        | DiffSyntaxLanguage::GoMod
+        | DiffSyntaxLanguage::GoWork
         | DiffSyntaxLanguage::C
         | DiffSyntaxLanguage::Cpp
+        | DiffSyntaxLanguage::ObjectiveC
         | DiffSyntaxLanguage::CSharp
         | DiffSyntaxLanguage::Java
         | DiffSyntaxLanguage::Kotlin
+        | DiffSyntaxLanguage::Swift
+        | DiffSyntaxLanguage::Dart
+        | DiffSyntaxLanguage::Scala
         | DiffSyntaxLanguage::Zig
         | DiffSyntaxLanguage::Bicep => HeuristicCommentConfig {
             line_comment: Some("//"),
             hash_comment: false,
-            block_comment: Some(HEURISTIC_C_BLOCK_COMMENT),
+            block_comment: match language {
+                DiffSyntaxLanguage::GoMod | DiffSyntaxLanguage::GoWork => None,
+                _ => Some(HEURISTIC_C_BLOCK_COMMENT),
+            },
             visual_basic_line_comment: false,
         },
         DiffSyntaxLanguage::Hcl | DiffSyntaxLanguage::Php => HeuristicCommentConfig {
@@ -218,14 +241,16 @@ pub(super) fn heuristic_comment_config(language: DiffSyntaxLanguage) -> Heuristi
             block_comment: None,
             visual_basic_line_comment: true,
         },
-        DiffSyntaxLanguage::Markdown | DiffSyntaxLanguage::Css | DiffSyntaxLanguage::Json => {
-            HeuristicCommentConfig {
-                line_comment: None,
-                hash_comment: false,
-                block_comment: None,
-                visual_basic_line_comment: false,
-            }
-        }
+        DiffSyntaxLanguage::Markdown
+        | DiffSyntaxLanguage::MarkdownInline
+        | DiffSyntaxLanguage::Css
+        | DiffSyntaxLanguage::Json
+        | DiffSyntaxLanguage::Diff => HeuristicCommentConfig {
+            line_comment: None,
+            hash_comment: false,
+            block_comment: None,
+            visual_basic_line_comment: false,
+        },
     }
 }
 
@@ -234,6 +259,7 @@ fn heuristic_block_comment_kind(language: DiffSyntaxLanguage) -> Option<Heuristi
         DiffSyntaxLanguage::Html | DiffSyntaxLanguage::Xml => Some(HeuristicBlockCommentKind::Html),
         DiffSyntaxLanguage::FSharp => Some(HeuristicBlockCommentKind::FSharp),
         DiffSyntaxLanguage::Lua => Some(HeuristicBlockCommentKind::Lua),
+        DiffSyntaxLanguage::PowerShell => Some(HeuristicBlockCommentKind::PowerShell),
         DiffSyntaxLanguage::Sql
         | DiffSyntaxLanguage::Rust
         | DiffSyntaxLanguage::JavaScript
@@ -242,9 +268,13 @@ fn heuristic_block_comment_kind(language: DiffSyntaxLanguage) -> Option<Heuristi
         | DiffSyntaxLanguage::Go
         | DiffSyntaxLanguage::C
         | DiffSyntaxLanguage::Cpp
+        | DiffSyntaxLanguage::ObjectiveC
         | DiffSyntaxLanguage::CSharp
         | DiffSyntaxLanguage::Java
         | DiffSyntaxLanguage::Kotlin
+        | DiffSyntaxLanguage::Swift
+        | DiffSyntaxLanguage::Dart
+        | DiffSyntaxLanguage::Scala
         | DiffSyntaxLanguage::Zig
         | DiffSyntaxLanguage::Bicep
         | DiffSyntaxLanguage::Hcl
@@ -259,6 +289,7 @@ fn heuristic_block_comment_start_bytes(kind: HeuristicBlockCommentKind) -> &'sta
         HeuristicBlockCommentKind::FSharp => b"(*",
         HeuristicBlockCommentKind::Lua => b"--[[",
         HeuristicBlockCommentKind::C => b"/*",
+        HeuristicBlockCommentKind::PowerShell => b"<#",
     }
 }
 
@@ -268,6 +299,7 @@ fn heuristic_block_comment_end_bytes(kind: HeuristicBlockCommentKind) -> &'stati
         HeuristicBlockCommentKind::FSharp => b"*)",
         HeuristicBlockCommentKind::Lua => b"]]",
         HeuristicBlockCommentKind::C => b"*/",
+        HeuristicBlockCommentKind::PowerShell => b"#>",
     }
 }
 
@@ -1217,7 +1249,10 @@ pub(in super::super) fn syntax_tokens_for_line_heuristic_into(
 fn is_keyword(language: DiffSyntaxLanguage, ident: &str) -> bool {
     // NOTE: This is a heuristic fallback when we don't want to use tree-sitter for a line.
     match language {
-        DiffSyntaxLanguage::Markdown => false,
+        DiffSyntaxLanguage::Markdown
+        | DiffSyntaxLanguage::MarkdownInline
+        | DiffSyntaxLanguage::Diff
+        | DiffSyntaxLanguage::GitCommit => false,
         DiffSyntaxLanguage::Html
         | DiffSyntaxLanguage::Xml
         | DiffSyntaxLanguage::Css
@@ -1462,6 +1497,19 @@ fn is_keyword(language: DiffSyntaxLanguage, ident: &str) -> bool {
                 | "type"
                 | "var"
         ),
+        DiffSyntaxLanguage::GoMod => matches!(
+            ident,
+            "exclude"
+                | "go"
+                | "ignore"
+                | "module"
+                | "replace"
+                | "require"
+                | "retract"
+                | "tool"
+                | "toolchain"
+        ),
+        DiffSyntaxLanguage::GoWork => matches!(ident, "go" | "replace" | "use"),
         DiffSyntaxLanguage::C | DiffSyntaxLanguage::Cpp | DiffSyntaxLanguage::CSharp => matches!(
             ident,
             "auto"
@@ -1505,6 +1553,52 @@ fn is_keyword(language: DiffSyntaxLanguage, ident: &str) -> bool {
                 | "volatile"
                 | "while"
         ),
+        DiffSyntaxLanguage::ObjectiveC => matches!(
+            ident,
+            "YES"
+                | "NO"
+                | "autoreleasepool"
+                | "break"
+                | "case"
+                | "catch"
+                | "class"
+                | "const"
+                | "continue"
+                | "default"
+                | "do"
+                | "else"
+                | "enum"
+                | "extern"
+                | "false"
+                | "for"
+                | "goto"
+                | "if"
+                | "implementation"
+                | "import"
+                | "in"
+                | "inline"
+                | "interface"
+                | "nil"
+                | "private"
+                | "property"
+                | "protected"
+                | "protocol"
+                | "public"
+                | "return"
+                | "selector"
+                | "static"
+                | "struct"
+                | "switch"
+                | "synthesize"
+                | "throw"
+                | "true"
+                | "try"
+                | "typedef"
+                | "union"
+                | "void"
+                | "volatile"
+                | "while"
+        ),
         DiffSyntaxLanguage::FSharp => matches!(
             ident,
             "let"
@@ -1520,25 +1614,27 @@ fn is_keyword(language: DiffSyntaxLanguage, ident: &str) -> bool {
                 | "false"
                 | "null"
         ),
-        DiffSyntaxLanguage::VisualBasic => matches!(
-            ident,
-            "Dim"
-                | "As"
-                | "If"
-                | "Then"
-                | "Else"
-                | "End"
-                | "For"
-                | "Each"
-                | "In"
-                | "Next"
-                | "While"
-                | "Do"
-                | "Loop"
-                | "True"
-                | "False"
-                | "Nothing"
-        ),
+        DiffSyntaxLanguage::VisualBasic => {
+            let ident = ascii_lowercase_for_match(ident);
+            matches!(
+                ident.as_ref(),
+                "as" | "dim"
+                    | "do"
+                    | "each"
+                    | "else"
+                    | "end"
+                    | "false"
+                    | "for"
+                    | "if"
+                    | "in"
+                    | "loop"
+                    | "next"
+                    | "nothing"
+                    | "then"
+                    | "true"
+                    | "while"
+            )
+        }
         DiffSyntaxLanguage::Java => matches!(
             ident,
             "abstract"
@@ -1630,6 +1726,248 @@ fn is_keyword(language: DiffSyntaxLanguage, ident: &str) -> bool {
                     | "true"
                     | "false"
                     | "null"
+            )
+        }
+        DiffSyntaxLanguage::PowerShell => {
+            let ident = ascii_lowercase_for_match(ident);
+            matches!(
+                ident.as_ref(),
+                "begin"
+                    | "break"
+                    | "catch"
+                    | "class"
+                    | "continue"
+                    | "data"
+                    | "do"
+                    | "else"
+                    | "end"
+                    | "enum"
+                    | "exit"
+                    | "false"
+                    | "filter"
+                    | "finally"
+                    | "for"
+                    | "foreach"
+                    | "from"
+                    | "function"
+                    | "if"
+                    | "in"
+                    | "null"
+                    | "parallel"
+                    | "param"
+                    | "process"
+                    | "return"
+                    | "switch"
+                    | "throw"
+                    | "trap"
+                    | "true"
+                    | "try"
+                    | "until"
+                    | "while"
+                    | "workflow"
+            )
+        }
+        DiffSyntaxLanguage::Swift => matches!(
+            ident,
+            "actor"
+                | "as"
+                | "async"
+                | "await"
+                | "break"
+                | "case"
+                | "catch"
+                | "class"
+                | "continue"
+                | "default"
+                | "defer"
+                | "deinit"
+                | "do"
+                | "else"
+                | "enum"
+                | "extension"
+                | "false"
+                | "for"
+                | "func"
+                | "guard"
+                | "if"
+                | "import"
+                | "in"
+                | "init"
+                | "inout"
+                | "let"
+                | "nil"
+                | "protocol"
+                | "repeat"
+                | "return"
+                | "self"
+                | "Self"
+                | "struct"
+                | "super"
+                | "switch"
+                | "throw"
+                | "true"
+                | "try"
+                | "typealias"
+                | "var"
+                | "where"
+                | "while"
+        ),
+        DiffSyntaxLanguage::R => matches!(
+            ident,
+            "NA" | "FALSE"
+                | "TRUE"
+                | "NULL"
+                | "NaN"
+                | "Inf"
+                | "break"
+                | "else"
+                | "for"
+                | "function"
+                | "if"
+                | "in"
+                | "next"
+                | "repeat"
+                | "while"
+        ),
+        DiffSyntaxLanguage::Dart => matches!(
+            ident,
+            "abstract"
+                | "as"
+                | "assert"
+                | "async"
+                | "await"
+                | "break"
+                | "case"
+                | "catch"
+                | "class"
+                | "const"
+                | "continue"
+                | "default"
+                | "deferred"
+                | "do"
+                | "dynamic"
+                | "else"
+                | "enum"
+                | "export"
+                | "extends"
+                | "extension"
+                | "external"
+                | "factory"
+                | "false"
+                | "final"
+                | "finally"
+                | "for"
+                | "get"
+                | "hide"
+                | "if"
+                | "implements"
+                | "import"
+                | "in"
+                | "interface"
+                | "is"
+                | "late"
+                | "library"
+                | "mixin"
+                | "new"
+                | "null"
+                | "on"
+                | "operator"
+                | "part"
+                | "required"
+                | "rethrow"
+                | "return"
+                | "set"
+                | "show"
+                | "static"
+                | "super"
+                | "switch"
+                | "sync"
+                | "this"
+                | "throw"
+                | "true"
+                | "try"
+                | "typedef"
+                | "var"
+                | "void"
+                | "while"
+                | "with"
+                | "yield"
+        ),
+        DiffSyntaxLanguage::Scala => matches!(
+            ident,
+            "abstract"
+                | "case"
+                | "catch"
+                | "class"
+                | "def"
+                | "do"
+                | "else"
+                | "enum"
+                | "extends"
+                | "false"
+                | "final"
+                | "finally"
+                | "for"
+                | "given"
+                | "if"
+                | "implicit"
+                | "import"
+                | "lazy"
+                | "match"
+                | "new"
+                | "null"
+                | "object"
+                | "override"
+                | "package"
+                | "private"
+                | "protected"
+                | "return"
+                | "sealed"
+                | "super"
+                | "then"
+                | "throw"
+                | "trait"
+                | "true"
+                | "try"
+                | "type"
+                | "val"
+                | "var"
+                | "while"
+                | "with"
+                | "yield"
+        ),
+        DiffSyntaxLanguage::Perl => {
+            let ident = ascii_lowercase_for_match(ident);
+            matches!(
+                ident.as_ref(),
+                "break"
+                    | "continue"
+                    | "default"
+                    | "defined"
+                    | "do"
+                    | "else"
+                    | "elsif"
+                    | "for"
+                    | "foreach"
+                    | "given"
+                    | "if"
+                    | "last"
+                    | "local"
+                    | "my"
+                    | "next"
+                    | "our"
+                    | "package"
+                    | "redo"
+                    | "require"
+                    | "return"
+                    | "state"
+                    | "sub"
+                    | "undef"
+                    | "unless"
+                    | "until"
+                    | "use"
+                    | "when"
+                    | "while"
             )
         }
         DiffSyntaxLanguage::Ruby => matches!(

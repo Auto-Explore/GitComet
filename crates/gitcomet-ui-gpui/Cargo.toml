@@ -21,7 +21,7 @@ benchmarks = [
 ]
 syntax-minimal = ["syntax-rust", "syntax-data", "syntax-shell"]
 syntax-common = ["syntax-minimal", "syntax-web", "syntax-python"]
-syntax-all = ["syntax-common", "syntax-go", "syntax-xml"]
+syntax-all = ["syntax-common", "syntax-go", "syntax-xml", "syntax-extra", "syntax-repo"]
 syntax-web = [
     "dep:tree-sitter-css",
     "dep:tree-sitter-html",
@@ -34,6 +34,35 @@ syntax-go = ["dep:tree-sitter-go"]
 syntax-data = ["dep:tree-sitter-json", "dep:tree-sitter-yaml"]
 syntax-shell = ["dep:tree-sitter-bash"]
 syntax-xml = ["dep:tree-sitter-xml"]
+syntax-extra = [
+    "dep:tree-sitter-bicep",
+    "dep:tree-sitter-c",
+    "dep:tree-sitter-c-sharp",
+    "dep:tree-sitter-cpp",
+    "dep:tree-sitter-dart",
+    "dep:tree-sitter-fsharp",
+    "dep:tree-sitter-java",
+    "dep:tree-sitter-kotlin-sg",
+    "dep:tree-sitter-lua",
+    "dep:tree-sitter-make",
+    "dep:tree-sitter-objc",
+    "dep:tree-sitter-php",
+    "dep:tree-sitter-powershell",
+    "dep:tree-sitter-r",
+    "dep:tree-sitter-ruby",
+    "dep:tree-sitter-scala",
+    "dep:tree-sitter-sequel",
+    "dep:tree-sitter-swift",
+    "dep:tree-sitter-toml-ng",
+    "dep:tree-sitter-zig",
+]
+syntax-repo = [
+    "dep:tree-sitter-diff",
+    "dep:tree-sitter-gitcommit",
+    "dep:tree-sitter-gomod",
+    "dep:tree-sitter-gowork",
+    "dep:tree-sitter-md",
+]
 
 [dependencies]
 fontdb = { workspace = true }
@@ -60,16 +89,41 @@ stats_alloc = { workspace = true }
 tempfile = { workspace = true }
 tree-sitter = { workspace = true }
 tree-sitter-bash = { workspace = true, optional = true }
+tree-sitter-bicep = { workspace = true, optional = true }
+tree-sitter-c = { workspace = true, optional = true }
+tree-sitter-c-sharp = { workspace = true, optional = true }
+tree-sitter-cpp = { workspace = true, optional = true }
 tree-sitter-css = { workspace = true, optional = true }
+tree-sitter-dart = { workspace = true, optional = true }
+tree-sitter-diff = { workspace = true, optional = true }
+tree-sitter-fsharp = { workspace = true, optional = true }
+tree-sitter-gitcommit = { workspace = true, optional = true }
 tree-sitter-go = { workspace = true, optional = true }
+tree-sitter-gomod = { workspace = true, optional = true }
+tree-sitter-gowork = { workspace = true, optional = true }
 tree-sitter-html = { workspace = true, optional = true }
 tree-sitter-javascript = { workspace = true, optional = true }
+tree-sitter-java = { workspace = true, optional = true }
 tree-sitter-json = { workspace = true, optional = true }
+tree-sitter-kotlin-sg = { workspace = true, optional = true }
+tree-sitter-lua = { workspace = true, optional = true }
+tree-sitter-make = { workspace = true, optional = true }
+tree-sitter-md = { workspace = true, optional = true }
+tree-sitter-objc = { workspace = true, optional = true }
+tree-sitter-php = { workspace = true, optional = true }
+tree-sitter-powershell = { workspace = true, optional = true }
 tree-sitter-python = { workspace = true, optional = true }
+tree-sitter-r = { workspace = true, optional = true }
+tree-sitter-ruby = { workspace = true, optional = true }
 tree-sitter-rust = { workspace = true, optional = true }
+tree-sitter-scala = { workspace = true, optional = true }
+tree-sitter-sequel = { workspace = true, optional = true }
+tree-sitter-swift = { workspace = true, optional = true }
+tree-sitter-toml-ng = { workspace = true, optional = true }
 tree-sitter-typescript = { workspace = true, optional = true }
 tree-sitter-xml = { workspace = true, optional = true }
 tree-sitter-yaml = { workspace = true, optional = true }
+tree-sitter-zig = { workspace = true, optional = true }
 unicode-segmentation = { workspace = true }
 url = { workspace = true }
 
@@ -89,16 +143,41 @@ gpui = { workspace = true, features = ["test-support"] }
 criterion = { workspace = true }
 regex = { workspace = true }
 tree-sitter-bash = { workspace = true }
+tree-sitter-bicep = { workspace = true }
+tree-sitter-c = { workspace = true }
+tree-sitter-c-sharp = { workspace = true }
+tree-sitter-cpp = { workspace = true }
 tree-sitter-css = { workspace = true }
+tree-sitter-dart = { workspace = true }
+tree-sitter-diff = { workspace = true }
+tree-sitter-fsharp = { workspace = true }
+tree-sitter-gitcommit = { workspace = true }
 tree-sitter-go = { workspace = true }
+tree-sitter-gomod = { workspace = true }
+tree-sitter-gowork = { workspace = true }
 tree-sitter-html = { workspace = true }
 tree-sitter-javascript = { workspace = true }
+tree-sitter-java = { workspace = true }
 tree-sitter-json = { workspace = true }
+tree-sitter-kotlin-sg = { workspace = true }
+tree-sitter-lua = { workspace = true }
+tree-sitter-make = { workspace = true }
+tree-sitter-md = { workspace = true }
+tree-sitter-objc = { workspace = true }
+tree-sitter-php = { workspace = true }
+tree-sitter-powershell = { workspace = true }
 tree-sitter-python = { workspace = true }
+tree-sitter-r = { workspace = true }
+tree-sitter-ruby = { workspace = true }
 tree-sitter-rust = { workspace = true }
+tree-sitter-scala = { workspace = true }
+tree-sitter-sequel = { workspace = true }
+tree-sitter-swift = { workspace = true }
+tree-sitter-toml-ng = { workspace = true }
 tree-sitter-typescript = { workspace = true }
 tree-sitter-xml = { workspace = true }
 tree-sitter-yaml = { workspace = true }
+tree-sitter-zig = { workspace = true }
 
 [build-dependencies]
 resvg = { workspace = true }
