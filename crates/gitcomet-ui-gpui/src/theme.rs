@@ -1493,7 +1493,11 @@ mod tests {
         assert_eq!(light.colors.emphasis_text, gpui::rgba(0x000000ff));
         assert_eq!(dark.syntax.diff_plus, gpui::rgba(0xbbf7d0ff));
         assert_eq!(dark.syntax.diff_minus, gpui::rgba(0xfecacaff));
-        assert_eq!(light.syntax.markup_link, gpui::rgba(0x5c78e2ff));
+        assert_eq!(light.syntax.keyword, gpui::rgba(0x3358d4ff));
+        assert_eq!(light.syntax.string, gpui::rgba(0x8a6116ff));
+        assert_eq!(light.syntax.function, gpui::rgba(0x245eb8ff));
+        assert_eq!(light.syntax.constant, gpui::rgba(0x276f27ff));
+        assert_eq!(light.syntax.markup_link, gpui::rgba(0x3358d4ff));
         assert_eq!(
             dark.graph_lane_palette.as_slice().len(),
             GRAPH_LANE_PALETTE_SIZE
