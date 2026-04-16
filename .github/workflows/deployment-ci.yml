@@ -108,6 +108,8 @@ jobs:
           grep -Fq 'vars.APT_STORAGE_PUBLIC_ACCESS' .github/workflows/deploy-apt-repo.yml
           grep -Fq 'vars.APT_STORAGE_ACCOUNT' .github/workflows/deploy-windows-installer.yml
           grep -Fq 'AZURE_STORAGE_ACCOUNT_KEY' .github/workflows/deploy-windows-installer.yml
+          grep -Fq 'windows-x86_64.msi' .github/workflows/deploy-windows-installer.yml
+          grep -Fq 'windows-arm64.msi' .github/workflows/deploy-windows-installer.yml
           grep -Fq 'vars.MICROSOFT_STORE_PACKAGE_BASE_URL' .github/workflows/deploy-microsoft-store.yml
           grep -Fq 'vars.MICROSOFT_STORE_PRODUCT_ID' .github/workflows/deploy-microsoft-store.yml
           grep -Fq 'vars.MICROSOFT_STORE_PACKAGE_LANGUAGES' .github/workflows/deploy-microsoft-store.yml
@@ -116,8 +118,13 @@ jobs:
           grep -Fq 'MICROSOFT_STORE_CLIENT_SECRET' .github/workflows/deploy-microsoft-store.yml
           grep -Fq 'MICROSOFT_STORE_SELLER_ID' .github/workflows/deploy-microsoft-store.yml
           grep -Fq 'microsoft/microsoft-store-apppublisher@v1.3' .github/workflows/deploy-microsoft-store.yml
+          grep -Fq 'gh release view' .github/workflows/deploy-microsoft-store.yml
           grep -Fq 'msstore submission update' .github/workflows/deploy-microsoft-store.yml
+          grep -Fq 'msstore submission updateMetadata' .github/workflows/deploy-microsoft-store.yml
           grep -Fq 'msstore submission commit' .github/workflows/deploy-microsoft-store.yml
+          grep -Fq 'ReleaseNotes' .github/workflows/deploy-microsoft-store.yml
+          grep -Fq '"X64"' .github/workflows/deploy-microsoft-store.yml
+          grep -Fq '"Arm64"' .github/workflows/deploy-microsoft-store.yml
           grep -Fq 'storage_container: "$web"' .github/workflows/release-manual-main.yml
           grep -Fq 'storage_prefix: "windows"' .github/workflows/release-manual-main.yml
           grep -Fq 'package_base_url: "https://apt.gitcomet.dev/windows"' .github/workflows/release-manual-main.yml

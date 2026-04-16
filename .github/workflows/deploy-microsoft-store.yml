@@ -46,7 +46,7 @@ on:
         required: false
         type: string
       package_base_url:
-        description: "Public base URL used for the hosted MSI. The workflow appends the MSI file name to this base URL."
+        description: "Public base URL used for the hosted MSIs. The workflow appends both x64 and arm64 MSI file names to this base URL."
         required: false
         default: "https://apt.gitcomet.dev/windows"
         type: string
@@ -61,7 +61,7 @@ on:
         default: "en"
         type: string
       dry_run:
-        description: "Validate the hosted MSI URL and generated submission payload without submitting to Microsoft Store"
+        description: "Validate the hosted MSI URLs, GitHub release notes, and generated submission payload without submitting to Microsoft Store"
         required: true
         default: false
         type: boolean
@@ -78,6 +78,8 @@ jobs:
     name: Submit Windows MSI update to Microsoft Store
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
       - name: Normalize inputs
         id: norm
@@ -162,8 +164,10 @@ jobs:
             exit 1
           fi
 
-          installer_name="gitcomet-v${version}-windows-x86_64.msi"
-          package_url="${package_base_url}/${installer_name}"
+          x64_installer_name="gitcomet-v${version}-windows-x86_64.msi"
+          arm64_installer_name="gitcomet-v${version}-windows-arm64.msi"
+          x64_package_url="${package_base_url}/${x64_installer_name}"
+          arm64_package_url="${package_base_url}/${arm64_installer_name}"
 
           declare -a languages=()
           language_tokens="${package_languages//,/ }"
@@ -191,22 +195,39 @@ jobs:
             exit 1
           fi
 
-          languages_json=""
-          for language in "${languages[@]}"; do
-            if [ -n "$languages_json" ]; then
-              languages_json="${languages_json},"
-            fi
-            languages_json="${languages_json}\"${language}\""
-          done
-
-          printf -v product_update '{"packages":[{"packageUrl":"%s","languages":[%s],"architectures":["X64"],"installerParameters":"/quiet /norestart","isSilentInstall":true}]}' "$package_url" "$languages_json"
+          languages_json="$(printf '%s\n' "${languages[@]}" | jq -R . | jq -sc .)"
+          product_update="$(jq -nc \
+            --arg x64_package_url "$x64_package_url" \
+            --arg arm64_package_url "$arm64_package_url" \
+            --argjson languages "$languages_json" \
+            '{
+              packages: [
+                {
+                  packageUrl: $x64_package_url,
+                  languages: $languages,
+                  architectures: ["X64"],
+                  installerParameters: "/quiet /norestart",
+                  isSilentInstall: true
+                },
+                {
+                  packageUrl: $arm64_package_url,
+                  languages: $languages,
+                  architectures: ["Arm64"],
+                  installerParameters: "/quiet /norestart",
+                  isSilentInstall: true
+                }
+              ]
+            }'
+          )"
 
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "package_base_url=$package_base_url" >> "$GITHUB_OUTPUT"
           echo "product_id=$product_id" >> "$GITHUB_OUTPUT"
-          echo "installer_name=$installer_name" >> "$GITHUB_OUTPUT"
-          echo "package_url=$package_url" >> "$GITHUB_OUTPUT"
+          echo "x64_installer_name=$x64_installer_name" >> "$GITHUB_OUTPUT"
+          echo "arm64_installer_name=$arm64_installer_name" >> "$GITHUB_OUTPUT"
+          echo "x64_package_url=$x64_package_url" >> "$GITHUB_OUTPUT"
+          echo "arm64_package_url=$arm64_package_url" >> "$GITHUB_OUTPUT"
           echo "package_languages=$package_languages" >> "$GITHUB_OUTPUT"
           echo "product_update=$product_update" >> "$GITHUB_OUTPUT"
           echo "dry_run=$dry_run" >> "$GITHUB_OUTPUT"
@@ -240,20 +261,42 @@ jobs:
             exit 1
           fi
 
-      - name: Wait for hosted MSI URL to become reachable
+      - name: Load GitHub release notes
         run: |
           set -euo pipefail
 
-          package_url="${{ steps.norm.outputs.package_url }}"
-          for attempt in $(seq 1 12); do
-            if curl --fail --silent --show-error --location --head "$package_url" >/dev/null; then
-              exit 0
-            fi
-            if [ "$attempt" -eq 12 ]; then
-              echo "::error title=Hosted MSI unavailable::Package URL '${package_url}' was not reachable after repeated checks."
-              exit 1
-            fi
-            sleep 10
+          mkdir -p dist
+          release_notes="$(gh release view "${{ steps.norm.outputs.tag }}" --repo "$GITHUB_REPOSITORY" --json body --jq '.body // ""')"
+          release_notes="$(printf '%s' "$release_notes" | tr -d '\r')"
+
+          if [ -z "$release_notes" ]; then
+            release_notes="GitComet v${{ steps.norm.outputs.version }}"
+          fi
+
+          printf '%s' "$release_notes" > dist/microsoft-store-release-notes.txt
+
+      - name: Wait for hosted MSI URLs to become reachable
+        run: |
+          set -euo pipefail
+
+          package_urls=(
+            "${{ steps.norm.outputs.x64_package_url }}"
+            "${{ steps.norm.outputs.arm64_package_url }}"
+          )
+
+          for package_url in "${package_urls[@]}"; do
+            for attempt in $(seq 1 12); do
+              if curl --fail --silent --show-error --location --head "$package_url" >/dev/null; then
+                break
+              fi
+
+              if [ "$attempt" -eq 12 ]; then
+                echo "::error title=Hosted MSI unavailable::Package URL '${package_url}' was not reachable after repeated checks."
+                exit 1
+              fi
+
+              sleep 10
+            done
           done
 
       - name: Install Microsoft Store CLI
@@ -276,12 +319,56 @@ jobs:
             --clientId "$MICROSOFT_STORE_CLIENT_ID" \
             --clientSecret "$MICROSOFT_STORE_CLIENT_SECRET"
 
-      - name: Update Microsoft Store draft submission
+      - name: Update Microsoft Store draft submission packages
         if: ${{ steps.norm.outputs.dry_run != 'true' }}
         run: |
           set -euo pipefail
 
           msstore submission update "${{ steps.norm.outputs.product_id }}" '${{ steps.norm.outputs.product_update }}' --verbose
+
+      - name: Update Microsoft Store draft submission metadata
+        if: ${{ steps.norm.outputs.dry_run != 'true' }}
+        env:
+          PRODUCT_ID: ${{ steps.norm.outputs.product_id }}
+          VERSION: ${{ steps.norm.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          submission_json="$(msstore submission get "$PRODUCT_ID")"
+          metadata_json="$(
+            printf '%s' "$submission_json" | jq -c \
+              --arg version "$VERSION" \
+              --rawfile release_notes dist/microsoft-store-release-notes.txt \
+              '
+                if (.Listings | type) != "object" then
+                  error("Draft submission metadata must include at least one listing.")
+                elif (.Listings | keys | length) == 0 then
+                  error("Draft submission metadata must include at least one listing.")
+                else
+                  .
+                end
+                | .Listings |= with_entries(
+                    .value = ((.value // {}) | .BaseListing = ((.BaseListing // {}) + {ReleaseNotes: $release_notes}))
+                  )
+                | if has("ApplicationVersion") and (.ApplicationVersion | type == "string") then
+                    .ApplicationVersion = $version
+                  else
+                    .
+                  end
+                | if has("AppVersion") and (.AppVersion | type == "string") then
+                    .AppVersion = $version
+                  else
+                    .
+                  end
+                | if has("Version") and (.Version | type == "string") then
+                    .Version = $version
+                  else
+                    .
+                  end
+              '
+          )"
+
+          printf '%s' "$metadata_json" | msstore submission updateMetadata "$PRODUCT_ID" --verbose
 
       - name: Commit Microsoft Store submission
         if: ${{ steps.norm.outputs.dry_run != 'true' }}
@@ -308,8 +395,13 @@ jobs:
             echo "### ${mode}"
             echo
             echo "- Release tag: \`${{ steps.norm.outputs.tag }}\`"
+            echo "- Version: \`${{ steps.norm.outputs.version }}\`"
             echo "- Microsoft Store product id: \`${product_id_display}\`"
-            echo "- Hosted MSI URL: \`${{ steps.norm.outputs.package_url }}\`"
+            echo "- Hosted x64 MSI URL: \`${{ steps.norm.outputs.x64_package_url }}\`"
+            echo "- Hosted ARM64 MSI URL: \`${{ steps.norm.outputs.arm64_package_url }}\`"
             echo "- Package languages: \`${{ steps.norm.outputs.package_languages }}\`"
-            echo "- Installer name: \`${{ steps.norm.outputs.installer_name }}\`"
+            echo "- Changelog source: \`GitHub release body for ${{ steps.norm.outputs.tag }}\`"
+            echo "- Installer names:"
+            echo "  - \`${{ steps.norm.outputs.x64_installer_name }}\`"
+            echo "  - \`${{ steps.norm.outputs.arm64_installer_name }}\`"
           } >> "$GITHUB_STEP_SUMMARY"

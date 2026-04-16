@@ -176,13 +176,22 @@ jobs:
             --dir dist/windows-release \
             --clobber
 
-          mapfile -t installers < <(find dist/windows-release -maxdepth 1 -type f -name "gitcomet-v${{ steps.norm.outputs.version }}-windows-*.msi" | LC_ALL=C sort)
-          if [ "${#installers[@]}" -eq 0 ]; then
-            echo "::error title=Missing Windows MSI asset::Expected at least one Windows MSI release asset for tag '${{ steps.norm.outputs.tag }}'."
+          x64_installer="dist/windows-release/gitcomet-v${{ steps.norm.outputs.version }}-windows-x86_64.msi"
+          arm64_installer="dist/windows-release/gitcomet-v${{ steps.norm.outputs.version }}-windows-arm64.msi"
+
+          missing=()
+          for installer_path in "$x64_installer" "$arm64_installer"; do
+            if [ ! -f "$installer_path" ]; then
+              missing+=("$(basename "$installer_path")")
+            fi
+          done
+
+          if [ "${#missing[@]}" -gt 0 ]; then
+            printf '::error title=Missing Windows MSI assets::Expected release assets for tag %s: %s.\n' "${{ steps.norm.outputs.tag }}" "$(IFS=', '; echo "${missing[*]}")"
             exit 1
           fi
 
-          printf '%s\n' "${installers[@]}" > dist/windows-installers.txt
+          printf '%s\n' "$x64_installer" "$arm64_installer" > dist/windows-installers.txt
 
       - name: Upload Windows MSI assets to Azure Blob Storage
         if: ${{ steps.norm.outputs.dry_run != 'true' }}
