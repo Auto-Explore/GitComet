@@ -322,6 +322,14 @@ fn settings_dropdown_background(theme: AppTheme) -> gpui::Rgba {
     }
 }
 
+fn settings_dropdown_border_color(theme: AppTheme) -> gpui::Rgba {
+    if theme.is_dark {
+        with_alpha(theme.colors.border, 0.98)
+    } else {
+        theme.colors.border
+    }
+}
+
 fn settings_dropdown_height(
     item_count: usize,
     estimated_row_height_px: f32,
@@ -1122,11 +1130,7 @@ impl SettingsWindowView {
             .min_h(height)
             .rounded(px(theme.radii.row))
             .border_1()
-            .border_color(if theme.is_dark {
-                with_alpha(theme.colors.border, 0.98)
-            } else {
-                theme.colors.border
-            })
+            .border_color(settings_dropdown_border_color(theme))
             .bg(settings_dropdown_background(theme))
             .overflow_hidden()
             .child(
@@ -1144,6 +1148,20 @@ impl SettingsWindowView {
                     .always_visible()
                     .render(theme),
             )
+    }
+
+    fn detail_container(&self, container_id: &'static str, theme: AppTheme) -> Stateful<gpui::Div> {
+        div()
+            .id(container_id)
+            .debug_selector(move || container_id.to_string())
+            .w_full()
+            .flex()
+            .flex_col()
+            .rounded(px(theme.radii.row))
+            .border_1()
+            .border_color(settings_dropdown_border_color(theme))
+            .bg(settings_dropdown_background(theme))
+            .overflow_hidden()
     }
 
     fn summary_row(
@@ -2172,107 +2190,109 @@ impl Render for SettingsWindowView {
                     .child(history_columns_row);
 
                 if self.expanded_section == Some(SettingsSection::GitLogColumns) {
-                    git_log_card = git_log_card
-                        .child(
-                            self.toggle_row(
-                                "settings_window_git_log_column_graph",
-                                "Graph",
-                                self.history_show_graph,
-                                theme,
+                    git_log_card = git_log_card.child(
+                        self.detail_container("settings_window_git_log_columns_container", theme)
+                            .child(
+                                self.toggle_row(
+                                    "settings_window_git_log_column_graph",
+                                    "Graph",
+                                    self.history_show_graph,
+                                    theme,
+                                )
+                                .on_click(cx.listener(
+                                    |this, _e: &ClickEvent, _window, cx| {
+                                        this.set_history_column_preferences(
+                                            !this.history_show_graph,
+                                            this.history_show_author,
+                                            this.history_show_date,
+                                            this.history_show_sha,
+                                            cx,
+                                        );
+                                    },
+                                )),
                             )
-                            .on_click(cx.listener(
-                                |this, _e: &ClickEvent, _window, cx| {
-                                    this.set_history_column_preferences(
-                                        !this.history_show_graph,
-                                        this.history_show_author,
-                                        this.history_show_date,
-                                        this.history_show_sha,
-                                        cx,
-                                    );
-                                },
-                            )),
-                        )
-                        .child(
-                            self.toggle_row(
-                                "settings_window_git_log_column_author",
-                                "Author",
-                                self.history_show_author,
-                                theme,
+                            .child(
+                                self.toggle_row(
+                                    "settings_window_git_log_column_author",
+                                    "Author",
+                                    self.history_show_author,
+                                    theme,
+                                )
+                                .on_click(cx.listener(
+                                    |this, _e: &ClickEvent, _window, cx| {
+                                        this.set_history_column_preferences(
+                                            this.history_show_graph,
+                                            !this.history_show_author,
+                                            this.history_show_date,
+                                            this.history_show_sha,
+                                            cx,
+                                        );
+                                    },
+                                )),
                             )
-                            .on_click(cx.listener(
-                                |this, _e: &ClickEvent, _window, cx| {
-                                    this.set_history_column_preferences(
-                                        this.history_show_graph,
-                                        !this.history_show_author,
-                                        this.history_show_date,
-                                        this.history_show_sha,
-                                        cx,
-                                    );
-                                },
-                            )),
-                        )
-                        .child(
-                            self.toggle_row(
-                                "settings_window_git_log_column_date",
-                                "Commit date",
-                                self.history_show_date,
-                                theme,
+                            .child(
+                                self.toggle_row(
+                                    "settings_window_git_log_column_date",
+                                    "Commit date",
+                                    self.history_show_date,
+                                    theme,
+                                )
+                                .on_click(cx.listener(
+                                    |this, _e: &ClickEvent, _window, cx| {
+                                        this.set_history_column_preferences(
+                                            this.history_show_graph,
+                                            this.history_show_author,
+                                            !this.history_show_date,
+                                            this.history_show_sha,
+                                            cx,
+                                        );
+                                    },
+                                )),
                             )
-                            .on_click(cx.listener(
-                                |this, _e: &ClickEvent, _window, cx| {
-                                    this.set_history_column_preferences(
-                                        this.history_show_graph,
-                                        this.history_show_author,
-                                        !this.history_show_date,
-                                        this.history_show_sha,
-                                        cx,
-                                    );
-                                },
-                            )),
-                        )
-                        .child(
-                            self.toggle_row(
-                                "settings_window_git_log_column_sha",
-                                "SHA",
-                                self.history_show_sha,
-                                theme,
+                            .child(
+                                self.toggle_row(
+                                    "settings_window_git_log_column_sha",
+                                    "SHA",
+                                    self.history_show_sha,
+                                    theme,
+                                )
+                                .on_click(cx.listener(
+                                    |this, _e: &ClickEvent, _window, cx| {
+                                        this.set_history_column_preferences(
+                                            this.history_show_graph,
+                                            this.history_show_author,
+                                            this.history_show_date,
+                                            !this.history_show_sha,
+                                            cx,
+                                        );
+                                    },
+                                )),
                             )
-                            .on_click(cx.listener(
-                                |this, _e: &ClickEvent, _window, cx| {
-                                    this.set_history_column_preferences(
-                                        this.history_show_graph,
-                                        this.history_show_author,
-                                        this.history_show_date,
-                                        !this.history_show_sha,
-                                        cx,
-                                    );
-                                },
-                            )),
-                        )
-                        .child(
-                            div()
-                                .px_2()
-                                .pb_1()
-                                .text_xs()
-                                .text_color(theme.colors.text_muted)
-                                .child("Columns may auto-hide in narrow windows."),
-                        )
-                        .child(
-                            self.link_row(
-                                "settings_window_git_log_reset_widths",
-                                "Reset column widths",
-                                "Reset".into(),
-                                theme,
+                            .child(
+                                div()
+                                    .px_2()
+                                    .pb_1()
+                                    .text_xs()
+                                    .text_color(theme.colors.text_muted)
+                                    .child("Columns may auto-hide in narrow windows."),
                             )
-                            .on_click(cx.listener(
-                                |this, _e: &ClickEvent, _window, cx| {
-                                    this.update_main_windows(cx, |view, _window, cx| {
-                                        view.reset_history_column_widths(cx);
-                                    });
-                                    cx.notify();
-                                },
-                            )),
-                        );
+                            .child(
+                                self.link_row(
+                                    "settings_window_git_log_reset_widths",
+                                    "Reset column widths",
+                                    "Reset".into(),
+                                    theme,
+                                )
+                                .on_click(cx.listener(
+                                    |this, _e: &ClickEvent, _window, cx| {
+                                        this.update_main_windows(cx, |view, _window, cx| {
+                                            view.reset_history_column_widths(cx);
+                                        });
+                                        cx.notify();
+                                    },
+                                )),
+                            ),
+                    );
                 }
 
                 git_log_card = git_log_card.child(show_history_tags_row);
@@ -2280,7 +2300,11 @@ impl Render for SettingsWindowView {
                     git_log_card = git_log_card.child(auto_fetch_tags_row);
 
                     if self.expanded_section == Some(SettingsSection::GitLogTagFetch) {
-                        git_log_card = git_log_card
+                        git_log_card = git_log_card.child(
+                            self.detail_container(
+                                "settings_window_git_log_tag_fetch_container",
+                                theme,
+                            )
                             .child(
                                 self.option_row(
                                     "settings_window_git_log_tag_fetch_mode_activation",
@@ -2320,7 +2344,8 @@ impl Render for SettingsWindowView {
                                         );
                                     },
                                 )),
-                            );
+                            ),
+                        );
                     }
                 }
 
@@ -2437,7 +2462,11 @@ impl Render for SettingsWindowView {
                                 this.apply_git_executable_settings(cx);
                             });
 
-                    git_executable_card = git_executable_card
+                    git_executable_card = git_executable_card.child(
+                        self.detail_container(
+                            "settings_window_git_executable_custom_container",
+                            theme,
+                        )
                         .child(
                             div()
                                 .px_2()
@@ -2473,7 +2502,8 @@ impl Render for SettingsWindowView {
                                 .child(
                                     "Press Enter after editing the path to apply it immediately.",
                                 ),
-                        );
+                        ),
+                    );
                 }
 
                 git_executable_card = git_executable_card.child(
@@ -2553,6 +2583,17 @@ impl Render for SettingsWindowView {
                         )
                         .on_click(|_, _, cx| {
                             cx.open_url(LICENSE_URL);
+                        }),
+                    )
+                    .child(
+                        self.link_row(
+                            "settings_window_professional_edition_waitlist",
+                            "Professional Edition waitlist",
+                            EDITIONS_URL.into(),
+                            theme,
+                        )
+                        .on_click(|_, _, cx| {
+                            cx.open_url(EDITIONS_URL);
                         }),
                     )
                     .child(
@@ -3283,6 +3324,133 @@ mod tests {
     }
 
     #[gpui::test]
+    fn expanded_history_columns_section_renders_detail_container(cx: &mut gpui::TestAppContext) {
+        let _visual_guard = lock_visual_test();
+        let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+        let (_main_view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+            open_settings_window(app);
+        });
+        cx.run_until_parked();
+
+        let settings_window = cx.update(|_window, app| {
+            app.windows()
+                .into_iter()
+                .find_map(|window| window.downcast::<SettingsWindowView>())
+                .expect("settings window should be open")
+        });
+
+        let mut settings_cx = gpui::VisualTestContext::from_window(*settings_window.deref(), cx);
+        settings_cx.run_until_parked();
+        settings_cx.simulate_resize(size(px(SETTINGS_WINDOW_DEFAULT_WIDTH_PX), px(1200.0)));
+        settings_cx.run_until_parked();
+
+        let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
+            settings.expanded_section = Some(SettingsSection::GitLogColumns);
+            cx.notify();
+        });
+        settings_cx.run_until_parked();
+        settings_cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+
+        assert!(
+            settings_cx
+                .debug_bounds("settings_window_git_log_columns_container")
+                .is_some(),
+            "expected the history columns section to render its detail container when expanded"
+        );
+    }
+
+    #[gpui::test]
+    fn expanded_auto_fetch_tags_section_renders_detail_container(cx: &mut gpui::TestAppContext) {
+        let _visual_guard = lock_visual_test();
+        let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+        let (_main_view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+            open_settings_window(app);
+        });
+        cx.run_until_parked();
+
+        let settings_window = cx.update(|_window, app| {
+            app.windows()
+                .into_iter()
+                .find_map(|window| window.downcast::<SettingsWindowView>())
+                .expect("settings window should be open")
+        });
+
+        let mut settings_cx = gpui::VisualTestContext::from_window(*settings_window.deref(), cx);
+        settings_cx.run_until_parked();
+        settings_cx.simulate_resize(size(px(SETTINGS_WINDOW_DEFAULT_WIDTH_PX), px(1200.0)));
+        settings_cx.run_until_parked();
+
+        let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
+            settings.history_show_tags = true;
+            settings.expanded_section = Some(SettingsSection::GitLogTagFetch);
+            cx.notify();
+        });
+        settings_cx.run_until_parked();
+        settings_cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+
+        assert!(
+            settings_cx
+                .debug_bounds("settings_window_git_log_tag_fetch_container")
+                .is_some(),
+            "expected the auto fetch tags section to render its detail container when expanded"
+        );
+    }
+
+    #[gpui::test]
+    fn custom_git_executable_mode_renders_detail_container(cx: &mut gpui::TestAppContext) {
+        let _visual_guard = lock_visual_test();
+        let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+        let (_main_view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+            open_settings_window(app);
+        });
+        cx.run_until_parked();
+
+        let settings_window = cx.update(|_window, app| {
+            app.windows()
+                .into_iter()
+                .find_map(|window| window.downcast::<SettingsWindowView>())
+                .expect("settings window should be open")
+        });
+
+        let mut settings_cx = gpui::VisualTestContext::from_window(*settings_window.deref(), cx);
+        settings_cx.run_until_parked();
+        settings_cx.simulate_resize(size(px(SETTINGS_WINDOW_DEFAULT_WIDTH_PX), px(1200.0)));
+        settings_cx.run_until_parked();
+
+        let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
+            settings.git_executable_mode = GitExecutableMode::Custom;
+            cx.notify();
+        });
+        settings_cx.run_until_parked();
+        settings_cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+
+        assert!(
+            settings_cx
+                .debug_bounds("settings_window_git_executable_custom_container")
+                .is_some(),
+            "expected custom git executable mode to render its detail container"
+        );
+    }
+
+    #[gpui::test]
     fn settings_dropdowns_fit_without_inner_scroll(cx: &mut gpui::TestAppContext) {
         let _visual_guard = lock_visual_test();
         let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
@@ -3375,6 +3543,19 @@ mod tests {
         settings_cx.update(|window, app| {
             let _ = window.draw(app);
         });
+        let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
+            // Keep the interaction test resilient as rows are added to the root links card.
+            let current_x = settings.settings_window_scroll.offset().x;
+            let max_offset = settings.settings_window_scroll.max_offset().y.max(px(0.0));
+            settings
+                .settings_window_scroll
+                .set_offset(point(current_x, -max_offset));
+            cx.notify();
+        });
+        settings_cx.run_until_parked();
+        settings_cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
 
         let row_bounds = settings_cx
             .debug_bounds("settings_window_open_source_licenses")
@@ -3442,6 +3623,45 @@ mod tests {
                 "expected the breadcrumb back control to return to the root settings view"
             );
         });
+    }
+
+    #[gpui::test]
+    fn settings_window_professional_edition_waitlist_row_opens_editions_page(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let _visual_guard = lock_visual_test();
+        let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+        let (_main_view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+            open_settings_window(app);
+        });
+        cx.run_until_parked();
+
+        let settings_window = cx.update(|_window, app| {
+            app.windows()
+                .into_iter()
+                .find_map(|window| window.downcast::<SettingsWindowView>())
+                .expect("settings window should be open")
+        });
+
+        let mut settings_cx = gpui::VisualTestContext::from_window(*settings_window.deref(), cx);
+        settings_cx.run_until_parked();
+        settings_cx.simulate_resize(size(px(SETTINGS_WINDOW_DEFAULT_WIDTH_PX), px(1200.0)));
+        settings_cx.run_until_parked();
+        settings_cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+
+        let row_bounds = settings_cx
+            .debug_bounds("settings_window_professional_edition_waitlist")
+            .expect("expected professional edition waitlist row bounds");
+        settings_cx.simulate_click(row_bounds.center(), Modifiers::default());
+        settings_cx.run_until_parked();
+
+        assert_eq!(cx.opened_url(), Some(EDITIONS_URL.to_string()));
     }
 
     #[gpui::test]

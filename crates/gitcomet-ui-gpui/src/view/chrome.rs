@@ -604,20 +604,55 @@ impl Render for TitleBarView {
         );
         let free_badge_text =
             with_alpha(theme.colors.text, if theme.is_dark { 0.72 } else { 0.62 });
+        let free_badge_hover_bg =
+            with_alpha(theme.colors.accent, if theme.is_dark { 0.18 } else { 0.12 });
+        let free_badge_hover_border =
+            with_alpha(theme.colors.accent, if theme.is_dark { 0.42 } else { 0.34 });
+        let free_badge_active_bg =
+            with_alpha(theme.colors.accent, if theme.is_dark { 0.28 } else { 0.20 });
+        let free_badge_active_border =
+            with_alpha(theme.colors.accent, if theme.is_dark { 0.58 } else { 0.46 });
+        let free_badge_tooltip: SharedString = "See GitComet editions".into();
         let free_badge = div()
             .id("free_badge")
+            .debug_selector(|| "titlebar_free_badge".to_string())
             .h(px(18.0))
             .px(px(6.0))
             .flex()
             .items_center()
             .justify_center()
             .rounded(px(2.0))
+            .cursor(CursorStyle::PointingHand)
             .bg(free_badge_bg)
             .border_1()
             .border_color(free_badge_border)
             .text_xs()
             .font_weight(FontWeight::NORMAL)
             .text_color(free_badge_text)
+            .hover(move |s| {
+                s.bg(free_badge_hover_bg)
+                    .border_color(free_badge_hover_border)
+                    .text_color(theme.colors.accent)
+            })
+            .active(move |s| {
+                s.bg(free_badge_active_bg)
+                    .border_color(free_badge_active_border)
+                    .text_color(theme.colors.accent)
+            })
+            .on_click(cx.listener(|_this, _e: &ClickEvent, _window, cx| {
+                cx.stop_propagation();
+                cx.open_url(EDITIONS_URL);
+            }))
+            .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
+                let changed = if *hovering {
+                    this.set_tooltip_text_if_changed(Some(free_badge_tooltip.clone()), cx)
+                } else {
+                    this.clear_tooltip_if_matches(&free_badge_tooltip, cx)
+                };
+                if changed {
+                    cx.notify();
+                }
+            }))
             .child("FREE");
 
         let macos_brand = div()

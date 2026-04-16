@@ -165,6 +165,7 @@ const DIFF_TEXT_LAYOUT_CACHE_PRUNE_OVERAGE: usize = 256;
 const TOAST_FADE_IN_MS: u64 = 180;
 const TOAST_FADE_OUT_MS: u64 = 220;
 const TOAST_SLIDE_PX: f32 = 12.0;
+pub(crate) const EDITIONS_URL: &str = "https://gitcomet.dev/#editions";
 
 // Only use these wrappers for views that remain mounted while their parent is mounted.
 // Parent-controlled mount/unmount boundaries, like collapsible panes, must rebuild their child.

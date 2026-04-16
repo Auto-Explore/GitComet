@@ -2329,6 +2329,55 @@ fn titlebar_hamburger_opens_app_menu_but_brand_pill_does_not(cx: &mut gpui::Test
 }
 
 #[gpui::test]
+fn titlebar_free_badge_opens_editions_page_and_updates_tooltip_on_hover(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitCometView::new(store, events, None, window, cx)
+    });
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    let badge_bounds = cx
+        .debug_bounds("titlebar_free_badge")
+        .expect("expected titlebar free badge bounds");
+    let badge_center = badge_bounds.center();
+
+    cx.simulate_mouse_move(badge_center, None, Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|_window, app| {
+        assert_eq!(
+            crate::view::test_support::tooltip_text(view.read(app), app),
+            Some("See GitComet editions".into())
+        );
+    });
+
+    cx.simulate_mouse_down(badge_center, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(badge_center, MouseButton::Left, Modifiers::default());
+    cx.run_until_parked();
+
+    assert_eq!(cx.opened_url(), Some(crate::view::EDITIONS_URL.to_string()));
+    cx.update(|_window, app| {
+        assert!(
+            !crate::view::test_support::popover_is_open(view.read(app), app),
+            "expected titlebar free badge click to leave popovers closed"
+        );
+    });
+
+    cx.simulate_mouse_move(gpui::point(px(120.0), px(18.0)), None, Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|_window, app| {
+        assert_eq!(
+            crate::view::test_support::tooltip_text(view.read(app), app),
+            None
+        );
+    });
+}
+
+#[gpui::test]
 fn titlebar_window_controls_update_tooltip_on_hover(cx: &mut gpui::TestAppContext) {
     if cfg!(target_os = "macos") {
         // The custom Min/Max/Close controls are only rendered on non-macOS.
