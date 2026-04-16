@@ -37,7 +37,7 @@ env:
 jobs:
   validate:
     name: Validate inputs and branch guard
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 15
     outputs:
       version: ${{ steps.norm.outputs.version }}
@@ -107,7 +107,7 @@ jobs:
 
   create_release:
     name: Create tag and draft GitHub release
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 20
     needs: validate
     environment: release
@@ -158,7 +158,7 @@ jobs:
 
   publish_release:
     name: Publish GitHub release
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 10
     needs: [validate, create_release, build_and_upload]
     if: ${{ fromJSON(needs.validate.outputs.draft) == false }}
@@ -223,7 +223,7 @@ jobs:
 
   cleanup_failed_release:
     name: Cleanup failed draft/tag
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 10
     needs: [validate, create_release, build_and_upload]
     if: ${{ always() && needs.create_release.result == 'success' && needs.build_and_upload.result != 'success' }}

@@ -44,7 +44,7 @@ env:
 jobs:
   formula-script-validation:
     name: Validate release helper scripts and workflow YAML
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
@@ -201,7 +201,7 @@ jobs:
 
   aur-metadata-smoke:
     name: Validate AUR metadata update script
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 20
     container:
       image: archlinux:base-devel
@@ -276,7 +276,7 @@ jobs:
 
   apt-repo-generation-smoke:
     name: Validate APT repo generation script
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
