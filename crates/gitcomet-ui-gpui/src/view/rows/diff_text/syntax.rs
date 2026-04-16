@@ -12,7 +12,6 @@ const TS_DOCUMENT_CACHE_MAX_ENTRIES: usize = 8;
 const TS_DOCUMENT_LINE_TOKEN_CHUNK_ROWS: usize = 64;
 const TS_DOCUMENT_LINE_TOKEN_PREFETCH_GUARD_CHUNKS: usize = 1;
 const DIFF_SYNTAX_FOREGROUND_PARSE_BUDGET_NON_TEST: Duration = Duration::from_millis(1);
-const DIFF_SYNTAX_FOREGROUND_PARSE_BUDGET_TEST: Duration = Duration::from_millis(2);
 const DIFF_SYNTAX_FOREGROUND_SKIP_TEXT_BYTES: usize = 128 * 1024;
 const DIFF_SYNTAX_FOREGROUND_SKIP_LINE_COUNT: usize = 2_048;
 const TS_QUERY_MATCH_LIMIT: u32 = 256;
@@ -26,26 +25,67 @@ const TS_INCREMENTAL_REPARSE_LATE_EDIT_MIN_PREFIX_BYTES: usize = 8 * 1024;
 const TS_INCREMENTAL_REPARSE_LATE_EDIT_MAX_CHANGED_BYTES: usize = 384 * 1024;
 const TS_INCREMENTAL_REPARSE_LATE_EDIT_MAX_CHANGED_PERCENT: usize = 80;
 const TS_LINE_TOKEN_CACHE_MAX_ENTRIES: usize = 256;
+// Extreme multi-megabyte documents are better served by the existing visible-line
+// heuristic fallback than by building a full prepared tree-sitter document.
+const TS_PREPARED_DOCUMENT_MAX_TEXT_BYTES: usize = 8 * 1024 * 1024;
 const TS_SHARED_DOCUMENT_SEED_MAX_ENTRIES: usize = 64;
 const TS_PENDING_PARSE_REQUEST_MAX_ENTRIES: usize = 8;
+#[cfg(any(test, feature = "syntax-shell"))]
+const BASH_HIGHLIGHTS_QUERY: &str = include_str!("queries/bash_highlights.scm");
+#[cfg(any(test, feature = "syntax-extra"))]
+const CSHARP_HIGHLIGHTS_QUERY: &str = include_str!("queries/csharp_highlights.scm");
+#[cfg(any(test, feature = "syntax-repo"))]
+const GITCOMMIT_HIGHLIGHTS_QUERY: &str = include_str!("queries/gitcommit_highlights.scm");
+#[cfg(any(test, feature = "syntax-repo"))]
+const GOMOD_HIGHLIGHTS_QUERY: &str = include_str!("queries/gomod_highlights.scm");
+#[cfg(any(test, feature = "syntax-repo"))]
+const GOWORK_HIGHLIGHTS_QUERY: &str = include_str!("queries/gowork_highlights.scm");
 #[cfg(any(test, feature = "syntax-web"))]
 const HTML_HIGHLIGHTS_QUERY: &str = include_str!("queries/html_highlights.scm");
 #[cfg(any(test, feature = "syntax-web"))]
 const HTML_INJECTIONS_QUERY: &str = include_str!("queries/html_injections.scm");
+#[cfg(any(test, feature = "syntax-repo"))]
+const MARKDOWN_HIGHLIGHTS_QUERY: &str = tree_sitter_md::HIGHLIGHT_QUERY_BLOCK;
+#[cfg(any(test, feature = "syntax-repo"))]
+const MARKDOWN_INJECTIONS_QUERY: &str = tree_sitter_md::INJECTION_QUERY_BLOCK;
+#[cfg(any(test, feature = "syntax-repo"))]
+const MARKDOWN_INLINE_HIGHLIGHTS_QUERY: &str = tree_sitter_md::HIGHLIGHT_QUERY_INLINE;
 #[cfg(any(test, feature = "syntax-web"))]
-const CSS_HIGHLIGHTS_QUERY: &str = tree_sitter_css::HIGHLIGHTS_QUERY;
+const CSS_HIGHLIGHTS_QUERY: &str = include_str!("queries/css_highlights.scm");
+#[cfg(any(test, feature = "syntax-go"))]
+const GO_HIGHLIGHTS_QUERY: &str = include_str!("queries/go_highlights.scm");
+#[cfg(any(test, feature = "syntax-go"))]
+const GO_INJECTIONS_QUERY: &str = include_str!("queries/go_injections.scm");
 #[cfg(any(test, feature = "syntax-web"))]
 const JAVASCRIPT_HIGHLIGHTS_QUERY: &str = include_str!("queries/javascript_highlights.scm");
 #[cfg(any(test, feature = "syntax-web"))]
+const JAVASCRIPT_INJECTIONS_QUERY: &str = tree_sitter_javascript::INJECTIONS_QUERY;
+#[cfg(any(test, feature = "syntax-data"))]
+const JSON_HIGHLIGHTS_QUERY: &str = include_str!("queries/json_highlights.scm");
+#[cfg(any(test, feature = "syntax-extra"))]
+const POWERSHELL_HIGHLIGHTS_QUERY: &str = tree_sitter_powershell::HIGHLIGHTS_QUERY;
+#[cfg(any(test, feature = "syntax-python"))]
+const PYTHON_HIGHLIGHTS_QUERY: &str = include_str!("queries/python_highlights.scm");
+#[cfg(any(test, feature = "syntax-web"))]
 const TYPESCRIPT_HIGHLIGHTS_QUERY: &str = include_str!("queries/typescript_highlights.scm");
 #[cfg(any(test, feature = "syntax-web"))]
+const TYPESCRIPT_INJECTIONS_QUERY: &str = include_str!("queries/typescript_injections.scm");
+#[cfg(any(test, feature = "syntax-web"))]
 const TSX_HIGHLIGHTS_QUERY: &str = include_str!("queries/tsx_highlights.scm");
+#[cfg(any(test, feature = "syntax-web"))]
+const TSX_INJECTIONS_QUERY: &str = include_str!("queries/tsx_injections.scm");
 #[cfg(any(test, feature = "syntax-rust"))]
 const RUST_HIGHLIGHTS_QUERY: &str = include_str!("queries/rust_highlights.scm");
 #[cfg(any(test, feature = "syntax-rust"))]
 const RUST_INJECTIONS_QUERY: &str = include_str!("queries/rust_injections.scm");
+#[cfg(any(test, feature = "syntax-data"))]
+const YAML_HIGHLIGHTS_QUERY: &str = include_str!("queries/yaml_highlights.scm");
+#[cfg(any(test, feature = "syntax-data"))]
+const YAML_INJECTIONS_QUERY: &str = include_str!("queries/yaml_injections.scm");
 #[cfg(any(test, feature = "syntax-xml"))]
 const XML_HIGHLIGHTS_QUERY: &str = tree_sitter_xml::XML_HIGHLIGHT_QUERY;
+#[cfg(any(test, feature = "syntax-extra"))]
+const CPP_INJECTIONS_QUERY: &str = include_str!("queries/cpp_injections.scm");
 
 /// Maximum injection nesting depth. Root document = 0, first injection = 1.
 /// This prevents infinite recursion if an injected language's highlight spec
@@ -143,6 +183,7 @@ fn with_ts_parser_parse_result<R>(
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(in crate::view) enum DiffSyntaxLanguage {
     Markdown,
+    MarkdownInline,
     Html,
     Css,
     Hcl,
@@ -157,18 +198,29 @@ pub(in crate::view) enum DiffSyntaxLanguage {
     TypeScript,
     Tsx,
     Go,
+    GoMod,
+    GoWork,
     C,
     Cpp,
+    ObjectiveC,
     CSharp,
     FSharp,
     VisualBasic,
     Java,
     Php,
     Ruby,
+    PowerShell,
+    Swift,
+    R,
+    Dart,
+    Scala,
+    Perl,
     Json,
     Toml,
     Yaml,
     Sql,
+    Diff,
+    GitCommit,
     Bash,
     Xml,
 }
@@ -258,11 +310,7 @@ pub(in crate::view) struct DiffSyntaxBudget {
 impl Default for DiffSyntaxBudget {
     fn default() -> Self {
         Self {
-            foreground_parse: if cfg!(test) {
-                DIFF_SYNTAX_FOREGROUND_PARSE_BUDGET_TEST
-            } else {
-                DIFF_SYNTAX_FOREGROUND_PARSE_BUDGET_NON_TEST
-            },
+            foreground_parse: crate::ui_runtime::current().diff_syntax_foreground_parse_budget(),
         }
     }
 }
@@ -316,6 +364,25 @@ pub(super) fn reset_prepared_syntax_cache() {
     prepared::reset_prepared_syntax_cache();
 }
 
+pub(super) fn syntax_tokens_for_streamed_line_slice_heuristic(
+    raw_text: &gitcomet_core::file_diff::FileDiffLineText,
+    language: DiffSyntaxLanguage,
+    requested_slice_range: Range<usize>,
+    resolved_slice_range: Range<usize>,
+) -> Option<Vec<SyntaxToken>> {
+    heuristic::syntax_tokens_for_streamed_line_slice_heuristic(
+        raw_text,
+        language,
+        requested_slice_range,
+        resolved_slice_range,
+    )
+}
+
+#[cfg(test)]
+pub(super) fn reset_streamed_heuristic_line_cache() {
+    heuristic::reset_streamed_heuristic_line_cache();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -349,6 +416,38 @@ mod tests {
                 text.is_char_boundary(token.range.end),
                 "{token:?} end is not a char boundary in {text:?}"
             );
+        }
+    }
+
+    struct TempFileBackedLineFixture {
+        path: std::path::PathBuf,
+        raw_text: gitcomet_core::file_diff::FileDiffLineText,
+    }
+
+    impl TempFileBackedLineFixture {
+        fn new(name: &str, text: &str) -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "gitcomet_{name}_{}_{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .expect("clock should be monotonic enough for test temp path")
+                    .as_nanos()
+            ));
+            std::fs::write(&path, text.as_bytes()).expect("write streamed slice fixture");
+            let raw_text = gitcomet_core::file_diff::FileDiffLineText::file_slice(
+                Arc::new(path.clone()),
+                0..text.len(),
+                false,
+                false,
+            );
+            Self { path, raw_text }
+        }
+    }
+
+    impl Drop for TempFileBackedLineFixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.path);
         }
     }
 
@@ -489,6 +588,10 @@ mod tests {
         prepare_test_document(DiffSyntaxLanguage::Html, &lines.join("\n"))
     }
 
+    fn prepare_markdown_document(lines: &[&str]) -> PreparedSyntaxDocument {
+        prepare_test_document(DiffSyntaxLanguage::Markdown, &lines.join("\n"))
+    }
+
     #[test]
     fn treesitter_line_length_guard() {
         assert!(super::should_use_treesitter_for_line("fn main() {}"));
@@ -552,6 +655,163 @@ mod tests {
     }
 
     #[test]
+    fn streamed_ascii_json_slice_keeps_string_state_after_checkpoint() {
+        const CHECKPOINT_SPACING: usize = 32 * 1024;
+        reset_streamed_heuristic_line_cache();
+
+        let payload = "x".repeat(CHECKPOINT_SPACING * 2);
+        let text = format!(r#"{{"payload":"{payload}","tail":true}}"#);
+        let payload_start = text.find(&payload).expect("payload should be present");
+        let slice_start = payload_start + CHECKPOINT_SPACING + 137;
+        let slice_end = slice_start + 256;
+        let raw_text = gitcomet_core::file_diff::FileDiffLineText::shared(Arc::from(text));
+        let (slice_text, resolved_range) = raw_text
+            .slice_text_resolved(slice_start..slice_end)
+            .expect("ASCII streamed slice should resolve");
+
+        let tokens = syntax_tokens_for_streamed_line_slice_heuristic(
+            &raw_text,
+            DiffSyntaxLanguage::Json,
+            slice_start..slice_end,
+            resolved_range,
+        )
+        .expect("ASCII streamed slice should be supported");
+        assert_token_ranges_are_utf8_safe(slice_text.as_ref(), &tokens);
+
+        assert!(
+            tokens.iter().any(|token| {
+                token.kind == SyntaxTokenKind::String
+                    && token.range.start == 0
+                    && token.range.end > 64
+            }),
+            "slice that starts inside the payload string should keep string highlighting: {tokens:?}"
+        );
+    }
+
+    #[test]
+    fn streamed_ascii_block_comment_slice_keeps_comment_state_and_tail_tokens() {
+        const CHECKPOINT_SPACING: usize = 32 * 1024;
+        reset_streamed_heuristic_line_cache();
+
+        let comment = "x".repeat(CHECKPOINT_SPACING + 192);
+        let text = format!("/*{comment}*/ let value = 1;");
+        let comment_start = text.find(&comment).expect("comment body should be present");
+        let comment_end = comment_start + comment.len();
+        let slice_start = comment_start + CHECKPOINT_SPACING;
+        let slice_end = text.len();
+        let raw_text = gitcomet_core::file_diff::FileDiffLineText::shared(Arc::from(text));
+        let (slice_text, resolved_range) = raw_text
+            .slice_text_resolved(slice_start..slice_end)
+            .expect("ASCII streamed slice should resolve");
+
+        let tokens = syntax_tokens_for_streamed_line_slice_heuristic(
+            &raw_text,
+            DiffSyntaxLanguage::Rust,
+            slice_start..slice_end,
+            resolved_range,
+        )
+        .expect("ASCII streamed slice should be supported");
+        assert_token_ranges_are_utf8_safe(slice_text.as_ref(), &tokens);
+
+        let comment_tail_len = comment_end.saturating_add(2).saturating_sub(slice_start);
+        assert!(
+            tokens.iter().any(|token| {
+                token.kind == SyntaxTokenKind::Comment
+                    && token.range.start == 0
+                    && token.range.end >= comment_tail_len
+            }),
+            "slice should preserve the continued block comment: {tokens:?}"
+        );
+        assert!(
+            tokens
+                .iter()
+                .any(|token| token.kind == SyntaxTokenKind::Keyword),
+            "tail after the closing comment should still tokenize normally: {tokens:?}"
+        );
+    }
+
+    #[test]
+    fn streamed_utf8_file_backed_json_slice_keeps_string_state_after_checkpoint() {
+        const CHECKPOINT_SPACING: usize = 32 * 1024;
+        reset_streamed_heuristic_line_cache();
+
+        let payload = "x".repeat(CHECKPOINT_SPACING * 2);
+        let text = format!(r#"{{"title":"Ä","payload":"{payload}","tail":true}}"#);
+        let payload_start = text.find(&payload).expect("payload should be present");
+        let slice_start = payload_start + CHECKPOINT_SPACING + 137;
+        let slice_end = slice_start + 256;
+        let fixture = TempFileBackedLineFixture::new("streamed_utf8_json_slice.json", &text);
+        let (slice_text, resolved_range) = fixture
+            .raw_text
+            .slice_text_resolved(slice_start..slice_end)
+            .expect("UTF-8 streamed slice should resolve");
+
+        let tokens = syntax_tokens_for_streamed_line_slice_heuristic(
+            &fixture.raw_text,
+            DiffSyntaxLanguage::Json,
+            slice_start..slice_end,
+            resolved_range,
+        )
+        .expect("UTF-8 streamed slice should be supported");
+
+        assert_token_ranges_are_utf8_safe(slice_text.as_ref(), &tokens);
+        assert!(
+            tokens.iter().any(|token| {
+                token.kind == SyntaxTokenKind::String
+                    && token.range.start == 0
+                    && token.range.end > 64
+            }),
+            "UTF-8 file-backed slice that starts inside the payload string should keep string highlighting: {tokens:?}"
+        );
+    }
+
+    #[test]
+    fn streamed_utf8_file_backed_block_comment_slice_keeps_comment_state_and_tail_tokens() {
+        const CHECKPOINT_SPACING: usize = 32 * 1024;
+        reset_streamed_heuristic_line_cache();
+
+        let comment = "x".repeat(CHECKPOINT_SPACING + 192);
+        let text = format!(r#"let title = "Ä"; /*{comment}*/ let value = 1;"#);
+        let comment_start = text.find(&comment).expect("comment body should be present");
+        let comment_end = comment_start + comment.len();
+        let slice_start = comment_start + CHECKPOINT_SPACING;
+        let slice_end = text.len();
+        let fixture = TempFileBackedLineFixture::new("streamed_utf8_comment_slice.rs", &text);
+        let (slice_text, resolved_range) = fixture
+            .raw_text
+            .slice_text_resolved(slice_start..slice_end)
+            .expect("UTF-8 streamed slice should resolve");
+
+        let tokens = syntax_tokens_for_streamed_line_slice_heuristic(
+            &fixture.raw_text,
+            DiffSyntaxLanguage::Rust,
+            slice_start..slice_end,
+            resolved_range.clone(),
+        )
+        .expect("UTF-8 streamed slice should be supported");
+
+        assert_token_ranges_are_utf8_safe(slice_text.as_ref(), &tokens);
+
+        let comment_tail_len = comment_end
+            .saturating_add(2)
+            .saturating_sub(resolved_range.start);
+        assert!(
+            tokens.iter().any(|token| {
+                token.kind == SyntaxTokenKind::Comment
+                    && token.range.start == 0
+                    && token.range.end >= comment_tail_len
+            }),
+            "UTF-8 file-backed slice should preserve the continued block comment: {tokens:?}"
+        );
+        assert!(
+            tokens
+                .iter()
+                .any(|token| token.kind == SyntaxTokenKind::Keyword),
+            "tail after the closing comment should still tokenize normally: {tokens:?}"
+        );
+    }
+
+    #[test]
     fn xml_has_own_language_variant() {
         assert_eq!(
             diff_syntax_language_for_path("foo.xml"),
@@ -605,6 +865,90 @@ mod tests {
     }
 
     #[test]
+    fn extended_path_aliases_are_supported() {
+        assert_eq!(
+            diff_syntax_language_for_path(".bashrc"),
+            Some(DiffSyntaxLanguage::Bash)
+        );
+        assert_eq!(
+            diff_syntax_language_for_path("PKGBUILD"),
+            Some(DiffSyntaxLanguage::Bash)
+        );
+        assert_eq!(
+            diff_syntax_language_for_path("module.cppm"),
+            Some(DiffSyntaxLanguage::Cpp)
+        );
+        assert_eq!(
+            diff_syntax_language_for_path("styles.pcss"),
+            Some(DiffSyntaxLanguage::Css)
+        );
+        assert_eq!(
+            diff_syntax_language_for_path("types.pyi"),
+            Some(DiffSyntaxLanguage::Python)
+        );
+        assert_eq!(
+            diff_syntax_language_for_path("config.jsonc"),
+            Some(DiffSyntaxLanguage::Json)
+        );
+        assert_eq!(
+            diff_syntax_language_for_path(".prettierrc"),
+            Some(DiffSyntaxLanguage::Json)
+        );
+        assert_eq!(
+            diff_syntax_language_for_path(".clang-format"),
+            Some(DiffSyntaxLanguage::Yaml)
+        );
+        assert_eq!(
+            diff_syntax_language_for_path("README.mdx"),
+            Some(DiffSyntaxLanguage::Markdown)
+        );
+        assert_eq!(
+            diff_syntax_language_for_path("script.ps1"),
+            Some(DiffSyntaxLanguage::PowerShell)
+        );
+        assert_eq!(
+            diff_syntax_language_for_path("main.swift"),
+            Some(DiffSyntaxLanguage::Swift)
+        );
+        assert_eq!(
+            diff_syntax_language_for_path("analysis.R"),
+            Some(DiffSyntaxLanguage::R)
+        );
+        assert_eq!(
+            diff_syntax_language_for_path("app.dart"),
+            Some(DiffSyntaxLanguage::Dart)
+        );
+        assert_eq!(
+            diff_syntax_language_for_path("build.sbt"),
+            Some(DiffSyntaxLanguage::Scala)
+        );
+        assert_eq!(
+            diff_syntax_language_for_path("module.pm"),
+            Some(DiffSyntaxLanguage::Perl)
+        );
+        assert_eq!(
+            diff_syntax_language_for_path("main.m"),
+            Some(DiffSyntaxLanguage::ObjectiveC)
+        );
+        assert_eq!(
+            diff_syntax_language_for_path("changes.patch"),
+            Some(DiffSyntaxLanguage::Diff)
+        );
+        assert_eq!(
+            diff_syntax_language_for_path("COMMIT_EDITMSG"),
+            Some(DiffSyntaxLanguage::GitCommit)
+        );
+        assert_eq!(
+            diff_syntax_language_for_path("go.mod"),
+            Some(DiffSyntaxLanguage::GoMod)
+        );
+        assert_eq!(
+            diff_syntax_language_for_path("go.work"),
+            Some(DiffSyntaxLanguage::GoWork)
+        );
+    }
+
+    #[test]
     fn fenced_code_info_aliases_are_supported() {
         assert_eq!(
             diff_syntax_language_for_code_fence_info("rust"),
@@ -617,6 +961,38 @@ mod tests {
         assert_eq!(
             diff_syntax_language_for_code_fence_info("{.shell}"),
             Some(DiffSyntaxLanguage::Bash)
+        );
+        assert_eq!(
+            diff_syntax_language_for_code_fence_info("jsonc"),
+            Some(DiffSyntaxLanguage::Json)
+        );
+        assert_eq!(
+            diff_syntax_language_for_code_fence_info("shellscript"),
+            Some(DiffSyntaxLanguage::Bash)
+        );
+        assert_eq!(
+            diff_syntax_language_for_code_fence_info("pwsh"),
+            Some(DiffSyntaxLanguage::PowerShell)
+        );
+        assert_eq!(
+            diff_syntax_language_for_code_fence_info("ps1"),
+            Some(DiffSyntaxLanguage::PowerShell)
+        );
+        assert_eq!(
+            diff_syntax_language_for_code_fence_info("objective-c"),
+            Some(DiffSyntaxLanguage::ObjectiveC)
+        );
+        assert_eq!(
+            diff_syntax_language_for_code_fence_info("go.mod"),
+            Some(DiffSyntaxLanguage::GoMod)
+        );
+        assert_eq!(
+            diff_syntax_language_for_code_fence_info("go.work"),
+            Some(DiffSyntaxLanguage::GoWork)
+        );
+        assert_eq!(
+            diff_syntax_language_for_code_fence_info("diff"),
+            Some(DiffSyntaxLanguage::Diff)
         );
     }
 
@@ -1030,6 +1406,51 @@ mod tests {
         assert!(
             second.iter().any(|t| t.kind == SyntaxTokenKind::Comment),
             "second line should include comment tokens from multiline context"
+        );
+    }
+
+    #[test]
+    fn prepared_markdown_document_highlights_fenced_rust_block_via_injection() {
+        let lines = ["```rust", "fn main() { let value = 42; }", "```"];
+        let doc = prepare_markdown_document(&lines);
+
+        let tokens = syntax_tokens_for_prepared_document_line(doc, 1)
+            .expect("markdown fenced code line tokens should be available");
+        assert!(
+            tokens.iter().any(|t| t.kind == SyntaxTokenKind::Keyword),
+            "embedded Rust should highlight keywords inside fenced markdown, got: {tokens:?}"
+        );
+        assert!(
+            tokens.iter().any(|t| t.kind == SyntaxTokenKind::Number),
+            "embedded Rust should highlight numbers inside fenced markdown, got: {tokens:?}"
+        );
+    }
+
+    #[test]
+    fn prepared_markdown_document_highlights_inline_code_and_html_block() {
+        let doc =
+            prepare_markdown_document(&["Use `git status` here", "<div class=\"note\">ok</div>"]);
+
+        let inline_tokens = syntax_tokens_for_prepared_document_line(doc, 0)
+            .expect("markdown inline line tokens should be available");
+        assert!(
+            inline_tokens
+                .iter()
+                .any(|t| t.kind == SyntaxTokenKind::PunctuationDelimiter),
+            "markdown inline code should at least preserve delimiter highlighting, got: {inline_tokens:?}"
+        );
+
+        let html_tokens = syntax_tokens_for_prepared_document_line(doc, 1)
+            .expect("markdown HTML block line tokens should be available");
+        assert!(
+            html_tokens.iter().any(|t| t.kind == SyntaxTokenKind::Tag),
+            "markdown HTML blocks should inject HTML tag highlighting, got: {html_tokens:?}"
+        );
+        assert!(
+            html_tokens
+                .iter()
+                .any(|t| t.kind == SyntaxTokenKind::Attribute),
+            "markdown HTML blocks should inject HTML attribute highlighting, got: {html_tokens:?}"
         );
     }
 
@@ -1692,6 +2113,60 @@ mod tests {
             "background parse should reuse the pending request instead of hashing again"
         );
         assert_eq!(background.line_count, 4_096);
+    }
+
+    #[test]
+    fn oversized_shared_text_prepare_falls_back_without_prepared_tree_sitter() {
+        let _lock = lock_global_counter_tests();
+        reset_prepared_syntax_cache();
+        reset_deferred_drop_counters();
+
+        let line = "let oversized_value: usize = 1;";
+        let repeat = (TS_PREPARED_DOCUMENT_MAX_TEXT_BYTES / (line.len() + 1)).saturating_add(1);
+        let source = std::iter::repeat_n(line, repeat)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            source.len() > TS_PREPARED_DOCUMENT_MAX_TEXT_BYTES,
+            "fixture should exceed the prepared full-document syntax byte gate"
+        );
+        let input = treesitter_document_input_from_text(&source);
+        let text: SharedString = source.clone().into();
+
+        let attempt = prepare_treesitter_document_with_budget_reuse_text(
+            DiffSyntaxLanguage::Rust,
+            DiffSyntaxMode::Auto,
+            text.clone(),
+            Arc::clone(&input.line_starts),
+            DiffSyntaxBudget {
+                foreground_parse: Duration::from_secs(1),
+            },
+            None,
+            None,
+        );
+        assert_eq!(
+            attempt,
+            PrepareTreesitterDocumentResult::Unsupported,
+            "oversized full-document syntax should fall back before parsing"
+        );
+        assert_eq!(
+            document_hash_count(),
+            0,
+            "oversized full-document syntax should skip whole-document hash work"
+        );
+
+        let background = prepare_treesitter_document_in_background_text_with_reuse(
+            DiffSyntaxLanguage::Rust,
+            DiffSyntaxMode::Auto,
+            text,
+            input.line_starts,
+            None,
+            None,
+        );
+        assert!(
+            background.is_none(),
+            "background prepared syntax should also skip oversized full-document inputs"
+        );
     }
 
     #[test]
@@ -2718,6 +3193,27 @@ mod tests {
         assert_eq!(syntax_kind_from_capture_name("text.jsx"), None);
     }
 
+    #[test]
+    fn normalize_non_overlapping_tokens_keeps_later_same_range_token() {
+        let tokens = normalize_non_overlapping_tokens(vec![
+            SyntaxToken {
+                range: 0..5,
+                kind: SyntaxTokenKind::Function,
+            },
+            SyntaxToken {
+                range: 0..5,
+                kind: SyntaxTokenKind::Type,
+            },
+        ]);
+        assert_eq!(
+            tokens,
+            vec![SyntaxToken {
+                range: 0..5,
+                kind: SyntaxTokenKind::Type,
+            }]
+        );
+    }
+
     #[cfg(any(test, feature = "syntax-rust"))]
     #[test]
     fn vendored_rust_query_compiles() {
@@ -2733,6 +3229,14 @@ mod tests {
         let lang: tree_sitter::Language = tree_sitter_css::LANGUAGE.into();
         let source = CSS_HIGHLIGHTS_QUERY;
         tree_sitter::Query::new(&lang, source).expect("vendored CSS highlights.scm should compile");
+    }
+
+    #[cfg(any(test, feature = "syntax-shell"))]
+    #[test]
+    fn vendored_bash_query_compiles() {
+        let lang: tree_sitter::Language = tree_sitter_bash::LANGUAGE.into();
+        tree_sitter::Query::new(&lang, BASH_HIGHLIGHTS_QUERY)
+            .expect("vendored Bash highlights.scm should compile");
     }
 
     #[cfg(any(test, feature = "syntax-web"))]
@@ -2762,6 +3266,14 @@ mod tests {
 
     #[cfg(any(test, feature = "syntax-web"))]
     #[test]
+    fn vendored_javascript_injections_query_compiles() {
+        let lang: tree_sitter::Language = tree_sitter_javascript::LANGUAGE.into();
+        tree_sitter::Query::new(&lang, JAVASCRIPT_INJECTIONS_QUERY)
+            .expect("vendored JavaScript injections.scm should compile against JS grammar");
+    }
+
+    #[cfg(any(test, feature = "syntax-web"))]
+    #[test]
     fn vendored_typescript_query_compiles() {
         let lang: tree_sitter::Language = tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into();
         tree_sitter::Query::new(&lang, TYPESCRIPT_HIGHLIGHTS_QUERY)
@@ -2770,10 +3282,108 @@ mod tests {
 
     #[cfg(any(test, feature = "syntax-web"))]
     #[test]
+    fn vendored_typescript_injections_query_compiles() {
+        let lang: tree_sitter::Language = tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into();
+        tree_sitter::Query::new(&lang, TYPESCRIPT_INJECTIONS_QUERY)
+            .expect("vendored TypeScript injections.scm should compile");
+    }
+
+    #[cfg(any(test, feature = "syntax-web"))]
+    #[test]
     fn vendored_tsx_query_compiles() {
         let lang: tree_sitter::Language = tree_sitter_typescript::LANGUAGE_TSX.into();
         tree_sitter::Query::new(&lang, TSX_HIGHLIGHTS_QUERY)
             .expect("vendored TSX highlights.scm should compile");
+    }
+
+    #[cfg(any(test, feature = "syntax-web"))]
+    #[test]
+    fn vendored_tsx_injections_query_compiles() {
+        let lang: tree_sitter::Language = tree_sitter_typescript::LANGUAGE_TSX.into();
+        tree_sitter::Query::new(&lang, TSX_INJECTIONS_QUERY)
+            .expect("vendored TSX injections.scm should compile");
+    }
+
+    #[cfg(any(test, feature = "syntax-go"))]
+    #[test]
+    fn vendored_go_queries_compile() {
+        let lang: tree_sitter::Language = tree_sitter_go::LANGUAGE.into();
+        tree_sitter::Query::new(&lang, GO_HIGHLIGHTS_QUERY)
+            .expect("vendored Go highlights.scm should compile");
+        tree_sitter::Query::new(&lang, GO_INJECTIONS_QUERY)
+            .expect("vendored Go injections.scm should compile");
+    }
+
+    #[cfg(any(test, feature = "syntax-data"))]
+    #[test]
+    fn vendored_json_query_compiles() {
+        let lang: tree_sitter::Language = tree_sitter_json::LANGUAGE.into();
+        tree_sitter::Query::new(&lang, JSON_HIGHLIGHTS_QUERY)
+            .expect("vendored JSON highlights.scm should compile");
+    }
+
+    #[cfg(any(test, feature = "syntax-python"))]
+    #[test]
+    fn vendored_python_query_compiles() {
+        let lang: tree_sitter::Language = tree_sitter_python::LANGUAGE.into();
+        tree_sitter::Query::new(&lang, PYTHON_HIGHLIGHTS_QUERY)
+            .expect("vendored Python highlights.scm should compile");
+    }
+
+    #[cfg(any(test, feature = "syntax-data"))]
+    #[test]
+    fn vendored_yaml_queries_compile() {
+        let lang: tree_sitter::Language = tree_sitter_yaml::LANGUAGE.into();
+        tree_sitter::Query::new(&lang, YAML_HIGHLIGHTS_QUERY)
+            .expect("vendored YAML highlights.scm should compile");
+        tree_sitter::Query::new(&lang, YAML_INJECTIONS_QUERY)
+            .expect("vendored YAML injections.scm should compile");
+    }
+
+    #[cfg(any(test, feature = "syntax-extra"))]
+    #[test]
+    fn vendored_csharp_query_compiles() {
+        let lang: tree_sitter::Language = tree_sitter_c_sharp::LANGUAGE.into();
+        tree_sitter::Query::new(&lang, CSHARP_HIGHLIGHTS_QUERY)
+            .expect("vendored C# highlights.scm should compile");
+    }
+
+    #[cfg(any(test, feature = "syntax-extra"))]
+    #[test]
+    fn vendored_cpp_injections_query_compiles() {
+        let lang: tree_sitter::Language = tree_sitter_cpp::LANGUAGE.into();
+        tree_sitter::Query::new(&lang, CPP_INJECTIONS_QUERY)
+            .expect("vendored C++ injections.scm should compile");
+    }
+
+    #[cfg(any(test, feature = "syntax-repo"))]
+    #[test]
+    fn vendored_repo_queries_compile() {
+        let markdown_lang: tree_sitter::Language = tree_sitter_md::LANGUAGE.into();
+        tree_sitter::Query::new(&markdown_lang, MARKDOWN_HIGHLIGHTS_QUERY)
+            .expect("Markdown block highlights.scm should compile");
+        tree_sitter::Query::new(&markdown_lang, MARKDOWN_INJECTIONS_QUERY)
+            .expect("Markdown block injections.scm should compile");
+
+        let markdown_inline_lang: tree_sitter::Language = tree_sitter_md::INLINE_LANGUAGE.into();
+        tree_sitter::Query::new(&markdown_inline_lang, MARKDOWN_INLINE_HIGHLIGHTS_QUERY)
+            .expect("Markdown inline highlights.scm should compile");
+
+        let diff_lang: tree_sitter::Language = tree_sitter_diff::LANGUAGE.into();
+        tree_sitter::Query::new(&diff_lang, tree_sitter_diff::HIGHLIGHTS_QUERY)
+            .expect("Diff highlights.scm should compile");
+
+        let gitcommit_lang: tree_sitter::Language = tree_sitter_gitcommit::LANGUAGE.into();
+        tree_sitter::Query::new(&gitcommit_lang, GITCOMMIT_HIGHLIGHTS_QUERY)
+            .expect("Git commit highlights.scm should compile");
+
+        let gomod_lang: tree_sitter::Language = tree_sitter_gomod::LANGUAGE.into();
+        tree_sitter::Query::new(&gomod_lang, GOMOD_HIGHLIGHTS_QUERY)
+            .expect("go.mod highlights.scm should compile");
+
+        let gowork_lang: tree_sitter::Language = tree_sitter_gowork::LANGUAGE.into();
+        tree_sitter::Query::new(&gowork_lang, GOWORK_HIGHLIGHTS_QUERY)
+            .expect("go.work highlights.scm should compile");
     }
 
     #[cfg(any(test, feature = "syntax-xml"))]
@@ -2848,11 +3458,25 @@ mod tests {
         );
     }
 
+    #[cfg(any(test, feature = "syntax-web"))]
+    #[test]
+    fn javascript_highlight_spec_compiles_injection_query() {
+        let spec = tree_sitter_highlight_spec(DiffSyntaxLanguage::JavaScript)
+            .expect("JavaScript highlight spec should exist");
+        assert!(
+            spec.injection_query.is_some(),
+            "JavaScript should compile and retain its injections.scm"
+        );
+    }
+
     fn capture_name_is_intentionally_ignored(name: &str) -> bool {
         name == "none"
+            || name == "clean"
+            || name == "assignvalue"
             || name == "embedded"
             || name == "error"
             || name == "nested"
+            || name == "spell"
             || name == "injection.content"
             || name.starts_with("text.")
             || name.starts_with('_')
@@ -2883,10 +3507,32 @@ mod tests {
         );
         #[cfg(any(test, feature = "syntax-web"))]
         assert_capture_names_are_supported(tree_sitter_css::LANGUAGE.into(), CSS_HIGHLIGHTS_QUERY);
+        #[cfg(any(test, feature = "syntax-shell"))]
+        assert_capture_names_are_supported(
+            tree_sitter_bash::LANGUAGE.into(),
+            BASH_HIGHLIGHTS_QUERY,
+        );
         #[cfg(any(test, feature = "syntax-web"))]
         assert_capture_names_are_supported(
             tree_sitter_javascript::LANGUAGE.into(),
             JAVASCRIPT_HIGHLIGHTS_QUERY,
+        );
+        #[cfg(any(test, feature = "syntax-python"))]
+        assert_capture_names_are_supported(
+            tree_sitter_python::LANGUAGE.into(),
+            PYTHON_HIGHLIGHTS_QUERY,
+        );
+        #[cfg(any(test, feature = "syntax-go"))]
+        assert_capture_names_are_supported(tree_sitter_go::LANGUAGE.into(), GO_HIGHLIGHTS_QUERY);
+        #[cfg(any(test, feature = "syntax-data"))]
+        assert_capture_names_are_supported(
+            tree_sitter_json::LANGUAGE.into(),
+            JSON_HIGHLIGHTS_QUERY,
+        );
+        #[cfg(any(test, feature = "syntax-data"))]
+        assert_capture_names_are_supported(
+            tree_sitter_yaml::LANGUAGE.into(),
+            YAML_HIGHLIGHTS_QUERY,
         );
         #[cfg(any(test, feature = "syntax-web"))]
         assert_capture_names_are_supported(
@@ -2902,6 +3548,136 @@ mod tests {
         assert_capture_names_are_supported(
             tree_sitter_xml::LANGUAGE_XML.into(),
             XML_HIGHLIGHTS_QUERY,
+        );
+        #[cfg(any(test, feature = "syntax-extra"))]
+        assert_capture_names_are_supported(
+            tree_sitter_c::LANGUAGE.into(),
+            tree_sitter_c::HIGHLIGHT_QUERY,
+        );
+        #[cfg(any(test, feature = "syntax-extra"))]
+        assert_capture_names_are_supported(
+            tree_sitter_cpp::LANGUAGE.into(),
+            tree_sitter_cpp::HIGHLIGHT_QUERY,
+        );
+        #[cfg(any(test, feature = "syntax-extra"))]
+        assert_capture_names_are_supported(
+            tree_sitter_c_sharp::LANGUAGE.into(),
+            CSHARP_HIGHLIGHTS_QUERY,
+        );
+        #[cfg(any(test, feature = "syntax-extra"))]
+        assert_capture_names_are_supported(
+            tree_sitter_java::LANGUAGE.into(),
+            tree_sitter_java::HIGHLIGHTS_QUERY,
+        );
+        #[cfg(any(test, feature = "syntax-extra"))]
+        assert_capture_names_are_supported(
+            tree_sitter_php::LANGUAGE_PHP.into(),
+            tree_sitter_php::HIGHLIGHTS_QUERY,
+        );
+        #[cfg(any(test, feature = "syntax-extra"))]
+        assert_capture_names_are_supported(
+            tree_sitter_ruby::LANGUAGE.into(),
+            tree_sitter_ruby::HIGHLIGHTS_QUERY,
+        );
+        #[cfg(any(test, feature = "syntax-extra"))]
+        assert_capture_names_are_supported(
+            tree_sitter_toml_ng::LANGUAGE.into(),
+            tree_sitter_toml_ng::HIGHLIGHTS_QUERY,
+        );
+        #[cfg(any(test, feature = "syntax-extra"))]
+        assert_capture_names_are_supported(
+            tree_sitter_lua::LANGUAGE.into(),
+            tree_sitter_lua::HIGHLIGHTS_QUERY,
+        );
+        #[cfg(any(test, feature = "syntax-extra"))]
+        assert_capture_names_are_supported(
+            tree_sitter_make::LANGUAGE.into(),
+            tree_sitter_make::HIGHLIGHTS_QUERY,
+        );
+        #[cfg(any(test, feature = "syntax-extra"))]
+        assert_capture_names_are_supported(
+            tree_sitter_kotlin_sg::LANGUAGE.into(),
+            tree_sitter_kotlin_sg::HIGHLIGHTS_QUERY,
+        );
+        #[cfg(any(test, feature = "syntax-extra"))]
+        assert_capture_names_are_supported(
+            tree_sitter_zig::LANGUAGE.into(),
+            tree_sitter_zig::HIGHLIGHTS_QUERY,
+        );
+        #[cfg(any(test, feature = "syntax-extra"))]
+        assert_capture_names_are_supported(
+            tree_sitter_bicep::LANGUAGE.into(),
+            tree_sitter_bicep::HIGHLIGHTS_QUERY,
+        );
+        #[cfg(any(test, feature = "syntax-extra"))]
+        assert_capture_names_are_supported(
+            tree_sitter_objc::LANGUAGE.into(),
+            tree_sitter_objc::HIGHLIGHTS_QUERY,
+        );
+        #[cfg(any(test, feature = "syntax-extra"))]
+        assert_capture_names_are_supported(
+            tree_sitter_fsharp::LANGUAGE_FSHARP.into(),
+            tree_sitter_fsharp::HIGHLIGHTS_QUERY,
+        );
+        #[cfg(any(test, feature = "syntax-extra"))]
+        assert_capture_names_are_supported(
+            tree_sitter_powershell::LANGUAGE.into(),
+            POWERSHELL_HIGHLIGHTS_QUERY,
+        );
+        #[cfg(any(test, feature = "syntax-extra"))]
+        assert_capture_names_are_supported(
+            tree_sitter_swift::LANGUAGE.into(),
+            tree_sitter_swift::HIGHLIGHTS_QUERY,
+        );
+        #[cfg(any(test, feature = "syntax-extra"))]
+        assert_capture_names_are_supported(
+            tree_sitter_r::LANGUAGE.into(),
+            tree_sitter_r::HIGHLIGHTS_QUERY,
+        );
+        #[cfg(any(test, feature = "syntax-extra"))]
+        assert_capture_names_are_supported(
+            tree_sitter_dart::LANGUAGE.into(),
+            tree_sitter_dart::HIGHLIGHTS_QUERY,
+        );
+        #[cfg(any(test, feature = "syntax-extra"))]
+        assert_capture_names_are_supported(
+            tree_sitter_scala::LANGUAGE.into(),
+            tree_sitter_scala::HIGHLIGHTS_QUERY,
+        );
+        #[cfg(any(test, feature = "syntax-extra"))]
+        assert_capture_names_are_supported(
+            tree_sitter_sequel::LANGUAGE.into(),
+            tree_sitter_sequel::HIGHLIGHTS_QUERY,
+        );
+        #[cfg(any(test, feature = "syntax-repo"))]
+        assert_capture_names_are_supported(
+            tree_sitter_md::LANGUAGE.into(),
+            MARKDOWN_HIGHLIGHTS_QUERY,
+        );
+        #[cfg(any(test, feature = "syntax-repo"))]
+        assert_capture_names_are_supported(
+            tree_sitter_md::INLINE_LANGUAGE.into(),
+            MARKDOWN_INLINE_HIGHLIGHTS_QUERY,
+        );
+        #[cfg(any(test, feature = "syntax-repo"))]
+        assert_capture_names_are_supported(
+            tree_sitter_diff::LANGUAGE.into(),
+            tree_sitter_diff::HIGHLIGHTS_QUERY,
+        );
+        #[cfg(any(test, feature = "syntax-repo"))]
+        assert_capture_names_are_supported(
+            tree_sitter_gitcommit::LANGUAGE.into(),
+            GITCOMMIT_HIGHLIGHTS_QUERY,
+        );
+        #[cfg(any(test, feature = "syntax-repo"))]
+        assert_capture_names_are_supported(
+            tree_sitter_gomod::LANGUAGE.into(),
+            GOMOD_HIGHLIGHTS_QUERY,
+        );
+        #[cfg(any(test, feature = "syntax-repo"))]
+        assert_capture_names_are_supported(
+            tree_sitter_gowork::LANGUAGE.into(),
+            GOWORK_HIGHLIGHTS_QUERY,
         );
     }
 
@@ -2972,6 +3748,194 @@ mod tests {
             tokens.iter().any(|t| t.kind == SyntaxTokenKind::Property),
             "CSS should highlight 'color' as property: {tokens:?}"
         );
+    }
+
+    #[cfg(any(test, feature = "syntax-web"))]
+    #[test]
+    fn javascript_tagged_template_injects_css() {
+        let document = prepare_test_document(
+            DiffSyntaxLanguage::JavaScript,
+            "const styles = css`color: red;`;",
+        );
+        let tokens = syntax_tokens_for_prepared_document_line(document, 0)
+            .expect("JavaScript document should have prepared tokens");
+        assert!(
+            tokens.iter().any(|t| t.kind == SyntaxTokenKind::Property),
+            "tagged CSS template should inject CSS property highlighting: {tokens:?}"
+        );
+    }
+
+    #[cfg(any(test, feature = "syntax-data"))]
+    #[test]
+    fn yaml_github_actions_script_injects_javascript() {
+        let text = [
+            "jobs:",
+            "  test:",
+            "    steps:",
+            "      - uses: actions/github-script@v7",
+            "        with:",
+            "          script: |",
+            "            const value = 42",
+        ]
+        .join("\n");
+        let document = prepare_test_document(DiffSyntaxLanguage::Yaml, &text);
+        let tokens = syntax_tokens_for_prepared_document_line(document, 6)
+            .expect("YAML github-script line should have prepared tokens");
+        assert!(
+            tokens.iter().any(|t| {
+                t.kind == SyntaxTokenKind::Keyword || t.kind == SyntaxTokenKind::KeywordControl
+            }),
+            "github-script YAML block should inject JavaScript keywords: {tokens:?}"
+        );
+        assert!(
+            tokens.iter().any(|t| t.kind == SyntaxTokenKind::Number),
+            "github-script YAML block should inject JavaScript numbers: {tokens:?}"
+        );
+    }
+
+    #[cfg(any(test, feature = "syntax-extra"))]
+    #[test]
+    fn extra_languages_capture_basic_semantic_tokens() {
+        let cases = [
+            (
+                DiffSyntaxLanguage::C,
+                "int main(void) { return 0; }",
+                SyntaxTokenKind::Function,
+            ),
+            (
+                DiffSyntaxLanguage::Cpp,
+                "auto value = std::vector<int>{1, 2};",
+                SyntaxTokenKind::Type,
+            ),
+            (
+                DiffSyntaxLanguage::CSharp,
+                "public class Example { string Name { get; } }",
+                SyntaxTokenKind::Keyword,
+            ),
+            (
+                DiffSyntaxLanguage::Bicep,
+                "param location string = 'westeurope'",
+                SyntaxTokenKind::Keyword,
+            ),
+            (
+                DiffSyntaxLanguage::ObjectiveC,
+                "NSString *value = @\"hi\";",
+                SyntaxTokenKind::Property,
+            ),
+            (
+                DiffSyntaxLanguage::FSharp,
+                "let value = 42",
+                SyntaxTokenKind::Keyword,
+            ),
+            (
+                DiffSyntaxLanguage::Java,
+                "class Example { int value() { return 1; } }",
+                SyntaxTokenKind::FunctionMethod,
+            ),
+            (
+                DiffSyntaxLanguage::Php,
+                "<?php function foo(): int { return 1; }",
+                SyntaxTokenKind::Function,
+            ),
+            (
+                DiffSyntaxLanguage::Ruby,
+                "class Example; def call(name) = 42 end",
+                SyntaxTokenKind::Function,
+            ),
+            (
+                DiffSyntaxLanguage::PowerShell,
+                "function Invoke-Test { return 42 }",
+                SyntaxTokenKind::Keyword,
+            ),
+            (
+                DiffSyntaxLanguage::Swift,
+                "struct Example { let value = 42 }",
+                SyntaxTokenKind::Keyword,
+            ),
+            (
+                DiffSyntaxLanguage::R,
+                "if (TRUE) print(1)",
+                SyntaxTokenKind::Boolean,
+            ),
+            (
+                DiffSyntaxLanguage::Dart,
+                "class Example { int value() => 42; }",
+                SyntaxTokenKind::Keyword,
+            ),
+            (
+                DiffSyntaxLanguage::Scala,
+                "object Example { def run(): Int = 42 }",
+                SyntaxTokenKind::Keyword,
+            ),
+            (
+                DiffSyntaxLanguage::Toml,
+                "enabled = true",
+                SyntaxTokenKind::Property,
+            ),
+            (
+                DiffSyntaxLanguage::Lua,
+                "local value = 42",
+                SyntaxTokenKind::Keyword,
+            ),
+            (
+                DiffSyntaxLanguage::Kotlin,
+                "class Example { fun run() = 42 }",
+                SyntaxTokenKind::Function,
+            ),
+            (
+                DiffSyntaxLanguage::Zig,
+                "const value: u32 = 42;",
+                SyntaxTokenKind::TypeBuiltin,
+            ),
+            (
+                DiffSyntaxLanguage::Sql,
+                "select name from users",
+                SyntaxTokenKind::Keyword,
+            ),
+        ];
+
+        for (language, text, expected_kind) in cases {
+            let tokens = syntax_tokens_for_line(text, language, DiffSyntaxMode::Auto);
+            assert!(
+                tokens.iter().any(|token| token.kind == expected_kind),
+                "{language:?} should capture {expected_kind:?}: {tokens:?}"
+            );
+        }
+    }
+
+    #[cfg(any(test, feature = "syntax-repo"))]
+    #[test]
+    fn repo_languages_capture_basic_semantic_tokens() {
+        let cases = [
+            (
+                DiffSyntaxLanguage::GoMod,
+                "module example.com/project",
+                SyntaxTokenKind::Keyword,
+            ),
+            (
+                DiffSyntaxLanguage::GoWork,
+                "use ./module",
+                SyntaxTokenKind::Keyword,
+            ),
+            (
+                DiffSyntaxLanguage::Diff,
+                "diff --git a/src/lib.rs b/src/lib.rs",
+                SyntaxTokenKind::VariableSpecial,
+            ),
+            (
+                DiffSyntaxLanguage::GitCommit,
+                "feat: widen syntax support",
+                SyntaxTokenKind::Keyword,
+            ),
+        ];
+
+        for (language, text, expected_kind) in cases {
+            let tokens = syntax_tokens_for_line(text, language, DiffSyntaxMode::Auto);
+            assert!(
+                tokens.iter().any(|token| token.kind == expected_kind),
+                "{language:?} should capture {expected_kind:?}: {tokens:?}"
+            );
+        }
     }
 
     #[test]
@@ -3173,6 +4137,7 @@ mod tests {
     fn grammar_and_highlight_spec_agree_on_supported_languages() {
         let all_languages = [
             DiffSyntaxLanguage::Markdown,
+            DiffSyntaxLanguage::MarkdownInline,
             DiffSyntaxLanguage::Html,
             DiffSyntaxLanguage::Css,
             DiffSyntaxLanguage::Hcl,
@@ -3187,18 +4152,29 @@ mod tests {
             DiffSyntaxLanguage::TypeScript,
             DiffSyntaxLanguage::Tsx,
             DiffSyntaxLanguage::Go,
+            DiffSyntaxLanguage::GoMod,
+            DiffSyntaxLanguage::GoWork,
             DiffSyntaxLanguage::C,
             DiffSyntaxLanguage::Cpp,
+            DiffSyntaxLanguage::ObjectiveC,
             DiffSyntaxLanguage::CSharp,
             DiffSyntaxLanguage::FSharp,
             DiffSyntaxLanguage::VisualBasic,
             DiffSyntaxLanguage::Java,
             DiffSyntaxLanguage::Php,
             DiffSyntaxLanguage::Ruby,
+            DiffSyntaxLanguage::PowerShell,
+            DiffSyntaxLanguage::Swift,
+            DiffSyntaxLanguage::R,
+            DiffSyntaxLanguage::Dart,
+            DiffSyntaxLanguage::Scala,
+            DiffSyntaxLanguage::Perl,
             DiffSyntaxLanguage::Json,
             DiffSyntaxLanguage::Toml,
             DiffSyntaxLanguage::Yaml,
             DiffSyntaxLanguage::Sql,
+            DiffSyntaxLanguage::Diff,
+            DiffSyntaxLanguage::GitCommit,
             DiffSyntaxLanguage::Bash,
             DiffSyntaxLanguage::Xml,
         ];
@@ -3294,6 +4270,18 @@ mod tests {
     }
 
     #[test]
+    fn heuristic_vb_keywords_are_case_insensitive() {
+        let tokens = syntax_tokens_for_line_heuristic(
+            "dim value As Integer",
+            DiffSyntaxLanguage::VisualBasic,
+        );
+        assert!(
+            tokens.iter().any(|t| t.kind == SyntaxTokenKind::Keyword),
+            "Visual Basic keywords should be highlighted regardless of case"
+        );
+    }
+
+    #[test]
     fn heuristic_rust_line_comment_and_string() {
         let tokens = syntax_tokens_for_line_heuristic(
             r#"let s = "hello"; // done"#,
@@ -3350,6 +4338,16 @@ mod tests {
         assert!(
             tokens.iter().any(|t| t.kind == SyntaxTokenKind::Comment),
             "HCL '#' should be detected as comment"
+        );
+    }
+
+    #[test]
+    fn heuristic_powershell_hash_comment() {
+        let tokens =
+            syntax_tokens_for_line_heuristic("$value = 1 # note", DiffSyntaxLanguage::PowerShell);
+        assert!(
+            tokens.iter().any(|t| t.kind == SyntaxTokenKind::Comment),
+            "PowerShell '#' should be detected as comment"
         );
     }
 

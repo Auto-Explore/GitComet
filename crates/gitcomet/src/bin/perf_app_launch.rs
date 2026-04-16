@@ -32,11 +32,6 @@ const ENVIRONMENT_BLOCKER_MARKER: &str = "This is an environment blocker, not a 
 #[cfg(any(test, target_os = "linux", target_os = "freebsd"))]
 const APP_LAUNCH_HEADLESS_NOTE: &str = "GPUI headless mode is not a substitute for app_launch because it cannot open the main window or emit comparable first_paint/first_interactive metrics.";
 
-#[cfg(windows)]
-const GIT_NULL_DEVICE: &str = "NUL";
-#[cfg(not(windows))]
-const GIT_NULL_DEVICE: &str = "/dev/null";
-
 #[global_allocator]
 static GLOBAL: &gitcomet_ui_gpui::perf_alloc::PerfTrackingAllocator = &TRACKING_MIMALLOC;
 
@@ -1204,14 +1199,28 @@ fn run_git_with_input(repo: &Path, args: &[&str], input: &str) -> Result<(), Str
     ))
 }
 
+// Git on Windows ARM64 cannot access the NUL device as a config path
+// (`unable to access 'NUL': Invalid argument`).  Use a process-lifetime
+// empty file instead, which works identically on every platform.
+fn empty_git_config() -> &'static Path {
+    use std::sync::OnceLock;
+    static EMPTY_CONFIG: OnceLock<PathBuf> = OnceLock::new();
+    EMPTY_CONFIG.get_or_init(|| {
+        let path = std::env::temp_dir().join("gitcomet-perf-empty.gitconfig");
+        fs::write(&path, "").expect("create empty git config for perf harness");
+        path
+    })
+}
+
 fn git_command(repo: &Path) -> Command {
+    let empty_config = empty_git_config();
     let mut command = Command::new("git");
     command
         .arg("-C")
         .arg(repo)
         .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", GIT_NULL_DEVICE)
-        .env("GIT_CONFIG_SYSTEM", GIT_NULL_DEVICE)
+        .env("GIT_CONFIG_GLOBAL", empty_config)
+        .env("GIT_CONFIG_SYSTEM", empty_config)
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_EDITOR", "true")
         .env("EDITOR", "true")

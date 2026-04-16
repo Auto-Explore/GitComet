@@ -1,9 +1,9 @@
 use super::*;
+use crate::model::{RepoLoadsInFlight, SidebarDataRequest};
 
 fn mark_repo_switch_secondary_metadata_ready(repo: &mut RepoState) {
     repo.branches = Loadable::Ready(Arc::new(Vec::new()));
     repo.tags = Loadable::Ready(Arc::new(Vec::new()));
-    repo.remote_tags = Loadable::Ready(Arc::new(Vec::new()));
     repo.remotes = Loadable::Ready(Arc::new(Vec::new()));
     repo.remote_branches = Loadable::Ready(Arc::new(Vec::new()));
     repo.stashes = Loadable::Ready(Arc::new(Vec::new()));
@@ -11,18 +11,91 @@ fn mark_repo_switch_secondary_metadata_ready(repo: &mut RepoState) {
     repo.merge_commit_message = Loadable::Ready(None);
 }
 
-fn has_secondary_refresh_effects(effects: &[Effect], repo_id: RepoId) -> bool {
+fn has_full_refresh_only_effects(effects: &[Effect], repo_id: RepoId) -> bool {
     effects.iter().any(|effect| {
         matches!(
             effect,
-            Effect::LoadBranches { repo_id: candidate }
-                | Effect::LoadTags { repo_id: candidate }
-                | Effect::LoadRemoteTags { repo_id: candidate }
+            Effect::LoadTags { repo_id: candidate }
                 | Effect::LoadRemotes { repo_id: candidate }
                 | Effect::LoadRemoteBranches { repo_id: candidate }
                 if *candidate == repo_id
         )
     })
+}
+
+fn has_worktree_refresh_effect(effects: &[Effect], repo_id: RepoId) -> bool {
+    effects.iter().any(|effect| {
+        matches!(
+            effect,
+            Effect::LoadWorktrees { repo_id: candidate } if *candidate == repo_id
+        )
+    })
+}
+
+fn has_submodule_load_effect(effects: &[Effect], repo_id: RepoId) -> bool {
+    effects.iter().any(|effect| {
+        matches!(
+            effect,
+            Effect::LoadSubmodules { repo_id: candidate } if *candidate == repo_id
+        )
+    })
+}
+
+fn has_stash_load_effect(effects: &[Effect], repo_id: RepoId) -> bool {
+    effects.iter().any(|effect| {
+        matches!(
+            effect,
+            Effect::LoadStashes {
+                repo_id: candidate,
+                limit: 50
+            } if *candidate == repo_id
+        )
+    })
+}
+
+fn has_effect_for_repo(
+    effects: &[Effect],
+    repo_id: RepoId,
+    matches_effect: impl Fn(&Effect, RepoId) -> bool,
+) -> bool {
+    effects.iter().any(|effect| matches_effect(effect, repo_id))
+}
+
+fn mark_repo_open_ready(
+    repos: &mut HashMap<RepoId, Arc<dyn GitRepository>>,
+    state: &mut AppState,
+    repo_id: RepoId,
+) {
+    let workdir = state
+        .repos
+        .iter()
+        .find(|repo| repo.id == repo_id)
+        .expect("repo exists")
+        .spec
+        .workdir
+        .to_string_lossy()
+        .into_owned();
+    repos.insert(repo_id, Arc::new(DummyRepo::new(&workdir)));
+
+    let repo_state = state
+        .repos
+        .iter_mut()
+        .find(|repo| repo.id == repo_id)
+        .expect("repo exists");
+    repo_state.set_open(Loadable::Ready(()));
+    repo_state.missing_on_disk = false;
+}
+
+fn open_repo_ready(
+    repos: &mut HashMap<RepoId, Arc<dyn GitRepository>>,
+    id_alloc: &AtomicU64,
+    state: &mut AppState,
+    path: impl Into<PathBuf>,
+) -> RepoId {
+    reduce(repos, id_alloc, state, Msg::OpenRepo(path.into()));
+    let repo_id = state.active_repo.expect("open repo should become active");
+    mark_repo_open_ready(repos, state, repo_id);
+    repo_id
 }
 
 #[test]
@@ -60,18 +133,8 @@ fn open_repo_focuses_existing_repo_instead_of_opening_duplicate() {
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
-    reduce(
-        &mut repos,
-        &id_alloc,
-        &mut state,
-        Msg::OpenRepo(PathBuf::from("/tmp/repo1")),
-    );
-    reduce(
-        &mut repos,
-        &id_alloc,
-        &mut state,
-        Msg::OpenRepo(PathBuf::from("/tmp/repo2")),
-    );
+    open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/repo1");
+    open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/repo2");
 
     assert_eq!(state.repos.len(), 2);
     assert_eq!(state.active_repo, Some(RepoId(2)));
@@ -84,9 +147,7 @@ fn open_repo_focuses_existing_repo_instead_of_opening_duplicate() {
     );
 
     assert!(
-        effects
-            .iter()
-            .any(|e| matches!(e, Effect::LoadStatus { repo_id } if *repo_id == RepoId(1))),
+        has_status_refresh_effects(&effects, RepoId(1)),
         "expected status refresh when focusing an already open repo"
     );
     assert_eq!(state.repos.len(), 2);
@@ -121,12 +182,7 @@ fn open_repo_allows_same_basename_in_different_folders() {
     let _ = std::fs::create_dir_all(&repo_a);
     let _ = std::fs::create_dir_all(&repo_b);
 
-    reduce(
-        &mut repos,
-        &id_alloc,
-        &mut state,
-        Msg::OpenRepo(repo_a.clone()),
-    );
+    open_repo_ready(&mut repos, &id_alloc, &mut state, repo_a.clone());
 
     let effects = reduce(
         &mut repos,
@@ -134,7 +190,7 @@ fn open_repo_allows_same_basename_in_different_folders() {
         &mut state,
         Msg::OpenRepo(repo_b.clone()),
     );
-
+    mark_repo_open_ready(&mut repos, &mut state, RepoId(2));
     assert!(
         effects
             .iter()
@@ -155,9 +211,7 @@ fn open_repo_allows_same_basename_in_different_folders() {
         Msg::OpenRepo(repo_a.clone()),
     );
     assert!(
-        effects
-            .iter()
-            .any(|e| matches!(e, Effect::LoadStatus { repo_id } if *repo_id == RepoId(1))),
+        has_status_refresh_effects(&effects, RepoId(1)),
         "expected status refresh when re-focusing repo by path"
     );
     assert_eq!(state.repos.len(), 2);
@@ -186,12 +240,7 @@ fn open_repo_refreshes_when_repo_is_already_active() {
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
-    reduce(
-        &mut repos,
-        &id_alloc,
-        &mut state,
-        Msg::OpenRepo(PathBuf::from("/tmp/repo")),
-    );
+    open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/repo");
     state.repos[0].missing_on_disk = true;
 
     let effects = reduce(
@@ -204,9 +253,7 @@ fn open_repo_refreshes_when_repo_is_already_active() {
     assert_eq!(state.repos.len(), 1);
     assert_eq!(state.active_repo, Some(RepoId(1)));
     assert!(
-        effects
-            .iter()
-            .any(|e| matches!(e, Effect::LoadStatus { repo_id } if *repo_id == RepoId(1))),
+        has_status_refresh_effects(&effects, RepoId(1)),
         "expected status refresh when re-opening active repo"
     );
 }
@@ -229,6 +276,8 @@ fn clone_repo_sets_running_state_and_emits_effect() {
 
     let op = state.clone.as_ref().expect("clone op set");
     assert!(matches!(op.status, CloneOpStatus::Running));
+    assert_eq!(op.progress.stage, CloneProgressStage::Loading);
+    assert_eq!(op.progress.percent, 0);
     assert_eq!(op.seq, 0);
     assert!(matches!(effects.as_slice(), [Effect::CloneRepo { .. }]));
 }
@@ -276,6 +325,55 @@ fn clone_repo_progress_trims_tail_and_skips_blank_lines() {
     assert_eq!(op.output_tail.len(), 80);
     assert_eq!(op.output_tail.front().map(String::as_str), Some("line-4"));
     assert_eq!(op.output_tail.back().map(String::as_str), Some("line-83"));
+    assert_eq!(op.progress.stage, CloneProgressStage::Loading);
+    assert_eq!(op.progress.percent, 0);
+}
+
+#[test]
+fn clone_repo_progress_tracks_loading_and_remote_object_phases() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let dest = PathBuf::from("/tmp/example");
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::CloneRepo {
+            url: "file:///tmp/example.git".to_string(),
+            dest: dest.clone(),
+        },
+    );
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::CloneRepoProgress {
+            dest: Arc::new(dest.clone()),
+            line: "Receiving objects:  42% (52/123), 1.23 MiB | 2.00 MiB/s".to_string(),
+        }),
+    );
+    {
+        let op = state.clone.as_ref().expect("clone op set");
+        assert_eq!(op.progress.stage, CloneProgressStage::Loading);
+        assert_eq!(op.progress.percent, 42);
+    }
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::CloneRepoProgress {
+            dest: Arc::new(dest),
+            line: "Resolving deltas:  17% (5/29)".to_string(),
+        }),
+    );
+
+    let op = state.clone.as_ref().expect("clone op set");
+    assert_eq!(op.progress.stage, CloneProgressStage::RemoteObjects);
+    assert_eq!(op.progress.percent, 17);
 }
 
 #[test]
@@ -342,6 +440,38 @@ fn clone_repo_progress_ignores_mismatched_or_non_running_operation() {
 }
 
 #[test]
+fn abort_clone_repo_marks_operation_cancelling_and_emits_effect() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let dest = PathBuf::from("/tmp/example");
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::CloneRepo {
+            url: "file:///tmp/example.git".to_string(),
+            dest: dest.clone(),
+        },
+    );
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::AbortCloneRepo { dest: dest.clone() },
+    );
+
+    let op = state.clone.as_ref().expect("clone op set");
+    assert!(matches!(op.status, CloneOpStatus::Cancelling));
+    assert_eq!(op.seq, 1);
+    assert!(
+        matches!(effects.as_slice(), [Effect::AbortCloneRepo { dest: effect_dest }] if effect_dest == &dest)
+    );
+}
+
+#[test]
 fn clone_repo_finished_updates_existing_operation_for_success_and_error() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);
@@ -396,6 +526,93 @@ fn clone_repo_finished_updates_existing_operation_for_success_and_error() {
         }
         other => panic!("expected clone error status, got {other:?}"),
     }
+}
+
+#[test]
+fn clone_repo_finished_maps_cancelling_error_to_cancelled() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let dest = PathBuf::from("/tmp/example");
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::CloneRepo {
+            url: "file:///tmp/example.git".to_string(),
+            dest: dest.clone(),
+        },
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::AbortCloneRepo { dest: dest.clone() },
+    );
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::CloneRepoFinished {
+            url: "file:///tmp/example.git".to_string(),
+            dest,
+            result: Err(Error::new(ErrorKind::Backend("clone aborted".to_string()))),
+        }),
+    );
+
+    let op = state.clone.as_ref().expect("clone op set");
+    assert!(matches!(op.status, CloneOpStatus::Cancelled));
+    assert_eq!(op.seq, 2);
+}
+
+#[test]
+fn clone_repo_finished_preserves_cleanup_failure_when_cancelling() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let dest = PathBuf::from("/tmp/example");
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::CloneRepo {
+            url: "file:///tmp/example.git".to_string(),
+            dest: dest.clone(),
+        },
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::AbortCloneRepo { dest: dest.clone() },
+    );
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::CloneRepoFinished {
+            url: "file:///tmp/example.git".to_string(),
+            dest,
+            result: Err(Error::new(ErrorKind::Backend(
+                "clone aborted, but failed to remove partially created destination `/tmp/example`: permission denied"
+                    .to_string(),
+            ))),
+        }),
+    );
+
+    let op = state.clone.as_ref().expect("clone op set");
+    match &op.status {
+        CloneOpStatus::FinishedErr(message) => {
+            assert!(message.contains("Clone failed"));
+            assert!(message.contains("failed to remove partially created destination"));
+        }
+        other => panic!("expected cleanup failure to remain visible, got {other:?}"),
+    }
+    assert_eq!(op.seq, 2);
 }
 
 #[test]
@@ -796,7 +1013,7 @@ fn restore_session_opens_all_and_selects_active_repo() {
 }
 
 #[test]
-fn set_active_repo_refreshes_repo_state_and_selected_diff() {
+fn set_active_repo_waits_for_repo_open_before_refreshing() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
@@ -813,6 +1030,319 @@ fn set_active_repo_refreshes_repo_state_and_selected_diff() {
         &mut state,
         Msg::OpenRepo(PathBuf::from("/tmp/repo2")),
     );
+
+    let repo1 = RepoId(1);
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SetActiveRepo { repo_id: repo1 },
+    );
+
+    assert_eq!(state.active_repo, Some(repo1));
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::PersistSession { .. }]
+    ));
+    assert!(
+        !effects.iter().any(|effect| matches!(
+            effect,
+            Effect::LoadWorktreeStatus { .. }
+                | Effect::LoadStagedStatus { .. }
+                | Effect::LoadBranches { .. }
+                | Effect::LoadWorktrees { .. }
+                | Effect::LoadSelectedDiff { .. }
+        )),
+        "expected no handle-dependent refreshes before RepoOpenedOk"
+    );
+    assert!(matches!(
+        state
+            .repos
+            .iter()
+            .find(|repo| repo.id == repo1)
+            .expect("repo1 exists")
+            .worktrees,
+        Loadable::NotLoaded
+    ));
+}
+
+#[test]
+fn pre_open_worktree_lazy_load_retries_after_repo_opened() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo")),
+    );
+
+    let repo_id = RepoId(1);
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::LoadWorktrees { repo_id },
+    );
+    assert!(effects.is_empty());
+    assert!(matches!(state.repos[0].worktrees, Loadable::NotLoaded));
+    assert!(
+        !state.repos[0]
+            .loads_in_flight
+            .is_in_flight(RepoLoadsInFlight::WORKTREES)
+    );
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            repo_id,
+            spec: RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+            repo: Arc::new(DummyRepo::new("/tmp/repo")),
+        }),
+    );
+
+    assert!(state.repos[0].worktrees.is_loading());
+    assert!(
+        effects.iter().any(
+            |effect| matches!(effect, Effect::LoadWorktrees { repo_id: rid } if *rid == repo_id)
+        )
+    );
+}
+
+#[test]
+fn pre_open_submodule_lazy_load_can_retry_after_repo_opened() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo")),
+    );
+
+    let repo_id = RepoId(1);
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::LoadSubmodules { repo_id },
+    );
+    assert!(effects.is_empty());
+    assert!(matches!(state.repos[0].submodules, Loadable::NotLoaded));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            repo_id,
+            spec: RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+            repo: Arc::new(DummyRepo::new("/tmp/repo")),
+        }),
+    );
+
+    assert!(!effects.iter().any(
+        |effect| matches!(effect, Effect::LoadSubmodules { repo_id: rid } if *rid == repo_id)
+    ));
+    assert!(matches!(state.repos[0].submodules, Loadable::NotLoaded));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::LoadSubmodules { repo_id },
+    );
+    assert!(effects.iter().any(
+        |effect| matches!(effect, Effect::LoadSubmodules { repo_id: rid } if *rid == repo_id)
+    ));
+    assert!(state.repos[0].submodules.is_loading());
+}
+
+#[test]
+fn pre_open_stash_lazy_load_can_retry_after_repo_opened() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo")),
+    );
+
+    let repo_id = RepoId(1);
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::LoadStashes { repo_id },
+    );
+    assert!(effects.is_empty());
+    assert!(matches!(state.repos[0].stashes, Loadable::NotLoaded));
+    assert!(
+        !state.repos[0]
+            .loads_in_flight
+            .is_in_flight(RepoLoadsInFlight::STASHES)
+    );
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            repo_id,
+            spec: RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+            repo: Arc::new(DummyRepo::new("/tmp/repo")),
+        }),
+    );
+
+    assert!(!effects.iter().any(|effect| matches!(
+        effect,
+        Effect::LoadStashes {
+            repo_id: rid,
+            limit: 50
+        } if *rid == repo_id
+    )));
+    assert!(matches!(state.repos[0].stashes, Loadable::NotLoaded));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::LoadStashes { repo_id },
+    );
+    assert!(effects.iter().any(|effect| matches!(
+        effect,
+        Effect::LoadStashes {
+            repo_id: rid,
+            limit: 50
+        } if *rid == repo_id
+    )));
+    assert!(state.repos[0].stashes.is_loading());
+}
+
+#[test]
+fn ensure_sidebar_data_retries_requested_sections_after_repo_opened() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo")),
+    );
+
+    let repo_id = RepoId(1);
+    let request = SidebarDataRequest {
+        worktrees: true,
+        submodules: true,
+        stashes: true,
+    };
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::EnsureSidebarData { repo_id, request },
+    );
+    assert!(effects.is_empty());
+    assert_eq!(state.repos[0].sidebar_data_request, request);
+    assert!(matches!(state.repos[0].worktrees, Loadable::NotLoaded));
+    assert!(matches!(state.repos[0].submodules, Loadable::NotLoaded));
+    assert!(matches!(state.repos[0].stashes, Loadable::NotLoaded));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            repo_id,
+            spec: RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+            repo: Arc::new(DummyRepo::new("/tmp/repo")),
+        }),
+    );
+
+    assert!(has_worktree_refresh_effect(&effects, repo_id));
+    assert!(has_submodule_load_effect(&effects, repo_id));
+    assert!(has_stash_load_effect(&effects, repo_id));
+    assert!(state.repos[0].worktrees.is_loading());
+    assert!(state.repos[0].submodules.is_loading());
+    assert!(state.repos[0].stashes.is_loading());
+}
+
+#[test]
+fn set_active_repo_replays_stored_sidebar_data_request() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/repo1");
+    open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/repo2");
+
+    let repo1 = RepoId(1);
+    let repo2 = RepoId(2);
+    assert_eq!(state.active_repo, Some(repo2));
+
+    let request = SidebarDataRequest {
+        worktrees: true,
+        submodules: true,
+        stashes: true,
+    };
+    let repo1_state = state
+        .repos
+        .iter_mut()
+        .find(|repo| repo.id == repo1)
+        .expect("repo1 exists");
+    repo1_state.set_sidebar_data_request(request);
+    repo1_state.set_worktrees(Loadable::NotLoaded);
+    repo1_state.set_submodules(Loadable::NotLoaded);
+    repo1_state.set_stashes(Loadable::NotLoaded);
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SetActiveRepo { repo_id: repo1 },
+    );
+
+    assert_eq!(state.active_repo, Some(repo1));
+    assert!(has_worktree_refresh_effect(&effects, repo1));
+    assert!(has_submodule_load_effect(&effects, repo1));
+    assert!(has_stash_load_effect(&effects, repo1));
+    let repo1_state = state
+        .repos
+        .iter()
+        .find(|repo| repo.id == repo1)
+        .expect("repo1 exists");
+    assert!(repo1_state.worktrees.is_loading());
+    assert!(repo1_state.submodules.is_loading());
+    assert!(repo1_state.stashes.is_loading());
+}
+
+#[test]
+fn set_active_repo_refreshes_repo_state_and_selected_diff() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/repo1");
+    open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/repo2");
 
     let repo1 = RepoId(1);
     let repo2 = RepoId(2);
@@ -837,9 +1367,7 @@ fn set_active_repo_refreshes_repo_state_and_selected_diff() {
 
     assert_eq!(state.active_repo, Some(repo1));
 
-    let has_status = effects
-        .iter()
-        .any(|e| matches!(e, Effect::LoadStatus { repo_id } if *repo_id == repo1));
+    let has_status = has_status_refresh_effects(&effects, repo1);
     let has_log = effects.iter().any(|e| {
         matches!(e, Effect::LoadLog { repo_id, scope: _, limit: _, cursor: _ } if *repo_id == repo1)
     });
@@ -848,8 +1376,10 @@ fn set_active_repo_refreshes_repo_state_and_selected_diff() {
             e,
             Effect::LoadSelectedDiff {
                 repo_id,
+                load_patch_diff: true,
                 load_file_text: true,
                 load_file_image: false,
+                preview_text_side: None,
             } if *repo_id == repo1
         )
     });
@@ -886,18 +1416,8 @@ fn set_active_repo_reloads_selected_image_diff_via_image_effect() {
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
-    reduce(
-        &mut repos,
-        &id_alloc,
-        &mut state,
-        Msg::OpenRepo(PathBuf::from("/tmp/repo1")),
-    );
-    reduce(
-        &mut repos,
-        &id_alloc,
-        &mut state,
-        Msg::OpenRepo(PathBuf::from("/tmp/repo2")),
-    );
+    open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/repo1");
+    open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/repo2");
 
     let repo1 = RepoId(1);
     let repo1_state = state
@@ -921,8 +1441,10 @@ fn set_active_repo_reloads_selected_image_diff_via_image_effect() {
         e,
         Effect::LoadSelectedDiff {
             repo_id,
+            load_patch_diff: true,
             load_file_text: false,
             load_file_image: true,
+            preview_text_side: None,
         } if *repo_id == repo1
     )));
 }
@@ -933,18 +1455,8 @@ fn set_active_repo_png_diff_enqueues_image_preview_only() {
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
-    reduce(
-        &mut repos,
-        &id_alloc,
-        &mut state,
-        Msg::OpenRepo(PathBuf::from("/tmp/repo1")),
-    );
-    reduce(
-        &mut repos,
-        &id_alloc,
-        &mut state,
-        Msg::OpenRepo(PathBuf::from("/tmp/repo2")),
-    );
+    open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/repo1");
+    open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/repo2");
 
     let repo1 = RepoId(1);
     let repo1_state = state
@@ -969,6 +1481,7 @@ fn set_active_repo_png_diff_enqueues_image_preview_only() {
             e,
             Effect::LoadSelectedDiff {
                 repo_id,
+                load_patch_diff: true,
                 load_file_text: false,
                 load_file_image: true,
                 ..
@@ -984,18 +1497,8 @@ fn set_active_repo_svg_diff_enqueues_image_and_text_previews() {
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
-    reduce(
-        &mut repos,
-        &id_alloc,
-        &mut state,
-        Msg::OpenRepo(PathBuf::from("/tmp/repo1")),
-    );
-    reduce(
-        &mut repos,
-        &id_alloc,
-        &mut state,
-        Msg::OpenRepo(PathBuf::from("/tmp/repo2")),
-    );
+    open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/repo1");
+    open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/repo2");
 
     let repo1 = RepoId(1);
     let repo1_state = state
@@ -1020,6 +1523,7 @@ fn set_active_repo_svg_diff_enqueues_image_and_text_previews() {
             e,
             Effect::LoadSelectedDiff {
                 repo_id,
+                load_patch_diff: true,
                 load_file_text: true,
                 load_file_image: true,
                 ..
@@ -1035,18 +1539,8 @@ fn set_active_repo_selected_conflict_target_reuses_existing_conflict_state() {
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
-    reduce(
-        &mut repos,
-        &id_alloc,
-        &mut state,
-        Msg::OpenRepo(PathBuf::from("/tmp/repo1")),
-    );
-    reduce(
-        &mut repos,
-        &id_alloc,
-        &mut state,
-        Msg::OpenRepo(PathBuf::from("/tmp/repo2")),
-    );
+    open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/repo1");
+    open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/repo2");
 
     let repo1 = RepoId(1);
     let conflict_path = PathBuf::from("src/conflict.rs");
@@ -1112,18 +1606,8 @@ fn set_active_repo_hot_switch_skips_secondary_refresh_when_metadata_is_ready() {
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
-    reduce(
-        &mut repos,
-        &id_alloc,
-        &mut state,
-        Msg::OpenRepo(PathBuf::from("/tmp/repo1")),
-    );
-    reduce(
-        &mut repos,
-        &id_alloc,
-        &mut state,
-        Msg::OpenRepo(PathBuf::from("/tmp/repo2")),
-    );
+    open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/repo1");
+    open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/repo2");
 
     let repo1 = RepoId(1);
     let repo1_state = state
@@ -1142,14 +1626,20 @@ fn set_active_repo_hot_switch_skips_secondary_refresh_when_metadata_is_ready() {
     );
 
     assert!(
-        !has_secondary_refresh_effects(&effects, repo1),
+        !has_full_refresh_only_effects(&effects, repo1),
         "hot repo switches with ready metadata should stay on the primary refresh path"
     );
     assert!(
         effects
             .iter()
-            .any(|effect| matches!(effect, Effect::LoadStatus { repo_id } if *repo_id == repo1))
+            .any(|effect| matches!(effect, Effect::LoadBranches { repo_id } if *repo_id == repo1)),
+        "expected local branches refresh on activation"
     );
+    assert!(
+        has_worktree_refresh_effect(&effects, repo1),
+        "expected worktrees refresh on activation"
+    );
+    assert!(has_status_refresh_effects(&effects, repo1));
     assert!(
         effects
             .iter()
@@ -1167,18 +1657,8 @@ fn set_active_repo_uses_full_refresh_when_hot_switch_metadata_is_incomplete() {
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
-    reduce(
-        &mut repos,
-        &id_alloc,
-        &mut state,
-        Msg::OpenRepo(PathBuf::from("/tmp/repo1")),
-    );
-    reduce(
-        &mut repos,
-        &id_alloc,
-        &mut state,
-        Msg::OpenRepo(PathBuf::from("/tmp/repo2")),
-    );
+    open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/repo1");
+    open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/repo2");
 
     let repo1 = RepoId(1);
     let repo1_state = state
@@ -1198,8 +1678,12 @@ fn set_active_repo_uses_full_refresh_when_hot_switch_metadata_is_incomplete() {
     );
 
     assert!(
-        has_secondary_refresh_effects(&effects, repo1),
+        has_full_refresh_only_effects(&effects, repo1),
         "missing secondary metadata should force the full refresh path"
+    );
+    assert!(
+        has_worktree_refresh_effect(&effects, repo1),
+        "expected worktrees refresh even on the full refresh path"
     );
 }
 
@@ -1209,18 +1693,8 @@ fn set_active_repo_uses_full_refresh_when_hot_switch_window_expires() {
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
-    reduce(
-        &mut repos,
-        &id_alloc,
-        &mut state,
-        Msg::OpenRepo(PathBuf::from("/tmp/repo1")),
-    );
-    reduce(
-        &mut repos,
-        &id_alloc,
-        &mut state,
-        Msg::OpenRepo(PathBuf::from("/tmp/repo2")),
-    );
+    open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/repo1");
+    open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/repo2");
 
     let repo1 = RepoId(1);
     let repo1_state = state
@@ -1239,8 +1713,12 @@ fn set_active_repo_uses_full_refresh_when_hot_switch_window_expires() {
     );
 
     assert!(
-        has_secondary_refresh_effects(&effects, repo1),
+        has_full_refresh_only_effects(&effects, repo1),
         "stale repo switches should fall back to the full refresh path"
+    );
+    assert!(
+        has_worktree_refresh_effect(&effects, repo1),
+        "expected worktrees refresh even when the hot-switch window expires"
     );
 }
 
@@ -1338,16 +1816,19 @@ fn repo_opened_ok_sets_loading_and_emits_refresh_effects() {
     assert!(repo_state.head_branch.is_loading());
     assert!(repo_state.branches.is_loading());
     assert!(repo_state.tags.is_loading());
-    assert!(repo_state.remote_tags.is_loading());
+    assert!(matches!(repo_state.remote_tags, Loadable::NotLoaded));
     assert!(repo_state.remotes.is_loading());
     assert!(repo_state.remote_branches.is_loading());
     assert!(repo_state.status.is_loading());
+    assert!(repo_state.worktree_status_is_loading());
+    assert!(repo_state.staged_status_is_loading());
     assert!(repo_state.log.is_loading());
     assert!(matches!(repo_state.stashes, Loadable::NotLoaded));
     assert!(matches!(repo_state.reflog, Loadable::NotLoaded));
     assert!(repo_state.upstream_divergence.is_loading());
     assert!(repo_state.rebase_in_progress.is_loading());
     assert!(repo_state.merge_commit_message.is_loading());
+    assert!(repo_state.worktrees.is_loading());
     assert!(matches!(
         repo_state.history_state.file_history,
         Loadable::NotLoaded
@@ -1356,21 +1837,86 @@ fn repo_opened_ok_sets_loading_and_emits_refresh_effects() {
         repo_state.history_state.blame,
         Loadable::NotLoaded
     ));
-    assert!(matches!(
-        effects.as_slice(),
-        [
-            Effect::LoadHeadBranch { .. },
-            Effect::LoadUpstreamDivergence { .. },
-            Effect::LoadStatus { .. },
-            Effect::LoadLog { .. },
-            Effect::LoadBranches { .. },
-            Effect::LoadTags { .. },
-            Effect::LoadRemoteTags { .. },
-            Effect::LoadRemotes { .. },
-            Effect::LoadRemoteBranches { .. },
-            Effect::LoadRebaseAndMergeState { .. },
-        ]
+    assert!(has_effect_for_repo(
+        &effects,
+        RepoId(1),
+        |effect, repo_id| {
+            matches!(effect, Effect::LoadHeadBranch { repo_id: candidate } if *candidate == repo_id)
+        }
     ));
+    assert!(has_effect_for_repo(
+        &effects,
+        RepoId(1),
+        |effect, repo_id| {
+            matches!(
+                effect,
+                Effect::LoadUpstreamDivergence {
+                    repo_id: candidate
+                } if *candidate == repo_id
+            )
+        }
+    ));
+    assert!(has_status_refresh_effects(&effects, RepoId(1)));
+    assert!(has_effect_for_repo(
+        &effects,
+        RepoId(1),
+        |effect, repo_id| {
+            matches!(effect, Effect::LoadLog { repo_id: candidate, .. } if *candidate == repo_id)
+        }
+    ));
+    assert!(has_effect_for_repo(
+        &effects,
+        RepoId(1),
+        |effect, repo_id| {
+            matches!(effect, Effect::LoadBranches { repo_id: candidate } if *candidate == repo_id)
+        }
+    ));
+    assert!(has_effect_for_repo(
+        &effects,
+        RepoId(1),
+        |effect, repo_id| {
+            matches!(effect, Effect::LoadTags { repo_id: candidate } if *candidate == repo_id)
+        }
+    ));
+    assert!(
+        !effects.iter().any(|effect| matches!(
+            effect,
+            Effect::LoadRemoteTags { repo_id } if *repo_id == RepoId(1)
+        )),
+        "remote tags should lazy-load from tag UI, not repo open"
+    );
+    assert!(has_effect_for_repo(
+        &effects,
+        RepoId(1),
+        |effect, repo_id| {
+            matches!(effect, Effect::LoadRemotes { repo_id: candidate } if *candidate == repo_id)
+        }
+    ));
+    assert!(has_effect_for_repo(
+        &effects,
+        RepoId(1),
+        |effect, repo_id| {
+            matches!(
+                effect,
+                Effect::LoadRemoteBranches {
+                    repo_id: candidate
+                } if *candidate == repo_id
+            )
+        }
+    ));
+    assert!(has_effect_for_repo(
+        &effects,
+        RepoId(1),
+        |effect, repo_id| {
+            matches!(
+                effect,
+                Effect::LoadRebaseAndMergeState {
+                    repo_id: candidate
+                } if *candidate == repo_id
+            )
+        }
+    ));
+    assert!(has_worktree_refresh_effect(&effects, RepoId(1)));
 }
 
 #[test]
@@ -1403,11 +1949,7 @@ fn repo_action_finished_clears_error_and_refreshes() {
 
     assert!(state.repos[0].last_error.is_none());
     assert!(state.banner_error.is_none());
-    assert!(
-        effects
-            .iter()
-            .any(|e| matches!(e, Effect::LoadStatus { repo_id: RepoId(1) }))
-    );
+    assert!(has_status_refresh_effects(&effects, RepoId(1)));
 }
 
 #[test]

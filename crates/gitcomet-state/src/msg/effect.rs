@@ -1,7 +1,9 @@
 use crate::model::{ConflictFileLoadMode, RepoId};
 use gitcomet_core::auth::StagedGitAuth;
 use gitcomet_core::domain::*;
-use gitcomet_core::services::{ConflictSide, PullMode, RemoteUrlKind, ResetMode};
+use gitcomet_core::services::{
+    ConflictSide, PullMode, RemoteUrlKind, ResetMode, SubmoduleTrustTarget,
+};
 use std::path::PathBuf;
 
 use super::RepoPathList;
@@ -23,6 +25,12 @@ pub enum Effect {
         repo_id: RepoId,
     },
     LoadRemoteBranches {
+        repo_id: RepoId,
+    },
+    LoadWorktreeStatus {
+        repo_id: RepoId,
+    },
+    LoadStagedStatus {
         repo_id: RepoId,
     },
     LoadStatus {
@@ -91,13 +99,20 @@ pub enum Effect {
         repo_id: RepoId,
         target: DiffTarget,
     },
+    LoadDiffPreviewTextFile {
+        repo_id: RepoId,
+        target: DiffTarget,
+        side: DiffPreviewTextSide,
+    },
     LoadDiffFileImage {
         repo_id: RepoId,
         target: DiffTarget,
     },
     LoadSelectedDiff {
         repo_id: RepoId,
+        load_patch_diff: bool,
         load_file_text: bool,
+        preview_text_side: Option<DiffPreviewTextSide>,
         load_file_image: bool,
     },
     LoadSelectedConflictFile {
@@ -161,6 +176,9 @@ pub enum Effect {
         dest: PathBuf,
         auth: Option<StagedGitAuth>,
     },
+    AbortCloneRepo {
+        dest: PathBuf,
+    },
     ExportPatch {
         repo_id: RepoId,
         commit_id: CommitId,
@@ -183,14 +201,30 @@ pub enum Effect {
         repo_id: RepoId,
         path: PathBuf,
     },
+    CheckSubmoduleAddTrust {
+        repo_id: RepoId,
+        url: String,
+        path: PathBuf,
+        branch: Option<String>,
+        name: Option<String>,
+        force: bool,
+    },
+    CheckSubmoduleUpdateTrust {
+        repo_id: RepoId,
+    },
     AddSubmodule {
         repo_id: RepoId,
         url: String,
         path: PathBuf,
+        branch: Option<String>,
+        name: Option<String>,
+        force: bool,
+        approved_sources: Vec<SubmoduleTrustTarget>,
         auth: Option<StagedGitAuth>,
     },
     UpdateSubmodules {
         repo_id: RepoId,
+        approved_sources: Vec<SubmoduleTrustTarget>,
         auth: Option<StagedGitAuth>,
     },
     RemoveSubmodule {

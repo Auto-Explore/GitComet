@@ -6,6 +6,7 @@ members = [
   "crates/gitcomet-git",
   "crates/gitcomet-git-gix",
   "crates/gitcomet-state",
+  "crates/gitcomet-tree-sitter-alloc",
   "crates/gitcomet-ui",
   "crates/gitcomet-ui-gpui",
 ]
@@ -22,7 +23,7 @@ default-members = [
 ]
 
 [workspace.package]
-version = "0.1.8"
+version = "0.1.11"
 edition = "2024"
 license = "AGPL-3.0-only"
 authors = ["AutoExplore Oy <info@autoexplore.ai>"]
@@ -43,9 +44,10 @@ clap = { version = "4.6.0", features = ["derive"] }
 criterion = "0.8.2"
 fontdb = "0.23.0"
 gix = { version = "0.81.0", default-features = false, features = ["max-performance-safe", "comfort", "basic", "auto-chain-error", "status", "blame", "sha1"] }
-gpui = { version = "0.2.2" }
+# Load gpui-ce directly from GitHub at commit 1679dc543d880e6562d84afe316a1b192a064b08.
+gpui = { package = "gpui-ce", git = "https://github.com/Havunen/gpui-ce.git", rev = "1679dc543d880e6562d84afe316a1b192a064b08" }
 image = "0.25.10"
-lru = "0.16"
+lru = "0.17"
 memchr = "2.8.0"
 # Pin mimalloc to the PR #152 head until the submodule update lands in a release.
 mimalloc = { git = "https://github.com/eduDorus/mimalloc_rust.git", rev = "262fb407466952bf6ebaf4a5d586c3010396cb2f", features = ["v3"] }
@@ -56,7 +58,7 @@ regex = "1.12.3"
 resvg = { version = "0.47.0", default-features = false, features = ["text", "system-fonts", "raster-images"] }
 rustc-hash = "2.1.2"
 rustix = { version = "1.1.4", default-features = false, features = ["std", "process"] }
-semver = "1.0.27"
+semver = "1.0.28"
 schemars = "1.2.1"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
@@ -66,22 +68,48 @@ stats_alloc = { version = "0.1.10", features = ["nightly"] }
 strsim = "0.11.1"
 tempfile = "3.27.0"
 thiserror = "2.0"
-tree-sitter = "0.26.7"
+tree-sitter = "0.26.8"
 tree-sitter-bash = "0.25.1"
+tree-sitter-bicep = "1.1.0"
+tree-sitter-c = "0.24.1"
+tree-sitter-c-sharp = "0.23.5"
+tree-sitter-cpp = "0.23.4"
 tree-sitter-css = "0.25.0"
+tree-sitter-dart = "0.1.0"
+tree-sitter-diff = "0.1.0"
+tree-sitter-fsharp = "0.2.2"
+tree-sitter-gitcommit = { git = "https://github.com/zed-industries/tree-sitter-git-commit", rev = "88309716a69dd13ab83443721ba6e0b491d37ee9" }
 tree-sitter-go = "0.25.0"
+tree-sitter-gomod = { git = "https://github.com/camdencheek/tree-sitter-go-mod", rev = "2e886870578eeba1927a2dc4bd2e2b3f598c5f9a", package = "tree-sitter-gomod" }
+tree-sitter-gowork = { git = "https://github.com/zed-industries/tree-sitter-go-work", rev = "acb0617bf7f4fda02c6217676cc64acb89536dc7" }
 tree-sitter-html = "0.23.2"
 tree-sitter-javascript = "0.25.0"
+tree-sitter-java = "0.23.5"
 tree-sitter-json = "0.24.8"
+tree-sitter-kotlin-sg = "0.4.0"
+tree-sitter-lua = "0.5.0"
+tree-sitter-make = "1.1.1"
+tree-sitter-md = { git = "https://github.com/tree-sitter-grammars/tree-sitter-markdown", rev = "9a23c1a96c0513d8fc6520972beedd419a973539" }
+tree-sitter-objc = "3.0.2"
+tree-sitter-php = "0.24.2"
+tree-sitter-powershell = "0.26.3"
 tree-sitter-python = "0.25.0"
+tree-sitter-r = "1.2.0"
+tree-sitter-ruby = "0.23.1"
 tree-sitter-rust = "0.24.2"
+tree-sitter-scala = "0.25.0"
+tree-sitter-sequel = "0.3.11"
+tree-sitter-swift = "0.7.1"
+tree-sitter-toml-ng = "0.7.0"
 tree-sitter-typescript = "0.23.2"
 tree-sitter-xml = "0.7.0"
 tree-sitter-yaml = "0.7.2"
+tree-sitter-zig = "1.1.2"
 unicode-segmentation = "1.13.2"
 url = "2.5.8"
-windows = "0.62"
-zed-reqwest = { version = "0.12.15-zed", default-features = false, features = ["blocking", "json", "rustls-tls-native-roots"] }
+windows = "0.62.2"
+wayland-client = "0.31.14"
+reqwest = { version = "0.13.2", default-features = false, features = ["blocking", "json", "rustls"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

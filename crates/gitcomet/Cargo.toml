@@ -30,6 +30,7 @@ clap = { workspace = true }
 gitcomet-core = { workspace = true }
 gitcomet-git = { workspace = true }
 gitcomet-git-gix = { workspace = true, optional = true }
+gitcomet-state = { workspace = true }
 gitcomet-ui = { workspace = true, optional = true }
 gitcomet-ui-gpui = { workspace = true, optional = true }
 mimalloc = { workspace = true }
@@ -37,6 +38,9 @@ rustc-hash = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+wayland-client = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.build-dependencies]
 embed-resource = "3"

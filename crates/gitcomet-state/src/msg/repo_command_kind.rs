@@ -1,5 +1,7 @@
 use gitcomet_core::domain::CommitId;
-use gitcomet_core::services::{ConflictSide, PullMode, RemoteUrlKind, ResetMode};
+use gitcomet_core::services::{
+    ConflictSide, PullMode, RemoteUrlKind, ResetMode, SubmoduleTrustTarget,
+};
 use std::path::PathBuf;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -111,8 +113,14 @@ pub enum RepoCommandKind {
     AddSubmodule {
         url: String,
         path: PathBuf,
+        branch: Option<String>,
+        name: Option<String>,
+        force: bool,
+        approved_sources: Vec<SubmoduleTrustTarget>,
     },
-    UpdateSubmodules,
+    UpdateSubmodules {
+        approved_sources: Vec<SubmoduleTrustTarget>,
+    },
     RemoveSubmodule {
         path: PathBuf,
     },

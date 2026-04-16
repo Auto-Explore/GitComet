@@ -2,12 +2,17 @@ use super::*;
 
 impl GitCometView {
     pub(super) fn schedule_ui_settings_persist(&mut self, cx: &mut gpui::Context<Self>) {
+        if !crate::ui_runtime::current().persists_ui_settings() {
+            let _ = cx;
+            return;
+        }
+
         self.ui_settings_persist_seq = self.ui_settings_persist_seq.wrapping_add(1);
         let seq = self.ui_settings_persist_seq;
 
         cx.spawn(
             async move |view: WeakEntity<GitCometView>, cx: &mut gpui::AsyncApp| {
-                Timer::after(Duration::from_millis(250)).await;
+                smol::Timer::after(Duration::from_millis(250)).await;
                 let settings = view
                     .update(cx, |this, cx| {
                         if this.ui_settings_persist_seq != seq {
@@ -22,10 +27,19 @@ impl GitCometView {
                         let sidebar_width: f32 = this.sidebar_width.round().into();
                         let details_width: f32 = this.details_width.round().into();
 
-                        let (history_show_author, history_show_date, history_show_sha) = this
+                        let (
+                            history_show_graph,
+                            history_show_author,
+                            history_show_date,
+                            history_show_sha,
+                        ) = this
                             .main_pane
                             .read(cx)
                             .history_visible_column_preferences(cx);
+                        let (history_show_tags, history_auto_fetch_tags_on_repo_activation) = this
+                            .main_pane
+                            .read(cx)
+                            .history_tag_preferences(cx);
                         let (change_tracking_height, untracked_height) =
                             this.details_pane.read(cx).saved_status_section_heights();
                         let repo_sidebar_collapsed_items =
@@ -48,11 +62,21 @@ impl GitCometView {
                             timezone: Some(this.timezone.key()),
                             show_timezone: Some(this.show_timezone),
                             change_tracking_view: Some(this.change_tracking_view.key().to_string()),
+                            diff_scroll_sync: Some(this.diff_scroll_sync.key().to_string()),
                             change_tracking_height,
                             untracked_height,
+                            history_show_graph: Some(history_show_graph),
                             history_show_author: Some(history_show_author),
                             history_show_date: Some(history_show_date),
                             history_show_sha: Some(history_show_sha),
+                            history_show_tags: Some(history_show_tags),
+                            history_tag_fetch_mode: Some(if history_auto_fetch_tags_on_repo_activation
+                            {
+                                gitcomet_state::model::GitLogTagFetchMode::OnRepositoryActivation
+                            } else {
+                                gitcomet_state::model::GitLogTagFetchMode::Disabled
+                            }),
+                            git_executable_path: None,
                         };
 
                         Some(settings)

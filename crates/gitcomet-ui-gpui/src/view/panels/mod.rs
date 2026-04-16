@@ -4,7 +4,7 @@ const COMMIT_DETAILS_MESSAGE_MAX_HEIGHT_PX: f32 = 240.0;
 const COMMIT_MESSAGE_INPUT_MAX_HEIGHT_PX: f32 = 200.0;
 
 #[derive(Clone)]
-enum ContextMenuAction {
+pub(in crate::view) enum ContextMenuAction {
     SelectDiff {
         repo_id: RepoId,
         target: DiffTarget,
@@ -52,12 +52,6 @@ enum ContextMenuAction {
         repo_id: RepoId,
         scope: gitcomet_core::domain::LogScope,
     },
-    SetHistoryColumns {
-        show_author: bool,
-        show_date: bool,
-        show_sha: bool,
-    },
-    ResetHistoryColumnWidths,
     SetChangeTrackingView {
         view: ChangeTrackingView,
     },
@@ -155,6 +149,10 @@ enum ContextMenuAction {
     ConflictResolverOutputPaste,
     CopyText {
         text: String,
+    },
+    CopyDiffText {
+        visible_ix: usize,
+        region: DiffTextRegion,
     },
     ApplyIndexPatch {
         repo_id: RepoId,
@@ -263,7 +261,7 @@ mod main;
 mod popover;
 mod repo_tabs_bar;
 
-pub(super) use action_bar::ActionBarView;
+pub(super) use action_bar::{ACTION_BAR_HEIGHT, ActionBarView};
 pub(super) use popover::PopoverHost;
 pub(super) use repo_tabs_bar::RepoTabsBarView;
 #[allow(unused_imports)]

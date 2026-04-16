@@ -40,7 +40,7 @@ pub(in super::super) struct DetailsPaneView {
     pub(in super::super) commit_message_programmatic_change: bool,
 
     pub(in super::super) status_multi_selection: HashMap<RepoId, StatusMultiSelection>,
-    pub(in super::super) status_multi_selection_last_status: HashMap<RepoId, Arc<RepoStatus>>,
+    pub(in super::super) status_multi_selection_last_status: HashMap<RepoId, (u64, u64)>,
 
     pub(in super::super) commit_details_delay: Option<CommitDetailsDelayState>,
     pub(in super::super) commit_details_delay_seq: u64,
@@ -160,7 +160,8 @@ impl DetailsPaneView {
         if let Some(repo_id) = state.active_repo
             && let Some(repo) = state.repos.iter().find(|r| r.id == repo_id)
         {
-            repo.status_rev.hash(&mut hasher);
+            repo.worktree_status_cache_rev().hash(&mut hasher);
+            repo.staged_status_cache_rev().hash(&mut hasher);
             repo.ops_rev.hash(&mut hasher);
             repo.history_state.selected_commit_rev.hash(&mut hasher);
             repo.history_state.commit_details_rev.hash(&mut hasher);
@@ -464,17 +465,17 @@ impl DetailsPaneView {
                 return false;
             }
 
-            let Loadable::Ready(status) = &repo.status else {
-                return true;
-            };
-
+            let status_key = (
+                repo.worktree_status_cache_rev(),
+                repo.staged_status_cache_rev(),
+            );
             let status_changed = match last_status.get(repo_id) {
-                Some(prev) => !Arc::ptr_eq(prev, status),
+                Some(prev) => *prev != status_key,
                 None => true,
             };
             if status_changed {
-                last_status.insert(*repo_id, Arc::clone(status));
-                reconcile_status_multi_selection(selection, status);
+                last_status.insert(*repo_id, status_key);
+                reconcile_status_multi_selection_with_repo(selection, repo);
             }
 
             if selection.is_empty() {
@@ -592,7 +593,7 @@ impl DetailsPaneView {
         let selected_id = selected_id.clone();
         cx.spawn(
             async move |view: WeakEntity<DetailsPaneView>, cx: &mut gpui::AsyncApp| {
-                Timer::after(Duration::from_millis(100)).await;
+                smol::Timer::after(Duration::from_millis(100)).await;
                 let _ = view.update(cx, |this, cx| {
                     if this.commit_details_delay_seq != seq {
                         return;
@@ -695,7 +696,7 @@ impl DetailsPaneView {
     ) {
         let _ = self.root_view.update(cx, |root, cx| {
             let handle = root.main_pane.read(cx).diff_panel_focus_handle.clone();
-            window.focus(&handle);
+            window.focus(&handle, cx);
         });
     }
 }
@@ -735,7 +736,8 @@ mod tests {
 
         let initial = DetailsPaneView::notify_fingerprint(&state);
 
-        state.repos[1].status_rev = 1;
+        state.repos[1].worktree_status_rev = 1;
+        state.repos[1].staged_status_rev = 1;
         state.repos[1].ops_rev = 1;
         state.repos[1].history_state.selected_commit_rev = 1;
         state.repos[1].history_state.commit_details_rev = 1;
@@ -754,7 +756,7 @@ mod tests {
 
         let initial = DetailsPaneView::notify_fingerprint(&state);
 
-        state.repos[0].status_rev = 1;
+        state.repos[0].worktree_status_rev = 1;
         let after_status = DetailsPaneView::notify_fingerprint(&state);
         assert_ne!(after_status, initial);
 

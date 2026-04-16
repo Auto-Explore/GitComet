@@ -133,6 +133,10 @@ const SVG_PREVIEW_MAX_RASTER_EDGE_PX: f32 = 4096.0;
 static SVG_PREVIEW_USVG_OPTIONS: std::sync::LazyLock<resvg::usvg::Options<'static>> =
     std::sync::LazyLock::new(resvg::usvg::Options::default);
 
+pub(in crate::view) fn fill_svg_viewport_white(pixmap: &mut resvg::tiny_skia::Pixmap) {
+    pixmap.fill(resvg::tiny_skia::Color::WHITE);
+}
+
 pub(in crate::view) fn rasterize_svg_png(
     svg_bytes: &[u8],
     target_width_px: f32,
@@ -164,6 +168,7 @@ pub(in crate::view) fn rasterize_svg_png(
     let raster_height = raster_height.max(1.0) as u32;
 
     let mut pixmap = resvg::tiny_skia::Pixmap::new(raster_width, raster_height)?;
+    fill_svg_viewport_white(&mut pixmap);
     let transform = resvg::tiny_skia::Transform::from_scale(
         raster_width as f32 / svg_width,
         raster_height as f32 / svg_height,
@@ -1097,6 +1102,26 @@ mod tests {
 
         assert_eq!(width, SVG_PREVIEW_MIN_RASTER_WIDTH_PX as u32);
         assert_eq!(height, (SVG_PREVIEW_MIN_RASTER_WIDTH_PX / 2.0) as u32);
+    }
+
+    #[test]
+    fn rasterize_svg_preview_png_fills_transparent_viewport_white() {
+        let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 4 4">
+<rect x="1" y="1" width="2" height="2" fill="#00aaff"/>
+</svg>"##;
+
+        let png = rasterize_svg_preview_png(svg).expect("svg should rasterize");
+        let decoded = image::load_from_memory_with_format(&png, image::ImageFormat::Png)
+            .expect("decode png")
+            .into_rgba8();
+
+        assert_eq!(decoded.get_pixel(0, 0).0, [255, 255, 255, 255]);
+        assert_eq!(
+            decoded
+                .get_pixel(decoded.width() / 2, decoded.height() / 2)
+                .0,
+            [0, 170, 255, 255]
+        );
     }
 
     #[test]

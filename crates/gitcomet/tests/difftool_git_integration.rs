@@ -1,3 +1,4 @@
+use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::process::background_command as no_window_command;
 #[path = "support/test_git_env.rs"]
 mod test_git_env;
@@ -74,7 +75,7 @@ fn gitcomet_bin() -> PathBuf {
 }
 
 fn gitcomet_bin_from_current_exe() -> Option<PathBuf> {
-    let test_exe = std::env::current_exe().ok()?;
+    let test_exe = canonicalize_or_original(std::env::current_exe().ok()?);
     let deps_dir = test_exe.parent()?;
     let profile_dir = deps_dir.parent()?;
     let exe_suffix = std::env::consts::EXE_SUFFIX;
@@ -83,7 +84,7 @@ fn gitcomet_bin_from_current_exe() -> Option<PathBuf> {
         let bin_name = "gitcomet";
         let candidate = profile_dir.join(format!("{bin_name}{exe_suffix}"));
         if candidate.is_file() {
-            return Some(candidate);
+            return Some(canonicalize_or_original(candidate));
         }
     }
 

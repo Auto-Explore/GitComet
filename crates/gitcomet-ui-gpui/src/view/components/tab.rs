@@ -95,11 +95,11 @@ impl Tab {
                 }
                 match event.keystroke.key.as_str() {
                     "left" => {
-                        window.focus_prev();
+                        window.focus_prev(cx);
                         cx.stop_propagation();
                     }
                     "right" => {
-                        window.focus_next();
+                        window.focus_next(cx);
                         cx.stop_propagation();
                     }
                     _ => {}

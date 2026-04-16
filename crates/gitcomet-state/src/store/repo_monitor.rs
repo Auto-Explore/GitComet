@@ -128,7 +128,11 @@ fn panic_payload_to_string(payload: Box<dyn Any + Send + 'static>) -> String {
     }
 }
 
-fn join_monitor_or_log(join: thread::JoinHandle<()>, repo_id: RepoId, context: &'static str) {
+pub(super) fn join_monitor_or_log(
+    join: thread::JoinHandle<()>,
+    repo_id: RepoId,
+    context: &'static str,
+) {
     if let Err(error) = join.join() {
         record_monitor_failure(
             MonitorFailureKind::Join,
@@ -182,19 +186,10 @@ pub(super) fn repo_monitor_ignore_lookup_stats() -> RepoMonitorIgnoreLookupStats
 }
 
 #[cfg(test)]
-pub(super) fn record_stop_send_failure_for_test(repo_id: RepoId, context: &'static str) {
+pub(super) fn record_stop_send_failure(repo_id: RepoId, context: &'static str) {
     let (tx, rx) = mpsc::channel::<MonitorMsg>();
     drop(rx);
     send_stop_or_log(&tx, repo_id, context);
-}
-
-#[cfg(test)]
-pub(super) fn join_monitor_for_test(
-    join: thread::JoinHandle<()>,
-    repo_id: RepoId,
-    context: &'static str,
-) {
-    join_monitor_or_log(join, repo_id, context);
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -646,7 +641,7 @@ fn repo_monitor_thread(
             }
             Ok(MonitorMsg::Event(Err(_))) => {
                 let now = Instant::now();
-                if let Some(to_flush) = debouncer.push(RepoExternalChange::Both, now) {
+                if let Some(to_flush) = debouncer.push(RepoExternalChange::all(), now) {
                     flush(to_flush);
                 }
             }
@@ -691,12 +686,10 @@ fn resolve_git_dir(workdir: &Path) -> Option<PathBuf> {
 }
 
 fn merge_change(a: RepoExternalChange, b: RepoExternalChange) -> RepoExternalChange {
-    use RepoExternalChange::*;
-    match (a, b) {
-        (Both, _) | (_, Both) => Both,
-        (Worktree, GitState) | (GitState, Worktree) => Both,
-        (Worktree, Worktree) => Worktree,
-        (GitState, GitState) => GitState,
+    RepoExternalChange {
+        worktree: a.worktree || b.worktree,
+        index: a.index || b.index,
+        git_state: a.git_state || b.git_state,
     }
 }
 
@@ -712,7 +705,7 @@ fn classify_repo_event(
 
     // If notify indicates a rescan is needed, assume anything could have changed.
     if event.need_rescan() {
-        return Some(RepoExternalChange::Both);
+        return Some(RepoExternalChange::all());
     }
 
     // Update ignore rules if the ignore config itself changes.
@@ -722,15 +715,16 @@ fn classify_repo_event(
         .any(|p| is_gitignore_config_path(workdir, git_dir, p))
     {
         *gitignore = GitignoreRules::load(workdir);
-        return Some(RepoExternalChange::Worktree);
+        return Some(RepoExternalChange::worktree());
     }
 
     if event.paths.is_empty() {
-        return Some(RepoExternalChange::Both);
+        return Some(RepoExternalChange::all());
     }
 
     let mut saw_worktree = false;
-    let mut saw_git = false;
+    let mut saw_index = false;
+    let mut saw_git_state = false;
     let is_dir_hint = path_dir_hint(event);
 
     for path in &event.paths {
@@ -738,12 +732,10 @@ fn classify_repo_event(
             continue;
         }
         if is_git_related_path(workdir, git_dir, path) {
-            // Treat `.git/index` updates like worktree changes: they typically reflect staging
-            // operations and should not trigger branch list refreshes.
             if is_git_index_path(workdir, git_dir, path) {
-                saw_worktree = true;
+                saw_index = true;
             } else {
-                saw_git = true;
+                saw_git_state = true;
             }
         } else {
             if is_ignored_worktree_path_with_hint(workdir, gitignore, path, is_dir_hint) {
@@ -751,18 +743,14 @@ fn classify_repo_event(
             }
             saw_worktree = true;
         }
-        if saw_git && saw_worktree {
-            return Some(RepoExternalChange::Both);
-        }
     }
 
-    if saw_git {
-        Some(RepoExternalChange::GitState)
-    } else if saw_worktree {
-        Some(RepoExternalChange::Worktree)
-    } else {
-        None
-    }
+    let change = RepoExternalChange {
+        worktree: saw_worktree,
+        index: saw_index,
+        git_state: saw_git_state,
+    };
+    (!change.is_empty()).then_some(change)
 }
 
 fn is_git_related_path(workdir: &Path, git_dir: Option<&Path>, path: &Path) -> bool {
@@ -980,11 +968,19 @@ mod tests {
     fn merge_change_coalesces_to_both() {
         assert_eq!(
             merge_change(RepoExternalChange::Worktree, RepoExternalChange::GitState),
-            RepoExternalChange::Both
+            RepoExternalChange {
+                worktree: true,
+                index: false,
+                git_state: true,
+            }
         );
         assert_eq!(
             merge_change(RepoExternalChange::GitState, RepoExternalChange::Worktree),
-            RepoExternalChange::Both
+            RepoExternalChange {
+                worktree: true,
+                index: false,
+                git_state: true,
+            }
         );
         assert_eq!(
             merge_change(RepoExternalChange::Both, RepoExternalChange::Worktree),
@@ -1014,7 +1010,7 @@ mod tests {
                 &mut GitignoreRules::default(),
                 &event
             ),
-            Some(RepoExternalChange::Worktree)
+            Some(RepoExternalChange::Index)
         );
 
         let event = notify::Event {
@@ -1044,7 +1040,11 @@ mod tests {
                 &mut GitignoreRules::default(),
                 &event
             ),
-            Some(RepoExternalChange::Both)
+            Some(RepoExternalChange {
+                worktree: true,
+                index: false,
+                git_state: true,
+            })
         );
     }
 

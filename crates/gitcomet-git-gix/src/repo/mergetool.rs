@@ -1,6 +1,7 @@
 use super::{GixRepo, conflict_stages::gix_index_stage_blob_bytes_optional};
 use crate::util::{bytes_to_text_preserving_utf8, run_git_simple};
 use gitcomet_core::error::{Error, ErrorKind};
+use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::process::background_command as no_window_command;
 use gitcomet_core::services::{
     CommandOutput, MergetoolResult, Result, validate_conflict_resolution_text,
@@ -427,7 +428,7 @@ fn stable_path_bytes(path: &Path) -> Vec<u8> {
 }
 
 fn stable_repo_tool_fingerprint(workdir: &Path, tool_name: &str) -> String {
-    let repo_path = std::fs::canonicalize(workdir).unwrap_or_else(|_| workdir.to_path_buf());
+    let repo_path = canonicalize_or_original(workdir.to_path_buf());
     let mut bytes = stable_path_bytes(&repo_path);
     bytes.push(0);
     bytes.extend_from_slice(tool_name.as_bytes());

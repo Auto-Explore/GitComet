@@ -4,7 +4,8 @@
 //! `git difftool` and `git mergetool` invoke gitcomet automatically.
 //! Uninstall removes those entries while preserving unrelated tool settings.
 
-use gitcomet_core::process::configure_background_command;
+use gitcomet_core::path_utils::strip_windows_verbatim_prefix;
+use gitcomet_core::process::git_command as process_git_command;
 use rustc_hash::FxHashMap as HashMap;
 use std::path::{Path, PathBuf};
 
@@ -97,6 +98,7 @@ fn current_exe_path() -> Result<PathBuf, String> {
 
 fn canonicalize_setup_path(path: PathBuf) -> Result<PathBuf, String> {
     path.canonicalize()
+        .map(strip_windows_verbatim_prefix)
         .map_err(|e| format!("Cannot determine gitcomet binary path: {e}"))
 }
 
@@ -114,9 +116,7 @@ fn quoted_env_var(name: &str) -> String {
 }
 
 fn git_command() -> std::process::Command {
-    let mut command = std::process::Command::new("git");
-    configure_background_command(&mut command);
-    command
+    process_git_command()
 }
 
 /// Build the list of git config entries for difftool/mergetool setup.

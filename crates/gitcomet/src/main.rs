@@ -12,10 +12,18 @@ mod cli;
 mod crashlog;
 mod difftool_mode;
 mod extract_fixtures_mode;
+#[cfg(any(
+    all(target_os = "linux", feature = "ui-gpui-runtime"),
+    all(test, feature = "ui-gpui-runtime")
+))]
+mod linux_wayland_fallback;
 mod mergetool_mode;
 mod setup_mode;
 
 use cli::{AppMode, exit_code};
+use gitcomet_core::process::install_git_executable_path;
+#[cfg(all(target_os = "linux", feature = "ui-gpui-runtime"))]
+use linux_wayland_fallback::maybe_relaunch_with_linux_x11_fallback;
 use mimalloc::MiMalloc;
 
 pub(crate) fn hex_encode(bytes: &[u8]) -> String {
@@ -148,6 +156,13 @@ fn main() {
             std::process::exit(exit_code::ERROR);
         }
     };
+
+    install_configured_git_executable_preference(&mode);
+
+    #[cfg(all(target_os = "linux", feature = "ui-gpui-runtime"))]
+    if let Some(code) = maybe_relaunch_with_linux_x11_fallback(&mode) {
+        std::process::exit(code);
+    }
 
     #[cfg(feature = "ui")]
     crashlog::install();
@@ -286,6 +301,22 @@ fn main() {
             run_and_exit(extract_fixtures_mode::run_extract_merge_fixtures(&config))
         }
     }
+}
+
+fn mode_uses_configured_git_executable_preference(mode: &AppMode) -> bool {
+    // The persisted custom Git executable is a browser-window preference.
+    // Git-invoked command modes intentionally keep using `git` from PATH so
+    // they track the invoking Git installation rather than browser settings.
+    matches!(mode, AppMode::Browser { .. })
+}
+
+fn install_configured_git_executable_preference(mode: &AppMode) {
+    if !mode_uses_configured_git_executable_preference(mode) {
+        return;
+    }
+
+    let session = gitcomet_state::session::load();
+    let _ = install_git_executable_path(session.git_executable_path);
 }
 
 #[cfg(all(target_os = "macos", feature = "ui-gpui-runtime"))]
@@ -725,6 +756,59 @@ mod tests {
         };
 
         assert!(!should_launch_focused_diff_gui(&config, &result));
+    }
+
+    #[test]
+    fn configured_git_preference_is_intentionally_browser_only() {
+        assert!(mode_uses_configured_git_executable_preference(
+            &AppMode::Browser { path: None }
+        ));
+        assert!(!mode_uses_configured_git_executable_preference(
+            &AppMode::Difftool(cli::DifftoolConfig {
+                local: std::path::PathBuf::from("left.txt"),
+                remote: std::path::PathBuf::from("right.txt"),
+                display_path: None,
+                label_left: None,
+                label_right: None,
+                gui: false,
+            })
+        ));
+        assert!(!mode_uses_configured_git_executable_preference(
+            &AppMode::Mergetool(cli::MergetoolConfig {
+                merged: std::path::PathBuf::from("merged.txt"),
+                local: std::path::PathBuf::from("local.txt"),
+                remote: std::path::PathBuf::from("remote.txt"),
+                base: Some(std::path::PathBuf::from("base.txt")),
+                label_base: None,
+                label_local: None,
+                label_remote: None,
+                conflict_style: ConflictStyle::Merge,
+                diff_algorithm: DiffAlgorithm::Myers,
+                marker_size: DEFAULT_MARKER_SIZE,
+                auto: false,
+                gui: false,
+            })
+        ));
+        assert!(!mode_uses_configured_git_executable_preference(
+            &AppMode::Setup {
+                dry_run: false,
+                local: false,
+            }
+        ));
+        assert!(!mode_uses_configured_git_executable_preference(
+            &AppMode::Uninstall {
+                dry_run: false,
+                local: false,
+            }
+        ));
+        assert!(!mode_uses_configured_git_executable_preference(
+            &AppMode::ExtractMergeFixtures(cli::ExtractMergeFixturesConfig {
+                repo: std::path::PathBuf::from("/tmp/repo"),
+                output_dir: std::path::PathBuf::from("/tmp/out"),
+                max_merges: 10,
+                max_files_per_merge: 5,
+            })
+        ));
     }
 
     #[test]

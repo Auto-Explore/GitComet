@@ -251,6 +251,7 @@ fn hash_status_multi_selection(selection: &StatusMultiSelection) -> u64 {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct StatusSelectDiffOpenMetrics {
     pub effect_count: usize,
+    pub load_selected_diff_effect_count: usize,
     pub load_diff_effect_count: usize,
     pub load_diff_file_effect_count: usize,
     pub load_diff_file_image_effect_count: usize,
@@ -266,6 +267,9 @@ impl StatusSelectDiffOpenMetrics {
         };
         for effect in effects {
             match effect {
+                Effect::LoadSelectedDiff { .. } => {
+                    metrics.load_selected_diff_effect_count += 1;
+                }
                 Effect::LoadDiff { .. } => metrics.load_diff_effect_count += 1,
                 Effect::LoadDiffFile { .. } => metrics.load_diff_file_effect_count += 1,
                 Effect::LoadDiffFileImage { .. } => metrics.load_diff_file_image_effect_count += 1,
@@ -301,22 +305,11 @@ impl StatusSelectDiffOpenFixture {
 
         let commits = build_synthetic_commits(100);
         let mut repo = build_synthetic_repo_state(20, 40, 2, 0, 0, 0, &commits);
-        repo.status = Loadable::Ready(Arc::new(RepoStatus {
-            unstaged: entries,
-            staged: Vec::new(),
-        }));
-        repo.status_rev = 1;
+        seed_repo_status_entries(&mut repo, entries, Vec::new());
         repo.open = Loadable::Ready(());
 
         Self {
-            baseline: AppState {
-                repos: vec![repo],
-                active_repo: Some(RepoId(1)),
-                clone: None,
-                notifications: Vec::new(),
-                banner_error: None,
-                auth_prompt: None,
-            },
+            baseline: bench_app_state(vec![repo], Some(RepoId(1))),
             diff_target: DiffTarget::WorkingTree {
                 path: target_path,
                 area: DiffArea::Unstaged,
@@ -330,22 +323,11 @@ impl StatusSelectDiffOpenFixture {
 
         let commits = build_synthetic_commits(100);
         let mut repo = build_synthetic_repo_state(20, 40, 2, 0, 0, 0, &commits);
-        repo.status = Loadable::Ready(Arc::new(RepoStatus {
-            staged: entries,
-            unstaged: Vec::new(),
-        }));
-        repo.status_rev = 1;
+        seed_repo_status_entries(&mut repo, Vec::new(), entries);
         repo.open = Loadable::Ready(());
 
         Self {
-            baseline: AppState {
-                repos: vec![repo],
-                active_repo: Some(RepoId(1)),
-                clone: None,
-                notifications: Vec::new(),
-                banner_error: None,
-                auth_prompt: None,
-            },
+            baseline: bench_app_state(vec![repo], Some(RepoId(1))),
             diff_target: DiffTarget::WorkingTree {
                 path: target_path,
                 area: DiffArea::Staged,
@@ -375,6 +357,24 @@ impl StatusSelectDiffOpenFixture {
                 for effect in effects.iter() {
                     std::mem::discriminant(effect).hash(&mut h);
                     match effect {
+                        Effect::LoadSelectedDiff {
+                            repo_id,
+                            load_patch_diff,
+                            load_file_text,
+                            preview_text_side,
+                            load_file_image,
+                        } => {
+                            repo_id.0.hash(&mut h);
+                            load_patch_diff.hash(&mut h);
+                            load_file_text.hash(&mut h);
+                            let preview_text_side_key: u8 = match preview_text_side {
+                                None => 0,
+                                Some(gitcomet_core::domain::DiffPreviewTextSide::Old) => 1,
+                                Some(gitcomet_core::domain::DiffPreviewTextSide::New) => 2,
+                            };
+                            preview_text_side_key.hash(&mut h);
+                            load_file_image.hash(&mut h);
+                        }
                         Effect::LoadDiff { repo_id, target }
                         | Effect::LoadDiffFile { repo_id, target }
                         | Effect::LoadDiffFileImage { repo_id, target } => {
@@ -384,6 +384,7 @@ impl StatusSelectDiffOpenFixture {
                         _ => {}
                     }
                 }
+                metrics.load_selected_diff_effect_count.hash(&mut h);
                 metrics.load_diff_effect_count.hash(&mut h);
                 metrics.load_diff_file_effect_count.hash(&mut h);
                 metrics.load_diff_file_image_effect_count.hash(&mut h);

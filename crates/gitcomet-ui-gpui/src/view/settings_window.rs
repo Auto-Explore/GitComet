@@ -1,6 +1,10 @@
 use super::*;
-use gitcomet_core::process::configure_background_command;
+use gitcomet_core::process::{
+    GitExecutablePreference, GitRuntimeState, install_git_executable_path, refresh_git_runtime,
+};
+use gitcomet_state::model::GitLogTagFetchMode;
 use gpui::{Stateful, TitlebarOptions, WindowBounds, WindowDecorations, WindowOptions};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 const SETTINGS_WINDOW_MIN_WIDTH_PX: f32 = 620.0;
@@ -34,6 +38,29 @@ const CHANGE_TRACKING_OPTIONS: &[(&str, ChangeTrackingView, &str)] = &[
     ),
 ];
 
+const DIFF_SCROLL_SYNC_OPTIONS: &[(&str, DiffScrollSync, &str)] = &[
+    (
+        "settings_window_diff_scroll_sync_vertical",
+        DiffScrollSync::Vertical,
+        "Lock vertical scrolling only.",
+    ),
+    (
+        "settings_window_diff_scroll_sync_horizontal",
+        DiffScrollSync::Horizontal,
+        "Lock horizontal scrolling only.",
+    ),
+    (
+        "settings_window_diff_scroll_sync_none",
+        DiffScrollSync::None,
+        "Keep split and merge panes independent.",
+    ),
+    (
+        "settings_window_diff_scroll_sync_both",
+        DiffScrollSync::Both,
+        "Lock both vertical and horizontal scrolling.",
+    ),
+];
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SettingsSection {
     Theme,
@@ -42,12 +69,30 @@ enum SettingsSection {
     DateFormat,
     Timezone,
     ChangeTracking,
+    Diff,
+    GitLogColumns,
+    GitLogTagFetch,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SettingsView {
     Root,
     OpenSourceLicenses,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum GitExecutableMode {
+    SystemPath,
+    Custom,
+}
+
+impl GitExecutableMode {
+    fn from_preference(preference: &GitExecutablePreference) -> Self {
+        match preference {
+            GitExecutablePreference::SystemPath => Self::SystemPath,
+            GitExecutablePreference::Custom(_) => Self::Custom,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -59,6 +104,7 @@ struct SettingsRuntimeInfo {
 
 #[derive(Clone, Debug)]
 struct GitRuntimeInfo {
+    runtime: GitRuntimeState,
     version_display: SharedString,
     compatibility: GitCompatibility,
     detail: Option<SharedString>,
@@ -69,6 +115,7 @@ enum GitCompatibility {
     Supported,
     TooOld,
     Unknown,
+    Unavailable,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -92,17 +139,31 @@ pub(crate) struct SettingsWindowView {
     date_format_scroll: UniformListScrollHandle,
     timezone_scroll: UniformListScrollHandle,
     change_tracking_scroll: UniformListScrollHandle,
+    diff_scroll_sync_scroll: UniformListScrollHandle,
     date_time_format: DateTimeFormat,
     timezone: Timezone,
     show_timezone: bool,
     change_tracking_view: ChangeTrackingView,
+    diff_scroll_sync: DiffScrollSync,
+    history_show_graph: bool,
+    history_show_author: bool,
+    history_show_date: bool,
+    history_show_sha: bool,
+    history_show_tags: bool,
+    history_tag_fetch_mode: GitLogTagFetchMode,
     current_view: SettingsView,
     open_source_licenses_scroll: UniformListScrollHandle,
     runtime_info: SettingsRuntimeInfo,
+    git_executable_mode: GitExecutableMode,
+    git_custom_path_draft: String,
+    git_executable_input: Entity<components::TextInput>,
     expanded_section: Option<SettingsSection>,
     hover_resize_edge: Option<ResizeEdge>,
     title_drag_state: chrome::TitleBarDragState,
+    _git_executable_input_subscription: gpui::Subscription,
     _appearance_subscription: gpui::Subscription,
+    #[cfg(test)]
+    overflow_probe: bool,
 }
 
 pub(crate) fn open_settings_window(cx: &mut App) {
@@ -126,25 +187,28 @@ pub(crate) fn open_settings_window(cx: &mut App) {
         ),
         cx,
     );
-    cx.open_window(
-        WindowOptions {
-            window_bounds: Some(WindowBounds::Windowed(bounds)),
-            window_min_size: Some(size(
-                px(SETTINGS_WINDOW_MIN_WIDTH_PX),
-                px(SETTINGS_WINDOW_MIN_HEIGHT_PX),
-            )),
-            titlebar: Some(settings_window_titlebar_options()),
-            app_id: Some("gitcomet-settings".into()),
-            window_decorations: Some(WindowDecorations::Client),
-            is_movable: true,
-            is_resizable: true,
-            ..Default::default()
-        },
-        |window, cx| cx.new(|cx| SettingsWindowView::new(window, cx)),
-    )
+    cx.open_window(settings_window_options(bounds), |window, cx| {
+        cx.new(|cx| SettingsWindowView::new(window, cx))
+    })
     .expect("failed to open settings window");
 
     cx.activate(true);
+}
+
+fn settings_window_options(bounds: Bounds<Pixels>) -> WindowOptions {
+    WindowOptions {
+        window_bounds: Some(WindowBounds::Windowed(bounds)),
+        window_min_size: Some(size(
+            px(SETTINGS_WINDOW_MIN_WIDTH_PX),
+            px(SETTINGS_WINDOW_MIN_HEIGHT_PX),
+        )),
+        titlebar: Some(settings_window_titlebar_options()),
+        app_id: Some("gitcomet-settings".into()),
+        window_decorations: Some(WindowDecorations::Client),
+        is_movable: true,
+        is_resizable: true,
+        ..Default::default()
+    }
 }
 
 fn settings_window_titlebar_options() -> TitlebarOptions {
@@ -205,7 +269,7 @@ fn uniform_list_vertical_scroll_metrics(
     let max_offset = state
         .last_item_size
         .map(|size| (size.contents.height - size.item.height).max(px(0.0)))
-        .unwrap_or_else(|| state.base_handle.max_offset().height.max(px(0.0)));
+        .unwrap_or_else(|| state.base_handle.max_offset().y.max(px(0.0)));
     let raw_offset = state.base_handle.offset().y;
     let scroll_offset = normalize_scroll_offset(raw_offset, max_offset);
     (raw_offset, scroll_offset, max_offset)
@@ -260,6 +324,14 @@ fn settings_dropdown_background(theme: AppTheme) -> gpui::Rgba {
     }
 }
 
+fn settings_dropdown_border_color(theme: AppTheme) -> gpui::Rgba {
+    if theme.is_dark {
+        with_alpha(theme.colors.border, 0.98)
+    } else {
+        theme.colors.border
+    }
+}
+
 fn settings_dropdown_height(
     item_count: usize,
     estimated_row_height_px: f32,
@@ -280,6 +352,51 @@ fn settings_theme_modes() -> Vec<ThemeMode> {
             .map(|theme| ThemeMode::Named(theme.key.to_string())),
     );
     modes
+}
+
+fn history_columns_settings_label(
+    show_graph: bool,
+    show_author: bool,
+    show_date: bool,
+    show_sha: bool,
+) -> SharedString {
+    let mut columns = Vec::new();
+    if show_graph {
+        columns.push("Graph");
+    }
+    if show_author {
+        columns.push("Author");
+    }
+    if show_date {
+        columns.push("Commit date");
+    }
+    if show_sha {
+        columns.push("SHA");
+    }
+
+    if columns.is_empty() {
+        "None".into()
+    } else {
+        columns.join(", ").into()
+    }
+}
+
+fn git_log_tag_fetch_mode_label(mode: GitLogTagFetchMode) -> &'static str {
+    match mode {
+        GitLogTagFetchMode::OnRepositoryActivation => "On repository activation",
+        GitLogTagFetchMode::Disabled => "Disabled",
+    }
+}
+
+fn applied_git_executable_path(runtime: &GitRuntimeState) -> Option<PathBuf> {
+    match &runtime.preference {
+        GitExecutablePreference::SystemPath => None,
+        GitExecutablePreference::Custom(path) => Some(path.clone()),
+    }
+}
+
+fn git_executable_scope_note() -> &'static str {
+    "Applies only to the main GitComet browser window. Git-invoked command modes keep using git from System PATH."
 }
 
 impl SettingsWindowView {
@@ -310,7 +427,27 @@ impl SettingsWindowView {
             .as_deref()
             .and_then(ChangeTrackingView::from_key)
             .unwrap_or_default();
+        let diff_scroll_sync = ui_session
+            .diff_scroll_sync
+            .as_deref()
+            .and_then(DiffScrollSync::from_key)
+            .unwrap_or_default();
+        let history_show_graph = ui_session.history_show_graph.unwrap_or(true);
+        let history_show_author = ui_session.history_show_author.unwrap_or(true);
+        let history_show_date = ui_session.history_show_date.unwrap_or(true);
+        let history_show_sha = ui_session.history_show_sha.unwrap_or(false);
+        let history_show_tags = ui_session.history_show_tags.unwrap_or(true);
+        let history_tag_fetch_mode = ui_session.history_tag_fetch_mode.unwrap_or_default();
         let theme = theme_mode.resolve_theme(window.appearance());
+        let runtime_info = SettingsRuntimeInfo::detect();
+        let git_executable_mode =
+            GitExecutableMode::from_preference(&runtime_info.git.runtime.preference);
+        let git_custom_path_draft = match &runtime_info.git.runtime.preference {
+            GitExecutablePreference::Custom(path) if !path.as_os_str().is_empty() => {
+                path.display().to_string()
+            }
+            _ => String::new(),
+        };
 
         let appearance_subscription = {
             let view = cx.weak_entity();
@@ -331,6 +468,35 @@ impl SettingsWindowView {
             })
         };
 
+        let git_executable_input = cx.new(|cx| {
+            components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "/path/to/git".into(),
+                    multiline: false,
+                    read_only: false,
+                    chromeless: false,
+                    soft_wrap: false,
+                },
+                window,
+                cx,
+            )
+        });
+        git_executable_input.update(cx, |input, cx| {
+            input.set_text(git_custom_path_draft.clone(), cx);
+        });
+        let git_executable_input_subscription =
+            cx.observe(&git_executable_input, |this, input, cx| {
+                let enter_pressed = input.update(cx, |input, _| input.take_enter_pressed());
+                let next = input.read(cx).text().to_string();
+                if this.git_custom_path_draft != next {
+                    this.git_custom_path_draft = next;
+                    cx.notify();
+                }
+                if enter_pressed && this.git_executable_mode == GitExecutableMode::Custom {
+                    this.apply_git_executable_settings(cx);
+                }
+            });
+
         Self {
             theme_mode,
             theme,
@@ -346,17 +512,31 @@ impl SettingsWindowView {
             date_format_scroll: UniformListScrollHandle::default(),
             timezone_scroll: UniformListScrollHandle::default(),
             change_tracking_scroll: UniformListScrollHandle::default(),
+            diff_scroll_sync_scroll: UniformListScrollHandle::default(),
             date_time_format,
             timezone,
             show_timezone,
             change_tracking_view,
+            diff_scroll_sync,
+            history_show_graph,
+            history_show_author,
+            history_show_date,
+            history_show_sha,
+            history_show_tags,
+            history_tag_fetch_mode,
             current_view: SettingsView::Root,
             open_source_licenses_scroll: UniformListScrollHandle::default(),
-            runtime_info: SettingsRuntimeInfo::detect(),
+            runtime_info,
+            git_executable_mode,
+            git_custom_path_draft,
+            git_executable_input,
             expanded_section: None,
             hover_resize_edge: None,
             title_drag_state: chrome::TitleBarDragState::default(),
+            _git_executable_input_subscription: git_executable_input_subscription,
             _appearance_subscription: appearance_subscription,
+            #[cfg(test)]
+            overflow_probe: false,
         }
     }
 
@@ -384,11 +564,16 @@ impl SettingsWindowView {
             timezone: Some(self.timezone.key()),
             show_timezone: Some(self.show_timezone),
             change_tracking_view: Some(self.change_tracking_view.key().to_string()),
+            diff_scroll_sync: Some(self.diff_scroll_sync.key().to_string()),
             change_tracking_height: None,
             untracked_height: None,
-            history_show_author: None,
-            history_show_date: None,
-            history_show_sha: None,
+            history_show_graph: Some(self.history_show_graph),
+            history_show_author: Some(self.history_show_author),
+            history_show_date: Some(self.history_show_date),
+            history_show_sha: Some(self.history_show_sha),
+            history_show_tags: Some(self.history_show_tags),
+            history_tag_fetch_mode: Some(self.history_tag_fetch_mode),
+            git_executable_path: Some(applied_git_executable_path(&self.runtime_info.git.runtime)),
         };
 
         cx.background_spawn(async move {
@@ -428,7 +613,7 @@ impl SettingsWindowView {
             .collect();
         cx.spawn(
             async move |_view: WeakEntity<Self>, cx: &mut gpui::AsyncApp| {
-                let _ = cx.update(move |cx| {
+                cx.update(move |cx| {
                     let mut f = f;
                     for handle in handles {
                         let _ = handle.update(cx, |view, window, cx| f(view, window, cx));
@@ -437,6 +622,58 @@ impl SettingsWindowView {
             },
         )
         .detach();
+    }
+
+    fn selected_git_executable_path(&self) -> Option<std::path::PathBuf> {
+        match self.git_executable_mode {
+            GitExecutableMode::SystemPath => None,
+            GitExecutableMode::Custom => {
+                let trimmed = self.git_custom_path_draft.trim();
+                Some(if trimmed.is_empty() {
+                    std::path::PathBuf::new()
+                } else {
+                    std::path::PathBuf::from(trimmed)
+                })
+            }
+        }
+    }
+
+    fn sync_git_runtime_state(&mut self, runtime: GitRuntimeState, cx: &mut gpui::Context<Self>) {
+        self.git_executable_mode = GitExecutableMode::from_preference(&runtime.preference);
+        if let GitExecutablePreference::Custom(path) = &runtime.preference {
+            let next_draft = if path.as_os_str().is_empty() {
+                String::new()
+            } else {
+                path.display().to_string()
+            };
+            if self.git_custom_path_draft != next_draft {
+                self.git_custom_path_draft = next_draft.clone();
+                self.git_executable_input
+                    .update(cx, |input, cx| input.set_text(next_draft, cx));
+            }
+        }
+
+        self.runtime_info = SettingsRuntimeInfo::from_runtime(runtime.clone());
+        self.persist_preferences(cx);
+        self.update_main_windows(cx, move |view, _window, _cx| {
+            view.store
+                .dispatch(Msg::SetGitRuntimeState(runtime.clone()));
+        });
+        cx.notify();
+    }
+
+    fn apply_git_executable_settings(&mut self, cx: &mut gpui::Context<Self>) {
+        let runtime = install_git_executable_path(self.selected_git_executable_path());
+        self.sync_git_runtime_state(runtime, cx);
+    }
+
+    fn set_git_executable_mode(&mut self, mode: GitExecutableMode, cx: &mut gpui::Context<Self>) {
+        if self.git_executable_mode == mode {
+            return;
+        }
+
+        self.git_executable_mode = mode;
+        self.apply_git_executable_settings(cx);
     }
 
     fn font_option_detail(&self, family: &str) -> Option<SharedString> {
@@ -608,6 +845,83 @@ impl SettingsWindowView {
         self.persist_preferences(cx);
         self.update_main_windows(cx, move |view, _window, cx| {
             view.set_change_tracking_view(next, cx);
+        });
+        cx.notify();
+    }
+
+    fn set_diff_scroll_sync(&mut self, next: DiffScrollSync, cx: &mut gpui::Context<Self>) {
+        if self.diff_scroll_sync == next {
+            return;
+        }
+
+        self.diff_scroll_sync = next;
+        self.expanded_section = None;
+        self.persist_preferences(cx);
+        self.update_main_windows(cx, move |view, _window, cx| {
+            view.set_diff_scroll_sync(next, cx);
+        });
+        cx.notify();
+    }
+
+    fn set_history_column_preferences(
+        &mut self,
+        show_graph: bool,
+        show_author: bool,
+        show_date: bool,
+        show_sha: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.history_show_graph == show_graph
+            && self.history_show_author == show_author
+            && self.history_show_date == show_date
+            && self.history_show_sha == show_sha
+        {
+            return;
+        }
+
+        self.history_show_graph = show_graph;
+        self.history_show_author = show_author;
+        self.history_show_date = show_date;
+        self.history_show_sha = show_sha;
+        self.persist_preferences(cx);
+        self.update_main_windows(cx, move |view, _window, cx| {
+            view.set_history_column_preferences(show_graph, show_author, show_date, show_sha, cx);
+        });
+        cx.notify();
+    }
+
+    fn set_history_show_tags(&mut self, enabled: bool, cx: &mut gpui::Context<Self>) {
+        if self.history_show_tags == enabled {
+            return;
+        }
+
+        self.history_show_tags = enabled;
+        if !enabled && self.expanded_section == Some(SettingsSection::GitLogTagFetch) {
+            self.expanded_section = None;
+        }
+        let tag_fetch_mode = self.history_tag_fetch_mode;
+        self.persist_preferences(cx);
+        self.update_main_windows(cx, move |view, _window, cx| {
+            view.set_history_tag_preferences(enabled, tag_fetch_mode, cx);
+        });
+        cx.notify();
+    }
+
+    fn set_history_tag_fetch_mode(
+        &mut self,
+        mode: GitLogTagFetchMode,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.history_tag_fetch_mode == mode {
+            return;
+        }
+
+        self.history_tag_fetch_mode = mode;
+        self.expanded_section = None;
+        let show_tags = self.history_show_tags;
+        self.persist_preferences(cx);
+        self.update_main_windows(cx, move |view, _window, cx| {
+            view.set_history_tag_preferences(show_tags, mode, cx);
         });
         cx.notify();
     }
@@ -789,7 +1103,9 @@ impl SettingsWindowView {
 
     fn empty_dropdown_list(&self, message: &'static str, theme: AppTheme) -> AnyElement {
         div()
+            .w_full()
             .h_full()
+            .min_w(px(0.0))
             .min_h(px(0.0))
             .px_2()
             .py_1()
@@ -815,21 +1131,21 @@ impl SettingsWindowView {
         div()
             .id(container_id)
             .debug_selector(move || container_id.to_string())
+            .w_full()
+            .min_w(px(0.0))
             .relative()
             .h(height)
             .min_h(height)
             .rounded(px(theme.radii.row))
             .border_1()
-            .border_color(if theme.is_dark {
-                with_alpha(theme.colors.border, 0.98)
-            } else {
-                theme.colors.border
-            })
+            .border_color(settings_dropdown_border_color(theme))
             .bg(settings_dropdown_background(theme))
             .overflow_hidden()
             .child(
                 div()
+                    .w_full()
                     .h_full()
+                    .min_w(px(0.0))
                     .min_h(px(0.0))
                     .pr(components::Scrollbar::visible_gutter(
                         scroll.clone(),
@@ -844,6 +1160,21 @@ impl SettingsWindowView {
             )
     }
 
+    fn detail_container(&self, container_id: &'static str, theme: AppTheme) -> Stateful<gpui::Div> {
+        div()
+            .id(container_id)
+            .debug_selector(move || container_id.to_string())
+            .w_full()
+            .min_w(px(0.0))
+            .flex()
+            .flex_col()
+            .rounded(px(theme.radii.row))
+            .border_1()
+            .border_color(settings_dropdown_border_color(theme))
+            .bg(settings_dropdown_background(theme))
+            .overflow_hidden()
+    }
+
     fn summary_row(
         &self,
         id: &'static str,
@@ -852,6 +1183,8 @@ impl SettingsWindowView {
         expanded: bool,
         theme: AppTheme,
     ) -> Stateful<gpui::Div> {
+        let label_debug_id = format!("{id}_label");
+        let value_debug_id = format!("{id}_value");
         div()
             .id(id)
             .debug_selector(move || id.to_string())
@@ -860,23 +1193,50 @@ impl SettingsWindowView {
             .py_1()
             .flex()
             .items_center()
-            .justify_between()
+            .gap_2()
             .rounded(px(theme.radii.row))
             .cursor(CursorStyle::PointingHand)
+            .overflow_hidden()
             .hover(move |s| s.bg(theme.colors.hover))
             .active(move |s| s.bg(theme.colors.active))
-            .child(div().text_sm().child(label))
             .child(
                 div()
+                    .debug_selector(move || label_debug_id.clone())
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .overflow_hidden()
+                    .child(
+                        div()
+                            .text_sm()
+                            .line_clamp(1)
+                            .whitespace_nowrap()
+                            .overflow_hidden()
+                            .child(label),
+                    ),
+            )
+            .child(
+                div()
+                    .debug_selector(move || value_debug_id.clone())
+                    .min_w(px(0.0))
                     .flex()
                     .items_center()
+                    .justify_end()
                     .gap_2()
                     .text_sm()
                     .text_color(theme.colors.text_muted)
-                    .child(value)
+                    .overflow_hidden()
+                    .child(
+                        div()
+                            .min_w(px(0.0))
+                            .line_clamp(1)
+                            .whitespace_nowrap()
+                            .overflow_hidden()
+                            .child(value),
+                    )
                     .child(
                         div()
                             .font_family(UI_MONOSPACE_FONT_FAMILY)
+                            .flex_shrink_0()
                             .child(if expanded { "^" } else { "v" }),
                     ),
             )
@@ -889,28 +1249,59 @@ impl SettingsWindowView {
         enabled: bool,
         theme: AppTheme,
     ) -> Stateful<gpui::Div> {
+        let label_debug_id = format!("{id}_label");
+        let value_debug_id = format!("{id}_value");
         div()
             .id(id)
+            .debug_selector(move || id.to_string())
             .w_full()
             .px_2()
             .py_1()
             .flex()
             .items_center()
-            .justify_between()
+            .gap_2()
             .rounded(px(theme.radii.row))
             .cursor(CursorStyle::PointingHand)
+            .overflow_hidden()
             .hover(move |s| s.bg(theme.colors.hover))
             .active(move |s| s.bg(theme.colors.active))
-            .child(div().text_sm().child(label))
             .child(
                 div()
-                    .text_sm()
-                    .text_color(if enabled {
-                        theme.colors.success
-                    } else {
-                        theme.colors.text_muted
-                    })
-                    .child(if enabled { "On" } else { "Off" }),
+                    .debug_selector(move || label_debug_id.clone())
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .overflow_hidden()
+                    .child(
+                        div()
+                            .text_sm()
+                            .line_clamp(1)
+                            .whitespace_nowrap()
+                            .overflow_hidden()
+                            .child(label),
+                    ),
+            )
+            .child(
+                div()
+                    .debug_selector(move || value_debug_id.clone())
+                    .min_w(px(0.0))
+                    .flex()
+                    .items_center()
+                    .justify_end()
+                    .overflow_hidden()
+                    .child(
+                        div()
+                            .min_w(px(0.0))
+                            .text_sm()
+                            .line_clamp(1)
+                            .whitespace_nowrap()
+                            .overflow_hidden()
+                            .text_color(if enabled {
+                                theme.colors.success
+                            } else {
+                                theme.colors.text_muted
+                            })
+                            .child(if enabled { "On" } else { "Off" }),
+                    ),
             )
     }
 
@@ -921,22 +1312,53 @@ impl SettingsWindowView {
         value: SharedString,
         theme: AppTheme,
     ) -> Stateful<gpui::Div> {
+        let label_debug_id = format!("{id}_label");
+        let value_debug_id = format!("{id}_value");
         div()
             .id(id)
+            .debug_selector(move || id.to_string())
             .w_full()
             .px_2()
             .py_1()
             .flex()
             .items_center()
-            .justify_between()
+            .gap_2()
             .rounded(px(theme.radii.row))
-            .child(div().text_sm().child(label))
+            .overflow_hidden()
             .child(
                 div()
-                    .text_sm()
-                    .font_family(UI_MONOSPACE_FONT_FAMILY)
-                    .text_color(theme.colors.text_muted)
-                    .child(value),
+                    .debug_selector(move || label_debug_id.clone())
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .overflow_hidden()
+                    .child(
+                        div()
+                            .text_sm()
+                            .line_clamp(1)
+                            .whitespace_nowrap()
+                            .overflow_hidden()
+                            .child(label),
+                    ),
+            )
+            .child(
+                div()
+                    .debug_selector(move || value_debug_id.clone())
+                    .min_w(px(0.0))
+                    .flex()
+                    .items_center()
+                    .justify_end()
+                    .overflow_hidden()
+                    .child(
+                        div()
+                            .min_w(px(0.0))
+                            .text_sm()
+                            .font_family(UI_MONOSPACE_FONT_FAMILY)
+                            .text_color(theme.colors.text_muted)
+                            .line_clamp(1)
+                            .whitespace_nowrap()
+                            .overflow_hidden()
+                            .child(value),
+                    ),
             )
     }
 
@@ -947,6 +1369,8 @@ impl SettingsWindowView {
         value: SharedString,
         theme: AppTheme,
     ) -> Stateful<gpui::Div> {
+        let label_debug_id = format!("{id}_label");
+        let value_debug_id = format!("{id}_value");
         div()
             .id(id)
             .debug_selector(move || id.to_string())
@@ -955,21 +1379,186 @@ impl SettingsWindowView {
             .py_1()
             .flex()
             .items_center()
-            .justify_between()
+            .gap_2()
             .rounded(px(theme.radii.row))
             .cursor(CursorStyle::PointingHand)
+            .overflow_hidden()
             .hover(move |s| s.bg(theme.colors.hover))
             .active(move |s| s.bg(theme.colors.active))
-            .child(div().text_sm().child(label))
             .child(
                 div()
+                    .debug_selector(move || label_debug_id.clone())
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .overflow_hidden()
+                    .child(
+                        div()
+                            .text_sm()
+                            .line_clamp(1)
+                            .whitespace_nowrap()
+                            .overflow_hidden()
+                            .child(label),
+                    ),
+            )
+            .child(
+                div()
+                    .debug_selector(move || value_debug_id.clone())
+                    .min_w(px(0.0))
                     .flex()
                     .items_center()
+                    .justify_end()
                     .gap_2()
                     .text_sm()
                     .text_color(theme.colors.accent)
-                    .child(value)
-                    .child(div().font_family(UI_MONOSPACE_FONT_FAMILY).child("->")),
+                    .overflow_hidden()
+                    .child(
+                        div()
+                            .min_w(px(0.0))
+                            .line_clamp(1)
+                            .whitespace_nowrap()
+                            .overflow_hidden()
+                            .child(value),
+                    )
+                    .child(
+                        div()
+                            .font_family(UI_MONOSPACE_FONT_FAMILY)
+                            .flex_shrink_0()
+                            .child("->"),
+                    ),
+            )
+    }
+
+    fn git_runtime_row(&self, theme: AppTheme) -> Stateful<gpui::Div> {
+        let min_git_version = format!("{MIN_GIT_MAJOR}.{MIN_GIT_MINOR}");
+        let (git_icon_path, git_icon_color, git_status_text): (
+            &'static str,
+            gpui::Rgba,
+            SharedString,
+        ) = match self.runtime_info.git.compatibility {
+            GitCompatibility::Supported => (
+                "icons/check.svg",
+                theme.colors.success,
+                format!("Git >= {min_git_version}").into(),
+            ),
+            GitCompatibility::TooOld => (
+                "icons/warning.svg",
+                theme.colors.warning,
+                format!("Git < {min_git_version}").into(),
+            ),
+            GitCompatibility::Unknown => (
+                "icons/warning.svg",
+                theme.colors.warning,
+                "Git version unknown".into(),
+            ),
+            GitCompatibility::Unavailable => (
+                "icons/warning.svg",
+                theme.colors.danger,
+                "Unavailable".into(),
+            ),
+        };
+
+        div()
+            .id("settings_window_git_runtime")
+            .debug_selector(|| "settings_window_git_runtime".to_string())
+            .w_full()
+            .px_2()
+            .py_1()
+            .flex()
+            .items_center()
+            .gap_2()
+            .rounded(px(theme.radii.row))
+            .overflow_hidden()
+            .child(
+                div()
+                    .debug_selector(|| "settings_window_git_runtime_label".to_string())
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .overflow_hidden()
+                    .child(
+                        div()
+                            .text_sm()
+                            .line_clamp(1)
+                            .whitespace_nowrap()
+                            .overflow_hidden()
+                            .child("Detected runtime"),
+                    ),
+            )
+            .child(
+                div()
+                    .debug_selector(|| "settings_window_git_runtime_value".to_string())
+                    .min_w(px(0.0))
+                    .flex()
+                    .items_center()
+                    .justify_end()
+                    .gap_2()
+                    .overflow_hidden()
+                    .child(svg_icon(git_icon_path, git_icon_color, px(14.0)))
+                    .child(
+                        div()
+                            .min_w(px(0.0))
+                            .text_sm()
+                            .font_family(UI_MONOSPACE_FONT_FAMILY)
+                            .text_color(theme.colors.text_muted)
+                            .line_clamp(1)
+                            .whitespace_nowrap()
+                            .overflow_hidden()
+                            .child(self.runtime_info.git.version_display.clone()),
+                    )
+                    .child(
+                        div()
+                            .min_w(px(0.0))
+                            .text_xs()
+                            .text_color(git_icon_color)
+                            .line_clamp(1)
+                            .whitespace_nowrap()
+                            .overflow_hidden()
+                            .flex_shrink_0()
+                            .child(git_status_text),
+                    ),
+            )
+    }
+
+    fn overflow_probe_content(&self, theme: AppTheme) -> Stateful<gpui::Div> {
+        div()
+            .id("settings_window_overflow_probe_view")
+            .w_full()
+            .flex_1()
+            .min_w(px(0.0))
+            .min_h(px(0.0))
+            .flex()
+            .flex_col()
+            .gap_3()
+            .p_3()
+            .child(
+                self.card("settings_window_overflow_probe_card", "Overflow probe", theme)
+                    .child(self.summary_row(
+                        "settings_window_overflow_summary",
+                        "Deliberately long summary label for overflow coverage",
+                        "Extraordinarily long monospace-friendly summary value used to verify clipping"
+                            .into(),
+                        false,
+                        theme,
+                    ))
+                    .child(self.toggle_row(
+                        "settings_window_overflow_toggle",
+                        "Deliberately long toggle label for overflow coverage",
+                        true,
+                        theme,
+                    ))
+                    .child(self.info_row(
+                        "settings_window_overflow_info",
+                        "Deliberately long info label for overflow coverage",
+                        self.runtime_info.operating_system.clone(),
+                        theme,
+                    ))
+                    .child(self.link_row(
+                        "settings_window_overflow_link",
+                        "Deliberately long link label for overflow coverage",
+                        "https://github.com/Auto-Explore/GitComet/releases/tag/settings-overflow-regression"
+                            .into(),
+                        theme,
+                    ))
+                    .child(self.git_runtime_row(theme)),
             )
     }
 
@@ -1221,10 +1810,37 @@ impl SettingsWindowView {
             .collect()
     }
 
+    fn render_diff_scroll_sync_option_rows(
+        this: &mut Self,
+        range: Range<usize>,
+        _window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> Vec<AnyElement> {
+        let theme = this.theme;
+        range
+            .filter_map(|ix| DIFF_SCROLL_SYNC_OPTIONS.get(ix).copied())
+            .map(|(id, option, detail)| {
+                this.option_row(
+                    id,
+                    option.label(),
+                    Some(detail.into()),
+                    this.diff_scroll_sync == option,
+                    theme,
+                )
+                .on_click(cx.listener(move |this, _e: &ClickEvent, _window, cx| {
+                    this.set_diff_scroll_sync(option, cx);
+                }))
+                .into_any_element()
+            })
+            .collect()
+    }
+
     fn card(&self, id: &'static str, title: &'static str, theme: AppTheme) -> Stateful<gpui::Div> {
         div()
             .id(id)
+            .debug_selector(move || id.to_string())
             .w_full()
+            .min_w(px(0.0))
             .flex()
             .flex_col()
             .rounded(px(theme.radii.panel))
@@ -1248,7 +1864,11 @@ impl SettingsWindowView {
 impl Render for SettingsWindowView {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         let theme = self.theme;
-        let decorations = effective_window_decorations(window);
+        let decorations = window.window_decorations();
+        let show_custom_window_chrome =
+            crate::linux_gui_env::LinuxGuiEnvironment::should_render_custom_window_chrome(
+                decorations,
+            );
         let (tiling, client_inset) = match decorations {
             Decorations::Client { tiling } => (Some(tiling), settings_window_client_inset()),
             Decorations::Server => (None, px(0.0)),
@@ -1325,7 +1945,7 @@ impl Render for SettingsWindowView {
             )
             .on_mouse_move(cx.listener(|this, _e, window, _cx| {
                 if this.title_drag_state.take_move_request() {
-                    window.start_window_move();
+                    crate::app::begin_window_move(window);
                 }
             }))
             .child(
@@ -1417,152 +2037,186 @@ impl Render for SettingsWindowView {
                 )
             });
 
-        let content = match self.current_view {
-            SettingsView::Root => {
-                let theme_row = self
-                    .summary_row(
-                        "settings_window_theme",
-                        "Theme",
-                        self.theme_mode.label().into(),
-                        self.expanded_section == Some(SettingsSection::Theme),
-                        theme,
-                    )
-                    .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
-                        this.toggle_section(SettingsSection::Theme, cx);
-                    }));
+        self.git_executable_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
 
-                let date_format_row = self
-                    .summary_row(
-                        "settings_window_date_format",
-                        "Date format",
-                        self.date_time_format.label().into(),
-                        self.expanded_section == Some(SettingsSection::DateFormat),
-                        theme,
-                    )
-                    .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
-                        this.toggle_section(SettingsSection::DateFormat, cx);
-                    }));
+        #[cfg(test)]
+        let show_overflow_probe =
+            self.overflow_probe && matches!(self.current_view, SettingsView::Root);
+        #[cfg(not(test))]
+        let show_overflow_probe = false;
 
-                let ui_font_row = self
-                    .summary_row(
-                        "settings_window_ui_font",
-                        "UI Font",
-                        crate::font_preferences::display_label(&self.ui_font_family).into(),
-                        self.expanded_section == Some(SettingsSection::UiFont),
-                        theme,
-                    )
-                    .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
-                        this.toggle_section(SettingsSection::UiFont, cx);
-                    }));
-
-                let editor_font_row = self
-                    .summary_row(
-                        "settings_window_editor_font",
-                        "Editor Font",
-                        crate::font_preferences::display_label(&self.editor_font_family).into(),
-                        self.expanded_section == Some(SettingsSection::EditorFont),
-                        theme,
-                    )
-                    .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
-                        this.toggle_section(SettingsSection::EditorFont, cx);
-                    }));
-
-                let font_ligatures_row = self
-                    .toggle_row(
-                        "settings_window_use_font_ligatures",
-                        "Use font ligatures",
-                        self.use_font_ligatures,
-                        theme,
-                    )
-                    .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
-                        this.set_use_font_ligatures(!this.use_font_ligatures, cx);
-                    }));
-
-                let timezone_row = self
-                    .summary_row(
-                        "settings_window_timezone",
-                        "Date timezone",
-                        self.timezone.label().into(),
-                        self.expanded_section == Some(SettingsSection::Timezone),
-                        theme,
-                    )
-                    .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
-                        this.toggle_section(SettingsSection::Timezone, cx);
-                    }));
-
-                let show_timezone_row = self
-                    .toggle_row(
-                        "settings_window_show_timezone",
-                        "Show timezone",
-                        self.show_timezone,
-                        theme,
-                    )
-                    .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
-                        this.set_show_timezone(!this.show_timezone, cx);
-                    }));
-
-                let change_tracking_row = self
-                    .summary_row(
-                        "settings_window_change_tracking",
-                        "Untracked files",
-                        self.change_tracking_view.settings_label().into(),
-                        self.expanded_section == Some(SettingsSection::ChangeTracking),
-                        theme,
-                    )
-                    .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
-                        this.toggle_section(SettingsSection::ChangeTracking, cx);
-                    }));
-
-                let mut general_card = self
-                    .card("settings_window_general", "General", theme)
-                    .child(theme_row);
-
-                if self.expanded_section == Some(SettingsSection::Theme) {
-                    let theme_mode_count = settings_theme_modes().len();
-                    let list = uniform_list(
-                        "settings_window_theme_list",
-                        theme_mode_count,
-                        cx.processor(Self::render_theme_option_rows),
-                    )
-                    .h_full()
-                    .min_h(px(0.0))
-                    .track_scroll(self.theme_scroll.clone())
-                    .on_scroll_wheel({
-                        let scroll = self.theme_scroll.clone();
-                        move |event, window, cx| {
-                            if uniform_list_should_stop_scroll_propagation(&scroll, event, window) {
-                                cx.stop_propagation();
-                            }
-                        }
-                    })
-                    .into_any_element();
-                    general_card = general_card.child(self.dropdown_list_container(
-                        "settings_window_theme_list_container",
-                        "settings_window_theme_scrollbar",
-                        self.theme_scroll.clone(),
-                        theme_mode_count,
-                        SETTINGS_DROPDOWN_COMPACT_ROW_HEIGHT_PX,
-                        SETTINGS_DROPDOWN_COMPACT_LIST_EXTRA_HEIGHT_PX,
-                        list,
-                        theme,
-                    ));
-                }
-
-                general_card = general_card.child(ui_font_row);
-                if self.expanded_section == Some(SettingsSection::UiFont) {
-                    let list = if self.ui_font_options.is_empty() {
-                        self.empty_dropdown_list("No fonts available.", theme)
-                    } else {
-                        uniform_list(
-                            "settings_window_ui_font_list",
-                            self.ui_font_options.len(),
-                            cx.processor(Self::render_ui_font_option_rows),
+        let content = if show_overflow_probe {
+            self.overflow_probe_content(theme).into_any_element()
+        } else {
+            match self.current_view {
+                SettingsView::Root => {
+                    let theme_row = self
+                        .summary_row(
+                            "settings_window_theme",
+                            "Theme",
+                            self.theme_mode.label().into(),
+                            self.expanded_section == Some(SettingsSection::Theme),
+                            theme,
                         )
+                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                            this.toggle_section(SettingsSection::Theme, cx);
+                        }));
+
+                    let date_format_row = self
+                        .summary_row(
+                            "settings_window_date_format",
+                            "Date format",
+                            self.date_time_format.label().into(),
+                            self.expanded_section == Some(SettingsSection::DateFormat),
+                            theme,
+                        )
+                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                            this.toggle_section(SettingsSection::DateFormat, cx);
+                        }));
+
+                    let ui_font_row = self
+                        .summary_row(
+                            "settings_window_ui_font",
+                            "UI Font",
+                            crate::font_preferences::display_label(&self.ui_font_family).into(),
+                            self.expanded_section == Some(SettingsSection::UiFont),
+                            theme,
+                        )
+                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                            this.toggle_section(SettingsSection::UiFont, cx);
+                        }));
+
+                    let editor_font_row = self
+                        .summary_row(
+                            "settings_window_editor_font",
+                            "Editor Font",
+                            crate::font_preferences::display_label(&self.editor_font_family).into(),
+                            self.expanded_section == Some(SettingsSection::EditorFont),
+                            theme,
+                        )
+                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                            this.toggle_section(SettingsSection::EditorFont, cx);
+                        }));
+
+                    let font_ligatures_row = self
+                        .toggle_row(
+                            "settings_window_use_font_ligatures",
+                            "Use font ligatures",
+                            self.use_font_ligatures,
+                            theme,
+                        )
+                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                            this.set_use_font_ligatures(!this.use_font_ligatures, cx);
+                        }));
+
+                    let timezone_row = self
+                        .summary_row(
+                            "settings_window_timezone",
+                            "Date timezone",
+                            self.timezone.label().into(),
+                            self.expanded_section == Some(SettingsSection::Timezone),
+                            theme,
+                        )
+                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                            this.toggle_section(SettingsSection::Timezone, cx);
+                        }));
+
+                    let show_timezone_row = self
+                        .toggle_row(
+                            "settings_window_show_timezone",
+                            "Show timezone",
+                            self.show_timezone,
+                            theme,
+                        )
+                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                            this.set_show_timezone(!this.show_timezone, cx);
+                        }));
+
+                    let change_tracking_row = self
+                        .summary_row(
+                            "settings_window_change_tracking",
+                            "Untracked files",
+                            self.change_tracking_view.settings_label().into(),
+                            self.expanded_section == Some(SettingsSection::ChangeTracking),
+                            theme,
+                        )
+                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                            this.toggle_section(SettingsSection::ChangeTracking, cx);
+                        }));
+
+                    let diff_scroll_sync_row = self
+                        .summary_row(
+                            "settings_window_diff_scroll_sync",
+                            "Scroll sync",
+                            self.diff_scroll_sync.label().into(),
+                            self.expanded_section == Some(SettingsSection::Diff),
+                            theme,
+                        )
+                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                            this.toggle_section(SettingsSection::Diff, cx);
+                        }));
+
+                    let history_columns_row = self
+                        .summary_row(
+                            "settings_window_git_log_columns",
+                            "History columns",
+                            history_columns_settings_label(
+                                self.history_show_graph,
+                                self.history_show_author,
+                                self.history_show_date,
+                                self.history_show_sha,
+                            ),
+                            self.expanded_section == Some(SettingsSection::GitLogColumns),
+                            theme,
+                        )
+                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                            this.toggle_section(SettingsSection::GitLogColumns, cx);
+                        }));
+
+                    let show_history_tags_row = self
+                        .toggle_row(
+                            "settings_window_git_log_show_tags",
+                            "Show tags in history view",
+                            self.history_show_tags,
+                            theme,
+                        )
+                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                            this.set_history_show_tags(!this.history_show_tags, cx);
+                        }));
+
+                    let auto_fetch_tags_row = self
+                        .summary_row(
+                            "settings_window_git_log_tag_fetch_mode",
+                            "Automatically fetch tags",
+                            git_log_tag_fetch_mode_label(self.history_tag_fetch_mode).into(),
+                            self.expanded_section == Some(SettingsSection::GitLogTagFetch),
+                            theme,
+                        )
+                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                            if this.history_show_tags {
+                                this.toggle_section(SettingsSection::GitLogTagFetch, cx);
+                            }
+                        }));
+
+                    let mut general_card = self
+                        .card("settings_window_general", "General", theme)
+                        .child(theme_row);
+
+                    if self.expanded_section == Some(SettingsSection::Theme) {
+                        let theme_mode_count = settings_theme_modes().len();
+                        let list = uniform_list(
+                            "settings_window_theme_list",
+                            theme_mode_count,
+                            cx.processor(Self::render_theme_option_rows),
+                        )
+                        .w_full()
+                        .min_w(px(0.0))
                         .h_full()
                         .min_h(px(0.0))
-                        .track_scroll(self.ui_font_scroll.clone())
+                        .track_scroll(&self.theme_scroll)
                         .on_scroll_wheel({
-                            let scroll = self.ui_font_scroll.clone();
+                            let scroll = self.theme_scroll.clone();
                             move |event, window, cx| {
                                 if uniform_list_should_stop_scroll_propagation(
                                     &scroll, event, window,
@@ -1571,445 +2225,859 @@ impl Render for SettingsWindowView {
                                 }
                             }
                         })
-                        .into_any_element()
-                    };
-                    general_card = general_card
-                        .child(
-                            div()
-                                .px_2()
-                                .pb_1()
-                                .text_xs()
-                                .text_color(theme.colors.text_muted)
-                                .child(self.font_options_hint(self.ui_font_family.as_str())),
-                        )
-                        .child(self.dropdown_list_container(
-                            "settings_window_ui_font_list_container",
-                            "settings_window_ui_font_scrollbar",
-                            self.ui_font_scroll.clone(),
-                            self.ui_font_options.len(),
+                        .into_any_element();
+                        general_card = general_card.child(self.dropdown_list_container(
+                            "settings_window_theme_list_container",
+                            "settings_window_theme_scrollbar",
+                            self.theme_scroll.clone(),
+                            theme_mode_count,
                             SETTINGS_DROPDOWN_COMPACT_ROW_HEIGHT_PX,
-                            0.0,
+                            SETTINGS_DROPDOWN_COMPACT_LIST_EXTRA_HEIGHT_PX,
                             list,
                             theme,
                         ));
-                }
+                    }
 
-                general_card = general_card.child(editor_font_row);
-                if self.expanded_section == Some(SettingsSection::EditorFont) {
-                    let list = if self.editor_font_options.is_empty() {
-                        self.empty_dropdown_list("No fonts available.", theme)
-                    } else {
-                        uniform_list(
-                            "settings_window_editor_font_list",
-                            self.editor_font_options.len(),
-                            cx.processor(Self::render_editor_font_option_rows),
-                        )
-                        .h_full()
-                        .min_h(px(0.0))
-                        .track_scroll(self.editor_font_scroll.clone())
-                        .on_scroll_wheel({
-                            let scroll = self.editor_font_scroll.clone();
-                            move |event, window, cx| {
-                                if uniform_list_should_stop_scroll_propagation(
-                                    &scroll, event, window,
-                                ) {
-                                    cx.stop_propagation();
-                                }
-                            }
-                        })
-                        .into_any_element()
-                    };
-                    general_card = general_card
-                        .child(
-                            div()
-                                .px_2()
-                                .pb_1()
-                                .text_xs()
-                                .text_color(theme.colors.text_muted)
-                                .child(self.font_options_hint(self.editor_font_family.as_str())),
-                        )
-                        .child(self.dropdown_list_container(
-                            "settings_window_editor_font_list_container",
-                            "settings_window_editor_font_scrollbar",
-                            self.editor_font_scroll.clone(),
-                            self.editor_font_options.len(),
-                            SETTINGS_DROPDOWN_COMPACT_ROW_HEIGHT_PX,
-                            0.0,
-                            list,
-                            theme,
-                        ));
-                }
-
-                general_card = general_card.child(font_ligatures_row);
-
-                general_card = general_card.child(date_format_row);
-                if self.expanded_section == Some(SettingsSection::DateFormat) {
-                    let list = uniform_list(
-                        "settings_window_date_format_list",
-                        DateTimeFormat::all().len(),
-                        cx.processor(Self::render_date_format_option_rows),
-                    )
-                    .h_full()
-                    .min_h(px(0.0))
-                    .track_scroll(self.date_format_scroll.clone())
-                    .on_scroll_wheel({
-                        let scroll = self.date_format_scroll.clone();
-                        move |event, window, cx| {
-                            if uniform_list_should_stop_scroll_propagation(&scroll, event, window) {
-                                cx.stop_propagation();
-                            }
-                        }
-                    })
-                    .into_any_element();
-                    general_card = general_card.child(self.dropdown_list_container(
-                        "settings_window_date_format_list_container",
-                        "settings_window_date_format_scrollbar",
-                        self.date_format_scroll.clone(),
-                        DateTimeFormat::all().len(),
-                        SETTINGS_DROPDOWN_COMPACT_ROW_HEIGHT_PX,
-                        SETTINGS_DROPDOWN_COMPACT_LIST_EXTRA_HEIGHT_PX,
-                        list,
-                        theme,
-                    ));
-                }
-
-                general_card = general_card.child(timezone_row);
-                if self.expanded_section == Some(SettingsSection::Timezone) {
-                    let list = uniform_list(
-                        "settings_window_timezone_list",
-                        Timezone::all().len(),
-                        cx.processor(Self::render_timezone_option_rows),
-                    )
-                    .h_full()
-                    .min_h(px(0.0))
-                    .track_scroll(self.timezone_scroll.clone())
-                    .on_scroll_wheel({
-                        let scroll = self.timezone_scroll.clone();
-                        move |event, window, cx| {
-                            if uniform_list_should_stop_scroll_propagation(&scroll, event, window) {
-                                cx.stop_propagation();
-                            }
-                        }
-                    })
-                    .into_any_element();
-                    general_card = general_card.child(self.dropdown_list_container(
-                        "settings_window_timezone_list_container",
-                        "settings_window_timezone_scrollbar",
-                        self.timezone_scroll.clone(),
-                        Timezone::all().len(),
-                        SETTINGS_DROPDOWN_DENSE_DETAIL_ROW_HEIGHT_PX,
-                        0.0,
-                        list,
-                        theme,
-                    ));
-                }
-
-                general_card = general_card.child(show_timezone_row);
-
-                let mut change_tracking_card = self
-                    .card(
-                        "settings_window_change_tracking_card",
-                        "Change tracking",
-                        theme,
-                    )
-                    .child(change_tracking_row);
-
-                if self.expanded_section == Some(SettingsSection::ChangeTracking) {
-                    let list = uniform_list(
-                        "settings_window_change_tracking_list",
-                        CHANGE_TRACKING_OPTIONS.len(),
-                        cx.processor(Self::render_change_tracking_option_rows),
-                    )
-                    .h_full()
-                    .min_h(px(0.0))
-                    .track_scroll(self.change_tracking_scroll.clone())
-                    .on_scroll_wheel({
-                        let scroll = self.change_tracking_scroll.clone();
-                        move |event, window, cx| {
-                            if uniform_list_should_stop_scroll_propagation(&scroll, event, window) {
-                                cx.stop_propagation();
-                            }
-                        }
-                    })
-                    .into_any_element();
-                    change_tracking_card =
-                        change_tracking_card.child(self.dropdown_list_container(
-                            "settings_window_change_tracking_list_container",
-                            "settings_window_change_tracking_scrollbar",
-                            self.change_tracking_scroll.clone(),
-                            CHANGE_TRACKING_OPTIONS.len(),
-                            SETTINGS_DROPDOWN_DETAIL_ROW_HEIGHT_PX,
-                            SETTINGS_DROPDOWN_DETAIL_LIST_EXTRA_HEIGHT_PX,
-                            list,
-                            theme,
-                        ));
-                }
-
-                let min_git_version = format!("{MIN_GIT_MAJOR}.{MIN_GIT_MINOR}");
-                let (git_icon_path, git_icon_color, git_status_text): (
-                    &'static str,
-                    gpui::Rgba,
-                    SharedString,
-                ) = match self.runtime_info.git.compatibility {
-                    GitCompatibility::Supported => (
-                        "icons/check.svg",
-                        theme.colors.success,
-                        format!("Git >= {min_git_version}").into(),
-                    ),
-                    GitCompatibility::TooOld => (
-                        "icons/warning.svg",
-                        theme.colors.warning,
-                        format!("Git < {min_git_version}").into(),
-                    ),
-                    GitCompatibility::Unknown => (
-                        "icons/warning.svg",
-                        theme.colors.warning,
-                        "Git version unknown".into(),
-                    ),
-                };
-
-                let mut environment_card = self
-                    .card("settings_window_environment", "Environment", theme)
-                    .child(
-                        div()
-                            .id("settings_window_git")
+                    general_card = general_card.child(ui_font_row);
+                    if self.expanded_section == Some(SettingsSection::UiFont) {
+                        let list = if self.ui_font_options.is_empty() {
+                            self.empty_dropdown_list("No fonts available.", theme)
+                        } else {
+                            uniform_list(
+                                "settings_window_ui_font_list",
+                                self.ui_font_options.len(),
+                                cx.processor(Self::render_ui_font_option_rows),
+                            )
                             .w_full()
-                            .px_2()
-                            .py_1()
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .rounded(px(theme.radii.row))
-                            .child(div().text_sm().child("Git"))
+                            .min_w(px(0.0))
+                            .h_full()
+                            .min_h(px(0.0))
+                            .track_scroll(&self.ui_font_scroll)
+                            .on_scroll_wheel({
+                                let scroll = self.ui_font_scroll.clone();
+                                move |event, window, cx| {
+                                    if uniform_list_should_stop_scroll_propagation(
+                                        &scroll, event, window,
+                                    ) {
+                                        cx.stop_propagation();
+                                    }
+                                }
+                            })
+                            .into_any_element()
+                        };
+                        general_card = general_card
                             .child(
                                 div()
-                                    .flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .child(svg_icon(git_icon_path, git_icon_color, px(14.0)))
+                                    .px_2()
+                                    .pb_1()
+                                    .text_xs()
+                                    .text_color(theme.colors.text_muted)
+                                    .child(self.font_options_hint(self.ui_font_family.as_str())),
+                            )
+                            .child(self.dropdown_list_container(
+                                "settings_window_ui_font_list_container",
+                                "settings_window_ui_font_scrollbar",
+                                self.ui_font_scroll.clone(),
+                                self.ui_font_options.len(),
+                                SETTINGS_DROPDOWN_COMPACT_ROW_HEIGHT_PX,
+                                0.0,
+                                list,
+                                theme,
+                            ));
+                    }
+
+                    general_card = general_card.child(editor_font_row);
+                    if self.expanded_section == Some(SettingsSection::EditorFont) {
+                        let list = if self.editor_font_options.is_empty() {
+                            self.empty_dropdown_list("No fonts available.", theme)
+                        } else {
+                            uniform_list(
+                                "settings_window_editor_font_list",
+                                self.editor_font_options.len(),
+                                cx.processor(Self::render_editor_font_option_rows),
+                            )
+                            .w_full()
+                            .min_w(px(0.0))
+                            .h_full()
+                            .min_h(px(0.0))
+                            .track_scroll(&self.editor_font_scroll)
+                            .on_scroll_wheel({
+                                let scroll = self.editor_font_scroll.clone();
+                                move |event, window, cx| {
+                                    if uniform_list_should_stop_scroll_propagation(
+                                        &scroll, event, window,
+                                    ) {
+                                        cx.stop_propagation();
+                                    }
+                                }
+                            })
+                            .into_any_element()
+                        };
+                        general_card = general_card
+                            .child(
+                                div()
+                                    .px_2()
+                                    .pb_1()
+                                    .text_xs()
+                                    .text_color(theme.colors.text_muted)
                                     .child(
-                                        div()
-                                            .text_sm()
-                                            .font_family(UI_MONOSPACE_FONT_FAMILY)
-                                            .text_color(theme.colors.text_muted)
-                                            .child(self.runtime_info.git.version_display.clone()),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(git_icon_color)
-                                            .child(git_status_text),
+                                        self.font_options_hint(self.editor_font_family.as_str()),
                                     ),
+                            )
+                            .child(self.dropdown_list_container(
+                                "settings_window_editor_font_list_container",
+                                "settings_window_editor_font_scrollbar",
+                                self.editor_font_scroll.clone(),
+                                self.editor_font_options.len(),
+                                SETTINGS_DROPDOWN_COMPACT_ROW_HEIGHT_PX,
+                                0.0,
+                                list,
+                                theme,
+                            ));
+                    }
+
+                    general_card = general_card.child(font_ligatures_row);
+
+                    general_card = general_card.child(date_format_row);
+                    if self.expanded_section == Some(SettingsSection::DateFormat) {
+                        let list = uniform_list(
+                            "settings_window_date_format_list",
+                            DateTimeFormat::all().len(),
+                            cx.processor(Self::render_date_format_option_rows),
+                        )
+                        .w_full()
+                        .min_w(px(0.0))
+                        .h_full()
+                        .min_h(px(0.0))
+                        .track_scroll(&self.date_format_scroll)
+                        .on_scroll_wheel({
+                            let scroll = self.date_format_scroll.clone();
+                            move |event, window, cx| {
+                                if uniform_list_should_stop_scroll_propagation(
+                                    &scroll, event, window,
+                                ) {
+                                    cx.stop_propagation();
+                                }
+                            }
+                        })
+                        .into_any_element();
+                        general_card = general_card.child(self.dropdown_list_container(
+                            "settings_window_date_format_list_container",
+                            "settings_window_date_format_scrollbar",
+                            self.date_format_scroll.clone(),
+                            DateTimeFormat::all().len(),
+                            SETTINGS_DROPDOWN_COMPACT_ROW_HEIGHT_PX,
+                            SETTINGS_DROPDOWN_COMPACT_LIST_EXTRA_HEIGHT_PX,
+                            list,
+                            theme,
+                        ));
+                    }
+
+                    general_card = general_card.child(timezone_row);
+                    if self.expanded_section == Some(SettingsSection::Timezone) {
+                        let list = uniform_list(
+                            "settings_window_timezone_list",
+                            Timezone::all().len(),
+                            cx.processor(Self::render_timezone_option_rows),
+                        )
+                        .w_full()
+                        .min_w(px(0.0))
+                        .h_full()
+                        .min_h(px(0.0))
+                        .track_scroll(&self.timezone_scroll)
+                        .on_scroll_wheel({
+                            let scroll = self.timezone_scroll.clone();
+                            move |event, window, cx| {
+                                if uniform_list_should_stop_scroll_propagation(
+                                    &scroll, event, window,
+                                ) {
+                                    cx.stop_propagation();
+                                }
+                            }
+                        })
+                        .into_any_element();
+                        general_card = general_card.child(self.dropdown_list_container(
+                            "settings_window_timezone_list_container",
+                            "settings_window_timezone_scrollbar",
+                            self.timezone_scroll.clone(),
+                            Timezone::all().len(),
+                            SETTINGS_DROPDOWN_DENSE_DETAIL_ROW_HEIGHT_PX,
+                            0.0,
+                            list,
+                            theme,
+                        ));
+                    }
+
+                    general_card = general_card.child(show_timezone_row);
+
+                    let mut change_tracking_card = self
+                        .card(
+                            "settings_window_change_tracking_card",
+                            "Change tracking",
+                            theme,
+                        )
+                        .child(change_tracking_row);
+
+                    if self.expanded_section == Some(SettingsSection::ChangeTracking) {
+                        let list = uniform_list(
+                            "settings_window_change_tracking_list",
+                            CHANGE_TRACKING_OPTIONS.len(),
+                            cx.processor(Self::render_change_tracking_option_rows),
+                        )
+                        .w_full()
+                        .min_w(px(0.0))
+                        .h_full()
+                        .min_h(px(0.0))
+                        .track_scroll(&self.change_tracking_scroll)
+                        .on_scroll_wheel({
+                            let scroll = self.change_tracking_scroll.clone();
+                            move |event, window, cx| {
+                                if uniform_list_should_stop_scroll_propagation(
+                                    &scroll, event, window,
+                                ) {
+                                    cx.stop_propagation();
+                                }
+                            }
+                        })
+                        .into_any_element();
+                        change_tracking_card =
+                            change_tracking_card.child(self.dropdown_list_container(
+                                "settings_window_change_tracking_list_container",
+                                "settings_window_change_tracking_scrollbar",
+                                self.change_tracking_scroll.clone(),
+                                CHANGE_TRACKING_OPTIONS.len(),
+                                SETTINGS_DROPDOWN_DETAIL_ROW_HEIGHT_PX,
+                                SETTINGS_DROPDOWN_DETAIL_LIST_EXTRA_HEIGHT_PX,
+                                list,
+                                theme,
+                            ));
+                    }
+
+                    let mut diff_card = self
+                        .card("settings_window_diff_card", "Diff", theme)
+                        .child(diff_scroll_sync_row);
+
+                    if self.expanded_section == Some(SettingsSection::Diff) {
+                        let list = uniform_list(
+                            "settings_window_diff_scroll_sync_list",
+                            DIFF_SCROLL_SYNC_OPTIONS.len(),
+                            cx.processor(Self::render_diff_scroll_sync_option_rows),
+                        )
+                        .w_full()
+                        .min_w(px(0.0))
+                        .h_full()
+                        .min_h(px(0.0))
+                        .track_scroll(&self.diff_scroll_sync_scroll)
+                        .on_scroll_wheel({
+                            let scroll = self.diff_scroll_sync_scroll.clone();
+                            move |event, window, cx| {
+                                if uniform_list_should_stop_scroll_propagation(
+                                    &scroll, event, window,
+                                ) {
+                                    cx.stop_propagation();
+                                }
+                            }
+                        })
+                        .into_any_element();
+                        diff_card = diff_card.child(self.dropdown_list_container(
+                            "settings_window_diff_scroll_sync_list_container",
+                            "settings_window_diff_scroll_sync_scrollbar",
+                            self.diff_scroll_sync_scroll.clone(),
+                            DIFF_SCROLL_SYNC_OPTIONS.len(),
+                            SETTINGS_DROPDOWN_DETAIL_ROW_HEIGHT_PX,
+                            SETTINGS_DROPDOWN_DETAIL_LIST_EXTRA_HEIGHT_PX + 18.0,
+                            list,
+                            theme,
+                        ));
+                    }
+
+                    let mut git_log_card = self
+                        .card("settings_window_git_log_card", "Git log", theme)
+                        .child(history_columns_row);
+
+                    if self.expanded_section == Some(SettingsSection::GitLogColumns) {
+                        git_log_card = git_log_card.child(
+                            self.detail_container(
+                                "settings_window_git_log_columns_container",
+                                theme,
+                            )
+                            .child(
+                                self.toggle_row(
+                                    "settings_window_git_log_column_graph",
+                                    "Graph",
+                                    self.history_show_graph,
+                                    theme,
+                                )
+                                .on_click(cx.listener(
+                                    |this, _e: &ClickEvent, _window, cx| {
+                                        this.set_history_column_preferences(
+                                            !this.history_show_graph,
+                                            this.history_show_author,
+                                            this.history_show_date,
+                                            this.history_show_sha,
+                                            cx,
+                                        );
+                                    },
+                                )),
+                            )
+                            .child(
+                                self.toggle_row(
+                                    "settings_window_git_log_column_author",
+                                    "Author",
+                                    self.history_show_author,
+                                    theme,
+                                )
+                                .on_click(cx.listener(
+                                    |this, _e: &ClickEvent, _window, cx| {
+                                        this.set_history_column_preferences(
+                                            this.history_show_graph,
+                                            !this.history_show_author,
+                                            this.history_show_date,
+                                            this.history_show_sha,
+                                            cx,
+                                        );
+                                    },
+                                )),
+                            )
+                            .child(
+                                self.toggle_row(
+                                    "settings_window_git_log_column_date",
+                                    "Commit date",
+                                    self.history_show_date,
+                                    theme,
+                                )
+                                .on_click(cx.listener(
+                                    |this, _e: &ClickEvent, _window, cx| {
+                                        this.set_history_column_preferences(
+                                            this.history_show_graph,
+                                            this.history_show_author,
+                                            !this.history_show_date,
+                                            this.history_show_sha,
+                                            cx,
+                                        );
+                                    },
+                                )),
+                            )
+                            .child(
+                                self.toggle_row(
+                                    "settings_window_git_log_column_sha",
+                                    "SHA",
+                                    self.history_show_sha,
+                                    theme,
+                                )
+                                .on_click(cx.listener(
+                                    |this, _e: &ClickEvent, _window, cx| {
+                                        this.set_history_column_preferences(
+                                            this.history_show_graph,
+                                            this.history_show_author,
+                                            this.history_show_date,
+                                            !this.history_show_sha,
+                                            cx,
+                                        );
+                                    },
+                                )),
+                            )
+                            .child(
+                                div()
+                                    .px_2()
+                                    .pb_1()
+                                    .text_xs()
+                                    .text_color(theme.colors.text_muted)
+                                    .child("Columns may auto-hide in narrow windows."),
+                            )
+                            .child(
+                                self.link_row(
+                                    "settings_window_git_log_reset_widths",
+                                    "Reset column widths",
+                                    "Reset".into(),
+                                    theme,
+                                )
+                                .on_click(cx.listener(
+                                    |this, _e: &ClickEvent, _window, cx| {
+                                        this.update_main_windows(cx, |view, _window, cx| {
+                                            view.reset_history_column_widths(cx);
+                                        });
+                                        cx.notify();
+                                    },
+                                )),
                             ),
+                        );
+                    }
+
+                    git_log_card = git_log_card.child(show_history_tags_row);
+                    if self.history_show_tags {
+                        git_log_card = git_log_card.child(auto_fetch_tags_row);
+
+                        if self.expanded_section == Some(SettingsSection::GitLogTagFetch) {
+                            git_log_card = git_log_card.child(
+                                self.detail_container(
+                                    "settings_window_git_log_tag_fetch_container",
+                                    theme,
+                                )
+                                .child(
+                                    self.option_row(
+                                        "settings_window_git_log_tag_fetch_mode_activation",
+                                        "On repository activation",
+                                        Some(
+                                            "Fetch local tags when a repository becomes active."
+                                                .into(),
+                                        ),
+                                        self.history_tag_fetch_mode
+                                            == GitLogTagFetchMode::OnRepositoryActivation,
+                                        theme,
+                                    )
+                                    .on_click(cx.listener(
+                                        |this, _e: &ClickEvent, _window, cx| {
+                                            this.set_history_tag_fetch_mode(
+                                                GitLogTagFetchMode::OnRepositoryActivation,
+                                                cx,
+                                            );
+                                        },
+                                    )),
+                                )
+                                .child(
+                                    self.option_row(
+                                        "settings_window_git_log_tag_fetch_mode_disabled",
+                                        "Disabled",
+                                        Some(
+                                            "Skip automatic tag fetching on repository activation."
+                                                .into(),
+                                        ),
+                                        self.history_tag_fetch_mode == GitLogTagFetchMode::Disabled,
+                                        theme,
+                                    )
+                                    .on_click(cx.listener(
+                                        |this, _e: &ClickEvent, _window, cx| {
+                                            this.set_history_tag_fetch_mode(
+                                                GitLogTagFetchMode::Disabled,
+                                                cx,
+                                            );
+                                        },
+                                    )),
+                                ),
+                            );
+                        }
+                    }
+
+                    let system_git_row = self
+                        .option_row(
+                            "settings_window_git_executable_system",
+                            "System PATH",
+                            Some(
+                                "Use the first `git` executable available in the current PATH."
+                                    .into(),
+                            ),
+                            self.git_executable_mode == GitExecutableMode::SystemPath,
+                            theme,
+                        )
+                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                            this.set_git_executable_mode(GitExecutableMode::SystemPath, cx);
+                        }));
+
+                    let custom_git_row = self
+                    .option_row(
+                        "settings_window_git_executable_custom",
+                        "Custom executable",
+                        Some(
+                            "Use a specific Git binary, such as a newer standalone installation."
+                                .into(),
+                        ),
+                        self.git_executable_mode == GitExecutableMode::Custom,
+                        theme,
                     )
-                    .child(self.info_row(
-                        "settings_window_build",
-                        "Build",
-                        self.runtime_info.app_version_display.clone(),
-                        theme,
-                    ))
-                    .child(self.info_row(
-                        "settings_window_os",
-                        "Operating system",
-                        self.runtime_info.operating_system.clone(),
-                        theme,
-                    ));
+                    .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                        this.set_git_executable_mode(GitExecutableMode::Custom, cx);
+                    }));
 
-                if let Some(detail) = self.runtime_info.git.detail.clone() {
-                    environment_card = environment_card.child(
-                        div()
-                            .px_2()
-                            .pt_1()
-                            .text_xs()
-                            .text_color(theme.colors.text_muted)
-                            .child(detail),
+                    let mut git_executable_card = self
+                        .card("settings_window_git_executable", "Git executable", theme)
+                        .child(
+                            div()
+                                .id("settings_window_git_executable_scope_note")
+                                .px_2()
+                                .pb_1()
+                                .text_xs()
+                                .text_color(theme.colors.text_muted)
+                                .child(git_executable_scope_note()),
+                        )
+                        .child(system_git_row)
+                        .child(custom_git_row);
+
+                    if self.git_executable_mode == GitExecutableMode::Custom {
+                        let browse_button = components::Button::new(
+                            "settings_window_git_executable_browse",
+                            "Browse",
+                        )
+                        .style(components::ButtonStyle::Outlined)
+                        .on_click(theme, cx, |_this, _e, window, cx| {
+                            let view = cx.weak_entity();
+                            let rx = cx.prompt_for_paths(gpui::PathPromptOptions {
+                                files: true,
+                                directories: false,
+                                multiple: false,
+                                prompt: Some("Select Git executable".into()),
+                            });
+
+                            window
+                                .spawn(cx, async move |cx| {
+                                    let result = rx.await;
+                                    let paths = match result {
+                                        Ok(Ok(Some(paths))) => paths,
+                                        Ok(Ok(None)) => return,
+                                        Ok(Err(_)) | Err(_) => return,
+                                    };
+                                    let Some(path) = paths.into_iter().next() else {
+                                        return;
+                                    };
+                                    let _ = view.update(cx, |this, cx| {
+                                        let next = path.display().to_string();
+                                        this.git_custom_path_draft = next.clone();
+                                        this.git_executable_input
+                                            .update(cx, |input, cx| input.set_text(next, cx));
+                                        this.apply_git_executable_settings(cx);
+                                    });
+                                })
+                                .detach();
+                        });
+
+                        let use_path_button = components::Button::new(
+                            "settings_window_git_executable_apply",
+                            "Use Path",
+                        )
+                        .style(components::ButtonStyle::Filled)
+                        .on_click(theme, cx, |this, _e, _window, cx| {
+                            this.apply_git_executable_settings(cx);
+                        });
+
+                        git_executable_card = git_executable_card.child(
+                        self.detail_container(
+                            "settings_window_git_executable_custom_container",
+                            theme,
+                        )
+                        .child(
+                            div()
+                                .px_2()
+                                .pt_1()
+                                .text_xs()
+                                .text_color(theme.colors.text_muted)
+                                .child("Custom Git executable"),
+                        )
+                        .child(
+                            div()
+                                .px_2()
+                                .pb_1()
+                                .w_full()
+                                .min_w(px(0.0))
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w(px(0.0))
+                                        .child(self.git_executable_input.clone()),
+                                )
+                                .child(browse_button)
+                                .child(use_path_button),
+                        )
+                        .child(
+                            div()
+                                .px_2()
+                                .pb_1()
+                                .text_xs()
+                                .text_color(theme.colors.text_muted)
+                                .child(
+                                    "Press Enter after editing the path to apply it immediately.",
+                                ),
+                        ),
                     );
-                }
+                    }
 
-                let links_card = self
-                    .card("settings_window_links", "Links", theme)
-                    .child(
-                        self.link_row("settings_window_github", "GitHub", GITHUB_URL.into(), theme)
+                    git_executable_card = git_executable_card.child(self.git_runtime_row(theme));
+
+                    if let Some(detail) = self.runtime_info.git.detail.clone() {
+                        git_executable_card = git_executable_card.child(
+                            div()
+                                .id("settings_window_git_runtime_detail")
+                                .px_2()
+                                .pb_1()
+                                .text_xs()
+                                .text_color(theme.colors.text_muted)
+                                .child(detail),
+                        );
+                    }
+
+                    let environment_card = self
+                        .card("settings_window_environment", "Environment", theme)
+                        .child(self.info_row(
+                            "settings_window_build",
+                            "Build",
+                            self.runtime_info.app_version_display.clone(),
+                            theme,
+                        ))
+                        .child(self.info_row(
+                            "settings_window_os",
+                            "Operating system",
+                            self.runtime_info.operating_system.clone(),
+                            theme,
+                        ));
+
+                    let links_card = self
+                        .card("settings_window_links", "Links", theme)
+                        .child(
+                            self.link_row(
+                                "settings_window_github",
+                                "GitHub",
+                                GITHUB_URL.into(),
+                                theme,
+                            )
                             .on_click(|_, _, cx| {
                                 cx.open_url(GITHUB_URL);
                             }),
-                    )
-                    .child(
-                        self.link_row(
-                            "settings_window_license",
-                            "License",
-                            LICENSE_NAME.into(),
-                            theme,
                         )
-                        .on_click(|_, _, cx| {
-                            cx.open_url(LICENSE_URL);
-                        }),
-                    )
-                    .child(
-                        self.link_row(
-                            "settings_window_open_source_licenses",
-                            "Open source licenses",
-                            "Show".into(),
-                            theme,
+                        .child(
+                            self.link_row(
+                                "settings_window_license",
+                                "License",
+                                LICENSE_NAME.into(),
+                                theme,
+                            )
+                            .on_click(|_, _, cx| {
+                                cx.open_url(LICENSE_URL);
+                            }),
                         )
-                        .on_click(cx.listener(
-                            |this, _e: &ClickEvent, _window, cx| {
-                                this.show_open_source_licenses(cx);
-                            },
-                        )),
-                    );
+                        .child(
+                            self.link_row(
+                                "settings_window_professional_edition_waitlist",
+                                "Professional Edition waitlist",
+                                EDITIONS_URL.into(),
+                                theme,
+                            )
+                            .on_click(|_, _, cx| {
+                                cx.open_url(EDITIONS_URL);
+                            }),
+                        )
+                        .child(
+                            self.link_row(
+                                "settings_window_open_source_licenses",
+                                "Open source licenses",
+                                "Show".into(),
+                                theme,
+                            )
+                            .on_click(cx.listener(
+                                |this, _e: &ClickEvent, _window, cx| {
+                                    this.show_open_source_licenses(cx);
+                                },
+                            )),
+                        );
 
-                div()
-                    .id("settings_window_scroll")
-                    .flex_1()
-                    .overflow_y_scroll()
-                    .track_scroll(&self.settings_window_scroll)
-                    .flex()
-                    .flex_col()
-                    .gap_3()
-                    .p_3()
-                    .child(general_card)
-                    .child(change_tracking_card)
-                    .child(environment_card)
-                    .child(links_card)
-            }
-            SettingsView::OpenSourceLicenses => {
-                let rows = crate::view::open_source_licenses_data::open_source_license_rows();
-                let breadcrumb = div()
-                    .id("settings_window_breadcrumb")
-                    .w_full()
-                    .px_2()
-                    .py_1()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(
-                        div()
-                            .id("settings_window_breadcrumb_settings")
-                            .debug_selector(|| "settings_window_breadcrumb_settings".to_string())
-                            .px_2()
-                            .py_1()
-                            .rounded(px(theme.radii.row))
-                            .cursor(CursorStyle::PointingHand)
-                            .hover(move |s| s.bg(theme.colors.hover))
-                            .active(move |s| s.bg(theme.colors.active))
-                            .text_sm()
-                            .text_color(theme.colors.accent)
-                            .child("< Settings")
-                            .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
-                                this.show_root(cx);
-                            })),
-                    )
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(theme.colors.text_muted)
-                            .child("/"),
-                    )
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(FontWeight::BOLD)
-                            .child("Open source licenses"),
-                    );
+                    let scroll_surface = div()
+                        .id("settings_window_scroll")
+                        .debug_selector(|| "settings_window_scroll".to_string())
+                        .w_full()
+                        .h_full()
+                        .min_w(px(0.0))
+                        .min_h(px(0.0))
+                        .overflow_y_scroll()
+                        .track_scroll(&self.settings_window_scroll)
+                        .flex()
+                        .flex_col()
+                        .gap_3()
+                        .p_3()
+                        .child(general_card)
+                        .child(change_tracking_card)
+                        .child(diff_card)
+                        .child(git_log_card)
+                        .child(git_executable_card)
+                        .child(environment_card)
+                        .child(links_card);
 
-                let list = if rows.is_empty() {
                     div()
+                        .id("settings_window_root_view")
+                        .debug_selector(|| "settings_window_root_view".to_string())
+                        .w_full()
+                        .relative()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .min_h(px(0.0))
+                        .child(
+                            div()
+                                .w_full()
+                                .flex_1()
+                                .h_full()
+                                .min_w(px(0.0))
+                                .min_h(px(0.0))
+                                .pr(components::Scrollbar::visible_gutter(
+                                    self.settings_window_scroll.clone(),
+                                    components::ScrollbarAxis::Vertical,
+                                ))
+                                .child(scroll_surface),
+                        )
+                        .child(
+                            {
+                                let scrollbar = components::Scrollbar::new(
+                                    "settings_window_scrollbar",
+                                    self.settings_window_scroll.clone(),
+                                )
+                                .always_visible();
+                                #[cfg(test)]
+                                let scrollbar =
+                                    scrollbar.debug_selector("settings_window_scrollbar");
+                                scrollbar
+                            }
+                            .render(theme),
+                        )
+                }
+                SettingsView::OpenSourceLicenses => {
+                    let rows = crate::view::open_source_licenses_data::open_source_license_rows();
+                    let breadcrumb = div()
+                        .id("settings_window_breadcrumb")
+                        .w_full()
                         .px_2()
                         .py_1()
-                        .text_sm()
-                        .text_color(theme.colors.text_muted)
-                        .child("No dependency licenses found.")
-                        .into_any_element()
-                } else {
-                    uniform_list(
-                        "settings_window_open_source_licenses_list",
-                        rows.len(),
-                        cx.processor(Self::render_open_source_license_rows),
-                    )
-                    .h_full()
-                    .min_h(px(0.0))
-                    .track_scroll(self.open_source_licenses_scroll.clone())
-                    .into_any_element()
-                };
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            div()
+                                .id("settings_window_breadcrumb_settings")
+                                .debug_selector(|| {
+                                    "settings_window_breadcrumb_settings".to_string()
+                                })
+                                .px_2()
+                                .py_1()
+                                .rounded(px(theme.radii.row))
+                                .cursor(CursorStyle::PointingHand)
+                                .hover(move |s| s.bg(theme.colors.hover))
+                                .active(move |s| s.bg(theme.colors.active))
+                                .text_sm()
+                                .text_color(theme.colors.accent)
+                                .child("< Settings")
+                                .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                                    this.show_root(cx);
+                                })),
+                        )
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(theme.colors.text_muted)
+                                .child("/"),
+                        )
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_weight(FontWeight::BOLD)
+                                .child("Open source licenses"),
+                        );
 
-                let list_container = div()
-                    .id("settings_window_open_source_licenses_list_container")
-                    .relative()
-                    .flex_1()
-                    .min_h(px(0.0))
-                    .child(
+                    let list = if rows.is_empty() {
                         div()
-                            .flex_1()
-                            .h_full()
-                            .min_h(px(0.0))
-                            .pr(components::Scrollbar::visible_gutter(
-                                self.open_source_licenses_scroll.clone(),
-                                components::ScrollbarAxis::Vertical,
-                            ))
-                            .child(list),
-                    )
-                    .child(
-                        {
-                            let scrollbar = components::Scrollbar::new(
-                                "settings_window_open_source_licenses_scrollbar",
-                                self.open_source_licenses_scroll.clone(),
-                            )
-                            .always_visible();
-                            #[cfg(test)]
-                            let scrollbar = scrollbar
-                                .debug_selector("settings_window_open_source_licenses_scrollbar");
-                            scrollbar
-                        }
-                        .render(theme),
-                    );
-
-                let licenses_card = self
-                    .card(
-                        "settings_window_open_source_licenses_card",
-                        "Open source licenses",
-                        theme,
-                    )
-                    .flex_1()
-                    .min_h(px(0.0))
-                    .child(
-                        div()
-                            .px_2()
-                            .pb_1()
-                            .text_xs()
-                            .text_color(theme.colors.text_muted)
-                            .child(format!("{} third-party crates listed", rows.len())),
-                    )
-                    .child(
-                        div()
-                            .id("settings_window_open_source_licenses_columns")
-                            .debug_selector(|| {
-                                "settings_window_open_source_licenses_columns".to_string()
-                            })
                             .px_2()
                             .py_1()
-                            .text_xs()
+                            .text_sm()
                             .text_color(theme.colors.text_muted)
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(div().w(px(200.0)).child("Crate"))
-                            .child(div().w(px(90.0)).child("Version"))
-                            .child(div().flex_1().min_w(px(0.0)).child("License")),
-                    )
-                    .child(list_container);
+                            .child("No dependency licenses found.")
+                            .into_any_element()
+                    } else {
+                        uniform_list(
+                            "settings_window_open_source_licenses_list",
+                            rows.len(),
+                            cx.processor(Self::render_open_source_license_rows),
+                        )
+                        .w_full()
+                        .min_w(px(0.0))
+                        .h_full()
+                        .min_h(px(0.0))
+                        .track_scroll(&self.open_source_licenses_scroll)
+                        .into_any_element()
+                    };
 
-                div()
-                    .id("settings_window_open_source_licenses_view")
-                    .flex_1()
-                    .min_h(px(0.0))
-                    .flex()
-                    .flex_col()
-                    .gap_3()
-                    .p_3()
-                    .child(breadcrumb)
-                    .child(licenses_card)
+                    let list_container = div()
+                        .id("settings_window_open_source_licenses_list_container")
+                        .w_full()
+                        .min_w(px(0.0))
+                        .relative()
+                        .flex_1()
+                        .min_h(px(0.0))
+                        .child(
+                            div()
+                                .w_full()
+                                .flex_1()
+                                .h_full()
+                                .min_w(px(0.0))
+                                .min_h(px(0.0))
+                                .pr(components::Scrollbar::visible_gutter(
+                                    self.open_source_licenses_scroll.clone(),
+                                    components::ScrollbarAxis::Vertical,
+                                ))
+                                .child(list),
+                        )
+                        .child(
+                            {
+                                let scrollbar = components::Scrollbar::new(
+                                    "settings_window_open_source_licenses_scrollbar",
+                                    self.open_source_licenses_scroll.clone(),
+                                )
+                                .always_visible();
+                                #[cfg(test)]
+                                let scrollbar = scrollbar.debug_selector(
+                                    "settings_window_open_source_licenses_scrollbar",
+                                );
+                                scrollbar
+                            }
+                            .render(theme),
+                        );
+
+                    let licenses_card = self
+                        .card(
+                            "settings_window_open_source_licenses_card",
+                            "Open source licenses",
+                            theme,
+                        )
+                        .flex_1()
+                        .min_h(px(0.0))
+                        .child(
+                            div()
+                                .px_2()
+                                .pb_1()
+                                .text_xs()
+                                .text_color(theme.colors.text_muted)
+                                .child(format!("{} third-party crates listed", rows.len())),
+                        )
+                        .child(
+                            div()
+                                .id("settings_window_open_source_licenses_columns")
+                                .debug_selector(|| {
+                                    "settings_window_open_source_licenses_columns".to_string()
+                                })
+                                .px_2()
+                                .py_1()
+                                .text_xs()
+                                .text_color(theme.colors.text_muted)
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .child(div().w(px(200.0)).child("Crate"))
+                                .child(div().w(px(90.0)).child("Version"))
+                                .child(div().flex_1().min_w(px(0.0)).child("License")),
+                        )
+                        .child(list_container);
+
+                    div()
+                        .id("settings_window_open_source_licenses_view")
+                        .w_full()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .min_h(px(0.0))
+                        .flex()
+                        .flex_col()
+                        .gap_3()
+                        .p_3()
+                        .child(breadcrumb)
+                        .child(licenses_card)
+                }
             }
+            .into_any_element()
         };
 
         let body = div()
@@ -2026,9 +3094,13 @@ impl Render for SettingsWindowView {
                 weight: gpui::FontWeight::default(),
                 style: gpui::FontStyle::default(),
             })
-            .text_color(theme.colors.text)
-            .child(header)
-            .child(content);
+            .text_color(theme.colors.text);
+
+        let body = if show_custom_window_chrome {
+            body.child(header).child(content)
+        } else {
+            body.child(content)
+        };
 
         let mut root = div()
             .size_full()
@@ -2037,7 +3109,7 @@ impl Render for SettingsWindowView {
             .relative();
 
         root = root.on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, window, cx| {
-            let Decorations::Client { tiling } = effective_window_decorations(window) else {
+            let Decorations::Client { tiling } = window.window_decorations() else {
                 if this.hover_resize_edge.is_some() {
                     this.hover_resize_edge = None;
                     cx.notify();
@@ -2062,8 +3134,7 @@ impl Render for SettingsWindowView {
             root = root.on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|_this, e: &MouseDownEvent, window, cx| {
-                    let Decorations::Client { tiling } = effective_window_decorations(window)
-                    else {
+                    let Decorations::Client { tiling } = window.window_decorations() else {
                         return;
                     };
 
@@ -2096,8 +3167,12 @@ impl Render for SettingsWindowView {
 
 impl SettingsRuntimeInfo {
     fn detect() -> Self {
+        Self::from_runtime(refresh_git_runtime())
+    }
+
+    fn from_runtime(runtime: GitRuntimeState) -> Self {
         Self {
-            git: detect_git_runtime_info(),
+            git: git_runtime_info_from_state(runtime),
             app_version_display: format!("GitComet v{}", env!("CARGO_PKG_VERSION")).into(),
             operating_system: format!(
                 "{} ({}, {})",
@@ -2110,105 +3185,39 @@ impl SettingsRuntimeInfo {
     }
 }
 
-fn detect_git_runtime_info() -> GitRuntimeInfo {
+fn git_runtime_info_from_state(runtime: GitRuntimeState) -> GitRuntimeInfo {
     let compatibility_message =
         format!("GitComet has been tested only with Git {MIN_GIT_MAJOR}.{MIN_GIT_MINOR} or newer.");
-
-    let mut command = std::process::Command::new("git");
-    configure_background_command(&mut command);
-    match command.arg("--version").output() {
-        Ok(output) if output.status.success() => {
-            let version_output = if !output.stdout.is_empty() {
-                bytes_to_text_preserving_utf8(&output.stdout)
-                    .trim()
-                    .to_string()
-            } else {
-                bytes_to_text_preserving_utf8(&output.stderr)
-                    .trim()
-                    .to_string()
-            };
-
-            if version_output.is_empty() {
-                return GitRuntimeInfo {
-                    version_display: "Unavailable".into(),
-                    compatibility: GitCompatibility::Unknown,
-                    detail: Some(compatibility_message.into()),
-                };
-            }
-
-            let compatibility = match parse_git_version(&version_output) {
-                Some(version) if is_supported_git_version(version) => GitCompatibility::Supported,
-                Some(_) => GitCompatibility::TooOld,
-                None => GitCompatibility::Unknown,
-            };
-
-            GitRuntimeInfo {
-                version_display: version_output.into(),
-                compatibility,
-                detail: match compatibility {
-                    GitCompatibility::Supported => None,
-                    GitCompatibility::TooOld | GitCompatibility::Unknown => {
-                        Some(compatibility_message.into())
-                    }
-                },
-            }
+    let compatibility = if !runtime.is_available() {
+        GitCompatibility::Unavailable
+    } else {
+        match runtime.version_output().and_then(parse_git_version) {
+            Some(version) if is_supported_git_version(version) => GitCompatibility::Supported,
+            Some(_) => GitCompatibility::TooOld,
+            None => GitCompatibility::Unknown,
         }
-        Ok(output) => {
-            let stderr = bytes_to_text_preserving_utf8(&output.stderr)
-                .trim()
-                .to_string();
-            let display = if stderr.is_empty() {
-                format!("Unavailable (exit code: {})", output.status)
-            } else {
-                format!("Unavailable ({stderr})")
-            };
-            GitRuntimeInfo {
-                version_display: display.into(),
-                compatibility: GitCompatibility::Unknown,
-                detail: Some(compatibility_message.into()),
-            }
-        }
-        Err(err) => GitRuntimeInfo {
-            version_display: format!("Unavailable ({err})").into(),
-            compatibility: GitCompatibility::Unknown,
-            detail: Some(compatibility_message.into()),
-        },
+    };
+
+    let version_display = runtime
+        .version_output()
+        .unwrap_or("Unavailable")
+        .to_string()
+        .into();
+
+    let detail = match compatibility {
+        GitCompatibility::Supported => None,
+        GitCompatibility::TooOld | GitCompatibility::Unknown => Some(compatibility_message.into()),
+        GitCompatibility::Unavailable => runtime
+            .unavailable_detail()
+            .map(|detail| SharedString::from(detail.to_string())),
+    };
+
+    GitRuntimeInfo {
+        runtime,
+        version_display,
+        compatibility,
+        detail,
     }
-}
-
-fn bytes_to_text_preserving_utf8(bytes: &[u8]) -> String {
-    use std::fmt::Write as _;
-
-    let mut out = String::with_capacity(bytes.len());
-    let mut cursor = 0usize;
-    while cursor < bytes.len() {
-        match std::str::from_utf8(&bytes[cursor..]) {
-            Ok(valid) => {
-                out.push_str(valid);
-                break;
-            }
-            Err(err) => {
-                let valid_len = err.valid_up_to();
-                if valid_len > 0 {
-                    let valid = &bytes[cursor..cursor + valid_len];
-                    out.push_str(
-                        std::str::from_utf8(valid)
-                            .expect("slice identified by valid_up_to must be valid UTF-8"),
-                    );
-                    cursor += valid_len;
-                }
-
-                let invalid_len = err.error_len().unwrap_or(1);
-                let invalid_end = cursor.saturating_add(invalid_len).min(bytes.len());
-                for byte in &bytes[cursor..invalid_end] {
-                    let _ = write!(out, "\\x{byte:02x}");
-                }
-                cursor = invalid_end;
-            }
-        }
-    }
-
-    out
 }
 
 fn parse_git_version(raw: &str) -> Option<GitVersion> {
@@ -2238,25 +3247,18 @@ fn is_supported_git_version(version: GitVersion) -> bool {
         || (version.major == MIN_GIT_MAJOR && version.minor >= MIN_GIT_MINOR)
 }
 
-fn effective_window_decorations(window: &Window) -> Decorations {
-    match window.window_decorations() {
-        Decorations::Client { tiling } => Decorations::Client { tiling },
-        Decorations::Server if !cfg!(target_os = "macos") => Decorations::Client {
-            tiling: Tiling::default(),
-        },
-        Decorations::Server => Decorations::Server,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::test_support::lock_visual_test;
     use gitcomet_core::error::{Error, ErrorKind};
+    use gitcomet_core::process::{
+        GitExecutableAvailability, GitExecutablePreference, GitRuntimeState,
+    };
     use gitcomet_core::services::{GitBackend, GitRepository, Result};
     use gpui::{Modifiers, ScrollDelta, ScrollWheelEvent};
     use std::ops::Deref;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
 
     struct TestBackend;
 
@@ -2268,11 +3270,155 @@ mod tests {
         }
     }
 
+    fn assert_debug_bounds_within(
+        cx: &mut gpui::VisualTestContext,
+        outer_selector: &'static str,
+        inner_selector: &'static str,
+    ) {
+        let outer_bounds = cx
+            .debug_bounds(outer_selector)
+            .unwrap_or_else(|| panic!("expected `{outer_selector}` bounds"));
+        let inner_bounds = cx
+            .debug_bounds(inner_selector)
+            .unwrap_or_else(|| panic!("expected `{inner_selector}` bounds"));
+        let tolerance = px(0.5);
+
+        assert!(
+            inner_bounds.left() >= outer_bounds.left() - tolerance
+                && inner_bounds.right() <= outer_bounds.right() + tolerance
+                && inner_bounds.top() >= outer_bounds.top() - tolerance
+                && inner_bounds.bottom() <= outer_bounds.bottom() + tolerance,
+            "expected `{inner_selector}` to stay within `{outer_selector}` \
+             (outer={outer_bounds:?}, inner={inner_bounds:?})"
+        );
+    }
+
+    fn assert_debug_horizontal_insets(
+        cx: &mut gpui::VisualTestContext,
+        outer_selector: &'static str,
+        inner_selector: &'static str,
+        expected_left_inset: Pixels,
+        expected_right_inset: Pixels,
+    ) {
+        let outer_bounds = cx
+            .debug_bounds(outer_selector)
+            .unwrap_or_else(|| panic!("expected `{outer_selector}` bounds"));
+        let inner_bounds = cx
+            .debug_bounds(inner_selector)
+            .unwrap_or_else(|| panic!("expected `{inner_selector}` bounds"));
+        let left_inset = inner_bounds.left() - outer_bounds.left();
+        let right_inset = outer_bounds.right() - inner_bounds.right();
+        let tolerance = px(1.0);
+
+        assert!(
+            (left_inset - expected_left_inset).abs() <= tolerance
+                && (right_inset - expected_right_inset).abs() <= tolerance,
+            "expected `{inner_selector}` horizontal insets within `{outer_selector}` \
+             to be left={expected_left_inset:?}, right={expected_right_inset:?} \
+             (actual left={left_inset:?}, right={right_inset:?}, \
+             outer={outer_bounds:?}, inner={inner_bounds:?})"
+        );
+    }
+
+    fn assert_debug_matching_horizontal_insets(
+        cx: &mut gpui::VisualTestContext,
+        outer_selector: &'static str,
+        inner_selector: &'static str,
+    ) {
+        let outer_bounds = cx
+            .debug_bounds(outer_selector)
+            .unwrap_or_else(|| panic!("expected `{outer_selector}` bounds"));
+        let inner_bounds = cx
+            .debug_bounds(inner_selector)
+            .unwrap_or_else(|| panic!("expected `{inner_selector}` bounds"));
+        let left_inset = inner_bounds.left() - outer_bounds.left();
+        let right_inset = outer_bounds.right() - inner_bounds.right();
+        let tolerance = px(1.0);
+
+        assert!(
+            (left_inset - right_inset).abs() <= tolerance,
+            "expected `{inner_selector}` to use the full horizontal content width inside \
+             `{outer_selector}` (left inset={left_inset:?}, right inset={right_inset:?}, \
+             outer={outer_bounds:?}, inner={inner_bounds:?})"
+        );
+    }
+
     #[test]
-    fn bytes_to_text_preserving_utf8_escapes_invalid_bytes() {
+    fn git_executable_mode_tracks_runtime_preference() {
         assert_eq!(
-            bytes_to_text_preserving_utf8(b"ok\xff\xfeend"),
-            "ok\\xff\\xfeend"
+            GitExecutableMode::from_preference(&GitExecutablePreference::SystemPath),
+            GitExecutableMode::SystemPath
+        );
+        assert_eq!(
+            GitExecutableMode::from_preference(&GitExecutablePreference::Custom(PathBuf::from(
+                "/opt/git/bin/git"
+            ),)),
+            GitExecutableMode::Custom
+        );
+    }
+
+    #[test]
+    fn git_runtime_info_from_state_surfaces_unavailable_detail() {
+        let runtime = GitRuntimeState {
+            preference: GitExecutablePreference::Custom(PathBuf::new()),
+            availability: GitExecutableAvailability::Unavailable {
+                detail: "Custom Git executable is not configured. Choose an executable or switch back to System PATH.".to_string(),
+            },
+        };
+
+        let info = git_runtime_info_from_state(runtime.clone());
+        assert_eq!(info.runtime, runtime);
+        assert_eq!(info.compatibility, GitCompatibility::Unavailable);
+        assert_eq!(info.version_display.as_ref(), "Unavailable");
+        assert_eq!(
+            info.detail.as_ref().map(|detail| detail.as_ref()),
+            Some(
+                "Custom Git executable is not configured. Choose an executable or switch back to System PATH."
+            )
+        );
+    }
+
+    #[test]
+    fn applied_git_executable_path_tracks_runtime_preference() {
+        assert_eq!(
+            applied_git_executable_path(&GitRuntimeState {
+                preference: GitExecutablePreference::SystemPath,
+                availability: GitExecutableAvailability::Available {
+                    version_output: "git version 2.51.0".to_string(),
+                },
+            }),
+            None
+        );
+        assert_eq!(
+            applied_git_executable_path(&GitRuntimeState {
+                preference: GitExecutablePreference::Custom(PathBuf::from("/opt/git/bin/git")),
+                availability: GitExecutableAvailability::Available {
+                    version_output: "git version 2.51.0".to_string(),
+                },
+            }),
+            Some(PathBuf::from("/opt/git/bin/git"))
+        );
+        assert_eq!(
+            applied_git_executable_path(&GitRuntimeState {
+                preference: GitExecutablePreference::Custom(PathBuf::new()),
+                availability: GitExecutableAvailability::Unavailable {
+                    detail: "missing".to_string(),
+                },
+            }),
+            Some(PathBuf::new())
+        );
+    }
+
+    #[test]
+    fn git_executable_scope_note_mentions_browser_only_scope() {
+        let note = git_executable_scope_note();
+        assert!(
+            note.contains("browser window"),
+            "expected browser-only scope note, got: {note}"
+        );
+        assert!(
+            note.contains("System PATH"),
+            "expected command-mode fallback note, got: {note}"
         );
     }
 
@@ -2350,6 +3496,45 @@ mod tests {
                 chrome::CLIENT_SIDE_DECORATION_INSET
             );
         }
+    }
+
+    #[test]
+    fn settings_window_options_request_client_chrome_and_resize_behavior() {
+        let bounds = Bounds::new(
+            point(px(12.0), px(24.0)),
+            size(
+                px(SETTINGS_WINDOW_DEFAULT_WIDTH_PX),
+                px(SETTINGS_WINDOW_DEFAULT_HEIGHT_PX),
+            ),
+        );
+        let options = settings_window_options(bounds);
+
+        assert_eq!(
+            options.window_bounds,
+            Some(WindowBounds::Windowed(bounds)),
+            "settings window should open at the requested bounds"
+        );
+        assert_eq!(
+            options.window_min_size,
+            Some(size(
+                px(SETTINGS_WINDOW_MIN_WIDTH_PX),
+                px(SETTINGS_WINDOW_MIN_HEIGHT_PX),
+            )),
+            "settings window should enforce its minimum size"
+        );
+        assert_eq!(
+            options.window_decorations,
+            Some(WindowDecorations::Client),
+            "settings window should request client-side decorations"
+        );
+        assert!(
+            options.is_movable,
+            "settings window should remain movable with custom chrome"
+        );
+        assert!(
+            options.is_resizable,
+            "settings window should remain resizable with custom chrome"
+        );
     }
 
     #[test]
@@ -2473,6 +3658,10 @@ mod tests {
                 SettingsSection::ChangeTracking,
                 "settings_window_change_tracking_list_container",
             ),
+            (
+                SettingsSection::Diff,
+                "settings_window_diff_scroll_sync_list_container",
+            ),
         ] {
             let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
                 settings.expanded_section = Some(section);
@@ -2488,6 +3677,133 @@ mod tests {
                 "expected `{selector}` to be rendered for the expanded section"
             );
         }
+    }
+
+    #[gpui::test]
+    fn expanded_history_columns_section_renders_detail_container(cx: &mut gpui::TestAppContext) {
+        let _visual_guard = lock_visual_test();
+        let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+        let (_main_view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+            open_settings_window(app);
+        });
+        cx.run_until_parked();
+
+        let settings_window = cx.update(|_window, app| {
+            app.windows()
+                .into_iter()
+                .find_map(|window| window.downcast::<SettingsWindowView>())
+                .expect("settings window should be open")
+        });
+
+        let mut settings_cx = gpui::VisualTestContext::from_window(*settings_window.deref(), cx);
+        settings_cx.run_until_parked();
+        settings_cx.simulate_resize(size(px(SETTINGS_WINDOW_DEFAULT_WIDTH_PX), px(1200.0)));
+        settings_cx.run_until_parked();
+
+        let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
+            settings.expanded_section = Some(SettingsSection::GitLogColumns);
+            cx.notify();
+        });
+        settings_cx.run_until_parked();
+        settings_cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+
+        assert!(
+            settings_cx
+                .debug_bounds("settings_window_git_log_columns_container")
+                .is_some(),
+            "expected the history columns section to render its detail container when expanded"
+        );
+    }
+
+    #[gpui::test]
+    fn expanded_auto_fetch_tags_section_renders_detail_container(cx: &mut gpui::TestAppContext) {
+        let _visual_guard = lock_visual_test();
+        let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+        let (_main_view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+            open_settings_window(app);
+        });
+        cx.run_until_parked();
+
+        let settings_window = cx.update(|_window, app| {
+            app.windows()
+                .into_iter()
+                .find_map(|window| window.downcast::<SettingsWindowView>())
+                .expect("settings window should be open")
+        });
+
+        let mut settings_cx = gpui::VisualTestContext::from_window(*settings_window.deref(), cx);
+        settings_cx.run_until_parked();
+        settings_cx.simulate_resize(size(px(SETTINGS_WINDOW_DEFAULT_WIDTH_PX), px(1200.0)));
+        settings_cx.run_until_parked();
+
+        let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
+            settings.history_show_tags = true;
+            settings.expanded_section = Some(SettingsSection::GitLogTagFetch);
+            cx.notify();
+        });
+        settings_cx.run_until_parked();
+        settings_cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+
+        assert!(
+            settings_cx
+                .debug_bounds("settings_window_git_log_tag_fetch_container")
+                .is_some(),
+            "expected the auto fetch tags section to render its detail container when expanded"
+        );
+    }
+
+    #[gpui::test]
+    fn custom_git_executable_mode_renders_detail_container(cx: &mut gpui::TestAppContext) {
+        let _visual_guard = lock_visual_test();
+        let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+        let (_main_view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+            open_settings_window(app);
+        });
+        cx.run_until_parked();
+
+        let settings_window = cx.update(|_window, app| {
+            app.windows()
+                .into_iter()
+                .find_map(|window| window.downcast::<SettingsWindowView>())
+                .expect("settings window should be open")
+        });
+
+        let mut settings_cx = gpui::VisualTestContext::from_window(*settings_window.deref(), cx);
+        settings_cx.run_until_parked();
+        settings_cx.simulate_resize(size(px(SETTINGS_WINDOW_DEFAULT_WIDTH_PX), px(1200.0)));
+        settings_cx.run_until_parked();
+
+        let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
+            settings.git_executable_mode = GitExecutableMode::Custom;
+            cx.notify();
+        });
+        settings_cx.run_until_parked();
+        settings_cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+
+        assert!(
+            settings_cx
+                .debug_bounds("settings_window_git_executable_custom_container")
+                .is_some(),
+            "expected custom git executable mode to render its detail container"
+        );
     }
 
     #[gpui::test]
@@ -2519,6 +3835,7 @@ mod tests {
             (SettingsSection::Theme, "Theme"),
             (SettingsSection::DateFormat, "Date time format"),
             (SettingsSection::ChangeTracking, "Untracked files"),
+            (SettingsSection::Diff, "Diff scroll sync"),
         ] {
             let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
                 settings.expanded_section = Some(section);
@@ -2539,6 +3856,9 @@ mod tests {
                     }
                     SettingsSection::ChangeTracking => {
                         uniform_list_vertical_scroll_metrics(&settings.change_tracking_scroll).2
+                    }
+                    SettingsSection::Diff => {
+                        uniform_list_vertical_scroll_metrics(&settings.diff_scroll_sync_scroll).2
                     }
                     _ => px(0.0),
                 })
@@ -2575,6 +3895,19 @@ mod tests {
         let mut settings_cx = gpui::VisualTestContext::from_window(*settings_window.deref(), cx);
         settings_cx.run_until_parked();
         settings_cx.simulate_resize(size(px(SETTINGS_WINDOW_DEFAULT_WIDTH_PX), px(1200.0)));
+        settings_cx.run_until_parked();
+        settings_cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
+            // Keep the interaction test resilient as rows are added to the root links card.
+            let current_x = settings.settings_window_scroll.offset().x;
+            let max_offset = settings.settings_window_scroll.max_offset().y.max(px(0.0));
+            settings
+                .settings_window_scroll
+                .set_offset(point(current_x, -max_offset));
+            cx.notify();
+        });
         settings_cx.run_until_parked();
         settings_cx.update(|window, app| {
             let _ = window.draw(app);
@@ -2649,9 +3982,282 @@ mod tests {
     }
 
     #[gpui::test]
-    fn non_macos_settings_window_uses_client_chrome_and_resize_edges(
+    fn settings_window_professional_edition_waitlist_row_opens_editions_page(
         cx: &mut gpui::TestAppContext,
     ) {
+        let _visual_guard = lock_visual_test();
+        let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+        let (_main_view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+            open_settings_window(app);
+        });
+        cx.run_until_parked();
+
+        let settings_window = cx.update(|_window, app| {
+            app.windows()
+                .into_iter()
+                .find_map(|window| window.downcast::<SettingsWindowView>())
+                .expect("settings window should be open")
+        });
+
+        let mut settings_cx = gpui::VisualTestContext::from_window(*settings_window.deref(), cx);
+        settings_cx.run_until_parked();
+        settings_cx.simulate_resize(size(px(SETTINGS_WINDOW_DEFAULT_WIDTH_PX), px(1200.0)));
+        settings_cx.run_until_parked();
+        settings_cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+
+        let row_bounds = settings_cx
+            .debug_bounds("settings_window_professional_edition_waitlist")
+            .expect("expected professional edition waitlist row bounds");
+        settings_cx.simulate_click(row_bounds.center(), Modifiers::default());
+        settings_cx.run_until_parked();
+
+        assert_eq!(cx.opened_url(), Some(EDITIONS_URL.to_string()));
+    }
+
+    #[gpui::test]
+    fn settings_window_root_view_renders_visible_scrollbar(cx: &mut gpui::TestAppContext) {
+        let _visual_guard = lock_visual_test();
+        let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+        let (_main_view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+            open_settings_window(app);
+        });
+        cx.run_until_parked();
+
+        let settings_window = cx.update(|_window, app| {
+            app.windows()
+                .into_iter()
+                .find_map(|window| window.downcast::<SettingsWindowView>())
+                .expect("settings window should be open")
+        });
+
+        let synthetic_fonts: Arc<[String]> = (0..200)
+            .map(|ix| format!("Test UI Font {ix:03}"))
+            .collect::<Vec<_>>()
+            .into();
+
+        cx.update(|_window, app| {
+            let _ = settings_window.update(app, |settings, _window, cx| {
+                settings.ui_font_options = synthetic_fonts.clone();
+                settings.ui_font_family = synthetic_fonts[0].clone();
+                settings.expanded_section = Some(SettingsSection::UiFont);
+                settings.settings_window_scroll = ScrollHandle::default();
+                settings.ui_font_scroll = UniformListScrollHandle::default();
+                cx.notify();
+            });
+        });
+
+        let mut settings_cx = gpui::VisualTestContext::from_window(*settings_window.deref(), cx);
+        settings_cx.run_until_parked();
+        settings_cx.simulate_resize(size(
+            px(SETTINGS_WINDOW_DEFAULT_WIDTH_PX),
+            px(SETTINGS_WINDOW_MIN_HEIGHT_PX),
+        ));
+        settings_cx.run_until_parked();
+        settings_cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+
+        let max_offset = settings_window
+            .update(&mut settings_cx, |settings, _window, _cx| {
+                settings.settings_window_scroll.max_offset().y.max(px(0.0))
+            })
+            .expect("settings window should remain readable");
+        assert!(
+            max_offset > px(0.0),
+            "expected the root settings page to be scrollable during the test"
+        );
+        assert!(
+            settings_cx
+                .debug_bounds("settings_window_scrollbar")
+                .is_some(),
+            "expected a visible scrollbar in the root settings view"
+        );
+    }
+
+    #[gpui::test]
+    fn settings_window_rows_clamp_under_lilex_at_minimum_width(cx: &mut gpui::TestAppContext) {
+        let _visual_guard = lock_visual_test();
+        let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+        let (_main_view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+            open_settings_window(app);
+        });
+        cx.run_until_parked();
+
+        let settings_window = cx.update(|_window, app| {
+            app.windows()
+                .into_iter()
+                .find_map(|window| window.downcast::<SettingsWindowView>())
+                .expect("settings window should be open")
+        });
+
+        let mut settings_cx = gpui::VisualTestContext::from_window(*settings_window.deref(), cx);
+        settings_cx.run_until_parked();
+
+        let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
+            settings.ui_font_family = crate::bundled_fonts::LILEX_FONT_FAMILY.to_string();
+            settings.runtime_info.app_version_display =
+                "GitComet v0.0.0-overflow-regression-build".into();
+            settings.runtime_info.operating_system =
+                "linux (gnu-linux-overflow-regression-platform, x86_64-extra-build-metadata)"
+                    .into();
+            settings.runtime_info.git.version_display =
+                "git version 2.51.0 (overflow-regression-build-with-very-long-metadata)".into();
+            settings.runtime_info.git.compatibility = GitCompatibility::Supported;
+            settings.overflow_probe = true;
+            cx.notify();
+        });
+        settings_cx.run_until_parked();
+        settings_cx.simulate_resize(size(
+            px(SETTINGS_WINDOW_MIN_WIDTH_PX),
+            px(SETTINGS_WINDOW_DEFAULT_HEIGHT_PX),
+        ));
+        settings_cx.run_until_parked();
+        settings_cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+
+        for (row_selector, label_selector, value_selector) in [
+            (
+                "settings_window_overflow_summary",
+                "settings_window_overflow_summary_label",
+                "settings_window_overflow_summary_value",
+            ),
+            (
+                "settings_window_overflow_toggle",
+                "settings_window_overflow_toggle_label",
+                "settings_window_overflow_toggle_value",
+            ),
+            (
+                "settings_window_overflow_info",
+                "settings_window_overflow_info_label",
+                "settings_window_overflow_info_value",
+            ),
+            (
+                "settings_window_overflow_link",
+                "settings_window_overflow_link_label",
+                "settings_window_overflow_link_value",
+            ),
+            (
+                "settings_window_git_runtime",
+                "settings_window_git_runtime_label",
+                "settings_window_git_runtime_value",
+            ),
+        ] {
+            assert_debug_bounds_within(&mut settings_cx, row_selector, label_selector);
+            assert_debug_bounds_within(&mut settings_cx, row_selector, value_selector);
+        }
+    }
+
+    #[gpui::test]
+    fn settings_window_containers_fill_available_width_when_content_wraps(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let _visual_guard = lock_visual_test();
+        let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+        let (_main_view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+            open_settings_window(app);
+        });
+        cx.run_until_parked();
+
+        let settings_window = cx.update(|_window, app| {
+            app.windows()
+                .into_iter()
+                .find_map(|window| window.downcast::<SettingsWindowView>())
+                .expect("settings window should be open")
+        });
+
+        let synthetic_fonts: Arc<[String]> = (0..24)
+            .map(|ix| format!("Overflow Regression UI Font {ix:02} With Extended Width Coverage"))
+            .collect::<Vec<_>>()
+            .into();
+
+        let mut settings_cx = gpui::VisualTestContext::from_window(*settings_window.deref(), cx);
+        settings_cx.run_until_parked();
+
+        let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
+            settings.ui_font_options = synthetic_fonts.clone();
+            settings.ui_font_family = synthetic_fonts[0].clone();
+            settings.expanded_section = Some(SettingsSection::UiFont);
+            settings.git_executable_mode = GitExecutableMode::Custom;
+            settings.runtime_info.app_version_display =
+                "GitComet v0.0.0-overflow-regression-build-with-extra-layout-metadata".into();
+            settings.runtime_info.operating_system =
+                "linux (gnu-linux-overflow-regression-platform with verbose wrapping metadata, x86_64)"
+                    .into();
+            settings.runtime_info.git.version_display =
+                "git version 2.51.0 (overflow-regression-build-with-very-long-metadata)".into();
+            settings.runtime_info.git.compatibility = GitCompatibility::Unknown;
+            settings.runtime_info.git.detail = Some(
+                "This deliberately long compatibility detail must wrap inside the Git executable card without shrinking the settings containers into narrow blocks."
+                    .into(),
+            );
+            settings.settings_window_scroll = ScrollHandle::default();
+            settings.ui_font_scroll = UniformListScrollHandle::default();
+            cx.notify();
+        });
+        settings_cx.run_until_parked();
+        settings_cx.simulate_resize(size(px(SETTINGS_WINDOW_MIN_WIDTH_PX), px(1200.0)));
+        settings_cx.run_until_parked();
+        settings_cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+
+        assert_debug_horizontal_insets(
+            &mut settings_cx,
+            "settings_window_root_view",
+            "settings_window_scroll",
+            px(0.0),
+            px(16.0),
+        );
+
+        for card_selector in [
+            "settings_window_general",
+            "settings_window_change_tracking_card",
+            "settings_window_diff_card",
+            "settings_window_git_log_card",
+            "settings_window_git_executable",
+            "settings_window_environment",
+            "settings_window_links",
+        ] {
+            assert_debug_matching_horizontal_insets(
+                &mut settings_cx,
+                "settings_window_scroll",
+                card_selector,
+            );
+        }
+
+        assert_debug_matching_horizontal_insets(
+            &mut settings_cx,
+            "settings_window_general",
+            "settings_window_ui_font_list_container",
+        );
+        assert_debug_matching_horizontal_insets(
+            &mut settings_cx,
+            "settings_window_git_executable",
+            "settings_window_git_executable_custom_container",
+        );
+    }
+
+    #[gpui::test]
+    fn non_macos_settings_window_renders_custom_chrome_controls(cx: &mut gpui::TestAppContext) {
         if cfg!(target_os = "macos") {
             return;
         }
@@ -2691,19 +4297,6 @@ mod tests {
                 "expected `{selector}` in debug bounds"
             );
         }
-
-        settings_cx.simulate_mouse_move(point(px(1.0), px(1.0)), None, Modifiers::default());
-        settings_cx.run_until_parked();
-
-        cx.update(|_window, app| {
-            assert_eq!(
-                settings_window
-                    .read_with(app, |settings, _cx| settings.hover_resize_edge)
-                    .expect("settings window should remain readable"),
-                Some(ResizeEdge::TopLeft),
-                "expected top-left corner hover to expose a resize edge"
-            );
-        });
     }
 
     #[gpui::test]
@@ -2814,7 +4407,7 @@ mod tests {
 
         cx.update(|_window, app| {
             assert_eq!(
-                main_view.read(app).show_timezone_for_test(),
+                crate::view::test_support::show_timezone(main_view.read(app)),
                 next_show_timezone
             );
             assert_eq!(
@@ -2874,7 +4467,7 @@ mod tests {
 
         cx.update(|_window, app| {
             assert_eq!(
-                main_view.read(app).change_tracking_view_for_test(),
+                crate::view::test_support::change_tracking_view(main_view.read(app)),
                 next_view
             );
             assert_eq!(
@@ -2882,6 +4475,68 @@ mod tests {
                     .read_with(app, |settings, _cx| settings.change_tracking_view)
                     .expect("settings window should remain readable"),
                 next_view
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn diff_scroll_sync_setting_defers_main_window_update(cx: &mut gpui::TestAppContext) {
+        let _visual_guard = lock_visual_test();
+        let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+        let (main_view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+            open_settings_window(app);
+        });
+        cx.run_until_parked();
+
+        let settings_window = cx.update(|_window, app| {
+            app.windows()
+                .into_iter()
+                .find_map(|window| window.downcast::<SettingsWindowView>())
+                .expect("settings window should be open")
+        });
+
+        let next_mode = cx.update(|_window, app| {
+            let current = settings_window
+                .read_with(app, |settings, _cx| settings.diff_scroll_sync)
+                .expect("settings window should be readable");
+            match current {
+                DiffScrollSync::Both => DiffScrollSync::Vertical,
+                DiffScrollSync::Vertical => DiffScrollSync::Horizontal,
+                DiffScrollSync::Horizontal => DiffScrollSync::None,
+                DiffScrollSync::None => DiffScrollSync::Both,
+            }
+        });
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            cx.update(|_window, app| {
+                main_view.update(app, |_view, cx| {
+                    let _ = settings_window.update(cx, |settings, _window, cx| {
+                        settings.set_diff_scroll_sync(next_mode, cx);
+                    });
+                });
+            });
+        }));
+        assert!(
+            result.is_ok(),
+            "diff scroll sync update should not re-enter GitCometView updates"
+        );
+
+        cx.run_until_parked();
+
+        cx.update(|_window, app| {
+            assert_eq!(
+                crate::view::test_support::diff_scroll_sync(main_view.read(app)),
+                next_mode
+            );
+            assert_eq!(
+                settings_window
+                    .read_with(app, |settings, _cx| settings.diff_scroll_sync)
+                    .expect("settings window should remain readable"),
+                next_mode
             );
         });
     }
@@ -2941,11 +4596,7 @@ mod tests {
                 (
                     absolute_scroll_y(&settings.settings_window_scroll),
                     uniform_list_vertical_scroll_metrics(&settings.ui_font_scroll).1,
-                    settings
-                        .settings_window_scroll
-                        .max_offset()
-                        .height
-                        .max(px(0.0)),
+                    settings.settings_window_scroll.max_offset().y.max(px(0.0)),
                     uniform_list_vertical_scroll_metrics(&settings.ui_font_scroll).2,
                 )
             })

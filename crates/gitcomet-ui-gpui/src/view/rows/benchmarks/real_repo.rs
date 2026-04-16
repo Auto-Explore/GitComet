@@ -9,7 +9,6 @@ const DEFAULT_MONOREPO_HISTORY_LIMIT: usize = 10_000;
 const DEFAULT_DEEP_HISTORY_LIMIT: usize = 50_000;
 const DEFAULT_HISTORY_PAGE_SIZE: usize = 1_000;
 const DEFAULT_HISTORY_WINDOW: usize = 200;
-const DEFAULT_FILE_DIFF_PAGE_SIZE: usize = 256;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RealRepoScenario {
@@ -254,10 +253,8 @@ impl RealRepoFixture {
     }
 
     fn run_monorepo_open_and_history(&self) -> (u64, RealRepoMetrics) {
-        let status = self
-            .repo
-            .status()
-            .expect("real_repo monorepo status benchmark");
+        let status =
+            load_split_repo_status(self.repo.as_ref(), "real_repo monorepo status benchmark");
         let branches = self
             .repo
             .list_branches()
@@ -378,10 +375,8 @@ impl RealRepoFixture {
     }
 
     fn run_mid_merge_conflict_list_and_open(&self) -> (u64, RealRepoMetrics) {
-        let status = self
-            .repo
-            .status()
-            .expect("real_repo mid-merge status benchmark");
+        let status =
+            load_split_repo_status(self.repo.as_ref(), "real_repo mid-merge status benchmark");
         let conflict_paths =
             conflict_paths_from_status_or_git(&status, self.repo.spec().workdir.as_path());
         let selected_path = self
@@ -429,11 +424,12 @@ impl RealRepoFixture {
 
         let old_text = file.old.as_deref().unwrap_or("");
         let new_text = file.new.as_deref().unwrap_or("");
-        let (split, inline) = crate::view::panes::main::diff_cache::bench_build_file_diff_providers(
-            old_text,
-            new_text,
-            DEFAULT_FILE_DIFF_PAGE_SIZE,
+        let rebuild = crate::view::panes::main::diff_cache::build_file_diff_cache_rebuild(
+            &file,
+            self._repo_root.path(),
         );
+        let split = rebuild.row_provider;
+        let inline = rebuild.inline_row_provider;
         let split_rows_painted = split
             .slice(0, DEFAULT_HISTORY_WINDOW)
             .take(DEFAULT_HISTORY_WINDOW)
@@ -703,8 +699,7 @@ fn build_real_repo_state(
     repo.remotes_rev = 1;
     repo.remote_branches = Loadable::Ready(Arc::new(remote_branches));
     repo.remote_branches_rev = 1;
-    repo.status = Loadable::Ready(Arc::new(status));
-    repo.status_rev = 1;
+    seed_repo_status(&mut repo, status);
     repo.stashes = Loadable::Ready(Arc::new(Vec::new()));
     repo.stashes_rev = 1;
     repo.worktrees = Loadable::Ready(Arc::new(Vec::new()));

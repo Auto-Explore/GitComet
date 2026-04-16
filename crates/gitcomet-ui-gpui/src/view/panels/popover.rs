@@ -33,6 +33,7 @@ mod submodule_add_prompt;
 mod submodule_open_picker;
 mod submodule_remove_confirm;
 mod submodule_remove_picker;
+mod submodule_trust_confirm;
 mod worktree_add_prompt;
 mod worktree_open_picker;
 mod worktree_remove_confirm;
@@ -96,6 +97,10 @@ pub(in super::super) struct PopoverHost {
     worktree_ref_input: Entity<components::TextInput>,
     submodule_url_input: Entity<components::TextInput>,
     submodule_path_input: Entity<components::TextInput>,
+    submodule_branch_input: Entity<components::TextInput>,
+    submodule_name_input: Entity<components::TextInput>,
+    submodule_add_advanced_expanded: bool,
+    submodule_force_enabled: bool,
 }
 
 impl PopoverHost {
@@ -461,6 +466,34 @@ impl PopoverHost {
             )
         });
 
+        let submodule_name_input = cx.new(|cx| {
+            components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "submodule-logical-name".into(),
+                    multiline: false,
+                    read_only: false,
+                    chromeless: false,
+                    soft_wrap: false,
+                },
+                window,
+                cx,
+            )
+        });
+
+        let submodule_branch_input = cx.new(|cx| {
+            components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "feature".into(),
+                    multiline: false,
+                    read_only: false,
+                    chromeless: false,
+                    soft_wrap: false,
+                },
+                window,
+                cx,
+            )
+        });
+
         let context_menu_focus_handle = cx.focus_handle().tab_index(0).tab_stop(false);
 
         Self {
@@ -512,6 +545,10 @@ impl PopoverHost {
             worktree_ref_input,
             submodule_url_input,
             submodule_path_input,
+            submodule_branch_input,
+            submodule_name_input,
+            submodule_add_advanced_expanded: false,
+            submodule_force_enabled: false,
         }
     }
 
@@ -546,6 +583,10 @@ impl PopoverHost {
             .update(cx, |input, cx| input.set_theme(theme, cx));
         self.submodule_path_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.submodule_branch_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.submodule_name_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
 
         if let Some(input) = &self.repo_picker_search_input {
             input.update(cx, |input, cx| input.set_theme(theme, cx));
@@ -576,8 +617,8 @@ impl PopoverHost {
     }
 
     #[cfg(test)]
-    pub(in super::super) fn set_state_for_test(&mut self, state: Arc<AppState>) {
-        self.state = state;
+    pub(in super::super) fn popover_kind_for_tests(&self) -> Option<PopoverKind> {
+        self.popover.clone()
     }
 
     pub(in super::super) fn close_popover(&mut self, cx: &mut gpui::Context<Self>) {
@@ -600,7 +641,7 @@ impl PopoverHost {
         self.close_popover(cx);
         if restore_diff_panel_focus {
             let focus = self.main_pane.read(cx).diff_panel_focus_handle.clone();
-            window.focus(&focus);
+            window.focus(&focus, cx);
         }
     }
 
@@ -614,7 +655,7 @@ impl PopoverHost {
         self.popover_anchor = None;
         self.clear_active_context_menu_invoker(cx);
         let focus = self.main_pane.read(cx).diff_panel_focus_handle.clone();
-        window.focus(&focus);
+        window.focus(&focus, cx);
         cx.notify();
     }
 
@@ -776,6 +817,26 @@ impl PopoverHost {
         self.open_popover(kind, PopoverAnchor::Bounds(anchor_bounds), window, cx);
     }
 
+    fn request_lazy_popover_repo_data(&self, kind: &PopoverKind) {
+        let repo_id = match kind {
+            PopoverKind::TagMenu { repo_id, .. } => Some(*repo_id),
+            _ => None,
+        };
+        let Some(repo_id) = repo_id else {
+            return;
+        };
+        let Some(repo) = self.state.repos.iter().find(|repo| repo.id == repo_id) else {
+            return;
+        };
+
+        if matches!(repo.tags, Loadable::NotLoaded | Loadable::Error(_)) {
+            self.store.dispatch(Msg::LoadTags { repo_id });
+        }
+        if matches!(repo.remote_tags, Loadable::NotLoaded | Loadable::Error(_)) {
+            self.store.dispatch(Msg::LoadRemoteTags { repo_id });
+        }
+    }
+
     fn open_popover(
         &mut self,
         kind: PopoverKind,
@@ -783,12 +844,12 @@ impl PopoverHost {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        self.request_lazy_popover_repo_data(&kind);
         let is_context_menu = matches!(
             &kind,
             PopoverKind::PullPicker
                 | PopoverKind::PushPicker
                 | PopoverKind::HistoryBranchFilter { .. }
-                | PopoverKind::HistoryColumnSettings
                 | PopoverKind::ChangeTrackingSettings
                 | PopoverKind::DiffHunkMenu { .. }
                 | PopoverKind::DiffEditorMenu { .. }
@@ -839,7 +900,7 @@ impl PopoverHost {
                 .as_ref()
                 .and_then(|kind| self.context_menu_model(kind, cx))
                 .and_then(|m| m.first_selectable());
-            window.focus(&self.context_menu_focus_handle);
+            window.focus(&self.context_menu_focus_handle, cx);
         } else {
             match &kind {
                 PopoverKind::RepoPicker => {
@@ -863,7 +924,7 @@ impl PopoverHost {
                     let focus = self
                         .create_branch_input
                         .read_with(cx, |i, _| i.focus_handle());
-                    window.focus(&focus);
+                    window.focus(&focus, cx);
                 }
                 PopoverKind::CreateBranchFromRefPrompt { .. } => {
                     let theme = self.theme;
@@ -877,7 +938,7 @@ impl PopoverHost {
                     let focus = self
                         .create_branch_input
                         .read_with(cx, |i, _| i.focus_handle());
-                    window.focus(&focus);
+                    window.focus(&focus, cx);
                 }
                 PopoverKind::CheckoutRemoteBranchPrompt { branch, .. } => {
                     let theme = self.theme;
@@ -890,7 +951,7 @@ impl PopoverHost {
                     let focus = self
                         .create_branch_input
                         .read_with(cx, |i, _| i.focus_handle());
-                    window.focus(&focus);
+                    window.focus(&focus, cx);
                 }
                 PopoverKind::StashPrompt => {
                     let theme = self.theme;
@@ -903,7 +964,7 @@ impl PopoverHost {
                     let focus = self
                         .stash_message_input
                         .read_with(cx, |i, _| i.focus_handle());
-                    window.focus(&focus);
+                    window.focus(&focus, cx);
                 }
                 PopoverKind::CloneRepo => {
                     let theme = self.theme;
@@ -928,7 +989,7 @@ impl PopoverHost {
                     let focus = self
                         .clone_repo_url_input
                         .read_with(cx, |i, _| i.focus_handle());
-                    window.focus(&focus);
+                    window.focus(&focus, cx);
                 }
                 PopoverKind::CreateTagPrompt { .. } => {
                     let theme = self.theme;
@@ -939,7 +1000,7 @@ impl PopoverHost {
                         cx.notify();
                     });
                     let focus = self.create_tag_input.read_with(cx, |i, _| i.focus_handle());
-                    window.focus(&focus);
+                    window.focus(&focus, cx);
                 }
                 PopoverKind::Repo {
                     kind: RepoPopoverKind::Remote(RemotePopoverKind::AddPrompt),
@@ -959,7 +1020,7 @@ impl PopoverHost {
                     let focus = self
                         .remote_name_input
                         .read_with(cx, |i, _| i.focus_handle());
-                    window.focus(&focus);
+                    window.focus(&focus, cx);
                 }
                 PopoverKind::Repo {
                     repo_id,
@@ -987,7 +1048,7 @@ impl PopoverHost {
                     let focus = self
                         .remote_url_edit_input
                         .read_with(cx, |i, _| i.focus_handle());
-                    window.focus(&focus);
+                    window.focus(&focus, cx);
                 }
                 PopoverKind::Repo {
                     kind: RepoPopoverKind::Worktree(WorktreePopoverKind::AddPrompt),
@@ -1007,7 +1068,7 @@ impl PopoverHost {
                     let focus = self
                         .worktree_path_input
                         .read_with(cx, |i, _| i.focus_handle());
-                    window.focus(&focus);
+                    window.focus(&focus, cx);
                 }
                 PopoverKind::Repo {
                     repo_id,
@@ -1025,6 +1086,8 @@ impl PopoverHost {
                     ..
                 } => {
                     let theme = self.theme;
+                    self.submodule_add_advanced_expanded = false;
+                    self.submodule_force_enabled = false;
                     self.submodule_url_input.update(cx, |input, cx| {
                         input.set_theme(theme, cx);
                         input.set_text("", cx);
@@ -1035,11 +1098,25 @@ impl PopoverHost {
                         input.set_text("", cx);
                         cx.notify();
                     });
+                    self.submodule_branch_input.update(cx, |input, cx| {
+                        input.set_theme(theme, cx);
+                        input.set_text("", cx);
+                        cx.notify();
+                    });
+                    self.submodule_name_input.update(cx, |input, cx| {
+                        input.set_theme(theme, cx);
+                        input.set_text("", cx);
+                        cx.notify();
+                    });
                     let focus = self
                         .submodule_url_input
                         .read_with(cx, |i, _| i.focus_handle());
-                    window.focus(&focus);
+                    window.focus(&focus, cx);
                 }
+                PopoverKind::Repo {
+                    kind: RepoPopoverKind::Submodule(SubmodulePopoverKind::TrustConfirm),
+                    ..
+                } => {}
                 PopoverKind::Repo {
                     repo_id,
                     kind:
@@ -1082,7 +1159,7 @@ impl PopoverHost {
                     let focus = self
                         .push_upstream_branch_input
                         .read_with(cx, |i, _| i.focus_handle());
-                    window.focus(&focus);
+                    window.focus(&focus, cx);
                 }
                 PopoverKind::DiffHunks => {
                     let _ = self.ensure_diff_hunk_picker_search_input(window, cx);
@@ -1283,7 +1360,6 @@ impl PopoverHost {
             PopoverKind::PullPicker
                 | PopoverKind::PushPicker
                 | PopoverKind::HistoryBranchFilter { .. }
-                | PopoverKind::HistoryColumnSettings
                 | PopoverKind::ChangeTrackingSettings
                 | PopoverKind::DiffHunkMenu { .. }
                 | PopoverKind::DiffEditorMenu { .. }
@@ -1348,6 +1424,7 @@ impl PopoverHost {
                 kind:
                     RepoPopoverKind::Submodule(
                         SubmodulePopoverKind::AddPrompt
+                        | SubmodulePopoverKind::TrustConfirm
                         | SubmodulePopoverKind::OpenPicker
                         | SubmodulePopoverKind::RemovePicker
                         | SubmodulePopoverKind::RemoveConfirm { .. },
@@ -1362,7 +1439,6 @@ impl PopoverHost {
             | PopoverKind::ForceRemoveWorktreeConfirm { .. }
             | PopoverKind::PullReconcilePrompt { .. }
             | PopoverKind::HistoryBranchFilter { .. }
-            | PopoverKind::HistoryColumnSettings
             | PopoverKind::ChangeTrackingSettings => Corner::TopRight,
             _ => Corner::TopLeft,
         };
@@ -1496,6 +1572,9 @@ impl PopoverHost {
                     SubmodulePopoverKind::AddPrompt => {
                         submodule_add_prompt::panel(self, repo_id, cx)
                     }
+                    SubmodulePopoverKind::TrustConfirm => {
+                        submodule_trust_confirm::panel(self, repo_id, cx)
+                    }
                     SubmodulePopoverKind::OpenPicker => {
                         submodule_open_picker::panel(self, repo_id, cx)
                     }
@@ -1552,10 +1631,6 @@ impl PopoverHost {
                 .context_menu_view(PopoverKind::HistoryBranchFilter { repo_id }, cx)
                 .min_w(px(160.0))
                 .max_w(px(220.0)),
-            PopoverKind::HistoryColumnSettings => self
-                .context_menu_view(PopoverKind::HistoryColumnSettings, cx)
-                .min_w(px(160.0))
-                .max_w(px(220.0)),
             PopoverKind::ChangeTrackingSettings => self
                 .context_menu_view(PopoverKind::ChangeTrackingSettings, cx)
                 .min_w(px(220.0))
@@ -1585,6 +1660,7 @@ impl PopoverHost {
                 discard_lines_patch,
                 lines_count,
                 copy_text,
+                copy_target,
             } => self
                 .context_menu_view(
                     PopoverKind::DiffEditorMenu {
@@ -1597,6 +1673,7 @@ impl PopoverHost {
                         discard_lines_patch,
                         lines_count,
                         copy_text,
+                        copy_target,
                     },
                     cx,
                 )

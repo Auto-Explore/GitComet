@@ -69,7 +69,7 @@ env:
 jobs:
   prepare:
     name: Normalize release metadata
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 10
     outputs:
       tag: ${{ steps.norm.outputs.tag }}
@@ -146,6 +146,9 @@ jobs:
           - target_platform: x86_64-windows
             artifact_arch: x86_64
             runs_on: windows-latest
+          - target_platform: aarch64-windows
+            artifact_arch: arm64
+            runs_on: windows-11-arm
     env:
       TAG: ${{ needs.prepare.outputs.tag }}
       VERSION: ${{ needs.prepare.outputs.version }}
@@ -203,8 +206,10 @@ jobs:
           $ErrorActionPreference = "Stop"
 
           $kitsRoot = Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10\bin"
+          # Prefer arch-matched signtool (arm64 on ARM runners, x64 on x64 runners), fall back to any.
+          $hostArch = if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq 'Arm64') { 'arm64' } else { 'x64' }
           $signTool = Get-ChildItem -Path $kitsRoot -Recurse -Filter signtool.exe -ErrorAction SilentlyContinue |
-            Where-Object { $_.FullName -match '\\x64\\' } |
+            Where-Object { $_.FullName -match "\\$hostArch\\" } |
             Sort-Object FullName -Descending |
             Select-Object -First 1 -ExpandProperty FullName
 
@@ -344,6 +349,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Build Linux release artifacts on Ubuntu 22.04 so the linked
+          # system libraries stay compatible with Ubuntu 22.04+.
           - target_platform: x86_64-linux
             artifact_arch: x86_64
             deb_arch: amd64
@@ -352,7 +359,7 @@ jobs:
           - target_platform: aarch64-linux
             artifact_arch: arm64
             deb_arch: arm64
-            runs_on: ubuntu-24.04-arm
+            runs_on: ubuntu-22.04-arm
             build_appimage: false
     env:
       TAG: ${{ needs.prepare.outputs.tag }}
@@ -371,6 +378,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             desktop-file-utils \
+            dpkg-dev \
             pkg-config \
             libxcb1-dev \
             libxkbcommon-dev \
@@ -410,7 +418,13 @@ jobs:
           deb_upstream_version="${VERSION/-rc./~rc.}"
           deb_revision="${DEB_REVISION}"
           deb_version="${deb_upstream_version}-${deb_revision}"
-          pkg_root="dist/deb-root"
+          if [[ -e debian ]]; then
+            echo "::error title=Unexpected debian directory::The release workflow expects no repository debian/ directory."
+            exit 1
+          fi
+
+          trap 'rm -rf debian' EXIT
+          pkg_root="debian/gitcomet"
           mkdir -p "${pkg_root}/DEBIAN"
           mkdir -p "${pkg_root}/usr/bin"
           mkdir -p "${pkg_root}/usr/share/applications"
@@ -421,17 +435,59 @@ jobs:
           install -m644 assets/gitcomet-512.png "${pkg_root}/usr/share/icons/hicolor/512x512/apps/gitcomet.png"
 
           {
-            echo "Package: gitcomet"
-            echo "Version: ${deb_version}"
-            echo "Architecture: ${DEB_ARCH}"
+            echo "Source: gitcomet"
             echo "Maintainer: AutoExplore Oy <info@autoexplore.ai>"
-            echo "Depends: git"
+            echo "Section: utils"
+            echo "Priority: optional"
+            echo "Standards-Version: 4.7.0"
+            echo
+            echo "Package: gitcomet"
+            echo "Architecture: ${DEB_ARCH}"
+            echo "Depends: git, \${shlibs:Depends}"
             echo "Section: utils"
             echo "Priority: optional"
             echo "Description: Fast, resource-efficient Git GUI written in Rust."
-          } > "${pkg_root}/DEBIAN/control"
+          } > debian/control
 
-          dpkg-deb --build "${pkg_root}" "dist/gitcomet_${deb_version}_${DEB_ARCH}.deb"
+          {
+            echo "gitcomet (${deb_version}) unstable; urgency=medium"
+            echo
+            echo "  * Release ${VERSION}."
+            echo
+            echo " -- AutoExplore Oy <info@autoexplore.ai>  $(date -Ru)"
+          } > debian/changelog
+
+          dpkg-shlibdeps -Tdebian/substvars "${pkg_root}/usr/bin/gitcomet"
+          dpkg-gencontrol -pgitcomet -P"${pkg_root}" -Tdebian/substvars
+
+          pkg_file="dist/gitcomet_${deb_version}_${DEB_ARCH}.deb"
+          dpkg-deb --build "${pkg_root}" "${pkg_file}"
+
+          package_name="$(dpkg-deb -f "${pkg_file}" Package)"
+          package_version="$(dpkg-deb -f "${pkg_file}" Version)"
+          package_architecture="$(dpkg-deb -f "${pkg_file}" Architecture)"
+          package_depends="$(dpkg-deb -f "${pkg_file}" Depends)"
+
+          if [[ "${package_name}" != "gitcomet" ]]; then
+            echo "::error title=Unexpected package name::Got ${package_name}."
+            exit 1
+          fi
+          if [[ "${package_version}" != "${deb_version}" ]]; then
+            echo "::error title=Unexpected package version::Got ${package_version}, expected ${deb_version}."
+            exit 1
+          fi
+          if [[ "${package_architecture}" != "${DEB_ARCH}" ]]; then
+            echo "::error title=Unexpected package architecture::Got ${package_architecture}, expected ${DEB_ARCH}."
+            exit 1
+          fi
+          if ! grep -Eq '(^|, )git($|, )' <<<"${package_depends}"; then
+            echo "::error title=Missing git dependency::Got ${package_depends}."
+            exit 1
+          fi
+          if [[ "${package_depends}" == "git" ]]; then
+            echo "::error title=Missing shared library dependencies::Got ${package_depends}."
+            exit 1
+          fi
 
       - name: Package AppImage
         if: ${{ matrix.build_appimage }}
@@ -555,7 +611,7 @@ jobs:
           keychain_password="$(openssl rand -hex 24)"
           cert_path="${RUNNER_TEMP}/gitcomet-signing-cert.p12"
           api_key_path="${RUNNER_TEMP}/AuthKey_${MACOS_NOTARY_KEY_ID}.p8"
-          default_keychain="$(security default-keychain -d user | tr -d '"')"
+          default_keychain="$(security default-keychain -d user | tr -d '"' | xargs)"
 
           if base64 --help 2>&1 | grep -q -- '--decode'; then
             printf '%s' "$MACOS_SIGNING_CERT_BASE64" | base64 --decode > "$cert_path"
@@ -608,32 +664,13 @@ jobs:
         if: ${{ steps.macos_signing_mode.outputs.enabled == 'true' }}
         run: |
           set -euo pipefail
-
-          release_root="gitcomet-v${VERSION}-macos-${ARCH}"
-          dmg_path="dist/${release_root}.dmg"
-          app_path="dist/stage/${release_root}/GitComet.app"
-          app_binary="${app_path}/Contents/MacOS/gitcomet"
-
-          if [ ! -f "$dmg_path" ] || [ ! -d "$app_path" ]; then
-            echo "::error title=Missing macOS package::Expected $dmg_path and $app_path to exist."
-            exit 1
-          fi
-
-          xcrun notarytool submit "$dmg_path" \
-            --key "${{ steps.macos_signing.outputs.api_key_path }}" \
+          scripts/notarize-macos.sh \
+            --version "${VERSION}" \
+            --arch "${ARCH}" \
+            --out-dir dist \
+            --api-key "${{ steps.macos_signing.outputs.api_key_path }}" \
             --key-id "${MACOS_NOTARY_KEY_ID}" \
-            --issuer "${MACOS_NOTARY_ISSUER_ID}" \
-            --wait
-
-          xcrun stapler staple "$app_path"
-          xcrun stapler staple "$dmg_path"
-          xcrun stapler validate "$app_path"
-          xcrun stapler validate "$dmg_path"
-
-          codesign --verify --deep --strict --verbose=2 "$app_path"
-          spctl --assess --type open --context context:primary-signature --verbose=4 "$app_path"
-          spctl --assess --type execute --verbose=4 "$app_binary"
-          spctl --assess --type open --context context:primary-signature --verbose=4 "$dmg_path"
+            --issuer "${MACOS_NOTARY_ISSUER_ID}"
 
       - name: Cleanup macOS signing keychain
         if: ${{ always() && steps.macos_signing_mode.outputs.enabled == 'true' }}
@@ -665,7 +702,7 @@ jobs:
 
   publish_release_assets:
     name: Attach assets and checksums to GitHub release
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 30
     needs: [prepare, build_windows, build_linux, build_macos]
     env:

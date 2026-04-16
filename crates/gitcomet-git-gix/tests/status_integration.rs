@@ -1,6 +1,7 @@
 use gitcomet_core::conflict_session::{ConflictPayload, ConflictResolverStrategy};
 use gitcomet_core::domain::{
-    CommitId, DiffArea, DiffLineKind, DiffTarget, FileConflictKind, FileStatusKind,
+    CommitId, DiffArea, DiffLineKind, DiffPreviewTextSide, DiffTarget, FileConflictKind,
+    FileStatusKind,
 };
 use gitcomet_core::error::{Error, ErrorKind, GitFailureId};
 use gitcomet_core::services::ConflictSide;
@@ -613,11 +614,13 @@ fn cmd_write_gui_to_merged() -> &'static str {
     "printf 'gui\\n' > \"$MERGED\""
 }
 
+#[allow(dead_code)]
 #[cfg(windows)]
 fn cmd_write_cmd_to_merged() -> &'static str {
     r#"powershell -NoProfile -Command "[System.IO.File]::WriteAllText($env:MERGED, 'cmd' + [char]10)""#
 }
 
+#[allow(dead_code)]
 #[cfg(not(windows))]
 fn cmd_write_cmd_to_merged() -> &'static str {
     "printf 'cmd\\n' > \"$MERGED\"; exit 0"
@@ -1094,6 +1097,50 @@ fn diff_unified_works_for_staged_and_unstaged() {
 }
 
 #[test]
+fn diff_working_tree_unstaged_ignores_crlf_only_line_ending_changes() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+    run_git(repo, &["config", "core.autocrlf", "false"]);
+    run_git(repo, &["config", "core.eol", "lf"]);
+
+    write(repo, "a.txt", "one\ntwo\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "init"],
+    );
+
+    write(repo, "a.txt", "one\r\ntwo\r\n");
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    let target = DiffTarget::WorkingTree {
+        path: PathBuf::from("a.txt"),
+        area: DiffArea::Unstaged,
+    };
+
+    let unified = opened.diff_unified(&target).unwrap();
+    assert!(
+        unified.trim().is_empty(),
+        "expected CRLF-only unstaged diff to be suppressed:\n{unified}"
+    );
+
+    let parsed = opened.diff_parsed(&target).unwrap();
+    assert!(
+        parsed.lines.is_empty(),
+        "expected parsed diff to be empty for CRLF-only unstaged change: {parsed:?}"
+    );
+}
+
+#[test]
 fn diff_file_text_reports_old_and_new_for_working_tree_and_commits() {
     if !require_git_shell_for_status_integration_tests() {
         return;
@@ -1163,6 +1210,47 @@ fn diff_file_text_reports_old_and_new_for_working_tree_and_commits() {
         .expect("file diff for commit");
     assert_eq!(commit.old.as_deref(), Some("one\n"));
     assert_eq!(commit.new.as_deref(), Some("one\ntwo\n"));
+}
+
+#[test]
+fn diff_file_text_unstaged_uses_git_normalized_worktree_content() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+    run_git(repo, &["config", "core.autocrlf", "true"]);
+
+    write(repo, "a.txt", "one\ntwo\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "init"],
+    );
+
+    write(repo, "a.txt", "one\r\ntwo\r\n");
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    let diff = opened
+        .diff_file_text(&DiffTarget::WorkingTree {
+            path: PathBuf::from("a.txt"),
+            area: DiffArea::Unstaged,
+        })
+        .unwrap()
+        .expect("file diff for unstaged crlf-only change");
+
+    assert_eq!(diff.old.as_deref(), Some("one\ntwo\n"));
+    assert_eq!(
+        diff.new.as_deref(),
+        Some("one\ntwo\n"),
+        "expected worktree text to match Git-normalized staged content"
+    );
 }
 
 #[test]
@@ -1253,6 +1341,134 @@ fn diff_file_text_staged_add_and_delete_report_missing_sides() {
     assert_eq!(deleted.path, PathBuf::from("a.txt"));
     assert_eq!(deleted.old.as_deref(), Some("one\n"));
     assert_eq!(deleted.new.as_deref(), None);
+}
+
+#[test]
+fn diff_preview_text_file_commit_added_file_returns_new_side_blob_path() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    write(repo, "docs/added.txt", "one\ntwo");
+    run_git(repo, &["add", "docs/added.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "add file"],
+    );
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    let commit_id = CommitId(run_git_output(repo, &["rev-parse", "HEAD"]).into());
+    let preview_path = opened
+        .diff_preview_text_file(
+            &DiffTarget::Commit {
+                commit_id,
+                path: Some(PathBuf::from("docs/added.txt")),
+            },
+            DiffPreviewTextSide::New,
+        )
+        .unwrap()
+        .expect("preview text file for committed added file");
+
+    assert!(preview_path.is_file());
+    assert_eq!(
+        fs::read_to_string(&preview_path).expect("read committed added preview text file"),
+        "one\ntwo"
+    );
+}
+
+#[test]
+fn diff_preview_text_file_commit_deleted_file_returns_old_side_blob_path() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    write(repo, "docs/delete-me.txt", "one\ntwo");
+    run_git(repo, &["add", "docs/delete-me.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "seed"],
+    );
+    run_git(repo, &["rm", "docs/delete-me.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "delete file"],
+    );
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    let commit_id = CommitId(run_git_output(repo, &["rev-parse", "HEAD"]).into());
+    let preview_path = opened
+        .diff_preview_text_file(
+            &DiffTarget::Commit {
+                commit_id,
+                path: Some(PathBuf::from("docs/delete-me.txt")),
+            },
+            DiffPreviewTextSide::Old,
+        )
+        .unwrap()
+        .expect("preview text file for committed deleted file");
+
+    assert!(preview_path.is_file());
+    assert_eq!(
+        fs::read_to_string(&preview_path).expect("read committed deleted preview text file"),
+        "one\ntwo"
+    );
+}
+
+#[test]
+fn diff_preview_text_file_staged_deleted_file_returns_head_blob_path() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    write(repo, "a.txt", "one\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "init"],
+    );
+    run_git(repo, &["rm", "a.txt"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    let preview_path = opened
+        .diff_preview_text_file(
+            &DiffTarget::WorkingTree {
+                path: PathBuf::from("a.txt"),
+                area: DiffArea::Staged,
+            },
+            DiffPreviewTextSide::Old,
+        )
+        .unwrap()
+        .expect("preview text file for staged deleted file");
+
+    assert!(preview_path.is_file());
+    assert_eq!(
+        fs::read_to_string(&preview_path).expect("read staged deleted preview text file"),
+        "one\n"
+    );
 }
 
 #[test]

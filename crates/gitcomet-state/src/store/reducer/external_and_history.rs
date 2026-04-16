@@ -1,12 +1,13 @@
 use super::util::{
-    SelectedConflictTarget, clear_banner_error_for_repo, diff_reload_effects,
-    handle_session_persist_result, push_diagnostic, refresh_full_effects, refresh_primary_effects,
-    selected_conflict_target, start_conflict_target_reload, start_current_conflict_target_reload,
+    SelectedConflictTarget, append_requested_status_refresh_effects, clear_banner_error_for_repo,
+    diff_reload_effects, handle_session_persist_result, push_diagnostic, refresh_full_effects,
+    refresh_primary_effects, selected_conflict_target, start_conflict_target_reload,
+    start_current_conflict_target_reload,
 };
 use crate::model::{AppState, DiagnosticKind, Loadable, RepoLoadsInFlight};
 use crate::msg::{Effect, RepoExternalChange};
 use crate::session;
-use gitcomet_core::domain::{DiffTarget, LogCursor, LogPage, LogScope};
+use gitcomet_core::domain::{DiffArea, DiffTarget, LogCursor, LogPage, LogScope};
 use gitcomet_core::error::Error;
 use std::sync::Arc;
 
@@ -52,6 +53,7 @@ fn reserve_initial_paginated_log_append_slack<T>(commits: &mut Vec<T>) {
 }
 
 pub(super) fn reload_repo(state: &mut AppState, repo_id: crate::model::RepoId) -> Vec<Effect> {
+    let git_log_settings = state.git_log_settings;
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
     };
@@ -59,8 +61,12 @@ pub(super) fn reload_repo(state: &mut AppState, repo_id: crate::model::RepoId) -
     repo_state.set_head_branch(Loadable::Loading);
     repo_state.set_detached_head_commit(None);
     repo_state.set_branches(Loadable::Loading);
-    repo_state.set_tags(Loadable::Loading);
-    repo_state.set_remote_tags(Loadable::Loading);
+    if git_log_settings.show_history_tags && git_log_settings.auto_fetch_tags_on_repo_activation() {
+        repo_state.set_tags(Loadable::Loading);
+    } else {
+        repo_state.set_tags(Loadable::NotLoaded);
+    }
+    repo_state.set_remote_tags(Loadable::NotLoaded);
     repo_state.set_remotes(Loadable::Loading);
     repo_state.set_remote_branches(Loadable::Loading);
     repo_state.set_status(Loadable::Loading);
@@ -80,7 +86,7 @@ pub(super) fn reload_repo(state: &mut AppState, repo_id: crate::model::RepoId) -
     repo_state.set_selected_commit(None);
     repo_state.set_commit_details(Loadable::NotLoaded);
 
-    refresh_full_effects(repo_state)
+    refresh_full_effects(repo_state, git_log_settings)
 }
 
 pub(super) fn repo_externally_changed(
@@ -93,35 +99,51 @@ pub(super) fn repo_externally_changed(
     };
 
     // Coalesce refreshes while a refresh is already in flight.
-    let (mut effects, should_reload_diff) = match change {
-        RepoExternalChange::Worktree => {
-            if repo_state
-                .loads_in_flight
-                .request(RepoLoadsInFlight::STATUS)
-            {
-                (vec![Effect::LoadStatus { repo_id }], true)
-            } else {
-                (Vec::new(), false)
-            }
+    let mut effects = if change.git_state {
+        let mut effects = refresh_primary_effects(repo_state);
+        if repo_state
+            .loads_in_flight
+            .request(RepoLoadsInFlight::BRANCHES)
+        {
+            effects.push(Effect::LoadBranches { repo_id });
         }
-        RepoExternalChange::GitState | RepoExternalChange::Both => {
-            let mut effects = refresh_primary_effects(repo_state);
-            if repo_state
-                .loads_in_flight
-                .request(RepoLoadsInFlight::BRANCHES)
-            {
-                effects.push(Effect::LoadBranches { repo_id });
-            }
-            if repo_state
-                .loads_in_flight
-                .request(RepoLoadsInFlight::REMOTE_BRANCHES)
-            {
-                effects.push(Effect::LoadRemoteBranches { repo_id });
-            }
-            let should_reload_diff = !effects.is_empty();
-            (effects, should_reload_diff)
+        if repo_state
+            .loads_in_flight
+            .request(RepoLoadsInFlight::REMOTE_BRANCHES)
+        {
+            effects.push(Effect::LoadRemoteBranches { repo_id });
         }
+        effects
+    } else {
+        let mut effects = Vec::new();
+        if change.worktree && change.index {
+            append_requested_status_refresh_effects(repo_state, &mut effects);
+        } else if change.worktree
+            && repo_state
+                .loads_in_flight
+                .request(RepoLoadsInFlight::WORKTREE_STATUS)
+        {
+            effects.push(Effect::LoadWorktreeStatus { repo_id });
+        } else if change.index
+            && repo_state
+                .loads_in_flight
+                .request(RepoLoadsInFlight::STAGED_STATUS)
+        {
+            effects.push(Effect::LoadStagedStatus { repo_id });
+        }
+        effects
     };
+
+    let should_reload_diff = repo_state
+        .diff_state
+        .diff_target
+        .as_ref()
+        .is_some_and(|target| match target {
+            DiffTarget::WorkingTree { area, .. } => {
+                change.git_state || change.index || (*area == DiffArea::Unstaged && change.worktree)
+            }
+            DiffTarget::Commit { .. } => false,
+        });
 
     if should_reload_diff
         && let Some(target) = repo_state.diff_state.diff_target.clone()
@@ -137,7 +159,7 @@ pub(super) fn repo_externally_changed(
                 }
             }
         } else {
-            effects.extend(diff_reload_effects(repo_id, target));
+            effects.extend(diff_reload_effects(repo_state, repo_id, target));
         }
     }
 
@@ -397,7 +419,7 @@ pub(super) fn repo_action_finished(
                 }
             }
         } else {
-            effects.extend(diff_reload_effects(repo_id, target));
+            effects.extend(diff_reload_effects(repo_state, repo_id, target));
         }
     }
     effects

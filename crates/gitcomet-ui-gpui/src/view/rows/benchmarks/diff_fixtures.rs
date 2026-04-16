@@ -1,4 +1,5 @@
 use super::*;
+use gitcomet_core::diff::annotate_unified;
 
 fn build_synthetic_unified_patch(line_count: usize) -> String {
     let line_count = line_count.max(1);
@@ -492,8 +493,18 @@ pub struct DiffRefreshMetrics {
     pub content_signature_matches: u64,
     /// Row count preserved by the rekey path (same as initial row count when content unchanged).
     pub rows_preserved: u64,
-    /// Row count after a full rebuild.
+    /// Split row count after a full rebuild.
     pub rebuild_rows: u64,
+    /// Inline row count after a full rebuild.
+    pub rebuild_inline_rows: u64,
+    /// Old-side document bytes rebuilt into the cache.
+    pub old_text_bytes: u64,
+    /// New-side document bytes rebuilt into the cache.
+    pub new_text_bytes: u64,
+    /// Old-side line-start entries rebuilt into the cache.
+    pub old_line_starts: u64,
+    /// New-side line-start entries rebuilt into the cache.
+    pub new_line_starts: u64,
 }
 
 /// Benchmark fixture for `diff_refresh_rev_only_same_content`.
@@ -505,7 +516,9 @@ pub struct DiffRefreshMetrics {
 ///
 /// Two benchmark sub-cases:
 /// - **rekey**: compute content signature, compare, bump rev (the fast path).
-/// - **rebuild**: full `side_by_side_plan` + plan scan (the slow path).
+/// - **rebuild**: the synchronous file-diff cache rebuild through document
+///   source cloning, line-start indexing, `side_by_side_plan`, and split/inline
+///   row-provider construction (the slow path before syntax refresh).
 pub struct DiffRefreshFixture {
     incoming_file: gitcomet_core::domain::FileDiffText,
     /// Content signature from initial build, precomputed on `FileDiffText`.
@@ -576,18 +589,22 @@ impl DiffRefreshFixture {
     /// **Rebuild path**: performs the full `side_by_side_plan` + plan scan
     /// that would occur when the content actually changes.
     pub fn run_rebuild_step(&self) -> u64 {
-        let plan = gitcomet_core::file_diff::side_by_side_plan(
-            self.incoming_file.old.as_deref().unwrap_or_default(),
-            self.incoming_file.new.as_deref().unwrap_or_default(),
+        #[cfg(feature = "benchmarks")]
+        let rebuild = crate::view::panes::main::diff_cache::build_file_diff_cache_rebuild(
+            &self.incoming_file,
+            std::path::Path::new("/tmp/gitcomet-bench-diff-refresh"),
         );
+        #[cfg(not(feature = "benchmarks"))]
+        let rebuild =
+            unreachable!("DiffRefreshFixture::run_rebuild_step requires benchmarks feature");
+
         let mut hasher = FxHasher::default();
-        plan.runs.len().hash(&mut hasher);
-        let row_count = plan.row_count;
-        row_count.hash(&mut hasher);
-        for run in plan.runs.iter().take(64) {
-            run.row_len().hash(&mut hasher);
-            run.inline_row_len().hash(&mut hasher);
-        }
+        bench_counter_u64(rebuild.row_provider.len_hint()).hash(&mut hasher);
+        bench_counter_u64(rebuild.inline_row_provider.len_hint()).hash(&mut hasher);
+        bench_counter_u64(rebuild.old_text.len()).hash(&mut hasher);
+        bench_counter_u64(rebuild.new_text.len()).hash(&mut hasher);
+        bench_counter_u64(rebuild.old_line_starts.len()).hash(&mut hasher);
+        bench_counter_u64(rebuild.new_line_starts.len()).hash(&mut hasher);
         hasher.finish()
     }
 
@@ -602,22 +619,36 @@ impl DiffRefreshFixture {
             content_signature_matches: if matched { 1 } else { 0 },
             rows_preserved: bench_counter_u64(self.initial_plan_row_count),
             rebuild_rows: 0,
+            rebuild_inline_rows: 0,
+            old_text_bytes: 0,
+            new_text_bytes: 0,
+            old_line_starts: 0,
+            new_line_starts: 0,
         }
     }
 
     /// Collect sidecar metrics for the full-rebuild path (content changed).
     #[cfg(any(test, feature = "benchmarks"))]
     pub fn measure_rebuild(&self) -> DiffRefreshMetrics {
-        let plan = gitcomet_core::file_diff::side_by_side_plan(
-            self.incoming_file.old.as_deref().unwrap_or_default(),
-            self.incoming_file.new.as_deref().unwrap_or_default(),
+        #[cfg(feature = "benchmarks")]
+        let rebuild = crate::view::panes::main::diff_cache::build_file_diff_cache_rebuild(
+            &self.incoming_file,
+            std::path::Path::new("/tmp/gitcomet-bench-diff-refresh"),
         );
+        #[cfg(not(feature = "benchmarks"))]
+        let rebuild =
+            unreachable!("DiffRefreshFixture::measure_rebuild requires benchmarks feature");
         DiffRefreshMetrics {
             diff_cache_rekeys: 0,
             full_rebuilds: 1,
             content_signature_matches: 0,
             rows_preserved: 0,
-            rebuild_rows: bench_counter_u64(plan.row_count),
+            rebuild_rows: bench_counter_u64(rebuild.row_provider.len_hint()),
+            rebuild_inline_rows: bench_counter_u64(rebuild.inline_row_provider.len_hint()),
+            old_text_bytes: bench_counter_u64(rebuild.old_text.len()),
+            new_text_bytes: bench_counter_u64(rebuild.new_text.len()),
+            old_line_starts: bench_counter_u64(rebuild.old_line_starts.len()),
+            new_line_starts: bench_counter_u64(rebuild.new_line_starts.len()),
         }
     }
 }
@@ -669,9 +700,8 @@ impl FileDiffOpenFixture {
             }
         }
         #[cfg(feature = "benchmarks")]
-        let (split, inline) = crate::view::panes::main::diff_cache::bench_build_file_diff_providers(
-            &old_text, &new_text, 256,
-        );
+        let (split, inline) =
+            build_bench_file_diff_rebuild_from_text("src/bench_diff_open.rs", &old_text, &new_text);
         #[cfg(not(feature = "benchmarks"))]
         let (split, inline) = unreachable!("FileDiffOpenFixture requires benchmarks feature");
 
@@ -1727,6 +1757,8 @@ pub struct RepoTabDragFixture {
     tab_count: usize,
     tab_width_px: f32,
     baseline: AppState,
+    #[cfg(test)]
+    pub hit_test_steps: Vec<RepoTabDragHitTestStep>,
 }
 
 /// Sidecar metrics for repo tab drag benchmarks.
@@ -1736,6 +1768,17 @@ pub struct RepoTabDragMetrics {
     pub reorder_steps: u64,
     pub effects_emitted: u64,
     pub noop_reorders: u64,
+}
+
+#[cfg(test)]
+pub struct RepoTabDragHitTestTarget {
+    pub repo_id: RepoId,
+}
+
+#[cfg(test)]
+pub struct RepoTabDragHitTestStep {
+    pub target: RepoTabDragHitTestTarget,
+    pub insert_before: Option<RepoId>,
 }
 
 impl RepoTabDragFixture {
@@ -1760,17 +1803,14 @@ impl RepoTabDragFixture {
             .collect();
 
         let active = repos.first().map(|r| r.id);
+        #[cfg(test)]
+        let hit_test_steps = build_repo_tab_drag_hit_test_steps(&repos, tab_count, 120.0);
         Self {
             tab_count,
             tab_width_px: 120.0,
-            baseline: AppState {
-                repos,
-                active_repo: active,
-                clone: None,
-                notifications: Vec::new(),
-                banner_error: None,
-                auth_prompt: None,
-            },
+            baseline: bench_app_state(repos, active),
+            #[cfg(test)]
+            hit_test_steps,
         }
     }
 
@@ -1816,6 +1856,24 @@ impl RepoTabDragFixture {
         };
 
         (h.finish(), metrics)
+    }
+
+    #[cfg(test)]
+    pub fn hit_test_target_repo_ids(&self) -> Vec<RepoId> {
+        let repos = &self.baseline.repos;
+        let steps = self.tab_count * 3;
+        let total_bar_width = self.tab_count as f32 * self.tab_width_px;
+        let mut ids = Vec::with_capacity(steps);
+
+        for step in 0..steps {
+            let frac = (step as f32) / (steps.max(1) as f32);
+            let cursor_x = frac * total_bar_width;
+            let tab_ix = (cursor_x / self.tab_width_px) as usize;
+            let tab_ix = tab_ix.min(self.tab_count.saturating_sub(1));
+            ids.push(repos[tab_ix].id);
+        }
+
+        ids
     }
 
     /// Full reducer dispatch — hit-test + reorder_repo_tabs for each step.
@@ -1883,6 +1941,41 @@ impl RepoTabDragFixture {
 
         (h.finish(), metrics)
     }
+}
+
+#[cfg(test)]
+fn build_repo_tab_drag_hit_test_steps(
+    repos: &[RepoState],
+    tab_count: usize,
+    tab_width_px: f32,
+) -> Vec<RepoTabDragHitTestStep> {
+    let steps = tab_count * 3;
+    let total_bar_width = tab_count as f32 * tab_width_px;
+    let mut out = Vec::with_capacity(steps);
+
+    for step in 0..steps {
+        let frac = (step as f32) / (steps.max(1) as f32);
+        let cursor_x = frac * total_bar_width;
+        let tab_ix = (cursor_x / tab_width_px) as usize;
+        let tab_ix = tab_ix.min(tab_count.saturating_sub(1));
+        let target_repo_id = repos[tab_ix].id;
+        let tab_left = tab_ix as f32 * tab_width_px;
+        let tab_center = tab_left + tab_width_px / 2.0;
+        let insert_before = if cursor_x <= tab_center {
+            Some(target_repo_id)
+        } else {
+            repos.get(tab_ix + 1).map(|repo| repo.id)
+        };
+
+        out.push(RepoTabDragHitTestStep {
+            target: RepoTabDragHitTestTarget {
+                repo_id: target_repo_id,
+            },
+            insert_before,
+        });
+    }
+
+    out
 }
 
 pub struct PatchDiffSearchQueryUpdateFixture {

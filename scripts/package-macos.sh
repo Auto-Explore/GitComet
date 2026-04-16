@@ -250,6 +250,11 @@ if [[ $create_dmg -eq 1 ]]; then
     "$dmg_path" >/dev/null
 
   rm -rf "$dmg_stage"
+
+  if [[ -n "$codesign_identity" ]]; then
+    codesign "${sign_args[@]}" "$dmg_path"
+    codesign --verify --strict --verbose=2 "$dmg_path"
+  fi
 fi
 
 echo "Packaged macOS artifacts:"

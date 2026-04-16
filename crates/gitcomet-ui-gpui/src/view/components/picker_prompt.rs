@@ -226,6 +226,13 @@ fn find_ascii_case_insensitive_precomputed(
     first_lower: u8,
     first_upper: u8,
 ) -> Option<Range<usize>> {
+    if needle_bytes.is_empty() {
+        return Some(0..0);
+    }
+    if haystack_bytes.len() < needle_bytes.len() {
+        return None;
+    }
+
     let end = haystack_bytes.len() - needle_bytes.len();
     'outer: for start in 0..=end {
         let first = haystack_bytes[start];
@@ -242,4 +249,32 @@ fn find_ascii_case_insensitive_precomputed(
     }
 
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn match_items_skips_queries_longer_than_candidate_labels() {
+        let items = vec!["ab".into(), "alphabet".into()];
+
+        let matches = match_items(&items, "alphabet soup");
+
+        assert!(matches.is_empty());
+    }
+
+    #[test]
+    fn ascii_matcher_returns_none_when_needle_is_longer_than_haystack() {
+        let needle = b"alphabet soup";
+
+        let range = find_ascii_case_insensitive_precomputed(
+            b"ab",
+            needle,
+            needle[0].to_ascii_lowercase(),
+            needle[0].to_ascii_uppercase(),
+        );
+
+        assert_eq!(range, None);
+    }
 }

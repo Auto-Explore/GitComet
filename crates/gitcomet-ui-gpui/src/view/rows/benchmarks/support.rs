@@ -198,6 +198,64 @@ pub(crate) fn build_synthetic_repo_state(
     repo
 }
 
+pub(crate) fn bench_app_state(repos: Vec<RepoState>, active_repo: Option<RepoId>) -> AppState {
+    AppState {
+        repos,
+        active_repo,
+        ..AppState::default()
+    }
+}
+
+pub(crate) fn seed_repo_status_entries(
+    repo: &mut RepoState,
+    unstaged: Vec<FileStatus>,
+    staged: Vec<FileStatus>,
+) {
+    repo.has_unstaged_conflicts = unstaged
+        .iter()
+        .any(|entry| entry.kind == FileStatusKind::Conflicted);
+    repo.worktree_status = Loadable::Ready(Arc::new(unstaged.clone()));
+    repo.worktree_status_rev = 1;
+    repo.staged_status = Loadable::Ready(Arc::new(staged.clone()));
+    repo.staged_status_rev = 1;
+    repo.status = Loadable::Ready(Arc::new(RepoStatus { unstaged, staged }));
+    repo.status_rev = 1;
+}
+
+pub(crate) fn seed_repo_status(repo: &mut RepoState, status: RepoStatus) {
+    let RepoStatus { unstaged, staged } = status;
+    seed_repo_status_entries(repo, unstaged, staged);
+}
+
+pub(crate) fn load_split_repo_status(repo: &dyn GitRepository, context: &str) -> RepoStatus {
+    let unstaged = repo
+        .worktree_status()
+        .unwrap_or_else(|error| panic!("{context} worktree_status failed: {error}"));
+    let staged = repo
+        .staged_status()
+        .unwrap_or_else(|error| panic!("{context} staged_status failed: {error}"));
+    RepoStatus { unstaged, staged }
+}
+
+pub(crate) fn measure_split_repo_status(
+    repo: &dyn GitRepository,
+    context: &str,
+) -> (RepoStatus, u64, f64) {
+    let started_at = std::time::Instant::now();
+    let unstaged = repo
+        .worktree_status()
+        .unwrap_or_else(|error| panic!("{context} worktree_status failed: {error}"));
+    let worktree_ms = started_at.elapsed().as_secs_f64() * 1_000.0;
+
+    let started_at = std::time::Instant::now();
+    let staged = repo
+        .staged_status()
+        .unwrap_or_else(|error| panic!("{context} staged_status failed: {error}"));
+    let staged_ms = started_at.elapsed().as_secs_f64() * 1_000.0;
+
+    (RepoStatus { unstaged, staged }, 2, worktree_ms + staged_ms)
+}
+
 pub(crate) fn build_repo_switch_repo_state(
     repo_id: RepoId,
     workdir: &str,
@@ -227,8 +285,7 @@ pub(crate) fn build_repo_switch_repo_state(
     repo.log = Loadable::Ready(log_page);
     repo.log_rev = 1;
 
-    repo.status = Loadable::Ready(Arc::new(build_synthetic_repo_status(status_entries)));
-    repo.status_rev = 1;
+    seed_repo_status(&mut repo, build_synthetic_repo_status(status_entries));
     repo.tags = Loadable::Ready(Arc::new(build_tags_targeting_commits(commits, 32)));
     repo.tags_rev = 1;
     repo.remote_tags = Loadable::Ready(Arc::new(Vec::new()));
@@ -908,11 +965,40 @@ pub(crate) fn commit_details_cached_row_hash(
     let mut h = FxHasher::default();
     details.id.as_ref().hash(&mut h);
     commit_details_message_hash(details.message.len(), message_render, &mut h);
-    file_rows
-        .bench_row_hash_for(&details.id, &details.files)
-        .hash(&mut h);
+    let rows = file_rows.rows_for(&details.id, &details.files);
+    hash_commit_file_row_presentations(rows.as_ref()).hash(&mut h);
     details.files.len().hash(&mut h);
     h.finish()
+}
+
+pub(crate) fn hash_commit_file_row_presentations(
+    rows: &[crate::view::rows::CommitFileRowPresentation],
+) -> u64 {
+    let mut hasher = FxHasher::default();
+    rows.len().hash(&mut hasher);
+    for row in rows {
+        row.visuals.kind_key.hash(&mut hasher);
+        let label = row.label.as_ref();
+        label.as_ptr().hash(&mut hasher);
+        label.len().hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+pub(crate) fn build_bench_file_diff_rebuild_from_text(
+    path: impl Into<std::path::PathBuf>,
+    old: &str,
+    new: &str,
+) -> (
+    Arc<crate::view::panes::main::diff_cache::PagedFileDiffRows>,
+    Arc<crate::view::panes::main::diff_cache::PagedFileDiffInlineRows>,
+) {
+    let file = FileDiffText::new(path.into(), Some(old.to_owned()), Some(new.to_owned()));
+    let rebuild = crate::view::panes::main::diff_cache::build_file_diff_cache_rebuild(
+        &file,
+        Path::new("/tmp/gitcomet-bench"),
+    );
+    (rebuild.row_provider, rebuild.inline_row_provider)
 }
 
 pub(crate) fn build_synthetic_source_lines(count: usize, target_line_bytes: usize) -> Vec<String> {

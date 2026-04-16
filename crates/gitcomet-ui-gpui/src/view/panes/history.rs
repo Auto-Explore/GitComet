@@ -67,6 +67,7 @@ fn default_history_column_widths() -> HistoryColumnWidths {
 
 #[derive(Copy, Clone)]
 pub(in crate::view) struct HistoryColumnDragLayout {
+    pub(in crate::view) show_graph: bool,
     pub(in crate::view) show_author: bool,
     pub(in crate::view) show_date: bool,
     pub(in crate::view) show_sha: bool,
@@ -79,6 +80,7 @@ pub(in crate::view) struct HistoryColumnDragLayout {
 
 fn history_visible_columns_for_width(
     available_width: Pixels,
+    show_graph: bool,
     preferred: (bool, bool, bool),
     widths: HistoryColumnWidths,
 ) -> (bool, bool, bool) {
@@ -90,8 +92,7 @@ fn history_visible_columns_for_width(
 
     let (mut show_author, mut show_date, mut show_sha) = preferred;
 
-    // Always show Branch + Graph; Message is flex.
-    let fixed_base = widths.branch + widths.graph;
+    let fixed_base = widths.branch + if show_graph { widths.graph } else { px(0.0) };
     let mut fixed = fixed_base
         + if show_author { widths.author } else { px(0.0) }
         + if show_date { widths.date } else { px(0.0) }
@@ -126,16 +127,18 @@ fn history_column_drag_next_width(
     handle: HistoryColResizeHandle,
     candidate: Pixels,
     available_width: Pixels,
+    show_graph: bool,
     preferred: (bool, bool, bool),
     widths: HistoryColumnWidths,
 ) -> Pixels {
     let (show_author, show_date, show_sha) =
-        history_visible_columns_for_width(available_width, preferred, widths);
+        history_visible_columns_for_width(available_width, show_graph, preferred, widths);
     history_column_drag_clamped_width(
         handle,
         candidate,
         available_width,
         HistoryColumnDragLayout {
+            show_graph,
             show_author,
             show_date,
             show_sha,
@@ -150,6 +153,7 @@ fn history_column_drag_next_width(
 
 fn history_reset_widths_for_available_width(
     available_width: Pixels,
+    show_graph: bool,
     preferred: (bool, bool, bool),
 ) -> HistoryColumnWidths {
     let mut widths = default_history_column_widths();
@@ -157,6 +161,7 @@ fn history_reset_widths_for_available_width(
         HistoryColResizeHandle::Graph,
         widths.graph,
         available_width,
+        show_graph,
         preferred,
         widths,
     );
@@ -164,6 +169,7 @@ fn history_reset_widths_for_available_width(
         HistoryColResizeHandle::Branch,
         widths.branch,
         available_width,
+        show_graph,
         preferred,
         widths,
     );
@@ -193,22 +199,23 @@ pub(in crate::view) fn history_column_resize_drag_params(
     let (min_width, static_max_width) = history_column_static_bounds(handle);
     let other_fixed_width = match handle {
         HistoryColResizeHandle::Branch => {
-            layout.graph_w
-                + if layout.show_author {
-                    layout.author_w
-                } else {
-                    px(0.0)
-                }
-                + if layout.show_date {
-                    layout.date_w
-                } else {
-                    px(0.0)
-                }
-                + if layout.show_sha {
-                    layout.sha_w
-                } else {
-                    px(0.0)
-                }
+            (if layout.show_graph {
+                layout.graph_w
+            } else {
+                px(0.0)
+            }) + if layout.show_author {
+                layout.author_w
+            } else {
+                px(0.0)
+            } + if layout.show_date {
+                layout.date_w
+            } else {
+                px(0.0)
+            } + if layout.show_sha {
+                layout.sha_w
+            } else {
+                px(0.0)
+            }
         }
         HistoryColResizeHandle::Graph => {
             layout.branch_w
@@ -230,7 +237,11 @@ pub(in crate::view) fn history_column_resize_drag_params(
         }
         HistoryColResizeHandle::Author => {
             layout.branch_w
-                + layout.graph_w
+                + if layout.show_graph {
+                    layout.graph_w
+                } else {
+                    px(0.0)
+                }
                 + if layout.show_date {
                     layout.date_w
                 } else {
@@ -244,7 +255,11 @@ pub(in crate::view) fn history_column_resize_drag_params(
         }
         HistoryColResizeHandle::Date => {
             layout.branch_w
-                + layout.graph_w
+                + if layout.show_graph {
+                    layout.graph_w
+                } else {
+                    px(0.0)
+                }
                 + if layout.show_author {
                     layout.author_w
                 } else {
@@ -258,7 +273,11 @@ pub(in crate::view) fn history_column_resize_drag_params(
         }
         HistoryColResizeHandle::Sha => {
             layout.branch_w
-                + layout.graph_w
+                + if layout.show_graph {
+                    layout.graph_w
+                } else {
+                    px(0.0)
+                }
                 + if layout.show_author {
                     layout.author_w
                 } else {
@@ -453,7 +472,12 @@ pub(in crate::view) fn history_visible_columns_for_layout(
     let mut show_date = layout.show_date;
     let mut show_sha = layout.show_sha;
 
-    let fixed_base = layout.branch_w + layout.graph_w;
+    let fixed_base = layout.branch_w
+        + if layout.show_graph {
+            layout.graph_w
+        } else {
+            px(0.0)
+        };
     let mut fixed = fixed_base
         + if show_author {
             layout.author_w
@@ -499,6 +523,22 @@ struct HistorySelectedListIndexCache {
     list_ix: usize,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PendingHistoryReveal {
+    repo_id: RepoId,
+    commit_id: CommitId,
+    desired_scope: LogScope,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct PendingHistoryRevealDecision {
+    set_scope: Option<LogScope>,
+    select_commit: bool,
+    scroll_to_list_ix: Option<usize>,
+    load_more: bool,
+    clear_pending: bool,
+}
+
 fn history_selected_list_index_cache_matches(
     cache: &HistorySelectedListIndexCache,
     repo_id: RepoId,
@@ -537,8 +577,8 @@ fn set_history_selected_list_index_cache(
     });
 }
 
-fn resolve_history_selected_list_index(
-    cache: &mut Option<HistorySelectedListIndexCache>,
+fn peek_history_selected_list_index(
+    cache: Option<&HistorySelectedListIndexCache>,
     repo_id: RepoId,
     log_rev: u64,
     stashes_rev: u64,
@@ -549,21 +589,10 @@ fn resolve_history_selected_list_index(
     commits: &[Commit],
 ) -> Option<usize> {
     if show_working_tree_summary_row && selected_commit.is_none() {
-        set_history_selected_list_index_cache(
-            cache,
-            repo_id,
-            log_rev,
-            stashes_rev,
-            history_scope,
-            show_working_tree_summary_row,
-            None,
-            0,
-        );
         return Some(0);
     }
 
     if let Some(list_ix) = cache
-        .as_ref()
         .filter(|entry| {
             history_selected_list_index_cache_matches(
                 entry,
@@ -587,7 +616,31 @@ fn resolve_history_selected_list_index(
             .get(commit_ix)
             .is_some_and(|commit| &commit.id == selected_commit)
     })?;
-    let list_ix = visible_ix + offset;
+    Some(visible_ix + offset)
+}
+
+fn resolve_history_selected_list_index(
+    cache: &mut Option<HistorySelectedListIndexCache>,
+    repo_id: RepoId,
+    log_rev: u64,
+    stashes_rev: u64,
+    history_scope: LogScope,
+    show_working_tree_summary_row: bool,
+    selected_commit: Option<&CommitId>,
+    visible_indices: &HistoryVisibleIndices,
+    commits: &[Commit],
+) -> Option<usize> {
+    let list_ix = peek_history_selected_list_index(
+        cache.as_ref(),
+        repo_id,
+        log_rev,
+        stashes_rev,
+        history_scope,
+        show_working_tree_summary_row,
+        selected_commit,
+        visible_indices,
+        commits,
+    )?;
     set_history_selected_list_index_cache(
         cache,
         repo_id,
@@ -595,10 +648,79 @@ fn resolve_history_selected_list_index(
         stashes_rev,
         history_scope,
         show_working_tree_summary_row,
-        Some(selected_commit.clone()),
+        selected_commit.cloned(),
         list_ix,
     );
     Some(list_ix)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn decide_pending_history_reveal(
+    pending: &PendingHistoryReveal,
+    active_repo_id: Option<RepoId>,
+    current_scope: Option<LogScope>,
+    selected_commit: Option<&CommitId>,
+    log_rev: u64,
+    stashes_rev: u64,
+    log_loading_more: bool,
+    page: Option<&LogPage>,
+    cache_request_matches: bool,
+    visible_indices: Option<&HistoryVisibleIndices>,
+    show_working_tree_summary_row: bool,
+    selected_list_index_cache: Option<&HistorySelectedListIndexCache>,
+) -> PendingHistoryRevealDecision {
+    let mut decision = PendingHistoryRevealDecision::default();
+
+    if active_repo_id != Some(pending.repo_id) {
+        decision.clear_pending = true;
+        return decision;
+    }
+
+    let Some(current_scope) = current_scope else {
+        decision.clear_pending = true;
+        return decision;
+    };
+
+    if current_scope != pending.desired_scope {
+        decision.set_scope = Some(pending.desired_scope);
+        return decision;
+    }
+
+    decision.select_commit = selected_commit != Some(&pending.commit_id);
+
+    let Some(page) = page else {
+        return decision;
+    };
+    if !cache_request_matches {
+        return decision;
+    }
+    let Some(visible_indices) = visible_indices else {
+        return decision;
+    };
+
+    if let Some(list_ix) = peek_history_selected_list_index(
+        selected_list_index_cache,
+        pending.repo_id,
+        log_rev,
+        stashes_rev,
+        current_scope,
+        show_working_tree_summary_row,
+        Some(&pending.commit_id),
+        visible_indices,
+        &page.commits,
+    ) {
+        decision.scroll_to_list_ix = Some(list_ix);
+        decision.clear_pending = true;
+        return decision;
+    }
+
+    if page.next_cursor.is_some() {
+        decision.load_more = !log_loading_more;
+        return decision;
+    }
+
+    decision.clear_pending = true;
+    decision
 }
 
 pub(in super::super) struct HistoryView {
@@ -623,13 +745,18 @@ pub(in super::super) struct HistoryView {
     pub(in super::super) history_col_author: Pixels,
     pub(in super::super) history_col_date: Pixels,
     pub(in super::super) history_col_sha: Pixels,
+    pub(in super::super) history_show_graph: bool,
     pub(in super::super) history_show_author: bool,
     pub(in super::super) history_show_date: bool,
     pub(in super::super) history_show_sha: bool,
+    pub(in super::super) history_show_tags: bool,
+    pub(in super::super) history_auto_fetch_tags_on_repo_activation: bool,
     pub(in super::super) history_col_graph_auto: bool,
     pub(in super::super) history_col_resize: Option<HistoryColResizeState>,
     pub(in super::super) history_cache: Option<HistoryCache>,
     history_selected_list_index_cache: Option<HistorySelectedListIndexCache>,
+    selected_branch: Option<SelectedBranch>,
+    pending_history_reveal: Option<PendingHistoryReveal>,
     pub(in super::super) history_worktree_summary_cache: Option<HistoryWorktreeSummaryCache>,
     pub(in super::super) history_stash_ids_cache: Option<HistoryStashIdsCache>,
     pub(in super::super) history_scroll: UniformListScrollHandle,
@@ -637,7 +764,7 @@ pub(in super::super) struct HistoryView {
 }
 
 impl HistoryView {
-    fn notify_fingerprint_for(state: &AppState) -> u64 {
+    fn notify_fingerprint_for(state: &AppState, show_history_tags: bool) -> u64 {
         let mut hasher = FxHasher::default();
         state.active_repo.hash(&mut hasher);
 
@@ -649,10 +776,13 @@ impl HistoryView {
             repo.detached_head_commit.hash(&mut hasher);
             repo.branches_rev.hash(&mut hasher);
             repo.remote_branches_rev.hash(&mut hasher);
-            repo.tags_rev.hash(&mut hasher);
+            if show_history_tags {
+                repo.tags_rev.hash(&mut hasher);
+            }
             repo.stashes_rev.hash(&mut hasher);
             repo.history_state.selected_commit_rev.hash(&mut hasher);
-            repo.status_rev.hash(&mut hasher);
+            repo.worktree_status_cache_rev().hash(&mut hasher);
+            repo.staged_status_cache_rev().hash(&mut hasher);
         }
 
         hasher.finish()
@@ -666,9 +796,12 @@ impl HistoryView {
         date_time_format: DateTimeFormat,
         timezone: Timezone,
         show_timezone: bool,
+        history_show_graph: bool,
         history_show_author: bool,
         history_show_date: bool,
         history_show_sha: bool,
+        history_show_tags: bool,
+        history_auto_fetch_tags_on_repo_activation: bool,
         root_view: WeakEntity<GitCometView>,
         tooltip_host: WeakEntity<TooltipHost>,
         last_window_size: Size<Pixels>,
@@ -676,10 +809,10 @@ impl HistoryView {
         cx: &mut gpui::Context<Self>,
     ) -> Self {
         let state = Arc::clone(&ui_model.read(cx).state);
-        let initial_fingerprint = Self::notify_fingerprint_for(&state);
+        let initial_fingerprint = Self::notify_fingerprint_for(&state, history_show_tags);
         let subscription = cx.observe(&ui_model, |this, model, cx| {
             let next = Arc::clone(&model.read(cx).state);
-            let next_fingerprint = Self::notify_fingerprint_for(&next);
+            let next_fingerprint = Self::notify_fingerprint_for(&next, this.history_show_tags);
             if next_fingerprint == this.notify_fingerprint {
                 this.state = next;
                 return;
@@ -714,13 +847,18 @@ impl HistoryView {
             history_col_author: default_widths.author,
             history_col_date: default_widths.date,
             history_col_sha: default_widths.sha,
+            history_show_graph,
             history_show_author,
             history_show_date,
             history_show_sha,
+            history_show_tags,
+            history_auto_fetch_tags_on_repo_activation,
             history_col_graph_auto: true,
             history_col_resize: None,
             history_cache: None,
             history_selected_list_index_cache: None,
+            selected_branch: None,
+            pending_history_reveal: None,
             history_worktree_summary_cache: None,
             history_stash_ids_cache: None,
             history_scroll: UniformListScrollHandle::default(),
@@ -737,17 +875,96 @@ impl HistoryView {
         self.state.repos.iter().find(|r| r.id == repo_id)
     }
 
-    pub(in super::super) fn history_visible_column_preferences(&self) -> (bool, bool, bool) {
+    fn history_cache_request_for_repo(
+        &self,
+        repo: &RepoState,
+        page: &LogPage,
+    ) -> HistoryCacheRequest {
+        HistoryCacheRequest {
+            repo_id: repo.id,
+            history_scope: repo.history_state.history_scope,
+            log_fingerprint: Self::log_fingerprint(&page.commits),
+            head_branch_rev: repo.head_branch_rev,
+            detached_head_commit: repo.detached_head_commit.clone(),
+            branches_rev: repo.branches_rev,
+            remote_branches_rev: repo.remote_branches_rev,
+            tags_rev: if self.history_show_tags {
+                repo.tags_rev
+            } else {
+                Default::default()
+            },
+            stashes_rev: repo.stashes_rev,
+            date_time_format: self.date_time_format,
+            timezone: self.timezone,
+            show_timezone: self.show_timezone,
+        }
+    }
+
+    pub(in crate::view) fn request_reveal_commit(
+        &mut self,
+        repo_id: RepoId,
+        commit_id: CommitId,
+        desired_scope: LogScope,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let next = PendingHistoryReveal {
+            repo_id,
+            commit_id,
+            desired_scope,
+        };
+        if self.pending_history_reveal.as_ref() != Some(&next) {
+            self.pending_history_reveal = Some(next);
+        }
+        self.drive_pending_history_reveal(cx);
+        cx.notify();
+    }
+
+    pub(in crate::view) fn set_selected_branch(
+        &mut self,
+        repo_id: RepoId,
+        section: BranchSection,
+        name: &str,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let next = Some(SelectedBranch {
+            repo_id,
+            section,
+            name: name.to_string(),
+        });
+        if self.selected_branch.as_ref() == next.as_ref() {
+            return;
+        }
+        self.selected_branch = next;
+        cx.notify();
+    }
+
+    pub(in super::super) fn selected_branch_entry_text_for_history_row(
+        &self,
+        repo_id: RepoId,
+        is_head: bool,
+        selected: bool,
+    ) -> Option<SharedString> {
+        selected_branch_history_entry_text(
+            self.selected_branch.as_ref(),
+            repo_id,
+            is_head,
+            selected,
+        )
+    }
+
+    pub(in super::super) fn history_visible_column_preferences(&self) -> (bool, bool, bool, bool) {
         (
+            self.history_show_graph,
             self.history_show_author,
             self.history_show_date,
             self.history_show_sha,
         )
     }
 
-    pub(in super::super) fn history_visible_columns(&self) -> (bool, bool, bool) {
+    pub(in super::super) fn history_visible_columns(&self) -> (bool, bool, bool, bool) {
         let available = self.history_content_width;
         let layout = HistoryColumnDragLayout {
+            show_graph: self.history_show_graph,
             show_author: self.history_show_author,
             show_date: self.history_show_date,
             show_sha: self.history_show_sha,
@@ -757,17 +974,24 @@ impl HistoryView {
             date_w: self.history_col_date,
             sha_w: self.history_col_sha,
         };
-        history_visible_columns_for_layout_with_resize_state(
-            available,
-            layout,
-            self.history_col_resize.as_ref(),
-        )
+        let (show_author, show_date, show_sha) =
+            history_visible_columns_for_layout_with_resize_state(
+                available,
+                layout,
+                self.history_col_resize.as_ref(),
+            );
+        (self.history_show_graph, show_author, show_date, show_sha)
     }
 
     pub(in super::super) fn reset_history_column_widths(&mut self) {
         let widths = history_reset_widths_for_available_width(
             self.history_content_width,
-            self.history_visible_column_preferences(),
+            self.history_show_graph,
+            (
+                self.history_show_author,
+                self.history_show_date,
+                self.history_show_sha,
+            ),
         );
         self.history_col_branch = widths.branch;
         self.history_col_graph = widths.graph;
@@ -843,6 +1067,60 @@ impl HistoryView {
         self.show_timezone = enabled;
         self.history_cache = None;
         self.history_cache_inflight = None;
+        cx.notify();
+    }
+
+    pub(in super::super) fn history_tag_preferences(&self) -> (bool, bool) {
+        (
+            self.history_show_tags,
+            self.history_auto_fetch_tags_on_repo_activation,
+        )
+    }
+
+    pub(in super::super) fn set_history_column_preferences(
+        &mut self,
+        show_graph: bool,
+        show_author: bool,
+        show_date: bool,
+        show_sha: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.history_show_graph == show_graph
+            && self.history_show_author == show_author
+            && self.history_show_date == show_date
+            && self.history_show_sha == show_sha
+        {
+            return;
+        }
+
+        self.history_show_graph = show_graph;
+        self.history_show_author = show_author;
+        self.history_show_date = show_date;
+        self.history_show_sha = show_sha;
+        self.history_col_resize = None;
+        cx.notify();
+    }
+
+    pub(in super::super) fn set_history_tag_preferences(
+        &mut self,
+        show_tags: bool,
+        auto_fetch_tags_on_repo_activation: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.history_show_tags == show_tags
+            && self.history_auto_fetch_tags_on_repo_activation == auto_fetch_tags_on_repo_activation
+        {
+            return;
+        }
+
+        let show_tags_changed = self.history_show_tags != show_tags;
+        self.history_show_tags = show_tags;
+        self.history_auto_fetch_tags_on_repo_activation = auto_fetch_tags_on_repo_activation;
+        if show_tags_changed {
+            self.notify_fingerprint = Self::notify_fingerprint_for(&self.state, show_tags);
+            self.history_cache = None;
+            self.history_cache_inflight = None;
+        }
         cx.notify();
     }
 
@@ -922,6 +1200,152 @@ impl HistoryView {
             .update(cx, |host, cx| host.clear_tooltip_if_matches(&tooltip, cx));
         false
     }
+
+    pub(in crate::view) fn drive_pending_history_reveal(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(pending) = self.pending_history_reveal.clone() else {
+            return;
+        };
+
+        let (show_working_tree_summary_row, _) = self.ensure_history_worktree_summary_cache();
+        let (
+            active_repo_id,
+            current_scope,
+            log_rev,
+            stashes_rev,
+            page,
+            cache_request_matches,
+            decision,
+        ) = {
+            let active_repo_id = self.active_repo_id();
+            let Some(repo) = self.active_repo() else {
+                let decision = decide_pending_history_reveal(
+                    &pending,
+                    active_repo_id,
+                    None,
+                    None,
+                    0,
+                    0,
+                    false,
+                    None,
+                    false,
+                    None,
+                    show_working_tree_summary_row,
+                    self.history_selected_list_index_cache.as_ref(),
+                );
+                return self.finish_pending_history_reveal(decision, pending, None, cx);
+            };
+
+            let current_scope = repo.history_state.history_scope;
+            let log_rev = repo.log_rev;
+            let stashes_rev = repo.stashes_rev;
+            let log_loading_more = repo.history_state.log_loading_more;
+            let page = match &repo.log {
+                Loadable::Ready(page) => Some(Arc::clone(page)),
+                _ => None,
+            };
+            let cache_request_matches = page.as_ref().is_some_and(|page| {
+                let request = self.history_cache_request_for_repo(repo, page.as_ref());
+                self.history_cache
+                    .as_ref()
+                    .is_some_and(|cache| cache.request == request)
+            });
+            let visible_indices = if cache_request_matches {
+                self.history_cache
+                    .as_ref()
+                    .map(|cache| &cache.visible_indices)
+            } else {
+                None
+            };
+            let decision = decide_pending_history_reveal(
+                &pending,
+                active_repo_id,
+                Some(current_scope),
+                repo.history_state.selected_commit.as_ref(),
+                log_rev,
+                stashes_rev,
+                log_loading_more,
+                page.as_deref(),
+                cache_request_matches,
+                visible_indices,
+                show_working_tree_summary_row,
+                self.history_selected_list_index_cache.as_ref(),
+            );
+
+            (
+                active_repo_id,
+                current_scope,
+                log_rev,
+                stashes_rev,
+                page,
+                cache_request_matches,
+                decision,
+            )
+        };
+
+        let cache_meta = (active_repo_id == Some(pending.repo_id)
+            && current_scope == pending.desired_scope
+            && page.is_some()
+            && cache_request_matches)
+            .then_some((
+                log_rev,
+                stashes_rev,
+                current_scope,
+                show_working_tree_summary_row,
+            ));
+
+        self.finish_pending_history_reveal(decision, pending, cache_meta, cx);
+    }
+
+    fn finish_pending_history_reveal(
+        &mut self,
+        decision: PendingHistoryRevealDecision,
+        pending: PendingHistoryReveal,
+        cache_meta: Option<(u64, u64, LogScope, bool)>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if let Some(scope) = decision.set_scope {
+            self.store.dispatch(Msg::SetHistoryScope {
+                repo_id: pending.repo_id,
+                scope,
+            });
+            return;
+        }
+
+        if decision.select_commit {
+            self.store.dispatch(Msg::SelectCommit {
+                repo_id: pending.repo_id,
+                commit_id: pending.commit_id.clone(),
+            });
+        }
+
+        if let Some(list_ix) = decision.scroll_to_list_ix {
+            if let Some((log_rev, stashes_rev, history_scope, show_working_tree_summary_row)) =
+                cache_meta
+            {
+                set_history_selected_list_index_cache(
+                    &mut self.history_selected_list_index_cache,
+                    pending.repo_id,
+                    log_rev,
+                    stashes_rev,
+                    history_scope,
+                    show_working_tree_summary_row,
+                    Some(pending.commit_id.clone()),
+                    list_ix,
+                );
+            }
+            self.history_scroll
+                .scroll_to_item_strict(list_ix, gpui::ScrollStrategy::Center);
+        } else if decision.load_more {
+            self.store.dispatch(Msg::LoadMoreHistory {
+                repo_id: pending.repo_id,
+            });
+        }
+
+        if decision.clear_pending {
+            self.pending_history_reveal = None;
+            cx.notify();
+        }
+    }
 }
 
 // Render impl is in history_panel.rs
@@ -942,7 +1366,8 @@ impl HistoryView {
             },
             Rebuild {
                 repo_id: RepoId,
-                status: Arc<RepoStatus>,
+                worktree_status_rev: u64,
+                staged_status_rev: u64,
                 show_row: bool,
                 counts: (usize, usize, usize),
             },
@@ -952,13 +1377,19 @@ impl HistoryView {
             let Some(repo) = self.active_repo() else {
                 return Action::Clear;
             };
-            let Loadable::Ready(status) = &repo.status else {
+            let worktree = repo.worktree_status_entries();
+            let staged = repo.staged_status_entries();
+            if worktree.is_none() && staged.is_none() {
                 return Action::Clear;
-            };
+            }
+
+            let worktree_status_rev = repo.worktree_status_cache_rev();
+            let staged_status_rev = repo.staged_status_cache_rev();
 
             if let Some(cache) = &self.history_worktree_summary_cache
                 && cache.repo_id == repo.id
-                && Arc::ptr_eq(&cache.status, status)
+                && cache.worktree_status_rev == worktree_status_rev
+                && cache.staged_status_rev == staged_status_rev
             {
                 return Action::CacheOk {
                     show_row: cache.show_row,
@@ -982,9 +1413,10 @@ impl HistoryView {
                 (added, modified, deleted)
             };
 
-            let unstaged_counts = count_for(&status.unstaged);
-            let staged_counts = count_for(&status.staged);
-            let show_row = !status.unstaged.is_empty() || !status.staged.is_empty();
+            let unstaged_counts = worktree.map_or((0, 0, 0), count_for);
+            let staged_counts = staged.map_or((0, 0, 0), count_for);
+            let show_row = worktree.is_some_and(|entries| !entries.is_empty())
+                || staged.is_some_and(|entries| !entries.is_empty());
             let counts = (
                 unstaged_counts.0 + staged_counts.0,
                 unstaged_counts.1 + staged_counts.1,
@@ -993,7 +1425,8 @@ impl HistoryView {
 
             Action::Rebuild {
                 repo_id: repo.id,
-                status: Arc::clone(status),
+                worktree_status_rev,
+                staged_status_rev,
                 show_row,
                 counts,
             }
@@ -1007,13 +1440,15 @@ impl HistoryView {
             Action::CacheOk { show_row, counts } => (show_row, counts),
             Action::Rebuild {
                 repo_id,
-                status,
+                worktree_status_rev,
+                staged_status_rev,
                 show_row,
                 counts,
             } => {
                 self.history_worktree_summary_cache = Some(HistoryWorktreeSummaryCache {
                     repo_id,
-                    status,
+                    worktree_status_rev,
+                    staged_status_rev,
                     show_row,
                     counts,
                 });
@@ -1102,20 +1537,7 @@ impl HistoryView {
 
         let next = if let Some(repo) = self.active_repo() {
             if let Loadable::Ready(page) = &repo.log {
-                let request = HistoryCacheRequest {
-                    repo_id: repo.id,
-                    history_scope: repo.history_state.history_scope,
-                    log_fingerprint: Self::log_fingerprint(&page.commits),
-                    head_branch_rev: repo.head_branch_rev,
-                    detached_head_commit: repo.detached_head_commit.clone(),
-                    branches_rev: repo.branches_rev,
-                    remote_branches_rev: repo.remote_branches_rev,
-                    tags_rev: repo.tags_rev,
-                    stashes_rev: repo.stashes_rev,
-                    date_time_format: self.date_time_format,
-                    timezone: self.timezone,
-                    show_timezone: self.show_timezone,
-                };
+                let request = self.history_cache_request_for_repo(repo, page.as_ref());
 
                 let cache_ok = self
                     .history_cache
@@ -1141,9 +1563,13 @@ impl HistoryView {
                             Loadable::Ready(b) => Arc::clone(b),
                             _ => Arc::new(Vec::new()),
                         },
-                        tags: match &repo.tags {
-                            Loadable::Ready(t) => Arc::clone(t),
-                            _ => Arc::new(Vec::new()),
+                        tags: if self.history_show_tags {
+                            match &repo.tags {
+                                Loadable::Ready(t) => Arc::clone(t),
+                                _ => Arc::new(Vec::new()),
+                            }
+                        } else {
+                            Arc::new(Vec::new())
                         },
                         stashes: match &repo.stashes {
                             Loadable::Ready(s) => Arc::clone(s),
@@ -1209,7 +1635,7 @@ impl HistoryView {
                 let request_for_update = request_for_task.clone();
                 let request_for_build = request_for_task.clone();
 
-                let rebuild = smol::unblock(move || {
+                let build_rebuild = move || {
                     let stash_analysis = analyze_history_stashes(&page.commits, stashes.as_ref());
                     let stash_tips = stash_analysis.stash_tips;
                     let stash_helper_ids = stash_analysis.stash_helper_ids;
@@ -1383,8 +1809,13 @@ impl HistoryView {
                         max_lanes,
                         commit_row_vms,
                     }
-                })
-                .await;
+                };
+
+                let rebuild = if crate::ui_runtime::current().uses_background_compute() {
+                    smol::unblock(build_rebuild).await
+                } else {
+                    build_rebuild()
+                };
 
                 let _ = view.update(cx, |this, cx| {
                     if this.history_cache_seq != seq {
@@ -1400,19 +1831,26 @@ impl HistoryView {
                     if this.history_col_graph_auto && this.history_col_resize.is_none() {
                         let required = px(HISTORY_GRAPH_MARGIN_X_PX * 2.0
                             + HISTORY_GRAPH_COL_GAP_PX * (rebuild.max_lanes as f32));
-                        this.history_col_graph = history_column_drag_next_width(
-                            HistoryColResizeHandle::Graph,
-                            required.min(px(HISTORY_COL_GRAPH_MAX_PX)),
-                            this.history_content_width,
-                            this.history_visible_column_preferences(),
-                            HistoryColumnWidths {
-                                branch: this.history_col_branch,
-                                graph: this.history_col_graph,
-                                author: this.history_col_author,
-                                date: this.history_col_date,
-                                sha: this.history_col_sha,
-                            },
-                        );
+                        if this.history_show_graph {
+                            this.history_col_graph = history_column_drag_next_width(
+                                HistoryColResizeHandle::Graph,
+                                required.min(px(HISTORY_COL_GRAPH_MAX_PX)),
+                                this.history_content_width,
+                                this.history_show_graph,
+                                (
+                                    this.history_show_author,
+                                    this.history_show_date,
+                                    this.history_show_sha,
+                                ),
+                                HistoryColumnWidths {
+                                    branch: this.history_col_branch,
+                                    graph: this.history_col_graph,
+                                    author: this.history_col_author,
+                                    date: this.history_col_date,
+                                    sha: this.history_col_sha,
+                                },
+                            );
+                        }
                     }
 
                     this.history_cache_inflight = None;
@@ -1460,7 +1898,7 @@ fn stash_summary_from_log_summary(summary: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gitcomet_core::domain::CommitId;
+    use gitcomet_core::domain::{CommitId, LogCursor, LogPage};
     use std::time::SystemTime;
 
     fn commit(id: &str, parents: &[&str], summary: &str) -> Commit {
@@ -1475,6 +1913,7 @@ mod tests {
 
     fn all_columns_visible_drag_layout() -> HistoryColumnDragLayout {
         HistoryColumnDragLayout {
+            show_graph: true,
             show_author: true,
             show_date: true,
             show_sha: true,
@@ -1500,6 +1939,16 @@ mod tests {
             remote: remote.into(),
             name: name.into(),
             target: CommitId(target.into()),
+        }
+    }
+
+    fn log_page(commits: Vec<Commit>, next_cursor: Option<&str>) -> LogPage {
+        LogPage {
+            commits,
+            next_cursor: next_cursor.map(|last_seen| LogCursor {
+                last_seen: CommitId(last_seen.into()),
+                resume_from: None,
+            }),
         }
     }
 
@@ -1558,6 +2007,52 @@ mod tests {
     }
 
     #[test]
+    fn selected_branch_history_entry_text_formats_head_local_branch() {
+        let selected_branch = SelectedBranch {
+            repo_id: RepoId(7),
+            section: BranchSection::Local,
+            name: "main".into(),
+        };
+
+        assert_eq!(
+            selected_branch_history_entry_text(Some(&selected_branch), RepoId(7), true, true),
+            Some(SharedString::from("HEAD → main"))
+        );
+    }
+
+    #[test]
+    fn selected_branch_history_entry_text_formats_remote_branch_without_head_prefix() {
+        let selected_branch = SelectedBranch {
+            repo_id: RepoId(7),
+            section: BranchSection::Remote,
+            name: "origin/feature/topic".into(),
+        };
+
+        assert_eq!(
+            selected_branch_history_entry_text(Some(&selected_branch), RepoId(7), true, true),
+            Some(SharedString::from("origin/feature/topic"))
+        );
+    }
+
+    #[test]
+    fn selected_branch_history_entry_text_requires_selected_row_and_matching_repo() {
+        let selected_branch = SelectedBranch {
+            repo_id: RepoId(7),
+            section: BranchSection::Local,
+            name: "main".into(),
+        };
+
+        assert_eq!(
+            selected_branch_history_entry_text(Some(&selected_branch), RepoId(8), true, true),
+            None
+        );
+        assert_eq!(
+            selected_branch_history_entry_text(Some(&selected_branch), RepoId(7), true, false),
+            None
+        );
+    }
+
+    #[test]
     fn history_column_drag_clamp_respects_static_maximums() {
         let available = history_columns_available_width(px(1436.0));
         let layout = all_columns_visible_drag_layout();
@@ -1605,7 +2100,7 @@ mod tests {
         let preferred = (true, true, true);
 
         assert_eq!(
-            history_visible_columns_for_width(available, preferred, widths),
+            history_visible_columns_for_width(available, true, preferred, widths),
             (false, false, false)
         );
 
@@ -1613,6 +2108,7 @@ mod tests {
             HistoryColResizeHandle::Graph,
             px(90.0),
             available,
+            true,
             preferred,
             widths,
         );
@@ -1622,7 +2118,7 @@ mod tests {
 
     #[test]
     fn reset_widths_clamp_default_graph_in_narrow_windows() {
-        let widths = history_reset_widths_for_available_width(px(396.0), (true, true, true));
+        let widths = history_reset_widths_for_available_width(px(396.0), true, (true, true, true));
 
         assert_eq!(widths.branch, px(HISTORY_COL_BRANCH_PX));
         assert_eq!(widths.graph, px(46.0));
@@ -1630,7 +2126,7 @@ mod tests {
 
     #[test]
     fn reset_widths_clamp_branch_after_graph_reaches_minimum() {
-        let widths = history_reset_widths_for_available_width(px(360.0), (true, true, true));
+        let widths = history_reset_widths_for_available_width(px(360.0), true, (true, true, true));
 
         assert_eq!(widths.graph, px(HISTORY_COL_GRAPH_MIN_PX));
         assert_eq!(widths.branch, px(96.0));
@@ -1780,5 +2276,154 @@ mod tests {
         );
 
         assert_eq!(list_ix, Some(5));
+    }
+
+    #[test]
+    fn pending_history_reveal_visible_target_scrolls_and_clears() {
+        let commits = vec![
+            commit("a", &["p0"], "a"),
+            commit("b", &["a"], "b"),
+            commit("c", &["b"], "c"),
+        ];
+        let pending = PendingHistoryReveal {
+            repo_id: RepoId(7),
+            commit_id: CommitId("c".into()),
+            desired_scope: LogScope::AllBranches,
+        };
+
+        let decision = decide_pending_history_reveal(
+            &pending,
+            Some(RepoId(7)),
+            Some(LogScope::AllBranches),
+            None,
+            11,
+            13,
+            false,
+            Some(&log_page(commits, None)),
+            true,
+            Some(&HistoryVisibleIndices::Filtered(vec![0, 2])),
+            true,
+            None,
+        );
+
+        assert_eq!(
+            decision,
+            PendingHistoryRevealDecision {
+                set_scope: None,
+                select_commit: true,
+                scroll_to_list_ix: Some(2),
+                load_more: false,
+                clear_pending: true,
+            }
+        );
+    }
+
+    #[test]
+    fn pending_history_reveal_missing_target_requests_load_more() {
+        let commits = vec![commit("a", &["p0"], "a"), commit("b", &["a"], "b")];
+        let pending = PendingHistoryReveal {
+            repo_id: RepoId(7),
+            commit_id: CommitId("c".into()),
+            desired_scope: LogScope::AllBranches,
+        };
+
+        let decision = decide_pending_history_reveal(
+            &pending,
+            Some(RepoId(7)),
+            Some(LogScope::AllBranches),
+            None,
+            11,
+            13,
+            false,
+            Some(&log_page(commits, Some("b"))),
+            true,
+            Some(&HistoryVisibleIndices::all(2)),
+            false,
+            None,
+        );
+
+        assert_eq!(
+            decision,
+            PendingHistoryRevealDecision {
+                set_scope: None,
+                select_commit: true,
+                scroll_to_list_ix: None,
+                load_more: true,
+                clear_pending: false,
+            }
+        );
+    }
+
+    #[test]
+    fn pending_history_reveal_missing_target_with_exhausted_history_clears() {
+        let commits = vec![commit("a", &["p0"], "a"), commit("b", &["a"], "b")];
+        let pending = PendingHistoryReveal {
+            repo_id: RepoId(7),
+            commit_id: CommitId("c".into()),
+            desired_scope: LogScope::AllBranches,
+        };
+
+        let decision = decide_pending_history_reveal(
+            &pending,
+            Some(RepoId(7)),
+            Some(LogScope::AllBranches),
+            None,
+            11,
+            13,
+            false,
+            Some(&log_page(commits, None)),
+            true,
+            Some(&HistoryVisibleIndices::all(2)),
+            false,
+            None,
+        );
+
+        assert_eq!(
+            decision,
+            PendingHistoryRevealDecision {
+                set_scope: None,
+                select_commit: true,
+                scroll_to_list_ix: None,
+                load_more: false,
+                clear_pending: true,
+            }
+        );
+    }
+
+    #[test]
+    fn pending_history_reveal_already_selected_commit_still_scrolls() {
+        let commits = vec![commit("a", &["p0"], "a"), commit("b", &["a"], "b")];
+        let selected = CommitId("b".into());
+        let pending = PendingHistoryReveal {
+            repo_id: RepoId(7),
+            commit_id: selected.clone(),
+            desired_scope: LogScope::CurrentBranch,
+        };
+
+        let decision = decide_pending_history_reveal(
+            &pending,
+            Some(RepoId(7)),
+            Some(LogScope::CurrentBranch),
+            Some(&selected),
+            21,
+            34,
+            false,
+            Some(&log_page(commits, None)),
+            true,
+            Some(&HistoryVisibleIndices::all(2)),
+            false,
+            None,
+        );
+
+        assert_eq!(
+            decision,
+            PendingHistoryRevealDecision {
+                set_scope: None,
+                select_commit: false,
+                scroll_to_list_ix: Some(1),
+                load_more: false,
+                clear_pending: true,
+            }
+        );
     }
 }

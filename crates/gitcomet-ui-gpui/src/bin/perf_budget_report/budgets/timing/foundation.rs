@@ -172,20 +172,20 @@ pub(crate) const PERF_BUDGETS: &[PerfBudgetSpec] = &[
         estimate_path: "branch_sidebar/cache_hit_balanced/new/estimates.json",
         threshold_ns: 1.0 * NANOS_PER_MICROSECOND,
     },
-    // branch_sidebar/cache_miss_remote_fanout — full rebuild with heavy remote fanout
+    // branch_sidebar/cache_miss_remote_fanout — source-changing rebuild with heavy remote fanout
     PerfBudgetSpec {
         label: "branch_sidebar/cache_miss_remote_fanout",
         estimate_path: "branch_sidebar/cache_miss_remote_fanout/new/estimates.json",
         threshold_ns: 50.0 * NANOS_PER_MILLISECOND,
     },
-    // branch_sidebar/cache_invalidation_single_ref_change — single rev bump + rebuild
+    // branch_sidebar/cache_invalidation_single_ref_change — single local-branch metadata change + rebuild
     PerfBudgetSpec {
         label: "branch_sidebar/cache_invalidation_single_ref_change",
         estimate_path: "branch_sidebar/cache_invalidation_single_ref_change/new/estimates.json",
         threshold_ns: 10.0 * NANOS_PER_MILLISECOND,
     },
-    // branch_sidebar/cache_invalidation_worktrees_ready — worktrees_rev bump + rebuild
-    // with worktrees/submodules/stashes present in the sidebar shape.
+    // branch_sidebar/cache_invalidation_worktrees_ready — worktree snapshot change + rebuild
+    // with worktrees/submodules/stashes present in the cached sidebar shape.
     PerfBudgetSpec {
         label: "branch_sidebar/cache_invalidation_worktrees_ready",
         estimate_path: "branch_sidebar/cache_invalidation_worktrees_ready/new/estimates.json",
@@ -328,8 +328,8 @@ pub(crate) const PERF_BUDGETS: &[PerfBudgetSpec] = &[
         estimate_path: "diff_refresh_rev_only_same_content/rekey/new/estimates.json",
         threshold_ns: 50.0 * NANOS_PER_MICROSECOND,
     },
-    // diff_refresh_rev_only_same_content/rebuild — full side_by_side_plan
-    // This is the expensive path; budget allows room for shared-runner noise.
+    // diff_refresh_rev_only_same_content/rebuild — synchronous file-diff cache rebuild
+    // This is the expensive non-parser path; budget allows room for shared-runner noise.
     PerfBudgetSpec {
         label: "diff_refresh_rev_only_same_content/rebuild",
         estimate_path: "diff_refresh_rev_only_same_content/rebuild/new/estimates.json",

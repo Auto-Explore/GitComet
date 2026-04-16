@@ -244,8 +244,10 @@ mod tests {
                 effects,
                 [Effect::LoadSelectedDiff {
                     repo_id: RepoId(1),
+                    load_patch_diff: true,
                     load_file_text: true,
                     load_file_image: false,
+                    preview_text_side: None,
                 }]
             ));
             assert_eq!(state.repos[0].diff_state.diff_target, Some(target.clone()));

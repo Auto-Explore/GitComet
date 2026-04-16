@@ -362,6 +362,53 @@ fn clone_finished_ssh_publickey_error_sets_passphrase_prompt() {
 }
 
 #[test]
+fn submit_auth_prompt_clears_stale_repo_banner_before_retry() {
+    let _lock = super::staged_auth_test_lock();
+    clear_staged_git_auth();
+
+    let repo_id = RepoId(1);
+    let (mut repos, mut state) = setup_open_repo(repo_id, "/tmp/repo");
+    let id_alloc = AtomicU64::new(1);
+    state.banner_error = Some(crate::model::BannerErrorState {
+        repo_id: Some(repo_id),
+        message: "git pull failed: Enter passphrase for key '/home/user/.ssh/id_ed25519'"
+            .to_string(),
+    });
+    state.auth_prompt = Some(AuthPromptState {
+        kind: AuthPromptKind::Passphrase,
+        reason: "auth required".to_string(),
+        operation: AuthRetryOperation::RepoCommand {
+            repo_id,
+            command: RepoCommandKind::Pull {
+                mode: PullMode::Default,
+            },
+        },
+    });
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SubmitAuthPrompt {
+            username: None,
+            secret: "passphrase".to_string(),
+        },
+    );
+
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::Pull {
+            repo_id: RepoId(1),
+            mode: PullMode::Default,
+            ..
+        }]
+    ));
+    assert!(state.banner_error.is_none());
+    assert!(state.auth_prompt.is_none());
+    clear_staged_git_auth();
+}
+
+#[test]
 fn submit_auth_prompt_replays_repo_command_and_stages_trimmed_credentials() {
     let _lock = super::staged_auth_test_lock();
     clear_staged_git_auth();
@@ -503,6 +550,10 @@ fn submit_auth_prompt_replays_clone_operation() {
     let mut state = AppState::default();
     let url = "ssh://git@example.com/private/repo.git".to_string();
     let dest = PathBuf::from("/tmp/retry-clone");
+    state.banner_error = Some(crate::model::BannerErrorState {
+        repo_id: None,
+        message: "Clone failed:\n\nPermission denied (publickey).".to_string(),
+    });
     state.auth_prompt = Some(AuthPromptState {
         kind: AuthPromptKind::Passphrase,
         reason: "auth required".to_string(),
@@ -530,6 +581,110 @@ fn submit_auth_prompt_replays_clone_operation() {
             ..
         }] if effect_url == &url && effect_dest == &dest
     ));
+    assert!(state.banner_error.is_none());
+    assert!(state.auth_prompt.is_none());
+    let staged = effect_git_auth(&effects[0]).expect("clone auth should be present");
+    assert_eq!(staged.kind, GitAuthKind::Passphrase);
+    assert_eq!(staged.secret, "passphrase");
+}
+
+#[test]
+fn submit_auth_prompt_clears_repo_scoped_clone_banner_before_retry() {
+    let _lock = super::staged_auth_test_lock();
+    clear_staged_git_auth();
+
+    let repo_id = RepoId(7);
+    let (mut repos, mut state) = setup_open_repo(repo_id, "/tmp/existing-repo");
+    let id_alloc = AtomicU64::new(1);
+    let url = "ssh://git@example.com/private/repo.git".to_string();
+    let dest = PathBuf::from("/tmp/retry-clone");
+    state.banner_error = Some(crate::model::BannerErrorState {
+        repo_id: Some(repo_id),
+        message: "Clone failed:\n\ngit@github.com: Permission denied (publickey).".to_string(),
+    });
+    state.auth_prompt = Some(AuthPromptState {
+        kind: AuthPromptKind::Passphrase,
+        reason: "auth required".to_string(),
+        operation: AuthRetryOperation::Clone {
+            url: url.clone(),
+            dest: dest.clone(),
+        },
+    });
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SubmitAuthPrompt {
+            username: None,
+            secret: "passphrase".to_string(),
+        },
+    );
+
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::CloneRepo {
+            url: effect_url,
+            dest: effect_dest,
+            ..
+        }] if effect_url == &url && effect_dest == &dest
+    ));
+    assert!(state.banner_error.is_none());
+    assert!(state.auth_prompt.is_none());
+    let staged = effect_git_auth(&effects[0]).expect("clone auth should be present");
+    assert_eq!(staged.kind, GitAuthKind::Passphrase);
+    assert_eq!(staged.secret, "passphrase");
+}
+
+#[test]
+fn submit_auth_prompt_preserves_non_clone_banner_when_replaying_clone() {
+    let _lock = super::staged_auth_test_lock();
+    clear_staged_git_auth();
+
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let url = "ssh://git@example.com/private/repo.git".to_string();
+    let dest = PathBuf::from("/tmp/retry-clone");
+    let banner_message = "Fetch failed".to_string();
+    state.banner_error = Some(crate::model::BannerErrorState {
+        repo_id: None,
+        message: banner_message.clone(),
+    });
+    state.auth_prompt = Some(AuthPromptState {
+        kind: AuthPromptKind::Passphrase,
+        reason: "auth required".to_string(),
+        operation: AuthRetryOperation::Clone {
+            url: url.clone(),
+            dest: dest.clone(),
+        },
+    });
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SubmitAuthPrompt {
+            username: None,
+            secret: "passphrase".to_string(),
+        },
+    );
+
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::CloneRepo {
+            url: effect_url,
+            dest: effect_dest,
+            ..
+        }] if effect_url == &url && effect_dest == &dest
+    ));
+    assert_eq!(
+        state.banner_error,
+        Some(crate::model::BannerErrorState {
+            repo_id: None,
+            message: banner_message,
+        })
+    );
     assert!(state.auth_prompt.is_none());
     let staged = effect_git_auth(&effects[0]).expect("clone auth should be present");
     assert_eq!(staged.kind, GitAuthKind::Passphrase);

@@ -114,6 +114,19 @@ pub enum RemoteUrlKind {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SubmoduleTrustTarget {
+    pub submodule_path: PathBuf,
+    pub display_source: String,
+    pub local_source_path: PathBuf,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SubmoduleTrustDecision {
+    Proceed,
+    Prompt { sources: Vec<SubmoduleTrustTarget> },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BlameLine {
     pub commit_id: Arc<str>,
     pub author: Arc<str>,
@@ -157,6 +170,12 @@ pub trait GitRepository: Send + Sync {
     }
     fn list_remotes(&self) -> Result<Vec<Remote>>;
     fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>>;
+    fn worktree_status(&self) -> Result<Vec<FileStatus>> {
+        self.status().map(|status| status.unstaged)
+    }
+    fn staged_status(&self) -> Result<Vec<FileStatus>> {
+        self.status().map(|status| status.staged)
+    }
     fn status(&self) -> Result<RepoStatus>;
     fn upstream_divergence(&self) -> Result<Option<UpstreamDivergence>> {
         Ok(None)
@@ -173,6 +192,15 @@ pub trait GitRepository: Send + Sync {
     fn diff_file_text(&self, _target: &DiffTarget) -> Result<Option<FileDiffText>> {
         Err(Error::new(ErrorKind::Unsupported(
             "file diff view is not implemented for this backend",
+        )))
+    }
+    fn diff_preview_text_file(
+        &self,
+        _target: &DiffTarget,
+        _side: DiffPreviewTextSide,
+    ) -> Result<Option<PathBuf>> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "preview text file loading is not implemented for this backend",
         )))
     }
     fn diff_file_image(&self, _target: &DiffTarget) -> Result<Option<FileDiffImage>> {
@@ -526,13 +554,40 @@ pub trait GitRepository: Send + Sync {
         )))
     }
 
-    fn add_submodule_with_output(&self, _url: &str, _path: &Path) -> Result<CommandOutput> {
+    fn check_submodule_add_trust(
+        &self,
+        _url: &str,
+        _path: &Path,
+    ) -> Result<SubmoduleTrustDecision> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "submodule trust checks are not implemented for this backend",
+        )))
+    }
+
+    fn check_submodule_update_trust(&self) -> Result<SubmoduleTrustDecision> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "submodule trust checks are not implemented for this backend",
+        )))
+    }
+
+    fn add_submodule_with_output(
+        &self,
+        _url: &str,
+        _path: &Path,
+        _branch: Option<&str>,
+        _name: Option<&str>,
+        _force: bool,
+        _approved_sources: &[SubmoduleTrustTarget],
+    ) -> Result<CommandOutput> {
         Err(Error::new(ErrorKind::Unsupported(
             "submodule add is not implemented for this backend",
         )))
     }
 
-    fn update_submodules_with_output(&self) -> Result<CommandOutput> {
+    fn update_submodules_with_output(
+        &self,
+        _approved_sources: &[SubmoduleTrustTarget],
+    ) -> Result<CommandOutput> {
         Err(Error::new(ErrorKind::Unsupported(
             "submodule update is not implemented for this backend",
         )))

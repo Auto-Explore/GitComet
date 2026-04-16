@@ -1,4 +1,41 @@
 use super::*;
+use gitcomet_core::domain::LogScope;
+
+const WORKTREE_ICON_PATH: &str = "icons/git_worktree.svg";
+
+pub(in crate::view) fn listed_workspace_paths_by_branch(
+    repo: &RepoState,
+) -> HashMap<String, std::path::PathBuf> {
+    let Loadable::Ready(worktrees) = &repo.worktrees else {
+        return HashMap::default();
+    };
+
+    let mut worktree_paths = HashMap::default();
+    for worktree in worktrees.iter() {
+        if worktree.path == repo.spec.workdir {
+            continue;
+        }
+
+        let Some(branch) = worktree.branch.clone() else {
+            continue;
+        };
+
+        worktree_paths
+            .entry(branch)
+            .or_insert_with(|| worktree.path.clone());
+    }
+
+    worktree_paths
+}
+
+fn branch_workspace_badge_path(
+    listed_workspace_path: Option<&std::path::Path>,
+    active_workspace_path: Option<&std::path::Path>,
+) -> Option<std::path::PathBuf> {
+    listed_workspace_path
+        .map(std::path::Path::to_path_buf)
+        .or_else(|| active_workspace_path.map(std::path::Path::to_path_buf))
+}
 
 pub(in crate::view) fn active_workspace_paths_by_branch(
     repo: &RepoState,
@@ -38,10 +75,6 @@ pub(in crate::view) fn active_workspace_paths_by_branch(
     active_workspaces
 }
 
-fn repo_shows_workspace_badges(repo: &RepoState) -> bool {
-    matches!(&repo.worktrees, Loadable::Ready(worktrees) if worktrees.len() > 1)
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum LocalBranchDoubleClickAction {
     CheckoutBranch { name: String },
@@ -62,6 +95,69 @@ fn local_branch_double_click_action(
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct BranchHistoryRevealTarget {
+    commit_id: CommitId,
+    desired_scope: LogScope,
+}
+
+fn branch_commit_id(repo: &RepoState, section: BranchSection, name: &str) -> Option<CommitId> {
+    match section {
+        BranchSection::Local => match &repo.branches {
+            Loadable::Ready(branches) => branches
+                .iter()
+                .find(|branch| branch.name == name)
+                .map(|branch| branch.target.clone()),
+            _ => None,
+        },
+        BranchSection::Remote => {
+            let (remote, branch_name) = name.split_once('/')?;
+            match &repo.remote_branches {
+                Loadable::Ready(branches) => branches
+                    .iter()
+                    .find(|branch| branch.remote == remote && branch.name == branch_name)
+                    .map(|branch| branch.target.clone()),
+                _ => None,
+            }
+        }
+    }
+}
+
+fn branch_click_history_reveal_target(
+    repo: &RepoState,
+    section: BranchSection,
+    name: &str,
+    is_head: bool,
+) -> Option<BranchHistoryRevealTarget> {
+    let commit_id = branch_commit_id(repo, section, name)?;
+
+    let desired_scope = match section {
+        BranchSection::Local if is_head => repo.history_state.history_scope,
+        BranchSection::Local | BranchSection::Remote => LogScope::AllBranches,
+    };
+
+    Some(BranchHistoryRevealTarget {
+        commit_id,
+        desired_scope,
+    })
+}
+
+fn branch_row_is_selected(
+    selected_branch: Option<&SelectedBranch>,
+    repo_id: RepoId,
+    section: BranchSection,
+    name: &str,
+    selected_commit: Option<&CommitId>,
+    selected_branch_commit_id: Option<&CommitId>,
+) -> bool {
+    selected_branch.is_some_and(|selected_branch| {
+        selected_branch.repo_id == repo_id
+            && selected_branch.section == section
+            && selected_branch.name == name
+            && selected_branch_commit_id.is_some_and(|commit_id| selected_commit == Some(commit_id))
+    })
+}
+
 impl SidebarPaneView {
     pub(in super::super) fn render_branch_sidebar_rows(
         this: &mut Self,
@@ -80,15 +176,27 @@ impl SidebarPaneView {
         let Some(repo_id) = this.active_repo_id() else {
             return Vec::new();
         };
-        let Some(rows) = this.branch_sidebar_rows_cached() else {
+        let Some(presentation) = this.branch_sidebar_presentation_cached() else {
             return Vec::new();
         };
+        let rows = presentation.rows;
+        let workspace_badges = presentation.workspace_badges;
         let repo_workdir = this.active_repo().map(|r| r.spec.workdir.clone());
-        let show_workspace_badges = this.active_repo().is_some_and(repo_shows_workspace_badges);
-        let active_workspace_paths_by_branch = this.active_workspace_paths_by_branch();
         let theme = this.theme;
         let icon_primary = theme.colors.accent;
         let icon_muted = with_alpha(theme.colors.accent, if theme.is_dark { 0.72 } else { 0.82 });
+        let selected_branch = this.selected_branch().cloned();
+        let (selected_commit, selected_branch_commit_id) =
+            this.active_repo().map_or((None, None), |repo| {
+                let selected_commit = repo.history_state.selected_commit.clone();
+                let selected_branch_commit_id = selected_branch
+                    .as_ref()
+                    .filter(|selected| selected.repo_id == repo_id)
+                    .and_then(|selected| {
+                        branch_commit_id(repo, selected.section, selected.name.as_str())
+                    });
+                (selected_commit, selected_branch_commit_id)
+            });
 
         let svg_icon = |path: &'static str, color: gpui::Rgba, size_px: f32| {
             super::super::icons::svg_icon(path, color, px(size_px))
@@ -379,6 +487,7 @@ impl SidebarPaneView {
 
                     div()
                         .id(("stash_section", ix))
+                        .debug_selector(move || format!("stash_section_{ix}"))
                         .relative()
                         .h(px(24.0))
                         .w_full()
@@ -651,6 +760,7 @@ impl SidebarPaneView {
 
                     div()
                         .id(("worktrees_section", ix))
+                        .debug_selector(move || format!("worktrees_section_{ix}"))
                         .relative()
                         .h(px(24.0))
                         .w_full()
@@ -673,7 +783,7 @@ impl SidebarPaneView {
                         .active(move |s| s.bg(theme.colors.active))
                         .when(top_border, |d| d.child(top_divider(theme.colors.border)))
                         .child(tree_toggle_slot(Some(collapsed)))
-                        .child(tree_icon_slot("icons/folder.svg", icon_primary, 14.0))
+                        .child(tree_icon_slot(WORKTREE_ICON_PATH, icon_primary, 14.0))
                         .child(
                             div()
                                 .flex_1()
@@ -835,7 +945,7 @@ impl SidebarPaneView {
                         })
                         .active(move |s| s.bg(theme.colors.active))
                         .child(tree_toggle_slot(None))
-                        .child(tree_icon_slot("icons/folder.svg", icon_primary, 12.0))
+                        .child(tree_icon_slot(WORKTREE_ICON_PATH, icon_primary, 12.0))
                         .child(
                             div()
                                 .flex_1()
@@ -940,6 +1050,7 @@ impl SidebarPaneView {
 
                     div()
                         .id(("submodules_section", ix))
+                        .debug_selector(move || format!("submodules_section_{ix}"))
                         .relative()
                         .h(px(24.0))
                         .w_full()
@@ -1353,6 +1464,7 @@ impl SidebarPaneView {
                     is_upstream,
                 } => {
                     let full_name_for_checkout: SharedString = name.clone();
+                    let full_name_for_reveal: SharedString = name.clone();
                     let full_name_for_menu: SharedString = name.clone();
                     let full_name_for_tooltip: SharedString = name.clone();
                     let section_key = match section {
@@ -1373,16 +1485,30 @@ impl SidebarPaneView {
                         super::super::branch_sidebar::branch_sidebar_branch_label(name.as_ref())
                             .to_owned()
                             .into();
-                    let workspace_path = if section == BranchSection::Local {
-                        active_workspace_paths_by_branch.get(name.as_ref()).cloned()
-                    } else {
-                        None
-                    };
-                    let has_active_workspace = workspace_path.is_some();
-                    let show_workspace_badge = has_active_workspace && show_workspace_badges;
-                    let show_branch_context_menu_indicator = !has_active_workspace;
+                    let workspace_path = (section == BranchSection::Local)
+                        .then(|| workspace_badges.listed_path(name.as_ref()).cloned())
+                        .flatten();
+                    let active_workspace_path = (section == BranchSection::Local)
+                        .then(|| workspace_badges.active_path(name.as_ref()).cloned())
+                        .flatten();
+                    let workspace_badge_path = branch_workspace_badge_path(
+                        workspace_path.as_deref(),
+                        active_workspace_path.as_deref(),
+                    );
+                    let branch_selected = branch_row_is_selected(
+                        selected_branch.as_ref(),
+                        repo_id,
+                        section,
+                        full_name_for_reveal.as_ref(),
+                        selected_commit.as_ref(),
+                        selected_branch_commit_id.as_ref(),
+                    );
+                    let has_worktree = workspace_badge_path.is_some();
+                    let has_active_workspace = active_workspace_path.is_some();
+                    let show_workspace_badge = has_worktree;
+                    let show_branch_context_menu_indicator = !has_worktree;
                     let workspace_row_menu_invoker: Option<SharedString> =
-                        workspace_path.as_ref().map(|path| {
+                        workspace_badge_path.as_ref().map(|path| {
                             format!("worktree_menu_{}_{}", repo_id.0, path.display()).into()
                         });
                     let workspace_menu_active = workspace_row_menu_invoker
@@ -1400,6 +1526,12 @@ impl SidebarPaneView {
                         theme.colors.text_muted
                     } else {
                         branch_tree_color(section)
+                    };
+                    let branch_selected_bg = selected_branch_row_bg(theme);
+                    let branch_selected_label_color = if branch_selected {
+                        selected_branch_label_color(theme)
+                    } else {
+                        branch_text_color
                     };
                     let branch_icon_color = match section {
                         BranchSection::Local => {
@@ -1421,12 +1553,21 @@ impl SidebarPaneView {
                         theme.colors.text_muted,
                         if theme.is_dark { 0.55 } else { 0.40 },
                     );
-                    let worktree_action_active_border = with_alpha(
+                    let worktree_action_open_border = with_alpha(
                         theme.colors.accent,
                         if theme.is_dark { 0.56 } else { 0.34 },
                     );
+                    let worktree_action_open_hover_border = with_alpha(
+                        theme.colors.accent,
+                        if theme.is_dark { 0.72 } else { 0.46 },
+                    );
+                    let worktree_action_active_border = with_alpha(
+                        theme.colors.accent,
+                        if theme.is_dark { 0.84 } else { 0.68 },
+                    );
                     let worktree_action_text = theme.colors.text_muted;
                     let worktree_action_hover_text = theme.colors.text;
+                    let worktree_action_open_text = theme.colors.accent;
                     let worktree_action_active_text = theme.colors.accent;
                     let mut row = div()
                         .id(("branch_item", ix))
@@ -1454,15 +1595,26 @@ impl SidebarPaneView {
                                 px(theme.radii.row),
                             ))
                         })
+                        .when(branch_selected, |d| d.bg(branch_selected_bg))
                         .when(context_menu_active, |d| d.bg(theme.colors.active))
                         .hover(move |s| {
                             if context_menu_active {
                                 s.bg(theme.colors.active)
+                            } else if branch_selected {
+                                s.bg(branch_selected_bg)
                             } else {
                                 s.bg(theme.colors.hover)
                             }
                         })
-                        .active(move |s| s.bg(theme.colors.active))
+                        .active(move |s| {
+                            if context_menu_active {
+                                s.bg(theme.colors.active)
+                            } else if branch_selected {
+                                s.bg(branch_selected_bg)
+                            } else {
+                                s.bg(theme.colors.active)
+                            }
+                        })
                         .text_color(branch_text_color)
                         .child(tree_toggle_slot(None))
                         .child(tree_icon_slot(
@@ -1477,6 +1629,7 @@ impl SidebarPaneView {
                                 .text_sm()
                                 .line_clamp(1)
                                 .whitespace_nowrap()
+                                .text_color(branch_selected_label_color)
                                 .child(label),
                         );
 
@@ -1546,21 +1699,48 @@ impl SidebarPaneView {
                     }
 
                     if show_workspace_badge {
-                        let Some(workspace_path) = workspace_path.clone() else {
-                            unreachable!("workspace badge requires an active workspace path");
+                        let Some(workspace_badge_path) = workspace_badge_path.clone() else {
+                            unreachable!("workspace badge requires a worktree path");
                         };
                         let workspace_menu_invoker_for_click = workspace_row_menu_invoker.clone();
                         let workspace_menu_invoker_for_right_click =
                             workspace_row_menu_invoker.clone();
-                        let workspace_path_for_menu = workspace_path.clone();
-                        let workspace_path_for_open = workspace_path.clone();
+                        let workspace_path_for_menu = workspace_badge_path.clone();
+                        let workspace_path_for_open = workspace_badge_path.clone();
+                        let workspace_badge_label =
+                            super::super::path_display::repo_path_name(&workspace_badge_path);
                         let worktree_badge_tooltip: SharedString =
-                            workspace_path.display().to_string().into();
+                            workspace_badge_path.display().to_string().into();
                         let branch_name_for_click = name.to_string();
                         let branch_name_for_right_click = branch_name_for_click.clone();
+                        let badge_border = if workspace_menu_active {
+                            worktree_action_active_border
+                        } else if has_active_workspace {
+                            worktree_action_open_border
+                        } else {
+                            worktree_action_border
+                        };
+                        let badge_hover_border = if has_active_workspace {
+                            worktree_action_open_hover_border
+                        } else {
+                            worktree_action_hover_border
+                        };
+                        let badge_text = if workspace_menu_active {
+                            worktree_action_active_text
+                        } else if has_active_workspace {
+                            worktree_action_open_text
+                        } else {
+                            worktree_action_text
+                        };
+                        let badge_hover_text = if has_active_workspace {
+                            worktree_action_open_text
+                        } else {
+                            worktree_action_hover_text
+                        };
                         right = right.child(
                             div()
                                 .id(("branch_workspace_badge", ix))
+                                .debug_selector(move || format!("branch_workspace_badge_{ix}"))
                                 .flex()
                                 .items_center()
                                 .gap(px(3.0))
@@ -1568,23 +1748,11 @@ impl SidebarPaneView {
                                 .py(px(0.0))
                                 .rounded(px(2.0))
                                 .border_1()
-                                .border_color(if workspace_menu_active {
-                                    worktree_action_active_border
-                                } else {
-                                    worktree_action_border
-                                })
-                                .bg(if workspace_menu_active {
-                                    worktree_action_active_bg
-                                } else {
-                                    worktree_action_bg
-                                })
+                                .border_color(badge_border)
+                                .bg(worktree_action_bg)
                                 .cursor(CursorStyle::PointingHand)
                                 .text_size(px(11.0))
-                                .text_color(if workspace_menu_active {
-                                    worktree_action_active_text
-                                } else {
-                                    worktree_action_text
-                                })
+                                .text_color(badge_text)
                                 .hover(move |s| {
                                     if workspace_menu_active {
                                         s.bg(worktree_action_active_bg)
@@ -1592,20 +1760,12 @@ impl SidebarPaneView {
                                             .text_color(worktree_action_active_text)
                                     } else {
                                         s.bg(worktree_action_bg)
-                                            .border_color(worktree_action_hover_border)
-                                            .text_color(worktree_action_hover_text)
+                                            .border_color(badge_hover_border)
+                                            .text_color(badge_hover_text)
                                     }
                                 })
-                                .child(svg_icon(
-                                    "icons/folder.svg",
-                                    if workspace_menu_active {
-                                        worktree_action_active_text
-                                    } else {
-                                        worktree_action_text
-                                    },
-                                    9.0,
-                                ))
-                                .child("Worktree")
+                                .child(svg_icon(WORKTREE_ICON_PATH, badge_text, 9.0))
+                                .child(workspace_badge_label.clone())
                                 .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
                                     if !e.standard_click() {
                                         return;
@@ -1651,7 +1811,7 @@ impl SidebarPaneView {
                                             PopoverKind::worktree(
                                                 repo_id,
                                                 WorktreePopoverKind::Menu {
-                                                    path: workspace_path.clone(),
+                                                    path: workspace_badge_path.clone(),
                                                     branch: Some(branch_name_for_right_click.clone()),
                                                 },
                                             ),
@@ -1719,7 +1879,38 @@ impl SidebarPaneView {
 
                     row = row
                         .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
-                            if !e.standard_click() || e.click_count() < 2 {
+                            if !e.standard_click() {
+                                return;
+                            }
+                            if e.click_count() == 1 {
+                                let Some(target) = this.active_repo().and_then(|repo| {
+                                    branch_click_history_reveal_target(
+                                        repo,
+                                        section,
+                                        full_name_for_reveal.as_ref(),
+                                        is_head,
+                                    )
+                                }) else {
+                                    return;
+                                };
+                                this.set_selected_branch(
+                                    repo_id,
+                                    section,
+                                    full_name_for_reveal.as_ref(),
+                                    cx,
+                                );
+                                this.reveal_branch_commit_in_history(
+                                    repo_id,
+                                    section,
+                                    full_name_for_reveal.as_ref(),
+                                    target.commit_id,
+                                    target.desired_scope,
+                                    cx,
+                                );
+                                cx.notify();
+                                return;
+                            }
+                            if e.click_count() < 2 {
                                 return;
                             }
                             match section {
@@ -1906,7 +2097,8 @@ impl DetailsPaneView {
                             .whitespace_nowrap()
                             .child(path_label),
                     )
-                    .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+                    .on_click(cx.listener(move |this, _e: &ClickEvent, window, cx| {
+                        this.focus_diff_panel(window, cx);
                         this.store.dispatch(Msg::SelectDiff {
                             repo_id,
                             target: DiffTarget::Commit {
@@ -1979,7 +2171,139 @@ impl DetailsPaneView {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gitcomet_core::domain::{RepoSpec, Worktree};
+    use gitcomet_core::domain::{
+        Branch, Commit, CommitId, DiffTarget, LogPage, RemoteBranch, RepoSpec, Worktree,
+    };
+    use gitcomet_core::services::{GitBackend, GitRepository, Result};
+    use gitcomet_state::msg::{InternalMsg, Msg};
+    use gitcomet_state::store::AppStore;
+    use std::path::{Path, PathBuf};
+    use std::time::{Duration, Instant, SystemTime};
+
+    struct BlockingBackend;
+
+    impl GitBackend for BlockingBackend {
+        fn open(&self, _workdir: &Path) -> Result<Arc<dyn GitRepository>> {
+            loop {
+                std::thread::park();
+            }
+        }
+    }
+
+    fn wait_until(
+        cx: &mut gpui::VisualTestContext,
+        description: &str,
+        ready: impl Fn(&mut gpui::VisualTestContext) -> bool,
+    ) {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            cx.update(|window, app| {
+                let _ = window.draw(app);
+            });
+            cx.run_until_parked();
+            if ready(cx) {
+                return;
+            }
+            if Instant::now() >= deadline {
+                panic!("timed out waiting for {description}");
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    fn sync_view_for_tests(cx: &mut gpui::VisualTestContext, view: &gpui::Entity<GitCometView>) {
+        cx.update(|window, app| {
+            view.update(app, |this, cx| {
+                crate::view::test_support::sync_store_snapshot(this, cx)
+            });
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+    }
+
+    fn commit_id(id: &str) -> CommitId {
+        CommitId(id.into())
+    }
+
+    fn commit(id: &str) -> Commit {
+        Commit {
+            id: commit_id(id),
+            parent_ids: gitcomet_core::domain::CommitParentIds::new(),
+            summary: id.into(),
+            author: "author".into(),
+            time: SystemTime::UNIX_EPOCH,
+        }
+    }
+
+    #[test]
+    fn listed_workspace_paths_by_branch_includes_closed_worktrees() {
+        let mut repo = RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: std::path::PathBuf::from("/tmp/repo"),
+            },
+        );
+        repo.worktrees = Loadable::Ready(Arc::new(vec![
+            Worktree {
+                path: std::path::PathBuf::from("/tmp/repo"),
+                head: None,
+                branch: Some("main".to_string()),
+                detached: false,
+            },
+            Worktree {
+                path: std::path::PathBuf::from("/tmp/repo-feature"),
+                head: None,
+                branch: Some("feature".to_string()),
+                detached: false,
+            },
+            Worktree {
+                path: std::path::PathBuf::from("/tmp/repo-detached"),
+                head: None,
+                branch: None,
+                detached: true,
+            },
+        ]));
+
+        let paths = listed_workspace_paths_by_branch(&repo);
+
+        assert_eq!(
+            paths.get("feature"),
+            Some(&std::path::PathBuf::from("/tmp/repo-feature"))
+        );
+        assert!(!paths.contains_key("main"));
+        assert!(!paths.contains_key("repo-detached"));
+    }
+
+    #[test]
+    fn listed_workspace_paths_by_branch_prefers_first_branch_match() {
+        let mut repo = RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: std::path::PathBuf::from("/tmp/repo"),
+            },
+        );
+        repo.worktrees = Loadable::Ready(Arc::new(vec![
+            Worktree {
+                path: std::path::PathBuf::from("/tmp/repo-feature-a"),
+                head: None,
+                branch: Some("feature/shared".to_string()),
+                detached: false,
+            },
+            Worktree {
+                path: std::path::PathBuf::from("/tmp/repo-feature-b"),
+                head: None,
+                branch: Some("feature/shared".to_string()),
+                detached: false,
+            },
+        ]));
+
+        let paths = listed_workspace_paths_by_branch(&repo);
+
+        assert_eq!(
+            paths.get("feature/shared"),
+            Some(&std::path::PathBuf::from("/tmp/repo-feature-a"))
+        );
+    }
 
     #[test]
     fn active_workspace_paths_by_branch_only_includes_open_worktrees() {
@@ -2199,39 +2523,18 @@ mod tests {
     }
 
     #[test]
-    fn repo_shows_workspace_badges_only_when_more_than_one_worktree_exists() {
-        let mut repo = RepoState::new_opening(
-            RepoId(1),
-            RepoSpec {
-                workdir: std::path::PathBuf::from("/tmp/repo"),
-            },
+    fn branch_workspace_badge_path_prefers_listed_workspace_and_falls_back_to_active() {
+        assert_eq!(
+            branch_workspace_badge_path(
+                Some(std::path::Path::new("/tmp/repo-feature-listed")),
+                Some(std::path::Path::new("/tmp/repo-feature-open")),
+            ),
+            Some(std::path::PathBuf::from("/tmp/repo-feature-listed"))
         );
-
-        assert!(!repo_shows_workspace_badges(&repo));
-
-        repo.worktrees = Loadable::Ready(Arc::new(vec![Worktree {
-            path: std::path::PathBuf::from("/tmp/repo"),
-            head: None,
-            branch: Some("main".to_string()),
-            detached: false,
-        }]));
-        assert!(!repo_shows_workspace_badges(&repo));
-
-        repo.worktrees = Loadable::Ready(Arc::new(vec![
-            Worktree {
-                path: std::path::PathBuf::from("/tmp/repo"),
-                head: None,
-                branch: Some("main".to_string()),
-                detached: false,
-            },
-            Worktree {
-                path: std::path::PathBuf::from("/tmp/repo-feature"),
-                head: None,
-                branch: Some("feature".to_string()),
-                detached: false,
-            },
-        ]));
-        assert!(repo_shows_workspace_badges(&repo));
+        assert_eq!(
+            branch_workspace_badge_path(None, Some(std::path::Path::new("/tmp/repo-feature-open")),),
+            Some(std::path::PathBuf::from("/tmp/repo-feature-open"))
+        );
     }
 
     #[test]
@@ -2255,5 +2558,275 @@ mod tests {
                 path: std::path::PathBuf::from("/tmp/repo-feature"),
             }
         );
+    }
+
+    #[test]
+    fn branch_row_selection_requires_matching_clicked_branch_identity() {
+        let target = commit_id("shared-tip");
+        let selected_branch = SelectedBranch {
+            repo_id: RepoId(1),
+            section: BranchSection::Local,
+            name: "main".into(),
+        };
+
+        assert!(branch_row_is_selected(
+            Some(&selected_branch),
+            RepoId(1),
+            BranchSection::Local,
+            "main",
+            Some(&target),
+            Some(&target)
+        ));
+        assert!(!branch_row_is_selected(
+            Some(&selected_branch),
+            RepoId(1),
+            BranchSection::Remote,
+            "origin/main",
+            Some(&target),
+            Some(&target)
+        ));
+    }
+
+    #[test]
+    fn branch_row_selection_requires_matching_selected_commit() {
+        let target = commit_id("main-tip");
+        let other = commit_id("other-tip");
+        let selected_branch = SelectedBranch {
+            repo_id: RepoId(1),
+            section: BranchSection::Local,
+            name: "main".into(),
+        };
+
+        assert!(!branch_row_is_selected(
+            Some(&selected_branch),
+            RepoId(1),
+            BranchSection::Local,
+            "main",
+            Some(&other),
+            Some(&target)
+        ));
+        assert!(!branch_row_is_selected(
+            Some(&selected_branch),
+            RepoId(1),
+            BranchSection::Local,
+            "main",
+            None,
+            Some(&target)
+        ));
+    }
+
+    #[test]
+    fn branch_row_selection_requires_resolved_selected_branch_tip() {
+        let target = commit_id("main-tip");
+        let selected_branch = SelectedBranch {
+            repo_id: RepoId(1),
+            section: BranchSection::Local,
+            name: "main".into(),
+        };
+
+        assert!(!branch_row_is_selected(
+            Some(&selected_branch),
+            RepoId(1),
+            BranchSection::Local,
+            "main",
+            Some(&target),
+            None
+        ));
+    }
+
+    #[test]
+    fn branch_click_history_reveal_target_keeps_current_scope_for_head_local_branch() {
+        let target = commit_id("main-tip");
+        let mut repo = RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+        );
+        repo.history_state.history_scope = LogScope::CurrentBranch;
+        repo.branches = Loadable::Ready(Arc::new(vec![Branch {
+            name: "main".to_string(),
+            target: target.clone(),
+            upstream: None,
+            divergence: None,
+        }]));
+
+        assert_eq!(
+            branch_click_history_reveal_target(&repo, BranchSection::Local, "main", true),
+            Some(BranchHistoryRevealTarget {
+                commit_id: target,
+                desired_scope: LogScope::CurrentBranch,
+            })
+        );
+    }
+
+    #[test]
+    fn branch_click_history_reveal_target_switches_non_head_local_branch_to_all_branches() {
+        let target = commit_id("feature-tip");
+        let mut repo = RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+        );
+        repo.history_state.history_scope = LogScope::CurrentBranch;
+        repo.branches = Loadable::Ready(Arc::new(vec![Branch {
+            name: "feature".to_string(),
+            target: target.clone(),
+            upstream: None,
+            divergence: None,
+        }]));
+
+        assert_eq!(
+            branch_click_history_reveal_target(&repo, BranchSection::Local, "feature", false),
+            Some(BranchHistoryRevealTarget {
+                commit_id: target,
+                desired_scope: LogScope::AllBranches,
+            })
+        );
+    }
+
+    #[test]
+    fn branch_click_history_reveal_target_switches_remote_branch_to_all_branches() {
+        let target = commit_id("origin-feature-tip");
+        let mut repo = RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+        );
+        repo.history_state.history_scope = LogScope::CurrentBranch;
+        repo.remote_branches = Loadable::Ready(Arc::new(vec![RemoteBranch {
+            remote: "origin".to_string(),
+            name: "feature/topic".to_string(),
+            target: target.clone(),
+        }]));
+
+        assert_eq!(
+            branch_click_history_reveal_target(
+                &repo,
+                BranchSection::Remote,
+                "origin/feature/topic",
+                false,
+            ),
+            Some(BranchHistoryRevealTarget {
+                commit_id: target,
+                desired_scope: LogScope::AllBranches,
+            })
+        );
+    }
+
+    #[gpui::test]
+    fn branch_reveal_routes_through_main_pane_and_selects_commit(cx: &mut gpui::TestAppContext) {
+        let _visual_guard = crate::test_support::lock_visual_test();
+        let (store, events) = AppStore::new(Arc::new(BlockingBackend));
+        let store_for_assert = store.clone();
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        let sync_view_from_store = |cx: &mut gpui::VisualTestContext| {
+            cx.update(|window, app| {
+                view.update(app, |this, cx| {
+                    crate::view::test_support::sync_store_snapshot(this, cx)
+                });
+                window.refresh();
+                let _ = window.draw(app);
+            });
+        };
+
+        let repo_id = RepoId(1);
+        let target = commit_id("main-tip");
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        store_for_assert.dispatch(Msg::OpenRepo(PathBuf::from("/tmp/repo")));
+        wait_until(cx, "opened repo placeholder", |_cx| {
+            let snapshot = store_for_assert.snapshot();
+            snapshot.active_repo == Some(repo_id)
+                && snapshot.repos.iter().any(|repo| repo.id == repo_id)
+        });
+        sync_view_from_store(cx);
+
+        store_for_assert.dispatch(Msg::Internal(InternalMsg::HeadBranchLoaded {
+            repo_id,
+            result: Ok("main".to_string()),
+        }));
+        store_for_assert.dispatch(Msg::Internal(InternalMsg::BranchesLoaded {
+            repo_id,
+            result: Ok(vec![Branch {
+                name: "main".to_string(),
+                target: target.clone(),
+                upstream: None,
+                divergence: None,
+            }]),
+        }));
+        store_for_assert.dispatch(Msg::Internal(InternalMsg::LogLoaded {
+            repo_id,
+            scope: LogScope::CurrentBranch,
+            cursor: None,
+            result: Ok(LogPage {
+                commits: vec![commit("main-tip")],
+                next_cursor: None,
+            }),
+        }));
+        store_for_assert.dispatch(Msg::SelectDiff {
+            repo_id,
+            target: DiffTarget::Commit {
+                commit_id: commit_id("previous"),
+                path: None,
+            },
+        });
+        wait_until(cx, "sidebar repo data", |_cx| {
+            let snapshot = store_for_assert.snapshot();
+            let Some(repo) = snapshot.repos.iter().find(|repo| repo.id == repo_id) else {
+                return false;
+            };
+            matches!(repo.head_branch, Loadable::Ready(ref head) if head == "main")
+                && matches!(repo.branches, Loadable::Ready(_))
+                && matches!(repo.log, Loadable::Ready(_))
+                && repo.diff_state.diff_target.is_some()
+        });
+        sync_view_from_store(cx);
+
+        wait_until(cx, "history view active repo", |cx| {
+            sync_view_for_tests(cx, &view);
+            cx.update(|_window, app| {
+                let (sidebar_pane, main_pane) = {
+                    let root = view.read(app);
+                    (root.sidebar_pane.clone(), root.main_pane.clone())
+                };
+                let history_view = main_pane.read(app).history_view.clone();
+
+                sidebar_pane.read(app).active_repo_id() == Some(repo_id)
+                    && main_pane.read(app).active_repo_id() == Some(repo_id)
+                    && history_view.read(app).active_repo_id() == Some(repo_id)
+            })
+        });
+
+        sync_view_for_tests(cx, &view);
+        let sidebar_pane = cx.update(|_window, app| view.read(app).sidebar_pane.clone());
+        cx.update(|window, app| {
+            sidebar_pane.update(app, |pane, cx| {
+                pane.reveal_branch_commit_in_history(
+                    repo_id,
+                    BranchSection::Local,
+                    "main",
+                    target.clone(),
+                    LogScope::CurrentBranch,
+                    cx,
+                );
+            });
+            let _ = window.draw(app);
+        });
+
+        wait_until(cx, "branch reveal store state", |_cx| {
+            let snapshot = store_for_assert.snapshot();
+            let Some(repo) = snapshot.repos.iter().find(|repo| repo.id == repo_id) else {
+                return false;
+            };
+            repo.diff_state.diff_target.is_none()
+                && repo.history_state.history_scope == LogScope::CurrentBranch
+                && repo.history_state.selected_commit.as_ref() == Some(&target)
+        });
     }
 }

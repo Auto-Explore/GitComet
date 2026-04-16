@@ -1,6 +1,7 @@
 use super::GixRepo;
 use crate::util::{path_buf_from_git_bytes, run_git_capture_bytes, run_git_with_output};
 use gitcomet_core::domain::{CommitId, Worktree};
+use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::services::{CommandOutput, Result};
 use std::path::Path;
 
@@ -53,14 +54,16 @@ fn parse_git_worktree_list_porcelain_z(output: &[u8]) -> Result<Vec<Worktree>> {
 
     for field in output.split(|b| *b == b'\0') {
         if field.is_empty() {
-            if let Some(wt) = current.take() {
+            if let Some(mut wt) = current.take() {
+                canonicalize_worktree_path(&mut wt);
                 out.push(wt);
             }
             continue;
         }
 
         if let Some(rest) = field.strip_prefix(b"worktree ") {
-            if let Some(wt) = current.take() {
+            if let Some(mut wt) = current.take() {
+                canonicalize_worktree_path(&mut wt);
                 out.push(wt);
             }
             current = Some(Worktree {
@@ -93,16 +96,22 @@ fn parse_git_worktree_list_porcelain_z(output: &[u8]) -> Result<Vec<Worktree>> {
         }
     }
 
-    if let Some(wt) = current.take() {
+    if let Some(mut wt) = current.take() {
+        canonicalize_worktree_path(&mut wt);
         out.push(wt);
     }
 
     Ok(out)
 }
 
+fn canonicalize_worktree_path(worktree: &mut Worktree) {
+    worktree.path = canonicalize_or_original(worktree.path.clone());
+}
+
 #[cfg(test)]
 mod tests {
     use super::parse_git_worktree_list_porcelain_z;
+    use gitcomet_core::path_utils::canonicalize_or_original;
     use std::path::PathBuf;
 
     #[test]
@@ -166,5 +175,28 @@ mod tests {
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0].path, PathBuf::from("/repo\nlinked"));
         assert!(parsed[0].detached);
+    }
+
+    #[test]
+    fn parse_git_worktree_list_porcelain_z_canonicalizes_existing_worktree_paths() {
+        let root = std::env::temp_dir().join(format!(
+            "gitcomet-worktree-parse-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let nested = root.join("repo");
+        std::fs::create_dir_all(&nested).unwrap();
+
+        let input = format!(
+            "worktree {}\0HEAD 1111111111111111111111111111111111111111\0branch refs/heads/main\0\0",
+            nested.join("..").join("repo").display()
+        );
+        let parsed = parse_git_worktree_list_porcelain_z(input.as_bytes()).unwrap();
+
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].path, canonicalize_or_original(nested.clone()));
     }
 }

@@ -1,4 +1,4 @@
-use crate::model::{AppState, RepoId};
+use crate::model::{AppState, GitLogTagFetchMode, RepoId};
 use gitcomet_core::domain::LogScope;
 use rustc_hash::FxHashSet;
 use serde::{Deserialize, Serialize};
@@ -29,11 +29,16 @@ pub struct UiSession {
     pub timezone: Option<String>,
     pub show_timezone: Option<bool>,
     pub change_tracking_view: Option<String>,
+    pub diff_scroll_sync: Option<String>,
     pub change_tracking_height: Option<u32>,
     pub untracked_height: Option<u32>,
+    pub history_show_graph: Option<bool>,
     pub history_show_author: Option<bool>,
     pub history_show_date: Option<bool>,
     pub history_show_sha: Option<bool>,
+    pub history_show_tags: Option<bool>,
+    pub history_tag_fetch_mode: Option<GitLogTagFetchMode>,
+    pub git_executable_path: Option<PathBuf>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -87,11 +92,16 @@ struct UiSessionFileV2 {
     timezone: Option<String>,
     show_timezone: Option<bool>,
     change_tracking_view: Option<String>,
+    diff_scroll_sync: Option<String>,
     change_tracking_height: Option<u32>,
     untracked_height: Option<u32>,
+    history_show_graph: Option<bool>,
     history_show_author: Option<bool>,
     history_show_date: Option<bool>,
     history_show_sha: Option<bool>,
+    history_show_tags: Option<bool>,
+    history_tag_fetch_mode: Option<GitLogTagFetchMode>,
+    git_executable_path: Option<String>,
     repo_history_scopes: Option<BTreeMap<String, HistoryScopeSetting>>,
     repo_fetch_prune_deleted_remote_tracking_branches: Option<BTreeMap<String, bool>>,
 }
@@ -142,11 +152,19 @@ pub fn load_from_path(path: &Path) -> UiSession {
         timezone: file.timezone,
         show_timezone: file.show_timezone,
         change_tracking_view: file.change_tracking_view,
+        diff_scroll_sync: file.diff_scroll_sync,
         change_tracking_height: file.change_tracking_height,
         untracked_height: file.untracked_height,
+        history_show_graph: file.history_show_graph,
         history_show_author: file.history_show_author,
         history_show_date: file.history_show_date,
         history_show_sha: file.history_show_sha,
+        history_show_tags: file.history_show_tags,
+        history_tag_fetch_mode: file.history_tag_fetch_mode,
+        git_executable_path: file
+            .git_executable_path
+            .as_deref()
+            .map(path_from_storage_key),
     }
 }
 
@@ -344,11 +362,16 @@ pub struct UiSettings {
     pub timezone: Option<String>,
     pub show_timezone: Option<bool>,
     pub change_tracking_view: Option<String>,
+    pub diff_scroll_sync: Option<String>,
     pub change_tracking_height: Option<u32>,
     pub untracked_height: Option<u32>,
+    pub history_show_graph: Option<bool>,
     pub history_show_author: Option<bool>,
     pub history_show_date: Option<bool>,
     pub history_show_sha: Option<bool>,
+    pub history_show_tags: Option<bool>,
+    pub history_tag_fetch_mode: Option<GitLogTagFetchMode>,
+    pub git_executable_path: Option<Option<PathBuf>>,
 }
 
 pub fn persist_ui_settings(settings: UiSettings) -> io::Result<()> {
@@ -399,11 +422,17 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
     if let Some(value) = settings.change_tracking_view {
         file.change_tracking_view = Some(value);
     }
+    if let Some(value) = settings.diff_scroll_sync {
+        file.diff_scroll_sync = Some(value);
+    }
     if let Some(value) = settings.change_tracking_height {
         file.change_tracking_height = Some(value);
     }
     if let Some(value) = settings.untracked_height {
         file.untracked_height = Some(value);
+    }
+    if let Some(value) = settings.history_show_graph {
+        file.history_show_graph = Some(value);
     }
     if let Some(value) = settings.history_show_author {
         file.history_show_author = Some(value);
@@ -413,6 +442,15 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
     }
     if let Some(value) = settings.history_show_sha {
         file.history_show_sha = Some(value);
+    }
+    if let Some(value) = settings.history_show_tags {
+        file.history_show_tags = Some(value);
+    }
+    if let Some(value) = settings.history_tag_fetch_mode {
+        file.history_tag_fetch_mode = Some(value);
+    }
+    if let Some(path) = settings.git_executable_path {
+        file.git_executable_path = path.map(|path| path_storage_key(&path));
     }
 
     persist_to_path(path, &file)
@@ -1532,11 +1570,14 @@ mod tests {
                 timezone: None,
                 show_timezone: None,
                 change_tracking_view: None,
+                diff_scroll_sync: None,
                 change_tracking_height: None,
                 untracked_height: None,
                 history_show_author: None,
                 history_show_date: None,
                 history_show_sha: None,
+                git_executable_path: None,
+                ..UiSettings::default()
             },
             &path,
         )
@@ -1588,11 +1629,14 @@ mod tests {
                 timezone: None,
                 show_timezone: None,
                 change_tracking_view: None,
+                diff_scroll_sync: None,
                 change_tracking_height: None,
                 untracked_height: None,
                 history_show_author: None,
                 history_show_date: None,
                 history_show_sha: None,
+                git_executable_path: None,
+                ..UiSettings::default()
             },
             &path,
         )
@@ -1641,11 +1685,14 @@ mod tests {
                 timezone: None,
                 show_timezone: Some(false),
                 change_tracking_view: None,
+                diff_scroll_sync: None,
                 change_tracking_height: None,
                 untracked_height: None,
                 history_show_author: None,
                 history_show_date: None,
                 history_show_sha: None,
+                git_executable_path: None,
+                ..UiSettings::default()
             },
             &path,
         )
@@ -1694,11 +1741,14 @@ mod tests {
                 timezone: None,
                 show_timezone: None,
                 change_tracking_view: None,
+                diff_scroll_sync: None,
                 change_tracking_height: None,
                 untracked_height: None,
                 history_show_author: None,
                 history_show_date: None,
                 history_show_sha: None,
+                git_executable_path: None,
+                ..UiSettings::default()
             },
             &path,
         )
@@ -1747,11 +1797,14 @@ mod tests {
                 timezone: None,
                 show_timezone: None,
                 change_tracking_view: Some("split_untracked".to_string()),
+                diff_scroll_sync: None,
                 change_tracking_height: None,
                 untracked_height: None,
                 history_show_author: None,
                 history_show_date: None,
                 history_show_sha: None,
+                git_executable_path: None,
+                ..UiSettings::default()
             },
             &path,
         )
@@ -1762,6 +1815,62 @@ mod tests {
             loaded.change_tracking_view.as_deref(),
             Some("split_untracked")
         );
+    }
+
+    #[test]
+    fn persist_ui_settings_round_trips_diff_scroll_sync() {
+        let dir = env::temp_dir().join(format!(
+            "gitcomet-ui-settings-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("session.json");
+
+        persist_to_path(
+            &path,
+            &UiSessionFileV2 {
+                version: CURRENT_SESSION_FILE_VERSION,
+                open_repos: Vec::new(),
+                active_repo: None,
+                ..UiSessionFileV2::default()
+            },
+        )
+        .expect("seed session file");
+
+        persist_ui_settings_to_path(
+            UiSettings {
+                window_width: None,
+                window_height: None,
+                sidebar_width: None,
+                details_width: None,
+                repo_sidebar_collapsed_items: None,
+                theme_mode: None,
+                ui_font_family: None,
+                editor_font_family: None,
+                use_font_ligatures: None,
+                date_time_format: None,
+                timezone: None,
+                show_timezone: None,
+                change_tracking_view: None,
+                diff_scroll_sync: Some("horizontal".to_string()),
+                change_tracking_height: None,
+                untracked_height: None,
+                history_show_author: None,
+                history_show_date: None,
+                history_show_sha: None,
+                git_executable_path: None,
+                ..UiSettings::default()
+            },
+            &path,
+        )
+        .expect("persist ui settings");
+
+        let loaded = load_from_path(&path);
+        assert_eq!(loaded.diff_scroll_sync.as_deref(), Some("horizontal"));
     }
 
     #[test]
@@ -1803,11 +1912,14 @@ mod tests {
                 timezone: None,
                 show_timezone: None,
                 change_tracking_view: None,
+                diff_scroll_sync: None,
                 change_tracking_height: Some(222),
                 untracked_height: Some(111),
                 history_show_author: None,
                 history_show_date: None,
                 history_show_sha: None,
+                git_executable_path: None,
+                ..UiSettings::default()
             },
             &path,
         )
@@ -1857,11 +1969,14 @@ mod tests {
                 timezone: None,
                 show_timezone: None,
                 change_tracking_view: None,
+                diff_scroll_sync: None,
                 change_tracking_height: None,
                 untracked_height: None,
                 history_show_author: None,
                 history_show_date: None,
                 history_show_sha: None,
+                git_executable_path: None,
+                ..UiSettings::default()
             },
             &path,
         )
@@ -1870,6 +1985,63 @@ mod tests {
         let loaded = load_from_path(&path);
         assert_eq!(loaded.theme_mode.as_deref(), Some("dark"));
     }
+
+    #[test]
+    fn persist_ui_settings_round_trips_empty_custom_git_executable_path() {
+        let dir = env::temp_dir().join(format!(
+            "gitcomet-ui-settings-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("session.json");
+
+        persist_to_path(
+            &path,
+            &UiSessionFileV2 {
+                version: CURRENT_SESSION_FILE_VERSION,
+                open_repos: Vec::new(),
+                active_repo: None,
+                ..UiSessionFileV2::default()
+            },
+        )
+        .expect("seed session file");
+
+        persist_ui_settings_to_path(
+            UiSettings {
+                window_width: None,
+                window_height: None,
+                sidebar_width: None,
+                details_width: None,
+                repo_sidebar_collapsed_items: None,
+                theme_mode: None,
+                ui_font_family: None,
+                editor_font_family: None,
+                use_font_ligatures: None,
+                date_time_format: None,
+                timezone: None,
+                show_timezone: None,
+                change_tracking_view: None,
+                diff_scroll_sync: None,
+                change_tracking_height: None,
+                untracked_height: None,
+                history_show_author: None,
+                history_show_date: None,
+                history_show_sha: None,
+                git_executable_path: Some(Some(PathBuf::new())),
+                ..UiSettings::default()
+            },
+            &path,
+        )
+        .expect("persist ui settings");
+
+        let loaded = load_from_path(&path);
+        assert_eq!(loaded.git_executable_path, Some(PathBuf::new()));
+    }
+
     #[test]
     fn persist_repo_history_scope_round_trips() {
         let dir = env::temp_dir().join(format!(

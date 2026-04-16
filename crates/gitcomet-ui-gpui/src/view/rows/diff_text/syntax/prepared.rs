@@ -2085,10 +2085,7 @@ fn treesitter_document_parse_request_from_input_with_reuse(
     old_tree_state: Option<&PreparedSyntaxTreeState>,
     reparse_plan: Option<&TreesitterReparsePlan>,
 ) -> Option<TreesitterDocumentParseRequest> {
-    if mode != DiffSyntaxMode::Auto {
-        return None;
-    }
-    if matches!(language, DiffSyntaxLanguage::Markdown) {
+    if !should_prepare_treesitter_document(language, mode, input.text.len()) {
         return None;
     }
 
@@ -2106,6 +2103,14 @@ fn treesitter_document_parse_request_from_input_with_reuse(
         input,
         cache_key,
     })
+}
+
+fn should_prepare_treesitter_document(
+    _language: DiffSyntaxLanguage,
+    mode: DiffSyntaxMode,
+    text_len: usize,
+) -> bool {
+    mode == DiffSyntaxMode::Auto && text_len <= TS_PREPARED_DOCUMENT_MAX_TEXT_BYTES
 }
 
 pub(super) fn treesitter_document_input_from_shared_text(
@@ -2684,10 +2689,7 @@ fn prepared_document_source_identity_for_shared_text(
     text: &str,
     line_count: usize,
 ) -> Option<PreparedSyntaxSourceIdentity> {
-    if mode != DiffSyntaxMode::Auto {
-        return None;
-    }
-    if matches!(language, DiffSyntaxLanguage::Markdown) {
+    if !should_prepare_treesitter_document(language, mode, text.len()) {
         return None;
     }
 
@@ -3102,6 +3104,9 @@ fn collect_treesitter_injection_matches_for_line_window(
     else {
         return Vec::new();
     };
+    let injection_language_capture_ix =
+        injection_query.capture_index_for_name("injection.language");
+    let language_capture_ix = injection_query.capture_index_for_name("language");
 
     let query_passes = treesitter_document_query_passes_for_line_window(
         line_starts,
@@ -3123,9 +3128,13 @@ fn collect_treesitter_injection_matches_for_line_window(
                 let mut matches = cursor.matches(injection_query, tree.root_node(), input);
                 tree_sitter::StreamingIterator::advance(&mut matches);
                 while let Some(m) = matches.get() {
-                    let Some(language) =
-                        injection_language_for_pattern(injection_query, m.pattern_index)
-                    else {
+                    let Some(language) = injection_language_for_match(
+                        injection_query,
+                        m,
+                        input,
+                        injection_language_capture_ix,
+                        language_capture_ix,
+                    ) else {
                         tree_sitter::StreamingIterator::advance(&mut matches);
                         continue;
                     };
@@ -3165,36 +3174,65 @@ fn collect_treesitter_injection_matches_for_line_window(
     injections
 }
 
-fn injection_language_for_pattern(
+fn injection_language_for_match(
     query: &tree_sitter::Query,
-    pattern_index: usize,
+    query_match: &tree_sitter::QueryMatch<'_, '_>,
+    input: &[u8],
+    injection_language_capture_ix: Option<u32>,
+    language_capture_ix: Option<u32>,
 ) -> Option<DiffSyntaxLanguage> {
-    let language_name = query
-        .property_settings(pattern_index)
+    let pattern_language = query
+        .property_settings(query_match.pattern_index)
         .iter()
+        .filter(|setting| matches!(setting.key.as_ref(), "injection.language" | "language"))
         .find_map(|setting| {
-            matches!(setting.key.as_ref(), "injection.language" | "language")
-                .then(|| setting.value.as_deref())
-                .flatten()
-        })?;
-    injection_language_from_name(language_name)
+            setting
+                .value
+                .as_deref()
+                .and_then(injection_language_from_name)
+                .or_else(|| {
+                    setting.capture_id.and_then(|capture_id| {
+                        query_capture_text(query_match.captures, capture_id as u32, input)
+                            .and_then(injection_language_from_name)
+                    })
+                })
+        });
+    pattern_language.or_else(|| {
+        [injection_language_capture_ix, language_capture_ix]
+            .into_iter()
+            .flatten()
+            .find_map(|capture_ix| {
+                query_capture_text(query_match.captures, capture_ix, input)
+                    .and_then(injection_language_from_name)
+            })
+    })
+}
+
+fn query_capture_text<'capture, 'input>(
+    captures: &[tree_sitter::QueryCapture<'capture>],
+    capture_ix: u32,
+    input: &'input [u8],
+) -> Option<&'input str> {
+    let capture = captures
+        .iter()
+        .rev()
+        .find(|capture| capture.index == capture_ix)?;
+    let mut byte_range = capture.node.byte_range();
+    byte_range.start = byte_range.start.min(input.len());
+    byte_range.end = byte_range.end.min(input.len());
+    if byte_range.start >= byte_range.end {
+        return None;
+    }
+    std::str::from_utf8(&input[byte_range.start..byte_range.end]).ok()
 }
 
 fn injection_language_from_name(name: &str) -> Option<DiffSyntaxLanguage> {
-    match name {
-        "html" => Some(DiffSyntaxLanguage::Html),
-        "css" => Some(DiffSyntaxLanguage::Css),
-        "rust" => Some(DiffSyntaxLanguage::Rust),
-        "python" => Some(DiffSyntaxLanguage::Python),
-        "javascript" | "js" => Some(DiffSyntaxLanguage::JavaScript),
-        "typescript" | "ts" => Some(DiffSyntaxLanguage::TypeScript),
-        "tsx" => Some(DiffSyntaxLanguage::Tsx),
-        "go" => Some(DiffSyntaxLanguage::Go),
-        "json" => Some(DiffSyntaxLanguage::Json),
-        "yaml" | "yml" => Some(DiffSyntaxLanguage::Yaml),
-        "bash" | "sh" => Some(DiffSyntaxLanguage::Bash),
-        _ => None,
+    let name =
+        name.trim_matches(|ch: char| ch.is_ascii_whitespace() || matches!(ch, '"' | '\'' | '`'));
+    if name.is_empty() {
+        return None;
     }
+    diff_syntax_language_for_code_fence_info(name)
 }
 
 pub(super) fn next_injection_access() -> u64 {
@@ -3417,17 +3455,23 @@ fn subtract_relative_range_from_line_tokens(
     *line_tokens = out;
 }
 
-fn normalize_non_overlapping_tokens(mut tokens: Vec<SyntaxToken>) -> Vec<SyntaxToken> {
+pub(super) fn normalize_non_overlapping_tokens(mut tokens: Vec<SyntaxToken>) -> Vec<SyntaxToken> {
     if tokens.len() <= 1 {
         return tokens;
     }
 
-    tokens.sort_unstable_by(|a, b| {
+    let mut indexed_tokens = tokens
+        .into_iter()
+        .enumerate()
+        .collect::<Vec<(usize, SyntaxToken)>>();
+    indexed_tokens.sort_unstable_by(|(a_ix, a), (b_ix, b)| {
         a.range
             .start
             .cmp(&b.range.start)
             .then(a.range.end.cmp(&b.range.end))
+            .then(a_ix.cmp(b_ix))
     });
+    tokens = indexed_tokens.into_iter().map(|(_, token)| token).collect();
 
     // Compact in-place: ensure non-overlapping tokens so the segment splitter
     // can pick a single style per range.

@@ -1,4 +1,5 @@
 use gitcomet_core::error::ErrorKind;
+use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::services::GitBackend;
 use gitcomet_git_gix::GixBackend;
 use std::fs;
@@ -27,7 +28,7 @@ fn gix_backend_open_succeeds_for_git_repository() {
     let opened = backend.open(&repo).expect("open repository");
     assert_eq!(
         opened.spec().workdir,
-        repo.canonicalize().unwrap_or(repo.clone())
+        canonicalize_or_original(repo.clone())
     );
 }
 

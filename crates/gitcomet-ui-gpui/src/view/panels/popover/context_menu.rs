@@ -11,7 +11,6 @@ mod conflict_resolver_output;
 mod diff_editor;
 mod diff_hunk;
 mod history_branch_filter;
-mod history_column_settings;
 mod pull;
 mod push;
 mod remote;
@@ -274,6 +273,7 @@ impl PopoverHost {
                 discard_lines_patch,
                 lines_count,
                 copy_text,
+                copy_target,
             } => Some(diff_editor::model(
                 *repo_id,
                 *area,
@@ -284,6 +284,7 @@ impl PopoverHost {
                 discard_lines_patch,
                 *lines_count,
                 copy_text,
+                *copy_target,
             )),
             PopoverKind::ConflictResolverInputRowMenu {
                 line_label,
@@ -327,19 +328,18 @@ impl PopoverHost {
             PopoverKind::HistoryBranchFilter { repo_id } => {
                 Some(history_branch_filter::model(*repo_id))
             }
-            PopoverKind::HistoryColumnSettings => Some(history_column_settings::model(self, cx)),
             PopoverKind::ChangeTrackingSettings => Some(change_tracking_settings::model(self)),
             _ => None,
         }
     }
 
-    pub(super) fn context_menu_activate_action(
+    pub(in crate::view) fn context_menu_activate_action(
         &mut self,
         action: ContextMenuAction,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        let mut close_after_action = true;
+        let close_after_action = true;
         match action {
             ContextMenuAction::SelectDiff { repo_id, target } => {
                 self.store.dispatch(Msg::SelectDiff { repo_id, target });
@@ -467,31 +467,6 @@ impl PopoverHost {
             }
             ContextMenuAction::SetHistoryScope { repo_id, scope } => {
                 self.store.dispatch(Msg::SetHistoryScope { repo_id, scope });
-            }
-            ContextMenuAction::SetHistoryColumns {
-                show_author,
-                show_date,
-                show_sha,
-            } => {
-                self.main_pane.update(cx, |pane, cx| {
-                    pane.history_view.update(cx, |view, cx| {
-                        view.history_show_author = show_author;
-                        view.history_show_date = show_date;
-                        view.history_show_sha = show_sha;
-                        cx.notify();
-                    });
-                });
-                self.schedule_ui_settings_persist(cx);
-                close_after_action = false;
-            }
-            ContextMenuAction::ResetHistoryColumnWidths => {
-                self.main_pane.update(cx, |pane, cx| {
-                    pane.history_view.update(cx, |view, cx| {
-                        view.reset_history_column_widths();
-                        cx.notify();
-                    });
-                });
-                close_after_action = false;
             }
             ContextMenuAction::SetChangeTrackingView { view } => {
                 self.change_tracking_view = view;
@@ -718,6 +693,11 @@ impl PopoverHost {
             ContextMenuAction::CopyText { text } => {
                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
             }
+            ContextMenuAction::CopyDiffText { visible_ix, region } => {
+                self.main_pane.update(cx, |pane, cx| {
+                    pane.copy_diff_text_for_context_menu_to_clipboard(visible_ix, region, cx);
+                });
+            }
             ContextMenuAction::ApplyIndexPatch {
                 repo_id,
                 patch,
@@ -873,14 +853,10 @@ impl PopoverHost {
             .repos
             .iter()
             .find(|r| r.id == repo_id)
-            .and_then(|r| match &r.status {
-                Loadable::Ready(status) => status
-                    .unstaged
-                    .iter()
-                    .chain(status.staged.iter())
-                    .find(|s| s.path == path)
-                    .map(|s| s.kind),
-                _ => None,
+            .and_then(|repo| {
+                repo.status_entry_for_path(DiffArea::Unstaged, path.as_path())
+                    .or_else(|| repo.status_entry_for_path(DiffArea::Staged, path.as_path()))
+                    .map(|status| status.kind)
             })
             .is_some_and(|kind| matches!(kind, FileStatusKind::Untracked | FileStatusKind::Added));
 
@@ -948,8 +924,8 @@ impl PopoverHost {
                 .key_context("ContextMenu")
                 .on_mouse_down(
                     MouseButton::Left,
-                    cx.listener(|this, _e: &MouseDownEvent, window, _cx| {
-                        window.focus(&this.context_menu_focus_handle);
+                    cx.listener(|this, _e: &MouseDownEvent, window, cx| {
+                        window.focus(&this.context_menu_focus_handle, cx);
                     }),
                 )
                 .on_key_down(
@@ -962,25 +938,30 @@ impl PopoverHost {
 
                         match key {
                             "escape" => {
+                                cx.stop_propagation();
                                 this.close_popover_and_restore_focus(window, cx);
                             }
                             "up" => {
+                                cx.stop_propagation();
                                 let next = model_for_keys
                                     .next_selectable(this.context_menu_selected_ix, -1);
                                 this.context_menu_selected_ix = next;
                                 cx.notify();
                             }
                             "down" => {
+                                cx.stop_propagation();
                                 let next = model_for_keys
                                     .next_selectable(this.context_menu_selected_ix, 1);
                                 this.context_menu_selected_ix = next;
                                 cx.notify();
                             }
                             "home" => {
+                                cx.stop_propagation();
                                 this.context_menu_selected_ix = model_for_keys.first_selectable();
                                 cx.notify();
                             }
                             "end" => {
+                                cx.stop_propagation();
                                 this.context_menu_selected_ix = model_for_keys.last_selectable();
                                 cx.notify();
                             }
@@ -991,6 +972,7 @@ impl PopoverHost {
                                 ) else {
                                     return;
                                 };
+                                cx.stop_propagation();
                                 if let Some(action) =
                                     context_menu_entry_action_at(&model_for_keys, ix)
                                 {
@@ -1003,6 +985,7 @@ impl PopoverHost {
                                     && let Some(action) =
                                         context_menu_entry_action_at(&model_for_keys, ix)
                                 {
+                                    cx.stop_propagation();
                                     this.context_menu_activate_action(action, window, cx);
                                 }
                             }

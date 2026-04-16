@@ -8,15 +8,9 @@ impl MainPaneView {
                 let (icon, color, text): (Option<&'static str>, gpui::Rgba, SharedString) = match t
                 {
                     DiffTarget::WorkingTree { path, area } => {
-                        let kind = self.active_repo().and_then(|repo| match &repo.status {
-                            Loadable::Ready(status) => {
-                                let list = match area {
-                                    DiffArea::Unstaged => &status.unstaged,
-                                    DiffArea::Staged => &status.staged,
-                                };
-                                list.iter().find(|e| e.path == *path).map(|e| e.kind)
-                            }
-                            _ => None,
+                        let kind = self.active_repo().and_then(|repo| {
+                            repo.status_entry_for_path(*area, path.as_path())
+                                .map(|entry| entry.kind)
                         });
 
                         let (icon, color) = match kind.unwrap_or(FileStatusKind::Modified) {
@@ -102,18 +96,19 @@ impl MainPaneView {
             let repo = self.active_repo()?;
             let change_tracking_view = self.active_change_tracking_view(cx);
 
-            let (prev, next) = match &repo.status {
-                Loadable::Ready(status) => repo
-                    .diff_state
-                    .diff_target
-                    .as_ref()
-                    .and_then(|target| {
-                        status_nav::status_navigation_context(status, target, change_tracking_view)
-                    })
-                    .map(|navigation| (navigation.prev_ix(), navigation.next_ix()))
-                    .unwrap_or((None, None)),
-                _ => (None, None),
-            };
+            let diff_target = repo.diff_state.diff_target.as_ref()?;
+            let prev = status_nav::adjacent_diff_file_target_for_repo(
+                repo,
+                diff_target,
+                change_tracking_view,
+                -1,
+            );
+            let next = status_nav::adjacent_diff_file_target_for_repo(
+                repo,
+                diff_target,
+                change_tracking_view,
+                1,
+            );
 
             let prev_disabled = prev.is_none();
             let next_disabled = next.is_none();
@@ -126,7 +121,7 @@ impl MainPaneView {
                 .style(components::ButtonStyle::Outlined)
                 .disabled(prev_disabled)
                 .on_click(theme, cx, move |this, _e, window, cx| {
-                    if this.try_select_adjacent_status_file(repo_id, -1, window, cx) {
+                    if this.try_select_adjacent_diff_file(repo_id, -1, window, cx) {
                         cx.notify();
                     }
                 })
@@ -148,7 +143,7 @@ impl MainPaneView {
                 .style(components::ButtonStyle::Outlined)
                 .disabled(next_disabled)
                 .on_click(theme, cx, move |this, _e, window, cx| {
-                    if this.try_select_adjacent_status_file(repo_id, 1, window, cx) {
+                    if this.try_select_adjacent_diff_file(repo_id, 1, window, cx) {
                         cx.notify();
                     }
                 })

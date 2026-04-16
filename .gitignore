@@ -16,4 +16,4 @@ dist/
 __pycache__/
 *.pyc
 criterion
-
+.codex

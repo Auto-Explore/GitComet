@@ -12,6 +12,7 @@ on:
       - ".github/workflows/deploy-microsoft-store.yml"
       - ".github/workflows/release-manual-main.yml"
       - "scripts/update-aur.sh"
+      - "scripts/cargo-flatten-dupes.sh"
       - "scripts/package-macos.sh"
       - "scripts/macos-cargo-config.sh"
       - "scripts/generate-homebrew-formula.sh"
@@ -29,6 +30,7 @@ on:
       - ".github/workflows/deploy-microsoft-store.yml"
       - ".github/workflows/release-manual-main.yml"
       - "scripts/update-aur.sh"
+      - "scripts/cargo-flatten-dupes.sh"
       - "scripts/package-macos.sh"
       - "scripts/macos-cargo-config.sh"
       - "scripts/generate-homebrew-formula.sh"
@@ -46,15 +48,17 @@ env:
 jobs:
   formula-script-validation:
     name: Validate release helper scripts and workflow YAML
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
 
       - name: Validate shell scripts syntax
         run: |
+          bash -n scripts/cargo-flatten-dupes.sh
           bash -n scripts/update-aur.sh
           bash -n scripts/package-macos.sh
+          bash -n scripts/notarize-macos.sh
           bash -n scripts/macos-cargo-config.sh
           bash -n scripts/generate-homebrew-formula.sh
           bash -n scripts/generate-homebrew-cask.sh
@@ -220,7 +224,7 @@ jobs:
 
   aur-metadata-smoke:
     name: Validate AUR metadata update script
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 20
     container:
       image: archlinux:base-devel
@@ -295,7 +299,7 @@ jobs:
 
   apt-repo-generation-smoke:
     name: Validate APT repo generation script
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6

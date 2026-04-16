@@ -256,31 +256,9 @@ pub(super) fn apply_status_multi_selection_click(
     }
 }
 
-fn status_entries_for_section(status: &RepoStatus, section: StatusSection) -> Vec<&FileStatus> {
-    match section {
-        StatusSection::CombinedUnstaged => status.unstaged.iter().collect(),
-        StatusSection::Untracked => status
-            .unstaged
-            .iter()
-            .filter(|entry| entry.kind == FileStatusKind::Untracked)
-            .collect(),
-        StatusSection::Unstaged => status
-            .unstaged
-            .iter()
-            .filter(|entry| entry.kind != FileStatusKind::Untracked)
-            .collect(),
-        StatusSection::Staged => status.staged.iter().collect(),
-    }
-}
-
-fn status_paths_for_section(
-    status: &RepoStatus,
-    section: StatusSection,
-) -> Vec<std::path::PathBuf> {
-    status_entries_for_section(status, section)
-        .into_iter()
-        .map(|entry| entry.path.clone())
-        .collect()
+fn status_paths_for_section(repo: &RepoState, section: StatusSection) -> Vec<std::path::PathBuf> {
+    StatusSectionEntries::from_repo(repo, section)
+        .map_or_else(Vec::new, StatusSectionEntries::path_vec)
 }
 
 impl DetailsPaneView {
@@ -342,7 +320,7 @@ impl DetailsPaneView {
         let status_rev = self
             .active_repo()
             .filter(|repo| repo.id == repo_id)
-            .map(|repo| repo.status_rev);
+            .map(|repo| status_section_rev(repo, section));
         let sel = self.status_multi_selection_for_repo_mut(repo_id);
         apply_status_multi_selection_click(
             sel,
@@ -402,16 +380,15 @@ fn render_status_rows_for_section(
     let Some(repo) = this.active_repo() else {
         return Vec::new();
     };
-    let Loadable::Ready(status) = &repo.status else {
+    let Some(entries) = StatusSectionEntries::from_repo(repo, section) else {
         return Vec::new();
     };
-    let entries = status_entries_for_section(status, section);
     let selected = repo.diff_state.diff_target.as_ref();
     let selected_paths = this.status_selected_paths_for_area(repo.id, section.diff_area());
     let multi_select_active = !selected_paths.is_empty();
     let theme = this.theme;
     range
-        .filter_map(|ix| entries.get(ix).copied().map(|entry| (ix, entry)))
+        .filter_map(|ix| entries.get(ix).map(|entry| (ix, entry)))
         .map(|(ix, entry)| {
             let path_display = this.cached_path_display(&entry.path);
             let is_selected = if multi_select_active {
@@ -668,10 +645,7 @@ fn status_row(
             let entries = if modifiers.shift {
                 this.active_repo()
                     .filter(|r| r.id == repo_id)
-                    .and_then(|repo| match &repo.status {
-                        Loadable::Ready(status) => Some(status_paths_for_section(status, section)),
-                        _ => None,
-                    })
+                    .map(|repo| status_paths_for_section(repo, section))
             } else {
                 None
             };

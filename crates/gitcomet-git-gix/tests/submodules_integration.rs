@@ -1,5 +1,5 @@
 use gitcomet_core::domain::SubmoduleStatus;
-use gitcomet_core::services::GitBackend;
+use gitcomet_core::services::{GitBackend, SubmoduleTrustDecision};
 use gitcomet_git_gix::GixBackend;
 #[path = "support/test_git_env.rs"]
 mod test_git_env;
@@ -41,6 +41,78 @@ fn git_stdout(repo: &Path, args: &[&str]) -> String {
         .expect("git stdout is utf-8")
         .trim()
         .to_string()
+}
+
+fn local_submodule_config_entries(repo: &Path) -> Vec<String> {
+    let output = git_output(repo, &["config", "--list", "--local"]);
+    assert!(output.status.success(), "git config --list --local failed");
+    String::from_utf8(output.stdout)
+        .expect("git stdout is utf-8")
+        .lines()
+        .filter(|line| line.starts_with("submodule."))
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+fn add_submodule_raw(parent_repo: &Path, sub_repo: &Path, path: &Path, name: Option<&str>) {
+    let mut cmd = git_command();
+    cmd.arg("-C")
+        .arg(parent_repo)
+        .arg("-c")
+        .arg("protocol.file.allow=always")
+        .arg("submodule")
+        .arg("add");
+    if let Some(name) = name {
+        cmd.arg("--name").arg(name);
+    }
+    let status = cmd
+        .arg(sub_repo)
+        .arg(path)
+        .status()
+        .expect("git submodule add to run");
+    assert!(status.success(), "git submodule add failed");
+}
+
+fn run_git_with_path(repo: &Path, args: &[&str], path: &Path) {
+    let status = git_command()
+        .arg("-C")
+        .arg(repo)
+        .args(args)
+        .arg(path)
+        .status()
+        .expect("git command to run");
+    assert!(status.success(), "git {:?} {:?} failed", args, path);
+}
+
+fn create_stale_submodule_git_dir(
+    parent_repo: &Path,
+    sub_repo: &Path,
+    path: &Path,
+    name: Option<&str>,
+) {
+    add_submodule_raw(parent_repo, sub_repo, path, name);
+    run_git(
+        parent_repo,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-m",
+            "add submodule",
+        ],
+    );
+    run_git_with_path(parent_repo, &["submodule", "deinit", "-f", "--"], path);
+    run_git_with_path(parent_repo, &["rm", "-f", "--"], path);
+    run_git(
+        parent_repo,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-m",
+            "remove submodule",
+        ],
+    );
 }
 
 fn init_repo_with_seed(repo: &Path, file: &str, contents: &str, message: &str) {
@@ -520,14 +592,27 @@ fn submodule_add_update_remove_round_trip() {
 
     init_repo_with_seed(&sub_repo, "file.txt", "hello\n", "seed submodule");
     init_repo_with_seed(&parent_repo, "seed.txt", "seed\n", "seed parent");
-    run_git(&parent_repo, &["config", "protocol.file.allow", "always"]);
 
     let backend = GixBackend;
     let opened = backend.open(&parent_repo).expect("open parent repository");
 
     let submodule_path = Path::new("mods/sub-one");
+    let approved_sources = match opened
+        .check_submodule_add_trust(sub_repo.to_string_lossy().as_ref(), submodule_path)
+        .expect("check local submodule trust")
+    {
+        SubmoduleTrustDecision::Prompt { sources } => sources,
+        other => panic!("expected trust prompt for local submodule, got {other:?}"),
+    };
     let add_output = opened
-        .add_submodule_with_output(sub_repo.to_string_lossy().as_ref(), submodule_path)
+        .add_submodule_with_output(
+            sub_repo.to_string_lossy().as_ref(),
+            submodule_path,
+            None,
+            None,
+            false,
+            &approved_sources,
+        )
         .expect("add submodule");
     assert_eq!(add_output.exit_code, Some(0));
 
@@ -551,8 +636,15 @@ fn submodule_add_update_remove_round_trip() {
     );
     assert_eq!(listed[0].head.as_ref().len(), 40);
 
+    assert_eq!(
+        opened
+            .check_submodule_update_trust()
+            .expect("check update trust after approval"),
+        SubmoduleTrustDecision::Proceed
+    );
+
     let update_output = opened
-        .update_submodules_with_output()
+        .update_submodules_with_output(&[])
         .expect("update submodules");
     assert_eq!(update_output.exit_code, Some(0));
 
@@ -567,4 +659,514 @@ fn submodule_add_update_remove_round_trip() {
         .expect("list submodules after remove");
     assert!(listed_after_remove.is_empty());
     assert!(!parent_repo.join("mods/sub-one").exists());
+    assert!(local_submodule_config_entries(&parent_repo).is_empty());
+    assert!(!parent_repo.join(".git/modules/mods/sub-one").exists());
+    assert!(!parent_repo.join(".git/modules/mods").exists());
+}
+
+#[test]
+fn add_submodule_does_not_restrict_https_or_ssh_transports() {
+    if !require_git_shell_for_submodule_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("parent");
+    fs::create_dir_all(&repo).expect("create parent repository directory");
+    init_repo_with_seed(&repo, "seed.txt", "seed\n", "seed parent");
+
+    let backend = GixBackend;
+    let opened = backend.open(&repo).expect("open parent repository");
+
+    for (url, blocked_transport) in [
+        ("https://127.0.0.1:1/repo.git", "https"),
+        ("ssh://git@127.0.0.1:1/repo.git", "ssh"),
+    ] {
+        let err = opened
+            .add_submodule_with_output(url, Path::new("mods/sub-one"), None, None, false, &[])
+            .expect_err("dummy remote should fail without a reachable server");
+        let rendered = err.to_string();
+        assert!(
+            !rendered.contains(&format!("transport '{blocked_transport}' not allowed")),
+            "unexpected protocol allowlist failure for {url}: {rendered}"
+        );
+    }
+}
+
+#[test]
+fn add_local_submodule_requires_explicit_trust() {
+    if !require_git_shell_for_submodule_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let root = dir.path();
+
+    let sub_repo = root.join("sub");
+    let parent_repo = root.join("parent");
+    fs::create_dir_all(&sub_repo).expect("create sub repository directory");
+    fs::create_dir_all(&parent_repo).expect("create parent repository directory");
+
+    init_repo_with_seed(&sub_repo, "file.txt", "hello\n", "seed submodule");
+    init_repo_with_seed(&parent_repo, "seed.txt", "seed\n", "seed parent");
+
+    let backend = GixBackend;
+    let opened = backend.open(&parent_repo).expect("open parent repository");
+
+    let submodule_path = Path::new("mods/sub");
+    let trust = opened
+        .check_submodule_add_trust(sub_repo.to_string_lossy().as_ref(), submodule_path)
+        .expect("check local submodule trust");
+    let approved_sources = match trust {
+        SubmoduleTrustDecision::Prompt { sources } => sources,
+        other => panic!("expected trust prompt for local submodule, got {other:?}"),
+    };
+
+    let err = opened
+        .add_submodule_with_output(
+            sub_repo.to_string_lossy().as_ref(),
+            submodule_path,
+            None,
+            None,
+            false,
+            &[],
+        )
+        .expect_err("local submodule should fail without trust");
+    assert!(
+        err.to_string().contains("Explicit trust is required"),
+        "unexpected error: {err}"
+    );
+
+    let add_output = opened
+        .add_submodule_with_output(
+            sub_repo.to_string_lossy().as_ref(),
+            submodule_path,
+            None,
+            None,
+            false,
+            &approved_sources,
+        )
+        .expect("add trusted local submodule");
+    assert_eq!(add_output.exit_code, Some(0));
+}
+
+#[test]
+fn add_submodule_supports_branch_selection() {
+    if !require_git_shell_for_submodule_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let root = dir.path();
+
+    let sub_repo = root.join("sub");
+    let parent_repo = root.join("parent");
+    fs::create_dir_all(&sub_repo).expect("create sub repository directory");
+    fs::create_dir_all(&parent_repo).expect("create parent repository directory");
+
+    init_repo_with_seed(&sub_repo, "file.txt", "hello\n", "seed submodule");
+    run_git(&sub_repo, &["branch", "feature"]);
+    init_repo_with_seed(&parent_repo, "seed.txt", "seed\n", "seed parent");
+
+    let backend = GixBackend;
+    let opened = backend.open(&parent_repo).expect("open parent repository");
+    let submodule_path = Path::new("mods/sub");
+    let approved_sources = match opened
+        .check_submodule_add_trust(sub_repo.to_string_lossy().as_ref(), submodule_path)
+        .expect("check local submodule trust")
+    {
+        SubmoduleTrustDecision::Prompt { sources } => sources,
+        other => panic!("expected trust prompt for local submodule, got {other:?}"),
+    };
+
+    let add_output = opened
+        .add_submodule_with_output(
+            sub_repo.to_string_lossy().as_ref(),
+            submodule_path,
+            Some("feature"),
+            None,
+            false,
+            &approved_sources,
+        )
+        .expect("add submodule with branch");
+    assert_eq!(add_output.exit_code, Some(0));
+    assert!(add_output.command.contains("--branch feature"));
+
+    let gitmodules = fs::read_to_string(parent_repo.join(".gitmodules")).expect("read .gitmodules");
+    assert!(gitmodules.contains("branch = feature"));
+    assert_eq!(
+        git_stdout(&parent_repo.join("mods/sub"), &["branch", "--show-current"]),
+        "feature"
+    );
+}
+
+#[test]
+fn add_submodule_supports_multiple_branches_from_same_source() {
+    if !require_git_shell_for_submodule_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let root = dir.path();
+
+    let sub_repo = root.join("sub");
+    let parent_repo = root.join("parent");
+    fs::create_dir_all(&sub_repo).expect("create sub repository directory");
+    fs::create_dir_all(&parent_repo).expect("create parent repository directory");
+
+    init_repo_with_seed(&sub_repo, "file.txt", "hello\n", "seed submodule");
+    let default_branch = git_stdout(&sub_repo, &["symbolic-ref", "--short", "HEAD"]);
+    run_git(&sub_repo, &["checkout", "-b", "feature"]);
+    fs::write(sub_repo.join("file.txt"), "feature\n").expect("write feature contents");
+    run_git(
+        &sub_repo,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-am",
+            "feature commit",
+        ],
+    );
+    run_git(&sub_repo, &["checkout", &default_branch]);
+    init_repo_with_seed(&parent_repo, "seed.txt", "seed\n", "seed parent");
+
+    let backend = GixBackend;
+    let opened = backend.open(&parent_repo).expect("open parent repository");
+
+    let main_path = Path::new("mods/main");
+    let approved_main = match opened
+        .check_submodule_add_trust(sub_repo.to_string_lossy().as_ref(), main_path)
+        .expect("check local submodule trust for main")
+    {
+        SubmoduleTrustDecision::Prompt { sources } => sources,
+        other => panic!("expected trust prompt for local submodule, got {other:?}"),
+    };
+    let main_output = opened
+        .add_submodule_with_output(
+            sub_repo.to_string_lossy().as_ref(),
+            main_path,
+            Some(default_branch.as_str()),
+            None,
+            false,
+            &approved_main,
+        )
+        .expect("add default-branch submodule");
+    assert_eq!(main_output.exit_code, Some(0));
+
+    let feature_path = Path::new("mods/feature");
+    let approved_feature = match opened
+        .check_submodule_add_trust(sub_repo.to_string_lossy().as_ref(), feature_path)
+        .expect("check local submodule trust for feature")
+    {
+        SubmoduleTrustDecision::Prompt { sources } => sources,
+        SubmoduleTrustDecision::Proceed => Vec::new(),
+    };
+    let feature_output = opened
+        .add_submodule_with_output(
+            sub_repo.to_string_lossy().as_ref(),
+            feature_path,
+            Some("feature"),
+            None,
+            false,
+            &approved_feature,
+        )
+        .expect("add feature-branch submodule");
+    assert_eq!(feature_output.exit_code, Some(0));
+
+    let listed = opened.list_submodules().expect("list added submodules");
+    assert_eq!(listed.len(), 2);
+    assert_eq!(
+        git_stdout(
+            &parent_repo.join("mods/main"),
+            &["branch", "--show-current"]
+        ),
+        default_branch
+    );
+    assert_eq!(
+        git_stdout(
+            &parent_repo.join("mods/feature"),
+            &["branch", "--show-current"]
+        ),
+        "feature"
+    );
+
+    let gitmodules = fs::read_to_string(parent_repo.join(".gitmodules")).expect("read .gitmodules");
+    assert!(gitmodules.contains(&format!("branch = {default_branch}")));
+    assert!(gitmodules.contains("branch = feature"));
+}
+
+#[test]
+fn add_submodule_failed_branch_checkout_cleans_partial_clone_and_metadata() {
+    if !require_git_shell_for_submodule_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let root = dir.path();
+
+    let sub_repo = root.join("sub");
+    let parent_repo = root.join("parent");
+    fs::create_dir_all(&sub_repo).expect("create sub repository directory");
+    fs::create_dir_all(&parent_repo).expect("create parent repository directory");
+
+    init_repo_with_seed(&sub_repo, "file.txt", "hello\n", "seed submodule");
+    init_repo_with_seed(&parent_repo, "seed.txt", "seed\n", "seed parent");
+
+    let backend = GixBackend;
+    let opened = backend.open(&parent_repo).expect("open parent repository");
+    let submodule_path = Path::new("mods/sub");
+    let approved_sources = match opened
+        .check_submodule_add_trust(sub_repo.to_string_lossy().as_ref(), submodule_path)
+        .expect("check local submodule trust")
+    {
+        SubmoduleTrustDecision::Prompt { sources } => sources,
+        other => panic!("expected trust prompt for local submodule, got {other:?}"),
+    };
+
+    let err = opened
+        .add_submodule_with_output(
+            sub_repo.to_string_lossy().as_ref(),
+            submodule_path,
+            Some("does-not-exist"),
+            None,
+            false,
+            &approved_sources,
+        )
+        .expect_err("add with missing branch should fail");
+    let rendered = err.to_string();
+    assert!(
+        rendered.contains("does-not-exist"),
+        "unexpected branch failure error: {rendered}"
+    );
+
+    assert!(
+        !parent_repo.join("mods/sub").exists(),
+        "expected failed submodule checkout to be removed"
+    );
+    assert!(
+        !parent_repo.join(".git/modules/mods/sub").exists(),
+        "expected failed submodule metadata to be removed"
+    );
+    assert!(
+        !parent_repo.join(".gitmodules").exists(),
+        "expected no .gitmodules entry after failed add"
+    );
+    assert!(local_submodule_config_entries(&parent_repo).is_empty());
+    assert!(
+        git_stdout(&parent_repo, &["submodule"]).is_empty(),
+        "expected git submodule to report no registered submodules"
+    );
+    assert!(
+        opened
+            .list_submodules()
+            .expect("list submodules")
+            .is_empty(),
+        "expected failed submodule add not to be listed"
+    );
+}
+
+#[test]
+fn add_submodule_failed_branch_checkout_cleans_partial_clone_with_custom_name() {
+    if !require_git_shell_for_submodule_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let root = dir.path();
+
+    let sub_repo = root.join("sub");
+    let parent_repo = root.join("parent");
+    fs::create_dir_all(&sub_repo).expect("create sub repository directory");
+    fs::create_dir_all(&parent_repo).expect("create parent repository directory");
+
+    init_repo_with_seed(&sub_repo, "file.txt", "hello\n", "seed submodule");
+    init_repo_with_seed(&parent_repo, "seed.txt", "seed\n", "seed parent");
+
+    let backend = GixBackend;
+    let opened = backend.open(&parent_repo).expect("open parent repository");
+    let submodule_path = Path::new("mods/sub");
+    let approved_sources = match opened
+        .check_submodule_add_trust(sub_repo.to_string_lossy().as_ref(), submodule_path)
+        .expect("check local submodule trust")
+    {
+        SubmoduleTrustDecision::Prompt { sources } => sources,
+        other => panic!("expected trust prompt for local submodule, got {other:?}"),
+    };
+
+    let err = opened
+        .add_submodule_with_output(
+            sub_repo.to_string_lossy().as_ref(),
+            submodule_path,
+            Some("does-not-exist"),
+            Some("custom-name"),
+            false,
+            &approved_sources,
+        )
+        .expect_err("add with missing branch and custom name should fail");
+    let rendered = err.to_string();
+    assert!(
+        rendered.contains("does-not-exist"),
+        "unexpected branch failure error: {rendered}"
+    );
+
+    assert!(
+        !parent_repo.join("mods/sub").exists(),
+        "expected failed submodule checkout to be removed"
+    );
+    assert!(
+        !parent_repo.join(".git/modules/custom-name").exists(),
+        "expected failed custom-name metadata to be removed"
+    );
+    assert!(
+        !parent_repo.join(".gitmodules").exists(),
+        "expected no .gitmodules entry after failed add"
+    );
+    assert!(local_submodule_config_entries(&parent_repo).is_empty());
+}
+
+#[test]
+fn add_submodule_supports_custom_logical_name_for_local_git_dir_collision() {
+    if !require_git_shell_for_submodule_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let root = dir.path();
+
+    let sub_repo = root.join("sub");
+    let parent_repo = root.join("parent");
+    fs::create_dir_all(&sub_repo).expect("create sub repository directory");
+    fs::create_dir_all(&parent_repo).expect("create parent repository directory");
+
+    init_repo_with_seed(&sub_repo, "file.txt", "hello\n", "seed submodule");
+    init_repo_with_seed(&parent_repo, "seed.txt", "seed\n", "seed parent");
+
+    let submodule_path = Path::new("sm");
+    create_stale_submodule_git_dir(&parent_repo, &sub_repo, submodule_path, None);
+    assert!(
+        parent_repo.join(".git/modules/sm").exists(),
+        "expected stale local submodule git dir"
+    );
+
+    let backend = GixBackend;
+    let opened = backend.open(&parent_repo).expect("open parent repository");
+    let approved_sources = match opened
+        .check_submodule_add_trust(sub_repo.to_string_lossy().as_ref(), submodule_path)
+        .expect("check local submodule trust")
+    {
+        SubmoduleTrustDecision::Prompt { sources } => sources,
+        other => panic!("expected trust prompt for local submodule, got {other:?}"),
+    };
+
+    let err = opened
+        .add_submodule_with_output(
+            sub_repo.to_string_lossy().as_ref(),
+            submodule_path,
+            None,
+            None,
+            false,
+            &approved_sources,
+        )
+        .expect_err("add without custom name or force should fail");
+    let rendered = err.to_string();
+    assert!(
+        rendered.contains("If you want to reuse this local git directory")
+            || rendered.contains("use the '--force' option")
+            || rendered.contains("choose another name with the '--name' option"),
+        "unexpected collision error: {rendered}"
+    );
+
+    let add_output = opened
+        .add_submodule_with_output(
+            sub_repo.to_string_lossy().as_ref(),
+            submodule_path,
+            None,
+            Some("sm-renamed"),
+            false,
+            &approved_sources,
+        )
+        .expect("add submodule with custom logical name");
+    assert_eq!(add_output.exit_code, Some(0));
+}
+
+#[test]
+fn add_submodule_supports_force_for_local_git_dir_collision() {
+    if !require_git_shell_for_submodule_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let root = dir.path();
+
+    let sub_repo = root.join("sub");
+    let parent_repo = root.join("parent");
+    fs::create_dir_all(&sub_repo).expect("create sub repository directory");
+    fs::create_dir_all(&parent_repo).expect("create parent repository directory");
+
+    init_repo_with_seed(&sub_repo, "file.txt", "hello\n", "seed submodule");
+    init_repo_with_seed(&parent_repo, "seed.txt", "seed\n", "seed parent");
+
+    let submodule_path = Path::new("sm");
+    create_stale_submodule_git_dir(&parent_repo, &sub_repo, submodule_path, None);
+    assert!(
+        parent_repo.join(".git/modules/sm").exists(),
+        "expected stale local submodule git dir"
+    );
+
+    let backend = GixBackend;
+    let opened = backend.open(&parent_repo).expect("open parent repository");
+    let approved_sources = match opened
+        .check_submodule_add_trust(sub_repo.to_string_lossy().as_ref(), submodule_path)
+        .expect("check local submodule trust")
+    {
+        SubmoduleTrustDecision::Prompt { sources } => sources,
+        other => panic!("expected trust prompt for local submodule, got {other:?}"),
+    };
+
+    let add_output = opened
+        .add_submodule_with_output(
+            sub_repo.to_string_lossy().as_ref(),
+            submodule_path,
+            None,
+            None,
+            true,
+            &approved_sources,
+        )
+        .expect("add submodule with force");
+    assert_eq!(add_output.exit_code, Some(0));
+}
+
+#[test]
+fn remove_submodule_cleans_custom_logical_name_metadata() {
+    if !require_git_shell_for_submodule_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let root = dir.path();
+
+    let sub_repo = root.join("sub");
+    let parent_repo = root.join("parent");
+    fs::create_dir_all(&sub_repo).expect("create sub repository directory");
+    fs::create_dir_all(&parent_repo).expect("create parent repository directory");
+
+    init_repo_with_seed(&sub_repo, "file.txt", "hello\n", "seed submodule");
+    init_repo_with_seed(&parent_repo, "seed.txt", "seed\n", "seed parent");
+    add_submodule_raw(
+        &parent_repo,
+        &sub_repo,
+        Path::new("mods/sub"),
+        Some("custom"),
+    );
+    run_git(
+        &parent_repo,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-m",
+            "add submodule",
+        ],
+    );
+
+    let backend = GixBackend;
+    let opened = backend.open(&parent_repo).expect("open parent repository");
+    let remove_output = opened
+        .remove_submodule_with_output(Path::new("mods/sub"))
+        .expect("remove submodule");
+    assert_eq!(remove_output.exit_code, Some(0));
+    assert!(local_submodule_config_entries(&parent_repo).is_empty());
+    assert!(!parent_repo.join(".git/modules/custom").exists());
 }

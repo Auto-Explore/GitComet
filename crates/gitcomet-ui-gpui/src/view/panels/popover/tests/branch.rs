@@ -2,6 +2,7 @@ use super::*;
 use gitcomet_core::domain::{
     Branch, CommitDetails, CommitId, LogPage, ReflogEntry, RepoSpec, RepoStatus, StashEntry,
 };
+use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::services::{CommandOutput, PullMode};
 use gitcomet_state::model::Loadable;
 use gitcomet_state::msg::{Msg, StoreEvent};
@@ -235,40 +236,7 @@ fn unique_temp_dir(label: &str) -> PathBuf {
 }
 
 fn normalize_store_workdir(path: &Path) -> PathBuf {
-    let path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    strip_windows_verbatim_prefix(path)
-}
-
-#[cfg(windows)]
-fn strip_windows_verbatim_prefix(path: PathBuf) -> PathBuf {
-    use std::path::{Component, Prefix};
-
-    let mut components = path.components();
-    let Some(Component::Prefix(prefix)) = components.next() else {
-        return path;
-    };
-
-    let mut out = match prefix.kind() {
-        Prefix::VerbatimDisk(letter) => PathBuf::from(format!("{}:", char::from(letter))),
-        Prefix::VerbatimUNC(server, share) => {
-            let mut out = PathBuf::from(r"\\");
-            out.push(server);
-            out.push(share);
-            out
-        }
-        Prefix::Verbatim(raw) => PathBuf::from(raw),
-        _ => return path,
-    };
-
-    for component in components {
-        out.push(component.as_os_str());
-    }
-    out
-}
-
-#[cfg(not(windows))]
-fn strip_windows_verbatim_prefix(path: PathBuf) -> PathBuf {
-    path
+    canonicalize_or_original(path.to_path_buf())
 }
 
 pub(super) fn wait_until(description: &str, ready: impl Fn() -> bool) {
@@ -330,7 +298,6 @@ fn create_branch_popover_escape_cancels(cx: &mut gpui::TestAppContext) {
             crate::kit::Enter,
             Some("TextInput"),
         )]);
-        view.update(app, |this, _cx| this.disable_poller_for_tests());
         let _ = window.draw(app);
     });
 
@@ -403,7 +370,6 @@ fn create_branch_popover_renders_shortcut_hints_and_separators(cx: &mut gpui::Te
         .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
 
     cx.update(|window, app| {
-        view.update(app, |this, _cx| this.disable_poller_for_tests());
         let _ = window.draw(app);
     });
 
@@ -446,7 +412,6 @@ fn create_branch_popover_enter_creates_and_closes(cx: &mut gpui::TestAppContext)
             crate::kit::Enter,
             Some("TextInput"),
         )]);
-        view.update(app, |this, _cx| this.disable_poller_for_tests());
         let _ = window.draw(app);
     });
 
@@ -524,7 +489,6 @@ fn create_branch_popover_enter_with_empty_input_does_not_close_or_create(
             crate::kit::Enter,
             Some("TextInput"),
         )]);
-        view.update(app, |this, _cx| this.disable_poller_for_tests());
         let _ = window.draw(app);
     });
 

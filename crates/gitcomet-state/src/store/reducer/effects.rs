@@ -1,6 +1,10 @@
-use super::util::push_diagnostic;
+use super::util::{
+    EffectAccumulator, apply_selected_diff_load_plan_state, diff_reload_effects, push_diagnostic,
+    selected_diff_load_plan,
+};
 use crate::model::{
-    AppState, ConflictFileLoadMode, DiagnosticKind, Loadable, RepoId, RepoLoadsInFlight,
+    AppState, ConflictFileLoadMode, DiagnosticKind, Loadable, RepoId, RepoLoadsInFlight, RepoState,
+    SidebarDataRequest,
 };
 use crate::msg::Effect;
 use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession};
@@ -109,14 +113,11 @@ fn build_conflict_session(
     file: &crate::model::ConflictFile,
 ) -> Option<ConflictSession> {
     // Look up the conflict kind from the repo's status entries.
-    let conflict_kind = match &repo_state.status {
-        Loadable::Ready(status) => status
-            .unstaged
-            .iter()
-            .find(|e| e.path == file.path && e.kind == FileStatusKind::Conflicted)
-            .and_then(|e| e.conflict),
-        _ => None,
-    }?;
+    let conflict_kind = repo_state
+        .worktree_status_entries()?
+        .iter()
+        .find(|e| e.path == file.path && e.kind == FileStatusKind::Conflicted)
+        .and_then(|e| e.conflict)?;
 
     let base = ConflictPayload::from_stage_parts(file.base_bytes.clone(), file.base.clone());
     let ours = ConflictPayload::from_stage_parts(file.ours_bytes.clone(), file.ours.clone());
@@ -157,6 +158,7 @@ pub(super) fn worktrees_loaded(
     repo_id: RepoId,
     result: std::result::Result<Vec<Worktree>, Error>,
 ) -> Vec<Effect> {
+    let mut effects = Vec::new();
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         let worktrees = match result {
             Ok(v) => Loadable::Ready(v),
@@ -166,8 +168,14 @@ pub(super) fn worktrees_loaded(
             }
         };
         repo_state.set_worktrees(worktrees);
+        if repo_state
+            .loads_in_flight
+            .finish(RepoLoadsInFlight::WORKTREES)
+        {
+            effects.push(Effect::LoadWorktrees { repo_id });
+        }
     }
-    Vec::new()
+    effects
 }
 
 pub(super) fn submodules_loaded(
@@ -229,10 +237,65 @@ pub(super) fn clear_commit_selection(state: &mut AppState, repo_id: RepoId) -> V
     Vec::new()
 }
 
+pub(super) fn append_ensure_sidebar_data_effects(
+    repo_state: &mut RepoState,
+    effects: &mut impl EffectAccumulator,
+) {
+    if !matches!(repo_state.open, Loadable::Ready(())) {
+        return;
+    }
+
+    let repo_id = repo_state.id;
+    let request = repo_state.sidebar_data_request;
+
+    if request.worktrees && matches!(repo_state.worktrees, Loadable::NotLoaded) {
+        repo_state.set_worktrees(Loadable::Loading);
+        if repo_state
+            .loads_in_flight
+            .request(RepoLoadsInFlight::WORKTREES)
+        {
+            effects.push_effect(Effect::LoadWorktrees { repo_id });
+        }
+    }
+
+    if request.submodules && matches!(repo_state.submodules, Loadable::NotLoaded) {
+        repo_state.set_submodules(Loadable::Loading);
+        effects.push_effect(Effect::LoadSubmodules { repo_id });
+    }
+
+    if request.stashes && matches!(repo_state.stashes, Loadable::NotLoaded) {
+        repo_state.set_stashes(Loadable::Loading);
+        if repo_state
+            .loads_in_flight
+            .request(RepoLoadsInFlight::STASHES)
+        {
+            effects.push_effect(Effect::LoadStashes { repo_id, limit: 50 });
+        }
+    }
+}
+
+pub(super) fn ensure_sidebar_data(
+    state: &mut AppState,
+    repo_id: RepoId,
+    request: SidebarDataRequest,
+) -> Vec<Effect> {
+    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+
+    repo_state.set_sidebar_data_request(request);
+    let mut effects = Vec::new();
+    append_ensure_sidebar_data_effects(repo_state, &mut effects);
+    effects
+}
+
 pub(super) fn load_stashes(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
     };
+    if !matches!(repo_state.open, Loadable::Ready(())) {
+        return Vec::new();
+    }
     repo_state.set_stashes(Loadable::Loading);
     if repo_state
         .loads_in_flight
@@ -254,6 +317,39 @@ pub(super) fn refresh_branches(state: &mut AppState, repo_id: RepoId) -> Vec<Eff
         .request(RepoLoadsInFlight::BRANCHES)
     {
         vec![Effect::LoadBranches { repo_id }]
+    } else {
+        Vec::new()
+    }
+}
+
+pub(super) fn load_tags(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
+    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+    if !matches!(repo_state.open, Loadable::Ready(())) {
+        return Vec::new();
+    }
+    repo_state.set_tags(Loadable::Loading);
+    if repo_state.loads_in_flight.request(RepoLoadsInFlight::TAGS) {
+        vec![Effect::LoadTags { repo_id }]
+    } else {
+        Vec::new()
+    }
+}
+
+pub(super) fn load_remote_tags(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
+    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+    if !matches!(repo_state.open, Loadable::Ready(())) {
+        return Vec::new();
+    }
+    repo_state.set_remote_tags(Loadable::Loading);
+    if repo_state
+        .loads_in_flight
+        .request(RepoLoadsInFlight::REMOTE_TAGS)
+    {
+        vec![Effect::LoadRemoteTags { repo_id }]
     } else {
         Vec::new()
     }
@@ -335,14 +431,27 @@ pub(super) fn load_worktrees(state: &mut AppState, repo_id: RepoId) -> Vec<Effec
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
     };
+    if !matches!(repo_state.open, Loadable::Ready(())) {
+        return Vec::new();
+    }
     repo_state.set_worktrees(Loadable::Loading);
-    vec![Effect::LoadWorktrees { repo_id }]
+    if repo_state
+        .loads_in_flight
+        .request(RepoLoadsInFlight::WORKTREES)
+    {
+        vec![Effect::LoadWorktrees { repo_id }]
+    } else {
+        Vec::new()
+    }
 }
 
 pub(super) fn load_submodules(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
     };
+    if !matches!(repo_state.open, Loadable::Ready(())) {
+        return Vec::new();
+    }
     repo_state.set_submodules(Loadable::Loading);
     vec![Effect::LoadSubmodules { repo_id }]
 }
@@ -447,19 +556,112 @@ pub(super) fn status_loaded(
                 true
             }
         };
-        // Replaying an unchanged status payload can self-sustain refresh loops when file-system
-        // events are produced by the status read itself (for example `.git/index` churn).
-        if repo_state.loads_in_flight.finish(RepoLoadsInFlight::STATUS) {
-            if should_replay_pending {
-                effects.push(Effect::LoadStatus { repo_id });
-            } else {
-                // `finish` marks STATUS back as in-flight when there was pending work. We are
-                // intentionally dropping that replay request, so clear the in-flight bit too.
-                let _ = repo_state.loads_in_flight.finish(RepoLoadsInFlight::STATUS);
-            }
-        }
+        finish_status_lane_replay(
+            repo_state,
+            RepoLoadsInFlight::WORKTREE_STATUS,
+            repo_id,
+            should_replay_pending,
+            Effect::LoadWorktreeStatus { repo_id },
+            &mut effects,
+        );
+        finish_status_lane_replay(
+            repo_state,
+            RepoLoadsInFlight::STAGED_STATUS,
+            repo_id,
+            should_replay_pending,
+            Effect::LoadStagedStatus { repo_id },
+            &mut effects,
+        );
     }
     effects
+}
+
+pub(super) fn worktree_status_loaded(
+    state: &mut AppState,
+    repo_id: RepoId,
+    result: std::result::Result<Vec<gitcomet_core::domain::FileStatus>, Error>,
+) -> Vec<Effect> {
+    let mut effects = Vec::new();
+    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+        let should_replay_pending = match result {
+            Ok(next) => {
+                let status_unchanged = matches!(&repo_state.worktree_status, Loadable::Ready(prev) if prev.as_slice() == next.as_slice());
+                if !status_unchanged {
+                    repo_state.set_worktree_status(Loadable::Ready(next));
+                }
+                clear_resolved_conflict_context(repo_state);
+                !status_unchanged
+            }
+            Err(e) => {
+                push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                repo_state.set_worktree_status(Loadable::Error(e.to_string()));
+                true
+            }
+        };
+        finish_status_lane_replay(
+            repo_state,
+            RepoLoadsInFlight::WORKTREE_STATUS,
+            repo_id,
+            should_replay_pending,
+            Effect::LoadWorktreeStatus { repo_id },
+            &mut effects,
+        );
+    }
+    effects
+}
+
+pub(super) fn staged_status_loaded(
+    state: &mut AppState,
+    repo_id: RepoId,
+    result: std::result::Result<Vec<gitcomet_core::domain::FileStatus>, Error>,
+) -> Vec<Effect> {
+    let mut effects = Vec::new();
+    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+        let should_replay_pending = match result {
+            Ok(next) => {
+                let status_unchanged = matches!(&repo_state.staged_status, Loadable::Ready(prev) if prev.as_slice() == next.as_slice());
+                if !status_unchanged {
+                    repo_state.set_staged_status(Loadable::Ready(next));
+                }
+                !status_unchanged
+            }
+            Err(e) => {
+                push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                repo_state.set_staged_status(Loadable::Error(e.to_string()));
+                true
+            }
+        };
+        finish_status_lane_replay(
+            repo_state,
+            RepoLoadsInFlight::STAGED_STATUS,
+            repo_id,
+            should_replay_pending,
+            Effect::LoadStagedStatus { repo_id },
+            &mut effects,
+        );
+    }
+    effects
+}
+
+fn finish_status_lane_replay(
+    repo_state: &mut crate::model::RepoState,
+    flag: u32,
+    _repo_id: RepoId,
+    should_replay_pending: bool,
+    replay_effect: Effect,
+    effects: &mut Vec<Effect>,
+) {
+    // Replaying an unchanged status payload can self-sustain refresh loops when file-system
+    // events are produced by the status read itself (for example `.git/index` churn).
+    if repo_state.loads_in_flight.finish(flag) {
+        if should_replay_pending {
+            effects.push(replay_effect);
+        } else {
+            // `finish` marks the flag back as in-flight when there was pending work. We are
+            // intentionally dropping that replay request, so clear the in-flight bit too.
+            let _ = repo_state.loads_in_flight.finish(flag);
+        }
+    }
 }
 
 /// Clear conflict-file/session state when the tracked conflict path is no longer
@@ -468,13 +670,11 @@ fn clear_resolved_conflict_context(repo_state: &mut crate::model::RepoState) {
     let Some(conflict_path) = repo_state.conflict_state.conflict_file_path.as_ref() else {
         return;
     };
-    let still_conflicted = match &repo_state.status {
-        Loadable::Ready(status) => status
-            .unstaged
+    let still_conflicted = repo_state.worktree_status_entries().is_none_or(|status| {
+        status
             .iter()
-            .any(|entry| entry.path == *conflict_path && entry.kind == FileStatusKind::Conflicted),
-        _ => true,
-    };
+            .any(|entry| entry.path == *conflict_path && entry.kind == FileStatusKind::Conflicted)
+    });
     if still_conflicted {
         return;
     }
@@ -661,6 +861,10 @@ pub(super) fn commit_details_loaded(
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
         && repo_state.history_state.selected_commit.as_ref() == Some(&commit_id)
     {
+        let selected_target = repo_state.diff_state.diff_target.clone();
+        let previous_plan = selected_target
+            .as_ref()
+            .map(|target| selected_diff_load_plan(repo_state, target));
         let value = match result {
             Ok(v) => Loadable::Ready(Arc::new(v)),
             Err(e) => {
@@ -669,6 +873,15 @@ pub(super) fn commit_details_loaded(
             }
         };
         repo_state.set_commit_details(value);
+
+        if let Some(target @ gitcomet_core::domain::DiffTarget::Commit { .. }) = selected_target {
+            let next_plan = selected_diff_load_plan(repo_state, &target);
+            if previous_plan != Some(next_plan) {
+                apply_selected_diff_load_plan_state(repo_state, next_plan);
+                repo_state.bump_diff_state_rev();
+                return diff_reload_effects(repo_state, repo_id, target);
+            }
+        }
     }
     Vec::new()
 }
@@ -676,7 +889,7 @@ pub(super) fn commit_details_loaded(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{ConflictFile, RepoState};
+    use crate::model::{ConflictFile, RepoState, SidebarDataRequest};
     use gitcomet_core::domain::{FileConflictKind, FileStatus, RepoSpec};
     use gitcomet_core::error::{Error, ErrorKind};
     use std::path::{Path, PathBuf};
@@ -749,6 +962,10 @@ mod tests {
             .iter_mut()
             .find(|repo| repo.id == repo_id)
             .expect("repo not found")
+    }
+
+    fn mark_repo_open_ready(state: &mut AppState, repo_id: RepoId) {
+        repo_mut(state, repo_id).set_open(Loadable::Ready(()));
     }
 
     fn mark_pending(state: &mut AppState, repo_id: RepoId, flag: u32) {
@@ -1054,6 +1271,7 @@ mod tests {
         let conflict_path = PathBuf::from("conflict.txt");
         let history_path = PathBuf::from("src/lib.rs");
         let blame_path = PathBuf::from("src/main.rs");
+        mark_repo_open_ready(&mut state, repo_id);
 
         {
             let repo = repo_mut(&mut state, repo_id);
@@ -1142,6 +1360,7 @@ mod tests {
             Effect::LoadWorktrees { repo_id: rid } if rid == repo_id
         ));
         assert!(repo_mut(&mut state, repo_id).worktrees.is_loading());
+        assert!(load_worktrees(&mut state, repo_id).is_empty());
 
         let effects = load_submodules(&mut state, repo_id);
         assert_eq!(effects.len(), 1);
@@ -1183,6 +1402,84 @@ mod tests {
         ));
         assert!(repo_mut(&mut state, repo_id).reflog.is_loading());
         assert!(load_reflog(&mut state, repo_id).is_empty());
+    }
+
+    #[test]
+    fn pre_open_worktree_and_submodule_loads_are_noops() {
+        let repo_id = RepoId(1);
+        let mut state = new_state_with_repo(repo_id);
+
+        assert!(load_worktrees(&mut state, repo_id).is_empty());
+        assert!(matches!(
+            repo_mut(&mut state, repo_id).worktrees,
+            Loadable::NotLoaded
+        ));
+        assert!(
+            !repo_mut(&mut state, repo_id)
+                .loads_in_flight
+                .is_in_flight(RepoLoadsInFlight::WORKTREES)
+        );
+
+        assert!(load_submodules(&mut state, repo_id).is_empty());
+        assert!(matches!(
+            repo_mut(&mut state, repo_id).submodules,
+            Loadable::NotLoaded
+        ));
+    }
+
+    #[test]
+    fn ensure_sidebar_data_stores_request_before_repo_is_open() {
+        let repo_id = RepoId(1);
+        let mut state = new_state_with_repo(repo_id);
+        let request = SidebarDataRequest {
+            worktrees: true,
+            submodules: true,
+            stashes: true,
+        };
+
+        assert!(ensure_sidebar_data(&mut state, repo_id, request).is_empty());
+
+        let repo = repo_mut(&mut state, repo_id);
+        assert_eq!(repo.sidebar_data_request, request);
+        assert!(matches!(repo.worktrees, Loadable::NotLoaded));
+        assert!(matches!(repo.submodules, Loadable::NotLoaded));
+        assert!(matches!(repo.stashes, Loadable::NotLoaded));
+    }
+
+    #[test]
+    fn ensure_sidebar_data_loads_only_missing_requested_sections() {
+        let repo_id = RepoId(1);
+        let mut state = new_state_with_repo(repo_id);
+        mark_repo_open_ready(&mut state, repo_id);
+        repo_mut(&mut state, repo_id).set_submodules(Loadable::Ready(Vec::new()));
+
+        let request = SidebarDataRequest {
+            worktrees: true,
+            submodules: false,
+            stashes: true,
+        };
+        let effects = ensure_sidebar_data(&mut state, repo_id, request);
+
+        assert!(effects.iter().any(
+            |effect| matches!(effect, Effect::LoadWorktrees { repo_id: rid } if *rid == repo_id)
+        ));
+        assert!(!effects.iter().any(
+            |effect| matches!(effect, Effect::LoadSubmodules { repo_id: rid } if *rid == repo_id)
+        ));
+        assert!(effects.iter().any(|effect| matches!(
+            effect,
+            Effect::LoadStashes {
+                repo_id: rid,
+                limit: 50
+            } if *rid == repo_id
+        )));
+
+        let repo = repo_mut(&mut state, repo_id);
+        assert!(repo.worktrees.is_loading());
+        assert!(matches!(repo.submodules, Loadable::Ready(_)));
+        assert!(repo.stashes.is_loading());
+
+        assert!(ensure_sidebar_data(&mut state, repo_id, request).is_empty());
     }
 
     #[test]
@@ -1288,6 +1585,18 @@ mod tests {
         ));
         assert!(matches!(
             repo_mut(&mut state, repo_id).remote_branches,
+            Loadable::Ready(_)
+        ));
+
+        mark_pending(&mut state, repo_id, RepoLoadsInFlight::WORKTREES);
+        let effects = worktrees_loaded(&mut state, repo_id, Ok(Vec::new()));
+        assert_eq!(effects.len(), 1);
+        assert!(matches!(
+            effects[0],
+            Effect::LoadWorktrees { repo_id: rid } if rid == repo_id
+        ));
+        assert!(matches!(
+            repo_mut(&mut state, repo_id).worktrees,
             Loadable::Ready(_)
         ));
 
@@ -1499,12 +1808,12 @@ mod tests {
             )));
             repo.set_conflict_hide_resolved(true);
         }
-        mark_pending(&mut state, repo_id, RepoLoadsInFlight::STATUS);
+        mark_pending(&mut state, repo_id, RepoLoadsInFlight::WORKTREE_STATUS);
         let effects = status_loaded(&mut state, repo_id, Ok(RepoStatus::default()));
         assert_eq!(effects.len(), 1);
         assert!(matches!(
             effects[0],
-            Effect::LoadStatus { repo_id: rid } if rid == repo_id
+            Effect::LoadWorktreeStatus { repo_id: rid } if rid == repo_id
         ));
         {
             let repo = repo_mut(&mut state, repo_id);

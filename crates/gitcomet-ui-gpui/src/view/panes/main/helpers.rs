@@ -326,6 +326,52 @@ pub(in crate::view) fn preview_source_text_and_line_starts_from_lines(
     (text.into(), Arc::from(line_starts))
 }
 
+const PREVIEW_LINE_FLAG_ASCII_ONLY: u8 = 0b01;
+const PREVIEW_LINE_FLAG_HAS_TABS: u8 = 0b10;
+
+#[inline]
+pub(in crate::view) fn preview_line_flags_for_text(text: &str) -> u8 {
+    preview_line_flags_from_bools(text.is_ascii(), text.contains('\t'))
+}
+
+#[inline]
+pub(in crate::view) fn preview_line_flags_from_bools(ascii_only: bool, has_tabs: bool) -> u8 {
+    let mut flags = 0u8;
+    if ascii_only {
+        flags |= PREVIEW_LINE_FLAG_ASCII_ONLY;
+    }
+    if has_tabs {
+        flags |= PREVIEW_LINE_FLAG_HAS_TABS;
+    }
+    flags
+}
+
+#[inline]
+pub(in crate::view) fn preview_line_is_ascii_without_loading(flags: u8) -> bool {
+    (flags & PREVIEW_LINE_FLAG_ASCII_ONLY) != 0
+}
+
+#[inline]
+pub(in crate::view) fn preview_line_has_tabs_without_loading(flags: u8) -> bool {
+    (flags & PREVIEW_LINE_FLAG_HAS_TABS) != 0
+}
+
+pub(in crate::view) fn preview_line_flags_from_source(
+    text: &str,
+    line_starts: &[usize],
+) -> Arc<[u8]> {
+    let line_count = indexed_line_count_from_len(text.len(), line_starts);
+    let mut flags = Vec::with_capacity(line_count);
+    for line_ix in 0..line_count {
+        let range = indexed_line_byte_range(line_starts, text.len(), line_ix)
+            .unwrap_or(text.len()..text.len());
+        flags.push(preview_line_flags_for_text(
+            text.get(range).unwrap_or_default(),
+        ));
+    }
+    Arc::from(flags)
+}
+
 pub(super) fn line_start_offset_for_index(
     line_starts: &[usize],
     text_len: usize,
@@ -346,12 +392,44 @@ pub(super) fn source_line_count(text: &str) -> usize {
 ///
 /// Uses `split('\n')` row semantics for non-empty text, so a trailing newline
 /// preserves a final empty row.
-pub(super) fn indexed_line_count(text: &str, line_starts: &[usize]) -> usize {
-    if text.is_empty() {
+pub(in crate::view) fn indexed_line_count_from_len(
+    source_len: usize,
+    line_starts: &[usize],
+) -> usize {
+    if source_len == 0 {
         0
     } else {
         line_starts.len().max(1)
     }
+}
+
+pub(super) fn indexed_line_count(text: &str, line_starts: &[usize]) -> usize {
+    indexed_line_count_from_len(text.len(), line_starts)
+}
+
+pub(in crate::view) fn indexed_line_byte_range(
+    line_starts: &[usize],
+    source_len: usize,
+    line_ix: usize,
+) -> Option<Range<usize>> {
+    let line_count = indexed_line_count_from_len(source_len, line_starts);
+    if line_ix >= line_count {
+        return None;
+    }
+
+    let start = line_starts
+        .get(line_ix)
+        .copied()
+        .unwrap_or(source_len)
+        .min(source_len);
+    let end = line_starts
+        .get(line_ix.saturating_add(1))
+        .copied()
+        .map(|next| next.saturating_sub(1))
+        .unwrap_or(source_len)
+        .min(source_len)
+        .max(start);
+    Some(start..end)
 }
 
 /// Number of logical rows produced by `split('\n')` (always at least 1).
@@ -2089,8 +2167,10 @@ pub(in crate::view) struct MainPaneView {
     pub(in crate::view) diff_view: DiffViewMode,
     pub(in crate::view) rendered_preview_modes: RenderedPreviewModes,
     pub(in crate::view) diff_word_wrap: bool,
+    pub(in crate::view) diff_scroll_sync: DiffScrollSync,
     pub(in crate::view) diff_split_ratio: f32,
     pub(in crate::view) diff_split_resize: Option<DiffSplitResizeState>,
+    pub(in crate::view) diff_split_last_synced_x: [Pixels; 2],
     pub(in crate::view) diff_split_last_synced_y: [Pixels; 2],
     pub(in crate::view) diff_horizontal_min_width: Pixels,
     pub(in crate::view) diff_cache_repo_id: Option<RepoId>,
@@ -2199,9 +2279,12 @@ pub(in crate::view) struct MainPaneView {
     pub(in crate::view) file_image_diff_cache_new_svg_path: Option<std::path::PathBuf>,
 
     pub(in crate::view) worktree_preview_path: Option<std::path::PathBuf>,
+    pub(in crate::view) worktree_preview_source_path: Option<std::path::PathBuf>,
     pub(in crate::view) worktree_preview: Loadable<usize>,
+    pub(in crate::view) worktree_preview_source_len: usize,
     pub(in crate::view) worktree_preview_text: SharedString,
     pub(in crate::view) worktree_preview_line_starts: Arc<[usize]>,
+    pub(in crate::view) worktree_preview_line_flags: Arc<[u8]>,
     pub(in crate::view) worktree_preview_search_trigram_index:
         Option<super::diff_search::DiffSearchVisibleTrigramIndex>,
     pub(in crate::view) worktree_preview_content_rev: u64,
@@ -2271,8 +2354,11 @@ pub(in crate::view) struct MainPaneView {
     pub(in crate::view) conflict_resolver_diff_scroll: UniformListScrollHandle,
     pub(in crate::view) conflict_preview_ours_scroll: UniformListScrollHandle,
     pub(in crate::view) conflict_preview_theirs_scroll: UniformListScrollHandle,
-    pub(in crate::view) conflict_preview_last_synced_y: [Pixels; 3],
+    pub(in crate::view) conflict_preview_last_synced_x: [Pixels; 4],
+    pub(in crate::view) conflict_preview_last_synced_y: [Pixels; 4],
     pub(in crate::view) conflict_resolved_preview_scroll: UniformListScrollHandle,
+    pub(in crate::view) conflict_resolved_preview_gutter_scroll: UniformListScrollHandle,
+    pub(in crate::view) conflict_resolved_preview_gutter_last_synced_y: [Pixels; 2],
     pub(in crate::view) worktree_preview_scroll: UniformListScrollHandle,
 
     pub(super) path_display_cache: std::cell::RefCell<path_display::PathDisplayCache>,

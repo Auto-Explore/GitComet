@@ -105,6 +105,10 @@ impl RepoTabsBarView {
         repo.missing_on_disk && !show_spinner
     }
 
+    fn repo_tab_click_message(active_repo: Option<RepoId>, repo_id: RepoId) -> Option<Msg> {
+        (active_repo != Some(repo_id)).then_some(Msg::SetActiveRepo { repo_id })
+    }
+
     pub(in super::super) fn new(
         store: Arc<AppStore>,
         ui_model: Entity<AppUiModel>,
@@ -213,14 +217,20 @@ impl RepoTabsBarView {
 
         self.repo_tab_spinner_delay_seq = self.repo_tab_spinner_delay_seq.wrapping_add(1);
         let seq = self.repo_tab_spinner_delay_seq;
+        let uses_spinner_delay = crate::ui_runtime::current().uses_repo_tab_spinner_delay();
         self.repo_tab_spinner_delay = Some(RepoTabSpinnerDelayState {
             repo_id,
-            show_spinner: false,
+            show_spinner: !uses_spinner_delay,
         });
+
+        if !uses_spinner_delay {
+            cx.notify();
+            return;
+        }
 
         cx.spawn(
             async move |view: WeakEntity<RepoTabsBarView>, cx: &mut gpui::AsyncApp| {
-                Timer::after(Duration::from_millis(100)).await;
+                smol::Timer::after(Duration::from_millis(100)).await;
                 let _ = view.update(cx, |this, cx| {
                     if this.repo_tab_spinner_delay_seq != seq {
                         return;
@@ -272,14 +282,7 @@ impl Render for RepoTabsBarView {
                     .as_ref()
                     .is_some_and(|s| s.repo_id == repo_id && s.show_spinner);
             let show_close = self.hovered_repo_tab == Some(repo_id);
-            let label: SharedString = repo
-                .spec
-                .workdir
-                .file_name()
-                .and_then(|s| s.to_str())
-                .map(ToOwned::to_owned)
-                .unwrap_or_else(|| path_display::path_display_string(&repo.spec.workdir))
-                .into();
+            let label = path_display::repo_path_name(&repo.spec.workdir);
             let label_for_drag = label.clone();
 
             let position = if ix == 0 {
@@ -456,7 +459,10 @@ impl Render for RepoTabsBarView {
                     }
                 }))
                 .on_click(cx.listener(move |this, _e: &ClickEvent, _w, _cx| {
-                    this.store.dispatch(Msg::SetActiveRepo { repo_id });
+                    if let Some(msg) = Self::repo_tab_click_message(this.active_repo_id(), repo_id)
+                    {
+                        this.store.dispatch(msg);
+                    }
                 }));
 
             bar = bar.tab(tab);
@@ -567,6 +573,7 @@ mod tests {
     use super::{RepoTabsBarView, repo_tab_insert_before_for_drag_cursor};
     use gitcomet_core::domain::RepoSpec;
     use gitcomet_state::model::{RepoId, RepoState};
+    use gitcomet_state::msg::Msg;
     use std::path::PathBuf;
 
     fn repo_state(path: &str) -> RepoState {
@@ -631,5 +638,18 @@ mod tests {
             repo_tab_insert_before_for_drag_cursor(RepoId(5), None, 80.0, 60.0),
             None
         );
+    }
+
+    #[test]
+    fn repo_tab_click_message_is_none_for_active_repo() {
+        assert!(RepoTabsBarView::repo_tab_click_message(Some(RepoId(5)), RepoId(5)).is_none());
+    }
+
+    #[test]
+    fn repo_tab_click_message_activates_inactive_repo() {
+        assert!(matches!(
+            RepoTabsBarView::repo_tab_click_message(Some(RepoId(5)), RepoId(6)),
+            Some(Msg::SetActiveRepo { repo_id: RepoId(6) })
+        ));
     }
 }

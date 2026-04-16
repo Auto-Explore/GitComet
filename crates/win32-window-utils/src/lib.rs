@@ -1,19 +1,32 @@
-use std::ffi::c_void;
+use std::ptr::null;
 
-use windows::Win32::Foundation::{HWND, LPARAM, POINT, WPARAM};
-use windows::Win32::Graphics::Gdi::ClientToScreen;
-use windows::Win32::UI::WindowsAndMessaging::{
-    EnableMenuItem, GWL_STYLE, GetSystemMenu, GetWindowLongPtrW, IsIconic, IsZoomed,
-    MENU_ITEM_FLAGS, MF_BYCOMMAND, MF_ENABLED, MF_GRAYED, PostMessageW, SC_CLOSE, SC_MAXIMIZE,
-    SC_MINIMIZE, SC_MOVE, SC_RESTORE, SC_SIZE, SW_RESTORE, SetForegroundWindow, ShowWindowAsync,
-    TPM_LEFTALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON, TPM_TOPALIGN, TrackPopupMenuEx, WINDOW_STYLE,
-    WM_NULL, WM_SYSCOMMAND, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_SYSMENU, WS_THICKFRAME,
+use windows_sys::Win32::Foundation::{HWND, LPARAM, POINT, WPARAM};
+use windows_sys::Win32::Graphics::Gdi::ClientToScreen;
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture;
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    EnableMenuItem, GWL_STYLE, GetSystemMenu, GetWindowLongPtrW, HMENU, HTCAPTION, IsIconic,
+    IsZoomed, MENU_ITEM_FLAGS, MF_BYCOMMAND, MF_ENABLED, MF_GRAYED, PostMessageW, SC_CLOSE,
+    SC_MAXIMIZE, SC_MINIMIZE, SC_MOVE, SC_RESTORE, SC_SIZE, SW_RESTORE, SetForegroundWindow,
+    ShowWindowAsync, TPM_LEFTALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON, TPM_TOPALIGN, TrackPopupMenuEx,
+    WINDOW_STYLE, WM_NULL, WM_SYSCOMMAND, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_SYSMENU,
+    WS_THICKFRAME,
 };
 
 /// Restore a Win32 window from the maximized state.
 pub fn restore_window(hwnd: isize) -> bool {
-    let hwnd = HWND(hwnd as *mut c_void);
-    unsafe { ShowWindowAsync(hwnd, SW_RESTORE).as_bool() }
+    let hwnd = hwnd as HWND;
+    unsafe { ShowWindowAsync(hwnd, SW_RESTORE) != 0 }
+}
+
+/// Begin a native Win32 window move for a client-side titlebar drag.
+pub fn begin_window_move(hwnd: isize) -> bool {
+    let hwnd = hwnd as HWND;
+    let command: WPARAM = (SC_MOVE as usize) + (HTCAPTION as usize);
+
+    unsafe {
+        let _ = ReleaseCapture();
+        PostMessageW(hwnd, WM_SYSCOMMAND, command, LPARAM::default()) != 0
+    }
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -26,16 +39,20 @@ struct SystemMenuState {
     close: bool,
 }
 
+fn has_style(style: WINDOW_STYLE, flag: WINDOW_STYLE) -> bool {
+    style & flag == flag
+}
+
 fn system_menu_state(
     style: WINDOW_STYLE,
     is_minimized: bool,
     is_maximized: bool,
 ) -> SystemMenuState {
-    let has_system_menu = style.contains(WS_SYSMENU);
+    let has_system_menu = has_style(style, WS_SYSMENU);
     let is_restored = !is_minimized && !is_maximized;
-    let can_resize = style.contains(WS_THICKFRAME);
-    let has_minimize = style.contains(WS_MINIMIZEBOX);
-    let has_maximize = style.contains(WS_MAXIMIZEBOX);
+    let can_resize = has_style(style, WS_THICKFRAME);
+    let has_minimize = has_style(style, WS_MINIMIZEBOX);
+    let has_maximize = has_style(style, WS_MAXIMIZEBOX);
 
     SystemMenuState {
         restore: has_system_menu && !is_restored,
@@ -47,21 +64,17 @@ fn system_menu_state(
     }
 }
 
-fn enable_menu_item(
-    menu: windows::Win32::UI::WindowsAndMessaging::HMENU,
-    command: u32,
-    enabled: bool,
-) {
+fn enable_menu_item(menu: HMENU, command: u32, enabled: bool) {
     let flags: MENU_ITEM_FLAGS = MF_BYCOMMAND | if enabled { MF_ENABLED } else { MF_GRAYED };
     unsafe {
         let _ = EnableMenuItem(menu, command, flags);
     }
 }
 
-fn sync_system_menu_state(hwnd: HWND, menu: windows::Win32::UI::WindowsAndMessaging::HMENU) {
-    let style = WINDOW_STYLE(unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) } as u32);
-    let state = system_menu_state(style, unsafe { IsIconic(hwnd).as_bool() }, unsafe {
-        IsZoomed(hwnd).as_bool()
+fn sync_system_menu_state(hwnd: HWND, menu: HMENU) {
+    let style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) as WINDOW_STYLE };
+    let state = system_menu_state(style, unsafe { IsIconic(hwnd) != 0 }, unsafe {
+        IsZoomed(hwnd) != 0
     });
 
     enable_menu_item(menu, SC_RESTORE, state.restore);
@@ -74,16 +87,16 @@ fn sync_system_menu_state(hwnd: HWND, menu: windows::Win32::UI::WindowsAndMessag
 
 /// Show the native Win32 system menu for a window at the given client-area position.
 pub fn show_window_system_menu(hwnd: isize, x: i32, y: i32) {
-    let hwnd = HWND(hwnd as *mut c_void);
+    let hwnd = hwnd as HWND;
     let mut position = POINT { x, y };
 
     unsafe {
-        if !ClientToScreen(hwnd, &mut position).as_bool() {
+        if ClientToScreen(hwnd, &mut position) == 0 {
             return;
         }
 
-        let menu = GetSystemMenu(hwnd, false);
-        if menu.0.is_null() {
+        let menu = GetSystemMenu(hwnd, 0);
+        if menu.is_null() {
             return;
         }
 
@@ -91,22 +104,16 @@ pub fn show_window_system_menu(hwnd: isize, x: i32, y: i32) {
         let _ = SetForegroundWindow(hwnd);
         let command = TrackPopupMenuEx(
             menu,
-            (TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RIGHTBUTTON | TPM_RETURNCMD).0,
+            TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RIGHTBUTTON | TPM_RETURNCMD,
             position.x,
             position.y,
             hwnd,
-            None,
-        )
-        .0 as usize;
+            null(),
+        ) as usize;
 
-        let _ = PostMessageW(Some(hwnd), WM_NULL, WPARAM::default(), LPARAM::default());
+        let _ = PostMessageW(hwnd, WM_NULL, WPARAM::default(), LPARAM::default());
         if command != 0 {
-            let _ = PostMessageW(
-                Some(hwnd),
-                WM_SYSCOMMAND,
-                WPARAM(command),
-                LPARAM::default(),
-            );
+            let _ = PostMessageW(hwnd, WM_SYSCOMMAND, command as WPARAM, LPARAM::default());
         }
     }
 }

@@ -199,6 +199,70 @@ pub(super) fn schedule_load_status(
     );
 }
 
+pub(super) fn schedule_load_worktree_status(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: mpsc::Sender<Msg>,
+    repo_id: RepoId,
+) {
+    spawn_with_repo_or_else(
+        executor,
+        repos,
+        repo_id,
+        msg_tx,
+        move |repo, msg_tx| {
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(crate::msg::InternalMsg::WorktreeStatusLoaded {
+                    repo_id,
+                    result: repo.worktree_status(),
+                }),
+            );
+        },
+        move |msg_tx| {
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(crate::msg::InternalMsg::WorktreeStatusLoaded {
+                    repo_id,
+                    result: Err(missing_repo_error(repo_id)),
+                }),
+            );
+        },
+    );
+}
+
+pub(super) fn schedule_load_staged_status(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: mpsc::Sender<Msg>,
+    repo_id: RepoId,
+) {
+    spawn_with_repo_or_else(
+        executor,
+        repos,
+        repo_id,
+        msg_tx,
+        move |repo, msg_tx| {
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(crate::msg::InternalMsg::StagedStatusLoaded {
+                    repo_id,
+                    result: repo.staged_status(),
+                }),
+            );
+        },
+        move |msg_tx| {
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(crate::msg::InternalMsg::StagedStatusLoaded {
+                    repo_id,
+                    result: Err(missing_repo_error(repo_id)),
+                }),
+            );
+        },
+    );
+}
+
 pub(super) fn schedule_load_head_branch(
     executor: &TaskExecutor,
     repos: &RepoMap,
@@ -478,8 +542,8 @@ pub(super) fn schedule_load_conflict_file(
                                 ours_bytes,
                                 theirs_bytes,
                                 base: None,
-                                ours: d.old.map(Arc::<str>::from),
-                                theirs: d.new.map(Arc::<str>::from),
+                                ours: d.old,
+                                theirs: d.new,
                             }
                         })
                     }),
@@ -657,15 +721,30 @@ pub(super) fn schedule_load_worktrees(
     msg_tx: mpsc::Sender<Msg>,
     repo_id: RepoId,
 ) {
-    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        send_or_log(
-            &msg_tx,
-            Msg::Internal(crate::msg::InternalMsg::WorktreesLoaded {
-                repo_id,
-                result: repo.list_worktrees(),
-            }),
-        );
-    });
+    spawn_with_repo_or_else(
+        executor,
+        repos,
+        repo_id,
+        msg_tx,
+        move |repo, msg_tx| {
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(crate::msg::InternalMsg::WorktreesLoaded {
+                    repo_id,
+                    result: repo.list_worktrees(),
+                }),
+            );
+        },
+        move |msg_tx| {
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(crate::msg::InternalMsg::WorktreesLoaded {
+                    repo_id,
+                    result: Err(missing_repo_error(repo_id)),
+                }),
+            );
+        },
+    );
 }
 
 pub(super) fn schedule_load_submodules(
@@ -674,15 +753,30 @@ pub(super) fn schedule_load_submodules(
     msg_tx: mpsc::Sender<Msg>,
     repo_id: RepoId,
 ) {
-    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        send_or_log(
-            &msg_tx,
-            Msg::Internal(crate::msg::InternalMsg::SubmodulesLoaded {
-                repo_id,
-                result: repo.list_submodules(),
-            }),
-        );
-    });
+    spawn_with_repo_or_else(
+        executor,
+        repos,
+        repo_id,
+        msg_tx,
+        move |repo, msg_tx| {
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(crate::msg::InternalMsg::SubmodulesLoaded {
+                    repo_id,
+                    result: repo.list_submodules(),
+                }),
+            );
+        },
+        move |msg_tx| {
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(crate::msg::InternalMsg::SubmodulesLoaded {
+                    repo_id,
+                    result: Err(missing_repo_error(repo_id)),
+                }),
+            );
+        },
+    );
 }
 
 pub(super) fn schedule_load_rebase_state(
@@ -855,6 +949,28 @@ pub(super) fn schedule_load_diff_file(
     });
 }
 
+pub(super) fn schedule_load_diff_preview_text_file(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: mpsc::Sender<Msg>,
+    repo_id: RepoId,
+    target: DiffTarget,
+    side: gitcomet_core::domain::DiffPreviewTextSide,
+) {
+    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
+        let result = repo.diff_preview_text_file(&target, side);
+        send_or_log(
+            &msg_tx,
+            Msg::Internal(crate::msg::InternalMsg::DiffPreviewTextFileLoaded {
+                repo_id,
+                target,
+                side,
+                result,
+            }),
+        );
+    });
+}
+
 pub(super) fn schedule_load_diff_file_image(
     executor: &TaskExecutor,
     repos: &RepoMap,
@@ -881,14 +997,28 @@ pub(super) fn schedule_load_selected_diff(
     msg_tx: mpsc::Sender<Msg>,
     repo_id: RepoId,
     target: DiffTarget,
+    load_patch_diff: bool,
     load_file_text: bool,
+    preview_text_side: Option<gitcomet_core::domain::DiffPreviewTextSide>,
     load_file_image: bool,
 ) {
     if load_file_image {
         schedule_load_diff_file_image(executor, repos, msg_tx.clone(), repo_id, target.clone());
     }
+    if let Some(side) = preview_text_side {
+        schedule_load_diff_preview_text_file(
+            executor,
+            repos,
+            msg_tx.clone(),
+            repo_id,
+            target.clone(),
+            side,
+        );
+    }
     if load_file_text {
         schedule_load_diff_file(executor, repos, msg_tx.clone(), repo_id, target.clone());
     }
-    schedule_load_diff(executor, repos, msg_tx, repo_id, target);
+    if load_patch_diff {
+        schedule_load_diff(executor, repos, msg_tx, repo_id, target);
+    }
 }

@@ -1,15 +1,15 @@
 use crate::util::git_workdir_cmd_for as util_git_workdir_cmd_for;
 use gitcomet_core::conflict_session::ConflictSession;
 use gitcomet_core::domain::{
-    Branch, CommitDetails, CommitId, Diff, DiffTarget, FileDiffImage, FileDiffText, LogCursor,
-    LogPage, ReflogEntry, Remote, RemoteBranch, RemoteTag, RepoSpec, RepoStatus, StashEntry,
-    Submodule, Tag, UpstreamDivergence, Worktree,
+    Branch, CommitDetails, CommitId, Diff, DiffPreviewTextSide, DiffTarget, FileDiffImage,
+    FileDiffText, LogCursor, LogPage, ReflogEntry, Remote, RemoteBranch, RemoteTag, RepoSpec,
+    RepoStatus, StashEntry, Submodule, Tag, UpstreamDivergence, Worktree,
 };
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::git_ops_trace::{self, GitOpTraceKind};
 use gitcomet_core::services::{
     BlameLine, CommandOutput, ConflictFileStages, ConflictSide, GitRepository, MergetoolResult,
-    PullMode, RemoteUrlKind, ResetMode, Result,
+    PullMode, RemoteUrlKind, ResetMode, Result, SubmoduleTrustDecision, SubmoduleTrustTarget,
 };
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -198,6 +198,16 @@ impl GitRepository for GixRepo {
         self.list_remote_branches_impl()
     }
 
+    fn worktree_status(&self) -> Result<Vec<gitcomet_core::domain::FileStatus>> {
+        let _scope = git_ops_trace::scope(GitOpTraceKind::Status);
+        self.worktree_status_impl()
+    }
+
+    fn staged_status(&self) -> Result<Vec<gitcomet_core::domain::FileStatus>> {
+        let _scope = git_ops_trace::scope(GitOpTraceKind::Status);
+        self.staged_status_impl()
+    }
+
     fn status(&self) -> Result<RepoStatus> {
         let _scope = git_ops_trace::scope(GitOpTraceKind::Status);
         self.status_impl()
@@ -231,6 +241,14 @@ impl GitRepository for GixRepo {
 
     fn diff_file_text(&self, target: &DiffTarget) -> Result<Option<FileDiffText>> {
         self.diff_file_text_impl(target)
+    }
+
+    fn diff_preview_text_file(
+        &self,
+        target: &DiffTarget,
+        side: DiffPreviewTextSide,
+    ) -> Result<Option<PathBuf>> {
+        self.diff_preview_text_file_impl(target, side)
     }
 
     fn diff_file_image(&self, target: &DiffTarget) -> Result<Option<FileDiffImage>> {
@@ -511,12 +529,31 @@ impl GitRepository for GixRepo {
         self.list_submodules_impl()
     }
 
-    fn add_submodule_with_output(&self, url: &str, path: &Path) -> Result<CommandOutput> {
-        self.add_submodule_with_output_impl(url, path)
+    fn check_submodule_add_trust(&self, url: &str, path: &Path) -> Result<SubmoduleTrustDecision> {
+        self.check_submodule_add_trust_impl(url, path)
     }
 
-    fn update_submodules_with_output(&self) -> Result<CommandOutput> {
-        self.update_submodules_with_output_impl()
+    fn check_submodule_update_trust(&self) -> Result<SubmoduleTrustDecision> {
+        self.check_submodule_update_trust_impl()
+    }
+
+    fn add_submodule_with_output(
+        &self,
+        url: &str,
+        path: &Path,
+        branch: Option<&str>,
+        name: Option<&str>,
+        force: bool,
+        approved_sources: &[SubmoduleTrustTarget],
+    ) -> Result<CommandOutput> {
+        self.add_submodule_with_output_impl(url, path, branch, name, force, approved_sources)
+    }
+
+    fn update_submodules_with_output(
+        &self,
+        approved_sources: &[SubmoduleTrustTarget],
+    ) -> Result<CommandOutput> {
+        self.update_submodules_with_output_impl(approved_sources)
     }
 
     fn remove_submodule_with_output(&self, path: &Path) -> Result<CommandOutput> {

@@ -5,7 +5,6 @@ fn status_file_menu_uses_multi_selection_for_stage(cx: &mut gpui::TestAppContext
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
-
     let repo_id = RepoId(3);
     let workdir = std::env::temp_dir().join(format!(
         "gitcomet_ui_test_{}_status_menu",
@@ -112,7 +111,6 @@ fn status_file_menu_uses_multi_selection_for_unstage(cx: &mut gpui::TestAppConte
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
-
     let repo_id = RepoId(4);
     let workdir = std::env::temp_dir().join(format!(
         "gitcomet_ui_test_{}_status_menu_staged",
@@ -219,7 +217,6 @@ fn status_file_menu_offers_resolve_actions_for_conflicts(cx: &mut gpui::TestAppC
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
-
     let repo_id = RepoId(5);
     let workdir = std::env::temp_dir().join(format!(
         "gitcomet_ui_test_{}_status_menu_conflict",
@@ -347,7 +344,6 @@ fn status_file_menu_hides_external_mergetool_for_staged_conflicts(cx: &mut gpui:
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
-
     let repo_id = RepoId(7);
     let workdir = std::env::temp_dir().join(format!(
         "gitcomet_ui_test_{}_status_menu_staged_conflict",
@@ -424,7 +420,6 @@ fn status_file_menu_open_from_details_pane_does_not_double_lease_panic(
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
-
     let repo_id = RepoId(6);
     let workdir = std::env::temp_dir().join(format!(
         "gitcomet_ui_test_{}_status_menu_reentrant",
