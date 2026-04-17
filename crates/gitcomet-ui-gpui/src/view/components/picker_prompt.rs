@@ -1,6 +1,7 @@
-use super::CONTROL_HEIGHT_MD_PX;
+use super::control_height_md;
 use crate::kit::{Scrollbar, ScrollbarAxis, TextInput};
 use crate::theme::AppTheme;
+use crate::ui_scale;
 use gpui::prelude::*;
 use gpui::{
     ClickEvent, CursorStyle, Div, Entity, FontWeight, ScrollHandle, SharedString, Window, div, px,
@@ -45,14 +46,26 @@ impl PickerPrompt {
         self
     }
 
+    #[allow(dead_code)]
     pub fn render<V: 'static>(
         self,
         theme: AppTheme,
         cx: &gpui::Context<V>,
         on_select: impl Fn(&mut V, usize, &ClickEvent, &mut Window, &mut gpui::Context<V>) + 'static,
     ) -> Div {
+        self.render_scaled(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT, cx, on_select)
+    }
+
+    pub fn render_scaled<V: 'static>(
+        self,
+        theme: AppTheme,
+        ui_scale_percent: u32,
+        cx: &gpui::Context<V>,
+        on_select: impl Fn(&mut V, usize, &ClickEvent, &mut Window, &mut gpui::Context<V>) + 'static,
+    ) -> Div {
         let on_select: Arc<OnSelectFn<V>> = Arc::new(on_select);
         let scroll_handle = self.scroll_handle;
+        let scaled_px = |value| ui_scale::design_px_from_percent(value, ui_scale_percent);
 
         let query = self
             .query_input
@@ -83,12 +96,13 @@ impl PickerPrompt {
         if matches.is_empty() {
             list = list.child(
                 div()
-                    .h(px(CONTROL_HEIGHT_MD_PX))
+                    .h(control_height_md(ui_scale_percent))
                     .w_full()
                     .flex()
                     .items_center()
-                    .px_2()
+                    .px(scaled_px(8.0))
                     .text_sm()
+                    .line_height(scaled_px(18.0))
                     .text_color(theme.colors.text_muted)
                     .child(self.empty_text),
             );
@@ -101,11 +115,11 @@ impl PickerPrompt {
                     div()
                         .id(("picker_prompt_item", original_index))
                         .debug_selector(move || format!("picker_prompt_item_{original_index}"))
-                        .h(px(CONTROL_HEIGHT_MD_PX))
+                        .h(control_height_md(ui_scale_percent))
                         .w_full()
                         .flex()
                         .items_center()
-                        .px_2()
+                        .px(scaled_px(8.0))
                         .rounded(px(theme.radii.row))
                         .hover(move |s| s.bg(theme.colors.hover))
                         .active(move |s| s.bg(theme.colors.active))

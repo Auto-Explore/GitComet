@@ -271,13 +271,14 @@ impl HistoryView {
 
     fn history_column_headers(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
         let theme = self.theme;
+        let scaled_px = |value| ui_scale::design_px_from_percent(value, self.ui_scale_percent);
         let icon_muted = with_alpha(theme.colors.accent, if theme.is_dark { 0.72 } else { 0.82 });
         let (show_graph, show_author, show_date, show_sha) = self.history_visible_columns();
         let col_author = self.history_col_author;
         let col_date = self.history_col_date;
         let col_sha = self.history_col_sha;
-        let handle_w = px(HISTORY_COL_HANDLE_PX);
-        let handle_half = px(HISTORY_COL_HANDLE_PX / 2.0);
+        let handle_w = scaled_px(HISTORY_COL_HANDLE_PX);
+        let handle_half = scaled_px(HISTORY_COL_HANDLE_PX / 2.0);
         let cell_pad = handle_half;
         let scope_label: SharedString = self
             .active_repo()
@@ -310,7 +311,12 @@ impl HistoryView {
                 .cursor(CursorStyle::ResizeLeftRight)
                 .hover(move |s| s.bg(theme.colors.hover))
                 .active(move |s| s.bg(theme.colors.active))
-                .child(div().w(px(1.0)).h(px(14.0)).bg(theme.colors.border))
+                .child(
+                    div()
+                        .w(scaled_px(1.0))
+                        .h(scaled_px(14.0))
+                        .bg(theme.colors.border),
+                )
                 .on_drag(handle, |_handle, _offset, _window, cx| {
                     cx.new(|_cx| HistoryColResizeDragGhost)
                 })
@@ -338,6 +344,7 @@ impl HistoryView {
                             e.position.x,
                             available_width,
                             drag_layout,
+                            this.ui_scale_percent,
                         ));
                         cx.notify();
                     }),
@@ -356,6 +363,7 @@ impl HistoryView {
                             &mut state,
                             e.event.position.x,
                             available_width,
+                            this.ui_scale_percent,
                         );
                         let width = this.history_column_width_mut(state.handle);
                         let changed = *width != next;
@@ -387,7 +395,7 @@ impl HistoryView {
         let mut header = div()
             .relative()
             .flex()
-            .h(px(24.0))
+            .h(scaled_px(24.0))
             .w_full()
             .items_center()
             .px_2()
@@ -417,8 +425,8 @@ impl HistoryView {
                                     .items_center()
                                     .gap_1()
                                     .px_1()
-                                    .h(px(18.0))
-                                    .line_height(px(18.0))
+                                    .h(scaled_px(18.0))
+                                    .line_height(scaled_px(18.0))
                                     .rounded(px(theme.radii.row))
                                     .when(scope_active, |d| d.bg(theme.colors.active))
                                     .hover(move |s| {
@@ -437,7 +445,11 @@ impl HistoryView {
                                             .whitespace_nowrap()
                                             .child(scope_label.clone()),
                                     )
-                                    .child(svg_icon("icons/chevron_down.svg", icon_muted, px(12.0)))
+                                    .child(svg_icon(
+                                        "icons/chevron_down.svg",
+                                        icon_muted,
+                                        scaled_px(12.0),
+                                    ))
                                     .when_some(scope_repo_id, |this, repo_id| {
                                         let scope_invoker = scope_invoker.clone();
                                         let scope_anchor_bounds_for_click =

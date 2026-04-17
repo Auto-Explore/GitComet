@@ -19,6 +19,7 @@ mod status_file;
 mod submodule;
 mod submodule_section;
 mod tag;
+mod ui_scale_picker;
 mod worktree;
 mod worktree_section;
 
@@ -329,6 +330,7 @@ impl PopoverHost {
                 Some(history_branch_filter::model(*repo_id))
             }
             PopoverKind::ChangeTrackingSettings => Some(change_tracking_settings::model(self)),
+            PopoverKind::UiScalePicker => Some(ui_scale_picker::model(cx)),
             _ => None,
         }
     }
@@ -657,6 +659,11 @@ impl PopoverHost {
                 self.store
                     .dispatch(Msg::UnsetUpstreamBranch { repo_id, branch });
             }
+            ContextMenuAction::SetUiScale { percent } => {
+                cx.defer(move |cx| {
+                    crate::app::set_app_ui_scale_percent(cx, percent);
+                });
+            }
             ContextMenuAction::OpenPopover { kind } => {
                 let anchor = self
                     .popover_anchor
@@ -902,6 +909,7 @@ impl PopoverHost {
         cx: &mut gpui::Context<Self>,
     ) -> gpui::Div {
         let theme = self.theme;
+        let ui_scale_percent = ui_scale::current(cx).percent;
         let model = self
             .context_menu_model(&kind, cx)
             .unwrap_or_else(|| ContextMenuModel::new(vec![]));
@@ -920,6 +928,7 @@ impl PopoverHost {
                 .min_w_full()
                 .flex()
                 .flex_col()
+                .items_stretch()
                 .track_focus(&focus)
                 .key_context("ContextMenu")
                 .on_mouse_down(
@@ -994,17 +1003,21 @@ impl PopoverHost {
                 )
                 .children(model.items.into_iter().enumerate().map(|(ix, item)| {
                     match item {
-                        ContextMenuItem::Separator => components::context_menu_separator(theme)
-                            .id(("context_menu_sep", ix))
-                            .into_any_element(),
+                        ContextMenuItem::Separator => {
+                            components::context_menu_separator_scaled(theme, ui_scale_percent)
+                                .id(("context_menu_sep", ix))
+                                .into_any_element()
+                        }
                         ContextMenuItem::Header(title) => {
-                            components::context_menu_header(theme, title)
+                            components::context_menu_header_scaled(theme, ui_scale_percent, title)
                                 .id(("context_menu_header", ix))
                                 .into_any_element()
                         }
-                        ContextMenuItem::Label(text) => components::context_menu_label(theme, text)
-                            .id(("context_menu_label", ix))
-                            .into_any_element(),
+                        ContextMenuItem::Label(text) => {
+                            components::context_menu_label_scaled(theme, ui_scale_percent, text)
+                                .id(("context_menu_label", ix))
+                                .into_any_element()
+                        }
                         ContextMenuItem::Entry {
                             label,
                             icon,
@@ -1019,6 +1032,7 @@ impl PopoverHost {
                             let row = components::context_menu_entry(
                                 ("context_menu_entry", ix),
                                 theme,
+                                ui_scale_percent,
                                 selected,
                                 disabled,
                                 icon,
@@ -1066,6 +1080,18 @@ impl PopoverHost {
                 }))
                 .into_any_element(),
         )
+        .w(super::popover_scaled_px_from_percent(
+            220.0,
+            ui_scale_percent,
+        ))
+        .min_w(super::popover_scaled_px_from_percent(
+            160.0,
+            ui_scale_percent,
+        ))
+        .max_w(super::popover_scaled_px_from_percent(
+            320.0,
+            ui_scale_percent,
+        ))
     }
 }
 

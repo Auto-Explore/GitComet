@@ -28,6 +28,7 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         let editor_font_family = crate::font_preferences::current_editor_font_family(cx);
+        let ui_scale_percent = crate::ui_scale::current(cx).percent;
         let (wants_image, wants_markdown_preview, rendered_preview_kind) = self
             .active_repo()
             .map(|repo| {
@@ -204,8 +205,12 @@ impl MainPaneView {
                                 })
                         };
 
-                        let columns_header =
-                            components::split_columns_header(theme, "A (before)", "B (after)");
+                        let columns_header = components::split_columns_header_scaled(
+                            theme,
+                            ui_scale_percent,
+                            "A (before)",
+                            "B (after)",
+                        );
 
                         div()
                             .id("diff_image_container")
@@ -599,7 +604,7 @@ impl MainPaneView {
 
                                     let columns_header = div()
                                         .id("diff_split_columns_header")
-                                        .h(px(components::CONTROL_HEIGHT_PX))
+                                        .h(components::control_height(ui_scale_percent))
                                         .flex()
                                         .items_center()
                                         .text_xs()
@@ -762,6 +767,7 @@ impl MainPaneView {
         inline_len: usize,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
+        let ui_scale_percent = crate::ui_scale::current(cx).percent;
         if old_len == 0 && new_len == 0 {
             return components::empty_state(theme, "Preview", "Empty file.").into_any_element();
         }
@@ -1016,8 +1022,9 @@ impl MainPaneView {
                     .flex_col()
                     .h_full()
                     .min_h(px(0.0))
-                    .child(components::split_columns_header(
+                    .child(components::split_columns_header_scaled(
                         theme,
+                        ui_scale_percent,
                         "A (before)",
                         "B (after)",
                     ))

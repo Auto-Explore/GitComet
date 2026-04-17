@@ -1,4 +1,5 @@
 use crate::theme::AppTheme;
+use crate::ui_scale;
 use gitcomet_core::diff::AnnotatedDiffLine;
 #[cfg(test)]
 use gitcomet_core::diff::annotate_unified;
@@ -21,11 +22,12 @@ use gitcomet_state::store::AppStore;
 use gpui::prelude::*;
 use gpui::{
     Animation, AnimationExt, AnyElement, AnyView, App, Bounds, ClickEvent, Corner, CursorStyle,
-    Decorations, Element, ElementId, Entity, FocusHandle, FontWeight, GlobalElementId,
-    InspectorElementId, IsZero, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, Pixels, Point, Render, ResizeEdge, ScrollHandle, ShapedLine, SharedString, Size,
-    Style, StyleRefinement, TextRun, Tiling, UniformListScrollHandle, WeakEntity, Window,
-    WindowControlArea, anchored, div, fill, point, px, relative, size, uniform_list,
+    Decorations, DispatchPhase, Element, ElementId, Entity, FocusHandle, FontWeight,
+    GlobalElementId, InspectorElementId, IsZero, LayoutId, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, Pixels, Point, Render, ResizeEdge, ScrollHandle,
+    ScrollWheelEvent, ShapedLine, SharedString, Size, Style, StyleRefinement, TextRun, Tiling,
+    UniformListScrollHandle, WeakEntity, Window, WindowControlArea, anchored, div, fill, point, px,
+    relative, size, uniform_list,
 };
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 #[cfg(test)]
@@ -85,10 +87,7 @@ use caches::{
     HistoryCache, HistoryCacheRequest, HistoryCommitRowVm, HistoryStashIdsCache,
     HistoryWorktreeSummaryCache,
 };
-use chrome::{
-    CLIENT_SIDE_DECORATION_INSET, TITLE_BAR_HEIGHT, TitleBarView, cursor_style_for_resize_edge,
-    resize_edge,
-};
+use chrome::{TitleBarView, cursor_style_for_resize_edge, resize_edge};
 use conflict_resolver::{ConflictPickSide, ConflictResolverViewMode};
 #[cfg(test)]
 use date_time::format_datetime;
@@ -117,12 +116,13 @@ pub use mod_helpers::{
     FocusedMergetoolLabels, FocusedMergetoolViewConfig, GitCometView, GitCometViewConfig,
     GitCometViewMode, InitialRepositoryLaunchMode, StartupCrashReport,
 };
-use panels::{ACTION_BAR_HEIGHT, ActionBarView, PopoverHost, RepoTabsBarView};
+use panels::{ActionBarView, BottomStatusBarView, PopoverHost, RepoTabsBarView, action_bar_height};
 use panes::{DetailsPaneInit, DetailsPaneView, HistoryView, MainPaneView, SidebarPaneView};
-pub(crate) use settings_window::open_settings_window;
+pub(crate) use settings_window::{SettingsWindowView, open_settings_window};
 use toast_host::ToastHost;
 use tooltip_host::TooltipHost;
 
+#[cfg(test)]
 pub(crate) use chrome::window_frame;
 use color::with_alpha;
 use icons::{svg_icon, svg_spinner};
@@ -193,6 +193,106 @@ fn stable_overlay_view<V: Render>(view: Entity<V>) -> impl IntoElement {
     // temporarily unavailable. Reusing the cached overlay paint range then
     // replays a stale input-handler index and panics inside GPUI reuse_paint.
     div().absolute().top_0().left_0().size_full().child(view)
+}
+
+struct UiScaleScrollCapture {
+    view: Entity<GitCometView>,
+}
+
+impl IntoElement for UiScaleScrollCapture {
+    type Element = Self;
+
+    fn into_element(self) -> Self::Element {
+        self
+    }
+}
+
+impl Element for UiScaleScrollCapture {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, Self::RequestLayoutState) {
+        let mut style = Style::default();
+        style.size.width = px(0.0).into();
+        style.size.height = px(0.0).into();
+        (window.request_layout(style, [], cx), ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        _bounds: Bounds<Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        _window: &mut Window,
+        _cx: &mut App,
+    ) -> Self::PrepaintState {
+    }
+
+    fn paint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        _bounds: Bounds<Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        _prepaint: &mut Self::PrepaintState,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        if !renders_full_chrome(self.view.read(cx).view_mode) {
+            return;
+        }
+
+        let view = self.view.clone();
+        window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
+            if phase != DispatchPhase::Capture
+                || !event.modifiers.secondary()
+                || event.modifiers.alt
+                || event.modifiers.function
+            {
+                return;
+            }
+
+            if !renders_full_chrome(view.read(cx).view_mode) {
+                return;
+            }
+
+            let delta_y = event.delta.pixel_delta(window.line_height()).y;
+            if delta_y.is_zero() {
+                return;
+            }
+
+            let current = crate::ui_scale::current(cx).percent;
+            let next = if delta_y > px(0.0) {
+                crate::ui_scale::step_up(current)
+            } else {
+                crate::ui_scale::step_down(current)
+            };
+
+            cx.stop_propagation();
+            if next == current {
+                return;
+            }
+
+            cx.defer(move |cx| {
+                crate::app::set_app_ui_scale_percent(cx, next);
+            });
+        });
+    }
 }
 
 pub(in crate::view) fn pane_resize_handles_width(
@@ -361,6 +461,7 @@ impl GitCometView {
         let main_pane = self.main_pane.clone();
         let details_pane = self.details_pane.clone();
         let action_bar = self.action_bar.clone();
+        let bottom_status_bar = self.bottom_status_bar.clone();
 
         cx.defer(move |cx| {
             sidebar_pane.update(cx, |pane, cx| {
@@ -373,6 +474,9 @@ impl GitCometView {
                 pane.set_active_context_menu_invoker(next.clone(), cx);
             });
             action_bar.update(cx, |bar, cx| {
+                bar.set_active_context_menu_invoker(next.clone(), cx);
+            });
+            bottom_status_bar.update(cx, |bar, cx| {
                 bar.set_active_context_menu_invoker(next.clone(), cx);
             });
         });
@@ -441,6 +545,7 @@ impl GitCometView {
         let store = Arc::new(store);
 
         let mut ui_session = session::load();
+        let ui_scale = ui_scale::current_or_initialize_from_session(&ui_session, cx);
         let _font_preferences =
             crate::font_preferences::current_or_initialize_from_session(window, &ui_session, cx);
         if should_seed_initial_repository_from_session(
@@ -597,6 +702,9 @@ impl GitCometView {
                 cx,
             )
         });
+        let bottom_status_bar = cx.new(|_cx| {
+            BottomStatusBarView::new(initial_theme, weak_view.clone(), tooltip_host.downgrade())
+        });
 
         let sidebar_pane = cx.new(|cx| {
             SidebarPaneView::new(
@@ -645,6 +753,7 @@ impl GitCometView {
                     change_tracking_view,
                     change_tracking_height: restored_change_tracking_height,
                     untracked_height: restored_untracked_height,
+                    ui_scale_percent: ui_scale.percent,
                     root_view: weak_view.clone(),
                     tooltip_host: tooltip_host.downgrade(),
                 },
@@ -797,6 +906,7 @@ impl GitCometView {
             details_pane,
             repo_tabs_bar,
             action_bar,
+            bottom_status_bar,
             tooltip_host,
             toast_host,
             popover_host,
@@ -812,6 +922,7 @@ impl GitCometView {
             show_timezone,
             change_tracking_view,
             diff_scroll_sync,
+            ui_scale_percent: ui_scale.percent,
             open_repo_panel: false,
             open_repo_input,
             hover_resize_edge: None,
@@ -879,6 +990,8 @@ impl GitCometView {
             .update(cx, |bar, cx| bar.set_theme(theme, cx));
         self.action_bar
             .update(cx, |bar, cx| bar.set_theme(theme, cx));
+        self.bottom_status_bar
+            .update(cx, |bar, cx| bar.set_theme(theme, cx));
         self.tooltip_host
             .update(cx, |host, cx| host.set_theme(theme, cx));
         self.toast_host
@@ -903,6 +1016,7 @@ impl GitCometView {
         self.details_pane.update(cx, |_pane, cx| cx.notify());
         self.repo_tabs_bar.update(cx, |_bar, cx| cx.notify());
         self.action_bar.update(cx, |_bar, cx| cx.notify());
+        self.bottom_status_bar.update(cx, |_bar, cx| cx.notify());
         self.tooltip_host.update(cx, |_host, cx| cx.notify());
         self.toast_host.update(cx, |_host, cx| cx.notify());
         self.popover_host.update(cx, |_host, cx| cx.notify());
@@ -913,6 +1027,82 @@ impl GitCometView {
         self.auth_prompt_secret_input
             .update(cx, |_input, cx| cx.notify());
         cx.notify();
+    }
+
+    fn scaled_px(&self, value: f32) -> Pixels {
+        ui_scale::design_px_from_percent(value, self.ui_scale_percent)
+    }
+
+    fn pane_collapsed_width(&self) -> Pixels {
+        self.scaled_px(PANE_COLLAPSED_PX)
+    }
+
+    fn main_min_width(&self) -> Pixels {
+        self.scaled_px(MAIN_MIN_PX)
+    }
+
+    fn sidebar_min_width(&self) -> Pixels {
+        self.scaled_px(SIDEBAR_MIN_PX)
+    }
+
+    fn details_min_width(&self) -> Pixels {
+        self.scaled_px(DETAILS_MIN_PX)
+    }
+
+    fn pane_resize_handle_width(&self) -> Pixels {
+        self.scaled_px(PANE_RESIZE_HANDLE_PX)
+    }
+
+    pub(crate) fn apply_ui_scale_percent(
+        &mut self,
+        percent: u32,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let percent = ui_scale::sanitize_percent(Some(percent));
+        if self.ui_scale_percent == percent {
+            return;
+        }
+
+        let previous_percent = self.ui_scale_percent;
+        self.ui_scale_percent = percent;
+        self.pane_resize = None;
+        self.sidebar_width_anim_seq = self.sidebar_width_anim_seq.wrapping_add(1);
+        self.details_width_anim_seq = self.details_width_anim_seq.wrapping_add(1);
+        self.sidebar_width_animating = false;
+        self.details_width_animating = false;
+
+        ui_scale::apply_to_window(window, percent);
+        crate::app::ensure_window_respects_min_size(
+            window,
+            crate::app::main_window_min_size_for_percent(percent),
+        );
+
+        self.last_window_size = window.viewport_size();
+        self.ui_window_size_last_seen = self.last_window_size;
+        self.sidebar_width =
+            ui_scale::rescale_pixels(self.sidebar_width, previous_percent, percent);
+        self.details_width =
+            ui_scale::rescale_pixels(self.details_width, previous_percent, percent);
+        self.sidebar_render_width =
+            ui_scale::rescale_pixels(self.sidebar_render_width, previous_percent, percent);
+        self.details_render_width =
+            ui_scale::rescale_pixels(self.details_render_width, previous_percent, percent);
+
+        let change_tracking_view = self.change_tracking_view;
+        self.details_pane.update(cx, |pane, cx| {
+            pane.apply_ui_scale_percent(previous_percent, percent, change_tracking_view, cx);
+        });
+        self.main_pane.update(cx, |pane, cx| {
+            pane.apply_ui_scale_percent(previous_percent, percent, cx);
+        });
+        self.popover_host.update(cx, |_host, cx| {
+            cx.notify();
+        });
+
+        self.clamp_pane_widths_to_window();
+        self.notify_font_preferences_changed(cx);
+        self.schedule_ui_settings_persist(cx);
     }
 
     fn set_theme_mode(
@@ -1182,7 +1372,7 @@ impl GitCometView {
         }
 
         let target = if collapsed {
-            px(PANE_COLLAPSED_PX)
+            self.pane_collapsed_width()
         } else {
             self.sidebar_width
         };
@@ -1210,7 +1400,7 @@ impl GitCometView {
         }
 
         let target = if collapsed {
-            px(PANE_COLLAPSED_PX)
+            self.pane_collapsed_width()
         } else {
             self.details_width
         };
@@ -1235,7 +1425,7 @@ impl GitCometView {
 
         div()
             .id(id)
-            .w(px(PANE_RESIZE_HANDLE_PX))
+            .w(self.pane_resize_handle_width())
             .h_full()
             .flex()
             .items_center()
@@ -1658,7 +1848,10 @@ impl Render for GitCometView {
 
         let decorations = window.window_decorations();
         let (tiling, client_inset) = match decorations {
-            Decorations::Client { tiling } => (Some(tiling), CLIENT_SIDE_DECORATION_INSET),
+            Decorations::Client { tiling } => (
+                Some(tiling),
+                chrome::client_side_decoration_inset(self.ui_scale_percent),
+            ),
             Decorations::Server => (None, px(0.0)),
         };
         window.set_client_inset(client_inset);
@@ -1694,7 +1887,7 @@ impl Render for GitCometView {
         if show_custom_window_chrome {
             body = body.child(stable_cached_fixed_height_view(
                 self.title_bar.clone(),
-                TITLE_BAR_HEIGHT,
+                chrome::title_bar_height(self.ui_scale_percent),
             ));
         }
 
@@ -2019,6 +2212,7 @@ impl Render for GitCometView {
             .cursor(cursor)
             .text_color(theme.colors.text);
         root = root.relative();
+        root = root.child(UiScaleScrollCapture { view: cx.entity() });
 
         root = root.on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, window, cx| {
             this.last_mouse_pos = e.position;
@@ -2034,7 +2228,12 @@ impl Render for GitCometView {
             };
 
             let size = window.viewport_size();
-            let next = resize_edge(e.position, CLIENT_SIDE_DECORATION_INSET, size, tiling);
+            let next = resize_edge(
+                e.position,
+                chrome::client_side_decoration_inset(this.ui_scale_percent),
+                size,
+                tiling,
+            );
             if next != this.hover_resize_edge {
                 this.hover_resize_edge = next;
                 cx.notify();
@@ -2043,13 +2242,18 @@ impl Render for GitCometView {
         if tiling.is_some() {
             root = root.on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|_this, e: &MouseDownEvent, window, cx| {
+                cx.listener(|this, e: &MouseDownEvent, window, cx| {
                     let Decorations::Client { tiling } = window.window_decorations() else {
                         return;
                     };
 
                     let size = window.viewport_size();
-                    let edge = resize_edge(e.position, CLIENT_SIDE_DECORATION_INSET, size, tiling);
+                    let edge = resize_edge(
+                        e.position,
+                        chrome::client_side_decoration_inset(this.ui_scale_percent),
+                        size,
+                        tiling,
+                    );
                     let Some(edge) = edge else {
                         return;
                     };
@@ -2062,7 +2266,12 @@ impl Render for GitCometView {
             self.hover_resize_edge = None;
         }
 
-        root = root.child(window_frame(theme, decorations, body.into_any_element()));
+        root = root.child(chrome::window_frame_scaled(
+            theme,
+            decorations,
+            body.into_any_element(),
+            self.ui_scale_percent,
+        ));
 
         root = root.child(stable_overlay_view(self.toast_host.clone()));
 

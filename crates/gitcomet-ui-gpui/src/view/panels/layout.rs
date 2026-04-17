@@ -432,7 +432,9 @@ impl DetailsPaneView {
                 .flex()
                 .items_center()
                 .justify_between()
-                .h(px(components::CONTROL_HEIGHT_MD_PX))
+                .h(components::control_height_md(
+                    crate::ui_scale::current(cx).percent,
+                ))
                 .px_2()
                 .bg(theme.colors.surface_bg_elevated)
                 .border_b_1()
@@ -916,6 +918,7 @@ impl DetailsPaneView {
         let repo_key = repo_id.map(|id| id.0).unwrap_or(0);
         let split_change_tracking = self.change_tracking_view == ChangeTrackingView::SplitUntracked;
         let icon_muted = with_alpha(theme.colors.accent, if theme.is_dark { 0.72 } else { 0.82 });
+        let ui_scale_percent = crate::ui_scale::current(cx).percent;
 
         let stage_all = components::Button::new("stage_all", "Stage all changes")
             .style(components::ButtonStyle::Subtle)
@@ -1203,7 +1206,7 @@ impl DetailsPaneView {
                 .flex()
                 .items_center()
                 .justify_between()
-                .h(px(components::CONTROL_HEIGHT_MD_PX))
+                .h(components::control_height_md(ui_scale_percent))
                 .px_2()
                 .bg(theme.colors.surface_bg_elevated)
                 .border_b_1()
@@ -1864,6 +1867,7 @@ impl DetailsPaneView {
 
     pub(in super::super) fn commit_box(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
         let theme = self.theme;
+        let ui_scale_percent = crate::ui_scale::current(cx).percent;
         let commit_in_flight = self
             .active_repo()
             .is_some_and(|repo| repo.commit_in_flight > 0);
@@ -1911,7 +1915,7 @@ impl DetailsPaneView {
                         })
                         .style(components::ButtonStyle::Filled)
                         .disabled(!can_submit_commit)
-                        .render(theme)
+                        .render_scaled(theme, ui_scale_percent)
                         .debug_selector(|| "commit_button".to_string())
                         .on_click(cx.listener(|this, _e: &ClickEvent, _w, cx| {
                             let Some(repo_id) = this.active_repo_id() else {

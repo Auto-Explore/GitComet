@@ -1,8 +1,23 @@
 use super::*;
+use crate::ui_scale;
 
-pub(super) const CLIENT_SIDE_DECORATION_INSET: Pixels = px(10.0);
-pub(super) const TITLE_BAR_HEIGHT: Pixels = px(34.0);
-const MACOS_TRAFFIC_LIGHTS_SAFE_INSET: Pixels = px(78.0);
+pub(super) const CLIENT_SIDE_DECORATION_INSET_PX: f32 = 10.0;
+pub(super) const TITLE_BAR_HEIGHT_PX: f32 = 34.0;
+const MACOS_TRAFFIC_LIGHTS_SAFE_INSET_PX: f32 = 78.0;
+#[cfg(test)]
+pub(super) const CLIENT_SIDE_DECORATION_INSET: Pixels = px(CLIENT_SIDE_DECORATION_INSET_PX);
+
+pub(super) fn client_side_decoration_inset(ui_scale_percent: u32) -> Pixels {
+    ui_scale::design_px_from_percent(CLIENT_SIDE_DECORATION_INSET_PX, ui_scale_percent)
+}
+
+pub(super) fn title_bar_height(_ui_scale_percent: u32) -> Pixels {
+    px(TITLE_BAR_HEIGHT_PX)
+}
+
+fn macos_traffic_lights_safe_inset(_ui_scale_percent: u32) -> Pixels {
+    px(MACOS_TRAFFIC_LIGHTS_SAFE_INSET_PX)
+}
 
 pub(super) struct TitleBarView {
     theme: AppTheme,
@@ -116,6 +131,7 @@ fn titlebar_app_icon(theme: AppTheme) -> AnyElement {
         .into_any_element()
 }
 
+#[cfg(test)]
 pub(super) fn titlebar_control_button(
     theme: AppTheme,
     id: &'static str,
@@ -123,12 +139,30 @@ pub(super) fn titlebar_control_button(
     hover_bg: gpui::Rgba,
     active_bg: gpui::Rgba,
 ) -> gpui::Div {
-    const TITLEBAR_CONTROL_HITBOX_WIDTH: Pixels = px(32.0);
-    const TITLEBAR_CONTROL_VISUAL_SIZE: Pixels = px(26.0);
+    titlebar_control_button_scaled(
+        theme,
+        id,
+        icon,
+        hover_bg,
+        active_bg,
+        ui_scale::DEFAULT_UI_SCALE_PERCENT,
+    )
+}
+
+pub(super) fn titlebar_control_button_scaled(
+    theme: AppTheme,
+    id: &'static str,
+    icon: gpui::Svg,
+    hover_bg: gpui::Rgba,
+    active_bg: gpui::Rgba,
+    _ui_scale_percent: u32,
+) -> gpui::Div {
+    let hitbox_width = px(32.0);
+    let visual_size = px(26.0);
 
     div()
         .h_full()
-        .w(TITLEBAR_CONTROL_HITBOX_WIDTH)
+        .w(hitbox_width)
         .flex()
         .items_center()
         .justify_center()
@@ -146,7 +180,7 @@ pub(super) fn titlebar_control_button(
                 .active(move |s| s.bg(active_bg))
                 .child(
                     div()
-                        .size(TITLEBAR_CONTROL_VISUAL_SIZE)
+                        .size(visual_size)
                         .flex()
                         .items_center()
                         .justify_center()
@@ -169,11 +203,16 @@ fn lighten(color: gpui::Rgba, amount: f32) -> gpui::Rgba {
     mix(color, gpui::rgba(0xFFFFFFFF), amount)
 }
 
+#[cfg(test)]
 fn window_frame_visual_inset() -> Pixels {
+    window_frame_visual_inset_scaled(ui_scale::DEFAULT_UI_SCALE_PERCENT)
+}
+
+fn window_frame_visual_inset_scaled(ui_scale_percent: u32) -> Pixels {
     if cfg!(target_os = "macos") {
         px(0.0)
     } else {
-        CLIENT_SIDE_DECORATION_INSET
+        client_side_decoration_inset(ui_scale_percent)
     }
 }
 
@@ -341,6 +380,7 @@ impl TitleBarView {
 impl Render for TitleBarView {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         let theme = self.theme;
+        let ui_scale_percent = ui_scale::current(cx).percent;
         let is_macos = cfg!(target_os = "macos");
         let workspace_actions_enabled = self.workspace_actions_enabled;
         let app_menu_open = self.app_menu_open;
@@ -370,7 +410,7 @@ impl Render for TitleBarView {
             .id("app_menu")
             .debug_selector(|| "app_menu".to_string())
             .h_full()
-            .pl_1()
+            .pl(px(4.0))
             .flex()
             .items_center()
             .cursor(CursorStyle::PointingHand)
@@ -422,16 +462,17 @@ impl Render for TitleBarView {
                 .child(
                     div()
                         .h(px(26.0))
-                        .px_2()
+                        .px(px(8.0))
                         .flex()
                         .items_center()
-                        .gap_1()
+                        .gap(px(4.0))
                         .child(titlebar_app_icon(theme))
                         .child(
                             div()
                                 .flex()
                                 .items_center()
-                                .text_sm()
+                                .text_size(px(13.0))
+                                .line_height(px(16.0))
                                 .font_weight(FontWeight::BOLD)
                                 .text_color(theme.colors.text)
                                 .whitespace_nowrap()
@@ -454,7 +495,7 @@ impl Render for TitleBarView {
             .flex()
             .items_center()
             .min_w(px(0.0))
-            .px_2()
+            .px(px(8.0))
             .window_control_area(WindowControlArea::Drag)
             .on_click(cx.listener(|this, e: &ClickEvent, window, cx| {
                 if !should_handle_titlebar_double_click(e.click_count(), e.standard_click()) {
@@ -503,12 +544,13 @@ impl Render for TitleBarView {
         let min_hover = with_alpha(theme.colors.text, if theme.is_dark { 0.10 } else { 0.08 });
         let min_active = with_alpha(theme.colors.text, if theme.is_dark { 0.16 } else { 0.12 });
         let min_tooltip: SharedString = "Minimize window".into();
-        let min = titlebar_control_button(
+        let min = titlebar_control_button_scaled(
             theme,
             "win_min_btn",
             titlebar_control_icon("icons/generic_minimize.svg", theme.colors.accent),
             min_hover,
             min_active,
+            ui_scale_percent,
         )
         .id("win_min")
         .debug_selector(|| "titlebar_win_min".to_string())
@@ -540,12 +582,13 @@ impl Render for TitleBarView {
         };
         let max_hover = with_alpha(theme.colors.text, if theme.is_dark { 0.10 } else { 0.08 });
         let max_active = with_alpha(theme.colors.text, if theme.is_dark { 0.16 } else { 0.12 });
-        let max = titlebar_control_button(
+        let max = titlebar_control_button_scaled(
             theme,
             "win_max_btn",
             titlebar_control_icon(max_icon, theme.colors.accent),
             max_hover,
             max_active,
+            ui_scale_percent,
         )
         .id("win_max")
         .debug_selector(|| "titlebar_win_max".to_string())
@@ -569,12 +612,13 @@ impl Render for TitleBarView {
         let close_hover = with_alpha(theme.colors.danger, if theme.is_dark { 0.45 } else { 0.28 });
         let close_active = with_alpha(theme.colors.danger, if theme.is_dark { 0.60 } else { 0.40 });
         let close_tooltip: SharedString = "Close window".into();
-        let close = titlebar_control_button(
+        let close = titlebar_control_button_scaled(
             theme,
             "win_close_btn",
             titlebar_control_icon("icons/generic_close.svg", theme.colors.danger),
             close_hover,
             close_active,
+            ui_scale_percent,
         )
         .id("win_close")
         .debug_selector(|| "titlebar_win_close".to_string())
@@ -626,7 +670,8 @@ impl Render for TitleBarView {
             .bg(free_badge_bg)
             .border_1()
             .border_color(free_badge_border)
-            .text_xs()
+            .text_size(px(11.0))
+            .line_height(px(12.0))
             .font_weight(FontWeight::NORMAL)
             .text_color(free_badge_text)
             .hover(move |s| {
@@ -658,20 +703,21 @@ impl Render for TitleBarView {
         let macos_brand = div()
             .id("title_bar_macos_brand")
             .h_full()
-            .pl_2()
+            .pl(px(8.0))
             .flex()
             .items_center()
             .child(
                 div()
                     .h(px(26.0))
-                    .px_2()
+                    .px(px(8.0))
                     .flex()
                     .items_center()
-                    .gap_1()
+                    .gap(px(4.0))
                     .child(titlebar_app_icon(theme))
                     .child(
                         div()
-                            .text_sm()
+                            .text_size(px(13.0))
+                            .line_height(px(16.0))
                             .font_weight(FontWeight::BOLD)
                             .text_color(theme.colors.text)
                             .whitespace_nowrap()
@@ -683,8 +729,10 @@ impl Render for TitleBarView {
             .flex()
             .items_center()
             .h_full()
-            .gap_0p5()
-            .when(is_macos, |d| d.pl(MACOS_TRAFFIC_LIGHTS_SAFE_INSET))
+            .gap(px(2.0))
+            .when(is_macos, |d| {
+                d.pl(macos_traffic_lights_safe_inset(ui_scale_percent))
+            })
             .when(is_macos, |d| d.child(macos_brand))
             .when(!is_macos && workspace_actions_enabled, |d| {
                 d.child(menu_toggle).child(windows_brand())
@@ -697,7 +745,7 @@ impl Render for TitleBarView {
             .id("title_bar")
             .flex()
             .items_center()
-            .h(TITLE_BAR_HEIGHT)
+            .h(title_bar_height(ui_scale_percent))
             .w_full()
             .bg(bar_bg)
             .border_b_1()
@@ -708,22 +756,37 @@ impl Render for TitleBarView {
                 div()
                     .flex()
                     .items_center()
-                    .gap_1()
+                    .gap(px(4.0))
                     .child(free_badge)
                     .when(!is_macos, |d| d.child(min).child(max).child(close))
-                    .pr_2(),
+                    .pr(px(8.0)),
             )
             .into_any_element()
     }
 }
 
+#[cfg(test)]
 pub(crate) fn window_frame(
     theme: AppTheme,
     decorations: Decorations,
     content: AnyElement,
 ) -> AnyElement {
+    window_frame_scaled(
+        theme,
+        decorations,
+        content,
+        ui_scale::DEFAULT_UI_SCALE_PERCENT,
+    )
+}
+
+pub(crate) fn window_frame_scaled(
+    theme: AppTheme,
+    decorations: Decorations,
+    content: AnyElement,
+    ui_scale_percent: u32,
+) -> AnyElement {
     let suppress_frame = should_suppress_window_frame(decorations);
-    let frame_inset = window_frame_visual_inset();
+    let frame_inset = window_frame_visual_inset_scaled(ui_scale_percent);
     let mut outer = div()
         .id("window_frame")
         .size_full()

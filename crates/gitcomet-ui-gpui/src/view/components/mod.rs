@@ -10,12 +10,15 @@ mod toast;
 mod tokens;
 
 pub use button::{Button, ButtonStyle};
-pub use containers::{empty_state, split_columns_header};
+#[allow(unused_imports)]
+pub use containers::{empty_state, split_columns_header, split_columns_header_scaled};
 #[cfg(test)]
 pub use containers::{panel, pill};
+#[allow(unused_imports)]
 pub use context_menu::{
-    context_menu, context_menu_entry, context_menu_header, context_menu_label,
-    context_menu_separator,
+    context_menu, context_menu_entry, context_menu_header, context_menu_header_scaled,
+    context_menu_label, context_menu_label_scaled, context_menu_separator,
+    context_menu_separator_scaled,
 };
 pub use diff_stat::diff_stat;
 pub use picker_prompt::PickerPrompt;

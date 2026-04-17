@@ -2,6 +2,8 @@ use super::*;
 
 pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>) -> gpui::Div {
     let theme = this.theme;
+    let ui_scale_percent = super::popover_ui_scale_percent(cx);
+    let scaled_px = |value: f32| super::popover_scaled_px_from_percent(value, ui_scale_percent);
     let recent_repos = session::load().recent_repos;
     let labels = recent_repos
         .iter()
@@ -14,19 +16,28 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
             components::PickerPrompt::new(search, this.picker_prompt_scroll.clone())
                 .items(labels)
                 .empty_text("No recent repositories")
-                .max_height(px(320.0))
-                .render(theme, cx, move |this, ix, _event, _window, cx| {
-                    let Some(path) = recent_repos.get(ix).cloned() else {
-                        return;
-                    };
+                .max_height(scaled_px(320.0))
+                .render_scaled(
+                    theme,
+                    ui_scale_percent,
+                    cx,
+                    move |this, ix, _event, _window, cx| {
+                        let Some(path) = recent_repos.get(ix).cloned() else {
+                            return;
+                        };
 
-                    select_recent_repository(this, path, cx);
-                }),
+                        select_recent_repository(this, path, cx);
+                    },
+                ),
         )
-        .w(px(480.0))
-        .max_w(px(860.0))
+        .w(scaled_px(480.0))
+        .max_w(scaled_px(860.0))
     } else {
-        let mut menu = div().flex().flex_col().min_w(px(480.0)).max_w(px(860.0));
+        let mut menu = div()
+            .flex()
+            .flex_col()
+            .min_w(scaled_px(480.0))
+            .max_w(scaled_px(860.0));
         for (ix, label) in labels.into_iter().enumerate() {
             let Some(path) = recent_repos.get(ix).cloned() else {
                 continue;
@@ -35,6 +46,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                 components::context_menu_entry(
                     ("recent_repo_item", ix),
                     theme,
+                    ui_scale_percent,
                     false,
                     false,
                     None,

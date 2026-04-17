@@ -73,8 +73,6 @@ GitComet requires a local Git installation of `2.50` or newer.
 
 GitComet started from frustration with existing tools on huge codebases like Chromium. We could not find a product that stays responsive and functional when browsing large repositories and file diffs.
 
-Measured on Linux 6.19.6-zen (x64), Ryzen 5950x, 128GB DDR4. Detailed test steps will be published.
-
 ### Editions (planned)
 
 #### Open Source

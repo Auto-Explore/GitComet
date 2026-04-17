@@ -104,12 +104,14 @@ fn wrapper_apis_use_session_file_env_when_set() {
     session::persist_ui_settings(UiSettings {
         window_width: Some(900),
         window_height: Some(700),
+        ui_scale_percent: Some(125),
         ..UiSettings::default()
     })
     .expect("persist ui settings through wrapper");
     let loaded = session::load();
     assert_eq!(loaded.window_width, Some(900));
     assert_eq!(loaded.window_height, Some(700));
+    assert_eq!(loaded.ui_scale_percent, Some(125));
 
     session::persist_repo_history_scope(repo, LogScope::CurrentBranch)
         .expect("persist history scope through wrapper");
@@ -292,6 +294,7 @@ fn persist_ui_settings_to_path_updates_optional_fields_and_requires_both_window_
             details_width: Some(84),
             repo_sidebar_collapsed_items: None,
             theme_mode: Some("light".to_string()),
+            ui_scale_percent: Some(110),
             ui_font_family: Some(".SystemUIFont".to_string()),
             editor_font_family: Some("JetBrains Mono".to_string()),
             use_font_ligatures: Some(false),
@@ -320,6 +323,7 @@ fn persist_ui_settings_to_path_updates_optional_fields_and_requires_both_window_
     assert_eq!(loaded.sidebar_width, Some(42));
     assert_eq!(loaded.details_width, Some(84));
     assert_eq!(loaded.theme_mode.as_deref(), Some("light"));
+    assert_eq!(loaded.ui_scale_percent, Some(110));
     assert_eq!(loaded.ui_font_family.as_deref(), Some(".SystemUIFont"));
     assert_eq!(loaded.editor_font_family.as_deref(), Some("JetBrains Mono"));
     assert_eq!(loaded.use_font_ligatures, Some(false));

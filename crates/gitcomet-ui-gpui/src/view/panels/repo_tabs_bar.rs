@@ -29,10 +29,12 @@ struct RepoTabDragGhost {
 }
 
 impl Render for RepoTabDragGhost {
-    fn render(&mut self, _window: &mut Window, _cx: &mut gpui::Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        let ui_scale_percent = ui_scale::current(cx).percent;
+        let scaled_px = |value| ui_scale::design_px_from_percent(value, ui_scale_percent);
         div()
             .px_2()
-            .h(px(28.0))
+            .h(scaled_px(28.0))
             .flex()
             .items_center()
             .rounded(px(self.theme.radii.pill))
@@ -264,10 +266,13 @@ impl RepoTabsBarView {
 impl Render for RepoTabsBarView {
     fn render(&mut self, _window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         let theme = self.theme;
+        let ui_scale_percent = ui_scale::current(cx).percent;
+        let scaled_px = |value| ui_scale::design_px_from_percent(value, ui_scale_percent);
         let active = self.active_repo_id();
         let repos_len = self.state.repos.len();
         let active_ix = active.and_then(|id| self.state.repos.iter().position(|r| r.id == id));
-        let spinner = |id: (&'static str, u64), color: gpui::Rgba| svg_spinner(id, color, px(12.0));
+        let spinner =
+            |id: (&'static str, u64), color: gpui::Rgba| svg_spinner(id, color, scaled_px(12.0));
 
         let mut bar = components::TabBar::new("repo_tab_bar");
         for (ix, repo) in self.state.repos.iter().enumerate() {
@@ -306,7 +311,7 @@ impl Render for RepoTabsBarView {
                 .flex()
                 .items_center()
                 .justify_center()
-                .size(px(14.0))
+                .size(scaled_px(14.0))
                 .rounded(px(theme.radii.row))
                 .cursor_pointer()
                 .hover(move |s| s.bg(with_alpha(theme.colors.danger, 0.18)))
@@ -314,7 +319,7 @@ impl Render for RepoTabsBarView {
                 .child(svg_icon(
                     "icons/repo_tab_close.svg",
                     theme.colors.danger,
-                    px(12.0),
+                    scaled_px(12.0),
                 ))
                 .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
                     cx.stop_propagation();
@@ -349,12 +354,12 @@ impl Render for RepoTabsBarView {
             let tab_label = div()
                 .flex()
                 .items_center()
-                .gap(px(6.0))
+                .gap(scaled_px(6.0))
                 .min_w(px(0.0))
                 .child(
                     div()
-                        .w(px(12.0))
-                        .h(px(12.0))
+                        .w(scaled_px(12.0))
+                        .h(scaled_px(12.0))
                         .flex()
                         .items_center()
                         .justify_center()
@@ -374,7 +379,7 @@ impl Render for RepoTabsBarView {
                             d.child(svg_icon(
                                 "icons/warning.svg",
                                 theme.colors.warning,
-                                px(12.0),
+                                scaled_px(12.0),
                             ))
                         }),
                 )
@@ -389,7 +394,7 @@ impl Render for RepoTabsBarView {
 
             let tab = tab
                 .child(tab_label)
-                .render(theme)
+                .render(theme, ui_scale_percent)
                 .debug_selector(move || format!("repo_tab_{}", repo_id.0))
                 .on_drag(
                     RepoTabDrag {
@@ -468,41 +473,54 @@ impl Render for RepoTabsBarView {
             bar = bar.tab(tab);
         }
 
-        let icon = |path: &'static str| svg_icon(path, theme.colors.accent, px(14.0));
+        let repo_bar_action_button =
+            |id: &'static str, icon_path: &'static str, tooltip: SharedString| {
+                div()
+                    .id(id)
+                    .h_full()
+                    .w(scaled_px(28.0))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor(CursorStyle::PointingHand)
+                    .child(
+                        div()
+                            .size(scaled_px(26.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(theme.radii.pill))
+                            .hover(move |s| s.bg(theme.colors.hover))
+                            .child(svg_icon(icon_path, theme.colors.accent, scaled_px(14.0))),
+                    )
+                    .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
+                        if *hovering {
+                            this.set_tooltip_text_if_changed(Some(tooltip.clone()), cx);
+                        } else {
+                            this.clear_tooltip_if_matches(&tooltip, cx);
+                        }
+                    }))
+            };
 
         let root_view = self.root_view.clone();
-        let open_repo = components::Button::new("open_repo", "")
-            .start_slot(icon("icons/folder.svg"))
-            .style(components::ButtonStyle::Subtle)
-            .on_click(theme, cx, move |_this, _e, window, cx| {
-                let _ = root_view.update(cx, |root, cx| root.prompt_open_repo(window, cx));
-            })
-            .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
-                let text: SharedString = "Open repository".into();
-                if *hovering {
-                    this.set_tooltip_text_if_changed(Some(text), cx);
-                } else {
-                    this.clear_tooltip_if_matches(&text, cx);
-                }
-            }));
+        let open_repo_tooltip: SharedString = "Open repository".into();
+        let open_repo =
+            repo_bar_action_button("open_repo", "icons/folder.svg", open_repo_tooltip.clone())
+                .on_click(cx.listener(move |_this, _e: &ClickEvent, window, cx| {
+                    cx.stop_propagation();
+                    let _ = root_view.update(cx, |root, cx| root.prompt_open_repo(window, cx));
+                }));
 
         let root_view = self.root_view.clone();
-        let clone_repo = components::Button::new("clone_repo", "")
-            .start_slot(icon("icons/cloud.svg"))
-            .style(components::ButtonStyle::Subtle)
-            .on_click(theme, cx, move |_this, e, window, cx| {
-                let _ = root_view.update(cx, |root, cx| {
-                    root.open_popover_at(PopoverKind::CloneRepo, e.position(), window, cx);
-                });
-            })
-            .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
-                let text: SharedString = "Clone repository".into();
-                if *hovering {
-                    this.set_tooltip_text_if_changed(Some(text), cx);
-                } else {
-                    this.clear_tooltip_if_matches(&text, cx);
-                }
-            }));
+        let clone_repo_tooltip: SharedString = "Clone repository".into();
+        let clone_repo =
+            repo_bar_action_button("clone_repo", "icons/cloud.svg", clone_repo_tooltip.clone())
+                .on_click(cx.listener(move |_this, e: &ClickEvent, window, cx| {
+                    cx.stop_propagation();
+                    let _ = root_view.update(cx, |root, cx| {
+                        root.open_popover_at(PopoverKind::CloneRepo, e.position(), window, cx);
+                    });
+                }));
 
         bar.end_child(
             div()
@@ -516,7 +534,7 @@ impl Render for RepoTabsBarView {
                 .child(open_repo)
                 .child(clone_repo),
         )
-        .render(theme)
+        .render(theme, ui_scale_percent)
         .can_drop(|dragged, _window, _cx| dragged.downcast_ref::<RepoTabDrag>().is_some())
         .on_drop(cx.listener(|this, drag: &RepoTabDrag, _w, cx| {
             // Drop on the bar (but not on a specific tab) -> move to end.

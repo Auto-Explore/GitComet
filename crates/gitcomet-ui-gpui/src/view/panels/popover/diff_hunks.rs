@@ -2,6 +2,8 @@ use super::*;
 
 pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>) -> gpui::Div {
     let theme = this.theme;
+    let ui_scale_percent = super::popover_ui_scale_percent(cx);
+    let scaled_px = |value: f32| super::popover_scaled_px_from_percent(value, ui_scale_percent);
     let close = cx.listener(|this, _e: &ClickEvent, _w, cx| this.close_popover(cx));
 
     let pane = this.main_pane.read(cx);
@@ -69,8 +71,8 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
         components::PickerPrompt::new(search, this.picker_prompt_scroll.clone())
             .items(items)
             .empty_text("No hunks")
-            .max_height(px(260.0))
-            .render(theme, cx, move |this, ix, _e, _w, cx| {
+            .max_height(scaled_px(260.0))
+            .render_scaled(theme, ui_scale_percent, cx, move |this, ix, _e, _w, cx| {
                 let Some(&target) = targets.get(ix) else {
                     return;
                 };
@@ -84,28 +86,38 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                 this.popover_anchor = None;
                 cx.notify();
             })
-            .w(px(520.0))
+            .w(scaled_px(520.0))
             .child(div().border_t_1().border_color(theme.colors.border))
             .child(
                 div()
                     .id("diff_hunks_close")
-                    .px_2()
-                    .py_1()
+                    .min_h(components::control_height_md(ui_scale_percent))
+                    .px(scaled_px(8.0))
+                    .py(scaled_px(4.0))
                     .hover(move |s| s.bg(theme.colors.hover))
                     .child("Close")
                     .on_click(close),
             )
     } else {
-        let mut menu = div().flex().flex_col().min_w(px(520.0));
+        let mut menu = div().flex().flex_col().min_w(scaled_px(520.0));
         for (ix, label) in items.into_iter().enumerate() {
             let target = targets.get(ix).copied().unwrap_or(0);
             menu = menu.child(
                 div()
                     .id(("diff_hunk_item", ix))
-                    .px_2()
-                    .py_1()
+                    .min_h(components::control_height_md(ui_scale_percent))
+                    .px(scaled_px(8.0))
+                    .py(scaled_px(4.0))
+                    .flex()
+                    .items_center()
                     .hover(move |s| s.bg(theme.colors.hover))
-                    .child(div().text_sm().line_clamp(1).child(label))
+                    .child(
+                        div()
+                            .text_sm()
+                            .line_height(scaled_px(18.0))
+                            .line_clamp(1)
+                            .child(label),
+                    )
                     .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
                         this.main_pane.update(cx, |pane, cx| {
                             pane.scroll_diff_to_item(target, gpui::ScrollStrategy::Top);
@@ -122,8 +134,11 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
         menu.child(
             div()
                 .id("diff_hunks_close")
-                .px_2()
-                .py_1()
+                .min_h(components::control_height_md(ui_scale_percent))
+                .px(scaled_px(8.0))
+                .py(scaled_px(4.0))
+                .flex()
+                .items_center()
                 .hover(move |s| s.bg(theme.colors.hover))
                 .child("Close")
                 .on_click(close),

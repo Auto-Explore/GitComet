@@ -7,12 +7,14 @@ pub(super) fn panel(
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
     let theme = this.theme;
+    let ui_scale_percent = super::popover_ui_scale_percent(cx);
+    let scaled_px = |value: f32| super::popover_scaled_px_from_percent(value, ui_scale_percent);
     let repo = this.state.repos.iter().find(|r| r.id == repo_id);
     let title: SharedString = path.display().to_string().into();
 
     let header = div()
-        .px_2()
-        .py_1()
+        .px(scaled_px(8.0))
+        .py(scaled_px(4.0))
         .flex()
         .items_center()
         .justify_between()
@@ -31,6 +33,7 @@ pub(super) fn panel(
                     div()
                         .text_xs()
                         .text_color(theme.colors.text_muted)
+                        .line_height(scaled_px(14.0))
                         .line_clamp(1)
                         .whitespace_nowrap()
                         .child(title),
@@ -47,15 +50,19 @@ pub(super) fn panel(
         );
 
     let body: AnyElement = match repo.map(|r| &r.history_state.file_history) {
-        None => components::context_menu_label(theme, "No repository").into_any_element(),
+        None => components::context_menu_label_scaled(theme, ui_scale_percent, "No repository")
+            .into_any_element(),
         Some(Loadable::Loading) => {
-            components::context_menu_label(theme, "Loading").into_any_element()
+            components::context_menu_label_scaled(theme, ui_scale_percent, "Loading")
+                .into_any_element()
         }
         Some(Loadable::Error(e)) => {
-            components::context_menu_label(theme, e.clone()).into_any_element()
+            components::context_menu_label_scaled(theme, ui_scale_percent, e.clone())
+                .into_any_element()
         }
         Some(Loadable::NotLoaded) => {
-            components::context_menu_label(theme, "Not loaded").into_any_element()
+            components::context_menu_label_scaled(theme, ui_scale_percent, "Not loaded")
+                .into_any_element()
         }
         Some(Loadable::Ready(page)) => {
             let commit_ids = page
@@ -77,8 +84,8 @@ pub(super) fn panel(
                 components::PickerPrompt::new(search, this.picker_prompt_scroll.clone())
                     .items(items)
                     .empty_text("No commits")
-                    .max_height(px(340.0))
-                    .render(theme, cx, move |this, ix, _e, _w, cx| {
+                    .max_height(scaled_px(340.0))
+                    .render_scaled(theme, ui_scale_percent, cx, move |this, ix, _e, _w, cx| {
                         let Some(commit_id) = commit_ids.get(ix).cloned() else {
                             return;
                         };
@@ -99,8 +106,12 @@ pub(super) fn panel(
                     })
                     .into_any_element()
             } else {
-                components::context_menu_label(theme, "Search input not initialized")
-                    .into_any_element()
+                components::context_menu_label_scaled(
+                    theme,
+                    ui_scale_percent,
+                    "Search input not initialized",
+                )
+                .into_any_element()
             }
         }
     };
@@ -110,8 +121,8 @@ pub(super) fn panel(
         div()
             .flex()
             .flex_col()
-            .w(px(520.0))
-            .max_w(px(820.0))
+            .w(scaled_px(520.0))
+            .max_w(scaled_px(820.0))
             .child(header)
             .child(div().border_t_1().border_color(theme.colors.border))
             .child(body),

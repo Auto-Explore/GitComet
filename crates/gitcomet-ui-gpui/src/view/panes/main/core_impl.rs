@@ -846,7 +846,13 @@ impl MainPaneView {
                 cx,
             );
             input.set_suppress_right_click(true);
-            input.set_line_height(Some(px(20.0)), cx);
+            input.set_line_height(
+                Some(ui_scale::design_px_from_percent(
+                    20.0,
+                    ui_scale::current(cx).percent,
+                )),
+                cx,
+            );
             input
         });
 
@@ -915,11 +921,13 @@ impl MainPaneView {
         let diff_panel_focus_handle = cx.focus_handle().tab_index(0).tab_stop(false);
 
         let last_window_size = window.viewport_size();
+        let ui_scale_percent = ui_scale::current(cx).percent;
         let history_view = cx.new(|cx| {
             super::HistoryView::new(
                 Arc::clone(&store),
                 ui_model.clone(),
                 theme,
+                ui_scale_percent,
                 date_time_format,
                 timezone,
                 show_timezone,
@@ -1212,6 +1220,24 @@ impl MainPaneView {
         }
         self.history_view
             .update(cx, |view, cx| view.set_theme(theme, cx));
+        cx.notify();
+    }
+
+    pub(in crate::view) fn apply_ui_scale_percent(
+        &mut self,
+        previous_percent: u32,
+        next_percent: u32,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.conflict_resolver_input.update(cx, |input, cx| {
+            input.set_line_height(
+                Some(ui_scale::design_px_from_percent(20.0, next_percent)),
+                cx,
+            );
+        });
+        self.history_view.update(cx, |view, cx| {
+            view.apply_ui_scale_percent(previous_percent, next_percent, cx);
+        });
         cx.notify();
     }
 

@@ -103,6 +103,17 @@ pub(in super::super) struct PopoverHost {
     submodule_force_enabled: bool,
 }
 
+pub(in super::super) fn popover_ui_scale_percent(cx: &mut gpui::Context<PopoverHost>) -> u32 {
+    crate::ui_scale::current(cx).percent
+}
+
+pub(in super::super) fn popover_scaled_px_from_percent(
+    value: f32,
+    ui_scale_percent: u32,
+) -> Pixels {
+    crate::ui_scale::design_px_from_percent(value, ui_scale_percent)
+}
+
 impl PopoverHost {
     fn sync_titlebar_app_menu_state(&self, cx: &mut gpui::Context<Self>) {
         let root_view = self.root_view.clone();
@@ -851,6 +862,7 @@ impl PopoverHost {
                 | PopoverKind::PushPicker
                 | PopoverKind::HistoryBranchFilter { .. }
                 | PopoverKind::ChangeTrackingSettings
+                | PopoverKind::UiScalePicker
                 | PopoverKind::DiffHunkMenu { .. }
                 | PopoverKind::DiffEditorMenu { .. }
                 | PopoverKind::ConflictResolverInputRowMenu { .. }
@@ -1337,6 +1349,8 @@ impl PopoverHost {
         cx: &mut gpui::Context<Self>,
     ) -> impl IntoElement {
         let theme = self.theme;
+        let ui_scale_percent = popover_ui_scale_percent(cx);
+        let scaled_px = |value: f32| popover_scaled_px_from_percent(value, ui_scale_percent);
         let anchor_source = self
             .popover_anchor
             .clone()
@@ -1345,8 +1359,8 @@ impl PopoverHost {
         let window_bounds = window.window_bounds().get_bounds();
         let window_w = window_bounds.size.width;
         let window_h = window_bounds.size.height;
-        let margin_x = px(16.0);
-        let margin_y = px(16.0);
+        let margin_x = scaled_px(16.0);
+        let margin_y = scaled_px(16.0);
 
         let is_app_menu = matches!(&kind, PopoverKind::AppMenu);
         let is_create_branch_or_stash_prompt = matches!(
@@ -1361,6 +1375,7 @@ impl PopoverHost {
                 | PopoverKind::PushPicker
                 | PopoverKind::HistoryBranchFilter { .. }
                 | PopoverKind::ChangeTrackingSettings
+                | PopoverKind::UiScalePicker
                 | PopoverKind::DiffHunkMenu { .. }
                 | PopoverKind::DiffEditorMenu { .. }
                 | PopoverKind::ConflictResolverInputRowMenu { .. }
@@ -1439,7 +1454,8 @@ impl PopoverHost {
             | PopoverKind::ForceRemoveWorktreeConfirm { .. }
             | PopoverKind::PullReconcilePrompt { .. }
             | PopoverKind::HistoryBranchFilter { .. }
-            | PopoverKind::ChangeTrackingSettings => Corner::TopRight,
+            | PopoverKind::ChangeTrackingSettings
+            | PopoverKind::UiScalePicker => Corner::TopRight,
             _ => Corner::TopLeft,
         };
 
@@ -1457,7 +1473,7 @@ impl PopoverHost {
         // can end up constrained to a very narrow width (making inputs unusably small). Prefer the
         // side with more horizontal space in those cases.
         let mut anchor = anchor_for_corner(anchor_corner);
-        let min_preferred_w = px(640.0);
+        let min_preferred_w = scaled_px(640.0);
         let space_left = (anchor.x - margin_x).max(px(0.0));
         let space_right = (window_w - margin_x - anchor.x).max(px(0.0));
         match anchor_corner {
@@ -1522,8 +1538,8 @@ impl PopoverHost {
                             PopoverKind::remote(repo_id, RemotePopoverKind::Menu { name }),
                             cx,
                         )
-                        .min_w(px(160.0))
-                        .max_w(px(320.0)),
+                        .min_w(scaled_px(160.0))
+                        .max_w(scaled_px(320.0)),
                 },
                 RepoPopoverKind::Worktree(worktree_kind) => match worktree_kind {
                     WorktreePopoverKind::SectionMenu => self
@@ -1531,8 +1547,8 @@ impl PopoverHost {
                             PopoverKind::worktree(repo_id, WorktreePopoverKind::SectionMenu),
                             cx,
                         )
-                        .min_w(px(160.0))
-                        .max_w(px(320.0)),
+                        .min_w(scaled_px(160.0))
+                        .max_w(scaled_px(320.0)),
                     WorktreePopoverKind::Menu { path, branch } => self
                         .context_menu_view(
                             PopoverKind::worktree(
@@ -1541,8 +1557,8 @@ impl PopoverHost {
                             ),
                             cx,
                         )
-                        .min_w(px(160.0))
-                        .max_w(px(320.0)),
+                        .min_w(scaled_px(160.0))
+                        .max_w(scaled_px(320.0)),
                     WorktreePopoverKind::AddPrompt => worktree_add_prompt::panel(self, repo_id, cx),
                     WorktreePopoverKind::OpenPicker => {
                         worktree_open_picker::panel(self, repo_id, cx)
@@ -1560,15 +1576,15 @@ impl PopoverHost {
                             PopoverKind::submodule(repo_id, SubmodulePopoverKind::SectionMenu),
                             cx,
                         )
-                        .min_w(px(160.0))
-                        .max_w(px(320.0)),
+                        .min_w(scaled_px(160.0))
+                        .max_w(scaled_px(320.0)),
                     SubmodulePopoverKind::Menu { path } => self
                         .context_menu_view(
                             PopoverKind::submodule(repo_id, SubmodulePopoverKind::Menu { path }),
                             cx,
                         )
-                        .min_w(px(160.0))
-                        .max_w(px(320.0)),
+                        .min_w(scaled_px(160.0))
+                        .max_w(scaled_px(320.0)),
                     SubmodulePopoverKind::AddPrompt => {
                         submodule_add_prompt::panel(self, repo_id, cx)
                     }
@@ -1629,27 +1645,31 @@ impl PopoverHost {
             }
             PopoverKind::HistoryBranchFilter { repo_id } => self
                 .context_menu_view(PopoverKind::HistoryBranchFilter { repo_id }, cx)
-                .min_w(px(160.0))
-                .max_w(px(220.0)),
+                .min_w(scaled_px(160.0))
+                .max_w(scaled_px(220.0)),
             PopoverKind::ChangeTrackingSettings => self
                 .context_menu_view(PopoverKind::ChangeTrackingSettings, cx)
-                .min_w(px(220.0))
-                .max_w(px(320.0)),
+                .min_w(scaled_px(220.0))
+                .max_w(scaled_px(320.0)),
+            PopoverKind::UiScalePicker => self
+                .context_menu_view(PopoverKind::UiScalePicker, cx)
+                .min_w(scaled_px(160.0))
+                .max_w(scaled_px(220.0)),
             PopoverKind::PullPicker => self.context_menu_view(PopoverKind::PullPicker, cx),
             PopoverKind::PushPicker => self.context_menu_view(PopoverKind::PushPicker, cx),
             PopoverKind::DiffHunks => diff_hunks::panel(self, cx),
             PopoverKind::CommitMenu { repo_id, commit_id } => self
                 .context_menu_view(PopoverKind::CommitMenu { repo_id, commit_id }, cx)
-                .min_w(px(160.0))
-                .max_w(px(320.0)),
+                .min_w(scaled_px(160.0))
+                .max_w(scaled_px(320.0)),
             PopoverKind::TagMenu { repo_id, commit_id } => self
                 .context_menu_view(PopoverKind::TagMenu { repo_id, commit_id }, cx)
-                .min_w(px(160.0))
-                .max_w(px(320.0)),
+                .min_w(scaled_px(160.0))
+                .max_w(scaled_px(320.0)),
             PopoverKind::DiffHunkMenu { repo_id, src_ix } => self
                 .context_menu_view(PopoverKind::DiffHunkMenu { repo_id, src_ix }, cx)
-                .min_w(px(160.0))
-                .max_w(px(220.0)),
+                .min_w(scaled_px(160.0))
+                .max_w(scaled_px(220.0)),
             PopoverKind::DiffEditorMenu {
                 repo_id,
                 area,
@@ -1677,9 +1697,9 @@ impl PopoverHost {
                     },
                     cx,
                 )
-                .w(px(220.0))
-                .min_w(px(160.0))
-                .max_w(px(260.0)),
+                .w(scaled_px(220.0))
+                .min_w(scaled_px(160.0))
+                .max_w(scaled_px(260.0)),
             PopoverKind::ConflictResolverInputRowMenu {
                 line_label,
                 line_target,
@@ -1695,8 +1715,8 @@ impl PopoverHost {
                     },
                     cx,
                 )
-                .min_w(px(180.0))
-                .max_w(px(280.0)),
+                .min_w(scaled_px(180.0))
+                .max_w(scaled_px(280.0)),
             PopoverKind::ConflictResolverChunkMenu {
                 conflict_ix,
                 has_base,
@@ -1714,9 +1734,9 @@ impl PopoverHost {
                     },
                     cx,
                 )
-                .w(px(220.0))
-                .min_w(px(190.0))
-                .max_w(px(280.0)),
+                .w(scaled_px(220.0))
+                .min_w(scaled_px(190.0))
+                .max_w(scaled_px(280.0)),
             PopoverKind::ConflictResolverOutputMenu {
                 cursor_line,
                 selected_text,
@@ -1736,9 +1756,9 @@ impl PopoverHost {
                     },
                     cx,
                 )
-                .w(px(240.0))
-                .min_w(px(200.0))
-                .max_w(px(300.0)),
+                .w(scaled_px(240.0))
+                .min_w(scaled_px(200.0))
+                .max_w(scaled_px(300.0)),
             PopoverKind::StatusFileMenu {
                 repo_id,
                 area,
@@ -1779,8 +1799,8 @@ impl PopoverHost {
                     },
                     cx,
                 )
-                .min_w(px(180.0))
-                .max_w(px(360.0)),
+                .min_w(scaled_px(180.0))
+                .max_w(scaled_px(360.0)),
             PopoverKind::CommitFileMenu {
                 repo_id,
                 commit_id,
@@ -1804,13 +1824,13 @@ impl PopoverHost {
             theme.colors.border
         };
         let gap_y = if is_app_menu {
-            crate::view::chrome::TITLE_BAR_HEIGHT
+            crate::view::chrome::title_bar_height(ui_scale_percent)
         } else if anchor_is_bounds {
             px(1.0)
         } else if is_right {
-            px(10.0)
+            scaled_px(10.0)
         } else {
-            px(8.0)
+            scaled_px(8.0)
         };
 
         let mut context_menu_max_panel_h: Option<Pixels> = None;
@@ -1821,7 +1841,7 @@ impl PopoverHost {
             };
             let below = (window_h - margin_y) - (below_anchor_y + gap_y);
             let above = (above_anchor_y - gap_y) - margin_y;
-            if below < px(240.0) && above > below {
+            if below < scaled_px(240.0) && above > below {
                 anchor_corner = match anchor_corner {
                     Corner::TopLeft => Corner::BottomLeft,
                     Corner::TopRight => Corner::BottomRight,
@@ -1841,7 +1861,7 @@ impl PopoverHost {
                 Corner::BottomLeft | Corner::BottomRight => popover_edge_y - margin_y,
             }
             .max(px(0.0));
-            let max_panel_h = (max_popover_h - px(12.0)).max(px(0.0));
+            let max_panel_h = (max_popover_h - scaled_px(12.0)).max(px(0.0));
             context_menu_max_panel_h = Some(max_panel_h);
         }
 

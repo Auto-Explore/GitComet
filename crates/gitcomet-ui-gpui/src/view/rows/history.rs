@@ -61,6 +61,7 @@ impl MainPaneView {
     ) -> Vec<AnyElement> {
         let min_width = this.diff_horizontal_min_width;
         let query = this.diff_search_query_or_empty();
+        let ui_scale_percent = crate::ui_scale::current(cx).percent;
 
         let theme = this.theme;
         let Some(path) = this.worktree_preview_path.as_ref() else {
@@ -106,6 +107,7 @@ impl MainPaneView {
                     return diff_canvas::worktree_preview_row_canvas(
                         theme,
                         cx.entity(),
+                        ui_scale_percent,
                         ix,
                         min_width,
                         bar_color,
@@ -166,6 +168,7 @@ impl MainPaneView {
                 diff_canvas::worktree_preview_row_canvas(
                     theme,
                     cx.entity(),
+                    ui_scale_percent,
                     ix,
                     min_width,
                     bar_color,
@@ -216,6 +219,7 @@ impl MainPaneView {
                 bar_color,
                 min_width: this.diff_horizontal_min_width.max(viewport_width),
                 editor_font_family,
+                ui_scale_percent: crate::ui_scale::current(cx).percent,
                 view: Some(cx.entity().clone()),
                 text_region: DiffTextRegion::Inline,
             },
@@ -264,6 +268,7 @@ impl MainPaneView {
                 bar_color: None,
                 min_width: this.diff_horizontal_min_width.max(viewport_width),
                 editor_font_family,
+                ui_scale_percent: crate::ui_scale::current(cx).percent,
                 view: Some(cx.entity().clone()),
                 text_region: region,
             },
@@ -308,6 +313,7 @@ impl MainPaneView {
                 bar_color: None,
                 min_width: this.diff_horizontal_min_width.max(viewport_width),
                 editor_font_family,
+                ui_scale_percent: crate::ui_scale::current(cx).percent,
                 view: Some(cx.entity().clone()),
                 text_region: DiffTextRegion::Inline,
             },
@@ -352,6 +358,7 @@ impl MainPaneView {
                 bar_color: None,
                 min_width: this.diff_horizontal_min_width.max(viewport_width),
                 editor_font_family,
+                ui_scale_percent: crate::ui_scale::current(cx).percent,
                 view: Some(cx.entity().clone()),
                 text_region: DiffTextRegion::SplitRight,
             },
@@ -375,6 +382,7 @@ impl MainPaneView {
                 row,
                 bar_color,
                 editor_font_family,
+                crate::ui_scale::current(cx).percent,
             );
             if required > min_width {
                 min_width = required;
@@ -406,6 +414,19 @@ const MARKDOWN_PREVIEW_ALERT_BADGE_GAP_PX: f32 = 10.0;
 const MARKDOWN_PREVIEW_SHELL_PAD_X_PX: f32 = 12.0;
 const MARKDOWN_PREVIEW_CODE_BORDER_PX: f32 = 1.0;
 
+fn markdown_preview_scaled_px(value: f32, ui_scale_percent: u32) -> Pixels {
+    crate::ui_scale::design_px_from_percent(value, ui_scale_percent)
+}
+
+fn markdown_preview_scaled_value(value: f32, ui_scale_percent: u32) -> f32 {
+    let scaled: f32 = markdown_preview_scaled_px(value, ui_scale_percent).into();
+    scaled
+}
+
+fn markdown_preview_row_height(ui_scale_percent: u32) -> Pixels {
+    markdown_preview_scaled_px(MARKDOWN_PREVIEW_ROW_HEIGHT_PX, ui_scale_percent)
+}
+
 struct MarkdownPreviewRowTypography {
     font_size: f32,
     line_height: f32,
@@ -431,6 +452,7 @@ pub(super) struct MarkdownPreviewRenderContext {
     pub(super) bar_color: Option<gpui::Rgba>,
     pub(super) min_width: Pixels,
     pub(super) editor_font_family: SharedString,
+    pub(super) ui_scale_percent: u32,
     pub(super) view: Option<Entity<MainPaneView>>,
     pub(super) text_region: DiffTextRegion,
 }
@@ -554,22 +576,28 @@ fn markdown_preview_row_element(
     let bar_color = context.bar_color;
     let min_width = context.min_width;
     let text_region = context.text_region;
+    let ui_scale_percent = context.ui_scale_percent;
     let is_interactive = context.view.is_some();
     let _perf_scope = perf::span(ViewPerfSpan::MarkdownPreviewStyledRowBuild);
     if matches!(row.kind, MarkdownPreviewRowKind::Spacer) {
         return div()
             .relative()
-            .h(px(MARKDOWN_PREVIEW_ROW_HEIGHT_PX))
-            .min_h(px(MARKDOWN_PREVIEW_ROW_HEIGHT_PX))
+            .h(markdown_preview_row_height(ui_scale_percent))
+            .min_h(markdown_preview_row_height(ui_scale_percent))
             .w(min_width)
             .min_w(min_width)
             .into_any_element();
     }
 
-    let row_layout = markdown_preview_row_layout(row);
-    let typography = markdown_preview_row_typography(theme, row, &context.editor_font_family);
+    let row_layout = markdown_preview_row_layout_scaled(row, ui_scale_percent);
+    let typography = markdown_preview_row_typography_scaled(
+        theme,
+        row,
+        &context.editor_font_family,
+        ui_scale_percent,
+    );
     let styled = markdown_preview_row_styled_text(theme, row);
-    let horizontal_padding = markdown_preview_row_horizontal_padding(row);
+    let horizontal_padding = markdown_preview_row_horizontal_padding_scaled(row, ui_scale_percent);
     let marker = markdown_preview_row_marker(row);
     let alert_title = markdown_preview_alert_title_label(row);
 
@@ -604,7 +632,10 @@ fn markdown_preview_row_element(
                 let code_border =
                     with_alpha(theme.colors.border, if theme.is_dark { 0.90 } else { 0.80 });
                 let mut shell = content_shell
-                    .px(px(12.0))
+                    .px(markdown_preview_scaled_px(
+                        MARKDOWN_PREVIEW_SHELL_PAD_X_PX,
+                        ui_scale_percent,
+                    ))
                     .bg(markdown_preview_code_background(theme))
                     .border_l_1()
                     .border_r_1()
@@ -630,7 +661,10 @@ fn markdown_preview_row_element(
                     )
                 };
                 content_shell
-                    .px(px(12.0))
+                    .px(markdown_preview_scaled_px(
+                        MARKDOWN_PREVIEW_SHELL_PAD_X_PX,
+                        ui_scale_percent,
+                    ))
                     .bg(bg)
                     .border_b_1()
                     .border_color(with_alpha(
@@ -638,10 +672,15 @@ fn markdown_preview_row_element(
                         if theme.is_dark { 0.88 } else { 0.86 },
                     ))
             }
-            MarkdownPreviewRowKind::PlainFallback => content_shell.px(px(12.0)).bg(with_alpha(
-                theme.colors.warning,
-                if theme.is_dark { 0.12 } else { 0.08 },
-            )),
+            MarkdownPreviewRowKind::PlainFallback => content_shell
+                .px(markdown_preview_scaled_px(
+                    MARKDOWN_PREVIEW_SHELL_PAD_X_PX,
+                    ui_scale_percent,
+                ))
+                .bg(with_alpha(
+                    theme.colors.warning,
+                    if theme.is_dark { 0.12 } else { 0.08 },
+                )),
             _ => unreachable!(),
         };
         if matches!(row.kind, MarkdownPreviewRowKind::CodeLine { .. }) && is_interactive {
@@ -764,12 +803,21 @@ fn markdown_preview_row_element(
                         div()
                             .flex_none()
                             .h_full()
-                            .min_w(px(22.0))
-                            .mr(px(10.0))
+                            .min_w(markdown_preview_scaled_px(
+                                MARKDOWN_PREVIEW_LIST_MARKER_MIN_WIDTH_PX,
+                                ui_scale_percent,
+                            ))
+                            .mr(markdown_preview_scaled_px(
+                                MARKDOWN_PREVIEW_LIST_MARKER_GAP_PX,
+                                ui_scale_percent,
+                            ))
                             .flex()
                             .items_center()
                             .justify_end()
-                            .text_size(px(MARKDOWN_PREVIEW_BASE_FONT_PX))
+                            .text_size(markdown_preview_scaled_px(
+                                MARKDOWN_PREVIEW_BASE_FONT_PX,
+                                ui_scale_percent,
+                            ))
                             .line_height(px(typography.line_height))
                             .text_color(theme.colors.text_muted)
                             .child(marker),
@@ -780,15 +828,24 @@ fn markdown_preview_row_element(
                     line = line.child(
                         div()
                             .flex_none()
-                            .mr(px(10.0))
-                            .px(px(6.0))
-                            .py(px(2.0))
-                            .rounded(px(2.0))
+                            .mr(markdown_preview_scaled_px(
+                                MARKDOWN_PREVIEW_ALERT_BADGE_GAP_PX,
+                                ui_scale_percent,
+                            ))
+                            .px(markdown_preview_scaled_px(
+                                MARKDOWN_PREVIEW_ALERT_BADGE_PAD_X_PX,
+                                ui_scale_percent,
+                            ))
+                            .py(markdown_preview_scaled_px(2.0, ui_scale_percent))
+                            .rounded(markdown_preview_scaled_px(2.0, ui_scale_percent))
                             .bg(with_alpha(
                                 alert_color,
                                 if theme.is_dark { 0.18 } else { 0.12 },
                             ))
-                            .text_size(px(11.0))
+                            .text_size(markdown_preview_scaled_px(
+                                MARKDOWN_PREVIEW_ALERT_BADGE_FONT_PX,
+                                ui_scale_percent,
+                            ))
                             .font_weight(FontWeight::BOLD)
                             .text_color(alert_color)
                             .child(alert_title),
@@ -823,8 +880,8 @@ fn markdown_preview_row_element(
             .id(("md_preview_row", row_ix))
             .debug_selector(|| format!("markdown_preview_row_box_{row_ix}"))
             .relative()
-            .h(px(MARKDOWN_PREVIEW_ROW_HEIGHT_PX))
-            .min_h(px(MARKDOWN_PREVIEW_ROW_HEIGHT_PX))
+            .h(markdown_preview_row_height(ui_scale_percent))
+            .min_h(markdown_preview_row_height(ui_scale_percent))
             .w(min_width)
             .flex()
             .items_center()
@@ -837,7 +894,10 @@ fn markdown_preview_row_element(
                 container.child(
                     div()
                         .h_full()
-                        .w(px(MARKDOWN_PREVIEW_CHANGE_BAR_WIDTH_PX))
+                        .w(markdown_preview_scaled_px(
+                            MARKDOWN_PREVIEW_CHANGE_BAR_WIDTH_PX,
+                            ui_scale_percent,
+                        ))
                         .bg(color),
                 )
             })
@@ -889,9 +949,12 @@ fn markdown_preview_row_element(
                 .items_center()
                 .pl(px(horizontal_padding.left_px))
                 .pr(px(horizontal_padding.right_px));
-            if let Some(blockquote_gutter) =
-                markdown_preview_blockquote_gutter(theme, row.blockquote_level, row.alert_kind)
-            {
+            if let Some(blockquote_gutter) = markdown_preview_blockquote_gutter_scaled(
+                theme,
+                row.blockquote_level,
+                row.alert_kind,
+                ui_scale_percent,
+            ) {
                 row_content = row_content.child(blockquote_gutter);
             }
             row_container
@@ -904,8 +967,8 @@ fn markdown_preview_row_element(
         // Non-interactive markdown preview row (benchmarks, conflict resolver).
         let row_container = div()
             .relative()
-            .h(px(MARKDOWN_PREVIEW_ROW_HEIGHT_PX))
-            .min_h(px(MARKDOWN_PREVIEW_ROW_HEIGHT_PX))
+            .h(markdown_preview_row_height(ui_scale_percent))
+            .min_h(markdown_preview_row_height(ui_scale_percent))
             .w(min_width)
             .flex()
             .items_center()
@@ -918,7 +981,10 @@ fn markdown_preview_row_element(
                 container.child(
                     div()
                         .h_full()
-                        .w(px(MARKDOWN_PREVIEW_CHANGE_BAR_WIDTH_PX))
+                        .w(markdown_preview_scaled_px(
+                            MARKDOWN_PREVIEW_CHANGE_BAR_WIDTH_PX,
+                            ui_scale_percent,
+                        ))
                         .bg(color),
                 )
             })
@@ -933,9 +999,12 @@ fn markdown_preview_row_element(
                 .items_center()
                 .pl(px(horizontal_padding.left_px))
                 .pr(px(horizontal_padding.right_px));
-            if let Some(blockquote_gutter) =
-                markdown_preview_blockquote_gutter(theme, row.blockquote_level, row.alert_kind)
-            {
+            if let Some(blockquote_gutter) = markdown_preview_blockquote_gutter_scaled(
+                theme,
+                row.blockquote_level,
+                row.alert_kind,
+                ui_scale_percent,
+            ) {
                 row_content = row_content.child(blockquote_gutter);
             }
             row_container
@@ -953,13 +1022,15 @@ fn markdown_preview_row_required_width(
     row: &MarkdownPreviewRow,
     bar_color: Option<gpui::Rgba>,
     editor_font_family: &str,
+    ui_scale_percent: u32,
 ) -> Pixels {
     if matches!(row.kind, MarkdownPreviewRowKind::Spacer) {
         return px(0.0);
     }
 
     let editor_font_family: SharedString = editor_font_family.to_owned().into();
-    let typography = markdown_preview_row_typography(theme, row, &editor_font_family);
+    let typography =
+        markdown_preview_row_typography_scaled(theme, row, &editor_font_family, ui_scale_percent);
     let default_font_family = window.text_style().font_family.clone();
     let resolved_font_family = typography
         .font_family
@@ -986,51 +1057,73 @@ fn markdown_preview_row_required_width(
             )
         };
 
-        let horizontal_padding = markdown_preview_row_horizontal_padding(row);
+        let horizontal_padding =
+            markdown_preview_row_horizontal_padding_scaled(row, ui_scale_percent);
         let mut width = px(horizontal_padding.left_px + horizontal_padding.right_px);
         width += text_width;
 
         if row.blockquote_level > 0 {
-            width += px(
-                f32::from(row.blockquote_level) * MARKDOWN_PREVIEW_BLOCKQUOTE_BAR_WIDTH_PX
-                    + f32::from(row.blockquote_level.saturating_sub(1))
-                        * MARKDOWN_PREVIEW_BLOCKQUOTE_BAR_GAP_PX
-                    + MARKDOWN_PREVIEW_BLOCKQUOTE_GUTTER_MARGIN_RIGHT_PX,
-            );
+            width += px(f32::from(row.blockquote_level)
+                * markdown_preview_scaled_value(
+                    MARKDOWN_PREVIEW_BLOCKQUOTE_BAR_WIDTH_PX,
+                    ui_scale_percent,
+                )
+                + f32::from(row.blockquote_level.saturating_sub(1))
+                    * markdown_preview_scaled_value(
+                        MARKDOWN_PREVIEW_BLOCKQUOTE_BAR_GAP_PX,
+                        ui_scale_percent,
+                    )
+                + markdown_preview_scaled_value(
+                    MARKDOWN_PREVIEW_BLOCKQUOTE_GUTTER_MARGIN_RIGHT_PX,
+                    ui_scale_percent,
+                ));
         }
 
         if let Some(marker) = markdown_preview_row_marker(row) {
             let marker_width = markdown_preview_shape_text_width(
                 window,
                 marker,
-                MARKDOWN_PREVIEW_BASE_FONT_PX,
+                markdown_preview_scaled_value(MARKDOWN_PREVIEW_BASE_FONT_PX, ui_scale_percent),
                 FontWeight::NORMAL,
                 None,
                 &[],
             );
-            width += marker_width.max(px(MARKDOWN_PREVIEW_LIST_MARKER_MIN_WIDTH_PX));
-            width += px(MARKDOWN_PREVIEW_LIST_MARKER_GAP_PX);
+            width += marker_width.max(markdown_preview_scaled_px(
+                MARKDOWN_PREVIEW_LIST_MARKER_MIN_WIDTH_PX,
+                ui_scale_percent,
+            ));
+            width +=
+                markdown_preview_scaled_px(MARKDOWN_PREVIEW_LIST_MARKER_GAP_PX, ui_scale_percent);
         }
 
         if let Some(alert_title) = markdown_preview_alert_title_label(row) {
             let alert_width = markdown_preview_shape_text_width(
                 window,
                 alert_title,
-                MARKDOWN_PREVIEW_ALERT_BADGE_FONT_PX,
+                markdown_preview_scaled_value(
+                    MARKDOWN_PREVIEW_ALERT_BADGE_FONT_PX,
+                    ui_scale_percent,
+                ),
                 FontWeight::BOLD,
                 None,
                 &[],
             );
-            width += alert_width + px(MARKDOWN_PREVIEW_ALERT_BADGE_PAD_X_PX * 2.0);
-            width += px(MARKDOWN_PREVIEW_ALERT_BADGE_GAP_PX);
+            width += alert_width
+                + markdown_preview_scaled_px(
+                    MARKDOWN_PREVIEW_ALERT_BADGE_PAD_X_PX * 2.0,
+                    ui_scale_percent,
+                );
+            width +=
+                markdown_preview_scaled_px(MARKDOWN_PREVIEW_ALERT_BADGE_GAP_PX, ui_scale_percent);
         }
 
         width += match row.kind {
-            MarkdownPreviewRowKind::CodeLine { .. } => {
-                px(MARKDOWN_PREVIEW_SHELL_PAD_X_PX * 2.0 + MARKDOWN_PREVIEW_CODE_BORDER_PX * 2.0)
-            }
+            MarkdownPreviewRowKind::CodeLine { .. } => markdown_preview_scaled_px(
+                MARKDOWN_PREVIEW_SHELL_PAD_X_PX * 2.0 + MARKDOWN_PREVIEW_CODE_BORDER_PX * 2.0,
+                ui_scale_percent,
+            ),
             MarkdownPreviewRowKind::TableRow { .. } | MarkdownPreviewRowKind::PlainFallback => {
-                px(MARKDOWN_PREVIEW_SHELL_PAD_X_PX * 2.0)
+                markdown_preview_scaled_px(MARKDOWN_PREVIEW_SHELL_PAD_X_PX * 2.0, ui_scale_percent)
             }
             _ => px(0.0),
         };
@@ -1040,7 +1133,7 @@ fn markdown_preview_row_required_width(
 
     let mut width = px(base_width as f32);
     if bar_color.is_some() {
-        width += px(MARKDOWN_PREVIEW_CHANGE_BAR_WIDTH_PX);
+        width += markdown_preview_scaled_px(MARKDOWN_PREVIEW_CHANGE_BAR_WIDTH_PX, ui_scale_percent);
     }
     width
 }
@@ -1210,10 +1303,11 @@ fn markdown_preview_alert_color(theme: AppTheme, kind: MarkdownAlertKind) -> gpu
     }
 }
 
-fn markdown_preview_blockquote_gutter(
+fn markdown_preview_blockquote_gutter_scaled(
     theme: AppTheme,
     blockquote_level: u8,
     alert_kind: Option<MarkdownAlertKind>,
+    ui_scale_percent: u32,
 ) -> Option<AnyElement> {
     if blockquote_level == 0 {
         return None;
@@ -1229,10 +1323,13 @@ fn markdown_preview_blockquote_gutter(
                 quote_bar_color
             };
             div()
-                .w(px(MARKDOWN_PREVIEW_BLOCKQUOTE_BAR_WIDTH_PX))
+                .w(markdown_preview_scaled_px(
+                    MARKDOWN_PREVIEW_BLOCKQUOTE_BAR_WIDTH_PX,
+                    ui_scale_percent,
+                ))
                 .h_full()
                 .bg(bar_color)
-                .rounded(px(2.0))
+                .rounded(markdown_preview_scaled_px(2.0, ui_scale_percent))
                 .into_any_element()
         })
         .collect::<Vec<_>>();
@@ -1242,8 +1339,14 @@ fn markdown_preview_blockquote_gutter(
             .flex_none()
             .h_full()
             .flex()
-            .gap(px(MARKDOWN_PREVIEW_BLOCKQUOTE_BAR_GAP_PX))
-            .mr(px(MARKDOWN_PREVIEW_BLOCKQUOTE_GUTTER_MARGIN_RIGHT_PX))
+            .gap(markdown_preview_scaled_px(
+                MARKDOWN_PREVIEW_BLOCKQUOTE_BAR_GAP_PX,
+                ui_scale_percent,
+            ))
+            .mr(markdown_preview_scaled_px(
+                MARKDOWN_PREVIEW_BLOCKQUOTE_GUTTER_MARGIN_RIGHT_PX,
+                ui_scale_percent,
+            ))
             .children(bars)
             .into_any_element(),
     )
@@ -1322,144 +1425,169 @@ fn markdown_preview_row_text_color(theme: AppTheme, row: &MarkdownPreviewRow) ->
     }
 }
 
+#[allow(dead_code)]
 fn markdown_preview_row_layout(row: &MarkdownPreviewRow) -> MarkdownPreviewRowLayout {
+    markdown_preview_row_layout_scaled(row, crate::ui_scale::DEFAULT_UI_SCALE_PERCENT)
+}
+
+fn markdown_preview_row_layout_scaled(
+    row: &MarkdownPreviewRow,
+    ui_scale_percent: u32,
+) -> MarkdownPreviewRowLayout {
+    let scaled = |value: f32| markdown_preview_scaled_value(value, ui_scale_percent);
     match row.kind {
         MarkdownPreviewRowKind::Heading { level: 1 | 2 } => MarkdownPreviewRowLayout {
-            top_inset_px: 0.0,
-            bottom_inset_px: 0.0,
+            top_inset_px: scaled(0.0),
+            bottom_inset_px: scaled(0.0),
         },
         MarkdownPreviewRowKind::Heading { level: 3 } => MarkdownPreviewRowLayout {
-            top_inset_px: 2.0,
-            bottom_inset_px: 4.0,
+            top_inset_px: scaled(2.0),
+            bottom_inset_px: scaled(4.0),
         },
         MarkdownPreviewRowKind::Heading { .. } => MarkdownPreviewRowLayout {
-            top_inset_px: 2.0,
-            bottom_inset_px: 6.0,
+            top_inset_px: scaled(2.0),
+            bottom_inset_px: scaled(6.0),
         },
         MarkdownPreviewRowKind::DetailsSummary => MarkdownPreviewRowLayout {
-            top_inset_px: 0.0,
-            bottom_inset_px: 0.0,
+            top_inset_px: scaled(0.0),
+            bottom_inset_px: scaled(0.0),
         },
         MarkdownPreviewRowKind::Paragraph => MarkdownPreviewRowLayout {
-            top_inset_px: 2.0,
-            bottom_inset_px: 6.0,
+            top_inset_px: scaled(2.0),
+            bottom_inset_px: scaled(6.0),
         },
         MarkdownPreviewRowKind::BlockquoteLine => MarkdownPreviewRowLayout {
-            top_inset_px: 2.0,
-            bottom_inset_px: 6.0,
+            top_inset_px: scaled(2.0),
+            bottom_inset_px: scaled(6.0),
         },
         MarkdownPreviewRowKind::ListItem { .. } => MarkdownPreviewRowLayout {
-            top_inset_px: 0.0,
-            bottom_inset_px: 0.0,
+            top_inset_px: scaled(0.0),
+            bottom_inset_px: scaled(0.0),
         },
         MarkdownPreviewRowKind::CodeLine { is_first, is_last } => MarkdownPreviewRowLayout {
-            top_inset_px: if is_first { 5.0 } else { 0.0 },
-            bottom_inset_px: if is_last { 5.0 } else { 0.0 },
+            top_inset_px: scaled(if is_first { 5.0 } else { 0.0 }),
+            bottom_inset_px: scaled(if is_last { 5.0 } else { 0.0 }),
         },
         MarkdownPreviewRowKind::ThematicBreak => MarkdownPreviewRowLayout {
-            top_inset_px: 6.0,
-            bottom_inset_px: 6.0,
+            top_inset_px: scaled(6.0),
+            bottom_inset_px: scaled(6.0),
         },
         MarkdownPreviewRowKind::Spacer => MarkdownPreviewRowLayout {
-            top_inset_px: 0.0,
-            bottom_inset_px: 0.0,
+            top_inset_px: scaled(0.0),
+            bottom_inset_px: scaled(0.0),
         },
         MarkdownPreviewRowKind::TableRow { .. } | MarkdownPreviewRowKind::PlainFallback => {
             MarkdownPreviewRowLayout {
-                top_inset_px: 2.0,
-                bottom_inset_px: 2.0,
+                top_inset_px: scaled(2.0),
+                bottom_inset_px: scaled(2.0),
             }
         }
     }
 }
 
+#[allow(dead_code)]
 fn markdown_preview_row_typography(
     theme: AppTheme,
     row: &MarkdownPreviewRow,
     editor_font_family: &SharedString,
 ) -> MarkdownPreviewRowTypography {
+    markdown_preview_row_typography_scaled(
+        theme,
+        row,
+        editor_font_family,
+        crate::ui_scale::DEFAULT_UI_SCALE_PERCENT,
+    )
+}
+
+fn markdown_preview_row_typography_scaled(
+    theme: AppTheme,
+    row: &MarkdownPreviewRow,
+    editor_font_family: &SharedString,
+    ui_scale_percent: u32,
+) -> MarkdownPreviewRowTypography {
     let text_color = markdown_preview_row_text_color(theme, row);
+    let scaled = |value: f32| markdown_preview_scaled_value(value, ui_scale_percent);
     match row.kind {
         MarkdownPreviewRowKind::Heading { level: 1 } => MarkdownPreviewRowTypography {
-            font_size: 28.0,
-            line_height: 28.0,
+            font_size: scaled(28.0),
+            line_height: scaled(28.0),
             font_weight: Some(FontWeight::BOLD),
             font_family: None,
             text_color,
         },
         MarkdownPreviewRowKind::Heading { level: 2 } => MarkdownPreviewRowTypography {
-            font_size: 24.0,
-            line_height: 24.0,
+            font_size: scaled(24.0),
+            line_height: scaled(24.0),
             font_weight: Some(FontWeight::BOLD),
             font_family: None,
             text_color,
         },
         MarkdownPreviewRowKind::Heading { level: 3 } => MarkdownPreviewRowTypography {
-            font_size: 20.0,
-            line_height: 22.0,
+            font_size: scaled(20.0),
+            line_height: scaled(22.0),
             font_weight: Some(FontWeight::BOLD),
             font_family: None,
             text_color,
         },
         MarkdownPreviewRowKind::Heading { level: 4 } => MarkdownPreviewRowTypography {
-            font_size: 18.0,
-            line_height: 20.0,
+            font_size: scaled(18.0),
+            line_height: scaled(20.0),
             font_weight: Some(FontWeight::BOLD),
             font_family: None,
             text_color,
         },
         MarkdownPreviewRowKind::Heading { level: 5 } => MarkdownPreviewRowTypography {
-            font_size: 16.0,
-            line_height: 18.0,
+            font_size: scaled(16.0),
+            line_height: scaled(18.0),
             font_weight: Some(FontWeight::BOLD),
             font_family: None,
             text_color,
         },
         MarkdownPreviewRowKind::Heading { level: 6 } => MarkdownPreviewRowTypography {
-            font_size: 14.0,
-            line_height: 16.0,
+            font_size: scaled(14.0),
+            line_height: scaled(16.0),
             font_weight: Some(FontWeight::BOLD),
             font_family: None,
             text_color,
         },
         MarkdownPreviewRowKind::DetailsSummary => MarkdownPreviewRowTypography {
-            font_size: MARKDOWN_PREVIEW_BASE_FONT_PX,
-            line_height: 28.0,
+            font_size: scaled(MARKDOWN_PREVIEW_BASE_FONT_PX),
+            line_height: scaled(28.0),
             font_weight: Some(FontWeight::BOLD),
             font_family: None,
             text_color,
         },
         MarkdownPreviewRowKind::ListItem { .. } => MarkdownPreviewRowTypography {
-            font_size: MARKDOWN_PREVIEW_BASE_FONT_PX,
-            line_height: MARKDOWN_PREVIEW_BASE_LINE_HEIGHT_PX,
+            font_size: scaled(MARKDOWN_PREVIEW_BASE_FONT_PX),
+            line_height: scaled(MARKDOWN_PREVIEW_BASE_LINE_HEIGHT_PX),
             font_weight: None,
             font_family: None,
             text_color,
         },
         MarkdownPreviewRowKind::CodeLine { .. } => MarkdownPreviewRowTypography {
-            font_size: 12.0,
-            line_height: 18.0,
+            font_size: scaled(12.0),
+            line_height: scaled(18.0),
             font_weight: None,
             font_family: Some(editor_font_family.clone()),
             text_color,
         },
         MarkdownPreviewRowKind::TableRow { is_header } => MarkdownPreviewRowTypography {
-            font_size: 12.0,
-            line_height: 18.0,
+            font_size: scaled(12.0),
+            line_height: scaled(18.0),
             font_weight: is_header.then_some(FontWeight::BOLD),
             font_family: Some(editor_font_family.clone()),
             text_color,
         },
         MarkdownPreviewRowKind::PlainFallback => MarkdownPreviewRowTypography {
-            font_size: 12.0,
-            line_height: 18.0,
+            font_size: scaled(12.0),
+            line_height: scaled(18.0),
             font_weight: None,
             font_family: Some(editor_font_family.clone()),
             text_color,
         },
         _ => MarkdownPreviewRowTypography {
-            font_size: MARKDOWN_PREVIEW_BASE_FONT_PX,
-            line_height: MARKDOWN_PREVIEW_BASE_LINE_HEIGHT_PX,
+            font_size: scaled(MARKDOWN_PREVIEW_BASE_FONT_PX),
+            line_height: scaled(MARKDOWN_PREVIEW_BASE_LINE_HEIGHT_PX),
             font_weight: None,
             font_family: None,
             text_color,
@@ -1475,23 +1603,42 @@ fn markdown_preview_code_background(theme: AppTheme) -> gpui::Rgba {
     }
 }
 
+#[allow(dead_code)]
 fn markdown_preview_row_horizontal_padding(
     row: &MarkdownPreviewRow,
 ) -> MarkdownPreviewRowHorizontalPadding {
+    markdown_preview_row_horizontal_padding_scaled(row, crate::ui_scale::DEFAULT_UI_SCALE_PERCENT)
+}
+
+fn markdown_preview_row_horizontal_padding_scaled(
+    row: &MarkdownPreviewRow,
+    ui_scale_percent: u32,
+) -> MarkdownPreviewRowHorizontalPadding {
     let indent_steps = f32::from(row.indent_level.saturating_sub(1));
-    let default_left_px =
-        MARKDOWN_PREVIEW_CONTENT_PAD_X_PX + indent_steps * MARKDOWN_PREVIEW_INDENT_STEP_PX;
+    let default_left_px = markdown_preview_scaled_value(
+        MARKDOWN_PREVIEW_CONTENT_PAD_X_PX + indent_steps * MARKDOWN_PREVIEW_INDENT_STEP_PX,
+        ui_scale_percent,
+    );
 
     match row.kind {
         MarkdownPreviewRowKind::CodeLine { .. } => MarkdownPreviewRowHorizontalPadding {
             // Fenced code blocks ignore surrounding list indentation but keep
             // a small edge gap so the boxed shell does not touch the preview edge.
-            left_px: MARKDOWN_PREVIEW_BOXED_EDGE_GAP_PX,
-            right_px: MARKDOWN_PREVIEW_BOXED_EDGE_GAP_PX,
+            left_px: markdown_preview_scaled_value(
+                MARKDOWN_PREVIEW_BOXED_EDGE_GAP_PX,
+                ui_scale_percent,
+            ),
+            right_px: markdown_preview_scaled_value(
+                MARKDOWN_PREVIEW_BOXED_EDGE_GAP_PX,
+                ui_scale_percent,
+            ),
         },
         _ => MarkdownPreviewRowHorizontalPadding {
             left_px: default_left_px,
-            right_px: MARKDOWN_PREVIEW_CONTENT_PAD_X_PX,
+            right_px: markdown_preview_scaled_value(
+                MARKDOWN_PREVIEW_CONTENT_PAD_X_PX,
+                ui_scale_percent,
+            ),
         },
     }
 }
@@ -1556,6 +1703,7 @@ impl HistoryView {
         let col_author = this.history_col_author;
         let col_date = this.history_col_date;
         let col_sha = this.history_col_sha;
+        let ui_scale_percent = this.ui_scale_percent;
         let (show_graph, show_author, show_date, show_sha) = this.history_visible_columns();
 
         let page = match &repo.log {
@@ -1581,6 +1729,7 @@ impl HistoryView {
                     let selected = repo.history_state.selected_commit.is_none();
                     return Some(working_tree_summary_history_row(
                         theme,
+                        ui_scale_percent,
                         col_branch,
                         col_graph,
                         col_author,
@@ -1625,6 +1774,7 @@ impl HistoryView {
 
                 Some(history_table_row(
                     theme,
+                    ui_scale_percent,
                     col_branch,
                     col_graph,
                     col_author,
@@ -1660,6 +1810,10 @@ impl HistoryView {
 }
 
 const HISTORY_ROW_HEIGHT_PX: f32 = 24.0;
+
+fn history_row_height(ui_scale_percent: u32) -> Pixels {
+    ui_scale::design_px_from_percent(HISTORY_ROW_HEIGHT_PX, ui_scale_percent)
+}
 
 fn history_selected_branch_entry_range(
     branches_text: &str,
@@ -1703,6 +1857,7 @@ fn history_branch_text_highlights(
 #[allow(clippy::too_many_arguments)]
 fn history_table_row(
     theme: AppTheme,
+    ui_scale_percent: u32,
     col_branch: Pixels,
     col_graph: Pixels,
     col_author: Pixels,
@@ -1767,10 +1922,11 @@ fn history_table_row(
     );
 
     let commit_id = commit.id.clone();
+    let row_height = history_row_height(ui_scale_percent);
     let mut row = div()
         .id(ix)
         .relative()
-        .h(px(HISTORY_ROW_HEIGHT_PX))
+        .h(row_height)
         .w_full()
         .cursor(CursorStyle::PointingHand)
         .hover(move |s| {
@@ -1798,7 +1954,7 @@ fn history_table_row(
     }
 
     if is_head {
-        let thickness = px(1.0);
+        let thickness = ui_scale::design_px_from_percent(1.0, ui_scale_percent);
         let color = with_alpha(theme.colors.accent, 0.90);
         row = row
             .child(
@@ -1845,6 +2001,7 @@ fn history_table_row(
 #[allow(clippy::too_many_arguments)]
 fn working_tree_summary_history_row(
     theme: AppTheme,
+    ui_scale_percent: u32,
     col_branch: Pixels,
     col_graph: Pixels,
     col_author: Pixels,
@@ -1860,13 +2017,14 @@ fn working_tree_summary_history_row(
     counts: (usize, usize, usize),
     cx: &mut gpui::Context<HistoryView>,
 ) -> AnyElement {
-    let cell_pad_x = px(HISTORY_COL_HANDLE_PX / 2.0);
+    let scaled_px = |value| ui_scale::design_px_from_percent(value, ui_scale_percent);
+    let cell_pad_x = scaled_px(HISTORY_COL_HANDLE_PX / 2.0);
     let icon_count = |icon_path: &'static str, color: gpui::Rgba, count: usize| {
         div()
             .flex()
             .items_center()
             .gap_1()
-            .child(svg_icon(icon_path, color, px(12.0)))
+            .child(svg_icon(icon_path, color, scaled_px(12.0)))
             .child(
                 div()
                     .text_xs()
@@ -1896,12 +2054,14 @@ fn working_tree_summary_history_row(
     let circle = gpui::canvas(
         |_, _, _| (),
         move |bounds, _, window, _cx| {
-            use gpui::{PathBuilder, fill, point, px, size};
-            let r = px(3.0);
-            let border = px(1.0);
+            use gpui::{PathBuilder, fill, point, size};
+            let design_scale_factor = ui_scale::design_scale_factor_from_window(window);
+            let scaled_px = |value| px(value * design_scale_factor);
+            let r = scaled_px(3.0);
+            let border = scaled_px(1.0);
             let outer = r + border;
-            let margin_x = px(HISTORY_GRAPH_MARGIN_X_PX);
-            let col_gap = px(HISTORY_GRAPH_COL_GAP_PX);
+            let margin_x = scaled_px(HISTORY_GRAPH_MARGIN_X_PX);
+            let col_gap = scaled_px(HISTORY_GRAPH_COL_GAP_PX);
             let node_x = margin_x + col_gap * 0.0;
             let center = point(
                 bounds.left() + node_x,
@@ -1909,7 +2069,7 @@ fn working_tree_summary_history_row(
             );
 
             // Connect the working tree node into the history graph below.
-            let stroke_width = px(1.6);
+            let stroke_width = scaled_px(1.6);
             let mut path = PathBuilder::stroke(stroke_width);
             path.move_to(point(center.x, center.y));
             path.line_to(point(center.x, bounds.bottom()));
@@ -1925,14 +2085,14 @@ fn working_tree_summary_history_row(
                     ),
                     node_color,
                 )
-                .corner_radii(outer.min(px(2.0))),
+                .corner_radii(outer.min(scaled_px(2.0))),
             );
             window.paint_quad(
                 fill(
                     gpui::Bounds::new(point(center.x - r, center.y - r), size(r * 2.0, r * 2.0)),
                     node_fill,
                 )
-                .corner_radii(r.min(px(2.0))),
+                .corner_radii(r.min(scaled_px(2.0))),
             );
         },
     )
@@ -1942,7 +2102,7 @@ fn working_tree_summary_history_row(
 
     let mut row = div()
         .id(("history_worktree_summary", repo_id.0))
-        .h(px(HISTORY_ROW_HEIGHT_PX))
+        .h(history_row_height(ui_scale_percent))
         .flex()
         .w_full()
         .items_center()

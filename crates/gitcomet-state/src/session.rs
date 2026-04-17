@@ -22,6 +22,7 @@ pub struct UiSession {
     pub sidebar_width: Option<u32>,
     pub details_width: Option<u32>,
     pub theme_mode: Option<String>,
+    pub ui_scale_percent: Option<u32>,
     pub ui_font_family: Option<String>,
     pub editor_font_family: Option<String>,
     pub use_font_ligatures: Option<bool>,
@@ -85,6 +86,7 @@ struct UiSessionFileV2 {
     sidebar_width: Option<u32>,
     details_width: Option<u32>,
     theme_mode: Option<String>,
+    ui_scale_percent: Option<u32>,
     ui_font_family: Option<String>,
     editor_font_family: Option<String>,
     use_font_ligatures: Option<bool>,
@@ -145,6 +147,7 @@ pub fn load_from_path(path: &Path) -> UiSession {
         sidebar_width: file.sidebar_width,
         details_width: file.details_width,
         theme_mode: file.theme_mode,
+        ui_scale_percent: file.ui_scale_percent,
         ui_font_family: file.ui_font_family,
         editor_font_family: file.editor_font_family,
         use_font_ligatures: file.use_font_ligatures,
@@ -355,6 +358,7 @@ pub struct UiSettings {
     pub details_width: Option<u32>,
     pub repo_sidebar_collapsed_items: Option<BTreeMap<PathBuf, BTreeSet<String>>>,
     pub theme_mode: Option<String>,
+    pub ui_scale_percent: Option<u32>,
     pub ui_font_family: Option<String>,
     pub editor_font_family: Option<String>,
     pub use_font_ligatures: Option<bool>,
@@ -400,6 +404,9 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
     }
     if let Some(theme_mode) = settings.theme_mode {
         file.theme_mode = Some(theme_mode);
+    }
+    if let Some(percent) = settings.ui_scale_percent {
+        file.ui_scale_percent = Some(percent);
     }
     if let Some(font_family) = settings.ui_font_family {
         file.ui_font_family = Some(font_family);
@@ -1984,6 +1991,43 @@ mod tests {
 
         let loaded = load_from_path(&path);
         assert_eq!(loaded.theme_mode.as_deref(), Some("dark"));
+    }
+
+    #[test]
+    fn persist_ui_settings_round_trips_ui_scale_percent() {
+        let dir = env::temp_dir().join(format!(
+            "gitcomet-ui-settings-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("session.json");
+
+        persist_to_path(
+            &path,
+            &UiSessionFileV2 {
+                version: CURRENT_SESSION_FILE_VERSION,
+                open_repos: Vec::new(),
+                active_repo: None,
+                ..UiSessionFileV2::default()
+            },
+        )
+        .expect("seed session file");
+
+        persist_ui_settings_to_path(
+            UiSettings {
+                ui_scale_percent: Some(125),
+                ..UiSettings::default()
+            },
+            &path,
+        )
+        .expect("persist ui settings");
+
+        let loaded = load_from_path(&path);
+        assert_eq!(loaded.ui_scale_percent, Some(125));
     }
 
     #[test]

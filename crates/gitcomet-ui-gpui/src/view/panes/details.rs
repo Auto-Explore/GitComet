@@ -8,6 +8,7 @@ pub(in super::super) struct DetailsPaneView {
     state: Arc<AppState>,
     pub(in super::super) theme: AppTheme,
     pub(in super::super) change_tracking_view: ChangeTrackingView,
+    pub(in super::super) ui_scale_percent: u32,
     _ui_model_subscription: gpui::Subscription,
     _commit_message_input_subscription: gpui::Subscription,
     root_view: WeakEntity<GitCometView>,
@@ -55,6 +56,7 @@ pub(in super::super) struct DetailsPaneInit {
     pub(in super::super) change_tracking_view: ChangeTrackingView,
     pub(in super::super) change_tracking_height: Option<u32>,
     pub(in super::super) untracked_height: Option<u32>,
+    pub(in super::super) ui_scale_percent: u32,
     pub(in super::super) root_view: WeakEntity<GitCometView>,
     pub(in super::super) tooltip_host: WeakEntity<TooltipHost>,
 }
@@ -183,6 +185,7 @@ impl DetailsPaneView {
             change_tracking_view,
             change_tracking_height,
             untracked_height,
+            ui_scale_percent,
             root_view,
             tooltip_host,
         } = init;
@@ -293,6 +296,7 @@ impl DetailsPaneView {
             state,
             theme,
             change_tracking_view,
+            ui_scale_percent,
             _ui_model_subscription: subscription,
             _commit_message_input_subscription: commit_message_subscription,
             root_view,
@@ -382,6 +386,34 @@ impl DetailsPaneView {
             to_u32(self.change_tracking_height),
             to_u32(self.untracked_height),
         )
+    }
+
+    pub(in super::super) fn apply_ui_scale_percent(
+        &mut self,
+        previous_percent: u32,
+        next_percent: u32,
+        change_tracking_view: ChangeTrackingView,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.ui_scale_percent == next_percent {
+            return;
+        }
+
+        self.ui_scale_percent = next_percent;
+        self.status_section_resize = None;
+        let (change_tracking_height, untracked_height) = self.saved_status_section_heights();
+        self.change_tracking_height = Self::sanitized_restored_change_tracking_height(
+            change_tracking_view,
+            crate::ui_scale::rescale_optional_u32(
+                change_tracking_height,
+                previous_percent,
+                next_percent,
+            ),
+        );
+        self.untracked_height = Self::sanitized_restored_untracked_height(
+            crate::ui_scale::rescale_optional_u32(untracked_height, previous_percent, next_percent),
+        );
+        cx.notify();
     }
 
     pub(in super::super) fn set_active_context_menu_invoker(

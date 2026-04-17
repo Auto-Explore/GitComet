@@ -15,6 +15,7 @@ pub mod perf_sidecar;
 mod startup_probe;
 mod theme;
 mod ui_runtime;
+mod ui_scale;
 mod view;
 
 pub use app::{FocusedMergetoolConfig, run, run_focused_mergetool, run_with_startup_crash_report};

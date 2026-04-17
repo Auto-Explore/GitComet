@@ -1,6 +1,7 @@
 use crate::theme::AppTheme;
+use crate::ui_scale;
 use gpui::prelude::*;
-use gpui::{AnyElement, Div, ElementId, IntoElement, Stateful, div, px};
+use gpui::{AnyElement, Div, ElementId, IntoElement, Stateful, div};
 use std::cmp::Ordering;
 
 /// The position of a tab within a list.
@@ -20,7 +21,7 @@ pub struct Tab {
 }
 
 impl Tab {
-    const END_TAB_SLOT_SIZE: gpui::Pixels = px(14.0);
+    const END_TAB_SLOT_SIZE_PX: f32 = 14.0;
 
     pub fn new(id: impl Into<ElementId>) -> Self {
         let id = id.into();
@@ -53,11 +54,12 @@ impl Tab {
         self
     }
 
-    pub fn container_height() -> gpui::Pixels {
-        px(32.0)
+    pub fn container_height(ui_scale_percent: u32) -> gpui::Pixels {
+        ui_scale::design_px_from_percent(32.0, ui_scale_percent)
     }
 
-    pub fn render(self, theme: AppTheme) -> Stateful<Div> {
+    pub fn render(self, theme: AppTheme, ui_scale_percent: u32) -> Stateful<Div> {
+        let scaled_px = |value| ui_scale::design_px_from_percent(value, ui_scale_percent);
         let (text_color, tab_bg) = if self.selected {
             (theme.colors.text, theme.colors.active_section)
         } else {
@@ -73,7 +75,7 @@ impl Tab {
 
         let end_slot = div()
             .flex_none()
-            .size(Self::END_TAB_SLOT_SIZE)
+            .size(scaled_px(Self::END_TAB_SLOT_SIZE_PX))
             .flex()
             .items_center()
             .justify_center()
@@ -84,7 +86,7 @@ impl Tab {
             .group("tab")
             .tab_index(0)
             .relative()
-            .h(Self::container_height())
+            .h(Self::container_height(ui_scale_percent))
             .bg(tab_bg)
             .border_color(theme.colors.border)
             .cursor_pointer()
@@ -106,7 +108,7 @@ impl Tab {
                 }
             })
             .when(self.selected, |tab| {
-                let thickness = px(1.0);
+                let thickness = scaled_px(1.0);
                 tab.child(
                     div()
                         .absolute()
@@ -131,7 +133,7 @@ impl Tab {
                     .flex()
                     .items_center()
                     .gap_1()
-                    .h(px(31.0))
+                    .h(scaled_px(31.0))
                     .px_1()
                     .text_color(text_color)
                     .children(self.children)
@@ -147,27 +149,31 @@ impl Tab {
         base = match self.position {
             TabPosition::First => {
                 if self.selected {
-                    base.pl(px(1.0)).pb(px(1.0))
+                    base.pl(scaled_px(1.0)).pb(scaled_px(1.0))
                 } else {
-                    base.pl(px(1.0)).pr(px(1.0)).border_b_1()
+                    base.pl(scaled_px(1.0)).pr(scaled_px(1.0)).border_b_1()
                 }
             }
             TabPosition::Last => {
                 if self.selected {
-                    base.pb(px(1.0))
+                    base.pb(scaled_px(1.0))
                 } else {
-                    base.pl(px(1.0)).border_b_1().border_r_1()
+                    base.pl(scaled_px(1.0)).border_b_1().border_r_1()
                 }
             }
             TabPosition::Middle(Ordering::Equal) => {
                 if self.selected {
-                    base.pb(px(1.0))
+                    base.pb(scaled_px(1.0))
                 } else {
-                    base.border_l_1().border_r_1().pb(px(1.0))
+                    base.border_l_1().border_r_1().pb(scaled_px(1.0))
                 }
             }
-            TabPosition::Middle(Ordering::Less) => base.border_l_1().pr(px(1.0)).border_b_1(),
-            TabPosition::Middle(Ordering::Greater) => base.border_r_1().pl(px(1.0)).border_b_1(),
+            TabPosition::Middle(Ordering::Less) => {
+                base.border_l_1().pr(scaled_px(1.0)).border_b_1()
+            }
+            TabPosition::Middle(Ordering::Greater) => {
+                base.border_r_1().pl(scaled_px(1.0)).border_b_1()
+            }
         };
 
         base

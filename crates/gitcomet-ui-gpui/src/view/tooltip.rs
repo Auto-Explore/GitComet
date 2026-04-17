@@ -55,6 +55,7 @@ impl GitCometView {
                                 .then_some(details_width as u32),
                             repo_sidebar_collapsed_items: Some(repo_sidebar_collapsed_items),
                             theme_mode: Some(this.theme_mode.key().to_string()),
+                            ui_scale_percent: Some(this.ui_scale_percent),
                             ui_font_family: Some(font_preferences.ui_font_family),
                             editor_font_family: Some(font_preferences.editor_font_family),
                             use_font_ligatures: Some(font_preferences.use_font_ligatures),
@@ -103,18 +104,18 @@ impl GitCometView {
         let sidebar_handle_w = if self.sidebar_collapsed {
             px(0.0)
         } else {
-            px(PANE_RESIZE_HANDLE_PX)
+            self.pane_resize_handle_width()
         };
         let details_handle_w = if self.details_collapsed {
             px(0.0)
         } else {
-            px(PANE_RESIZE_HANDLE_PX)
+            self.pane_resize_handle_width()
         };
         let handles_w = sidebar_handle_w + details_handle_w;
-        let main_min = px(MAIN_MIN_PX);
-        let sidebar_min = px(SIDEBAR_MIN_PX);
-        let details_min = px(DETAILS_MIN_PX);
-        let collapsed_w = px(PANE_COLLAPSED_PX);
+        let main_min = self.main_min_width();
+        let sidebar_min = self.sidebar_min_width();
+        let details_min = self.details_min_width();
+        let collapsed_w = self.pane_collapsed_width();
 
         if !self.sidebar_collapsed {
             let details_w = if self.details_collapsed {

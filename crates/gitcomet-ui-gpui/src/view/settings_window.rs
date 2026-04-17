@@ -1,4 +1,5 @@
 use super::*;
+use crate::ui_scale;
 use gitcomet_core::process::{
     GitExecutablePreference, GitRuntimeState, install_git_executable_path, refresh_git_runtime,
 };
@@ -18,7 +19,7 @@ const SETTINGS_DROPDOWN_DETAIL_ROW_HEIGHT_PX: f32 = 42.0;
 const SETTINGS_DROPDOWN_DETAIL_LIST_EXTRA_HEIGHT_PX: f32 = 24.0;
 const SETTINGS_DROPDOWN_DENSE_DETAIL_ROW_HEIGHT_PX: f32 = 28.0;
 const SETTINGS_WINDOW_TITLE: &str = "Settings: GitComet";
-const SETTINGS_TRAFFIC_LIGHTS_SAFE_INSET: Pixels = px(78.0);
+const SETTINGS_TRAFFIC_LIGHTS_SAFE_INSET_PX: f32 = 78.0;
 const MIN_GIT_MAJOR: u32 = 2;
 const MIN_GIT_MINOR: u32 = 50;
 const GITHUB_URL: &str = "https://github.com/Auto-Explore/GitComet";
@@ -64,6 +65,7 @@ const DIFF_SCROLL_SYNC_OPTIONS: &[(&str, DiffScrollSync, &str)] = &[
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SettingsSection {
     Theme,
+    UiScale,
     UiFont,
     EditorFont,
     DateFormat,
@@ -127,6 +129,7 @@ struct GitVersion {
 pub(crate) struct SettingsWindowView {
     theme_mode: ThemeMode,
     theme: AppTheme,
+    ui_scale_percent: u32,
     ui_font_family: String,
     editor_font_family: String,
     use_font_ligatures: bool,
@@ -179,30 +182,63 @@ pub(crate) fn open_settings_window(cx: &mut App) {
         return;
     }
 
+    let ui_session = session::load();
+    let ui_scale = ui_scale::current_or_initialize_from_session(&ui_session, cx);
     let bounds = Bounds::centered(
         None,
-        size(
-            px(SETTINGS_WINDOW_DEFAULT_WIDTH_PX),
-            px(SETTINGS_WINDOW_DEFAULT_HEIGHT_PX),
-        ),
+        settings_window_default_size_for_percent(ui_scale.percent),
         cx,
     );
-    cx.open_window(settings_window_options(bounds), |window, cx| {
-        cx.new(|cx| SettingsWindowView::new(window, cx))
-    })
+    let ui_scale_percent = ui_scale.percent;
+    cx.open_window(
+        settings_window_options_for_scale(bounds, ui_scale_percent),
+        move |window, cx| {
+            ui_scale::apply_to_window(window, ui_scale_percent);
+            cx.new(|cx| SettingsWindowView::new(window, cx))
+        },
+    )
     .expect("failed to open settings window");
 
     cx.activate(true);
 }
 
+fn settings_window_min_size_for_percent(percent: u32) -> gpui::Size<Pixels> {
+    ui_scale::design_size_from_percent(
+        SETTINGS_WINDOW_MIN_WIDTH_PX,
+        SETTINGS_WINDOW_MIN_HEIGHT_PX,
+        percent,
+    )
+}
+
+fn settings_window_default_size_for_percent(percent: u32) -> gpui::Size<Pixels> {
+    ui_scale::design_size_from_percent(
+        SETTINGS_WINDOW_DEFAULT_WIDTH_PX,
+        SETTINGS_WINDOW_DEFAULT_HEIGHT_PX,
+        percent,
+    )
+}
+
+fn settings_window_traffic_light_position(_percent: u32) -> Point<Pixels> {
+    point(px(9.0), px(9.0))
+}
+
+fn settings_window_traffic_lights_safe_inset(_percent: u32) -> Pixels {
+    px(SETTINGS_TRAFFIC_LIGHTS_SAFE_INSET_PX)
+}
+
+#[cfg(test)]
 fn settings_window_options(bounds: Bounds<Pixels>) -> WindowOptions {
+    settings_window_options_for_scale(bounds, ui_scale::DEFAULT_UI_SCALE_PERCENT)
+}
+
+fn settings_window_options_for_scale(
+    bounds: Bounds<Pixels>,
+    ui_scale_percent: u32,
+) -> WindowOptions {
     WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
-        window_min_size: Some(size(
-            px(SETTINGS_WINDOW_MIN_WIDTH_PX),
-            px(SETTINGS_WINDOW_MIN_HEIGHT_PX),
-        )),
-        titlebar: Some(settings_window_titlebar_options()),
+        window_min_size: Some(settings_window_min_size_for_percent(ui_scale_percent)),
+        titlebar: Some(settings_window_titlebar_options_for_scale(ui_scale_percent)),
         app_id: Some("gitcomet-settings".into()),
         window_decorations: Some(WindowDecorations::Client),
         is_movable: true,
@@ -211,21 +247,32 @@ fn settings_window_options(bounds: Bounds<Pixels>) -> WindowOptions {
     }
 }
 
+#[cfg(test)]
 fn settings_window_titlebar_options() -> TitlebarOptions {
+    settings_window_titlebar_options_for_scale(ui_scale::DEFAULT_UI_SCALE_PERCENT)
+}
+
+fn settings_window_titlebar_options_for_scale(ui_scale_percent: u32) -> TitlebarOptions {
     TitlebarOptions {
         title: Some(SETTINGS_WINDOW_TITLE.into()),
         // Windows needs a transparent native titlebar to avoid rendering its own
         // caption on top of the custom settings header.
         appears_transparent: cfg!(any(target_os = "macos", target_os = "windows")),
-        traffic_light_position: cfg!(target_os = "macos").then_some(point(px(9.0), px(9.0))),
+        traffic_light_position: cfg!(target_os = "macos")
+            .then_some(settings_window_traffic_light_position(ui_scale_percent)),
     }
 }
 
+#[cfg(test)]
 fn settings_window_client_inset() -> Pixels {
+    settings_window_client_inset_for_scale(ui_scale::DEFAULT_UI_SCALE_PERCENT)
+}
+
+fn settings_window_client_inset_for_scale(ui_scale_percent: u32) -> Pixels {
     if cfg!(target_os = "windows") {
         px(0.0)
     } else {
-        chrome::CLIENT_SIDE_DECORATION_INSET
+        chrome::client_side_decoration_inset(ui_scale_percent)
     }
 }
 
@@ -233,11 +280,12 @@ fn settings_window_frame(
     theme: AppTheme,
     decorations: Decorations,
     content: AnyElement,
+    ui_scale_percent: u32,
 ) -> AnyElement {
     if cfg!(target_os = "windows") {
         content
     } else {
-        window_frame(theme, decorations, content)
+        chrome::window_frame_scaled(theme, decorations, content, ui_scale_percent)
     }
 }
 
@@ -336,10 +384,12 @@ fn settings_dropdown_height(
     item_count: usize,
     estimated_row_height_px: f32,
     extra_height_px: f32,
+    ui_scale_percent: u32,
 ) -> Pixels {
-    px(
+    ui_scale::design_px_from_percent(
         (((item_count.max(1) as f32) * estimated_row_height_px) + extra_height_px)
             .min(SETTINGS_DROPDOWN_LIST_MAX_HEIGHT_PX),
+        ui_scale_percent,
     )
 }
 
@@ -404,6 +454,7 @@ impl SettingsWindowView {
         window.set_window_title(SETTINGS_WINDOW_TITLE);
 
         let ui_session = session::load();
+        let ui_scale = ui_scale::current_or_initialize_from_session(&ui_session, cx);
         let font_preferences =
             crate::font_preferences::current_or_initialize_from_session(window, &ui_session, cx);
         let theme_mode = ui_session
@@ -500,6 +551,7 @@ impl SettingsWindowView {
         Self {
             theme_mode,
             theme,
+            ui_scale_percent: ui_scale.percent,
             ui_font_family: font_preferences.ui_font_family,
             editor_font_family: font_preferences.editor_font_family,
             use_font_ligatures: font_preferences.use_font_ligatures,
@@ -557,6 +609,7 @@ impl SettingsWindowView {
             details_width: None,
             repo_sidebar_collapsed_items: None,
             theme_mode: Some(self.theme_mode.key().to_string()),
+            ui_scale_percent: Some(self.ui_scale_percent),
             ui_font_family: Some(self.ui_font_family.clone()),
             editor_font_family: Some(self.editor_font_family.clone()),
             use_font_ligatures: Some(self.use_font_ligatures),
@@ -598,6 +651,26 @@ impl SettingsWindowView {
 
         self.current_view = SettingsView::OpenSourceLicenses;
         self.expanded_section = None;
+        cx.notify();
+    }
+
+    pub(crate) fn apply_ui_scale_percent(
+        &mut self,
+        percent: u32,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let percent = ui_scale::sanitize_percent(Some(percent));
+        if self.ui_scale_percent == percent {
+            return;
+        }
+
+        self.ui_scale_percent = percent;
+        ui_scale::apply_to_window(window, percent);
+        crate::app::ensure_window_respects_min_size(
+            window,
+            settings_window_min_size_for_percent(percent),
+        );
         cx.notify();
     }
 
@@ -705,6 +778,26 @@ impl SettingsWindowView {
             selected,
             theme,
         )
+    }
+
+    fn set_ui_scale_percent(
+        &mut self,
+        percent: u32,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let percent = ui_scale::set_current(cx, percent).percent;
+        if self.ui_scale_percent == percent {
+            return;
+        }
+
+        self.expanded_section = None;
+        self.apply_ui_scale_percent(percent, window, cx);
+        self.persist_preferences(cx);
+        self.update_main_windows(cx, move |view, root_window, cx| {
+            view.apply_ui_scale_percent(percent, root_window, cx);
+        });
+        cx.notify();
     }
 
     fn set_theme_mode(
@@ -1126,7 +1219,12 @@ impl SettingsWindowView {
         list: AnyElement,
         theme: AppTheme,
     ) -> Stateful<gpui::Div> {
-        let height = settings_dropdown_height(item_count, estimated_row_height_px, extra_height_px);
+        let height = settings_dropdown_height(
+            item_count,
+            estimated_row_height_px,
+            extra_height_px,
+            self.ui_scale_percent,
+        );
 
         div()
             .id(container_id)
@@ -1870,7 +1968,10 @@ impl Render for SettingsWindowView {
                 decorations,
             );
         let (tiling, client_inset) = match decorations {
-            Decorations::Client { tiling } => (Some(tiling), settings_window_client_inset()),
+            Decorations::Client { tiling } => (
+                Some(tiling),
+                settings_window_client_inset_for_scale(self.ui_scale_percent),
+            ),
             Decorations::Server => (None, px(0.0)),
         };
         window.set_client_inset(client_inset);
@@ -1902,9 +2003,13 @@ impl Render for SettingsWindowView {
             .flex()
             .items_center()
             .min_w(px(0.0))
-            .px_3()
+            .px(px(12.0))
             .window_control_area(WindowControlArea::Drag)
-            .when(is_macos, |this| this.pl(SETTINGS_TRAFFIC_LIGHTS_SAFE_INSET))
+            .when(is_macos, |this| {
+                this.pl(settings_window_traffic_lights_safe_inset(
+                    self.ui_scale_percent,
+                ))
+            })
             .on_click(cx.listener(|this, e: &ClickEvent, window, cx| {
                 if !chrome::should_handle_titlebar_double_click(e.click_count(), e.standard_click())
                 {
@@ -1951,7 +2056,8 @@ impl Render for SettingsWindowView {
             .child(
                 div()
                     .overflow_hidden()
-                    .text_sm()
+                    .text_size(px(13.0))
+                    .line_height(px(16.0))
                     .font_weight(FontWeight::BOLD)
                     .whitespace_nowrap()
                     .child(SETTINGS_WINDOW_TITLE),
@@ -1959,12 +2065,13 @@ impl Render for SettingsWindowView {
 
         let min_hover = with_alpha(theme.colors.text, if theme.is_dark { 0.10 } else { 0.08 });
         let min_active = with_alpha(theme.colors.text, if theme.is_dark { 0.16 } else { 0.12 });
-        let min = chrome::titlebar_control_button(
+        let min = chrome::titlebar_control_button_scaled(
             theme,
             "settings_window_min_btn",
             chrome::titlebar_control_icon("icons/generic_minimize.svg", theme.colors.accent),
             min_hover,
             min_active,
+            self.ui_scale_percent,
         )
         .id("settings_window_min")
         .debug_selector(|| "settings_window_min".to_string())
@@ -1981,12 +2088,13 @@ impl Render for SettingsWindowView {
         };
         let max_hover = with_alpha(theme.colors.text, if theme.is_dark { 0.10 } else { 0.08 });
         let max_active = with_alpha(theme.colors.text, if theme.is_dark { 0.16 } else { 0.12 });
-        let max = chrome::titlebar_control_button(
+        let max = chrome::titlebar_control_button_scaled(
             theme,
             "settings_window_max_btn",
             chrome::titlebar_control_icon(max_icon, theme.colors.accent),
             max_hover,
             max_active,
+            self.ui_scale_percent,
         )
         .id("settings_window_max")
         .debug_selector(|| "settings_window_max".to_string())
@@ -1999,12 +2107,13 @@ impl Render for SettingsWindowView {
 
         let close_hover = with_alpha(theme.colors.danger, if theme.is_dark { 0.45 } else { 0.28 });
         let close_active = with_alpha(theme.colors.danger, if theme.is_dark { 0.60 } else { 0.40 });
-        let close = chrome::titlebar_control_button(
+        let close = chrome::titlebar_control_button_scaled(
             theme,
             "settings_window_close_btn",
             chrome::titlebar_control_icon("icons/generic_close.svg", theme.colors.danger),
             close_hover,
             close_active,
+            self.ui_scale_percent,
         )
         .id("settings_window_close_btn")
         .debug_selector(|| "settings_window_close".to_string())
@@ -2016,7 +2125,7 @@ impl Render for SettingsWindowView {
 
         let header = div()
             .id("settings_window_header")
-            .h(chrome::TITLE_BAR_HEIGHT)
+            .h(chrome::title_bar_height(self.ui_scale_percent))
             .w_full()
             .flex()
             .items_center()
@@ -2073,6 +2182,18 @@ impl Render for SettingsWindowView {
                         )
                         .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
                             this.toggle_section(SettingsSection::DateFormat, cx);
+                        }));
+
+                    let ui_scale_row = self
+                        .summary_row(
+                            "settings_window_ui_scale",
+                            "UI scale",
+                            ui_scale::label(self.ui_scale_percent).into(),
+                            self.expanded_section == Some(SettingsSection::UiScale),
+                            theme,
+                        )
+                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                            this.toggle_section(SettingsSection::UiScale, cx);
                         }));
 
                     let ui_font_row = self
@@ -2236,6 +2357,44 @@ impl Render for SettingsWindowView {
                             list,
                             theme,
                         ));
+                    }
+
+                    general_card = general_card.child(ui_scale_row);
+                    if self.expanded_section == Some(SettingsSection::UiScale) {
+                        let mut detail =
+                            self.detail_container("settings_window_ui_scale_container", theme);
+                        for percent in ui_scale::UI_SCALE_PRESETS.iter().copied() {
+                            let detail_text = match percent {
+                                ui_scale::DEFAULT_UI_SCALE_PERCENT => Some("Default scale".into()),
+                                80 | 90 => Some("Fit more on screen".into()),
+                                110 | 125 | 150 => Some("Larger controls and text".into()),
+                                _ => None,
+                            };
+                            detail = detail.child(
+                                self.option_row(
+                                    format!("settings_window_ui_scale_{percent}"),
+                                    ui_scale::label(percent),
+                                    detail_text,
+                                    self.ui_scale_percent == percent,
+                                    theme,
+                                )
+                                .on_click(cx.listener(
+                                    move |this, _e: &ClickEvent, window, cx| {
+                                        this.set_ui_scale_percent(percent, window, cx);
+                                    },
+                                )),
+                            );
+                        }
+                        general_card = general_card.child(
+                            detail.child(
+                                div()
+                                    .px_2()
+                                    .pb_1()
+                                    .text_xs()
+                                    .text_color(theme.colors.text_muted)
+                                    .child("Shortcut: Ctrl/Cmd +, -, and 0."),
+                            ),
+                        );
                     }
 
                     general_card = general_card.child(ui_font_row);
@@ -3120,7 +3279,7 @@ impl Render for SettingsWindowView {
             let size = window.viewport_size();
             let next = chrome::resize_edge(
                 e.position,
-                chrome::CLIENT_SIDE_DECORATION_INSET,
+                settings_window_client_inset_for_scale(this.ui_scale_percent),
                 size,
                 tiling,
             );
@@ -3133,7 +3292,7 @@ impl Render for SettingsWindowView {
         if tiling.is_some() {
             root = root.on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|_this, e: &MouseDownEvent, window, cx| {
+                cx.listener(|this, e: &MouseDownEvent, window, cx| {
                     let Decorations::Client { tiling } = window.window_decorations() else {
                         return;
                     };
@@ -3141,7 +3300,7 @@ impl Render for SettingsWindowView {
                     let size = window.viewport_size();
                     let edge = chrome::resize_edge(
                         e.position,
-                        chrome::CLIENT_SIDE_DECORATION_INSET,
+                        settings_window_client_inset_for_scale(this.ui_scale_percent),
                         size,
                         tiling,
                     );
@@ -3161,6 +3320,7 @@ impl Render for SettingsWindowView {
             theme,
             decorations,
             body.into_any_element(),
+            self.ui_scale_percent,
         ))
     }
 }
@@ -3630,7 +3790,7 @@ mod tests {
 
         let mut settings_cx = gpui::VisualTestContext::from_window(*settings_window.deref(), cx);
         settings_cx.run_until_parked();
-        settings_cx.simulate_resize(size(px(SETTINGS_WINDOW_DEFAULT_WIDTH_PX), px(1200.0)));
+        settings_cx.simulate_resize(size(px(SETTINGS_WINDOW_DEFAULT_WIDTH_PX), px(1800.0)));
         settings_cx.run_until_parked();
 
         for (section, selector) in [
@@ -4006,6 +4166,19 @@ mod tests {
         let mut settings_cx = gpui::VisualTestContext::from_window(*settings_window.deref(), cx);
         settings_cx.run_until_parked();
         settings_cx.simulate_resize(size(px(SETTINGS_WINDOW_DEFAULT_WIDTH_PX), px(1200.0)));
+        settings_cx.run_until_parked();
+        settings_cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
+            // Keep the interaction test resilient as rows are added to the root links card.
+            let current_x = settings.settings_window_scroll.offset().x;
+            let max_offset = settings.settings_window_scroll.max_offset().y.max(px(0.0));
+            settings
+                .settings_window_scroll
+                .set_offset(point(current_x, -max_offset));
+            cx.notify();
+        });
         settings_cx.run_until_parked();
         settings_cx.update(|window, app| {
             let _ = window.draw(app);
