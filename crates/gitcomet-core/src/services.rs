@@ -640,6 +640,16 @@ pub trait GitRepository: Send + Sync {
         )))
     }
 
+    fn merge_subtree_with_output(
+        &self,
+        _path: &Path,
+        _options: &SubtreeMergeOptions,
+    ) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "subtree merge is not implemented for this backend",
+        )))
+    }
+
     fn split_subtree_with_output(
         &self,
         _path: &Path,

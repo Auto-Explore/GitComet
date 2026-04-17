@@ -172,6 +172,13 @@ pub struct Subtree {
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct SubtreeMergeOptions {
+    pub revision: String,
+    pub squash: bool,
+    pub message: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct SubtreeSplitOptions {
     pub branch: Option<String>,
     pub through_revision: Option<String>,

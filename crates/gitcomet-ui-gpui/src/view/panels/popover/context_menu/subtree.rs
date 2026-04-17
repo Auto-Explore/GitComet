@@ -48,6 +48,20 @@ pub(super) fn model(repo: Option<&RepoState>, repo_id: RepoId, path: &Path) -> C
         }),
     });
     items.push(ContextMenuItem::Entry {
+        label: "Merge…".into(),
+        icon: Some("icons/swap.svg".into()),
+        shortcut: None,
+        disabled: false,
+        action: Box::new(ContextMenuAction::OpenPopover {
+            kind: PopoverKind::subtree(
+                repo_id,
+                SubtreePopoverKind::MergePrompt {
+                    initial_path: Some(path.to_path_buf()),
+                },
+            ),
+        }),
+    });
+    items.push(ContextMenuItem::Entry {
         label: "Split…".into(),
         icon: Some("icons/git_branch.svg".into()),
         shortcut: None,
@@ -56,7 +70,7 @@ pub(super) fn model(repo: Option<&RepoState>, repo_id: RepoId, path: &Path) -> C
             kind: PopoverKind::subtree(
                 repo_id,
                 SubtreePopoverKind::SplitPrompt {
-                    path: path.to_path_buf(),
+                    initial_path: Some(path.to_path_buf()),
                 },
             ),
         }),
@@ -239,6 +253,11 @@ mod tests {
         assert!(
             icons
                 .iter()
+                .any(|(label, icon)| label == "Merge…" && *icon == Some("icons/swap.svg"))
+        );
+        assert!(
+            icons
+                .iter()
                 .any(|(label, icon)| label == "Split…" && *icon == Some("icons/git_branch.svg"))
         );
     }
@@ -258,5 +277,38 @@ mod tests {
                 ContextMenuItem::Entry { label, .. } if label.as_ref() == "Reveal location"
             )
         }));
+    }
+
+    #[test]
+    fn model_opens_merge_prompt_with_prefilled_path() {
+        let repo = repo_with_subtree_source(Some("https://example.com/repo.git"));
+        let model = model(
+            Some(&repo),
+            RepoId(1),
+            &std::path::PathBuf::from("vendor/lib"),
+        );
+
+        let merge_action = model
+            .items
+            .iter()
+            .find_map(|item| match item {
+                ContextMenuItem::Entry { label, action, .. } if label.as_ref() == "Merge…" => {
+                    Some((**action).clone())
+                }
+                _ => None,
+            })
+            .expect("expected merge entry");
+
+        assert!(matches!(
+            merge_action,
+            ContextMenuAction::OpenPopover {
+                kind: PopoverKind::Repo {
+                    repo_id: RepoId(1),
+                    kind: RepoPopoverKind::Subtree(SubtreePopoverKind::MergePrompt {
+                        initial_path: Some(path),
+                    }),
+                },
+            } if path == std::path::PathBuf::from("vendor/lib")
+        ));
     }
 }

@@ -35,6 +35,7 @@ mod submodule_remove_confirm;
 mod submodule_remove_picker;
 mod submodule_trust_confirm;
 mod subtree_add_prompt;
+mod subtree_merge_prompt;
 mod subtree_open_picker;
 mod subtree_pull_picker;
 mod subtree_pull_prompt;
@@ -42,7 +43,6 @@ mod subtree_push_picker;
 mod subtree_push_prompt;
 mod subtree_remove_confirm;
 mod subtree_remove_picker;
-mod subtree_split_picker;
 mod subtree_split_prompt;
 mod worktree_add_prompt;
 mod worktree_open_picker;
@@ -114,6 +114,8 @@ pub(in super::super) struct PopoverHost {
     subtree_reference_input: Entity<components::TextInput>,
     subtree_path_input: Entity<components::TextInput>,
     subtree_push_refspec_input: Entity<components::TextInput>,
+    subtree_merge_revision_input: Entity<components::TextInput>,
+    subtree_merge_message_input: Entity<components::TextInput>,
     subtree_split_branch_input: Entity<components::TextInput>,
     subtree_split_through_revision_input: Entity<components::TextInput>,
     subtree_split_annotate_input: Entity<components::TextInput>,
@@ -577,6 +579,34 @@ impl PopoverHost {
             )
         });
 
+        let subtree_merge_revision_input = cx.new(|cx| {
+            components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "subtree-split-or-commit".into(),
+                    multiline: false,
+                    read_only: false,
+                    chromeless: false,
+                    soft_wrap: false,
+                },
+                window,
+                cx,
+            )
+        });
+
+        let subtree_merge_message_input = cx.new(|cx| {
+            components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "Optional merge commit message".into(),
+                    multiline: false,
+                    read_only: false,
+                    chromeless: false,
+                    soft_wrap: false,
+                },
+                window,
+                cx,
+            )
+        });
+
         let subtree_split_branch_input = cx.new(|cx| {
             components::TextInput::new(
                 components::TextInputOptions {
@@ -733,6 +763,8 @@ impl PopoverHost {
             subtree_reference_input,
             subtree_path_input,
             subtree_push_refspec_input,
+            subtree_merge_revision_input,
+            subtree_merge_message_input,
             subtree_split_branch_input,
             subtree_split_through_revision_input,
             subtree_split_annotate_input,
@@ -792,6 +824,10 @@ impl PopoverHost {
         self.subtree_path_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
         self.subtree_push_refspec_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.subtree_merge_revision_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.subtree_merge_message_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
         self.subtree_split_branch_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
@@ -1390,7 +1426,6 @@ impl PopoverHost {
                             SubtreePopoverKind::OpenPicker
                             | SubtreePopoverKind::PullPicker
                             | SubtreePopoverKind::PushPicker
-                            | SubtreePopoverKind::SplitPicker
                             | SubtreePopoverKind::RemovePicker,
                         ),
                 } => {
@@ -1485,7 +1520,7 @@ impl PopoverHost {
                 }
                 PopoverKind::Repo {
                     repo_id,
-                    kind: RepoPopoverKind::Subtree(SubtreePopoverKind::SplitPrompt { path }),
+                    kind: RepoPopoverKind::Subtree(SubtreePopoverKind::MergePrompt { initial_path }),
                 } => {
                     let theme = self.theme;
                     let source = self
@@ -1493,13 +1528,67 @@ impl PopoverHost {
                         .repos
                         .iter()
                         .find(|repo| repo.id == *repo_id)
-                        .and_then(|repo| match &repo.subtrees {
-                            Loadable::Ready(subtrees) => subtrees
-                                .iter()
-                                .find(|subtree| subtree.path == *path)
-                                .and_then(|subtree| subtree.source.clone()),
-                            _ => None,
+                        .and_then(|repo| {
+                            initial_path.as_ref().and_then(|path| match &repo.subtrees {
+                                Loadable::Ready(subtrees) => subtrees
+                                    .iter()
+                                    .find(|subtree| subtree.path == *path)
+                                    .and_then(|subtree| subtree.source.clone()),
+                                _ => None,
+                            })
                         });
+                    let initial_path_text = initial_path
+                        .as_ref()
+                        .map(|path| path.display().to_string())
+                        .unwrap_or_default();
+                    self.subtree_path_input.update(cx, |input, cx| {
+                        input.set_theme(theme, cx);
+                        input.set_text(initial_path_text, cx);
+                        cx.notify();
+                    });
+                    self.subtree_merge_revision_input.update(cx, |input, cx| {
+                        input.set_theme(theme, cx);
+                        input.set_text("", cx);
+                        cx.notify();
+                    });
+                    self.subtree_merge_message_input.update(cx, |input, cx| {
+                        input.set_theme(theme, cx);
+                        input.set_text("", cx);
+                        cx.notify();
+                    });
+                    self.subtree_squash_enabled = source.is_none_or(|source| source.squash);
+                    let focus = if initial_path.is_some() {
+                        self.subtree_merge_revision_input
+                            .read_with(cx, |i, _| i.focus_handle())
+                    } else {
+                        self.subtree_path_input
+                            .read_with(cx, |i, _| i.focus_handle())
+                    };
+                    window.focus(&focus, cx);
+                }
+                PopoverKind::Repo {
+                    repo_id,
+                    kind: RepoPopoverKind::Subtree(SubtreePopoverKind::SplitPrompt { initial_path }),
+                } => {
+                    let theme = self.theme;
+                    let source = self
+                        .state
+                        .repos
+                        .iter()
+                        .find(|repo| repo.id == *repo_id)
+                        .and_then(|repo| {
+                            initial_path.as_ref().and_then(|path| match &repo.subtrees {
+                                Loadable::Ready(subtrees) => subtrees
+                                    .iter()
+                                    .find(|subtree| subtree.path == *path)
+                                    .and_then(|subtree| subtree.source.clone()),
+                                _ => None,
+                            })
+                        });
+                    let initial_path_text = initial_path
+                        .as_ref()
+                        .map(|path| path.display().to_string())
+                        .unwrap_or_default();
                     let remote_repository = source
                         .as_ref()
                         .and_then(|source| match source.local_repository.as_deref() {
@@ -1515,6 +1604,11 @@ impl PopoverHost {
                         .as_ref()
                         .map(|source| source.reference.clone())
                         .unwrap_or_default();
+                    self.subtree_path_input.update(cx, |input, cx| {
+                        input.set_theme(theme, cx);
+                        input.set_text(initial_path_text, cx);
+                        cx.notify();
+                    });
                     self.subtree_split_branch_input.update(cx, |input, cx| {
                         input.set_theme(theme, cx);
                         input.set_text("", cx);
@@ -1559,7 +1653,7 @@ impl PopoverHost {
                     self.subtree_split_ignore_joins_enabled = false;
                     self.subtree_split_remote_enabled = !remote_repository.is_empty();
                     let focus = self
-                        .subtree_split_destination_repo_input
+                        .subtree_path_input
                         .read_with(cx, |i, _| i.focus_handle());
                     window.focus(&focus, cx);
                 }
@@ -1875,7 +1969,7 @@ impl PopoverHost {
                         | SubtreePopoverKind::PullPrompt { .. }
                         | SubtreePopoverKind::PushPicker
                         | SubtreePopoverKind::PushPrompt { .. }
-                        | SubtreePopoverKind::SplitPicker
+                        | SubtreePopoverKind::MergePrompt { .. }
                         | SubtreePopoverKind::SplitPrompt { .. }
                         | SubtreePopoverKind::RemovePicker
                         | SubtreePopoverKind::RemoveConfirm { .. },
@@ -2061,11 +2155,11 @@ impl PopoverHost {
                     SubtreePopoverKind::PushPrompt { path } => {
                         subtree_push_prompt::panel(self, repo_id, path, cx)
                     }
-                    SubtreePopoverKind::SplitPicker => {
-                        subtree_split_picker::panel(self, repo_id, cx)
+                    SubtreePopoverKind::MergePrompt { initial_path } => {
+                        subtree_merge_prompt::panel(self, repo_id, initial_path, cx)
                     }
-                    SubtreePopoverKind::SplitPrompt { path } => {
-                        subtree_split_prompt::panel(self, repo_id, path, cx)
+                    SubtreePopoverKind::SplitPrompt { initial_path } => {
+                        subtree_split_prompt::panel(self, repo_id, initial_path, cx)
                     }
                     SubtreePopoverKind::RemovePicker => {
                         subtree_remove_picker::panel(self, repo_id, cx)

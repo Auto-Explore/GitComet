@@ -2376,17 +2376,29 @@ pub(super) enum SubmodulePopoverKind {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum SubtreePopoverKind {
     SectionMenu,
-    Menu { path: std::path::PathBuf },
+    Menu {
+        path: std::path::PathBuf,
+    },
     AddPrompt,
     OpenPicker,
     PullPicker,
-    PullPrompt { path: std::path::PathBuf },
+    PullPrompt {
+        path: std::path::PathBuf,
+    },
     PushPicker,
-    PushPrompt { path: std::path::PathBuf },
-    SplitPicker,
-    SplitPrompt { path: std::path::PathBuf },
+    PushPrompt {
+        path: std::path::PathBuf,
+    },
+    MergePrompt {
+        initial_path: Option<std::path::PathBuf>,
+    },
+    SplitPrompt {
+        initial_path: Option<std::path::PathBuf>,
+    },
     RemovePicker,
-    RemoveConfirm { path: std::path::PathBuf },
+    RemoveConfirm {
+        path: std::path::PathBuf,
+    },
 }
 
 impl PopoverKind {

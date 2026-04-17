@@ -94,6 +94,7 @@ struct ExtractRepoState {
 
 struct ExtractRepo {
     spec: RepoSpec,
+    subtrees: Vec<Subtree>,
     split_revision: Arc<str>,
     state: Arc<ExtractRepoState>,
 }
@@ -208,7 +209,7 @@ impl GitRepository for ExtractRepo {
     }
 
     fn list_subtrees(&self) -> Result<Vec<Subtree>> {
-        Ok(Vec::new())
+        Ok(self.subtrees.clone())
     }
 
     fn split_subtree_with_output(
@@ -599,6 +600,7 @@ fn extract_subtree_effect_rejects_non_empty_destination_repo_without_mutating_it
         spec: RepoSpec {
             workdir: src.clone(),
         },
+        subtrees: Vec::new(),
         split_revision: Arc::from(split_revision),
         state: Arc::clone(&state),
     });
@@ -672,6 +674,7 @@ fn extract_subtree_effect_rejects_destination_matching_source_repo() {
         spec: RepoSpec {
             workdir: src.clone(),
         },
+        subtrees: Vec::new(),
         split_revision: Arc::from(split_revision),
         state: Arc::clone(&state),
     });
@@ -737,6 +740,10 @@ fn extract_subtree_effect_succeeds_for_missing_and_empty_destinations() {
             spec: RepoSpec {
                 workdir: src.clone(),
             },
+            subtrees: vec![Subtree {
+                path: PathBuf::from("vendor/lib"),
+                source: None,
+            }],
             split_revision: Arc::from(split_revision),
             state: Arc::clone(&state),
         });
@@ -779,6 +786,122 @@ fn extract_subtree_effect_succeeds_for_missing_and_empty_destinations() {
             "{label} destination should be a git repo"
         );
     }
+}
+
+#[test]
+fn extract_subtree_effect_rejects_split_paths_outside_repo_before_running_git() {
+    if !super::require_git_shell_for_store_tests() {
+        return;
+    }
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let src = temp.path().join("src");
+    let dest = temp.path().join("dest");
+    let split_revision = init_commit_repo(&src);
+
+    let repo_id = RepoId(10);
+    let state = Arc::new(ExtractRepoState::default());
+    let repo: Arc<dyn GitRepository> = Arc::new(ExtractRepo {
+        spec: RepoSpec {
+            workdir: src.clone(),
+        },
+        subtrees: Vec::new(),
+        split_revision: Arc::from(split_revision),
+        state: Arc::clone(&state),
+    });
+    let repos: HashMap<RepoId, Arc<dyn GitRepository>> = {
+        let mut repos = HashMap::default();
+        repos.insert(repo_id, repo);
+        repos
+    };
+    let executor = super::executor::TaskExecutor::new(1);
+    let backend: Arc<dyn GitBackend> = Arc::new(FailingBackend);
+    let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
+
+    schedule_effect_for_test(
+        &executor,
+        &executor,
+        &backend,
+        &repos,
+        msg_tx,
+        Effect::ExtractSubtree {
+            repo_id,
+            path: PathBuf::from("../vendor/lib"),
+            options: gitcomet_core::domain::SubtreeExtractOptions {
+                destination_repository: Some(dest.clone()),
+                ..Default::default()
+            },
+            auth: None,
+        },
+    );
+
+    let (result, saw_open_repo) = wait_for_extract_finished(&msg_rx, &dest);
+    let err = result.expect_err("path traversal should be rejected");
+    let err_text = err.to_string();
+    assert!(
+        err_text.contains("inside the repository workdir"),
+        "unexpected error: {err_text}"
+    );
+    assert!(
+        !saw_open_repo,
+        "rejected extract should not open destination"
+    );
+    assert_eq!(state.split_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(state.stored_source_configs.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn extract_subtree_effect_skips_metadata_for_custom_non_subtree_paths() {
+    if !super::require_git_shell_for_store_tests() {
+        return;
+    }
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let src = temp.path().join("src");
+    let dest = temp.path().join("dest");
+    let split_revision = init_commit_repo(&src);
+
+    let repo_id = RepoId(11);
+    let state = Arc::new(ExtractRepoState::default());
+    let repo: Arc<dyn GitRepository> = Arc::new(ExtractRepo {
+        spec: RepoSpec {
+            workdir: src.clone(),
+        },
+        subtrees: Vec::new(),
+        split_revision: Arc::from(split_revision),
+        state: Arc::clone(&state),
+    });
+    let repos: HashMap<RepoId, Arc<dyn GitRepository>> = {
+        let mut repos = HashMap::default();
+        repos.insert(repo_id, repo);
+        repos
+    };
+    let executor = super::executor::TaskExecutor::new(1);
+    let backend: Arc<dyn GitBackend> = Arc::new(FailingBackend);
+    let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
+
+    schedule_effect_for_test(
+        &executor,
+        &executor,
+        &backend,
+        &repos,
+        msg_tx,
+        Effect::ExtractSubtree {
+            repo_id,
+            path: PathBuf::from("custom/dir"),
+            options: gitcomet_core::domain::SubtreeExtractOptions {
+                destination_repository: Some(dest.clone()),
+                ..Default::default()
+            },
+            auth: None,
+        },
+    );
+
+    let (result, saw_open_repo) = wait_for_extract_finished(&msg_rx, &dest);
+    result.expect("custom path extract should succeed");
+    assert!(saw_open_repo, "successful extract should open destination");
+    assert_eq!(state.split_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(state.stored_source_configs.load(Ordering::SeqCst), 0);
 }
 
 #[test]
@@ -4397,6 +4520,18 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
                 refspec: "main".to_string(),
                 path: PathBuf::from("vendor/lib"),
                 auth: None,
+            },
+            1,
+        ),
+        (
+            Effect::MergeSubtree {
+                repo_id,
+                path: PathBuf::from("vendor/lib"),
+                options: gitcomet_core::domain::SubtreeMergeOptions {
+                    revision: "subtree-split".to_string(),
+                    squash: true,
+                    message: Some("Merge subtree update".to_string()),
+                },
             },
             1,
         ),

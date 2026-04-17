@@ -320,6 +320,14 @@ mod tests {
             "main",
             path,
         ));
+        assert_unsupported(repo.merge_subtree_with_output(
+            path,
+            &gitcomet_core::domain::SubtreeMergeOptions {
+                revision: "subtree-branch".to_string(),
+                squash: true,
+                message: Some("merge subtree".to_string()),
+            },
+        ));
         assert_unsupported(repo.split_subtree_with_output(
             path,
             &gitcomet_core::domain::SubtreeSplitOptions {

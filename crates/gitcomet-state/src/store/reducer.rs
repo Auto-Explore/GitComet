@@ -125,6 +125,7 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::AddSubtree { .. }
             | Msg::PullSubtree { .. }
             | Msg::PushSubtree { .. }
+            | Msg::MergeSubtree { .. }
             | Msg::SplitSubtree { .. }
             | Msg::ExtractSubtree { .. }
             | Msg::RemoveSubtree { .. }
@@ -457,6 +458,18 @@ fn retry_msg_for_repo_command(repo_id: RepoId, command: RepoCommandKind) -> Opti
             repository,
             refspec,
             path,
+        },
+        RepoCommandKind::MergeSubtree {
+            path,
+            revision,
+            squash,
+            message,
+        } => Msg::MergeSubtree {
+            repo_id,
+            path,
+            revision,
+            squash,
+            message,
         },
         RepoCommandKind::SplitSubtree { path, branch } => Msg::SplitSubtree {
             repo_id,
@@ -1059,6 +1072,16 @@ pub(super) fn reduce(
         } => {
             begin_local_action(state, repo_id);
             actions_emit_effects::push_subtree(repo_id, repository, refspec, path)
+        }
+        Msg::MergeSubtree {
+            repo_id,
+            path,
+            revision,
+            squash,
+            message,
+        } => {
+            begin_local_action(state, repo_id);
+            actions_emit_effects::merge_subtree(repo_id, path, revision, squash, message)
         }
         Msg::SplitSubtree {
             repo_id,

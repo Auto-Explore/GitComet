@@ -263,6 +263,11 @@ pub enum Effect {
         path: PathBuf,
         auth: Option<StagedGitAuth>,
     },
+    MergeSubtree {
+        repo_id: RepoId,
+        path: PathBuf,
+        options: SubtreeMergeOptions,
+    },
     SplitSubtree {
         repo_id: RepoId,
         path: PathBuf,

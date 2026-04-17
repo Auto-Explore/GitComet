@@ -2,6 +2,7 @@ use crate::msg::{Msg, RepoCommandKind};
 use gitcomet_core::auth::{
     StagedGitAuth, clear_staged_git_auth, stage_git_auth_for_current_thread,
 };
+use gitcomet_core::domain::SubtreeMergeOptions;
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{
     CommandOutput, ConflictSide, GitRepository, PullMode, RemoteUrlKind, ResetMode,
@@ -63,6 +64,50 @@ fn normalize_worktree_relative_path(path: &Path) -> Result<PathBuf, Error> {
         )));
     }
     Ok(normalized)
+}
+
+fn normalize_subtree_relative_path(path: &Path) -> Result<PathBuf, Error> {
+    const OUTSIDE_WORKDIR_ERROR: &str = "subtree path must stay inside the repository workdir";
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::Normal(part) => normalized.push(part),
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                return Err(Error::new(ErrorKind::Backend(
+                    OUTSIDE_WORKDIR_ERROR.to_string(),
+                )));
+            }
+        }
+    }
+    if normalized.as_os_str().is_empty() {
+        return Err(Error::new(ErrorKind::Backend(
+            "subtree path must not be empty".to_string(),
+        )));
+    }
+    Ok(normalized)
+}
+
+fn normalize_subtree_merge_options(
+    options: &SubtreeMergeOptions,
+) -> Result<SubtreeMergeOptions, Error> {
+    let revision = options.revision.trim();
+    if revision.is_empty() {
+        return Err(Error::new(ErrorKind::Backend(
+            "subtree merge revision must not be empty".to_string(),
+        )));
+    }
+
+    Ok(SubtreeMergeOptions {
+        revision: revision.to_string(),
+        squash: options.squash,
+        message: options
+            .message
+            .as_deref()
+            .map(str::trim)
+            .filter(|message| !message.is_empty())
+            .map(ToOwned::to_owned),
+    })
 }
 
 fn run_with_git_auth<R>(
@@ -464,6 +509,35 @@ pub(super) fn schedule_push_subtree(
             run_with_git_auth(auth, || {
                 repo.push_subtree_with_output(&repository, &refspec, &path)
             })
+        },
+    );
+}
+
+pub(super) fn schedule_merge_subtree(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: mpsc::Sender<Msg>,
+    repo_id: RepoId,
+    path: PathBuf,
+    options: SubtreeMergeOptions,
+) {
+    let command_path = path.clone();
+    let command_options = options.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::MergeSubtree {
+            path: command_path,
+            revision: command_options.revision,
+            squash: command_options.squash,
+            message: command_options.message,
+        },
+        move |repo| {
+            let normalized_path = normalize_subtree_relative_path(&path)?;
+            let normalized_options = normalize_subtree_merge_options(&options)?;
+            repo.merge_subtree_with_output(&normalized_path, &normalized_options)
         },
     );
 }

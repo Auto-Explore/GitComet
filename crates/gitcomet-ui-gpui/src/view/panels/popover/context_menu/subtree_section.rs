@@ -38,12 +38,27 @@ pub(super) fn model(repo_id: RepoId) -> ContextMenuModel {
         }),
     });
     items.push(ContextMenuItem::Entry {
+        label: "Merge subtree…".into(),
+        icon: Some("icons/swap.svg".into()),
+        shortcut: None,
+        disabled: false,
+        action: Box::new(ContextMenuAction::OpenPopover {
+            kind: PopoverKind::subtree(
+                repo_id,
+                SubtreePopoverKind::MergePrompt { initial_path: None },
+            ),
+        }),
+    });
+    items.push(ContextMenuItem::Entry {
         label: "Split subtree…".into(),
         icon: Some("icons/git_branch.svg".into()),
         shortcut: None,
         disabled: false,
         action: Box::new(ContextMenuAction::OpenPopover {
-            kind: PopoverKind::subtree(repo_id, SubtreePopoverKind::SplitPicker),
+            kind: PopoverKind::subtree(
+                repo_id,
+                SubtreePopoverKind::SplitPrompt { initial_path: None },
+            ),
         }),
     });
     items.push(ContextMenuItem::Entry {
@@ -117,8 +132,73 @@ mod tests {
                 |(label, icon)| label == "Push subtree…" && *icon == Some("icons/arrow_up.svg")
             )
         );
+        assert!(
+            icons
+                .iter()
+                .any(|(label, icon)| label == "Merge subtree…" && *icon == Some("icons/swap.svg"))
+        );
         assert!(icons.iter().any(
             |(label, icon)| label == "Split subtree…" && *icon == Some("icons/git_branch.svg")
+        ));
+    }
+
+    #[test]
+    fn model_opens_editable_split_prompt() {
+        let model = model(RepoId(1));
+
+        let split_action = model
+            .items
+            .iter()
+            .find_map(|item| match item {
+                ContextMenuItem::Entry { label, action, .. }
+                    if label.as_ref() == "Split subtree…" =>
+                {
+                    Some((**action).clone())
+                }
+                _ => None,
+            })
+            .expect("expected split entry");
+
+        assert!(matches!(
+            split_action,
+            ContextMenuAction::OpenPopover {
+                kind: PopoverKind::Repo {
+                    repo_id: RepoId(1),
+                    kind: RepoPopoverKind::Subtree(SubtreePopoverKind::SplitPrompt {
+                        initial_path: None,
+                    }),
+                },
+            }
+        ));
+    }
+
+    #[test]
+    fn model_opens_blank_merge_prompt() {
+        let model = model(RepoId(1));
+
+        let merge_action = model
+            .items
+            .iter()
+            .find_map(|item| match item {
+                ContextMenuItem::Entry { label, action, .. }
+                    if label.as_ref() == "Merge subtree…" =>
+                {
+                    Some((**action).clone())
+                }
+                _ => None,
+            })
+            .expect("expected merge entry");
+
+        assert!(matches!(
+            merge_action,
+            ContextMenuAction::OpenPopover {
+                kind: PopoverKind::Repo {
+                    repo_id: RepoId(1),
+                    kind: RepoPopoverKind::Subtree(SubtreePopoverKind::MergePrompt {
+                        initial_path: None,
+                    }),
+                },
+            }
         ));
     }
 }

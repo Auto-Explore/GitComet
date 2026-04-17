@@ -141,6 +141,12 @@ pub enum RepoCommandKind {
         refspec: String,
         path: PathBuf,
     },
+    MergeSubtree {
+        path: PathBuf,
+        revision: String,
+        squash: bool,
+        message: Option<String>,
+    },
     SplitSubtree {
         path: PathBuf,
         branch: Option<String>,

@@ -649,14 +649,15 @@ fn hash_repo_popover_kind<H: Hasher>(repo_id: RepoId, kind: &RepoPopoverKind, ha
                 repo_id.hash(hasher);
                 path.hash(hasher);
             }
-            SubtreePopoverKind::SplitPicker => {
+            SubtreePopoverKind::MergePrompt { initial_path } => {
                 37u8.hash(hasher);
                 repo_id.hash(hasher);
+                initial_path.hash(hasher);
             }
-            SubtreePopoverKind::SplitPrompt { path } => {
+            SubtreePopoverKind::SplitPrompt { initial_path } => {
                 38u8.hash(hasher);
                 repo_id.hash(hasher);
-                path.hash(hasher);
+                initial_path.hash(hasher);
             }
             SubtreePopoverKind::RemovePicker => {
                 39u8.hash(hasher);

@@ -867,6 +867,7 @@ fn summarize_command(
             RepoCommandKind::AddSubtree { .. }
             | RepoCommandKind::PullSubtree { .. }
             | RepoCommandKind::PushSubtree { .. }
+            | RepoCommandKind::MergeSubtree { .. }
             | RepoCommandKind::SplitSubtree { .. }
             | RepoCommandKind::RemoveSubtree { .. } => "Subtree",
             RepoCommandKind::StageHunk | RepoCommandKind::UnstageHunk => "Hunk",
@@ -1081,6 +1082,20 @@ fn summarize_command(
         }
         RepoCommandKind::PushSubtree { path, refspec, .. } => {
             format!("Subtree pushed → {} ({refspec})", path.display())
+        }
+        RepoCommandKind::MergeSubtree {
+            path,
+            revision,
+            squash,
+            ..
+        } => {
+            if output.stdout.contains("Already up to date") {
+                format!("Subtree merge: Already up to date → {}", path.display())
+            } else if *squash {
+                format!("Subtree merged → {} ({revision}, --squash)", path.display())
+            } else {
+                format!("Subtree merged → {} ({revision})", path.display())
+            }
         }
         RepoCommandKind::SplitSubtree { path, branch } => {
             if let Some(branch) = branch {
@@ -1751,6 +1766,22 @@ mod tests {
             None,
         );
         assert_eq!(pull_merged, "Pull: Merged");
+
+        let (_, subtree_merge_up_to_date) = summarize_command(
+            &RepoCommandKind::MergeSubtree {
+                path: PathBuf::from("vendor/lib"),
+                revision: "subtree-split".to_string(),
+                squash: true,
+                message: None,
+            },
+            &command_output("git subtree merge", "Already up to date", ""),
+            true,
+            None,
+        );
+        assert_eq!(
+            subtree_merge_up_to_date,
+            "Subtree merge: Already up to date → vendor/lib"
+        );
 
         let (_, pull_rebased) = summarize_command(
             &RepoCommandKind::Pull {

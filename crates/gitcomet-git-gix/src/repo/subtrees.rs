@@ -3,7 +3,9 @@ use crate::util::{
     bytes_to_text_preserving_utf8, git_command_failed_error, run_git_raw_output,
     run_git_with_output,
 };
-use gitcomet_core::domain::{Subtree, SubtreeSourceConfig, SubtreeSplitOptions};
+use gitcomet_core::domain::{
+    Subtree, SubtreeMergeOptions, SubtreeSourceConfig, SubtreeSplitOptions,
+};
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{CommandOutput, Result};
 use std::collections::{BTreeMap, BTreeSet};
@@ -177,6 +179,33 @@ impl GixRepo {
         };
         self.write_stored_subtree_source_config(path, &source)?;
         Ok(output)
+    }
+
+    pub(super) fn merge_subtree_with_output_impl(
+        &self,
+        path: &Path,
+        options: &SubtreeMergeOptions,
+    ) -> Result<CommandOutput> {
+        let path_text = path_to_config_value(path)?;
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("subtree")
+            .arg("merge")
+            .arg("--prefix")
+            .arg(&path_text);
+        if options.squash {
+            cmd.arg("--squash");
+        }
+        if let Some(message) = options.message.as_deref() {
+            cmd.arg("--message").arg(message);
+        }
+        cmd.arg(&options.revision);
+        map_subtree_command_error(run_git_with_output(
+            cmd,
+            &format!(
+                "git subtree merge --prefix={path_text} {}",
+                options.revision
+            ),
+        ))
     }
 
     pub(super) fn split_subtree_with_output_impl(

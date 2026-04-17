@@ -15,7 +15,7 @@ fn click_debug_selector(cx: &mut gpui::VisualTestContext, selector: &'static str
 fn open_split_prompt(
     view: &Entity<GitCometView>,
     cx: &mut gpui::VisualTestContext,
-    path: std::path::PathBuf,
+    initial_path: Option<std::path::PathBuf>,
 ) -> RepoId {
     let repo_id = cx.update(|window, app| {
         let repo_id = view
@@ -29,7 +29,41 @@ fn open_split_prompt(
                     PopoverKind::Repo {
                         repo_id,
                         kind: RepoPopoverKind::Subtree(SubtreePopoverKind::SplitPrompt {
-                            path: path.clone(),
+                            initial_path: initial_path.clone(),
+                        }),
+                    },
+                    gpui::point(gpui::px(120.0), gpui::px(72.0)),
+                    window,
+                    cx,
+                );
+            });
+        });
+        repo_id
+    });
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    repo_id
+}
+
+fn open_merge_prompt(
+    view: &Entity<GitCometView>,
+    cx: &mut gpui::VisualTestContext,
+    initial_path: Option<std::path::PathBuf>,
+) -> RepoId {
+    let repo_id = cx.update(|window, app| {
+        let repo_id = view
+            .read(app)
+            .state
+            .active_repo
+            .expect("expected active repo");
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                host.open_popover_at(
+                    PopoverKind::Repo {
+                        repo_id,
+                        kind: RepoPopoverKind::Subtree(SubtreePopoverKind::MergePrompt {
+                            initial_path: initial_path.clone(),
                         }),
                     },
                     gpui::point(gpui::px(120.0), gpui::px(72.0)),
@@ -99,7 +133,7 @@ fn split_prompt_prefills_stored_extract_defaults_and_enables_publish(
         });
     });
 
-    open_split_prompt(&view, cx, std::path::PathBuf::from("libs/example"));
+    open_split_prompt(&view, cx, Some(std::path::PathBuf::from("libs/example")));
 
     cx.update(|_window, app| {
         let host = view.read(app).popover_host.read(app);
@@ -190,7 +224,7 @@ fn split_prompt_prefills_local_destination_without_enabling_publish(cx: &mut gpu
         });
     });
 
-    open_split_prompt(&view, cx, std::path::PathBuf::from("libs/example"));
+    open_split_prompt(&view, cx, Some(std::path::PathBuf::from("libs/example")));
 
     cx.update(|_window, app| {
         let host = view.read(app).popover_host.read(app);
@@ -227,7 +261,7 @@ fn split_prompt_defaults_to_simple_extract_ui(cx: &mut gpui::TestAppContext) {
         let _ = window.draw(app);
     });
 
-    let repo_id = open_split_prompt(&view, cx, std::path::PathBuf::from("libs/example"));
+    let repo_id = open_split_prompt(&view, cx, Some(std::path::PathBuf::from("libs/example")));
 
     cx.debug_bounds("subtree_split_publish_remote_toggle")
         .expect("expected publish toggle");
@@ -247,7 +281,7 @@ fn split_prompt_defaults_to_simple_extract_ui(cx: &mut gpui::TestAppContext) {
             Some(PopoverKind::Repo {
                 repo_id,
                 kind: RepoPopoverKind::Subtree(SubtreePopoverKind::SplitPrompt {
-                    path: std::path::PathBuf::from("libs/example"),
+                    initial_path: Some(std::path::PathBuf::from("libs/example")),
                 }),
             })
         );
@@ -258,6 +292,11 @@ fn split_prompt_defaults_to_simple_extract_ui(cx: &mut gpui::TestAppContext) {
         assert!(
             !host.subtree_split_remote_enabled,
             "expected publish to remote to stay disabled without stored remote state"
+        );
+        assert_eq!(
+            host.subtree_path_input
+                .read_with(app, |input, _| input.text().to_string()),
+            "libs/example"
         );
         assert_eq!(
             host.subtree_split_destination_repo_input
@@ -275,11 +314,11 @@ fn split_prompt_defaults_to_simple_extract_ui(cx: &mut gpui::TestAppContext) {
             ""
         );
         let focus = host
-            .subtree_split_destination_repo_input
+            .subtree_path_input
             .read_with(app, |input, _| input.focus_handle());
         assert!(
             focus.is_focused(window),
-            "expected destination repo input to receive initial focus"
+            "expected path input to receive initial focus"
         );
     });
 }
@@ -296,7 +335,7 @@ fn split_prompt_advanced_toggle_preserves_values_until_reopen(cx: &mut gpui::Tes
         let _ = window.draw(app);
     });
 
-    open_split_prompt(&view, cx, path.clone());
+    open_split_prompt(&view, cx, Some(path.clone()));
 
     click_debug_selector(cx, "subtree_split_advanced_toggle");
     cx.update(|window, app| {
@@ -370,7 +409,7 @@ fn split_prompt_advanced_toggle_preserves_values_until_reopen(cx: &mut gpui::Tes
         let _ = window.draw(app);
     });
 
-    open_split_prompt(&view, cx, path);
+    open_split_prompt(&view, cx, Some(path));
 
     cx.update(|_window, app| {
         let host = view.read(app).popover_host.read(app);
@@ -389,4 +428,182 @@ fn split_prompt_advanced_toggle_preserves_values_until_reopen(cx: &mut gpui::Tes
             .is_some(),
         "expected advanced options indicator to reset to collapsed on reopen"
     );
+}
+
+#[gpui::test]
+fn split_prompt_allows_blank_initial_path_for_section_level_split(cx: &mut gpui::TestAppContext) {
+    let (store, events, _repo, _workdir) = create_tracking_store("subtree-split-section-level");
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    let repo_id = open_split_prompt(&view, cx, None);
+
+    cx.update(|window, app| {
+        let host = view.read(app).popover_host.read(app);
+        assert_eq!(
+            host.popover_kind_for_tests(),
+            Some(PopoverKind::Repo {
+                repo_id,
+                kind: RepoPopoverKind::Subtree(SubtreePopoverKind::SplitPrompt {
+                    initial_path: None,
+                }),
+            })
+        );
+        assert_eq!(
+            host.subtree_path_input
+                .read_with(app, |input, _| input.text().to_string()),
+            ""
+        );
+        assert_eq!(
+            host.subtree_split_destination_repo_input
+                .read_with(app, |input, _| input.text().to_string()),
+            ""
+        );
+        let focus = host
+            .subtree_path_input
+            .read_with(app, |input, _| input.focus_handle());
+        assert!(
+            focus.is_focused(window),
+            "expected path input to receive focus for section-level split"
+        );
+    });
+}
+
+#[gpui::test]
+fn merge_prompt_defaults_to_blank_path_for_section_level_merge(cx: &mut gpui::TestAppContext) {
+    let (store, events, _repo, _workdir) = create_tracking_store("subtree-merge-section-level");
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    let repo_id = open_merge_prompt(&view, cx, None);
+
+    cx.update(|window, app| {
+        let host = view.read(app).popover_host.read(app);
+        assert_eq!(
+            host.popover_kind_for_tests(),
+            Some(PopoverKind::Repo {
+                repo_id,
+                kind: RepoPopoverKind::Subtree(SubtreePopoverKind::MergePrompt {
+                    initial_path: None,
+                }),
+            })
+        );
+        assert_eq!(
+            host.subtree_path_input
+                .read_with(app, |input, _| input.text().to_string()),
+            ""
+        );
+        assert_eq!(
+            host.subtree_merge_revision_input
+                .read_with(app, |input, _| input.text().to_string()),
+            ""
+        );
+        let focus = host
+            .subtree_path_input
+            .read_with(app, |input, _| input.focus_handle());
+        assert!(
+            focus.is_focused(window),
+            "expected path input to receive focus for section-level merge"
+        );
+    });
+}
+
+#[gpui::test]
+fn merge_prompt_prefills_path_and_focuses_revision_for_row_level_merge(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+    let repo_id = RepoId(44);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_subtree_merge_row",
+        std::process::id()
+    ));
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = RepoState::new_opening(
+                repo_id,
+                gitcomet_core::domain::RepoSpec {
+                    workdir: workdir.clone(),
+                },
+            );
+            repo.open = Loadable::Ready(());
+            repo.subtrees = Loadable::Ready(
+                vec![gitcomet_core::domain::Subtree {
+                    path: std::path::PathBuf::from("libs/example"),
+                    source: Some(gitcomet_core::domain::SubtreeSourceConfig {
+                        local_repository: Some("/tmp/libs-example".to_string()),
+                        repository: "/tmp/libs-example".to_string(),
+                        reference: "main".to_string(),
+                        push_refspec: Some("refs/heads/main".to_string()),
+                        squash: false,
+                    }),
+                }]
+                .into(),
+            );
+
+            this.state = Arc::new(AppState {
+                repos: vec![repo],
+                active_repo: Some(repo_id),
+                ..Default::default()
+            });
+            this.popover_host.update(cx, |host, _| {
+                host.state = Arc::clone(&this.state);
+            });
+            cx.notify();
+        });
+    });
+
+    open_merge_prompt(&view, cx, Some(std::path::PathBuf::from("libs/example")));
+
+    cx.update(|window, app| {
+        let host = view.read(app).popover_host.read(app);
+        assert_eq!(
+            host.popover_kind_for_tests(),
+            Some(PopoverKind::Repo {
+                repo_id,
+                kind: RepoPopoverKind::Subtree(SubtreePopoverKind::MergePrompt {
+                    initial_path: Some(std::path::PathBuf::from("libs/example")),
+                }),
+            })
+        );
+        assert_eq!(
+            host.subtree_path_input
+                .read_with(app, |input, _| input.text().to_string()),
+            "libs/example"
+        );
+        assert_eq!(
+            host.subtree_merge_revision_input
+                .read_with(app, |input, _| input.text().to_string()),
+            ""
+        );
+        assert!(
+            !host.subtree_squash_enabled,
+            "expected merge prompt to restore stored subtree squash mode"
+        );
+        let focus = host
+            .subtree_merge_revision_input
+            .read_with(app, |input, _| input.focus_handle());
+        assert!(
+            focus.is_focused(window),
+            "expected revision input to receive focus for row-level merge"
+        );
+    });
 }

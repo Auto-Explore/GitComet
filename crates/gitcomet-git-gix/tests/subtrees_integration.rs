@@ -260,3 +260,74 @@ fn subtree_commands_round_trip_and_persist_source_metadata() {
         String::from_utf8_lossy(&config_output.stderr)
     );
 }
+
+#[test]
+fn subtree_merge_accepts_local_split_revision() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let root = dir.path();
+
+    let upstream_repo = root.join("upstream");
+    let parent_repo = root.join("parent");
+    fs::create_dir_all(&upstream_repo).expect("create upstream");
+    fs::create_dir_all(&parent_repo).expect("create parent");
+
+    init_repo_with_seed(&upstream_repo, "lib.txt", "v1\n", "seed subtree source");
+    init_repo_with_seed(&parent_repo, "README.md", "parent\n", "seed parent");
+
+    let backend = GixBackend;
+    let opened = backend.open(&parent_repo).expect("open parent repository");
+    let upstream_text = upstream_repo.to_string_lossy().to_string();
+    let subtree_path = Path::new("vendor/lib");
+
+    opened
+        .add_subtree_with_output(&upstream_text, "main", subtree_path, false)
+        .expect("add subtree");
+
+    opened
+        .split_subtree_with_output(
+            subtree_path,
+            &gitcomet_core::domain::SubtreeSplitOptions {
+                branch: Some("subtree-split".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("split subtree");
+
+    run_git(&parent_repo, &["checkout", "subtree-split"]);
+    write_and_commit(
+        &parent_repo,
+        "lib.txt",
+        "v2-from-split\n",
+        "update split branch",
+    );
+    let split_tip = git_stdout(&parent_repo, &["rev-parse", "HEAD"]);
+    run_git(&parent_repo, &["checkout", "main"]);
+
+    opened
+        .merge_subtree_with_output(
+            subtree_path,
+            &gitcomet_core::domain::SubtreeMergeOptions {
+                revision: split_tip.clone(),
+                squash: true,
+                message: Some("Merge subtree update".to_string()),
+            },
+        )
+        .expect("merge subtree");
+
+    assert_eq!(
+        fs::read_to_string(parent_repo.join("vendor/lib/lib.txt")).expect("read merged subtree"),
+        "v2-from-split\n"
+    );
+    assert_eq!(
+        git_stdout(&parent_repo, &["log", "-1", "--pretty=%s"]),
+        "Merge subtree update"
+    );
+
+    let persisted = opened.list_subtrees().expect("list subtree after merge");
+    assert_eq!(persisted.len(), 1);
+    let source = persisted[0].source.as_ref().expect("stored source config");
+    assert_eq!(source.repository, upstream_text);
+    assert_eq!(source.reference, "main");
+    assert!(matches!(source.push_refspec, None));
+    assert!(!source.squash);
+}

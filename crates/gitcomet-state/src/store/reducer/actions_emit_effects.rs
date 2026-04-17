@@ -185,6 +185,24 @@ pub(super) fn push_subtree(
     }]
 }
 
+pub(super) fn merge_subtree(
+    repo_id: RepoId,
+    path: PathBuf,
+    revision: String,
+    squash: bool,
+    message: Option<String>,
+) -> Vec<Effect> {
+    vec![Effect::MergeSubtree {
+        repo_id,
+        path,
+        options: gitcomet_core::domain::SubtreeMergeOptions {
+            revision,
+            squash,
+            message,
+        },
+    }]
+}
+
 pub(super) fn split_subtree(repo_id: RepoId, path: PathBuf, branch: Option<String>) -> Vec<Effect> {
     vec![Effect::SplitSubtree {
         repo_id,
@@ -688,6 +706,7 @@ fn tracks_local_actions_in_flight(command: &RepoCommandKind) -> bool {
             | RepoCommandKind::AddSubtree { .. }
             | RepoCommandKind::PullSubtree { .. }
             | RepoCommandKind::PushSubtree { .. }
+            | RepoCommandKind::MergeSubtree { .. }
             | RepoCommandKind::SplitSubtree { .. }
             | RepoCommandKind::RemoveSubtree { .. }
             | RepoCommandKind::StageHunk
@@ -723,6 +742,7 @@ pub(super) fn repo_command_finished(
         RepoCommandKind::AddSubtree { .. }
             | RepoCommandKind::PullSubtree { .. }
             | RepoCommandKind::PushSubtree { .. }
+            | RepoCommandKind::MergeSubtree { .. }
             | RepoCommandKind::RemoveSubtree { .. }
     ) && result.is_ok();
     let command_succeeded = result.is_ok();

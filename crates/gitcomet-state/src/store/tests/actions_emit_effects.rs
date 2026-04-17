@@ -794,6 +794,30 @@ fn subtree_commands_reload_subtrees_on_success() {
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
             repo_id,
+            command: RepoCommandKind::MergeSubtree {
+                path: PathBuf::from("vendor/lib"),
+                revision: "subtree-split".to_string(),
+                squash: true,
+                message: Some("Merge subtree update".to_string()),
+            },
+            result: Ok(CommandOutput::empty_success("git subtree merge")),
+        }),
+    );
+
+    assert!(state.repos[0].subtrees.is_loading());
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadSubtrees { repo_id: id } if *id == repo_id))
+    );
+
+    state.repos[0].set_subtrees(Loadable::Ready(Vec::new()));
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+            repo_id,
             command: RepoCommandKind::PushSubtree {
                 repository: "https://example.com/sub.git".to_string(),
                 refspec: "main".to_string(),
@@ -2383,6 +2407,15 @@ fn repo_command_finished_error_summaries_cover_additional_labels() {
             "Subtree",
         ),
         (
+            RepoCommandKind::MergeSubtree {
+                path: PathBuf::from("vendor/lib"),
+                revision: "subtree-split".to_string(),
+                squash: true,
+                message: Some("Merge subtree update".to_string()),
+            },
+            "Subtree",
+        ),
+        (
             RepoCommandKind::SplitSubtree {
                 path: PathBuf::from("vendor/lib"),
                 branch: Some("subtree-split".to_string()),
@@ -2542,6 +2575,15 @@ fn repo_command_finished_success_summaries_cover_additional_commands() {
                 path: PathBuf::from("vendor/lib"),
             },
             "Subtree pushed → vendor/lib (main)",
+        ),
+        (
+            RepoCommandKind::MergeSubtree {
+                path: PathBuf::from("vendor/lib"),
+                revision: "subtree-split".to_string(),
+                squash: true,
+                message: Some("Merge subtree update".to_string()),
+            },
+            "Subtree merged → vendor/lib (subtree-split, --squash)",
         ),
         (
             RepoCommandKind::SplitSubtree {
@@ -2820,6 +2862,30 @@ fn checkout_branch_and_submodule_messages_emit_effects() {
         }] if repository == "https://example.com/sub.git"
             && refspec == "main"
             && path == &PathBuf::from("vendor/lib")
+    ));
+
+    let merge_subtree = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::MergeSubtree {
+            repo_id: RepoId(1),
+            path: PathBuf::from("vendor/lib"),
+            revision: "subtree-split".to_string(),
+            squash: true,
+            message: Some("Merge subtree update".to_string()),
+        },
+    );
+    assert!(matches!(
+        merge_subtree.as_slice(),
+        [Effect::MergeSubtree {
+            repo_id: RepoId(1),
+            path,
+            options,
+        }] if path == &PathBuf::from("vendor/lib")
+            && options.revision == "subtree-split"
+            && options.squash
+            && options.message.as_deref() == Some("Merge subtree update")
     ));
 
     let split_subtree = reduce(

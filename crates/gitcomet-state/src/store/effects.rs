@@ -389,12 +389,14 @@ fn send_unavailable_git_effect_result(
             path,
             options,
             ..
-        } => send(Msg::Internal(crate::msg::InternalMsg::ExtractSubtreeFinished {
-            repo_id,
-            path,
-            destination_repo: options.destination_repository,
-            result: Err(git_unavailable_error(runtime)),
-        })),
+        } => send(Msg::Internal(
+            crate::msg::InternalMsg::ExtractSubtreeFinished {
+                repo_id,
+                path,
+                destination_repo: options.destination_repository,
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
         Effect::AbortCloneRepo { dest } => clone::schedule_abort_clone_repo(msg_tx.clone(), dest),
         Effect::ExportPatch {
             repo_id,
@@ -487,16 +489,18 @@ fn send_unavailable_git_effect_result(
             path,
             squash,
             ..
-        } => send(Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
-            repo_id,
-            command: RepoCommandKind::AddSubtree {
-                repository,
-                reference,
-                path,
-                squash,
+        } => send(Msg::Internal(
+            crate::msg::InternalMsg::RepoCommandFinished {
+                repo_id,
+                command: RepoCommandKind::AddSubtree {
+                    repository,
+                    reference,
+                    path,
+                    squash,
+                },
+                result: Err(git_unavailable_error(runtime)),
             },
-            result: Err(git_unavailable_error(runtime)),
-        })),
+        )),
         Effect::PullSubtree {
             repo_id,
             repository,
@@ -504,40 +508,62 @@ fn send_unavailable_git_effect_result(
             path,
             squash,
             ..
-        } => send(Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
-            repo_id,
-            command: RepoCommandKind::PullSubtree {
-                repository,
-                reference,
-                path,
-                squash,
+        } => send(Msg::Internal(
+            crate::msg::InternalMsg::RepoCommandFinished {
+                repo_id,
+                command: RepoCommandKind::PullSubtree {
+                    repository,
+                    reference,
+                    path,
+                    squash,
+                },
+                result: Err(git_unavailable_error(runtime)),
             },
-            result: Err(git_unavailable_error(runtime)),
-        })),
+        )),
         Effect::PushSubtree {
             repo_id,
             repository,
             refspec,
             path,
             ..
-        } => send(Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
-            repo_id,
-            command: RepoCommandKind::PushSubtree {
-                repository,
-                refspec,
-                path,
+        } => send(Msg::Internal(
+            crate::msg::InternalMsg::RepoCommandFinished {
+                repo_id,
+                command: RepoCommandKind::PushSubtree {
+                    repository,
+                    refspec,
+                    path,
+                },
+                result: Err(git_unavailable_error(runtime)),
             },
-            result: Err(git_unavailable_error(runtime)),
-        })),
+        )),
+        Effect::MergeSubtree {
+            repo_id,
+            path,
+            options,
+        } => send(Msg::Internal(
+            crate::msg::InternalMsg::RepoCommandFinished {
+                repo_id,
+                command: RepoCommandKind::MergeSubtree {
+                    path,
+                    revision: options.revision,
+                    squash: options.squash,
+                    message: options.message,
+                },
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
         Effect::SplitSubtree {
             repo_id,
             path,
             branch,
-        } => send(Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
-            repo_id,
-            command: RepoCommandKind::SplitSubtree { path, branch },
-            result: Err(git_unavailable_error(runtime)),
-        })),
+        } => send(Msg::Internal(
+            crate::msg::InternalMsg::RepoCommandFinished {
+                repo_id,
+                command: RepoCommandKind::SplitSubtree { path, branch },
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
         Effect::RemoveSubtree { repo_id, path } => send(Msg::Internal(
             crate::msg::InternalMsg::RepoCommandFinished {
                 repo_id,
@@ -1178,6 +1204,11 @@ pub(super) fn schedule_effect(
         } => repo_commands::schedule_push_subtree(
             executor, repos, msg_tx, repo_id, repository, refspec, path, auth,
         ),
+        Effect::MergeSubtree {
+            repo_id,
+            path,
+            options,
+        } => repo_commands::schedule_merge_subtree(executor, repos, msg_tx, repo_id, path, options),
         Effect::SplitSubtree {
             repo_id,
             path,

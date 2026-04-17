@@ -318,6 +318,13 @@ pub enum Msg {
         refspec: String,
         path: PathBuf,
     },
+    MergeSubtree {
+        repo_id: RepoId,
+        path: PathBuf,
+        revision: String,
+        squash: bool,
+        message: Option<String>,
+    },
     SplitSubtree {
         repo_id: RepoId,
         path: PathBuf,

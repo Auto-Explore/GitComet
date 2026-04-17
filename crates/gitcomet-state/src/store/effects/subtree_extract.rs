@@ -10,7 +10,7 @@ use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::process::configure_background_command;
 use gitcomet_core::services::CommandOutput;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::{Arc, mpsc};
 
@@ -256,6 +256,28 @@ fn default_destination_branch(
         .unwrap_or_else(|| "main".to_string())
 }
 
+fn normalize_subtree_split_path(path: &Path) -> Result<PathBuf, Error> {
+    const OUTSIDE_WORKDIR_ERROR: &str = "subtree path must stay inside the repository workdir";
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::Normal(part) => normalized.push(part),
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                return Err(Error::new(ErrorKind::Backend(
+                    OUTSIDE_WORKDIR_ERROR.to_string(),
+                )));
+            }
+        }
+    }
+    if normalized.as_os_str().is_empty() {
+        return Err(Error::new(ErrorKind::Backend(
+            "subtree path must not be empty".to_string(),
+        )));
+    }
+    Ok(normalized)
+}
+
 fn validate_destination_repository(
     source_repo: &Path,
     destination_repo: &Path,
@@ -320,9 +342,11 @@ pub(super) fn schedule_extract_subtree(
     auth: Option<StagedGitAuth>,
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let path_arc = Arc::new(path.clone());
         let destination_repo = options.destination_repository.clone().map(Arc::new);
         let result = (|| {
+            let normalized_path = normalize_subtree_split_path(&path)?;
+            let path_arc = Arc::new(normalized_path.clone());
+
             if let Some(remote) = options.remote_repository.as_deref()
                 && destination_repo.is_none()
             {
@@ -339,11 +363,13 @@ pub(super) fn schedule_extract_subtree(
                 stage_git_auth_for_current_thread(auth);
             }
 
-            let existing_source = repo
+            let existing_subtree = repo
                 .list_subtrees()?
                 .into_iter()
-                .find(|subtree| subtree.path == path)
-                .and_then(|subtree| subtree.source);
+                .find(|subtree| subtree.path == normalized_path);
+            let existing_source = existing_subtree
+                .as_ref()
+                .and_then(|subtree| subtree.source.clone());
 
             send_progress(
                 &msg_tx,
@@ -354,10 +380,13 @@ pub(super) fn schedule_extract_subtree(
                     stage: SubtreeExtractProgressStage::Splitting,
                     percent: 5,
                 },
-                Some(format!("Splitting subtree history from {}", path.display())),
+                Some(format!(
+                    "Splitting subtree history from {}",
+                    normalized_path.display()
+                )),
             );
 
-            let split_output = repo.split_subtree_with_output(&path, &options.split)?;
+            let split_output = repo.split_subtree_with_output(&normalized_path, &options.split)?;
             push_output_lines(
                 &msg_tx,
                 repo_id,
@@ -592,14 +621,16 @@ pub(super) fn schedule_extract_subtree(
                 );
             }
 
-            store_updated_subtree_source(
-                &repo,
-                &path,
-                destination_repo_path,
-                &destination_branch,
-                options.remote_repository.as_deref(),
-                existing_source.as_ref(),
-            )?;
+            if existing_subtree.is_some() {
+                store_updated_subtree_source(
+                    &repo,
+                    &normalized_path,
+                    destination_repo_path,
+                    &destination_branch,
+                    options.remote_repository.as_deref(),
+                    existing_source.as_ref(),
+                )?;
+            }
             send_progress(
                 &msg_tx,
                 repo_id,

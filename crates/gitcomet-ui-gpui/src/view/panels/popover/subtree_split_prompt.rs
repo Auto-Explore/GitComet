@@ -109,7 +109,7 @@ fn advanced_options_toggle(theme: AppTheme, expanded: bool) -> gpui::Stateful<gp
 pub(super) fn panel(
     this: &mut PopoverHost,
     repo_id: RepoId,
-    path: std::path::PathBuf,
+    initial_path: Option<std::path::PathBuf>,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
     let theme = this.theme;
@@ -138,15 +138,15 @@ pub(super) fn panel(
                 .py_1()
                 .text_xs()
                 .text_color(theme.colors.text_muted)
-                .child("Path"),
+                .child("Path (repo-relative)"),
         )
         .child(
             div()
                 .px_2()
                 .pb_1()
-                .text_sm()
-                .text_color(theme.colors.text_muted)
-                .child(path.display().to_string()),
+                .w_full()
+                .min_w(px(0.0))
+                .child(this.subtree_path_input.clone()),
         )
         .child(
             div()
@@ -154,9 +154,11 @@ pub(super) fn panel(
                 .pb_2()
                 .text_xs()
                 .text_color(theme.colors.text_muted)
-                .child(
-                    "Leave destination blank to only materialize the subtree's standalone history in the current repository.",
-                ),
+                .child(if initial_path.is_some() {
+                    "Edit the repo-relative prefix passed to git subtree split --prefix. Leave destination blank to only materialize standalone history in the current repository."
+                } else {
+                    "Choose any repo-relative directory to pass to git subtree split --prefix. Leave destination blank to only materialize standalone history in the current repository."
+                }),
         )
         .child(div().border_t_1().border_color(theme.colors.border))
         .child(
@@ -337,6 +339,9 @@ pub(super) fn panel(
                     components::Button::new("subtree_split_go", "Split")
                         .style(components::ButtonStyle::Filled)
                         .on_click(theme, cx, move |this, _e, _w, cx| {
+                            let path_text = this
+                                .subtree_path_input
+                                .read_with(cx, |i, _| i.text().trim().to_string());
                             let branch = this
                                 .subtree_split_branch_input
                                 .read_with(cx, |i, _| i.text().trim().to_string());
@@ -364,6 +369,15 @@ pub(super) fn panel(
                                 String::new()
                             };
 
+                            if path_text.is_empty() {
+                                this.push_toast(
+                                    components::ToastKind::Error,
+                                    "Subtree path is required".to_string(),
+                                    cx,
+                                );
+                                return;
+                            }
+
                             if !remote_repository.is_empty() && destination_repo.is_empty() {
                                 this.push_toast(
                                     components::ToastKind::Error,
@@ -376,7 +390,7 @@ pub(super) fn panel(
 
                             this.store.dispatch(Msg::ExtractSubtree {
                                 repo_id,
-                                path: path.clone(),
+                                path: std::path::PathBuf::from(path_text),
                                 options: gitcomet_core::domain::SubtreeExtractOptions {
                                     split: gitcomet_core::domain::SubtreeSplitOptions {
                                         branch: (!branch.is_empty()).then_some(branch),
