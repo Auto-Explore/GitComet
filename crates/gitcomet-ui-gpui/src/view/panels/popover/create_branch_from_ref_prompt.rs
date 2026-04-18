@@ -57,11 +57,13 @@ pub(super) fn panel(
 ) -> gpui::Div {
     let theme = this.theme;
     let can_create = this.can_submit_create_branch(cx);
+    let ui_scale_percent = super::popover_ui_scale_percent(cx);
+    let scaled_px = |value: f32| super::popover_scaled_px_from_percent(value, ui_scale_percent);
 
     div()
         .flex()
         .flex_col()
-        .w(px(540.0))
+        .w(scaled_px(540.0))
         .child(
             div()
                 .px_2()

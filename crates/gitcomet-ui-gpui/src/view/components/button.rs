@@ -1,4 +1,5 @@
 use crate::theme::AppTheme;
+use crate::ui_scale::UiScale;
 use gpui::prelude::*;
 use gpui::{
     AnyElement, Bounds, ClickEvent, CursorStyle, Div, IntoElement, Pixels, SharedString, Stateful,
@@ -7,7 +8,7 @@ use gpui::{
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use super::{CONTROL_HEIGHT_PX, CONTROL_PAD_X_PX, CONTROL_PAD_Y_PX, ICON_PAD_X_PX};
+use super::{control_height, control_pad_x, control_pad_y, icon_pad_x};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ButtonStyle {
@@ -100,29 +101,31 @@ impl Button {
     pub fn on_click<V: 'static>(
         self,
         theme: AppTheme,
-        cx: &gpui::Context<V>,
+        cx: &mut gpui::Context<V>,
         f: impl Fn(&mut V, &ClickEvent, &mut Window, &mut gpui::Context<V>) + 'static,
     ) -> Stateful<Div> {
         let disabled = self.disabled;
+        let ui_scale = UiScale::current(cx);
 
-        self.render(theme)
+        self.render(theme, ui_scale)
             .when(!disabled, |this| this.on_click(cx.listener(f)))
     }
 
     pub fn on_click_with_bounds<V: 'static>(
         self,
         theme: AppTheme,
-        cx: &gpui::Context<V>,
+        cx: &mut gpui::Context<V>,
         f: impl Fn(&mut V, &ClickEvent, Bounds<Pixels>, &mut Window, &mut gpui::Context<V>) + 'static,
     ) -> Stateful<Div> {
         let disabled = self.disabled;
+        let ui_scale = UiScale::current(cx);
 
         let last_bounds: Rc<RefCell<Option<Bounds<Pixels>>>> = Rc::new(RefCell::new(None));
         let last_bounds_for_prepaint = Rc::clone(&last_bounds);
         let last_bounds_for_click = Rc::clone(&last_bounds);
         let wrapper_id: SharedString = format!("{}_bounds_wrapper", self.id).into();
 
-        let button = self.render(theme).when(!disabled, |this| {
+        let button = self.render(theme, ui_scale).when(!disabled, |this| {
             this.on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
                 let bounds = (*last_bounds_for_click.borrow())
                     .unwrap_or_else(|| Bounds::new(e.position(), gpui::size(px(0.0), px(0.0))));
@@ -140,7 +143,7 @@ impl Button {
             .id(wrapper_id)
     }
 
-    pub fn render(self, theme: AppTheme) -> Stateful<Div> {
+    pub fn render(self, theme: AppTheme, ui_scale: impl Into<UiScale>) -> Stateful<Div> {
         let Self {
             id,
             label,
@@ -154,6 +157,7 @@ impl Button {
             end_slot,
             separate_end_slot,
         } = self;
+        let ui_scale = ui_scale.into();
 
         let transparent = gpui::rgba(0x00000000);
         let outlined_border = with_alpha(
@@ -272,8 +276,14 @@ impl Button {
         let icon_only = looks_like_icon_button(&label);
         let selected_bg_override = selected_bg;
         let suppress_hover_border = suppress_hover_border || borderless;
+        let control_height = control_height(ui_scale);
+        let control_pad_x = control_pad_x(ui_scale);
+        let control_pad_y = control_pad_y(ui_scale);
+        let icon_pad_x = icon_pad_x(ui_scale);
+        let content_gap = ui_scale.px(4.0);
+        let separated_slot_pad = ui_scale.px(6.0);
 
-        let mut leading = div().flex().items_center().gap_1();
+        let mut leading = div().flex().items_center().gap(content_gap);
         if let Some(start_slot) = start_slot {
             leading = leading.child(start_slot);
         }
@@ -285,7 +295,7 @@ impl Button {
                 .flex()
                 .items_center()
                 .h_full()
-                .child(leading.pr(px(6.0)))
+                .child(leading.pr(separated_slot_pad))
                 .child(
                     div()
                         .debug_selector({
@@ -295,7 +305,7 @@ impl Button {
                         .flex()
                         .items_center()
                         .h_full()
-                        .pl(px(6.0))
+                        .pl(separated_slot_pad)
                         .border_l_1()
                         .border_color(separator_color)
                         .child(end_slot),
@@ -307,13 +317,9 @@ impl Button {
         let mut base = div()
             .id(id.clone())
             .tab_index(0)
-            .h(px(CONTROL_HEIGHT_PX))
-            .px(px(if icon_only {
-                ICON_PAD_X_PX
-            } else {
-                CONTROL_PAD_X_PX
-            }))
-            .py(px(CONTROL_PAD_Y_PX))
+            .h(control_height)
+            .px(if icon_only { icon_pad_x } else { control_pad_x })
+            .py(control_pad_y)
             .flex()
             .items_center()
             .justify_center()

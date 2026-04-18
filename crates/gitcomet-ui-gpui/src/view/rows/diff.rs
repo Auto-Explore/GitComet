@@ -7,6 +7,26 @@ use crate::view::panes::main::{
 use gitcomet_core::domain::DiffLineKind;
 use gitcomet_core::file_diff::FileDiffRowKind;
 
+const DIFF_ROW_HEIGHT_PX: f32 = 20.0;
+const DIFF_FILE_HEADER_HEIGHT_PX: f32 = 28.0;
+const DIFF_HUNK_HEADER_HEIGHT_PX: f32 = 24.0;
+
+fn diff_scaled_px(value: f32, ui_scale_percent: u32) -> Pixels {
+    crate::ui_scale::design_px_from_percent(value, ui_scale_percent)
+}
+
+fn diff_row_height(ui_scale_percent: u32) -> Pixels {
+    diff_scaled_px(DIFF_ROW_HEIGHT_PX, ui_scale_percent)
+}
+
+fn diff_file_header_height(ui_scale_percent: u32) -> Pixels {
+    diff_scaled_px(DIFF_FILE_HEADER_HEIGHT_PX, ui_scale_percent)
+}
+
+fn diff_hunk_header_height(ui_scale_percent: u32) -> Pixels {
+    diff_scaled_px(DIFF_HUNK_HEADER_HEIGHT_PX, ui_scale_percent)
+}
+
 /// Returns the word-highlight color for a diff line kind.
 fn diff_line_word_color(kind: DiffLineKind, theme: AppTheme) -> Option<gpui::Rgba> {
     match kind {
@@ -31,10 +51,14 @@ fn file_diff_split_word_color(
     }
 }
 
-fn diff_placeholder_row(id: impl Into<gpui::ElementId>, theme: AppTheme) -> AnyElement {
+fn diff_placeholder_row(
+    id: impl Into<gpui::ElementId>,
+    theme: AppTheme,
+    ui_scale_percent: u32,
+) -> AnyElement {
     div()
         .id(id)
-        .h(px(20.0))
+        .h(diff_row_height(ui_scale_percent))
         .px_2()
         .text_xs()
         .text_color(theme.colors.text_muted)
@@ -160,6 +184,7 @@ impl MainPaneView {
     ) -> Vec<AnyElement> {
         let min_width = this.diff_horizontal_min_width;
         let query = this.diff_search_query_or_empty();
+        let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
 
         if this.is_file_diff_view_active() {
             let theme = this.theme;
@@ -250,7 +275,11 @@ impl MainPaneView {
                         .is_some_and(|(a, b)| visible_ix >= a.min(b) && visible_ix <= a.max(b));
 
                     let Some(inline_ix) = this.diff_mapped_ix_for_visible_ix(visible_ix) else {
-                        return diff_placeholder_row(("diff_missing", visible_ix), theme);
+                        return diff_placeholder_row(
+                            ("diff_missing", visible_ix),
+                            theme,
+                            ui_scale_percent,
+                        );
                     };
                     let row_word_ranges = this
                         .file_diff_inline_modify_pair_texts(inline_ix)
@@ -335,7 +364,11 @@ impl MainPaneView {
                             )
                         } else {
                             let Some(line) = this.file_diff_inline_row(inline_ix) else {
-                                return diff_placeholder_row(("diff_oob", visible_ix), theme);
+                                return diff_placeholder_row(
+                                    ("diff_oob", visible_ix),
+                                    theme,
+                                    ui_scale_percent,
+                                );
                             };
                             let cache_epoch = this.file_diff_inline_style_cache_epoch(&line);
                             if this
@@ -383,7 +416,11 @@ impl MainPaneView {
                         }
                     } else {
                         let Some(line) = this.file_diff_inline_row(inline_ix) else {
-                            return diff_placeholder_row(("diff_oob", visible_ix), theme);
+                            return diff_placeholder_row(
+                                ("diff_oob", visible_ix),
+                                theme,
+                                ui_scale_percent,
+                            );
                         };
                         let cache_epoch = this.file_diff_inline_style_cache_epoch(&line);
                         if this
@@ -433,6 +470,7 @@ impl MainPaneView {
 
                     diff_row(
                         theme,
+                        ui_scale_percent,
                         visible_ix,
                         DiffClickKind::Line,
                         selected,
@@ -462,7 +500,11 @@ impl MainPaneView {
                     .is_some_and(|(a, b)| visible_ix >= a.min(b) && visible_ix <= a.max(b));
 
                 let Some(src_ix) = this.diff_mapped_ix_for_visible_ix(visible_ix) else {
-                    return diff_placeholder_row(("diff_missing", visible_ix), theme);
+                    return diff_placeholder_row(
+                        ("diff_missing", visible_ix),
+                        theme,
+                        ui_scale_percent,
+                    );
                 };
                 let click_kind = this
                     .diff_click_kinds
@@ -481,7 +523,7 @@ impl MainPaneView {
 
                 let language = this.diff_language_for_src_ix.get(src_ix).copied().flatten();
                 let Some(line) = this.patch_diff_row(src_ix) else {
-                    return diff_placeholder_row(("diff_oob", visible_ix), theme);
+                    return diff_placeholder_row(("diff_oob", visible_ix), theme, ui_scale_percent);
                 };
                 let streamed_spec = matches!(click_kind, DiffClickKind::Line)
                     .then(|| {
@@ -552,6 +594,7 @@ impl MainPaneView {
                 };
                 diff_row(
                     theme,
+                    ui_scale_percent,
                     visible_ix,
                     click_kind,
                     selected,
@@ -595,6 +638,7 @@ impl MainPaneView {
     ) -> Vec<AnyElement> {
         let min_width = this.diff_horizontal_min_width;
         let query = this.diff_search_query_or_empty();
+        let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
 
         let is_left = matches!(column, PatchSplitColumn::Left);
         let region = if is_left {
@@ -643,16 +687,10 @@ impl MainPaneView {
                         .is_some_and(|(a, b)| visible_ix >= a.min(b) && visible_ix <= a.max(b));
 
                     let Some(row_ix) = this.diff_mapped_ix_for_visible_ix(visible_ix) else {
-                        return diff_placeholder_row(
-                            (id_missing, visible_ix),
-                            theme,
-                        );
+                        return diff_placeholder_row((id_missing, visible_ix), theme, ui_scale_percent);
                     };
                     let Some(row) = this.file_diff_split_row(row_ix) else {
-                        return diff_placeholder_row(
-                            (id_oob, visible_ix),
-                            theme,
-                        );
+                        return diff_placeholder_row((id_oob, visible_ix), theme, ui_scale_percent);
                     };
                     let row_word_ranges = this
                         .file_diff_split_modify_pair_texts(row_ix)
@@ -749,6 +787,7 @@ impl MainPaneView {
 
                     patch_split_column_row(
                         theme,
+                        ui_scale_percent,
                         column,
                         visible_ix,
                         selected,
@@ -772,10 +811,10 @@ impl MainPaneView {
                     .is_some_and(|(a, b)| visible_ix >= a.min(b) && visible_ix <= a.max(b));
 
                 let Some(row_ix) = this.diff_mapped_ix_for_visible_ix(visible_ix) else {
-                    return diff_placeholder_row((id_missing, visible_ix), theme);
+                    return diff_placeholder_row((id_missing, visible_ix), theme, ui_scale_percent);
                 };
                 let Some(row) = this.patch_diff_split_row(row_ix) else {
-                    return diff_placeholder_row((id_oob, visible_ix), theme);
+                    return diff_placeholder_row((id_oob, visible_ix), theme, ui_scale_percent);
                 };
 
                 match row {
@@ -851,6 +890,7 @@ impl MainPaneView {
 
                         patch_split_column_row(
                             theme,
+                            ui_scale_percent,
                             column,
                             visible_ix,
                             selected,
@@ -863,7 +903,11 @@ impl MainPaneView {
                     }
                     PatchSplitRow::Raw { src_ix, click_kind } => {
                         if this.patch_diff_row(src_ix).is_none() {
-                            return diff_placeholder_row((id_src_oob, visible_ix), theme);
+                            return diff_placeholder_row(
+                                (id_src_oob, visible_ix),
+                                theme,
+                                ui_scale_percent,
+                            );
                         };
                         let file_stat = this.diff_file_stats.get(src_ix).and_then(|s| *s);
                         let should_style = !query.is_empty();
@@ -885,7 +929,11 @@ impl MainPaneView {
                             this.diff_text_segments_cache_set(src_ix, cache_epoch, computed);
                         }
                         let Some(line) = this.patch_diff_row(src_ix) else {
-                            return diff_placeholder_row((id_src_oob, visible_ix), theme);
+                            return diff_placeholder_row(
+                                (id_src_oob, visible_ix),
+                                theme,
+                                ui_scale_percent,
+                            );
                         };
                         if should_hide_unified_diff_header_line(&line) {
                             return div()
@@ -911,6 +959,7 @@ impl MainPaneView {
                         };
                         patch_split_header_row(
                             theme,
+                            ui_scale_percent,
                             column,
                             visible_ix,
                             click_kind,
@@ -933,6 +982,7 @@ impl MainPaneView {
 #[allow(clippy::too_many_arguments)]
 fn diff_row(
     theme: AppTheme,
+    ui_scale_percent: u32,
     visible_ix: usize,
     click_kind: DiffClickKind,
     selected: bool,
@@ -960,7 +1010,7 @@ fn diff_row(
             header_display.unwrap_or_else(|| SharedString::from(line.text.as_ref().to_owned()));
         let mut row = div()
             .id(("diff_file_hdr", visible_ix))
-            .h(px(28.0))
+            .h(diff_file_header_height(ui_scale_percent))
             .w_full()
             .min_w(min_width)
             .flex()
@@ -1003,7 +1053,7 @@ fn diff_row(
 
         let mut row = div()
             .id(("diff_hunk_hdr", visible_ix))
-            .h(px(24.0))
+            .h(diff_hunk_header_height(ui_scale_percent))
             .w_full()
             .min_w(min_width)
             .flex()
@@ -1072,6 +1122,7 @@ fn diff_row(
         DiffViewMode::Inline => diff_canvas::inline_diff_line_row_canvas(
             theme,
             cx.entity(),
+            ui_scale_percent,
             visible_ix,
             min_width,
             selected,
@@ -1116,6 +1167,7 @@ fn diff_row(
             diff_canvas::split_diff_line_row_canvas(
                 theme,
                 cx.entity(),
+                ui_scale_percent,
                 visible_ix,
                 min_width,
                 selected,
@@ -1145,6 +1197,7 @@ pub(super) enum PatchSplitColumn {
 #[allow(clippy::too_many_arguments)]
 fn patch_split_column_row(
     theme: AppTheme,
+    ui_scale_percent: u32,
     column: PatchSplitColumn,
     visible_ix: usize,
     selected: bool,
@@ -1173,6 +1226,7 @@ fn patch_split_column_row(
     diff_canvas::patch_split_column_row_canvas(
         theme,
         cx.entity(),
+        ui_scale_percent,
         column,
         visible_ix,
         min_width,
@@ -1189,6 +1243,7 @@ fn patch_split_column_row(
 #[allow(clippy::too_many_arguments)]
 fn patch_split_header_row(
     theme: AppTheme,
+    ui_scale_percent: u32,
     column: PatchSplitColumn,
     visible_ix: usize,
     click_kind: DiffClickKind,
@@ -1226,7 +1281,7 @@ fn patch_split_header_row(
                     },
                     visible_ix,
                 ))
-                .h(px(28.0))
+                .h(diff_file_header_height(ui_scale_percent))
                 .w_full()
                 .min_w(min_width)
                 .flex()
@@ -1274,7 +1329,7 @@ fn patch_split_header_row(
                     },
                     visible_ix,
                 ))
-                .h(px(24.0))
+                .h(diff_hunk_header_height(ui_scale_percent))
                 .w_full()
                 .min_w(min_width)
                 .flex()
@@ -1340,12 +1395,21 @@ fn patch_split_header_row(
 
             row.into_any_element()
         }
-        DiffClickKind::Line => patch_split_meta_row(theme, column, visible_ix, selected, line, cx),
+        DiffClickKind::Line => patch_split_meta_row(
+            theme,
+            ui_scale_percent,
+            column,
+            visible_ix,
+            selected,
+            line,
+            cx,
+        ),
     }
 }
 
 fn patch_split_meta_row(
     theme: AppTheme,
+    ui_scale_percent: u32,
     column: PatchSplitColumn,
     visible_ix: usize,
     selected: bool,
@@ -1374,7 +1438,7 @@ fn patch_split_meta_row(
             },
             visible_ix,
         ))
-        .h(px(20.0))
+        .h(diff_row_height(ui_scale_percent))
         .flex()
         .items_center()
         .px_2()

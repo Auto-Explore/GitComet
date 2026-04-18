@@ -1645,6 +1645,85 @@ fn commit_details_file_list_keeps_visible_viewport_when_overflowing(cx: &mut gpu
 }
 
 #[gpui::test]
+fn ui_scale_commit_details_file_list_content_height_scales(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(62);
+    let commit_sha = "fedcba9876543210fedcba9876543210fedcba98".to_string();
+    let files = (0..48)
+        .map(|ix| gitcomet_core::domain::CommitFileChange {
+            path: std::path::PathBuf::from(format!("src/commit_zoom/dir_{ix}/file_{ix}.rs")),
+            kind: gitcomet_core::domain::FileStatusKind::Modified,
+        })
+        .collect::<Vec<_>>();
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, Path::new("/tmp/repo-commit-files-zoom"));
+            repo.history_state.selected_commit =
+                Some(gitcomet_core::domain::CommitId(commit_sha.clone().into()));
+            repo.history_state.commit_details = gitcomet_state::model::Loadable::Ready(Arc::new(
+                gitcomet_core::domain::CommitDetails {
+                    id: gitcomet_core::domain::CommitId(commit_sha.clone().into()),
+                    message: "subject".to_string(),
+                    committed_at: "2026-03-08 12:34:56 +0200".to_string(),
+                    parent_ids: vec![gitcomet_core::domain::CommitId(
+                        "89abcdef0123456789abcdef0123456789abcdef".into(),
+                    )],
+                    files,
+                },
+            ));
+
+            let next_state = app_state_with_repo(repo, repo_id);
+            push_test_state(this, next_state, cx);
+        });
+    });
+
+    cx.simulate_resize(gpui::size(px(1024.0), px(420.0)));
+    draw_and_drain_test_window(cx);
+
+    let default_contents_height = cx.update(|_window, app| {
+        let pane = view.read(app).details_pane.read(app);
+        let item_size = pane
+            .commit_files_scroll
+            .0
+            .borrow()
+            .last_item_size
+            .expect("expected commit details files list measurements at the default zoom");
+        let height: f32 = item_size.contents.height.into();
+        height
+    });
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.apply_ui_scale_percent(200, window, cx);
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    let zoomed_contents_height = cx.update(|_window, app| {
+        let pane = view.read(app).details_pane.read(app);
+        let item_size = pane
+            .commit_files_scroll
+            .0
+            .borrow()
+            .last_item_size
+            .expect("expected commit details files list measurements after zooming");
+        let height: f32 = item_size.contents.height.into();
+        height
+    });
+
+    assert!(
+        zoomed_contents_height > default_contents_height * 1.7,
+        "expected the commit details file list content height to grow substantially with zoom (default={default_contents_height}, zoomed={zoomed_contents_height})",
+    );
+}
+
+#[gpui::test]
 fn switching_active_repo_restores_commit_message_draft_per_repo(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {

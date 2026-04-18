@@ -8,6 +8,8 @@ on:
       - ".github/workflows/deploy-aur.yml"
       - ".github/workflows/deploy-homebrew-tap.yml"
       - ".github/workflows/deploy-apt-repo.yml"
+      - ".github/workflows/deploy-windows-installer.yml"
+      - ".github/workflows/deploy-microsoft-store.yml"
       - ".github/workflows/release-manual-main.yml"
       - "scripts/update-aur.sh"
       - "scripts/cargo-flatten-dupes.sh"
@@ -23,6 +25,8 @@ on:
       - ".github/workflows/deploy-aur.yml"
       - ".github/workflows/deploy-homebrew-tap.yml"
       - ".github/workflows/deploy-apt-repo.yml"
+      - ".github/workflows/deploy-windows-installer.yml"
+      - ".github/workflows/deploy-microsoft-store.yml"
       - ".github/workflows/release-manual-main.yml"
       - "scripts/update-aur.sh"
       - "scripts/cargo-flatten-dupes.sh"
@@ -75,6 +79,8 @@ jobs:
             .github/workflows/deploy-aur.yml
             .github/workflows/deploy-homebrew-tap.yml
             .github/workflows/deploy-apt-repo.yml
+            .github/workflows/deploy-windows-installer.yml
+            .github/workflows/deploy-microsoft-store.yml
             .github/workflows/deployment-ci.yml
             .github/workflows/release-manual-main.yml
           ].each { |path| YAML.load_file(path) }'
@@ -100,6 +106,30 @@ jobs:
           grep -Fq 'vars.APT_REPO_LABEL' .github/workflows/deploy-apt-repo.yml
           grep -Fq 'vars.APT_REPO_DESCRIPTION' .github/workflows/deploy-apt-repo.yml
           grep -Fq 'vars.APT_STORAGE_PUBLIC_ACCESS' .github/workflows/deploy-apt-repo.yml
+          grep -Fq 'vars.APT_STORAGE_ACCOUNT' .github/workflows/deploy-windows-installer.yml
+          grep -Fq 'AZURE_STORAGE_ACCOUNT_KEY' .github/workflows/deploy-windows-installer.yml
+          grep -Fq 'windows-x86_64.msi' .github/workflows/deploy-windows-installer.yml
+          grep -Fq 'windows-arm64.msi' .github/workflows/deploy-windows-installer.yml
+          grep -Fq 'vars.MICROSOFT_STORE_PACKAGE_BASE_URL' .github/workflows/deploy-microsoft-store.yml
+          grep -Fq 'vars.MICROSOFT_STORE_PRODUCT_ID' .github/workflows/deploy-microsoft-store.yml
+          grep -Fq 'vars.MICROSOFT_STORE_PACKAGE_LANGUAGES' .github/workflows/deploy-microsoft-store.yml
+          grep -Fq 'MICROSOFT_STORE_TENANT_ID' .github/workflows/deploy-microsoft-store.yml
+          grep -Fq 'MICROSOFT_STORE_CLIENT_ID' .github/workflows/deploy-microsoft-store.yml
+          grep -Fq 'MICROSOFT_STORE_CLIENT_SECRET' .github/workflows/deploy-microsoft-store.yml
+          grep -Fq 'MICROSOFT_STORE_SELLER_ID' .github/workflows/deploy-microsoft-store.yml
+          grep -Fq 'microsoft/microsoft-store-apppublisher@v1.3' .github/workflows/deploy-microsoft-store.yml
+          grep -Fq 'gh release view' .github/workflows/deploy-microsoft-store.yml
+          grep -Fq 'msstore submission update' .github/workflows/deploy-microsoft-store.yml
+          grep -Fq 'msstore submission updateMetadata' .github/workflows/deploy-microsoft-store.yml
+          grep -Fq 'msstore submission commit' .github/workflows/deploy-microsoft-store.yml
+          grep -Fq 'ReleaseNotes' .github/workflows/deploy-microsoft-store.yml
+          grep -Fq '"X64"' .github/workflows/deploy-microsoft-store.yml
+          grep -Fq '"Arm64"' .github/workflows/deploy-microsoft-store.yml
+          grep -Fq 'storage_container: "$web"' .github/workflows/release-manual-main.yml
+          grep -Fq 'storage_prefix: "windows"' .github/workflows/release-manual-main.yml
+          grep -Fq 'package_base_url: "https://apt.gitcomet.dev/windows"' .github/workflows/release-manual-main.yml
+          grep -Fq 'product_id: $''{{ vars.MICROSOFT_STORE_PRODUCT_ID }}' .github/workflows/release-manual-main.yml
+          grep -Fq 'package_languages: $''{{ vars.MICROSOFT_STORE_PACKAGE_LANGUAGES }}' .github/workflows/release-manual-main.yml
           grep -Fq 'vars.AUR_GIT_REPOSITORY' .github/workflows/deploy-aur.yml
           grep -Fq 'vars.AUR_GIT_BRANCH' .github/workflows/deploy-aur.yml
           grep -Fq 'vars.WINDOWS_SIGNING_ENDPOINT' .github/workflows/build-release-artifacts.yml

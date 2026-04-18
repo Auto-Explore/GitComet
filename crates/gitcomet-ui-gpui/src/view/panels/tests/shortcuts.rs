@@ -1,5 +1,6 @@
 use super::*;
 use gitcomet_core::domain::{CommitDetails, CommitFileChange};
+use gpui::{ScrollDelta, ScrollWheelEvent};
 
 fn copied_path_ends_with(text: &str, suffix: &std::path::Path) -> bool {
     let normalize = |value: &str| value.replace('\\', "/");
@@ -179,6 +180,51 @@ fn open_change_tracking_settings_popover(
         });
         let _ = window.draw(app);
     });
+}
+
+fn open_popover_for_test(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    kind: PopoverKind,
+) {
+    cx.update(|window, app| {
+        let kind = kind.clone();
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                host.open_popover_at(kind.clone(), gpui::point(px(72.0), px(72.0)), window, cx);
+            });
+        });
+        let _ = window.draw(app);
+    });
+}
+
+fn set_ui_scale_percent_for_test(
+    cx: &mut gpui::VisualTestContext,
+    _view: &gpui::Entity<super::super::GitCometView>,
+    percent: u32,
+) {
+    cx.update(|_window, app| {
+        crate::app::set_app_ui_scale_percent(app, percent);
+    });
+}
+
+fn debug_width(cx: &mut gpui::VisualTestContext, selector: &'static str) -> f32 {
+    let bounds = cx
+        .debug_bounds(selector)
+        .unwrap_or_else(|| panic!("expected `{selector}` bounds"));
+    bounds.size.width.into()
+}
+
+fn assert_context_menu_entry_fills_popover_width(
+    cx: &mut gpui::VisualTestContext,
+    selector: &'static str,
+) {
+    let popover_width = debug_width(cx, "app_popover");
+    let entry_width = debug_width(cx, selector);
+    assert!(
+        entry_width >= popover_width * 0.80,
+        "expected `{selector}` to fill most of the popover width (entry={entry_width}, popover={popover_width})"
+    );
 }
 
 fn shortcut_fixture_repo(
@@ -1401,5 +1447,287 @@ fn dismissing_change_tracking_settings_with_escape_restores_diff_panel_focus(
     assert!(
         diff_panel_is_focused(cx, &view),
         "expected dismissing change-tracking settings to restore diff-panel focus"
+    );
+}
+
+#[gpui::test]
+fn ui_scale_picker_selection_updates_zoom(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(707);
+    let commit_id = CommitId("1122334455667788".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_ui_scale_picker",
+        std::process::id()
+    ));
+    let repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
+
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                host.open_popover_at(
+                    PopoverKind::UiScalePicker,
+                    point(px(72.0), px(72.0)),
+                    window,
+                    cx,
+                );
+            });
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    assert!(
+        popover_is_open(cx, &view),
+        "expected opening the UI scale picker to show a popover"
+    );
+    assert!(
+        cx.debug_bounds("context_menu_125").is_some(),
+        "expected the UI scale picker to expose a 125% menu item"
+    );
+
+    let zoom_125_bounds = cx
+        .debug_bounds("context_menu_125")
+        .expect("expected the 125% zoom entry to be rendered");
+    cx.simulate_click(zoom_125_bounds.center(), Modifiers::default());
+    draw_and_drain_test_window(cx);
+
+    let zoom_percent = cx.update(|_window, app| view.read(app).ui_scale_percent);
+    assert_eq!(
+        zoom_percent, 125,
+        "expected selecting 125% from the zoom picker to update the UI scale"
+    );
+    assert!(
+        !popover_is_open(cx, &view),
+        "expected the UI scale picker to close after selecting a zoom level"
+    );
+}
+
+#[gpui::test]
+fn bottom_status_bar_zoom_button_keeps_icon_at_default_scale_and_opens_picker(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(709);
+    let commit_id = CommitId("9988776655443322".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_bottom_status_zoom_button",
+        std::process::id()
+    ));
+    let repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
+
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    draw_and_drain_test_window(cx);
+
+    assert!(
+        cx.debug_bounds("bottom_status_bar_zoom_icon").is_some(),
+        "expected the bottom status bar zoom icon to be visible at the default scale"
+    );
+
+    let default_button_width = debug_width(cx, "bottom_status_bar_zoom");
+    assert!(
+        default_button_width < 40.0,
+        "expected the default zoom button to stay icon-only (width={default_button_width})"
+    );
+
+    let zoom_button_bounds = cx
+        .debug_bounds("bottom_status_bar_zoom")
+        .expect("expected bottom status bar zoom button bounds");
+    cx.simulate_click(zoom_button_bounds.center(), Modifiers::default());
+    draw_and_drain_test_window(cx);
+
+    assert!(
+        popover_is_open(cx, &view),
+        "expected clicking the bottom status bar zoom button to open the UI scale picker"
+    );
+    assert_context_menu_entry_fills_popover_width(cx, "context_menu_125");
+
+    let zoom_125_bounds = cx
+        .debug_bounds("context_menu_125")
+        .expect("expected the 125% zoom entry to be rendered");
+    cx.simulate_click(zoom_125_bounds.center(), Modifiers::default());
+    draw_and_drain_test_window(cx);
+
+    let zoom_percent = cx.update(|_window, app| view.read(app).ui_scale_percent);
+    assert_eq!(
+        zoom_percent, 125,
+        "expected selecting 125% from the zoom button picker to update the UI scale"
+    );
+    assert!(
+        !popover_is_open(cx, &view),
+        "expected the UI scale picker to close after selecting a zoom level from the bottom bar"
+    );
+    assert!(
+        cx.debug_bounds("bottom_status_bar_zoom_icon").is_some(),
+        "expected the bottom status bar zoom icon to remain visible after changing zoom"
+    );
+
+    let zoomed_button_width = debug_width(cx, "bottom_status_bar_zoom");
+    assert!(
+        zoomed_button_width > default_button_width + 10.0,
+        "expected the non-default zoom button to grow to include its percent label (default={default_button_width}, zoomed={zoomed_button_width})"
+    );
+}
+
+#[gpui::test]
+fn shared_context_menu_rows_fill_the_popover_width(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(710);
+    let commit_id = CommitId("1234432112344321".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_shared_context_menu_width",
+        std::process::id()
+    ));
+    let repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
+
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    open_change_tracking_settings_popover(cx, &view);
+    draw_and_drain_test_window(cx);
+
+    assert!(
+        popover_is_open(cx, &view),
+        "expected the change-tracking settings popover to be open"
+    );
+    assert_context_menu_entry_fills_popover_width(cx, "context_menu_combine_with_unstaged");
+    assert_context_menu_entry_fills_popover_width(cx, "context_menu_show_separate_untracked_block");
+}
+
+#[gpui::test]
+fn context_menus_grow_wider_with_ui_zoom(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(711);
+    let commit_id = CommitId("2233445566778899".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_context_menu_zoom_width",
+        std::process::id()
+    ));
+    let repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
+
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    open_change_tracking_settings_popover(cx, &view);
+    draw_and_drain_test_window(cx);
+
+    let default_width = debug_width(cx, "app_popover");
+    assert_context_menu_entry_fills_popover_width(cx, "context_menu_combine_with_unstaged");
+
+    set_ui_scale_percent_for_test(cx, &view, 200);
+    draw_and_drain_test_window(cx);
+
+    assert!(
+        popover_is_open(cx, &view),
+        "expected the change-tracking settings context menu to remain open after zooming"
+    );
+
+    let zoomed_width = debug_width(cx, "app_popover");
+    assert!(
+        zoomed_width > default_width * 1.6,
+        "expected the context menu to grow substantially with zoom (default={default_width}, zoomed={zoomed_width})"
+    );
+    assert_context_menu_entry_fills_popover_width(cx, "context_menu_combine_with_unstaged");
+}
+
+#[gpui::test]
+fn prompt_popovers_grow_wider_with_ui_zoom(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(712);
+    let commit_id = CommitId("3344556677889900".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_prompt_popover_zoom_width",
+        std::process::id()
+    ));
+    let repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
+
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    open_popover_for_test(cx, &view, PopoverKind::CreateBranch);
+    draw_and_drain_test_window(cx);
+
+    let default_width = debug_width(cx, "app_popover");
+
+    set_ui_scale_percent_for_test(cx, &view, 200);
+    draw_and_drain_test_window(cx);
+
+    assert!(
+        popover_is_open(cx, &view),
+        "expected the create-branch popover to remain open after zooming"
+    );
+
+    let zoomed_width = debug_width(cx, "app_popover");
+    assert!(
+        zoomed_width > default_width * 1.6,
+        "expected the prompt popover to grow substantially with zoom (default={default_width}, zoomed={zoomed_width})"
+    );
+}
+
+#[gpui::test]
+fn ui_scale_ctrl_scroll_wheel_changes_zoom(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(708);
+    let commit_id = CommitId("8877665544332211".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_ui_scale_ctrl_scroll",
+        std::process::id()
+    ));
+    let repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
+
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    draw_and_drain_test_window(cx);
+
+    let position = point(px(320.0), px(240.0));
+    cx.simulate_mouse_move(position, None, Modifiers::default());
+    cx.simulate_event(ScrollWheelEvent {
+        position,
+        delta: ScrollDelta::Pixels(point(px(0.0), px(120.0))),
+        modifiers: Modifiers {
+            control: true,
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    draw_and_drain_test_window(cx);
+
+    let zoomed_in = cx.update(|_window, app| view.read(app).ui_scale_percent);
+    assert_eq!(
+        zoomed_in, 110,
+        "expected Ctrl/Cmd + wheel up to step the UI zoom to the next preset"
+    );
+
+    cx.simulate_event(ScrollWheelEvent {
+        position,
+        delta: ScrollDelta::Pixels(point(px(0.0), px(-120.0))),
+        modifiers: Modifiers {
+            control: true,
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    draw_and_drain_test_window(cx);
+
+    let zoomed_back_out = cx.update(|_window, app| view.read(app).ui_scale_percent);
+    assert_eq!(
+        zoomed_back_out, 100,
+        "expected Ctrl/Cmd + wheel down to step the UI zoom back to the previous preset"
     );
 }

@@ -29,7 +29,7 @@ impl TabBar {
         self
     }
 
-    pub fn render(self, theme: AppTheme) -> Stateful<Div> {
+    pub fn render(self, theme: AppTheme, ui_scale_percent: u32) -> Stateful<Div> {
         let tabs = div()
             .id((self.id.clone(), "tabs"))
             .flex()
@@ -46,7 +46,7 @@ impl TabBar {
             .flex_none()
             .items_center()
             .w_full()
-            .h(Tab::container_height())
+            .h(Tab::container_height(ui_scale_percent))
             .bg(theme.colors.surface_bg)
             .child(
                 div()

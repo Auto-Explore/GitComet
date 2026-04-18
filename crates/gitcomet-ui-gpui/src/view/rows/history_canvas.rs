@@ -212,6 +212,8 @@ pub(super) fn history_commit_row_canvas(
             }
             window.set_cursor_style(CursorStyle::PointingHand, &hitbox);
 
+            let design_scale_factor = ui_scale::design_scale_factor_from_window(window);
+            let scaled_px = |value| px(value * design_scale_factor);
             let base_style = window.text_style();
             let sm_font = base_style.font_size.to_pixels(window.rem_size());
             let sm_line_height = base_style
@@ -225,7 +227,7 @@ pub(super) fn history_commit_row_canvas(
             let xxs_line_height = base_style
                 .line_height
                 .to_pixels(xxs_font.into(), window.rem_size());
-            let cell_pad_x = px(HISTORY_COL_HANDLE_PX / 2.0);
+            let cell_pad_x = scaled_px(HISTORY_COL_HANDLE_PX / 2.0);
 
             let center_y = |line_height: Pixels| {
                 let extra = (bounds.size.height - line_height).max(px(0.0));
@@ -311,9 +313,9 @@ pub(super) fn history_commit_row_canvas(
                 );
             }
 
-            let chip_height = px(HISTORY_TAG_CHIP_HEIGHT_PX);
-            let chip_pad_x = px(HISTORY_TAG_CHIP_PADDING_X_PX);
-            let chip_gap = px(HISTORY_TAG_CHIP_GAP_PX);
+            let chip_height = scaled_px(HISTORY_TAG_CHIP_HEIGHT_PX);
+            let chip_pad_x = scaled_px(HISTORY_TAG_CHIP_PADDING_X_PX);
+            let chip_gap = scaled_px(HISTORY_TAG_CHIP_GAP_PX);
 
             let branch_content_bounds = Bounds::new(
                 point(branch_bounds.left() + cell_pad_x, branch_bounds.top()),
@@ -379,14 +381,18 @@ pub(super) fn history_commit_row_canvas(
 
                             window.paint_quad(fill(*chip_bounds, border).corner_radii(radius));
                             let inner = Bounds::new(
-                                point(chip_bounds.left() + px(1.0), chip_bounds.top() + px(1.0)),
+                                point(
+                                    chip_bounds.left() + scaled_px(1.0),
+                                    chip_bounds.top() + scaled_px(1.0),
+                                ),
                                 size(
-                                    (chip_bounds.size.width - px(2.0)).max(px(0.0)),
-                                    (chip_bounds.size.height - px(2.0)).max(px(0.0)),
+                                    (chip_bounds.size.width - scaled_px(2.0)).max(px(0.0)),
+                                    (chip_bounds.size.height - scaled_px(2.0)).max(px(0.0)),
                                 ),
                             );
                             window.paint_quad(
-                                fill(inner, bg).corner_radii((radius - px(1.0)).max(px(0.0))),
+                                fill(inner, bg)
+                                    .corner_radii((radius - scaled_px(1.0)).max(px(0.0))),
                             );
 
                             let text_y = chip_bounds.top()
@@ -454,15 +460,15 @@ pub(super) fn history_commit_row_canvas(
                 .unwrap_or(theme.colors.text_muted);
 
             if show_graph_color_marker {
-                let marker_w = px(2.0);
-                let marker_h = px(12.0);
+                let marker_w = scaled_px(2.0);
+                let marker_h = scaled_px(12.0);
                 let y = bounds.top() + (bounds.size.height - marker_h) * 0.5;
                 window.paint_quad(
                     fill(
                         Bounds::new(point(summary_bounds.left(), y), size(marker_w, marker_h)),
                         node_color,
                     )
-                    .corner_radii(px(2.0)),
+                    .corner_radii(scaled_px(2.0)),
                 );
             }
 
@@ -650,7 +656,7 @@ pub(super) fn history_commit_row_canvas(
             });
         },
     )
-    .h(px(24.0))
+    .h_full()
     .w_full()
     .into_any_element()
 }
