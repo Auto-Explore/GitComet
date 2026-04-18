@@ -327,7 +327,7 @@ impl PopoverHost {
                 *is_three_way,
             )),
             PopoverKind::HistoryBranchFilter { repo_id } => {
-                Some(history_branch_filter::model(*repo_id))
+                Some(history_branch_filter::model(self, *repo_id))
             }
             PopoverKind::ChangeTrackingSettings => Some(change_tracking_settings::model(self)),
             PopoverKind::UiScalePicker => Some(ui_scale_picker::model(cx)),
