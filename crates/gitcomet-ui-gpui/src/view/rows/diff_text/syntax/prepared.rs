@@ -3143,12 +3143,11 @@ fn collect_treesitter_injection_matches_for_line_window(
                         .iter()
                         .filter(|capture| capture.index == injection_content_capture_ix)
                     {
-                        let mut byte_range = capture.node.byte_range();
-                        byte_range.start = byte_range.start.min(input.len());
-                        byte_range.end = byte_range.end.min(input.len());
-                        if byte_range.start >= byte_range.end {
+                        let Some(byte_range) =
+                            normalized_injection_content_byte_range(capture.node, input.len())
+                        else {
                             continue;
-                        }
+                        };
                         let injection = TreesitterInjectionMatch {
                             language,
                             byte_start: byte_range.start,
@@ -3172,6 +3171,50 @@ fn collect_treesitter_injection_matches_for_line_window(
 
     injections.sort_by_key(|injection| (injection.byte_start, injection.byte_end));
     injections
+}
+
+fn bounded_node_byte_range(node: tree_sitter::Node, input_len: usize) -> Option<Range<usize>> {
+    let mut byte_range = node.byte_range();
+    byte_range.start = byte_range.start.min(input_len);
+    byte_range.end = byte_range.end.min(input_len);
+    (byte_range.start < byte_range.end).then_some(byte_range)
+}
+
+fn normalized_injection_content_byte_range(
+    node: tree_sitter::Node,
+    input_len: usize,
+) -> Option<Range<usize>> {
+    let byte_range = bounded_node_byte_range(node, input_len)?;
+    if !matches!(node.kind(), "string" | "template_string") {
+        return Some(byte_range);
+    }
+
+    let named_child_count = node.named_child_count();
+    if named_child_count == 0 {
+        return Some(byte_range);
+    }
+
+    let mut content_start = usize::MAX;
+    let mut content_end = 0usize;
+    for child_ix in 0..named_child_count {
+        let Some(child) = node.named_child(child_ix as u32) else {
+            continue;
+        };
+        match child.kind() {
+            "string_fragment" | "string_content" | "escape_sequence" => {
+                let child_range = bounded_node_byte_range(child, input_len)?;
+                content_start = content_start.min(child_range.start);
+                content_end = content_end.max(child_range.end);
+            }
+            _ => return Some(byte_range),
+        }
+    }
+
+    if content_start < content_end {
+        Some(content_start..content_end)
+    } else {
+        Some(byte_range)
+    }
 }
 
 fn injection_language_for_match(
@@ -3455,67 +3498,57 @@ fn subtract_relative_range_from_line_tokens(
     *line_tokens = out;
 }
 
-pub(super) fn normalize_non_overlapping_tokens(mut tokens: Vec<SyntaxToken>) -> Vec<SyntaxToken> {
+pub(super) fn normalize_non_overlapping_tokens(tokens: Vec<SyntaxToken>) -> Vec<SyntaxToken> {
+    let tokens = tokens
+        .into_iter()
+        .filter(|token| token.range.start < token.range.end)
+        .collect::<Vec<_>>();
     if tokens.len() <= 1 {
         return tokens;
     }
 
-    let mut indexed_tokens = tokens
-        .into_iter()
-        .enumerate()
-        .collect::<Vec<(usize, SyntaxToken)>>();
-    indexed_tokens.sort_unstable_by(|(a_ix, a), (b_ix, b)| {
-        a.range
-            .start
-            .cmp(&b.range.start)
-            .then(a.range.end.cmp(&b.range.end))
-            .then(a_ix.cmp(b_ix))
-    });
-    tokens = indexed_tokens.into_iter().map(|(_, token)| token).collect();
-
-    // Compact in-place: ensure non-overlapping tokens so the segment splitter
-    // can pick a single style per range.
-    // Tree-sitter queries follow "later pattern wins" semantics: when two patterns capture
-    // the same node, the more specific pattern (later in the query file) should take priority.
-    // Since captures() returns lower pattern indices first, later tokens at the same position
-    // should override earlier ones.
-    let mut write = 1usize;
-    for read in 1..tokens.len() {
-        let cur_start = tokens[read].range.start;
-        let cur_end = tokens[read].range.end;
-        let cur_kind = tokens[read].kind;
-
-        let prev_start = tokens[write - 1].range.start;
-        let prev_end = tokens[write - 1].range.end;
-
-        if cur_start < prev_end {
-            // Exact same range: later pattern wins (replace previous)
-            if cur_start == prev_start && cur_end == prev_end {
-                tokens[write - 1].kind = cur_kind;
-                continue;
-            }
-            // Fully contained in previous: skip
-            if cur_end <= prev_end {
-                continue;
-            }
-            // Partial overlap: trim start to prev end
-            let new_start = prev_end;
-            if new_start >= cur_end {
-                continue;
-            }
-            tokens[write] = SyntaxToken {
-                range: new_start..cur_end,
-                kind: cur_kind,
-            };
-            write += 1;
-        } else {
-            tokens[write] = SyntaxToken {
-                range: cur_start..cur_end,
-                kind: cur_kind,
-            };
-            write += 1;
-        }
+    let mut boundaries = Vec::with_capacity(tokens.len().saturating_mul(2));
+    for token in &tokens {
+        boundaries.push(token.range.start);
+        boundaries.push(token.range.end);
     }
-    tokens.truncate(write);
-    tokens
+    boundaries.sort_unstable();
+    boundaries.dedup();
+
+    // Convert overlapping captures into non-overlapping segments while preserving
+    // tree-sitter's "later capture wins" semantics within each overlapped slice.
+    let mut normalized: Vec<SyntaxToken> = Vec::with_capacity(tokens.len());
+    for window in boundaries.windows(2) {
+        let start = window[0];
+        let end = window[1];
+        if start >= end {
+            continue;
+        }
+
+        let mut winner = None;
+        for token in &tokens {
+            if token.range.start <= start && end <= token.range.end {
+                winner = Some(token.kind);
+            }
+        }
+
+        let Some(kind) = winner else {
+            continue;
+        };
+
+        if let Some(last) = normalized.last_mut()
+            && last.kind == kind
+            && last.range.end == start
+        {
+            last.range.end = end;
+            continue;
+        }
+
+        normalized.push(SyntaxToken {
+            range: start..end,
+            kind,
+        });
+    }
+
+    normalized
 }

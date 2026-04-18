@@ -89,6 +89,7 @@ pub(in crate::view) fn diff_syntax_language_for_code_fence_info(
     let token = token.strip_prefix("language-").unwrap_or(token);
     let token = ascii_lowercase_for_match(token);
     diff_syntax_language_for_identifier(token.as_ref())
+        .or_else(|| diff_syntax_language_for_path(token.as_ref()))
 }
 
 pub(super) fn empty_line_syntax_tokens() -> Arc<[SyntaxToken]> {
