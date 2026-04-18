@@ -9,8 +9,12 @@ use std::hash::{Hash, Hasher};
 
 mod history_panel;
 
+pub(in super::super) fn history_scrollbar_gutter() -> Pixels {
+    crate::view::components::Scrollbar::gutter(crate::view::components::ScrollbarAxis::Vertical)
+}
+
 fn history_columns_available_width(content_width: Pixels) -> Pixels {
-    content_width.max(px(0.0))
+    (content_width - history_scrollbar_gutter()).max(px(0.0))
 }
 
 fn graph_branch_heads<'a>(
@@ -19,7 +23,7 @@ fn graph_branch_heads<'a>(
     remote_branches: &'a [RemoteBranch],
 ) -> impl Iterator<Item = &'a str> + 'a {
     let (branches, remote_branches): (&[Branch], &[RemoteBranch]) =
-        if history_scope == LogScope::CurrentBranch {
+        if history_scope.is_current_branch_mode() {
             (&[], &[])
         } else {
             (branches, remote_branches)
@@ -527,7 +531,7 @@ struct HistorySelectedListIndexCache {
 struct PendingHistoryReveal {
     repo_id: RepoId,
     commit_id: CommitId,
-    desired_scope: LogScope,
+    fallback_scope: Option<LogScope>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -663,7 +667,8 @@ fn decide_pending_history_reveal(
     log_rev: u64,
     stashes_rev: u64,
     log_loading_more: bool,
-    page: Option<&LogPage>,
+    display_page: Option<&LogPage>,
+    live_page_has_more: Option<bool>,
     cache_request_matches: bool,
     visible_indices: Option<&HistoryVisibleIndices>,
     show_working_tree_summary_row: bool,
@@ -681,14 +686,9 @@ fn decide_pending_history_reveal(
         return decision;
     };
 
-    if current_scope != pending.desired_scope {
-        decision.set_scope = Some(pending.desired_scope);
-        return decision;
-    }
-
     decision.select_commit = selected_commit != Some(&pending.commit_id);
 
-    let Some(page) = page else {
+    let Some(display_page) = display_page else {
         return decision;
     };
     if !cache_request_matches {
@@ -707,15 +707,26 @@ fn decide_pending_history_reveal(
         show_working_tree_summary_row,
         Some(&pending.commit_id),
         visible_indices,
-        &page.commits,
+        &display_page.commits,
     ) {
         decision.scroll_to_list_ix = Some(list_ix);
         decision.clear_pending = true;
         return decision;
     }
 
-    if page.next_cursor.is_some() {
-        decision.load_more = !log_loading_more;
+    match live_page_has_more {
+        Some(true) => {
+            decision.load_more = !log_loading_more;
+            return decision;
+        }
+        Some(false) => {}
+        None => return decision,
+    }
+
+    if let Some(fallback_scope) = pending.fallback_scope
+        && current_scope != fallback_scope
+    {
+        decision.set_scope = Some(fallback_scope);
         return decision;
     }
 
@@ -739,7 +750,7 @@ pub(in super::super) struct HistoryView {
     pub(in super::super) history_content_width: Pixels,
 
     pub(in super::super) history_cache_seq: u64,
-    pub(in super::super) history_cache_inflight: Option<HistoryCacheRequest>,
+    pub(in super::super) history_cache_inflight: Option<HistoryCacheBuildRequest>,
     pub(in super::super) history_col_branch: Pixels,
     pub(in super::super) history_col_graph: Pixels,
     pub(in super::super) history_col_author: Pixels,
@@ -875,15 +886,53 @@ impl HistoryView {
         self.state.repos.iter().find(|r| r.id == repo_id)
     }
 
-    fn history_cache_request_for_repo(
+    pub(in crate::view) fn display_log_page_for_repo(repo: &RepoState) -> Option<Arc<LogPage>> {
+        match &repo.log {
+            Loadable::Ready(page) => Some(Arc::clone(page)),
+            Loadable::Loading => repo
+                .history_state
+                .retained_log_while_loading
+                .as_ref()
+                .map(Arc::clone),
+            Loadable::NotLoaded | Loadable::Error(_) => None,
+        }
+    }
+
+    fn live_log_page_has_more_for_repo(repo: &RepoState) -> Option<bool> {
+        match &repo.log {
+            Loadable::Ready(page) => Some(page.next_cursor.is_some()),
+            Loadable::Loading | Loadable::NotLoaded | Loadable::Error(_) => None,
+        }
+    }
+
+    fn history_base_cache_request_for_repo(
         &self,
         repo: &RepoState,
         page: &LogPage,
-    ) -> HistoryCacheRequest {
-        HistoryCacheRequest {
+    ) -> HistoryBaseCacheRequest {
+        HistoryBaseCacheRequest {
             repo_id: repo.id,
             history_scope: repo.history_state.history_scope,
             log_fingerprint: Self::log_fingerprint(&page.commits),
+            head_branch_rev: repo.head_branch_rev,
+            detached_head_commit: repo.detached_head_commit.clone(),
+            branches_rev: repo.branches_rev,
+            remote_branches_rev: if repo.history_state.history_scope.is_current_branch_mode() {
+                0
+            } else {
+                repo.remote_branches_rev
+            },
+            stashes_rev: repo.stashes_rev,
+        }
+    }
+
+    fn history_decoration_cache_request_for_repo(
+        &self,
+        repo: &RepoState,
+        page: &LogPage,
+    ) -> HistoryDecorationCacheRequest {
+        HistoryDecorationCacheRequest {
+            base_request: self.history_base_cache_request_for_repo(repo, page),
             head_branch_rev: repo.head_branch_rev,
             detached_head_commit: repo.detached_head_commit.clone(),
             branches_rev: repo.branches_rev,
@@ -891,12 +940,8 @@ impl HistoryView {
             tags_rev: if self.history_show_tags {
                 repo.tags_rev
             } else {
-                Default::default()
+                0
             },
-            stashes_rev: repo.stashes_rev,
-            date_time_format: self.date_time_format,
-            timezone: self.timezone,
-            show_timezone: self.show_timezone,
         }
     }
 
@@ -904,13 +949,13 @@ impl HistoryView {
         &mut self,
         repo_id: RepoId,
         commit_id: CommitId,
-        desired_scope: LogScope,
+        fallback_scope: Option<LogScope>,
         cx: &mut gpui::Context<Self>,
     ) {
         let next = PendingHistoryReveal {
             repo_id,
             commit_id,
-            desired_scope,
+            fallback_scope,
         };
         if self.pending_history_reveal.as_ref() != Some(&next) {
             self.pending_history_reveal = Some(next);
@@ -1041,8 +1086,6 @@ impl HistoryView {
             return;
         }
         self.date_time_format = next;
-        self.history_cache = None;
-        self.history_cache_inflight = None;
         cx.notify();
     }
 
@@ -1051,8 +1094,6 @@ impl HistoryView {
             return;
         }
         self.timezone = next;
-        self.history_cache = None;
-        self.history_cache_inflight = None;
         cx.notify();
     }
 
@@ -1065,8 +1106,6 @@ impl HistoryView {
             return;
         }
         self.show_timezone = enabled;
-        self.history_cache = None;
-        self.history_cache_inflight = None;
         cx.notify();
     }
 
@@ -1118,7 +1157,6 @@ impl HistoryView {
         self.history_auto_fetch_tags_on_repo_activation = auto_fetch_tags_on_repo_activation;
         if show_tags_changed {
             self.notify_fingerprint = Self::notify_fingerprint_for(&self.state, show_tags);
-            self.history_cache = None;
             self.history_cache_inflight = None;
         }
         cx.notify();
@@ -1227,6 +1265,7 @@ impl HistoryView {
                     0,
                     false,
                     None,
+                    None,
                     false,
                     None,
                     show_working_tree_summary_row,
@@ -1239,20 +1278,18 @@ impl HistoryView {
             let log_rev = repo.log_rev;
             let stashes_rev = repo.stashes_rev;
             let log_loading_more = repo.history_state.log_loading_more;
-            let page = match &repo.log {
-                Loadable::Ready(page) => Some(Arc::clone(page)),
-                _ => None,
-            };
-            let cache_request_matches = page.as_ref().is_some_and(|page| {
-                let request = self.history_cache_request_for_repo(repo, page.as_ref());
+            let display_page = Self::display_log_page_for_repo(repo);
+            let live_page_has_more = Self::live_log_page_has_more_for_repo(repo);
+            let cache_request_matches = display_page.as_ref().is_some_and(|page| {
+                let request = self.history_base_cache_request_for_repo(repo, page.as_ref());
                 self.history_cache
                     .as_ref()
-                    .is_some_and(|cache| cache.request == request)
+                    .is_some_and(|cache| cache.base.request == request)
             });
             let visible_indices = if cache_request_matches {
                 self.history_cache
                     .as_ref()
-                    .map(|cache| &cache.visible_indices)
+                    .map(|cache| &cache.base.visible_indices)
             } else {
                 None
             };
@@ -1264,7 +1301,8 @@ impl HistoryView {
                 log_rev,
                 stashes_rev,
                 log_loading_more,
-                page.as_deref(),
+                display_page.as_deref(),
+                live_page_has_more,
                 cache_request_matches,
                 visible_indices,
                 show_working_tree_summary_row,
@@ -1276,22 +1314,20 @@ impl HistoryView {
                 current_scope,
                 log_rev,
                 stashes_rev,
-                page,
+                display_page,
                 cache_request_matches,
                 decision,
             )
         };
 
-        let cache_meta = (active_repo_id == Some(pending.repo_id)
-            && current_scope == pending.desired_scope
-            && page.is_some()
-            && cache_request_matches)
-            .then_some((
-                log_rev,
-                stashes_rev,
-                current_scope,
-                show_working_tree_summary_row,
-            ));
+        let cache_meta =
+            (active_repo_id == Some(pending.repo_id) && page.is_some() && cache_request_matches)
+                .then_some((
+                    log_rev,
+                    stashes_rev,
+                    current_scope,
+                    show_working_tree_summary_row,
+                ));
 
         self.finish_pending_history_reveal(decision, pending, cache_meta, cx);
     }
@@ -1525,32 +1561,44 @@ impl HistoryView {
             CacheOk,
             Inflight,
             Build {
-                request: HistoryCacheRequest,
+                request: HistoryCacheBuildRequest,
                 page: Arc<LogPage>,
                 head_branch: Option<String>,
                 branches: Arc<Vec<Branch>>,
                 remote_branches: Arc<Vec<RemoteBranch>>,
                 tags: Arc<Vec<Tag>>,
                 stashes: Arc<Vec<StashEntry>>,
+                base_reuse: Option<HistoryBaseCache>,
             },
         }
 
         let next = if let Some(repo) = self.active_repo() {
-            if let Loadable::Ready(page) = &repo.log {
-                let request = self.history_cache_request_for_repo(repo, page.as_ref());
+            if let Some(page) = Self::display_log_page_for_repo(repo) {
+                let base_request = self.history_base_cache_request_for_repo(repo, page.as_ref());
+                let decoration_request =
+                    self.history_decoration_cache_request_for_repo(repo, page.as_ref());
+                let request = HistoryCacheBuildRequest {
+                    base_request: base_request.clone(),
+                    decoration_request,
+                };
 
-                let cache_ok = self
-                    .history_cache
-                    .as_ref()
-                    .is_some_and(|c| c.request == request);
+                let cache_ok = self.history_cache.as_ref().is_some_and(|cache| {
+                    cache.base.request == base_request
+                        && cache.decorations.request == request.decoration_request
+                });
                 if cache_ok {
                     Next::CacheOk
                 } else if self.history_cache_inflight.as_ref() == Some(&request) {
                     Next::Inflight
                 } else {
+                    let base_reuse = self
+                        .history_cache
+                        .as_ref()
+                        .filter(|cache| cache.base.request == base_request)
+                        .map(|cache| cache.base.clone());
                     Next::Build {
                         request,
-                        page: Arc::clone(page),
+                        page,
                         head_branch: match &repo.head_branch {
                             Loadable::Ready(h) => Some(h.clone()),
                             _ => None,
@@ -1575,6 +1623,7 @@ impl HistoryView {
                             Loadable::Ready(s) => Arc::clone(s),
                             _ => Arc::new(Vec::new()),
                         },
+                        base_reuse,
                     }
                 }
             } else {
@@ -1584,38 +1633,48 @@ impl HistoryView {
             Next::Clear
         };
 
-        let (request_for_task, page, head_branch, branches, remote_branches, tags, stashes) =
-            match next {
-                Next::Clear => {
-                    self.history_cache_inflight = None;
-                    self.history_cache = None;
-                    return;
-                }
-                Next::CacheOk => {
-                    self.history_cache_inflight = None;
-                    return;
-                }
-                Next::Inflight => {
-                    return;
-                }
-                Next::Build {
-                    request,
-                    page,
-                    head_branch,
-                    branches,
-                    remote_branches,
-                    tags,
-                    stashes,
-                } => (
-                    request,
-                    page,
-                    head_branch,
-                    branches,
-                    remote_branches,
-                    tags,
-                    stashes,
-                ),
-            };
+        let (
+            request_for_task,
+            page,
+            head_branch,
+            branches,
+            remote_branches,
+            tags,
+            stashes,
+            base_reuse,
+        ) = match next {
+            Next::Clear => {
+                self.history_cache_inflight = None;
+                self.history_cache = None;
+                return;
+            }
+            Next::CacheOk => {
+                self.history_cache_inflight = None;
+                return;
+            }
+            Next::Inflight => {
+                return;
+            }
+            Next::Build {
+                request,
+                page,
+                head_branch,
+                branches,
+                remote_branches,
+                tags,
+                stashes,
+                base_reuse,
+            } => (
+                request,
+                page,
+                head_branch,
+                branches,
+                remote_branches,
+                tags,
+                stashes,
+                base_reuse,
+            ),
+        };
 
         self.history_cache_seq = self.history_cache_seq.wrapping_add(1);
         let seq = self.history_cache_seq;
@@ -1625,197 +1684,41 @@ impl HistoryView {
 
         cx.spawn(
             async move |view: WeakEntity<HistoryView>, cx: &mut gpui::AsyncApp| {
-                struct Rebuild {
-                    visible_indices: HistoryVisibleIndices,
-                    graph_rows: Arc<[history_graph::GraphRow]>,
-                    max_lanes: usize,
-                    commit_row_vms: Vec<HistoryCommitRowVm>,
-                }
-
                 let request_for_update = request_for_task.clone();
-                let request_for_build = request_for_task.clone();
+                let base_request_for_build = request_for_task.base_request.clone();
+                let decoration_request_for_build = request_for_task.decoration_request.clone();
 
                 let build_rebuild = move || {
-                    let stash_analysis = analyze_history_stashes(&page.commits, stashes.as_ref());
-                    let stash_tips = stash_analysis.stash_tips;
-                    let stash_helper_ids = stash_analysis.stash_helper_ids;
-
-                    let visible_indices =
-                        build_history_visible_indices(&page.commits, &stash_helper_ids);
-
-                    let head_target = match head_branch.as_deref() {
-                        Some("HEAD") => request_for_build
-                            .detached_head_commit
-                            .as_ref()
-                            .map(|id| id.as_ref())
-                            .or_else(|| {
-                                (request_for_build.history_scope == LogScope::CurrentBranch)
-                                    .then(|| {
-                                        visible_indices
-                                            .first()
-                                            .and_then(|ix| page.commits.get(ix))
-                                            .map(|c| c.id.as_ref())
-                                    })
-                                    .flatten()
-                            }),
-                        Some(head) => branches
-                            .iter()
-                            .find(|b| b.name == head)
-                            .map(|b| b.target.as_ref()),
-                        None => None,
-                    };
-
-                    let branch_heads = graph_branch_heads(
-                        request_for_build.history_scope,
-                        branches.as_ref(),
-                        remote_branches.as_ref(),
-                    );
-                    let graph_rows: Arc<[history_graph::GraphRow]> = if stash_helper_ids.is_empty()
-                    {
-                        history_graph::compute_graph(
-                            &page.commits,
+                    let base = base_reuse.unwrap_or_else(|| {
+                        build_history_base_cache(
+                            base_request_for_build,
+                            page.as_ref(),
                             theme,
-                            branch_heads,
-                            head_target,
-                        )
-                        .into()
-                    } else {
-                        // Reuse the existing visible commits instead of cloning
-                        // each filtered row's parent-id vector just for graph
-                        // construction.
-                        let visible_commit_refs = visible_indices
-                            .iter()
-                            .map(|ix| &page.commits[ix])
-                            .collect::<Vec<_>>();
-                        history_graph::compute_graph_refs(
-                            &visible_commit_refs,
-                            theme,
-                            branch_heads,
-                            head_target,
-                        )
-                        .into()
-                    };
-                    let max_lanes = graph_rows
-                        .iter()
-                        .map(|r| r.lanes_now.len().max(r.lanes_next.len()))
-                        .max()
-                        .unwrap_or(1);
-                    let (mut branch_text_by_target, head_branches_text) =
-                        build_history_branch_text_by_target(
+                            head_branch.as_deref(),
                             branches.as_ref(),
                             remote_branches.as_ref(),
-                            head_branch.as_deref(),
-                            head_target,
-                        );
-                    let mut tag_names_by_target = build_history_tag_names_by_target(tags.as_ref());
+                            stashes.as_ref(),
+                        )
+                    });
+                    let decorations = build_history_decoration_cache(
+                        decoration_request_for_build,
+                        page.as_ref(),
+                        &base,
+                        head_branch.as_deref(),
+                        branches.as_ref(),
+                        remote_branches.as_ref(),
+                        tags.as_ref(),
+                    );
 
-                    let has_stash_tips = !stash_tips.is_empty();
-                    let mut author_cache: HashMap<&str, SharedString> =
-                        HashMap::with_capacity_and_hasher(64, Default::default());
-                    let mut commit_row_vms = Vec::with_capacity(visible_indices.len());
-                    if has_stash_tips {
-                        let mut next_stash_tip_ix = 0usize;
-                        for ix in visible_indices.iter() {
-                            let Some(commit) = page.commits.get(ix) else {
-                                continue;
-                            };
-                            let commit_id = commit.id.as_ref();
+                    HistoryCache { base, decorations }
+                };
 
-                            let is_head = head_target == Some(commit_id);
-
-                            let branches_text = if is_head {
-                                head_branches_text.clone().unwrap_or_default()
-                            } else {
-                                branch_text_by_target.remove(commit_id).unwrap_or_default()
-                            };
-
-                            let tag_names =
-                                tag_names_by_target.remove(commit_id).unwrap_or_default();
-
-                            let author: SharedString = author_cache
-                                .entry(commit.author.as_ref())
-                                .or_insert_with(|| commit.author.clone().into())
-                                .clone();
-                            let (is_stash, summary): (bool, SharedString) =
-                                match next_history_stash_tip_for_commit_ix(
-                                    &stash_tips,
-                                    &mut next_stash_tip_ix,
-                                    ix,
-                                ) {
-                                    Some(stash_tip) => (
-                                        true,
-                                        stash_tip
-                                            .message
-                                            .map(|message| Arc::clone(message).into())
-                                            .or_else(|| {
-                                                stash_summary_from_log_summary(&commit.summary)
-                                                    .map(SharedString::new)
-                                            })
-                                            .unwrap_or_else(|| commit.summary.clone().into()),
-                                    ),
-                                    None => (false, commit.summary.clone().into()),
-                                };
-
-                            commit_row_vms.push(HistoryCommitRowVm {
-                                branches_text,
-                                tag_names,
-                                author,
-                                summary,
-                                when: HistoryWhenVm::deferred(commit.time),
-                                short_sha: HistoryShortShaVm::new(commit.id.as_ref()),
-                                is_head,
-                                is_stash,
-                            });
-                        }
+                let rebuild: HistoryCache =
+                    if crate::ui_runtime::current().uses_background_compute() {
+                        smol::unblock(build_rebuild).await
                     } else {
-                        for ix in visible_indices.iter() {
-                            let Some(commit) = page.commits.get(ix) else {
-                                continue;
-                            };
-                            let commit_id = commit.id.as_ref();
-
-                            let is_head = head_target == Some(commit_id);
-
-                            let branches_text = if is_head {
-                                head_branches_text.clone().unwrap_or_default()
-                            } else {
-                                branch_text_by_target.remove(commit_id).unwrap_or_default()
-                            };
-
-                            let tag_names =
-                                tag_names_by_target.remove(commit_id).unwrap_or_default();
-
-                            let author: SharedString = author_cache
-                                .entry(commit.author.as_ref())
-                                .or_insert_with(|| commit.author.clone().into())
-                                .clone();
-
-                            commit_row_vms.push(HistoryCommitRowVm {
-                                branches_text,
-                                tag_names,
-                                author,
-                                summary: commit.summary.clone().into(),
-                                when: HistoryWhenVm::deferred(commit.time),
-                                short_sha: HistoryShortShaVm::new(commit.id.as_ref()),
-                                is_head,
-                                is_stash: false,
-                            });
-                        }
-                    }
-
-                    Rebuild {
-                        visible_indices,
-                        graph_rows,
-                        max_lanes,
-                        commit_row_vms,
-                    }
-                };
-
-                let rebuild = if crate::ui_runtime::current().uses_background_compute() {
-                    smol::unblock(build_rebuild).await
-                } else {
-                    build_rebuild()
-                };
+                        build_rebuild()
+                    };
 
                 let _ = view.update(cx, |this, cx| {
                     if this.history_cache_seq != seq {
@@ -1824,13 +1727,13 @@ impl HistoryView {
                     if this.history_cache_inflight.as_ref() != Some(&request_for_update) {
                         return;
                     }
-                    if this.active_repo_id() != Some(request_for_update.repo_id) {
+                    if this.active_repo_id() != Some(request_for_update.base_request.repo_id) {
                         return;
                     }
 
                     if this.history_col_graph_auto && this.history_col_resize.is_none() {
                         let required = px(HISTORY_GRAPH_MARGIN_X_PX * 2.0
-                            + HISTORY_GRAPH_COL_GAP_PX * (rebuild.max_lanes as f32));
+                            + HISTORY_GRAPH_COL_GAP_PX * (rebuild.base.max_lanes as f32));
                         if this.history_show_graph {
                             this.history_col_graph = history_column_drag_next_width(
                                 HistoryColResizeHandle::Graph,
@@ -1854,12 +1757,7 @@ impl HistoryView {
                     }
 
                     this.history_cache_inflight = None;
-                    this.history_cache = Some(HistoryCache {
-                        request: request_for_update.clone(),
-                        visible_indices: rebuild.visible_indices,
-                        graph_rows: rebuild.graph_rows,
-                        commit_row_vms: rebuild.commit_row_vms,
-                    });
+                    this.history_cache = Some(rebuild);
                     cx.notify();
                 });
             },
@@ -1895,11 +1793,265 @@ fn stash_summary_from_log_summary(summary: &str) -> Option<&str> {
     }
 }
 
+fn resolve_history_head_target<'a>(
+    history_scope: LogScope,
+    detached_head_commit: Option<&'a CommitId>,
+    head_branch: Option<&'a str>,
+    branches: &'a [Branch],
+    visible_indices: &HistoryVisibleIndices,
+    commits: &'a [Commit],
+) -> Option<&'a str> {
+    match head_branch {
+        Some("HEAD") => detached_head_commit.map(AsRef::as_ref).or_else(|| {
+            history_scope
+                .guarantees_head_visibility()
+                .then(|| {
+                    visible_indices
+                        .first()
+                        .and_then(|ix| commits.get(ix))
+                        .map(|commit| commit.id.as_ref())
+                })
+                .flatten()
+        }),
+        Some(head) => branches
+            .iter()
+            .find(|branch| branch.name == head)
+            .map(|branch| branch.target.as_ref()),
+        None => None,
+    }
+}
+
+fn build_history_base_cache(
+    request: HistoryBaseCacheRequest,
+    page: &LogPage,
+    theme: AppTheme,
+    head_branch: Option<&str>,
+    branches: &[Branch],
+    remote_branches: &[RemoteBranch],
+    stashes: &[StashEntry],
+) -> HistoryBaseCache {
+    let stash_analysis = analyze_history_stashes(&page.commits, stashes);
+    let stash_tips = stash_analysis.stash_tips;
+    let stash_helper_ids = stash_analysis.stash_helper_ids;
+
+    let visible_indices = build_history_visible_indices(&page.commits, &stash_helper_ids);
+    let head_target = resolve_history_head_target(
+        request.history_scope,
+        request.detached_head_commit.as_ref(),
+        head_branch,
+        branches,
+        &visible_indices,
+        &page.commits,
+    );
+
+    let branch_heads = graph_branch_heads(request.history_scope, branches, remote_branches);
+    let graph_rows: Arc<[history_graph::GraphRow]> = if stash_helper_ids.is_empty() {
+        history_graph::compute_graph(&page.commits, theme, branch_heads, head_target).into()
+    } else {
+        let visible_commit_refs = visible_indices
+            .iter()
+            .map(|ix| &page.commits[ix])
+            .collect::<Vec<_>>();
+        history_graph::compute_graph_refs(&visible_commit_refs, theme, branch_heads, head_target)
+            .into()
+    };
+    let max_lanes = graph_rows
+        .iter()
+        .map(|row| row.lanes_now.len().max(row.lanes_next.len()))
+        .max()
+        .unwrap_or(1);
+
+    let has_stash_tips = !stash_tips.is_empty();
+    let mut author_cache: HashMap<&str, HistoryTextVm> =
+        HashMap::with_capacity_and_hasher(64, Default::default());
+    let mut row_vms = Vec::with_capacity(visible_indices.len());
+    if has_stash_tips {
+        let mut next_stash_tip_ix = 0usize;
+        for ix in visible_indices.iter() {
+            let Some(commit) = page.commits.get(ix) else {
+                continue;
+            };
+            let commit_id = commit.id.as_ref();
+            let author = author_cache
+                .entry(commit.author.as_ref())
+                .or_insert_with(|| HistoryTextVm::new(commit.author.clone().into()))
+                .clone();
+            let (is_stash, summary) =
+                match next_history_stash_tip_for_commit_ix(&stash_tips, &mut next_stash_tip_ix, ix)
+                {
+                    Some(stash_tip) => (
+                        true,
+                        stash_tip
+                            .message
+                            .map(|message| Arc::clone(message).into())
+                            .or_else(|| {
+                                stash_summary_from_log_summary(&commit.summary)
+                                    .map(SharedString::new)
+                            })
+                            .unwrap_or_else(|| commit.summary.clone().into()),
+                    ),
+                    None => (false, commit.summary.clone().into()),
+                };
+
+            row_vms.push(HistoryBaseRowVm {
+                author,
+                summary: HistoryTextVm::new(summary),
+                when: HistoryWhenVm::deferred(commit.time),
+                short_sha: HistoryShortShaVm::new(commit.id.as_ref()),
+                is_head: head_target == Some(commit_id),
+                is_stash,
+            });
+        }
+    } else {
+        for ix in visible_indices.iter() {
+            let Some(commit) = page.commits.get(ix) else {
+                continue;
+            };
+            let author = author_cache
+                .entry(commit.author.as_ref())
+                .or_insert_with(|| HistoryTextVm::new(commit.author.clone().into()))
+                .clone();
+            row_vms.push(HistoryBaseRowVm {
+                author,
+                summary: HistoryTextVm::new(commit.summary.clone().into()),
+                when: HistoryWhenVm::deferred(commit.time),
+                short_sha: HistoryShortShaVm::new(commit.id.as_ref()),
+                is_head: head_target == Some(commit.id.as_ref()),
+                is_stash: false,
+            });
+        }
+    }
+
+    HistoryBaseCache {
+        request,
+        visible_indices,
+        graph_rows,
+        max_lanes,
+        row_vms,
+    }
+}
+
+fn build_history_decoration_cache(
+    request: HistoryDecorationCacheRequest,
+    page: &LogPage,
+    base: &HistoryBaseCache,
+    head_branch: Option<&str>,
+    branches: &[Branch],
+    remote_branches: &[RemoteBranch],
+    tags: &[Tag],
+) -> HistoryDecorationCache {
+    let head_target = resolve_history_head_target(
+        request.base_request.history_scope,
+        request.detached_head_commit.as_ref(),
+        head_branch,
+        branches,
+        &base.visible_indices,
+        &page.commits,
+    );
+    let (mut branch_text_by_target, head_branches_text) =
+        build_history_branch_text_by_target(branches, remote_branches, head_branch, head_target);
+    let mut tag_names_by_target = build_history_tag_names_by_target(tags);
+    let mut row_vms = Vec::with_capacity(base.visible_indices.len());
+    for (commit_ix, base_row) in base.visible_indices.iter().zip(base.row_vms.iter()) {
+        let Some(commit) = page.commits.get(commit_ix) else {
+            continue;
+        };
+        let commit_id = commit.id.as_ref();
+        let branches_text = if base_row.is_head {
+            head_branches_text.clone().unwrap_or_default()
+        } else {
+            branch_text_by_target
+                .remove(commit_id)
+                .unwrap_or_else(HistoryTextVm::default)
+        };
+        row_vms.push(HistoryDecorationRowVm {
+            branches_text,
+            tag_names: tag_names_by_target.remove(commit_id).unwrap_or_default(),
+        });
+    }
+
+    HistoryDecorationCache {
+        request,
+        row_vms: row_vms.into(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gitcomet_core::domain::{CommitId, LogCursor, LogPage};
-    use std::time::SystemTime;
+    use gitcomet_core::domain::{CommitId, LogCursor, LogPage, RepoSpec};
+    use gitcomet_core::services::{GitBackend, GitRepository, Result};
+    use gitcomet_state::model::AppState;
+    use gitcomet_state::store::AppStore;
+    use std::path::{Path, PathBuf};
+    use std::sync::Arc;
+    use std::time::{Duration, Instant, SystemTime};
+
+    struct BlockingBackend;
+
+    impl GitBackend for BlockingBackend {
+        fn open(&self, _workdir: &Path) -> Result<Arc<dyn GitRepository>> {
+            loop {
+                std::thread::park();
+            }
+        }
+    }
+
+    fn wait_until(
+        cx: &mut gpui::VisualTestContext,
+        description: &str,
+        ready: impl Fn(&mut gpui::VisualTestContext) -> bool,
+    ) {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            cx.update(|window, app| {
+                let _ = window.draw(app);
+            });
+            cx.run_until_parked();
+            if ready(cx) {
+                return;
+            }
+            if Instant::now() >= deadline {
+                panic!("timed out waiting for {description}");
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    fn set_history_view_state_for_tests(
+        cx: &mut gpui::VisualTestContext,
+        view: &gpui::Entity<GitCometView>,
+        state: Arc<AppState>,
+    ) {
+        cx.update(|window, app| {
+            let history_view = view.read(app).main_pane.read(app).history_view.clone();
+            history_view.update(app, |history, cx| {
+                history.notify_fingerprint =
+                    HistoryView::notify_fingerprint_for(&state, history.history_show_tags);
+                history.state = Arc::clone(&state);
+                cx.notify();
+            });
+            window.refresh();
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+    }
+
+    fn ensure_history_cache_for_tests(
+        cx: &mut gpui::VisualTestContext,
+        view: &gpui::Entity<GitCometView>,
+        state: Arc<AppState>,
+    ) {
+        set_history_view_state_for_tests(cx, view, state);
+        cx.update(|window, app| {
+            let main_pane = view.read(app).main_pane.clone();
+            let history_view = main_pane.read(app).history_view.clone();
+            history_view.update(app, |history, cx| history.ensure_history_cache(cx));
+            window.refresh();
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+    }
 
     fn commit(id: &str, parents: &[&str], summary: &str) -> Commit {
         Commit {
@@ -2053,6 +2205,16 @@ mod tests {
     }
 
     #[test]
+    fn history_columns_available_width_reserves_scrollbar_gutter() {
+        let gutter = history_scrollbar_gutter();
+        assert_eq!(
+            history_columns_available_width(px(200.0)),
+            px(200.0) - gutter
+        );
+        assert_eq!(history_columns_available_width(gutter), px(0.0));
+    }
+
+    #[test]
     fn history_column_drag_clamp_respects_static_maximums() {
         let available = history_columns_available_width(px(1436.0));
         let layout = all_columns_visible_drag_layout();
@@ -2077,7 +2239,7 @@ mod tests {
         );
 
         let next_f: f32 = next.into();
-        assert!((next_f - 148.0).abs() < 1e-3);
+        assert!((next_f - 132.0).abs() < 1e-3);
     }
 
     #[test]
@@ -2118,18 +2280,26 @@ mod tests {
 
     #[test]
     fn reset_widths_clamp_default_graph_in_narrow_windows() {
-        let widths = history_reset_widths_for_available_width(px(396.0), true, (true, true, true));
+        let widths = history_reset_widths_for_available_width(
+            history_columns_available_width(px(396.0)),
+            true,
+            (true, true, true),
+        );
 
-        assert_eq!(widths.branch, px(HISTORY_COL_BRANCH_PX));
-        assert_eq!(widths.graph, px(46.0));
+        assert_eq!(widths.branch, px(116.0));
+        assert_eq!(widths.graph, px(HISTORY_COL_GRAPH_MIN_PX));
     }
 
     #[test]
     fn reset_widths_clamp_branch_after_graph_reaches_minimum() {
-        let widths = history_reset_widths_for_available_width(px(360.0), true, (true, true, true));
+        let widths = history_reset_widths_for_available_width(
+            history_columns_available_width(px(360.0)),
+            true,
+            (true, true, true),
+        );
 
         assert_eq!(widths.graph, px(HISTORY_COL_GRAPH_MIN_PX));
-        assert_eq!(widths.branch, px(96.0));
+        assert_eq!(widths.branch, px(80.0));
     }
 
     #[test]
@@ -2231,7 +2401,7 @@ mod tests {
             LogScope::AllBranches,
             true,
             Some(&selected),
-            &HistoryVisibleIndices::Filtered(vec![0, 2]),
+            &HistoryVisibleIndices::Filtered(vec![0, 2].into()),
             &commits,
         );
 
@@ -2288,20 +2458,21 @@ mod tests {
         let pending = PendingHistoryReveal {
             repo_id: RepoId(7),
             commit_id: CommitId("c".into()),
-            desired_scope: LogScope::AllBranches,
+            fallback_scope: Some(LogScope::AllBranches),
         };
 
         let decision = decide_pending_history_reveal(
             &pending,
             Some(RepoId(7)),
-            Some(LogScope::AllBranches),
+            Some(LogScope::CurrentBranch),
             None,
             11,
             13,
             false,
             Some(&log_page(commits, None)),
+            Some(false),
             true,
-            Some(&HistoryVisibleIndices::Filtered(vec![0, 2])),
+            Some(&HistoryVisibleIndices::Filtered(vec![0, 2].into())),
             true,
             None,
         );
@@ -2324,18 +2495,19 @@ mod tests {
         let pending = PendingHistoryReveal {
             repo_id: RepoId(7),
             commit_id: CommitId("c".into()),
-            desired_scope: LogScope::AllBranches,
+            fallback_scope: Some(LogScope::AllBranches),
         };
 
         let decision = decide_pending_history_reveal(
             &pending,
             Some(RepoId(7)),
-            Some(LogScope::AllBranches),
+            Some(LogScope::CurrentBranch),
             None,
             11,
             13,
             false,
             Some(&log_page(commits, Some("b"))),
+            Some(true),
             true,
             Some(&HistoryVisibleIndices::all(2)),
             false,
@@ -2355,23 +2527,61 @@ mod tests {
     }
 
     #[test]
-    fn pending_history_reveal_missing_target_with_exhausted_history_clears() {
+    fn pending_history_reveal_switches_to_fallback_scope_after_exhausting_current_mode() {
         let commits = vec![commit("a", &["p0"], "a"), commit("b", &["a"], "b")];
         let pending = PendingHistoryReveal {
             repo_id: RepoId(7),
             commit_id: CommitId("c".into()),
-            desired_scope: LogScope::AllBranches,
+            fallback_scope: Some(LogScope::AllBranches),
         };
 
         let decision = decide_pending_history_reveal(
             &pending,
             Some(RepoId(7)),
-            Some(LogScope::AllBranches),
+            Some(LogScope::CurrentBranch),
             None,
             11,
             13,
             false,
             Some(&log_page(commits, None)),
+            Some(false),
+            true,
+            Some(&HistoryVisibleIndices::all(2)),
+            false,
+            None,
+        );
+
+        assert_eq!(
+            decision,
+            PendingHistoryRevealDecision {
+                set_scope: Some(LogScope::AllBranches),
+                select_commit: true,
+                scroll_to_list_ix: None,
+                load_more: false,
+                clear_pending: false,
+            }
+        );
+    }
+
+    #[test]
+    fn pending_history_reveal_missing_target_with_exhausted_history_and_no_fallback_clears() {
+        let commits = vec![commit("a", &["p0"], "a"), commit("b", &["a"], "b")];
+        let pending = PendingHistoryReveal {
+            repo_id: RepoId(7),
+            commit_id: CommitId("c".into()),
+            fallback_scope: None,
+        };
+
+        let decision = decide_pending_history_reveal(
+            &pending,
+            Some(RepoId(7)),
+            Some(LogScope::CurrentBranch),
+            None,
+            11,
+            13,
+            false,
+            Some(&log_page(commits, None)),
+            Some(false),
             true,
             Some(&HistoryVisibleIndices::all(2)),
             false,
@@ -2397,7 +2607,7 @@ mod tests {
         let pending = PendingHistoryReveal {
             repo_id: RepoId(7),
             commit_id: selected.clone(),
-            desired_scope: LogScope::CurrentBranch,
+            fallback_scope: None,
         };
 
         let decision = decide_pending_history_reveal(
@@ -2409,6 +2619,7 @@ mod tests {
             34,
             false,
             Some(&log_page(commits, None)),
+            Some(false),
             true,
             Some(&HistoryVisibleIndices::all(2)),
             false,
@@ -2425,5 +2636,621 @@ mod tests {
                 clear_pending: true,
             }
         );
+    }
+
+    #[test]
+    fn display_log_page_uses_retained_page_while_loading() {
+        let mut repo = RepoState::new_opening(
+            RepoId(9),
+            RepoSpec {
+                workdir: "/tmp/repo".into(),
+            },
+        );
+        let page = Arc::new(log_page(vec![commit("a", &[], "a")], None));
+        repo.log = Loadable::Loading;
+        repo.history_state.log = Loadable::Loading;
+        repo.history_state.retained_log_while_loading = Some(Arc::clone(&page));
+
+        let display = HistoryView::display_log_page_for_repo(&repo)
+            .expect("retained log should remain available while loading");
+        assert!(Arc::ptr_eq(&display, &page));
+    }
+
+    #[gpui::test]
+    fn date_time_changes_reuse_history_cache_and_rows_still_render(cx: &mut gpui::TestAppContext) {
+        let _visual_guard = crate::test_support::lock_visual_test();
+        let (store, events) = AppStore::new(Arc::new(BlockingBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        let repo_id = RepoId(1);
+        let page = Arc::new(log_page(vec![commit("tip", &[], "tip")], None));
+        let mut repo = RepoState::new_opening(
+            repo_id,
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/history-date-time-reuse"),
+            },
+        );
+        repo.history_state.history_scope = LogScope::AllBranches;
+        repo.head_branch = Loadable::Ready("main".to_string());
+        repo.head_branch_rev = 1;
+        repo.branches = Loadable::Ready(Arc::new(vec![branch("main", "tip")]));
+        repo.branches_rev = 1;
+        repo.log = Loadable::Ready(Arc::clone(&page));
+        repo.log_rev = 1;
+        repo.history_state.log = Loadable::Ready(page);
+        repo.history_state.log_rev = 1;
+
+        let state = Arc::new(AppState {
+            repos: vec![repo],
+            active_repo: Some(repo_id),
+            ..Default::default()
+        });
+
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+
+        ensure_history_cache_for_tests(cx, &view, state);
+
+        wait_until(cx, "initial history cache for date-time reuse", |cx| {
+            cx.update(|_window, app| {
+                let main_pane = view.read(app).main_pane.clone();
+                let history_view = main_pane.read(app).history_view.clone();
+                let history = history_view.read(app);
+                history.history_cache.as_ref().is_some_and(|cache| {
+                    cache.base.row_vms.len() == 1
+                        && cache.base.row_vms[0].summary.as_ref() == "tip"
+                        && cache.decorations.row_vms.len() == 1
+                })
+            })
+        });
+
+        let (before_graph_rows, before_base_request, before_decoration_request, before_when_text) =
+            cx.update(|window, app| {
+                let main_pane = view.read(app).main_pane.clone();
+                let history_view = main_pane.read(app).history_view.clone();
+                let rows_len = history_view.update(app, |history, cx| {
+                    HistoryView::render_history_table_rows(history, 0..1, window, cx).len()
+                });
+                assert_eq!(rows_len, 1, "initial history row should render");
+
+                let history = history_view.read(app);
+                let cache = history
+                    .history_cache
+                    .as_ref()
+                    .expect("history cache should be available");
+                (
+                    Arc::clone(&cache.base.graph_rows),
+                    cache.base.request.clone(),
+                    cache.decorations.request.clone(),
+                    cache.base.row_vms[0]
+                        .when
+                        .resolve(HistoryDisplayKey::new(
+                            DateTimeFormat::YmdHm,
+                            Timezone::Utc,
+                            true,
+                        ))
+                        .as_ref()
+                        .to_owned(),
+                )
+            });
+
+        assert_eq!(
+            before_when_text,
+            format_datetime(
+                SystemTime::UNIX_EPOCH,
+                DateTimeFormat::YmdHm,
+                Timezone::Utc,
+                true,
+            )
+        );
+
+        cx.update(|window, app| {
+            let main_pane = view.read(app).main_pane.clone();
+            let history_view = main_pane.read(app).history_view.clone();
+            history_view.update(app, |history, cx| {
+                history.set_date_time_format(DateTimeFormat::MdyHm, cx);
+                history.ensure_history_cache(cx);
+                let rows = HistoryView::render_history_table_rows(history, 0..1, window, cx);
+                assert_eq!(
+                    rows.len(),
+                    1,
+                    "history row should still render after date change"
+                );
+            });
+            window.refresh();
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+
+        let (after_graph_rows, after_base_request, after_decoration_request, after_when_text) = cx
+            .update(|_window, app| {
+                let main_pane = view.read(app).main_pane.clone();
+                let history_view = main_pane.read(app).history_view.clone();
+                let history = history_view.read(app);
+                assert!(
+                    history.history_cache_inflight.is_none(),
+                    "display-only changes should not enqueue a cache rebuild"
+                );
+                let cache = history
+                    .history_cache
+                    .as_ref()
+                    .expect("history cache should still be available");
+                (
+                    Arc::clone(&cache.base.graph_rows),
+                    cache.base.request.clone(),
+                    cache.decorations.request.clone(),
+                    cache.base.row_vms[0]
+                        .when
+                        .resolve(HistoryDisplayKey::new(
+                            DateTimeFormat::MdyHm,
+                            Timezone::Utc,
+                            true,
+                        ))
+                        .as_ref()
+                        .to_owned(),
+                )
+            });
+
+        assert!(
+            Arc::ptr_eq(&before_graph_rows, &after_graph_rows),
+            "date/time changes should keep the heavy graph cache"
+        );
+        assert_eq!(after_base_request, before_base_request);
+        assert_eq!(after_decoration_request, before_decoration_request);
+        assert_eq!(
+            after_when_text,
+            format_datetime(
+                SystemTime::UNIX_EPOCH,
+                DateTimeFormat::MdyHm,
+                Timezone::Utc,
+                true,
+            )
+        );
+        assert_ne!(after_when_text, before_when_text);
+    }
+
+    #[gpui::test]
+    fn current_branch_remote_branch_changes_reuse_base_cache_and_refresh_decorations(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let _visual_guard = crate::test_support::lock_visual_test();
+        let (store, events) = AppStore::new(Arc::new(BlockingBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        let repo_id = RepoId(1);
+        let page = Arc::new(log_page(vec![commit("tip", &[], "tip")], None));
+        let repo_path = PathBuf::from("/tmp/history-current-branch-remote-reuse");
+
+        let mut initial_repo = RepoState::new_opening(repo_id, RepoSpec { workdir: repo_path });
+        initial_repo.history_state.history_scope = LogScope::CurrentBranch;
+        initial_repo.head_branch = Loadable::Ready("main".to_string());
+        initial_repo.head_branch_rev = 1;
+        initial_repo.branches = Loadable::Ready(Arc::new(vec![branch("main", "tip")]));
+        initial_repo.branches_rev = 1;
+        initial_repo.remote_branches =
+            Loadable::Ready(Arc::new(vec![remote_branch("origin", "main", "tip")]));
+        initial_repo.remote_branches_rev = 1;
+        initial_repo.log = Loadable::Ready(Arc::clone(&page));
+        initial_repo.log_rev = 1;
+        initial_repo.history_state.log = Loadable::Ready(Arc::clone(&page));
+        initial_repo.history_state.log_rev = 1;
+
+        let initial_state = Arc::new(AppState {
+            repos: vec![initial_repo.clone()],
+            active_repo: Some(repo_id),
+            ..Default::default()
+        });
+
+        let mut updated_repo = initial_repo;
+        updated_repo.remote_branches = Loadable::Ready(Arc::new(vec![
+            remote_branch("origin", "main", "tip"),
+            remote_branch("upstream", "main", "tip"),
+        ]));
+        updated_repo.remote_branches_rev = 2;
+
+        let updated_state = Arc::new(AppState {
+            repos: vec![updated_repo],
+            active_repo: Some(repo_id),
+            ..Default::default()
+        });
+
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+
+        ensure_history_cache_for_tests(cx, &view, initial_state);
+
+        wait_until(cx, "initial current-branch history cache", |cx| {
+            cx.update(|_window, app| {
+                let main_pane = view.read(app).main_pane.clone();
+                let history_view = main_pane.read(app).history_view.clone();
+                let history = history_view.read(app);
+                history.history_cache.as_ref().is_some_and(|cache| {
+                    cache.base.request.history_scope == LogScope::CurrentBranch
+                        && cache.base.request.remote_branches_rev == 0
+                        && cache.decorations.row_vms.len() == 1
+                        && cache.decorations.row_vms[0]
+                            .branches_text
+                            .as_ref()
+                            .contains("origin/main")
+                })
+            })
+        });
+
+        let (before_graph_rows, before_base_request, before_branches_text) =
+            cx.update(|window, app| {
+                let main_pane = view.read(app).main_pane.clone();
+                let history_view = main_pane.read(app).history_view.clone();
+                let rows_len = history_view.update(app, |history, cx| {
+                    HistoryView::render_history_table_rows(history, 0..1, window, cx).len()
+                });
+                assert_eq!(rows_len, 1, "initial current-branch row should render");
+
+                let history = history_view.read(app);
+                let cache = history
+                    .history_cache
+                    .as_ref()
+                    .expect("history cache should be available");
+                (
+                    Arc::clone(&cache.base.graph_rows),
+                    cache.base.request.clone(),
+                    cache.decorations.row_vms[0]
+                        .branches_text
+                        .as_ref()
+                        .to_owned(),
+                )
+            });
+
+        assert!(before_branches_text.contains("origin/main"));
+        assert!(!before_branches_text.contains("upstream/main"));
+
+        ensure_history_cache_for_tests(cx, &view, updated_state);
+
+        wait_until(cx, "updated current-branch decorations", |cx| {
+            cx.update(|_window, app| {
+                let main_pane = view.read(app).main_pane.clone();
+                let history_view = main_pane.read(app).history_view.clone();
+                let history = history_view.read(app);
+                history.history_cache.as_ref().is_some_and(|cache| {
+                    cache.base.request.history_scope == LogScope::CurrentBranch
+                        && cache.base.request.remote_branches_rev == 0
+                        && cache.decorations.request.remote_branches_rev == 2
+                        && cache.decorations.row_vms.len() == 1
+                        && cache.decorations.row_vms[0]
+                            .branches_text
+                            .as_ref()
+                            .contains("upstream/main")
+                })
+            })
+        });
+
+        let (after_graph_rows, after_base_request, after_branches_text) =
+            cx.update(|window, app| {
+                let main_pane = view.read(app).main_pane.clone();
+                let history_view = main_pane.read(app).history_view.clone();
+                let rows_len = history_view.update(app, |history, cx| {
+                    HistoryView::render_history_table_rows(history, 0..1, window, cx).len()
+                });
+                assert_eq!(
+                    rows_len, 1,
+                    "updated current-branch row should still render"
+                );
+
+                let history = history_view.read(app);
+                let cache = history
+                    .history_cache
+                    .as_ref()
+                    .expect("history cache should be available");
+                (
+                    Arc::clone(&cache.base.graph_rows),
+                    cache.base.request.clone(),
+                    cache.decorations.row_vms[0]
+                        .branches_text
+                        .as_ref()
+                        .to_owned(),
+                )
+            });
+
+        assert!(
+            Arc::ptr_eq(&before_graph_rows, &after_graph_rows),
+            "remote branch changes in current-branch mode should reuse the heavy base cache"
+        );
+        assert_eq!(after_base_request, before_base_request);
+        assert!(after_branches_text.contains("origin/main"));
+        assert!(after_branches_text.contains("upstream/main"));
+    }
+
+    #[gpui::test]
+    fn history_scope_switch_keeps_rows_visible_and_refreshes_automatically(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let _visual_guard = crate::test_support::lock_visual_test();
+        let (store, events) = AppStore::new(Arc::new(BlockingBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        let repo_id = RepoId(1);
+        let initial_scope = LogScope::FullReachable;
+        let switched_scope = LogScope::AllBranches;
+        let repo_path = PathBuf::from("/tmp/history-scope-switch-test");
+        let initial_page = Arc::new(log_page(vec![commit("main-tip", &[], "main tip")], None));
+        let switched_page = Arc::new(log_page(
+            vec![
+                commit("all-tip", &[], "all branches tip"),
+                commit("main-tip", &[], "main tip"),
+            ],
+            None,
+        ));
+
+        let mut initial_repo = RepoState::new_opening(repo_id, RepoSpec { workdir: repo_path });
+        initial_repo.history_state.history_scope = initial_scope;
+        initial_repo.log = Loadable::Ready(Arc::clone(&initial_page));
+        initial_repo.log_rev = 1;
+        initial_repo.history_state.log = Loadable::Ready(Arc::clone(&initial_page));
+        initial_repo.history_state.log_rev = 1;
+
+        let initial_state = Arc::new(AppState {
+            repos: vec![initial_repo.clone()],
+            active_repo: Some(repo_id),
+            ..Default::default()
+        });
+
+        let mut loading_repo = initial_repo.clone();
+        loading_repo.history_state.history_scope = switched_scope;
+        loading_repo.log = Loadable::Loading;
+        loading_repo.log_rev = 2;
+        loading_repo.history_state.log = Loadable::Loading;
+        loading_repo.history_state.log_rev = 2;
+        loading_repo.history_state.retained_log_while_loading = Some(Arc::clone(&initial_page));
+
+        let loading_state = Arc::new(AppState {
+            repos: vec![loading_repo.clone()],
+            active_repo: Some(repo_id),
+            ..Default::default()
+        });
+
+        let mut loaded_repo = loading_repo;
+        loaded_repo.log = Loadable::Ready(Arc::clone(&switched_page));
+        loaded_repo.log_rev = 3;
+        loaded_repo.history_state.log = Loadable::Ready(Arc::clone(&switched_page));
+        loaded_repo.history_state.log_rev = 3;
+        loaded_repo.history_state.retained_log_while_loading = None;
+
+        let loaded_state = Arc::new(AppState {
+            repos: vec![loaded_repo],
+            active_repo: Some(repo_id),
+            ..Default::default()
+        });
+
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+
+        ensure_history_cache_for_tests(cx, &view, Arc::clone(&initial_state));
+
+        wait_until(cx, "initial history rows", |cx| {
+            cx.update(|_window, app| {
+                let main_pane = view.read(app).main_pane.clone();
+                let history_view = main_pane.read(app).history_view.clone();
+                let history = history_view.read(app);
+                history.history_cache.as_ref().is_some_and(|cache| {
+                    cache.base.request.history_scope == initial_scope
+                        && cache.base.visible_indices.len() == 1
+                        && cache.base.row_vms.len() == 1
+                        && cache.base.row_vms[0].summary.as_ref() == "main tip"
+                })
+            })
+        });
+
+        ensure_history_cache_for_tests(cx, &view, Arc::clone(&loading_state));
+
+        wait_until(cx, "retained history rows during loading", |cx| {
+            cx.update(|_window, app| {
+                let main_pane = view.read(app).main_pane.clone();
+                let history_view = main_pane.read(app).history_view.clone();
+                let history = history_view.read(app);
+                history.active_repo().is_some_and(|repo| {
+                    repo.history_state.history_scope == switched_scope
+                        && matches!(repo.log, Loadable::Loading)
+                        && repo
+                            .history_state
+                            .retained_log_while_loading
+                            .as_ref()
+                            .is_some_and(|page| Arc::ptr_eq(page, &initial_page))
+                }) && history.history_cache.as_ref().is_some_and(|cache| {
+                    cache.base.visible_indices.len() == 1
+                        && cache.base.row_vms.len() == 1
+                        && cache.base.row_vms[0].summary.as_ref() == "main tip"
+                })
+            })
+        });
+
+        cx.update(|window, app| {
+            let main_pane = view.read(app).main_pane.clone();
+            let history_view = main_pane.read(app).history_view.clone();
+            history_view.update(app, |history, cx| {
+                let rows = HistoryView::render_history_table_rows(history, 0..1, window, cx);
+                assert_eq!(rows.len(), 1, "retained history row should still render");
+            });
+        });
+
+        ensure_history_cache_for_tests(cx, &view, Arc::clone(&loaded_state));
+
+        wait_until(cx, "history rows refresh after scope load", |cx| {
+            cx.update(|_window, app| {
+                let main_pane = view.read(app).main_pane.clone();
+                let history_view = main_pane.read(app).history_view.clone();
+                let history = history_view.read(app);
+                history.history_cache.as_ref().is_some_and(|cache| {
+                    cache.base.request.history_scope == switched_scope
+                        && cache.base.visible_indices.len() == 2
+                        && cache.base.row_vms.len() == 2
+                        && cache.base.row_vms[0].summary.as_ref() == "all branches tip"
+                        && cache.base.row_vms[1].summary.as_ref() == "main tip"
+                })
+            })
+        });
+    }
+
+    #[gpui::test]
+    fn filtered_modes_do_not_infer_detached_head_target_from_first_visible_row(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let _visual_guard = crate::test_support::lock_visual_test();
+        let (store, events) = AppStore::new(Arc::new(BlockingBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+
+        for (scope, commits, expected_summary) in [
+            (
+                LogScope::NoMerges,
+                vec![commit("visible", &["hidden"], "visible non-merge")],
+                "visible non-merge",
+            ),
+            (
+                LogScope::MergesOnly,
+                vec![commit("visible-merge", &["p0", "p1"], "visible merge")],
+                "visible merge",
+            ),
+        ] {
+            let page = Arc::new(log_page(commits, None));
+            let mut repo = RepoState::new_opening(
+                RepoId(1),
+                RepoSpec {
+                    workdir: PathBuf::from("/tmp/history-detached-head-filtered"),
+                },
+            );
+            repo.history_state.history_scope = scope;
+            repo.head_branch = Loadable::Ready("HEAD".to_string());
+            repo.head_branch_rev = 1;
+            repo.log = Loadable::Ready(Arc::clone(&page));
+            repo.log_rev = 1;
+            repo.history_state.log = Loadable::Ready(page);
+            repo.history_state.log_rev = 1;
+
+            let state = Arc::new(AppState {
+                repos: vec![repo],
+                active_repo: Some(RepoId(1)),
+                ..Default::default()
+            });
+
+            ensure_history_cache_for_tests(cx, &view, state);
+
+            let description = format!("filtered {scope:?} history cache");
+            wait_until(cx, &description, |cx| {
+                cx.update(|_window, app| {
+                    let main_pane = view.read(app).main_pane.clone();
+                    let history_view = main_pane.read(app).history_view.clone();
+                    let history = history_view.read(app);
+                    history.history_cache.as_ref().is_some_and(|cache| {
+                        cache.base.request.history_scope == scope
+                            && cache.base.row_vms.len() == 1
+                            && !cache.base.row_vms[0].is_head
+                            && cache.base.row_vms[0].summary.as_ref() == expected_summary
+                    })
+                })
+            });
+        }
+    }
+
+    #[gpui::test]
+    fn retained_history_rows_support_keyboard_navigation_while_loading(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let _visual_guard = crate::test_support::lock_visual_test();
+        let (store, events) = AppStore::new(Arc::new(BlockingBackend));
+        let store_for_assert = store.clone();
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        let repo_id = RepoId(1);
+        let first = CommitId("tip".into());
+        let second = CommitId("base".into());
+        let repo_path = PathBuf::from(format!(
+            "/tmp/history-retained-nav-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+
+        store_for_assert.dispatch(Msg::OpenRepo(repo_path.clone()));
+        wait_until(cx, "opened repo placeholder", |_cx| {
+            let snapshot = store_for_assert.snapshot();
+            snapshot.active_repo == Some(repo_id)
+                && snapshot.repos.iter().any(|repo| repo.id == repo_id)
+        });
+
+        let page = Arc::new(log_page(
+            vec![commit("tip", &["base"], "tip"), commit("base", &[], "base")],
+            None,
+        ));
+        let mut repo = RepoState::new_opening(repo_id, RepoSpec { workdir: repo_path });
+        repo.history_state.history_scope = LogScope::AllBranches;
+        repo.history_state.selected_commit = Some(first.clone());
+        repo.history_state.retained_log_while_loading = Some(Arc::clone(&page));
+        repo.head_branch = Loadable::Ready("main".to_string());
+        repo.head_branch_rev = 1;
+        repo.log = Loadable::Loading;
+        repo.log_rev = 1;
+        repo.history_state.log = Loadable::Loading;
+        repo.history_state.log_rev = 1;
+
+        let state = Arc::new(AppState {
+            repos: vec![repo],
+            active_repo: Some(repo_id),
+            ..Default::default()
+        });
+
+        ensure_history_cache_for_tests(cx, &view, state);
+
+        wait_until(cx, "retained rows available during loading", |cx| {
+            cx.update(|_window, app| {
+                let main_pane = view.read(app).main_pane.clone();
+                let history_view = main_pane.read(app).history_view.clone();
+                let history = history_view.read(app);
+                history.active_repo().is_some_and(|repo| {
+                    repo.history_state.history_scope == LogScope::AllBranches
+                        && matches!(repo.log, Loadable::Loading)
+                        && repo.history_state.retained_log_while_loading.is_some()
+                        && repo.history_state.selected_commit.as_ref() == Some(&first)
+                }) && history.history_cache.as_ref().is_some_and(|cache| {
+                    cache.base.request.history_scope == LogScope::AllBranches
+                        && cache.base.row_vms.len() == 2
+                        && cache.base.row_vms[0].summary.as_ref() == "tip"
+                        && cache.base.row_vms[1].summary.as_ref() == "base"
+                })
+            })
+        });
+
+        cx.update(|window, app| {
+            let main_pane = view.read(app).main_pane.clone();
+            let history_view = main_pane.read(app).history_view.clone();
+            history_view.update(app, |history, cx| {
+                assert!(history.history_select_adjacent_commit(1, cx));
+            });
+            window.refresh();
+            let _ = window.draw(app);
+        });
+
+        wait_until(cx, "selected second retained commit", |_cx| {
+            let snapshot = store_for_assert.snapshot();
+            let Some(repo) = snapshot.repos.iter().find(|repo| repo.id == repo_id) else {
+                return false;
+            };
+            repo.history_state.selected_commit.as_ref() == Some(&second)
+        });
     }
 }

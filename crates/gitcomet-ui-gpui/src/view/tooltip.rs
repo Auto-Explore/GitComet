@@ -76,6 +76,7 @@ impl GitCometView {
                             } else {
                                 gitcomet_state::model::GitLogTagFetchMode::Disabled
                             }),
+                            default_history_mode: None,
                             git_executable_path: None,
                         };
 

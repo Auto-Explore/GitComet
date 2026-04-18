@@ -45,11 +45,38 @@ pub struct Commit {
     pub time: SystemTime,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub enum LogScope {
-    CurrentBranch,
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
+pub enum HistoryMode {
+    #[default]
+    FullReachable,
+    FirstParent,
+    NoMerges,
+    MergesOnly,
     AllBranches,
 }
+
+impl HistoryMode {
+    #[allow(non_upper_case_globals)]
+    pub const CurrentBranch: Self = Self::FirstParent;
+
+    pub fn is_all_branches(self) -> bool {
+        matches!(self, Self::AllBranches)
+    }
+
+    pub fn is_current_branch_mode(self) -> bool {
+        !self.is_all_branches()
+    }
+
+    pub fn guarantees_head_visibility(self) -> bool {
+        matches!(self, Self::FullReachable | Self::FirstParent)
+    }
+
+    pub fn uses_first_parent_pagination(self) -> bool {
+        matches!(self, Self::FirstParent)
+    }
+}
+
+pub type LogScope = HistoryMode;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CommitDetails {

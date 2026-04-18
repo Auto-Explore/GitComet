@@ -1,4 +1,5 @@
 use super::*;
+use gitcomet_core::domain::HistoryMode;
 use gitcomet_core::process::{
     GitExecutablePreference, GitRuntimeState, install_git_executable_path, refresh_git_runtime,
 };
@@ -70,6 +71,7 @@ enum SettingsSection {
     Timezone,
     ChangeTracking,
     Diff,
+    GitLogDefaultMode,
     GitLogColumns,
     GitLogTagFetch,
 }
@@ -151,6 +153,7 @@ pub(crate) struct SettingsWindowView {
     history_show_sha: bool,
     history_show_tags: bool,
     history_tag_fetch_mode: GitLogTagFetchMode,
+    default_history_mode: HistoryMode,
     current_view: SettingsView,
     open_source_licenses_scroll: UniformListScrollHandle,
     runtime_info: SettingsRuntimeInfo,
@@ -438,6 +441,7 @@ impl SettingsWindowView {
         let history_show_sha = ui_session.history_show_sha.unwrap_or(false);
         let history_show_tags = ui_session.history_show_tags.unwrap_or(true);
         let history_tag_fetch_mode = ui_session.history_tag_fetch_mode.unwrap_or_default();
+        let default_history_mode = ui_session.default_history_mode.unwrap_or_default();
         let theme = theme_mode.resolve_theme(window.appearance());
         let runtime_info = SettingsRuntimeInfo::detect();
         let git_executable_mode =
@@ -524,6 +528,7 @@ impl SettingsWindowView {
             history_show_sha,
             history_show_tags,
             history_tag_fetch_mode,
+            default_history_mode,
             current_view: SettingsView::Root,
             open_source_licenses_scroll: UniformListScrollHandle::default(),
             runtime_info,
@@ -573,6 +578,7 @@ impl SettingsWindowView {
             history_show_sha: Some(self.history_show_sha),
             history_show_tags: Some(self.history_show_tags),
             history_tag_fetch_mode: Some(self.history_tag_fetch_mode),
+            default_history_mode: Some(self.default_history_mode),
             git_executable_path: Some(applied_git_executable_path(&self.runtime_info.git.runtime)),
         };
 
@@ -923,6 +929,17 @@ impl SettingsWindowView {
         self.update_main_windows(cx, move |view, _window, cx| {
             view.set_history_tag_preferences(show_tags, mode, cx);
         });
+        cx.notify();
+    }
+
+    fn set_default_history_mode(&mut self, mode: HistoryMode, cx: &mut gpui::Context<Self>) {
+        if self.default_history_mode == mode {
+            return;
+        }
+
+        self.default_history_mode = mode;
+        self.expanded_section = None;
+        self.persist_preferences(cx);
         cx.notify();
     }
 
@@ -2157,6 +2174,21 @@ impl Render for SettingsWindowView {
                             this.toggle_section(SettingsSection::Diff, cx);
                         }));
 
+                    let history_default_mode_row = self
+                        .summary_row(
+                            "settings_window_git_log_default_mode",
+                            "Default history mode",
+                            crate::view::history_mode::history_mode_label(
+                                self.default_history_mode,
+                            )
+                            .into(),
+                            self.expanded_section == Some(SettingsSection::GitLogDefaultMode),
+                            theme,
+                        )
+                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                            this.toggle_section(SettingsSection::GitLogDefaultMode, cx);
+                        }));
+
                     let history_columns_row = self
                         .summary_row(
                             "settings_window_git_log_columns",
@@ -2493,7 +2525,45 @@ impl Render for SettingsWindowView {
 
                     let mut git_log_card = self
                         .card("settings_window_git_log_card", "Git log", theme)
-                        .child(history_columns_row);
+                        .child(history_default_mode_row);
+
+                    if self.expanded_section == Some(SettingsSection::GitLogDefaultMode) {
+                        let mut mode_container = self.detail_container(
+                            "settings_window_git_log_default_mode_container",
+                            theme,
+                        );
+                        for spec in crate::view::history_mode::history_mode_ui_specs() {
+                            let mode = spec.mode;
+                            mode_container = mode_container.child(
+                                self.option_row(
+                                    spec.settings_row_id,
+                                    spec.label,
+                                    Some(spec.settings_description.into()),
+                                    self.default_history_mode == mode,
+                                    theme,
+                                )
+                                .on_click(cx.listener(
+                                    move |this, _e: &ClickEvent, _window, cx| {
+                                        this.set_default_history_mode(mode, cx);
+                                    },
+                                )),
+                            );
+                        }
+                        git_log_card = git_log_card.child(
+                            mode_container.child(
+                                div()
+                                    .px_2()
+                                    .pb_1()
+                                    .text_xs()
+                                    .text_color(theme.colors.text_muted)
+                                    .child(
+                                        "Applies when opening repositories that do not already have a saved history mode.",
+                                    ),
+                            ),
+                        );
+                    }
+
+                    git_log_card = git_log_card.child(history_columns_row);
 
                     if self.expanded_section == Some(SettingsSection::GitLogColumns) {
                         git_log_card = git_log_card.child(
@@ -3722,6 +3792,126 @@ mod tests {
     }
 
     #[gpui::test]
+    fn expanded_git_log_default_mode_section_renders_modes_in_order_and_updates_selection(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let _visual_guard = lock_visual_test();
+        let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+        let (_main_view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+            open_settings_window(app);
+        });
+        cx.run_until_parked();
+
+        let settings_window = cx.update(|_window, app| {
+            app.windows()
+                .into_iter()
+                .find_map(|window| window.downcast::<SettingsWindowView>())
+                .expect("settings window should be open")
+        });
+
+        let mut settings_cx = gpui::VisualTestContext::from_window(*settings_window.deref(), cx);
+        settings_cx.run_until_parked();
+        settings_cx.simulate_resize(size(px(SETTINGS_WINDOW_DEFAULT_WIDTH_PX), px(1200.0)));
+        settings_cx.run_until_parked();
+
+        let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
+            settings.expanded_section = Some(SettingsSection::GitLogDefaultMode);
+            cx.notify();
+        });
+        settings_cx.run_until_parked();
+        settings_cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+
+        let mut previous_top = None;
+        for spec in crate::view::history_mode::history_mode_ui_specs() {
+            let bounds = settings_cx
+                .debug_bounds(spec.settings_row_id)
+                .unwrap_or_else(|| panic!("expected `{}` bounds", spec.settings_row_id));
+            if let Some(previous_top) = previous_top {
+                assert!(
+                    bounds.top() > previous_top,
+                    "expected `{}` to appear below the previous history mode row",
+                    spec.settings_row_id
+                );
+            }
+            previous_top = Some(bounds.top());
+        }
+
+        let selected = crate::view::history_mode::history_mode_ui_specs()
+            .last()
+            .copied()
+            .expect("history modes");
+        let selected_bounds = settings_cx
+            .debug_bounds(selected.settings_row_id)
+            .expect("expected selected row bounds");
+        settings_cx.simulate_click(selected_bounds.center(), Modifiers::default());
+        settings_cx.run_until_parked();
+
+        cx.update(|_window, app| {
+            assert_eq!(
+                settings_window
+                    .read_with(app, |settings, _cx| settings.default_history_mode)
+                    .expect("settings window should remain readable"),
+                selected.mode
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn expanded_git_log_default_mode_section_renders_before_history_columns_row(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let _visual_guard = lock_visual_test();
+        let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+        let (_main_view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+            open_settings_window(app);
+        });
+        cx.run_until_parked();
+
+        let settings_window = cx.update(|_window, app| {
+            app.windows()
+                .into_iter()
+                .find_map(|window| window.downcast::<SettingsWindowView>())
+                .expect("settings window should be open")
+        });
+
+        let mut settings_cx = gpui::VisualTestContext::from_window(*settings_window.deref(), cx);
+        settings_cx.run_until_parked();
+        settings_cx.simulate_resize(size(px(SETTINGS_WINDOW_DEFAULT_WIDTH_PX), px(1200.0)));
+        settings_cx.run_until_parked();
+
+        let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
+            settings.expanded_section = Some(SettingsSection::GitLogDefaultMode);
+            cx.notify();
+        });
+        settings_cx.run_until_parked();
+        settings_cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+
+        let default_mode_container = settings_cx
+            .debug_bounds("settings_window_git_log_default_mode_container")
+            .expect("expected default history mode container bounds");
+        let history_columns_row = settings_cx
+            .debug_bounds("settings_window_git_log_columns")
+            .expect("expected history columns row bounds");
+
+        assert!(
+            default_mode_container.bottom() <= history_columns_row.top(),
+            "expected the default history mode container to appear before the history columns row"
+        );
+    }
+
+    #[gpui::test]
     fn expanded_auto_fetch_tags_section_renders_detail_container(cx: &mut gpui::TestAppContext) {
         let _visual_guard = lock_visual_test();
         let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
@@ -4006,6 +4196,19 @@ mod tests {
         let mut settings_cx = gpui::VisualTestContext::from_window(*settings_window.deref(), cx);
         settings_cx.run_until_parked();
         settings_cx.simulate_resize(size(px(SETTINGS_WINDOW_DEFAULT_WIDTH_PX), px(1200.0)));
+        settings_cx.run_until_parked();
+        settings_cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
+            // Keep the interaction test resilient as sections are added above the links card.
+            let current_x = settings.settings_window_scroll.offset().x;
+            let max_offset = settings.settings_window_scroll.max_offset().y.max(px(0.0));
+            settings
+                .settings_window_scroll
+                .set_offset(point(current_x, -max_offset));
+            cx.notify();
+        });
         settings_cx.run_until_parked();
         settings_cx.update(|window, app| {
             let _ = window.draw(app);

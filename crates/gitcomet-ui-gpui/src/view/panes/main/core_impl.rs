@@ -669,7 +669,7 @@ impl MainPaneView {
         &mut self,
         repo_id: RepoId,
         commit_id: CommitId,
-        desired_scope: LogScope,
+        fallback_scope: Option<LogScope>,
         cx: &mut gpui::Context<Self>,
     ) {
         if matches!(
@@ -682,7 +682,7 @@ impl MainPaneView {
 
         self.clear_diff_selection_or_exit(repo_id, cx);
         self.history_view.update(cx, |view, cx| {
-            view.request_reveal_commit(repo_id, commit_id, desired_scope, cx);
+            view.request_reveal_commit(repo_id, commit_id, fallback_scope, cx);
         });
         cx.notify();
     }
@@ -693,14 +693,14 @@ impl MainPaneView {
         section: BranchSection,
         branch_name: &str,
         commit_id: CommitId,
-        desired_scope: LogScope,
+        fallback_scope: Option<LogScope>,
         cx: &mut gpui::Context<Self>,
     ) {
         let branch_name = branch_name.to_string();
         self.history_view.update(cx, |view, cx| {
             view.set_selected_branch(repo_id, section, &branch_name, cx);
         });
-        self.reveal_history_commit(repo_id, commit_id, desired_scope, cx);
+        self.reveal_history_commit(repo_id, commit_id, fallback_scope, cx);
     }
 
     pub(super) fn set_focused_mergetool_exit_code(&self, code: i32) {

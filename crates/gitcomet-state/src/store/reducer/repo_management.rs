@@ -119,12 +119,15 @@ pub(super) fn open_repo(id_alloc: &AtomicU64, state: &mut AppState, path: PathBu
 
     let repo_id = RepoId(id_alloc.fetch_add(1, Ordering::Relaxed));
     let spec = RepoSpec { workdir: path };
+    let saved_history_mode = session::load_repo_history_mode(&spec.workdir);
+    let history_mode = saved_history_mode
+        .or_else(|| session::load_repo_history_scope(&spec.workdir))
+        .or_else(session::load_default_history_mode)
+        .unwrap_or_default();
 
     state.repos.push({
         let mut repo_state = crate::model::RepoState::new_opening(repo_id, spec.clone());
-        if let Some(scope) = session::load_repo_history_scope(&spec.workdir) {
-            repo_state.history_state.history_scope = scope;
-        }
+        repo_state.history_state.history_scope = history_mode;
         if let Some(enabled) =
             session::load_repo_fetch_prune_deleted_remote_tracking_branches(&spec.workdir)
         {
@@ -150,6 +153,16 @@ pub(super) fn open_repo(id_alloc: &AtomicU64, state: &mut AppState, path: PathBu
         "updating recent repositories",
         persist_recent_result,
     );
+    if saved_history_mode.is_none() {
+        let persist_history_mode_result =
+            session::persist_repo_history_mode(&spec.workdir, history_mode);
+        handle_session_persist_result(
+            state,
+            Some(repo_id),
+            "updating history mode",
+            persist_history_mode_result,
+        );
+    }
     effects
 }
 
@@ -165,7 +178,9 @@ pub(super) fn restore_session(
     state.repos.clear();
     state.active_repo = None;
 
+    let repo_history_modes = session::load_repo_history_modes();
     let repo_history_scopes = session::load_repo_history_scopes();
+    let default_history_mode = session::load_default_history_mode().unwrap_or_default();
     let repo_fetch_prune_deleted_remote_tracking_branches =
         session::load_repo_fetch_prune_deleted_remote_tracking_branches_by_repo();
     let active_repo = active_repo.map(normalize_repo_path);
@@ -189,13 +204,15 @@ pub(super) fn restore_session(
         {
             active_repo_id = Some(repo_id);
         }
+        let workdir_key = session::path_storage_key(&spec.workdir);
+        let saved_history_mode = repo_history_modes.get(&workdir_key).copied();
+        let history_mode = saved_history_mode
+            .or_else(|| repo_history_scopes.get(&workdir_key).copied())
+            .unwrap_or(default_history_mode);
 
         state.repos.push({
             let mut repo_state = crate::model::RepoState::new_opening(repo_id, spec.clone());
-            let workdir_key = session::path_storage_key(&spec.workdir);
-            if let Some(scope) = repo_history_scopes.get(&workdir_key).copied() {
-                repo_state.history_state.history_scope = scope;
-            }
+            repo_state.history_state.history_scope = history_mode;
             if let Some(enabled) = repo_fetch_prune_deleted_remote_tracking_branches
                 .get(&workdir_key)
                 .copied()
@@ -204,6 +221,16 @@ pub(super) fn restore_session(
             }
             repo_state
         });
+        if saved_history_mode.is_none() {
+            let persist_history_mode_result =
+                session::persist_repo_history_mode(&spec.workdir, history_mode);
+            handle_session_persist_result(
+                state,
+                Some(repo_id),
+                "updating history mode",
+                persist_history_mode_result,
+            );
+        }
         effects.push(Effect::OpenRepo {
             repo_id,
             path: spec.workdir.clone(),

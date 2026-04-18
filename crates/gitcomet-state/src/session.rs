@@ -1,5 +1,5 @@
 use crate::model::{AppState, GitLogTagFetchMode, RepoId};
-use gitcomet_core::domain::LogScope;
+use gitcomet_core::domain::{HistoryMode, LogScope};
 use rustc_hash::FxHashSet;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
@@ -38,6 +38,7 @@ pub struct UiSession {
     pub history_show_sha: Option<bool>,
     pub history_show_tags: Option<bool>,
     pub history_tag_fetch_mode: Option<GitLogTagFetchMode>,
+    pub default_history_mode: Option<HistoryMode>,
     pub git_executable_path: Option<PathBuf>,
 }
 
@@ -51,8 +52,11 @@ enum HistoryScopeSetting {
 impl From<LogScope> for HistoryScopeSetting {
     fn from(value: LogScope) -> Self {
         match value {
-            LogScope::CurrentBranch => Self::CurrentBranch,
-            LogScope::AllBranches => Self::AllBranches,
+            HistoryMode::AllBranches => Self::AllBranches,
+            HistoryMode::FullReachable
+            | HistoryMode::FirstParent
+            | HistoryMode::NoMerges
+            | HistoryMode::MergesOnly => Self::CurrentBranch,
         }
     }
 }
@@ -62,6 +66,40 @@ impl From<HistoryScopeSetting> for LogScope {
         match value {
             HistoryScopeSetting::CurrentBranch => Self::CurrentBranch,
             HistoryScopeSetting::AllBranches => Self::AllBranches,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum HistoryModeSetting {
+    FullReachable,
+    FirstParent,
+    NoMerges,
+    MergesOnly,
+    AllBranches,
+}
+
+impl From<HistoryMode> for HistoryModeSetting {
+    fn from(value: HistoryMode) -> Self {
+        match value {
+            HistoryMode::FullReachable => Self::FullReachable,
+            HistoryMode::FirstParent => Self::FirstParent,
+            HistoryMode::NoMerges => Self::NoMerges,
+            HistoryMode::MergesOnly => Self::MergesOnly,
+            HistoryMode::AllBranches => Self::AllBranches,
+        }
+    }
+}
+
+impl From<HistoryModeSetting> for HistoryMode {
+    fn from(value: HistoryModeSetting) -> Self {
+        match value {
+            HistoryModeSetting::FullReachable => Self::FullReachable,
+            HistoryModeSetting::FirstParent => Self::FirstParent,
+            HistoryModeSetting::NoMerges => Self::NoMerges,
+            HistoryModeSetting::MergesOnly => Self::MergesOnly,
+            HistoryModeSetting::AllBranches => Self::AllBranches,
         }
     }
 }
@@ -101,7 +139,9 @@ struct UiSessionFileV2 {
     history_show_sha: Option<bool>,
     history_show_tags: Option<bool>,
     history_tag_fetch_mode: Option<GitLogTagFetchMode>,
+    default_history_mode: Option<HistoryModeSetting>,
     git_executable_path: Option<String>,
+    repo_history_modes: Option<BTreeMap<String, HistoryModeSetting>>,
     repo_history_scopes: Option<BTreeMap<String, HistoryScopeSetting>>,
     repo_fetch_prune_deleted_remote_tracking_branches: Option<BTreeMap<String, bool>>,
 }
@@ -161,6 +201,7 @@ pub fn load_from_path(path: &Path) -> UiSession {
         history_show_sha: file.history_show_sha,
         history_show_tags: file.history_show_tags,
         history_tag_fetch_mode: file.history_tag_fetch_mode,
+        default_history_mode: file.default_history_mode.map(Into::into),
         git_executable_path: file
             .git_executable_path
             .as_deref()
@@ -184,6 +225,37 @@ struct CachedSessionReposSnapshot {
 
 thread_local! {
     static SESSION_REPOS_SNAPSHOT_CACHE: RefCell<Option<CachedSessionReposSnapshot>> = const { RefCell::new(None) };
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_SESSION_FILE_PATH_OVERRIDE: RefCell<Vec<Option<PathBuf>>> = const { RefCell::new(Vec::new()) };
+}
+
+#[cfg(test)]
+pub(crate) struct TestSessionFilePathGuard;
+
+#[cfg(test)]
+pub(crate) fn push_test_session_file_path_override(
+    path: impl Into<Option<PathBuf>>,
+) -> TestSessionFilePathGuard {
+    TEST_SESSION_FILE_PATH_OVERRIDE.with(|stack| stack.borrow_mut().push(path.into()));
+    TestSessionFilePathGuard
+}
+
+#[cfg(test)]
+impl Drop for TestSessionFilePathGuard {
+    fn drop(&mut self) {
+        TEST_SESSION_FILE_PATH_OVERRIDE.with(|stack| {
+            let popped = stack.borrow_mut().pop();
+            debug_assert!(popped.is_some(), "session path override stack underflow");
+        });
+    }
+}
+
+#[cfg(test)]
+fn test_session_file_path_override() -> Option<Option<PathBuf>> {
+    TEST_SESSION_FILE_PATH_OVERRIDE.with(|stack| stack.borrow().last().cloned())
 }
 
 fn snapshot_repos_from_cache(state: &AppState) -> Option<SessionReposSnapshot> {
@@ -371,6 +443,7 @@ pub struct UiSettings {
     pub history_show_sha: Option<bool>,
     pub history_show_tags: Option<bool>,
     pub history_tag_fetch_mode: Option<GitLogTagFetchMode>,
+    pub default_history_mode: Option<HistoryMode>,
     pub git_executable_path: Option<Option<PathBuf>>,
 }
 
@@ -449,11 +522,96 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
     if let Some(value) = settings.history_tag_fetch_mode {
         file.history_tag_fetch_mode = Some(value);
     }
+    if let Some(value) = settings.default_history_mode {
+        file.default_history_mode = Some(value.into());
+    }
     if let Some(path) = settings.git_executable_path {
         file.git_executable_path = path.map(|path| path_storage_key(&path));
     }
 
     persist_to_path(path, &file)
+}
+
+pub fn load_default_history_mode() -> Option<HistoryMode> {
+    let session_file_path = default_session_file_path()?;
+    load_default_history_mode_from_path(&session_file_path)
+}
+
+pub fn load_default_history_mode_from_path(session_file_path: &Path) -> Option<HistoryMode> {
+    let file = load_file_v2(session_file_path)?;
+    file.default_history_mode.map(Into::into)
+}
+
+pub fn load_repo_history_mode(workdir: &Path) -> Option<HistoryMode> {
+    let session_file_path = default_session_file_path()?;
+    load_repo_history_mode_from_path(workdir, &session_file_path)
+}
+
+pub fn load_repo_history_mode_from_path(
+    workdir: &Path,
+    session_file_path: &Path,
+) -> Option<HistoryMode> {
+    let workdir_key = path_storage_key(workdir);
+    let file = load_file_v2(session_file_path)?;
+    let modes = file.repo_history_modes?;
+    modes.get(&workdir_key).copied().map(Into::into)
+}
+
+pub fn load_repo_history_modes() -> BTreeMap<String, HistoryMode> {
+    let Some(session_file_path) = default_session_file_path() else {
+        return BTreeMap::new();
+    };
+    load_repo_history_modes_from_path(&session_file_path)
+}
+
+pub fn load_repo_history_modes_from_path(
+    session_file_path: &Path,
+) -> BTreeMap<String, HistoryMode> {
+    let Some(file) = load_file_v2(session_file_path) else {
+        return BTreeMap::new();
+    };
+    file.repo_history_modes
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(k, v)| (k, v.into()))
+        .collect()
+}
+
+pub fn persist_repo_history_mode(workdir: &Path, mode: HistoryMode) -> io::Result<()> {
+    let Some(session_file_path) = default_session_file_path() else {
+        return Ok(());
+    };
+    persist_repo_history_mode_to_path(workdir, mode, &session_file_path)
+}
+
+pub fn persist_repo_history_mode_to_path(
+    workdir: &Path,
+    mode: HistoryMode,
+    session_file_path: &Path,
+) -> io::Result<()> {
+    let mut file = load_file_v2(session_file_path).unwrap_or_default();
+    let mode = HistoryModeSetting::from(mode);
+
+    if let Some(existing_mode) = file.repo_history_modes.as_ref().and_then(|modes| {
+        workdir
+            .to_str()
+            .and_then(|path| modes.get(path).copied())
+            .or_else(|| {
+                let workdir_key = path_storage_key(workdir);
+                modes.get(&workdir_key).copied()
+            })
+    }) && existing_mode == mode
+    {
+        return Ok(());
+    }
+
+    file.version = CURRENT_SESSION_FILE_VERSION;
+    let workdir_key = path_storage_key(workdir);
+    file.repo_history_modes
+        .get_or_insert_with(BTreeMap::new)
+        .insert(workdir_key, mode);
+
+    persist_to_path(session_file_path, &file)
 }
 
 pub fn load_repo_history_scope(workdir: &Path) -> Option<LogScope> {
@@ -820,6 +978,11 @@ fn persist_to_path(path: &Path, session: &impl Serialize) -> io::Result<()> {
 }
 
 fn default_session_file_path() -> Option<PathBuf> {
+    #[cfg(test)]
+    if let Some(path) = test_session_file_path_override() {
+        return path;
+    }
+
     if let Some(path) = env::var_os(SESSION_FILE_ENV)
         && !path.is_empty()
     {

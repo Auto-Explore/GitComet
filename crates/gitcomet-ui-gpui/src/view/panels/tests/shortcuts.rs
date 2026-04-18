@@ -269,13 +269,37 @@ fn history_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::TestAppC
     let history_filter_model = cx.update(|_window, app| {
         context_menu_model_for(&view, app, PopoverKind::HistoryBranchFilter { repo_id })
     });
-    assert_declared_shortcuts(&history_filter_model, &["C", "A"]);
+    assert_declared_shortcuts(&history_filter_model, &["F", "P", "N", "M", "A"]);
     assert_shortcut_action!(
         history_filter_model,
-        "C",
+        "F",
         ContextMenuAction::SetHistoryScope {
             repo_id: rid,
-            scope: gitcomet_core::domain::LogScope::CurrentBranch
+            scope: gitcomet_core::domain::HistoryMode::FullReachable
+        } if *rid == repo_id
+    );
+    assert_shortcut_action!(
+        history_filter_model,
+        "P",
+        ContextMenuAction::SetHistoryScope {
+            repo_id: rid,
+            scope: gitcomet_core::domain::HistoryMode::FirstParent
+        } if *rid == repo_id
+    );
+    assert_shortcut_action!(
+        history_filter_model,
+        "N",
+        ContextMenuAction::SetHistoryScope {
+            repo_id: rid,
+            scope: gitcomet_core::domain::HistoryMode::NoMerges
+        } if *rid == repo_id
+    );
+    assert_shortcut_action!(
+        history_filter_model,
+        "M",
+        ContextMenuAction::SetHistoryScope {
+            repo_id: rid,
+            scope: gitcomet_core::domain::HistoryMode::MergesOnly
         } if *rid == repo_id
     );
     assert_shortcut_action!(

@@ -697,6 +697,10 @@ pub(super) fn head_branch_loaded(
             Ok(v) => {
                 if v == "HEAD" {
                     if repo_state.detached_head_commit.is_none()
+                        && repo_state
+                            .history_state
+                            .history_scope
+                            .guarantees_head_visibility()
                         && let Loadable::Ready(page) = &repo_state.log
                     {
                         repo_state
@@ -890,7 +894,7 @@ pub(super) fn commit_details_loaded(
 mod tests {
     use super::*;
     use crate::model::{ConflictFile, RepoState, SidebarDataRequest};
-    use gitcomet_core::domain::{FileConflictKind, FileStatus, RepoSpec};
+    use gitcomet_core::domain::{FileConflictKind, FileStatus, LogScope, RepoSpec};
     use gitcomet_core::error::{Error, ErrorKind};
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
@@ -1719,6 +1723,55 @@ mod tests {
         let repo = repo_mut(&mut state, repo_id);
         assert!(matches!(repo.head_branch, Loadable::Ready(ref v) if v == "HEAD"));
         assert_eq!(repo.detached_head_commit, Some(CommitId("c1".into())));
+    }
+
+    #[test]
+    fn head_branch_loaded_does_not_backfill_detached_head_commit_from_filtered_logs() {
+        for (scope, page) in [
+            (
+                LogScope::NoMerges,
+                LogPage {
+                    commits: vec![gitcomet_core::domain::Commit {
+                        id: CommitId("visible-non-merge".into()),
+                        parent_ids: smallvec::smallvec![CommitId("hidden-head".into())],
+                        summary: "visible".into(),
+                        author: "a".into(),
+                        time: std::time::SystemTime::UNIX_EPOCH,
+                    }],
+                    next_cursor: None,
+                },
+            ),
+            (
+                LogScope::MergesOnly,
+                LogPage {
+                    commits: vec![gitcomet_core::domain::Commit {
+                        id: CommitId("visible-merge".into()),
+                        parent_ids: smallvec::smallvec![
+                            CommitId("p0".into()),
+                            CommitId("p1".into())
+                        ],
+                        summary: "merge".into(),
+                        author: "a".into(),
+                        time: std::time::SystemTime::UNIX_EPOCH,
+                    }],
+                    next_cursor: None,
+                },
+            ),
+        ] {
+            let repo_id = RepoId(1);
+            let mut state = new_state_with_repo(repo_id);
+            repo_mut(&mut state, repo_id).history_state.history_scope = scope;
+            repo_mut(&mut state, repo_id).set_log(Loadable::Ready(Arc::new(page)));
+
+            let _ = head_branch_loaded(&mut state, repo_id, Ok("HEAD".to_string()));
+
+            let repo = repo_mut(&mut state, repo_id);
+            assert!(matches!(repo.head_branch, Loadable::Ready(ref v) if v == "HEAD"));
+            assert!(
+                repo.detached_head_commit.is_none(),
+                "{scope:?} should not infer detached HEAD from filtered log contents"
+            );
+        }
     }
 
     #[test]

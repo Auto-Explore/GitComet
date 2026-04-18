@@ -356,7 +356,7 @@ impl SidebarPaneView {
         section: BranchSection,
         branch_name: &str,
         commit_id: CommitId,
-        desired_scope: LogScope,
+        fallback_scope: Option<LogScope>,
         cx: &mut gpui::Context<Self>,
     ) {
         let branch_name = branch_name.to_string();
@@ -367,7 +367,7 @@ impl SidebarPaneView {
                     section,
                     &branch_name,
                     commit_id,
-                    desired_scope,
+                    fallback_scope,
                     cx,
                 );
             });

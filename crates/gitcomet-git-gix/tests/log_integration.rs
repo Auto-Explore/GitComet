@@ -1,4 +1,4 @@
-use gitcomet_core::domain::{CommitId, FileStatusKind, LogCursor};
+use gitcomet_core::domain::{CommitId, FileStatusKind, HistoryMode, LogCursor};
 use gitcomet_core::error::{ErrorKind, GitFailureId};
 use gitcomet_core::services::GitBackend;
 use gitcomet_git_gix::GixBackend;
@@ -11,18 +11,24 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 
 fn run_git(repo: &Path, args: &[&str]) {
+    run_git_with_env(repo, args, &[]);
+}
+
+fn run_git_with_env(repo: &Path, args: &[&str], envs: &[(&str, &str)]) {
     let mut cmd = Command::new("git");
     test_git_env::apply(&mut cmd);
-    let status = cmd
+    let cmd = cmd
         .arg("-C")
         .arg(repo)
         .args(args)
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_EDITOR", "true")
         .env("EDITOR", "true")
-        .env("VISUAL", "true")
-        .status()
-        .expect("git command to run");
+        .env("VISUAL", "true");
+    for (key, value) in envs {
+        cmd.env(key, value);
+    }
+    let status = cmd.status().expect("git command to run");
     assert!(status.success(), "git {:?} failed", args);
 }
 
@@ -94,6 +100,326 @@ fn git_remote_url(path: &Path) -> String {
     } else {
         path.to_string_lossy().into_owned()
     }
+}
+
+fn run_git_at(repo: &Path, args: &[&str], unix_seconds: i64) {
+    let seconds = unix_seconds.rem_euclid(60);
+    let minutes = unix_seconds.div_euclid(60).rem_euclid(60);
+    let hours = unix_seconds.div_euclid(3_600).rem_euclid(24);
+    let day = 1 + unix_seconds.div_euclid(86_400);
+    let date = format!("2000-01-{day:02}T{hours:02}:{minutes:02}:{seconds:02}+0000");
+    let envs = [
+        ("GIT_AUTHOR_DATE", date.as_str()),
+        ("GIT_COMMITTER_DATE", date.as_str()),
+    ];
+    run_git_with_env(repo, args, &envs);
+}
+
+fn commit_file_at(repo: &Path, relative_path: &str, contents: &str, message: &str, time: i64) {
+    let path = repo.join(relative_path);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).unwrap();
+    }
+    std::fs::write(&path, contents).unwrap();
+    run_git(repo, &["add", relative_path]);
+    run_git_at(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", message],
+        time,
+    );
+}
+
+struct HistoryModeFixture {
+    _dir: tempfile::TempDir,
+    repo: std::path::PathBuf,
+    base_id: String,
+    feature_id: String,
+    main_id: String,
+    merge_id: String,
+    side_id: String,
+}
+
+impl HistoryModeFixture {
+    fn new() -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+
+        run_git(&repo, &["init", "-b", "main"]);
+        run_git(&repo, &["config", "user.email", "you@example.com"]);
+        run_git(&repo, &["config", "user.name", "You"]);
+        run_git(&repo, &["config", "commit.gpgsign", "false"]);
+
+        commit_file_at(&repo, "base.txt", "base\n", "base", 1);
+        let base_id = git_stdout(&repo, &["rev-parse", "HEAD"]);
+
+        run_git(&repo, &["checkout", "-b", "feature"]);
+        commit_file_at(&repo, "feature.txt", "feature\n", "feature", 2);
+        let feature_id = git_stdout(&repo, &["rev-parse", "HEAD"]);
+
+        run_git(&repo, &["checkout", "main"]);
+        commit_file_at(&repo, "main.txt", "main\n", "main", 3);
+        let main_id = git_stdout(&repo, &["rev-parse", "HEAD"]);
+
+        run_git_at(
+            &repo,
+            &["merge", "--no-ff", "feature", "-m", "merge feature"],
+            4,
+        );
+        let merge_id = git_stdout(&repo, &["rev-parse", "HEAD"]);
+
+        run_git(&repo, &["checkout", "-b", "side", base_id.as_str()]);
+        commit_file_at(&repo, "side.txt", "side\n", "side", 5);
+        let side_id = git_stdout(&repo, &["rev-parse", "HEAD"]);
+
+        run_git(&repo, &["checkout", "main"]);
+
+        Self {
+            _dir: dir,
+            repo,
+            base_id,
+            feature_id,
+            main_id,
+            merge_id,
+            side_id,
+        }
+    }
+
+    fn repo(&self) -> &Path {
+        &self.repo
+    }
+}
+
+#[test]
+fn history_modes_return_expected_commits_on_canonical_graph() {
+    let fixture = HistoryModeFixture::new();
+    let backend = GixBackend;
+    let opened = backend.open(fixture.repo()).unwrap();
+
+    let cases = [
+        (
+            HistoryMode::FullReachable,
+            vec![
+                fixture.merge_id.as_str(),
+                fixture.main_id.as_str(),
+                fixture.feature_id.as_str(),
+                fixture.base_id.as_str(),
+            ],
+            vec![fixture.side_id.as_str()],
+        ),
+        (
+            HistoryMode::FirstParent,
+            vec![
+                fixture.merge_id.as_str(),
+                fixture.main_id.as_str(),
+                fixture.base_id.as_str(),
+            ],
+            vec![fixture.feature_id.as_str(), fixture.side_id.as_str()],
+        ),
+        (
+            HistoryMode::NoMerges,
+            vec![
+                fixture.main_id.as_str(),
+                fixture.feature_id.as_str(),
+                fixture.base_id.as_str(),
+            ],
+            vec![fixture.merge_id.as_str(), fixture.side_id.as_str()],
+        ),
+        (
+            HistoryMode::MergesOnly,
+            vec![fixture.merge_id.as_str()],
+            vec![
+                fixture.main_id.as_str(),
+                fixture.feature_id.as_str(),
+                fixture.base_id.as_str(),
+                fixture.side_id.as_str(),
+            ],
+        ),
+        (
+            HistoryMode::AllBranches,
+            vec![
+                fixture.side_id.as_str(),
+                fixture.merge_id.as_str(),
+                fixture.main_id.as_str(),
+                fixture.feature_id.as_str(),
+                fixture.base_id.as_str(),
+            ],
+            Vec::new(),
+        ),
+    ];
+
+    for (mode, expected_ids, excluded_ids) in cases {
+        let page = opened.log_history_mode_page(mode, 20, None).unwrap();
+        let ids = page
+            .commits
+            .iter()
+            .map(|commit| commit.id.as_ref())
+            .collect::<Vec<_>>();
+        for expected_id in expected_ids {
+            assert!(
+                ids.contains(&expected_id),
+                "{mode:?} should include {expected_id}, got {ids:?}"
+            );
+        }
+        for excluded_id in excluded_ids {
+            assert!(
+                !ids.contains(&excluded_id),
+                "{mode:?} should exclude {excluded_id}, got {ids:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn history_modes_preserve_expected_order_on_canonical_graph() {
+    let fixture = HistoryModeFixture::new();
+    let backend = GixBackend;
+    let opened = backend.open(fixture.repo()).unwrap();
+
+    let full_reachable = opened
+        .log_history_mode_page(HistoryMode::FullReachable, 20, None)
+        .unwrap();
+    assert_eq!(
+        full_reachable
+            .commits
+            .iter()
+            .map(|commit| commit.summary.as_ref())
+            .collect::<Vec<_>>(),
+        vec!["merge feature", "main", "feature", "base"]
+    );
+
+    let first_parent = opened
+        .log_history_mode_page(HistoryMode::FirstParent, 20, None)
+        .unwrap();
+    assert_eq!(
+        first_parent
+            .commits
+            .iter()
+            .map(|commit| commit.summary.as_ref())
+            .collect::<Vec<_>>(),
+        vec!["merge feature", "main", "base"]
+    );
+
+    let no_merges = opened
+        .log_history_mode_page(HistoryMode::NoMerges, 20, None)
+        .unwrap();
+    assert_eq!(
+        no_merges
+            .commits
+            .iter()
+            .map(|commit| commit.summary.as_ref())
+            .collect::<Vec<_>>(),
+        vec!["main", "feature", "base"]
+    );
+
+    let merges_only = opened
+        .log_history_mode_page(HistoryMode::MergesOnly, 20, None)
+        .unwrap();
+    assert_eq!(
+        merges_only
+            .commits
+            .iter()
+            .map(|commit| commit.summary.as_ref())
+            .collect::<Vec<_>>(),
+        vec!["merge feature"]
+    );
+}
+
+#[test]
+fn no_merges_history_mode_paginates_without_repeating_filtered_commits() {
+    let fixture = HistoryModeFixture::new();
+    let backend = GixBackend;
+    let opened = backend.open(fixture.repo()).unwrap();
+
+    let first = opened
+        .log_history_mode_page(HistoryMode::NoMerges, 2, None)
+        .unwrap();
+    assert_eq!(
+        first
+            .commits
+            .iter()
+            .map(|commit| commit.summary.as_ref())
+            .collect::<Vec<_>>(),
+        vec!["main", "feature"]
+    );
+    let cursor = first.next_cursor.as_ref().expect("next cursor");
+
+    let second = opened
+        .log_history_mode_page(HistoryMode::NoMerges, 2, Some(cursor))
+        .unwrap();
+    assert_eq!(
+        second
+            .commits
+            .iter()
+            .map(|commit| commit.summary.as_ref())
+            .collect::<Vec<_>>(),
+        vec!["base"]
+    );
+    assert!(
+        second
+            .commits
+            .iter()
+            .all(|commit| first.commits.iter().all(|first| first.id != commit.id)),
+        "filtered pagination should not repeat commits across pages"
+    );
+}
+
+#[test]
+fn merges_only_history_mode_paginates_without_repeating_filtered_merges() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init", "-b", "main"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    commit_file_at(repo, "base.txt", "base\n", "base", 1);
+
+    run_git(repo, &["checkout", "-b", "feature-one"]);
+    commit_file_at(repo, "feature-one.txt", "feature one\n", "feature one", 2);
+
+    run_git(repo, &["checkout", "main"]);
+    commit_file_at(repo, "main-one.txt", "main one\n", "main one", 3);
+    run_git_at(
+        repo,
+        &["merge", "--no-ff", "feature-one", "-m", "merge feature one"],
+        4,
+    );
+    let merge_one = git_stdout(repo, &["rev-parse", "HEAD"]);
+
+    run_git(repo, &["checkout", "-b", "feature-two"]);
+    commit_file_at(repo, "feature-two.txt", "feature two\n", "feature two", 5);
+
+    run_git(repo, &["checkout", "main"]);
+    commit_file_at(repo, "main-two.txt", "main two\n", "main two", 6);
+    run_git_at(
+        repo,
+        &["merge", "--no-ff", "feature-two", "-m", "merge feature two"],
+        7,
+    );
+    let merge_two = git_stdout(repo, &["rev-parse", "HEAD"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+
+    let first = opened
+        .log_history_mode_page(HistoryMode::MergesOnly, 1, None)
+        .unwrap();
+    assert_eq!(first.commits.len(), 1);
+    assert_eq!(first.commits[0].id.as_ref(), merge_two.as_str());
+    let cursor = first
+        .next_cursor
+        .as_ref()
+        .expect("next cursor for second merge");
+
+    let second = opened
+        .log_history_mode_page(HistoryMode::MergesOnly, 1, Some(cursor))
+        .unwrap();
+    assert_eq!(second.commits.len(), 1);
+    assert_eq!(second.commits[0].id.as_ref(), merge_one.as_str());
+    assert!(second.next_cursor.is_none());
+    assert_ne!(first.commits[0].id, second.commits[0].id);
 }
 
 #[test]

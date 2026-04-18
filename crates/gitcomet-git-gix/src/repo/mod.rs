@@ -2,8 +2,8 @@ use crate::util::git_workdir_cmd_for as util_git_workdir_cmd_for;
 use gitcomet_core::conflict_session::ConflictSession;
 use gitcomet_core::domain::{
     Branch, CommitDetails, CommitId, Diff, DiffPreviewTextSide, DiffTarget, FileDiffImage,
-    FileDiffText, LogCursor, LogPage, ReflogEntry, Remote, RemoteBranch, RemoteTag, RepoSpec,
-    RepoStatus, StashEntry, Submodule, Tag, UpstreamDivergence, Worktree,
+    FileDiffText, HistoryMode, LogCursor, LogPage, ReflogEntry, Remote, RemoteBranch, RemoteTag,
+    RepoSpec, RepoStatus, StashEntry, Submodule, Tag, UpstreamDivergence, Worktree,
 };
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::git_ops_trace::{self, GitOpTraceKind};
@@ -83,6 +83,7 @@ struct TreeIndexCacheEntry {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct LogHeadPageCacheKey {
+    mode: HistoryMode,
     head_oid: Option<gix::ObjectId>,
     limit: usize,
     last_seen: Option<CommitId>,
@@ -139,6 +140,16 @@ pub(crate) fn allow_test_repo_local_mergetool_command(workdir: &Path, tool_name:
 impl GitRepository for GixRepo {
     fn spec(&self) -> &RepoSpec {
         &self.spec
+    }
+
+    fn log_history_mode_page(
+        &self,
+        mode: HistoryMode,
+        limit: usize,
+        cursor: Option<&LogCursor>,
+    ) -> Result<LogPage> {
+        let _scope = git_ops_trace::scope(GitOpTraceKind::LogWalk);
+        self.log_history_mode_page_impl(mode, limit, cursor)
     }
 
     fn log_head_page(&self, limit: usize, cursor: Option<&LogCursor>) -> Result<LogPage> {

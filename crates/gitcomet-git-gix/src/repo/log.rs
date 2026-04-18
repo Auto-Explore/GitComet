@@ -5,8 +5,8 @@ use crate::util::{
     run_git_capture, unix_seconds_to_system_time, unix_seconds_to_system_time_or_epoch,
 };
 use gitcomet_core::domain::{
-    Commit, CommitDetails, CommitFileChange, CommitId, CommitParentIds, LogCursor, LogPage,
-    ReflogEntry, StashEntry,
+    Commit, CommitDetails, CommitFileChange, CommitId, CommitParentIds, HistoryMode, LogCursor,
+    LogPage, ReflogEntry, StashEntry,
 };
 use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
 use gitcomet_core::services::Result;
@@ -462,13 +462,55 @@ where
     })
 }
 
+fn log_page_from_walk_filtered<'repo, E>(
+    walk: impl Iterator<Item = std::result::Result<gix::revision::walk::Info<'repo>, E>>,
+    limit: usize,
+    cursor: Option<&LogCursor>,
+    mut include: impl FnMut(&gix::revision::walk::Info<'repo>) -> bool,
+) -> Result<LogPage>
+where
+    E: std::fmt::Display,
+{
+    let mut decode_state = CommitDecodeState::default();
+    let mut cursor_gate = CursorGate::new(cursor);
+    let mut commits: Vec<Commit> = Vec::with_capacity(limit);
+    let mut next_cursor = None;
+
+    for result in walk {
+        let info = result.map_err(|e| Error::new(ErrorKind::Backend(format!("gix walk: {e}"))))?;
+        if cursor_gate.should_skip_oid(info.id().as_ref()) {
+            continue;
+        }
+        if !include(&info) {
+            continue;
+        }
+
+        if commits.len() >= limit {
+            next_cursor = commits.last().map(|commit| LogCursor {
+                last_seen: commit.id.clone(),
+                resume_from: None,
+            });
+            break;
+        }
+
+        commits.push(commit_from_walk_info(&info, &mut decode_state)?);
+    }
+
+    Ok(LogPage {
+        commits,
+        next_cursor,
+    })
+}
+
 impl GixRepo {
     fn log_head_page_cache_key(
+        mode: HistoryMode,
         head_oid: Option<gix::ObjectId>,
         limit: usize,
         cursor: Option<&LogCursor>,
     ) -> super::LogHeadPageCacheKey {
         super::LogHeadPageCacheKey {
+            mode,
             head_oid,
             limit,
             last_seen: cursor.map(|cursor| cursor.last_seen.clone()),
@@ -525,46 +567,94 @@ impl GixRepo {
         limit: usize,
         cursor: Option<&LogCursor>,
     ) -> Result<LogPage> {
+        self.log_history_mode_page_impl(HistoryMode::FirstParent, limit, cursor)
+    }
+
+    pub(super) fn log_history_mode_page_impl(
+        &self,
+        mode: HistoryMode,
+        limit: usize,
+        cursor: Option<&LogCursor>,
+    ) -> Result<LogPage> {
         if limit == 0 {
             return Ok(empty_log_page());
         }
 
+        if mode == HistoryMode::AllBranches {
+            return self.log_all_branches_page_impl(limit, cursor);
+        }
+
         let repo = self._repo.to_thread_local();
         let head_id = gix_head_id_or_none(&repo)?;
-        let cache_key = Self::log_head_page_cache_key(head_id, limit, cursor);
+        let cache_key = Self::log_head_page_cache_key(mode, head_id, limit, cursor);
         if let Some(page) = self.cached_log_head_page(&cache_key) {
             return Ok(page);
         }
 
-        let page = if let Some(resume_tip) = cursor
-            .and_then(|cursor| cursor.resume_from.as_ref())
-            .and_then(object_id_from_commit_id)
-        {
-            let walk = repo
-                .rev_walk([resume_tip])
-                .sorting(gix::revision::walk::Sorting::ByCommitTime(
-                    CommitTimeOrder::NewestFirst,
-                ))
-                .first_parent_only()
-                .all()
-                .map_err(|e| Error::new(ErrorKind::Backend(format!("gix rev_walk: {e}"))))?;
-            let mut page = log_page_from_walk(walk, limit, None)?;
-            apply_first_parent_resume_hint(&mut page);
-            page
-        } else if let Some(head_id) = head_id {
-            let walk = repo
-                .rev_walk([head_id])
-                .sorting(gix::revision::walk::Sorting::ByCommitTime(
-                    CommitTimeOrder::NewestFirst,
-                ))
-                .first_parent_only()
-                .all()
-                .map_err(|e| Error::new(ErrorKind::Backend(format!("gix rev_walk: {e}"))))?;
-            let mut page = log_page_from_walk(walk, limit, cursor)?;
-            apply_first_parent_resume_hint(&mut page);
-            page
-        } else {
-            empty_log_page()
+        let page = match mode {
+            HistoryMode::FirstParent => {
+                if let Some(resume_tip) = cursor
+                    .and_then(|cursor| cursor.resume_from.as_ref())
+                    .and_then(object_id_from_commit_id)
+                {
+                    let walk = repo
+                        .rev_walk([resume_tip])
+                        .sorting(gix::revision::walk::Sorting::ByCommitTime(
+                            CommitTimeOrder::NewestFirst,
+                        ))
+                        .first_parent_only()
+                        .all()
+                        .map_err(|e| {
+                            Error::new(ErrorKind::Backend(format!("gix rev_walk: {e}")))
+                        })?;
+                    let mut page = log_page_from_walk(walk, limit, None)?;
+                    apply_first_parent_resume_hint(&mut page);
+                    page
+                } else if let Some(head_id) = head_id {
+                    let walk = repo
+                        .rev_walk([head_id])
+                        .sorting(gix::revision::walk::Sorting::ByCommitTime(
+                            CommitTimeOrder::NewestFirst,
+                        ))
+                        .first_parent_only()
+                        .all()
+                        .map_err(|e| {
+                            Error::new(ErrorKind::Backend(format!("gix rev_walk: {e}")))
+                        })?;
+                    let mut page = log_page_from_walk(walk, limit, cursor)?;
+                    apply_first_parent_resume_hint(&mut page);
+                    page
+                } else {
+                    empty_log_page()
+                }
+            }
+            HistoryMode::FullReachable | HistoryMode::NoMerges | HistoryMode::MergesOnly => {
+                let Some(head_id) = head_id else {
+                    return Ok(empty_log_page());
+                };
+                let walk = repo
+                    .rev_walk([head_id])
+                    .sorting(gix::revision::walk::Sorting::ByCommitTime(
+                        CommitTimeOrder::NewestFirst,
+                    ))
+                    .all()
+                    .map_err(|e| Error::new(ErrorKind::Backend(format!("gix rev_walk: {e}"))))?;
+                match mode {
+                    HistoryMode::FullReachable => log_page_from_walk(walk, limit, cursor)?,
+                    HistoryMode::NoMerges => {
+                        log_page_from_walk_filtered(walk, limit, cursor, |info| {
+                            info.parent_ids.len() < 2
+                        })?
+                    }
+                    HistoryMode::MergesOnly => {
+                        log_page_from_walk_filtered(walk, limit, cursor, |info| {
+                            info.parent_ids.len() > 1
+                        })?
+                    }
+                    HistoryMode::FirstParent | HistoryMode::AllBranches => unreachable!(),
+                }
+            }
+            HistoryMode::AllBranches => unreachable!(),
         };
 
         self.store_log_head_page(cache_key, &page);

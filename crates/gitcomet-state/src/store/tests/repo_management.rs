@@ -98,6 +98,59 @@ fn open_repo_ready(
     repo_id
 }
 
+fn assert_open_repo_history_mode_resolution(
+    seed_session: impl FnOnce(&Path, &Path),
+    expected: LogScope,
+) {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo_path = dir.path().join("repo");
+    let session_file = dir.path().join("session.json");
+    std::fs::create_dir_all(&repo_path).expect("create repo path");
+
+    let _session_file_override =
+        crate::session::push_test_session_file_path_override(Some(session_file.clone()));
+    seed_session(&repo_path, &session_file);
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(repo_path.clone()),
+    );
+
+    assert_eq!(state.active_repo, Some(RepoId(1)));
+    assert_eq!(state.repos[0].history_state.history_scope, expected);
+
+    let spec = state.repos[0].spec.clone();
+    let workdir = spec.workdir.to_string_lossy().into_owned();
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            repo_id: RepoId(1),
+            spec,
+            repo: Arc::new(DummyRepo::new(&workdir)),
+        }),
+    );
+
+    assert!(
+        effects.iter().any(|effect| matches!(
+            effect,
+            Effect::LoadLog {
+                repo_id,
+                scope,
+                ..
+            } if *repo_id == RepoId(1) && *scope == expected
+        )),
+        "expected RepoOpenedOk to request LoadLog({expected:?}), got {effects:?}"
+    );
+}
+
 #[test]
 fn open_repo_sets_opening_and_emits_effect() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
@@ -256,6 +309,80 @@ fn open_repo_refreshes_when_repo_is_already_active() {
         has_status_refresh_effects(&effects, RepoId(1)),
         "expected status refresh when re-opening active repo"
     );
+}
+
+#[test]
+fn open_repo_prefers_saved_history_mode_over_legacy_scope_and_default() {
+    assert_open_repo_history_mode_resolution(
+        |repo_path, session_file| {
+            crate::session::persist_ui_settings_to_path(
+                crate::session::UiSettings {
+                    default_history_mode: Some(LogScope::MergesOnly),
+                    ..Default::default()
+                },
+                session_file,
+            )
+            .expect("persist default history mode");
+            crate::session::persist_repo_history_scope_to_path(
+                repo_path,
+                LogScope::AllBranches,
+                session_file,
+            )
+            .expect("persist legacy history scope");
+            crate::session::persist_repo_history_mode_to_path(
+                repo_path,
+                LogScope::NoMerges,
+                session_file,
+            )
+            .expect("persist repo history mode");
+        },
+        LogScope::NoMerges,
+    );
+}
+
+#[test]
+fn open_repo_falls_back_to_legacy_history_scope_when_saved_mode_is_missing() {
+    assert_open_repo_history_mode_resolution(
+        |repo_path, session_file| {
+            crate::session::persist_ui_settings_to_path(
+                crate::session::UiSettings {
+                    default_history_mode: Some(LogScope::MergesOnly),
+                    ..Default::default()
+                },
+                session_file,
+            )
+            .expect("persist default history mode");
+            crate::session::persist_repo_history_scope_to_path(
+                repo_path,
+                LogScope::CurrentBranch,
+                session_file,
+            )
+            .expect("persist legacy history scope");
+        },
+        LogScope::FirstParent,
+    );
+}
+
+#[test]
+fn open_repo_falls_back_to_default_history_mode_when_repo_settings_are_missing() {
+    assert_open_repo_history_mode_resolution(
+        |_repo_path, session_file| {
+            crate::session::persist_ui_settings_to_path(
+                crate::session::UiSettings {
+                    default_history_mode: Some(LogScope::AllBranches),
+                    ..Default::default()
+                },
+                session_file,
+            )
+            .expect("persist default history mode");
+        },
+        LogScope::AllBranches,
+    );
+}
+
+#[test]
+fn open_repo_uses_builtin_default_history_mode_without_saved_preferences() {
+    assert_open_repo_history_mode_resolution(|_, _| {}, LogScope::default());
 }
 
 #[test]
@@ -1010,6 +1137,82 @@ fn restore_session_opens_all_and_selects_active_repo() {
         .clone();
 
     assert_eq!(active_workdir, super::reducer::normalize_repo_path(repo_a));
+}
+
+#[test]
+fn restore_session_resolves_history_mode_precedence_per_repository() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let session_file = dir.path().join("session.json");
+    let repo_mode = dir.path().join("repo-mode");
+    let repo_legacy = dir.path().join("repo-legacy");
+    let repo_default = dir.path().join("repo-default");
+    std::fs::create_dir_all(&repo_mode).expect("create repo-mode");
+    std::fs::create_dir_all(&repo_legacy).expect("create repo-legacy");
+    std::fs::create_dir_all(&repo_default).expect("create repo-default");
+
+    crate::session::persist_ui_settings_to_path(
+        crate::session::UiSettings {
+            default_history_mode: Some(LogScope::MergesOnly),
+            ..Default::default()
+        },
+        &session_file,
+    )
+    .expect("persist default history mode");
+    crate::session::persist_repo_history_mode_to_path(
+        &repo_mode,
+        LogScope::NoMerges,
+        &session_file,
+    )
+    .expect("persist repo mode");
+    crate::session::persist_repo_history_scope_to_path(
+        &repo_legacy,
+        LogScope::CurrentBranch,
+        &session_file,
+    )
+    .expect("persist legacy scope");
+
+    let _session_file_override =
+        crate::session::push_test_session_file_path_override(Some(session_file.clone()));
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RestoreSession {
+            open_repos: vec![repo_mode.clone(), repo_legacy.clone(), repo_default.clone()],
+            active_repo: Some(repo_default.clone()),
+        },
+    );
+
+    let by_workdir = state
+        .repos
+        .iter()
+        .map(|repo| (repo.spec.workdir.clone(), repo.history_state.history_scope))
+        .collect::<HashMap<_, _>>();
+
+    assert_eq!(
+        by_workdir.get(&super::reducer::normalize_repo_path(repo_mode)),
+        Some(&LogScope::NoMerges)
+    );
+    assert_eq!(
+        by_workdir.get(&super::reducer::normalize_repo_path(repo_legacy)),
+        Some(&LogScope::FirstParent)
+    );
+    assert_eq!(
+        by_workdir.get(&super::reducer::normalize_repo_path(repo_default.clone())),
+        Some(&LogScope::MergesOnly)
+    );
+    assert_eq!(
+        state.active_repo.and_then(|repo_id| state
+            .repos
+            .iter()
+            .find(|repo| repo.id == repo_id)
+            .map(|repo| repo.spec.workdir.clone())),
+        Some(super::reducer::normalize_repo_path(repo_default))
+    );
 }
 
 #[test]

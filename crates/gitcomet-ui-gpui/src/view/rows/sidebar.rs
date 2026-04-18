@@ -98,7 +98,7 @@ fn local_branch_double_click_action(
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct BranchHistoryRevealTarget {
     commit_id: CommitId,
-    desired_scope: LogScope,
+    fallback_scope: Option<LogScope>,
 }
 
 fn branch_commit_id(repo: &RepoState, section: BranchSection, name: &str) -> Option<CommitId> {
@@ -131,14 +131,14 @@ fn branch_click_history_reveal_target(
 ) -> Option<BranchHistoryRevealTarget> {
     let commit_id = branch_commit_id(repo, section, name)?;
 
-    let desired_scope = match section {
-        BranchSection::Local if is_head => repo.history_state.history_scope,
-        BranchSection::Local | BranchSection::Remote => LogScope::AllBranches,
+    let fallback_scope = match section {
+        BranchSection::Local if is_head => Some(LogScope::FullReachable),
+        BranchSection::Local | BranchSection::Remote => Some(LogScope::AllBranches),
     };
 
     Some(BranchHistoryRevealTarget {
         commit_id,
-        desired_scope,
+        fallback_scope,
     })
 }
 
@@ -1904,7 +1904,7 @@ impl SidebarPaneView {
                                     section,
                                     full_name_for_reveal.as_ref(),
                                     target.commit_id,
-                                    target.desired_scope,
+                                    target.fallback_scope,
                                     cx,
                                 );
                                 cx.notify();
@@ -2635,7 +2635,7 @@ mod tests {
     }
 
     #[test]
-    fn branch_click_history_reveal_target_keeps_current_scope_for_head_local_branch() {
+    fn branch_click_history_reveal_target_switches_head_local_branch_to_full_reachable() {
         let target = commit_id("main-tip");
         let mut repo = RepoState::new_opening(
             RepoId(1),
@@ -2655,7 +2655,7 @@ mod tests {
             branch_click_history_reveal_target(&repo, BranchSection::Local, "main", true),
             Some(BranchHistoryRevealTarget {
                 commit_id: target,
-                desired_scope: LogScope::CurrentBranch,
+                fallback_scope: Some(LogScope::FullReachable),
             })
         );
     }
@@ -2681,7 +2681,7 @@ mod tests {
             branch_click_history_reveal_target(&repo, BranchSection::Local, "feature", false),
             Some(BranchHistoryRevealTarget {
                 commit_id: target,
-                desired_scope: LogScope::AllBranches,
+                fallback_scope: Some(LogScope::AllBranches),
             })
         );
     }
@@ -2711,7 +2711,7 @@ mod tests {
             ),
             Some(BranchHistoryRevealTarget {
                 commit_id: target,
-                desired_scope: LogScope::AllBranches,
+                fallback_scope: Some(LogScope::AllBranches),
             })
         );
     }
@@ -2736,6 +2736,7 @@ mod tests {
 
         let repo_id = RepoId(1);
         let target = commit_id("main-tip");
+        let initial_scope = LogScope::default();
         cx.update(|window, app| {
             let _ = window.draw(app);
         });
@@ -2762,7 +2763,7 @@ mod tests {
         }));
         store_for_assert.dispatch(Msg::Internal(InternalMsg::LogLoaded {
             repo_id,
-            scope: LogScope::CurrentBranch,
+            scope: initial_scope,
             cursor: None,
             result: Ok(LogPage {
                 commits: vec![commit("main-tip")],
@@ -2812,7 +2813,7 @@ mod tests {
                     BranchSection::Local,
                     "main",
                     target.clone(),
-                    LogScope::CurrentBranch,
+                    None,
                     cx,
                 );
             });
@@ -2825,7 +2826,7 @@ mod tests {
                 return false;
             };
             repo.diff_state.diff_target.is_none()
-                && repo.history_state.history_scope == LogScope::CurrentBranch
+                && repo.history_state.history_scope == initial_scope
                 && repo.history_state.selected_commit.as_ref() == Some(&target)
         });
     }

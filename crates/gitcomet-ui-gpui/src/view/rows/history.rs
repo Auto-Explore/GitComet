@@ -1557,23 +1557,16 @@ impl HistoryView {
         let col_date = this.history_col_date;
         let col_sha = this.history_col_sha;
         let (show_graph, show_author, show_date, show_sha) = this.history_visible_columns();
+        let display_key =
+            HistoryDisplayKey::new(this.date_time_format, this.timezone, this.show_timezone);
 
-        let page = match &repo.log {
-            Loadable::Ready(page) => Some(page),
-            _ => None,
-        };
+        let page = Self::display_log_page_for_repo(repo);
         let cache = this
             .history_cache
             .as_ref()
-            .filter(|c| c.request.repo_id == repo.id);
-        let worktree_node_color = cache
-            .and_then(|c| c.graph_rows.first())
-            .and_then(|row| {
-                row.lanes_now
-                    .first()
-                    .map(|lane| history_graph::lane_color(theme, lane.color_ix))
-            })
-            .unwrap_or(theme.colors.accent);
+            .filter(|cache| cache.base.request.repo_id == repo.id);
+        let worktree_node_color =
+            history_worktree_node_color(theme, cache.map(|cache| cache.base.graph_rows.as_ref()));
 
         range
             .filter_map(|list_ix| {
@@ -1601,27 +1594,30 @@ impl HistoryView {
                 let offset = usize::from(show_working_tree_summary_row);
                 let visible_ix = list_ix.checked_sub(offset)?;
 
-                let page = page?;
+                let page = page.as_deref()?;
                 let cache = cache?;
 
-                let commit_ix = cache.visible_indices.get(visible_ix)?;
+                let commit_ix = cache.base.visible_indices.get(visible_ix)?;
                 let commit = page.commits.get(commit_ix)?;
-                cache.graph_rows.get(visible_ix)?;
-                let row_vm = cache.commit_row_vms.get(visible_ix)?;
+                cache.base.graph_rows.get(visible_ix)?;
+                let base_row_vm = cache.base.row_vms.get(visible_ix)?;
+                let decoration_row_vm = cache.decorations.row_vms.get(visible_ix)?;
                 let connect_from_top_col =
                     (show_working_tree_summary_row && visible_ix == 0).then_some(0);
                 let selected = repo.history_state.selected_commit.as_ref() == Some(&commit.id);
                 let selected_branch_entry_text = this.selected_branch_entry_text_for_history_row(
                     repo.id,
-                    row_vm.is_head,
+                    base_row_vm.is_head,
                     selected,
                 );
                 let show_graph_color_marker = repo.history_state.history_scope
                     == gitcomet_core::domain::LogScope::AllBranches;
-                let is_stash_node = row_vm.is_stash
+                let is_stash_node = base_row_vm.is_stash
                     || stash_ids
                         .as_ref()
                         .is_some_and(|ids| ids.contains(&commit.id));
+                let when = base_row_vm.when.resolve(display_key);
+                let short_sha = base_row_vm.short_sha.resolve();
 
                 Some(history_table_row(
                     theme,
@@ -1638,18 +1634,18 @@ impl HistoryView {
                     list_ix,
                     repo.id,
                     commit,
-                    Arc::clone(&cache.graph_rows),
+                    Arc::clone(&cache.base.graph_rows),
                     visible_ix,
                     connect_from_top_col,
-                    Arc::clone(&row_vm.tag_names),
-                    row_vm.branches_text.clone(),
+                    Arc::clone(&decoration_row_vm.tag_names),
+                    decoration_row_vm.branches_text.clone(),
                     selected_branch_entry_text,
-                    row_vm.author.clone(),
-                    row_vm.summary.clone(),
-                    row_vm.when.resolve(&cache.request),
-                    row_vm.short_sha.resolve(),
+                    base_row_vm.author.clone(),
+                    base_row_vm.summary.clone(),
+                    when,
+                    short_sha,
                     selected,
-                    row_vm.is_head,
+                    base_row_vm.is_head,
                     is_stash_node,
                     this.active_context_menu_invoker.as_ref(),
                     cx,
@@ -1660,6 +1656,20 @@ impl HistoryView {
 }
 
 const HISTORY_ROW_HEIGHT_PX: f32 = 24.0;
+
+fn history_worktree_node_color(
+    theme: AppTheme,
+    graph_rows: Option<&[history_graph::GraphRow]>,
+) -> gpui::Rgba {
+    graph_rows
+        .and_then(|rows| rows.first())
+        .and_then(|row| {
+            row.lanes_now
+                .first()
+                .map(|lane| history_graph::lane_color(theme, lane.color_ix))
+        })
+        .unwrap_or_else(|| history_graph::lane_color(theme, 0))
+}
 
 fn history_selected_branch_entry_range(
     branches_text: &str,
@@ -1719,13 +1729,13 @@ fn history_table_row(
     graph_rows: Arc<[history_graph::GraphRow]>,
     graph_row_ix: usize,
     connect_from_top_col: Option<usize>,
-    tag_names: Arc<[SharedString]>,
-    branches_text: SharedString,
+    tag_names: Arc<[HistoryTextVm]>,
+    branches_text: HistoryTextVm,
     selected_branch_entry_text: Option<SharedString>,
-    author: SharedString,
-    summary: SharedString,
-    when: SharedString,
-    short_sha: SharedString,
+    author: HistoryTextVm,
+    summary: HistoryTextVm,
+    when: HistoryTextVm,
+    short_sha: HistoryTextVm,
     selected: bool,
     is_head: bool,
     is_stash_node: bool,
@@ -1735,8 +1745,11 @@ fn history_table_row(
     let context_menu_invoker: SharedString =
         format!("history_commit_menu_{}_{}", repo_id.0, commit.id.as_ref()).into();
     let context_menu_active = active_context_menu_invoker == Some(&context_menu_invoker);
-    let branch_highlights =
-        history_branch_text_highlights(&branches_text, selected_branch_entry_text.as_ref(), theme);
+    let branch_highlights = history_branch_text_highlights(
+        branches_text.shared(),
+        selected_branch_entry_text.as_ref(),
+        theme,
+    );
     let commit_row = history_canvas::history_commit_row_canvas(
         theme,
         cx.entity(),
@@ -2026,12 +2039,14 @@ mod tests {
     use super::{
         MarkdownChangeHint, MarkdownInlineStyle, MarkdownPreviewRow, MarkdownPreviewRowKind,
         history_branch_text_highlights, history_selected_branch_entry_range,
-        markdown_preview_alert_title_label, markdown_preview_inline_highlight,
-        markdown_preview_row_background, markdown_preview_row_horizontal_padding,
-        markdown_preview_row_layout, markdown_preview_row_marker, markdown_preview_row_styled_text,
+        history_worktree_node_color, markdown_preview_alert_title_label,
+        markdown_preview_inline_highlight, markdown_preview_row_background,
+        markdown_preview_row_horizontal_padding, markdown_preview_row_layout,
+        markdown_preview_row_marker, markdown_preview_row_styled_text,
         markdown_preview_row_typography,
     };
     use crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY;
+    use crate::view::history_graph;
     use crate::view::markdown_preview::MarkdownInlineSpan;
     use crate::view::{AppTheme, DateTimeFormat, Timezone, format_datetime, format_datetime_utc};
     use gpui::{FontWeight, SharedString};
@@ -2064,6 +2079,16 @@ mod tests {
             .expect("expected head branch entry range");
 
         assert_eq!(&text[range], "HEAD → main");
+    }
+
+    #[test]
+    fn history_worktree_node_color_falls_back_to_primary_lane_color() {
+        let theme = AppTheme::gitcomet_dark();
+
+        assert_eq!(
+            history_worktree_node_color(theme, None),
+            history_graph::lane_color(theme, 0)
+        );
     }
 
     #[test]

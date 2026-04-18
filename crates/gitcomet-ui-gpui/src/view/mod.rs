@@ -52,6 +52,7 @@ mod diff_text_selection;
 mod diff_utils;
 mod fingerprint;
 mod history_graph;
+pub(crate) mod history_mode;
 mod icons;
 #[cfg(any(test, target_os = "linux", target_os = "freebsd"))]
 mod linux_desktop_integration;
@@ -82,7 +83,9 @@ mod word_diff;
 use app_model::AppUiModel;
 use branch_sidebar::{BranchSection, BranchSidebarRow};
 use caches::{
-    HistoryCache, HistoryCacheRequest, HistoryCommitRowVm, HistoryStashIdsCache,
+    HistoryBaseCache, HistoryBaseCacheRequest, HistoryBaseRowVm, HistoryCache,
+    HistoryCacheBuildRequest, HistoryDecorationCache, HistoryDecorationCacheRequest,
+    HistoryDecorationRowVm, HistoryDisplayKey, HistoryStashIdsCache, HistoryTextVm,
     HistoryWorktreeSummaryCache,
 };
 use chrome::{
