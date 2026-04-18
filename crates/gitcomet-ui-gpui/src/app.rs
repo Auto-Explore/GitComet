@@ -1,8 +1,9 @@
 use crate::assets::GitCometAssets;
 use crate::launch_guard::{UiLaunchError, run_with_panic_guard};
+use crate::ui_scale;
 use crate::view::{
     FocusedMergetoolLabels, FocusedMergetoolViewConfig, GitCometView, GitCometViewConfig,
-    GitCometViewMode, InitialRepositoryLaunchMode, StartupCrashReport,
+    GitCometViewMode, InitialRepositoryLaunchMode, SettingsWindowView, StartupCrashReport,
 };
 use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::services::GitBackend;
@@ -13,8 +14,8 @@ use gpui::WindowsPlatform;
 #[cfg(target_os = "macos")]
 use gpui::{Action, Menu, MenuItem, OsAction, SystemMenuType};
 use gpui::{
-    App, AppContext, BorrowAppContext, Bounds, KeyBinding, Pixels, Point, TitlebarOptions, Window,
-    WindowBounds, WindowDecorations, WindowOptions, actions, point, px, size,
+    App, AppContext, BorrowAppContext, Bounds, KeyBinding, Pixels, Point, Size, TitlebarOptions,
+    Window, WindowBounds, WindowDecorations, WindowOptions, actions, point, px, size,
 };
 #[cfg(target_os = "windows")]
 use raw_window_handle::RawWindowHandle;
@@ -53,6 +54,9 @@ actions!(
         MinimizeWindow,
         ZoomWindow,
         ToggleFullScreen,
+        IncreaseUiScale,
+        DecreaseUiScale,
+        ResetUiScale,
         Hide,
         HideOthers,
         ShowAll,
@@ -82,6 +86,29 @@ struct WindowLaunchConfig {
     title: String,
     app_id: String,
     view_config: GitCometViewConfig,
+}
+
+pub(crate) fn main_window_min_size_for_percent(percent: u32) -> Size<Pixels> {
+    ui_scale::design_size_from_percent(WINDOW_MIN_WIDTH_PX, WINDOW_MIN_HEIGHT_PX, percent)
+}
+
+fn main_window_default_size_for_percent(percent: u32) -> Size<Pixels> {
+    ui_scale::design_size_from_percent(WINDOW_DEFAULT_WIDTH_PX, WINDOW_DEFAULT_HEIGHT_PX, percent)
+}
+
+fn window_traffic_light_position(_percent: u32) -> Point<Pixels> {
+    point(px(9.0), px(9.0))
+}
+
+pub(crate) fn ensure_window_respects_min_size(window: &mut Window, min_size: Size<Pixels>) {
+    let current = window.viewport_size();
+    let next = size(
+        current.width.max(min_size.width),
+        current.height.max(min_size.height),
+    );
+    if next != current {
+        window.resize(next);
+    }
 }
 
 pub fn run(backend: Arc<dyn GitBackend>) -> Result<(), UiLaunchError> {
@@ -373,29 +400,33 @@ fn open_gitcomet_window(
     launch: &WindowLaunchConfig,
 ) -> gpui::WindowHandle<GitCometView> {
     let ui_session = session::load();
+    let ui_scale = ui_scale::current_or_initialize_from_session(&ui_session, cx);
+    let min_size = main_window_min_size_for_percent(ui_scale.percent);
+    let default_size = main_window_default_size_for_percent(ui_scale.percent);
     let restored_w = ui_session
         .window_width
         .map(|w| px(w as f32))
-        .unwrap_or(px(WINDOW_DEFAULT_WIDTH_PX))
-        .max(px(WINDOW_MIN_WIDTH_PX));
+        .unwrap_or(default_size.width)
+        .max(min_size.width);
     let restored_h = ui_session
         .window_height
         .map(|h| px(h as f32))
-        .unwrap_or(px(WINDOW_DEFAULT_HEIGHT_PX))
-        .max(px(WINDOW_MIN_HEIGHT_PX));
+        .unwrap_or(default_size.height)
+        .max(min_size.height);
     let bounds = Bounds::centered(None, size(restored_w, restored_h), cx);
     let window_title = launch.title.clone();
     let app_id = launch.app_id.clone();
     let view_config = launch.view_config.clone();
+    let ui_scale_percent = ui_scale.percent;
 
     cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
-            window_min_size: Some(size(px(WINDOW_MIN_WIDTH_PX), px(WINDOW_MIN_HEIGHT_PX))),
+            window_min_size: Some(min_size),
             titlebar: Some(TitlebarOptions {
                 title: Some(window_title.into()),
                 appears_transparent: true,
-                traffic_light_position: Some(point(px(9.0), px(9.0))),
+                traffic_light_position: Some(window_traffic_light_position(ui_scale_percent)),
             }),
             app_id: Some(app_id),
             window_decorations: Some(WindowDecorations::Client),
@@ -404,6 +435,7 @@ fn open_gitcomet_window(
             ..Default::default()
         },
         move |window, cx| {
+            ui_scale::apply_to_window(window, ui_scale_percent);
             let (store, events) = AppStore::new(Arc::clone(&backend));
             cx.new(|cx| {
                 GitCometView::new_with_config(store, events, view_config.clone(), window, cx)
@@ -411,6 +443,50 @@ fn open_gitcomet_window(
         },
     )
     .expect("failed to open main GitComet window")
+}
+
+fn current_or_default_ui_scale_percent(cx: &mut App) -> u32 {
+    let current = ui_scale::current(cx);
+    if current.initialized {
+        current.percent
+    } else {
+        ui_scale::DEFAULT_UI_SCALE_PERCENT
+    }
+}
+
+fn apply_ui_scale_to_open_windows(cx: &mut App, percent: u32) {
+    for handle in cx.windows() {
+        let _ = handle.update(cx, |root_view, window, cx| {
+            let root_view = match root_view.downcast::<GitCometView>() {
+                Ok(view) => {
+                    view.update(cx, |view, cx| {
+                        view.apply_ui_scale_percent(percent, window, cx);
+                    });
+                    return;
+                }
+                Err(root_view) => root_view,
+            };
+
+            if let Ok(view) = root_view.downcast::<SettingsWindowView>() {
+                view.update(cx, |view, cx| {
+                    view.apply_ui_scale_percent(percent, window, cx);
+                });
+                return;
+            }
+
+            ui_scale::apply_to_window(window, percent);
+        });
+    }
+}
+
+pub(crate) fn set_app_ui_scale_percent(cx: &mut App, percent: u32) {
+    let current = ui_scale::current(cx);
+    let next = ui_scale::set_current(cx, percent);
+    if current.initialized && current.percent == next.percent {
+        return;
+    }
+
+    apply_ui_scale_to_open_windows(cx, next.percent);
 }
 
 fn install_app_actions(cx: &mut App, backend: Arc<dyn GitBackend>) {
@@ -506,6 +582,23 @@ fn install_app_actions(cx: &mut App, backend: Arc<dyn GitBackend>) {
             }
         });
     });
+    cx.on_action(|_: &IncreaseUiScale, cx| {
+        cx.defer(|cx| {
+            let next = ui_scale::step_up(current_or_default_ui_scale_percent(cx));
+            set_app_ui_scale_percent(cx, next);
+        });
+    });
+    cx.on_action(|_: &DecreaseUiScale, cx| {
+        cx.defer(|cx| {
+            let next = ui_scale::step_down(current_or_default_ui_scale_percent(cx));
+            set_app_ui_scale_percent(cx, next);
+        });
+    });
+    cx.on_action(|_: &ResetUiScale, cx| {
+        cx.defer(|cx| {
+            set_app_ui_scale_percent(cx, ui_scale::DEFAULT_UI_SCALE_PERCENT);
+        });
+    });
     cx.on_action(|_: &Hide, cx| cx.defer(|cx| cx.hide()));
     cx.on_action(|_: &HideOthers, cx| cx.defer(|cx| cx.hide_other_apps()));
     cx.on_action(|_: &ShowAll, cx| cx.defer(|cx| cx.unhide_other_apps()));
@@ -541,6 +634,10 @@ fn bind_app_keys(cx: &mut App) {
         KeyBinding::new("secondary-shift-w", CloseWindow, None),
         KeyBinding::new("secondary-pageup", PreviousRepository, None),
         KeyBinding::new("secondary-pagedown", NextRepository, None),
+        KeyBinding::new("secondary-+", IncreaseUiScale, None),
+        KeyBinding::new("secondary-=", IncreaseUiScale, None),
+        KeyBinding::new("secondary--", DecreaseUiScale, None),
+        KeyBinding::new("secondary-0", ResetUiScale, None),
         KeyBinding::new("secondary-q", Quit, None),
         #[cfg(target_os = "macos")]
         KeyBinding::new("alt-cmd-o", OpenRecentPicker, None),
@@ -630,6 +727,10 @@ fn macos_app_menus() -> Vec<Menu> {
             items: vec![
                 MenuItem::action("Minimize", MinimizeWindow),
                 MenuItem::action("Zoom", ZoomWindow),
+                MenuItem::separator(),
+                MenuItem::action("Zoom In", IncreaseUiScale),
+                MenuItem::action("Zoom Out", DecreaseUiScale),
+                MenuItem::action("Actual Size", ResetUiScale),
                 MenuItem::separator(),
                 MenuItem::action("Previous Repository", PreviousRepository),
                 MenuItem::action("Next Repository", NextRepository),
@@ -1361,6 +1462,9 @@ mod tests {
                 .on_action(record_action_listener!(MinimizeWindow))
                 .on_action(record_action_listener!(ZoomWindow))
                 .on_action(record_action_listener!(ToggleFullScreen))
+                .on_action(record_action_listener!(IncreaseUiScale))
+                .on_action(record_action_listener!(DecreaseUiScale))
+                .on_action(record_action_listener!(ResetUiScale))
                 .on_action(record_action_listener!(Hide))
                 .on_action(record_action_listener!(HideOthers))
                 .on_action(record_action_listener!(ShowAll))
@@ -1686,6 +1790,10 @@ mod tests {
             ("secondary-shift-w", CloseWindow.name()),
             ("secondary-pageup", PreviousRepository.name()),
             ("secondary-pagedown", NextRepository.name()),
+            ("secondary-+", IncreaseUiScale.name()),
+            ("secondary-=", IncreaseUiScale.name()),
+            ("secondary--", DecreaseUiScale.name()),
+            ("secondary-0", ResetUiScale.name()),
             ("secondary-q", Quit.name()),
         ];
 

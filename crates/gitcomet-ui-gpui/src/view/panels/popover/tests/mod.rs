@@ -20,6 +20,7 @@ mod branch;
 mod clone;
 mod context_shortcuts;
 mod file_actions;
+mod layout;
 mod picker;
 mod recent_repo_picker;
 mod refs;

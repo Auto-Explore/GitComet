@@ -41,6 +41,7 @@ impl MainPaneView {
 
     pub(in crate::view) fn diff_view(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
         let theme = self.theme;
+        let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
         let repo_id = self.active_repo_id();
         let editor_font_family = crate::font_preferences::current_editor_font_family(cx);
 
@@ -420,7 +421,7 @@ impl MainPaneView {
                     .id("diff_view_toggle")
                     .flex()
                     .items_center()
-                    .h(px(components::CONTROL_HEIGHT_PX))
+                    .h(components::control_height(ui_scale_percent))
                     .rounded(px(theme.radii.row))
                     .border_1()
                     .border_color(view_toggle_border)
@@ -597,7 +598,7 @@ impl MainPaneView {
             .flex()
             .items_center()
             .justify_between()
-            .h(px(components::CONTROL_HEIGHT_MD_PX))
+            .h(components::control_height_md(ui_scale_percent))
             .child(
                 div()
                     .flex_1()
@@ -893,14 +894,24 @@ impl MainPaneView {
                             };
                             let show_whitespace_control = div()
                                 .id("conflict_show_whitespace_pill")
-                                .h(px(components::CONTROL_HEIGHT_PX))
-                                .px(px(8.0))
-                                .py(px(2.0))
+                                .h(components::control_height(ui_scale_percent))
+                                .px(crate::ui_scale::design_px_from_percent(
+                                    8.0,
+                                    ui_scale_percent,
+                                ))
+                                .py(crate::ui_scale::design_px_from_percent(
+                                    2.0,
+                                    ui_scale_percent,
+                                ))
                                 .rounded(px(theme.radii.pill))
                                 .bg(gpui::rgba(0x000000ff))
                                 .border_1()
                                 .border_color(gpui::rgba(0x00000000))
                                 .text_xs()
+                                .line_height(crate::ui_scale::design_px_from_percent(
+                                    14.0,
+                                    ui_scale_percent,
+                                ))
                                 .text_color(ws_pill_text)
                                 .cursor(CursorStyle::PointingHand)
                                 .hover(move |pill| pill.border_color(ws_pill_border_hover))
@@ -944,7 +955,7 @@ impl MainPaneView {
                                 .id("conflict_view_mode_toggle")
                                 .flex()
                                 .items_center()
-                                .h(px(components::CONTROL_HEIGHT_PX))
+                                .h(components::control_height(ui_scale_percent))
                                 .rounded(px(theme.radii.row))
                                 .border_1()
                                 .border_color(view_toggle_border)
@@ -1118,7 +1129,7 @@ impl MainPaneView {
                                     .id("conflict_preview_toggle")
                                     .flex()
                                     .items_center()
-                                    .h(px(components::CONTROL_HEIGHT_PX))
+                                    .h(components::control_height(ui_scale_percent))
                                     .rounded(px(theme.radii.row))
                                     .border_1()
                                     .border_color(view_toggle_border)
@@ -2291,8 +2302,12 @@ impl MainPaneView {
                                 "Theirs (deleted)".into()
                             };
 
-                            let columns_header =
-                                components::split_columns_header(theme, ours_label, theirs_label);
+                            let columns_header = components::split_columns_header(
+                                theme,
+                                ui_scale_percent,
+                                ours_label,
+                                theirs_label,
+                            );
 
                             let diff_len = self.conflict_resolver.two_way_split_visible_len();
 
@@ -2669,7 +2684,7 @@ impl MainPaneView {
 
                                             let columns_header = div()
                                                 .id("diff_split_columns_header")
-                                                .h(px(components::CONTROL_HEIGHT_PX))
+                                                .h(components::control_height(ui_scale_percent))
                                                 .flex()
                                                 .items_center()
                                                 .text_xs()
@@ -3176,7 +3191,7 @@ impl MainPaneView {
             }))
             .child(
                 header
-                    .h(px(components::CONTROL_HEIGHT_MD_PX))
+                    .h(components::control_height_md(ui_scale_percent))
                     .px_2()
                     .bg(theme.colors.surface_bg_elevated)
                     .border_b_1()

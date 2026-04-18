@@ -14,6 +14,8 @@ pub(super) fn panel(
         .clone()
         .map(|r| format!("rev: {r}").into())
         .unwrap_or_else(|| "rev: HEAD".into());
+    let ui_scale_percent = super::popover_ui_scale_percent(cx);
+    let scaled_px = |value: f32| super::popover_scaled_px_from_percent(value, ui_scale_percent);
 
     let header = div()
         .px_2()
@@ -96,8 +98,8 @@ pub(super) fn panel(
     div()
         .flex()
         .flex_col()
-        .min_w(px(720.0))
-        .max_w(px(980.0))
+        .min_w(scaled_px(720.0))
+        .max_w(scaled_px(980.0))
         .child(header)
         .child(div().border_t_1().border_color(theme.colors.border))
         .child(body)
@@ -125,6 +127,8 @@ fn render_blame_popover_rows(
     };
 
     let theme = this.theme;
+    let ui_scale_percent = super::popover_ui_scale_percent(cx);
+    let scaled_px = |value: f32| super::popover_scaled_px_from_percent(value, ui_scale_percent);
     let mut rows = Vec::with_capacity(range.len());
     for ix in range {
         let Some(line) = lines.get(ix) else {
@@ -150,7 +154,7 @@ fn render_blame_popover_rows(
                 .active(move |s| s.bg(theme.colors.active))
                 .child(
                     div()
-                        .w(px(44.0))
+                        .w(scaled_px(44.0))
                         .text_xs()
                         .text_color(theme.colors.text_muted)
                         .whitespace_nowrap()
@@ -158,7 +162,7 @@ fn render_blame_popover_rows(
                 )
                 .child(
                     div()
-                        .w(px(76.0))
+                        .w(scaled_px(76.0))
                         .text_xs()
                         .text_color(theme.colors.text_muted)
                         .whitespace_nowrap()
@@ -166,7 +170,7 @@ fn render_blame_popover_rows(
                 )
                 .child(
                     div()
-                        .w(px(140.0))
+                        .w(scaled_px(140.0))
                         .text_xs()
                         .text_color(theme.colors.text_muted)
                         .line_clamp(1)

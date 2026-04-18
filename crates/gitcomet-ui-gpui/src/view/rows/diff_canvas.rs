@@ -23,6 +23,10 @@ const GUTTER_TEXT_LAYOUT_CACHE_MAX_ENTRIES: usize = 16_384;
 const STREAMED_DIFF_TEXT_MIN_BYTES: usize = 64 * 1024;
 const STREAMED_DIFF_TEXT_OVERSCAN_COLUMNS: usize = 64;
 const STREAMED_DIFF_TEXT_CELL_WIDTH_SAMPLE: &str = "0000000000";
+const DIFF_ROW_HEIGHT_PX: f32 = 20.0;
+const DIFF_GUTTER_BASE_WIDTH_PX: f32 = 44.0;
+const DIFF_ROW_TEXT_TRAILING_PADDING_PX: f32 = 16.0;
+const DIFF_CHANGE_BAR_WIDTH_PX: f32 = 3.0;
 
 type HighlightSpans = Arc<[(Range<usize>, HighlightStyle)]>;
 
@@ -640,6 +644,7 @@ fn diff_text_paint_payload(
 pub(super) fn inline_diff_line_row_canvas(
     theme: AppTheme,
     view: Entity<MainPaneView>,
+    ui_scale_percent: u32,
     visible_ix: usize,
     min_width: Pixels,
     selected: bool,
@@ -662,7 +667,7 @@ pub(super) fn inline_diff_line_row_canvas(
         (canvas_id, format!("{revision:016x}")),
         move |bounds, window, _cx| {
             let pad = px_2(window);
-            let gutter_total = gutter_cell_total_width(window, pad);
+            let gutter_total = gutter_cell_total_width(pad, ui_scale_percent);
             let text_bounds = inline_text_bounds(bounds, gutter_total, pad);
             let text_hitbox = window.insert_hitbox(text_bounds, HitboxBehavior::Normal);
 
@@ -714,6 +719,7 @@ pub(super) fn inline_diff_line_row_canvas(
                     y,
                     fg,
                     line_metrics,
+                    ui_scale_percent,
                     theme,
                     window,
                     cx,
@@ -749,7 +755,7 @@ pub(super) fn inline_diff_line_row_canvas(
             }
         },
     )
-    .h(px(20.0))
+    .h(diff_row_height(ui_scale_percent))
     .min_w(min_width)
     .w_full()
     .bg(bg)
@@ -762,6 +768,7 @@ pub(super) fn inline_diff_line_row_canvas(
 pub(super) fn split_diff_line_row_canvas(
     theme: AppTheme,
     view: Entity<MainPaneView>,
+    ui_scale_percent: u32,
     visible_ix: usize,
     min_width: Pixels,
     selected: bool,
@@ -804,7 +811,7 @@ pub(super) fn split_diff_line_row_canvas(
         (canvas_id, format!("{revision:016x}")),
         move |bounds, window, _cx| {
             let pad = px_2(window);
-            let gutter_total = gutter_cell_total_width(window, pad);
+            let gutter_total = gutter_cell_total_width(pad, ui_scale_percent);
             let (left_col, sep_bounds, right_col) = split_columns(bounds);
             let left_text_bounds = column_text_bounds(left_col, gutter_total, pad);
             let right_text_bounds = column_text_bounds(right_col, gutter_total, pad);
@@ -869,6 +876,7 @@ pub(super) fn split_diff_line_row_canvas(
                     y,
                     left_fg,
                     line_metrics,
+                    ui_scale_percent,
                     theme,
                     window,
                     cx,
@@ -890,6 +898,7 @@ pub(super) fn split_diff_line_row_canvas(
                     y,
                     right_fg,
                     line_metrics,
+                    ui_scale_percent,
                     theme,
                     window,
                     cx,
@@ -927,7 +936,7 @@ pub(super) fn split_diff_line_row_canvas(
             }
         },
     )
-    .h(px(20.0))
+    .h(diff_row_height(ui_scale_percent))
     .min_w(min_width)
     .w_full()
     .text_xs()
@@ -939,6 +948,7 @@ pub(super) fn split_diff_line_row_canvas(
 pub(super) fn patch_split_column_row_canvas(
     theme: AppTheme,
     view: Entity<MainPaneView>,
+    ui_scale_percent: u32,
     column: super::diff::PatchSplitColumn,
     visible_ix: usize,
     min_width: Pixels,
@@ -978,7 +988,7 @@ pub(super) fn patch_split_column_row_canvas(
         (canvas_id, format!("{revision:016x}")),
         move |bounds, window, _cx| {
             let pad = px_2(window);
-            let gutter_total = gutter_cell_total_width(window, pad);
+            let gutter_total = gutter_cell_total_width(pad, ui_scale_percent);
             let text_bounds = single_column_text_bounds(bounds, gutter_total, pad);
             let text_hitbox = window.insert_hitbox(text_bounds, HitboxBehavior::Normal);
             SingleColumnRowPrepaintState {
@@ -1021,6 +1031,7 @@ pub(super) fn patch_split_column_row_canvas(
                     y,
                     fg,
                     line_metrics,
+                    ui_scale_percent,
                     theme,
                     window,
                     cx,
@@ -1053,7 +1064,7 @@ pub(super) fn patch_split_column_row_canvas(
             }
         },
     )
-    .h(px(20.0))
+    .h(diff_row_height(ui_scale_percent))
     .min_w(min_width)
     .w_full()
     .text_xs()
@@ -1064,6 +1075,7 @@ pub(super) fn patch_split_column_row_canvas(
 pub(super) fn worktree_preview_row_canvas(
     theme: AppTheme,
     view: Entity<MainPaneView>,
+    ui_scale_percent: u32,
     ix: usize,
     min_width: Pixels,
     bar_color: Option<gpui::Rgba>,
@@ -1078,9 +1090,9 @@ pub(super) fn worktree_preview_row_canvas(
         ("worktree_preview_row_canvas", ix),
         move |bounds, window, _cx| {
             let pad = px_2(window);
-            let gutter_total = gutter_cell_total_width(window, pad);
+            let gutter_total = gutter_cell_total_width(pad, ui_scale_percent);
             let bar_w = if bar_color.is_some() {
-                px(3.0)
+                diff_scaled_px(DIFF_CHANGE_BAR_WIDTH_PX, ui_scale_percent)
             } else {
                 px(0.0)
             };
@@ -1142,6 +1154,7 @@ pub(super) fn worktree_preview_row_canvas(
                     y,
                     theme.colors.text,
                     line_metrics,
+                    ui_scale_percent,
                     theme,
                     window,
                     cx,
@@ -1198,7 +1211,7 @@ pub(super) fn worktree_preview_row_canvas(
             });
         },
     )
-    .h(px(20.0))
+    .h(diff_row_height(ui_scale_percent))
     .min_w(min_width)
     .w_full()
     .text_xs()
@@ -1439,9 +1452,16 @@ fn px_2(window: &Window) -> Pixels {
     window.rem_size() * 0.5
 }
 
-fn gutter_cell_total_width(window: &Window, pad: Pixels) -> Pixels {
-    let _ = window;
-    px(44.0) + pad * 2.0
+fn diff_scaled_px(value: f32, ui_scale_percent: u32) -> Pixels {
+    crate::ui_scale::design_px_from_percent(value, ui_scale_percent)
+}
+
+fn diff_row_height(ui_scale_percent: u32) -> Pixels {
+    diff_scaled_px(DIFF_ROW_HEIGHT_PX, ui_scale_percent)
+}
+
+fn gutter_cell_total_width(pad: Pixels, ui_scale_percent: u32) -> Pixels {
+    diff_scaled_px(DIFF_GUTTER_BASE_WIDTH_PX, ui_scale_percent) + pad * 2.0
 }
 
 fn inline_text_bounds(bounds: Bounds<Pixels>, gutter_total: Pixels, pad: Pixels) -> Bounds<Pixels> {
@@ -1547,6 +1567,7 @@ fn paint_selectable_diff_text(
     y: Pixels,
     base_fg: gpui::Rgba,
     metrics: LineMetrics,
+    ui_scale_percent: u32,
     theme: AppTheme,
     window: &mut Window,
     cx: &mut App,
@@ -1557,7 +1578,7 @@ fn paint_selectable_diff_text(
     base_style.text_overflow = None;
 
     let pad = px_2(window);
-    let gutter_total = gutter_cell_total_width(window, pad);
+    let gutter_total = gutter_cell_total_width(pad, ui_scale_percent);
     let row_extra = match region {
         DiffTextRegion::Inline => gutter_total * 2.0 + pad * 2.0,
         DiffTextRegion::SplitLeft | DiffTextRegion::SplitRight => gutter_total + pad * 2.0,
@@ -1608,8 +1629,10 @@ fn paint_selectable_diff_text(
         hitbox_cell_width = Some(cell_width);
         pending_prepared_syntax = pending;
         streamed_slice_range = Some(resolved_slice_range);
-        let required_row_w =
-            (row_extra + cell_width * spec.raw_text.len() as f32 + px(16.0)).round();
+        let required_row_w = (row_extra
+            + cell_width * spec.raw_text.len() as f32
+            + diff_scaled_px(DIFF_ROW_TEXT_TRAILING_PADDING_PX, ui_scale_percent))
+        .round();
         streamed_styled = Some(slice_styled);
         (layout_key, layout, shaped_new, required_row_w)
     } else {
@@ -1625,7 +1648,10 @@ fn paint_selectable_diff_text(
             window,
             cx,
         );
-        let required_row_w = (row_extra + layout.width + px(16.0)).round();
+        let required_row_w = (row_extra
+            + layout.width
+            + diff_scaled_px(DIFF_ROW_TEXT_TRAILING_PADDING_PX, ui_scale_percent))
+        .round();
         (layout_key, layout, shaped_new, required_row_w)
     };
 
