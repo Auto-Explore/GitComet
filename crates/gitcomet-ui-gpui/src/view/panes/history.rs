@@ -1693,124 +1693,64 @@ impl HistoryView {
     }
 
     pub(in super::super) fn ensure_history_cache(&mut self, cx: &mut gpui::Context<Self>) {
-        enum Next {
-            Clear,
-            CacheOk,
-            Inflight,
-            Build {
-                request: HistoryCacheBuildRequest,
-                page: Arc<LogPage>,
-                head_branch: Option<String>,
-                branches: Arc<Vec<Branch>>,
-                remote_branches: Arc<Vec<RemoteBranch>>,
-                tags: Arc<Vec<Tag>>,
-                stashes: Arc<Vec<StashEntry>>,
-                base_reuse: Option<HistoryBaseCache>,
-            },
-        }
-
-        let next = if let Some(repo) = self.active_repo() {
-            if let Some(page) = Self::display_log_page_for_repo(repo) {
-                let base_request = self.history_base_cache_request_for_repo(repo, page.as_ref());
-                let decoration_request =
-                    self.history_decoration_cache_request_for_repo(repo, page.as_ref());
-                let request = HistoryCacheBuildRequest {
-                    base_request: base_request.clone(),
-                    decoration_request,
-                };
-
-                let cache_ok = self.history_cache.as_ref().is_some_and(|cache| {
-                    cache.base.request == base_request
-                        && cache.decorations.request == request.decoration_request
-                });
-                if cache_ok {
-                    Next::CacheOk
-                } else if self.history_cache_inflight.as_ref() == Some(&request) {
-                    Next::Inflight
-                } else {
-                    let base_reuse = self
-                        .history_cache
-                        .as_ref()
-                        .filter(|cache| cache.base.request == base_request)
-                        .map(|cache| cache.base.clone());
-                    Next::Build {
-                        request,
-                        page,
-                        head_branch: match &repo.head_branch {
-                            Loadable::Ready(h) => Some(h.clone()),
-                            _ => None,
-                        },
-                        branches: match &repo.branches {
-                            Loadable::Ready(b) => Arc::clone(b),
-                            _ => Arc::new(Vec::new()),
-                        },
-                        remote_branches: match &repo.remote_branches {
-                            Loadable::Ready(b) => Arc::clone(b),
-                            _ => Arc::new(Vec::new()),
-                        },
-                        tags: if self.history_show_tags {
-                            match &repo.tags {
-                                Loadable::Ready(t) => Arc::clone(t),
-                                _ => Arc::new(Vec::new()),
-                            }
-                        } else {
-                            Arc::new(Vec::new())
-                        },
-                        stashes: match &repo.stashes {
-                            Loadable::Ready(s) => Arc::clone(s),
-                            _ => Arc::new(Vec::new()),
-                        },
-                        base_reuse,
-                    }
-                }
-            } else {
-                Next::Clear
-            }
-        } else {
-            Next::Clear
+        let Some(repo) = self.active_repo() else {
+            self.history_cache_inflight = None;
+            self.history_cache = None;
+            return;
+        };
+        let Some(page) = Self::display_log_page_for_repo(repo) else {
+            self.history_cache_inflight = None;
+            self.history_cache = None;
+            return;
         };
 
-        let (
-            request_for_task,
-            page,
-            head_branch,
-            branches,
-            remote_branches,
-            tags,
-            stashes,
-            base_reuse,
-        ) = match next {
-            Next::Clear => {
-                self.history_cache_inflight = None;
-                self.history_cache = None;
-                return;
+        let base_request = self.history_base_cache_request_for_repo(repo, page.as_ref());
+        let decoration_request =
+            self.history_decoration_cache_request_for_repo(repo, page.as_ref());
+        let request_for_task = HistoryCacheBuildRequest {
+            base_request: base_request.clone(),
+            decoration_request: decoration_request.clone(),
+        };
+
+        let cache_ok = self.history_cache.as_ref().is_some_and(|cache| {
+            cache.base.request == base_request && cache.decorations.request == decoration_request
+        });
+        if cache_ok {
+            self.history_cache_inflight = None;
+            return;
+        }
+        if self.history_cache_inflight.as_ref() == Some(&request_for_task) {
+            return;
+        }
+
+        let base_reuse = self
+            .history_cache
+            .as_ref()
+            .filter(|cache| cache.base.request == base_request)
+            .map(|cache| cache.base.clone());
+        let head_branch = match &repo.head_branch {
+            Loadable::Ready(h) => Some(h.clone()),
+            _ => None,
+        };
+        let branches = match &repo.branches {
+            Loadable::Ready(b) => Arc::clone(b),
+            _ => Arc::new(Vec::new()),
+        };
+        let remote_branches = match &repo.remote_branches {
+            Loadable::Ready(b) => Arc::clone(b),
+            _ => Arc::new(Vec::new()),
+        };
+        let tags = if self.history_show_tags {
+            match &repo.tags {
+                Loadable::Ready(t) => Arc::clone(t),
+                _ => Arc::new(Vec::new()),
             }
-            Next::CacheOk => {
-                self.history_cache_inflight = None;
-                return;
-            }
-            Next::Inflight => {
-                return;
-            }
-            Next::Build {
-                request,
-                page,
-                head_branch,
-                branches,
-                remote_branches,
-                tags,
-                stashes,
-                base_reuse,
-            } => (
-                request,
-                page,
-                head_branch,
-                branches,
-                remote_branches,
-                tags,
-                stashes,
-                base_reuse,
-            ),
+        } else {
+            Arc::new(Vec::new())
+        };
+        let stashes = match &repo.stashes {
+            Loadable::Ready(s) => Arc::clone(s),
+            _ => Arc::new(Vec::new()),
         };
 
         self.history_cache_seq = self.history_cache_seq.wrapping_add(1);
@@ -2449,8 +2389,12 @@ mod tests {
 
     #[test]
     fn reset_widths_clamp_default_graph_in_narrow_windows() {
-        let widths =
-            history_reset_widths_for_available_width(px(396.0), true, (true, true, true), 100);
+        let widths = history_reset_widths_for_available_width(
+            history_columns_available_width(px(396.0)),
+            true,
+            (true, true, true),
+            100,
+        );
 
         assert_eq!(widths.branch, px(116.0));
         assert_eq!(widths.graph, px(HISTORY_COL_GRAPH_MIN_PX));
@@ -2458,8 +2402,12 @@ mod tests {
 
     #[test]
     fn reset_widths_clamp_branch_after_graph_reaches_minimum() {
-        let widths =
-            history_reset_widths_for_available_width(px(360.0), true, (true, true, true), 100);
+        let widths = history_reset_widths_for_available_width(
+            history_columns_available_width(px(360.0)),
+            true,
+            (true, true, true),
+            100,
+        );
 
         assert_eq!(widths.graph, px(HISTORY_COL_GRAPH_MIN_PX));
         assert_eq!(widths.branch, px(80.0));
