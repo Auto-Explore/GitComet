@@ -110,10 +110,11 @@ fn assert_open_repo_history_mode_resolution(
     let repo_path = dir.path().join("repo");
     let session_file = dir.path().join("session.json");
     std::fs::create_dir_all(&repo_path).expect("create repo path");
+    let normalized_repo_path = super::reducer::normalize_repo_path(repo_path.clone());
 
     let _session_file_override =
         crate::session::push_test_session_file_path_override(Some(session_file.clone()));
-    seed_session(&repo_path, &session_file);
+    seed_session(&normalized_repo_path, &session_file);
 
     reduce(
         &mut repos,
@@ -395,6 +396,7 @@ fn open_repo_persists_resolved_history_mode_and_keeps_it_sticky() {
     let repo_path = dir.path().join("repo");
     let session_file = dir.path().join("session.json");
     std::fs::create_dir_all(&repo_path).expect("create repo path");
+    let normalized_repo_path = super::reducer::normalize_repo_path(repo_path.clone());
 
     crate::session::persist_ui_settings_to_path(
         crate::session::UiSettings {
@@ -420,7 +422,7 @@ fn open_repo_persists_resolved_history_mode_and_keeps_it_sticky() {
         LogScope::AllBranches
     );
     assert_eq!(
-        crate::session::load_repo_history_mode_from_path(&repo_path, &session_file),
+        crate::session::load_repo_history_mode_from_path(&normalized_repo_path, &session_file),
         Some(LogScope::AllBranches)
     );
 
@@ -1212,6 +1214,9 @@ fn restore_session_resolves_history_mode_precedence_per_repository() {
     std::fs::create_dir_all(&repo_mode).expect("create repo-mode");
     std::fs::create_dir_all(&repo_legacy).expect("create repo-legacy");
     std::fs::create_dir_all(&repo_default).expect("create repo-default");
+    let normalized_repo_mode = super::reducer::normalize_repo_path(repo_mode.clone());
+    let normalized_repo_legacy = super::reducer::normalize_repo_path(repo_legacy.clone());
+    let normalized_repo_default = super::reducer::normalize_repo_path(repo_default.clone());
 
     crate::session::persist_ui_settings_to_path(
         crate::session::UiSettings {
@@ -1222,13 +1227,13 @@ fn restore_session_resolves_history_mode_precedence_per_repository() {
     )
     .expect("persist default history mode");
     crate::session::persist_repo_history_mode_to_path(
-        &repo_mode,
+        &normalized_repo_mode,
         LogScope::NoMerges,
         &session_file,
     )
     .expect("persist repo mode");
     crate::session::persist_repo_history_scope_to_path(
-        &repo_legacy,
+        &normalized_repo_legacy,
         LogScope::CurrentBranch,
         &session_file,
     )
@@ -1253,15 +1258,15 @@ fn restore_session_resolves_history_mode_precedence_per_repository() {
         .collect::<HashMap<_, _>>();
 
     assert_eq!(
-        by_workdir.get(&super::reducer::normalize_repo_path(repo_mode.clone())),
+        by_workdir.get(&normalized_repo_mode),
         Some(&LogScope::NoMerges)
     );
     assert_eq!(
-        by_workdir.get(&super::reducer::normalize_repo_path(repo_legacy.clone())),
+        by_workdir.get(&normalized_repo_legacy),
         Some(&LogScope::FirstParent)
     );
     assert_eq!(
-        by_workdir.get(&super::reducer::normalize_repo_path(repo_default.clone())),
+        by_workdir.get(&normalized_repo_default),
         Some(&LogScope::MergesOnly)
     );
     assert_eq!(
@@ -1270,18 +1275,18 @@ fn restore_session_resolves_history_mode_precedence_per_repository() {
             .iter()
             .find(|repo| repo.id == repo_id)
             .map(|repo| repo.spec.workdir.clone())),
-        Some(super::reducer::normalize_repo_path(repo_default.clone()))
+        Some(normalized_repo_default.clone())
     );
     assert_eq!(
-        crate::session::load_repo_history_mode_from_path(&repo_mode, &session_file),
+        crate::session::load_repo_history_mode_from_path(&normalized_repo_mode, &session_file),
         Some(LogScope::NoMerges)
     );
     assert_eq!(
-        crate::session::load_repo_history_mode_from_path(&repo_legacy, &session_file),
+        crate::session::load_repo_history_mode_from_path(&normalized_repo_legacy, &session_file),
         Some(LogScope::FirstParent)
     );
     assert_eq!(
-        crate::session::load_repo_history_mode_from_path(&repo_default, &session_file),
+        crate::session::load_repo_history_mode_from_path(&normalized_repo_default, &session_file),
         Some(LogScope::MergesOnly)
     );
 }
