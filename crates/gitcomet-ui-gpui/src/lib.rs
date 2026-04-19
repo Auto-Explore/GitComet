@@ -13,6 +13,7 @@ pub mod perf_ram_guard;
 #[doc(hidden)]
 pub mod perf_sidecar;
 mod startup_probe;
+mod text_selection;
 mod theme;
 mod ui_runtime;
 mod ui_scale;

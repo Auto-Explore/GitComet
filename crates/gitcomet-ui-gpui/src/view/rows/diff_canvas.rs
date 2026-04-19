@@ -1179,20 +1179,13 @@ pub(super) fn worktree_preview_row_canvas(
                         let click_count = event.click_count;
                         let position = event.position;
                         view.update(cx, |this, cx| {
-                            if click_count >= 2 {
-                                this.double_click_select_diff_text(
-                                    ix,
-                                    DiffTextRegion::Inline,
-                                    DiffClickKind::Line,
-                                );
-                            } else {
-                                this.begin_diff_text_selection(
-                                    ix,
-                                    DiffTextRegion::Inline,
-                                    position,
-                                );
-                                this.begin_diff_text_scroll_tracking(position, cx);
-                            }
+                            this.handle_diff_text_mouse_down(
+                                ix,
+                                DiffTextRegion::Inline,
+                                position,
+                                click_count,
+                                cx,
+                            );
                             cx.notify();
                         });
                     } else if event.button == gpui::MouseButton::Right {
@@ -1358,16 +1351,13 @@ fn install_diff_row_mouse_handlers(
                     let click_count = event.click_count;
                     let position = event.position;
                     view.update(cx, |this, cx| {
-                        if click_count >= 2 {
-                            this.double_click_select_diff_text(
-                                visible_ix,
-                                region,
-                                DiffClickKind::Line,
-                            );
-                        } else {
-                            this.begin_diff_text_selection(visible_ix, region, position);
-                            this.begin_diff_text_scroll_tracking(position, cx);
-                        }
+                        this.handle_diff_text_mouse_down(
+                            visible_ix,
+                            region,
+                            position,
+                            click_count,
+                            cx,
+                        );
                         cx.notify();
                     });
                 }

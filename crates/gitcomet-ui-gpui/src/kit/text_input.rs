@@ -2041,7 +2041,7 @@ impl TextInput {
     }
 
     fn is_word_char(ch: char) -> bool {
-        ch.is_alphanumeric() || ch == '_'
+        crate::text_selection::is_word_char(ch)
     }
 
     fn current_undo_snapshot(&self) -> UndoSnapshot {
@@ -2165,39 +2165,7 @@ impl TextInput {
     }
 
     fn token_range_for_offset(&self, offset: usize) -> Range<usize> {
-        let s = self.content.as_ref();
-        if s.is_empty() {
-            return 0..0;
-        }
-
-        let mut probe = offset.min(s.len());
-        if probe == s.len() && probe > 0 {
-            probe = self.previous_boundary(probe);
-        }
-
-        let Some(ch) = s[probe..].chars().next() else {
-            return probe..probe;
-        };
-
-        if ch.is_whitespace() {
-            let start = Self::skip_left_while(s, probe, |ch| ch.is_whitespace());
-            let end = Self::skip_right_while(s, probe, |ch| ch.is_whitespace());
-            return start..end;
-        }
-
-        if Self::is_word_char(ch) {
-            let start = Self::skip_left_while(s, probe, Self::is_word_char);
-            let end = Self::skip_right_while(s, probe, Self::is_word_char);
-            return start..end;
-        }
-
-        let start = Self::skip_left_while(s, probe, |ch| {
-            !ch.is_whitespace() && !Self::is_word_char(ch)
-        });
-        let end = Self::skip_right_while(s, probe, |ch| {
-            !ch.is_whitespace() && !Self::is_word_char(ch)
-        });
-        start..end
+        crate::text_selection::token_range_for_offset(self.content.as_ref(), offset)
     }
 
     fn on_mouse_down(

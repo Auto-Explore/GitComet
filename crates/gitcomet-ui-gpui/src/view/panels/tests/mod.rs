@@ -15,6 +15,87 @@ pub(super) use std::path::Path;
 pub(super) use std::sync::Arc;
 pub(super) use std::sync::atomic::{AtomicUsize, Ordering};
 
+pub(super) fn simulate_counted_click(
+    cx: &mut gpui::VisualTestContext,
+    position: gpui::Point<Pixels>,
+    click_count: usize,
+) {
+    cx.simulate_mouse_move(position, None, Modifiers::default());
+    cx.simulate_event(MouseDownEvent {
+        position,
+        modifiers: Modifiers::default(),
+        button: MouseButton::Left,
+        click_count,
+        first_mouse: false,
+    });
+    cx.simulate_event(MouseUpEvent {
+        position,
+        modifiers: Modifiers::default(),
+        button: MouseButton::Left,
+        click_count,
+    });
+}
+
+fn diff_text_click_position_for_offset_range(
+    pane: &MainPaneView,
+    visible_ix: usize,
+    region: DiffTextRegion,
+    target: std::ops::Range<usize>,
+) -> Option<gpui::Point<Pixels>> {
+    let hitbox = pane.diff_text_hitboxes.get(&(visible_ix, region))?;
+    let y = hitbox.bounds.center().y;
+    (0..2048usize)
+        .find_map(|step| {
+            let position = point(hitbox.bounds.left() + px(step as f32), y);
+            pane.diff_text_offset_for_position_for_tests(visible_ix, region, position)
+                .filter(|offset| target.contains(offset))
+                .map(|_| position)
+        })
+        .or_else(|| Some(hitbox.bounds.center()))
+}
+
+pub(super) fn wait_for_diff_text_click_position_for_offset_range(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    visible_ix: usize,
+    region: DiffTextRegion,
+    target: std::ops::Range<usize>,
+    description: &str,
+) -> gpui::Point<Pixels> {
+    let deadline = std::time::Instant::now() + DEFAULT_MAIN_PANE_WAIT_TIMEOUT;
+    loop {
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+
+        if let Some(position) = cx.update(|_window, app| {
+            let pane = view.read(app).main_pane.read(app);
+            diff_text_click_position_for_offset_range(&pane, visible_ix, region, target.clone())
+        }) {
+            return position;
+        }
+
+        if std::time::Instant::now() >= deadline {
+            let snapshot = cx.update(|_window, app| {
+                let pane = view.read(app).main_pane.read(app);
+                (
+                    pane.diff_visible_len(),
+                    pane.diff_text_hitboxes
+                        .keys()
+                        .cloned()
+                        .collect::<Vec<(usize, DiffTextRegion)>>(),
+                )
+            });
+            panic!(
+                "timed out waiting for {description}: visible_ix={visible_ix} region={region:?} target={target:?} snapshot={snapshot:?}"
+            );
+        }
+
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
 const _: () = {
     assert!(COMMIT_DETAILS_MESSAGE_MAX_HEIGHT_PX > 0.0);
     assert!(COMMIT_DETAILS_MESSAGE_MAX_HEIGHT_PX <= 400.0);

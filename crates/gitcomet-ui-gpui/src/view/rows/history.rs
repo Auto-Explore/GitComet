@@ -911,16 +911,13 @@ fn markdown_preview_row_element(
                     let click_count = event.click_count;
                     let position = event.position;
                     view.update(cx, |this, cx| {
-                        if click_count >= 2 {
-                            this.double_click_select_diff_text(
-                                row_ix,
-                                text_region,
-                                DiffClickKind::Line,
-                            );
-                        } else {
-                            this.begin_diff_text_selection(row_ix, text_region, position);
-                            this.begin_diff_text_scroll_tracking(position, cx);
-                        }
+                        this.handle_diff_text_mouse_down(
+                            row_ix,
+                            text_region,
+                            position,
+                            click_count,
+                            cx,
+                        );
                         cx.notify();
                     });
                 }
