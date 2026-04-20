@@ -1588,6 +1588,15 @@ fn click_debug_selector(
     selector: &'static str,
     click_count: usize,
 ) {
+    click_debug_selector_with_button(cx, selector, MouseButton::Left, click_count);
+}
+
+fn click_debug_selector_with_button(
+    cx: &mut gpui::VisualTestContext,
+    selector: &'static str,
+    button: MouseButton,
+    click_count: usize,
+) {
     let bounds = cx
         .debug_bounds(selector)
         .unwrap_or_else(|| panic!("expected debug selector {selector}"));
@@ -1596,14 +1605,14 @@ fn click_debug_selector(
     cx.simulate_event(MouseDownEvent {
         position: center,
         modifiers: Modifiers::default(),
-        button: MouseButton::Left,
+        button,
         click_count,
         first_mouse: false,
     });
     cx.simulate_event(MouseUpEvent {
         position: center,
         modifiers: Modifiers::default(),
-        button: MouseButton::Left,
+        button,
         click_count,
     });
 }
@@ -1796,6 +1805,78 @@ fn repo_tabs_drop_on_self_is_noop(cx: &mut gpui::TestAppContext) {
         .map(|r| r.id)
         .collect::<Vec<_>>();
     assert_eq!(got, repo_ids);
+}
+
+#[gpui::test]
+fn repo_tabs_middle_click_closes_inactive_tab_without_reactivating(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_test = store.clone();
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let base = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_repo_tabs_middle_close_{}",
+        std::process::id()
+    ));
+    let repo_ids = restore_session_and_draw(
+        cx,
+        &store_for_test,
+        view.clone(),
+        vec![base.join("repo1"), base.join("repo2"), base.join("repo3")],
+    );
+
+    let active_repo = repo_ids[0];
+    let closed_repo = repo_ids[1];
+    click_debug_selector_with_button(cx, repo_tab_selector(closed_repo), MouseButton::Middle, 1);
+
+    let state = wait_for_repo_count(&store_for_test, 2);
+    assert_eq!(
+        state.repos.iter().map(|repo| repo.id).collect::<Vec<_>>(),
+        vec![repo_ids[0], repo_ids[2]]
+    );
+    assert_eq!(state.active_repo, Some(active_repo));
+
+    sync_view_for_tests(cx, &view);
+    assert!(
+        cx.debug_bounds(repo_tab_selector(closed_repo)).is_none(),
+        "expected middle-clicked repo tab to be removed from the UI"
+    );
+}
+
+#[gpui::test]
+fn repo_tabs_right_click_does_not_close(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_test = store.clone();
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let base = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_repo_tabs_right_click_{}",
+        std::process::id()
+    ));
+    let repo_ids = restore_session_and_draw(
+        cx,
+        &store_for_test,
+        view.clone(),
+        vec![base.join("repo1"), base.join("repo2"), base.join("repo3")],
+    );
+
+    click_debug_selector_with_button(cx, repo_tab_selector(repo_ids[1]), MouseButton::Right, 1);
+
+    let state = store_for_test.snapshot();
+    assert_eq!(
+        state.repos.iter().map(|repo| repo.id).collect::<Vec<_>>(),
+        repo_ids
+    );
+    assert_eq!(state.active_repo, Some(repo_ids[0]));
+
+    sync_view_for_tests(cx, &view);
+    assert!(
+        cx.debug_bounds(repo_tab_selector(repo_ids[1])).is_some(),
+        "expected right-clicked repo tab to remain visible"
+    );
 }
 
 #[gpui::test]

@@ -111,6 +111,12 @@ impl RepoTabsBarView {
         (active_repo != Some(repo_id)).then_some(Msg::SetActiveRepo { repo_id })
     }
 
+    fn close_repo_tab(&mut self, repo_id: RepoId, cx: &mut gpui::Context<Self>) {
+        self.hovered_repo_tab = None;
+        self.store.dispatch(Msg::CloseRepo { repo_id });
+        cx.notify();
+    }
+
     pub(in super::super) fn new(
         store: Arc<AppStore>,
         ui_model: Entity<AppUiModel>,
@@ -323,9 +329,7 @@ impl Render for RepoTabsBarView {
                 ))
                 .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
                     cx.stop_propagation();
-                    this.hovered_repo_tab = None;
-                    this.store.dispatch(Msg::CloseRepo { repo_id });
-                    cx.notify();
+                    this.close_repo_tab(repo_id, cx);
                 }))
                 .on_hover(cx.listener({
                     let tooltip = tooltip.clone();
@@ -468,6 +472,14 @@ impl Render for RepoTabsBarView {
                     {
                         this.store.dispatch(msg);
                     }
+                }))
+                .on_aux_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
+                    if !e.is_middle_click() {
+                        return;
+                    }
+
+                    cx.stop_propagation();
+                    this.close_repo_tab(repo_id, cx);
                 }));
 
             bar = bar.tab(tab);
