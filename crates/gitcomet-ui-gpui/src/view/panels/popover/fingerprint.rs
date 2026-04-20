@@ -49,7 +49,7 @@ pub(super) fn notify_fingerprint(state: &AppState, popover: &PopoverKind) -> u64
                 view_fingerprint::hash_loadable_kind(&repo.open, &mut hasher);
             }
         }
-        PopoverKind::ChangeTrackingSettings | PopoverKind::AppMenu => {
+        PopoverKind::ChangeTrackingSettings | PopoverKind::UiScalePicker | PopoverKind::AppMenu => {
             // Mostly local UI state; depend only on whether a repo is active/open.
             state.active_repo.hash(&mut hasher);
             if let Some(repo) = repo_for_popover(state, popover) {
@@ -110,7 +110,8 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         PopoverKind::RepoPicker
         | PopoverKind::RecentRepositoryPicker
         | PopoverKind::CloneRepo
-        | PopoverKind::ChangeTrackingSettings => None,
+        | PopoverKind::ChangeTrackingSettings
+        | PopoverKind::UiScalePicker => None,
 
         // Popovers that implicitly use the currently active repo.
         PopoverKind::BranchPicker
@@ -270,6 +271,7 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         | PopoverKind::CommitFileMenu { .. }
         | PopoverKind::StatusFileMenu { .. }
         | PopoverKind::ChangeTrackingSettings
+        | PopoverKind::UiScalePicker
         | PopoverKind::ConflictResolverInputRowMenu { .. }
         | PopoverKind::ConflictResolverChunkMenu { .. }
         | PopoverKind::ConflictResolverOutputMenu { .. }
@@ -324,6 +326,7 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
         }
         PopoverKind::CloneRepo => 4u8.hash(hasher),
         PopoverKind::ChangeTrackingSettings => 66u8.hash(hasher),
+        PopoverKind::UiScalePicker => 67u8.hash(hasher),
 
         PopoverKind::ResetPrompt {
             repo_id,

@@ -457,6 +457,13 @@ impl AppStore {
         let state = self.state.read().unwrap_or_else(|e| e.into_inner());
         Arc::clone(&state)
     }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn replace_snapshot_for_test(&self, state: Arc<AppState>) {
+        let mut current = self.state.write().unwrap_or_else(|e| e.into_inner());
+        *current = state;
+    }
 }
 
 #[cfg(feature = "benchmarks")]

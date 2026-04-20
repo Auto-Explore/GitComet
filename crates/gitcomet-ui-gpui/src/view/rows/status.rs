@@ -387,6 +387,7 @@ fn render_status_rows_for_section(
     let selected_paths = this.status_selected_paths_for_area(repo.id, section.diff_area());
     let multi_select_active = !selected_paths.is_empty();
     let theme = this.theme;
+    let ui_scale = this.ui_scale();
     range
         .filter_map(|ix| entries.get(ix).map(|entry| (ix, entry)))
         .map(|(ix, entry)| {
@@ -403,6 +404,7 @@ fn render_status_rows_for_section(
             };
             status_row(
                 theme,
+                ui_scale,
                 ix,
                 entry,
                 path_display,
@@ -419,6 +421,7 @@ fn render_status_rows_for_section(
 #[allow(clippy::too_many_arguments)]
 fn status_row(
     theme: AppTheme,
+    ui_scale: crate::ui_scale::UiScale,
     ix: usize,
     entry: &FileStatus,
     path_display: SharedString,
@@ -428,6 +431,7 @@ fn status_row(
     active_context_menu_invoker: Option<&SharedString>,
     cx: &mut gpui::Context<DetailsPaneView>,
 ) -> AnyElement {
+    let scaled_px = |value: f32| ui_scale.px(value);
     let area = section.diff_area();
     let (icon, color) = match entry.kind {
         FileStatusKind::Untracked => match area {
@@ -475,6 +479,7 @@ fn status_row(
     let context_menu_invoker_for_row = context_menu_invoker.clone();
     let row_group: SharedString =
         format!("status_row_{}_{}_{}", repo_id.0, section.id_label(), ix).into();
+    let row_debug_selector = format!("status_row_{}_{}_{}", repo_id.0, section.id_label(), ix);
 
     let stage_button = components::Button::new(format!("stage_btn_{ix}"), stage_label)
         .style(components::ButtonStyle::Solid)
@@ -532,13 +537,14 @@ fn status_row(
 
     div()
         .id(ix)
+        .debug_selector(move || row_debug_selector.clone())
         .relative()
         .group(row_group.clone())
         .flex()
         .items_center()
-        .gap_2()
-        .px_2()
-        .h(px(STATUS_ROW_HEIGHT_PX))
+        .gap(scaled_px(8.0))
+        .px(scaled_px(8.0))
+        .h(scaled_px(STATUS_ROW_HEIGHT_PX))
         .w_full()
         .rounded(px(theme.radii.row))
         .cursor(CursorStyle::PointingHand)
@@ -612,15 +618,16 @@ fn status_row(
         )
         .child(
             div()
-                .w(px(16.0))
+                .w(scaled_px(16.0))
                 .flex()
                 .items_center()
                 .justify_center()
-                .child(svg_icon(icon, color, px(14.0))),
+                .child(svg_icon(icon, color, scaled_px(14.0))),
         )
         .child(
             div()
                 .text_sm()
+                .line_height(scaled_px(18.0))
                 .flex_1()
                 .min_w(px(0.0))
                 .line_clamp(1)
@@ -629,14 +636,14 @@ fn status_row(
         .child(
             div()
                 .absolute()
-                .right(px(6.0))
+                .right(scaled_px(6.0))
                 .top_0()
                 .bottom_0()
                 .flex()
                 .items_center()
                 .invisible()
                 .group_hover(row_group.clone(), |d| d.visible())
-                .gap_1()
+                .gap(scaled_px(4.0))
                 .child(stage_button),
         )
         .on_click(cx.listener(move |this, _e: &ClickEvent, window, cx| {

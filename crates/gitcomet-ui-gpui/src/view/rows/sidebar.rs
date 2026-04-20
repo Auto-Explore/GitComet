@@ -1,4 +1,5 @@
 use super::*;
+use crate::ui_scale;
 use gitcomet_core::domain::LogScope;
 
 const WORKTREE_ICON_PATH: &str = "icons/git_worktree.svg";
@@ -98,7 +99,7 @@ fn local_branch_double_click_action(
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct BranchHistoryRevealTarget {
     commit_id: CommitId,
-    desired_scope: LogScope,
+    fallback_scope: Option<LogScope>,
 }
 
 fn branch_commit_id(repo: &RepoState, section: BranchSection, name: &str) -> Option<CommitId> {
@@ -131,14 +132,14 @@ fn branch_click_history_reveal_target(
 ) -> Option<BranchHistoryRevealTarget> {
     let commit_id = branch_commit_id(repo, section, name)?;
 
-    let desired_scope = match section {
-        BranchSection::Local if is_head => repo.history_state.history_scope,
-        BranchSection::Local | BranchSection::Remote => LogScope::AllBranches,
+    let fallback_scope = match section {
+        BranchSection::Local if is_head => Some(LogScope::FullReachable),
+        BranchSection::Local | BranchSection::Remote => Some(LogScope::AllBranches),
     };
 
     Some(BranchHistoryRevealTarget {
         commit_id,
-        desired_scope,
+        fallback_scope,
     })
 }
 
@@ -172,6 +173,8 @@ impl SidebarPaneView {
         const BRANCH_TREE_GAP_PX: f32 = 6.0;
         const CONTEXT_MENU_INDICATOR_SIZE_PX: f32 = 18.0;
         const CONTEXT_MENU_INDICATOR_RIGHT_PX: f32 = 6.0;
+        let ui_scale_percent = ui_scale::current(cx).percent;
+        let scaled_px = |value: f32| ui_scale::design_px_from_percent(value, ui_scale_percent);
 
         let Some(repo_id) = this.active_repo_id() else {
             return Vec::new();
@@ -199,10 +202,10 @@ impl SidebarPaneView {
             });
 
         let svg_icon = |path: &'static str, color: gpui::Rgba, size_px: f32| {
-            super::super::icons::svg_icon(path, color, px(size_px))
+            super::super::icons::svg_icon(path, color, scaled_px(size_px))
         };
         let svg_spinner = |id: (&'static str, u64), color: gpui::Rgba, size_px: f32| {
-            super::super::icons::svg_spinner(id, color, px(size_px))
+            super::super::icons::svg_spinner(id, color, scaled_px(size_px))
         };
         let svg_collapse = |collapsed: bool| {
             svg_icon(
@@ -217,7 +220,7 @@ impl SidebarPaneView {
         };
         let tree_toggle_slot = |collapsed: Option<bool>| {
             div()
-                .w(px(BRANCH_TREE_TOGGLE_SLOT_PX))
+                .w(scaled_px(BRANCH_TREE_TOGGLE_SLOT_PX))
                 .flex_none()
                 .flex()
                 .items_center()
@@ -228,7 +231,7 @@ impl SidebarPaneView {
         };
         let tree_icon_slot = |path: &'static str, color: gpui::Rgba, size_px: f32| {
             div()
-                .w(px(BRANCH_TREE_ICON_SLOT_PX))
+                .w(scaled_px(BRANCH_TREE_ICON_SLOT_PX))
                 .flex_none()
                 .flex()
                 .items_center()
@@ -275,14 +278,14 @@ impl SidebarPaneView {
                 div()
                     .id(id)
                     .absolute()
-                    .right(px(CONTEXT_MENU_INDICATOR_RIGHT_PX))
+                    .right(scaled_px(CONTEXT_MENU_INDICATOR_RIGHT_PX))
                     .top_0()
                     .bottom_0()
-                    .w(px(CONTEXT_MENU_INDICATOR_SIZE_PX))
+                    .w(scaled_px(CONTEXT_MENU_INDICATOR_SIZE_PX))
                     .flex()
                     .items_center()
                     .justify_center()
-                    .rounded(px(4.0))
+                    .rounded(scaled_px(4.0))
                     .bg(if menu_active {
                         context_menu_indicator_active_bg
                     } else {
@@ -309,30 +312,30 @@ impl SidebarPaneView {
                     ))
             };
 
-        fn indent_px(depth: usize) -> Pixels {
-            px(BRANCH_TREE_BASE_PAD_PX + depth as f32 * BRANCH_TREE_DEPTH_STEP_PX)
-        }
+        let indent_px = |depth: usize| {
+            scaled_px(BRANCH_TREE_BASE_PAD_PX + depth as f32 * BRANCH_TREE_DEPTH_STEP_PX)
+        };
 
-        fn left_divider(color: gpui::Rgba, radius: Pixels) -> gpui::Div {
+        let left_divider = |color: gpui::Rgba, radius: Pixels| {
             div()
                 .absolute()
                 .top_0()
                 .bottom_0()
                 .left_0()
-                .w(px(2.0))
+                .w(scaled_px(2.0))
                 .rounded_l(radius)
                 .bg(color)
-        }
+        };
 
-        fn top_divider(color: gpui::Rgba) -> gpui::Div {
+        let top_divider = |color: gpui::Rgba| {
             div()
                 .absolute()
                 .top_0()
                 .left_0()
                 .right_0()
-                .h(px(1.0))
+                .h(scaled_px(1.0))
                 .bg(color)
-        }
+        };
 
         range
             .filter_map(|ix| rows.get(ix).cloned().map(|r| (ix, r)))
@@ -364,14 +367,14 @@ impl SidebarPaneView {
                     div()
                         .id(("branch_section", ix))
                         .relative()
-                        .h(px(24.0))
+                        .h(scaled_px(24.0))
                         .w_full()
                         .pl(indent_px(0))
                         .pr_2()
                         .group(row_group.clone())
                         .flex()
                         .items_center()
-                        .gap(px(BRANCH_TREE_GAP_PX))
+                        .gap(scaled_px(BRANCH_TREE_GAP_PX))
                         .bg(theme.colors.surface_bg_elevated)
                         .cursor(CursorStyle::PointingHand)
                         .when(context_menu_active, |d| d.bg(theme.colors.active))
@@ -465,7 +468,7 @@ impl SidebarPaneView {
                 }
                 BranchSidebarRow::SectionSpacer => div()
                     .id(("branch_section_spacer", ix))
-                    .h(px(10.0))
+                    .h(scaled_px(10.0))
                     .w_full()
                     .into_any_element(),
                 BranchSidebarRow::StashHeader {
@@ -489,14 +492,14 @@ impl SidebarPaneView {
                         .id(("stash_section", ix))
                         .debug_selector(move || format!("stash_section_{ix}"))
                         .relative()
-                        .h(px(24.0))
+                        .h(scaled_px(24.0))
                         .w_full()
                         .pl(indent_px(0))
                         .pr_2()
                         .group(row_group.clone())
                         .flex()
                         .items_center()
-                        .gap(px(BRANCH_TREE_GAP_PX))
+                        .gap(scaled_px(BRANCH_TREE_GAP_PX))
                         .bg(theme.colors.surface_bg_elevated)
                         .cursor(CursorStyle::PointingHand)
                         .when(context_menu_active, |d| d.bg(theme.colors.active))
@@ -598,7 +601,7 @@ impl SidebarPaneView {
                 }
                 BranchSidebarRow::StashPlaceholder { message } => div()
                     .id(("stash_placeholder", ix))
-                    .h(px(22.0))
+                    .h(scaled_px(22.0))
                     .w_full()
                     .px_2()
                     .text_sm()
@@ -630,10 +633,10 @@ impl SidebarPaneView {
                         .group(row_group.clone())
                         .flex()
                         .items_center()
-                        .gap(px(BRANCH_TREE_GAP_PX))
+                        .gap(scaled_px(BRANCH_TREE_GAP_PX))
                         .pl(indent_px(0))
                         .pr_2()
-                        .h(px(24.0))
+                        .h(scaled_px(24.0))
                         .w_full()
                         .rounded(px(theme.radii.row))
                         .when(context_menu_active, |d| d.bg(theme.colors.active))
@@ -732,7 +735,7 @@ impl SidebarPaneView {
                     message,
                 } => div()
                     .id(("branch_placeholder", ix))
-                    .h(px(22.0))
+                    .h(scaled_px(22.0))
                     .w_full()
                     .px_2()
                     .text_sm()
@@ -762,14 +765,14 @@ impl SidebarPaneView {
                         .id(("worktrees_section", ix))
                         .debug_selector(move || format!("worktrees_section_{ix}"))
                         .relative()
-                        .h(px(24.0))
+                        .h(scaled_px(24.0))
                         .w_full()
                         .pl(indent_px(0))
                         .pr_2()
                         .group(row_group.clone())
                         .flex()
                         .items_center()
-                        .gap(px(BRANCH_TREE_GAP_PX))
+                        .gap(scaled_px(BRANCH_TREE_GAP_PX))
                         .bg(theme.colors.surface_bg_elevated)
                         .cursor(CursorStyle::PointingHand)
                         .when(context_menu_active, |d| d.bg(theme.colors.active))
@@ -879,7 +882,7 @@ impl SidebarPaneView {
                 }
                 BranchSidebarRow::WorktreePlaceholder { message } => div()
                     .id(("worktree_placeholder", ix))
-                    .h(px(22.0))
+                    .h(scaled_px(22.0))
                     .w_full()
                     .px_2()
                     .text_sm()
@@ -916,12 +919,12 @@ impl SidebarPaneView {
                     div()
                         .id(("worktree_item", ix))
                         .relative()
-                        .h(px(22.0))
+                        .h(scaled_px(22.0))
                         .w_full()
                         .group(row_group.clone())
                         .flex()
                         .items_center()
-                        .gap(px(BRANCH_TREE_GAP_PX))
+                        .gap(scaled_px(BRANCH_TREE_GAP_PX))
                         .pl(indent_px(0))
                         .pr_2()
                         .rounded(px(theme.radii.row))
@@ -1052,14 +1055,14 @@ impl SidebarPaneView {
                         .id(("submodules_section", ix))
                         .debug_selector(move || format!("submodules_section_{ix}"))
                         .relative()
-                        .h(px(24.0))
+                        .h(scaled_px(24.0))
                         .w_full()
                         .pl(indent_px(0))
                         .pr_2()
                         .group(row_group.clone())
                         .flex()
                         .items_center()
-                        .gap(px(BRANCH_TREE_GAP_PX))
+                        .gap(scaled_px(BRANCH_TREE_GAP_PX))
                         .bg(theme.colors.surface_bg_elevated)
                         .cursor(CursorStyle::PointingHand)
                         .when(context_menu_active, |d| d.bg(theme.colors.active))
@@ -1169,7 +1172,7 @@ impl SidebarPaneView {
                 }
                 BranchSidebarRow::SubmodulePlaceholder { message } => div()
                     .id(("submodule_placeholder", ix))
-                    .h(px(22.0))
+                    .h(scaled_px(22.0))
                     .w_full()
                     .px_2()
                     .text_sm()
@@ -1195,12 +1198,12 @@ impl SidebarPaneView {
                     div()
                         .id(("submodule_item", ix))
                         .relative()
-                        .h(px(22.0))
+                        .h(scaled_px(22.0))
                         .w_full()
                         .group(row_group.clone())
                         .flex()
                         .items_center()
-                        .gap(px(BRANCH_TREE_GAP_PX))
+                        .gap(scaled_px(BRANCH_TREE_GAP_PX))
                         .pl(indent_px(0))
                         .pr_2()
                         .rounded(px(theme.radii.row))
@@ -1594,14 +1597,14 @@ impl SidebarPaneView {
                     div()
                         .id(("branch_remote", ix))
                         .relative()
-                        .h(px(24.0))
+                        .h(scaled_px(24.0))
                         .w_full()
                         .pl(indent_px(0))
                         .pr_2()
                         .group(row_group.clone())
                         .flex()
                         .items_center()
-                        .gap(px(BRANCH_TREE_GAP_PX))
+                        .gap(scaled_px(BRANCH_TREE_GAP_PX))
                         .rounded(px(theme.radii.row))
                         .cursor(CursorStyle::PointingHand)
                         .when(context_menu_active, |d| d.bg(theme.colors.active))
@@ -1693,13 +1696,13 @@ impl SidebarPaneView {
                     };
                     div()
                         .id(("branch_group", ix))
-                        .h(px(22.0))
+                        .h(scaled_px(22.0))
                         .w_full()
                         .pl(indent_px(usize::from(depth)))
                         .pr_2()
                         .flex()
                         .items_center()
-                        .gap(px(BRANCH_TREE_GAP_PX))
+                        .gap(scaled_px(BRANCH_TREE_GAP_PX))
                         .rounded(px(theme.radii.row))
                         .cursor(CursorStyle::PointingHand)
                         .hover(move |s| s.bg(theme.colors.hover))
@@ -1845,15 +1848,15 @@ impl SidebarPaneView {
                         .id(("branch_item", ix))
                         .relative()
                         .h(if section == BranchSection::Local {
-                            px(24.0)
+                            scaled_px(24.0)
                         } else {
-                            px(22.0)
+                            scaled_px(22.0)
                         })
                         .w_full()
                         .group(row_group.clone())
                         .flex()
                         .items_center()
-                        .gap(px(BRANCH_TREE_GAP_PX))
+                        .gap(scaled_px(BRANCH_TREE_GAP_PX))
                         .pl(indent_px(usize::from(depth)))
                         .pr_2()
                         .rounded(px(theme.radii.row))
@@ -1908,7 +1911,7 @@ impl SidebarPaneView {
                     let mut right = div().flex().items_center().gap_2().ml_auto().when(
                         branch_has_right_metadata && show_branch_context_menu_indicator,
                         |d| {
-                            d.pr(px(CONTEXT_MENU_INDICATOR_SIZE_PX
+                            d.pr(scaled_px(CONTEXT_MENU_INDICATOR_SIZE_PX
                                 + CONTEXT_MENU_INDICATOR_RIGHT_PX
                                 + 4.0))
                         },
@@ -1917,10 +1920,10 @@ impl SidebarPaneView {
                     if is_upstream && section == BranchSection::Remote {
                         right = right.child(
                             div()
-                                .px(px(3.0))
-                                .py(px(0.0))
-                                .rounded(px(2.0))
-                                .text_size(px(11.0))
+                                .px(scaled_px(3.0))
+                                .py(scaled_px(0.0))
+                                .rounded(scaled_px(2.0))
+                                .text_size(scaled_px(11.0))
                                 .text_color(theme.colors.text_muted)
                                 .bg(with_alpha(
                                     theme.colors.accent,
@@ -2015,15 +2018,15 @@ impl SidebarPaneView {
                                 .debug_selector(move || format!("branch_workspace_badge_{ix}"))
                                 .flex()
                                 .items_center()
-                                .gap(px(3.0))
-                                .px(px(4.0))
-                                .py(px(0.0))
-                                .rounded(px(2.0))
+                                .gap(scaled_px(3.0))
+                                .px(scaled_px(4.0))
+                                .py(scaled_px(0.0))
+                                .rounded(scaled_px(2.0))
                                 .border_1()
                                 .border_color(badge_border)
                                 .bg(worktree_action_bg)
                                 .cursor(CursorStyle::PointingHand)
-                                .text_size(px(11.0))
+                                .text_size(scaled_px(11.0))
                                 .text_color(badge_text)
                                 .hover(move |s| {
                                     if workspace_menu_active {
@@ -2176,7 +2179,7 @@ impl SidebarPaneView {
                                     section,
                                     full_name_for_reveal.as_ref(),
                                     target.commit_id,
-                                    target.desired_scope,
+                                    target.fallback_scope,
                                     cx,
                                 );
                                 cx.notify();
@@ -2284,6 +2287,9 @@ impl DetailsPaneView {
         };
 
         let theme = this.theme;
+        let ui_scale_percent = this.ui_scale_percent;
+        let scaled_px =
+            |value: f32| crate::ui_scale::design_px_from_percent(value, ui_scale_percent);
         let repo_id = repo.id;
         let has_active_menu = this.active_context_menu_invoker.is_some();
         let file_rows = this.cached_commit_file_rows(
@@ -2334,11 +2340,11 @@ impl DetailsPaneView {
 
                 let mut row = div()
                     .id(("commit_file", ix))
-                    .h(px(24.0))
+                    .h(scaled_px(24.0))
                     .flex()
                     .items_center()
-                    .gap_2()
-                    .px_2()
+                    .gap(scaled_px(8.0))
+                    .px(scaled_px(8.0))
                     .w_full()
                     .rounded(px(theme.radii.row))
                     .cursor(CursorStyle::PointingHand)
@@ -2352,12 +2358,12 @@ impl DetailsPaneView {
                     .active(move |s| s.bg(theme.colors.active))
                     .child(
                         div()
-                            .w(px(16.0))
+                            .w(scaled_px(16.0))
                             .flex()
                             .items_center()
                             .justify_center()
                             .when_some(icon, |this, icon| {
-                                this.child(svg_icon(icon, color, px(14.0)))
+                                this.child(svg_icon(icon, color, scaled_px(14.0)))
                             }),
                     )
                     .child(
@@ -2365,6 +2371,7 @@ impl DetailsPaneView {
                             .flex_1()
                             .min_w(px(0.0))
                             .text_sm()
+                            .line_height(scaled_px(18.0))
                             .line_clamp(1)
                             .whitespace_nowrap()
                             .child(path_label),
@@ -2907,7 +2914,7 @@ mod tests {
     }
 
     #[test]
-    fn branch_click_history_reveal_target_keeps_current_scope_for_head_local_branch() {
+    fn branch_click_history_reveal_target_switches_head_local_branch_to_full_reachable() {
         let target = commit_id("main-tip");
         let mut repo = RepoState::new_opening(
             RepoId(1),
@@ -2927,7 +2934,7 @@ mod tests {
             branch_click_history_reveal_target(&repo, BranchSection::Local, "main", true),
             Some(BranchHistoryRevealTarget {
                 commit_id: target,
-                desired_scope: LogScope::CurrentBranch,
+                fallback_scope: Some(LogScope::FullReachable),
             })
         );
     }
@@ -2953,7 +2960,7 @@ mod tests {
             branch_click_history_reveal_target(&repo, BranchSection::Local, "feature", false),
             Some(BranchHistoryRevealTarget {
                 commit_id: target,
-                desired_scope: LogScope::AllBranches,
+                fallback_scope: Some(LogScope::AllBranches),
             })
         );
     }
@@ -2983,7 +2990,7 @@ mod tests {
             ),
             Some(BranchHistoryRevealTarget {
                 commit_id: target,
-                desired_scope: LogScope::AllBranches,
+                fallback_scope: Some(LogScope::AllBranches),
             })
         );
     }
@@ -3008,6 +3015,7 @@ mod tests {
 
         let repo_id = RepoId(1);
         let target = commit_id("main-tip");
+        let initial_scope = LogScope::default();
         cx.update(|window, app| {
             let _ = window.draw(app);
         });
@@ -3034,7 +3042,7 @@ mod tests {
         }));
         store_for_assert.dispatch(Msg::Internal(InternalMsg::LogLoaded {
             repo_id,
-            scope: LogScope::CurrentBranch,
+            scope: initial_scope,
             cursor: None,
             result: Ok(LogPage {
                 commits: vec![commit("main-tip")],
@@ -3084,7 +3092,7 @@ mod tests {
                     BranchSection::Local,
                     "main",
                     target.clone(),
-                    LogScope::CurrentBranch,
+                    None,
                     cx,
                 );
             });
@@ -3097,7 +3105,7 @@ mod tests {
                 return false;
             };
             repo.diff_state.diff_target.is_none()
-                && repo.history_state.history_scope == LogScope::CurrentBranch
+                && repo.history_state.history_scope == initial_scope
                 && repo.history_state.selected_commit.as_ref() == Some(&target)
         });
     }

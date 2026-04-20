@@ -498,7 +498,7 @@ pub struct HistoryState {
 impl Default for HistoryState {
     fn default() -> Self {
         Self {
-            history_scope: LogScope::CurrentBranch,
+            history_scope: LogScope::default(),
             log: Loadable::NotLoaded,
             retained_log_while_loading: None,
             log_loading_more: false,
@@ -1006,6 +1006,12 @@ impl RepoState {
                 && matches!(self.status, Loadable::Loading))
     }
 
+    #[inline]
+    pub(crate) fn bump_log_revs(&mut self) {
+        self.log_rev = self.log_rev.wrapping_add(1);
+        self.history_state.log_rev = self.history_state.log_rev.wrapping_add(1);
+    }
+
     pub(crate) fn set_log(&mut self, log: Loadable<Shared<LogPage>>) {
         if self.history_state.log == log && self.log == log {
             return;
@@ -1015,7 +1021,7 @@ impl RepoState {
         }
         self.history_state.log = log.clone();
         self.log = log;
-        self.history_state.log_rev = self.history_state.log_rev.wrapping_add(1);
+        self.bump_log_revs();
     }
 
     pub(crate) fn retain_log_while_loading(&mut self) {
@@ -1034,7 +1040,7 @@ impl RepoState {
         }
         self.history_state.log_loading_more = v;
         self.log_loading_more = v;
-        self.history_state.log_rev = self.history_state.log_rev.wrapping_add(1);
+        self.bump_log_revs();
     }
 
     pub(crate) fn set_log_scope(&mut self, scope: LogScope) {
@@ -1042,7 +1048,7 @@ impl RepoState {
             return;
         }
         self.history_state.history_scope = scope;
-        self.history_state.log_rev = self.history_state.log_rev.wrapping_add(1);
+        self.bump_log_revs();
     }
 
     pub(crate) fn set_selected_commit(&mut self, v: Option<CommitId>) {
@@ -1289,6 +1295,55 @@ mod tests {
     }
 
     #[test]
+    fn request_log_scope_change_replaces_pending_log_request() {
+        let mut loads = RepoLoadsInFlight::default();
+        assert!(loads.request_log(LogScope::FullReachable, 20, None));
+
+        assert!(!loads.request_log(
+            LogScope::AllBranches,
+            20,
+            Some(LogCursor {
+                last_seen: CommitId("older".into()),
+                resume_from: None,
+                resume_token: None,
+            }),
+        ));
+        assert!(!loads.request_log(LogScope::NoMerges, 20, None));
+
+        assert_eq!(
+            loads.finish_log(),
+            Some(PendingLogLoad {
+                scope: LogScope::NoMerges,
+                limit: 20,
+                cursor: None,
+            })
+        );
+    }
+
+    #[test]
+    fn request_log_same_scope_refresh_does_not_clobber_pending_pagination() {
+        let mut loads = RepoLoadsInFlight::default();
+        let cursor = LogCursor {
+            last_seen: CommitId("page-1".into()),
+            resume_from: None,
+            resume_token: None,
+        };
+
+        assert!(loads.request_log(LogScope::MergesOnly, 20, None));
+        assert!(!loads.request_log(LogScope::MergesOnly, 20, Some(cursor.clone())));
+        assert!(!loads.request_log(LogScope::MergesOnly, 20, None));
+
+        assert_eq!(
+            loads.finish_log(),
+            Some(PendingLogLoad {
+                scope: LogScope::MergesOnly,
+                limit: 20,
+                cursor: Some(cursor),
+            })
+        );
+    }
+
+    #[test]
     fn set_spec_refreshes_session_workdir_key() {
         let mut repo = RepoState::new_opening(
             RepoId(1),
@@ -1375,9 +1430,10 @@ mod tests {
     #[test]
     fn set_log_bumps_log_rev() {
         let mut repo = new_repo();
-        let before = repo.history_state.log_rev;
+        let before = (repo.log_rev, repo.history_state.log_rev);
         repo.set_log(Loadable::Loading);
-        assert_eq!(repo.history_state.log_rev, before + 1);
+        assert_eq!(repo.log_rev, before.0 + 1);
+        assert_eq!(repo.history_state.log_rev, before.1 + 1);
     }
 
     #[test]
@@ -1416,19 +1472,22 @@ mod tests {
     #[test]
     fn set_log_loading_more_bumps_log_rev() {
         let mut repo = new_repo();
-        let before = repo.history_state.log_rev;
+        let before = (repo.log_rev, repo.history_state.log_rev);
         repo.set_log_loading_more(true);
-        assert_eq!(repo.history_state.log_rev, before + 1);
+        assert_eq!(repo.log_rev, before.0 + 1);
+        assert_eq!(repo.history_state.log_rev, before.1 + 1);
         repo.set_log_loading_more(false);
-        assert_eq!(repo.history_state.log_rev, before + 2);
+        assert_eq!(repo.log_rev, before.0 + 2);
+        assert_eq!(repo.history_state.log_rev, before.1 + 2);
     }
 
     #[test]
     fn set_log_scope_bumps_log_rev() {
         let mut repo = new_repo();
-        let before = repo.history_state.log_rev;
+        let before = (repo.log_rev, repo.history_state.log_rev);
         repo.set_log_scope(LogScope::AllBranches);
-        assert_eq!(repo.history_state.log_rev, before + 1);
+        assert_eq!(repo.log_rev, before.0 + 1);
+        assert_eq!(repo.history_state.log_rev, before.1 + 1);
     }
 
     #[test]
@@ -1705,27 +1764,30 @@ mod tests {
     fn set_log_skips_rev_bump_when_unchanged() {
         let mut repo = new_repo();
         repo.set_log(Loadable::Loading);
-        let rev = repo.history_state.log_rev;
+        let rev = (repo.log_rev, repo.history_state.log_rev);
         repo.set_log(Loadable::Loading);
-        assert_eq!(repo.history_state.log_rev, rev);
+        assert_eq!(repo.log_rev, rev.0);
+        assert_eq!(repo.history_state.log_rev, rev.1);
     }
 
     #[test]
     fn set_log_loading_more_skips_rev_bump_when_unchanged() {
         let mut repo = new_repo();
         repo.set_log_loading_more(true);
-        let rev = repo.history_state.log_rev;
+        let rev = (repo.log_rev, repo.history_state.log_rev);
         repo.set_log_loading_more(true);
-        assert_eq!(repo.history_state.log_rev, rev);
+        assert_eq!(repo.log_rev, rev.0);
+        assert_eq!(repo.history_state.log_rev, rev.1);
     }
 
     #[test]
     fn set_log_scope_skips_rev_bump_when_unchanged() {
         let mut repo = new_repo();
         repo.set_log_scope(LogScope::AllBranches);
-        let rev = repo.history_state.log_rev;
+        let rev = (repo.log_rev, repo.history_state.log_rev);
         repo.set_log_scope(LogScope::AllBranches);
-        assert_eq!(repo.history_state.log_rev, rev);
+        assert_eq!(repo.log_rev, rev.0);
+        assert_eq!(repo.history_state.log_rev, rev.1);
     }
 
     // --- Isolation tests: one setter does not bump another's rev ---
@@ -1735,6 +1797,7 @@ mod tests {
         let mut repo = new_repo();
         let snap = (
             repo.status_rev,
+            repo.log_rev,
             repo.history_state.log_rev,
             repo.history_state.selected_commit_rev,
             repo.history_state.commit_details_rev,
@@ -1748,21 +1811,23 @@ mod tests {
 
         repo.set_status(Loadable::Loading);
         assert_eq!(repo.status_rev, snap.0 + 1);
-        assert_eq!(repo.history_state.log_rev, snap.1);
-        assert_eq!(repo.history_state.selected_commit_rev, snap.2);
-        assert_eq!(repo.history_state.commit_details_rev, snap.3);
-        assert_eq!(repo.merge_message_rev, snap.4);
-        assert_eq!(repo.upstream_divergence_rev, snap.5);
-        assert_eq!(repo.open_rev, snap.6);
-        assert_eq!(repo.conflict_state.conflict_rev, snap.7);
-        assert_eq!(repo.diff_state.diff_state_rev, snap.8);
-        assert_eq!(repo.ops_rev, snap.9);
+        assert_eq!(repo.log_rev, snap.1);
+        assert_eq!(repo.history_state.log_rev, snap.2);
+        assert_eq!(repo.history_state.selected_commit_rev, snap.3);
+        assert_eq!(repo.history_state.commit_details_rev, snap.4);
+        assert_eq!(repo.merge_message_rev, snap.5);
+        assert_eq!(repo.upstream_divergence_rev, snap.6);
+        assert_eq!(repo.open_rev, snap.7);
+        assert_eq!(repo.conflict_state.conflict_rev, snap.8);
+        assert_eq!(repo.diff_state.diff_state_rev, snap.9);
+        assert_eq!(repo.ops_rev, snap.10);
     }
 
     #[test]
     fn all_rev_counters_start_at_zero() {
         let repo = new_repo();
         assert_eq!(repo.status_rev, 0);
+        assert_eq!(repo.log_rev, 0);
         assert_eq!(repo.history_state.log_rev, 0);
         assert_eq!(repo.history_state.selected_commit_rev, 0);
         assert_eq!(repo.history_state.commit_details_rev, 0);
@@ -1787,7 +1852,7 @@ mod tests {
     #[test]
     fn grouped_state_defaults_are_initialized() {
         let repo = new_repo();
-        assert_eq!(repo.history_state.history_scope, LogScope::CurrentBranch);
+        assert_eq!(repo.history_state.history_scope, LogScope::FullReachable);
         assert!(matches!(repo.history_state.log, Loadable::NotLoaded));
         assert!(matches!(
             repo.history_state.file_history,

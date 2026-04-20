@@ -55,6 +55,9 @@ pub(in crate::view) enum ContextMenuAction {
     SetChangeTrackingView {
         view: ChangeTrackingView,
     },
+    SetUiScale {
+        percent: u32,
+    },
     StageSelectionOrPath {
         repo_id: RepoId,
         area: DiffArea,
@@ -259,12 +262,14 @@ impl ContextMenuModel {
 
 mod action_bar;
 mod bars;
+mod bottom_status_bar;
 mod layout;
 mod main;
 mod popover;
 mod repo_tabs_bar;
 
-pub(super) use action_bar::{ACTION_BAR_HEIGHT, ActionBarView};
+pub(super) use action_bar::{ActionBarView, action_bar_height};
+pub(super) use bottom_status_bar::BottomStatusBarView;
 pub(super) use popover::PopoverHost;
 pub(super) use repo_tabs_bar::RepoTabsBarView;
 #[allow(unused_imports)]

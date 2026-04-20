@@ -188,11 +188,11 @@ pub(super) fn set_history_scope(
         repo_state.set_log_loading_more(false);
         repo_state.spec.workdir.clone()
     };
-    let persist_result = session::persist_repo_history_scope(&workdir, scope);
+    let persist_result = session::persist_repo_history_mode(&workdir, scope);
     handle_session_persist_result(
         state,
         Some(repo_id),
-        "updating history scope",
+        "updating history mode",
         persist_result,
     );
 
@@ -338,8 +338,7 @@ pub(super) fn log_loaded(
                     existing.next_cursor = page.next_cursor;
                     // Re-share the updated Arc with history_state.
                     repo_state.history_state.log = repo_state.log.clone();
-                    repo_state.history_state.log_rev =
-                        repo_state.history_state.log_rev.wrapping_add(1);
+                    repo_state.bump_log_revs();
                 } else {
                     if page.next_cursor.is_some() {
                         reserve_initial_paginated_log_append_slack(&mut page.commits);
@@ -355,7 +354,7 @@ pub(super) fn log_loaded(
             }
         }
 
-        if scope == LogScope::CurrentBranch
+        if scope.guarantees_head_visibility()
             && matches!(repo_state.head_branch, Loadable::Ready(ref head) if head == "HEAD")
             && let Loadable::Ready(page) = &repo_state.log
         {

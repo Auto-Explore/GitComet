@@ -41,6 +41,114 @@ fn worktree_preview_ready_rows_preserve_trailing_empty_line(cx: &mut gpui::TestA
 }
 
 #[gpui::test]
+fn file_preview_text_multi_clicks_select_word_then_line(cx: &mut gpui::TestAppContext) {
+    let _clipboard_guard = lock_clipboard_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(902);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_file_preview_multi_clicks",
+        std::process::id()
+    ));
+    let file_rel = std::path::PathBuf::from("preview_clicks.rs");
+    let preview_abs_path = workdir.join(&file_rel);
+    let preview_lines = Arc::new(vec!["alpha_beta = gamma;".to_string()]);
+
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(&workdir).expect("create preview multi-click workdir");
+    std::fs::write(&preview_abs_path, preview_lines.join("\n")).expect("write preview fixture");
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            set_test_file_status(
+                &mut repo,
+                file_rel.clone(),
+                gitcomet_core::domain::FileStatusKind::Added,
+                gitcomet_core::domain::DiffArea::Staged,
+            );
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let preview_abs_path = preview_abs_path.clone();
+            let preview_lines = Arc::clone(&preview_lines);
+            this.main_pane.update(cx, |pane, cx| {
+                set_ready_worktree_preview(
+                    pane,
+                    preview_abs_path,
+                    preview_lines,
+                    "alpha_beta = gamma;".len(),
+                    cx,
+                );
+            });
+        });
+    });
+
+    let expected_line = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        pane.diff_text_line_for_region(0, DiffTextRegion::Inline)
+            .to_string()
+    });
+    let click = wait_for_diff_text_click_position_for_offset_range(
+        cx,
+        &view,
+        0,
+        DiffTextRegion::Inline,
+        1..5,
+        "file preview multi-click hitbox",
+    );
+    let expected_word = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let offset = pane
+            .diff_text_offset_for_position_for_tests(0, DiffTextRegion::Inline, click)
+            .expect("expected file-preview diff text offset");
+        let word_range = crate::text_selection::token_range_for_offset(&expected_line, offset);
+        expected_line[word_range].to_string()
+    });
+
+    simulate_counted_click(cx, click, 2);
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, cx| {
+            pane.copy_selected_diff_text_to_clipboard(cx)
+        });
+    });
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|item| item.text()),
+        Some(expected_word)
+    );
+
+    simulate_counted_click(cx, click, 3);
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, cx| {
+            pane.copy_selected_diff_text_to_clipboard(cx)
+        });
+    });
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|item| item.text()),
+        Some(expected_line)
+    );
+
+    simulate_counted_click(cx, click, 1);
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert!(
+            !pane.diff_text_has_selection(),
+            "single click should clear the file preview text selection"
+        );
+    });
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup preview multi-click fixture");
+}
+
+#[gpui::test]
 fn file_preview_renders_scrollable_syntax_highlighted_rows(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {

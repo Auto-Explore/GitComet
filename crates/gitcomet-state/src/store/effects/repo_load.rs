@@ -345,10 +345,7 @@ pub(super) fn schedule_load_log(
         move |repo, msg_tx| {
             let result = {
                 let cursor_ref = cursor.as_ref();
-                match scope {
-                    LogScope::CurrentBranch => repo.log_head_page(limit, cursor_ref),
-                    LogScope::AllBranches => repo.log_all_branches_page(limit, cursor_ref),
-                }
+                repo.log_history_mode_page(scope, limit, cursor_ref)
             };
             send_or_log(
                 &msg_tx,

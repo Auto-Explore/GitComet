@@ -3703,6 +3703,130 @@ impl GitBackend for PanicOpenBackend {
     }
 }
 
+struct RecordingLogRepo {
+    spec: RepoSpec,
+    calls: Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+impl GitRepository for RecordingLogRepo {
+    fn spec(&self) -> &RepoSpec {
+        &self.spec
+    }
+
+    fn log_history_mode_page(
+        &self,
+        mode: LogScope,
+        limit: usize,
+        cursor: Option<&LogCursor>,
+    ) -> Result<LogPage> {
+        self.calls
+            .lock()
+            .expect("log recording mutex")
+            .push(format!(
+                "history {mode:?} {limit} {}",
+                cursor
+                    .map(|cursor| cursor.last_seen.as_ref())
+                    .unwrap_or("none")
+            ));
+        Ok(LogPage {
+            commits: Vec::new(),
+            next_cursor: None,
+        })
+    }
+
+    fn log_head_page(&self, limit: usize, cursor: Option<&LogCursor>) -> Result<LogPage> {
+        self.calls
+            .lock()
+            .expect("log recording mutex")
+            .push(format!(
+                "head {limit} {}",
+                cursor
+                    .map(|cursor| cursor.last_seen.as_ref())
+                    .unwrap_or("none")
+            ));
+        Ok(LogPage {
+            commits: Vec::new(),
+            next_cursor: None,
+        })
+    }
+
+    fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
+        unsupported_repo_result()
+    }
+    fn reflog_head(&self, _limit: usize) -> Result<Vec<ReflogEntry>> {
+        unsupported_repo_result()
+    }
+    fn current_branch(&self) -> Result<String> {
+        unsupported_repo_result()
+    }
+    fn list_branches(&self) -> Result<Vec<Branch>> {
+        unsupported_repo_result()
+    }
+    fn list_remotes(&self) -> Result<Vec<Remote>> {
+        unsupported_repo_result()
+    }
+    fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
+        unsupported_repo_result()
+    }
+    fn status(&self) -> Result<RepoStatus> {
+        unsupported_repo_result()
+    }
+    fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
+        unsupported_repo_result()
+    }
+    fn create_branch(&self, _name: &str, _target: &CommitId) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn delete_branch(&self, _name: &str) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn checkout_branch(&self, _name: &str) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn checkout_commit(&self, _id: &CommitId) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn revert(&self, _id: &CommitId) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn stash_list(&self) -> Result<Vec<StashEntry>> {
+        unsupported_repo_result()
+    }
+    fn stash_apply(&self, _index: usize) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn stash_drop(&self, _index: usize) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn stage(&self, _paths: &[&Path]) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn unstage(&self, _paths: &[&Path]) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn commit(&self, _message: &str) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn fetch_all(&self) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn pull(&self, _mode: PullMode) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn push(&self) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {
+        unsupported_repo_result()
+    }
+}
+
 struct RecordingCheckoutRepo {
     spec: RepoSpec,
     calls: Arc<std::sync::Mutex<Vec<String>>>,
@@ -4207,6 +4331,69 @@ fn worktree_and_submodule_effects_report_missing_repo_handle() {
 }
 
 #[test]
+fn load_log_effect_uses_history_mode_api() {
+    let repo_id = RepoId(498);
+    let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let backend: Arc<dyn GitBackend> = Arc::new(PanicOpenBackend);
+    let cursor = LogCursor {
+        last_seen: CommitId("cursor".into()),
+        resume_from: None,
+        resume_token: None,
+    };
+    let repo: Arc<dyn GitRepository> = Arc::new(RecordingLogRepo {
+        spec: RepoSpec {
+            workdir: unique_temp_path("gitcomet-load-log-history-mode-effect"),
+        },
+        calls: Arc::clone(&calls),
+    });
+    let repos: HashMap<RepoId, Arc<dyn GitRepository>> = {
+        let mut repos = HashMap::default();
+        repos.insert(repo_id, repo);
+        repos
+    };
+    let executor = super::executor::TaskExecutor::new(1);
+    let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
+
+    schedule_effect_for_test(
+        &executor,
+        &executor,
+        &backend,
+        &repos,
+        msg_tx,
+        Effect::LoadLog {
+            repo_id,
+            scope: LogScope::NoMerges,
+            limit: 20,
+            cursor: Some(cursor.clone()),
+        },
+    );
+
+    let msg = msg_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("expected LogLoaded");
+    match msg {
+        Msg::Internal(crate::msg::InternalMsg::LogLoaded {
+            repo_id: got_repo_id,
+            scope,
+            cursor: got_cursor,
+            result: Ok(page),
+        }) => {
+            assert_eq!(got_repo_id, repo_id);
+            assert_eq!(scope, LogScope::NoMerges);
+            assert_eq!(got_cursor, Some(cursor));
+            assert!(page.commits.is_empty());
+            assert!(page.next_cursor.is_none());
+        }
+        _ => panic!("expected LogLoaded"),
+    }
+
+    assert_eq!(
+        *calls.lock().expect("log recording mutex"),
+        vec!["history NoMerges 20 cursor".to_string()]
+    );
+}
+
+#[test]
 fn schedule_effect_dispatches_many_variants_with_repo_present() {
     struct Backend;
     impl GitBackend for Backend {
@@ -4274,6 +4461,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
                 cursor: Some(LogCursor {
                     last_seen: CommitId("cursor".into()),
                     resume_from: None,
+                    resume_token: None,
                 }),
             },
             1,

@@ -21,6 +21,7 @@ mod submodule_section;
 mod subtree;
 mod subtree_section;
 mod tag;
+mod ui_scale_picker;
 mod worktree;
 mod worktree_section;
 
@@ -340,9 +341,10 @@ impl PopoverHost {
                 *is_three_way,
             )),
             PopoverKind::HistoryBranchFilter { repo_id } => {
-                Some(history_branch_filter::model(*repo_id))
+                Some(history_branch_filter::model(self, *repo_id))
             }
             PopoverKind::ChangeTrackingSettings => Some(change_tracking_settings::model(self)),
+            PopoverKind::UiScalePicker => Some(ui_scale_picker::model(cx)),
             _ => None,
         }
     }
@@ -674,6 +676,11 @@ impl PopoverHost {
                 self.store
                     .dispatch(Msg::UnsetUpstreamBranch { repo_id, branch });
             }
+            ContextMenuAction::SetUiScale { percent } => {
+                cx.defer(move |cx| {
+                    crate::app::set_app_ui_scale_percent(cx, percent);
+                });
+            }
             ContextMenuAction::OpenPopover { kind } => {
                 let anchor = self
                     .popover_anchor
@@ -919,6 +926,8 @@ impl PopoverHost {
         cx: &mut gpui::Context<Self>,
     ) -> gpui::Div {
         let theme = self.theme;
+        let ui_scale = super::popover_ui_scale(cx);
+        let width = super::popover_width_spec(&kind).unwrap_or(super::DEFAULT_CONTEXT_MENU_WIDTH);
         let model = self
             .context_menu_model(&kind, cx)
             .unwrap_or_else(|| ContextMenuModel::new(vec![]));
@@ -937,6 +946,7 @@ impl PopoverHost {
                 .min_w_full()
                 .flex()
                 .flex_col()
+                .items_stretch()
                 .track_focus(&focus)
                 .key_context("ContextMenu")
                 .on_mouse_down(
@@ -1011,17 +1021,21 @@ impl PopoverHost {
                 )
                 .children(model.items.into_iter().enumerate().map(|(ix, item)| {
                     match item {
-                        ContextMenuItem::Separator => components::context_menu_separator(theme)
-                            .id(("context_menu_sep", ix))
-                            .into_any_element(),
+                        ContextMenuItem::Separator => {
+                            components::context_menu_separator(theme, ui_scale)
+                                .id(("context_menu_sep", ix))
+                                .into_any_element()
+                        }
                         ContextMenuItem::Header(title) => {
-                            components::context_menu_header(theme, title)
+                            components::context_menu_header(theme, ui_scale, title)
                                 .id(("context_menu_header", ix))
                                 .into_any_element()
                         }
-                        ContextMenuItem::Label(text) => components::context_menu_label(theme, text)
-                            .id(("context_menu_label", ix))
-                            .into_any_element(),
+                        ContextMenuItem::Label(text) => {
+                            components::context_menu_label(theme, ui_scale, text)
+                                .id(("context_menu_label", ix))
+                                .into_any_element()
+                        }
                         ContextMenuItem::Entry {
                             label,
                             icon,
@@ -1036,6 +1050,7 @@ impl PopoverHost {
                             let row = components::context_menu_entry(
                                 ("context_menu_entry", ix),
                                 theme,
+                                ui_scale,
                                 selected,
                                 disabled,
                                 icon,
@@ -1083,6 +1098,9 @@ impl PopoverHost {
                 }))
                 .into_any_element(),
         )
+        .w(width.preferred_px(ui_scale))
+        .min_w(width.min_px(ui_scale))
+        .max_w(width.max_px(ui_scale))
     }
 }
 

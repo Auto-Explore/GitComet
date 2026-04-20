@@ -59,7 +59,7 @@ const GO_INJECTIONS_QUERY: &str = include_str!("queries/go_injections.scm");
 #[cfg(any(test, feature = "syntax-web"))]
 const JAVASCRIPT_HIGHLIGHTS_QUERY: &str = include_str!("queries/javascript_highlights.scm");
 #[cfg(any(test, feature = "syntax-web"))]
-const JAVASCRIPT_INJECTIONS_QUERY: &str = tree_sitter_javascript::INJECTIONS_QUERY;
+const JAVASCRIPT_INJECTIONS_QUERY: &str = include_str!("queries/javascript_injections.scm");
 #[cfg(any(test, feature = "syntax-data"))]
 const JSON_HIGHLIGHTS_QUERY: &str = include_str!("queries/json_highlights.scm");
 #[cfg(any(test, feature = "syntax-extra"))]
@@ -417,6 +417,19 @@ mod tests {
                 "{token:?} end is not a char boundary in {text:?}"
             );
         }
+    }
+
+    fn has_token_kind_and_text(
+        text: &str,
+        tokens: &[SyntaxToken],
+        kind: SyntaxTokenKind,
+        expected: &str,
+    ) -> bool {
+        tokens.iter().any(|token| {
+            token.kind == kind
+                && token.range.end <= text.len()
+                && &text[token.range.clone()] == expected
+        })
     }
 
     struct TempFileBackedLineFixture {
@@ -994,6 +1007,14 @@ mod tests {
             diff_syntax_language_for_code_fence_info("diff"),
             Some(DiffSyntaxLanguage::Diff)
         );
+        assert_eq!(
+            diff_syntax_language_for_code_fence_info("foo/bar/baz.rb"),
+            Some(DiffSyntaxLanguage::Ruby)
+        );
+        assert_eq!(
+            diff_syntax_language_for_code_fence_info("src/components/button.tsx"),
+            Some(DiffSyntaxLanguage::Tsx)
+        );
     }
 
     #[test]
@@ -1409,6 +1430,23 @@ mod tests {
         );
     }
 
+    #[cfg(any(test, feature = "syntax-rust"))]
+    #[test]
+    fn prepared_rust_document_highlights_macro_token_tree_via_injection() {
+        let text = "test_macro!(value.field::<Vec<u32>>());";
+        let document = prepare_test_document(DiffSyntaxLanguage::Rust, text);
+        let tokens = syntax_tokens_for_prepared_document_line(document, 0)
+            .expect("Rust macro line tokens should be available");
+        assert!(
+            has_token_kind_and_text(text, &tokens, SyntaxTokenKind::FunctionMethod, "field"),
+            "Rust macro token trees should inject nested method calls: {tokens:?}"
+        );
+        assert!(
+            has_token_kind_and_text(text, &tokens, SyntaxTokenKind::TypeBuiltin, "u32"),
+            "Rust macro token trees should inject nested builtin types: {tokens:?}"
+        );
+    }
+
     #[test]
     fn prepared_markdown_document_highlights_fenced_rust_block_via_injection() {
         let lines = ["```rust", "fn main() { let value = 42; }", "```"];
@@ -1423,6 +1461,115 @@ mod tests {
         assert!(
             tokens.iter().any(|t| t.kind == SyntaxTokenKind::Number),
             "embedded Rust should highlight numbers inside fenced markdown, got: {tokens:?}"
+        );
+    }
+
+    #[cfg(any(test, feature = "syntax-web"))]
+    #[test]
+    fn prepared_markdown_document_highlights_fenced_html_block_via_injection() {
+        let doc = prepare_markdown_document(&["```html", "<div class=\"note\">ok</div>", "```"]);
+
+        let tokens = syntax_tokens_for_prepared_document_line(doc, 1)
+            .expect("markdown fenced HTML line tokens should be available");
+        assert!(
+            tokens.iter().any(|t| t.kind == SyntaxTokenKind::Tag),
+            "embedded HTML should highlight tags inside fenced markdown, got: {tokens:?}"
+        );
+        assert!(
+            tokens.iter().any(|t| t.kind == SyntaxTokenKind::Attribute),
+            "embedded HTML should highlight attributes inside fenced markdown, got: {tokens:?}"
+        );
+    }
+
+    #[cfg(any(test, feature = "syntax-extra"))]
+    #[test]
+    fn prepared_markdown_document_highlights_fenced_ruby_block_via_path_alias() {
+        let doc = prepare_markdown_document(&["```foo/bar/baz.rb", "if @user", "end", "```"]);
+
+        let tokens = syntax_tokens_for_prepared_document_line(doc, 1)
+            .expect("markdown fenced Ruby line tokens should be available");
+        assert!(
+            tokens.iter().any(|t| t.kind == SyntaxTokenKind::Keyword),
+            "Ruby path aliases in fenced markdown should highlight keywords, got: {tokens:?}"
+        );
+        assert!(
+            tokens.iter().any(|t| t.kind == SyntaxTokenKind::Property),
+            "Ruby path aliases in fenced markdown should highlight instance variables, got: {tokens:?}"
+        );
+    }
+
+    #[cfg(any(test, feature = "syntax-web"))]
+    #[test]
+    fn prepared_markdown_document_highlights_fenced_tsx_block_via_path_alias() {
+        let doc = prepare_markdown_document(&[
+            "```src/components/button.tsx",
+            "const node = <button disabled />;",
+            "```",
+        ]);
+
+        let tokens = syntax_tokens_for_prepared_document_line(doc, 1)
+            .expect("markdown fenced TSX line tokens should be available");
+        assert!(
+            tokens.iter().any(|t| t.kind == SyntaxTokenKind::Tag),
+            "TSX path aliases in fenced markdown should highlight JSX tags, got: {tokens:?}"
+        );
+        assert!(
+            tokens.iter().any(|t| t.kind == SyntaxTokenKind::Attribute),
+            "TSX path aliases in fenced markdown should highlight JSX attributes, got: {tokens:?}"
+        );
+    }
+
+    #[cfg(any(test, feature = "syntax-repo"))]
+    #[test]
+    fn prepared_markdown_document_highlights_fenced_gomod_block_via_filename_alias() {
+        let line = "module example.com/project";
+        let doc = prepare_markdown_document(&["```go.mod", line, "```"]);
+
+        let tokens = syntax_tokens_for_prepared_document_line(doc, 1)
+            .expect("markdown fenced go.mod line tokens should be available");
+        assert!(
+            has_token_kind_and_text(line, &tokens, SyntaxTokenKind::Keyword, "module"),
+            "go.mod filename aliases in fenced markdown should highlight keywords, got: {tokens:?}"
+        );
+    }
+
+    #[test]
+    fn prepared_markdown_document_unknown_fence_does_not_reuse_previous_language_tokens() {
+        let rust_doc =
+            prepare_markdown_document(&["```rs", "fn main() { let value = 42; }", "```"]);
+        let rust_tokens = syntax_tokens_for_prepared_document_line(rust_doc, 1)
+            .expect("markdown fenced Rust line tokens should be available");
+        assert!(
+            rust_tokens
+                .iter()
+                .any(|t| t.kind == SyntaxTokenKind::Keyword),
+            "supported fenced Rust should highlight keywords, got: {rust_tokens:?}"
+        );
+        assert!(
+            rust_tokens
+                .iter()
+                .any(|t| t.kind == SyntaxTokenKind::Number),
+            "supported fenced Rust should highlight numbers, got: {rust_tokens:?}"
+        );
+
+        let unknown_doc = prepare_markdown_document(&[
+            "```foo/bar/baz.unknown",
+            "fn main() { let value = 42; }",
+            "```",
+        ]);
+        let unknown_tokens = syntax_tokens_for_prepared_document_line(unknown_doc, 1)
+            .expect("markdown fenced unknown-language line tokens should be available");
+        assert!(
+            !unknown_tokens
+                .iter()
+                .any(|t| t.kind == SyntaxTokenKind::Keyword),
+            "unsupported fenced languages should not reuse stale Rust keyword tokens, got: {unknown_tokens:?}"
+        );
+        assert!(
+            !unknown_tokens
+                .iter()
+                .any(|t| t.kind == SyntaxTokenKind::Number),
+            "unsupported fenced languages should not reuse stale Rust number tokens, got: {unknown_tokens:?}"
         );
     }
 
@@ -3214,6 +3361,37 @@ mod tests {
         );
     }
 
+    #[test]
+    fn normalize_non_overlapping_tokens_splits_contained_later_token() {
+        let tokens = normalize_non_overlapping_tokens(vec![
+            SyntaxToken {
+                range: 0..10,
+                kind: SyntaxTokenKind::Function,
+            },
+            SyntaxToken {
+                range: 4..6,
+                kind: SyntaxTokenKind::Operator,
+            },
+        ]);
+        assert_eq!(
+            tokens,
+            vec![
+                SyntaxToken {
+                    range: 0..4,
+                    kind: SyntaxTokenKind::Function,
+                },
+                SyntaxToken {
+                    range: 4..6,
+                    kind: SyntaxTokenKind::Operator,
+                },
+                SyntaxToken {
+                    range: 6..10,
+                    kind: SyntaxTokenKind::Function,
+                },
+            ]
+        );
+    }
+
     #[cfg(any(test, feature = "syntax-rust"))]
     #[test]
     fn vendored_rust_query_compiles() {
@@ -3444,6 +3622,26 @@ mod tests {
         assert!(
             tokens.iter().any(|t| t.kind == SyntaxTokenKind::Number),
             "JS should capture numbers: {tokens:?}"
+        );
+    }
+
+    #[cfg(any(test, feature = "syntax-web"))]
+    #[test]
+    fn typescript_treesitter_preserves_arrow_operator_inside_arrow_function() {
+        let text = "const fn = (x: number): number => x + 1;";
+        let tokens =
+            syntax_tokens_for_line(text, DiffSyntaxLanguage::TypeScript, DiffSyntaxMode::Auto);
+        assert!(
+            tokens
+                .iter()
+                .any(|t| t.kind == SyntaxTokenKind::Function && &text[t.range.clone()] == "fn"),
+            "TypeScript should capture the arrow function name, got: {tokens:?}"
+        );
+        assert!(
+            tokens
+                .iter()
+                .any(|t| t.kind == SyntaxTokenKind::Operator && &text[t.range.clone()] == "=>"),
+            "TypeScript should preserve the fat-arrow operator, got: {tokens:?}"
         );
     }
 
@@ -3765,6 +3963,298 @@ mod tests {
         );
     }
 
+    #[cfg(any(test, feature = "syntax-web"))]
+    #[test]
+    fn javascript_tagged_template_injects_html() {
+        let text = "const markup = html`<div class=\"note\">ok</div>`;";
+        let document = prepare_test_document(DiffSyntaxLanguage::JavaScript, text);
+        let tokens = syntax_tokens_for_prepared_document_line(document, 0)
+            .expect("JavaScript document should have prepared tokens");
+        assert!(
+            has_token_kind_and_text(text, &tokens, SyntaxTokenKind::Tag, "div"),
+            "tagged HTML template should inject HTML tags in JavaScript: {tokens:?}"
+        );
+        assert!(
+            has_token_kind_and_text(text, &tokens, SyntaxTokenKind::Attribute, "class"),
+            "tagged HTML template should inject HTML attributes in JavaScript: {tokens:?}"
+        );
+    }
+
+    #[cfg(any(test, feature = "syntax-web"))]
+    #[test]
+    fn javascript_styled_member_template_injects_css() {
+        let text = "const Button = styled.div`color: red;`;";
+        let document = prepare_test_document(DiffSyntaxLanguage::JavaScript, text);
+        let tokens = syntax_tokens_for_prepared_document_line(document, 0)
+            .expect("JavaScript document should have prepared tokens");
+        assert!(
+            has_token_kind_and_text(text, &tokens, SyntaxTokenKind::Property, "color"),
+            "styled member templates should inject CSS properties in JavaScript: {tokens:?}"
+        );
+    }
+
+    #[cfg(any(test, feature = "syntax-web"))]
+    #[test]
+    fn javascript_styled_call_template_injects_css() {
+        let text = "const Button = styled(Link)`color: red;`;";
+        let document = prepare_test_document(DiffSyntaxLanguage::JavaScript, text);
+        let tokens = syntax_tokens_for_prepared_document_line(document, 0)
+            .expect("JavaScript document should have prepared tokens");
+        assert!(
+            has_token_kind_and_text(text, &tokens, SyntaxTokenKind::Property, "color"),
+            "styled call templates should inject CSS properties in JavaScript: {tokens:?}"
+        );
+    }
+
+    #[cfg(any(test, feature = "syntax-web"))]
+    #[test]
+    fn javascript_comment_prefixed_string_injects_html() {
+        let text = r#"const markup = /* html */ "<div class='note'>ok</div>";"#;
+        let document = prepare_test_document(DiffSyntaxLanguage::JavaScript, text);
+        let tokens = syntax_tokens_for_prepared_document_line(document, 0)
+            .expect("JavaScript document should have prepared tokens");
+        assert!(
+            has_token_kind_and_text(text, &tokens, SyntaxTokenKind::Tag, "div"),
+            "comment-prefixed HTML string should inject HTML tags: {tokens:?}"
+        );
+        assert!(
+            has_token_kind_and_text(text, &tokens, SyntaxTokenKind::Attribute, "class"),
+            "comment-prefixed HTML string should inject HTML attributes: {tokens:?}"
+        );
+    }
+
+    #[cfg(any(test, feature = "syntax-web"))]
+    #[test]
+    fn javascript_comment_prefixed_string_injects_css() {
+        let text = r#"const styles = /* css */ "color: red;";"#;
+        let document = prepare_test_document(DiffSyntaxLanguage::JavaScript, text);
+        let tokens = syntax_tokens_for_prepared_document_line(document, 0)
+            .expect("JavaScript document should have prepared tokens");
+        assert!(
+            has_token_kind_and_text(text, &tokens, SyntaxTokenKind::Property, "color"),
+            "comment-prefixed CSS strings should inject CSS properties in JavaScript: {tokens:?}"
+        );
+    }
+
+    #[cfg(any(test, feature = "syntax-web"))]
+    #[test]
+    fn javascript_comment_prefixed_template_literal_injects_css() {
+        let text = "const styles = /* css */ `color: red;`;";
+        let document = prepare_test_document(DiffSyntaxLanguage::JavaScript, text);
+        let tokens = syntax_tokens_for_prepared_document_line(document, 0)
+            .expect("JavaScript document should have prepared tokens");
+        assert!(
+            has_token_kind_and_text(text, &tokens, SyntaxTokenKind::Property, "color"),
+            "comment-prefixed CSS template literals should inject CSS properties: {tokens:?}"
+        );
+    }
+
+    #[cfg(any(test, feature = "syntax-web"))]
+    #[test]
+    fn typescript_tagged_template_injects_yaml() {
+        let text = "const workflow = yaml`enabled: true`;";
+        let document = prepare_test_document(DiffSyntaxLanguage::TypeScript, text);
+        let tokens = syntax_tokens_for_prepared_document_line(document, 0)
+            .expect("TypeScript document should have prepared tokens");
+        assert!(
+            has_token_kind_and_text(text, &tokens, SyntaxTokenKind::Property, "enabled"),
+            "tagged YAML template should inject YAML properties: {tokens:?}"
+        );
+        assert!(
+            has_token_kind_and_text(text, &tokens, SyntaxTokenKind::Boolean, "true"),
+            "tagged YAML template should inject YAML booleans: {tokens:?}"
+        );
+    }
+
+    #[cfg(any(test, feature = "syntax-web"))]
+    #[test]
+    fn typescript_tagged_template_injects_html() {
+        let text = "const markup = html`<div class=\"note\">ok</div>`;";
+        let document = prepare_test_document(DiffSyntaxLanguage::TypeScript, text);
+        let tokens = syntax_tokens_for_prepared_document_line(document, 0)
+            .expect("TypeScript document should have prepared tokens");
+        assert!(
+            has_token_kind_and_text(text, &tokens, SyntaxTokenKind::Tag, "div"),
+            "tagged HTML template should inject HTML tags in TypeScript: {tokens:?}"
+        );
+        assert!(
+            has_token_kind_and_text(text, &tokens, SyntaxTokenKind::Attribute, "class"),
+            "tagged HTML template should inject HTML attributes in TypeScript: {tokens:?}"
+        );
+    }
+
+    #[cfg(any(test, feature = "syntax-web"))]
+    #[test]
+    fn typescript_tagged_template_injects_sql() {
+        let text = "const query = sql`select name from users`;";
+        let document = prepare_test_document(DiffSyntaxLanguage::TypeScript, text);
+        let tokens = syntax_tokens_for_prepared_document_line(document, 0)
+            .expect("TypeScript document should have prepared tokens");
+        assert!(
+            has_token_kind_and_text(text, &tokens, SyntaxTokenKind::Keyword, "select"),
+            "tagged SQL template should inject SQL keywords in TypeScript: {tokens:?}"
+        );
+    }
+
+    #[cfg(any(test, feature = "syntax-web"))]
+    #[test]
+    fn typescript_comment_prefixed_string_injects_css() {
+        let text = r#"const styles = /* css */ "color: red;";"#;
+        let document = prepare_test_document(DiffSyntaxLanguage::TypeScript, text);
+        let tokens = syntax_tokens_for_prepared_document_line(document, 0)
+            .expect("TypeScript document should have prepared tokens");
+        assert!(
+            has_token_kind_and_text(text, &tokens, SyntaxTokenKind::Property, "color"),
+            "comment-prefixed CSS strings should inject CSS properties in TypeScript: {tokens:?}"
+        );
+    }
+
+    #[cfg(any(test, feature = "syntax-web"))]
+    #[test]
+    fn typescript_component_styles_array_template_injects_css() {
+        let text = "Component({ styles: [`div { color: red; }`] });";
+        let document = prepare_test_document(DiffSyntaxLanguage::TypeScript, text);
+        let tokens = syntax_tokens_for_prepared_document_line(document, 0)
+            .expect("TypeScript document should have prepared tokens");
+        assert!(
+            has_token_kind_and_text(text, &tokens, SyntaxTokenKind::Property, "color"),
+            "TypeScript Component styles templates should inject CSS properties: {tokens:?}"
+        );
+    }
+
+    #[cfg(any(test, feature = "syntax-web"))]
+    #[test]
+    fn tsx_tagged_template_injects_html() {
+        let text = "const markup = html`<div class=\"note\">ok</div>`;";
+        let document = prepare_test_document(DiffSyntaxLanguage::Tsx, text);
+        let tokens = syntax_tokens_for_prepared_document_line(document, 0)
+            .expect("TSX document should have prepared tokens");
+        assert!(
+            has_token_kind_and_text(text, &tokens, SyntaxTokenKind::Tag, "div"),
+            "tagged HTML template should inject HTML tags in TSX: {tokens:?}"
+        );
+        assert!(
+            has_token_kind_and_text(text, &tokens, SyntaxTokenKind::Attribute, "class"),
+            "tagged HTML template should inject HTML attributes in TSX: {tokens:?}"
+        );
+    }
+
+    #[cfg(any(test, feature = "syntax-go"))]
+    #[test]
+    fn go_treesitter_captures_function_method_property_and_number() {
+        let declaration = "func Hello(a B) C { return C{} }";
+        let declaration_tokens =
+            syntax_tokens_for_line(declaration, DiffSyntaxLanguage::Go, DiffSyntaxMode::Auto);
+        assert!(
+            has_token_kind_and_text(
+                declaration,
+                &declaration_tokens,
+                SyntaxTokenKind::Function,
+                "Hello",
+            ),
+            "Go should capture function declarations: {declaration_tokens:?}"
+        );
+        assert!(
+            has_token_kind_and_text(declaration, &declaration_tokens, SyntaxTokenKind::Type, "B"),
+            "Go should capture parameter types: {declaration_tokens:?}"
+        );
+        assert!(
+            has_token_kind_and_text(declaration, &declaration_tokens, SyntaxTokenKind::Type, "C"),
+            "Go should capture return or composite literal types: {declaration_tokens:?}"
+        );
+        assert!(
+            has_token_kind_and_text(
+                declaration,
+                &declaration_tokens,
+                SyntaxTokenKind::Keyword,
+                "return",
+            ),
+            "Go should capture keywords: {declaration_tokens:?}"
+        );
+
+        let method_call = "value.Do(42)";
+        let method_call_tokens =
+            syntax_tokens_for_line(method_call, DiffSyntaxLanguage::Go, DiffSyntaxMode::Auto);
+        assert!(
+            has_token_kind_and_text(
+                method_call,
+                &method_call_tokens,
+                SyntaxTokenKind::FunctionMethod,
+                "Do",
+            ),
+            "Go should capture method calls: {method_call_tokens:?}"
+        );
+        assert!(
+            has_token_kind_and_text(
+                method_call,
+                &method_call_tokens,
+                SyntaxTokenKind::Number,
+                "42",
+            ),
+            "Go should capture numeric literals: {method_call_tokens:?}"
+        );
+
+        let field_access = "value.Field";
+        let field_access_tokens =
+            syntax_tokens_for_line(field_access, DiffSyntaxLanguage::Go, DiffSyntaxMode::Auto);
+        assert!(
+            has_token_kind_and_text(
+                field_access,
+                &field_access_tokens,
+                SyntaxTokenKind::Property,
+                "Field",
+            ),
+            "Go should capture field accesses: {field_access_tokens:?}"
+        );
+    }
+
+    #[cfg(any(test, feature = "syntax-go"))]
+    #[test]
+    fn go_comment_prefixed_strings_inject_supported_languages() {
+        let cases = [
+            (
+                r#"var payload = /* json */ `{"count": 42}`;"#,
+                SyntaxTokenKind::Number,
+                "42",
+            ),
+            (
+                r#"var config = /* yaml */ `enabled: true`;"#,
+                SyntaxTokenKind::Boolean,
+                "true",
+            ),
+            (
+                r#"var markup = /* html */ `<div class="note">ok</div>`;"#,
+                SyntaxTokenKind::Tag,
+                "div",
+            ),
+            (
+                r#"var markup = /* xml */ `<root attr="value"/>`;"#,
+                SyntaxTokenKind::Tag,
+                "root",
+            ),
+            (
+                r#"var script = /* js */ `const value = 42;`;"#,
+                SyntaxTokenKind::Number,
+                "42",
+            ),
+            (
+                r#"var query = /* sql */ `select name from users`;"#,
+                SyntaxTokenKind::Keyword,
+                "select",
+            ),
+        ];
+
+        for (text, expected_kind, expected_text) in cases {
+            let document = prepare_test_document(DiffSyntaxLanguage::Go, text);
+            let tokens = syntax_tokens_for_prepared_document_line(document, 0)
+                .expect("Go document should have prepared tokens");
+            assert!(
+                has_token_kind_and_text(text, &tokens, expected_kind, expected_text),
+                "Go comment-prefixed injection should produce {expected_kind:?} token {expected_text:?}: {tokens:?}"
+            );
+        }
+    }
+
     #[cfg(any(test, feature = "syntax-data"))]
     #[test]
     fn yaml_github_actions_script_injects_javascript() {
@@ -3790,6 +4280,35 @@ mod tests {
         assert!(
             tokens.iter().any(|t| t.kind == SyntaxTokenKind::Number),
             "github-script YAML block should inject JavaScript numbers: {tokens:?}"
+        );
+    }
+
+    #[cfg(any(test, feature = "syntax-data"))]
+    #[test]
+    fn yaml_github_actions_inline_script_injects_javascript() {
+        let text = [
+            "jobs:",
+            "  test:",
+            "    steps:",
+            "      - uses: actions/github-script@v7",
+            "        with:",
+            "          script: const value = 42",
+        ]
+        .join("\n");
+        let inline_line = text.lines().nth(5).unwrap_or_default();
+        let document = prepare_test_document(DiffSyntaxLanguage::Yaml, &text);
+        let tokens = syntax_tokens_for_prepared_document_line(document, 5)
+            .expect("YAML github-script inline line should have prepared tokens");
+        assert!(
+            has_token_kind_and_text(inline_line, &tokens, SyntaxTokenKind::Keyword, "const")
+                || tokens
+                    .iter()
+                    .any(|t| t.kind == SyntaxTokenKind::KeywordControl),
+            "github-script YAML inline scalars should inject JavaScript keywords: {tokens:?}"
+        );
+        assert!(
+            tokens.iter().any(|t| t.kind == SyntaxTokenKind::Number),
+            "github-script YAML inline scalars should inject JavaScript numbers: {tokens:?}"
         );
     }
 

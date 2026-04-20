@@ -12,6 +12,7 @@ workspace = true
 
 [features]
 benchmarks = []
+test-support = []
 
 [dependencies]
 gitcomet-core = { workspace = true }

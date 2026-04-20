@@ -23,7 +23,7 @@ env:
 jobs:
   fmt:
     name: Rustfmt
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 60
     steps:
     - uses: actions/checkout@v6
@@ -38,7 +38,7 @@ jobs:
 
   audit:
     name: Dependency audit (cargo-audit)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 60
     steps:
     - uses: actions/checkout@v6
@@ -58,7 +58,7 @@ jobs:
 
   clippy:
     name: Clippy
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 60
     steps:
     - uses: actions/checkout@v6
@@ -79,7 +79,7 @@ jobs:
 
   build:
     name: Build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 60
     steps:
     - uses: actions/checkout@v6
@@ -95,7 +95,7 @@ jobs:
   # Core merge algorithm correctness — Phase 1A/1B/1C portability tests
   merge-algorithm:
     name: Merge algorithm parity (t6403/t6427)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 60
     needs: build
     steps:
@@ -118,7 +118,7 @@ jobs:
   # Fixture harness and corpus — Phase 2/3A regression gates
   merge-regression:
     name: Merge regression suite (fixtures + corpus)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 60
     needs: build
     steps:
@@ -137,7 +137,7 @@ jobs:
   # E2E integration with git mergetool/difftool — Phase 4A/4B
   tool-integration:
     name: Git mergetool/difftool E2E parity
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 60
     needs: build
     steps:
@@ -160,7 +160,7 @@ jobs:
   # Backend integration — mergetool launcher, status, conflict checkout
   backend-integration:
     name: Git backend integration
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 60
     needs: build
     steps:

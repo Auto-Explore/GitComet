@@ -207,12 +207,8 @@ pub(in super::super) fn selectable_cached_diff_text(
                 window.focus(&this.diff_panel_focus_handle, cx);
                 if e.click_count >= 2 {
                     cx.stop_propagation();
-                    this.double_click_select_diff_text(visible_ix, region, double_click_kind);
-                    cx.notify();
-                    return;
                 }
-                this.begin_diff_text_selection(visible_ix, region, e.position);
-                this.begin_diff_text_scroll_tracking(e.position, cx);
+                this.handle_diff_text_mouse_down(visible_ix, region, e.position, e.click_count, cx);
                 cx.notify();
             }),
         )

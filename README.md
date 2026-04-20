@@ -20,20 +20,16 @@ Available for Linux, Windows, and macOS.
 
 Download the latest prebuilt binaries/installers from [GitHub Releases](https://github.com/Auto-Explore/GitComet/releases).
 
-#### Homebrew (macOs / Linux)
+#### Homebrew (macOS / Linux)
 
-install app from tap (recommended):
+App and `gitcomet` command from tap:
 
 ```bash
 brew tap auto-explore/gitcomet
 brew install --cask gitcomet
 ```
 
-optional CLI install:
-
-```bash
-brew install gitcomet-cli
-```
+On Linux, the cask installs the AppImage build. If your system cannot launch AppImages, use the APT repo, AUR package, release tarball, or `.deb` instead.
 
 #### AUR (Arch Linux)
 
@@ -77,20 +73,6 @@ GitComet requires a local Git installation of `2.50` or newer.
 
 GitComet started from frustration with existing tools on huge codebases like Chromium. We could not find a product that stays responsive and functional when browsing large repositories and file diffs.
 
-#### Chromium benchmark snapshot
-
-| Tool | Version | Time to open Chromium repo | Memory while opening |
-| --- | --- | ---: | ---: |
-| GitComet | v0.2.0 | 1s | 265MB |
-| GitFiend | v0.45.3 | 1s | 289MB |
-| SourceGit | v2026.6 | 3.5s | 301MB |
-| SmartGit | v25.1.110 | 18s | 4.8GB |
-| GitKraken | v11.10.0 | 25s | 2GB |
-| Megit | v0.10.0 | 29s | 14.4GB |
-| Gittyup | v2.0.0 | 43s | 2.5GB + 1.5GB indexer |
-
-Measured on Linux 6.19.6-zen (x64), Ryzen 5950x, 128GB DDR4. Detailed test steps will be published.
-
 ### Editions (planned)
 
 #### Open Source
@@ -113,7 +95,7 @@ Measured on Linux 6.19.6-zen (x64), Ryzen 5950x, 128GB DDR4. Detailed test steps
   - Code test coverage workflows
   - GitHub and Azure DevOps integrations
   - Priority improvements during early access
-- Join waitlist: [gitcomet.dev/#pricing](https://gitcomet.dev/#pricing)
+- Join waitlist: [gitcomet.dev/#editions](https://gitcomet.dev/#editions)
 
 ### Build from source
 

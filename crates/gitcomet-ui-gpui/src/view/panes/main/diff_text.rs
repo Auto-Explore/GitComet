@@ -139,6 +139,106 @@ impl MainPaneView {
         self.diff_text_pos_from_hitbox(visible_ix, region, position)
     }
 
+    #[cfg(test)]
+    pub(in crate::view) fn diff_text_offset_for_position_for_tests(
+        &self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+        position: Point<Pixels>,
+    ) -> Option<usize> {
+        self.diff_text_pos_from_hitbox(visible_ix, region, position)
+            .map(|pos| pos.offset)
+    }
+
+    fn set_diff_text_selection(
+        &mut self,
+        anchor: DiffTextPos,
+        head: DiffTextPos,
+        suppress_clicks: usize,
+    ) {
+        self.diff_text_selecting = false;
+        self.diff_text_anchor = Some(anchor);
+        self.diff_text_head = Some(head);
+        self.diff_selection_anchor = None;
+        self.diff_selection_range = None;
+        self.diff_suppress_clicks_remaining = suppress_clicks.min(u8::MAX as usize) as u8;
+    }
+
+    fn select_diff_text_token_at_mouse(
+        &mut self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+        position: Point<Pixels>,
+    ) {
+        let Some(pos) = self.diff_text_pos_from_hitbox(visible_ix, region, position) else {
+            return;
+        };
+        let text = self.diff_text_line_for_region(pos.visible_ix, pos.region);
+        let range = crate::text_selection::token_range_for_offset(text.as_ref(), pos.offset);
+        let anchor = DiffTextPos {
+            visible_ix: pos.visible_ix,
+            region: pos.region,
+            offset: range.start,
+        };
+        let head = DiffTextPos {
+            visible_ix: pos.visible_ix,
+            region: pos.region,
+            offset: range.end,
+        };
+        self.set_diff_text_selection(anchor, head, 1);
+    }
+
+    fn select_diff_text_line_at_mouse(
+        &mut self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+        position: Point<Pixels>,
+    ) {
+        let Some(pos) = self.diff_text_pos_from_hitbox(visible_ix, region, position) else {
+            return;
+        };
+        let line_len = self.diff_text_line_len_for_region(pos.visible_ix, pos.region);
+        let anchor = DiffTextPos {
+            visible_ix: pos.visible_ix,
+            region: pos.region,
+            offset: 0,
+        };
+        let head = DiffTextPos {
+            visible_ix: pos.visible_ix,
+            region: pos.region,
+            offset: line_len,
+        };
+        self.set_diff_text_selection(anchor, head, 1);
+    }
+
+    pub(in super::super::super) fn handle_diff_text_mouse_down(
+        &mut self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+        position: Point<Pixels>,
+        click_count: usize,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        match click_count {
+            3.. => {
+                self.select_diff_text_line_at_mouse(visible_ix, region, position);
+            }
+            2 => {
+                self.select_diff_text_token_at_mouse(visible_ix, region, position);
+            }
+            _ if self.diff_text_has_selection() => {
+                self.begin_diff_text_selection(visible_ix, region, position);
+                if self.diff_text_selecting {
+                    self.diff_suppress_clicks_remaining = 1;
+                }
+            }
+            _ => {
+                self.begin_diff_text_selection(visible_ix, region, position);
+                self.begin_diff_text_scroll_tracking(position, cx);
+            }
+        }
+    }
+
     pub(in super::super::super) fn begin_diff_text_selection(
         &mut self,
         visible_ix: usize,
@@ -151,6 +251,8 @@ impl MainPaneView {
         self.diff_text_selecting = true;
         self.diff_text_anchor = Some(pos);
         self.diff_text_head = Some(pos);
+        self.diff_selection_anchor = None;
+        self.diff_selection_range = None;
         self.diff_text_last_mouse_pos = position;
         self.diff_suppress_clicks_remaining = 0;
     }

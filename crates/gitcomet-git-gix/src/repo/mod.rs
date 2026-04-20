@@ -2,9 +2,9 @@ use crate::util::git_workdir_cmd_for as util_git_workdir_cmd_for;
 use gitcomet_core::conflict_session::ConflictSession;
 use gitcomet_core::domain::{
     Branch, CommitDetails, CommitId, Diff, DiffPreviewTextSide, DiffTarget, FileDiffImage,
-    FileDiffText, LogCursor, LogPage, ReflogEntry, Remote, RemoteBranch, RemoteTag, RepoSpec,
-    RepoStatus, StashEntry, Submodule, Subtree, SubtreeMergeOptions, SubtreeSourceConfig,
-    SubtreeSplitOptions, Tag, UpstreamDivergence, Worktree,
+    FileDiffText, HistoryMode, LogCursor, LogPage, ReflogEntry, Remote, RemoteBranch, RemoteTag,
+    RepoSpec, RepoStatus, StashEntry, Submodule, Subtree, SubtreeMergeOptions,
+    SubtreeSourceConfig, SubtreeSplitOptions, Tag, UpstreamDivergence, Worktree,
 };
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::git_ops_trace::{self, GitOpTraceKind};
@@ -85,6 +85,7 @@ struct TreeIndexCacheEntry {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct LogHeadPageCacheKey {
+    mode: HistoryMode,
     head_oid: Option<gix::ObjectId>,
     limit: usize,
     last_seen: Option<CommitId>,
@@ -110,7 +111,28 @@ struct SubtreeListCacheEntry {
     subtrees: Vec<Subtree>,
 }
 
+type LogPagedWalk = gix::traverse::commit::Simple<gix::OdbHandleArc, fn(&gix::oid) -> bool>;
+
+struct LogPagedWalkState {
+    pending: Option<gix::traverse::commit::Info>,
+    walk: LogPagedWalk,
+}
+
+struct LogPagedWalkCacheEntry {
+    token: Arc<str>,
+    mode: HistoryMode,
+    head_oid: gix::ObjectId,
+    state: LogPagedWalkState,
+}
+
+#[derive(Default)]
+struct LogPagedWalkCache {
+    next_id: u64,
+    entries: Vec<LogPagedWalkCacheEntry>,
+}
+
 const LOG_HEAD_PAGE_CACHE_LIMIT: usize = 32;
+const LOG_PAGED_WALK_CACHE_LIMIT: usize = 32;
 
 pub(crate) struct GixRepo {
     spec: RepoSpec,
@@ -119,6 +141,7 @@ pub(crate) struct GixRepo {
     branch_tracking_config: std::sync::Mutex<Option<BranchTrackingConfigCacheEntry>>,
     tree_index_cache: std::sync::Mutex<Option<TreeIndexCacheEntry>>,
     log_head_page_cache: std::sync::Mutex<Vec<LogHeadPageCacheEntry>>,
+    log_paged_walk_cache: std::sync::Mutex<LogPagedWalkCache>,
     subtree_list_cache: std::sync::Mutex<Option<SubtreeListCacheEntry>>,
 }
 
@@ -131,6 +154,7 @@ impl GixRepo {
             branch_tracking_config: std::sync::Mutex::new(None),
             tree_index_cache: std::sync::Mutex::new(None),
             log_head_page_cache: std::sync::Mutex::new(Vec::new()),
+            log_paged_walk_cache: std::sync::Mutex::new(LogPagedWalkCache::default()),
             subtree_list_cache: std::sync::Mutex::new(None),
         }
     }
@@ -156,6 +180,16 @@ pub(crate) fn allow_test_repo_local_mergetool_command(workdir: &Path, tool_name:
 impl GitRepository for GixRepo {
     fn spec(&self) -> &RepoSpec {
         &self.spec
+    }
+
+    fn log_history_mode_page(
+        &self,
+        mode: HistoryMode,
+        limit: usize,
+        cursor: Option<&LogCursor>,
+    ) -> Result<LogPage> {
+        let _scope = git_ops_trace::scope(GitOpTraceKind::LogWalk);
+        self.log_history_mode_page_impl(mode, limit, cursor)
     }
 
     fn log_head_page(&self, limit: usize, cursor: Option<&LogCursor>) -> Result<LogPage> {

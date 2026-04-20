@@ -64,12 +64,11 @@ env:
   WIXTOOLSET_VERSION: 3.14.1.20250415
   CARGO_WIX_VERSION: 0.3.9
   APPIMAGETOOL_VERSION: 1.9.1
-  APPIMAGETOOL_X86_64_SHA256: ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
 
 jobs:
   prepare:
     name: Normalize release metadata
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 10
     outputs:
       tag: ${{ steps.norm.outputs.tag }}
@@ -349,22 +348,33 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Build Linux release artifacts on Ubuntu 22.04 so the linked
+          # system libraries stay compatible with Ubuntu 22.04+.
           - target_platform: x86_64-linux
             artifact_arch: x86_64
             deb_arch: amd64
-            runs_on: ubuntu-24.04
+            runs_on: ubuntu-22.04
             build_appimage: true
+            appimagetool_asset: appimagetool-x86_64.AppImage
+            appimagetool_sha256: ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
+            appimage_arch: x86_64
           - target_platform: aarch64-linux
             artifact_arch: arm64
             deb_arch: arm64
-            runs_on: ubuntu-24.04-arm
-            build_appimage: false
+            runs_on: ubuntu-22.04-arm
+            build_appimage: true
+            appimagetool_asset: appimagetool-aarch64.AppImage
+            appimagetool_sha256: f0837e7448a0c1e4e650a93bb3e85802546e60654ef287576f46c71c126a9158
+            appimage_arch: aarch64
     env:
       TAG: ${{ needs.prepare.outputs.tag }}
       VERSION: ${{ needs.prepare.outputs.version }}
       DEB_REVISION: ${{ needs.prepare.outputs.deb_revision }}
       ARTIFACT_ARCH: ${{ matrix.artifact_arch }}
       DEB_ARCH: ${{ matrix.deb_arch }}
+      APPIMAGETOOL_ASSET: ${{ matrix.appimagetool_asset }}
+      APPIMAGETOOL_SHA256: ${{ matrix.appimagetool_sha256 }}
+      APPIMAGE_ARCH: ${{ matrix.appimage_arch }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -506,11 +516,11 @@ jobs:
           chmod +x "${appdir}/AppRun"
 
           curl -fsSL \
-            "https://github.com/AppImage/appimagetool/releases/download/${APPIMAGETOOL_VERSION}/appimagetool-x86_64.AppImage" \
+            "https://github.com/AppImage/appimagetool/releases/download/${APPIMAGETOOL_VERSION}/${APPIMAGETOOL_ASSET}" \
             -o /tmp/appimagetool.AppImage
-          echo "${APPIMAGETOOL_X86_64_SHA256}  /tmp/appimagetool.AppImage" | sha256sum -c -
+          echo "${APPIMAGETOOL_SHA256}  /tmp/appimagetool.AppImage" | sha256sum -c -
           chmod +x /tmp/appimagetool.AppImage
-          ARCH=x86_64 /tmp/appimagetool.AppImage --appimage-extract-and-run \
+          ARCH="${APPIMAGE_ARCH}" /tmp/appimagetool.AppImage --appimage-extract-and-run \
             "${appdir}" "dist/gitcomet-v${VERSION}-linux-${ARTIFACT_ARCH}.AppImage"
 
       - name: Upload Linux artifacts
@@ -700,7 +710,7 @@ jobs:
 
   publish_release_assets:
     name: Attach assets and checksums to GitHub release
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 30
     needs: [prepare, build_windows, build_linux, build_macos]
     env:
@@ -746,41 +756,30 @@ jobs:
           fi
           ls -lah dist/release
 
-      - name: Generate Homebrew cask and formula
+      - name: Generate Homebrew cask
         run: |
           set -euo pipefail
-          arm_tar="gitcomet-v${VERSION}-macos-arm64.tar.gz"
-          intel_tar="gitcomet-v${VERSION}-macos-x86_64.tar.gz"
-          linux_arm_tar="gitcomet-v${VERSION}-linux-arm64.tar.gz"
-          linux_intel_tar="gitcomet-v${VERSION}-linux-x86_64.tar.gz"
+          linux_arm_appimage="gitcomet-v${VERSION}-linux-arm64.AppImage"
+          linux_intel_appimage="gitcomet-v${VERSION}-linux-x86_64.AppImage"
           arm_dmg="gitcomet-v${VERSION}-macos-arm64.dmg"
           intel_dmg="gitcomet-v${VERSION}-macos-x86_64.dmg"
-          arm_path="dist/release/${arm_tar}"
-          intel_path="dist/release/${intel_tar}"
-          linux_arm_path="dist/release/${linux_arm_tar}"
-          linux_intel_path="dist/release/${linux_intel_tar}"
+          linux_arm_appimage_path="dist/release/${linux_arm_appimage}"
+          linux_intel_appimage_path="dist/release/${linux_intel_appimage}"
           arm_dmg_path="dist/release/${arm_dmg}"
           intel_dmg_path="dist/release/${intel_dmg}"
 
-          if [ ! -f "${arm_path}" ] || [ ! -f "${intel_path}" ] || [ ! -f "${linux_arm_path}" ] || [ ! -f "${linux_intel_path}" ] || [ ! -f "${arm_dmg_path}" ] || [ ! -f "${intel_dmg_path}" ]; then
-            echo "::error title=Missing release assets::Expected ${arm_tar}, ${intel_tar}, ${linux_arm_tar}, ${linux_intel_tar}, ${arm_dmg}, and ${intel_dmg} in dist/release."
+          if [ ! -f "${linux_arm_appimage_path}" ] || [ ! -f "${linux_intel_appimage_path}" ] || [ ! -f "${arm_dmg_path}" ] || [ ! -f "${intel_dmg_path}" ]; then
+            echo "::error title=Missing release assets::Expected ${linux_arm_appimage}, ${linux_intel_appimage}, ${arm_dmg}, and ${intel_dmg} in dist/release."
             exit 1
           fi
-
-          scripts/generate-homebrew-formula.sh \
-            --version "${VERSION}" \
-            --github-repo "${GITHUB_REPOSITORY}" \
-            --arm-tar "${arm_path}" \
-            --intel-tar "${intel_path}" \
-            --linux-arm-tar "${linux_arm_path}" \
-            --linux-intel-tar "${linux_intel_path}" \
-            --output "dist/release/gitcomet-cli.rb"
 
           scripts/generate-homebrew-cask.sh \
             --version "${VERSION}" \
             --github-repo "${GITHUB_REPOSITORY}" \
             --arm-dmg "${arm_dmg_path}" \
             --intel-dmg "${intel_dmg_path}" \
+            --linux-arm-appimage "${linux_arm_appimage_path}" \
+            --linux-intel-appimage "${linux_intel_appimage_path}" \
             --output "dist/release/gitcomet.rb"
 
       - name: Generate checksums

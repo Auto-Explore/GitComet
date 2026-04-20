@@ -26,8 +26,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: linux / ubuntu-latest
-            runs_on: ubuntu-latest
+          - name: linux / ubuntu-22.04
+            runs_on: ubuntu-22.04
           - name: macos / apple-silicon
             runs_on: macos-latest
           - name: windows / x86_64

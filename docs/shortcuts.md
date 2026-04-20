@@ -72,6 +72,7 @@ These shortcuts apply when a GitComet text input has focus.
 
 Compatibility note:
 - GitComet also keeps the opposite modifier family wired in text inputs where practical, so `Alt`-based word movement and `Ctrl`-based editing aliases remain available as portability fallbacks.
+- Diff-navigation fallbacks stay active from focused GitComet text inputs for `F1`, `F4`, `F2`, `F3`, `F7`, `Shift-F7`, `Alt-Up`, and `Alt-Down` when the input does not handle those keys itself.
 
 ## Diff view shortcuts
 
@@ -98,6 +99,7 @@ These shortcuts apply in the main diff panel, including conflict resolution view
 
 Preview-mode note:
 - Rendered markdown preview hides the raw diff navigation controls and ignores the raw-diff-only view toggles, hunk picker, whitespace toggle, and conflict navigation hotkeys until you return to source mode.
+- The diff navigation keys above still work while a GitComet text input has focus, but search activation, `Escape`, view toggles, hunk picker, and staging `Space` remain tied to the active diff surface rather than text inputs.
 
 ## Context menu shortcuts
 

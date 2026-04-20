@@ -61,11 +61,13 @@ pub(super) fn panel(
             }
         }
     };
+    let ui_scale_percent = super::popover_ui_scale_percent(cx);
+    let scaled_px = |value: f32| super::popover_scaled_px_from_percent(value, ui_scale_percent);
 
     div()
         .flex()
         .flex_col()
-        .min_w(px(420.0))
+        .min_w(scaled_px(420.0))
         .child(
             div()
                 .px_2()

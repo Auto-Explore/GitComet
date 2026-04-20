@@ -122,6 +122,142 @@ fn patch_view_applies_syntax_highlighting_to_context_lines(cx: &mut gpui::TestAp
 }
 
 #[gpui::test]
+fn patch_diff_text_multi_clicks_match_editor_selection_behavior(cx: &mut gpui::TestAppContext) {
+    let _clipboard_guard = lock_clipboard_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(901);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_patch_diff_text_multi_clicks",
+        std::process::id()
+    ));
+    let path = std::path::PathBuf::from("src/multi_click.rs");
+    let old_text = "alpha_beta = delta;\n";
+    let new_text = "alpha_beta = gamma;\n";
+
+    seed_file_diff_state(cx, &view, repo_id, &workdir, &path, old_text, new_text);
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, cx| {
+            pane.diff_view = DiffViewMode::Inline;
+            cx.notify();
+        });
+    });
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "file diff multi-click fixture activation",
+        |pane| {
+            pane.file_diff_cache_inflight.is_none()
+                && pane.file_diff_cache_path == Some(workdir.join(&path))
+                && pane.diff_visible_len() >= 1
+                && pane
+                    .file_diff_inline_cache
+                    .iter()
+                    .any(|line| line.text.as_ref().contains("gamma"))
+        },
+        |pane| {
+            format!(
+                "cache_inflight={:?} cache_path={:?} diff_view={:?} visible_len={} inline_rows={:?}",
+                pane.file_diff_cache_inflight,
+                pane.file_diff_cache_path.clone(),
+                pane.diff_view,
+                pane.diff_visible_len(),
+                pane.file_diff_inline_cache
+                    .iter()
+                    .map(|line| format!("{:?}:{}", line.kind, line.text.as_ref()))
+                    .collect::<Vec<_>>(),
+            )
+        },
+    );
+
+    let (visible_ix, expected_line) = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let visible_ix = (0..pane.diff_visible_len())
+            .find(|&visible_ix| {
+                let Some(inline_ix) = pane.diff_mapped_ix_for_visible_ix(visible_ix) else {
+                    return false;
+                };
+                pane.file_diff_inline_row(inline_ix)
+                    .is_some_and(|line| line.text.as_ref().contains("gamma"))
+            })
+            .expect("expected visible file-diff row for changed line");
+        let expected_line = pane
+            .diff_text_line_for_region(visible_ix, DiffTextRegion::Inline)
+            .to_string();
+        (visible_ix, expected_line)
+    });
+    let click = wait_for_diff_text_click_position_for_offset_range(
+        cx,
+        &view,
+        visible_ix,
+        DiffTextRegion::Inline,
+        2..6,
+        "file diff multi-click target row hitbox",
+    );
+    let expected_word = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let offset = pane
+            .diff_text_offset_for_position_for_tests(visible_ix, DiffTextRegion::Inline, click)
+            .expect("expected diff text offset for click");
+        let word_range = crate::text_selection::token_range_for_offset(&expected_line, offset);
+        expected_line[word_range].to_string()
+    });
+
+    simulate_counted_click(cx, click, 2);
+
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, cx| {
+            pane.copy_selected_diff_text_to_clipboard(cx)
+        });
+    });
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|item| item.text()),
+        Some(expected_word.clone())
+    );
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(
+            pane.diff_selection_range, None,
+            "double click on diff text should not also select the row"
+        );
+    });
+
+    simulate_counted_click(cx, click, 3);
+
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, cx| {
+            pane.copy_selected_diff_text_to_clipboard(cx)
+        });
+    });
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|item| item.text()),
+        Some(expected_line)
+    );
+
+    simulate_counted_click(cx, click, 1);
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert!(
+            !pane.diff_text_has_selection(),
+            "single click should clear the text selection"
+        );
+        assert_eq!(
+            pane.diff_selection_range, None,
+            "single click used to clear text selection should not trigger row selection"
+        );
+    });
+}
+
+#[gpui::test]
 fn yaml_commit_file_diff_keeps_consistent_highlighting_for_added_paths_and_keys(
     cx: &mut gpui::TestAppContext,
 ) {

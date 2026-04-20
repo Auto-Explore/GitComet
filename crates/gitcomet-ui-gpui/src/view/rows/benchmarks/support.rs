@@ -278,6 +278,7 @@ pub(crate) fn build_repo_switch_repo_state(
         next_cursor: commits.get(200).map(|commit| LogCursor {
             last_seen: commit.id.clone(),
             resume_from: None,
+            resume_token: None,
         }),
     });
     repo.history_state.log = Loadable::Ready(Arc::clone(&log_page));

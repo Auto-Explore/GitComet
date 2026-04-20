@@ -1718,9 +1718,16 @@ fn full_chrome_layout_only_caches_always_mounted_subviews() {
         "expected repo tabs bar to stay behind the stable cache boundary"
     );
     assert!(
-        normalized
-            .contains("stable_cached_fixed_height_view(self.action_bar.clone(),ACTION_BAR_HEIGHT"),
+        normalized.contains(
+            "stable_cached_fixed_height_view(self.action_bar.clone(),action_bar_height(cx)"
+        ),
         "expected action bar to stay behind the stable cache boundary"
+    );
+    assert!(
+        normalized.contains(
+            "stable_cached_fixed_height_view(self.bottom_status_bar.clone(),components::Tab::container_height("
+        ),
+        "expected bottom status bar to stay behind the stable cache boundary"
     );
     assert!(
         normalized
