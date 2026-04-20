@@ -1,6 +1,6 @@
 use crate::test_support::{lock_clipboard_test, lock_visual_test};
 use crate::view::components;
-use crate::{theme::AppTheme, view};
+use crate::{theme::AppTheme, ui_scale, view};
 use gitcomet_core::domain::*;
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{GitBackend, GitRepository, PullMode, Result};
@@ -29,6 +29,23 @@ fn abs_scroll_y(raw: Pixels) -> Pixels {
     if raw < px(0.0) { -raw } else { raw }
 }
 
+fn open_text_input_context_menu(cx: &mut gpui::VisualTestContext, position: gpui::Point<Pixels>) {
+    cx.simulate_mouse_move(position, None, Modifiers::default());
+    cx.simulate_event(MouseDownEvent {
+        position,
+        modifiers: Modifiers::default(),
+        button: MouseButton::Right,
+        click_count: 1,
+        first_mouse: false,
+    });
+    cx.simulate_event(MouseUpEvent {
+        position,
+        modifiers: Modifiers::default(),
+        button: MouseButton::Right,
+        click_count: 1,
+    });
+}
+
 #[test]
 fn builds_pure_components_without_panics() {
     for theme in [AppTheme::gitcomet_dark(), AppTheme::gitcomet_light()] {
@@ -55,52 +72,60 @@ fn builds_pure_components_without_panics() {
         assert_no_panic("components::Button render variants", || {
             let _ = components::Button::new("z1", "Filled")
                 .style(components::ButtonStyle::Filled)
-                .render(theme);
+                .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT);
             let _ = components::Button::new("z2", "Outlined")
                 .style(components::ButtonStyle::Outlined)
-                .render(theme);
+                .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT);
             let _ = components::Button::new("z3", "Subtle")
                 .style(components::ButtonStyle::Subtle)
-                .render(theme);
+                .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT);
             let _ = components::Button::new("z4", "Disabled")
                 .style(components::ButtonStyle::Outlined)
                 .disabled(true)
-                .render(theme);
+                .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT);
             let _ = components::Button::new("z5", "Create")
                 .style(components::ButtonStyle::Filled)
                 .separated_end_slot(div().text_xs().child("Enter"))
-                .render(theme);
+                .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT);
         });
 
         assert_no_panic("components::SplitButton", || {
             let left = components::Button::new("s1", "Left")
                 .style(components::ButtonStyle::Outlined)
-                .render(theme);
+                .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT);
             let right = components::Button::new("s2", "Right")
                 .style(components::ButtonStyle::Outlined)
-                .render(theme);
+                .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT);
             let _ = components::SplitButton::new(left, right)
                 .style(components::SplitButtonStyle::Outlined)
-                .render(theme);
+                .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT);
         });
 
         assert_no_panic("components::Tab + TabBar", || {
             let tab = components::Tab::new(("t", 1u64))
                 .selected(true)
                 .child(div().child("Repo"))
-                .render(theme);
-            let _ = components::TabBar::new("tb").tab(tab).render(theme);
+                .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT);
+            let _ = components::TabBar::new("tb")
+                .tab(tab)
+                .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT);
         });
 
         assert_no_panic("view::window_frame", || {
             let content = div().child("content").into_any_element();
-            let _ = view::window_frame(theme, Decorations::Server, content);
+            let _ = view::window_frame(
+                theme,
+                Decorations::Server,
+                content,
+                ui_scale::DEFAULT_UI_SCALE_PERCENT,
+            );
             let _ = view::window_frame(
                 theme,
                 Decorations::Client {
                     tiling: Tiling::default(),
                 },
                 div().child("content").into_any_element(),
+                ui_scale::DEFAULT_UI_SCALE_PERCENT,
             );
         });
 
@@ -154,15 +179,15 @@ impl gpui::Render for SmokeView {
                 components::Tab::new(("t", 0u64))
                     .selected(true)
                     .child(div().child("One"))
-                    .render(theme),
+                    .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT),
             )
             .tab(
                 components::Tab::new(("t", 1u64))
                     .selected(false)
                     .child(div().child("Two"))
-                    .render(theme),
+                    .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT),
             )
-            .render(theme);
+            .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT);
 
         let content = div()
             .flex()
@@ -188,17 +213,22 @@ impl gpui::Render for SmokeView {
                     .child(
                         components::Button::new("b1", "Primary")
                             .style(components::ButtonStyle::Filled)
-                            .render(theme),
+                            .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT),
                     )
                     .child(
                         components::Button::new("b2", "Secondary")
                             .style(components::ButtonStyle::Outlined)
-                            .render(theme),
+                            .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT),
                     ),
             ))
             .into_any_element();
 
-        view::window_frame(theme, window.window_decorations(), content)
+        view::window_frame(
+            theme,
+            window.window_decorations(),
+            content,
+            ui_scale::DEFAULT_UI_SCALE_PERCENT,
+        )
     }
 }
 
@@ -270,7 +300,12 @@ impl gpui::Render for TextInputCursorScrollView {
             )
             .into_any_element();
 
-        view::window_frame(theme, window.window_decorations(), content)
+        view::window_frame(
+            theme,
+            window.window_decorations(),
+            content,
+            ui_scale::DEFAULT_UI_SCALE_PERCENT,
+        )
     }
 }
 
@@ -315,7 +350,12 @@ impl gpui::Render for TextInputHostView {
             )
             .into_any_element();
 
-        view::window_frame(self.theme, window.window_decorations(), content)
+        view::window_frame(
+            self.theme,
+            window.window_decorations(),
+            content,
+            ui_scale::DEFAULT_UI_SCALE_PERCENT,
+        )
     }
 }
 
@@ -802,6 +842,58 @@ fn text_input_context_menu_does_not_resize_input_container(cx: &mut gpui::TestAp
         f32::from(before.size.height),
         f32::from(after.size.width),
         f32::from(after.size.height)
+    );
+}
+
+#[gpui::test]
+fn text_input_context_menu_grows_wider_with_ui_zoom(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = cx.add_window_view(SmokeView::new);
+
+    cx.update(|window, app| {
+        let focus = view.update(app, |this, cx| this.input.read(cx).focus_handle());
+        window.focus(&focus, app);
+
+        view.update(app, |this, cx| {
+            this.input
+                .update(cx, |input, cx| input.set_text("hello world", cx));
+        });
+
+        let _ = window.draw(app);
+    });
+
+    let bounds = cx
+        .debug_bounds("smoke_input")
+        .expect("expected smoke input bounds");
+    let click = bounds.center();
+
+    open_text_input_context_menu(cx, click);
+
+    let default_row_width: f32 = cx
+        .debug_bounds("text_input_context_select_all")
+        .expect("expected text-input context menu row before zooming")
+        .size
+        .width
+        .into();
+
+    cx.update(|window, app| {
+        view.update(app, |_this, cx| {
+            crate::ui_scale::set_current(cx, 200);
+        });
+        crate::ui_scale::apply_to_window(window, 200);
+        let _ = window.draw(app);
+    });
+    cx.run_until_parked();
+
+    let zoomed_row_width: f32 = cx
+        .debug_bounds("text_input_context_select_all")
+        .expect("expected text-input context menu row after zooming")
+        .size
+        .width
+        .into();
+
+    assert!(
+        zoomed_row_width > default_row_width * 1.6,
+        "expected the text-input context menu to grow substantially with zoom (default={default_row_width}, zoomed={zoomed_row_width})"
     );
 }
 
@@ -2073,7 +2165,12 @@ impl gpui::Render for PickerPromptScrollbarTestView {
                 components::PickerPrompt::new(self.input.clone(), self.scroll_handle.clone())
                     .items(items)
                     .max_height(px(120.0))
-                    .render(self.theme, cx, |_this, _ix, _event, _window, _cx| {}),
+                    .render(
+                        self.theme,
+                        ui_scale::DEFAULT_UI_SCALE_PERCENT,
+                        cx,
+                        |_this, _ix, _event, _window, _cx| {},
+                    ),
             ),
         )
     }
@@ -2326,6 +2423,96 @@ fn titlebar_hamburger_opens_app_menu_but_brand_pill_does_not(cx: &mut gpui::Test
             "expected hamburger click to open the app menu"
         );
     });
+}
+
+#[gpui::test]
+fn titlebar_free_badge_opens_editions_page_and_updates_tooltip_on_hover(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitCometView::new(store, events, None, window, cx)
+    });
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    let badge_bounds = cx
+        .debug_bounds("titlebar_free_badge")
+        .expect("expected titlebar free badge bounds");
+    let badge_center = badge_bounds.center();
+
+    cx.simulate_mouse_move(badge_center, None, Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|_window, app| {
+        assert_eq!(
+            crate::view::test_support::tooltip_text(view.read(app), app),
+            Some("See GitComet editions".into())
+        );
+    });
+
+    cx.simulate_mouse_down(badge_center, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(badge_center, MouseButton::Left, Modifiers::default());
+    cx.run_until_parked();
+
+    assert_eq!(cx.opened_url(), Some(crate::view::EDITIONS_URL.to_string()));
+    cx.update(|_window, app| {
+        assert!(
+            !crate::view::test_support::popover_is_open(view.read(app), app),
+            "expected titlebar free badge click to leave popovers closed"
+        );
+    });
+
+    cx.simulate_mouse_move(gpui::point(px(120.0), px(18.0)), None, Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|_window, app| {
+        assert_eq!(
+            crate::view::test_support::tooltip_text(view.read(app), app),
+            None
+        );
+    });
+}
+
+#[gpui::test]
+fn titlebar_free_badge_keeps_the_same_size_across_ui_zoom(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitCometView::new(store, events, None, window, cx)
+    });
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    let default_bounds = cx
+        .debug_bounds("titlebar_free_badge")
+        .expect("expected titlebar free badge bounds at the default zoom");
+    let default_width: f32 = default_bounds.size.width.into();
+    let default_height: f32 = default_bounds.size.height.into();
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.apply_ui_scale_percent(200, window, cx);
+        });
+        let _ = window.draw(app);
+    });
+    cx.run_until_parked();
+
+    let zoomed_bounds = cx
+        .debug_bounds("titlebar_free_badge")
+        .expect("expected titlebar free badge bounds after zooming");
+    let zoomed_width: f32 = zoomed_bounds.size.width.into();
+    let zoomed_height: f32 = zoomed_bounds.size.height.into();
+
+    assert!(
+        (zoomed_width - default_width).abs() <= 0.5,
+        "expected the FREE badge width to stay fixed across zoom (default={default_width}, zoomed={zoomed_width})"
+    );
+    assert!(
+        (zoomed_height - default_height).abs() <= 0.5,
+        "expected the FREE badge height to stay fixed across zoom (default={default_height}, zoomed={zoomed_height})"
+    );
 }
 
 #[gpui::test]

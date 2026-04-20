@@ -4,6 +4,7 @@ use gpui::{
     fill, point, px, size,
 };
 use rustc_hash::FxHasher;
+use smallvec::SmallVec;
 use std::cell::RefCell;
 
 const HISTORY_TAG_CHIP_HEIGHT_PX: f32 = 18.0;
@@ -22,6 +23,7 @@ fn shape_truncated_line_cached(
     base_style: &gpui::TextStyle,
     font_size: Pixels,
     text: &SharedString,
+    text_hash: u64,
     max_width: Pixels,
     color: gpui::Rgba,
     font_family: Option<&'static str>,
@@ -30,7 +32,7 @@ fn shape_truncated_line_cached(
 
     let key = {
         let mut hasher = FxHasher::default();
-        text.as_ref().hash(&mut hasher);
+        text_hash.hash(&mut hasher);
         max_width.hash(&mut hasher);
         font_size.hash(&mut hasher);
         base_style.font_weight.hash(&mut hasher);
@@ -136,10 +138,10 @@ fn layout_chip_bounds(
     chip_height: Pixels,
     gap: Pixels,
     chip_widths: &[Pixels],
-) -> Vec<Bounds<Pixels>> {
+) -> SmallVec<[Bounds<Pixels>; 4]> {
     let y = row_bounds.top() + (row_bounds.size.height - chip_height).max(px(0.0)) * 0.5;
     let mut x = branch_bounds.left();
-    let mut out = Vec::with_capacity(chip_widths.len());
+    let mut out = SmallVec::with_capacity(chip_widths.len());
     for w in chip_widths {
         let w = (*w).max(px(0.0));
         if x + w > branch_bounds.right() {
@@ -179,13 +181,13 @@ pub(super) fn history_commit_row_canvas(
     connect_from_top_col: Option<usize>,
     graph_rows: Arc<[history_graph::GraphRow]>,
     graph_row_ix: usize,
-    tag_names: Arc<[SharedString]>,
-    branches_text: SharedString,
+    tag_names: Arc<[HistoryTextVm]>,
+    branches_text: HistoryTextVm,
     branch_highlights: Arc<[(Range<usize>, gpui::HighlightStyle)]>,
-    author: SharedString,
-    summary: SharedString,
-    when: SharedString,
-    short_sha: SharedString,
+    author: HistoryTextVm,
+    summary: HistoryTextVm,
+    when: HistoryTextVm,
+    short_sha: HistoryTextVm,
 ) -> AnyElement {
     super::canvas::keyed_canvas(
         ("history_commit_row_canvas", row_id),
@@ -210,6 +212,8 @@ pub(super) fn history_commit_row_canvas(
             }
             window.set_cursor_style(CursorStyle::PointingHand, &hitbox);
 
+            let design_scale_factor = ui_scale::design_scale_factor_from_window(window);
+            let scaled_px = |value| px(value * design_scale_factor);
             let base_style = window.text_style();
             let sm_font = base_style.font_size.to_pixels(window.rem_size());
             let sm_line_height = base_style
@@ -223,7 +227,7 @@ pub(super) fn history_commit_row_canvas(
             let xxs_line_height = base_style
                 .line_height
                 .to_pixels(xxs_font.into(), window.rem_size());
-            let cell_pad_x = px(HISTORY_COL_HANDLE_PX / 2.0);
+            let cell_pad_x = scaled_px(HISTORY_COL_HANDLE_PX / 2.0);
 
             let center_y = |line_height: Pixels| {
                 let extra = (bounds.size.height - line_height).max(px(0.0));
@@ -309,9 +313,9 @@ pub(super) fn history_commit_row_canvas(
                 );
             }
 
-            let chip_height = px(HISTORY_TAG_CHIP_HEIGHT_PX);
-            let chip_pad_x = px(HISTORY_TAG_CHIP_PADDING_X_PX);
-            let chip_gap = px(HISTORY_TAG_CHIP_GAP_PX);
+            let chip_height = scaled_px(HISTORY_TAG_CHIP_HEIGHT_PX);
+            let chip_pad_x = scaled_px(HISTORY_TAG_CHIP_PADDING_X_PX);
+            let chip_gap = scaled_px(HISTORY_TAG_CHIP_GAP_PX);
 
             let branch_content_bounds = Bounds::new(
                 point(branch_bounds.left() + cell_pad_x, branch_bounds.top()),
@@ -321,7 +325,8 @@ pub(super) fn history_commit_row_canvas(
                 ),
             );
 
-            let mut tag_chip_bounds: Vec<Bounds<Pixels>> = Vec::with_capacity(tag_names.len());
+            let mut tag_chip_bounds: SmallVec<[Bounds<Pixels>; 4]> =
+                SmallVec::with_capacity(tag_names.len());
             if !tag_names.is_empty() || !branches_text.as_ref().trim().is_empty() {
                 window.with_content_mask(
                     Some(ContentMask {
@@ -329,9 +334,10 @@ pub(super) fn history_commit_row_canvas(
                     }),
                     |window| {
                         let mut x = branch_content_bounds.left();
-                        let mut chip_widths: Vec<Pixels> = Vec::with_capacity(tag_names.len());
-                        let mut chip_texts: Vec<gpui::ShapedLine> =
-                            Vec::with_capacity(tag_names.len());
+                        let mut chip_widths: SmallVec<[Pixels; 4]> =
+                            SmallVec::with_capacity(tag_names.len());
+                        let mut chip_texts: SmallVec<[gpui::ShapedLine; 4]> =
+                            SmallVec::with_capacity(tag_names.len());
 
                         for name in tag_names.iter() {
                             let remaining = (branch_content_bounds.right() - x).max(px(0.0));
@@ -343,7 +349,8 @@ pub(super) fn history_commit_row_canvas(
                                 window,
                                 &base_style,
                                 xs_font,
-                                name,
+                                name.shared(),
+                                name.text_hash(),
                                 (remaining - chip_pad_x * 2.0).max(px(0.0)),
                                 theme.colors.accent,
                                 None,
@@ -374,14 +381,18 @@ pub(super) fn history_commit_row_canvas(
 
                             window.paint_quad(fill(*chip_bounds, border).corner_radii(radius));
                             let inner = Bounds::new(
-                                point(chip_bounds.left() + px(1.0), chip_bounds.top() + px(1.0)),
+                                point(
+                                    chip_bounds.left() + scaled_px(1.0),
+                                    chip_bounds.top() + scaled_px(1.0),
+                                ),
                                 size(
-                                    (chip_bounds.size.width - px(2.0)).max(px(0.0)),
-                                    (chip_bounds.size.height - px(2.0)).max(px(0.0)),
+                                    (chip_bounds.size.width - scaled_px(2.0)).max(px(0.0)),
+                                    (chip_bounds.size.height - scaled_px(2.0)).max(px(0.0)),
                                 ),
                             );
                             window.paint_quad(
-                                fill(inner, bg).corner_radii((radius - px(1.0)).max(px(0.0))),
+                                fill(inner, bg)
+                                    .corner_radii((radius - scaled_px(1.0)).max(px(0.0))),
                             );
 
                             let text_y = chip_bounds.top()
@@ -411,7 +422,8 @@ pub(super) fn history_commit_row_canvas(
                                     window,
                                     &base_style,
                                     xs_font,
-                                    &branches_text,
+                                    branches_text.shared(),
+                                    branches_text.text_hash(),
                                     remaining,
                                     theme.colors.text_muted,
                                     None,
@@ -421,7 +433,7 @@ pub(super) fn history_commit_row_canvas(
                                     window,
                                     &base_style,
                                     xs_font,
-                                    &branches_text,
+                                    branches_text.shared(),
                                     remaining,
                                     theme.colors.text_muted,
                                     branch_highlights.as_ref(),
@@ -448,15 +460,15 @@ pub(super) fn history_commit_row_canvas(
                 .unwrap_or(theme.colors.text_muted);
 
             if show_graph_color_marker {
-                let marker_w = px(2.0);
-                let marker_h = px(12.0);
+                let marker_w = scaled_px(2.0);
+                let marker_h = scaled_px(12.0);
                 let y = bounds.top() + (bounds.size.height - marker_h) * 0.5;
                 window.paint_quad(
                     fill(
                         Bounds::new(point(summary_bounds.left(), y), size(marker_w, marker_h)),
                         node_color,
                     )
-                    .corner_radii(px(2.0)),
+                    .corner_radii(scaled_px(2.0)),
                 );
             }
 
@@ -467,12 +479,13 @@ pub(super) fn history_commit_row_canvas(
                     bounds.size.height,
                 ),
             );
-            if !summary.as_ref().is_empty() {
+            if !summary.is_empty() {
                 let shaped = shape_truncated_line_cached(
                     window,
                     &base_style,
                     sm_font,
-                    &summary,
+                    summary.shared(),
+                    summary.text_hash(),
                     summary_text_bounds.size.width.max(px(0.0)),
                     theme.colors.text,
                     None,
@@ -494,7 +507,7 @@ pub(super) fn history_commit_row_canvas(
                 );
             }
 
-            if show_author && !author.as_ref().is_empty() {
+            if show_author && !author.is_empty() {
                 let author_text_bounds = Bounds::new(
                     point(author_bounds.left() + cell_pad_x, author_bounds.top()),
                     size(
@@ -506,7 +519,8 @@ pub(super) fn history_commit_row_canvas(
                     window,
                     &base_style,
                     xs_font,
-                    &author,
+                    author.shared(),
+                    author.text_hash(),
                     author_text_bounds.size.width.max(px(0.0)),
                     theme.colors.text_muted,
                     None,
@@ -530,7 +544,7 @@ pub(super) fn history_commit_row_canvas(
                 );
             }
 
-            if show_date && !when.as_ref().is_empty() {
+            if show_date && !when.is_empty() {
                 let date_text_bounds = Bounds::new(
                     point(date_bounds.left() + cell_pad_x, date_bounds.top()),
                     size(
@@ -542,7 +556,8 @@ pub(super) fn history_commit_row_canvas(
                     window,
                     &base_style,
                     xxs_font,
-                    &when,
+                    when.shared(),
+                    when.text_hash(),
                     date_text_bounds.size.width.max(px(0.0)),
                     theme.colors.text_muted,
                     Some(UI_MONOSPACE_FONT_FAMILY),
@@ -566,7 +581,7 @@ pub(super) fn history_commit_row_canvas(
                 );
             }
 
-            if show_sha && !short_sha.as_ref().is_empty() {
+            if show_sha && !short_sha.is_empty() {
                 let sha_text_bounds = Bounds::new(
                     point(sha_bounds.left() + cell_pad_x, sha_bounds.top()),
                     size(
@@ -578,7 +593,8 @@ pub(super) fn history_commit_row_canvas(
                     window,
                     &base_style,
                     xxs_font,
-                    &short_sha,
+                    short_sha.shared(),
+                    short_sha.text_hash(),
                     sha_text_bounds.size.width.max(px(0.0)),
                     theme.colors.text_muted,
                     Some(UI_MONOSPACE_FONT_FAMILY),
@@ -640,7 +656,7 @@ pub(super) fn history_commit_row_canvas(
             });
         },
     )
-    .h(px(24.0))
+    .h_full()
     .w_full()
     .into_any_element()
 }

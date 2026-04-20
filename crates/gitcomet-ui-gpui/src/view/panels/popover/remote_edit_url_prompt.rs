@@ -12,11 +12,13 @@ pub(super) fn panel(
         RemoteUrlKind::Fetch => "fetch",
         RemoteUrlKind::Push => "push",
     };
+    let ui_scale_percent = super::popover_ui_scale_percent(cx);
+    let scaled_px = |value: f32| super::popover_scaled_px_from_percent(value, ui_scale_percent);
 
     div()
         .flex()
         .flex_col()
-        .w(px(640.0))
+        .w(scaled_px(640.0))
         .child(
             div()
                 .px_2()

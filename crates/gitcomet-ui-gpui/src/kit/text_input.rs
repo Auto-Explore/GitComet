@@ -2041,7 +2041,7 @@ impl TextInput {
     }
 
     fn is_word_char(ch: char) -> bool {
-        ch.is_alphanumeric() || ch == '_'
+        crate::text_selection::is_word_char(ch)
     }
 
     fn current_undo_snapshot(&self) -> UndoSnapshot {
@@ -2165,39 +2165,7 @@ impl TextInput {
     }
 
     fn token_range_for_offset(&self, offset: usize) -> Range<usize> {
-        let s = self.content.as_ref();
-        if s.is_empty() {
-            return 0..0;
-        }
-
-        let mut probe = offset.min(s.len());
-        if probe == s.len() && probe > 0 {
-            probe = self.previous_boundary(probe);
-        }
-
-        let Some(ch) = s[probe..].chars().next() else {
-            return probe..probe;
-        };
-
-        if ch.is_whitespace() {
-            let start = Self::skip_left_while(s, probe, |ch| ch.is_whitespace());
-            let end = Self::skip_right_while(s, probe, |ch| ch.is_whitespace());
-            return start..end;
-        }
-
-        if Self::is_word_char(ch) {
-            let start = Self::skip_left_while(s, probe, Self::is_word_char);
-            let end = Self::skip_right_while(s, probe, Self::is_word_char);
-            return start..end;
-        }
-
-        let start = Self::skip_left_while(s, probe, |ch| {
-            !ch.is_whitespace() && !Self::is_word_char(ch)
-        });
-        let end = Self::skip_right_while(s, probe, |ch| {
-            !ch.is_whitespace() && !Self::is_word_char(ch)
-        });
-        start..end
+        crate::text_selection::token_range_for_offset(self.content.as_ref(), offset)
     }
 
     fn on_mouse_down(
@@ -2341,6 +2309,7 @@ impl TextInput {
         state: TextInputContextMenuState,
         cx: &mut Context<Self>,
     ) -> Div {
+        let menu_ui_scale_percent = crate::ui_scale::current(cx).percent;
         let primary = primary_modifier_label();
         let undo_disabled = self.read_only || self.undo_stack.is_empty();
         let redo_disabled = self.read_only || self.redo_stack.is_empty();
@@ -2461,7 +2430,10 @@ impl TextInput {
         }
 
         div()
-            .w(px(188.0))
+            .w(crate::ui_scale::design_px_from_percent(
+                188.0,
+                menu_ui_scale_percent,
+            ))
             .p_1()
             .flex()
             .flex_col()
@@ -3114,13 +3086,15 @@ impl Element for TextElement {
 
                 let mut selections = Vec::with_capacity(visible_line_range.len().max(1));
                 let cursor_quad = if selected_range.is_empty() {
+                    let control_height =
+                        crate::ui_scale::design_px_from_window(CONTROL_HEIGHT_PX, window);
                     let (line_ix, local_ix) = line_for_offset(line_starts.as_ref(), &lines, cursor);
                     let x = lines[line_ix].x_for_index(local_ix) - scroll_x;
                     let caret_inset_y = px(3.0);
                     let caret_h = if !input.multiline && !input.chromeless {
                         // Cap caret to fit within the fixed-height container
                         // (CONTROL_HEIGHT_PX minus 2px border minus insets).
-                        (px(CONTROL_HEIGHT_PX) - px(2.0) - caret_inset_y * 2.0).max(px(2.0))
+                        (control_height - px(2.0) - caret_inset_y * 2.0).max(px(2.0))
                     } else {
                         (line_height - caret_inset_y * 2.0).max(px(2.0))
                     };
@@ -3741,8 +3715,13 @@ impl Render for TextInput {
             .on_mouse_move(cx.listener(Self::on_mouse_move))
             .on_mouse_down(MouseButton::Right, cx.listener(Self::on_mouse_down_right))
             .line_height(self.effective_line_height(window))
-            .text_size(px(13.0))
-            .when(!multiline && !chromeless, |d| d.h(px(CONTROL_HEIGHT_PX)))
+            .text_size(crate::ui_scale::design_px_from_window(13.0, window))
+            .when(!multiline && !chromeless, |d| {
+                d.h(crate::ui_scale::design_px_from_window(
+                    CONTROL_HEIGHT_PX,
+                    window,
+                ))
+            })
             .when(!multiline, |d| d.items_center())
             .when(multiline, |d| d.items_start())
             .child(text_surface);

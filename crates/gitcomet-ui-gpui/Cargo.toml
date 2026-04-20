@@ -139,6 +139,7 @@ raw-window-handle = { workspace = true }
 
 [dev-dependencies]
 gitcomet-core = { workspace = true, features = ["test-support"] }
+gitcomet-state = { workspace = true, features = ["test-support"] }
 gpui = { workspace = true, features = ["test-support"] }
 criterion = { workspace = true }
 regex = { workspace = true }

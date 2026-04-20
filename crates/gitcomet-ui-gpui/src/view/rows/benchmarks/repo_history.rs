@@ -1907,6 +1907,7 @@ impl HistoryLoadMoreAppendFixture {
         self.existing_commits.last().map(|commit| LogCursor {
             last_seen: commit.id.clone(),
             resume_from: None,
+            resume_token: None,
         })
     }
 
@@ -1914,6 +1915,7 @@ impl HistoryLoadMoreAppendFixture {
         self.appended_commits.last().map(|commit| LogCursor {
             last_seen: commit.id.clone(),
             resume_from: None,
+            resume_token: None,
         })
     }
 
@@ -2091,6 +2093,7 @@ impl HistoryScopeSwitchFixture {
             next_cursor: self.existing_commits.last().map(|c| LogCursor {
                 last_seen: c.id.clone(),
                 resume_from: None,
+                resume_token: None,
             }),
         }));
         state.repos.push(repo_state);

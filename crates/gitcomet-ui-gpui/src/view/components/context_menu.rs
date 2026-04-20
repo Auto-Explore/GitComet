@@ -1,8 +1,9 @@
 use crate::theme::AppTheme;
+use crate::ui_scale::UiScale;
 use gpui::prelude::*;
 use gpui::{CursorStyle, Div, ElementId, SharedString, Stateful, div, px};
 
-use super::CONTROL_HEIGHT_MD_PX;
+use super::control_height_md;
 
 pub fn context_menu(theme: AppTheme, content: impl IntoElement) -> Div {
     div()
@@ -10,16 +11,25 @@ pub fn context_menu(theme: AppTheme, content: impl IntoElement) -> Div {
         .min_w_full()
         .flex()
         .flex_col()
+        .items_stretch()
         .text_color(theme.colors.text)
         .child(content)
 }
 
-pub fn context_menu_header(theme: AppTheme, title: impl Into<SharedString>) -> Div {
+pub fn context_menu_header(
+    theme: AppTheme,
+    ui_scale: impl Into<UiScale>,
+    title: impl Into<SharedString>,
+) -> Div {
+    let ui_scale = ui_scale.into();
+    let scaled_px = |value| ui_scale.px(value);
     div()
         .w_full()
-        .px_2()
-        .py_1()
+        .self_stretch()
+        .px(scaled_px(8.0))
+        .py(scaled_px(4.0))
         .text_xs()
+        .line_height(scaled_px(14.0))
         .line_clamp(1)
         .whitespace_nowrap()
         .overflow_hidden()
@@ -27,20 +37,32 @@ pub fn context_menu_header(theme: AppTheme, title: impl Into<SharedString>) -> D
         .child(title.into())
 }
 
-pub fn context_menu_label(theme: AppTheme, text: impl Into<SharedString>) -> Div {
+pub fn context_menu_label(
+    theme: AppTheme,
+    ui_scale: impl Into<UiScale>,
+    text: impl Into<SharedString>,
+) -> Div {
+    let ui_scale = ui_scale.into();
+    let scaled_px = |value| ui_scale.px(value);
     div()
         .w_full()
-        .px_2()
-        .pb_1()
+        .self_stretch()
+        .px(scaled_px(8.0))
+        .pb(scaled_px(4.0))
         .text_sm()
+        .line_height(scaled_px(18.0))
         .text_color(theme.colors.text)
         .line_clamp(2)
         .child(text.into())
 }
 
-pub fn context_menu_separator(theme: AppTheme) -> Div {
+pub fn context_menu_separator(theme: AppTheme, ui_scale: impl Into<UiScale>) -> Div {
+    let ui_scale = ui_scale.into();
+    let scaled_px = |value| ui_scale.px(value);
     div()
         .w_full()
+        .self_stretch()
+        .my(scaled_px(2.0))
         .border_t_1()
         .border_color(theme.colors.border)
 }
@@ -48,12 +70,15 @@ pub fn context_menu_separator(theme: AppTheme) -> Div {
 pub fn context_menu_entry(
     id: impl Into<ElementId>,
     theme: AppTheme,
+    ui_scale: impl Into<UiScale>,
     selected: bool,
     disabled: bool,
     icon: Option<SharedString>,
     label: impl Into<SharedString>,
     shortcut: Option<SharedString>,
 ) -> Stateful<Div> {
+    let ui_scale = ui_scale.into();
+    let scaled_px = |value| ui_scale.px(value);
     let label: SharedString = label.into();
     let icon_path = icon
         .as_ref()
@@ -62,14 +87,15 @@ pub fn context_menu_entry(
 
     let mut row = div()
         .id(id)
-        .h(px(CONTROL_HEIGHT_MD_PX))
+        .h(control_height_md(ui_scale))
         .w_full()
         .min_w_full()
-        .px_2()
+        .self_stretch()
+        .px(scaled_px(8.0))
         .flex()
         .items_center()
         .justify_between()
-        .gap_2()
+        .gap(scaled_px(8.0))
         .rounded(px(theme.radii.row))
         .text_color(theme.colors.text)
         .when(selected, |s| s.bg(theme.colors.hover))
@@ -82,17 +108,21 @@ pub fn context_menu_entry(
             div()
                 .flex()
                 .items_center()
-                .gap_2()
+                .gap(scaled_px(8.0))
                 .flex_1()
                 .min_w(px(0.0))
                 .child(
                     div()
-                        .w(px(16.0))
+                        .w(scaled_px(16.0))
                         .flex()
                         .items_center()
                         .justify_center()
                         .when_some(icon_path, |this, path| {
-                            this.child(crate::view::icons::svg_icon(path, icon_color, px(13.0)))
+                            this.child(crate::view::icons::svg_icon(
+                                path,
+                                icon_color,
+                                scaled_px(13.0),
+                            ))
                         }),
                 )
                 .child(
@@ -100,6 +130,7 @@ pub fn context_menu_entry(
                         .flex_1()
                         .min_w(px(0.0))
                         .text_sm()
+                        .line_height(scaled_px(18.0))
                         .line_clamp(1)
                         .child(label),
                 ),
@@ -108,9 +139,10 @@ pub fn context_menu_entry(
     let mut end = div()
         .flex()
         .items_center()
-        .gap_2()
+        .gap(scaled_px(8.0))
         .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
         .text_xs()
+        .line_height(scaled_px(14.0))
         .text_color(theme.colors.text_muted);
 
     if let Some(shortcut) = shortcut {

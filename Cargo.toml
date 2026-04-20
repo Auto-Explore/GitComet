@@ -23,7 +23,7 @@ default-members = [
 ]
 
 [workspace.package]
-version = "0.1.11"
+version = "0.1.12"
 edition = "2024"
 license = "AGPL-3.0-only"
 authors = ["AutoExplore Oy <info@autoexplore.ai>"]
@@ -40,7 +40,7 @@ gitcomet-ui = { path = "crates/gitcomet-ui" }
 gitcomet-ui-gpui = { path = "crates/gitcomet-ui-gpui", default-features = false }
 
 # External crates
-clap = { version = "4.6.0", features = ["derive"] }
+clap = { version = "4.6.1", features = ["derive"] }
 criterion = "0.8.2"
 fontdb = "0.23.0"
 gix = { version = "0.81.0", default-features = false, features = ["max-performance-safe", "comfort", "basic", "auto-chain-error", "status", "blame", "sha1"] }
@@ -52,7 +52,7 @@ memchr = "2.8.0"
 # Pin mimalloc to the PR #152 head until the submodule update lands in a release.
 mimalloc = { git = "https://github.com/eduDorus/mimalloc_rust.git", rev = "262fb407466952bf6ebaf4a5d586c3010396cb2f", features = ["v3"] }
 pulldown-cmark = { version = "0.13", default-features = false, features = ["simd"] }
-notify = "9.0.0-rc.2"
+notify = "9.0.0-rc.3"
 raw-window-handle = "0.6"
 regex = "1.12.3"
 resvg = { version = "0.47.0", default-features = false, features = ["text", "system-fonts", "raster-images"] }
@@ -77,7 +77,7 @@ tree-sitter-cpp = "0.23.4"
 tree-sitter-css = "0.25.0"
 tree-sitter-dart = "0.1.0"
 tree-sitter-diff = "0.1.0"
-tree-sitter-fsharp = "0.2.2"
+tree-sitter-fsharp = "0.3.0"
 tree-sitter-gitcommit = { git = "https://github.com/zed-industries/tree-sitter-git-commit", rev = "88309716a69dd13ab83443721ba6e0b491d37ee9" }
 tree-sitter-go = "0.25.0"
 tree-sitter-gomod = { git = "https://github.com/camdencheek/tree-sitter-go-mod", rev = "2e886870578eeba1927a2dc4bd2e2b3f598c5f9a", package = "tree-sitter-gomod" }
@@ -97,7 +97,7 @@ tree-sitter-python = "0.25.0"
 tree-sitter-r = "1.2.0"
 tree-sitter-ruby = "0.23.1"
 tree-sitter-rust = "0.24.2"
-tree-sitter-scala = "0.25.0"
+tree-sitter-scala = "0.26.0"
 tree-sitter-sequel = "0.3.11"
 tree-sitter-swift = "0.7.1"
 tree-sitter-toml-ng = "0.7.0"

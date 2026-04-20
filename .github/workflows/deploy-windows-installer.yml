@@ -1,0 +1,274 @@
+name: Deploy Windows Installer
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+      version:
+        required: false
+        type: string
+        default: ""
+      storage_account:
+        required: false
+        type: string
+        default: ""
+      storage_container:
+        required: false
+        type: string
+        default: "$web"
+      storage_prefix:
+        required: false
+        type: string
+        default: "windows"
+      dry_run:
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      AZURE_STORAGE_ACCOUNT_KEY:
+        required: false
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (e.g. 0.2.0 or v0.2.0)"
+        required: true
+        type: string
+      tag:
+        description: "Optional tag override (e.g. v0.2.0). Defaults to v<version>."
+        required: false
+        type: string
+      storage_account:
+        description: "Azure Storage account name. Defaults to repository variable APT_STORAGE_ACCOUNT when omitted."
+        required: false
+        default: ""
+        type: string
+      storage_container:
+        description: "Azure Blob container for the Windows MSI. Defaults to $web when omitted."
+        required: false
+        default: "$web"
+        type: string
+      storage_prefix:
+        description: "Blob prefix within the container. Defaults to windows when omitted."
+        required: false
+        default: "windows"
+        type: string
+      dry_run:
+        description: "Download and validate release MSI assets without uploading to Azure"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-windows-installer-${{ inputs.tag || github.event.inputs.tag || inputs.version || github.event.inputs.version || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Publish Windows MSI to Azure Blob Storage
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Normalize inputs
+        id: norm
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          DISPATCH_TAG: ${{ github.event.inputs.tag }}
+          INPUT_VERSION: ${{ inputs.version }}
+          DISPATCH_VERSION: ${{ github.event.inputs.version }}
+          INPUT_STORAGE_ACCOUNT: ${{ inputs.storage_account }}
+          DISPATCH_STORAGE_ACCOUNT: ${{ github.event.inputs.storage_account }}
+          VAR_STORAGE_ACCOUNT: ${{ vars.APT_STORAGE_ACCOUNT }}
+          INPUT_STORAGE_CONTAINER: ${{ inputs.storage_container }}
+          DISPATCH_STORAGE_CONTAINER: ${{ github.event.inputs.storage_container }}
+          INPUT_STORAGE_PREFIX: ${{ inputs.storage_prefix }}
+          DISPATCH_STORAGE_PREFIX: ${{ github.event.inputs.storage_prefix }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+          DISPATCH_DRY_RUN: ${{ github.event.inputs.dry_run }}
+        run: |
+          set -euo pipefail
+
+          tag="${INPUT_TAG:-${DISPATCH_TAG:-}}"
+          version="${INPUT_VERSION:-${DISPATCH_VERSION:-}}"
+          storage_account="${INPUT_STORAGE_ACCOUNT:-${DISPATCH_STORAGE_ACCOUNT:-${VAR_STORAGE_ACCOUNT:-}}}"
+          storage_container="${INPUT_STORAGE_CONTAINER:-${DISPATCH_STORAGE_CONTAINER:-\$web}}"
+          storage_prefix="${INPUT_STORAGE_PREFIX:-${DISPATCH_STORAGE_PREFIX:-windows}}"
+          dry_run="${INPUT_DRY_RUN:-${DISPATCH_DRY_RUN:-false}}"
+
+          tag="$(echo "$tag" | tr -d '[:space:]')"
+          version="$(echo "$version" | tr -d '[:space:]')"
+          storage_account="$(echo "$storage_account" | tr -d '[:space:]')"
+          storage_container="$(echo "$storage_container" | tr -d '[:space:]')"
+          storage_prefix="$(echo "$storage_prefix" | sed 's#^/*##;s#/*$##')"
+          dry_run="$(echo "$dry_run" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
+
+          if [ -z "$tag" ] && [ -z "$version" ]; then
+            echo "::error title=Missing release metadata::Provide at least version or tag."
+            exit 1
+          fi
+
+          if [ -n "$tag" ] && [[ "$tag" != v* ]]; then
+            tag="v${tag}"
+          fi
+
+          if [ -z "$version" ]; then
+            version="${tag#v}"
+          fi
+          version="${version#v}"
+
+          if [ -z "$tag" ]; then
+            tag="v${version}"
+          fi
+
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]]; then
+            echo "::error title=Invalid version::Expected semver like 1.2.3 or 1.2.3-rc.1."
+            exit 1
+          fi
+
+          if [ "$tag" != "v${version}" ]; then
+            echo "::error title=Tag/version mismatch::Tag '$tag' does not match version '$version'."
+            exit 1
+          fi
+
+          if [[ "$dry_run" != "true" && "$dry_run" != "false" ]]; then
+            echo "::error title=Invalid dry_run::dry_run must be true or false."
+            exit 1
+          fi
+
+          if [ "$dry_run" != "true" ] && [ -z "$storage_account" ]; then
+            echo "::error title=Missing storage account::storage_account is required for live publication."
+            exit 1
+          fi
+
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "storage_account=$storage_account" >> "$GITHUB_OUTPUT"
+          echo "storage_container=$storage_container" >> "$GITHUB_OUTPUT"
+          echo "storage_prefix=$storage_prefix" >> "$GITHUB_OUTPUT"
+          echo "dry_run=$dry_run" >> "$GITHUB_OUTPUT"
+
+      - name: Validate live publish credentials
+        if: ${{ steps.norm.outputs.dry_run != 'true' }}
+        env:
+          AZURE_STORAGE_ACCOUNT_KEY: ${{ secrets.AZURE_STORAGE_ACCOUNT_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${AZURE_STORAGE_ACCOUNT_KEY:-}" ]; then
+            echo "::error title=Missing Azure publish credentials::Set AZURE_STORAGE_ACCOUNT_KEY for Azure Blob Storage publication."
+            exit 1
+          fi
+
+      - name: Download Windows MSI assets from GitHub release
+        run: |
+          set -euo pipefail
+
+          mkdir -p dist/windows-release
+          gh release view "${{ steps.norm.outputs.tag }}" --repo "$GITHUB_REPOSITORY" >/dev/null
+          gh release download "${{ steps.norm.outputs.tag }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "gitcomet-v${{ steps.norm.outputs.version }}-windows-*.msi" \
+            --dir dist/windows-release \
+            --clobber
+
+          x64_installer="dist/windows-release/gitcomet-v${{ steps.norm.outputs.version }}-windows-x86_64.msi"
+          arm64_installer="dist/windows-release/gitcomet-v${{ steps.norm.outputs.version }}-windows-arm64.msi"
+
+          missing=()
+          for installer_path in "$x64_installer" "$arm64_installer"; do
+            if [ ! -f "$installer_path" ]; then
+              missing+=("$(basename "$installer_path")")
+            fi
+          done
+
+          if [ "${#missing[@]}" -gt 0 ]; then
+            printf '::error title=Missing Windows MSI assets::Expected release assets for tag %s: %s.\n' "${{ steps.norm.outputs.tag }}" "$(IFS=', '; echo "${missing[*]}")"
+            exit 1
+          fi
+
+          printf '%s\n' "$x64_installer" "$arm64_installer" > dist/windows-installers.txt
+
+      - name: Upload Windows MSI assets to Azure Blob Storage
+        if: ${{ steps.norm.outputs.dry_run != 'true' }}
+        env:
+          AZURE_CONFIG_DIR: ${{ runner.temp }}/azure-config
+          AZURE_STORAGE_ACCOUNT_KEY: ${{ secrets.AZURE_STORAGE_ACCOUNT_KEY }}
+          STORAGE_ACCOUNT: ${{ steps.norm.outputs.storage_account }}
+          STORAGE_CONTAINER: ${{ steps.norm.outputs.storage_container }}
+          STORAGE_PREFIX: ${{ steps.norm.outputs.storage_prefix }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p "$AZURE_CONFIG_DIR"
+
+          exists="$(az storage container exists \
+            --account-name "$STORAGE_ACCOUNT" \
+            --name "$STORAGE_CONTAINER" \
+            --account-key "$AZURE_STORAGE_ACCOUNT_KEY" \
+            --query exists \
+            -o tsv)"
+
+          if [ "$exists" != "true" ]; then
+            az storage container create \
+              --account-name "$STORAGE_ACCOUNT" \
+              --name "$STORAGE_CONTAINER" \
+              --account-key "$AZURE_STORAGE_ACCOUNT_KEY" \
+              --output none
+          fi
+
+          while IFS= read -r installer_path; do
+            [ -n "$installer_path" ] || continue
+
+            blob_name="$(basename "$installer_path")"
+            if [ -n "$STORAGE_PREFIX" ]; then
+              blob_name="${STORAGE_PREFIX}/${blob_name}"
+            fi
+
+            az storage blob upload \
+              --account-name "$STORAGE_ACCOUNT" \
+              --container-name "$STORAGE_CONTAINER" \
+              --account-key "$AZURE_STORAGE_ACCOUNT_KEY" \
+              --name "$blob_name" \
+              --file "$installer_path" \
+              --overwrite true \
+              --no-progress \
+              --content-type "application/x-msi" \
+              --content-cache-control "public, max-age=31536000, immutable" \
+              --output none
+          done < dist/windows-installers.txt
+
+      - name: Emit deployment summary
+        env:
+          DRY_RUN: ${{ steps.norm.outputs.dry_run }}
+          TAG: ${{ steps.norm.outputs.tag }}
+          STORAGE_ACCOUNT: ${{ steps.norm.outputs.storage_account }}
+          STORAGE_CONTAINER: ${{ steps.norm.outputs.storage_container }}
+          STORAGE_PREFIX: ${{ steps.norm.outputs.storage_prefix }}
+        run: |
+          set -euo pipefail
+
+          if [ "$DRY_RUN" = "true" ]; then
+            mode="Validated Windows MSI release assets without Azure upload"
+            storage_account_display="n/a (dry run)"
+          else
+            mode="Published Windows MSI assets to Azure Blob Storage"
+            storage_account_display="$STORAGE_ACCOUNT"
+          fi
+
+          {
+            echo "### ${mode}"
+            echo
+            echo "- Release tag: \`${TAG}\`"
+            echo "- Storage account: \`${storage_account_display}\`"
+            echo "- Container: \`${STORAGE_CONTAINER}\`"
+            if [ -n "$STORAGE_PREFIX" ]; then
+              echo "- Prefix: \`${STORAGE_PREFIX}\`"
+            fi
+            echo "- Installers:"
+            sed 's#^#  - `#;s#$#`#' dist/windows-installers.txt
+          } >> "$GITHUB_STEP_SUMMARY"
