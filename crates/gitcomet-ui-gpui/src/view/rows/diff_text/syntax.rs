@@ -4091,6 +4091,473 @@ mod tests {
         );
     }
 
+    #[cfg(any(test, feature = "syntax-rust"))]
+    #[test]
+    fn rust_treesitter_captures_keyword_function_type_and_string_families() {
+        let text = r#"fn foo(bar: u32) { let x = "hi"; }"#;
+        let tokens = syntax_tokens_for_line(text, DiffSyntaxLanguage::Rust, DiffSyntaxMode::Auto);
+        assert!(
+            has_token_kind_and_text(text, &tokens, SyntaxTokenKind::Keyword, "fn"),
+            "Rust should highlight `fn` as a keyword, got: {tokens:?}"
+        );
+        assert!(
+            has_token_kind_and_text(text, &tokens, SyntaxTokenKind::Function, "foo"),
+            "Rust function declarations should capture the function name, got: {tokens:?}"
+        );
+        assert!(
+            has_token_kind_and_text(text, &tokens, SyntaxTokenKind::Keyword, "let"),
+            "Rust should highlight `let` as a keyword, got: {tokens:?}"
+        );
+        assert!(
+            has_token_kind_and_text(text, &tokens, SyntaxTokenKind::TypeBuiltin, "u32"),
+            "Rust primitive types should keep their dedicated type token, got: {tokens:?}"
+        );
+        assert!(
+            has_token_kind_and_text(text, &tokens, SyntaxTokenKind::String, "\"hi\""),
+            "Rust string literals should produce String tokens, got: {tokens:?}"
+        );
+    }
+
+    #[cfg(any(test, feature = "syntax-rust"))]
+    #[test]
+    fn rust_treesitter_captures_impl_family_as_preproc() {
+        let impl_text = "impl Widget where T: Trait {}";
+        let impl_tokens =
+            syntax_tokens_for_line(impl_text, DiffSyntaxLanguage::Rust, DiffSyntaxMode::Auto);
+        assert!(
+            has_token_kind_and_text(impl_text, &impl_tokens, SyntaxTokenKind::Preproc, "impl"),
+            "Rust `impl` should route through Preproc for the violet family, got: {impl_tokens:?}"
+        );
+        assert!(
+            has_token_kind_and_text(impl_text, &impl_tokens, SyntaxTokenKind::Preproc, "where"),
+            "Rust `where` should route through Preproc, got: {impl_tokens:?}"
+        );
+        assert!(
+            has_token_kind_and_text(impl_text, &impl_tokens, SyntaxTokenKind::Type, "Widget"),
+            "Rust impl targets should keep their type token, got: {impl_tokens:?}"
+        );
+
+        let trait_text = "trait Painter where Self: Sized {}";
+        let trait_tokens =
+            syntax_tokens_for_line(trait_text, DiffSyntaxLanguage::Rust, DiffSyntaxMode::Auto);
+        assert!(
+            has_token_kind_and_text(trait_text, &trait_tokens, SyntaxTokenKind::Preproc, "trait"),
+            "Rust `trait` should route through Preproc, got: {trait_tokens:?}"
+        );
+        assert!(
+            has_token_kind_and_text(trait_text, &trait_tokens, SyntaxTokenKind::Preproc, "where"),
+            "Rust `where` should stay violet in trait declarations, got: {trait_tokens:?}"
+        );
+
+        let dyn_text = "let painter: dyn Painter = todo!();";
+        let dyn_tokens =
+            syntax_tokens_for_line(dyn_text, DiffSyntaxLanguage::Rust, DiffSyntaxMode::Auto);
+        assert!(
+            has_token_kind_and_text(dyn_text, &dyn_tokens, SyntaxTokenKind::Preproc, "dyn"),
+            "Rust `dyn` should route through Preproc, got: {dyn_tokens:?}"
+        );
+    }
+
+    #[cfg(any(test, feature = "syntax-rust"))]
+    #[test]
+    fn rust_treesitter_captures_use_roots_and_tails() {
+        let type_text = "use foo::Bar;";
+        let type_tokens =
+            syntax_tokens_for_line(type_text, DiffSyntaxLanguage::Rust, DiffSyntaxMode::Auto);
+        assert!(
+            has_token_kind_and_text(type_text, &type_tokens, SyntaxTokenKind::Preproc, "foo"),
+            "Non-`crate` import roots should route through Preproc, got: {type_tokens:?}"
+        );
+        assert!(
+            has_token_kind_and_text(type_text, &type_tokens, SyntaxTokenKind::Type, "Bar"),
+            "Imported uppercase tails should keep their type token, got: {type_tokens:?}"
+        );
+
+        let function_text = "use foo::bar;";
+        let function_tokens =
+            syntax_tokens_for_line(function_text, DiffSyntaxLanguage::Rust, DiffSyntaxMode::Auto);
+        assert!(
+            has_token_kind_and_text(
+                function_text,
+                &function_tokens,
+                SyntaxTokenKind::Preproc,
+                "foo",
+            ),
+            "Non-`crate` import roots should stay violet, got: {function_tokens:?}"
+        );
+        assert!(
+            has_token_kind_and_text(
+                function_text,
+                &function_tokens,
+                SyntaxTokenKind::Function,
+                "bar",
+            ),
+            "Imported lowercase tails should route through Function, got: {function_tokens:?}"
+        );
+    }
+
+    #[cfg(any(test, feature = "syntax-rust"))]
+    #[test]
+    fn rust_treesitter_keeps_use_middle_modules_neutral() {
+        let type_text = "use foo::bar::Baz;";
+        let type_tokens =
+            syntax_tokens_for_line(type_text, DiffSyntaxLanguage::Rust, DiffSyntaxMode::Auto);
+        assert!(
+            has_token_kind_and_text(type_text, &type_tokens, SyntaxTokenKind::Preproc, "foo"),
+            "The top import root should stay violet, got: {type_tokens:?}"
+        );
+        assert!(
+            has_token_kind_and_text(type_text, &type_tokens, SyntaxTokenKind::Type, "Baz"),
+            "The imported type should stay green, got: {type_tokens:?}"
+        );
+        assert!(
+            !has_token_kind_and_text(type_text, &type_tokens, SyntaxTokenKind::Preproc, "bar"),
+            "Middle modules should not inherit the root violet accent, got: {type_tokens:?}"
+        );
+        assert!(
+            !has_token_kind_and_text(type_text, &type_tokens, SyntaxTokenKind::Function, "bar"),
+            "Middle modules should not be recolored as imported tails, got: {type_tokens:?}"
+        );
+
+        let crate_type_text = "use crate::foo::Bar;";
+        let crate_type_tokens =
+            syntax_tokens_for_line(crate_type_text, DiffSyntaxLanguage::Rust, DiffSyntaxMode::Auto);
+        assert!(
+            has_token_kind_and_text(
+                crate_type_text,
+                &crate_type_tokens,
+                SyntaxTokenKind::Keyword,
+                "crate",
+            ),
+            "Rust should keep `crate` on the keyword/orange family, got: {crate_type_tokens:?}"
+        );
+        assert!(
+            has_token_kind_and_text(
+                crate_type_text,
+                &crate_type_tokens,
+                SyntaxTokenKind::Type,
+                "Bar",
+            ),
+            "Imported types under `crate` should stay green, got: {crate_type_tokens:?}"
+        );
+        assert!(
+            !has_token_kind_and_text(
+                crate_type_text,
+                &crate_type_tokens,
+                SyntaxTokenKind::Preproc,
+                "foo",
+            ),
+            "The segment after `crate::` should stay neutral, got: {crate_type_tokens:?}"
+        );
+
+        let crate_function_text = "use crate::foo::bar;";
+        let crate_function_tokens = syntax_tokens_for_line(
+            crate_function_text,
+            DiffSyntaxLanguage::Rust,
+            DiffSyntaxMode::Auto,
+        );
+        assert!(
+            has_token_kind_and_text(
+                crate_function_text,
+                &crate_function_tokens,
+                SyntaxTokenKind::Function,
+                "bar",
+            ),
+            "The final lowercase import tail should stay blue under `crate`, got: {crate_function_tokens:?}"
+        );
+        assert!(
+            !has_token_kind_and_text(
+                crate_function_text,
+                &crate_function_tokens,
+                SyntaxTokenKind::Preproc,
+                "foo",
+            ),
+            "The segment after `crate::` should remain neutral, got: {crate_function_tokens:?}"
+        );
+    }
+
+    #[cfg(any(test, feature = "syntax-rust"))]
+    #[test]
+    fn rust_treesitter_captures_root_modules_before_functions_and_types() {
+        let call_text = "let handler = foo::bar::baz();";
+        let call_tokens =
+            syntax_tokens_for_line(call_text, DiffSyntaxLanguage::Rust, DiffSyntaxMode::Auto);
+        assert!(
+            has_token_kind_and_text(call_text, &call_tokens, SyntaxTokenKind::Preproc, "foo"),
+            "Rust code paths should color the bare root module as Preproc, got: {call_tokens:?}"
+        );
+        assert!(
+            !has_token_kind_and_text(call_text, &call_tokens, SyntaxTokenKind::Preproc, "bar"),
+            "Inner code-path modules should stay neutral instead of inheriting the root violet, got: {call_tokens:?}"
+        );
+        assert!(
+            !has_token_kind_and_text(call_text, &call_tokens, SyntaxTokenKind::Function, "bar"),
+            "Inner code-path modules should not be recolored as callable tails, got: {call_tokens:?}"
+        );
+        assert!(
+            has_token_kind_and_text(call_text, &call_tokens, SyntaxTokenKind::Function, "baz"),
+            "Rust function paths should keep the callable name as Function, got: {call_tokens:?}"
+        );
+
+        let associated_text = "let factory = foo::bar::Baz::new();";
+        let associated_tokens = syntax_tokens_for_line(
+            associated_text,
+            DiffSyntaxLanguage::Rust,
+            DiffSyntaxMode::Auto,
+        );
+        assert!(
+            has_token_kind_and_text(
+                associated_text,
+                &associated_tokens,
+                SyntaxTokenKind::Preproc,
+                "foo",
+            ),
+            "Associated paths should keep the bare root module violet, got: {associated_tokens:?}"
+        );
+        assert!(
+            !has_token_kind_and_text(
+                associated_text,
+                &associated_tokens,
+                SyntaxTokenKind::Preproc,
+                "bar",
+            ),
+            "Inner modules before associated functions should stay neutral, got: {associated_tokens:?}"
+        );
+        assert!(
+            has_token_kind_and_text(
+                associated_text,
+                &associated_tokens,
+                SyntaxTokenKind::Type,
+                "Baz",
+            ),
+            "Associated function paths should keep the type token, got: {associated_tokens:?}"
+        );
+        assert!(
+            has_token_kind_and_text(
+                associated_text,
+                &associated_tokens,
+                SyntaxTokenKind::Function,
+                "new",
+            ),
+            "Associated function paths should keep the callable name as Function, got: {associated_tokens:?}"
+        );
+
+        let crate_text = "let value: crate::foo::Bar = todo!();";
+        let crate_tokens =
+            syntax_tokens_for_line(crate_text, DiffSyntaxLanguage::Rust, DiffSyntaxMode::Auto);
+        assert!(
+            has_token_kind_and_text(crate_text, &crate_tokens, SyntaxTokenKind::Keyword, "crate"),
+            "Rust should keep `crate` on the keyword/orange family, got: {crate_tokens:?}"
+        );
+        assert!(
+            !has_token_kind_and_text(crate_text, &crate_tokens, SyntaxTokenKind::Preproc, "foo"),
+            "The first named segment after `crate::` should stay neutral in code paths, got: {crate_tokens:?}"
+        );
+        assert!(
+            has_token_kind_and_text(crate_text, &crate_tokens, SyntaxTokenKind::Type, "Bar"),
+            "Rust type tails under `crate` should stay green, got: {crate_tokens:?}"
+        );
+    }
+
+    #[cfg(any(test, feature = "syntax-rust"))]
+    #[test]
+    fn rust_treesitter_captures_constants_in_scoped_paths() {
+        let constant_text = "let mode = NotForContentType::SSE;";
+        let constant_tokens = syntax_tokens_for_line(
+            constant_text,
+            DiffSyntaxLanguage::Rust,
+            DiffSyntaxMode::Auto,
+        );
+        assert!(
+            has_token_kind_and_text(
+                constant_text,
+                &constant_tokens,
+                SyntaxTokenKind::Type,
+                "NotForContentType",
+            ),
+            "Rust should keep the type side of associated constants green, got: {constant_tokens:?}"
+        );
+        assert!(
+            has_token_kind_and_text(
+                constant_text,
+                &constant_tokens,
+                SyntaxTokenKind::Constant,
+                "SSE",
+            ),
+            "Rust ALL_CAPS associated constants should route through Constant, got: {constant_tokens:?}"
+        );
+        assert!(
+            !has_token_kind_and_text(
+                constant_text,
+                &constant_tokens,
+                SyntaxTokenKind::Type,
+                "SSE",
+            ),
+            "Rust ALL_CAPS associated constants should no longer be typed green, got: {constant_tokens:?}"
+        );
+
+        let scoped_text = "let root = foo::BAR;";
+        let scoped_tokens =
+            syntax_tokens_for_line(scoped_text, DiffSyntaxLanguage::Rust, DiffSyntaxMode::Auto);
+        assert!(
+            has_token_kind_and_text(scoped_text, &scoped_tokens, SyntaxTokenKind::Preproc, "foo"),
+            "Bare module roots should stay violet before constant tails, got: {scoped_tokens:?}"
+        );
+        assert!(
+            has_token_kind_and_text(
+                scoped_text,
+                &scoped_tokens,
+                SyntaxTokenKind::Constant,
+                "BAR",
+            ),
+            "Scoped ALL_CAPS references should route through Constant, got: {scoped_tokens:?}"
+        );
+
+        let crate_scoped_text = "let root = crate::foo::BAR;";
+        let crate_scoped_tokens = syntax_tokens_for_line(
+            crate_scoped_text,
+            DiffSyntaxLanguage::Rust,
+            DiffSyntaxMode::Auto,
+        );
+        assert!(
+            has_token_kind_and_text(
+                crate_scoped_text,
+                &crate_scoped_tokens,
+                SyntaxTokenKind::Keyword,
+                "crate",
+            ),
+            "Rust should keep `crate` orange before constant tails, got: {crate_scoped_tokens:?}"
+        );
+        assert!(
+            !has_token_kind_and_text(
+                crate_scoped_text,
+                &crate_scoped_tokens,
+                SyntaxTokenKind::Preproc,
+                "foo",
+            ),
+            "The first named segment after `crate::` should stay neutral before constants, got: {crate_scoped_tokens:?}"
+        );
+        assert!(
+            has_token_kind_and_text(
+                crate_scoped_text,
+                &crate_scoped_tokens,
+                SyntaxTokenKind::Constant,
+                "BAR",
+            ),
+            "ALL_CAPS constant tails under `crate` should stay pink/Constant, got: {crate_scoped_tokens:?}"
+        );
+
+        let standalone_text = "let standalone = SSE;";
+        let standalone_tokens = syntax_tokens_for_line(
+            standalone_text,
+            DiffSyntaxLanguage::Rust,
+            DiffSyntaxMode::Auto,
+        );
+        assert!(
+            has_token_kind_and_text(
+                standalone_text,
+                &standalone_tokens,
+                SyntaxTokenKind::Constant,
+                "SSE",
+            ),
+            "Standalone ALL_CAPS Rust names should route through Constant, got: {standalone_tokens:?}"
+        );
+    }
+
+    #[cfg(any(test, feature = "syntax-rust"))]
+    #[test]
+    fn rust_treesitter_captures_grouped_use_import_semantics() {
+        let text = "use foo::{bar, baz::Qux};";
+        let tokens = syntax_tokens_for_line(text, DiffSyntaxLanguage::Rust, DiffSyntaxMode::Auto);
+        assert!(
+            has_token_kind_and_text(text, &tokens, SyntaxTokenKind::Preproc, "foo"),
+            "Grouped imports should accent the non-`crate` root, got: {tokens:?}"
+        );
+        assert!(
+            has_token_kind_and_text(text, &tokens, SyntaxTokenKind::Function, "bar"),
+            "Grouped imports should keep lowercase imported tails blue, got: {tokens:?}"
+        );
+        assert!(
+            has_token_kind_and_text(text, &tokens, SyntaxTokenKind::Type, "Qux"),
+            "Grouped imports should keep uppercase imported tails green, got: {tokens:?}"
+        );
+        assert!(
+            !has_token_kind_and_text(text, &tokens, SyntaxTokenKind::Preproc, "baz"),
+            "Grouped middle modules should not inherit the root violet accent, got: {tokens:?}"
+        );
+        assert!(
+            !has_token_kind_and_text(text, &tokens, SyntaxTokenKind::Function, "baz"),
+            "Grouped middle modules should stay neutral when importing a type, got: {tokens:?}"
+        );
+
+        let crate_text = "use crate::{foo::bar, baz::Qux};";
+        let crate_tokens =
+            syntax_tokens_for_line(crate_text, DiffSyntaxLanguage::Rust, DiffSyntaxMode::Auto);
+        assert!(
+            has_token_kind_and_text(
+                crate_text,
+                &crate_tokens,
+                SyntaxTokenKind::Keyword,
+                "crate",
+            ),
+            "Grouped imports should keep `crate` on the keyword/orange family, got: {crate_tokens:?}"
+        );
+        assert!(
+            has_token_kind_and_text(
+                crate_text,
+                &crate_tokens,
+                SyntaxTokenKind::Function,
+                "bar",
+            ),
+            "Grouped imports under `crate` should keep lowercase tails blue, got: {crate_tokens:?}"
+        );
+        assert!(
+            has_token_kind_and_text(crate_text, &crate_tokens, SyntaxTokenKind::Type, "Qux"),
+            "Grouped imports under `crate` should keep uppercase tails green, got: {crate_tokens:?}"
+        );
+        assert!(
+            !has_token_kind_and_text(
+                crate_text,
+                &crate_tokens,
+                SyntaxTokenKind::Preproc,
+                "foo",
+            ),
+            "Paths under `crate::{{...}}` should not add a violet root accent, got: {crate_tokens:?}"
+        );
+        assert!(
+            !has_token_kind_and_text(
+                crate_text,
+                &crate_tokens,
+                SyntaxTokenKind::Function,
+                "baz",
+            ),
+            "Middle grouped modules should stay neutral before imported types, got: {crate_tokens:?}"
+        );
+    }
+
+    #[cfg(any(test, feature = "syntax-rust"))]
+    #[test]
+    fn rust_treesitter_keeps_use_aliases_neutral() {
+        let text = "use foo::bar as baz;";
+        let tokens = syntax_tokens_for_line(text, DiffSyntaxLanguage::Rust, DiffSyntaxMode::Auto);
+        assert!(
+            has_token_kind_and_text(text, &tokens, SyntaxTokenKind::Preproc, "foo"),
+            "Aliased imports should keep the non-`crate` root violet, got: {tokens:?}"
+        );
+        assert!(
+            has_token_kind_and_text(text, &tokens, SyntaxTokenKind::Function, "bar"),
+            "Aliased imports should keep the source tail blue, got: {tokens:?}"
+        );
+        assert!(
+            !has_token_kind_and_text(text, &tokens, SyntaxTokenKind::Preproc, "baz"),
+            "Import aliases should stay neutral instead of inheriting the root accent, got: {tokens:?}"
+        );
+        assert!(
+            !has_token_kind_and_text(text, &tokens, SyntaxTokenKind::Function, "baz"),
+            "Import aliases should stay neutral instead of inheriting the source tail color, got: {tokens:?}"
+        );
+    }
+
     #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn tsx_treesitter_highlights_jsx_tag_and_attribute() {
