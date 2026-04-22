@@ -2185,7 +2185,7 @@ mod tests {
         for snippet in [
             "Custom themes are loaded from JSON bundle files in your per-user themes directory",
             "creates on startup",
-            "[THEMES.md](THEMES.md)",
+            "[THEMES.md](docs/themes.md)",
         ] {
             assert!(
                 readme.contains(snippet),

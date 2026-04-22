@@ -2865,10 +2865,10 @@ fn large_conflict_two_way_views_upgrade_to_prepared_document_syntax(cx: &mut gpu
             ours_comment_line,
             "expected the cached two-way split row to match the multiline comment text"
         );
-        let has_comment_highlight = styled_has_leading_muted_highlight(
+        let has_comment_highlight = styled_has_leading_color_highlight(
             styled,
             comment_prefix_end,
-            pane.theme.colors.text_muted.into(),
+            pane.theme.syntax.comment.into(),
         );
         if has_comment_highlight {
             None
@@ -2911,10 +2911,10 @@ fn large_conflict_two_way_views_upgrade_to_prepared_document_syntax(cx: &mut gpu
                     fallback_split_highlights_hash
                         .map(|hash| styled.highlights_hash != hash)
                         .unwrap_or(true)
-                        && styled_has_leading_muted_highlight(
+                        && styled_has_leading_color_highlight(
                             styled,
                             comment_prefix_end,
-                            pane.theme.colors.text_muted.into(),
+                            pane.theme.syntax.comment.into(),
                         )
                 })
         },
@@ -2942,10 +2942,10 @@ fn large_conflict_two_way_views_upgrade_to_prepared_document_syntax(cx: &mut gpu
         )
         .expect("split cache should stay available after background syntax preparation");
         assert!(
-            styled_has_leading_muted_highlight(
+            styled_has_leading_color_highlight(
                 styled,
                 comment_prefix_end,
-                pane.theme.colors.text_muted.into(),
+                pane.theme.syntax.comment.into(),
             ),
             "prepared syntax should continue to drive split-row styling after background preparation",
         );
@@ -2983,10 +2983,10 @@ fn large_conflict_two_way_views_upgrade_to_prepared_document_syntax(cx: &mut gpu
             "expected the cached three-way ours row to match the multiline comment text",
         );
         assert!(
-            styled_has_leading_muted_highlight(
+            styled_has_leading_color_highlight(
                 styled,
                 comment_prefix_end,
-                pane.theme.colors.text_muted.into(),
+                pane.theme.syntax.comment.into(),
             ),
             "prepared syntax should continue to drive three-way row styling after toggling from two-way",
         );
@@ -3021,10 +3021,10 @@ fn large_conflict_two_way_views_upgrade_to_prepared_document_syntax(cx: &mut gpu
         )
         .expect("split cache should rebuild after returning from three-way mode");
         assert!(
-            styled_has_leading_muted_highlight(
+            styled_has_leading_color_highlight(
                 styled,
                 comment_prefix_end,
-                pane.theme.colors.text_muted.into(),
+                pane.theme.syntax.comment.into(),
             ),
             "prepared syntax should continue to drive split-row styling after toggling back from three-way",
         );
@@ -4779,7 +4779,7 @@ fn edited_conflict_resolved_output_renders_plain_text_then_upgrades_after_backgr
                 styled.highlights.iter().any(|(range, style)| {
                     range.start == 0
                         && range.end == inserted_comment_line.len()
-                        && style.color == Some(pane.theme.colors.text_muted.into())
+                        && style.color == Some(pane.theme.syntax.comment.into())
                 }),
                 "if the background parse wins before the first observable redraw, the continuation row should already be comment-highlighted"
             );
@@ -4790,7 +4790,7 @@ fn edited_conflict_resolved_output_renders_plain_text_then_upgrades_after_backgr
             styled.highlights.iter().any(|(range, style)| {
                 range.start == 0
                     && range.end == inserted_comment_line.len()
-                    && style.color == Some(pane.theme.colors.text_muted.into())
+                    && style.color == Some(pane.theme.syntax.comment.into())
             }),
         )
     });
@@ -4811,7 +4811,7 @@ fn edited_conflict_resolved_output_renders_plain_text_then_upgrades_after_backgr
                             && styled.highlights.iter().any(|(range, style)| {
                                 range.start == 0
                                     && range.end == inserted_comment_line.len()
-                                    && style.color == Some(pane.theme.colors.text_muted.into())
+                                    && style.color == Some(pane.theme.syntax.comment.into())
                             })
                     })
         },
@@ -4843,7 +4843,7 @@ fn edited_conflict_resolved_output_renders_plain_text_then_upgrades_after_backgr
             styled.highlights.iter().any(|(range, style)| {
                 range.start == 0
                     && range.end == inserted_comment_line.len()
-                    && style.color == Some(pane.theme.colors.text_muted.into())
+                    && style.color == Some(pane.theme.syntax.comment.into())
             }),
             "the inserted comment continuation row should upgrade to multiline comment highlighting after background reparsing"
         );

@@ -1428,12 +1428,12 @@ mod tests {
 
         assert_eq!(
             start_style(&multiline),
-            Some(theme.colors.text_muted.into()),
+            Some(theme.syntax.comment.into()),
             "multiline continuation should keep comment highlighting from document context"
         );
         assert_ne!(
             start_style(&standalone),
-            Some(theme.colors.text_muted.into()),
+            Some(theme.syntax.comment.into()),
             "standalone line should not reuse cached comment styling from another prepared document"
         );
     }
@@ -1509,7 +1509,7 @@ mod tests {
             highlights.iter().any(|(range, style)| {
                 range.start <= second_line_start
                     && range.end > second_line_start
-                    && style.color == Some(theme.colors.text_muted.into())
+                    && style.color == Some(theme.syntax.comment.into())
             }),
             "second line should retain comment highlighting from multiline document context"
         );
@@ -1538,7 +1538,7 @@ mod tests {
             !first.highlights.iter().any(|(range, style)| {
                 range.start <= second_line_start
                     && range.end > second_line_start
-                    && style.color == Some(theme.colors.text_muted.into())
+                    && style.color == Some(theme.syntax.comment.into())
             }),
             "heuristic fallback should not invent multiline comment state before the chunk is ready"
         );
@@ -1564,7 +1564,7 @@ mod tests {
             second.highlights.iter().any(|(range, style)| {
                 range.start <= second_line_start
                     && range.end > second_line_start
-                    && style.color == Some(theme.colors.text_muted.into())
+                    && style.color == Some(theme.syntax.comment.into())
             }),
             "resolved output should upgrade to full document-aware comment highlighting"
         );

@@ -2538,7 +2538,7 @@ fn titlebar_free_badge_opens_editions_page_and_updates_tooltip_on_hover(
     let badge_center = badge_bounds.center();
 
     cx.simulate_mouse_move(badge_center, None, Modifiers::default());
-    cx.run_until_parked();
+    wait_for_native_tooltip(cx);
     cx.update(|_window, app| {
         assert_eq!(
             crate::view::test_support::tooltip_text(view.read(app), app),
@@ -2559,7 +2559,7 @@ fn titlebar_free_badge_opens_editions_page_and_updates_tooltip_on_hover(
     });
 
     cx.simulate_mouse_move(gpui::point(px(120.0), px(18.0)), None, Modifiers::default());
-    cx.run_until_parked();
+    redraw(cx);
     cx.update(|_window, app| {
         assert_eq!(
             crate::view::test_support::tooltip_text(view.read(app), app),

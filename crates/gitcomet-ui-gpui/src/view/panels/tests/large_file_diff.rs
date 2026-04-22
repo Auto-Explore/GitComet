@@ -1230,7 +1230,7 @@ fn large_file_diff_renders_plain_text_then_upgrades_after_background_syntax(
                     styled.highlights.iter().any(|(range, style)| {
                         range.start == 0
                             && range.end == comment_line.len()
-                            && style.color == Some(pane.theme.colors.text_muted.into())
+                            && style.color == Some(pane.theme.syntax.comment.into())
                     }),
                     "if the background parse wins the race before the first split draw, the cached split row should already be syntax highlighted"
                 );
@@ -1266,7 +1266,7 @@ fn large_file_diff_renders_plain_text_then_upgrades_after_background_syntax(
                             && styled.highlights.iter().any(|(range, style)| {
                                 range.start == 0
                                     && range.end == comment_line.len()
-                                    && style.color == Some(pane.theme.colors.text_muted.into())
+                                    && style.color == Some(pane.theme.syntax.comment.into())
                             })
                     })
         },
@@ -1318,7 +1318,7 @@ fn large_file_diff_renders_plain_text_then_upgrades_after_background_syntax(
             split_styled.highlights.iter().any(|(range, style)| {
                 range.start == 0
                     && range.end == comment_line.len()
-                    && style.color == Some(pane.theme.colors.text_muted.into())
+                    && style.color == Some(pane.theme.syntax.comment.into())
             }),
             "split comment row should upgrade to comment highlighting after background parsing"
         );
@@ -1352,7 +1352,7 @@ fn large_file_diff_renders_plain_text_then_upgrades_after_background_syntax(
                     && styled.highlights.iter().any(|(range, style)| {
                         range.start == 0
                             && range.end == comment_line.len()
-                            && style.color == Some(pane.theme.colors.text_muted.into())
+                            && style.color == Some(pane.theme.syntax.comment.into())
                     })
             })
         },
@@ -1598,7 +1598,7 @@ fn edited_large_file_diff_reparses_incrementally_in_background_after_timeout(
                     styled.highlights.iter().any(|(range, style)| {
                         range.start == 0
                             && range.end == comment_line.len()
-                            && style.color == Some(pane.theme.colors.text_muted.into())
+                            && style.color == Some(pane.theme.syntax.comment.into())
                     }),
                     "if the background parse wins the race before the first observable split cache fill, the cached edited row should already be syntax highlighted"
                 );
@@ -1646,7 +1646,7 @@ fn edited_large_file_diff_reparses_incrementally_in_background_after_timeout(
                             && styled.highlights.iter().any(|(range, style)| {
                                 range.start == 0
                                     && range.end == comment_line.len()
-                                    && style.color == Some(pane.theme.colors.text_muted.into())
+                                    && style.color == Some(pane.theme.syntax.comment.into())
                             })
                     })
         },
@@ -1718,7 +1718,7 @@ fn edited_large_file_diff_reparses_incrementally_in_background_after_timeout(
             split_styled.highlights.iter().any(|(range, style)| {
                 range.start == 0
                     && range.end == comment_line.len()
-                    && style.color == Some(pane.theme.colors.text_muted.into())
+                    && style.color == Some(pane.theme.syntax.comment.into())
             }),
             "the edited split comment row should upgrade to comment highlighting after incremental background parsing"
         );
@@ -1752,7 +1752,7 @@ fn edited_large_file_diff_reparses_incrementally_in_background_after_timeout(
                     && styled.highlights.iter().any(|(range, style)| {
                         range.start == 0
                             && range.end == comment_line.len()
-                            && style.color == Some(pane.theme.colors.text_muted.into())
+                            && style.color == Some(pane.theme.syntax.comment.into())
                     })
             })
         },
@@ -2085,7 +2085,7 @@ fn file_diff_background_left_syntax_upgrade_preserves_right_cached_rows(
                         styled.highlights.iter().any(|(range, style)| {
                             range.start == 0
                                 && range.end == comment_line.len()
-                                && style.color == Some(pane.theme.colors.text_muted.into())
+                                && style.color == Some(pane.theme.syntax.comment.into())
                         }) && (!left_was_pending
                             || pane.file_diff_split_style_cache_epoch(DiffTextRegion::SplitLeft)
                                 > left_epoch_before
@@ -2156,7 +2156,7 @@ fn file_diff_background_left_syntax_upgrade_preserves_right_cached_rows(
             left_cached.highlights.iter().any(|(range, style)| {
                 range.start == 0
                     && range.end == comment_line.len()
-                    && style.color == Some(pane.theme.colors.text_muted.into())
+                    && style.color == Some(pane.theme.syntax.comment.into())
             }),
             "the left comment row should be comment-highlighted after the background parse completes"
         );
