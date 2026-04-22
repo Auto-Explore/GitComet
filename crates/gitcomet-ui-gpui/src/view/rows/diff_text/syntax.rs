@@ -1428,6 +1428,38 @@ mod tests {
             second.iter().any(|t| t.kind == SyntaxTokenKind::Comment),
             "second line should include comment tokens from multiline context"
         );
+        assert!(
+            second
+                .iter()
+                .any(|t| t.kind == SyntaxTokenKind::Comment && t.range.start == 0),
+            "second line should start with comment highlighting from multiline context, got: {second:?}"
+        );
+    }
+
+    #[test]
+    fn prepared_document_request_line_tokens_preserves_multiline_context() {
+        let lines = ["/* open comment", "still comment */ let x = 1;"];
+        let doc = prepare_test_document(DiffSyntaxLanguage::Rust, &lines.join("\n"));
+
+        let expected = syntax_tokens_for_prepared_document_line(doc, 1)
+            .expect("sync line-token lookup should materialize the continuation line chunk");
+
+        match request_syntax_tokens_for_prepared_document_line(doc, 1) {
+            Some(PreparedSyntaxLineTokensRequest::Ready(tokens)) => {
+                assert!(
+                    tokens
+                        .iter()
+                        .any(|t| t.kind == SyntaxTokenKind::Comment && t.range.start == 0),
+                    "requested second line should start with comment highlighting from multiline context, got: {tokens:?}"
+                );
+                assert_eq!(
+                    tokens.as_ref(),
+                    expected.as_slice(),
+                    "requested prepared continuation line should match the synchronously materialized tokens"
+                );
+            }
+            other => panic!("expected ready prepared second line, got {other:?}"),
+        }
     }
 
     #[cfg(any(test, feature = "syntax-rust"))]
