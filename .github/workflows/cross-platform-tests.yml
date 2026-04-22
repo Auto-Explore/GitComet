@@ -37,13 +37,25 @@ jobs:
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
 
-      - name: Enable WER full dumps for Windows ARM test crashes
+      - name: Install ProcDump for Windows ARM test crashes
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force C:\CrashDumps | Out-Null
-          reg add "HKLM\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps" /v DumpFolder /t REG_EXPAND_SZ /d C:\CrashDumps /f
-          reg add "HKLM\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps" /v DumpType /t REG_DWORD /d 2 /f
-          reg add "HKLM\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps" /v DumpCount /t REG_DWORD /d 10 /f
+          $dumpDir = 'C:\CrashDumps'
+          $procDumpDir = Join-Path $env:RUNNER_TEMP 'procdump'
+          $procDumpArchive = Join-Path $env:RUNNER_TEMP 'Procdump.zip'
+          $procDumpExe = Join-Path $procDumpDir 'procdump64a.exe'
+
+          New-Item -ItemType Directory -Force $dumpDir | Out-Null
+          New-Item -ItemType Directory -Force $procDumpDir | Out-Null
+
+          Invoke-WebRequest 'https://download.sysinternals.com/files/Procdump.zip' -OutFile $procDumpArchive -UseBasicParsing
+          Expand-Archive -Path $procDumpArchive -DestinationPath $procDumpDir -Force
+
+          if (-not (Test-Path $procDumpExe)) {
+            throw "ProcDump ARM64 binary not found at $procDumpExe"
+          }
+
+          & $procDumpExe -accepteula -ma -i $dumpDir
 
       - name: Run headless test suite (PowerShell)
         shell: pwsh
@@ -56,7 +68,7 @@ jobs:
             --locked `
             --verbose
 
-      - name: Wait for WER crash dumps and log contents
+      - name: Wait for ProcDump crash dumps and log contents
         if: failure()
         shell: pwsh
         run: |
