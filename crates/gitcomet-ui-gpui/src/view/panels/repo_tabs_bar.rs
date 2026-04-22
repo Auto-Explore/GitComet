@@ -9,7 +9,6 @@ pub(in super::super) struct RepoTabsBarView {
     theme: AppTheme,
     _ui_model_subscription: gpui::Subscription,
     root_view: WeakEntity<GitCometView>,
-    tooltip_host: WeakEntity<TooltipHost>,
 
     hovered_repo_tab: Option<RepoId>,
     repo_tab_spinner_delay: Option<RepoTabSpinnerDelayState>,
@@ -122,7 +121,6 @@ impl RepoTabsBarView {
         ui_model: Entity<AppUiModel>,
         theme: AppTheme,
         root_view: WeakEntity<GitCometView>,
-        tooltip_host: WeakEntity<TooltipHost>,
         cx: &mut gpui::Context<Self>,
     ) -> Self {
         let state = Arc::clone(&ui_model.read(cx).state);
@@ -141,11 +139,6 @@ impl RepoTabsBarView {
                 this.hovered_repo_tab = None;
             }
 
-            if this.state.repos.is_empty() {
-                let close_tooltip: SharedString = "Close repository".into();
-                this.clear_tooltip_if_matches(&close_tooltip, cx);
-            }
-
             if next_fingerprint != this.notify_fingerprint {
                 this.notify_fingerprint = next_fingerprint;
                 cx.notify();
@@ -158,7 +151,6 @@ impl RepoTabsBarView {
             theme,
             _ui_model_subscription: subscription,
             root_view,
-            tooltip_host,
             hovered_repo_tab: None,
             repo_tab_spinner_delay: None,
             repo_tab_spinner_delay_seq: 0,
@@ -175,29 +167,6 @@ impl RepoTabsBarView {
 
     fn active_repo_id(&self) -> Option<RepoId> {
         self.state.active_repo
-    }
-
-    fn set_tooltip_text_if_changed(
-        &mut self,
-        next: Option<SharedString>,
-        cx: &mut gpui::Context<Self>,
-    ) -> bool {
-        let _ = self
-            .tooltip_host
-            .update(cx, |host, cx| host.set_tooltip_text_if_changed(next, cx));
-        false
-    }
-
-    fn clear_tooltip_if_matches(
-        &mut self,
-        tooltip: &SharedString,
-        cx: &mut gpui::Context<Self>,
-    ) -> bool {
-        let tooltip = tooltip.clone();
-        let _ = self
-            .tooltip_host
-            .update(cx, |host, cx| host.clear_tooltip_if_matches(&tooltip, cx));
-        false
     }
 
     fn update_repo_tab_spinner_delay(&mut self, cx: &mut gpui::Context<Self>) {
@@ -314,6 +283,7 @@ impl Render for RepoTabsBarView {
 
             let close_button = div()
                 .id(("repo_tab_close", repo_id.0))
+                .debug_selector(move || format!("repo_tab_close_{}", repo_id.0))
                 .flex()
                 .items_center()
                 .justify_center()
@@ -331,21 +301,7 @@ impl Render for RepoTabsBarView {
                     cx.stop_propagation();
                     this.close_repo_tab(repo_id, cx);
                 }))
-                .on_hover(cx.listener({
-                    let tooltip = tooltip.clone();
-                    let close_tooltip = close_tooltip.clone();
-                    move |this, hovering: &bool, _w, cx| {
-                        if *hovering {
-                            this.set_tooltip_text_if_changed(Some(close_tooltip.clone()), cx);
-                            return;
-                        }
-
-                        let cleared = this.clear_tooltip_if_matches(&close_tooltip, cx);
-                        if cleared && this.hovered_repo_tab == Some(repo_id) {
-                            this.set_tooltip_text_if_changed(Some(tooltip.clone()), cx);
-                        }
-                    }
-                }));
+                .gitcomet_tooltip(theme, close_tooltip.clone());
 
             let mut tab = components::Tab::new(("repo_tab", repo_id.0))
                 .selected(is_active)
@@ -452,21 +408,15 @@ impl Render for RepoTabsBarView {
                     this.hovered_repo_tab = None;
                     cx.notify();
                 }))
-                .on_hover(cx.listener({
-                    move |this, hovering: &bool, _w, cx| {
-                        if *hovering {
-                            this.hovered_repo_tab = Some(repo_id);
-                            this.set_tooltip_text_if_changed(Some(tooltip.clone()), cx);
-                        } else {
-                            if this.hovered_repo_tab == Some(repo_id) {
-                                this.hovered_repo_tab = None;
-                            }
-                            this.clear_tooltip_if_matches(&tooltip, cx);
-                            this.clear_tooltip_if_matches(&close_tooltip, cx);
-                        }
-                        cx.notify();
+                .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
+                    if *hovering {
+                        this.hovered_repo_tab = Some(repo_id);
+                    } else if this.hovered_repo_tab == Some(repo_id) {
+                        this.hovered_repo_tab = None;
                     }
+                    cx.notify();
                 }))
+                .gitcomet_tooltip(theme, tooltip.clone())
                 .on_click(cx.listener(move |this, _e: &ClickEvent, _w, _cx| {
                     if let Some(msg) = Self::repo_tab_click_message(this.active_repo_id(), repo_id)
                     {
@@ -505,28 +455,20 @@ impl Render for RepoTabsBarView {
                             .hover(move |s| s.bg(theme.colors.hover))
                             .child(svg_icon(icon_path, theme.colors.accent, scaled_px(14.0))),
                     )
-                    .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
-                        if *hovering {
-                            this.set_tooltip_text_if_changed(Some(tooltip.clone()), cx);
-                        } else {
-                            this.clear_tooltip_if_matches(&tooltip, cx);
-                        }
-                    }))
+                    .gitcomet_tooltip(theme, tooltip)
             };
 
         let root_view = self.root_view.clone();
-        let open_repo_tooltip: SharedString = "Open repository".into();
         let open_repo =
-            repo_bar_action_button("open_repo", "icons/folder.svg", open_repo_tooltip.clone())
+            repo_bar_action_button("open_repo", "icons/folder.svg", "Open repository".into())
                 .on_click(cx.listener(move |_this, _e: &ClickEvent, window, cx| {
                     cx.stop_propagation();
                     let _ = root_view.update(cx, |root, cx| root.prompt_open_repo(window, cx));
                 }));
 
         let root_view = self.root_view.clone();
-        let clone_repo_tooltip: SharedString = "Clone repository".into();
         let clone_repo =
-            repo_bar_action_button("clone_repo", "icons/cloud.svg", clone_repo_tooltip.clone())
+            repo_bar_action_button("clone_repo", "icons/cloud.svg", "Clone repository".into())
                 .on_click(cx.listener(move |_this, e: &ClickEvent, window, cx| {
                     cx.stop_propagation();
                     let _ = root_view.update(cx, |root, cx| {

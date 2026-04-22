@@ -2525,13 +2525,11 @@ fn titlebar_free_badge_opens_editions_page_and_updates_tooltip_on_hover(
     let badge_center = badge_bounds.center();
 
     cx.simulate_mouse_move(badge_center, None, Modifiers::default());
-    cx.run_until_parked();
-    cx.update(|_window, app| {
-        assert_eq!(
-            crate::view::test_support::tooltip_text(view.read(app), app),
-            Some("See GitComet editions".into())
-        );
-    });
+    crate::view::test_support::wait_for_native_tooltip(cx);
+    assert_eq!(
+        crate::view::test_support::tooltip_text(cx, &view),
+        Some("See GitComet editions".into())
+    );
 
     cx.simulate_mouse_down(badge_center, MouseButton::Left, Modifiers::default());
     cx.simulate_mouse_up(badge_center, MouseButton::Left, Modifiers::default());
@@ -2546,13 +2544,7 @@ fn titlebar_free_badge_opens_editions_page_and_updates_tooltip_on_hover(
     });
 
     cx.simulate_mouse_move(gpui::point(px(120.0), px(18.0)), None, Modifiers::default());
-    cx.run_until_parked();
-    cx.update(|_window, app| {
-        assert_eq!(
-            crate::view::test_support::tooltip_text(view.read(app), app),
-            None
-        );
-    });
+    assert_eq!(crate::view::test_support::tooltip_text(cx, &view), None);
 }
 
 #[gpui::test]
@@ -2616,13 +2608,11 @@ fn titlebar_window_controls_update_tooltip_on_hover(cx: &mut gpui::TestAppContex
         .debug_bounds("titlebar_win_min")
         .expect("expected titlebar min control bounds");
     cx.simulate_mouse_move(min_bounds.center(), None, Modifiers::default());
-    cx.run_until_parked();
-    cx.update(|_window, app| {
-        assert_eq!(
-            crate::view::test_support::tooltip_text(view.read(app), app),
-            Some("Minimize window".into())
-        );
-    });
+    crate::view::test_support::wait_for_native_tooltip(cx);
+    assert_eq!(
+        crate::view::test_support::tooltip_text(cx, &view),
+        Some("Minimize window".into())
+    );
 
     let max_bounds = cx
         .debug_bounds("titlebar_win_max")
@@ -2635,34 +2625,24 @@ fn titlebar_window_controls_update_tooltip_on_hover(cx: &mut gpui::TestAppContex
         }
     });
     cx.simulate_mouse_move(max_bounds.center(), None, Modifiers::default());
-    cx.run_until_parked();
-    cx.update(|_window, app| {
-        assert_eq!(
-            crate::view::test_support::tooltip_text(view.read(app), app),
-            Some(expected_max)
-        );
-    });
+    crate::view::test_support::wait_for_native_tooltip(cx);
+    assert_eq!(
+        crate::view::test_support::tooltip_text(cx, &view),
+        Some(expected_max)
+    );
 
     let close_bounds = cx
         .debug_bounds("titlebar_win_close")
         .expect("expected titlebar close control bounds");
     cx.simulate_mouse_move(close_bounds.center(), None, Modifiers::default());
-    cx.run_until_parked();
-    cx.update(|_window, app| {
-        assert_eq!(
-            crate::view::test_support::tooltip_text(view.read(app), app),
-            Some("Close window".into())
-        );
-    });
+    crate::view::test_support::wait_for_native_tooltip(cx);
+    assert_eq!(
+        crate::view::test_support::tooltip_text(cx, &view),
+        Some("Close window".into())
+    );
 
     cx.simulate_mouse_move(gpui::point(px(120.0), px(18.0)), None, Modifiers::default());
-    cx.run_until_parked();
-    cx.update(|_window, app| {
-        assert_eq!(
-            crate::view::test_support::tooltip_text(view.read(app), app),
-            None
-        );
-    });
+    assert_eq!(crate::view::test_support::tooltip_text(cx, &view), None);
 }
 
 struct ScrollbarTestView {

@@ -19,7 +19,6 @@ pub(in super::super) struct SidebarPaneView {
     path_display_cache: std::cell::RefCell<path_display::PathDisplayCache>,
     sidebar_collapsed_items_by_repo: BTreeMap<std::path::PathBuf, BTreeSet<String>>,
     root_view: WeakEntity<GitCometView>,
-    tooltip_host: WeakEntity<TooltipHost>,
     notify_fingerprint: SidebarNotifyFingerprint,
     sidebar_request_fingerprint: SidebarRequestFingerprint,
     pub(in super::super) active_context_menu_invoker: Option<SharedString>,
@@ -64,7 +63,6 @@ impl SidebarPaneView {
         theme: AppTheme,
         sidebar_collapsed_items_by_repo: BTreeMap<std::path::PathBuf, BTreeSet<String>>,
         root_view: WeakEntity<GitCometView>,
-        tooltip_host: WeakEntity<TooltipHost>,
         cx: &mut gpui::Context<Self>,
     ) -> Self {
         let state = Arc::clone(&ui_model.read(cx).state);
@@ -93,7 +91,6 @@ impl SidebarPaneView {
             path_display_cache: std::cell::RefCell::new(path_display::PathDisplayCache::default()),
             sidebar_collapsed_items_by_repo,
             root_view,
-            tooltip_host,
             notify_fingerprint: initial_fingerprint,
             sidebar_request_fingerprint: SidebarRequestFingerprint::default(),
             active_context_menu_invoker: None,
@@ -294,29 +291,6 @@ impl SidebarPaneView {
             .h_full()
             .min_h(px(0.0))
             .child(panel_body)
-    }
-
-    pub(in super::super) fn set_tooltip_text_if_changed(
-        &mut self,
-        next: Option<SharedString>,
-        cx: &mut gpui::Context<Self>,
-    ) -> bool {
-        let _ = self
-            .tooltip_host
-            .update(cx, |host, cx| host.set_tooltip_text_if_changed(next, cx));
-        false
-    }
-
-    pub(in super::super) fn clear_tooltip_if_matches(
-        &mut self,
-        tooltip: &SharedString,
-        cx: &mut gpui::Context<Self>,
-    ) -> bool {
-        let tooltip = tooltip.clone();
-        let _ = self
-            .tooltip_host
-            .update(cx, |host, cx| host.clear_tooltip_if_matches(&tooltip, cx));
-        false
     }
 
     pub(in super::super) fn open_popover_at(

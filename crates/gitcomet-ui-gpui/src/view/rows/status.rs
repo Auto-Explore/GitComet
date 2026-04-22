@@ -521,17 +521,7 @@ fn status_row(
 
             cx.notify();
         })
-        .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
-            let mut changed = false;
-            if *hovering {
-                changed |= this.set_tooltip_text_if_changed(Some(stage_tooltip.clone()), cx);
-            } else {
-                changed |= this.clear_tooltip_if_matches(&stage_tooltip, cx);
-            }
-            if changed {
-                cx.notify();
-            }
-        }));
+        .gitcomet_tooltip(theme, stage_tooltip.clone());
 
     let path_display_for_label = path_display.clone();
 
@@ -558,17 +548,7 @@ fn status_row(
             }
         })
         .active(move |s| s.bg(theme.colors.active))
-        .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
-            let mut changed = false;
-            if *hovering {
-                changed |= this.set_tooltip_text_if_changed(Some(row_tooltip.clone()), cx);
-            } else {
-                changed |= this.clear_tooltip_if_matches(&row_tooltip, cx);
-            }
-            if changed {
-                cx.notify();
-            }
-        }))
+        .gitcomet_tooltip(theme, row_tooltip.clone())
         .on_mouse_down(
             MouseButton::Right,
             cx.listener(move |this, e: &MouseDownEvent, window, cx| {

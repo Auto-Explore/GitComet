@@ -2826,7 +2826,6 @@ pub struct GitCometView {
     pub(super) repo_tabs_bar: Entity<RepoTabsBarView>,
     pub(super) action_bar: Entity<ActionBarView>,
     pub(super) bottom_status_bar: Entity<BottomStatusBarView>,
-    pub(super) tooltip_host: Entity<TooltipHost>,
     pub(super) toast_host: Entity<ToastHost>,
     pub(super) popover_host: Entity<PopoverHost>,
     pub(super) focused_mergetool_bootstrap: Option<FocusedMergetoolBootstrap>,

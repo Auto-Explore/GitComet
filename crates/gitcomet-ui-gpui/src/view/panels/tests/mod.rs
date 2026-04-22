@@ -382,19 +382,19 @@ pub(super) fn conflict_split_cached_styled<'a>(
     pane.conflict_diff_segments_cache_split.get(&(row_ix, side))
 }
 
-pub(super) fn styled_has_leading_muted_highlight(
+pub(super) fn styled_has_leading_color_highlight(
     styled: &super::CachedDiffStyledText,
     comment_prefix_end: usize,
-    muted: gpui::Hsla,
+    color: gpui::Hsla,
 ) -> bool {
     let has_muted_prefix_start = styled
         .highlights
         .iter()
-        .any(|(range, style)| range.start == 0 && style.color == Some(muted));
+        .any(|(range, style)| range.start == 0 && style.color == Some(color));
     let max_muted_end = styled
         .highlights
         .iter()
-        .filter(|(range, style)| range.start < comment_prefix_end && style.color == Some(muted))
+        .filter(|(range, style)| range.start < comment_prefix_end && style.color == Some(color))
         .map(|(range, _)| range.end)
         .max()
         .unwrap_or(0);

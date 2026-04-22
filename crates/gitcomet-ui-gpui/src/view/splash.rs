@@ -141,23 +141,6 @@ impl GitCometView {
             .update(cx, |bar, cx| bar.set_workspace_actions_enabled(enabled, cx));
     }
 
-    fn set_tooltip_text_if_changed(
-        &mut self,
-        next: Option<SharedString>,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        let _ = self
-            .tooltip_host
-            .update(cx, |host, cx| host.set_tooltip_text_if_changed(next, cx));
-    }
-
-    fn clear_tooltip_if_matches(&mut self, tooltip: &SharedString, cx: &mut gpui::Context<Self>) {
-        let tooltip = tooltip.clone();
-        let _ = self
-            .tooltip_host
-            .update(cx, |host, cx| host.clear_tooltip_if_matches(&tooltip, cx));
-    }
-
     fn interstitial_logo(_theme: AppTheme, size: Pixels) -> AnyElement {
         div()
             .id("repository_entry_logo")
@@ -309,20 +292,11 @@ impl GitCometView {
             },
             self.ui_scale_percent,
         )
+        .gitcomet_tooltip(self.theme, settings_tooltip)
         .on_click(cx.listener(|this, _e, _window, cx| {
             this.open_repo_panel = false;
             cx.defer(crate::view::open_settings_window);
             cx.notify();
-        }))
-        .on_hover(cx.listener({
-            let settings_tooltip = settings_tooltip.clone();
-            move |this, hovering: &bool, _w, cx| {
-                if *hovering {
-                    this.set_tooltip_text_if_changed(Some(settings_tooltip.clone()), cx);
-                } else {
-                    this.clear_tooltip_if_matches(&settings_tooltip, cx);
-                }
-            }
         }))
     }
 
@@ -555,18 +529,9 @@ impl GitCometView {
             primary_button_colors,
             self.ui_scale_percent,
         )
+        .gitcomet_tooltip(self.theme, open_tooltip)
         .on_click(cx.listener(|this, _e, window, cx| {
             this.prompt_open_repo(window, cx);
-        }))
-        .on_hover(cx.listener({
-            let open_tooltip = open_tooltip.clone();
-            move |this, hovering: &bool, _w, cx| {
-                if *hovering {
-                    this.set_tooltip_text_if_changed(Some(open_tooltip.clone()), cx);
-                } else {
-                    this.clear_tooltip_if_matches(&open_tooltip, cx);
-                }
-            }
         }));
 
         let clone_button = {
@@ -581,20 +546,11 @@ impl GitCometView {
                 secondary_button_colors,
                 self.ui_scale_percent,
             )
+            .gitcomet_tooltip(self.theme, clone_tooltip)
             .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
                 let bounds = (*last_bounds_for_click.borrow())
                     .unwrap_or_else(|| Bounds::new(e.position(), size(px(0.0), px(0.0))));
                 this.open_popover_for_bounds(PopoverKind::CloneRepo, bounds, window, cx);
-            }))
-            .on_hover(cx.listener({
-                let clone_tooltip = clone_tooltip.clone();
-                move |this, hovering: &bool, _w, cx| {
-                    if *hovering {
-                        this.set_tooltip_text_if_changed(Some(clone_tooltip.clone()), cx);
-                    } else {
-                        this.clear_tooltip_if_matches(&clone_tooltip, cx);
-                    }
-                }
             }));
 
             div()
