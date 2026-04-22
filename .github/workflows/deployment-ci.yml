@@ -1,40 +1,6 @@
 name: Deployment CI
 
 on:
-  pull_request:
-    branches: ["main"]
-    paths:
-      - ".github/workflows/build-release-artifacts.yml"
-      - ".github/workflows/deploy-aur.yml"
-      - ".github/workflows/deploy-homebrew-tap.yml"
-      - ".github/workflows/deploy-apt-repo.yml"
-      - ".github/workflows/deploy-windows-installer.yml"
-      - ".github/workflows/deploy-microsoft-store.yml"
-      - ".github/workflows/release-manual-main.yml"
-      - "scripts/update-aur.sh"
-      - "scripts/cargo-flatten-dupes.sh"
-      - "scripts/package-macos.sh"
-      - "scripts/macos-cargo-config.sh"
-      - "scripts/generate-homebrew-cask.sh"
-      - "scripts/build-apt-repo.sh"
-      - "scripts/windows/verify-signed-artifact.ps1"
-  push:
-    branches: ["main"]
-    paths:
-      - ".github/workflows/build-release-artifacts.yml"
-      - ".github/workflows/deploy-aur.yml"
-      - ".github/workflows/deploy-homebrew-tap.yml"
-      - ".github/workflows/deploy-apt-repo.yml"
-      - ".github/workflows/deploy-windows-installer.yml"
-      - ".github/workflows/deploy-microsoft-store.yml"
-      - ".github/workflows/release-manual-main.yml"
-      - "scripts/update-aur.sh"
-      - "scripts/cargo-flatten-dupes.sh"
-      - "scripts/package-macos.sh"
-      - "scripts/macos-cargo-config.sh"
-      - "scripts/generate-homebrew-cask.sh"
-      - "scripts/build-apt-repo.sh"
-      - "scripts/windows/verify-signed-artifact.ps1"
   workflow_dispatch:
 
 permissions:
