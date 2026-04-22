@@ -3,6 +3,7 @@ use crate::ui_scale;
 use gitcomet_core::domain::LogScope;
 
 const WORKTREE_ICON_PATH: &str = "icons/git_worktree.svg";
+const STASH_ICON_PATH: &str = crate::view::icons::STASH_ICON_PATH;
 
 pub(in crate::view) fn listed_workspace_paths_by_branch(
     repo: &RepoState,
@@ -513,7 +514,7 @@ impl SidebarPaneView {
                         .active(move |s| s.bg(theme.colors.active))
                         .when(top_border, |d| d.child(top_divider(theme.colors.border)))
                         .child(tree_toggle_slot(Some(collapsed)))
-                        .child(tree_icon_slot("icons/box.svg", icon_primary, 14.0))
+                        .child(tree_icon_slot(STASH_ICON_PATH, icon_primary, 14.0))
                         .child(
                             div()
                                 .flex_1()
@@ -649,7 +650,7 @@ impl SidebarPaneView {
                         })
                         .active(move |s| s.bg(theme.colors.active))
                         .child(tree_toggle_slot(None))
-                        .child(tree_icon_slot("icons/box.svg", icon_primary, 12.0))
+                        .child(tree_icon_slot(STASH_ICON_PATH, icon_primary, 12.0))
                         .child(
                             div()
                                 .flex_1()

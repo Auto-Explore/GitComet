@@ -597,7 +597,7 @@ impl Render for ActionBarView {
             .as_ref()
             .is_some_and(|id| id.as_ref() == stash_prompt_invoker.as_ref());
         let stash = components::Button::new("stash", "Stash")
-            .start_slot(icon("icons/box.svg", icon_primary))
+            .start_slot(icon(crate::view::icons::STASH_ICON_PATH, icon_primary))
             .style(components::ButtonStyle::Outlined)
             .selected(stash_prompt_active)
             .selected_bg(menu_selected_bg)
