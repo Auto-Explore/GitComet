@@ -74,6 +74,12 @@ Compatibility note:
 - GitComet also keeps the opposite modifier family wired in text inputs where practical, so `Alt`-based word movement and `Ctrl`-based editing aliases remain available as portability fallbacks.
 - Diff-navigation fallbacks stay active from focused GitComet text inputs for `F1`, `F4`, `F2`, `F3`, `F7`, `Shift-F7`, `Alt-Up`, and `Alt-Down` when the input does not handle those keys itself.
 
+### Commit composer
+
+| Action | macOS | Windows / Linux | Notes |
+| --- | --- | --- | --- |
+| Commit staged changes | `Cmd-Enter` | `Ctrl-Enter` | Commit message input only, and only when the Commit action is enabled. |
+
 ## Diff view shortcuts
 
 These shortcuts apply in the main diff panel, including conflict resolution views where noted.
