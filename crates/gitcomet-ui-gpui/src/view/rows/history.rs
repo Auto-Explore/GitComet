@@ -1730,8 +1730,8 @@ impl HistoryView {
                     base_row_vm.is_head,
                     selected,
                 );
-                let show_graph_color_marker = repo.history_state.history_scope
-                    == gitcomet_core::domain::LogScope::AllBranches;
+                let show_graph_color_marker =
+                    history_scope_shows_graph_color_marker(repo.history_state.history_scope);
                 let is_stash_node = base_row_vm.is_stash
                     || stash_ids
                         .as_ref()
@@ -1794,6 +1794,10 @@ fn history_worktree_node_color(
 
 fn history_row_height(ui_scale: ui_scale::UiScale) -> Pixels {
     ui_scale.px(HISTORY_ROW_HEIGHT_PX)
+}
+
+fn history_scope_shows_graph_color_marker(scope: gitcomet_core::domain::LogScope) -> bool {
+    !matches!(scope, gitcomet_core::domain::LogScope::FirstParent)
 }
 
 fn history_selected_branch_entry_range(
@@ -2169,17 +2173,18 @@ fn working_tree_summary_history_row(
 mod tests {
     use super::{
         MarkdownChangeHint, MarkdownInlineStyle, MarkdownPreviewRow, MarkdownPreviewRowKind,
-        history_branch_text_highlights, history_selected_branch_entry_range,
-        history_worktree_node_color, markdown_preview_alert_title_label,
-        markdown_preview_inline_highlight, markdown_preview_row_background,
-        markdown_preview_row_horizontal_padding, markdown_preview_row_layout,
-        markdown_preview_row_marker, markdown_preview_row_styled_text,
+        history_branch_text_highlights, history_scope_shows_graph_color_marker,
+        history_selected_branch_entry_range, history_worktree_node_color,
+        markdown_preview_alert_title_label, markdown_preview_inline_highlight,
+        markdown_preview_row_background, markdown_preview_row_horizontal_padding,
+        markdown_preview_row_layout, markdown_preview_row_marker, markdown_preview_row_styled_text,
         markdown_preview_row_typography,
     };
     use crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY;
     use crate::view::history_graph;
     use crate::view::markdown_preview::MarkdownInlineSpan;
     use crate::view::{AppTheme, DateTimeFormat, Timezone, format_datetime, format_datetime_utc};
+    use gitcomet_core::domain::LogScope;
     use gpui::{FontWeight, SharedString};
     use std::sync::Arc;
     use std::time::{Duration, UNIX_EPOCH};
@@ -2220,6 +2225,21 @@ mod tests {
             history_worktree_node_color(theme, None),
             history_graph::lane_color(theme, 0)
         );
+    }
+
+    #[test]
+    fn history_graph_color_marker_is_shown_for_all_non_first_parent_modes() {
+        assert!(history_scope_shows_graph_color_marker(
+            LogScope::FullReachable
+        ));
+        assert!(!history_scope_shows_graph_color_marker(
+            LogScope::FirstParent
+        ));
+        assert!(history_scope_shows_graph_color_marker(LogScope::NoMerges));
+        assert!(history_scope_shows_graph_color_marker(LogScope::MergesOnly));
+        assert!(history_scope_shows_graph_color_marker(
+            LogScope::AllBranches
+        ));
     }
 
     #[test]
