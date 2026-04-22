@@ -4,41 +4,90 @@ use super::branch_sidebar::{
 };
 use super::*;
 use gitcomet_core::domain::{Branch, LogScope, RemoteBranch, StashEntry, Tag};
+use rustc_hash::FxHasher;
 use smallvec::SmallVec;
 use std::cell::RefCell;
 use std::cmp::Ordering;
+use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use std::rc::Rc;
 use std::time::SystemTime;
 
 #[derive(Clone, Debug)]
 pub(super) struct HistoryCache {
-    pub(super) request: HistoryCacheRequest,
+    pub(super) base: HistoryBaseCache,
+    pub(super) decorations: HistoryDecorationCache,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct HistoryBaseCache {
+    pub(super) request: HistoryBaseCacheRequest,
     pub(super) visible_indices: HistoryVisibleIndices,
     pub(super) graph_rows: Arc<[history_graph::GraphRow]>,
-    pub(super) commit_row_vms: Vec<HistoryCommitRowVm>,
+    pub(super) max_lanes: usize,
+    pub(super) row_vms: Vec<HistoryBaseRowVm>,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct HistoryDecorationCache {
+    pub(super) request: HistoryDecorationCacheRequest,
+    pub(super) row_vms: Arc<[HistoryDecorationRowVm]>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) struct HistoryCacheRequest {
+pub(super) struct HistoryBaseCacheRequest {
     pub(super) repo_id: RepoId,
     pub(super) history_scope: LogScope,
     pub(super) log_fingerprint: u64,
     pub(super) head_branch_rev: u64,
     pub(super) detached_head_commit: Option<CommitId>,
+    pub(super) head_branch_target: Option<CommitId>,
+    pub(super) branches_rev: u64,
+    pub(super) remote_branches_rev: u64,
+    pub(super) stashes_rev: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct HistoryDecorationCacheRequest {
+    pub(super) base_request: HistoryBaseCacheRequest,
+    pub(super) head_branch_rev: u64,
+    pub(super) detached_head_commit: Option<CommitId>,
     pub(super) branches_rev: u64,
     pub(super) remote_branches_rev: u64,
     pub(super) tags_rev: u64,
-    pub(super) stashes_rev: u64,
-    pub(super) date_time_format: DateTimeFormat,
-    pub(super) timezone: Timezone,
-    pub(super) show_timezone: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct HistoryCacheBuildRequest {
+    pub(super) base_request: HistoryBaseCacheRequest,
+    pub(super) decoration_request: HistoryDecorationCacheRequest,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::view) struct HistoryDisplayKey {
+    pub(in crate::view) date_time_format: DateTimeFormat,
+    pub(in crate::view) timezone: Timezone,
+    pub(in crate::view) show_timezone: bool,
+}
+
+impl HistoryDisplayKey {
+    pub(in crate::view) const fn new(
+        date_time_format: DateTimeFormat,
+        timezone: Timezone,
+        show_timezone: bool,
+    ) -> Self {
+        Self {
+            date_time_format,
+            timezone,
+            show_timezone,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
 pub(in crate::view) enum HistoryVisibleIndices {
     All { len: usize },
-    Filtered(Vec<usize>),
+    Filtered(Arc<[usize]>),
 }
 
 pub(in crate::view) enum HistoryVisibleIndicesIter<'a> {
@@ -118,10 +167,50 @@ pub(in crate::view) struct HistoryStashTip<'a> {
     pub(in crate::view) message: Option<&'a Arc<str>>,
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(in crate::view) struct HistoryTextVm {
+    text: SharedString,
+    hash: u64,
+}
+
+impl HistoryTextVm {
+    pub(in crate::view) fn new(text: SharedString) -> Self {
+        Self {
+            hash: history_text_hash(text.as_ref()),
+            text,
+        }
+    }
+
+    pub(in crate::view) fn shared(&self) -> &SharedString {
+        &self.text
+    }
+
+    pub(in crate::view) const fn text_hash(&self) -> u64 {
+        self.hash
+    }
+
+    pub(in crate::view) fn is_empty(&self) -> bool {
+        self.text.is_empty()
+    }
+}
+
+impl AsRef<str> for HistoryTextVm {
+    fn as_ref(&self) -> &str {
+        self.text.as_ref()
+    }
+}
+
+#[inline]
+pub(in crate::view) fn history_text_hash(text: &str) -> u64 {
+    let mut hasher = FxHasher::default();
+    text.hash(&mut hasher);
+    hasher.finish()
+}
+
 #[derive(Clone, Debug)]
 pub(in crate::view) struct HistoryWhenVm {
     time: SystemTime,
-    formatted: RefCell<Option<SharedString>>,
+    formatted: RefCell<Option<(HistoryDisplayKey, HistoryTextVm)>>,
 }
 
 impl HistoryWhenVm {
@@ -132,8 +221,10 @@ impl HistoryWhenVm {
         }
     }
 
-    pub(in crate::view) fn resolve(&self, request: &HistoryCacheRequest) -> SharedString {
-        if let Some(formatted) = self.formatted.borrow().as_ref() {
+    pub(in crate::view) fn resolve(&self, display_key: HistoryDisplayKey) -> HistoryTextVm {
+        if let Some((cached_key, formatted)) = self.formatted.borrow().as_ref()
+            && *cached_key == display_key
+        {
             return formatted.clone();
         }
 
@@ -141,12 +232,12 @@ impl HistoryWhenVm {
         format_datetime_into(
             &mut formatted,
             self.time,
-            request.date_time_format,
-            request.timezone,
-            request.show_timezone,
+            display_key.date_time_format,
+            display_key.timezone,
+            display_key.show_timezone,
         );
-        let formatted: SharedString = formatted.into();
-        *self.formatted.borrow_mut() = Some(formatted.clone());
+        let formatted = HistoryTextVm::new(formatted.into());
+        *self.formatted.borrow_mut() = Some((display_key, formatted.clone()));
         formatted
     }
 }
@@ -157,7 +248,8 @@ const HISTORY_SHORT_SHA_LEN: usize = 8;
 pub(in crate::view) struct HistoryShortShaVm {
     bytes: [u8; HISTORY_SHORT_SHA_LEN],
     len: u8,
-    formatted: RefCell<Option<SharedString>>,
+    hash: u64,
+    formatted: RefCell<Option<HistoryTextVm>>,
 }
 
 impl HistoryShortShaVm {
@@ -169,6 +261,7 @@ impl HistoryShortShaVm {
         Self {
             bytes,
             len: u8::try_from(len).expect("short sha length fits into u8"),
+            hash: history_text_hash(std::str::from_utf8(&id[..len]).expect("short sha is utf-8")),
             formatted: RefCell::new(None),
         }
     }
@@ -178,27 +271,34 @@ impl HistoryShortShaVm {
             .expect("commit id prefixes must stay valid utf-8")
     }
 
-    pub(in crate::view) fn resolve(&self) -> SharedString {
+    pub(in crate::view) fn resolve(&self) -> HistoryTextVm {
         if let Some(formatted) = self.formatted.borrow().as_ref() {
             return formatted.clone();
         }
 
-        let formatted = SharedString::new(self.as_str());
+        let formatted = HistoryTextVm {
+            text: SharedString::new(self.as_str()),
+            hash: self.hash,
+        };
         *self.formatted.borrow_mut() = Some(formatted.clone());
         formatted
     }
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct HistoryCommitRowVm {
-    pub(super) branches_text: SharedString,
-    pub(super) tag_names: Arc<[SharedString]>,
-    pub(super) author: SharedString,
-    pub(super) summary: SharedString,
+pub(super) struct HistoryBaseRowVm {
+    pub(super) author: HistoryTextVm,
+    pub(super) summary: HistoryTextVm,
     pub(super) when: HistoryWhenVm,
     pub(super) short_sha: HistoryShortShaVm,
     pub(super) is_head: bool,
     pub(super) is_stash: bool,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct HistoryDecorationRowVm {
+    pub(super) branches_text: HistoryTextVm,
+    pub(super) tag_names: Arc<[HistoryTextVm]>,
 }
 
 #[inline]
@@ -293,7 +393,7 @@ pub(in crate::view) fn build_history_visible_indices(
         }
         visible_indices.push(ix);
     }
-    HistoryVisibleIndices::Filtered(visible_indices)
+    HistoryVisibleIndices::Filtered(visible_indices.into())
 }
 
 #[inline]
@@ -497,7 +597,7 @@ pub(in crate::view) fn build_history_branch_text_by_target<'a>(
     remote_branches: &'a [RemoteBranch],
     head_branch: Option<&str>,
     head_target: Option<&str>,
-) -> (HashMap<&'a str, SharedString>, Option<SharedString>) {
+) -> (HashMap<&'a str, HistoryTextVm>, Option<HistoryTextVm>) {
     let mut branch_names_by_target: HashMap<&str, HistoryBranchNameBucket<'_>> =
         HashMap::with_capacity_and_hasher(
             branches.len() + remote_branches.len(),
@@ -538,21 +638,27 @@ pub(in crate::view) fn build_history_branch_text_by_target<'a>(
         shared_history_branch_text_with_extra_plain(&names, head_label.as_str())
     });
 
-    let mut branch_text_by_target: HashMap<&str, SharedString> =
+    let mut branch_text_by_target: HashMap<&str, HistoryTextVm> =
         HashMap::with_capacity_and_hasher(branch_names_by_target.len(), Default::default());
     for (target, names) in branch_names_by_target {
         if names.is_empty() {
             continue;
         }
-        branch_text_by_target.insert(target, shared_history_branch_text(&names));
+        branch_text_by_target.insert(
+            target,
+            HistoryTextVm::new(shared_history_branch_text(&names)),
+        );
     }
 
-    (branch_text_by_target, head_branches_text)
+    (
+        branch_text_by_target,
+        head_branches_text.map(HistoryTextVm::new),
+    )
 }
 
 pub(in crate::view) fn build_history_tag_names_by_target(
     tags: &[Tag],
-) -> HashMap<&str, Arc<[SharedString]>> {
+) -> HashMap<&str, Arc<[HistoryTextVm]>> {
     let mut tag_names_by_target: HashMap<&str, HistoryTagNameBucket<'_>> =
         HashMap::with_capacity_and_hasher(tags.len(), Default::default());
     for tag in tags.iter() {
@@ -562,20 +668,25 @@ pub(in crate::view) fn build_history_tag_names_by_target(
             .push(tag.name.as_str());
     }
 
-    let mut tag_text_by_target: HashMap<&str, Arc<[SharedString]>> =
+    let mut tag_text_by_target: HashMap<&str, Arc<[HistoryTextVm]>> =
         HashMap::with_capacity_and_hasher(tag_names_by_target.len(), Default::default());
     for (target, mut names) in tag_names_by_target {
         if names.is_empty() {
             continue;
         }
         if names.len() == 1 {
-            let tag_names: Vec<SharedString> = vec![SharedString::new(names[0])];
+            let tag_names: Vec<HistoryTextVm> =
+                vec![HistoryTextVm::new(SharedString::new(names[0]))];
             tag_text_by_target.insert(target, tag_names.into());
             continue;
         }
         names.sort_unstable();
         names.dedup();
-        let tag_names: Vec<SharedString> = names.into_iter().map(SharedString::new).collect();
+        let tag_names: Vec<HistoryTextVm> = names
+            .into_iter()
+            .map(SharedString::new)
+            .map(HistoryTextVm::new)
+            .collect();
         tag_text_by_target.insert(target, tag_names.into());
     }
 
@@ -778,17 +889,17 @@ mod tests {
         assert_eq!(
             branch_text_by_target
                 .get(commit_a.as_ref())
-                .map(SharedString::as_ref),
+                .map(HistoryTextVm::as_ref),
             Some("feature, origin/main")
         );
         assert_eq!(
             branch_text_by_target
                 .get(commit_b.as_ref())
-                .map(SharedString::as_ref),
+                .map(HistoryTextVm::as_ref),
             Some("upstream/topic")
         );
         assert_eq!(
-            head_branches_text.as_ref().map(SharedString::as_ref),
+            head_branches_text.as_ref().map(HistoryTextVm::as_ref),
             Some("HEAD → main, feature, origin/main")
         );
     }
@@ -844,11 +955,11 @@ mod tests {
         assert_eq!(
             branch_text_by_target
                 .get(commit.as_ref())
-                .map(SharedString::as_ref),
+                .map(HistoryTextVm::as_ref),
             Some("apple, origin/main, origin/zzz")
         );
         assert_eq!(
-            head_branches_text.as_ref().map(SharedString::as_ref),
+            head_branches_text.as_ref().map(HistoryTextVm::as_ref),
             Some("HEAD → topic, apple, origin/main, origin/zzz")
         );
     }
@@ -877,7 +988,7 @@ mod tests {
             .expect("tag names should be cached for the target");
         let tag_names = tag_names
             .iter()
-            .map(SharedString::as_ref)
+            .map(HistoryTextVm::as_ref)
             .collect::<Vec<_>>();
 
         assert_eq!(tag_names, vec!["v1.0.0", "v2.0.0"]);
@@ -929,25 +1040,12 @@ mod tests {
 
     #[test]
     fn history_when_vm_formats_lazily_and_caches_result() {
-        let request = HistoryCacheRequest {
-            repo_id: RepoId(1),
-            history_scope: LogScope::AllBranches,
-            log_fingerprint: 0,
-            head_branch_rev: 0,
-            detached_head_commit: None,
-            branches_rev: 0,
-            remote_branches_rev: 0,
-            tags_rev: 0,
-            stashes_rev: 0,
-            date_time_format: DateTimeFormat::YmdHm,
-            timezone: Timezone::Utc,
-            show_timezone: true,
-        };
+        let display_key = HistoryDisplayKey::new(DateTimeFormat::YmdHm, Timezone::Utc, true);
         let when = HistoryWhenVm::deferred(SystemTime::UNIX_EPOCH);
 
         assert!(when.formatted.borrow().is_none());
-        let first = when.resolve(&request);
-        let second = when.resolve(&request);
+        let first = when.resolve(display_key);
+        let second = when.resolve(display_key);
         assert_eq!(first, second);
         assert!(when.formatted.borrow().is_some());
     }
@@ -960,7 +1058,7 @@ mod tests {
         assert!(short_sha.formatted.borrow().is_none());
         let first = short_sha.resolve();
         let second = short_sha.resolve();
-        assert_eq!(first, "01234567");
+        assert_eq!(first.as_ref(), "01234567");
         assert_eq!(first, second);
         assert!(short_sha.formatted.borrow().is_some());
     }
@@ -998,11 +1096,11 @@ mod tests {
         assert_eq!(
             branch_text_by_target
                 .get(commit.as_ref())
-                .map(SharedString::as_ref),
+                .map(HistoryTextVm::as_ref),
             Some("main, origin/main")
         );
         assert_eq!(
-            head_branches_text.as_ref().map(SharedString::as_ref),
+            head_branches_text.as_ref().map(HistoryTextVm::as_ref),
             Some("HEAD, main, origin/main")
         );
     }

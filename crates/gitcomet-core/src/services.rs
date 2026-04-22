@@ -138,6 +138,21 @@ pub struct BlameLine {
 pub trait GitRepository: Send + Sync {
     fn spec(&self) -> &RepoSpec;
 
+    fn log_history_mode_page(
+        &self,
+        mode: HistoryMode,
+        limit: usize,
+        cursor: Option<&LogCursor>,
+    ) -> Result<LogPage> {
+        match mode {
+            HistoryMode::AllBranches => self.log_all_branches_page(limit, cursor),
+            HistoryMode::FullReachable
+            | HistoryMode::FirstParent
+            | HistoryMode::NoMerges
+            | HistoryMode::MergesOnly => self.log_head_page(limit, cursor),
+        }
+    }
+
     fn log_head_page(&self, limit: usize, cursor: Option<&LogCursor>) -> Result<LogPage>;
     fn log_all_branches_page(&self, _limit: usize, _cursor: Option<&LogCursor>) -> Result<LogPage> {
         Err(Error::new(ErrorKind::Unsupported(
@@ -618,9 +633,180 @@ pub trait GitBackend: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::{
-        BlameLine, CommandOutput, decode_utf8_optional, validate_conflict_resolution_text,
+        BlameLine, CommandOutput, GitRepository, decode_utf8_optional,
+        validate_conflict_resolution_text,
     };
-    use std::sync::Arc;
+    use crate::domain::{
+        Branch, CommitDetails, CommitId, DiffTarget, HistoryMode, LogCursor, LogPage, ReflogEntry,
+        Remote, RemoteBranch, RepoSpec, RepoStatus, StashEntry,
+    };
+    use crate::error::{Error, ErrorKind};
+    use std::path::{Path, PathBuf};
+    use std::sync::{Arc, Mutex};
+
+    fn unsupported<T>() -> super::Result<T> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "unused in services history-mode delegation test",
+        )))
+    }
+
+    struct RecordingHistoryModeRepo {
+        spec: RepoSpec,
+        calls: Mutex<Vec<(&'static str, usize, Option<String>)>>,
+    }
+
+    impl RecordingHistoryModeRepo {
+        fn new() -> Self {
+            Self {
+                spec: RepoSpec {
+                    workdir: PathBuf::from("/tmp/recording-history-mode-repo"),
+                },
+                calls: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn record(&self, method: &'static str, limit: usize, cursor: Option<&LogCursor>) {
+            self.calls.lock().expect("recording mutex").push((
+                method,
+                limit,
+                cursor.map(|cursor| cursor.last_seen.as_ref().to_string()),
+            ));
+        }
+
+        fn calls(&self) -> Vec<(&'static str, usize, Option<String>)> {
+            self.calls.lock().expect("recording mutex").clone()
+        }
+    }
+
+    impl GitRepository for RecordingHistoryModeRepo {
+        fn spec(&self) -> &RepoSpec {
+            &self.spec
+        }
+
+        fn log_head_page(
+            &self,
+            limit: usize,
+            cursor: Option<&LogCursor>,
+        ) -> super::Result<LogPage> {
+            self.record("head", limit, cursor);
+            Ok(LogPage {
+                commits: Vec::new(),
+                next_cursor: None,
+            })
+        }
+
+        fn log_all_branches_page(
+            &self,
+            limit: usize,
+            cursor: Option<&LogCursor>,
+        ) -> super::Result<LogPage> {
+            self.record("all", limit, cursor);
+            Ok(LogPage {
+                commits: Vec::new(),
+                next_cursor: None,
+            })
+        }
+
+        fn commit_details(&self, _id: &CommitId) -> super::Result<CommitDetails> {
+            unsupported()
+        }
+
+        fn reflog_head(&self, _limit: usize) -> super::Result<Vec<ReflogEntry>> {
+            unsupported()
+        }
+
+        fn current_branch(&self) -> super::Result<String> {
+            unsupported()
+        }
+
+        fn list_branches(&self) -> super::Result<Vec<Branch>> {
+            unsupported()
+        }
+
+        fn list_remotes(&self) -> super::Result<Vec<Remote>> {
+            unsupported()
+        }
+
+        fn list_remote_branches(&self) -> super::Result<Vec<RemoteBranch>> {
+            unsupported()
+        }
+
+        fn status(&self) -> super::Result<RepoStatus> {
+            unsupported()
+        }
+
+        fn diff_unified(&self, _target: &DiffTarget) -> super::Result<String> {
+            unsupported()
+        }
+
+        fn create_branch(&self, _name: &str, _target: &CommitId) -> super::Result<()> {
+            unsupported()
+        }
+
+        fn delete_branch(&self, _name: &str) -> super::Result<()> {
+            unsupported()
+        }
+
+        fn checkout_branch(&self, _name: &str) -> super::Result<()> {
+            unsupported()
+        }
+
+        fn checkout_commit(&self, _id: &CommitId) -> super::Result<()> {
+            unsupported()
+        }
+
+        fn cherry_pick(&self, _id: &CommitId) -> super::Result<()> {
+            unsupported()
+        }
+
+        fn revert(&self, _id: &CommitId) -> super::Result<()> {
+            unsupported()
+        }
+
+        fn stash_create(&self, _message: &str, _include_untracked: bool) -> super::Result<()> {
+            unsupported()
+        }
+
+        fn stash_list(&self) -> super::Result<Vec<StashEntry>> {
+            unsupported()
+        }
+
+        fn stash_apply(&self, _index: usize) -> super::Result<()> {
+            unsupported()
+        }
+
+        fn stash_drop(&self, _index: usize) -> super::Result<()> {
+            unsupported()
+        }
+
+        fn stage(&self, _paths: &[&Path]) -> super::Result<()> {
+            unsupported()
+        }
+
+        fn unstage(&self, _paths: &[&Path]) -> super::Result<()> {
+            unsupported()
+        }
+
+        fn commit(&self, _message: &str) -> super::Result<()> {
+            unsupported()
+        }
+
+        fn fetch_all(&self) -> super::Result<()> {
+            unsupported()
+        }
+
+        fn pull(&self, _mode: super::PullMode) -> super::Result<()> {
+            unsupported()
+        }
+
+        fn push(&self) -> super::Result<()> {
+            unsupported()
+        }
+
+        fn discard_worktree_changes(&self, _paths: &[&Path]) -> super::Result<()> {
+            unsupported()
+        }
+    }
 
     // ── validate_conflict_resolution_text ────────────────────────────
 
@@ -815,5 +1001,37 @@ mod tests {
         assert!(Arc::ptr_eq(&line.author, &cloned.author));
         assert!(Arc::ptr_eq(&line.summary, &cloned.summary));
         assert_eq!(line.line, cloned.line);
+    }
+
+    #[test]
+    fn log_history_mode_page_delegates_current_branch_modes_to_head_log() {
+        let repo = RecordingHistoryModeRepo::new();
+        let cursor = LogCursor {
+            last_seen: CommitId("cursor".into()),
+            resume_from: Some(CommitId("resume".into())),
+            resume_token: Some(Arc::from("token")),
+        };
+
+        for mode in [
+            HistoryMode::FullReachable,
+            HistoryMode::FirstParent,
+            HistoryMode::NoMerges,
+            HistoryMode::MergesOnly,
+            HistoryMode::AllBranches,
+        ] {
+            repo.log_history_mode_page(mode, 7, Some(&cursor))
+                .expect("history mode delegation should succeed");
+        }
+
+        assert_eq!(
+            repo.calls(),
+            vec![
+                ("head", 7, Some("cursor".to_string())),
+                ("head", 7, Some("cursor".to_string())),
+                ("head", 7, Some("cursor".to_string())),
+                ("head", 7, Some("cursor".to_string())),
+                ("all", 7, Some("cursor".to_string())),
+            ]
+        );
     }
 }

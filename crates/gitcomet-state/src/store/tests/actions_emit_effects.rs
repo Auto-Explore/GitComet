@@ -1535,6 +1535,7 @@ fn commit_finished_clears_commit_state_and_requests_primary_refreshes() {
             result: Ok(()),
         }),
     );
+    let expected_scope = state.repos[0].history_state.history_scope;
 
     assert_eq!(state.repos[0].local_actions_in_flight, 0);
     assert_eq!(state.repos[0].commit_in_flight, 0);
@@ -1560,9 +1561,9 @@ fn commit_finished_clears_commit_state_and_requests_primary_refreshes() {
         e,
         Effect::LoadLog {
             repo_id: id,
-            scope: LogScope::CurrentBranch,
+            scope,
             ..
-        } if *id == repo_id
+        } if *id == repo_id && *scope == expected_scope
     )));
 }
 

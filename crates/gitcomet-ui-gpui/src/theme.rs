@@ -73,27 +73,43 @@ pub struct SyntaxColors {
     pub comment_doc: Rgba,
     pub string: Rgba,
     pub string_escape: Rgba,
+    pub string_regex: Rgba,
+    pub string_special: Rgba,
     pub keyword: Rgba,
     pub keyword_control: Rgba,
+    pub preproc: Rgba,
     pub number: Rgba,
     pub boolean: Rgba,
     pub function: Rgba,
     pub function_method: Rgba,
     pub function_special: Rgba,
+    pub constructor: Rgba,
     pub type_name: Rgba,
     pub type_builtin: Rgba,
     pub type_interface: Rgba,
+    pub namespace: Rgba,
     pub variable: Option<Rgba>,
     pub variable_parameter: Rgba,
     pub variable_special: Rgba,
+    pub variable_builtin: Rgba,
     pub property: Rgba,
+    pub label: Option<Rgba>,
     pub constant: Rgba,
+    pub constant_builtin: Rgba,
     pub operator: Rgba,
     pub punctuation: Rgba,
     pub punctuation_bracket: Rgba,
     pub punctuation_delimiter: Rgba,
+    pub punctuation_special: Rgba,
+    pub punctuation_list_marker: Rgba,
     pub tag: Rgba,
     pub attribute: Rgba,
+    pub markup_heading: Rgba,
+    pub markup_link: Rgba,
+    pub text_literal: Rgba,
+    pub diff_plus: Rgba,
+    pub diff_minus: Rgba,
+    pub diff_delta: Rgba,
     pub lifetime: Rgba,
 }
 
@@ -230,10 +246,10 @@ impl AppTheme {
     }
 
     pub(crate) fn from_key(key: &str) -> Option<Self> {
-        runtime_themes()
+        embedded_theme_cache()
             .get(key)
             .map(|spec| spec.theme)
-            .or_else(|| embedded_theme_cache().get(key).map(|spec| spec.theme))
+            .or_else(|| runtime_themes().get(key).map(|spec| spec.theme))
     }
 
     /// GitComet's default dark theme loaded from an embedded JSON definition.
@@ -251,20 +267,24 @@ impl AppTheme {
 }
 
 pub(crate) fn available_themes() -> Vec<ThemeOption> {
-    merged_theme_options(None, true)
+    merged_theme_options(None)
 }
 
 pub(crate) fn has_theme_key(key: &str) -> bool {
-    merged_theme_options(None, true)
+    merged_theme_options(None)
         .iter()
         .any(|option| option.key == key)
 }
 
 pub(crate) fn theme_label(key: &str) -> Option<String> {
-    merged_theme_options(None, true)
+    merged_theme_options(None)
         .into_iter()
         .find(|option| option.key == key)
         .map(|option| option.label)
+}
+
+pub(crate) fn ensure_user_themes_dir_exists() -> Option<PathBuf> {
+    resolved_runtime_themes_dir(None)
 }
 
 #[cfg(test)]
@@ -453,9 +473,15 @@ struct ThemeFileSyntaxColors {
     #[serde(default)]
     string_escape: Option<ThemeColor>,
     #[serde(default)]
+    string_regex: Option<ThemeColor>,
+    #[serde(default)]
+    string_special: Option<ThemeColor>,
+    #[serde(default)]
     keyword: Option<ThemeColor>,
     #[serde(default)]
     keyword_control: Option<ThemeColor>,
+    #[serde(default)]
+    preproc: Option<ThemeColor>,
     #[serde(default)]
     number: Option<ThemeColor>,
     #[serde(default)]
@@ -466,6 +492,8 @@ struct ThemeFileSyntaxColors {
     function_method: Option<ThemeColor>,
     #[serde(default)]
     function_special: Option<ThemeColor>,
+    #[serde(default)]
+    constructor: Option<ThemeColor>,
     #[serde(rename = "type", default)]
     type_name: Option<ThemeColor>,
     #[serde(default)]
@@ -473,15 +501,23 @@ struct ThemeFileSyntaxColors {
     #[serde(default)]
     type_interface: Option<ThemeColor>,
     #[serde(default)]
+    namespace: Option<ThemeColor>,
+    #[serde(default)]
     variable: Option<ThemeColor>,
     #[serde(default)]
     variable_parameter: Option<ThemeColor>,
     #[serde(default)]
     variable_special: Option<ThemeColor>,
     #[serde(default)]
+    variable_builtin: Option<ThemeColor>,
+    #[serde(default)]
     property: Option<ThemeColor>,
     #[serde(default)]
+    label: Option<ThemeColor>,
+    #[serde(default)]
     constant: Option<ThemeColor>,
+    #[serde(default)]
+    constant_builtin: Option<ThemeColor>,
     #[serde(default)]
     operator: Option<ThemeColor>,
     #[serde(default)]
@@ -491,9 +527,25 @@ struct ThemeFileSyntaxColors {
     #[serde(default)]
     punctuation_delimiter: Option<ThemeColor>,
     #[serde(default)]
+    punctuation_special: Option<ThemeColor>,
+    #[serde(default)]
+    punctuation_list_marker: Option<ThemeColor>,
+    #[serde(default)]
     tag: Option<ThemeColor>,
     #[serde(default)]
     attribute: Option<ThemeColor>,
+    #[serde(default)]
+    markup_heading: Option<ThemeColor>,
+    #[serde(default)]
+    markup_link: Option<ThemeColor>,
+    #[serde(default)]
+    text_literal: Option<ThemeColor>,
+    #[serde(default)]
+    diff_plus: Option<ThemeColor>,
+    #[serde(default)]
+    diff_minus: Option<ThemeColor>,
+    #[serde(default)]
+    diff_delta: Option<ThemeColor>,
     #[serde(default)]
     lifetime: Option<ThemeColor>,
 }
@@ -653,21 +705,51 @@ fn resolve_syntax_colors(
         comment_doc: resolve_syntax_color(overrides.comment_doc, colors.text_muted),
         string: resolve_syntax_color(overrides.string, warning),
         string_escape: resolve_syntax_color(overrides.string_escape, success),
+        string_regex: resolve_syntax_color(
+            overrides.string_regex,
+            resolve_syntax_color(overrides.string, warning),
+        ),
+        string_special: resolve_syntax_color(
+            overrides.string_special,
+            resolve_syntax_color(overrides.string, warning),
+        ),
         keyword: resolve_syntax_color(overrides.keyword, accent),
         keyword_control: resolve_syntax_color(overrides.keyword_control, accent),
+        preproc: resolve_syntax_color(
+            overrides.preproc,
+            resolve_syntax_color(overrides.keyword, accent),
+        ),
         number: resolve_syntax_color(overrides.number, success),
         boolean: resolve_syntax_color(overrides.boolean, success),
         function: resolve_syntax_color(overrides.function, accent),
         function_method: resolve_syntax_color(overrides.function_method, accent),
         function_special: resolve_syntax_color(overrides.function_special, accent),
+        constructor: resolve_syntax_color(
+            overrides.constructor,
+            resolve_syntax_color(overrides.function, accent),
+        ),
         type_name: resolve_syntax_color(overrides.type_name, warning),
         type_builtin: resolve_syntax_color(overrides.type_builtin, warning),
         type_interface: resolve_syntax_color(overrides.type_interface, warning),
+        namespace: resolve_syntax_color(
+            overrides.namespace,
+            resolve_syntax_color(overrides.type_name, warning),
+        ),
         variable: resolve_optional_syntax_color(overrides.variable),
         variable_parameter: resolve_syntax_color(overrides.variable_parameter, colors.text_muted),
         variable_special: resolve_syntax_color(overrides.variable_special, accent),
+        variable_builtin: resolve_syntax_color(
+            overrides.variable_builtin,
+            resolve_syntax_color(overrides.variable_special, accent),
+        ),
         property: resolve_syntax_color(overrides.property, accent),
+        label: resolve_optional_syntax_color(overrides.label)
+            .or(resolve_optional_syntax_color(overrides.variable)),
         constant: resolve_syntax_color(overrides.constant, success),
+        constant_builtin: resolve_syntax_color(
+            overrides.constant_builtin,
+            resolve_syntax_color(overrides.constant, success),
+        ),
         operator: resolve_syntax_color(overrides.operator, colors.text_muted),
         punctuation: resolve_syntax_color(overrides.punctuation, colors.text_muted),
         punctuation_bracket: resolve_syntax_color(overrides.punctuation_bracket, colors.text_muted),
@@ -675,8 +757,40 @@ fn resolve_syntax_colors(
             overrides.punctuation_delimiter,
             colors.text_muted,
         ),
+        punctuation_special: resolve_syntax_color(
+            overrides.punctuation_special,
+            resolve_syntax_color(overrides.punctuation, colors.text_muted),
+        ),
+        punctuation_list_marker: resolve_syntax_color(
+            overrides.punctuation_list_marker,
+            resolve_syntax_color(overrides.punctuation, colors.text_muted),
+        ),
         tag: resolve_syntax_color(overrides.tag, warning),
         attribute: resolve_syntax_color(overrides.attribute, accent),
+        markup_heading: resolve_syntax_color(
+            overrides.markup_heading,
+            resolve_syntax_color(overrides.keyword, accent),
+        ),
+        markup_link: resolve_syntax_color(
+            overrides.markup_link,
+            resolve_syntax_color(overrides.string, warning),
+        ),
+        text_literal: resolve_syntax_color(
+            overrides.text_literal,
+            resolve_syntax_color(overrides.string, warning),
+        ),
+        diff_plus: resolve_syntax_color(
+            overrides.diff_plus,
+            resolve_syntax_color(overrides.string, warning),
+        ),
+        diff_minus: resolve_syntax_color(
+            overrides.diff_minus,
+            resolve_syntax_color(overrides.keyword, accent),
+        ),
+        diff_delta: resolve_syntax_color(
+            overrides.diff_delta,
+            resolve_syntax_color(overrides.type_name, warning),
+        ),
         lifetime: resolve_syntax_color(overrides.lifetime, accent),
     }
 }
@@ -762,35 +876,45 @@ struct RuntimeThemeSpec {
     theme: AppTheme,
 }
 
-fn merged_theme_options(runtime_dir: Option<&Path>, seed_embedded: bool) -> Vec<ThemeOption> {
+fn is_embedded_theme_key(key: &str) -> bool {
+    embedded_theme_cache().contains_key(key)
+}
+
+fn is_embedded_theme_stem(stem: &str) -> bool {
+    EMBEDDED_THEME_FILES.iter().any(|file| file.stem == stem)
+}
+
+fn is_reserved_runtime_theme_path(path: &Path) -> bool {
+    path.file_stem()
+        .and_then(|stem| stem.to_str())
+        .is_some_and(is_embedded_theme_stem)
+}
+
+fn merged_theme_options(runtime_dir: Option<&Path>) -> Vec<ThemeOption> {
     let mut options = BTreeMap::<String, ThemeOption>::new();
+    for spec in runtime_themes_with_dir(runtime_dir).into_values() {
+        options.insert(spec.option.key.clone(), spec.option);
+    }
     for spec in embedded_theme_cache().values() {
         options.insert(spec.option.key.clone(), spec.option.clone());
-    }
-
-    for spec in runtime_themes_with_dir(runtime_dir, seed_embedded).into_values() {
-        options.insert(spec.option.key.clone(), spec.option);
     }
 
     options.into_values().collect()
 }
 
 fn runtime_themes() -> HashMap<String, RuntimeThemeSpec> {
-    runtime_themes_with_dir(None, true)
+    runtime_themes_with_dir(None)
 }
 
-fn runtime_themes_with_dir(
-    runtime_dir: Option<&Path>,
-    seed_embedded: bool,
-) -> HashMap<String, RuntimeThemeSpec> {
-    let Some(dir) = resolved_runtime_themes_dir(runtime_dir, seed_embedded) else {
+fn runtime_themes_with_dir(runtime_dir: Option<&Path>) -> HashMap<String, RuntimeThemeSpec> {
+    let Some(dir) = resolved_runtime_themes_dir(runtime_dir) else {
         return HashMap::default();
     };
 
     load_runtime_themes_from_dir(&dir)
 }
 
-fn resolved_runtime_themes_dir(runtime_dir: Option<&Path>, seed_embedded: bool) -> Option<PathBuf> {
+fn resolved_runtime_themes_dir(runtime_dir: Option<&Path>) -> Option<PathBuf> {
     let dir = match runtime_dir {
         Some(path) => path.to_path_buf(),
         None => gitcomet_state::session::user_themes_dir()?,
@@ -800,21 +924,7 @@ fn resolved_runtime_themes_dir(runtime_dir: Option<&Path>, seed_embedded: bool) 
         return None;
     }
 
-    if seed_embedded {
-        seed_runtime_themes_dir(&dir);
-    }
-
     Some(dir)
-}
-
-fn seed_runtime_themes_dir(dir: &Path) {
-    for file in EMBEDDED_THEME_FILES {
-        let path = dir.join(format!("{}.json", file.stem));
-        if path.exists() {
-            continue;
-        }
-        let _ = fs::write(path, file.json);
-    }
 }
 
 fn load_runtime_themes_from_dir(dir: &Path) -> HashMap<String, RuntimeThemeSpec> {
@@ -825,6 +935,7 @@ fn load_runtime_themes_from_dir(dir: &Path) -> HashMap<String, RuntimeThemeSpec>
     let mut files = entries
         .filter_map(|entry| entry.ok().map(|entry| entry.path()))
         .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("json"))
+        .filter(|path| !is_reserved_runtime_theme_path(path))
         .collect::<Vec<_>>();
     files.sort();
 
@@ -833,7 +944,7 @@ fn load_runtime_themes_from_dir(dir: &Path) -> HashMap<String, RuntimeThemeSpec>
         let Ok(json) = fs::read_to_string(&path) else {
             continue;
         };
-        let Ok(specs) = load_theme_specs_from_json(&json) else {
+        let Ok(specs) = load_runtime_theme_specs_from_json(&json) else {
             continue;
         };
 
@@ -850,8 +961,28 @@ fn load_theme_specs_from_json(json: &str) -> Result<Vec<RuntimeThemeSpec>, Theme
     load_theme_specs_from_bundle(bundle)
 }
 
+fn load_runtime_theme_specs_from_json(
+    json: &str,
+) -> Result<Vec<RuntimeThemeSpec>, ThemeParseError> {
+    let bundle = parse_theme_bundle(json)?;
+    load_runtime_theme_specs_from_bundle(bundle)
+}
+
 fn load_theme_specs_from_bundle(
     bundle: ThemeBundleFile,
+) -> Result<Vec<RuntimeThemeSpec>, ThemeParseError> {
+    collect_theme_specs(bundle, false)
+}
+
+fn load_runtime_theme_specs_from_bundle(
+    bundle: ThemeBundleFile,
+) -> Result<Vec<RuntimeThemeSpec>, ThemeParseError> {
+    collect_theme_specs(bundle, true)
+}
+
+fn collect_theme_specs(
+    bundle: ThemeBundleFile,
+    skip_embedded_keys: bool,
 ) -> Result<Vec<RuntimeThemeSpec>, ThemeParseError> {
     if bundle.themes.is_empty() {
         return Err(ThemeParseError::Invalid(
@@ -864,6 +995,10 @@ fn load_theme_specs_from_bundle(
 
     for entry in bundle.themes {
         let key = entry.key.clone();
+        if skip_embedded_keys && is_embedded_theme_key(&key) {
+            continue;
+        }
+
         if !seen_keys.insert(key.clone()) {
             return Err(ThemeParseError::Invalid(format!(
                 "theme bundle defines duplicate key `{key}`"
@@ -894,12 +1029,76 @@ pub(crate) fn with_alpha(mut color: Rgba, alpha: f32) -> Rgba {
 #[cfg(test)]
 mod tests {
     use super::{
-        AppTheme, DEFAULT_DARK_THEME_KEY, DEFAULT_LIGHT_THEME_KEY, GRAPH_LANE_PALETTE_SIZE, Rgba,
-        available_themes, derived_syntax_color, has_theme_key, load_theme_specs_from_json,
-        merged_theme_options, theme_label, with_alpha,
+        AppTheme, DEFAULT_DARK_THEME_KEY, DEFAULT_LIGHT_THEME_KEY, EMBEDDED_THEME_FILES,
+        GRAPH_LANE_PALETTE_SIZE, Rgba, available_themes, derived_syntax_color, has_theme_key,
+        load_theme_specs_from_json, merged_theme_options, resolved_runtime_themes_dir,
+        runtime_themes_with_dir, theme_label, with_alpha,
     };
-    use std::fs;
+    use std::{fs, path::PathBuf};
     use tempfile::tempdir;
+
+    fn themes_markdown_path() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/themes.md")
+    }
+
+    fn readme_path() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../README.md")
+    }
+
+    fn themes_markdown_example() -> String {
+        let markdown = fs::read_to_string(themes_markdown_path())
+            .expect("THEMES.md should be readable for theme docs tests");
+        let start = markdown
+            .find("```javascript")
+            .expect("THEMES.md should include a javascript example block");
+        let example = &markdown[start + "```javascript".len()..];
+        let end = example
+            .find("```")
+            .expect("THEMES.md example block should be closed");
+        example[..end].trim().to_string()
+    }
+
+    fn strip_json_line_comments(json_with_comments: &str) -> String {
+        let mut out = String::with_capacity(json_with_comments.len());
+        let mut chars = json_with_comments.chars().peekable();
+        let mut in_string = false;
+        let mut escaped = false;
+
+        while let Some(ch) = chars.next() {
+            if in_string {
+                out.push(ch);
+                if escaped {
+                    escaped = false;
+                } else if ch == '\\' {
+                    escaped = true;
+                } else if ch == '"' {
+                    in_string = false;
+                }
+                continue;
+            }
+
+            if ch == '"' {
+                in_string = true;
+                out.push(ch);
+                continue;
+            }
+
+            if ch == '/' && chars.peek() == Some(&'/') {
+                let _ = chars.next();
+                for next in chars.by_ref() {
+                    if next == '\n' {
+                        out.push('\n');
+                        break;
+                    }
+                }
+                continue;
+            }
+
+            out.push(ch);
+        }
+
+        out
+    }
 
     #[test]
     fn with_alpha_preserves_rgb_and_overwrites_alpha() {
@@ -1034,7 +1233,9 @@ mod tests {
                     "syntax": {
                         "keyword": "#112233ff",
                         "variable": "#445566ff",
-                        "comment_doc": "#778899ff"
+                        "comment_doc": "#778899ff",
+                        "diff_plus": "#aabbccff",
+                        "label": "#998877ff"
                     },
                     "radii": {
                         "panel": 2.0,
@@ -1050,11 +1251,163 @@ mod tests {
         assert_eq!(theme.syntax.keyword, gpui::rgba(0x112233ff));
         assert_eq!(theme.syntax.variable, Some(gpui::rgba(0x445566ff)));
         assert_eq!(theme.syntax.comment_doc, gpui::rgba(0x778899ff));
+        assert_eq!(theme.syntax.diff_plus, gpui::rgba(0xaabbccff));
+        assert_eq!(theme.syntax.label, Some(gpui::rgba(0x998877ff)));
         assert_eq!(theme.syntax.comment, theme.colors.text_muted);
         assert_eq!(
             theme.syntax.string,
             derived_syntax_color(theme.is_dark, &theme.colors, theme.colors.warning)
         );
+    }
+
+    #[test]
+    fn new_syntax_categories_fallback_to_legacy_buckets() {
+        let json = r##"{
+            "name": "Fixture",
+            "themes": [
+                {
+                    "key": "fixture",
+                    "name": "Fixture",
+                    "appearance": "light",
+                    "colors": {
+                        "window_bg": "#fafafaff",
+                        "surface_bg": "#ebebecff",
+                        "surface_bg_elevated": "#ebebecff",
+                        "active_section": "#fafafaff",
+                        "border": "#dfdfe0ff",
+                        "text": "#242529ff",
+                        "text_muted": "#58585aff",
+                        "accent": "#5c78e2ff",
+                        "hover": "#dfdfe0ff",
+                        "active": { "hex": "#dfdfe0ff", "alpha": 0.88 },
+                        "focus_ring": { "hex": "#5c78e2ff", "alpha": 0.52 },
+                        "focus_ring_bg": { "hex": "#5c78e2ff", "alpha": 0.12 },
+                        "scrollbar_thumb": { "hex": "#58585aff", "alpha": 0.26 },
+                        "scrollbar_thumb_hover": { "hex": "#58585aff", "alpha": 0.36 },
+                        "scrollbar_thumb_active": { "hex": "#58585aff", "alpha": 0.46 },
+                        "danger": "#de3e35ff",
+                        "warning": "#d2b67cff",
+                        "success": "#3f953aff"
+                    },
+                    "syntax": {
+                        "string": "#112233ff",
+                        "keyword": "#223344ff",
+                        "type": "#334455ff",
+                        "variable": "#445566ff",
+                        "variable_special": "#556677ff",
+                        "constant": "#667788ff",
+                        "punctuation": "#778899ff"
+                    },
+                    "radii": {
+                        "panel": 2.0,
+                        "pill": 2.0,
+                        "row": 2.0
+                    }
+                }
+            ]
+        }"##;
+
+        let theme = AppTheme::from_json_str(json).expect("theme JSON should parse");
+
+        assert_eq!(theme.syntax.string_regex, gpui::rgba(0x112233ff));
+        assert_eq!(theme.syntax.string_special, gpui::rgba(0x112233ff));
+        assert_eq!(theme.syntax.preproc, gpui::rgba(0x223344ff));
+        assert_eq!(theme.syntax.namespace, gpui::rgba(0x334455ff));
+        assert_eq!(theme.syntax.label, Some(gpui::rgba(0x445566ff)));
+        assert_eq!(theme.syntax.variable_builtin, gpui::rgba(0x556677ff));
+        assert_eq!(theme.syntax.constant_builtin, gpui::rgba(0x667788ff));
+        assert_eq!(theme.syntax.punctuation_special, gpui::rgba(0x778899ff));
+        assert_eq!(theme.syntax.punctuation_list_marker, gpui::rgba(0x778899ff));
+        assert_eq!(theme.syntax.markup_heading, gpui::rgba(0x223344ff));
+        assert_eq!(theme.syntax.markup_link, gpui::rgba(0x112233ff));
+        assert_eq!(theme.syntax.text_literal, gpui::rgba(0x112233ff));
+        assert_eq!(theme.syntax.diff_plus, gpui::rgba(0x112233ff));
+        assert_eq!(theme.syntax.diff_minus, gpui::rgba(0x223344ff));
+        assert_eq!(theme.syntax.diff_delta, gpui::rgba(0x334455ff));
+    }
+
+    #[test]
+    fn explicit_new_syntax_overrides_beat_legacy_fallbacks() {
+        let json = r##"{
+            "name": "Fixture",
+            "themes": [
+                {
+                    "key": "fixture",
+                    "name": "Fixture",
+                    "appearance": "dark",
+                    "colors": {
+                        "window_bg": "#0d1016ff",
+                        "surface_bg": "#1f2127ff",
+                        "surface_bg_elevated": "#1f2127ff",
+                        "active_section": "#2d2f34ff",
+                        "border": "#2d2f34ff",
+                        "text": "#bfbdb6ff",
+                        "text_muted": "#8a8986ff",
+                        "accent": "#5ac1feff",
+                        "hover": "#2d2f34ff",
+                        "active": { "hex": "#2d2f34ff", "alpha": 0.78 },
+                        "focus_ring": { "hex": "#5ac1feff", "alpha": 0.60 },
+                        "focus_ring_bg": { "hex": "#5ac1feff", "alpha": 0.16 },
+                        "scrollbar_thumb": { "hex": "#8a8986ff", "alpha": 0.30 },
+                        "scrollbar_thumb_hover": { "hex": "#8a8986ff", "alpha": 0.42 },
+                        "scrollbar_thumb_active": { "hex": "#8a8986ff", "alpha": 0.52 },
+                        "danger": "#ef7177ff",
+                        "warning": "#feb454ff",
+                        "success": "#aad84cff"
+                    },
+                    "syntax": {
+                        "string": "#111111ff",
+                        "keyword": "#222222ff",
+                        "type": "#333333ff",
+                        "variable": "#444444ff",
+                        "variable_special": "#555555ff",
+                        "constant": "#666666ff",
+                        "punctuation": "#777777ff",
+                        "function": "#888888ff",
+                        "string_regex": "#010101ff",
+                        "string_special": "#020202ff",
+                        "preproc": "#030303ff",
+                        "constructor": "#040404ff",
+                        "namespace": "#050505ff",
+                        "variable_builtin": "#060606ff",
+                        "label": "#070707ff",
+                        "constant_builtin": "#080808ff",
+                        "punctuation_special": "#090909ff",
+                        "punctuation_list_marker": "#0a0a0aff",
+                        "markup_heading": "#0b0b0bff",
+                        "markup_link": "#0c0c0cff",
+                        "text_literal": "#0d0d0dff",
+                        "diff_plus": "#0e0e0eff",
+                        "diff_minus": "#0f0f0fff",
+                        "diff_delta": "#101010ff"
+                    },
+                    "radii": {
+                        "panel": 2.0,
+                        "pill": 2.0,
+                        "row": 2.0
+                    }
+                }
+            ]
+        }"##;
+
+        let theme = AppTheme::from_json_str(json).expect("theme JSON should parse");
+
+        assert_eq!(theme.syntax.string_regex, gpui::rgba(0x010101ff));
+        assert_eq!(theme.syntax.string_special, gpui::rgba(0x020202ff));
+        assert_eq!(theme.syntax.preproc, gpui::rgba(0x030303ff));
+        assert_eq!(theme.syntax.constructor, gpui::rgba(0x040404ff));
+        assert_eq!(theme.syntax.namespace, gpui::rgba(0x050505ff));
+        assert_eq!(theme.syntax.variable_builtin, gpui::rgba(0x060606ff));
+        assert_eq!(theme.syntax.label, Some(gpui::rgba(0x070707ff)));
+        assert_eq!(theme.syntax.constant_builtin, gpui::rgba(0x080808ff));
+        assert_eq!(theme.syntax.punctuation_special, gpui::rgba(0x090909ff));
+        assert_eq!(theme.syntax.punctuation_list_marker, gpui::rgba(0x0a0a0aff));
+        assert_eq!(theme.syntax.markup_heading, gpui::rgba(0x0b0b0bff));
+        assert_eq!(theme.syntax.markup_link, gpui::rgba(0x0c0c0cff));
+        assert_eq!(theme.syntax.text_literal, gpui::rgba(0x0d0d0dff));
+        assert_eq!(theme.syntax.diff_plus, gpui::rgba(0x0e0e0eff));
+        assert_eq!(theme.syntax.diff_minus, gpui::rgba(0x0f0f0fff));
+        assert_eq!(theme.syntax.diff_delta, gpui::rgba(0x101010ff));
     }
 
     #[test]
@@ -1217,16 +1570,71 @@ mod tests {
             dark.colors.focus_ring,
             with_alpha(gpui::rgba(0x5ac1feff), 0.60)
         );
+        assert_eq!(light.colors.window_bg, gpui::rgba(0xffffffff));
+        assert_eq!(light.colors.surface_bg, gpui::rgba(0xe7ebf1ff));
+        assert_eq!(light.colors.surface_bg_elevated, gpui::rgba(0xf0f3f8ff));
+        assert_eq!(light.colors.border, gpui::rgba(0xc7ced8ff));
+        assert_eq!(light.colors.text, gpui::rgba(0x1d2330ff));
+        assert_eq!(light.colors.text_muted, gpui::rgba(0x4c5567ff));
+        assert_eq!(light.colors.accent, gpui::rgba(0x4f72ddff));
         assert_eq!(
             light.colors.scrollbar_thumb_hover,
-            with_alpha(gpui::rgba(0x58585aff), 0.36)
+            with_alpha(gpui::rgba(0x4c5567ff), 0.42)
         );
         assert_eq!(dark.colors.diff_add_bg, gpui::rgba(0x0b2e1cff));
-        assert_eq!(light.colors.diff_remove_text, gpui::rgba(0xcb2431ff));
+        assert_eq!(light.colors.diff_remove_text, gpui::rgba(0xb92533ff));
         assert_eq!(dark.colors.input_placeholder, gpui::rgba(0xffffff59));
         assert_eq!(light.colors.accent_text, gpui::rgba(0xffffffff));
         assert_eq!(dark.colors.emphasis_text, gpui::rgba(0xffffffff));
         assert_eq!(light.colors.emphasis_text, gpui::rgba(0x000000ff));
+        assert_eq!(dark.syntax.comment, gpui::rgba(0x6f7b94ff));
+        assert_eq!(dark.syntax.keyword, gpui::rgba(0xedb981ff));
+        assert_eq!(dark.syntax.keyword_control, dark.syntax.keyword);
+        assert_eq!(dark.syntax.preproc, gpui::rgba(0xa79aebff));
+        assert_eq!(dark.syntax.string, gpui::rgba(0xbbd57fff));
+        assert_eq!(dark.syntax.string_regex, dark.syntax.string);
+        assert_eq!(dark.syntax.function_method, gpui::rgba(0x5ac1feff));
+        assert_eq!(dark.syntax.function_special, dark.syntax.function_method);
+        assert_eq!(dark.syntax.property, dark.syntax.function_method);
+        assert_eq!(dark.syntax.namespace, dark.syntax.function_method);
+        assert_eq!(dark.syntax.markup_link, dark.syntax.function_method);
+        assert_eq!(dark.syntax.type_name, gpui::rgba(0xbbd57fff));
+        assert_eq!(dark.syntax.type_builtin, dark.syntax.type_name);
+        assert_eq!(dark.syntax.number, gpui::rgba(0xe4a688ff));
+        assert_eq!(dark.syntax.constant, gpui::rgba(0xde9fc1ff));
+        assert_eq!(dark.syntax.constant_builtin, dark.syntax.constant);
+        assert_eq!(dark.syntax.variable, Some(dark.colors.text));
+        assert_eq!(dark.syntax.variable_parameter, dark.colors.text);
+        assert_eq!(dark.syntax.variable_special, dark.colors.text);
+        assert_eq!(dark.syntax.operator, gpui::rgba(0x8d96aaff));
+        assert_eq!(dark.syntax.punctuation, dark.syntax.operator);
+        assert_eq!(dark.syntax.diff_delta, dark.syntax.function_method);
+        assert_eq!(dark.syntax.diff_plus, gpui::rgba(0xbbf7d0ff));
+        assert_eq!(dark.syntax.diff_minus, gpui::rgba(0xfecacaff));
+        assert_eq!(light.syntax.comment, gpui::rgba(0x5c6982ff));
+        assert_eq!(light.syntax.keyword, gpui::rgba(0x8a4d0dff));
+        assert_eq!(light.syntax.keyword_control, light.syntax.keyword);
+        assert_eq!(light.syntax.preproc, gpui::rgba(0x5946aaff));
+        assert_eq!(light.syntax.string, gpui::rgba(0x4d6710ff));
+        assert_eq!(light.syntax.string_special, light.syntax.string);
+        assert_eq!(light.syntax.function, gpui::rgba(0x006c98ff));
+        assert_eq!(light.syntax.function_method, light.syntax.function);
+        assert_eq!(light.syntax.function_special, light.syntax.function);
+        assert_eq!(light.syntax.property, light.syntax.function);
+        assert_eq!(light.syntax.namespace, light.syntax.function);
+        assert_eq!(light.syntax.markup_link, light.syntax.function);
+        assert_eq!(light.syntax.type_name, gpui::rgba(0x4d6710ff));
+        assert_eq!(light.syntax.type_builtin, light.syntax.type_name);
+        assert_eq!(light.syntax.constructor, light.syntax.function);
+        assert_eq!(light.syntax.constant, gpui::rgba(0x8e4c6fff));
+        assert_eq!(light.syntax.constant_builtin, light.syntax.constant);
+        assert_eq!(light.syntax.number, gpui::rgba(0x97503aff));
+        assert_eq!(light.syntax.variable, Some(light.colors.text));
+        assert_eq!(light.syntax.variable_parameter, light.colors.text);
+        assert_eq!(light.syntax.variable_special, light.colors.text);
+        assert_eq!(light.syntax.operator, gpui::rgba(0x4a566cff));
+        assert_eq!(light.syntax.punctuation, light.syntax.operator);
+        assert_eq!(light.syntax.diff_delta, light.syntax.function);
         assert_eq!(
             dark.graph_lane_palette.as_slice().len(),
             GRAPH_LANE_PALETTE_SIZE
@@ -1242,7 +1650,57 @@ mod tests {
         assert_eq!(theme.colors.emphasis_text, gpui::rgba(0xffffffff));
         assert_eq!(theme.syntax.keyword, gpui::rgba(0xbb9af7ff));
         assert_eq!(theme.syntax.string, gpui::rgba(0x9ece6aff));
+        assert_eq!(theme.syntax.string_regex, gpui::rgba(0xff9e64ff));
+        assert_eq!(theme.syntax.diff_minus, gpui::rgba(0xf7768eff));
         assert_eq!(theme.syntax.variable, Some(gpui::rgba(0xc0caf5ff)));
+    }
+
+    #[test]
+    fn built_in_sunset_veil_theme_loads_from_embedded_json() {
+        let theme = AppTheme::from_key("sunset_veil").expect("Sunset Veil theme should load");
+
+        assert!(!theme.is_dark);
+        assert_eq!(theme.colors.window_bg, gpui::rgba(0xfcf6f0ff));
+        assert_eq!(theme.colors.accent, gpui::rgba(0xa6632cff));
+        assert_eq!(theme.colors.diff_add_text, gpui::rgba(0x2e7638ff));
+        assert_eq!(theme.syntax.keyword, gpui::rgba(0x2f7b93ff));
+        assert_eq!(theme.syntax.markup_heading, gpui::rgba(0x3a86a0ff));
+        assert_eq!(theme.syntax.diff_plus, gpui::rgba(0x2e7638ff));
+        assert_eq!(theme.syntax.variable, Some(gpui::rgba(0x2b241dff)));
+        assert_eq!(theme_label("sunset_veil"), Some("Sunset Veil".to_string()));
+    }
+
+    #[test]
+    fn bundled_theme_assets_explicitly_define_new_syntax_keys() {
+        const REQUIRED_KEYS: &[&str] = &[
+            "\"string_regex\"",
+            "\"string_special\"",
+            "\"preproc\"",
+            "\"constructor\"",
+            "\"namespace\"",
+            "\"variable_builtin\"",
+            "\"label\"",
+            "\"constant_builtin\"",
+            "\"punctuation_special\"",
+            "\"punctuation_list_marker\"",
+            "\"markup_heading\"",
+            "\"markup_link\"",
+            "\"text_literal\"",
+            "\"diff_plus\"",
+            "\"diff_minus\"",
+            "\"diff_delta\"",
+        ];
+
+        for file in EMBEDDED_THEME_FILES {
+            for key in REQUIRED_KEYS {
+                assert!(
+                    file.json.contains(key),
+                    "embedded theme file {} should explicitly define {}",
+                    file.stem,
+                    key
+                );
+            }
+        }
     }
 
     #[test]
@@ -1342,7 +1800,21 @@ mod tests {
     }
 
     #[test]
-    fn runtime_theme_dir_overrides_and_extends_embedded_themes() {
+    fn ensure_runtime_theme_dir_creates_missing_directory() {
+        let dir = tempdir().expect("temp dir should exist");
+        let path = dir.path().join("themes");
+
+        assert!(!path.exists(), "theme subdirectory should start absent");
+
+        let resolved = resolved_runtime_themes_dir(Some(&path))
+            .expect("runtime theme helper should resolve a writable directory");
+
+        assert_eq!(resolved, path);
+        assert!(resolved.is_dir(), "theme directory should be created");
+    }
+
+    #[test]
+    fn runtime_theme_dir_extends_embedded_themes_with_custom_entries() {
         let dir = tempdir().expect("temp dir should exist");
         fs::write(
             dir.path().join("custom_theme.json"),
@@ -1384,7 +1856,7 @@ mod tests {
         )
         .expect("custom theme file should be written");
 
-        let themes = merged_theme_options(Some(dir.path()), false);
+        let themes = merged_theme_options(Some(dir.path()));
         let custom = themes
             .iter()
             .find(|theme| theme.key == "custom_theme")
@@ -1396,5 +1868,329 @@ mod tests {
                 .iter()
                 .any(|theme| theme.key == DEFAULT_DARK_THEME_KEY)
         );
+    }
+
+    #[test]
+    fn runtime_theme_dir_ignores_reserved_system_theme_filenames() {
+        let dir = tempdir().expect("temp dir should exist");
+        fs::write(
+            dir.path().join("gitcomet.json"),
+            r##"{
+                "name": "Shadow Theme",
+                "themes": [
+                    {
+                        "key": "shadow_theme",
+                        "name": "Shadow Theme",
+                        "appearance": "dark",
+                        "colors": {
+                            "window_bg": "#000000ff",
+                            "surface_bg": "#111111ff",
+                            "surface_bg_elevated": "#111111ff",
+                            "active_section": "#222222ff",
+                            "border": "#333333ff",
+                            "text": "#eeeeeeff",
+                            "text_muted": "#999999ff",
+                            "accent": "#abcdef12",
+                            "hover": "#222222ff",
+                            "active": "#222222ff",
+                            "focus_ring": "#abcdef12",
+                            "focus_ring_bg": "#abcdef12",
+                            "scrollbar_thumb": "#88888880",
+                            "scrollbar_thumb_hover": "#888888aa",
+                            "scrollbar_thumb_active": "#888888ff",
+                            "danger": "#aa0000ff",
+                            "warning": "#bb9900ff",
+                            "success": "#00aa00ff"
+                        },
+                        "radii": {
+                            "panel": 2.0,
+                            "pill": 2.0,
+                            "row": 2.0
+                        }
+                    }
+                ]
+            }"##,
+        )
+        .expect("reserved theme file should be written");
+
+        let themes = merged_theme_options(Some(dir.path()));
+
+        assert!(
+            themes.iter().all(|theme| theme.key != "shadow_theme"),
+            "custom themes in reserved bundled filenames should be ignored"
+        );
+    }
+
+    #[test]
+    fn runtime_theme_dir_ignores_every_reserved_system_theme_filename() {
+        let dir = tempdir().expect("temp dir should exist");
+
+        for (ix, file) in EMBEDDED_THEME_FILES.iter().enumerate() {
+            let theme_key = format!("reserved_shadow_{ix}");
+            let theme_name = format!("Reserved Shadow {ix}");
+            let json = format!(
+                r##"{{
+                    "name": "Reserved Shadow Pack {ix}",
+                    "themes": [
+                        {{
+                            "key": "{theme_key}",
+                            "name": "{theme_name}",
+                            "appearance": "dark",
+                            "colors": {{
+                                "window_bg": "#000000ff",
+                                "surface_bg": "#111111ff",
+                                "surface_bg_elevated": "#111111ff",
+                                "active_section": "#222222ff",
+                                "border": "#333333ff",
+                                "text": "#eeeeeeff",
+                                "text_muted": "#999999ff",
+                                "accent": "#abcdef12",
+                                "hover": "#222222ff",
+                                "active": "#222222ff",
+                                "focus_ring": "#abcdef12",
+                                "focus_ring_bg": "#abcdef12",
+                                "scrollbar_thumb": "#88888880",
+                                "scrollbar_thumb_hover": "#888888aa",
+                                "scrollbar_thumb_active": "#888888ff",
+                                "danger": "#aa0000ff",
+                                "warning": "#bb9900ff",
+                                "success": "#00aa00ff"
+                            }},
+                            "radii": {{
+                                "panel": 2.0,
+                                "pill": 2.0,
+                                "row": 2.0
+                            }}
+                        }}
+                    ]
+                }}"##,
+            );
+            fs::write(dir.path().join(format!("{}.json", file.stem)), json)
+                .expect("reserved theme file should be written");
+        }
+
+        let runtime_themes = runtime_themes_with_dir(Some(dir.path()));
+        let merged_themes = merged_theme_options(Some(dir.path()));
+
+        for ix in 0..EMBEDDED_THEME_FILES.len() {
+            let theme_key = format!("reserved_shadow_{ix}");
+            assert!(
+                !runtime_themes.contains_key(&theme_key),
+                "runtime themes should ignore reserved bundled filename entry `{theme_key}`"
+            );
+            assert!(
+                merged_themes.iter().all(|theme| theme.key != theme_key),
+                "available themes should ignore reserved bundled filename entry `{theme_key}`"
+            );
+        }
+    }
+
+    #[test]
+    fn runtime_theme_dir_ignores_embedded_theme_key_collisions_but_keeps_custom_entries() {
+        let dir = tempdir().expect("temp dir should exist");
+        fs::write(
+            dir.path().join("mixed_theme.json"),
+            r##"{
+                "name": "Mixed Theme",
+                "themes": [
+                    {
+                        "key": "gitcomet_dark",
+                        "name": "Fake GitComet Dark",
+                        "appearance": "dark",
+                        "colors": {
+                            "window_bg": "#000000ff",
+                            "surface_bg": "#111111ff",
+                            "surface_bg_elevated": "#222222ff",
+                            "active_section": "#333333ff",
+                            "border": "#444444ff",
+                            "text": "#eeeeeeff",
+                            "text_muted": "#999999ff",
+                            "accent": "#abcdef12",
+                            "hover": "#555555ff",
+                            "active": "#666666ff",
+                            "focus_ring": "#777777ff",
+                            "focus_ring_bg": "#888888ff",
+                            "scrollbar_thumb": "#99999980",
+                            "scrollbar_thumb_hover": "#999999aa",
+                            "scrollbar_thumb_active": "#999999ff",
+                            "danger": "#aa0000ff",
+                            "warning": "#bb9900ff",
+                            "success": "#00aa00ff"
+                        },
+                        "radii": {
+                            "panel": 2.0,
+                            "pill": 2.0,
+                            "row": 2.0
+                        }
+                    },
+                    {
+                        "key": "custom_keep",
+                        "name": "Custom Keep",
+                        "appearance": "light",
+                        "colors": {
+                            "window_bg": "#ffffffff",
+                            "surface_bg": "#f0f0f0ff",
+                            "surface_bg_elevated": "#f7f7f7ff",
+                            "active_section": "#ffffffff",
+                            "border": "#d2d2d2ff",
+                            "text": "#000000ff",
+                            "text_muted": "#505050ff",
+                            "accent": "#1f6ae2ff",
+                            "hover": "#d0d0d0ff",
+                            "active": "#c7deffff",
+                            "focus_ring": "#1f6ae2ff",
+                            "focus_ring_bg": "#1f6ae233",
+                            "scrollbar_thumb": "#c8c8c8aa",
+                            "scrollbar_thumb_hover": "#c8c8c8cc",
+                            "scrollbar_thumb_active": "#c8c8c8ff",
+                            "danger": "#c5060bff",
+                            "warning": "#c99401ff",
+                            "success": "#036a07ff"
+                        },
+                        "radii": {
+                            "panel": 2.0,
+                            "pill": 2.0,
+                            "row": 2.0
+                        }
+                    }
+                ]
+            }"##,
+        )
+        .expect("mixed theme file should be written");
+
+        let runtime_themes = runtime_themes_with_dir(Some(dir.path()));
+        assert!(
+            !runtime_themes.contains_key(DEFAULT_DARK_THEME_KEY),
+            "runtime themes should ignore entries that reuse embedded system keys"
+        );
+        assert!(
+            runtime_themes.contains_key("custom_keep"),
+            "runtime themes should keep valid custom entries from mixed bundles"
+        );
+
+        let themes = merged_theme_options(Some(dir.path()));
+        assert_eq!(
+            themes
+                .iter()
+                .find(|theme| theme.key == DEFAULT_DARK_THEME_KEY)
+                .map(|theme| theme.label.as_str()),
+            Some("GitComet Dark"),
+            "embedded theme labels should remain authoritative"
+        );
+        assert_eq!(
+            themes
+                .iter()
+                .filter(|theme| theme.key == DEFAULT_DARK_THEME_KEY)
+                .count(),
+            1,
+            "embedded system keys should appear only once in the merged theme list"
+        );
+        assert!(
+            themes.iter().any(|theme| theme.key == "custom_keep"),
+            "valid custom themes should still appear in available theme options"
+        );
+    }
+
+    #[test]
+    fn themes_markdown_example_matches_current_theme_parser() {
+        let example = themes_markdown_example();
+        let json = strip_json_line_comments(&example);
+        let themes = load_theme_specs_from_json(&json)
+            .expect("THEMES.md example should stay in sync with the runtime parser");
+
+        assert_eq!(themes.len(), 1, "docs example should define a single theme");
+        assert_eq!(themes[0].option.key, "my_theme_dark");
+    }
+
+    #[test]
+    fn themes_markdown_lists_current_supported_syntax_keys() {
+        const REQUIRED_DOC_KEYS: &[&str] = &[
+            "comment",
+            "comment_doc",
+            "string",
+            "string_escape",
+            "string_regex",
+            "string_special",
+            "keyword",
+            "keyword_control",
+            "preproc",
+            "number",
+            "boolean",
+            "function",
+            "function_method",
+            "function_special",
+            "constructor",
+            "type",
+            "type_builtin",
+            "type_interface",
+            "namespace",
+            "variable",
+            "variable_parameter",
+            "variable_special",
+            "variable_builtin",
+            "property",
+            "label",
+            "constant",
+            "constant_builtin",
+            "operator",
+            "punctuation",
+            "punctuation_bracket",
+            "punctuation_delimiter",
+            "punctuation_special",
+            "punctuation_list_marker",
+            "tag",
+            "attribute",
+            "markup_heading",
+            "markup_link",
+            "text_literal",
+            "diff_plus",
+            "diff_minus",
+            "diff_delta",
+            "lifetime",
+        ];
+
+        let markdown = fs::read_to_string(themes_markdown_path())
+            .expect("THEMES.md should be readable for supported-key checks");
+
+        for key in REQUIRED_DOC_KEYS {
+            assert!(
+                markdown.contains(&format!("`{key}`")),
+                "THEMES.md should mention the supported syntax key `{key}`"
+            );
+        }
+    }
+
+    #[test]
+    fn themes_markdown_documents_custom_theme_override_rules() {
+        let markdown = fs::read_to_string(themes_markdown_path())
+            .expect("THEMES.md should be readable for override behavior checks");
+
+        for snippet in [
+            "GitComet creates the user themes directory on startup",
+            "ignores files whose basename matches a bundled system theme file",
+            "cannot override built-in system theme keys",
+        ] {
+            assert!(
+                markdown.contains(snippet),
+                "THEMES.md should document `{snippet}`"
+            );
+        }
+    }
+
+    #[test]
+    fn readme_themes_section_points_to_theme_guide() {
+        let readme =
+            fs::read_to_string(readme_path()).expect("README.md should be readable for docs tests");
+
+        for snippet in [
+            "Custom themes are loaded from JSON bundle files in your per-user themes directory",
+            "creates on startup",
+            "[THEMES.md](THEMES.md)",
+        ] {
+            assert!(
+                readme.contains(snippet),
+                "README.md theme section should mention `{snippet}`"
+            );
+        }
     }
 }

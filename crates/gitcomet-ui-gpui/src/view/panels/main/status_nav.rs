@@ -206,10 +206,11 @@ pub(super) fn adjacent_diff_file_target_for_repo(
 }
 
 impl MainPaneView {
-    pub(in crate::view) fn try_select_adjacent_diff_file(
+    fn try_select_adjacent_diff_file_inner(
         &mut self,
         repo_id: RepoId,
         direction: i8,
+        focus_diff_panel: bool,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
@@ -222,7 +223,9 @@ impl MainPaneView {
             return false;
         };
 
-        window.focus(&self.diff_panel_focus_handle, cx);
+        if focus_diff_panel {
+            window.focus(&self.diff_panel_focus_handle, cx);
+        }
         match target {
             AdjacentDiffFileTarget::WorkingTree {
                 section,
@@ -260,6 +263,26 @@ impl MainPaneView {
         }
 
         true
+    }
+
+    pub(in crate::view) fn try_select_adjacent_diff_file(
+        &mut self,
+        repo_id: RepoId,
+        direction: i8,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        self.try_select_adjacent_diff_file_inner(repo_id, direction, true, window, cx)
+    }
+
+    pub(in crate::view) fn try_select_adjacent_diff_file_preserving_focus(
+        &mut self,
+        repo_id: RepoId,
+        direction: i8,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        self.try_select_adjacent_diff_file_inner(repo_id, direction, false, window, cx)
     }
 }
 

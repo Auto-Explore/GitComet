@@ -207,12 +207,8 @@ pub(in super::super) fn selectable_cached_diff_text(
                 window.focus(&this.diff_panel_focus_handle, cx);
                 if e.click_count >= 2 {
                     cx.stop_propagation();
-                    this.double_click_select_diff_text(visible_ix, region, double_click_kind);
-                    cx.notify();
-                    return;
                 }
-                this.begin_diff_text_selection(visible_ix, region, e.position);
-                this.begin_diff_text_scroll_tracking(e.position, cx);
+                this.handle_diff_text_mouse_down(visible_ix, region, e.position, e.click_count, cx);
                 cx.notify();
             }),
         )
@@ -280,30 +276,49 @@ pub(super) fn syntax_theme_signature(theme: AppTheme) -> u64 {
     hash_rgba_bits(&mut hasher, syntax.comment_doc);
     hash_rgba_bits(&mut hasher, syntax.string);
     hash_rgba_bits(&mut hasher, syntax.string_escape);
+    hash_rgba_bits(&mut hasher, syntax.string_regex);
+    hash_rgba_bits(&mut hasher, syntax.string_special);
     hash_rgba_bits(&mut hasher, syntax.keyword);
     hash_rgba_bits(&mut hasher, syntax.keyword_control);
+    hash_rgba_bits(&mut hasher, syntax.preproc);
     hash_rgba_bits(&mut hasher, syntax.number);
     hash_rgba_bits(&mut hasher, syntax.boolean);
     hash_rgba_bits(&mut hasher, syntax.function);
     hash_rgba_bits(&mut hasher, syntax.function_method);
     hash_rgba_bits(&mut hasher, syntax.function_special);
+    hash_rgba_bits(&mut hasher, syntax.constructor);
     hash_rgba_bits(&mut hasher, syntax.type_name);
     hash_rgba_bits(&mut hasher, syntax.type_builtin);
     hash_rgba_bits(&mut hasher, syntax.type_interface);
+    hash_rgba_bits(&mut hasher, syntax.namespace);
     syntax.variable.is_some().hash(&mut hasher);
     if let Some(variable) = syntax.variable {
         hash_rgba_bits(&mut hasher, variable);
     }
     hash_rgba_bits(&mut hasher, syntax.variable_parameter);
     hash_rgba_bits(&mut hasher, syntax.variable_special);
+    hash_rgba_bits(&mut hasher, syntax.variable_builtin);
     hash_rgba_bits(&mut hasher, syntax.property);
+    syntax.label.is_some().hash(&mut hasher);
+    if let Some(label) = syntax.label {
+        hash_rgba_bits(&mut hasher, label);
+    }
     hash_rgba_bits(&mut hasher, syntax.constant);
+    hash_rgba_bits(&mut hasher, syntax.constant_builtin);
     hash_rgba_bits(&mut hasher, syntax.operator);
     hash_rgba_bits(&mut hasher, syntax.punctuation);
     hash_rgba_bits(&mut hasher, syntax.punctuation_bracket);
     hash_rgba_bits(&mut hasher, syntax.punctuation_delimiter);
+    hash_rgba_bits(&mut hasher, syntax.punctuation_special);
+    hash_rgba_bits(&mut hasher, syntax.punctuation_list_marker);
     hash_rgba_bits(&mut hasher, syntax.tag);
     hash_rgba_bits(&mut hasher, syntax.attribute);
+    hash_rgba_bits(&mut hasher, syntax.markup_heading);
+    hash_rgba_bits(&mut hasher, syntax.markup_link);
+    hash_rgba_bits(&mut hasher, syntax.text_literal);
+    hash_rgba_bits(&mut hasher, syntax.diff_plus);
+    hash_rgba_bits(&mut hasher, syntax.diff_minus);
+    hash_rgba_bits(&mut hasher, syntax.diff_delta);
     hash_rgba_bits(&mut hasher, syntax.lifetime);
     hasher.finish()
 }
@@ -953,27 +968,43 @@ fn syntax_highlight_color(theme: AppTheme, kind: SyntaxTokenKind) -> Option<gpui
         SyntaxTokenKind::CommentDoc => Some(theme.syntax.comment_doc),
         SyntaxTokenKind::String => Some(theme.syntax.string),
         SyntaxTokenKind::StringEscape => Some(theme.syntax.string_escape),
+        SyntaxTokenKind::StringRegex => Some(theme.syntax.string_regex),
+        SyntaxTokenKind::StringSpecial => Some(theme.syntax.string_special),
         SyntaxTokenKind::Keyword => Some(theme.syntax.keyword),
         SyntaxTokenKind::KeywordControl => Some(theme.syntax.keyword_control),
+        SyntaxTokenKind::Preproc => Some(theme.syntax.preproc),
         SyntaxTokenKind::Number => Some(theme.syntax.number),
         SyntaxTokenKind::Boolean => Some(theme.syntax.boolean),
         SyntaxTokenKind::Function => Some(theme.syntax.function),
         SyntaxTokenKind::FunctionMethod => Some(theme.syntax.function_method),
         SyntaxTokenKind::FunctionSpecial => Some(theme.syntax.function_special),
+        SyntaxTokenKind::Constructor => Some(theme.syntax.constructor),
         SyntaxTokenKind::Type => Some(theme.syntax.type_name),
         SyntaxTokenKind::TypeBuiltin => Some(theme.syntax.type_builtin),
         SyntaxTokenKind::TypeInterface => Some(theme.syntax.type_interface),
+        SyntaxTokenKind::Namespace => Some(theme.syntax.namespace),
         SyntaxTokenKind::Variable => theme.syntax.variable,
         SyntaxTokenKind::VariableParameter => Some(theme.syntax.variable_parameter),
         SyntaxTokenKind::VariableSpecial => Some(theme.syntax.variable_special),
+        SyntaxTokenKind::VariableBuiltin => Some(theme.syntax.variable_builtin),
         SyntaxTokenKind::Property => Some(theme.syntax.property),
+        SyntaxTokenKind::Label => theme.syntax.label,
         SyntaxTokenKind::Constant => Some(theme.syntax.constant),
+        SyntaxTokenKind::ConstantBuiltin => Some(theme.syntax.constant_builtin),
         SyntaxTokenKind::Operator => Some(theme.syntax.operator),
         SyntaxTokenKind::Punctuation => Some(theme.syntax.punctuation),
         SyntaxTokenKind::PunctuationBracket => Some(theme.syntax.punctuation_bracket),
         SyntaxTokenKind::PunctuationDelimiter => Some(theme.syntax.punctuation_delimiter),
+        SyntaxTokenKind::PunctuationSpecial => Some(theme.syntax.punctuation_special),
+        SyntaxTokenKind::PunctuationListMarker => Some(theme.syntax.punctuation_list_marker),
         SyntaxTokenKind::Tag => Some(theme.syntax.tag),
         SyntaxTokenKind::Attribute => Some(theme.syntax.attribute),
+        SyntaxTokenKind::MarkupHeading => Some(theme.syntax.markup_heading),
+        SyntaxTokenKind::MarkupLink => Some(theme.syntax.markup_link),
+        SyntaxTokenKind::TextLiteral => Some(theme.syntax.text_literal),
+        SyntaxTokenKind::DiffPlus => Some(theme.syntax.diff_plus),
+        SyntaxTokenKind::DiffMinus => Some(theme.syntax.diff_minus),
+        SyntaxTokenKind::DiffDelta => Some(theme.syntax.diff_delta),
         SyntaxTokenKind::Lifetime => Some(theme.syntax.lifetime),
     }
 }

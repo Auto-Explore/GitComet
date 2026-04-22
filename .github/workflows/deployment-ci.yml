@@ -8,12 +8,13 @@ on:
       - ".github/workflows/deploy-aur.yml"
       - ".github/workflows/deploy-homebrew-tap.yml"
       - ".github/workflows/deploy-apt-repo.yml"
+      - ".github/workflows/deploy-windows-installer.yml"
+      - ".github/workflows/deploy-microsoft-store.yml"
       - ".github/workflows/release-manual-main.yml"
       - "scripts/update-aur.sh"
       - "scripts/cargo-flatten-dupes.sh"
       - "scripts/package-macos.sh"
       - "scripts/macos-cargo-config.sh"
-      - "scripts/generate-homebrew-formula.sh"
       - "scripts/generate-homebrew-cask.sh"
       - "scripts/build-apt-repo.sh"
       - "scripts/windows/verify-signed-artifact.ps1"
@@ -24,12 +25,13 @@ on:
       - ".github/workflows/deploy-aur.yml"
       - ".github/workflows/deploy-homebrew-tap.yml"
       - ".github/workflows/deploy-apt-repo.yml"
+      - ".github/workflows/deploy-windows-installer.yml"
+      - ".github/workflows/deploy-microsoft-store.yml"
       - ".github/workflows/release-manual-main.yml"
       - "scripts/update-aur.sh"
       - "scripts/cargo-flatten-dupes.sh"
       - "scripts/package-macos.sh"
       - "scripts/macos-cargo-config.sh"
-      - "scripts/generate-homebrew-formula.sh"
       - "scripts/generate-homebrew-cask.sh"
       - "scripts/build-apt-repo.sh"
       - "scripts/windows/verify-signed-artifact.ps1"
@@ -44,7 +46,7 @@ env:
 jobs:
   formula-script-validation:
     name: Validate release helper scripts and workflow YAML
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
@@ -56,7 +58,6 @@ jobs:
           bash -n scripts/package-macos.sh
           bash -n scripts/notarize-macos.sh
           bash -n scripts/macos-cargo-config.sh
-          bash -n scripts/generate-homebrew-formula.sh
           bash -n scripts/generate-homebrew-cask.sh
           bash -n scripts/build-apt-repo.sh
 
@@ -78,6 +79,8 @@ jobs:
             .github/workflows/deploy-aur.yml
             .github/workflows/deploy-homebrew-tap.yml
             .github/workflows/deploy-apt-repo.yml
+            .github/workflows/deploy-windows-installer.yml
+            .github/workflows/deploy-microsoft-store.yml
             .github/workflows/deployment-ci.yml
             .github/workflows/release-manual-main.yml
           ].each { |path| YAML.load_file(path) }'
@@ -103,6 +106,30 @@ jobs:
           grep -Fq 'vars.APT_REPO_LABEL' .github/workflows/deploy-apt-repo.yml
           grep -Fq 'vars.APT_REPO_DESCRIPTION' .github/workflows/deploy-apt-repo.yml
           grep -Fq 'vars.APT_STORAGE_PUBLIC_ACCESS' .github/workflows/deploy-apt-repo.yml
+          grep -Fq 'vars.APT_STORAGE_ACCOUNT' .github/workflows/deploy-windows-installer.yml
+          grep -Fq 'AZURE_STORAGE_ACCOUNT_KEY' .github/workflows/deploy-windows-installer.yml
+          grep -Fq 'windows-x86_64.msi' .github/workflows/deploy-windows-installer.yml
+          grep -Fq 'windows-arm64.msi' .github/workflows/deploy-windows-installer.yml
+          grep -Fq 'vars.MICROSOFT_STORE_PACKAGE_BASE_URL' .github/workflows/deploy-microsoft-store.yml
+          grep -Fq 'vars.MICROSOFT_STORE_PRODUCT_ID' .github/workflows/deploy-microsoft-store.yml
+          grep -Fq 'vars.MICROSOFT_STORE_PACKAGE_LANGUAGES' .github/workflows/deploy-microsoft-store.yml
+          grep -Fq 'MICROSOFT_STORE_TENANT_ID' .github/workflows/deploy-microsoft-store.yml
+          grep -Fq 'MICROSOFT_STORE_CLIENT_ID' .github/workflows/deploy-microsoft-store.yml
+          grep -Fq 'MICROSOFT_STORE_CLIENT_SECRET' .github/workflows/deploy-microsoft-store.yml
+          grep -Fq 'MICROSOFT_STORE_SELLER_ID' .github/workflows/deploy-microsoft-store.yml
+          grep -Fq 'microsoft/microsoft-store-apppublisher@v1.3' .github/workflows/deploy-microsoft-store.yml
+          grep -Fq 'gh release view' .github/workflows/deploy-microsoft-store.yml
+          grep -Fq 'msstore submission update' .github/workflows/deploy-microsoft-store.yml
+          grep -Fq 'msstore submission updateMetadata' .github/workflows/deploy-microsoft-store.yml
+          grep -Fq 'msstore submission commit' .github/workflows/deploy-microsoft-store.yml
+          grep -Fq 'ReleaseNotes' .github/workflows/deploy-microsoft-store.yml
+          grep -Fq '"X64"' .github/workflows/deploy-microsoft-store.yml
+          grep -Fq '"Arm64"' .github/workflows/deploy-microsoft-store.yml
+          grep -Fq 'storage_container: "$web"' .github/workflows/release-manual-main.yml
+          grep -Fq 'storage_prefix: "windows"' .github/workflows/release-manual-main.yml
+          grep -Fq 'package_base_url: "https://apt.gitcomet.dev/windows"' .github/workflows/release-manual-main.yml
+          grep -Fq 'product_id: $''{{ vars.MICROSOFT_STORE_PRODUCT_ID }}' .github/workflows/release-manual-main.yml
+          grep -Fq 'package_languages: $''{{ vars.MICROSOFT_STORE_PACKAGE_LANGUAGES }}' .github/workflows/release-manual-main.yml
           grep -Fq 'vars.AUR_GIT_REPOSITORY' .github/workflows/deploy-aur.yml
           grep -Fq 'vars.AUR_GIT_BRANCH' .github/workflows/deploy-aur.yml
           grep -Fq 'vars.WINDOWS_SIGNING_ENDPOINT' .github/workflows/build-release-artifacts.yml
@@ -122,43 +149,35 @@ jobs:
           grep -Fq 'ssh://aur@aur.archlinux.org/gitcomet.git' .github/workflows/deploy-aur.yml
           grep -Fq 'HOMEBREW_TAP_TOKEN' .github/workflows/deploy-homebrew-tap.yml
 
-      - name: Generate Homebrew cask and formula from synthetic artifacts
+      - name: Generate Homebrew cask from synthetic artifacts
         run: |
           set -euo pipefail
           mkdir -p dist/deployment-ci
-          printf 'arm64-test' > dist/deployment-ci/gitcomet-v0.0.0-ci-macos-arm64.tar.gz
-          printf 'intel-test' > dist/deployment-ci/gitcomet-v0.0.0-ci-macos-x86_64.tar.gz
-          printf 'linux-arm-test' > dist/deployment-ci/gitcomet-v0.0.0-ci-linux-arm64.tar.gz
-          printf 'linux-test' > dist/deployment-ci/gitcomet-v0.0.0-ci-linux-x86_64.tar.gz
+          printf 'linux-arm-appimage-test' > dist/deployment-ci/gitcomet-v0.0.0-ci-linux-arm64.AppImage
+          printf 'linux-appimage-test' > dist/deployment-ci/gitcomet-v0.0.0-ci-linux-x86_64.AppImage
           printf 'arm64-dmg-test' > dist/deployment-ci/gitcomet-v0.0.0-ci-macos-arm64.dmg
           printf 'intel-dmg-test' > dist/deployment-ci/gitcomet-v0.0.0-ci-macos-x86_64.dmg
-
-          scripts/generate-homebrew-formula.sh \
-            --version "0.0.0-ci" \
-            --github-repo "Auto-Explore/GitComet" \
-            --arm-tar "dist/deployment-ci/gitcomet-v0.0.0-ci-macos-arm64.tar.gz" \
-            --intel-tar "dist/deployment-ci/gitcomet-v0.0.0-ci-macos-x86_64.tar.gz" \
-            --linux-arm-tar "dist/deployment-ci/gitcomet-v0.0.0-ci-linux-arm64.tar.gz" \
-            --linux-intel-tar "dist/deployment-ci/gitcomet-v0.0.0-ci-linux-x86_64.tar.gz" \
-            --output "dist/deployment-ci/gitcomet-cli.rb"
 
           scripts/generate-homebrew-cask.sh \
             --version "0.0.0-ci" \
             --github-repo "Auto-Explore/GitComet" \
             --arm-dmg "dist/deployment-ci/gitcomet-v0.0.0-ci-macos-arm64.dmg" \
             --intel-dmg "dist/deployment-ci/gitcomet-v0.0.0-ci-macos-x86_64.dmg" \
+            --linux-arm-appimage "dist/deployment-ci/gitcomet-v0.0.0-ci-linux-arm64.AppImage" \
+            --linux-intel-appimage "dist/deployment-ci/gitcomet-v0.0.0-ci-linux-x86_64.AppImage" \
             --output "dist/deployment-ci/gitcomet.rb"
 
           ruby -c dist/deployment-ci/gitcomet.rb
-          ruby -c dist/deployment-ci/gitcomet-cli.rb
           grep -q 'cask "gitcomet" do' dist/deployment-ci/gitcomet.rb
+          grep -q 'os macos: "macos", linux: "linux"' dist/deployment-ci/gitcomet.rb
+          grep -q 'on_linux do' dist/deployment-ci/gitcomet.rb
+          grep -q 'on_macos do' dist/deployment-ci/gitcomet.rb
           grep -q 'app "GitComet.app"' dist/deployment-ci/gitcomet.rb
-          grep -q 'brew install gitcomet-cli' dist/deployment-ci/gitcomet.rb
-          grep -q 'class GitcometCli < Formula' dist/deployment-ci/gitcomet-cli.rb
-          grep -q "on_linux do" dist/deployment-ci/gitcomet-cli.rb
-          grep -q 'gitcomet-v0.0.0-ci-linux-arm64.tar.gz' dist/deployment-ci/gitcomet-cli.rb
-          grep -q 'gitcomet-v0.0.0-ci-linux-x86_64.tar.gz' dist/deployment-ci/gitcomet-cli.rb
-          grep -q 'bin.install "gitcomet"' dist/deployment-ci/gitcomet-cli.rb
+          grep -q 'binary "#{appdir}/GitComet.app/Contents/MacOS/gitcomet", target: "gitcomet"' dist/deployment-ci/gitcomet.rb
+          grep -q 'container type: :naked' dist/deployment-ci/gitcomet.rb
+          grep -q 'binary "gitcomet-v#{version}-linux-#{arch}.AppImage", target: "gitcomet"' dist/deployment-ci/gitcomet.rb
+          grep -q 'gitcomet-v#{version}-linux-#{arch}.AppImage' dist/deployment-ci/gitcomet.rb
+          grep -q 'depends_on macos:' dist/deployment-ci/gitcomet.rb
 
       - name: Validate Homebrew tap publish detection
         run: |
@@ -180,28 +199,39 @@ jobs:
             version "0.0.0"
           end
           RUBY
+          cat > Formula/gitcomet-cli.rb <<'RUBY'
+          class GitcometCli < Formula
+            desc "Legacy GitComet CLI formula"
+            homepage "https://example.com"
+            url "https://example.com/gitcomet-cli.tar.gz"
+            sha256 "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            version "0.0.0"
+          end
+          RUBY
 
-          git add README.md Formula/gitcomet.rb
+          git add README.md Formula/gitcomet.rb Formula/gitcomet-cli.rb
           git commit -m "Initial tap repo"
 
-          mkdir -p Casks Formula
+          mkdir -p Casks
           cp ../gitcomet.rb Casks/gitcomet.rb
-          cp ../gitcomet-cli.rb Formula/gitcomet-cli.rb
 
-          git add Casks/gitcomet.rb Formula/gitcomet-cli.rb
+          git add Casks/gitcomet.rb
+          if git ls-files --error-unmatch Formula/gitcomet-cli.rb >/dev/null 2>&1; then
+            git rm -f Formula/gitcomet-cli.rb
+          fi
           if git ls-files --error-unmatch Formula/gitcomet.rb >/dev/null 2>&1; then
             git rm -f Formula/gitcomet.rb
           fi
 
           if git diff --cached --quiet -- Casks/gitcomet.rb Formula/gitcomet-cli.rb Formula/gitcomet.rb; then
-            echo "Expected Homebrew cask/formula publish to be detected as a change."
+            echo "Expected Homebrew cask publish and legacy formula removal to be detected as a change."
             exit 1
           fi
           popd >/dev/null
 
   aur-metadata-smoke:
     name: Validate AUR metadata update script
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 20
     container:
       image: archlinux:base-devel
@@ -276,7 +306,7 @@ jobs:
 
   apt-repo-generation-smoke:
     name: Validate APT repo generation script
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6

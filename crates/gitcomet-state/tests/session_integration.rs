@@ -1,4 +1,4 @@
-use gitcomet_core::domain::{LogScope, RepoSpec};
+use gitcomet_core::domain::{HistoryMode, LogScope, RepoSpec};
 use gitcomet_state::model::{AppState, RepoId, RepoState};
 use gitcomet_state::session::{self, UiSession, UiSettings};
 use serde_json::json;
@@ -104,12 +104,14 @@ fn wrapper_apis_use_session_file_env_when_set() {
     session::persist_ui_settings(UiSettings {
         window_width: Some(900),
         window_height: Some(700),
+        ui_scale_percent: Some(125),
         ..UiSettings::default()
     })
     .expect("persist ui settings through wrapper");
     let loaded = session::load();
     assert_eq!(loaded.window_width, Some(900));
     assert_eq!(loaded.window_height, Some(700));
+    assert_eq!(loaded.ui_scale_percent, Some(125));
 
     session::persist_repo_history_scope(repo, LogScope::CurrentBranch)
         .expect("persist history scope through wrapper");
@@ -292,6 +294,7 @@ fn persist_ui_settings_to_path_updates_optional_fields_and_requires_both_window_
             details_width: Some(84),
             repo_sidebar_collapsed_items: None,
             theme_mode: Some("light".to_string()),
+            ui_scale_percent: Some(110),
             ui_font_family: Some(".SystemUIFont".to_string()),
             editor_font_family: Some("JetBrains Mono".to_string()),
             use_font_ligatures: Some(false),
@@ -309,6 +312,7 @@ fn persist_ui_settings_to_path_updates_optional_fields_and_requires_both_window_
             history_show_tags: Some(false),
             history_tag_fetch_mode: Some(gitcomet_state::model::GitLogTagFetchMode::Disabled),
             git_executable_path: None,
+            ..UiSettings::default()
         },
         &session_file,
     )
@@ -320,6 +324,7 @@ fn persist_ui_settings_to_path_updates_optional_fields_and_requires_both_window_
     assert_eq!(loaded.sidebar_width, Some(42));
     assert_eq!(loaded.details_width, Some(84));
     assert_eq!(loaded.theme_mode.as_deref(), Some("light"));
+    assert_eq!(loaded.ui_scale_percent, Some(110));
     assert_eq!(loaded.ui_font_family.as_deref(), Some(".SystemUIFont"));
     assert_eq!(loaded.editor_font_family.as_deref(), Some("JetBrains Mono"));
     assert_eq!(loaded.use_font_ligatures, Some(false));
@@ -433,6 +438,108 @@ fn history_scope_round_trips_for_individual_and_bulk_loaders() {
 
     let missing = session::load_repo_history_scopes_from_path(&dir.join("does-not-exist.json"));
     assert!(missing.is_empty());
+}
+
+#[test]
+fn default_history_mode_round_trips_via_ui_settings_and_loaders() {
+    let dir = unique_temp_dir("default-history-mode");
+    let session_file = dir.join("session.json");
+
+    session::persist_ui_settings_to_path(
+        UiSettings {
+            default_history_mode: Some(HistoryMode::MergesOnly),
+            ..UiSettings::default()
+        },
+        &session_file,
+    )
+    .expect("persist default history mode");
+
+    let loaded = session::load_from_path(&session_file);
+    assert_eq!(loaded.default_history_mode, Some(HistoryMode::MergesOnly));
+    assert_eq!(
+        session::load_default_history_mode_from_path(&session_file),
+        Some(HistoryMode::MergesOnly)
+    );
+}
+
+#[test]
+fn history_mode_round_trips_for_individual_and_bulk_loaders() {
+    let dir = unique_temp_dir("history-mode");
+    let session_file = dir.join("session.json");
+    let repo_a = dir.join("repo-a");
+    let repo_b = dir.join("repo-b");
+
+    session::persist_repo_history_mode_to_path(&repo_a, HistoryMode::FirstParent, &session_file)
+        .expect("persist first-parent mode");
+    session::persist_repo_history_mode_to_path(&repo_b, HistoryMode::AllBranches, &session_file)
+        .expect("persist all-branches mode");
+
+    assert_eq!(
+        session::load_repo_history_mode_from_path(&repo_a, &session_file),
+        Some(HistoryMode::FirstParent)
+    );
+    assert_eq!(
+        session::load_repo_history_mode_from_path(&repo_b, &session_file),
+        Some(HistoryMode::AllBranches)
+    );
+    assert_eq!(
+        session::load_repo_history_mode_from_path(Path::new("/tmp/missing"), &session_file),
+        None
+    );
+
+    let modes = session::load_repo_history_modes_from_path(&session_file);
+    assert_eq!(modes.len(), 2);
+    assert_eq!(
+        modes.get(&repo_a.to_string_lossy().to_string()),
+        Some(&HistoryMode::FirstParent)
+    );
+    assert_eq!(
+        modes.get(&repo_b.to_string_lossy().to_string()),
+        Some(&HistoryMode::AllBranches)
+    );
+
+    let missing = session::load_repo_history_modes_from_path(&dir.join("does-not-exist.json"));
+    assert!(missing.is_empty());
+}
+
+#[test]
+fn legacy_history_scope_current_branch_maps_to_first_parent_mode() {
+    let dir = unique_temp_dir("legacy-history-scope");
+    let session_file = dir.join("session.json");
+    let repo_a = dir.join("repo-a");
+    let repo_b = dir.join("repo-b");
+
+    write_session_json(
+        &session_file,
+        json!({
+            "version": 2,
+            "open_repos": [],
+            "active_repo": null,
+            "repo_history_scopes": {
+                (repo_a.to_string_lossy().to_string()): "current_branch",
+                (repo_b.to_string_lossy().to_string()): "all_branches"
+            }
+        }),
+    );
+
+    assert_eq!(
+        session::load_repo_history_scope_from_path(&repo_a, &session_file),
+        Some(HistoryMode::FirstParent)
+    );
+    assert_eq!(
+        session::load_repo_history_scope_from_path(&repo_b, &session_file),
+        Some(HistoryMode::AllBranches)
+    );
+
+    let scopes = session::load_repo_history_scopes_from_path(&session_file);
+    assert_eq!(
+        scopes.get(&repo_a.to_string_lossy().to_string()),
+        Some(&HistoryMode::FirstParent)
+    );
+    assert_eq!(
+        scopes.get(&repo_b.to_string_lossy().to_string()),
+        Some(&HistoryMode::AllBranches)
+    );
 }
 
 #[test]

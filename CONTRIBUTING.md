@@ -86,12 +86,11 @@ The release workflow `.github/workflows/build-release-artifacts.yml` builds and 
 - Windows: portable ZIP + MSI
 - Linux: tar.gz + AppImage + .deb
 - macOS: DMG + tar.gz for `arm64` and `x86_64`
-- Homebrew cask asset: `gitcomet.rb` (generated from macOS DMG artifacts and their SHA256 values)
-- Homebrew CLI formula asset: `gitcomet-cli.rb` (generated from macOS + Linux x86_64 tarballs and their SHA256 values)
+- Homebrew cask asset: `gitcomet.rb` (generated from macOS DMG artifacts and Linux AppImages plus their SHA256 values)
 
 ### Homebrew deployment
 
-To push `Casks/gitcomet.rb` and `Formula/gitcomet-cli.rb` into a Homebrew tap repo automatically on release:
+To push `Casks/gitcomet.rb` into a Homebrew tap repo automatically on release:
 
 1. Create a tap repository (default expected name: `OWNER/homebrew-gitcomet`).
 2. In this repo, configure:
@@ -104,7 +103,7 @@ This release flow will:
 
 - build and upload release artifacts
 - publish the GitHub release
-- call `.github/workflows/deploy-homebrew-tap.yml` to update `Casks/gitcomet.rb` and `Formula/gitcomet-cli.rb` in the tap repo
+- call `.github/workflows/deploy-homebrew-tap.yml` to update `Casks/gitcomet.rb` in the tap repo
 
 You can also run `.github/workflows/deploy-homebrew-tap.yml` manually for backfills or dry-runs.
 

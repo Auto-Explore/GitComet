@@ -340,14 +340,15 @@ fn app_store_dispatch_does_not_reprobe_git_runtime_for_git_messages() {
 
     let _restore =
         GitRuntimePreferenceResetGuard::install(GitExecutablePreference::Custom(script_path));
+    let initial_probe_count = git_runtime_probe_count(&probe_log);
 
     let backend: Arc<dyn GitBackend> = Arc::new(FailingBackend);
     let (store, _event_rx) = AppStore::new(backend);
 
     assert_eq!(
         git_runtime_probe_count(&probe_log),
-        1,
-        "installing the custom runtime should probe exactly once"
+        initial_probe_count,
+        "creating the store should reuse the installed runtime state without probing again"
     );
 
     store.dispatch(Msg::ReloadRepo {
@@ -356,7 +357,7 @@ fn app_store_dispatch_does_not_reprobe_git_runtime_for_git_messages() {
 
     assert_eq!(
         git_runtime_probe_count(&probe_log),
-        1,
+        initial_probe_count,
         "dispatch should not re-run `git --version` for regular Git-backed messages"
     );
 }

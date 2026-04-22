@@ -719,6 +719,77 @@ impl MainPaneView {
         }
     }
 
+    fn has_active_diff_target(&self) -> bool {
+        self.active_repo()
+            .and_then(|repo| repo.diff_state.diff_target.as_ref())
+            .is_some()
+    }
+
+    fn navigate_diff_change(&mut self, previous: bool, cx: &mut gpui::Context<Self>) -> bool {
+        if !self.has_active_diff_target() {
+            return false;
+        }
+
+        if self.is_conflict_resolver_active() {
+            if self.is_conflict_rendered_preview_active() {
+                return false;
+            }
+            if previous {
+                self.conflict_jump_prev(cx);
+            } else {
+                self.conflict_jump_next(cx);
+            }
+            return true;
+        }
+
+        if self.is_file_preview_active() {
+            return false;
+        }
+
+        if previous {
+            self.diff_jump_prev();
+        } else {
+            self.diff_jump_next();
+        }
+        true
+    }
+
+    pub(in crate::view) fn navigate_prev_diff_change(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        self.navigate_diff_change(true, cx)
+    }
+
+    pub(in crate::view) fn navigate_next_diff_change(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        self.navigate_diff_change(false, cx)
+    }
+
+    pub(in crate::view) fn navigate_prev_search_match_or_diff_change(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        if self.diff_search_active {
+            self.diff_search_prev_match();
+            return true;
+        }
+        self.navigate_prev_diff_change(cx)
+    }
+
+    pub(in crate::view) fn navigate_next_search_match_or_diff_change(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        if self.diff_search_active {
+            self.diff_search_next_match();
+            return true;
+        }
+        self.navigate_next_diff_change(cx)
+    }
+
     pub(in crate::view) fn diff_jump_prev(&mut self) {
         let entries = self.diff_nav_entries();
         if entries.is_empty() {

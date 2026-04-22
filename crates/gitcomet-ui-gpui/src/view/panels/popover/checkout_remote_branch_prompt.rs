@@ -11,11 +11,13 @@ pub(super) fn panel(
     let upstream = format!("{remote}/{branch}");
     let remote_for_action = remote.clone();
     let branch_for_action = branch.clone();
+    let ui_scale_percent = super::popover_ui_scale_percent(cx);
+    let scaled_px = |value: f32| super::popover_scaled_px_from_percent(value, ui_scale_percent);
 
     div()
         .flex()
         .flex_col()
-        .w(px(540.0))
+        .w(scaled_px(540.0))
         .child(
             div()
                 .px_2()

@@ -118,7 +118,7 @@
 
 (escape_sequence) @string.escape
 
-(regex) @string.special
+(regex) @string.regex
 
 (number) @number
 

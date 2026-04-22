@@ -28,7 +28,7 @@ arrayvec	0.7.6	MIT OR Apache-2.0
 as-raw-xcb-connection	1.0.1	MIT OR Apache-2.0
 as-slice	0.2.1	MIT OR Apache-2.0
 ash	0.38.0+1.3.281	MIT OR Apache-2.0
-ashpd	0.13.9	MIT
+ashpd	0.13.10	MIT
 async-broadcast	0.7.2	MIT OR Apache-2.0
 async-channel	1.9.0	Apache-2.0 OR MIT
 async-channel	2.5.0	Apache-2.0 OR MIT
@@ -52,8 +52,8 @@ autocfg	1.5.0	Apache-2.0 OR MIT
 av-scenechange	0.14.1	MIT
 av1-grain	0.2.5	BSD-2-Clause
 avif-serialize	0.8.8	BSD-3-Clause
-aws-lc-rs	1.16.2	ISC AND (Apache-2.0 OR ISC)
-aws-lc-sys	0.39.1	ISC AND (Apache-2.0 OR ISC) AND Apache-2.0 AND MIT AND BSD-3-Clause AND (Apache-2.0 OR ISC OR MIT) AND (Apache-2.0 OR ISC OR MIT-0)
+aws-lc-rs	1.16.3	ISC AND (Apache-2.0 OR ISC)
+aws-lc-sys	0.40.0	ISC AND (Apache-2.0 OR ISC) AND Apache-2.0 AND MIT AND BSD-3-Clause AND (Apache-2.0 OR ISC OR MIT) AND (Apache-2.0 OR ISC OR MIT-0)
 backtrace	0.3.76	MIT OR Apache-2.0
 base64	0.22.1	MIT OR Apache-2.0
 bit-set	0.8.0	Apache-2.0 OR MIT
@@ -62,8 +62,8 @@ bit-vec	0.8.0	Apache-2.0 OR MIT
 bit-vec	0.9.1	Apache-2.0 OR MIT
 bit_field	0.10.3	Apache-2.0/MIT
 bitflags	1.3.2	MIT/Apache-2.0
-bitflags	2.11.0	MIT OR Apache-2.0
-bitstream-io	4.9.0	MIT/Apache-2.0
+bitflags	2.11.1	MIT OR Apache-2.0
+bitstream-io	4.10.0	MIT/Apache-2.0
 block	0.1.6	MIT
 block-buffer	0.10.4	MIT OR Apache-2.0
 block-padding	0.3.3	MIT OR Apache-2.0
@@ -95,9 +95,9 @@ ciborium-io	0.2.2	Apache-2.0
 ciborium-ll	0.2.2	Apache-2.0
 cipher	0.4.4	MIT OR Apache-2.0
 circular-buffer	1.2.0	BSD-3-Clause
-clap	4.6.0	MIT OR Apache-2.0
+clap	4.6.1	MIT OR Apache-2.0
 clap_builder	4.6.0	MIT OR Apache-2.0
-clap_derive	4.6.0	MIT OR Apache-2.0
+clap_derive	4.6.1	MIT OR Apache-2.0
 clap_lex	1.1.0	MIT OR Apache-2.0
 clru	0.6.3	MIT
 cmake	0.1.58	MIT OR Apache-2.0
@@ -122,7 +122,6 @@ core-graphics-types	0.2.0	MIT OR Apache-2.0
 core-graphics2	0.5.2	MIT OR Apache-2.0
 core-text	21.0.0	MIT OR Apache-2.0
 core-video	0.5.2	MIT OR Apache-2.0
-core2	0.4.0	Apache-2.0 OR MIT
 core_maths	0.1.1	MIT
 cosmic-text	0.18.2	MIT OR Apache-2.0
 cpufeatures	0.2.17	MIT OR Apache-2.0
@@ -193,7 +192,7 @@ flume	0.12.0	Apache-2.0/MIT
 fnv	1.0.7	Apache-2.0 / MIT
 foldhash	0.1.5	Zlib
 foldhash	0.2.0	Zlib
-font-types	0.11.2	MIT OR Apache-2.0
+font-types	0.11.3	MIT OR Apache-2.0
 fontconfig-parser	0.5.8	MIT
 fontdb	0.23.0	MIT
 foreign-types	0.5.0	MIT/Apache-2.0
@@ -317,7 +316,7 @@ http-body-util	0.1.3	MIT
 httparse	1.10.1	MIT OR Apache-2.0
 human_format	1.2.1	MIT
 hyper	1.9.0	MIT
-hyper-rustls	0.27.7	Apache-2.0 OR ISC OR MIT
+hyper-rustls	0.27.9	Apache-2.0 OR ISC OR MIT
 hyper-util	0.1.20	MIT
 iana-time-zone	0.1.65	MIT OR Apache-2.0
 iana-time-zone-haiku	0.1.2	MIT OR Apache-2.0
@@ -376,7 +375,7 @@ leak	0.1.2	Apache-2.0 OR MIT
 leaky-cow	0.1.1	MIT / Apache-2.0
 leb128fmt	0.1.0	MIT OR Apache-2.0
 lebe	0.5.3	BSD-3-Clause
-libc	0.2.184	MIT OR Apache-2.0
+libc	0.2.185	MIT OR Apache-2.0
 libfuzzer-sys	0.4.12	(MIT OR Apache-2.0) AND NCSA
 libgit2-sys	0.18.3+1.9.2	MIT OR Apache-2.0
 libloading	0.8.9	ISC
@@ -393,7 +392,7 @@ litrs	1.0.0	MIT OR Apache-2.0
 lock_api	0.4.14	MIT OR Apache-2.0
 log	0.4.29	MIT OR Apache-2.0
 loop9	0.1.5	MIT
-lru	0.16.3	MIT
+lru	0.17.0	MIT
 lru-slab	0.1.2	MIT OR Apache-2.0 OR Zlib
 lyon	1.0.19	MIT OR Apache-2.0
 lyon_algorithms	1.0.19	MIT OR Apache-2.0
@@ -422,10 +421,11 @@ ndk-sys	0.6.0+11769913	MIT OR Apache-2.0
 new_debug_unreachable	1.0.6	MIT
 nix	0.29.0	MIT
 nix	0.31.2	MIT
+no_std_io2	0.9.3	Apache-2.0 OR MIT
 nom	8.0.0	MIT
 nonempty	0.12.0	MIT
 noop_proc_macro	0.3.0	MIT
-notify	9.0.0-rc.2	CC0-1.0
+notify	9.0.0-rc.3	CC0-1.0
 notify-types	2.1.0	MIT OR Apache-2.0
 num	0.4.3	MIT OR Apache-2.0
 num-bigint	0.4.6	MIT OR Apache-2.0
@@ -450,7 +450,7 @@ once_cell	1.21.4	MIT OR Apache-2.0
 once_cell_polyfill	1.70.2	MIT OR Apache-2.0
 oo7	0.6.0	MIT
 oorandom	11.1.5	MIT
-open	5.3.3	MIT
+open	5.3.4	MIT
 openssl-probe	0.2.1	MIT OR Apache-2.0
 option-ext	0.2.0	MPL-2.0
 ordered-float	5.3.0	MIT
@@ -472,7 +472,7 @@ pin-project-internal	1.1.11	Apache-2.0 OR MIT
 pin-project-lite	0.2.17	Apache-2.0 OR MIT
 pin-utils	0.1.0	MIT OR Apache-2.0
 piper	0.2.5	MIT OR Apache-2.0
-pkg-config	0.3.32	MIT OR Apache-2.0
+pkg-config	0.3.33	MIT OR Apache-2.0
 plain	0.2.3	MIT/Apache-2.0
 plotters	0.3.7	MIT
 plotters-backend	0.3.7	MIT
@@ -482,7 +482,7 @@ polling	3.11.0	Apache-2.0 OR MIT
 pollster	0.2.5	Apache-2.0/MIT
 pollster	0.4.0	Apache-2.0/MIT
 portable-atomic	1.13.1	Apache-2.0 OR MIT
-portable-atomic-util	0.2.6	Apache-2.0 OR MIT
+portable-atomic-util	0.2.7	Apache-2.0 OR MIT
 postage	0.5.0	MIT
 potential_utf	0.1.5	Unicode-3.0
 ppv-lite86	0.2.21	MIT OR Apache-2.0
@@ -499,7 +499,7 @@ proptest	1.11.0	MIT OR Apache-2.0
 psm	0.1.30	MIT OR Apache-2.0
 pulldown-cmark	0.13.3	MIT
 pulldown-cmark-escape	0.11.0	MIT
-pxfm	0.1.28	BSD-3-Clause OR Apache-2.0
+pxfm	0.1.29	BSD-3-Clause OR Apache-2.0
 qoi	0.4.1	MIT/Apache-2.0
 quick-error	1.2.3	MIT/Apache-2.0
 quick-error	2.0.1	MIT/Apache-2.0
@@ -511,9 +511,9 @@ quote	1.0.45	MIT OR Apache-2.0
 r-efi	5.3.0	MIT OR Apache-2.0 OR LGPL-2.1-or-later
 r-efi	6.0.0	MIT OR Apache-2.0 OR LGPL-2.1-or-later
 rand	0.10.1	MIT OR Apache-2.0
-rand	0.9.3	MIT OR Apache-2.0
+rand	0.9.4	MIT OR Apache-2.0
 rand_chacha	0.9.0	MIT OR Apache-2.0
-rand_core	0.10.0	MIT OR Apache-2.0
+rand_core	0.10.1	MIT OR Apache-2.0
 rand_core	0.9.5	MIT OR Apache-2.0
 rand_xorshift	0.4.0	MIT OR Apache-2.0
 range-alloc	0.1.5	MIT OR Apache-2.0
@@ -522,7 +522,7 @@ rav1e	0.8.1	BSD-2-Clause
 ravif	0.13.0	BSD-3-Clause
 raw-window-handle	0.6.2	MIT OR Apache-2.0 OR Zlib
 raw-window-metal	1.1.0	MIT OR Apache-2.0
-rayon	1.11.0	MIT OR Apache-2.0
+rayon	1.12.0	MIT OR Apache-2.0
 rayon-core	1.13.0	MIT OR Apache-2.0
 read-fonts	0.37.0	MIT OR Apache-2.0
 redox_syscall	0.2.16	MIT
@@ -550,13 +550,13 @@ rustc-hash	2.1.2	Apache-2.0 OR MIT
 rustc_version	0.4.1	MIT OR Apache-2.0
 rustix	0.38.44	Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
 rustix	1.1.4	Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
-rustls	0.23.37	Apache-2.0 OR ISC OR MIT
+rustls	0.23.38	Apache-2.0 OR ISC OR MIT
 rustls-native-certs	0.8.3	Apache-2.0 OR ISC OR MIT
 rustls-pemfile	2.2.0	Apache-2.0 OR ISC OR MIT
 rustls-pki-types	1.14.0	MIT OR Apache-2.0
 rustls-platform-verifier	0.6.2	MIT OR Apache-2.0
 rustls-platform-verifier-android	0.1.1	MIT OR Apache-2.0
-rustls-webpki	0.103.11	ISC
+rustls-webpki	0.103.12	ISC
 rustversion	1.0.22	MIT OR Apache-2.0
 rusty-fork	0.3.1	MIT/Apache-2.0
 rustybuzz	0.20.1	MIT
@@ -649,7 +649,7 @@ tinystr	0.8.3	Unicode-3.0
 tinytemplate	1.2.1	Apache-2.0 OR MIT
 tinyvec	1.11.0	Zlib OR Apache-2.0 OR MIT
 tinyvec_macros	0.1.1	MIT OR Apache-2.0 OR Zlib
-tokio	1.51.1	MIT
+tokio	1.52.1	MIT
 tokio-rustls	0.26.4	MIT OR Apache-2.0
 tokio-socks	0.5.2	MIT
 tokio-util	0.7.18	MIT
@@ -668,21 +668,46 @@ tracing-attributes	0.1.31	MIT
 tracing-core	0.1.36	MIT
 tree-sitter	0.26.8	MIT
 tree-sitter-bash	0.25.1	MIT
+tree-sitter-bicep	1.1.0	MIT
+tree-sitter-c	0.24.1	MIT
+tree-sitter-c-sharp	0.23.5	MIT
+tree-sitter-cpp	0.23.4	MIT
 tree-sitter-css	0.25.0	MIT
+tree-sitter-dart	0.1.0	MIT
+tree-sitter-diff	0.1.0	MIT
+tree-sitter-fsharp	0.3.0	MIT
+tree-sitter-gitcommit	0.0.1	MIT
 tree-sitter-go	0.25.0	MIT
+tree-sitter-gomod	1.1.1	MIT
+tree-sitter-gowork	0.0.1	MIT
 tree-sitter-html	0.23.2	MIT
+tree-sitter-java	0.23.5	MIT
 tree-sitter-javascript	0.25.0	MIT
 tree-sitter-json	0.24.8	MIT
+tree-sitter-kotlin-sg	0.4.0	MIT
 tree-sitter-language	0.1.7	MIT
+tree-sitter-lua	0.5.0	MIT
+tree-sitter-make	1.1.1	MIT
+tree-sitter-md	0.3.2	MIT
+tree-sitter-objc	3.0.2	MIT
+tree-sitter-php	0.24.2	MIT
+tree-sitter-powershell	0.26.3	MIT
 tree-sitter-python	0.25.0	MIT
+tree-sitter-r	1.2.0	MIT
+tree-sitter-ruby	0.23.1	MIT
 tree-sitter-rust	0.24.2	MIT
+tree-sitter-scala	0.26.0	MIT
+tree-sitter-sequel	0.3.11	MIT
+tree-sitter-swift	0.7.1	MIT
+tree-sitter-toml-ng	0.7.0	MIT
 tree-sitter-typescript	0.23.2	MIT
 tree-sitter-xml	0.7.0	MIT
 tree-sitter-yaml	0.7.2	MIT
+tree-sitter-zig	1.1.2	MIT
 try-lock	0.2.5	MIT
 ttf-parser	0.25.1	MIT OR Apache-2.0
 typeid	1.0.3	MIT OR Apache-2.0
-typenum	1.19.0	MIT OR Apache-2.0
+typenum	1.20.0	MIT OR Apache-2.0
 uds_windows	1.2.1	MIT
 uluru	3.1.0	MPL-2.0
 unarray	0.1.4	MIT OR Apache-2.0
@@ -706,7 +731,7 @@ usvg	0.47.0	Apache-2.0 OR MIT
 utf-8	0.7.6	MIT OR Apache-2.0
 utf8_iter	1.0.4	Apache-2.0 OR MIT
 utf8parse	0.2.2	Apache-2.0 OR MIT
-uuid	1.23.0	Apache-2.0 OR MIT
+uuid	1.23.1	Apache-2.0 OR MIT
 v_frame	0.3.9	BSD-2-Clause
 value-bag	1.12.0	Apache-2.0 OR MIT
 value-bag-serde1	1.12.0	Apache-2.0 OR MIT
@@ -720,7 +745,7 @@ waker-fn	1.2.0	Apache-2.0 OR MIT
 walkdir	2.5.0	Unlicense/MIT
 want	0.3.1	MIT
 wasi	0.11.1+wasi-snapshot-preview1	Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
-wasip2	1.0.2+wasi-0.2.9	Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
+wasip2	1.0.3+wasi-0.2.9	Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
 wasip3	0.4.0+wasi-0.3.0-rc-2026-01-06	Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
 wasm-bindgen	0.2.118	MIT OR Apache-2.0
 wasm-bindgen-futures	0.4.68	MIT OR Apache-2.0
@@ -741,7 +766,7 @@ wayland-scanner	0.31.10	MIT
 wayland-sys	0.31.11	MIT
 web-sys	0.3.95	MIT OR Apache-2.0
 web-time	1.1.0	MIT OR Apache-2.0
-webpki-root-certs	1.0.6	CDLA-Permissive-2.0
+webpki-root-certs	1.0.7	CDLA-Permissive-2.0
 weezl	0.1.12	MIT OR Apache-2.0
 wgpu	29.0.0	MIT OR Apache-2.0
 wgpu-core	29.0.0	MIT OR Apache-2.0
@@ -756,26 +781,20 @@ winapi	0.3.9	MIT/Apache-2.0
 winapi-i686-pc-windows-gnu	0.4.0	MIT/Apache-2.0
 winapi-util	0.1.11	Unlicense OR MIT
 winapi-x86_64-pc-windows-gnu	0.4.0	MIT/Apache-2.0
-windows	0.61.3	MIT OR Apache-2.0
 windows	0.62.2	MIT OR Apache-2.0
-windows-collections	0.2.0	MIT OR Apache-2.0
 windows-collections	0.3.2	MIT OR Apache-2.0
-windows-core	0.61.2	MIT OR Apache-2.0
 windows-core	0.62.2	MIT OR Apache-2.0
-windows-future	0.2.1	MIT OR Apache-2.0
 windows-future	0.3.2	MIT OR Apache-2.0
 windows-implement	0.60.2	MIT OR Apache-2.0
 windows-interface	0.59.3	MIT OR Apache-2.0
 windows-link	0.1.3	MIT OR Apache-2.0
 windows-link	0.2.1	MIT OR Apache-2.0
-windows-numerics	0.2.0	MIT OR Apache-2.0
 windows-numerics	0.3.1	MIT OR Apache-2.0
 windows-registry	0.4.0	MIT OR Apache-2.0
 windows-registry	0.6.1	MIT OR Apache-2.0
 windows-result	0.3.4	MIT OR Apache-2.0
 windows-result	0.4.1	MIT OR Apache-2.0
 windows-strings	0.3.1	MIT OR Apache-2.0
-windows-strings	0.4.2	MIT OR Apache-2.0
 windows-strings	0.5.1	MIT OR Apache-2.0
 windows-sys	0.45.0	MIT OR Apache-2.0
 windows-sys	0.48.0	MIT OR Apache-2.0
@@ -787,7 +806,6 @@ windows-targets	0.42.2	MIT OR Apache-2.0
 windows-targets	0.48.5	MIT OR Apache-2.0
 windows-targets	0.52.6	MIT OR Apache-2.0
 windows-targets	0.53.5	MIT OR Apache-2.0
-windows-threading	0.1.0	MIT OR Apache-2.0
 windows-threading	0.2.1	MIT OR Apache-2.0
 windows_aarch64_gnullvm	0.42.2	MIT OR Apache-2.0
 windows_aarch64_gnullvm	0.48.5	MIT OR Apache-2.0
@@ -825,6 +843,7 @@ winreg	0.55.0	MIT
 winsafe	0.0.19	MIT
 wio	0.2.2	MIT/Apache-2.0
 wit-bindgen	0.51.0	Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
+wit-bindgen	0.57.1	Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
 wit-bindgen-core	0.51.0	Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
 wit-bindgen-rust	0.51.0	Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
 wit-bindgen-rust-macro	0.51.0	Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT

@@ -2327,6 +2327,7 @@ pub(super) enum PopoverKind {
         repo_id: RepoId,
     },
     ChangeTrackingSettings,
+    UiScalePicker,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -2824,6 +2825,7 @@ pub struct GitCometView {
     pub(super) details_pane: Entity<DetailsPaneView>,
     pub(super) repo_tabs_bar: Entity<RepoTabsBarView>,
     pub(super) action_bar: Entity<ActionBarView>,
+    pub(super) bottom_status_bar: Entity<BottomStatusBarView>,
     pub(super) toast_host: Entity<ToastHost>,
     pub(super) popover_host: Entity<PopoverHost>,
     pub(super) focused_mergetool_bootstrap: Option<FocusedMergetoolBootstrap>,
@@ -2840,6 +2842,7 @@ pub struct GitCometView {
     pub(super) show_timezone: bool,
     pub(super) change_tracking_view: ChangeTrackingView,
     pub(super) diff_scroll_sync: DiffScrollSync,
+    pub(super) ui_scale_percent: u32,
 
     pub(super) open_repo_panel: bool,
     pub(super) open_repo_input: Entity<components::TextInput>,
@@ -2848,6 +2851,8 @@ pub struct GitCometView {
 
     pub(super) sidebar_collapsed: bool,
     pub(super) details_collapsed: bool,
+    pub(super) sidebar_width_design: f32,
+    pub(super) details_width_design: f32,
     pub(super) sidebar_width: Pixels,
     pub(super) details_width: Pixels,
     pub(super) sidebar_render_width: Pixels,

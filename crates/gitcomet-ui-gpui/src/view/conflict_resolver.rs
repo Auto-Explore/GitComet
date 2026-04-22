@@ -149,6 +149,7 @@ pub enum AutosolveTraceMode {
     History,
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ConflictNavDirection {
     Prev,
@@ -551,6 +552,7 @@ pub fn conflict_quick_pick_choice_for_key(key: &str) -> Option<ConflictChoice> {
 }
 
 /// Resolve conflict navigation shortcuts (`F2`, `F3`, `F7`) to a direction.
+#[cfg(test)]
 pub fn conflict_nav_direction_for_key(key: &str, shift: bool) -> Option<ConflictNavDirection> {
     match key {
         "f2" => Some(ConflictNavDirection::Prev),

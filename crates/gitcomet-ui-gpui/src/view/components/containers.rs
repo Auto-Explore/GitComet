@@ -1,4 +1,5 @@
 use crate::theme::AppTheme;
+use crate::ui_scale;
 use gpui::prelude::*;
 use gpui::{Div, FontWeight, SharedString, div, px};
 
@@ -100,11 +101,15 @@ pub fn empty_state(
 
 pub fn split_columns_header(
     theme: AppTheme,
+    ui_scale_percent: u32,
     left: impl Into<SharedString>,
     right: impl Into<SharedString>,
 ) -> Div {
     div()
-        .h(px(CONTROL_HEIGHT_PX))
+        .h(ui_scale::design_px_from_percent(
+            CONTROL_HEIGHT_PX,
+            ui_scale_percent,
+        ))
         .flex()
         .items_center()
         .text_xs()

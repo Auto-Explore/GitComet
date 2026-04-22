@@ -4,7 +4,14 @@ use rustc_hash::FxHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-pub(in super::super) const ACTION_BAR_HEIGHT: Pixels = px(components::CONTROL_HEIGHT_PX + 8.0);
+const ACTION_BAR_HEIGHT_PX: f32 = components::CONTROL_HEIGHT_PX + 8.0;
+
+pub(in super::super) fn action_bar_height<C>(cx: &mut C) -> Pixels
+where
+    C: gpui::BorrowAppContext,
+{
+    crate::ui_scale::design_px(ACTION_BAR_HEIGHT_PX, cx)
+}
 
 fn head_branch_has_tracking_upstream(
     head_branch: &Loadable<String>,
@@ -181,12 +188,17 @@ impl ActionBarView {
 impl Render for ActionBarView {
     fn render(&mut self, _window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         let theme = self.theme;
+        let action_bar_height = action_bar_height(cx);
+        let ui_scale_percent = crate::ui_scale::current(cx).percent;
+        let scaled_px =
+            |value: f32| crate::ui_scale::design_px_from_percent(value, ui_scale_percent);
         let hover_bg = with_alpha(theme.colors.text, if theme.is_dark { 0.06 } else { 0.04 });
         let active_bg = with_alpha(theme.colors.text, if theme.is_dark { 0.10 } else { 0.07 });
         let icon_primary = theme.colors.accent;
         let icon_muted = with_alpha(theme.colors.accent, if theme.is_dark { 0.72 } else { 0.82 });
-        let icon = |path: &'static str, color: gpui::Rgba| svg_icon(path, color, px(14.0));
-        let spinner = |id: (&'static str, u64), color: gpui::Rgba| svg_spinner(id, color, px(14.0));
+        let icon = |path: &'static str, color: gpui::Rgba| svg_icon(path, color, scaled_px(14.0));
+        let spinner =
+            |id: (&'static str, u64), color: gpui::Rgba| svg_spinner(id, color, scaled_px(14.0));
         let count_badge = |count: usize, color: gpui::Rgba| {
             div()
                 .text_xs()
@@ -407,7 +419,7 @@ impl Render for ActionBarView {
                     ),
                 )
                 .style(components::SplitButtonStyle::Outlined)
-                .render(theme),
+                .render(theme, ui_scale_percent),
             )
             .gitcomet_tooltip(
                 theme,
@@ -524,7 +536,7 @@ impl Render for ActionBarView {
                     ),
                 )
                 .style(components::SplitButtonStyle::Outlined)
-                .render(theme),
+                .render(theme, ui_scale_percent),
             )
             .gitcomet_tooltip(
                 theme,
@@ -573,7 +585,7 @@ impl Render for ActionBarView {
 
         div()
             .w_full()
-            .h(ACTION_BAR_HEIGHT)
+            .h(action_bar_height)
             .flex_none()
             .flex()
             .items_center()

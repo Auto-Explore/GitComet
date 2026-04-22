@@ -229,21 +229,37 @@ impl DetailsPaneView {
             })
     }
 
+    pub(in super::super) fn sanitized_restored_change_tracking_height_design(
+        view: ChangeTrackingView,
+        height: Option<u32>,
+    ) -> Option<f32> {
+        let min_height: f32 = min_change_tracking_stack_height(
+            view == ChangeTrackingView::SplitUntracked,
+            px(PANE_RESIZE_HANDLE_PX),
+        )
+        .into();
+        height.map(|value| (value as f32).max(min_height))
+    }
+
+    #[cfg(test)]
     pub(in super::super) fn sanitized_restored_change_tracking_height(
         view: ChangeTrackingView,
         height: Option<u32>,
     ) -> Option<Pixels> {
-        let min_height = min_change_tracking_stack_height(
-            view == ChangeTrackingView::SplitUntracked,
-            px(PANE_RESIZE_HANDLE_PX),
-        );
-        height.map(|value| px(value as f32).max(min_height))
+        Self::sanitized_restored_change_tracking_height_design(view, height).map(px)
     }
 
+    pub(in super::super) fn sanitized_restored_untracked_height_design(
+        height: Option<u32>,
+    ) -> Option<f32> {
+        height.map(|value| (value as f32).max(STATUS_SECTION_MIN_HEIGHT_PX))
+    }
+
+    #[cfg(test)]
     pub(in super::super) fn sanitized_restored_untracked_height(
         height: Option<u32>,
     ) -> Option<Pixels> {
-        height.map(|value| px(value as f32).max(px(STATUS_SECTION_MIN_HEIGHT_PX)))
+        Self::sanitized_restored_untracked_height_design(height).map(px)
     }
 
     fn status_resize_total_height(
@@ -338,7 +354,7 @@ impl DetailsPaneView {
                     (state.start_height + delta_y).max(min_top)
                 };
                 if self.change_tracking_height != Some(next_height) {
-                    self.change_tracking_height = Some(next_height);
+                    self.set_change_tracking_height_from_pixels(Some(next_height));
                     changed = true;
                 }
             }
@@ -354,7 +370,7 @@ impl DetailsPaneView {
                     (state.start_height + delta_y).max(section_min_h)
                 };
                 if self.untracked_height != Some(next_height) {
-                    self.untracked_height = Some(next_height);
+                    self.set_untracked_height_from_pixels(Some(next_height));
                     changed = true;
                 }
             }
@@ -416,6 +432,9 @@ impl DetailsPaneView {
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         let theme = self.theme;
+        let ui_scale = self.ui_scale();
+        let commit_files_min_viewport_height = ui_scale.px(24.0);
+        let commit_files_section_min_height = ui_scale.px(44.0);
         let active_repo_id = self.active_repo_id();
         let selected_id = self
             .active_repo()
@@ -432,7 +451,7 @@ impl DetailsPaneView {
                 .flex()
                 .items_center()
                 .justify_between()
-                .h(px(components::CONTROL_HEIGHT_MD_PX))
+                .h(components::control_height_md(ui_scale))
                 .px_2()
                 .bg(theme.colors.surface_bg_elevated)
                 .border_b_1()
@@ -526,7 +545,7 @@ impl DetailsPaneView {
                                     .flex_col()
                                     .flex_1()
                                     .h_full()
-                                    .min_h(px(0.0))
+                                    .min_h(commit_files_min_viewport_height)
                                     .w_full()
                                     .overflow_hidden()
                                     .child(
@@ -637,7 +656,7 @@ impl DetailsPaneView {
                                         .gap_1()
                                         .flex_1()
                                         .h_full()
-                                        .min_h(px(0.0))
+                                        .min_h(commit_files_section_min_height)
                                         .child(
                                             div()
                                                 .text_sm()
@@ -684,7 +703,7 @@ impl DetailsPaneView {
                                 .flex_col()
                                 .flex_1()
                                 .h_full()
-                                .min_h(px(0.0))
+                                .min_h(commit_files_min_viewport_height)
                                 .w_full()
                                 .overflow_hidden()
                                 .child(
@@ -795,7 +814,7 @@ impl DetailsPaneView {
                                     .gap_1()
                                     .flex_1()
                                     .h_full()
-                                    .min_h(px(0.0))
+                                    .min_h(commit_files_section_min_height)
                                     .child(
                                         div()
                                             .text_sm()
@@ -905,6 +924,7 @@ impl DetailsPaneView {
         let repo_key = repo_id.map(|id| id.0).unwrap_or(0);
         let split_change_tracking = self.change_tracking_view == ChangeTrackingView::SplitUntracked;
         let icon_muted = with_alpha(theme.colors.accent, if theme.is_dark { 0.72 } else { 0.82 });
+        let ui_scale_percent = crate::ui_scale::current(cx).percent;
 
         let stage_all = components::Button::new("stage_all", "Stage all changes")
             .style(components::ButtonStyle::Subtle)
@@ -1170,7 +1190,7 @@ impl DetailsPaneView {
                 .flex()
                 .items_center()
                 .justify_between()
-                .h(px(components::CONTROL_HEIGHT_MD_PX))
+                .h(components::control_height_md(ui_scale_percent))
                 .px_2()
                 .bg(theme.colors.surface_bg_elevated)
                 .border_b_1()
@@ -1831,6 +1851,7 @@ impl DetailsPaneView {
 
     pub(in super::super) fn commit_box(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
         let theme = self.theme;
+        let ui_scale_percent = crate::ui_scale::current(cx).percent;
         let commit_in_flight = self
             .active_repo()
             .is_some_and(|repo| repo.commit_in_flight > 0);
@@ -1878,7 +1899,7 @@ impl DetailsPaneView {
                         })
                         .style(components::ButtonStyle::Filled)
                         .disabled(!can_submit_commit)
-                        .render(theme)
+                        .render(theme, ui_scale_percent)
                         .debug_selector(|| "commit_button".to_string())
                         .on_click(cx.listener(|this, _e: &ClickEvent, _w, cx| {
                             let Some(repo_id) = this.active_repo_id() else {

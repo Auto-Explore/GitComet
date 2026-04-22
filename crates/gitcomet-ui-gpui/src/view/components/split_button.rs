@@ -1,8 +1,9 @@
 use crate::theme::AppTheme;
+use crate::ui_scale::UiScale;
 use gpui::prelude::*;
 use gpui::{AnyElement, Div, IntoElement, div, px};
 
-use super::CONTROL_HEIGHT_PX;
+use super::control_height;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SplitButtonStyle {
@@ -30,7 +31,8 @@ impl SplitButton {
         self
     }
 
-    pub fn render(self, theme: AppTheme) -> Div {
+    pub fn render(self, theme: AppTheme, ui_scale: impl Into<UiScale>) -> Div {
+        let ui_scale = ui_scale.into();
         let bg = match self.style {
             SplitButtonStyle::Filled => theme.colors.surface_bg_elevated,
             SplitButtonStyle::Outlined => gpui::rgba(0x00000000),
@@ -68,7 +70,7 @@ impl SplitButton {
         div()
             .flex()
             .items_center()
-            .h(px(CONTROL_HEIGHT_PX))
+            .h(control_height(ui_scale))
             .rounded(px(theme.radii.row))
             .bg(gpui::rgba(0x00000000))
             .border_1()

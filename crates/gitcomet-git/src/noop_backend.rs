@@ -179,6 +179,7 @@ mod tests {
         let cursor = LogCursor {
             last_seen: CommitId("deadbeef".into()),
             resume_from: None,
+            resume_token: None,
         };
         let diff_target = DiffTarget::WorkingTree {
             path: PathBuf::from("file.txt"),
@@ -222,6 +223,7 @@ mod tests {
         let cursor = LogCursor {
             last_seen: CommitId("deadbeef".into()),
             resume_from: None,
+            resume_token: None,
         };
         let diff_target = DiffTarget::WorkingTree {
             path: PathBuf::from("file.txt"),

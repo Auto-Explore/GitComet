@@ -21,7 +21,7 @@ env:
 jobs:
   fmt:
     name: Rustfmt
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v6
@@ -42,12 +42,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: x86_64-linux / ubuntu-24.04
+          - name: x86_64-linux / ubuntu-22.04
             target_platform: x86_64-linux
-            runs_on: ubuntu-24.04
-          - name: aarch64-linux / ubuntu-24.04-arm
+            runs_on: ubuntu-22.04
+          - name: aarch64-linux / ubuntu-22.04-arm
             target_platform: aarch64-linux
-            runs_on: ubuntu-24.04-arm
+            runs_on: ubuntu-22.04-arm
     steps:
       - uses: actions/checkout@v6
       - name: Show Git version
@@ -67,7 +67,7 @@ jobs:
 
   linux-fedora:
     name: Linux Headless Suite (Fedora container)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 60
     container:
       image: fedora:41
@@ -105,7 +105,7 @@ jobs:
 
   linux-display-profiles:
     name: Linux Display Profile (${{ matrix.profile.name }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -231,6 +231,8 @@ jobs:
         include:
           - target_platform: x86_64-windows
             runs_on: windows-latest
+          - target_platform: aarch64-windows
+            runs_on: windows-11-arm
     steps:
       - uses: actions/checkout@v6
       - name: Show Git version

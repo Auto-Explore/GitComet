@@ -75,18 +75,20 @@ impl GitCometView {
             .to_string()
     }
 
-    fn git_unavailable_status_icon(theme: AppTheme) -> AnyElement {
+    fn git_unavailable_status_icon(theme: AppTheme, ui_scale_percent: u32) -> AnyElement {
+        let scaled_px =
+            |value: f32| crate::ui_scale::design_px_from_percent(value, ui_scale_percent);
         div()
             .id("git_unavailable_status_icon")
             .debug_selector(|| "git_unavailable_status_icon".to_string())
-            .size(px(56.0))
+            .size(scaled_px(56.0))
             .flex()
             .items_center()
             .justify_center()
             .child(svg_icon(
                 "icons/warning.svg",
                 theme.colors.warning,
-                px(36.0),
+                scaled_px(36.0),
             ))
             .into_any_element()
     }
@@ -166,7 +168,10 @@ impl GitCometView {
         label: &'static str,
         icon_path: &'static str,
         colors: SplashCtaButtonColors,
+        ui_scale_percent: u32,
     ) -> gpui::Stateful<gpui::Div> {
+        let scaled_px =
+            |value: f32| crate::ui_scale::design_px_from_percent(value, ui_scale_percent);
         let focus_ring = gpui::rgba(0x79d0ffeb);
         let SplashCtaButtonColors {
             icon: icon_color,
@@ -189,22 +194,22 @@ impl GitCometView {
             .id(id)
             .debug_selector(move || id.to_string())
             .tab_index(0)
-            .h(px(36.0))
-            .px(px(16.0))
+            .h(scaled_px(36.0))
+            .px(scaled_px(16.0))
             .flex()
             .items_center()
             .justify_center()
-            .gap(px(6.0))
-            .rounded(px(2.0))
+            .gap(scaled_px(6.0))
+            .rounded(scaled_px(2.0))
             .border_1()
             .border_color(border)
             .bg(bg)
-            .text_size(px(13.0))
+            .text_size(scaled_px(13.0))
             .font_weight(FontWeight::BOLD)
             .text_color(text_color)
             .cursor(CursorStyle::PointingHand)
             .whitespace_nowrap()
-            .child(svg_icon(icon_path, icon_color, px(14.0)))
+            .child(svg_icon(icon_path, icon_color, scaled_px(14.0)))
             .child(label)
             .focus(move |s| s.border_color(focus_ring))
             .hover(move |s| s.bg(hover_bg).border_color(hover_border))
@@ -285,6 +290,7 @@ impl GitCometView {
                     active: primary_active,
                 },
             },
+            self.ui_scale_percent,
         )
         .gitcomet_tooltip(self.theme, settings_tooltip)
         .on_click(cx.listener(|this, _e, _window, cx| {
@@ -312,7 +318,10 @@ impl GitCometView {
             .flex_col()
             .items_center()
             .gap_3()
-            .child(Self::git_unavailable_status_icon(theme))
+            .child(Self::git_unavailable_status_icon(
+                theme,
+                self.ui_scale_percent,
+            ))
             .child(
                 div()
                     .text_lg()
@@ -416,6 +425,9 @@ impl GitCometView {
 
     pub(super) fn startup_repository_loading_screen(&mut self) -> AnyElement {
         let theme = self.theme;
+        let ui_scale_percent = self.ui_scale_percent;
+        let scaled_px =
+            |value: f32| crate::ui_scale::design_px_from_percent(value, ui_scale_percent);
 
         self.interstitial_shell(
             "repository_loading_screen",
@@ -424,7 +436,7 @@ impl GitCometView {
                 .flex_col()
                 .items_center()
                 .gap_3()
-                .child(Self::interstitial_logo(theme, px(84.0)))
+                .child(Self::interstitial_logo(theme, scaled_px(84.0)))
                 .child(
                     div()
                         .text_lg()
@@ -448,7 +460,7 @@ impl GitCometView {
                         .child(svg_spinner(
                             ("repository_loading_spinner", 0u64),
                             theme.colors.accent,
-                            px(16.0),
+                            scaled_px(16.0),
                         ))
                         .child("Please wait…"),
                 ),
@@ -515,6 +527,7 @@ impl GitCometView {
             "Open Repository",
             "icons/folder.svg",
             primary_button_colors,
+            self.ui_scale_percent,
         )
         .gitcomet_tooltip(self.theme, open_tooltip)
         .on_click(cx.listener(|this, _e, window, cx| {
@@ -531,6 +544,7 @@ impl GitCometView {
                 "Clone Repository",
                 "icons/cloud.svg",
                 secondary_button_colors,
+                self.ui_scale_percent,
             )
             .gitcomet_tooltip(self.theme, clone_tooltip)
             .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
@@ -778,6 +792,9 @@ impl GitCometView {
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         let theme = self.theme;
+        let ui_scale_percent = self.ui_scale_percent;
+        let scaled_px =
+            |value: f32| crate::ui_scale::design_px_from_percent(value, ui_scale_percent);
 
         if self.is_startup_repository_loading_screen_active() {
             return self.startup_repository_loading_screen();
@@ -795,12 +812,12 @@ impl GitCometView {
                 .min_h(px(0.0))
                 .child(stable_cached_fixed_height_view(
                     self.repo_tabs_bar.clone(),
-                    components::Tab::container_height(),
+                    components::Tab::container_height(self.ui_scale_percent),
                 ))
                 .child(self.open_repo_panel(cx))
                 .child(stable_cached_fixed_height_view(
                     self.action_bar.clone(),
-                    ACTION_BAR_HEIGHT,
+                    action_bar_height(cx),
                 ))
                 .child(
                     div()
@@ -831,7 +848,7 @@ impl GitCometView {
                                                     "icons/arrow_left.svg"
                                                 },
                                                 theme.colors.text_muted,
-                                                px(12.0),
+                                                scaled_px(12.0),
                                             ))
                                             .style(components::ButtonStyle::Transparent)
                                             .on_click(theme, cx, |this, _e, _w, cx| {
@@ -891,7 +908,7 @@ impl GitCometView {
                                                     "icons/arrow_right.svg"
                                                 },
                                                 theme.colors.text_muted,
-                                                px(12.0),
+                                                scaled_px(12.0),
                                             ))
                                             .style(components::ButtonStyle::Transparent)
                                             .on_click(theme, cx, |this, _e, _w, cx| {
@@ -904,6 +921,10 @@ impl GitCometView {
                                 ),
                         ),
                 )
+                .child(stable_cached_fixed_height_view(
+                    self.bottom_status_bar.clone(),
+                    components::Tab::container_height(self.ui_scale_percent),
+                ))
                 .into_any_element();
 
             if self.should_show_git_unavailable_overlay() {

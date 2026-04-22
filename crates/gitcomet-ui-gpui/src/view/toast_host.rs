@@ -555,6 +555,7 @@ impl Render for ToastHost {
             return div().into_any_element();
         }
         let theme = self.theme;
+        let ui_scale_percent = crate::ui_scale::current(cx).percent;
 
         let mut progress_toasts = Vec::new();
         if let Some(progress) = self.clone_progress.clone() {
@@ -599,7 +600,7 @@ impl Render for ToastHost {
                         px(12.0),
                     ))
                     .style(components::ButtonStyle::Transparent)
-                    .render(theme)
+                    .render(theme, ui_scale_percent)
                     .gitcomet_tooltip(theme, "Dismiss notification".into())
                     .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
                         this.remove_toast(t.id, cx);

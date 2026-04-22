@@ -1,10 +1,5 @@
 use super::*;
 
-#[cfg(windows)]
-const GIT_OPS_NULL_DEVICE: &str = "NUL";
-#[cfg(not(windows))]
-const GIT_OPS_NULL_DEVICE: &str = "/dev/null";
-
 enum GitOpsScenario {
     StatusDirty {
         tracked_files: usize,
@@ -1078,14 +1073,29 @@ fn run_git_with_input(repo: &Path, args: &[&str], input: &str) {
     );
 }
 
+// Git on Windows ARM64 cannot access the NUL device as a config path
+// (`unable to access 'NUL': Invalid argument`).  Use a process-lifetime
+// empty file instead, which works identically on every platform.
+fn git_ops_empty_config() -> &'static Path {
+    use std::path::PathBuf;
+    use std::sync::OnceLock;
+    static EMPTY_CONFIG: OnceLock<PathBuf> = OnceLock::new();
+    EMPTY_CONFIG.get_or_init(|| {
+        let path = std::env::temp_dir().join("gitcomet-bench-empty.gitconfig");
+        fs::write(&path, "").expect("create empty git config for benchmarks");
+        path
+    })
+}
+
 pub(crate) fn git_command(repo: &Path) -> Command {
+    let empty_config = git_ops_empty_config();
     let mut command = Command::new("git");
     command
         .arg("-C")
         .arg(repo)
         .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", GIT_OPS_NULL_DEVICE)
-        .env("GIT_CONFIG_SYSTEM", GIT_OPS_NULL_DEVICE)
+        .env("GIT_CONFIG_GLOBAL", empty_config)
+        .env("GIT_CONFIG_SYSTEM", empty_config)
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_EDITOR", "true")
         .env("EDITOR", "true")

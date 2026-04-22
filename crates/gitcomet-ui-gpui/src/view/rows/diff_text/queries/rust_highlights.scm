@@ -33,10 +33,208 @@
 (trait_bounds
   (type_identifier) @type.interface)
 
-; Identifier conventions
-((identifier) @constant
-  (#match? @constant "^_*[A-Z][A-Z\\d_]*$"))
+; Bare module roots in scoped paths. Keep only the first named module segment
+; violet; inner modules stay neutral so the trailing function/type/constant can
+; keep its own capture.
+((scoped_identifier
+  path: (identifier) @preproc)
+  (#match? @preproc "^(r#)?[a-z_][A-Za-z0-9_]*$"))
 
+((scoped_type_identifier
+  path: (identifier) @preproc)
+  (#match? @preproc "^(r#)?[a-z_][A-Za-z0-9_]*$"))
+
+; Import roots / tails. In `use` paths, accent only the non-`crate` root and
+; the final imported symbol. Middle modules stay neutral so imported types keep
+; their green type capture and imported lowercase symbols can go blue.
+((use_declaration
+  argument: (identifier) @preproc)
+  (#match? @preproc "^(r#)?[a-z_][A-Za-z0-9_]*$"))
+
+((use_declaration
+  argument: (scoped_identifier
+    path: (identifier) @preproc))
+  (#match? @preproc "^(r#)?[a-z_][A-Za-z0-9_]*$"))
+
+((use_declaration
+  argument: (scoped_identifier
+    path: (scoped_identifier
+      path: (identifier) @preproc)))
+  (#match? @preproc "^(r#)?[a-z_][A-Za-z0-9_]*$"))
+
+((use_declaration
+  argument: (scoped_identifier
+    path: (scoped_identifier
+      path: (scoped_identifier
+        path: (identifier) @preproc))))
+  (#match? @preproc "^(r#)?[a-z_][A-Za-z0-9_]*$"))
+
+((use_as_clause
+  path: (identifier) @preproc)
+  (#match? @preproc "^(r#)?[a-z_][A-Za-z0-9_]*$"))
+
+((use_as_clause
+  path: (scoped_identifier
+    path: (identifier) @preproc))
+  (#match? @preproc "^(r#)?[a-z_][A-Za-z0-9_]*$"))
+
+((use_as_clause
+  path: (scoped_identifier
+    path: (scoped_identifier
+      path: (identifier) @preproc)))
+  (#match? @preproc "^(r#)?[a-z_][A-Za-z0-9_]*$"))
+
+((use_as_clause
+  path: (scoped_identifier
+    path: (scoped_identifier
+      path: (scoped_identifier
+        path: (identifier) @preproc))))
+  (#match? @preproc "^(r#)?[a-z_][A-Za-z0-9_]*$"))
+
+((scoped_use_list
+  path: (identifier) @preproc)
+  (#match? @preproc "^(r#)?[a-z_][A-Za-z0-9_]*$"))
+
+((scoped_use_list
+  path: (scoped_identifier
+    path: (identifier) @preproc))
+  (#match? @preproc "^(r#)?[a-z_][A-Za-z0-9_]*$"))
+
+((scoped_use_list
+  path: (scoped_identifier
+    path: (scoped_identifier
+      path: (identifier) @preproc)))
+  (#match? @preproc "^(r#)?[a-z_][A-Za-z0-9_]*$"))
+
+((use_declaration
+  argument: (use_list
+    (identifier) @preproc))
+  (#match? @preproc "^(r#)?[a-z_][A-Za-z0-9_]*$"))
+
+((use_declaration
+  argument: (use_list
+    (scoped_identifier
+      path: (identifier) @preproc)))
+  (#match? @preproc "^(r#)?[a-z_][A-Za-z0-9_]*$"))
+
+((use_declaration
+  argument: (use_list
+    (scoped_identifier
+      path: (scoped_identifier
+        path: (identifier) @preproc))))
+  (#match? @preproc "^(r#)?[a-z_][A-Za-z0-9_]*$"))
+
+((use_declaration
+  argument: (use_list
+    (use_as_clause
+      path: (identifier) @preproc)))
+  (#match? @preproc "^(r#)?[a-z_][A-Za-z0-9_]*$"))
+
+((use_declaration
+  argument: (use_list
+    (use_as_clause
+      path: (scoped_identifier
+        path: (identifier) @preproc))))
+  (#match? @preproc "^(r#)?[a-z_][A-Za-z0-9_]*$"))
+
+((use_declaration
+  argument: (use_list
+    (use_as_clause
+      path: (scoped_identifier
+        path: (scoped_identifier
+          path: (identifier) @preproc)))))
+  (#match? @preproc "^(r#)?[a-z_][A-Za-z0-9_]*$"))
+
+; Nested grouped imports stay neutral after the top-level group root. These
+; later variable captures intentionally override the generic bare-root Preproc
+; capture above.
+((use_list
+  (scoped_identifier
+    path: (identifier) @variable))
+  (#match? @variable "^(r#)?[a-z_][A-Za-z0-9_]*$"))
+
+((use_list
+  (scoped_identifier
+    path: (scoped_identifier
+      path: (identifier) @variable)))
+  (#match? @variable "^(r#)?[a-z_][A-Za-z0-9_]*$"))
+
+((use_list
+  (scoped_identifier
+    path: (scoped_identifier
+      path: (scoped_identifier
+        path: (identifier) @variable))))
+  (#match? @variable "^(r#)?[a-z_][A-Za-z0-9_]*$"))
+
+((use_list
+  (use_as_clause
+    path: (scoped_identifier
+      path: (identifier) @variable)))
+  (#match? @variable "^(r#)?[a-z_][A-Za-z0-9_]*$"))
+
+((use_list
+  (use_as_clause
+    path: (scoped_identifier
+      path: (scoped_identifier
+        path: (identifier) @variable))))
+  (#match? @variable "^(r#)?[a-z_][A-Za-z0-9_]*$"))
+
+((use_list
+  (use_as_clause
+    path: (scoped_identifier
+      path: (scoped_identifier
+        path: (scoped_identifier
+          path: (identifier) @variable)))))
+  (#match? @variable "^(r#)?[a-z_][A-Za-z0-9_]*$"))
+
+((use_declaration
+  argument: (scoped_identifier
+    name: (identifier) @function))
+  (#match? @function "^(r#)?[a-z_][A-Za-z0-9_]*$"))
+
+((use_as_clause
+  path: (scoped_identifier
+    name: (identifier) @function))
+  (#match? @function "^(r#)?[a-z_][A-Za-z0-9_]*$"))
+
+((scoped_use_list
+  list: (use_list
+    (identifier) @function))
+  (#match? @function "^(r#)?[a-z_][A-Za-z0-9_]*$"))
+
+((scoped_use_list
+  list: (use_list
+    (scoped_identifier
+      name: (identifier) @function)))
+  (#match? @function "^(r#)?[a-z_][A-Za-z0-9_]*$"))
+
+((scoped_use_list
+  list: (use_list
+    (use_as_clause
+      path: (identifier) @function)))
+  (#match? @function "^(r#)?[a-z_][A-Za-z0-9_]*$"))
+
+((scoped_use_list
+  list: (use_list
+    (use_as_clause
+      path: (scoped_identifier
+        name: (identifier) @function))))
+  (#match? @function "^(r#)?[a-z_][A-Za-z0-9_]*$"))
+
+((use_declaration
+  argument: (use_list
+    (scoped_identifier
+      name: (identifier) @function)))
+  (#match? @function "^(r#)?[a-z_][A-Za-z0-9_]*$"))
+
+((use_declaration
+  argument: (use_list
+    (use_as_clause
+      path: (scoped_identifier
+        name: (identifier) @function))))
+  (#match? @function "^(r#)?[a-z_][A-Za-z0-9_]*$"))
+
+; Identifier conventions
 ((identifier) @type
   (#match? @type "^[A-Z]"))
 
@@ -64,6 +262,9 @@
 
 (enum_variant
   name: (identifier) @type)
+
+((identifier) @constant
+  (#match? @constant "^_*[A-Z][A-Z\\d_]*$"))
 
 ; Function calls
 (call_expression
@@ -148,11 +349,9 @@
   "async"
   "const"
   "default"
-  "dyn"
   "enum"
   "extern"
   "fn"
-  "impl"
   "let"
   "macro_rules!"
   "mod"
@@ -163,16 +362,21 @@
   "static"
   "struct"
   "for"
-  "trait"
   "type"
   "union"
   "unsafe"
   "use"
-  "where"
   (crate)
   (mutable_specifier)
   (super)
 ] @keyword
+
+[
+  "dyn"
+  "impl"
+  "trait"
+  "where"
+] @preproc
 
 [
   "await"

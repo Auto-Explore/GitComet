@@ -669,7 +669,7 @@ impl MainPaneView {
         &mut self,
         repo_id: RepoId,
         commit_id: CommitId,
-        desired_scope: LogScope,
+        fallback_scope: Option<LogScope>,
         cx: &mut gpui::Context<Self>,
     ) {
         if matches!(
@@ -682,7 +682,7 @@ impl MainPaneView {
 
         self.clear_diff_selection_or_exit(repo_id, cx);
         self.history_view.update(cx, |view, cx| {
-            view.request_reveal_commit(repo_id, commit_id, desired_scope, cx);
+            view.request_reveal_commit(repo_id, commit_id, fallback_scope, cx);
         });
         cx.notify();
     }
@@ -693,14 +693,14 @@ impl MainPaneView {
         section: BranchSection,
         branch_name: &str,
         commit_id: CommitId,
-        desired_scope: LogScope,
+        fallback_scope: Option<LogScope>,
         cx: &mut gpui::Context<Self>,
     ) {
         let branch_name = branch_name.to_string();
         self.history_view.update(cx, |view, cx| {
             view.set_selected_branch(repo_id, section, &branch_name, cx);
         });
-        self.reveal_history_commit(repo_id, commit_id, desired_scope, cx);
+        self.reveal_history_commit(repo_id, commit_id, fallback_scope, cx);
     }
 
     pub(super) fn set_focused_mergetool_exit_code(&self, code: i32) {
@@ -845,7 +845,13 @@ impl MainPaneView {
                 cx,
             );
             input.set_suppress_right_click(true);
-            input.set_line_height(Some(px(20.0)), cx);
+            input.set_line_height(
+                Some(ui_scale::design_px_from_percent(
+                    20.0,
+                    ui_scale::current(cx).percent,
+                )),
+                cx,
+            );
             input
         });
 
@@ -914,11 +920,13 @@ impl MainPaneView {
         let diff_panel_focus_handle = cx.focus_handle().tab_index(0).tab_stop(false);
 
         let last_window_size = window.viewport_size();
+        let ui_scale_percent = ui_scale::current(cx).percent;
         let history_view = cx.new(|cx| {
             super::HistoryView::new(
                 Arc::clone(&store),
                 ui_model.clone(),
                 theme,
+                ui_scale_percent,
                 date_time_format,
                 timezone,
                 show_timezone,
@@ -1209,6 +1217,24 @@ impl MainPaneView {
         }
         self.history_view
             .update(cx, |view, cx| view.set_theme(theme, cx));
+        cx.notify();
+    }
+
+    pub(in crate::view) fn apply_ui_scale_percent(
+        &mut self,
+        previous_percent: u32,
+        next_percent: u32,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.conflict_resolver_input.update(cx, |input, cx| {
+            input.set_line_height(
+                Some(ui_scale::design_px_from_percent(20.0, next_percent)),
+                cx,
+            );
+        });
+        self.history_view.update(cx, |view, cx| {
+            view.apply_ui_scale_percent(previous_percent, next_percent, cx);
+        });
         cx.notify();
     }
 
@@ -3310,176 +3336,6 @@ impl MainPaneView {
             region: end_region,
             offset: end_offset,
         });
-    }
-
-    pub(super) fn select_diff_text_rows_range(
-        &mut self,
-        start_visible_ix: usize,
-        end_visible_ix: usize,
-        region: DiffTextRegion,
-    ) {
-        let list_len = self.diff_visible_len();
-        if list_len == 0 {
-            return;
-        }
-
-        let a = start_visible_ix.min(list_len - 1);
-        let b = end_visible_ix.min(list_len - 1);
-        let (a, b) = if a <= b { (a, b) } else { (b, a) };
-
-        let region = match self.diff_view {
-            DiffViewMode::Inline => DiffTextRegion::Inline,
-            DiffViewMode::Split => match region {
-                DiffTextRegion::SplitRight => DiffTextRegion::SplitRight,
-                _ => DiffTextRegion::SplitLeft,
-            },
-        };
-        let start_region = region;
-        let end_region = region;
-
-        let end_offset = self.diff_text_line_len_for_region(b, end_region);
-
-        self.diff_text_selecting = false;
-        self.diff_text_anchor = Some(DiffTextPos {
-            visible_ix: a,
-            region: start_region,
-            offset: 0,
-        });
-        self.diff_text_head = Some(DiffTextPos {
-            visible_ix: b,
-            region: end_region,
-            offset: end_offset,
-        });
-
-        // Double-click produces two click events; suppress both.
-        self.diff_suppress_clicks_remaining = 2;
-    }
-
-    pub(in crate::view) fn double_click_select_diff_text(
-        &mut self,
-        visible_ix: usize,
-        region: DiffTextRegion,
-        kind: DiffClickKind,
-    ) {
-        // Markdown preview: select the full row on double-click.
-        if self.is_markdown_preview_active() {
-            let Some(count) = self.markdown_preview_row_count() else {
-                return;
-            };
-            if count == 0 {
-                return;
-            }
-            let effective_region = if self.is_file_preview_active() {
-                DiffTextRegion::Inline
-            } else {
-                region
-            };
-            let visible_ix = visible_ix.min(count - 1);
-            let end_offset = self.diff_text_line_len_for_region(visible_ix, effective_region);
-            self.diff_text_selecting = false;
-            self.diff_text_anchor = Some(DiffTextPos {
-                visible_ix,
-                region: effective_region,
-                offset: 0,
-            });
-            self.diff_text_head = Some(DiffTextPos {
-                visible_ix,
-                region: effective_region,
-                offset: end_offset,
-            });
-            self.diff_suppress_clicks_remaining = 2;
-            return;
-        }
-
-        if self.is_file_preview_active() {
-            let Some(count) = self.worktree_preview_line_count() else {
-                return;
-            };
-            if count == 0 {
-                return;
-            }
-            let visible_ix = visible_ix.min(count - 1);
-            let end_offset = self.diff_text_line_len_for_region(visible_ix, DiffTextRegion::Inline);
-            self.diff_text_selecting = false;
-            self.diff_text_anchor = Some(DiffTextPos {
-                visible_ix,
-                region: DiffTextRegion::Inline,
-                offset: 0,
-            });
-            self.diff_text_head = Some(DiffTextPos {
-                visible_ix,
-                region: DiffTextRegion::Inline,
-                offset: end_offset,
-            });
-
-            // Double-click produces two click events; suppress both.
-            self.diff_suppress_clicks_remaining = 2;
-            return;
-        }
-
-        let list_len = self.diff_visible_len();
-        if list_len == 0 {
-            return;
-        }
-        let visible_ix = visible_ix.min(list_len - 1);
-
-        // File-diff view doesn't have file/hunk header blocks; treat as row selection.
-        if self.is_file_diff_view_active() {
-            self.select_diff_text_rows_range(visible_ix, visible_ix, region);
-            return;
-        }
-
-        let end = match self.diff_view {
-            DiffViewMode::Inline => match kind {
-                DiffClickKind::Line => visible_ix,
-                DiffClickKind::HunkHeader => self
-                    .diff_next_boundary_visible_ix(visible_ix, |src_ix| {
-                        self.patch_diff_row(src_ix).is_some_and(|line| {
-                            matches!(line.kind, gitcomet_core::domain::DiffLineKind::Hunk)
-                                || (matches!(
-                                    line.kind,
-                                    gitcomet_core::domain::DiffLineKind::Header
-                                ) && line.text.starts_with("diff --git "))
-                        })
-                    })
-                    .unwrap_or(list_len - 1),
-                DiffClickKind::FileHeader => self
-                    .diff_next_boundary_visible_ix(visible_ix, |src_ix| {
-                        self.patch_diff_row(src_ix).is_some_and(|line| {
-                            matches!(line.kind, gitcomet_core::domain::DiffLineKind::Header)
-                                && line.text.starts_with("diff --git ")
-                        })
-                    })
-                    .unwrap_or(list_len - 1),
-            },
-            DiffViewMode::Split => match kind {
-                DiffClickKind::Line => visible_ix,
-                DiffClickKind::HunkHeader => self
-                    .split_next_boundary_visible_ix(visible_ix, |row| {
-                        matches!(
-                            row,
-                            PatchSplitRow::Raw {
-                                click_kind: DiffClickKind::HunkHeader | DiffClickKind::FileHeader,
-                                ..
-                            }
-                        )
-                    })
-                    .unwrap_or(list_len - 1),
-                DiffClickKind::FileHeader => self
-                    .split_next_boundary_visible_ix(visible_ix, |row| {
-                        matches!(
-                            row,
-                            PatchSplitRow::Raw {
-                                click_kind: DiffClickKind::FileHeader,
-                                ..
-                            }
-                        )
-                    })
-                    .unwrap_or(list_len - 1),
-            },
-        };
-
-        self.select_diff_text_rows_range(visible_ix, end, region);
     }
 
     pub(super) fn split_next_boundary_visible_ix(
