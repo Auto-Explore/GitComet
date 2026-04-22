@@ -1,4 +1,5 @@
 use super::*;
+use std::time::Duration;
 
 pub(crate) fn push_test_state(
     view: &GitCometView,
@@ -22,8 +23,25 @@ pub(in crate::view) fn popover_kind(view: &GitCometView, app: &App) -> Option<Po
     view.popover_host.read(app).popover_kind_for_tests()
 }
 
-pub(crate) fn tooltip_text(view: &GitCometView, app: &App) -> Option<SharedString> {
-    view.tooltip_text_for_test(app)
+pub(crate) fn redraw(cx: &mut gpui::VisualTestContext) {
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+}
+
+pub(crate) fn wait_for_native_tooltip(cx: &mut gpui::VisualTestContext) {
+    cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_millis(500));
+    cx.run_until_parked();
+    redraw(cx);
+}
+
+pub(crate) fn tooltip_text(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<GitCometView>,
+) -> Option<SharedString> {
+    redraw(cx);
+    cx.update(|_window, app| view.read(app).tooltip_text_for_test(app))
 }
 
 pub(crate) fn open_repo_panel_visible(view: &GitCometView) -> bool {

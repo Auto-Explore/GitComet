@@ -283,6 +283,7 @@ impl Render for RepoTabsBarView {
 
             let close_button = div()
                 .id(("repo_tab_close", repo_id.0))
+                .debug_selector(move || format!("repo_tab_close_{}", repo_id.0))
                 .flex()
                 .items_center()
                 .justify_center()
