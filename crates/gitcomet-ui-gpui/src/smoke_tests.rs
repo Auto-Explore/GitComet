@@ -19,6 +19,19 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
+fn redraw(cx: &mut gpui::VisualTestContext) {
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+}
+
+fn wait_for_native_tooltip(cx: &mut gpui::VisualTestContext) {
+    cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_millis(500));
+    cx.run_until_parked();
+    redraw(cx);
+}
+
 fn assert_no_panic(label: &str, f: impl FnOnce()) {
     if std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).is_err() {
         panic!("component build panicked: {label}");
@@ -2348,7 +2361,7 @@ fn titlebar_window_controls_update_tooltip_on_hover(cx: &mut gpui::TestAppContex
         .debug_bounds("titlebar_win_min")
         .expect("expected titlebar min control bounds");
     cx.simulate_mouse_move(min_bounds.center(), None, Modifiers::default());
-    cx.run_until_parked();
+    wait_for_native_tooltip(cx);
     cx.update(|_window, app| {
         assert_eq!(
             crate::view::test_support::tooltip_text(view.read(app), app),
@@ -2367,7 +2380,7 @@ fn titlebar_window_controls_update_tooltip_on_hover(cx: &mut gpui::TestAppContex
         }
     });
     cx.simulate_mouse_move(max_bounds.center(), None, Modifiers::default());
-    cx.run_until_parked();
+    wait_for_native_tooltip(cx);
     cx.update(|_window, app| {
         assert_eq!(
             crate::view::test_support::tooltip_text(view.read(app), app),
@@ -2379,7 +2392,7 @@ fn titlebar_window_controls_update_tooltip_on_hover(cx: &mut gpui::TestAppContex
         .debug_bounds("titlebar_win_close")
         .expect("expected titlebar close control bounds");
     cx.simulate_mouse_move(close_bounds.center(), None, Modifiers::default());
-    cx.run_until_parked();
+    wait_for_native_tooltip(cx);
     cx.update(|_window, app| {
         assert_eq!(
             crate::view::test_support::tooltip_text(view.read(app), app),
@@ -2388,7 +2401,7 @@ fn titlebar_window_controls_update_tooltip_on_hover(cx: &mut gpui::TestAppContex
     });
 
     cx.simulate_mouse_move(gpui::point(px(120.0), px(18.0)), None, Modifiers::default());
-    cx.run_until_parked();
+    redraw(cx);
     cx.update(|_window, app| {
         assert_eq!(
             crate::view::test_support::tooltip_text(view.read(app), app),

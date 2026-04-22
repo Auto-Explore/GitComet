@@ -3,7 +3,6 @@ use gitcomet_state::model::SubmoduleAddProgressState;
 
 pub(super) struct ToastHost {
     theme: AppTheme,
-    tooltip_host: WeakEntity<TooltipHost>,
     root_view: WeakEntity<GitCometView>,
 
     toasts: Vec<ToastState>,
@@ -160,14 +159,9 @@ fn apply_submodule_add_progress_sync(
 }
 
 impl ToastHost {
-    pub(super) fn new(
-        theme: AppTheme,
-        tooltip_host: WeakEntity<TooltipHost>,
-        root_view: WeakEntity<GitCometView>,
-    ) -> Self {
+    pub(super) fn new(theme: AppTheme, root_view: WeakEntity<GitCometView>) -> Self {
         Self {
             theme,
-            tooltip_host,
             root_view,
             toasts: Vec::new(),
             clone_progress: None,
@@ -550,29 +544,6 @@ impl ToastHost {
         );
         self.render_progress_shell(content)
     }
-
-    fn set_tooltip_text_if_changed(
-        &mut self,
-        next: Option<SharedString>,
-        cx: &mut gpui::Context<Self>,
-    ) -> bool {
-        let _ = self
-            .tooltip_host
-            .update(cx, |host, cx| host.set_tooltip_text_if_changed(next, cx));
-        false
-    }
-
-    fn clear_tooltip_if_matches(
-        &mut self,
-        tooltip: &SharedString,
-        cx: &mut gpui::Context<Self>,
-    ) -> bool {
-        let tooltip = tooltip.clone();
-        let _ = self
-            .tooltip_host
-            .update(cx, |host, cx| host.clear_tooltip_if_matches(&tooltip, cx));
-        false
-    }
 }
 
 impl Render for ToastHost {
@@ -628,16 +599,10 @@ impl Render for ToastHost {
                         px(12.0),
                     ))
                     .style(components::ButtonStyle::Transparent)
-                    .on_click(theme, cx, move |this, _e, _w, cx| {
+                    .render(theme)
+                    .gitcomet_tooltip(theme, "Dismiss notification".into())
+                    .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
                         this.remove_toast(t.id, cx);
-                    })
-                    .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
-                        let text: SharedString = "Dismiss notification".into();
-                        if *hovering {
-                            this.set_tooltip_text_if_changed(Some(text), cx);
-                        } else {
-                            this.clear_tooltip_if_matches(&text, cx);
-                        }
                     }));
 
                 let message_scroll = div()

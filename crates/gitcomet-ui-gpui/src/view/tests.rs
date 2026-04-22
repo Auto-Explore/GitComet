@@ -33,6 +33,19 @@ fn pump_for(cx: &mut gpui::VisualTestContext, duration: Duration) {
     }
 }
 
+fn redraw(cx: &mut gpui::VisualTestContext) {
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+}
+
+fn wait_for_native_tooltip(cx: &mut gpui::VisualTestContext) {
+    cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_millis(500));
+    cx.run_until_parked();
+    redraw(cx);
+}
+
 fn wait_until(description: &str, ready: impl Fn() -> bool) {
     let deadline = Instant::now() + Duration::from_secs(3);
     loop {
@@ -1837,7 +1850,7 @@ fn git_unavailable_open_settings_button_publishes_expected_tooltip(cx: &mut gpui
         .expect("expected open settings call to action")
         .center();
     cx.simulate_mouse_move(button_center, None, gpui::Modifiers::default());
-    cx.run_until_parked();
+    wait_for_native_tooltip(cx);
 
     cx.update(|_window, app| {
         assert_eq!(
@@ -1851,7 +1864,7 @@ fn git_unavailable_open_settings_button_publishes_expected_tooltip(cx: &mut gpui
         .expect("expected git unavailable status icon")
         .center();
     cx.simulate_mouse_move(icon_center, None, gpui::Modifiers::default());
-    cx.run_until_parked();
+    redraw(cx);
 
     cx.update(|_window, app| {
         assert_eq!(
@@ -2002,7 +2015,7 @@ fn splash_screen_buttons_publish_expected_tooltips(cx: &mut gpui::TestAppContext
         .expect("expected splash open repository button")
         .center();
     cx.simulate_mouse_move(open_center, None, gpui::Modifiers::default());
-    cx.run_until_parked();
+    wait_for_native_tooltip(cx);
     cx.update(|_window, app| {
         assert_eq!(
             test_support::tooltip_text(view.read(app), app).map(|text| text.to_string()),
@@ -2015,7 +2028,7 @@ fn splash_screen_buttons_publish_expected_tooltips(cx: &mut gpui::TestAppContext
         .expect("expected splash clone repository button")
         .center();
     cx.simulate_mouse_move(clone_center, None, gpui::Modifiers::default());
-    cx.run_until_parked();
+    wait_for_native_tooltip(cx);
     cx.update(|_window, app| {
         assert_eq!(
             test_support::tooltip_text(view.read(app), app).map(|text| text.to_string()),
@@ -2094,15 +2107,15 @@ fn closing_last_repository_tab_returns_to_splash_screen(cx: &mut gpui::TestAppCo
 }
 
 #[gpui::test]
-fn splash_screen_clears_stale_close_repository_tooltip(cx: &mut gpui::TestAppContext) {
+fn removed_repo_tab_tooltip_does_not_reappear_after_hover_target_disappears(
+    cx: &mut gpui::TestAppContext,
+) {
     let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let store_for_assert = store.clone();
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
-    cx.update(|window, app| {
-        let _ = window.draw(app);
-    });
+    redraw(cx);
 
     store_for_assert.dispatch(Msg::OpenRepo(PathBuf::from(
         "/tmp/splash-tooltip-clear-test",
@@ -2115,15 +2128,19 @@ fn splash_screen_clears_stale_close_repository_tooltip(cx: &mut gpui::TestAppCon
     });
     pump_for(cx, Duration::from_millis(120));
 
+    let repo_tab_center = cx
+        .debug_bounds("repo_tab_1")
+        .expect("expected repo tab to be rendered")
+        .center();
+    cx.simulate_mouse_move(repo_tab_center, None, gpui::Modifiers::default());
+    wait_for_native_tooltip(cx);
+
+    let expected_tooltip =
+        path_display::path_display_string(Path::new("/tmp/splash-tooltip-clear-test"));
     cx.update(|_window, app| {
-        view.update(app, |this, cx| {
-            this.tooltip_host.update(cx, |host, cx| {
-                host.set_tooltip_text_if_changed(Some("Close repository".into()), cx);
-            });
-        });
         assert_eq!(
             test_support::tooltip_text(view.read(app), app).map(|text| text.to_string()),
-            Some("Close repository".to_string())
+            Some(expected_tooltip)
         );
     });
 
@@ -2143,16 +2160,25 @@ fn splash_screen_clears_stale_close_repository_tooltip(cx: &mut gpui::TestAppCon
         view.update(app, |this, cx| test_support::sync_store_snapshot(this, cx));
     });
     pump_for(cx, Duration::from_millis(120));
-
-    cx.update(|window, app| {
-        let _ = window.draw(app);
-    });
+    redraw(cx);
 
     cx.update(|_window, app| {
         assert_eq!(
             test_support::tooltip_text(view.read(app), app),
             None,
-            "expected splash transition to clear stale repository-close tooltip text"
+            "expected repo tab tooltip to clear once its source view is removed"
+        );
+    });
+
+    let neutral_point = gpui::point(px(700.0), px(500.0));
+    cx.simulate_mouse_move(neutral_point, None, gpui::Modifiers::default());
+    wait_for_native_tooltip(cx);
+
+    cx.update(|_window, app| {
+        assert_eq!(
+            test_support::tooltip_text(view.read(app), app),
+            None,
+            "expected removed repo tab tooltip not to reappear after the mouse stops elsewhere"
         );
     });
 }

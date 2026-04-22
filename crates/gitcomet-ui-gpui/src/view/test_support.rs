@@ -23,7 +23,7 @@ pub(in crate::view) fn popover_kind(view: &GitCometView, app: &App) -> Option<Po
 }
 
 pub(crate) fn tooltip_text(view: &GitCometView, app: &App) -> Option<SharedString> {
-    view.tooltip_host.read(app).tooltip_text_for_test()
+    view.tooltip_text_for_test(app)
 }
 
 pub(crate) fn open_repo_panel_visible(view: &GitCometView) -> bool {

@@ -732,7 +732,6 @@ pub(in super::super) struct HistoryView {
     pub(in super::super) show_timezone: bool,
     _ui_model_subscription: gpui::Subscription,
     root_view: WeakEntity<GitCometView>,
-    tooltip_host: WeakEntity<TooltipHost>,
     notify_fingerprint: u64,
     pub(in super::super) active_context_menu_invoker: Option<SharedString>,
     pub(in super::super) last_window_size: Size<Pixels>,
@@ -803,7 +802,6 @@ impl HistoryView {
         history_show_tags: bool,
         history_auto_fetch_tags_on_repo_activation: bool,
         root_view: WeakEntity<GitCometView>,
-        tooltip_host: WeakEntity<TooltipHost>,
         last_window_size: Size<Pixels>,
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
@@ -835,7 +833,6 @@ impl HistoryView {
             show_timezone,
             _ui_model_subscription: subscription,
             root_view,
-            tooltip_host,
             notify_fingerprint: initial_fingerprint,
             active_context_menu_invoker: None,
             last_window_size,
@@ -1176,29 +1173,6 @@ impl HistoryView {
         let _ = self.root_view.update(cx, move |root, cx| {
             root.set_active_context_menu_invoker(Some(invoker), cx);
         });
-    }
-
-    pub(in super::super) fn set_tooltip_text_if_changed(
-        &mut self,
-        next: Option<SharedString>,
-        cx: &mut gpui::Context<Self>,
-    ) -> bool {
-        let _ = self
-            .tooltip_host
-            .update(cx, |host, cx| host.set_tooltip_text_if_changed(next, cx));
-        false
-    }
-
-    pub(in super::super) fn clear_tooltip_if_matches(
-        &mut self,
-        tooltip: &SharedString,
-        cx: &mut gpui::Context<Self>,
-    ) -> bool {
-        let tooltip = tooltip.clone();
-        let _ = self
-            .tooltip_host
-            .update(cx, |host, cx| host.clear_tooltip_if_matches(&tooltip, cx));
-        false
     }
 
     pub(in crate::view) fn drive_pending_history_reveal(&mut self, cx: &mut gpui::Context<Self>) {

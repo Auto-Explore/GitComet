@@ -1,4 +1,62 @@
 use super::*;
+#[cfg(test)]
+use std::cell::RefCell;
+
+#[cfg(test)]
+thread_local! {
+    static VISIBLE_TOOLTIP_TEXT_FOR_TEST: RefCell<Option<SharedString>> = const { RefCell::new(None) };
+}
+
+pub(super) trait GitCometTooltipExt: gpui::StatefulInteractiveElement + Sized {
+    fn gitcomet_tooltip(self, theme: AppTheme, text: SharedString) -> Self {
+        self.tooltip(move |_window, cx| {
+            AnyView::from(cx.new(|_cx| TooltipBubbleView {
+                theme,
+                text: text.clone(),
+            }))
+        })
+    }
+}
+
+impl<T: gpui::StatefulInteractiveElement> GitCometTooltipExt for T {}
+
+struct TooltipBubbleView {
+    theme: AppTheme,
+    text: SharedString,
+}
+
+impl Render for TooltipBubbleView {
+    fn render(&mut self, _window: &mut Window, _cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        #[cfg(test)]
+        VISIBLE_TOOLTIP_TEXT_FOR_TEST.with(|value| {
+            value.replace(Some(self.text.clone()));
+        });
+
+        div().pl(px(11.0)).pt(px(17.0)).child(
+            div()
+                .px_2()
+                .py_1()
+                .bg(self.theme.colors.tooltip_bg)
+                .rounded(px(self.theme.radii.row))
+                .shadow_sm()
+                .text_xs()
+                .text_color(self.theme.colors.tooltip_text)
+                .child(self.text.clone()),
+        )
+    }
+}
+
+#[cfg(test)]
+pub(super) fn clear_visible_tooltip_text_for_test() {
+    VISIBLE_TOOLTIP_TEXT_FOR_TEST.with(|value| {
+        value.replace(None);
+    });
+}
+
+#[cfg(test)]
+pub(super) fn tooltip_text_for_test() -> Option<SharedString> {
+    VISIBLE_TOOLTIP_TEXT_FOR_TEST.with(|value| value.borrow().clone())
+}
 
 impl GitCometView {
     pub(super) fn schedule_ui_settings_persist(&mut self, cx: &mut gpui::Context<Self>) {

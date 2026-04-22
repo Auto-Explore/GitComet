@@ -37,10 +37,6 @@ impl UiRuntime {
         matches!(self.mode, UiRuntimeMode::Live)
     }
 
-    pub(crate) const fn uses_tooltip_delay(self) -> bool {
-        matches!(self.mode, UiRuntimeMode::Live)
-    }
-
     pub(crate) const fn uses_toast_ttl(self) -> bool {
         matches!(self.mode, UiRuntimeMode::Live)
     }
