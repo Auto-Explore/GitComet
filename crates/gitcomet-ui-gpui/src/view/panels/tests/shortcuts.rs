@@ -1853,6 +1853,84 @@ fn commit_message_text_input_f2_prefers_previous_diff_search_match(cx: &mut gpui
 }
 
 #[gpui::test]
+fn commit_message_text_input_secondary_enter_commits_staged_changes(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(705315);
+    let commit_id = CommitId("8899aabbccddef10".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_commit_message_submit_shortcut",
+        std::process::id()
+    ));
+    let staged_path = std::path::PathBuf::from("src/lib.rs");
+
+    let mut repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
+    repo.status = Loadable::Ready(
+        gitcomet_core::domain::RepoStatus {
+            staged: vec![gitcomet_core::domain::FileStatus {
+                path: staged_path,
+                kind: gitcomet_core::domain::FileStatusKind::Modified,
+                conflict: None,
+            }],
+            unstaged: vec![],
+        }
+        .into(),
+    );
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    focus_commit_message_input(cx, &view);
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.details_pane.update(cx, |pane, cx| {
+                pane.commit_message_input.update(cx, |input, cx| {
+                    input.set_text("hello shortcut".to_string(), cx);
+                });
+            });
+        });
+        let _ = window.draw(app);
+    });
+
+    cx.simulate_keystrokes("secondary-enter");
+    draw_and_drain_test_window(cx);
+
+    cx.update(|window, app| {
+        let root = view.read(app);
+        let snapshot = root.store.snapshot();
+        let repo = snapshot
+            .repos
+            .iter()
+            .find(|repo| repo.id == repo_id)
+            .expect("expected repo in store snapshot");
+        assert_eq!(
+            repo.commit_in_flight, 1,
+            "expected secondary-enter from the commit message input to dispatch a commit"
+        );
+        let focus = root
+            .details_pane
+            .read(app)
+            .commit_message_input
+            .read(app)
+            .focus_handle();
+        assert!(
+            focus.is_focused(window),
+            "expected commit-message input to keep focus after secondary-enter commit"
+        );
+        assert_eq!(
+            root.details_pane
+                .read(app)
+                .commit_message_input
+                .read(app)
+                .text(),
+            "",
+            "expected secondary-enter commit to clear the commit message input"
+        );
+    });
+}
+
+#[gpui::test]
 fn commit_message_text_input_change_navigation_shortcuts_move_diff_without_stealing_focus(
     cx: &mut gpui::TestAppContext,
 ) {

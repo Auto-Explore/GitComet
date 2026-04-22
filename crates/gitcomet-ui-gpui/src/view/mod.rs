@@ -41,6 +41,7 @@ use std::time::{Duration, Instant};
 actions!(
     text_input_diff_navigation,
     [
+        TextInputCommitSubmit,
         TextInputDiffPrevFile,
         TextInputDiffNextFile,
         TextInputDiffPrevSearchMatchOrChange,
@@ -578,6 +579,7 @@ impl GitCometView {
 
         let restored_sidebar_width = ui_session.sidebar_width;
         let restored_details_width = ui_session.details_width;
+        let _ = crate::theme::ensure_user_themes_dir_exists();
         let theme_mode = ui_session
             .theme_mode
             .as_deref()
@@ -2287,6 +2289,14 @@ impl Render for GitCometView {
         root = root.relative();
         root = root.child(UiScaleScrollCapture { view: cx.entity() });
         root = root
+            .on_action(cx.listener(|this, _: &TextInputCommitSubmit, window, cx| {
+                let handled = this.details_pane.update(cx, |pane, cx| {
+                    pane.handle_commit_submit_shortcut(window, cx)
+                });
+                if handled {
+                    cx.stop_propagation();
+                }
+            }))
             .on_action(cx.listener(|this, _: &TextInputDiffPrevFile, _window, cx| {
                 this.defer_text_input_adjacent_diff_file_navigation(-1, cx);
                 cx.stop_propagation();

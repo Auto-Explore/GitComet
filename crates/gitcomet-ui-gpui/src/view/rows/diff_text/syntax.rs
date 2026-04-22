@@ -1428,6 +1428,38 @@ mod tests {
             second.iter().any(|t| t.kind == SyntaxTokenKind::Comment),
             "second line should include comment tokens from multiline context"
         );
+        assert!(
+            second
+                .iter()
+                .any(|t| t.kind == SyntaxTokenKind::Comment && t.range.start == 0),
+            "second line should start with comment highlighting from multiline context, got: {second:?}"
+        );
+    }
+
+    #[test]
+    fn prepared_document_request_line_tokens_preserves_multiline_context() {
+        let lines = ["/* open comment", "still comment */ let x = 1;"];
+        let doc = prepare_test_document(DiffSyntaxLanguage::Rust, &lines.join("\n"));
+
+        let expected = syntax_tokens_for_prepared_document_line(doc, 1)
+            .expect("sync line-token lookup should materialize the continuation line chunk");
+
+        match request_syntax_tokens_for_prepared_document_line(doc, 1) {
+            Some(PreparedSyntaxLineTokensRequest::Ready(tokens)) => {
+                assert!(
+                    tokens
+                        .iter()
+                        .any(|t| t.kind == SyntaxTokenKind::Comment && t.range.start == 0),
+                    "requested second line should start with comment highlighting from multiline context, got: {tokens:?}"
+                );
+                assert_eq!(
+                    tokens.as_ref(),
+                    expected.as_slice(),
+                    "requested prepared continuation line should match the synchronously materialized tokens"
+                );
+            }
+            other => panic!("expected ready prepared second line, got {other:?}"),
+        }
     }
 
     #[cfg(any(test, feature = "syntax-rust"))]
@@ -3242,12 +3274,20 @@ mod tests {
             Some(SyntaxTokenKind::FunctionSpecial)
         );
         assert_eq!(
+            syntax_kind_from_capture_name("constructor"),
+            Some(SyntaxTokenKind::Constructor)
+        );
+        assert_eq!(
             syntax_kind_from_capture_name("type.builtin"),
             Some(SyntaxTokenKind::TypeBuiltin)
         );
         assert_eq!(
             syntax_kind_from_capture_name("type.interface"),
             Some(SyntaxTokenKind::TypeInterface)
+        );
+        assert_eq!(
+            syntax_kind_from_capture_name("namespace"),
+            Some(SyntaxTokenKind::Namespace)
         );
         assert_eq!(
             syntax_kind_from_capture_name("variable"),
@@ -3262,6 +3302,14 @@ mod tests {
             Some(SyntaxTokenKind::VariableSpecial)
         );
         assert_eq!(
+            syntax_kind_from_capture_name("variable.builtin"),
+            Some(SyntaxTokenKind::VariableBuiltin)
+        );
+        assert_eq!(
+            syntax_kind_from_capture_name("label"),
+            Some(SyntaxTokenKind::Label)
+        );
+        assert_eq!(
             syntax_kind_from_capture_name("operator"),
             Some(SyntaxTokenKind::Operator)
         );
@@ -3272,6 +3320,18 @@ mod tests {
         assert_eq!(
             syntax_kind_from_capture_name("punctuation.delimiter"),
             Some(SyntaxTokenKind::PunctuationDelimiter)
+        );
+        assert_eq!(
+            syntax_kind_from_capture_name("punctuation.special"),
+            Some(SyntaxTokenKind::PunctuationSpecial)
+        );
+        assert_eq!(
+            syntax_kind_from_capture_name("punctuation.list_marker.markup"),
+            Some(SyntaxTokenKind::PunctuationListMarker)
+        );
+        assert_eq!(
+            syntax_kind_from_capture_name("punctuation.list_marker"),
+            Some(SyntaxTokenKind::PunctuationListMarker)
         );
         assert_eq!(
             syntax_kind_from_capture_name("tag"),
@@ -3288,6 +3348,74 @@ mod tests {
         assert_eq!(
             syntax_kind_from_capture_name("boolean"),
             Some(SyntaxTokenKind::Boolean)
+        );
+        assert_eq!(
+            syntax_kind_from_capture_name("preproc"),
+            Some(SyntaxTokenKind::Preproc)
+        );
+        assert_eq!(
+            syntax_kind_from_capture_name("string.regex"),
+            Some(SyntaxTokenKind::StringRegex)
+        );
+        assert_eq!(
+            syntax_kind_from_capture_name("string.regexp"),
+            Some(SyntaxTokenKind::StringRegex)
+        );
+        assert_eq!(
+            syntax_kind_from_capture_name("string.special.regex"),
+            Some(SyntaxTokenKind::StringRegex)
+        );
+        assert_eq!(
+            syntax_kind_from_capture_name("string.special.symbol"),
+            Some(SyntaxTokenKind::StringSpecial)
+        );
+        assert_eq!(
+            syntax_kind_from_capture_name("constant.builtin"),
+            Some(SyntaxTokenKind::ConstantBuiltin)
+        );
+        assert_eq!(
+            syntax_kind_from_capture_name("markup.heading"),
+            Some(SyntaxTokenKind::MarkupHeading)
+        );
+        assert_eq!(
+            syntax_kind_from_capture_name("title.markup"),
+            Some(SyntaxTokenKind::MarkupHeading)
+        );
+        assert_eq!(
+            syntax_kind_from_capture_name("markup.link.url"),
+            Some(SyntaxTokenKind::MarkupLink)
+        );
+        assert_eq!(
+            syntax_kind_from_capture_name("link_uri.markup"),
+            Some(SyntaxTokenKind::MarkupLink)
+        );
+        assert_eq!(
+            syntax_kind_from_capture_name("text.uri"),
+            Some(SyntaxTokenKind::MarkupLink)
+        );
+        assert_eq!(
+            syntax_kind_from_capture_name("text.literal.markup"),
+            Some(SyntaxTokenKind::TextLiteral)
+        );
+        assert_eq!(
+            syntax_kind_from_capture_name("text.literal"),
+            Some(SyntaxTokenKind::TextLiteral)
+        );
+        assert_eq!(
+            syntax_kind_from_capture_name("text.title"),
+            Some(SyntaxTokenKind::MarkupHeading)
+        );
+        assert_eq!(
+            syntax_kind_from_capture_name("diff.plus"),
+            Some(SyntaxTokenKind::DiffPlus)
+        );
+        assert_eq!(
+            syntax_kind_from_capture_name("diff.minus"),
+            Some(SyntaxTokenKind::DiffMinus)
+        );
+        assert_eq!(
+            syntax_kind_from_capture_name("diff.delta"),
+            Some(SyntaxTokenKind::DiffDelta)
         );
         assert_eq!(
             syntax_kind_from_capture_name("tag.jsx"),
@@ -3362,6 +3490,45 @@ mod tests {
     }
 
     #[test]
+    fn normalize_non_overlapping_tokens_splits_outer_token_for_inner_semantics() {
+        let tokens = normalize_non_overlapping_tokens(vec![
+            SyntaxToken {
+                range: 0..22,
+                kind: SyntaxTokenKind::Comment,
+            },
+            SyntaxToken {
+                range: 2..10,
+                kind: SyntaxTokenKind::DiffPlus,
+            },
+            SyntaxToken {
+                range: 12..22,
+                kind: SyntaxTokenKind::StringSpecial,
+            },
+        ]);
+        assert_eq!(
+            tokens,
+            vec![
+                SyntaxToken {
+                    range: 0..2,
+                    kind: SyntaxTokenKind::Comment,
+                },
+                SyntaxToken {
+                    range: 2..10,
+                    kind: SyntaxTokenKind::DiffPlus,
+                },
+                SyntaxToken {
+                    range: 10..12,
+                    kind: SyntaxTokenKind::Comment,
+                },
+                SyntaxToken {
+                    range: 12..22,
+                    kind: SyntaxTokenKind::StringSpecial,
+                },
+            ]
+        );
+    }
+
+    #[test]
     fn normalize_non_overlapping_tokens_splits_contained_later_token() {
         let tokens = normalize_non_overlapping_tokens(vec![
             SyntaxToken {
@@ -3387,6 +3554,33 @@ mod tests {
                 SyntaxToken {
                     range: 6..10,
                     kind: SyntaxTokenKind::Function,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn normalize_non_overlapping_tokens_assigns_partial_overlap_to_later_token() {
+        let tokens = normalize_non_overlapping_tokens(vec![
+            SyntaxToken {
+                range: 0..8,
+                kind: SyntaxTokenKind::Comment,
+            },
+            SyntaxToken {
+                range: 5..12,
+                kind: SyntaxTokenKind::DiffMinus,
+            },
+        ]);
+        assert_eq!(
+            tokens,
+            vec![
+                SyntaxToken {
+                    range: 0..5,
+                    kind: SyntaxTokenKind::Comment,
+                },
+                SyntaxToken {
+                    range: 5..12,
+                    kind: SyntaxTokenKind::DiffMinus,
                 },
             ]
         );
@@ -3894,6 +4088,17 @@ mod tests {
 
     #[cfg(any(test, feature = "syntax-rust"))]
     #[test]
+    fn rust_treesitter_captures_self_as_variable_special() {
+        let text = "impl Widget { fn render(&self, item: Item) { self.draw(item); } }";
+        let tokens = syntax_tokens_for_line(text, DiffSyntaxLanguage::Rust, DiffSyntaxMode::Auto);
+        assert!(
+            has_token_kind_and_text(text, &tokens, SyntaxTokenKind::VariableSpecial, "self"),
+            "Rust `self` should produce VariableSpecial token, got: {tokens:?}"
+        );
+    }
+
+    #[cfg(any(test, feature = "syntax-rust"))]
+    #[test]
     fn rust_treesitter_captures_type_builtin() {
         let text = "let x: u32 = 0;";
         let tokens = syntax_tokens_for_line(text, DiffSyntaxLanguage::Rust, DiffSyntaxMode::Auto);
@@ -3915,6 +4120,459 @@ mod tests {
                 .iter()
                 .any(|t| t.kind == SyntaxTokenKind::FunctionSpecial),
             "Rust macro invocation should produce FunctionSpecial token, got: {tokens:?}"
+        );
+    }
+
+    #[cfg(any(test, feature = "syntax-rust"))]
+    #[test]
+    fn rust_treesitter_captures_keyword_function_type_and_string_families() {
+        let text = r#"fn foo(bar: u32) { let x = "hi"; }"#;
+        let tokens = syntax_tokens_for_line(text, DiffSyntaxLanguage::Rust, DiffSyntaxMode::Auto);
+        assert!(
+            has_token_kind_and_text(text, &tokens, SyntaxTokenKind::Keyword, "fn"),
+            "Rust should highlight `fn` as a keyword, got: {tokens:?}"
+        );
+        assert!(
+            has_token_kind_and_text(text, &tokens, SyntaxTokenKind::Function, "foo"),
+            "Rust function declarations should capture the function name, got: {tokens:?}"
+        );
+        assert!(
+            has_token_kind_and_text(text, &tokens, SyntaxTokenKind::Keyword, "let"),
+            "Rust should highlight `let` as a keyword, got: {tokens:?}"
+        );
+        assert!(
+            has_token_kind_and_text(text, &tokens, SyntaxTokenKind::TypeBuiltin, "u32"),
+            "Rust primitive types should keep their dedicated type token, got: {tokens:?}"
+        );
+        assert!(
+            has_token_kind_and_text(text, &tokens, SyntaxTokenKind::String, "\"hi\""),
+            "Rust string literals should produce String tokens, got: {tokens:?}"
+        );
+    }
+
+    #[cfg(any(test, feature = "syntax-rust"))]
+    #[test]
+    fn rust_treesitter_captures_impl_family_as_preproc() {
+        let impl_text = "impl Widget where T: Trait {}";
+        let impl_tokens =
+            syntax_tokens_for_line(impl_text, DiffSyntaxLanguage::Rust, DiffSyntaxMode::Auto);
+        assert!(
+            has_token_kind_and_text(impl_text, &impl_tokens, SyntaxTokenKind::Preproc, "impl"),
+            "Rust `impl` should route through Preproc for the violet family, got: {impl_tokens:?}"
+        );
+        assert!(
+            has_token_kind_and_text(impl_text, &impl_tokens, SyntaxTokenKind::Preproc, "where"),
+            "Rust `where` should route through Preproc, got: {impl_tokens:?}"
+        );
+        assert!(
+            has_token_kind_and_text(impl_text, &impl_tokens, SyntaxTokenKind::Type, "Widget"),
+            "Rust impl targets should keep their type token, got: {impl_tokens:?}"
+        );
+
+        let trait_text = "trait Painter where Self: Sized {}";
+        let trait_tokens =
+            syntax_tokens_for_line(trait_text, DiffSyntaxLanguage::Rust, DiffSyntaxMode::Auto);
+        assert!(
+            has_token_kind_and_text(trait_text, &trait_tokens, SyntaxTokenKind::Preproc, "trait"),
+            "Rust `trait` should route through Preproc, got: {trait_tokens:?}"
+        );
+        assert!(
+            has_token_kind_and_text(trait_text, &trait_tokens, SyntaxTokenKind::Preproc, "where"),
+            "Rust `where` should stay violet in trait declarations, got: {trait_tokens:?}"
+        );
+
+        let dyn_text = "let painter: dyn Painter = todo!();";
+        let dyn_tokens =
+            syntax_tokens_for_line(dyn_text, DiffSyntaxLanguage::Rust, DiffSyntaxMode::Auto);
+        assert!(
+            has_token_kind_and_text(dyn_text, &dyn_tokens, SyntaxTokenKind::Preproc, "dyn"),
+            "Rust `dyn` should route through Preproc, got: {dyn_tokens:?}"
+        );
+    }
+
+    #[cfg(any(test, feature = "syntax-rust"))]
+    #[test]
+    fn rust_treesitter_captures_use_roots_and_tails() {
+        let type_text = "use foo::Bar;";
+        let type_tokens =
+            syntax_tokens_for_line(type_text, DiffSyntaxLanguage::Rust, DiffSyntaxMode::Auto);
+        assert!(
+            has_token_kind_and_text(type_text, &type_tokens, SyntaxTokenKind::Preproc, "foo"),
+            "Non-`crate` import roots should route through Preproc, got: {type_tokens:?}"
+        );
+        assert!(
+            has_token_kind_and_text(type_text, &type_tokens, SyntaxTokenKind::Type, "Bar"),
+            "Imported uppercase tails should keep their type token, got: {type_tokens:?}"
+        );
+
+        let function_text = "use foo::bar;";
+        let function_tokens = syntax_tokens_for_line(
+            function_text,
+            DiffSyntaxLanguage::Rust,
+            DiffSyntaxMode::Auto,
+        );
+        assert!(
+            has_token_kind_and_text(
+                function_text,
+                &function_tokens,
+                SyntaxTokenKind::Preproc,
+                "foo",
+            ),
+            "Non-`crate` import roots should stay violet, got: {function_tokens:?}"
+        );
+        assert!(
+            has_token_kind_and_text(
+                function_text,
+                &function_tokens,
+                SyntaxTokenKind::Function,
+                "bar",
+            ),
+            "Imported lowercase tails should route through Function, got: {function_tokens:?}"
+        );
+    }
+
+    #[cfg(any(test, feature = "syntax-rust"))]
+    #[test]
+    fn rust_treesitter_keeps_use_middle_modules_neutral() {
+        let type_text = "use foo::bar::Baz;";
+        let type_tokens =
+            syntax_tokens_for_line(type_text, DiffSyntaxLanguage::Rust, DiffSyntaxMode::Auto);
+        assert!(
+            has_token_kind_and_text(type_text, &type_tokens, SyntaxTokenKind::Preproc, "foo"),
+            "The top import root should stay violet, got: {type_tokens:?}"
+        );
+        assert!(
+            has_token_kind_and_text(type_text, &type_tokens, SyntaxTokenKind::Type, "Baz"),
+            "The imported type should stay green, got: {type_tokens:?}"
+        );
+        assert!(
+            !has_token_kind_and_text(type_text, &type_tokens, SyntaxTokenKind::Preproc, "bar"),
+            "Middle modules should not inherit the root violet accent, got: {type_tokens:?}"
+        );
+        assert!(
+            !has_token_kind_and_text(type_text, &type_tokens, SyntaxTokenKind::Function, "bar"),
+            "Middle modules should not be recolored as imported tails, got: {type_tokens:?}"
+        );
+
+        let crate_type_text = "use crate::foo::Bar;";
+        let crate_type_tokens = syntax_tokens_for_line(
+            crate_type_text,
+            DiffSyntaxLanguage::Rust,
+            DiffSyntaxMode::Auto,
+        );
+        assert!(
+            has_token_kind_and_text(
+                crate_type_text,
+                &crate_type_tokens,
+                SyntaxTokenKind::Keyword,
+                "crate",
+            ),
+            "Rust should keep `crate` on the keyword/orange family, got: {crate_type_tokens:?}"
+        );
+        assert!(
+            has_token_kind_and_text(
+                crate_type_text,
+                &crate_type_tokens,
+                SyntaxTokenKind::Type,
+                "Bar",
+            ),
+            "Imported types under `crate` should stay green, got: {crate_type_tokens:?}"
+        );
+        assert!(
+            !has_token_kind_and_text(
+                crate_type_text,
+                &crate_type_tokens,
+                SyntaxTokenKind::Preproc,
+                "foo",
+            ),
+            "The segment after `crate::` should stay neutral, got: {crate_type_tokens:?}"
+        );
+
+        let crate_function_text = "use crate::foo::bar;";
+        let crate_function_tokens = syntax_tokens_for_line(
+            crate_function_text,
+            DiffSyntaxLanguage::Rust,
+            DiffSyntaxMode::Auto,
+        );
+        assert!(
+            has_token_kind_and_text(
+                crate_function_text,
+                &crate_function_tokens,
+                SyntaxTokenKind::Function,
+                "bar",
+            ),
+            "The final lowercase import tail should stay blue under `crate`, got: {crate_function_tokens:?}"
+        );
+        assert!(
+            !has_token_kind_and_text(
+                crate_function_text,
+                &crate_function_tokens,
+                SyntaxTokenKind::Preproc,
+                "foo",
+            ),
+            "The segment after `crate::` should remain neutral, got: {crate_function_tokens:?}"
+        );
+    }
+
+    #[cfg(any(test, feature = "syntax-rust"))]
+    #[test]
+    fn rust_treesitter_captures_root_modules_before_functions_and_types() {
+        let call_text = "let handler = foo::bar::baz();";
+        let call_tokens =
+            syntax_tokens_for_line(call_text, DiffSyntaxLanguage::Rust, DiffSyntaxMode::Auto);
+        assert!(
+            has_token_kind_and_text(call_text, &call_tokens, SyntaxTokenKind::Preproc, "foo"),
+            "Rust code paths should color the bare root module as Preproc, got: {call_tokens:?}"
+        );
+        assert!(
+            !has_token_kind_and_text(call_text, &call_tokens, SyntaxTokenKind::Preproc, "bar"),
+            "Inner code-path modules should stay neutral instead of inheriting the root violet, got: {call_tokens:?}"
+        );
+        assert!(
+            !has_token_kind_and_text(call_text, &call_tokens, SyntaxTokenKind::Function, "bar"),
+            "Inner code-path modules should not be recolored as callable tails, got: {call_tokens:?}"
+        );
+        assert!(
+            has_token_kind_and_text(call_text, &call_tokens, SyntaxTokenKind::Function, "baz"),
+            "Rust function paths should keep the callable name as Function, got: {call_tokens:?}"
+        );
+
+        let associated_text = "let factory = foo::bar::Baz::new();";
+        let associated_tokens = syntax_tokens_for_line(
+            associated_text,
+            DiffSyntaxLanguage::Rust,
+            DiffSyntaxMode::Auto,
+        );
+        assert!(
+            has_token_kind_and_text(
+                associated_text,
+                &associated_tokens,
+                SyntaxTokenKind::Preproc,
+                "foo",
+            ),
+            "Associated paths should keep the bare root module violet, got: {associated_tokens:?}"
+        );
+        assert!(
+            !has_token_kind_and_text(
+                associated_text,
+                &associated_tokens,
+                SyntaxTokenKind::Preproc,
+                "bar",
+            ),
+            "Inner modules before associated functions should stay neutral, got: {associated_tokens:?}"
+        );
+        assert!(
+            has_token_kind_and_text(
+                associated_text,
+                &associated_tokens,
+                SyntaxTokenKind::Type,
+                "Baz",
+            ),
+            "Associated function paths should keep the type token, got: {associated_tokens:?}"
+        );
+        assert!(
+            has_token_kind_and_text(
+                associated_text,
+                &associated_tokens,
+                SyntaxTokenKind::Function,
+                "new",
+            ),
+            "Associated function paths should keep the callable name as Function, got: {associated_tokens:?}"
+        );
+
+        let crate_text = "let value: crate::foo::Bar = todo!();";
+        let crate_tokens =
+            syntax_tokens_for_line(crate_text, DiffSyntaxLanguage::Rust, DiffSyntaxMode::Auto);
+        assert!(
+            has_token_kind_and_text(crate_text, &crate_tokens, SyntaxTokenKind::Keyword, "crate"),
+            "Rust should keep `crate` on the keyword/orange family, got: {crate_tokens:?}"
+        );
+        assert!(
+            !has_token_kind_and_text(crate_text, &crate_tokens, SyntaxTokenKind::Preproc, "foo"),
+            "The first named segment after `crate::` should stay neutral in code paths, got: {crate_tokens:?}"
+        );
+        assert!(
+            has_token_kind_and_text(crate_text, &crate_tokens, SyntaxTokenKind::Type, "Bar"),
+            "Rust type tails under `crate` should stay green, got: {crate_tokens:?}"
+        );
+    }
+
+    #[cfg(any(test, feature = "syntax-rust"))]
+    #[test]
+    fn rust_treesitter_captures_constants_in_scoped_paths() {
+        let constant_text = "let mode = NotForContentType::SSE;";
+        let constant_tokens = syntax_tokens_for_line(
+            constant_text,
+            DiffSyntaxLanguage::Rust,
+            DiffSyntaxMode::Auto,
+        );
+        assert!(
+            has_token_kind_and_text(
+                constant_text,
+                &constant_tokens,
+                SyntaxTokenKind::Type,
+                "NotForContentType",
+            ),
+            "Rust should keep the type side of associated constants green, got: {constant_tokens:?}"
+        );
+        assert!(
+            has_token_kind_and_text(
+                constant_text,
+                &constant_tokens,
+                SyntaxTokenKind::Constant,
+                "SSE",
+            ),
+            "Rust ALL_CAPS associated constants should route through Constant, got: {constant_tokens:?}"
+        );
+        assert!(
+            !has_token_kind_and_text(
+                constant_text,
+                &constant_tokens,
+                SyntaxTokenKind::Type,
+                "SSE",
+            ),
+            "Rust ALL_CAPS associated constants should no longer be typed green, got: {constant_tokens:?}"
+        );
+
+        let scoped_text = "let root = foo::BAR;";
+        let scoped_tokens =
+            syntax_tokens_for_line(scoped_text, DiffSyntaxLanguage::Rust, DiffSyntaxMode::Auto);
+        assert!(
+            has_token_kind_and_text(scoped_text, &scoped_tokens, SyntaxTokenKind::Preproc, "foo"),
+            "Bare module roots should stay violet before constant tails, got: {scoped_tokens:?}"
+        );
+        assert!(
+            has_token_kind_and_text(
+                scoped_text,
+                &scoped_tokens,
+                SyntaxTokenKind::Constant,
+                "BAR",
+            ),
+            "Scoped ALL_CAPS references should route through Constant, got: {scoped_tokens:?}"
+        );
+
+        let crate_scoped_text = "let root = crate::foo::BAR;";
+        let crate_scoped_tokens = syntax_tokens_for_line(
+            crate_scoped_text,
+            DiffSyntaxLanguage::Rust,
+            DiffSyntaxMode::Auto,
+        );
+        assert!(
+            has_token_kind_and_text(
+                crate_scoped_text,
+                &crate_scoped_tokens,
+                SyntaxTokenKind::Keyword,
+                "crate",
+            ),
+            "Rust should keep `crate` orange before constant tails, got: {crate_scoped_tokens:?}"
+        );
+        assert!(
+            !has_token_kind_and_text(
+                crate_scoped_text,
+                &crate_scoped_tokens,
+                SyntaxTokenKind::Preproc,
+                "foo",
+            ),
+            "The first named segment after `crate::` should stay neutral before constants, got: {crate_scoped_tokens:?}"
+        );
+        assert!(
+            has_token_kind_and_text(
+                crate_scoped_text,
+                &crate_scoped_tokens,
+                SyntaxTokenKind::Constant,
+                "BAR",
+            ),
+            "ALL_CAPS constant tails under `crate` should stay pink/Constant, got: {crate_scoped_tokens:?}"
+        );
+
+        let standalone_text = "let standalone = SSE;";
+        let standalone_tokens = syntax_tokens_for_line(
+            standalone_text,
+            DiffSyntaxLanguage::Rust,
+            DiffSyntaxMode::Auto,
+        );
+        assert!(
+            has_token_kind_and_text(
+                standalone_text,
+                &standalone_tokens,
+                SyntaxTokenKind::Constant,
+                "SSE",
+            ),
+            "Standalone ALL_CAPS Rust names should route through Constant, got: {standalone_tokens:?}"
+        );
+    }
+
+    #[cfg(any(test, feature = "syntax-rust"))]
+    #[test]
+    fn rust_treesitter_captures_grouped_use_import_semantics() {
+        let text = "use foo::{bar, baz::Qux};";
+        let tokens = syntax_tokens_for_line(text, DiffSyntaxLanguage::Rust, DiffSyntaxMode::Auto);
+        assert!(
+            has_token_kind_and_text(text, &tokens, SyntaxTokenKind::Preproc, "foo"),
+            "Grouped imports should accent the non-`crate` root, got: {tokens:?}"
+        );
+        assert!(
+            has_token_kind_and_text(text, &tokens, SyntaxTokenKind::Function, "bar"),
+            "Grouped imports should keep lowercase imported tails blue, got: {tokens:?}"
+        );
+        assert!(
+            has_token_kind_and_text(text, &tokens, SyntaxTokenKind::Type, "Qux"),
+            "Grouped imports should keep uppercase imported tails green, got: {tokens:?}"
+        );
+        assert!(
+            !has_token_kind_and_text(text, &tokens, SyntaxTokenKind::Preproc, "baz"),
+            "Grouped middle modules should not inherit the root violet accent, got: {tokens:?}"
+        );
+        assert!(
+            !has_token_kind_and_text(text, &tokens, SyntaxTokenKind::Function, "baz"),
+            "Grouped middle modules should stay neutral when importing a type, got: {tokens:?}"
+        );
+
+        let crate_text = "use crate::{foo::bar, baz::Qux};";
+        let crate_tokens =
+            syntax_tokens_for_line(crate_text, DiffSyntaxLanguage::Rust, DiffSyntaxMode::Auto);
+        assert!(
+            has_token_kind_and_text(crate_text, &crate_tokens, SyntaxTokenKind::Keyword, "crate",),
+            "Grouped imports should keep `crate` on the keyword/orange family, got: {crate_tokens:?}"
+        );
+        assert!(
+            has_token_kind_and_text(crate_text, &crate_tokens, SyntaxTokenKind::Function, "bar",),
+            "Grouped imports under `crate` should keep lowercase tails blue, got: {crate_tokens:?}"
+        );
+        assert!(
+            has_token_kind_and_text(crate_text, &crate_tokens, SyntaxTokenKind::Type, "Qux"),
+            "Grouped imports under `crate` should keep uppercase tails green, got: {crate_tokens:?}"
+        );
+        assert!(
+            !has_token_kind_and_text(crate_text, &crate_tokens, SyntaxTokenKind::Preproc, "foo",),
+            "Paths under `crate::{{...}}` should not add a violet root accent, got: {crate_tokens:?}"
+        );
+        assert!(
+            !has_token_kind_and_text(crate_text, &crate_tokens, SyntaxTokenKind::Function, "baz",),
+            "Middle grouped modules should stay neutral before imported types, got: {crate_tokens:?}"
+        );
+    }
+
+    #[cfg(any(test, feature = "syntax-rust"))]
+    #[test]
+    fn rust_treesitter_keeps_use_aliases_neutral() {
+        let text = "use foo::bar as baz;";
+        let tokens = syntax_tokens_for_line(text, DiffSyntaxLanguage::Rust, DiffSyntaxMode::Auto);
+        assert!(
+            has_token_kind_and_text(text, &tokens, SyntaxTokenKind::Preproc, "foo"),
+            "Aliased imports should keep the non-`crate` root violet, got: {tokens:?}"
+        );
+        assert!(
+            has_token_kind_and_text(text, &tokens, SyntaxTokenKind::Function, "bar"),
+            "Aliased imports should keep the source tail blue, got: {tokens:?}"
+        );
+        assert!(
+            !has_token_kind_and_text(text, &tokens, SyntaxTokenKind::Preproc, "baz"),
+            "Import aliases should stay neutral instead of inheriting the root accent, got: {tokens:?}"
+        );
+        assert!(
+            !has_token_kind_and_text(text, &tokens, SyntaxTokenKind::Function, "baz"),
+            "Import aliases should stay neutral instead of inheriting the source tail color, got: {tokens:?}"
         );
     }
 
@@ -4359,7 +5017,7 @@ mod tests {
             (
                 DiffSyntaxLanguage::Ruby,
                 "class Example; def call(name) = 42 end",
-                SyntaxTokenKind::Function,
+                SyntaxTokenKind::FunctionMethod,
             ),
             (
                 DiffSyntaxLanguage::PowerShell,
@@ -4439,12 +5097,12 @@ mod tests {
             (
                 DiffSyntaxLanguage::Diff,
                 "diff --git a/src/lib.rs b/src/lib.rs",
-                SyntaxTokenKind::VariableSpecial,
+                SyntaxTokenKind::VariableBuiltin,
             ),
             (
                 DiffSyntaxLanguage::GitCommit,
                 "feat: widen syntax support",
-                SyntaxTokenKind::Keyword,
+                SyntaxTokenKind::MarkupHeading,
             ),
         ];
 
@@ -4455,6 +5113,262 @@ mod tests {
                 "{language:?} should capture {expected_kind:?}: {tokens:?}"
             );
         }
+    }
+
+    #[cfg(any(test, feature = "syntax-web"))]
+    #[test]
+    fn javascript_treesitter_captures_regex_literal() {
+        let text = "const re = /foo+/gi;";
+        let tokens =
+            syntax_tokens_for_line(text, DiffSyntaxLanguage::JavaScript, DiffSyntaxMode::Auto);
+        assert!(
+            tokens
+                .iter()
+                .any(|t| t.kind == SyntaxTokenKind::StringRegex),
+            "JavaScript regex literal should produce StringRegex token, got: {tokens:?}"
+        );
+    }
+
+    #[cfg(any(test, feature = "syntax-web"))]
+    #[test]
+    fn javascript_treesitter_captures_constructor_and_constant_builtin() {
+        let constructor_tokens = syntax_tokens_for_line(
+            "class Example { constructor() {} }",
+            DiffSyntaxLanguage::JavaScript,
+            DiffSyntaxMode::Auto,
+        );
+        assert!(
+            constructor_tokens
+                .iter()
+                .any(|t| t.kind == SyntaxTokenKind::Constructor),
+            "JavaScript constructor should produce Constructor token, got: {constructor_tokens:?}"
+        );
+
+        let builtin_tokens = syntax_tokens_for_line(
+            "const value = undefined;",
+            DiffSyntaxLanguage::JavaScript,
+            DiffSyntaxMode::Auto,
+        );
+        assert!(
+            builtin_tokens
+                .iter()
+                .any(|t| t.kind == SyntaxTokenKind::ConstantBuiltin),
+            "JavaScript builtins should produce ConstantBuiltin token, got: {builtin_tokens:?}"
+        );
+    }
+
+    #[cfg(any(test, feature = "syntax-go"))]
+    #[test]
+    fn go_treesitter_captures_namespace_package_identifier() {
+        let tokens =
+            syntax_tokens_for_line("package main", DiffSyntaxLanguage::Go, DiffSyntaxMode::Auto);
+        assert!(
+            tokens.iter().any(|t| t.kind == SyntaxTokenKind::Namespace),
+            "Go package identifier should produce Namespace token, got: {tokens:?}"
+        );
+    }
+
+    #[cfg(any(test, feature = "syntax-extra"))]
+    #[test]
+    fn lua_and_c_treesitter_capture_preprocessor_and_label() {
+        let preproc = syntax_tokens_for_line(
+            "#!/usr/bin/env lua",
+            DiffSyntaxLanguage::Lua,
+            DiffSyntaxMode::Auto,
+        );
+        assert!(
+            preproc.iter().any(|t| t.kind == SyntaxTokenKind::Preproc),
+            "Lua hash bang should produce Preproc token, got: {preproc:?}"
+        );
+
+        let label = syntax_tokens_for_line(
+            "start: return 0;",
+            DiffSyntaxLanguage::C,
+            DiffSyntaxMode::Auto,
+        );
+        assert!(
+            label.iter().any(|t| t.kind == SyntaxTokenKind::Label),
+            "C label should produce Label token, got: {label:?}"
+        );
+    }
+
+    #[cfg(any(test, feature = "syntax-repo"))]
+    #[test]
+    fn gitcommit_treesitter_captures_diff_change_kinds() {
+        let text = [
+            "Subject",
+            "",
+            "# Changes to be committed:",
+            "# new file: src/new.rs",
+            "# deleted: src/old.rs",
+            "# modified: src/lib.rs",
+        ]
+        .join("\n");
+        let document = prepare_test_document(DiffSyntaxLanguage::GitCommit, &text);
+
+        let plus = syntax_tokens_for_prepared_document_line(document, 3)
+            .expect("gitcommit added line should have prepared tokens");
+        assert!(
+            plus.iter().any(|t| t.kind == SyntaxTokenKind::DiffPlus),
+            "gitcommit additions should produce DiffPlus tokens, got: {plus:?}"
+        );
+
+        let minus = syntax_tokens_for_prepared_document_line(document, 4)
+            .expect("gitcommit removed line should have prepared tokens");
+        assert!(
+            minus.iter().any(|t| t.kind == SyntaxTokenKind::DiffMinus),
+            "gitcommit removals should produce DiffMinus tokens, got: {minus:?}"
+        );
+
+        let delta = syntax_tokens_for_prepared_document_line(document, 5)
+            .expect("gitcommit modified file line should have prepared tokens");
+        assert!(
+            delta.iter().any(|t| t.kind == SyntaxTokenKind::DiffDelta),
+            "gitcommit modified files should produce DiffDelta tokens, got: {delta:?}"
+        );
+    }
+
+    #[cfg(any(test, feature = "syntax-repo"))]
+    #[test]
+    fn prepared_documents_capture_markup_specific_tokens() {
+        let gitcommit =
+            prepare_test_document(DiffSyntaxLanguage::GitCommit, "Subject\n\ncloses #123");
+
+        let heading = syntax_tokens_for_prepared_document_line(gitcommit, 0)
+            .expect("gitcommit subject line should have prepared tokens");
+        assert!(
+            heading
+                .iter()
+                .any(|t| t.kind == SyntaxTokenKind::MarkupHeading),
+            "gitcommit subject should produce MarkupHeading token, got: {heading:?}"
+        );
+
+        let link = syntax_tokens_for_prepared_document_line(gitcommit, 2)
+            .expect("gitcommit body line should have prepared tokens");
+        assert!(
+            link.iter().any(|t| t.kind == SyntaxTokenKind::MarkupLink),
+            "gitcommit issue reference should produce MarkupLink token, got: {link:?}"
+        );
+
+        let xml = prepare_test_document(DiffSyntaxLanguage::Xml, "<root><![CDATA[code]]></root>");
+        let literal = syntax_tokens_for_prepared_document_line(xml, 0)
+            .expect("XML CDATA line should have prepared tokens");
+        assert!(
+            literal
+                .iter()
+                .any(|t| t.kind == SyntaxTokenKind::TextLiteral),
+            "XML CDATA should produce TextLiteral token, got: {literal:?}"
+        );
+    }
+
+    #[cfg(any(test, feature = "syntax-repo"))]
+    #[test]
+    fn markdown_inline_treesitter_captures_text_literal_and_markup_link() {
+        let text = "[link](https://example.com) `code`";
+        let tokens = syntax_tokens_for_line(
+            text,
+            DiffSyntaxLanguage::MarkdownInline,
+            DiffSyntaxMode::Auto,
+        );
+        assert!(
+            tokens.iter().any(|t| t.kind == SyntaxTokenKind::MarkupLink),
+            "Markdown inline link destination should produce MarkupLink token, got: {tokens:?}"
+        );
+        assert!(
+            tokens
+                .iter()
+                .any(|t| t.kind == SyntaxTokenKind::TextLiteral),
+            "Markdown inline code span should produce TextLiteral token, got: {tokens:?}"
+        );
+    }
+
+    #[cfg(any(test, feature = "syntax-repo"))]
+    #[test]
+    fn markdown_prepared_document_captures_heading_marker_as_punctuation_special() {
+        let document = prepare_test_document(DiffSyntaxLanguage::Markdown, "# Heading");
+        let tokens = syntax_tokens_for_prepared_document_line(document, 0)
+            .expect("markdown heading line should have prepared tokens");
+        assert!(
+            tokens
+                .iter()
+                .any(|t| t.kind == SyntaxTokenKind::PunctuationSpecial),
+            "Markdown heading marker should remain PunctuationSpecial, got: {tokens:?}"
+        );
+    }
+
+    #[cfg(any(test, feature = "syntax-extra"))]
+    #[test]
+    fn ruby_and_swift_treesitter_capture_regex_aliases() {
+        let cases = [
+            (DiffSyntaxLanguage::Ruby, "value = /foo+/"),
+            (DiffSyntaxLanguage::Swift, "let pattern = /foo+/"),
+        ];
+
+        for (language, text) in cases {
+            let tokens = syntax_tokens_for_line(text, language, DiffSyntaxMode::Auto);
+            assert!(
+                tokens
+                    .iter()
+                    .any(|token| token.kind == SyntaxTokenKind::StringRegex),
+                "{language:?} regex literal should produce StringRegex token, got: {tokens:?}"
+            );
+        }
+    }
+
+    #[cfg(any(test, feature = "syntax-repo"))]
+    #[test]
+    fn gitcommit_prepared_document_captures_path_symbol_and_trailer_tokens() {
+        let text = [
+            "Subject",
+            "",
+            "closes #123",
+            "Signed-off-by: me@example.com",
+            "# On branch feature/demo",
+            "# Changes to be committed:",
+            "# renamed: src/old.rs -> src/new.rs",
+        ]
+        .join("\n");
+        let document = prepare_test_document(DiffSyntaxLanguage::GitCommit, &text);
+
+        let trailer = syntax_tokens_for_prepared_document_line(document, 3)
+            .expect("gitcommit trailer line should have prepared tokens");
+        assert!(
+            trailer.iter().any(|t| t.kind == SyntaxTokenKind::Property),
+            "gitcommit trailer key should produce Property token, got: {trailer:?}"
+        );
+
+        let branch = syntax_tokens_for_prepared_document_line(document, 4)
+            .expect("gitcommit branch line should have prepared tokens");
+        assert!(
+            branch
+                .iter()
+                .any(|t| t.kind == SyntaxTokenKind::StringSpecial),
+            "gitcommit branch line should produce StringSpecial token, got: {branch:?}"
+        );
+
+        let renamed = syntax_tokens_for_prepared_document_line(document, 6)
+            .expect("gitcommit renamed file line should have prepared tokens");
+        assert!(
+            renamed.iter().any(|t| t.kind == SyntaxTokenKind::DiffDelta),
+            "gitcommit renamed file line should produce DiffDelta token, got: {renamed:?}"
+        );
+        assert!(
+            renamed
+                .iter()
+                .any(|t| t.kind == SyntaxTokenKind::StringSpecial),
+            "gitcommit renamed file path should produce StringSpecial token, got: {renamed:?}"
+        );
+    }
+
+    #[cfg(any(test, feature = "syntax-xml"))]
+    #[test]
+    fn xml_treesitter_captures_markup_link_via_system_literal() {
+        let text = "<!DOCTYPE root SYSTEM \"https://example.com/schema.dtd\">";
+        let tokens = syntax_tokens_for_line(text, DiffSyntaxLanguage::Xml, DiffSyntaxMode::Auto);
+        assert!(
+            tokens.iter().any(|t| t.kind == SyntaxTokenKind::MarkupLink),
+            "XML system literal should produce MarkupLink token, got: {tokens:?}"
+        );
     }
 
     #[test]

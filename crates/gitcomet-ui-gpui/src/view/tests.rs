@@ -1724,10 +1724,8 @@ fn full_chrome_layout_only_caches_always_mounted_subviews() {
         "expected action bar to stay behind the stable cache boundary"
     );
     assert!(
-        normalized.contains(
-            "stable_cached_fixed_height_view(self.bottom_status_bar.clone(),components::Tab::container_height("
-        ),
-        "expected bottom status bar to stay behind the stable cache boundary"
+        normalized.contains("self.bottom_status_bar.clone(),"),
+        "expected bottom status bar to mount directly"
     );
     assert!(
         normalized
@@ -1751,6 +1749,12 @@ fn full_chrome_layout_only_caches_always_mounted_subviews() {
     assert!(
         !normalized.contains("stable_cached_fill_view(self.details_pane.clone())"),
         "details pane must stay outside the stable cache boundary"
+    );
+    assert!(
+        !normalized.contains(
+            "stable_cached_fixed_height_view(self.bottom_status_bar.clone(),components::Tab::container_height("
+        ),
+        "bottom status bar must stay outside the stable cache boundary"
     );
 }
 

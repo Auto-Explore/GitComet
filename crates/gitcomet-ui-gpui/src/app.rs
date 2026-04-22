@@ -4,8 +4,9 @@ use crate::ui_scale;
 use crate::view::{
     FocusedMergetoolLabels, FocusedMergetoolViewConfig, GitCometView, GitCometViewConfig,
     GitCometViewMode, InitialRepositoryLaunchMode, SettingsWindowView, StartupCrashReport,
-    TextInputDiffNextChange, TextInputDiffNextFile, TextInputDiffNextSearchMatchOrChange,
-    TextInputDiffPrevChange, TextInputDiffPrevFile, TextInputDiffPrevSearchMatchOrChange,
+    TextInputCommitSubmit, TextInputDiffNextChange, TextInputDiffNextFile,
+    TextInputDiffNextSearchMatchOrChange, TextInputDiffPrevChange, TextInputDiffPrevFile,
+    TextInputDiffPrevSearchMatchOrChange,
 };
 use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::services::GitBackend;
@@ -1234,6 +1235,8 @@ fn bind_text_input_keys(cx: &mut App) {
         ),
         KeyBinding::new("alt-delete", crate::kit::DeleteWordRight, Some("TextInput")),
         KeyBinding::new("enter", crate::kit::Enter, Some("TextInput")),
+        KeyBinding::new("shift-enter", crate::kit::ShiftEnter, Some("TextInput")),
+        KeyBinding::new("secondary-enter", TextInputCommitSubmit, Some("TextInput")),
         KeyBinding::new("f1", TextInputDiffPrevFile, Some("TextInput")),
         KeyBinding::new("f4", TextInputDiffNextFile, Some("TextInput")),
         KeyBinding::new(
@@ -1448,6 +1451,7 @@ mod tests {
                 .on_action(record_action_listener!(crate::kit::DeleteWordLeft))
                 .on_action(record_action_listener!(crate::kit::DeleteWordRight))
                 .on_action(record_action_listener!(crate::kit::Enter))
+                .on_action(record_action_listener!(crate::kit::ShiftEnter))
                 .on_action(record_action_listener!(crate::kit::Left))
                 .on_action(record_action_listener!(crate::kit::Right))
                 .on_action(record_action_listener!(crate::kit::Up))
@@ -1474,6 +1478,7 @@ mod tests {
                 .on_action(record_action_listener!(crate::kit::Copy))
                 .on_action(record_action_listener!(crate::kit::Undo))
                 .on_action(record_action_listener!(crate::kit::Redo))
+                .on_action(record_action_listener!(crate::view::TextInputCommitSubmit))
                 .on_action(record_action_listener!(crate::view::TextInputDiffPrevFile))
                 .on_action(record_action_listener!(crate::view::TextInputDiffNextFile))
                 .on_action(record_action_listener!(
@@ -1588,6 +1593,8 @@ mod tests {
             ("alt-backspace", crate::kit::DeleteWordLeft.name()),
             ("alt-delete", crate::kit::DeleteWordRight.name()),
             ("enter", crate::kit::Enter.name()),
+            ("shift-enter", crate::kit::ShiftEnter.name()),
+            ("secondary-enter", crate::view::TextInputCommitSubmit.name()),
             ("f1", crate::view::TextInputDiffPrevFile.name()),
             ("f4", crate::view::TextInputDiffNextFile.name()),
             (

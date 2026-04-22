@@ -547,10 +547,12 @@ fn syntax_kind_for_capture_name(name: &str) -> Option<SyntaxTokenKind> {
         "comment" => SyntaxTokenKind::Comment,
         // Strings
         "escape" | "string.escape" => SyntaxTokenKind::StringEscape,
-        "string" | "string.special" | "string.regex" | "character" => SyntaxTokenKind::String,
-        "diff.plus" => SyntaxTokenKind::String,
-        "diff.minus" => SyntaxTokenKind::Keyword,
-        "diff.delta" => SyntaxTokenKind::Type,
+        "string.regex" | "string.regexp" | "string.special.regex" => SyntaxTokenKind::StringRegex,
+        "string.special" => SyntaxTokenKind::StringSpecial,
+        "string" | "character" => SyntaxTokenKind::String,
+        "diff.plus" => SyntaxTokenKind::DiffPlus,
+        "diff.minus" => SyntaxTokenKind::DiffMinus,
+        "diff.delta" => SyntaxTokenKind::DiffDelta,
         // Keywords
         "conditional" | "keyword.control" | "repeat" => SyntaxTokenKind::KeywordControl,
         "exception"
@@ -558,25 +560,26 @@ fn syntax_kind_for_capture_name(name: &str) -> Option<SyntaxTokenKind> {
         | "keyword.declaration"
         | "keyword.import"
         | "include"
-        | "storageclass"
-        | "preproc" => SyntaxTokenKind::Keyword,
+        | "storageclass" => SyntaxTokenKind::Keyword,
+        "preproc" => SyntaxTokenKind::Preproc,
         // Numbers & booleans
         "float" | "number" | "number.float" => SyntaxTokenKind::Number,
         "boolean" => SyntaxTokenKind::Boolean,
         // Functions
         "function.method" => SyntaxTokenKind::FunctionMethod,
         "function.special" | "function.special.definition" => SyntaxTokenKind::FunctionSpecial,
-        "function" | "function.definition" | "constructor" | "method" => SyntaxTokenKind::Function,
+        "constructor" => SyntaxTokenKind::Constructor,
+        "function" | "function.definition" | "method" => SyntaxTokenKind::Function,
         // Types
         "module.builtin" | "type.builtin" => SyntaxTokenKind::TypeBuiltin,
         "concept" | "type.interface" => SyntaxTokenKind::TypeInterface,
-        "array" | "module" | "namespace" | "selector" | "type" | "type.class" => {
-            SyntaxTokenKind::Type
-        }
+        "module" | "namespace" => SyntaxTokenKind::Namespace,
+        "array" | "selector" | "type" | "type.class" => SyntaxTokenKind::Type,
         // Variables - general `@variable` renders as plain text (no color) to avoid
         // "everything is highlighted" noise. Sub-captures get distinct treatment.
         "parameter" | "variable.parameter" => SyntaxTokenKind::VariableParameter,
-        "variable.builtin" | "variable.special" => SyntaxTokenKind::VariableSpecial,
+        "variable.builtin" => SyntaxTokenKind::VariableBuiltin,
+        "variable.special" => SyntaxTokenKind::VariableSpecial,
         "variable.member" | "variable.other.member" => SyntaxTokenKind::Property,
         "variable" => SyntaxTokenKind::Variable,
         // Properties
@@ -586,27 +589,32 @@ fn syntax_kind_for_capture_name(name: &str) -> Option<SyntaxTokenKind> {
         // Attributes
         "attribute" | "attribute.jsx" => SyntaxTokenKind::Attribute,
         // Constants
-        "constant" | "constant.builtin" => SyntaxTokenKind::Constant,
+        "constant.builtin" => SyntaxTokenKind::ConstantBuiltin,
+        "constant" => SyntaxTokenKind::Constant,
         // Operators
         "operator" => SyntaxTokenKind::Operator,
         // Punctuation
         "punctuation.bracket" => SyntaxTokenKind::PunctuationBracket,
         "delimiter" | "punctuation.delimiter" => SyntaxTokenKind::PunctuationDelimiter,
-        "punctuation" | "punctuation.special" => SyntaxTokenKind::Punctuation,
+        "punctuation.special" => SyntaxTokenKind::PunctuationSpecial,
+        "punctuation.list_marker" | "punctuation.list_marker.markup" => {
+            SyntaxTokenKind::PunctuationListMarker
+        }
+        "punctuation" => SyntaxTokenKind::Punctuation,
         // Lifetime (Rust)
         "lifetime" => SyntaxTokenKind::Lifetime,
         // Labels (goto, DTD notation names)
-        "label" => SyntaxTokenKind::Variable,
+        "label" => SyntaxTokenKind::Label,
         // Markup (XML text content, CDATA, URIs)
-        "link_uri.markup" | "markup.link" => SyntaxTokenKind::String,
-        "markup.raw" | "text.literal.markup" => SyntaxTokenKind::String,
-        "markup.heading" | "title.markup" => SyntaxTokenKind::Keyword,
+        "link_uri.markup" | "markup.link" | "text.uri" => SyntaxTokenKind::MarkupLink,
+        "markup.raw" | "text.literal" | "text.literal.markup" => SyntaxTokenKind::TextLiteral,
+        "markup.heading" | "text.title" | "title.markup" => SyntaxTokenKind::MarkupHeading,
         "emphasis.markup"
         | "emphasis.strong.markup"
         | "link_text.markup"
         | "markup"
         | "strikethrough.markup" => SyntaxTokenKind::Variable,
-        // Skip `@none`, `@embedded`, `@text.*` and other non-semantic captures
+        // Skip `@none`, `@embedded`, most `@text.*`, and other non-semantic captures.
         _ => return None,
     })
 }

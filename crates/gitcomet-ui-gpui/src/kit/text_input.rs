@@ -30,6 +30,7 @@ actions!(
         DeleteWordLeft,
         DeleteWordRight,
         Enter,
+        ShiftEnter,
         Left,
         Right,
         Up,
@@ -1835,14 +1836,25 @@ impl TextInput {
         self.replace_text_in_range(None, "", window, cx)
     }
 
+    fn insert_line_break(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.queue_cursor_autoscroll();
+        self.replace_text_in_range(None, self.line_ending, window, cx);
+    }
+
     fn enter(&mut self, _: &Enter, window: &mut Window, cx: &mut Context<Self>) {
         if self.read_only || !self.multiline {
             self.enter_pressed = true;
             cx.notify();
             return;
         }
-        self.queue_cursor_autoscroll();
-        self.replace_text_in_range(None, self.line_ending, window, cx);
+        self.insert_line_break(window, cx);
+    }
+
+    fn shift_enter(&mut self, _: &ShiftEnter, window: &mut Window, cx: &mut Context<Self>) {
+        if self.read_only || !self.multiline {
+            return;
+        }
+        self.insert_line_break(window, cx);
     }
 
     fn show_character_palette(
@@ -3682,6 +3694,7 @@ impl Render for TextInput {
             .on_action(cx.listener(Self::delete_word_left))
             .on_action(cx.listener(Self::delete_word_right))
             .on_action(cx.listener(Self::enter))
+            .on_action(cx.listener(Self::shift_enter))
             .on_action(cx.listener(Self::left))
             .on_action(cx.listener(Self::right))
             .on_action(cx.listener(Self::up))
@@ -5693,6 +5706,63 @@ mod tests {
                 )]
             }),
         }
+    }
+
+    #[gpui::test]
+    fn multiline_shift_enter_inserts_a_line_break(cx: &mut gpui::TestAppContext) {
+        let (input, cx) = cx.add_window_view(|window, cx| {
+            TextInput::new(
+                TextInputOptions {
+                    multiline: true,
+                    ..Default::default()
+                },
+                window,
+                cx,
+            )
+        });
+
+        cx.update(|window, app| {
+            input.update(app, |input, cx| {
+                input.set_text("alpha", cx);
+                let expected = format!("alpha{}", input.line_ending);
+
+                input.shift_enter(&ShiftEnter, window, cx);
+
+                assert_eq!(input.text(), expected);
+                assert!(
+                    !input.take_enter_pressed(),
+                    "shift-enter should insert a newline instead of flagging enter-pressed"
+                );
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn single_line_shift_enter_is_a_noop(cx: &mut gpui::TestAppContext) {
+        let (input, cx) = cx.add_window_view(|window, cx| {
+            TextInput::new(
+                TextInputOptions {
+                    multiline: false,
+                    ..Default::default()
+                },
+                window,
+                cx,
+            )
+        });
+
+        cx.update(|window, app| {
+            input.update(app, |input, cx| {
+                input.set_text("alpha", cx);
+
+                input.shift_enter(&ShiftEnter, window, cx);
+
+                assert_eq!(input.text(), "alpha");
+                assert!(
+                    !input.take_enter_pressed(),
+                    "shift-enter should not submit or modify single-line inputs"
+                );
+            });
+        });
     }
 
     #[gpui::test]

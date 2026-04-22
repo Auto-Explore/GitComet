@@ -114,33 +114,49 @@ pub(super) fn syntax_mode_for_prepared_document(
     }
 }
 
-const SYNTAX_HIGHLIGHT_STYLE_KINDS: [SyntaxTokenKind; 27] = [
+const SYNTAX_HIGHLIGHT_STYLE_KINDS: [SyntaxTokenKind; 43] = [
     SyntaxTokenKind::None,
     SyntaxTokenKind::Comment,
     SyntaxTokenKind::CommentDoc,
     SyntaxTokenKind::String,
     SyntaxTokenKind::StringEscape,
+    SyntaxTokenKind::StringRegex,
+    SyntaxTokenKind::StringSpecial,
     SyntaxTokenKind::Keyword,
     SyntaxTokenKind::KeywordControl,
+    SyntaxTokenKind::Preproc,
     SyntaxTokenKind::Number,
     SyntaxTokenKind::Boolean,
     SyntaxTokenKind::Function,
     SyntaxTokenKind::FunctionMethod,
     SyntaxTokenKind::FunctionSpecial,
+    SyntaxTokenKind::Constructor,
     SyntaxTokenKind::Type,
     SyntaxTokenKind::TypeBuiltin,
     SyntaxTokenKind::TypeInterface,
+    SyntaxTokenKind::Namespace,
     SyntaxTokenKind::Variable,
     SyntaxTokenKind::VariableParameter,
     SyntaxTokenKind::VariableSpecial,
+    SyntaxTokenKind::VariableBuiltin,
     SyntaxTokenKind::Property,
+    SyntaxTokenKind::Label,
     SyntaxTokenKind::Constant,
+    SyntaxTokenKind::ConstantBuiltin,
     SyntaxTokenKind::Operator,
     SyntaxTokenKind::Punctuation,
     SyntaxTokenKind::PunctuationBracket,
     SyntaxTokenKind::PunctuationDelimiter,
+    SyntaxTokenKind::PunctuationSpecial,
+    SyntaxTokenKind::PunctuationListMarker,
     SyntaxTokenKind::Tag,
     SyntaxTokenKind::Attribute,
+    SyntaxTokenKind::MarkupHeading,
+    SyntaxTokenKind::MarkupLink,
+    SyntaxTokenKind::TextLiteral,
+    SyntaxTokenKind::DiffPlus,
+    SyntaxTokenKind::DiffMinus,
+    SyntaxTokenKind::DiffDelta,
     SyntaxTokenKind::Lifetime,
 ];
 
@@ -989,7 +1005,9 @@ mod tests {
                         },
                         "syntax": {
                             "keyword": "#112233ff",
-                            "variable": "#445566ff"
+                            "variable": "#445566ff",
+                            "diff_plus": "#abcdefff",
+                            "label": "#fedcbaff"
                         },
                         "radii": {
                             "panel": 2.0,
@@ -1009,6 +1027,128 @@ mod tests {
         let variable = syntax_highlight_style(theme, SyntaxTokenKind::Variable)
             .expect("variable style should be present when overridden");
         assert_eq!(variable.color, Some(gpui::rgba(0x445566ff).into()));
+
+        let diff_plus = syntax_highlight_style(theme, SyntaxTokenKind::DiffPlus)
+            .expect("diff_plus style should be present");
+        assert_eq!(diff_plus.color, Some(gpui::rgba(0xabcdefff).into()));
+
+        let label = syntax_highlight_style(theme, SyntaxTokenKind::Label)
+            .expect("label style should be present when overridden");
+        assert_eq!(label.color, Some(gpui::rgba(0xfedcbaff).into()));
+    }
+
+    #[test]
+    fn syntax_highlight_style_kind_table_covers_new_token_kinds() {
+        for kind in [
+            SyntaxTokenKind::StringRegex,
+            SyntaxTokenKind::StringSpecial,
+            SyntaxTokenKind::Preproc,
+            SyntaxTokenKind::Constructor,
+            SyntaxTokenKind::Namespace,
+            SyntaxTokenKind::VariableBuiltin,
+            SyntaxTokenKind::Label,
+            SyntaxTokenKind::ConstantBuiltin,
+            SyntaxTokenKind::PunctuationSpecial,
+            SyntaxTokenKind::PunctuationListMarker,
+            SyntaxTokenKind::MarkupHeading,
+            SyntaxTokenKind::MarkupLink,
+            SyntaxTokenKind::TextLiteral,
+            SyntaxTokenKind::DiffPlus,
+            SyntaxTokenKind::DiffMinus,
+            SyntaxTokenKind::DiffDelta,
+        ] {
+            assert!(
+                SYNTAX_HIGHLIGHT_STYLE_KINDS.contains(&kind),
+                "syntax highlight palette should cover {kind:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn syntax_highlight_style_uses_all_new_theme_syntax_overrides() {
+        let theme = AppTheme::from_json_str(
+            r##"{
+                "name": "Fixture",
+                "themes": [
+                    {
+                        "key": "fixture",
+                        "name": "Fixture",
+                        "appearance": "dark",
+                        "colors": {
+                            "window_bg": "#0d1016ff",
+                            "surface_bg": "#1f2127ff",
+                            "surface_bg_elevated": "#1f2127ff",
+                            "active_section": "#2d2f34ff",
+                            "border": "#2d2f34ff",
+                            "text": "#bfbdb6ff",
+                            "text_muted": "#8a8986ff",
+                            "accent": "#5ac1feff",
+                            "hover": "#2d2f34ff",
+                            "active": { "hex": "#2d2f34ff", "alpha": 0.78 },
+                            "focus_ring": { "hex": "#5ac1feff", "alpha": 0.60 },
+                            "focus_ring_bg": { "hex": "#5ac1feff", "alpha": 0.16 },
+                            "scrollbar_thumb": { "hex": "#8a8986ff", "alpha": 0.30 },
+                            "scrollbar_thumb_hover": { "hex": "#8a8986ff", "alpha": 0.42 },
+                            "scrollbar_thumb_active": { "hex": "#8a8986ff", "alpha": 0.52 },
+                            "danger": "#ef7177ff",
+                            "warning": "#feb454ff",
+                            "success": "#aad84cff"
+                        },
+                        "syntax": {
+                            "string_regex": "#010101ff",
+                            "string_special": "#020202ff",
+                            "preproc": "#030303ff",
+                            "constructor": "#040404ff",
+                            "namespace": "#050505ff",
+                            "variable_builtin": "#060606ff",
+                            "label": "#070707ff",
+                            "constant_builtin": "#080808ff",
+                            "punctuation_special": "#090909ff",
+                            "punctuation_list_marker": "#0a0a0aff",
+                            "markup_heading": "#0b0b0bff",
+                            "markup_link": "#0c0c0cff",
+                            "text_literal": "#0d0d0dff",
+                            "diff_plus": "#0e0e0eff",
+                            "diff_minus": "#0f0f0fff",
+                            "diff_delta": "#101010ff"
+                        },
+                        "radii": {
+                            "panel": 2.0,
+                            "pill": 2.0,
+                            "row": 2.0
+                        }
+                    }
+                ]
+            }"##,
+        )
+        .expect("theme JSON should parse");
+
+        for (kind, color) in [
+            (SyntaxTokenKind::StringRegex, 0x010101ff),
+            (SyntaxTokenKind::StringSpecial, 0x020202ff),
+            (SyntaxTokenKind::Preproc, 0x030303ff),
+            (SyntaxTokenKind::Constructor, 0x040404ff),
+            (SyntaxTokenKind::Namespace, 0x050505ff),
+            (SyntaxTokenKind::VariableBuiltin, 0x060606ff),
+            (SyntaxTokenKind::Label, 0x070707ff),
+            (SyntaxTokenKind::ConstantBuiltin, 0x080808ff),
+            (SyntaxTokenKind::PunctuationSpecial, 0x090909ff),
+            (SyntaxTokenKind::PunctuationListMarker, 0x0a0a0aff),
+            (SyntaxTokenKind::MarkupHeading, 0x0b0b0bff),
+            (SyntaxTokenKind::MarkupLink, 0x0c0c0cff),
+            (SyntaxTokenKind::TextLiteral, 0x0d0d0dff),
+            (SyntaxTokenKind::DiffPlus, 0x0e0e0eff),
+            (SyntaxTokenKind::DiffMinus, 0x0f0f0fff),
+            (SyntaxTokenKind::DiffDelta, 0x101010ff),
+        ] {
+            let style = syntax_highlight_style(theme, kind)
+                .unwrap_or_else(|| panic!("{kind:?} style should be present"));
+            assert_eq!(
+                style.color,
+                Some(gpui::rgba(color).into()),
+                "{kind:?} should use its explicit syntax override"
+            );
+        }
     }
 
     #[test]
@@ -1247,6 +1387,15 @@ mod tests {
                 .is_some(),
             "standalone prepared document should expose a ready first line"
         );
+        let multiline_tokens =
+            syntax::syntax_tokens_for_prepared_document_line(multiline_document.inner, 1)
+                .expect("multiline continuation tokens should remain available");
+        assert!(
+            multiline_tokens
+                .iter()
+                .any(|token| token.kind == SyntaxTokenKind::Comment && token.range.start == 0),
+            "multiline continuation tokens should start with a comment token, got: {multiline_tokens:?}"
+        );
 
         let build = |document, line_ix| {
             match build_cached_diff_styled_text_for_prepared_document_line_nonblocking_with_palette(
@@ -1288,12 +1437,12 @@ mod tests {
 
         assert_eq!(
             start_style(&multiline),
-            Some(theme.colors.text_muted.into()),
+            Some(theme.syntax.comment.into()),
             "multiline continuation should keep comment highlighting from document context"
         );
         assert_ne!(
             start_style(&standalone),
-            Some(theme.colors.text_muted.into()),
+            Some(theme.syntax.comment.into()),
             "standalone line should not reuse cached comment styling from another prepared document"
         );
     }
@@ -1369,7 +1518,7 @@ mod tests {
             highlights.iter().any(|(range, style)| {
                 range.start <= second_line_start
                     && range.end > second_line_start
-                    && style.color == Some(theme.colors.text_muted.into())
+                    && style.color == Some(theme.syntax.comment.into())
             }),
             "second line should retain comment highlighting from multiline document context"
         );
@@ -1398,7 +1547,7 @@ mod tests {
             !first.highlights.iter().any(|(range, style)| {
                 range.start <= second_line_start
                     && range.end > second_line_start
-                    && style.color == Some(theme.colors.text_muted.into())
+                    && style.color == Some(theme.syntax.comment.into())
             }),
             "heuristic fallback should not invent multiline comment state before the chunk is ready"
         );
@@ -1424,7 +1573,7 @@ mod tests {
             second.highlights.iter().any(|(range, style)| {
                 range.start <= second_line_start
                     && range.end > second_line_start
-                    && style.color == Some(theme.colors.text_muted.into())
+                    && style.color == Some(theme.syntax.comment.into())
             }),
             "resolved output should upgrade to full document-aware comment highlighting"
         );

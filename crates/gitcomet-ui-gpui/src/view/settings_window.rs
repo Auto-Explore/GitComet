@@ -24,6 +24,7 @@ const SETTINGS_TRAFFIC_LIGHTS_SAFE_INSET_PX: f32 = 78.0;
 const MIN_GIT_MAJOR: u32 = 2;
 const MIN_GIT_MINOR: u32 = 50;
 const GITHUB_URL: &str = "https://github.com/Auto-Explore/GitComet";
+const THEMES_GUIDE_URL: &str = "https://github.com/Auto-Explore/GitComet/blob/main/docs/themes.md";
 const LICENSE_URL: &str = "https://github.com/Auto-Explore/GitComet/blob/main/LICENSE-AGPL-3.0";
 const LICENSE_NAME: &str = "AGPL-3.0";
 
@@ -658,6 +659,42 @@ impl SettingsWindowView {
         self.current_view = SettingsView::OpenSourceLicenses;
         self.expanded_section = None;
         cx.notify();
+    }
+
+    fn custom_theme_folder_detail(&self) -> SharedString {
+        session::user_themes_dir()
+            .map(|path| path.display().to_string().into())
+            .unwrap_or_else(|| "Unavailable".into())
+    }
+
+    fn push_main_window_toast(
+        &self,
+        kind: components::ToastKind,
+        message: String,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.update_main_windows(cx, move |view, _window, cx| {
+            view.push_toast(kind, message.clone(), cx);
+        });
+    }
+
+    fn open_custom_theme_folder(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(path) = crate::theme::ensure_user_themes_dir_exists() else {
+            self.push_main_window_toast(
+                components::ToastKind::Error,
+                "Custom theme folder is unavailable.".to_string(),
+                cx,
+            );
+            return;
+        };
+
+        if let Err(err) = super::platform_open::open_path(&path) {
+            self.push_main_window_toast(
+                components::ToastKind::Error,
+                format!("Failed to open custom theme folder: {err}"),
+                cx,
+            );
+        }
     }
 
     pub(crate) fn apply_ui_scale_percent(
@@ -2386,6 +2423,33 @@ impl Render for SettingsWindowView {
                             list,
                             theme,
                         ));
+                        general_card = general_card.child(
+                            self.detail_container("settings_window_theme_links_container", theme)
+                                .child(
+                                    self.link_row(
+                                        "settings_window_theme_custom_folder",
+                                        "Open custom theme folder",
+                                        self.custom_theme_folder_detail(),
+                                        theme,
+                                    )
+                                    .on_click(cx.listener(
+                                        |this, _e: &ClickEvent, _window, cx| {
+                                            this.open_custom_theme_folder(cx);
+                                        },
+                                    )),
+                                )
+                                .child(
+                                    self.link_row(
+                                        "settings_window_theme_guide",
+                                        "Theme guide",
+                                        THEMES_GUIDE_URL.into(),
+                                        theme,
+                                    )
+                                    .on_click(|_, _, cx| {
+                                        cx.open_url(THEMES_GUIDE_URL);
+                                    }),
+                                ),
+                        );
                     }
 
                     general_card = general_card.child(ui_scale_row);
@@ -3050,6 +3114,17 @@ impl Render for SettingsWindowView {
 
                     let links_card = self
                         .card("settings_window_links", "Links", theme)
+                        .child(
+                            self.link_row(
+                                "settings_window_links_theme_guide",
+                                "Theme guide",
+                                THEMES_GUIDE_URL.into(),
+                                theme,
+                            )
+                            .on_click(|_, _, cx| {
+                                cx.open_url(THEMES_GUIDE_URL);
+                            }),
+                        )
                         .child(
                             self.link_row(
                                 "settings_window_github",
@@ -3907,6 +3982,64 @@ mod tests {
     }
 
     #[gpui::test]
+    fn expanded_theme_section_renders_theme_utilities_and_opens_theme_guide(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let _visual_guard = lock_visual_test();
+        let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+        let (_main_view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+            open_settings_window(app);
+        });
+        cx.run_until_parked();
+
+        let settings_window = cx.update(|_window, app| {
+            app.windows()
+                .into_iter()
+                .find_map(|window| window.downcast::<SettingsWindowView>())
+                .expect("settings window should be open")
+        });
+
+        let mut settings_cx = gpui::VisualTestContext::from_window(*settings_window.deref(), cx);
+        settings_cx.run_until_parked();
+        settings_cx.simulate_resize(size(px(SETTINGS_WINDOW_DEFAULT_WIDTH_PX), px(1200.0)));
+        settings_cx.run_until_parked();
+
+        let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
+            settings.expanded_section = Some(SettingsSection::Theme);
+            cx.notify();
+        });
+        settings_cx.run_until_parked();
+        settings_cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+
+        assert!(
+            settings_cx
+                .debug_bounds("settings_window_theme_links_container")
+                .is_some(),
+            "expected the expanded theme section to render theme utility links"
+        );
+        assert!(
+            settings_cx
+                .debug_bounds("settings_window_theme_custom_folder")
+                .is_some(),
+            "expected the expanded theme section to render the custom folder action"
+        );
+
+        let guide_bounds = settings_cx
+            .debug_bounds("settings_window_theme_guide")
+            .expect("expected theme guide row bounds");
+        settings_cx.simulate_click(guide_bounds.center(), Modifiers::default());
+        settings_cx.run_until_parked();
+
+        assert_eq!(cx.opened_url(), Some(THEMES_GUIDE_URL.to_string()));
+    }
+
+    #[gpui::test]
     fn expanded_history_columns_section_renders_detail_container(cx: &mut gpui::TestAppContext) {
         let _visual_guard = lock_visual_test();
         let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
@@ -4378,6 +4511,54 @@ mod tests {
         settings_cx.run_until_parked();
 
         assert_eq!(cx.opened_url(), Some(EDITIONS_URL.to_string()));
+    }
+
+    #[gpui::test]
+    fn settings_window_links_card_includes_theme_guide_row(cx: &mut gpui::TestAppContext) {
+        let _visual_guard = lock_visual_test();
+        let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+        let (_main_view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+            open_settings_window(app);
+        });
+        cx.run_until_parked();
+
+        let settings_window = cx.update(|_window, app| {
+            app.windows()
+                .into_iter()
+                .find_map(|window| window.downcast::<SettingsWindowView>())
+                .expect("settings window should be open")
+        });
+
+        let mut settings_cx = gpui::VisualTestContext::from_window(*settings_window.deref(), cx);
+        settings_cx.run_until_parked();
+        settings_cx.simulate_resize(size(px(SETTINGS_WINDOW_DEFAULT_WIDTH_PX), px(1200.0)));
+        settings_cx.run_until_parked();
+        settings_cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
+            let current_x = settings.settings_window_scroll.offset().x;
+            let max_offset = settings.settings_window_scroll.max_offset().y.max(px(0.0));
+            settings
+                .settings_window_scroll
+                .set_offset(point(current_x, -max_offset));
+            cx.notify();
+        });
+        settings_cx.run_until_parked();
+        settings_cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+
+        assert!(
+            settings_cx
+                .debug_bounds("settings_window_links_theme_guide")
+                .is_some(),
+            "expected the Links card to include a Theme guide row"
+        );
     }
 
     #[gpui::test]

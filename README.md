@@ -27,8 +27,8 @@ Download the latest Windows installer or portable binary from [GitHub Releases](
 
 Install from the Microsoft Store:
 
-<a href="https://get.microsoft.com/installer/download/XPFD182V1H793R?referrer=appbadge" target="_self">
-  <img src="https://get.microsoft.com/images/en-us%20dark.svg" width="200" alt="Download from Microsoft Store" />
+<a href="https://apps.microsoft.com/detail/XPFD182V1H793R?referrer=appbadge&mode=full" target="_blank"  rel="noopener noreferrer">
+  <img src="https://get.microsoft.com/images/en-us%20dark.svg" width="200"/>
 </a>
 
 </details>
@@ -223,9 +223,9 @@ KDiff3 and Meld invocation forms are supported (`--L1/--L2/--L3`, `-o/--output/-
 
 GitComet supports built-in themes and user-provided custom themes.
 
-Themes are loaded from JSON bundle files. GitComet ships with built-in themes and copies them into your per-user themes directory, and it also loads custom theme bundles from that same location.
+Built-in themes are embedded in the GitComet binary. Custom themes are loaded from JSON bundle files in your per-user themes directory, which GitComet creates on startup.
 
-The full theme guide, including file locations, schema details, example bundles, and override behavior, now lives in [THEMES.md](THEMES.md).
+The full theme guide, including file locations, schema details, example bundles, and override behavior, now lives in [THEMES.md](docs/themes.md).
 
 ### Crash logs
 

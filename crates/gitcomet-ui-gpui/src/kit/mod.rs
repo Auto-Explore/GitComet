@@ -9,8 +9,8 @@ pub use text_input::{
     Backspace, Copy, Cut, Delete, DeleteWordLeft, DeleteWordRight, Down, End, Enter,
     HighlightProvider, HighlightProviderResult, Home, Left, PageDown, PageUp, Paste, Redo, Right,
     SelectAll, SelectDown, SelectEnd, SelectHome, SelectLeft, SelectPageDown, SelectPageUp,
-    SelectRight, SelectUp, SelectWordLeft, SelectWordRight, TextInput, TextInputOptions, Undo, Up,
-    WordLeft, WordRight,
+    SelectRight, SelectUp, SelectWordLeft, SelectWordRight, ShiftEnter, TextInput,
+    TextInputOptions, Undo, Up, WordLeft, WordRight,
 };
 #[cfg(feature = "benchmarks")]
 pub(crate) use text_input::{

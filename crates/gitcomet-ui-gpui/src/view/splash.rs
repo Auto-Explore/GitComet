@@ -965,10 +965,13 @@ impl GitCometView {
                                 ),
                         ),
                 )
-                .child(stable_cached_fixed_height_view(
+                .child(
+                    // Keep the bottom bar uncached. It paints after the details pane,
+                    // so reusing its cached paint range can replay a stale input-handler
+                    // index while a focused TextInput is temporarily detached during a
+                    // Wayland text-input redraw.
                     self.bottom_status_bar.clone(),
-                    components::Tab::container_height(self.ui_scale_percent),
-                ))
+                )
                 .into_any_element();
 
             if self.should_show_git_unavailable_overlay() {
