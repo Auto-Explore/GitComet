@@ -45,14 +45,16 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                 .justify_between()
                 .child(
                     components::Button::new("create_branch_cancel", "Cancel")
+                        .focus_handle(this.create_branch_cancel_focus_handle.clone())
                         .separated_end_slot(hotkey_hint(theme, "create_branch_cancel_hint", "Esc"))
                         .style(components::ButtonStyle::Outlined)
                         .on_click(theme, cx, |this, _e, window, cx| {
-                            this.dismiss_inline_popover(window, cx);
+                            this.dismiss_prompt_popover(window, cx);
                         }),
                 )
                 .child(
                     components::Button::new("create_branch_go", "Create")
+                        .focus_handle(this.create_branch_submit_focus_handle.clone())
                         .separated_end_slot(hotkey_hint(theme, "create_branch_go_hint", "Enter"))
                         .style(components::ButtonStyle::Filled)
                         .disabled(!can_create)

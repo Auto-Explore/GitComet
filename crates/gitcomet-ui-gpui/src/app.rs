@@ -3,9 +3,10 @@ use crate::launch_guard::{UiLaunchError, run_with_panic_guard};
 use crate::ui_scale;
 use crate::view::{
     FocusedMergetoolLabels, FocusedMergetoolViewConfig, GitCometView, GitCometViewConfig,
-    GitCometViewMode, InitialRepositoryLaunchMode, SettingsWindowView, StartupCrashReport,
-    TextInputDiffNextChange, TextInputDiffNextFile, TextInputDiffNextSearchMatchOrChange,
-    TextInputDiffPrevChange, TextInputDiffPrevFile, TextInputDiffPrevSearchMatchOrChange,
+    GitCometViewMode, InitialRepositoryLaunchMode, PopoverPromptDismiss, PopoverPromptTabNext,
+    PopoverPromptTabPrev, SettingsWindowView, StartupCrashReport, TextInputDiffNextChange,
+    TextInputDiffNextFile, TextInputDiffNextSearchMatchOrChange, TextInputDiffPrevChange,
+    TextInputDiffPrevFile, TextInputDiffPrevSearchMatchOrChange,
 };
 use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::services::GitBackend;
@@ -1214,6 +1215,9 @@ pub(crate) fn ensure_graphics_device_available(
 
 fn bind_text_input_keys(cx: &mut App) {
     cx.bind_keys([
+        KeyBinding::new("escape", PopoverPromptDismiss, Some("PopoverPrompt")),
+        KeyBinding::new("tab", PopoverPromptTabNext, Some("PopoverPrompt")),
+        KeyBinding::new("shift-tab", PopoverPromptTabPrev, Some("PopoverPrompt")),
         KeyBinding::new("backspace", crate::kit::Backspace, Some("TextInput")),
         KeyBinding::new("shift-backspace", crate::kit::Backspace, Some("TextInput")),
         KeyBinding::new("delete", crate::kit::Delete, Some("TextInput")),

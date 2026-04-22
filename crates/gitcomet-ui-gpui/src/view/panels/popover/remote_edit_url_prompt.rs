@@ -54,15 +54,15 @@ pub(super) fn panel(
                 .justify_between()
                 .child(
                     components::Button::new("edit_remote_url_cancel", "Cancel")
+                        .focus_handle(this.remote_edit_cancel_focus_handle.clone())
                         .style(components::ButtonStyle::Outlined)
-                        .on_click(theme, cx, |this, _e, _w, cx| {
-                            this.popover = None;
-                            this.popover_anchor = None;
-                            cx.notify();
+                        .on_click(theme, cx, |this, _e, window, cx| {
+                            this.dismiss_prompt_popover(window, cx);
                         }),
                 )
                 .child(
                     components::Button::new("edit_remote_url_go", "Save")
+                        .focus_handle(this.remote_edit_submit_focus_handle.clone())
                         .style(components::ButtonStyle::Filled)
                         .on_click(theme, cx, move |this, _e, _w, cx| {
                             let url = this

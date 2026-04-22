@@ -1,58 +1,58 @@
 use super::*;
 
-fn advanced_toggle(theme: AppTheme, expanded: bool) -> gpui::Stateful<gpui::Div> {
-    div()
-        .id("submodule_add_advanced_toggle")
-        .debug_selector(|| "submodule_add_advanced_toggle".to_string())
-        .w_full()
-        .px_2()
-        .py_1()
-        .flex()
-        .items_center()
-        .justify_between()
-        .rounded(px(theme.radii.row))
-        .cursor(CursorStyle::PointingHand)
-        .hover(move |s| s.bg(theme.colors.hover))
-        .active(move |s| s.bg(theme.colors.active))
-        .child(div().text_sm().child("Advanced"))
-        .child(
-            div()
-                .text_sm()
-                .font_family(UI_MONOSPACE_FONT_FAMILY)
-                .text_color(theme.colors.text_muted)
-                .child(if expanded { "^" } else { "v" }),
-        )
+fn advanced_toggle(
+    theme: AppTheme,
+    expanded: bool,
+    focus_handle: &FocusHandle,
+    cx: &mut gpui::Context<PopoverHost>,
+) -> gpui::Stateful<gpui::Div> {
+    focusable_toggle_row(
+        "submodule_add_advanced_toggle",
+        "submodule_add_advanced_toggle",
+        theme,
+        focus_handle,
+        cx,
+    )
+    .flex()
+    .child(div().text_sm().child("Advanced"))
+    .child(
+        div()
+            .text_sm()
+            .font_family(UI_MONOSPACE_FONT_FAMILY)
+            .text_color(theme.colors.text_muted)
+            .child(if expanded { "^" } else { "v" }),
+    )
 }
 
-fn force_toggle(theme: AppTheme, enabled: bool) -> gpui::Stateful<gpui::Div> {
-    div()
-        .id("submodule_add_force_toggle")
-        .debug_selector(|| "submodule_add_force_toggle".to_string())
-        .w_full()
-        .px_2()
-        .py_1()
-        .flex()
-        .items_center()
-        .justify_between()
-        .rounded(px(theme.radii.row))
-        .cursor(CursorStyle::PointingHand)
-        .hover(move |s| s.bg(theme.colors.hover))
-        .active(move |s| s.bg(theme.colors.active))
-        .child(
-            div()
-                .text_sm()
-                .child("Force reuse / bypass collision checks"),
-        )
-        .child(
-            div()
-                .text_sm()
-                .text_color(if enabled {
-                    theme.colors.success
-                } else {
-                    theme.colors.text_muted
-                })
-                .child(if enabled { "On" } else { "Off" }),
-        )
+fn force_toggle(
+    theme: AppTheme,
+    enabled: bool,
+    focus_handle: &FocusHandle,
+    cx: &mut gpui::Context<PopoverHost>,
+) -> gpui::Stateful<gpui::Div> {
+    focusable_toggle_row(
+        "submodule_add_force_toggle",
+        "submodule_add_force_toggle",
+        theme,
+        focus_handle,
+        cx,
+    )
+    .flex()
+    .child(
+        div()
+            .text_sm()
+            .child("Force reuse / bypass collision checks"),
+    )
+    .child(
+        div()
+            .text_sm()
+            .text_color(if enabled {
+                theme.colors.success
+            } else {
+                theme.colors.text_muted
+            })
+            .child(if enabled { "On" } else { "Off" }),
+    )
 }
 
 pub(super) fn panel(
@@ -128,7 +128,13 @@ pub(super) fn panel(
                 .child(this.submodule_branch_input.clone()),
         )
         .child(
-            advanced_toggle(theme, advanced_expanded).on_click(cx.listener(|this, _e: &ClickEvent, _w, cx| {
+            advanced_toggle(
+                theme,
+                advanced_expanded,
+                &this.submodule_advanced_focus_handle,
+                cx,
+            )
+            .on_click(cx.listener(|this, _e: &ClickEvent, _w, cx| {
                 this.submodule_add_advanced_expanded = !this.submodule_add_advanced_expanded;
                 cx.notify();
             })),
@@ -152,12 +158,16 @@ pub(super) fn panel(
                         .child(this.submodule_name_input.clone()),
                 )
                 .child(
-                    force_toggle(theme, force_enabled).on_click(cx.listener(
-                        |this, _e: &ClickEvent, _w, cx| {
-                            this.submodule_force_enabled = !this.submodule_force_enabled;
-                            cx.notify();
-                        },
-                    )),
+                    force_toggle(
+                        theme,
+                        force_enabled,
+                        &this.submodule_force_focus_handle,
+                        cx,
+                    )
+                    .on_click(cx.listener(|this, _e: &ClickEvent, _w, cx| {
+                        this.submodule_force_enabled = !this.submodule_force_enabled;
+                        cx.notify();
+                    })),
                 )
                 .child(
                     div()
@@ -180,15 +190,15 @@ pub(super) fn panel(
                 .justify_between()
                 .child(
                     components::Button::new("submodule_add_cancel", "Cancel")
+                        .focus_handle(this.submodule_cancel_focus_handle.clone())
                         .style(components::ButtonStyle::Outlined)
-                        .on_click(theme, cx, |this, _e, _w, cx| {
-                            this.popover = None;
-                            this.popover_anchor = None;
-                            cx.notify();
+                        .on_click(theme, cx, |this, _e, window, cx| {
+                            this.dismiss_prompt_popover(window, cx);
                         }),
                 )
                 .child(
                     components::Button::new("submodule_add_go", "Add")
+                        .focus_handle(this.submodule_submit_focus_handle.clone())
                         .style(components::ButtonStyle::Filled)
                         .on_click(theme, cx, move |this, _e, _w, cx| {
                             let url = this

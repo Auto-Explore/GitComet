@@ -1,6 +1,11 @@
 use super::*;
 
-fn checkout_toggle(theme: AppTheme, enabled: bool) -> gpui::Stateful<gpui::Div> {
+fn checkout_toggle(
+    theme: AppTheme,
+    enabled: bool,
+    focus_handle: &FocusHandle,
+    cx: &mut gpui::Context<PopoverHost>,
+) -> gpui::Stateful<gpui::Div> {
     let border = if enabled {
         theme.colors.success
     } else {
@@ -15,38 +20,34 @@ fn checkout_toggle(theme: AppTheme, enabled: bool) -> gpui::Stateful<gpui::Div> 
         gpui::rgba(0x00000000)
     };
 
-    div()
-        .id("create_branch_checkout_toggle")
-        .debug_selector(|| "create_branch_checkout_toggle".to_string())
-        .w_full()
-        .px_2()
-        .py_1()
-        .flex()
-        .items_center()
-        .gap_2()
-        .rounded(px(theme.radii.row))
-        .hover(move |this| this.bg(theme.colors.hover))
-        .active(move |this| this.bg(theme.colors.active))
-        .cursor(CursorStyle::PointingHand)
-        .child(
-            div()
-                .size(px(16.0))
-                .flex()
-                .items_center()
-                .justify_center()
-                .border_1()
-                .border_color(border)
-                .rounded(px(4.0))
-                .bg(background)
-                .when(enabled, |this| {
-                    this.child(crate::view::icons::svg_icon(
-                        "icons/check.svg",
-                        theme.colors.success,
-                        px(10.0),
-                    ))
-                }),
-        )
-        .child(div().text_sm().child("Checkout"))
+    focusable_toggle_row(
+        "create_branch_checkout_toggle",
+        "create_branch_checkout_toggle",
+        theme,
+        focus_handle,
+        cx,
+    )
+    .flex()
+    .gap_2()
+    .child(
+        div()
+            .size(px(16.0))
+            .flex()
+            .items_center()
+            .justify_center()
+            .border_1()
+            .border_color(border)
+            .rounded(px(4.0))
+            .bg(background)
+            .when(enabled, |this| {
+                this.child(crate::view::icons::svg_icon(
+                    "icons/check.svg",
+                    theme.colors.success,
+                    px(10.0),
+                ))
+            }),
+    )
+    .child(div().text_sm().child("Checkout"))
 }
 
 pub(super) fn panel(
@@ -98,12 +99,16 @@ pub(super) fn panel(
                 .child(this.create_branch_input.clone()),
         )
         .child(
-            checkout_toggle(theme, this.create_branch_checkout_enabled).on_click(cx.listener(
-                |this, _e: &ClickEvent, _w, cx| {
-                    this.create_branch_checkout_enabled = !this.create_branch_checkout_enabled;
-                    cx.notify();
-                },
-            )),
+            checkout_toggle(
+                theme,
+                this.create_branch_checkout_enabled,
+                &this.create_branch_from_ref_checkout_focus_handle,
+                cx,
+            )
+            .on_click(cx.listener(|this, _e: &ClickEvent, _w, cx| {
+                this.create_branch_checkout_enabled = !this.create_branch_checkout_enabled;
+                cx.notify();
+            })),
         )
         .child(div().border_t_1().border_color(theme.colors.border))
         .child(
@@ -115,13 +120,15 @@ pub(super) fn panel(
                 .justify_between()
                 .child(
                     components::Button::new("create_branch_from_ref_cancel", "Cancel")
+                        .focus_handle(this.create_branch_from_ref_cancel_focus_handle.clone())
                         .style(components::ButtonStyle::Outlined)
                         .on_click(theme, cx, |this, _e, window, cx| {
-                            this.dismiss_inline_popover(window, cx);
+                            this.dismiss_prompt_popover(window, cx);
                         }),
                 )
                 .child(
                     components::Button::new("create_branch_from_ref_go", "Create")
+                        .focus_handle(this.create_branch_from_ref_submit_focus_handle.clone())
                         .style(components::ButtonStyle::Filled)
                         .disabled(!can_create)
                         .on_click(theme, cx, |this, _e, window, cx| {

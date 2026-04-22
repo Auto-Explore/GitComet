@@ -33,6 +33,7 @@ fn clone_repo_popover_renders_shortcut_hints_and_separators(cx: &mut gpui::TestA
         .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
 
     cx.update(|window, app| {
+        crate::app::bind_text_input_keys_for_test(app);
         let _ = window.draw(app);
     });
 
@@ -70,6 +71,7 @@ fn clone_repo_popover_escape_closes_from_parent_input(cx: &mut gpui::TestAppCont
         .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
 
     cx.update(|window, app| {
+        crate::app::bind_text_input_keys_for_test(app);
         let _ = window.draw(app);
     });
 
@@ -105,6 +107,152 @@ fn clone_repo_popover_escape_closes_from_parent_input(cx: &mut gpui::TestAppCont
         store.snapshot().clone.is_none(),
         "expected Escape to avoid starting a clone"
     );
+}
+
+#[gpui::test]
+fn clone_repo_popover_escape_closes_from_browse_button(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    cx.update(|window, app| {
+        crate::app::bind_text_input_keys_for_test(app);
+        let _ = window.draw(app);
+    });
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                host.open_popover_at(
+                    PopoverKind::CloneRepo,
+                    gpui::point(gpui::px(120.0), gpui::px(72.0)),
+                    window,
+                    cx,
+                );
+                window.focus(&host.clone_repo_browse_focus_handle, cx);
+            });
+        });
+    });
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    simulate_key_press(cx, "escape");
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    let is_open = cx.update(|_window, app| view.read(app).popover_host.read(app).is_open());
+    assert!(
+        !is_open,
+        "expected Escape to close clone popover from Browse"
+    );
+    assert!(
+        store.snapshot().clone.is_none(),
+        "expected Escape from Browse to avoid starting a clone"
+    );
+}
+
+#[gpui::test]
+fn clone_repo_popover_tabs_between_inputs_buttons_and_wraps(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    cx.update(|window, app| {
+        crate::app::bind_text_input_keys_for_test(app);
+        let _ = window.draw(app);
+    });
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                host.open_popover_at(
+                    PopoverKind::CloneRepo,
+                    gpui::point(gpui::px(120.0), gpui::px(72.0)),
+                    window,
+                    cx,
+                );
+                host.clone_repo_url_input.update(cx, |input, cx| {
+                    input.set_text("http://example.com/org/repo.git", cx)
+                });
+                host.clone_repo_parent_dir_input
+                    .update(cx, |input, cx| input.set_text("/tmp", cx));
+            });
+        });
+    });
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+        let host = view.read(app).popover_host.read(app);
+        assert_window_focus(
+            window,
+            app,
+            host.clone_repo_url_input.read(app).focus_handle(),
+            "expected clone popover to focus the URL input first",
+        );
+    });
+
+    cx.simulate_keystrokes("tab");
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let host = view.read(app).popover_host.read(app);
+        assert_window_focus(
+            window,
+            app,
+            host.clone_repo_parent_dir_input.read(app).focus_handle(),
+            "expected Tab to move from clone URL to parent dir",
+        );
+    });
+
+    cx.simulate_keystrokes("tab");
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let host = view.read(app).popover_host.read(app);
+        assert_window_focus(
+            window,
+            app,
+            host.clone_repo_browse_focus_handle.clone(),
+            "expected Tab to move from clone parent dir to Browse",
+        );
+    });
+
+    cx.simulate_keystrokes("tab");
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let host = view.read(app).popover_host.read(app);
+        assert_window_focus(
+            window,
+            app,
+            host.clone_repo_submit_focus_handle.clone(),
+            "expected Tab to move from Browse to Clone",
+        );
+    });
+
+    cx.simulate_keystrokes("tab");
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let host = view.read(app).popover_host.read(app);
+        assert_window_focus(
+            window,
+            app,
+            host.clone_repo_url_input.read(app).focus_handle(),
+            "expected Tab to wrap from Clone back to URL",
+        );
+    });
+
+    cx.simulate_keystrokes("shift-tab");
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let host = view.read(app).popover_host.read(app);
+        assert_window_focus(
+            window,
+            app,
+            host.clone_repo_submit_focus_handle.clone(),
+            "expected Shift-Tab to wrap from URL back to Clone",
+        );
+    });
 }
 
 #[gpui::test]
