@@ -16,7 +16,6 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  APP_FEATURES: --no-default-features --features gix
 
 jobs:
   windows-tests:
@@ -66,7 +65,6 @@ jobs:
             --exclude gitcomet-ui `
             --exclude gitcomet-ui-gpui `
             --no-default-features `
-            --features gix `
             --locked `
             --verbose
 
