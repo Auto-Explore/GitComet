@@ -324,33 +324,6 @@ impl TitleBarView {
             root.open_popover_at(kind, anchor, window, cx);
         });
     }
-
-    fn set_tooltip_text_if_changed(
-        &mut self,
-        next: Option<SharedString>,
-        cx: &mut gpui::Context<Self>,
-    ) -> bool {
-        self.root_view
-            .update(cx, |root, cx| {
-                root.tooltip_host
-                    .update(cx, |host, cx| host.set_tooltip_text_if_changed(next, cx))
-            })
-            .unwrap_or(false)
-    }
-
-    fn clear_tooltip_if_matches(
-        &mut self,
-        tooltip: &SharedString,
-        cx: &mut gpui::Context<Self>,
-    ) -> bool {
-        let tooltip = tooltip.clone();
-        self.root_view
-            .update(cx, |root, cx| {
-                root.tooltip_host
-                    .update(cx, |host, cx| host.clear_tooltip_if_matches(&tooltip, cx))
-            })
-            .unwrap_or(false)
-    }
 }
 
 impl Render for TitleBarView {
@@ -530,19 +503,10 @@ impl Render for TitleBarView {
         .id("win_min")
         .debug_selector(|| "titlebar_win_min".to_string())
         .window_control_area(WindowControlArea::Min)
+        .gitcomet_tooltip(theme, min_tooltip)
         .on_click(cx.listener(|_this, _e: &ClickEvent, window, cx| {
             cx.stop_propagation();
             window.minimize_window();
-        }))
-        .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
-            let changed = if *hovering {
-                this.set_tooltip_text_if_changed(Some(min_tooltip.clone()), cx)
-            } else {
-                this.clear_tooltip_if_matches(&min_tooltip, cx)
-            };
-            if changed {
-                cx.notify();
-            }
         }));
 
         let max_icon = if window.is_maximized() {
@@ -567,20 +531,11 @@ impl Render for TitleBarView {
         .id("win_max")
         .debug_selector(|| "titlebar_win_max".to_string())
         .window_control_area(WindowControlArea::Max)
+        .gitcomet_tooltip(theme, max_tooltip)
         .on_click(cx.listener(|_this, _e: &ClickEvent, window, cx| {
             cx.stop_propagation();
             crate::app::toggle_window_zoom(window);
             cx.notify();
-        }))
-        .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
-            let changed = if *hovering {
-                this.set_tooltip_text_if_changed(Some(max_tooltip.clone()), cx)
-            } else {
-                this.clear_tooltip_if_matches(&max_tooltip, cx)
-            };
-            if changed {
-                cx.notify();
-            }
         }));
 
         let close_hover = with_alpha(theme.colors.danger, if theme.is_dark { 0.45 } else { 0.28 });
@@ -596,19 +551,10 @@ impl Render for TitleBarView {
         .id("win_close")
         .debug_selector(|| "titlebar_win_close".to_string())
         .window_control_area(WindowControlArea::Close)
+        .gitcomet_tooltip(theme, close_tooltip)
         .on_click(cx.listener(|_this, _e: &ClickEvent, window, cx| {
             cx.stop_propagation();
             window.remove_window();
-        }))
-        .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
-            let changed = if *hovering {
-                this.set_tooltip_text_if_changed(Some(close_tooltip.clone()), cx)
-            } else {
-                this.clear_tooltip_if_matches(&close_tooltip, cx)
-            };
-            if changed {
-                cx.notify();
-            }
         }));
 
         let free_badge_bg = with_alpha(
@@ -661,16 +607,7 @@ impl Render for TitleBarView {
                 cx.stop_propagation();
                 cx.open_url(EDITIONS_URL);
             }))
-            .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
-                let changed = if *hovering {
-                    this.set_tooltip_text_if_changed(Some(free_badge_tooltip.clone()), cx)
-                } else {
-                    this.clear_tooltip_if_matches(&free_badge_tooltip, cx)
-                };
-                if changed {
-                    cx.notify();
-                }
-            }))
+            .gitcomet_tooltip(theme, free_badge_tooltip.clone())
             .child("FREE");
 
         let macos_brand = div()

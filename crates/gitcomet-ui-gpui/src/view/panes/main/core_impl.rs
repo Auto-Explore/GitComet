@@ -800,7 +800,6 @@ impl MainPaneView {
         focused_mergetool_labels: Option<FocusedMergetoolLabels>,
         focused_mergetool_exit_code: Option<Arc<AtomicI32>>,
         root_view: WeakEntity<GitCometView>,
-        tooltip_host: WeakEntity<TooltipHost>,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Self {
@@ -938,7 +937,6 @@ impl MainPaneView {
                 history_show_tags,
                 history_auto_fetch_tags_on_repo_activation,
                 root_view.clone(),
-                tooltip_host.clone(),
                 last_window_size,
                 window,
                 cx,
@@ -955,7 +953,6 @@ impl MainPaneView {
             date_time_format,
             _ui_model_subscription: subscription,
             root_view,
-            tooltip_host,
             notify_fingerprint: initial_fingerprint,
             active_context_menu_invoker: None,
             last_window_size: size(px(0.0), px(0.0)),
@@ -2887,29 +2884,6 @@ impl MainPaneView {
                     cx.notify();
                 });
         });
-    }
-
-    pub(in crate::view) fn set_tooltip_text_if_changed(
-        &mut self,
-        next: Option<SharedString>,
-        cx: &mut gpui::Context<Self>,
-    ) -> bool {
-        let _ = self
-            .tooltip_host
-            .update(cx, |host, cx| host.set_tooltip_text_if_changed(next, cx));
-        false
-    }
-
-    pub(in crate::view) fn clear_tooltip_if_matches(
-        &mut self,
-        tooltip: &SharedString,
-        cx: &mut gpui::Context<Self>,
-    ) -> bool {
-        let tooltip = tooltip.clone();
-        let _ = self
-            .tooltip_host
-            .update(cx, |host, cx| host.clear_tooltip_if_matches(&tooltip, cx));
-        false
     }
 
     pub(super) fn apply_state_snapshot(

@@ -3,6 +3,7 @@ use crate::ui_scale;
 use gitcomet_core::domain::LogScope;
 
 const WORKTREE_ICON_PATH: &str = "icons/git_worktree.svg";
+const STASH_ICON_PATH: &str = crate::view::icons::STASH_ICON_PATH;
 
 pub(in crate::view) fn listed_workspace_paths_by_branch(
     repo: &RepoState,
@@ -430,18 +431,7 @@ impl SidebarPaneView {
                                 },
                             )),
                         )
-                        .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
-                            let mut changed = false;
-                            if *hovering {
-                                changed |=
-                                    this.set_tooltip_text_if_changed(Some(tooltip.clone()), cx);
-                            } else {
-                                changed |= this.clear_tooltip_if_matches(&tooltip, cx);
-                            }
-                            if changed {
-                                cx.notify();
-                            }
-                        }))
+                        .gitcomet_tooltip(theme, tooltip.clone())
                         .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
                             if !e.standard_click() || e.click_count() != 1 {
                                 return;
@@ -513,7 +503,7 @@ impl SidebarPaneView {
                         .active(move |s| s.bg(theme.colors.active))
                         .when(top_border, |d| d.child(top_divider(theme.colors.border)))
                         .child(tree_toggle_slot(Some(collapsed)))
-                        .child(tree_icon_slot("icons/box.svg", icon_primary, 14.0))
+                        .child(tree_icon_slot(STASH_ICON_PATH, icon_primary, 14.0))
                         .child(
                             div()
                                 .flex_1()
@@ -562,19 +552,10 @@ impl SidebarPaneView {
                                 },
                             )),
                         )
-                        .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
-                            let text: SharedString =
-                                "Stashes (Right-click or use the menu button for actions)".into();
-                            let mut changed = false;
-                            if *hovering {
-                                changed |= this.set_tooltip_text_if_changed(Some(text), cx);
-                            } else {
-                                changed |= this.clear_tooltip_if_matches(&text, cx);
-                            }
-                            if changed {
-                                cx.notify();
-                            }
-                        }))
+                        .gitcomet_tooltip(
+                            theme,
+                            "Stashes (Right-click or use the menu button for actions)".into(),
+                        )
                         .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
                             if !e.standard_click() || e.click_count() != 1 {
                                 return;
@@ -649,7 +630,7 @@ impl SidebarPaneView {
                         })
                         .active(move |s| s.bg(theme.colors.active))
                         .child(tree_toggle_slot(None))
-                        .child(tree_icon_slot("icons/box.svg", icon_primary, 12.0))
+                        .child(tree_icon_slot(STASH_ICON_PATH, icon_primary, 12.0))
                         .child(
                             div()
                                 .flex_1()
@@ -716,18 +697,7 @@ impl SidebarPaneView {
                                 );
                             }),
                         )
-                        .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
-                            let mut changed = false;
-                            if *hovering {
-                                changed |=
-                                    this.set_tooltip_text_if_changed(Some(tooltip.clone()), cx);
-                            } else {
-                                changed |= this.clear_tooltip_if_matches(&tooltip, cx);
-                            }
-                            if changed {
-                                cx.notify();
-                            }
-                        }))
+                        .gitcomet_tooltip(theme, tooltip.clone())
                         .into_any_element()
                 }
                 BranchSidebarRow::Placeholder {
@@ -840,19 +810,10 @@ impl SidebarPaneView {
                                 },
                             )),
                         )
-                        .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
-                            let text: SharedString =
-                                "Worktrees (Add / Refresh / Open / Remove)".into();
-                            let mut changed = false;
-                            if *hovering {
-                                changed |= this.set_tooltip_text_if_changed(Some(text), cx);
-                            } else {
-                                changed |= this.clear_tooltip_if_matches(&text, cx);
-                            }
-                            if changed {
-                                cx.notify();
-                            }
-                        }))
+                        .gitcomet_tooltip(
+                            theme,
+                            "Worktrees (Add / Refresh / Open / Remove)".into(),
+                        )
                         .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
                             if !e.standard_click() || e.click_count() != 1 {
                                 return;
@@ -1019,18 +980,7 @@ impl SidebarPaneView {
                                 );
                             }),
                         )
-                        .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
-                            let mut changed = false;
-                            if *hovering {
-                                changed |= this
-                                    .set_tooltip_text_if_changed(Some(label.clone()), cx);
-                            } else {
-                                changed |= this.clear_tooltip_if_matches(&label, cx);
-                            }
-                            if changed {
-                                cx.notify();
-                            }
-                        }))
+                        .gitcomet_tooltip(theme, label.clone())
                         .into_any_element()
                 }
                 BranchSidebarRow::SubmodulesHeader {
@@ -1130,19 +1080,10 @@ impl SidebarPaneView {
                                 },
                             )),
                         )
-                        .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
-                            let text: SharedString =
-                                "Submodules (Add / Update / Open / Remove)".into();
-                            let mut changed = false;
-                            if *hovering {
-                                changed |= this.set_tooltip_text_if_changed(Some(text), cx);
-                            } else {
-                                changed |= this.clear_tooltip_if_matches(&text, cx);
-                            }
-                            if changed {
-                                cx.notify();
-                            }
-                        }))
+                        .gitcomet_tooltip(
+                            theme,
+                            "Submodules (Add / Update / Open / Remove)".into(),
+                        )
                         .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
                             if !e.standard_click() || e.click_count() != 1 {
                                 return;
@@ -1290,18 +1231,7 @@ impl SidebarPaneView {
                                 );
                             }),
                         )
-                        .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
-                            let mut changed = false;
-                            if *hovering {
-                                changed |=
-                                    this.set_tooltip_text_if_changed(Some(tooltip.clone()), cx);
-                            } else {
-                                changed |= this.clear_tooltip_if_matches(&tooltip, cx);
-                            }
-                            if changed {
-                                cx.notify();
-                            }
-                        }))
+                        .gitcomet_tooltip(theme, tooltip.clone())
                         .into_any_element()
                 }
                 BranchSidebarRow::RemoteHeader {
@@ -1824,25 +1754,7 @@ impl SidebarPaneView {
                                         );
                                     }),
                                 )
-                                .on_hover(cx.listener(
-                                    move |this, hovering: &bool, _w, cx| {
-                                        let mut changed = false;
-                                        if *hovering {
-                                            changed |= this.set_tooltip_text_if_changed(
-                                                Some(worktree_badge_tooltip.clone()),
-                                                cx,
-                                            );
-                                        } else {
-                                            changed |= this.clear_tooltip_if_matches(
-                                                &worktree_badge_tooltip,
-                                                cx,
-                                            );
-                                        }
-                                        if changed {
-                                            cx.notify();
-                                        }
-                                    },
-                                )),
+                                .gitcomet_tooltip(theme, worktree_badge_tooltip.clone()),
                         );
                     }
 
@@ -1975,23 +1887,13 @@ impl SidebarPaneView {
                                 );
                             }),
                         )
-                        .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
-                            let branch_tooltip =
-                                super::super::branch_sidebar::branch_sidebar_branch_tooltip(
-                                    full_name_for_tooltip.as_ref(),
-                                    is_upstream,
-                                );
-                            let mut changed = false;
-                            if *hovering {
-                                changed |=
-                                    this.set_tooltip_text_if_changed(Some(branch_tooltip), cx);
-                            } else {
-                                changed |= this.clear_tooltip_if_matches(&branch_tooltip, cx);
-                            }
-                            if changed {
-                                cx.notify();
-                            }
-                        }));
+                        .gitcomet_tooltip(
+                            theme,
+                            super::super::branch_sidebar::branch_sidebar_branch_tooltip(
+                                full_name_for_tooltip.as_ref(),
+                                is_upstream,
+                            ),
+                        );
 
                     row.into_any_element()
                 }
@@ -2115,17 +2017,7 @@ impl DetailsPaneView {
                         });
                         cx.notify();
                     }))
-                    .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
-                        let mut changed = false;
-                        if *hovering {
-                            changed |= this.set_tooltip_text_if_changed(Some(tooltip.clone()), cx);
-                        } else {
-                            changed |= this.clear_tooltip_if_matches(&tooltip, cx);
-                        }
-                        if changed {
-                            cx.notify();
-                        }
-                    }));
+                    .gitcomet_tooltip(theme, tooltip.clone());
                 row = row.on_mouse_down(
                     MouseButton::Right,
                     cx.listener(move |this, e: &MouseDownEvent, window, cx| {

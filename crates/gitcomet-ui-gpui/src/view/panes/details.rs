@@ -12,7 +12,6 @@ pub(in super::super) struct DetailsPaneView {
     _ui_model_subscription: gpui::Subscription,
     _commit_message_input_subscription: gpui::Subscription,
     root_view: WeakEntity<GitCometView>,
-    tooltip_host: WeakEntity<TooltipHost>,
     notify_fingerprint: u64,
     pub(in super::super) active_context_menu_invoker: Option<SharedString>,
     change_tracking_height_design: Option<f32>,
@@ -60,7 +59,6 @@ pub(in super::super) struct DetailsPaneInit {
     pub(in super::super) untracked_height: Option<u32>,
     pub(in super::super) ui_scale_percent: u32,
     pub(in super::super) root_view: WeakEntity<GitCometView>,
-    pub(in super::super) tooltip_host: WeakEntity<TooltipHost>,
 }
 
 pub(in super::super) struct StatusSectionResizeTracker {
@@ -189,7 +187,6 @@ impl DetailsPaneView {
             untracked_height,
             ui_scale_percent,
             root_view,
-            tooltip_host,
         } = init;
         let state = Arc::clone(&ui_model.read(cx).state);
         let initial_fingerprint = Self::notify_fingerprint(&state);
@@ -302,7 +299,6 @@ impl DetailsPaneView {
             _ui_model_subscription: subscription,
             _commit_message_input_subscription: commit_message_subscription,
             root_view,
-            tooltip_host,
             notify_fingerprint: initial_fingerprint,
             active_context_menu_invoker: None,
             change_tracking_height_design: Self::sanitized_restored_change_tracking_height_design(
@@ -712,29 +708,6 @@ impl DetailsPaneView {
             },
         )
         .detach();
-    }
-
-    pub(in super::super) fn set_tooltip_text_if_changed(
-        &mut self,
-        next: Option<SharedString>,
-        cx: &mut gpui::Context<Self>,
-    ) -> bool {
-        let _ = self
-            .tooltip_host
-            .update(cx, |host, cx| host.set_tooltip_text_if_changed(next, cx));
-        false
-    }
-
-    pub(in super::super) fn clear_tooltip_if_matches(
-        &mut self,
-        tooltip: &SharedString,
-        cx: &mut gpui::Context<Self>,
-    ) -> bool {
-        let tooltip = tooltip.clone();
-        let _ = self
-            .tooltip_host
-            .update(cx, |host, cx| host.clear_tooltip_if_matches(&tooltip, cx));
-        false
     }
 
     pub(in super::super) fn open_popover_at(
