@@ -129,18 +129,7 @@ impl MainPaneView {
                             cx.notify();
                         }
                     })
-                    .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
-                        let mut changed = false;
-                        if *hovering {
-                            changed |=
-                                this.set_tooltip_text_if_changed(Some(prev_tooltip.clone()), cx);
-                        } else {
-                            changed |= this.clear_tooltip_if_matches(&prev_tooltip, cx);
-                        }
-                        if changed {
-                            cx.notify();
-                        }
-                    }))
+                    .gitcomet_tooltip(theme, prev_tooltip.clone())
                     .into_any_element();
 
                 let next_btn = components::Button::new("diff_next_file", "Next file")
@@ -152,18 +141,7 @@ impl MainPaneView {
                             cx.notify();
                         }
                     })
-                    .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
-                        let mut changed = false;
-                        if *hovering {
-                            changed |=
-                                this.set_tooltip_text_if_changed(Some(next_tooltip.clone()), cx);
-                        } else {
-                            changed |= this.clear_tooltip_if_matches(&next_tooltip, cx);
-                        }
-                        if changed {
-                            cx.notify();
-                        }
-                    }))
+                    .gitcomet_tooltip(theme, next_tooltip.clone())
                     .into_any_element();
 
                 return Some((prev_btn, next_btn));
