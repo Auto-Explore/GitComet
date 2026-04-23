@@ -1,7 +1,9 @@
 use super::text_model::{TextModel, TextModelSnapshot};
 use crate::theme::AppTheme;
 use crate::view::components::CONTROL_HEIGHT_PX;
-use crate::view::text_truncation::{TextTruncationProfile, TruncatedLineLayout, shape_truncated_line_cached};
+use crate::view::text_truncation::{
+    TextTruncationProfile, TruncatedLineLayout, shape_truncated_line_cached,
+};
 use gpui::prelude::*;
 use gpui::{
     App, Bounds, ClipboardItem, Context, CursorStyle, Div, Element, ElementId, ElementInputHandler,
@@ -2839,9 +2841,10 @@ impl EntityInputHandler for TextInput {
                 let line = lines.get(line_ix)?;
                 (line.x_for_index(local_ix) - self.scroll_x, y_offset)
             }
-            TextInputLayout::TruncatedSingleLine(line) => {
-                (truncated_line_x_for_source_offset(line, offset), Pixels::ZERO)
-            }
+            TextInputLayout::TruncatedSingleLine(line) => (
+                truncated_line_x_for_source_offset(line, offset),
+                Pixels::ZERO,
+            ),
             TextInputLayout::Wrapped { lines, .. } => {
                 let line = lines.get(line_ix)?;
                 let p = line
@@ -3656,7 +3659,7 @@ impl Element for TextElement {
                     }
                 }
                 TextInputLayout::TruncatedSingleLine(line) => {
-                    if line.has_background_highlights {
+                    if line.has_background_runs {
                         let _ = line.shaped_line.paint_background(
                             point(bounds.origin.x, bounds.origin.y),
                             line.line_height,
@@ -5031,8 +5034,9 @@ fn truncated_line_x_for_source_offset(line: &TruncatedLineLayout, source_offset:
 
 fn truncated_line_source_offset_for_x(line: &TruncatedLineLayout, x: Pixels) -> usize {
     let display_offset = line.shaped_line.closest_index_for_x(x.max(px(0.0)));
-    if let Some((hidden_range, display_range)) =
-        line.projection.ellipsis_segment_at_display_offset(display_offset)
+    if let Some((hidden_range, display_range)) = line
+        .projection
+        .ellipsis_segment_at_display_offset(display_offset)
     {
         let x0 = line.shaped_line.x_for_index(display_range.start);
         let x1 = line.shaped_line.x_for_index(display_range.end);
@@ -5838,9 +5842,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn truncated_read_only_select_all_returns_full_source_text(
-        cx: &mut gpui::TestAppContext,
-    ) {
+    fn truncated_read_only_select_all_returns_full_source_text(cx: &mut gpui::TestAppContext) {
         let text = "0123456789abcdef0123456789abcdef";
         let (input, cx) = cx.add_window_view(|window, cx| {
             TextInput::new(
@@ -5905,6 +5907,85 @@ mod tests {
             assert_eq!(
                 truncated_line_source_offset_for_x(&line, right_x),
                 hidden_range.end
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn focused_truncated_line_hit_testing_snaps_both_ellipsis_segments_to_hidden_boundaries(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let text: SharedString = "prefix-aaaaaaaaaa-suffix".into();
+        let focus = 7..17;
+        let (_view, cx) = cx.add_window_view(|_window, _cx| gpui::Empty);
+
+        cx.update(|window, app| {
+            let style = window.text_style();
+            let font_size = style.font_size.to_pixels(window.rem_size());
+            let runs_four = vec![style.clone().to_run("…aaaa…".len())];
+            let runs_five = vec![style.clone().to_run("…aaaaa…".len())];
+            let width_four = window
+                .text_system()
+                .shape_line("…aaaa…".into(), font_size, &runs_four, None)
+                .width;
+            let width_five = window
+                .text_system()
+                .shape_line("…aaaaa…".into(), font_size, &runs_five, None)
+                .width;
+            let max_width = width_four + (width_five - width_four) / 2.0;
+
+            let line = shape_truncated_line_cached(
+                window,
+                app,
+                &style,
+                &text,
+                Some(max_width),
+                TextTruncationProfile::Middle,
+                &[],
+                Some(focus),
+            );
+
+            assert!(line.truncated, "expected the line to truncate");
+
+            let (left_hidden_range, left_display_range) = line
+                .projection
+                .ellipsis_segment_for_source_offset(0)
+                .expect("expected a left ellipsis segment");
+            let (right_hidden_range, right_display_range) = line
+                .projection
+                .ellipsis_segment_for_source_offset(text.len())
+                .expect("expected a right ellipsis segment");
+
+            assert_ne!(left_display_range, right_display_range);
+
+            let left_x0 = line.shaped_line.x_for_index(left_display_range.start);
+            let left_x1 = line.shaped_line.x_for_index(left_display_range.end);
+            let left_span = left_x1 - left_x0;
+            let left_inside = left_x0 + left_span / 4.0;
+            let left_outside = left_x0 + (left_span * 3.0) / 4.0;
+
+            assert_eq!(
+                truncated_line_source_offset_for_x(&line, left_inside),
+                left_hidden_range.start
+            );
+            assert_eq!(
+                truncated_line_source_offset_for_x(&line, left_outside),
+                left_hidden_range.end
+            );
+
+            let right_x0 = line.shaped_line.x_for_index(right_display_range.start);
+            let right_x1 = line.shaped_line.x_for_index(right_display_range.end);
+            let right_span = right_x1 - right_x0;
+            let right_inside = right_x0 + right_span / 4.0;
+            let right_outside = right_x0 + (right_span * 3.0) / 4.0;
+
+            assert_eq!(
+                truncated_line_source_offset_for_x(&line, right_inside),
+                right_hidden_range.start
+            );
+            assert_eq!(
+                truncated_line_source_offset_for_x(&line, right_outside),
+                right_hidden_range.end
             );
         });
     }

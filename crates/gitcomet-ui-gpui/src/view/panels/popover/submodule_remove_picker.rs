@@ -18,24 +18,20 @@ pub(super) fn panel(
                 Some(this.tooltip_host.clone()),
                 cx,
             ),
-            Loadable::NotLoaded => {
-                components::context_menu_label(
-                    theme,
-                    ui_scale_percent,
-                    "Not loaded",
-                    Some(this.tooltip_host.clone()),
-                    cx,
-                )
-            }
-            Loadable::Error(e) => {
-                components::context_menu_label(
-                    theme,
-                    ui_scale_percent,
-                    e.clone(),
-                    Some(this.tooltip_host.clone()),
-                    cx,
-                )
-            }
+            Loadable::NotLoaded => components::context_menu_label(
+                theme,
+                ui_scale_percent,
+                "Not loaded",
+                Some(this.tooltip_host.clone()),
+                cx,
+            ),
+            Loadable::Error(e) => components::context_menu_label(
+                theme,
+                ui_scale_percent,
+                e.clone(),
+                Some(this.tooltip_host.clone()),
+                cx,
+            ),
             Loadable::Ready(subs) => {
                 let items = subs
                     .iter()

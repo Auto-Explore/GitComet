@@ -76,37 +76,31 @@ pub(super) fn panel(
             Some(this.tooltip_host.clone()),
             cx,
         )
-            .into_any_element(),
-        Some(Loadable::Loading) => {
-            components::context_menu_label(
-                theme,
-                ui_scale_percent,
-                "Loading",
-                Some(this.tooltip_host.clone()),
-                cx,
-            )
-            .into_any_element()
-        }
-        Some(Loadable::Error(e)) => {
-            components::context_menu_label(
-                theme,
-                ui_scale_percent,
-                e.clone(),
-                Some(this.tooltip_host.clone()),
-                cx,
-            )
-            .into_any_element()
-        }
-        Some(Loadable::NotLoaded) => {
-            components::context_menu_label(
-                theme,
-                ui_scale_percent,
-                "Not loaded",
-                Some(this.tooltip_host.clone()),
-                cx,
-            )
-            .into_any_element()
-        }
+        .into_any_element(),
+        Some(Loadable::Loading) => components::context_menu_label(
+            theme,
+            ui_scale_percent,
+            "Loading",
+            Some(this.tooltip_host.clone()),
+            cx,
+        )
+        .into_any_element(),
+        Some(Loadable::Error(e)) => components::context_menu_label(
+            theme,
+            ui_scale_percent,
+            e.clone(),
+            Some(this.tooltip_host.clone()),
+            cx,
+        )
+        .into_any_element(),
+        Some(Loadable::NotLoaded) => components::context_menu_label(
+            theme,
+            ui_scale_percent,
+            "Not loaded",
+            Some(this.tooltip_host.clone()),
+            cx,
+        )
+        .into_any_element(),
         Some(Loadable::Ready(page)) => {
             let commit_ids = page
                 .commits

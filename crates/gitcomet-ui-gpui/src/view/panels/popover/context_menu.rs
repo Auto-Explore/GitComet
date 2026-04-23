@@ -1010,28 +1010,24 @@ impl PopoverHost {
                                 .id(("context_menu_sep", ix))
                                 .into_any_element()
                         }
-                        ContextMenuItem::Header(title) => {
-                            components::context_menu_header(
-                                theme,
-                                ui_scale,
-                                title,
-                                Some(tooltip_host.clone()),
-                                cx,
-                            )
-                                .id(("context_menu_header", ix))
-                                .into_any_element()
-                        }
-                        ContextMenuItem::Label(text) => {
-                            components::context_menu_label(
-                                theme,
-                                ui_scale,
-                                text,
-                                Some(tooltip_host.clone()),
-                                cx,
-                            )
-                                .id(("context_menu_label", ix))
-                                .into_any_element()
-                        }
+                        ContextMenuItem::Header(title) => components::context_menu_header(
+                            theme,
+                            ui_scale,
+                            title,
+                            Some(tooltip_host.clone()),
+                            cx,
+                        )
+                        .id(("context_menu_header", ix))
+                        .into_any_element(),
+                        ContextMenuItem::Label(text) => components::context_menu_label(
+                            theme,
+                            ui_scale,
+                            text,
+                            Some(tooltip_host.clone()),
+                            cx,
+                        )
+                        .id(("context_menu_label", ix))
+                        .into_any_element(),
                         ContextMenuItem::Entry {
                             label,
                             icon,

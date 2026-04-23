@@ -1,4 +1,5 @@
 use super::super::path_display;
+use super::super::text_truncation::path_alignment_visible_signature;
 use super::super::*;
 use rustc_hash::FxHasher;
 use std::hash::{Hash, Hasher};
@@ -51,6 +52,12 @@ pub(in super::super) struct DetailsPaneView {
     path_display_cache: std::cell::RefCell<path_display::PathDisplayCache>,
     commit_file_rows:
         std::cell::RefCell<crate::view::rows::CommitFileRowPresentationCache<(RepoId, u64)>>,
+    pub(in super::super) untracked_path_alignment_group:
+        components::TruncatedTextPathAlignmentGroup,
+    pub(in super::super) unstaged_path_alignment_group: components::TruncatedTextPathAlignmentGroup,
+    pub(in super::super) staged_path_alignment_group: components::TruncatedTextPathAlignmentGroup,
+    pub(in super::super) commit_files_path_alignment_group:
+        components::TruncatedTextPathAlignmentGroup,
 }
 
 pub(in super::super) struct DetailsPaneInit {
@@ -344,6 +351,11 @@ impl DetailsPaneView {
             commit_file_rows: std::cell::RefCell::new(
                 crate::view::rows::CommitFileRowPresentationCache::default(),
             ),
+            untracked_path_alignment_group: components::TruncatedTextPathAlignmentGroup::default(),
+            unstaged_path_alignment_group: components::TruncatedTextPathAlignmentGroup::default(),
+            staged_path_alignment_group: components::TruncatedTextPathAlignmentGroup::default(),
+            commit_files_path_alignment_group: components::TruncatedTextPathAlignmentGroup::default(
+            ),
         };
         pane.sync_scaled_section_heights_from_design();
         pane.set_theme(theme, cx);
@@ -504,6 +516,61 @@ impl DetailsPaneView {
     ) -> Arc<[crate::view::rows::CommitFileRowPresentation]> {
         let mut cache = self.commit_file_rows.borrow_mut();
         cache.rows_for(&(repo_id, commit_details_rev), files)
+    }
+
+    pub(in super::super) fn status_path_alignment_group(
+        &self,
+        section: StatusSection,
+    ) -> &components::TruncatedTextPathAlignmentGroup {
+        match section {
+            StatusSection::CombinedUnstaged | StatusSection::Unstaged => {
+                &self.unstaged_path_alignment_group
+            }
+            StatusSection::Untracked => &self.untracked_path_alignment_group,
+            StatusSection::Staged => &self.staged_path_alignment_group,
+        }
+    }
+
+    pub(in super::super) fn status_visible_signature(
+        &self,
+        repo: &RepoState,
+        section: StatusSection,
+        range: &Range<usize>,
+        total_rows: usize,
+    ) -> u64 {
+        path_alignment_visible_signature(&(
+            repo.id,
+            Self::status_section_alignment_key(section),
+            status_section_rev(repo, section),
+            total_rows,
+            range.start,
+            range.end,
+        ))
+    }
+
+    pub(in super::super) fn commit_files_visible_signature(
+        &self,
+        repo_id: RepoId,
+        commit_details_rev: u64,
+        range: &Range<usize>,
+        total_rows: usize,
+    ) -> u64 {
+        path_alignment_visible_signature(&(
+            repo_id,
+            commit_details_rev,
+            total_rows,
+            range.start,
+            range.end,
+        ))
+    }
+
+    fn status_section_alignment_key(section: StatusSection) -> u8 {
+        match section {
+            StatusSection::CombinedUnstaged => 0,
+            StatusSection::Untracked => 1,
+            StatusSection::Unstaged => 2,
+            StatusSection::Staged => 3,
+        }
     }
 
     fn apply_state_snapshot(&mut self, next: Arc<AppState>, cx: &mut gpui::Context<Self>) {

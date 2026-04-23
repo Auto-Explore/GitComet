@@ -1,11 +1,7 @@
 use super::*;
 
 impl MainPaneView {
-    pub(super) fn diff_panel_title(
-        &self,
-        theme: AppTheme,
-        cx: &gpui::Context<Self>,
-    ) -> AnyElement {
+    pub(super) fn diff_panel_title(&self, theme: AppTheme, cx: &gpui::Context<Self>) -> AnyElement {
         self.active_repo()
             .and_then(|r| r.diff_state.diff_target.as_ref())
             .map(|t| {

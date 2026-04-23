@@ -1,7 +1,9 @@
 use super::super::text_truncation::{
-    TextTruncationProfile, TruncatedLineLayout, shape_truncated_line_cached,
+    TextTruncationProfile, TruncatedLineLayout, path_alignment_style_key,
+    shape_truncated_line_cached_with_path_anchor, truncated_line_ellipsis_x,
 };
 use crate::view::tooltip_host::TooltipHost;
+use gpui::EntityId;
 use gpui::prelude::*;
 use gpui::{
     App, AvailableSpace, Bounds, Context, Element, ElementId, GlobalElementId, HighlightStyle,
@@ -12,6 +14,13 @@ use std::cell::{Cell, RefCell};
 use std::ops::Range;
 use std::rc::Rc;
 use std::sync::Arc;
+
+#[cfg(test)]
+use super::super::text_truncation::{
+    clear_truncated_layout_cache_for_test, path_alignment_visible_signature,
+};
+
+pub(crate) use super::super::text_truncation::TruncatedTextPathAlignmentGroup;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum TruncatedTextTooltipMode {
@@ -27,6 +36,7 @@ pub struct TruncatedText {
     focus_range: Option<Range<usize>>,
     tooltip_mode: TruncatedTextTooltipMode,
     tooltip_host: Option<WeakEntity<TooltipHost>>,
+    path_alignment_group: Option<TruncatedTextPathAlignmentGroup>,
 }
 
 impl TruncatedText {
@@ -38,6 +48,7 @@ impl TruncatedText {
             focus_range: None,
             tooltip_mode: TruncatedTextTooltipMode::None,
             tooltip_host: None,
+            path_alignment_group: None,
         }
     }
 
@@ -69,10 +80,19 @@ impl TruncatedText {
         self
     }
 
+    pub(crate) fn path_alignment_group(
+        mut self,
+        path_alignment_group: TruncatedTextPathAlignmentGroup,
+    ) -> Self {
+        self.path_alignment_group = Some(path_alignment_group);
+        self
+    }
+
     pub fn render<V: 'static>(self, cx: &Context<V>) -> impl IntoElement {
         let tooltip_text = self.text.clone();
         let tooltip_mode = self.tooltip_mode;
         let tooltip_host = self.tooltip_host.clone();
+        let owner_view_id = cx.entity_id();
         let truncated = Rc::new(Cell::new(false));
         let element = TruncatedTextElement {
             text: self.text,
@@ -81,6 +101,8 @@ impl TruncatedText {
             focus_range: self.focus_range,
             layout: TruncatedTextLayoutState::default(),
             truncated: Rc::clone(&truncated),
+            owner_view_id,
+            path_alignment_group: self.path_alignment_group,
         };
 
         let mut root: Stateful<_> = div()
@@ -126,6 +148,8 @@ struct TruncatedTextElement {
     focus_range: Option<Range<usize>>,
     layout: TruncatedTextLayoutState,
     truncated: Rc<Cell<bool>>,
+    owner_view_id: EntityId,
+    path_alignment_group: Option<TruncatedTextPathAlignmentGroup>,
 }
 
 impl Element for TruncatedTextElement {
@@ -153,30 +177,55 @@ impl Element for TruncatedTextElement {
         let highlights = Arc::clone(&self.highlights);
         let focus_range = self.focus_range.clone();
         let truncated = Rc::clone(&self.truncated);
+        let owner_view_id = self.owner_view_id;
+        let path_alignment_group = self.path_alignment_group.clone();
 
-        let layout_id = window.request_measured_layout(Default::default(), move |known_dimensions, available_space, window, cx| {
-            let max_width = known_dimensions.width.or(match available_space.width {
-                AvailableSpace::Definite(width) => Some(width),
-                _ => None,
-            });
-            let line = shape_truncated_line_cached(
-                window,
-                cx,
-                &window.text_style(),
-                &text,
-                max_width,
-                profile,
-                highlights.as_ref(),
-                focus_range.clone(),
-            );
-            truncated.set(line.truncated);
-            let width = max_width
-                .map(|width| line.shaped_line.width.min(width.max(px(0.0))))
-                .unwrap_or(line.shaped_line.width);
-            let size = size(width, line.line_height);
-            layout_state.0.replace(Some(TruncatedTextLayoutInner { line }));
-            size
-        });
+        let layout_id = window.request_measured_layout(
+            Default::default(),
+            move |known_dimensions, available_space, window, cx| {
+                let max_width = known_dimensions.width.or(match available_space.width {
+                    AvailableSpace::Definite(width) => Some(width),
+                    _ => None,
+                });
+                let base_style = window.text_style();
+                let alignment_style_key = (profile == TextTruncationProfile::Path)
+                    .then(|| path_alignment_style_key(&base_style, window.rem_size()));
+                let path_ellipsis_anchor = path_alignment_group.as_ref().and_then(|group| {
+                    alignment_style_key
+                        .map(|style_key| group.path_anchor_for_layout(max_width, style_key))
+                        .flatten()
+                });
+                let line = shape_truncated_line_cached_with_path_anchor(
+                    window,
+                    cx,
+                    &base_style,
+                    &text,
+                    max_width,
+                    profile,
+                    highlights.as_ref(),
+                    focus_range.clone(),
+                    path_ellipsis_anchor,
+                );
+                if profile == TextTruncationProfile::Path
+                    && path_ellipsis_anchor.is_none()
+                    && let Some(group) = path_alignment_group.as_ref()
+                    && let Some(style_key) = alignment_style_key
+                    && let Some(ellipsis_x) = truncated_line_ellipsis_x(&line)
+                    && group.report_natural_ellipsis(max_width, style_key, ellipsis_x)
+                {
+                    cx.notify(owner_view_id);
+                }
+                truncated.set(line.truncated);
+                let width = max_width
+                    .map(|width| width.max(px(0.0)))
+                    .unwrap_or(line.shaped_line.width);
+                let size = size(width, line.line_height);
+                layout_state
+                    .0
+                    .replace(Some(TruncatedTextLayoutInner { line }));
+                size
+            },
+        );
 
         (layout_id, ())
     }
@@ -207,7 +256,7 @@ impl Element for TruncatedTextElement {
             return;
         };
 
-        if inner.line.has_background_highlights {
+        if inner.line.has_background_runs {
             let _ = inner.line.shaped_line.paint_background(
                 point(bounds.left(), bounds.top()),
                 inner.line.line_height,
@@ -234,5 +283,89 @@ impl IntoElement for TruncatedTextElement {
 
     fn into_element(self) -> Self::Element {
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    const PATH_A: &str = "src/components/really_long_directory_name/rows/file_name_alpha.rs";
+    const PATH_B: &str = "src/components/dir/another_super_long_directory_name/file_name_beta.rs";
+
+    struct TruncatedTextPathAlignmentTestView {
+        group: TruncatedTextPathAlignmentGroup,
+        width: Pixels,
+        font_size: Pixels,
+        line_height: Pixels,
+    }
+
+    impl TruncatedTextPathAlignmentTestView {
+        fn new() -> Self {
+            Self {
+                group: TruncatedTextPathAlignmentGroup::default(),
+                width: px(190.0),
+                font_size: px(14.0),
+                line_height: px(18.0),
+            }
+        }
+    }
+
+    impl Render for TruncatedTextPathAlignmentTestView {
+        fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            self.group
+                .begin_visible_rows(path_alignment_visible_signature(&(PATH_A, PATH_B)));
+
+            div()
+                .flex_col()
+                .child(
+                    div()
+                        .w(self.width)
+                        .text_size(self.font_size)
+                        .line_height(self.line_height)
+                        .child(
+                            TruncatedText::new(PATH_A)
+                                .profile(TextTruncationProfile::Path)
+                                .path_alignment_group(self.group.clone())
+                                .render(cx),
+                        ),
+                )
+                .child(
+                    div()
+                        .w(self.width)
+                        .text_size(self.font_size)
+                        .line_height(self.line_height)
+                        .child(
+                            TruncatedText::new(PATH_B)
+                                .profile(TextTruncationProfile::Path)
+                                .path_alignment_group(self.group.clone())
+                                .render(cx),
+                        ),
+                )
+        }
+    }
+
+    #[gpui::test]
+    fn truncated_text_path_alignment_converges_in_layout_passes(cx: &mut gpui::TestAppContext) {
+        clear_truncated_layout_cache_for_test();
+        let (view, cx) =
+            cx.add_window_view(|_window, _cx| TruncatedTextPathAlignmentTestView::new());
+
+        cx.update(|window, app| {
+            window.refresh();
+            let _ = window.draw(app);
+        });
+
+        let after_first_draw = cx.update(|_window, app| view.read(app).group.snapshot_for_test());
+        assert!(after_first_draw.layout_key.is_some());
+
+        cx.update(|window, app| {
+            window.refresh();
+            let _ = window.draw(app);
+        });
+
+        let after_second_draw = cx.update(|_window, app| view.read(app).group.snapshot_for_test());
+        assert!(after_second_draw.layout_key.is_some());
+        assert!(after_second_draw.resolved_anchor.is_some());
+        assert_eq!(after_second_draw.pending_anchor, None);
     }
 }

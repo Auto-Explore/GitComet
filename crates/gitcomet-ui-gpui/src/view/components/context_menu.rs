@@ -115,7 +115,12 @@ pub fn context_menu_header<V: 'static>(
         .text_color(theme.colors.text_muted)
         .when(max_lines == 1, |s| s.whitespace_nowrap().overflow_hidden())
         .when(max_lines > 1, |s| s.line_clamp(max_lines))
-        .child(context_menu_text_content(title, tooltip_host, cx, max_lines))
+        .child(context_menu_text_content(
+            title,
+            tooltip_host,
+            cx,
+            max_lines,
+        ))
 }
 
 pub fn context_menu_label<V: 'static>(

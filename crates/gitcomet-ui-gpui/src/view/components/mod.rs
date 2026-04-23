@@ -23,9 +23,11 @@ pub use picker_prompt::{PickerPrompt, PickerPromptItem, PickerPromptItemPart};
 pub use split_button::{SplitButton, SplitButtonStyle};
 pub use tab::{Tab, TabPosition};
 pub use tab_bar::TabBar;
-pub use toast::{toast, ToastKind};
+pub use toast::{ToastKind, toast};
 pub use tokens::*;
-pub(crate) use truncated_text::{TruncatedText, TruncatedTextTooltipMode};
+pub(crate) use truncated_text::{
+    TruncatedText, TruncatedTextPathAlignmentGroup, TruncatedTextTooltipMode,
+};
 
 pub use crate::kit::{
     Scrollbar, ScrollbarAxis, ScrollbarMarker, ScrollbarMarkerKind, TextInput, TextInputOptions,

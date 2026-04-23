@@ -2074,6 +2074,14 @@ impl DetailsPaneView {
             repo.history_state.commit_details_rev,
             &details.files,
         );
+        let path_alignment_group = this.commit_files_path_alignment_group.clone();
+        let visible_signature = this.commit_files_visible_signature(
+            repo_id,
+            repo.history_state.commit_details_rev,
+            &range,
+            details.files.len(),
+        );
+        path_alignment_group.begin_visible_rows(visible_signature);
 
         range
             .filter_map(|ix| {
@@ -2151,7 +2159,12 @@ impl DetailsPaneView {
                             .line_height(scaled_px(18.0))
                             .line_clamp(1)
                             .whitespace_nowrap()
-                            .child(path_label),
+                            .child(
+                                components::TruncatedText::new(path_label)
+                                    .profile(components::TextTruncationProfile::Path)
+                                    .path_alignment_group(path_alignment_group.clone())
+                                    .render(cx),
+                            ),
                     )
                     .on_click(cx.listener(move |this, _e: &ClickEvent, window, cx| {
                         this.focus_diff_panel(window, cx);

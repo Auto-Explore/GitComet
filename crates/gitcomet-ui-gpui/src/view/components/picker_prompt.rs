@@ -446,7 +446,10 @@ mod tests {
 
     #[test]
     fn match_items_skips_queries_longer_than_candidate_labels() {
-        let items = vec![PickerPromptItem::plain("ab"), PickerPromptItem::plain("alphabet")];
+        let items = vec![
+            PickerPromptItem::plain("ab"),
+            PickerPromptItem::plain("alphabet"),
+        ];
 
         let matches = match_items(&items, "alphabet soup");
 
@@ -483,7 +486,10 @@ mod tests {
 
         assert_eq!(item.parts()[0].local_match_range(Some(&range)), None);
         assert_eq!(item.parts()[1].local_match_range(Some(&range)), None);
-        assert_eq!(item.parts()[2].local_match_range(Some(&range)), Some(14..18));
+        assert_eq!(
+            item.parts()[2].local_match_range(Some(&range)),
+            Some(14..18)
+        );
     }
 
     #[test]

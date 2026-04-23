@@ -388,6 +388,9 @@ fn render_status_rows_for_section(
     let multi_select_active = !selected_paths.is_empty();
     let theme = this.theme;
     let ui_scale = this.ui_scale();
+    let path_alignment_group = this.status_path_alignment_group(section).clone();
+    let visible_signature = this.status_visible_signature(repo, section, &range, entries.len());
+    path_alignment_group.begin_visible_rows(visible_signature);
     range
         .filter_map(|ix| entries.get(ix).map(|entry| (ix, entry)))
         .map(|(ix, entry)| {
@@ -412,6 +415,7 @@ fn render_status_rows_for_section(
                 repo.id,
                 is_selected,
                 this.tooltip_host.clone(),
+                path_alignment_group.clone(),
                 this.active_context_menu_invoker.as_ref(),
                 cx,
             )
@@ -430,6 +434,7 @@ fn status_row(
     repo_id: RepoId,
     selected: bool,
     tooltip_host: WeakEntity<TooltipHost>,
+    path_alignment_group: components::TruncatedTextPathAlignmentGroup,
     active_context_menu_invoker: Option<&SharedString>,
     cx: &mut gpui::Context<DetailsPaneView>,
 ) -> AnyElement {
@@ -624,9 +629,8 @@ fn status_row(
                     components::TruncatedText::new(path_display_for_label.clone())
                         .profile(components::TextTruncationProfile::Path)
                         .tooltip_host(tooltip_host)
-                        .tooltip_mode(
-                            components::TruncatedTextTooltipMode::FullTextIfTruncated,
-                        )
+                        .tooltip_mode(components::TruncatedTextTooltipMode::FullTextIfTruncated)
+                        .path_alignment_group(path_alignment_group)
                         .render(cx),
                 ),
         )
