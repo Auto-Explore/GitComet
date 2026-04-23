@@ -418,25 +418,26 @@ impl MainPaneView {
     }
 
     pub(in crate::view) fn ensure_file_image_diff_cache(&mut self, cx: &mut gpui::Context<Self>) {
-        let Some((repo_id, diff_file_rev, diff_target, workdir, file)) = (|| {
-            let repo = self.active_repo()?;
-            if !Self::is_file_diff_target(repo.diff_state.diff_target.as_ref()) {
-                return None;
-            }
+        let Some((repo_id, diff_file_rev, diff_target, workdir, expected_abs_path, file)) =
+            (|| {
+                let (repo_id, diff_file_rev, diff_target, workdir, expected_abs_path) =
+                    self.rendered_file_diff_identity()?;
+                let file: Option<Arc<gitcomet_core::domain::FileDiffImage>> =
+                    match self.rendered_file_image_diff_loadable()? {
+                        Loadable::Ready(Some(file)) => Some(Arc::clone(file)),
+                        _ => None,
+                    };
 
-            let file = match &repo.diff_state.diff_file_image {
-                Loadable::Ready(Some(file)) => Some(Arc::clone(file)),
-                _ => None,
-            };
-
-            Some((
-                repo.id,
-                repo.diff_state.diff_file_rev,
-                repo.diff_state.diff_target.clone(),
-                repo.spec.workdir.clone(),
-                file,
-            ))
-        })() else {
+                Some((
+                    repo_id,
+                    diff_file_rev,
+                    diff_target,
+                    workdir,
+                    expected_abs_path,
+                    file,
+                ))
+            })()
+        else {
             self.file_image_diff_cache_repo_id = None;
             self.file_image_diff_cache_target = None;
             self.file_image_diff_cache_rev = 0;
@@ -449,7 +450,8 @@ impl MainPaneView {
             .as_ref()
             .map(|file| file_image_diff_signature(file.as_ref()));
         let same_repo_and_target = self.file_image_diff_cache_repo_id == Some(repo_id)
-            && self.file_image_diff_cache_target == diff_target;
+            && self.file_image_diff_cache_target == Some(diff_target.clone())
+            && self.file_image_diff_cache_path.as_ref() == Some(&expected_abs_path);
 
         if same_repo_and_target && self.file_image_diff_cache_rev == diff_file_rev {
             return;
@@ -467,7 +469,7 @@ impl MainPaneView {
 
         self.file_image_diff_cache_repo_id = Some(repo_id);
         self.file_image_diff_cache_rev = diff_file_rev;
-        self.file_image_diff_cache_target = diff_target;
+        self.file_image_diff_cache_target = Some(diff_target);
         self.reset_file_image_diff_cache_data();
 
         let Some(file) = file else {
@@ -485,7 +487,7 @@ impl MainPaneView {
             if self.file_image_diff_cache_inflight == Some(seq)
                 && self.file_image_diff_cache_repo_id == Some(repo_id)
                 && self.file_image_diff_cache_rev == diff_file_rev
-                && self.file_image_diff_cache_target == diff_target_for_task
+                && self.file_image_diff_cache_target == Some(diff_target_for_task.clone())
             {
                 self.file_image_diff_cache_inflight = None;
                 self.file_image_diff_cache_content_signature = Some(content_signature);
@@ -512,7 +514,7 @@ impl MainPaneView {
                     }
                     if this.file_image_diff_cache_repo_id != Some(repo_id)
                         || this.file_image_diff_cache_rev != diff_file_rev
-                        || this.file_image_diff_cache_target != diff_target_for_task
+                        || this.file_image_diff_cache_target != Some(diff_target_for_task.clone())
                     {
                         return;
                     }

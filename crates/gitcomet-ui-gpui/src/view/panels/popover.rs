@@ -114,6 +114,7 @@ pub(in super::super) struct PopoverHost {
     timezone: Timezone,
     show_timezone: bool,
     change_tracking_view: ChangeTrackingView,
+    diff_content_mode: DiffContentMode,
     _ui_model_subscription: gpui::Subscription,
     _clone_repo_url_input_subscription: gpui::Subscription,
     _clone_repo_parent_dir_input_subscription: gpui::Subscription,
@@ -193,6 +194,7 @@ fn popover_is_context_menu(kind: &PopoverKind) -> bool {
         PopoverKind::PullPicker
             | PopoverKind::PushPicker
             | PopoverKind::HistoryBranchFilter { .. }
+            | PopoverKind::DiffContentModeSettings
             | PopoverKind::ChangeTrackingSettings
             | PopoverKind::UiScalePicker
             | PopoverKind::DiffHunkMenu { .. }
@@ -277,6 +279,7 @@ fn popover_anchor_corner(kind: &PopoverKind) -> Corner {
         | PopoverKind::ForceRemoveWorktreeConfirm { .. }
         | PopoverKind::PullReconcilePrompt { .. }
         | PopoverKind::HistoryBranchFilter { .. }
+        | PopoverKind::DiffContentModeSettings
         | PopoverKind::ChangeTrackingSettings
         | PopoverKind::UiScalePicker => Corner::TopRight,
         _ => Corner::TopLeft,
@@ -387,6 +390,7 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         }
         | PopoverKind::CommitFileMenu { .. } => Some(DEFAULT_CONTEXT_MENU_WIDTH),
         PopoverKind::HistoryBranchFilter { .. }
+        | PopoverKind::DiffContentModeSettings
         | PopoverKind::UiScalePicker
         | PopoverKind::DiffHunkMenu { .. } => Some(NARROW_CONTEXT_MENU_WIDTH),
         PopoverKind::ChangeTrackingSettings => Some(CHANGE_TRACKING_MENU_WIDTH),
@@ -467,6 +471,7 @@ impl PopoverHost {
         timezone: Timezone,
         show_timezone: bool,
         change_tracking_view: ChangeTrackingView,
+        diff_content_mode: DiffContentMode,
         root_view: WeakEntity<GitCometView>,
         main_pane: Entity<MainPaneView>,
         details_pane: Entity<DetailsPaneView>,
@@ -884,6 +889,7 @@ impl PopoverHost {
             timezone,
             show_timezone,
             change_tracking_view,
+            diff_content_mode,
             _ui_model_subscription: subscription,
             _clone_repo_url_input_subscription: clone_repo_url_input_subscription,
             _clone_repo_parent_dir_input_subscription: clone_repo_parent_dir_input_subscription,
@@ -1682,6 +1688,21 @@ impl PopoverHost {
         }
     }
 
+    pub(in super::super) fn sync_diff_content_mode(
+        &mut self,
+        next: DiffContentMode,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.diff_content_mode == next {
+            return;
+        }
+
+        self.diff_content_mode = next;
+        if matches!(self.popover, Some(PopoverKind::DiffContentModeSettings)) {
+            cx.notify();
+        }
+    }
+
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     fn install_linux_desktop_integration(&mut self, cx: &mut gpui::Context<Self>) {
         let _ = self.root_view.update(cx, |root, cx| {
@@ -1924,6 +1945,9 @@ impl PopoverHost {
             }
             PopoverKind::HistoryBranchFilter { repo_id } => {
                 self.context_menu_view(PopoverKind::HistoryBranchFilter { repo_id }, cx)
+            }
+            PopoverKind::DiffContentModeSettings => {
+                self.context_menu_view(PopoverKind::DiffContentModeSettings, cx)
             }
             PopoverKind::ChangeTrackingSettings => {
                 self.context_menu_view(PopoverKind::ChangeTrackingSettings, cx)

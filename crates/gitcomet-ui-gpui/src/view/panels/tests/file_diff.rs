@@ -2,6 +2,7 @@
 #![allow(clippy::type_complexity)]
 
 use super::*;
+use std::path::PathBuf;
 
 fn fixture_repo_root() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -9,6 +10,736 @@ fn fixture_repo_root() -> std::path::PathBuf {
         .nth(2)
         .expect("test fixtures should run from the workspace root")
         .to_path_buf()
+}
+
+fn push_inline_submodule_diff_content_mode_state(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    repo_id: gitcomet_state::model::RepoId,
+    fixture_name: &str,
+) -> gitcomet_core::domain::DiffTarget {
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_{}_inline_root",
+        std::process::id(),
+        fixture_name
+    ));
+    let submodule_workdir = workdir.join("vendor/submodule");
+    let _ = std::fs::create_dir_all(&submodule_workdir);
+    let path = PathBuf::from("src/lib.rs");
+    let target = gitcomet_core::domain::DiffTarget::CommitRange {
+        from_commit_id: gitcomet_core::domain::CommitId("aaaa".into()),
+        to_commit_id: gitcomet_core::domain::CommitId("bbbb".into()),
+        path: Some(path.clone()),
+    };
+    let unified = "\
+diff --git a/src/lib.rs b/src/lib.rs
+index 1111111..2222222 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,2 +1,2 @@
+-old value
++new value
+ unchanged
+";
+    let diff = gitcomet_core::domain::Diff::from_unified(target.clone(), unified);
+    let file_diff = gitcomet_core::domain::FileDiffText::new(
+        path.clone(),
+        Some("old value\nunchanged\n".to_string()),
+        Some("new value\nunchanged\n".to_string()),
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            repo.diff_state.diff_target = Some(gitcomet_core::domain::DiffTarget::WorkingTree {
+                path: PathBuf::from("vendor/submodule"),
+                area: gitcomet_core::domain::DiffArea::Unstaged,
+            });
+            repo.diff_state.inline_submodule_diff =
+                Some(gitcomet_state::model::InlineSubmoduleDiffState {
+                    submodule_repo_path: submodule_workdir.clone(),
+                    parent_submodule_path: PathBuf::from("vendor/submodule"),
+                    entries: vec![gitcomet_state::model::InlineSubmoduleDiffEntry {
+                        path: path.clone(),
+                        kind: gitcomet_core::domain::FileStatusKind::Modified,
+                        target: target.clone(),
+                        section: gitcomet_state::model::InlineSubmoduleDiffSection::Range(
+                            gitcomet_core::domain::SubmoduleDiffRangeKind::CommitHistory,
+                        ),
+                    }],
+                    selected_ix: 0,
+                    target: target.clone(),
+                    rev: 1,
+                    diff_rev: 1,
+                    diff: gitcomet_state::model::Loadable::Ready(Arc::new(diff)),
+                    diff_file_rev: 1,
+                    diff_file: gitcomet_state::model::Loadable::Ready(Some(Arc::new(file_diff))),
+                    diff_file_image: gitcomet_state::model::Loadable::NotLoaded,
+                });
+
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+
+    target
+}
+
+fn push_regular_diff_content_mode_state(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    repo_id: gitcomet_state::model::RepoId,
+    fixture_name: &str,
+    path: PathBuf,
+    unified: String,
+    old_text: String,
+    new_text: String,
+) -> gitcomet_core::domain::DiffTarget {
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_{}_regular_root",
+        std::process::id(),
+        fixture_name
+    ));
+    let _ = std::fs::create_dir_all(&workdir);
+    let target = gitcomet_core::domain::DiffTarget::Commit {
+        commit_id: gitcomet_core::domain::CommitId("deadbeef".into()),
+        path: Some(path.clone()),
+    };
+    let diff = gitcomet_core::domain::Diff::from_unified(target.clone(), &unified);
+    let file_diff =
+        gitcomet_core::domain::FileDiffText::new(path.clone(), Some(old_text), Some(new_text));
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            repo.diff_state.diff_target = Some(target.clone());
+            repo.diff_state.diff_rev = 1;
+            repo.diff_state.diff = gitcomet_state::model::Loadable::Ready(Arc::new(diff));
+            repo.diff_state.diff_file_rev = 1;
+            repo.diff_state.diff_file =
+                gitcomet_state::model::Loadable::Ready(Some(Arc::new(file_diff)));
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+
+    target
+}
+
+fn build_collapsed_diff_fixture_texts() -> (String, String, String) {
+    let old_lines = (1..=70usize)
+        .map(|line| {
+            if line == 35 {
+                "old value 35".to_string()
+            } else {
+                format!("line {line}")
+            }
+        })
+        .collect::<Vec<_>>();
+    let new_lines = (1..=70usize)
+        .map(|line| {
+            if line == 35 {
+                "new value 35".to_string()
+            } else {
+                format!("line {line}")
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let old_text = format!("{}\n", old_lines.join("\n"));
+    let new_text = format!("{}\n", new_lines.join("\n"));
+    let unified = format!(
+        "\
+diff --git a/src/lib.rs b/src/lib.rs
+index 1111111..2222222 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -32,7 +32,7 @@
+ {}
+ {}
+ {}
+-{}
++{}
+ {}
+ {}
+ {}
+",
+        old_lines[31],
+        old_lines[32],
+        old_lines[33],
+        old_lines[34],
+        new_lines[34],
+        old_lines[35],
+        old_lines[36],
+        old_lines[37],
+    );
+    (unified, old_text, new_text)
+}
+
+#[gpui::test]
+fn diff_content_mode_main_pane_persist_path_does_not_reenter_main_pane_updates(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        cx.update(|_window, app| {
+            let main_pane = view.read(app).main_pane.clone();
+            main_pane.update(app, |pane, cx| {
+                pane.set_diff_content_mode_and_persist(DiffContentMode::Collapsed, cx);
+            });
+        });
+    }));
+    assert!(
+        result.is_ok(),
+        "main-pane diff content mode persistence should not re-enter MainPaneView updates"
+    );
+
+    cx.run_until_parked();
+
+    cx.update(|_window, app| {
+        assert_eq!(
+            crate::view::test_support::diff_content_mode(view.read(app)),
+            DiffContentMode::Collapsed,
+        );
+        assert_eq!(
+            view.read(app).main_pane.read(app).diff_content_mode,
+            DiffContentMode::Collapsed,
+        );
+    });
+}
+
+#[gpui::test]
+fn diff_content_mode_switches_regular_file_diff_between_patch_and_content(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(186);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_diff_content_mode_regular",
+        std::process::id()
+    ));
+    let _ = std::fs::create_dir_all(&workdir);
+    let path = PathBuf::from("src/lib.rs");
+    let target = gitcomet_core::domain::DiffTarget::Commit {
+        commit_id: gitcomet_core::domain::CommitId("deadbeef".into()),
+        path: Some(path.clone()),
+    };
+    let unified = "\
+diff --git a/src/lib.rs b/src/lib.rs
+index 1111111..2222222 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,2 +1,2 @@
+-old value
++new value
+ unchanged
+";
+    let diff = gitcomet_core::domain::Diff::from_unified(target.clone(), unified);
+    let file_diff = gitcomet_core::domain::FileDiffText::new(
+        path.clone(),
+        Some("old value\nunchanged\n".to_string()),
+        Some("new value\nunchanged\n".to_string()),
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            repo.diff_state.diff_target = Some(target.clone());
+            repo.diff_state.diff_rev = 1;
+            repo.diff_state.diff = gitcomet_state::model::Loadable::Ready(Arc::new(diff));
+            repo.diff_state.diff_file_rev = 1;
+            repo.diff_state.diff_file =
+                gitcomet_state::model::Loadable::Ready(Some(Arc::new(file_diff)));
+
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "regular file diff content mode activates file diff view",
+        |pane| {
+            pane.is_file_diff_view_active()
+                && pane.file_diff_cache_inflight.is_none()
+                && pane.file_diff_cache_target == Some(target.clone())
+        },
+        |pane| {
+            format!(
+                "content_mode={:?} file_diff_active={} inflight={:?} patch_rows={} file_rows={}",
+                pane.diff_content_mode,
+                pane.is_file_diff_view_active(),
+                pane.file_diff_cache_inflight,
+                pane.patch_diff_split_row_len(),
+                pane.file_diff_split_row_len(),
+            )
+        },
+    );
+
+    set_diff_content_mode_for_test(cx, &view, DiffContentMode::Collapsed);
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "regular file diff changed-lines mode activates patch view",
+        |pane| !pane.is_file_diff_view_active() && pane.patch_diff_split_row_len() > 0,
+        |pane| {
+            format!(
+                "content_mode={:?} file_diff_active={} patch_rows={} file_rows={}",
+                pane.diff_content_mode,
+                pane.is_file_diff_view_active(),
+                pane.patch_diff_split_row_len(),
+                pane.file_diff_split_row_len(),
+            )
+        },
+    );
+
+    set_diff_content_mode_for_test(cx, &view, DiffContentMode::Full);
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "regular file diff switches back to file diff view",
+        |pane| {
+            pane.is_file_diff_view_active()
+                && pane.file_diff_cache_inflight.is_none()
+                && pane.file_diff_cache_target == Some(target.clone())
+        },
+        |pane| {
+            format!(
+                "content_mode={:?} file_diff_active={} inflight={:?} patch_rows={} file_rows={}",
+                pane.diff_content_mode,
+                pane.is_file_diff_view_active(),
+                pane.file_diff_cache_inflight,
+                pane.patch_diff_split_row_len(),
+                pane.file_diff_split_row_len(),
+            )
+        },
+    );
+}
+
+#[gpui::test]
+fn diff_content_mode_switches_inline_submodule_diff_between_patch_and_content(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(187);
+    let target = push_inline_submodule_diff_content_mode_state(
+        cx,
+        &view,
+        repo_id,
+        "diff_content_mode_switches",
+    );
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "inline submodule content mode activates file diff view",
+        |pane| {
+            pane.is_inline_submodule_diff_active()
+                && pane.is_file_diff_view_active()
+                && pane.file_diff_cache_inflight.is_none()
+                && pane.file_diff_cache_target == Some(target.clone())
+        },
+        |pane| {
+            format!(
+                "inline_active={} content_mode={:?} is_file_preview={} supports_toggle={} wants_file_view={} file_diff_active={} inflight={:?} cache_repo_id={:?} cache_rev={} cache_target={:?} cache_path={:?} rendered_identity={:?} patch_rows={} file_rows={}",
+                pane.is_inline_submodule_diff_active(),
+                pane.diff_content_mode,
+                pane.is_file_preview_active(),
+                pane.supports_diff_content_mode_toggle(pane.is_file_preview_active()),
+                pane.wants_file_diff_view(pane.is_file_preview_active()),
+                pane.is_file_diff_view_active(),
+                pane.file_diff_cache_inflight,
+                pane.file_diff_cache_repo_id,
+                pane.file_diff_cache_rev,
+                pane.file_diff_cache_target,
+                pane.file_diff_cache_path,
+                pane.rendered_file_diff_identity(),
+                pane.patch_diff_split_row_len(),
+                pane.file_diff_split_row_len(),
+            )
+        },
+    );
+
+    set_diff_content_mode_for_test(cx, &view, DiffContentMode::Collapsed);
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "inline submodule changed-lines mode activates patch view",
+        |pane| {
+            pane.is_inline_submodule_diff_active()
+                && !pane.is_file_diff_view_active()
+                && pane.patch_diff_split_row_len() > 0
+        },
+        |pane| {
+            format!(
+                "inline_active={} content_mode={:?} file_diff_active={} patch_rows={} file_rows={}",
+                pane.is_inline_submodule_diff_active(),
+                pane.diff_content_mode,
+                pane.is_file_diff_view_active(),
+                pane.patch_diff_split_row_len(),
+                pane.file_diff_split_row_len(),
+            )
+        },
+    );
+
+    set_diff_content_mode_for_test(cx, &view, DiffContentMode::Full);
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "inline submodule switches back to file diff view",
+        |pane| {
+            pane.is_inline_submodule_diff_active()
+                && pane.is_file_diff_view_active()
+                && pane.file_diff_cache_inflight.is_none()
+                && pane.file_diff_cache_target == Some(target.clone())
+        },
+        |pane| {
+            format!(
+                "inline_active={} content_mode={:?} file_diff_active={} inflight={:?} patch_rows={} file_rows={}",
+                pane.is_inline_submodule_diff_active(),
+                pane.diff_content_mode,
+                pane.is_file_diff_view_active(),
+                pane.file_diff_cache_inflight,
+                pane.patch_diff_split_row_len(),
+                pane.file_diff_split_row_len(),
+            )
+        },
+    );
+}
+
+#[gpui::test]
+fn diff_content_mode_inline_submodule_persist_path_does_not_panic(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(188);
+    let target = push_inline_submodule_diff_content_mode_state(
+        cx,
+        &view,
+        repo_id,
+        "diff_content_mode_click",
+    );
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "inline submodule content mode activates file diff view before pane-owned toggle",
+        |pane| {
+            pane.is_inline_submodule_diff_active()
+                && pane.is_file_diff_view_active()
+                && pane.file_diff_cache_inflight.is_none()
+                && pane.file_diff_cache_target == Some(target.clone())
+        },
+        |pane| {
+            format!(
+                "inline_active={} content_mode={:?} file_diff_active={} inflight={:?} patch_rows={} file_rows={}",
+                pane.is_inline_submodule_diff_active(),
+                pane.diff_content_mode,
+                pane.is_file_diff_view_active(),
+                pane.file_diff_cache_inflight,
+                pane.patch_diff_split_row_len(),
+                pane.file_diff_split_row_len(),
+            )
+        },
+    );
+
+    let changed_lines_click = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        cx.update(|_window, app| {
+            let main_pane = view.read(app).main_pane.clone();
+            main_pane.update(app, |pane, cx| {
+                pane.set_diff_content_mode_and_persist(DiffContentMode::Collapsed, cx);
+            });
+        });
+    }));
+    assert!(
+        changed_lines_click.is_ok(),
+        "switching to Changed lines from the inline submodule pane should not panic"
+    );
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "inline submodule changed-lines toolbar click activates patch view",
+        |pane| {
+            pane.is_inline_submodule_diff_active()
+                && pane.diff_content_mode == DiffContentMode::Collapsed
+                && !pane.is_file_diff_view_active()
+                && pane.patch_diff_split_row_len() > 0
+        },
+        |pane| {
+            format!(
+                "inline_active={} content_mode={:?} file_diff_active={} patch_rows={} file_rows={}",
+                pane.is_inline_submodule_diff_active(),
+                pane.diff_content_mode,
+                pane.is_file_diff_view_active(),
+                pane.patch_diff_split_row_len(),
+                pane.file_diff_split_row_len(),
+            )
+        },
+    );
+
+    let content_click = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        cx.update(|_window, app| {
+            let main_pane = view.read(app).main_pane.clone();
+            main_pane.update(app, |pane, cx| {
+                pane.set_diff_content_mode_and_persist(DiffContentMode::Full, cx);
+            });
+        });
+    }));
+    assert!(
+        content_click.is_ok(),
+        "switching back to Content from the inline submodule pane should not panic"
+    );
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "inline submodule content pane-owned toggle restores file diff view",
+        |pane| {
+            pane.is_inline_submodule_diff_active()
+                && pane.diff_content_mode == DiffContentMode::Full
+                && pane.is_file_diff_view_active()
+                && pane.file_diff_cache_inflight.is_none()
+                && pane.file_diff_cache_target == Some(target.clone())
+        },
+        |pane| {
+            format!(
+                "inline_active={} content_mode={:?} file_diff_active={} inflight={:?} patch_rows={} file_rows={}",
+                pane.is_inline_submodule_diff_active(),
+                pane.diff_content_mode,
+                pane.is_file_diff_view_active(),
+                pane.file_diff_cache_inflight,
+                pane.patch_diff_split_row_len(),
+                pane.file_diff_split_row_len(),
+            )
+        },
+    );
+}
+
+#[gpui::test]
+fn collapsed_diff_hunk_header_click_does_not_create_row_selection(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(189);
+    let path = PathBuf::from("src/lib.rs");
+    let (unified, old_text, new_text) = build_collapsed_diff_fixture_texts();
+    let target = push_regular_diff_content_mode_state(
+        cx,
+        &view,
+        repo_id,
+        "collapsed_header_click",
+        path,
+        unified,
+        old_text,
+        new_text,
+    );
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "collapsed diff fixture activates full file diff first",
+        |pane| {
+            pane.is_file_diff_view_active() && pane.file_diff_cache_target == Some(target.clone())
+        },
+        |pane| {
+            format!(
+                "mode={:?} file_diff_active={} target={:?}",
+                pane.diff_content_mode,
+                pane.is_file_diff_view_active(),
+                pane.file_diff_cache_target,
+            )
+        },
+    );
+
+    set_diff_content_mode_for_test(cx, &view, DiffContentMode::Collapsed);
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "collapsed diff projection becomes active",
+        |pane| {
+            pane.is_collapsed_diff_projection_active()
+                && !pane.collapsed_diff_hunk_visible_indices.is_empty()
+        },
+        |pane| {
+            format!(
+                "collapsed_active={} visible_len={} hunk_rows={:?}",
+                pane.is_collapsed_diff_projection_active(),
+                pane.diff_visible_len(),
+                pane.collapsed_diff_hunk_visible_indices,
+            )
+        },
+    );
+
+    let hunk_visible_ix = cx.update(|_window, app| {
+        view.read(app)
+            .main_pane
+            .read(app)
+            .collapsed_diff_hunk_visible_indices[0]
+    });
+
+    let click = wait_for_diff_text_click_position_for_offset_range(
+        cx,
+        &view,
+        hunk_visible_ix,
+        DiffTextRegion::SplitLeft,
+        0..1,
+        "collapsed hunk header click target",
+    );
+    simulate_counted_click(cx, click, 1);
+    draw_and_drain_test_window(cx);
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(
+            pane.diff_selection_anchor, None,
+            "collapsed hunk header click should not create a row selection anchor"
+        );
+        assert_eq!(
+            pane.diff_selection_range, None,
+            "collapsed hunk header click should not create a row selection range"
+        );
+    });
+}
+
+#[gpui::test]
+fn collapsed_diff_reveal_controls_expand_visible_context(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(190);
+    let path = PathBuf::from("src/lib.rs");
+    let (unified, old_text, new_text) = build_collapsed_diff_fixture_texts();
+    let target = push_regular_diff_content_mode_state(
+        cx,
+        &view,
+        repo_id,
+        "collapsed_reveal",
+        path,
+        unified,
+        old_text,
+        new_text,
+    );
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "collapsed reveal fixture activates full file diff first",
+        |pane| {
+            pane.is_file_diff_view_active() && pane.file_diff_cache_target == Some(target.clone())
+        },
+        |pane| {
+            format!(
+                "mode={:?} file_diff_active={} target={:?}",
+                pane.diff_content_mode,
+                pane.is_file_diff_view_active(),
+                pane.file_diff_cache_target,
+            )
+        },
+    );
+
+    set_diff_content_mode_for_test(cx, &view, DiffContentMode::Collapsed);
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "collapsed reveal projection becomes active",
+        |pane| pane.is_collapsed_diff_projection_active() && !pane.collapsed_diff_hunks.is_empty(),
+        |pane| {
+            format!(
+                "collapsed_active={} visible_len={} hunks={:?}",
+                pane.is_collapsed_diff_projection_active(),
+                pane.diff_visible_len(),
+                pane.collapsed_diff_hunks,
+            )
+        },
+    );
+
+    let (hunk_src_ix, visible_before, hidden_up_before, hidden_down_before) =
+        cx.update(|_window, app| {
+            let pane = view.read(app).main_pane.read(app);
+            let hunk = pane
+                .collapsed_diff_hunks
+                .first()
+                .copied()
+                .expect("expected collapsed diff fixture to expose one hunk");
+            (
+                hunk.src_ix,
+                pane.diff_visible_len(),
+                pane.collapsed_diff_hidden_up_rows(hunk.src_ix),
+                pane.collapsed_diff_hidden_down_rows(hunk.src_ix),
+            )
+        });
+
+    assert!(
+        hidden_up_before >= 30 && hidden_down_before >= 30,
+        "fixture should expose enough hidden context for 30-line reveal steps"
+    );
+
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, cx| {
+            pane.collapsed_diff_reveal_hunk_up(hunk_src_ix, cx);
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(
+            pane.diff_visible_len(),
+            visible_before + 30,
+            "revealing above the hunk should add 30 visible rows"
+        );
+        assert_eq!(
+            pane.collapsed_diff_hidden_up_rows(hunk_src_ix),
+            hidden_up_before - 30,
+            "revealing above the hunk should reduce the hidden-up budget by 30 rows"
+        );
+    });
+
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, cx| {
+            pane.collapsed_diff_reveal_hunk_down(hunk_src_ix, cx);
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(
+            pane.diff_visible_len(),
+            visible_before + 60,
+            "revealing below the hunk should add another 30 visible rows"
+        );
+        assert_eq!(
+            pane.collapsed_diff_hidden_down_rows(hunk_src_ix),
+            hidden_down_before - 30,
+            "revealing below the hunk should reduce the hidden-down budget by 30 rows"
+        );
+    });
 }
 
 fn fixture_git_command(repo_root: &std::path::Path) -> std::process::Command {

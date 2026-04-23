@@ -247,17 +247,18 @@ impl MainPaneView {
     /// Returns `true` when the markdown rendered preview is currently shown
     /// (either single-pane file preview or two-sided diff preview).
     pub(in crate::view) fn is_markdown_preview_active(&self) -> bool {
+        let has_submodule_summary = self
+            .active_repo()
+            .is_some_and(|repo| !matches!(repo.diff_state.submodule_summary, Loadable::NotLoaded));
+        if has_submodule_summary && !self.is_inline_submodule_diff_active() {
+            return false;
+        }
+
         let is_file_preview =
             self.is_file_preview_active() && self.untracked_directory_notice().is_none();
-        let wants_file_diff = !is_file_preview
-            && !self.is_worktree_target_directory()
-            && self.active_repo().is_some_and(|repo| {
-                Self::is_file_diff_target(repo.diff_state.diff_target.as_ref())
-            });
-        let rendered_preview_kind = crate::view::diff_target_rendered_preview_kind(
-            self.active_repo()
-                .and_then(|repo| repo.diff_state.diff_target.as_ref()),
-        );
+        let wants_file_diff = self.wants_file_diff_view(is_file_preview);
+        let rendered_preview_kind =
+            crate::view::diff_target_rendered_preview_kind(self.rendered_diff_target());
         let toggle_kind = crate::view::main_diff_rendered_preview_toggle_kind(
             wants_file_diff,
             is_file_preview,
@@ -436,18 +437,18 @@ impl MainPaneView {
     }
 
     pub(in crate::view) fn is_worktree_target_directory(&self) -> bool {
-        self.active_repo().is_some_and(|repo| {
-            let Some(DiffTarget::WorkingTree { path, .. }) = repo.diff_state.diff_target.as_ref()
-            else {
-                return false;
-            };
-            let abs_path = if path.is_absolute() {
-                path.clone()
-            } else {
-                repo.spec.workdir.join(path)
-            };
-            abs_path.is_dir()
-        })
+        let Some(DiffTarget::WorkingTree { path, .. }) = self.rendered_diff_target() else {
+            return false;
+        };
+        let Some(workdir) = self.rendered_diff_workdir() else {
+            return false;
+        };
+        let abs_path = if path.is_absolute() {
+            path.clone()
+        } else {
+            workdir.join(path)
+        };
+        abs_path.is_dir()
     }
 
     pub(in crate::view) fn untracked_directory_notice(&self) -> Option<SharedString> {

@@ -112,6 +112,14 @@ pub enum Effect {
         repo_id: RepoId,
         inline_rev: u64,
     },
+    LoadInlineSubmoduleSelectedDiffFile {
+        repo_id: RepoId,
+        inline_rev: u64,
+    },
+    LoadInlineSubmoduleSelectedDiffFileImage {
+        repo_id: RepoId,
+        inline_rev: u64,
+    },
     LoadDiffFileImage {
         repo_id: RepoId,
         target: DiffTarget,

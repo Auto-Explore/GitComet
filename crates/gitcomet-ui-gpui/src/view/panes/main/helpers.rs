@@ -2143,6 +2143,42 @@ pub(in crate::view) struct PreparedSyntaxDocumentKey {
     pub(in crate::view) view_mode: PreparedSyntaxViewMode,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(in crate::view) struct CollapsedDiffRevealState {
+    pub(in crate::view) up_lines: usize,
+    pub(in crate::view) down_lines: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::view) struct CollapsedDiffHunk {
+    pub(in crate::view) src_ix: usize,
+    pub(in crate::view) base_row_start: usize,
+    pub(in crate::view) base_row_end_exclusive: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::view) enum CollapsedDiffVisibleRow {
+    FileHeader { src_ix: usize },
+    HunkHeader { src_ix: usize },
+    FileRow { row_ix: usize },
+}
+
+impl CollapsedDiffVisibleRow {
+    pub(in crate::view) const fn src_ix(self) -> Option<usize> {
+        match self {
+            Self::FileHeader { src_ix } | Self::HunkHeader { src_ix } => Some(src_ix),
+            Self::FileRow { .. } => None,
+        }
+    }
+
+    pub(in crate::view) const fn row_ix(self) -> Option<usize> {
+        match self {
+            Self::FileRow { row_ix } => Some(row_ix),
+            Self::FileHeader { .. } | Self::HunkHeader { .. } => None,
+        }
+    }
+}
+
 pub(in crate::view) struct MainPaneView {
     pub(in crate::view) store: Arc<AppStore>,
     pub(super) state: Arc<AppState>,
@@ -2168,6 +2204,7 @@ pub(in crate::view) struct MainPaneView {
     pub(in crate::view) rendered_preview_modes: RenderedPreviewModes,
     pub(in crate::view) diff_word_wrap: bool,
     pub(in crate::view) diff_scroll_sync: DiffScrollSync,
+    pub(in crate::view) diff_content_mode: DiffContentMode,
     pub(in crate::view) diff_split_ratio: f32,
     pub(in crate::view) diff_split_resize: Option<DiffSplitResizeState>,
     pub(in crate::view) diff_split_last_synced_x: [Pixels; 2],
@@ -2195,9 +2232,15 @@ pub(in crate::view) struct MainPaneView {
     pub(in crate::view) submodule_hash_inputs: Vec<Entity<components::TextInput>>,
     pub(in crate::view) diff_visible_indices: Vec<usize>,
     pub(in crate::view) diff_visible_inline_map: Option<super::diff_cache::PatchInlineVisibleMap>,
+    pub(in crate::view) collapsed_diff_hunks: Vec<CollapsedDiffHunk>,
+    pub(in crate::view) collapsed_diff_reveals: HashMap<usize, CollapsedDiffRevealState>,
+    pub(in crate::view) collapsed_diff_visible_rows: Vec<CollapsedDiffVisibleRow>,
+    pub(in crate::view) collapsed_diff_hunk_visible_indices: Vec<usize>,
     pub(in crate::view) diff_visible_cache_len: usize,
     pub(in crate::view) diff_visible_view: DiffViewMode,
     pub(in crate::view) diff_visible_is_file_view: bool,
+    pub(in crate::view) diff_visible_projection_rev: u64,
+    pub(in crate::view) diff_visible_cache_projection_rev: u64,
     pub(in crate::view) diff_scrollbar_markers_cache: Vec<components::ScrollbarMarker>,
     pub(in crate::view) diff_word_highlights: Vec<Option<Vec<Range<usize>>>>,
     pub(in crate::view) diff_word_highlights_inflight: Option<u64>,
@@ -2239,9 +2282,13 @@ pub(in crate::view) struct MainPaneView {
     /// Real old-side file text used for split and inline syntax projection.
     pub(in crate::view) file_diff_old_text: SharedString,
     pub(in crate::view) file_diff_old_line_starts: Arc<[usize]>,
+    pub(in crate::view) file_diff_old_line_to_row: Arc<[Option<usize>]>,
+    pub(in crate::view) file_diff_old_line_to_inline_row: Arc<[Option<usize>]>,
     /// Real new-side file text used for split and inline syntax projection.
     pub(in crate::view) file_diff_new_text: SharedString,
     pub(in crate::view) file_diff_new_line_starts: Arc<[usize]>,
+    pub(in crate::view) file_diff_new_line_to_row: Arc<[Option<usize>]>,
+    pub(in crate::view) file_diff_new_line_to_inline_row: Arc<[Option<usize>]>,
     pub(in crate::view) file_diff_inline_cache: Vec<AnnotatedDiffLine>,
     pub(in crate::view) file_diff_inline_row_provider:
         Option<Arc<super::diff_cache::PagedFileDiffInlineRows>>,

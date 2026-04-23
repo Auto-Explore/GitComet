@@ -508,6 +508,7 @@ impl MainPaneView {
         } else {
             if self.diff_view == DiffViewMode::Inline
                 && !self.is_file_diff_view_active()
+                && !self.is_collapsed_diff_projection_active()
                 && self.diff_search_scan_inline_patch_diff_with_needle(query)
             {
                 return;
@@ -699,6 +700,7 @@ impl MainPaneView {
             || self.active_conflict_target().is_some()
             || self.diff_view != DiffViewMode::Inline
             || self.is_file_diff_view_active()
+            || self.is_collapsed_diff_projection_active()
         {
             return false;
         }

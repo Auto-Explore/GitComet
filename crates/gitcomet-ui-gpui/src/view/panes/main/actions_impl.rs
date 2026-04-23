@@ -208,6 +208,12 @@ impl MainPaneView {
 
         let clicked_visible_ix = clicked_visible_ix.min(list_len - 1);
 
+        if self.is_collapsed_diff_projection_active()
+            && matches!(kind, DiffClickKind::HunkHeader | DiffClickKind::FileHeader)
+        {
+            return;
+        }
+
         if shift && let Some(anchor) = self.diff_selection_anchor {
             let a = anchor.min(clicked_visible_ix);
             let b = anchor.max(clicked_visible_ix);
@@ -259,6 +265,12 @@ impl MainPaneView {
         }
 
         let clicked_visible_ix = clicked_visible_ix.min(list_len - 1);
+
+        if self.is_collapsed_diff_projection_active()
+            && matches!(kind, DiffClickKind::HunkHeader | DiffClickKind::FileHeader)
+        {
+            return;
+        }
 
         if shift && let Some(anchor) = self.diff_selection_anchor {
             let a = anchor.min(clicked_visible_ix);
@@ -387,7 +399,21 @@ impl MainPaneView {
         }
     }
 
-    pub(super) fn patch_hunk_entries(&self) -> Vec<(usize, usize)> {
+    pub(in crate::view) fn patch_hunk_entries(&self) -> Vec<(usize, usize)> {
+        if self.is_collapsed_diff_projection_active() {
+            return self
+                .collapsed_diff_hunk_visible_indices
+                .iter()
+                .filter_map(|&visible_ix| {
+                    self.collapsed_visible_row(visible_ix).and_then(|row| {
+                        row.src_ix()
+                            .filter(|_| matches!(row, CollapsedDiffVisibleRow::HunkHeader { .. }))
+                            .map(|src_ix| (visible_ix, src_ix))
+                    })
+                })
+                .collect();
+        }
+
         let mut out = Vec::new();
         for visible_ix in 0..self.diff_visible_len() {
             let Some(ix) = self.diff_mapped_ix_for_visible_ix(visible_ix) else {
@@ -425,6 +451,9 @@ impl MainPaneView {
         }
         if self.is_file_diff_view_active() {
             return self.file_change_visible_indices();
+        }
+        if self.is_collapsed_diff_projection_active() {
+            return self.collapsed_diff_hunk_visible_indices.clone();
         }
         self.patch_hunk_entries()
             .into_iter()

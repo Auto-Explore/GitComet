@@ -331,6 +331,48 @@ fn send_unavailable_git_effect_result(
                 },
             ))
         }
+        Effect::LoadInlineSubmoduleSelectedDiffFile {
+            repo_id,
+            inline_rev,
+        } => {
+            let Some((_, target, current_rev)) =
+                selected_inline_submodule_diff(thread_state, repo_id)
+            else {
+                return;
+            };
+            if current_rev != inline_rev {
+                return;
+            }
+            send(Msg::Internal(
+                crate::msg::InternalMsg::InlineSubmoduleDiffFileLoaded {
+                    repo_id,
+                    inline_rev,
+                    target,
+                    result: Err(git_unavailable_error(runtime)),
+                },
+            ))
+        }
+        Effect::LoadInlineSubmoduleSelectedDiffFileImage {
+            repo_id,
+            inline_rev,
+        } => {
+            let Some((_, target, current_rev)) =
+                selected_inline_submodule_diff(thread_state, repo_id)
+            else {
+                return;
+            };
+            if current_rev != inline_rev {
+                return;
+            }
+            send(Msg::Internal(
+                crate::msg::InternalMsg::InlineSubmoduleDiffFileImageLoaded {
+                    repo_id,
+                    inline_rev,
+                    target,
+                    result: Err(git_unavailable_error(runtime)),
+                },
+            ))
+        }
         Effect::LoadDiffFileImage { repo_id, target } => send(Msg::Internal(
             crate::msg::InternalMsg::DiffFileImageLoaded {
                 repo_id,
@@ -989,6 +1031,32 @@ pub(super) fn schedule_effect(
             inline_rev,
         } => {
             repo_load::schedule_load_inline_submodule_selected_diff(
+                executor,
+                backend.clone(),
+                msg_tx,
+                repo_id,
+                inline_rev,
+                selected_inline_submodule_diff(thread_state, repo_id),
+            );
+        }
+        Effect::LoadInlineSubmoduleSelectedDiffFile {
+            repo_id,
+            inline_rev,
+        } => {
+            repo_load::schedule_load_inline_submodule_selected_diff_file(
+                executor,
+                backend.clone(),
+                msg_tx,
+                repo_id,
+                inline_rev,
+                selected_inline_submodule_diff(thread_state, repo_id),
+            );
+        }
+        Effect::LoadInlineSubmoduleSelectedDiffFileImage {
+            repo_id,
+            inline_rev,
+        } => {
+            repo_load::schedule_load_inline_submodule_selected_diff_file_image(
                 executor,
                 backend.clone(),
                 msg_tx,

@@ -263,6 +263,30 @@ impl std::fmt::Debug for InternalMsg {
                 .field("target", target)
                 .field("result", result)
                 .finish(),
+            InternalMsg::InlineSubmoduleDiffFileLoaded {
+                repo_id,
+                inline_rev,
+                target,
+                result,
+            } => f
+                .debug_struct("InlineSubmoduleDiffFileLoaded")
+                .field("repo_id", repo_id)
+                .field("inline_rev", inline_rev)
+                .field("target", target)
+                .field("result", result)
+                .finish(),
+            InternalMsg::InlineSubmoduleDiffFileImageLoaded {
+                repo_id,
+                inline_rev,
+                target,
+                result,
+            } => f
+                .debug_struct("InlineSubmoduleDiffFileImageLoaded")
+                .field("repo_id", repo_id)
+                .field("inline_rev", inline_rev)
+                .field("target", target)
+                .field("result", result)
+                .finish(),
             InternalMsg::DiffFileImageLoaded {
                 repo_id,
                 target,

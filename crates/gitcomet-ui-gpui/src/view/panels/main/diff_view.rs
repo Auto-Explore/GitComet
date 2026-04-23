@@ -91,11 +91,7 @@ impl MainPaneView {
         if self.is_markdown_preview_active() {
             self.rendered_preview_modes
                 .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Source);
-            let wants_file_diff = !self.is_file_preview_active()
-                && !self.is_worktree_target_directory()
-                && self.active_repo().is_some_and(|repo| {
-                    Self::is_file_diff_target(repo.diff_state.diff_target.as_ref())
-                });
+            let wants_file_diff = self.wants_file_diff_view(self.is_file_preview_active());
             if wants_file_diff {
                 self.ensure_file_diff_cache(cx);
             }
@@ -732,6 +728,8 @@ impl MainPaneView {
             && untracked_directory_notice.is_none()
             && !has_submodule_summary
             && !inline_submodule_diff_active;
+        let supports_diff_content_toggle = (inline_submodule_diff_active || !has_submodule_summary)
+            && self.supports_diff_content_mode_toggle(is_file_preview);
 
         if is_file_preview {
             self.ensure_selected_file_preview_loaded(cx);
@@ -745,17 +743,13 @@ impl MainPaneView {
             self.reset_worktree_preview_source_state();
             self.diff_horizontal_min_width = px(0.0);
         }
-        let wants_file_diff = !inline_submodule_diff_active
-            && !is_file_preview
-            && !self.is_worktree_target_directory()
-            && self
-                .active_repo()
-                .is_some_and(|r| Self::is_file_diff_target(r.diff_state.diff_target.as_ref()));
+        let wants_file_diff =
+            supports_diff_content_toggle && self.wants_file_diff_view(is_file_preview);
 
         let repo = self.active_repo();
         let conflict_target = (!inline_submodule_diff_active)
             .then_some(())
-            .and_then(|_| repo)
+            .and(repo)
             .and_then(|repo| {
                 let DiffTarget::WorkingTree { path, area } =
                     repo.diff_state.diff_target.as_ref()?
@@ -807,10 +801,10 @@ impl MainPaneView {
                 .rendered_preview_modes
                 .get(RenderedPreviewKind::Markdown)
                 == RenderedPreviewMode::Rendered;
-        let is_image_diff_loaded = !inline_submodule_diff_active
-            && repo.is_some_and(|repo| {
-                !matches!(repo.diff_state.diff_file_image, Loadable::NotLoaded)
-            });
+        let is_image_diff_loaded = wants_file_diff
+            && self
+                .rendered_file_image_diff_loadable()
+                .is_some_and(|file| !matches!(file, Loadable::NotLoaded));
         let is_image_diff_view = wants_file_diff
             && is_image_diff_loaded
             && (!matches!(rendered_preview_kind, Some(RenderedPreviewKind::Svg))
@@ -1004,6 +998,66 @@ impl MainPaneView {
                     });
             }
         } else if !is_file_preview {
+            let view_toggle_selected_bg =
+                with_alpha(theme.colors.accent, if theme.is_dark { 0.26 } else { 0.20 });
+            let view_toggle_border = with_alpha(
+                theme.colors.text_muted,
+                if theme.is_dark { 0.38 } else { 0.28 },
+            );
+            let view_toggle_divider = with_alpha(view_toggle_border, 0.90);
+
+            if supports_diff_content_toggle {
+                let diff_mode_invoker: SharedString = "diff_content_mode_header".into();
+                let diff_mode_active = self
+                    .active_context_menu_invoker
+                    .as_ref()
+                    .is_some_and(|id| id == &diff_mode_invoker);
+                let diff_mode_label = self.diff_content_mode.label();
+
+                controls = controls.child(
+                    div()
+                        .id("diff_content_mode_header")
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .px_1()
+                        .h(components::control_height(ui_scale_percent))
+                        .rounded(px(theme.radii.row))
+                        .when(diff_mode_active, |d| d.bg(theme.colors.active))
+                        .hover(move |s| {
+                            if diff_mode_active {
+                                s.bg(theme.colors.active)
+                            } else {
+                                s.bg(with_alpha(theme.colors.hover, 0.55))
+                            }
+                        })
+                        .active(move |s| s.bg(theme.colors.active))
+                        .cursor(CursorStyle::PointingHand)
+                        .child(
+                            div()
+                                .min_w(px(0.0))
+                                .line_clamp(1)
+                                .whitespace_nowrap()
+                                .text_sm()
+                                .child(diff_mode_label),
+                        )
+                        .child(svg_icon(
+                            "icons/chevron_down.svg",
+                            theme.colors.text_muted,
+                            px(12.0),
+                        ))
+                        .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
+                            this.activate_context_menu_invoker(diff_mode_invoker.clone(), cx);
+                            this.open_popover_at(
+                                PopoverKind::DiffContentModeSettings,
+                                e.position(),
+                                window,
+                                cx,
+                            );
+                        })),
+                );
+            }
+
             controls = controls.when_some(prev_file_btn, |d, btn| d.child(btn));
 
             if !is_image_diff_view {
@@ -1056,13 +1110,6 @@ impl MainPaneView {
                         }
                     }));
 
-                let view_toggle_selected_bg =
-                    with_alpha(theme.colors.accent, if theme.is_dark { 0.26 } else { 0.20 });
-                let view_toggle_border = with_alpha(
-                    theme.colors.text_muted,
-                    if theme.is_dark { 0.38 } else { 0.28 },
-                );
-                let view_toggle_divider = with_alpha(view_toggle_border, 0.90);
                 let diff_inline_btn = components::Button::new("diff_inline", "Inline")
                     .borderless()
                     .style(components::ButtonStyle::Subtle)
@@ -3848,11 +3895,14 @@ impl MainPaneView {
                         }
                         "h" => {
                             let is_file_preview = this.is_file_preview_active();
-                            let wants_file_diff = !is_file_preview
-                                && !this.is_worktree_target_directory()
-                                && this.active_repo().is_some_and(|r| {
-                                    Self::is_file_diff_target(r.diff_state.diff_target.as_ref())
-                                });
+                            let has_submodule_summary = this.active_repo().is_some_and(|repo| {
+                                !matches!(repo.diff_state.submodule_summary, Loadable::NotLoaded)
+                            });
+                            let supports_diff_content_toggle =
+                                (this.is_inline_submodule_diff_active() || !has_submodule_summary)
+                                    && this.supports_diff_content_mode_toggle(is_file_preview);
+                            let wants_file_diff = supports_diff_content_toggle
+                                && this.wants_file_diff_view(is_file_preview);
                             if !is_file_preview && !wants_file_diff {
                                 this.open_popover_at_cursor(PopoverKind::DiffHunks, window, cx);
                                 handled = true;

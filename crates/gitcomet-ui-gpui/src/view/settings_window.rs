@@ -64,6 +64,19 @@ const DIFF_SCROLL_SYNC_OPTIONS: &[(&str, DiffScrollSync, &str)] = &[
     ),
 ];
 
+const DIFF_CONTENT_MODE_OPTIONS: &[(&str, DiffContentMode, &str)] = &[
+    (
+        "settings_window_diff_content_mode_collapsed",
+        DiffContentMode::Collapsed,
+        "Hide unchanged sections, with hunk controls to reveal more context.",
+    ),
+    (
+        "settings_window_diff_content_mode_full",
+        DiffContentMode::Full,
+        "Show the full file using the regular file diff view.",
+    ),
+];
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SettingsSection {
     Theme,
@@ -73,6 +86,7 @@ enum SettingsSection {
     DateFormat,
     Timezone,
     ChangeTracking,
+    DiffContentMode,
     Diff,
     GitLogDefaultMode,
     GitLogColumns,
@@ -145,11 +159,13 @@ pub(crate) struct SettingsWindowView {
     date_format_scroll: UniformListScrollHandle,
     timezone_scroll: UniformListScrollHandle,
     change_tracking_scroll: UniformListScrollHandle,
+    diff_content_mode_scroll: UniformListScrollHandle,
     diff_scroll_sync_scroll: UniformListScrollHandle,
     date_time_format: DateTimeFormat,
     timezone: Timezone,
     show_timezone: bool,
     change_tracking_view: ChangeTrackingView,
+    diff_content_mode: DiffContentMode,
     diff_scroll_sync: DiffScrollSync,
     history_show_graph: bool,
     history_show_author: bool,
@@ -487,6 +503,11 @@ impl SettingsWindowView {
             .as_deref()
             .and_then(DiffScrollSync::from_key)
             .unwrap_or_default();
+        let diff_content_mode = ui_session
+            .diff_content_mode
+            .as_deref()
+            .and_then(DiffContentMode::from_key)
+            .unwrap_or_default();
         let history_show_graph = ui_session.history_show_graph.unwrap_or(true);
         let history_show_author = ui_session.history_show_author.unwrap_or(true);
         let history_show_date = ui_session.history_show_date.unwrap_or(true);
@@ -569,11 +590,13 @@ impl SettingsWindowView {
             date_format_scroll: UniformListScrollHandle::default(),
             timezone_scroll: UniformListScrollHandle::default(),
             change_tracking_scroll: UniformListScrollHandle::default(),
+            diff_content_mode_scroll: UniformListScrollHandle::default(),
             diff_scroll_sync_scroll: UniformListScrollHandle::default(),
             date_time_format,
             timezone,
             show_timezone,
             change_tracking_view,
+            diff_content_mode,
             diff_scroll_sync,
             history_show_graph,
             history_show_author,
@@ -624,6 +647,7 @@ impl SettingsWindowView {
             show_timezone: Some(self.show_timezone),
             change_tracking_view: Some(self.change_tracking_view.key().to_string()),
             diff_scroll_sync: Some(self.diff_scroll_sync.key().to_string()),
+            diff_content_mode: Some(self.diff_content_mode.key().to_string()),
             change_tracking_height: None,
             untracked_height: None,
             history_show_graph: Some(self.history_show_graph),
@@ -995,6 +1019,20 @@ impl SettingsWindowView {
         self.persist_preferences(cx);
         self.update_main_windows(cx, move |view, _window, cx| {
             view.set_diff_scroll_sync(next, cx);
+        });
+        cx.notify();
+    }
+
+    fn set_diff_content_mode(&mut self, next: DiffContentMode, cx: &mut gpui::Context<Self>) {
+        if self.diff_content_mode == next {
+            return;
+        }
+
+        self.diff_content_mode = next;
+        self.expanded_section = None;
+        self.persist_preferences(cx);
+        self.update_main_windows(cx, move |view, _window, cx| {
+            view.set_diff_content_mode(next, cx);
         });
         cx.notify();
     }
@@ -1987,6 +2025,31 @@ impl SettingsWindowView {
             .collect()
     }
 
+    fn render_diff_content_mode_option_rows(
+        this: &mut Self,
+        range: Range<usize>,
+        _window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> Vec<AnyElement> {
+        let theme = this.theme;
+        range
+            .filter_map(|ix| DIFF_CONTENT_MODE_OPTIONS.get(ix).copied())
+            .map(|(id, option, detail)| {
+                this.option_row(
+                    id,
+                    option.label(),
+                    Some(detail.into()),
+                    this.diff_content_mode == option,
+                    theme,
+                )
+                .on_click(cx.listener(move |this, _e: &ClickEvent, _window, cx| {
+                    this.set_diff_content_mode(option, cx);
+                }))
+                .into_any_element()
+            })
+            .collect()
+    }
+
     fn card(&self, id: &'static str, title: &'static str, theme: AppTheme) -> Stateful<gpui::Div> {
         div()
             .id(id)
@@ -2327,6 +2390,18 @@ impl Render for SettingsWindowView {
                         )
                         .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
                             this.toggle_section(SettingsSection::Diff, cx);
+                        }));
+
+                    let diff_content_mode_row = self
+                        .summary_row(
+                            "settings_window_diff_content_mode",
+                            "Diff mode",
+                            self.diff_content_mode.settings_label().into(),
+                            self.expanded_section == Some(SettingsSection::DiffContentMode),
+                            theme,
+                        )
+                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                            this.toggle_section(SettingsSection::DiffContentMode, cx);
                         }));
 
                     let history_default_mode_row = self
@@ -2707,7 +2782,42 @@ impl Render for SettingsWindowView {
 
                     let mut diff_card = self
                         .card("settings_window_diff_card", "Diff", theme)
+                        .child(diff_content_mode_row)
                         .child(diff_scroll_sync_row);
+
+                    if self.expanded_section == Some(SettingsSection::DiffContentMode) {
+                        let list = uniform_list(
+                            "settings_window_diff_content_mode_list",
+                            DIFF_CONTENT_MODE_OPTIONS.len(),
+                            cx.processor(Self::render_diff_content_mode_option_rows),
+                        )
+                        .w_full()
+                        .min_w(px(0.0))
+                        .h_full()
+                        .min_h(px(0.0))
+                        .track_scroll(&self.diff_content_mode_scroll)
+                        .on_scroll_wheel({
+                            let scroll = self.diff_content_mode_scroll.clone();
+                            move |event, window, cx| {
+                                if uniform_list_should_stop_scroll_propagation(
+                                    &scroll, event, window,
+                                ) {
+                                    cx.stop_propagation();
+                                }
+                            }
+                        })
+                        .into_any_element();
+                        diff_card = diff_card.child(self.dropdown_list_container(
+                            "settings_window_diff_content_mode_list_container",
+                            "settings_window_diff_content_mode_scrollbar",
+                            self.diff_content_mode_scroll.clone(),
+                            DIFF_CONTENT_MODE_OPTIONS.len(),
+                            SETTINGS_DROPDOWN_DETAIL_ROW_HEIGHT_PX,
+                            SETTINGS_DROPDOWN_DETAIL_LIST_EXTRA_HEIGHT_PX,
+                            list,
+                            theme,
+                        ));
+                    }
 
                     if self.expanded_section == Some(SettingsSection::Diff) {
                         let list = uniform_list(
@@ -5076,6 +5186,66 @@ mod tests {
             assert_eq!(
                 settings_window
                     .read_with(app, |settings, _cx| settings.diff_scroll_sync)
+                    .expect("settings window should remain readable"),
+                next_mode
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn diff_content_mode_setting_defers_main_window_update(cx: &mut gpui::TestAppContext) {
+        let _visual_guard = lock_visual_test();
+        let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+        let (main_view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+            open_settings_window(app);
+        });
+        cx.run_until_parked();
+
+        let settings_window = cx.update(|_window, app| {
+            app.windows()
+                .into_iter()
+                .find_map(|window| window.downcast::<SettingsWindowView>())
+                .expect("settings window should be open")
+        });
+
+        let next_mode = cx.update(|_window, app| {
+            let current = settings_window
+                .read_with(app, |settings, _cx| settings.diff_content_mode)
+                .expect("settings window should be readable");
+            match current {
+                DiffContentMode::Full => DiffContentMode::Collapsed,
+                DiffContentMode::Collapsed => DiffContentMode::Full,
+            }
+        });
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            cx.update(|_window, app| {
+                main_view.update(app, |_view, cx| {
+                    let _ = settings_window.update(cx, |settings, _window, cx| {
+                        settings.set_diff_content_mode(next_mode, cx);
+                    });
+                });
+            });
+        }));
+        assert!(
+            result.is_ok(),
+            "diff content mode update should not re-enter GitCometView updates"
+        );
+
+        cx.run_until_parked();
+
+        cx.update(|_window, app| {
+            assert_eq!(
+                crate::view::test_support::diff_content_mode(main_view.read(app)),
+                next_mode
+            );
+            assert_eq!(
+                settings_window
+                    .read_with(app, |settings, _cx| settings.diff_content_mode)
                     .expect("settings window should remain readable"),
                 next_mode
             );

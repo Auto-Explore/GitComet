@@ -1019,6 +1019,70 @@ pub(super) fn schedule_load_inline_submodule_selected_diff(
     });
 }
 
+pub(super) fn schedule_load_inline_submodule_selected_diff_file(
+    executor: &TaskExecutor,
+    backend: Arc<dyn GitBackend>,
+    msg_tx: mpsc::Sender<Msg>,
+    repo_id: RepoId,
+    inline_rev: u64,
+    selected: Option<(PathBuf, DiffTarget, u64)>,
+) {
+    let Some((submodule_repo_path, target, current_rev)) = selected else {
+        return;
+    };
+    if current_rev != inline_rev {
+        return;
+    }
+
+    executor.spawn(move || {
+        let result = backend
+            .open(&submodule_repo_path)
+            .and_then(|repo| repo.diff_file_text(&target));
+        send_or_log(
+            &msg_tx,
+            Msg::Internal(crate::msg::InternalMsg::InlineSubmoduleDiffFileLoaded {
+                repo_id,
+                inline_rev,
+                target,
+                result,
+            }),
+        );
+    });
+}
+
+pub(super) fn schedule_load_inline_submodule_selected_diff_file_image(
+    executor: &TaskExecutor,
+    backend: Arc<dyn GitBackend>,
+    msg_tx: mpsc::Sender<Msg>,
+    repo_id: RepoId,
+    inline_rev: u64,
+    selected: Option<(PathBuf, DiffTarget, u64)>,
+) {
+    let Some((submodule_repo_path, target, current_rev)) = selected else {
+        return;
+    };
+    if current_rev != inline_rev {
+        return;
+    }
+
+    executor.spawn(move || {
+        let result = backend
+            .open(&submodule_repo_path)
+            .and_then(|repo| repo.diff_file_image(&target));
+        send_or_log(
+            &msg_tx,
+            Msg::Internal(
+                crate::msg::InternalMsg::InlineSubmoduleDiffFileImageLoaded {
+                    repo_id,
+                    inline_rev,
+                    target,
+                    result,
+                },
+            ),
+        );
+    });
+}
+
 pub(super) fn schedule_load_diff_file_image(
     executor: &TaskExecutor,
     repos: &RepoMap,

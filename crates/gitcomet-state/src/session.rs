@@ -31,6 +31,7 @@ pub struct UiSession {
     pub show_timezone: Option<bool>,
     pub change_tracking_view: Option<String>,
     pub diff_scroll_sync: Option<String>,
+    pub diff_content_mode: Option<String>,
     pub change_tracking_height: Option<u32>,
     pub untracked_height: Option<u32>,
     pub history_show_graph: Option<bool>,
@@ -133,6 +134,7 @@ struct UiSessionFile {
     show_timezone: Option<bool>,
     change_tracking_view: Option<String>,
     diff_scroll_sync: Option<String>,
+    diff_content_mode: Option<String>,
     change_tracking_height: Option<u32>,
     untracked_height: Option<u32>,
     history_show_graph: Option<bool>,
@@ -200,6 +202,7 @@ pub fn load_from_path(path: &Path) -> UiSession {
         show_timezone: file.show_timezone,
         change_tracking_view: file.change_tracking_view,
         diff_scroll_sync: file.diff_scroll_sync,
+        diff_content_mode: file.diff_content_mode,
         change_tracking_height: file.change_tracking_height,
         untracked_height: file.untracked_height,
         history_show_graph: file.history_show_graph,
@@ -485,6 +488,7 @@ pub struct UiSettings {
     pub show_timezone: Option<bool>,
     pub change_tracking_view: Option<String>,
     pub diff_scroll_sync: Option<String>,
+    pub diff_content_mode: Option<String>,
     pub change_tracking_height: Option<u32>,
     pub untracked_height: Option<u32>,
     pub history_show_graph: Option<bool>,
@@ -550,6 +554,9 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
     }
     if let Some(value) = settings.diff_scroll_sync {
         file.diff_scroll_sync = Some(value);
+    }
+    if let Some(value) = settings.diff_content_mode {
+        file.diff_content_mode = Some(value);
     }
     if let Some(value) = settings.change_tracking_height {
         file.change_tracking_height = Some(value);
@@ -2416,6 +2423,66 @@ mod tests {
 
         let loaded = load_from_path(&path);
         assert_eq!(loaded.diff_scroll_sync.as_deref(), Some("horizontal"));
+    }
+
+    #[test]
+    fn persist_ui_settings_round_trips_diff_content_mode() {
+        let dir = env::temp_dir().join(format!(
+            "gitcomet-ui-settings-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("session.json");
+
+        persist_to_path(
+            &path,
+            &UiSessionFile {
+                version: CURRENT_SESSION_FILE_VERSION,
+                open_repos: Vec::new(),
+                active_repo: None,
+                ..UiSessionFile::default()
+            },
+        )
+        .expect("seed session file");
+
+        persist_ui_settings_to_path(
+            UiSettings {
+                window_width: None,
+                window_height: None,
+                sidebar_width: None,
+                details_width: None,
+                repo_sidebar_collapsed_items: None,
+                theme_mode: None,
+                ui_font_family: None,
+                editor_font_family: None,
+                use_font_ligatures: None,
+                date_time_format: None,
+                timezone: None,
+                show_timezone: None,
+                change_tracking_view: None,
+                diff_scroll_sync: None,
+                diff_content_mode: Some("changed_lines_only".to_string()),
+                change_tracking_height: None,
+                untracked_height: None,
+                history_show_author: None,
+                history_show_date: None,
+                history_show_sha: None,
+                git_executable_path: None,
+                ..UiSettings::default()
+            },
+            &path,
+        )
+        .expect("persist ui settings");
+
+        let loaded = load_from_path(&path);
+        assert_eq!(
+            loaded.diff_content_mode.as_deref(),
+            Some("changed_lines_only")
+        );
     }
 
     #[test]

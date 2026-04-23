@@ -1245,7 +1245,7 @@ impl SidebarPaneView {
                             icon_primary,
                             None,
                             true,
-                            SharedString::from(path_label.clone()),
+                            path_label.clone(),
                         )
                     };
                     let context_menu_invoker: SharedString =

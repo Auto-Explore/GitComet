@@ -557,7 +557,7 @@ fn commit_path_diff_revisions(
             path: Some(path),
         } => Ok(Some((
             path.clone(),
-            gix_first_parent_optional(&repo, commit_id.as_ref())?,
+            gix_first_parent_optional(repo, commit_id.as_ref())?,
             commit_id.as_ref().to_string(),
         ))),
         DiffTarget::CommitRange {

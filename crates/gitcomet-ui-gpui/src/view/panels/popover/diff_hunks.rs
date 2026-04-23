@@ -7,51 +7,34 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
     let close = cx.listener(|this, _e: &ClickEvent, _w, cx| this.close_popover(cx));
 
     let pane = this.main_pane.read(cx);
-    let visible_len = pane.diff_visible_len();
-    let mut items: Vec<SharedString> = Vec::with_capacity(visible_len);
-    let mut targets: Vec<usize> = Vec::with_capacity(visible_len);
+    let hunk_entries = pane.patch_hunk_entries();
+    let mut items: Vec<SharedString> = Vec::with_capacity(hunk_entries.len());
+    let mut targets: Vec<usize> = Vec::with_capacity(hunk_entries.len());
     let mut current_file: Option<String> = None;
 
     if !pane.is_file_diff_view_active() {
-        for visible_ix in 0..visible_len {
-            let Some(ix) = pane.diff_mapped_ix_for_visible_ix(visible_ix) else {
-                continue;
-            };
-            let (src_ix, click_kind) = match pane.diff_view {
-                DiffViewMode::Inline => {
-                    let click_kind = pane
-                        .diff_click_kinds
-                        .get(ix)
-                        .copied()
-                        .unwrap_or(DiffClickKind::Line);
-                    (ix, click_kind)
-                }
-                DiffViewMode::Split => {
-                    let Some(row) = pane.patch_diff_split_row(ix) else {
-                        continue;
-                    };
-                    let PatchSplitRow::Raw { src_ix, click_kind } = row else {
-                        continue;
-                    };
-                    (src_ix, click_kind)
-                }
-            };
-
+        for (visible_ix, src_ix) in hunk_entries {
             let Some(line) = pane.patch_diff_row(src_ix) else {
                 continue;
             };
-
-            if matches!(click_kind, DiffClickKind::FileHeader) {
-                current_file = parse_diff_git_header_path(line.text.as_ref());
-            }
-
-            if !matches!(click_kind, DiffClickKind::HunkHeader) {
-                continue;
-            }
+            let file_for_hunk = (0..=src_ix)
+                .rev()
+                .find_map(|candidate_ix| {
+                    pane.patch_diff_row(candidate_ix).and_then(|candidate| {
+                        (matches!(
+                            pane.diff_click_kinds.get(candidate_ix).copied(),
+                            Some(DiffClickKind::FileHeader)
+                        ))
+                        .then(|| parse_diff_git_header_path(candidate.text.as_ref()))
+                        .flatten()
+                    })
+                })
+                .or_else(|| current_file.clone());
+            current_file = file_for_hunk.clone();
 
             let label =
                 if let Some(parsed) = parse_unified_hunk_header_for_display(line.text.as_ref()) {
-                    let file = current_file.as_deref().unwrap_or("<file>").to_string();
+                    let file = file_for_hunk.as_deref().unwrap_or("<file>").to_string();
                     let heading = parsed.heading.unwrap_or_default();
                     if heading.is_empty() {
                         format!("{file}: {} {}", parsed.old, parsed.new)
@@ -59,7 +42,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                         format!("{file}: {} {} {heading}", parsed.old, parsed.new)
                     }
                 } else {
-                    current_file.as_deref().unwrap_or("<file>").to_string()
+                    file_for_hunk.as_deref().unwrap_or("<file>").to_string()
                 };
 
             items.push(label.into());

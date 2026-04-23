@@ -1,6 +1,7 @@
 use super::util::{
-    SelectedConflictTarget, apply_selected_diff_load_plan_state, selected_conflict_target,
-    selected_diff_load_plan, start_conflict_target_reload, start_conflict_target_reload_with_mode,
+    SelectedConflictTarget, SelectedDiffLoadPlan, apply_selected_diff_load_plan_state,
+    diff_target_preview_flags, selected_conflict_target, selected_diff_load_plan,
+    start_conflict_target_reload, start_conflict_target_reload_with_mode,
     start_current_conflict_target_reload,
 };
 use crate::model::{
@@ -16,7 +17,7 @@ use gitcomet_core::error::Error;
 use smallvec::SmallVec;
 use std::sync::Arc;
 
-pub(crate) const SELECT_DIFF_INLINE_EFFECT_CAPACITY: usize = 1;
+pub(crate) const SELECT_DIFF_INLINE_EFFECT_CAPACITY: usize = 3;
 pub(crate) type SelectDiffEffects = SmallVec<[Effect; SELECT_DIFF_INLINE_EFFECT_CAPACITY]>;
 
 fn clear_inline_submodule_diff_state(
@@ -91,6 +92,73 @@ fn inline_submodule_entry_index(
     target: &DiffTarget,
 ) -> Option<usize> {
     entries.iter().position(|entry| &entry.target == target)
+}
+
+fn inline_submodule_selected_diff_load_plan(target: &DiffTarget) -> SelectedDiffLoadPlan {
+    let supports_file = matches!(
+        target,
+        DiffTarget::WorkingTree { .. }
+            | DiffTarget::Commit { path: Some(_), .. }
+            | DiffTarget::CommitRange { path: Some(_), .. }
+    );
+    let preview = diff_target_preview_flags(target);
+
+    SelectedDiffLoadPlan {
+        load_patch_diff: true,
+        load_file_text: supports_file && (!preview.wants_image || preview.is_svg),
+        preview_text_side: None,
+        load_submodule_summary: false,
+        load_file_image: supports_file && preview.wants_image,
+    }
+}
+
+fn apply_inline_submodule_diff_load_plan_state(
+    inline: &mut InlineSubmoduleDiffState,
+    load_plan: SelectedDiffLoadPlan,
+) {
+    inline.diff_rev = 0;
+    inline.diff = if load_plan.load_patch_diff {
+        Loadable::Loading
+    } else {
+        Loadable::NotLoaded
+    };
+    inline.diff_file_rev = 0;
+    inline.diff_file = if load_plan.load_file_text {
+        Loadable::Loading
+    } else {
+        Loadable::NotLoaded
+    };
+    inline.diff_file_image = if load_plan.load_file_image {
+        Loadable::Loading
+    } else {
+        Loadable::NotLoaded
+    };
+}
+
+fn push_inline_submodule_diff_load_effects(
+    repo_id: RepoId,
+    inline_rev: u64,
+    load_plan: SelectedDiffLoadPlan,
+    effects: &mut SelectDiffEffects,
+) {
+    if load_plan.load_patch_diff {
+        effects.push(Effect::LoadInlineSubmoduleSelectedDiff {
+            repo_id,
+            inline_rev,
+        });
+    }
+    if load_plan.load_file_text {
+        effects.push(Effect::LoadInlineSubmoduleSelectedDiffFile {
+            repo_id,
+            inline_rev,
+        });
+    }
+    if load_plan.load_file_image {
+        effects.push(Effect::LoadInlineSubmoduleSelectedDiffFileImage {
+            repo_id,
+            inline_rev,
+        });
+    }
 }
 
 pub(super) fn select_diff(
@@ -213,6 +281,7 @@ pub(super) fn open_inline_submodule_diff(
     }
 
     let target = entries[selected_ix].target.clone();
+    let load_plan = inline_submodule_selected_diff_load_plan(&target);
     let rev = repo_state
         .diff_state
         .inline_submodule_diff
@@ -226,14 +295,28 @@ pub(super) fn open_inline_submodule_diff(
         target,
         rev,
         diff_rev: 0,
-        diff: Loadable::Loading,
+        diff: if load_plan.load_patch_diff {
+            Loadable::Loading
+        } else {
+            Loadable::NotLoaded
+        },
+        diff_file_rev: 0,
+        diff_file: if load_plan.load_file_text {
+            Loadable::Loading
+        } else {
+            Loadable::NotLoaded
+        },
+        diff_file_image: if load_plan.load_file_image {
+            Loadable::Loading
+        } else {
+            Loadable::NotLoaded
+        },
     });
     repo_state.bump_diff_state_rev();
 
-    vec![Effect::LoadInlineSubmoduleSelectedDiff {
-        repo_id,
-        inline_rev: rev,
-    }]
+    let mut effects = SelectDiffEffects::new();
+    push_inline_submodule_diff_load_effects(repo_id, rev, load_plan, &mut effects);
+    effects.into_vec()
 }
 
 pub(super) fn select_inline_submodule_diff(
@@ -244,7 +327,7 @@ pub(super) fn select_inline_submodule_diff(
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
     };
-    let inline_rev = {
+    let (inline_rev, load_plan) = {
         let Some(inline) = repo_state.diff_state.inline_submodule_diff.as_mut() else {
             return Vec::new();
         };
@@ -260,15 +343,15 @@ pub(super) fn select_inline_submodule_diff(
         inline.selected_ix = selected_ix;
         inline.target = next_target;
         inline.rev = inline.rev.wrapping_add(1);
-        inline.diff = Loadable::Loading;
-        inline.rev
+        let next_load_plan = inline_submodule_selected_diff_load_plan(&inline.target);
+        apply_inline_submodule_diff_load_plan_state(inline, next_load_plan);
+        (inline.rev, next_load_plan)
     };
     repo_state.bump_diff_state_rev();
 
-    vec![Effect::LoadInlineSubmoduleSelectedDiff {
-        repo_id,
-        inline_rev,
-    }]
+    let mut effects = SelectDiffEffects::new();
+    push_inline_submodule_diff_load_effects(repo_id, inline_rev, load_plan, &mut effects);
+    effects.into_vec()
 }
 
 pub(super) fn close_inline_submodule_diff(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
@@ -489,6 +572,72 @@ pub(super) fn inline_submodule_diff_loaded(
             }
             inline.diff_rev = inline.diff_rev.wrapping_add(1);
             inline.diff = next_diff;
+        }
+        if let Some(message) = diagnostic {
+            super::util::push_diagnostic(repo_state, DiagnosticKind::Error, message);
+        }
+        repo_state.bump_diff_state_rev();
+    }
+    Vec::new()
+}
+
+pub(super) fn inline_submodule_diff_file_loaded(
+    state: &mut AppState,
+    repo_id: RepoId,
+    inline_rev: u64,
+    target: DiffTarget,
+    result: std::result::Result<Option<FileDiffText>, Error>,
+) -> Vec<Effect> {
+    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+        let (next_diff_file, diagnostic) = match result {
+            Ok(file) => (Loadable::Ready(file.map(Arc::new)), None),
+            Err(e) => {
+                let message = e.to_string();
+                (Loadable::Error(message.clone()), Some(message))
+            }
+        };
+        {
+            let Some(inline) = repo_state.diff_state.inline_submodule_diff.as_mut() else {
+                return Vec::new();
+            };
+            if inline.rev != inline_rev || inline.target != target {
+                return Vec::new();
+            }
+            inline.diff_file_rev = inline.diff_file_rev.wrapping_add(1);
+            inline.diff_file = next_diff_file;
+        }
+        if let Some(message) = diagnostic {
+            super::util::push_diagnostic(repo_state, DiagnosticKind::Error, message);
+        }
+        repo_state.bump_diff_state_rev();
+    }
+    Vec::new()
+}
+
+pub(super) fn inline_submodule_diff_file_image_loaded(
+    state: &mut AppState,
+    repo_id: RepoId,
+    inline_rev: u64,
+    target: DiffTarget,
+    result: std::result::Result<Option<FileDiffImage>, Error>,
+) -> Vec<Effect> {
+    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+        let (next_diff_image, diagnostic) = match result {
+            Ok(file) => (Loadable::Ready(file.map(Arc::new)), None),
+            Err(e) => {
+                let message = e.to_string();
+                (Loadable::Error(message.clone()), Some(message))
+            }
+        };
+        {
+            let Some(inline) = repo_state.diff_state.inline_submodule_diff.as_mut() else {
+                return Vec::new();
+            };
+            if inline.rev != inline_rev || inline.target != target {
+                return Vec::new();
+            }
+            inline.diff_file_rev = inline.diff_file_rev.wrapping_add(1);
+            inline.diff_file_image = next_diff_image;
         }
         if let Some(message) = diagnostic {
             super::util::push_diagnostic(repo_state, DiagnosticKind::Error, message);

@@ -2331,6 +2331,7 @@ pub(super) enum PopoverKind {
     HistoryBranchFilter {
         repo_id: RepoId,
     },
+    DiffContentModeSettings,
     ChangeTrackingSettings,
     UiScalePicker,
 }
@@ -2907,6 +2908,41 @@ impl DiffScrollSync {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) enum DiffContentMode {
+    #[default]
+    Full,
+    Collapsed,
+}
+
+impl DiffContentMode {
+    pub(super) const fn key(self) -> &'static str {
+        match self {
+            Self::Full => "content",
+            Self::Collapsed => "changed_lines_only",
+        }
+    }
+
+    pub(super) fn from_key(raw: &str) -> Option<Self> {
+        match raw {
+            "content" => Some(Self::Full),
+            "changed_lines_only" => Some(Self::Collapsed),
+            _ => None,
+        }
+    }
+
+    pub(super) const fn label(self) -> &'static str {
+        match self {
+            Self::Full => "Full",
+            Self::Collapsed => "Collapsed",
+        }
+    }
+
+    pub(super) const fn settings_label(self) -> &'static str {
+        self.label()
+    }
+}
+
 pub struct GitCometView {
     pub(super) store: Arc<AppStore>,
     pub(super) state: Arc<AppState>,
@@ -2944,6 +2980,7 @@ pub struct GitCometView {
     pub(super) show_timezone: bool,
     pub(super) change_tracking_view: ChangeTrackingView,
     pub(super) diff_scroll_sync: DiffScrollSync,
+    pub(super) diff_content_mode: DiffContentMode,
     pub(super) ui_scale_percent: u32,
 
     pub(super) open_repo_panel: bool,

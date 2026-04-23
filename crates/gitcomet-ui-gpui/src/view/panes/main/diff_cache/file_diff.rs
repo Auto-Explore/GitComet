@@ -73,6 +73,87 @@ fn build_file_diff_plan_from_document_sources(
     )
 }
 
+fn plan_line_to_inline_row_maps(
+    plan: &gitcomet_core::file_diff::FileDiffPlan,
+    old_line_count: usize,
+    new_line_count: usize,
+) -> (Vec<Option<usize>>, Vec<Option<usize>>) {
+    let mut old_line_to_inline_row = vec![None; old_line_count];
+    let mut new_line_to_inline_row = vec![None; new_line_count];
+    let mut inline_start = 0usize;
+
+    let assign = |line_to_row: &mut [Option<usize>], line_ix: usize, row_ix: usize| {
+        if let Some(slot) = line_to_row.get_mut(line_ix) {
+            *slot = Some(row_ix);
+        }
+    };
+
+    for run in &plan.runs {
+        match *run {
+            gitcomet_core::file_diff::FileDiffPlanRun::Context {
+                old_start,
+                new_start,
+                len,
+            } => {
+                for offset in 0..len {
+                    let row_ix = inline_start.saturating_add(offset);
+                    assign(
+                        old_line_to_inline_row.as_mut_slice(),
+                        old_start.saturating_add(offset),
+                        row_ix,
+                    );
+                    assign(
+                        new_line_to_inline_row.as_mut_slice(),
+                        new_start.saturating_add(offset),
+                        row_ix,
+                    );
+                }
+            }
+            gitcomet_core::file_diff::FileDiffPlanRun::Remove { old_start, len } => {
+                for offset in 0..len {
+                    assign(
+                        old_line_to_inline_row.as_mut_slice(),
+                        old_start.saturating_add(offset),
+                        inline_start.saturating_add(offset),
+                    );
+                }
+            }
+            gitcomet_core::file_diff::FileDiffPlanRun::Add { new_start, len } => {
+                for offset in 0..len {
+                    assign(
+                        new_line_to_inline_row.as_mut_slice(),
+                        new_start.saturating_add(offset),
+                        inline_start.saturating_add(offset),
+                    );
+                }
+            }
+            gitcomet_core::file_diff::FileDiffPlanRun::Modify {
+                old_start,
+                new_start,
+                len,
+            } => {
+                for offset in 0..len {
+                    let pair_start = inline_start.saturating_add(offset.saturating_mul(2));
+                    assign(
+                        old_line_to_inline_row.as_mut_slice(),
+                        old_start.saturating_add(offset),
+                        pair_start,
+                    );
+                    assign(
+                        new_line_to_inline_row.as_mut_slice(),
+                        new_start.saturating_add(offset),
+                        pair_start.saturating_add(1),
+                    );
+                }
+            }
+        }
+
+        inline_start = inline_start.saturating_add(run.inline_row_len());
+    }
+
+    (old_line_to_inline_row, new_line_to_inline_row)
+}
+
 fn line_number(line_ix: usize) -> Option<u32> {
     line_ix
         .checked_add(1)
@@ -1033,8 +1114,12 @@ pub(in crate::view) struct FileDiffCacheRebuild {
     pub(in crate::view) inline_row_provider: Arc<PagedFileDiffInlineRows>,
     pub(in crate::view) old_text: SharedString,
     pub(in crate::view) old_line_starts: Arc<[usize]>,
+    pub(in crate::view) old_line_to_row: Arc<[Option<usize>]>,
+    pub(in crate::view) old_line_to_inline_row: Arc<[Option<usize>]>,
     pub(in crate::view) new_text: SharedString,
     pub(in crate::view) new_line_starts: Arc<[usize]>,
+    pub(in crate::view) new_line_to_row: Arc<[Option<usize>]>,
+    pub(in crate::view) new_line_to_inline_row: Arc<[Option<usize>]>,
     pub(in crate::view) inline_text: SharedString,
     #[cfg(test)]
     pub(in crate::view) rows: Vec<FileDiffRow>,
@@ -1054,6 +1139,17 @@ pub(in crate::view) fn build_file_diff_cache_rebuild(
         &new_text,
         new_line_starts.as_ref(),
     ));
+    let old_line_count =
+        file_diff_lines_from_starts(old_text.as_ref(), old_line_starts.as_ref()).len();
+    let new_line_count =
+        file_diff_lines_from_starts(new_text.as_ref(), new_line_starts.as_ref()).len();
+    let (old_line_to_row, new_line_to_row) = gitcomet_core::file_diff::plan_line_to_row_maps(
+        plan.as_ref(),
+        old_line_count,
+        new_line_count,
+    );
+    let (old_line_to_inline_row, new_line_to_inline_row) =
+        plan_line_to_inline_row_maps(plan.as_ref(), old_line_count, new_line_count);
     let source = Arc::new(StreamedFileDiffSource::new(
         Arc::clone(&plan),
         old_text.clone(),
@@ -1096,8 +1192,12 @@ pub(in crate::view) fn build_file_diff_cache_rebuild(
         inline_row_provider,
         old_text,
         old_line_starts,
+        old_line_to_row: Arc::from(old_line_to_row),
+        old_line_to_inline_row: Arc::from(old_line_to_inline_row),
         new_text,
         new_line_starts,
+        new_line_to_row: Arc::from(new_line_to_row),
+        new_line_to_inline_row: Arc::from(new_line_to_inline_row),
         inline_text,
         #[cfg(test)]
         rows,

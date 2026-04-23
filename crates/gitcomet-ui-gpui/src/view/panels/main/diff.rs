@@ -29,26 +29,20 @@ impl MainPaneView {
     ) -> AnyElement {
         let editor_font_family = crate::font_preferences::current_editor_font_family(cx);
         let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
-        let (wants_image, wants_markdown_preview, rendered_preview_kind) = self
-            .active_repo()
-            .map(|repo| {
-                let rendered_preview_kind = crate::view::diff_target_rendered_preview_kind(
-                    repo.diff_state.diff_target.as_ref(),
-                );
-                let has_image = !matches!(repo.diff_state.diff_file_image, Loadable::NotLoaded);
-                let wants_image = has_image
-                    && (!matches!(rendered_preview_kind, Some(RenderedPreviewKind::Svg))
-                        || self.rendered_preview_modes.get(RenderedPreviewKind::Svg)
-                            == RenderedPreviewMode::Rendered);
-                let wants_markdown_preview = rendered_preview_kind
-                    == Some(RenderedPreviewKind::Markdown)
-                    && self
-                        .rendered_preview_modes
-                        .get(RenderedPreviewKind::Markdown)
-                        == RenderedPreviewMode::Rendered;
-                (wants_image, wants_markdown_preview, rendered_preview_kind)
-            })
-            .unwrap_or((false, false, None));
+        let rendered_preview_kind =
+            crate::view::diff_target_rendered_preview_kind(self.rendered_diff_target());
+        let has_image = self
+            .rendered_file_image_diff_loadable()
+            .is_some_and(|file| !matches!(file, Loadable::NotLoaded));
+        let wants_image = has_image
+            && (!matches!(rendered_preview_kind, Some(RenderedPreviewKind::Svg))
+                || self.rendered_preview_modes.get(RenderedPreviewKind::Svg)
+                    == RenderedPreviewMode::Rendered);
+        let wants_markdown_preview = rendered_preview_kind == Some(RenderedPreviewKind::Markdown)
+            && self
+                .rendered_preview_modes
+                .get(RenderedPreviewKind::Markdown)
+                == RenderedPreviewMode::Rendered;
 
         if wants_image {
             enum DiffFileImageState {
@@ -58,10 +52,7 @@ impl MainPaneView {
                 Ready { has_file: bool },
             }
 
-            let diff_file_state = match self
-                .active_repo()
-                .map(|repo| &repo.diff_state.diff_file_image)
-            {
+            let diff_file_state = match self.rendered_file_image_diff_loadable() {
                 None => {
                     return components::empty_state(theme, "Diff", "No repository.")
                         .into_any_element();
@@ -242,7 +233,7 @@ impl MainPaneView {
                 Ready { has_file: bool },
             }
 
-            let diff_file_state = match self.active_repo().map(|repo| &repo.diff_state.diff_file) {
+            let diff_file_state = match self.rendered_file_diff_loadable() {
                 None => {
                     return components::empty_state(theme, "Diff", "No repository.")
                         .into_any_element();

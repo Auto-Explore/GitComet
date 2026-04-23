@@ -521,6 +521,9 @@ pub struct InlineSubmoduleDiffState {
     pub rev: u64,
     pub diff_rev: u64,
     pub diff: Loadable<Shared<Diff>>,
+    pub diff_file_rev: u64,
+    pub diff_file: Loadable<Option<Shared<FileDiffText>>>,
+    pub diff_file_image: Loadable<Option<Shared<FileDiffImage>>>,
 }
 
 #[derive(Clone, Debug)]

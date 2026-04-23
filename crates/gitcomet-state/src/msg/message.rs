@@ -702,6 +702,18 @@ pub enum InternalMsg {
         target: DiffTarget,
         result: Result<Diff, Error>,
     },
+    InlineSubmoduleDiffFileLoaded {
+        repo_id: RepoId,
+        inline_rev: u64,
+        target: DiffTarget,
+        result: Result<Option<FileDiffText>, Error>,
+    },
+    InlineSubmoduleDiffFileImageLoaded {
+        repo_id: RepoId,
+        inline_rev: u64,
+        target: DiffTarget,
+        result: Result<Option<FileDiffImage>, Error>,
+    },
     DiffFileImageLoaded {
         repo_id: RepoId,
         target: DiffTarget,

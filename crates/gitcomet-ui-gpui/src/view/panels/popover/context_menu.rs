@@ -8,6 +8,7 @@ mod commit_file;
 mod conflict_resolver_chunk;
 mod conflict_resolver_input_row;
 mod conflict_resolver_output;
+mod diff_content_mode_settings;
 mod diff_editor;
 mod diff_hunk;
 mod history_branch_filter;
@@ -339,6 +340,7 @@ impl PopoverHost {
             PopoverKind::HistoryBranchFilter { repo_id } => {
                 Some(history_branch_filter::model(self, *repo_id))
             }
+            PopoverKind::DiffContentModeSettings => Some(diff_content_mode_settings::model(self)),
             PopoverKind::ChangeTrackingSettings => Some(change_tracking_settings::model(self)),
             PopoverKind::UiScalePicker => Some(ui_scale_picker::model(cx)),
             _ => None,
@@ -424,7 +426,7 @@ impl PopoverHost {
                 self.store.dispatch(Msg::OpenRepo(path));
             }
             ContextMenuAction::OpenSubmoduleDiffInTab { path, target } => {
-                let _ = self.main_pane.update(cx, |pane, cx| {
+                self.main_pane.update(cx, |pane, cx| {
                     pane.open_submodule_inner_diff(path, target, cx);
                 });
             }
@@ -484,6 +486,15 @@ impl PopoverHost {
             }
             ContextMenuAction::SetHistoryScope { repo_id, scope } => {
                 self.store.dispatch(Msg::SetHistoryScope { repo_id, scope });
+            }
+            ContextMenuAction::SetDiffContentMode { mode } => {
+                self.diff_content_mode = mode;
+                let main_pane = self.main_pane.clone();
+                cx.defer(move |cx| {
+                    main_pane.update(cx, |pane, cx| {
+                        pane.set_diff_content_mode_and_persist(mode, cx);
+                    });
+                });
             }
             ContextMenuAction::SetChangeTrackingView { view } => {
                 self.change_tracking_view = view;

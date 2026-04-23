@@ -1424,6 +1424,22 @@ pub(super) fn reduce(
         }) => {
             diff_selection::inline_submodule_diff_loaded(state, repo_id, inline_rev, target, result)
         }
+        Msg::Internal(crate::msg::InternalMsg::InlineSubmoduleDiffFileLoaded {
+            repo_id,
+            inline_rev,
+            target,
+            result,
+        }) => diff_selection::inline_submodule_diff_file_loaded(
+            state, repo_id, inline_rev, target, result,
+        ),
+        Msg::Internal(crate::msg::InternalMsg::InlineSubmoduleDiffFileImageLoaded {
+            repo_id,
+            inline_rev,
+            target,
+            result,
+        }) => diff_selection::inline_submodule_diff_file_image_loaded(
+            state, repo_id, inline_rev, target, result,
+        ),
         Msg::Internal(crate::msg::InternalMsg::DiffFileImageLoaded {
             repo_id,
             target,

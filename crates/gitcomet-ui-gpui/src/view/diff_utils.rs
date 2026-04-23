@@ -199,22 +199,38 @@ pub(super) struct ParsedHunkHeader {
     pub(super) old: String,
     pub(super) new: String,
     pub(super) heading: Option<String>,
+    pub(super) old_start_line: u32,
+    pub(super) old_line_count: u32,
+    pub(super) new_start_line: u32,
+    pub(super) new_line_count: u32,
 }
 
 pub(super) fn parse_unified_hunk_header_for_display(text: &str) -> Option<ParsedHunkHeader> {
+    fn parse_range(token: &str, prefix: char) -> Option<(String, u32, u32)> {
+        let body = token.strip_prefix(prefix)?;
+        let (start_text, count_text) = body.split_once(',').unwrap_or((body, "1"));
+        let start_line = start_text.parse::<u32>().ok()?;
+        let line_count = count_text.parse::<u32>().ok()?;
+        Some((token.to_string(), start_line, line_count))
+    }
+
     let text = text.strip_prefix("@@")?.trim_start();
     let (ranges, rest) = text.split_once("@@")?;
     let ranges = ranges.trim();
     let heading = rest.trim();
 
     let mut it = ranges.split_whitespace();
-    let old = it.next()?.trim().to_string();
-    let new = it.next()?.trim().to_string();
+    let (old, old_start_line, old_line_count) = parse_range(it.next()?.trim(), '-')?;
+    let (new, new_start_line, new_line_count) = parse_range(it.next()?.trim(), '+')?;
 
     Some(ParsedHunkHeader {
         old,
         new,
         heading: (!heading.is_empty()).then_some(heading.to_string()),
+        old_start_line,
+        old_line_count,
+        new_start_line,
+        new_line_count,
     })
 }
 

@@ -607,6 +607,11 @@ impl GitCometView {
             .as_deref()
             .and_then(DiffScrollSync::from_key)
             .unwrap_or_default();
+        let diff_content_mode = ui_session
+            .diff_content_mode
+            .as_deref()
+            .and_then(DiffContentMode::from_key)
+            .unwrap_or_default();
         let restored_change_tracking_height = ui_session.change_tracking_height;
         let restored_untracked_height = ui_session.untracked_height;
 
@@ -743,6 +748,7 @@ impl GitCometView {
                 timezone,
                 show_timezone,
                 diff_scroll_sync,
+                diff_content_mode,
                 history_show_graph,
                 history_show_author,
                 history_show_date,
@@ -789,6 +795,7 @@ impl GitCometView {
                 timezone,
                 show_timezone,
                 change_tracking_view,
+                diff_content_mode,
                 weak_view.clone(),
                 main_pane.clone(),
                 details_pane.clone(),
@@ -943,6 +950,7 @@ impl GitCometView {
             show_timezone,
             change_tracking_view,
             diff_scroll_sync,
+            diff_content_mode,
             ui_scale_percent: ui_scale.percent,
             open_repo_panel: false,
             open_repo_input,
@@ -1190,6 +1198,46 @@ impl GitCometView {
         self.main_pane
             .update(cx, |pane, cx| pane.set_diff_scroll_sync(next, cx));
         self.schedule_ui_settings_persist(cx);
+    }
+
+    fn apply_diff_content_mode_preference(
+        &mut self,
+        next: DiffContentMode,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        if self.diff_content_mode == next {
+            return false;
+        }
+
+        self.diff_content_mode = next;
+        self.popover_host
+            .update(cx, |host, cx| host.sync_diff_content_mode(next, cx));
+        self.schedule_ui_settings_persist(cx);
+        true
+    }
+
+    // MainPaneView sometimes owns the active GPUI update when the diff-header
+    // toggle is clicked, so syncing the root preference must not call back into
+    // `main_pane.update(...)`.
+    pub(in crate::view) fn sync_diff_content_mode_from_pane(
+        &mut self,
+        next: DiffContentMode,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let _ = self.apply_diff_content_mode_preference(next, cx);
+    }
+
+    pub(in crate::view) fn set_diff_content_mode(
+        &mut self,
+        next: DiffContentMode,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if !self.apply_diff_content_mode_preference(next, cx) {
+            return;
+        }
+
+        self.main_pane
+            .update(cx, |pane, cx| pane.set_diff_content_mode(next, cx));
     }
 
     pub(in crate::view) fn set_history_column_preferences(

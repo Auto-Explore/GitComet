@@ -41,3 +41,7 @@ pub(in crate::view) fn change_tracking_view(view: &GitCometView) -> ChangeTracki
 pub(in crate::view) fn diff_scroll_sync(view: &GitCometView) -> DiffScrollSync {
     view.diff_scroll_sync
 }
+
+pub(in crate::view) fn diff_content_mode(view: &GitCometView) -> DiffContentMode {
+    view.diff_content_mode
+}

@@ -1,6 +1,7 @@
 use super::diff_canvas;
 use super::diff_text::*;
 use super::*;
+use crate::view::panes::main::CollapsedDiffVisibleRow;
 use crate::view::panes::main::{
     VersionedCachedDiffStyledText, versioned_query_cached_diff_styled_text_is_current,
 };
@@ -185,6 +186,321 @@ impl MainPaneView {
         let min_width = this.diff_horizontal_min_width;
         let query = this.diff_search_query_or_empty();
         let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
+
+        if this.is_collapsed_diff_projection_active() {
+            let theme = this.theme;
+            let language = this.file_diff_cache_language;
+            let old_document_text: Arc<str> = this.file_diff_old_text.clone().into();
+            let old_line_starts = Arc::clone(&this.file_diff_old_line_starts);
+            let new_document_text: Arc<str> = this.file_diff_new_text.clone().into();
+            let new_line_starts = Arc::clone(&this.file_diff_new_line_starts);
+            let syntax_mode = this.patch_diff_syntax_mode();
+            let header_cache_base = this
+                .file_diff_inline_row_len()
+                .max(this.file_diff_split_row_len().saturating_mul(2))
+                .saturating_add(1);
+
+            return range
+                .map(|visible_ix| {
+                    let selected = this
+                        .diff_selection_range
+                        .is_some_and(|(a, b)| visible_ix >= a.min(b) && visible_ix <= a.max(b));
+                    let Some(row) = this.collapsed_visible_row(visible_ix) else {
+                        return diff_placeholder_row(
+                            ("collapsed_diff_missing", visible_ix),
+                            theme,
+                            ui_scale_percent,
+                        );
+                    };
+
+                    match row {
+                        CollapsedDiffVisibleRow::FileHeader { src_ix }
+                        | CollapsedDiffVisibleRow::HunkHeader { src_ix } => {
+                            let click_kind = match row {
+                                CollapsedDiffVisibleRow::FileHeader { .. } => {
+                                    DiffClickKind::FileHeader
+                                }
+                                CollapsedDiffVisibleRow::HunkHeader { .. } => {
+                                    DiffClickKind::HunkHeader
+                                }
+                                CollapsedDiffVisibleRow::FileRow { .. } => unreachable!(),
+                            };
+                            let display = this
+                                .diff_header_display_cache
+                                .get(&src_ix)
+                                .cloned()
+                                .or_else(|| {
+                                    this.patch_diff_row(src_ix)
+                                        .map(|line| SharedString::from(line.text.as_ref().to_owned()))
+                                })
+                                .unwrap_or_default();
+                            let file_stat = this.diff_file_stats.get(src_ix).and_then(|s| *s);
+                            let header_key = header_cache_base.saturating_add(src_ix);
+                            if !query.is_empty()
+                                && this.diff_text_segments_cache_get(header_key, 0).is_none()
+                            {
+                                let computed = build_cached_diff_styled_text(
+                                    theme,
+                                    display.as_ref(),
+                                    &[],
+                                    "",
+                                    None,
+                                    syntax_mode,
+                                    None,
+                                );
+                                this.diff_text_segments_cache_set(header_key, 0, computed);
+                            }
+                            let context_menu_active = click_kind == DiffClickKind::HunkHeader
+                                && this.active_repo_id().is_some_and(|repo_id| {
+                                    let invoker: SharedString =
+                                        format!("diff_hunk_menu_{}_{}", repo_id.0, src_ix).into();
+                                    this.active_context_menu_invoker.as_ref() == Some(&invoker)
+                                });
+                            let hidden_up = if click_kind == DiffClickKind::HunkHeader {
+                                this.collapsed_diff_hidden_up_rows(src_ix)
+                            } else {
+                                0
+                            };
+                            let hidden_down = if click_kind == DiffClickKind::HunkHeader {
+                                this.collapsed_diff_hidden_down_rows(src_ix)
+                            } else {
+                                0
+                            };
+                            let styled = if !query.is_empty() {
+                                this.diff_text_segments_cache_get_for_query(
+                                    header_key,
+                                    query.as_ref(),
+                                    0,
+                                )
+                            } else {
+                                None
+                            };
+
+                            collapsed_inline_header_row(
+                                theme,
+                                ui_scale_percent,
+                                visible_ix,
+                                click_kind,
+                                selected,
+                                min_width,
+                                file_stat,
+                                display,
+                                styled,
+                                context_menu_active,
+                                src_ix,
+                                hidden_up,
+                                hidden_down,
+                                cx,
+                            )
+                        }
+                        CollapsedDiffVisibleRow::FileRow { row_ix } => {
+                            let row_word_ranges = this
+                                .file_diff_inline_modify_pair_texts(row_ix)
+                                .map(|(old, new, kind)| {
+                                    let (old_ranges, new_ranges) = capped_word_diff_ranges(old, new);
+                                    match kind {
+                                        DiffLineKind::Remove => old_ranges,
+                                        DiffLineKind::Add => new_ranges,
+                                        DiffLineKind::Context
+                                        | DiffLineKind::Header
+                                        | DiffLineKind::Hunk => Vec::new(),
+                                    }
+                                })
+                                .unwrap_or_default();
+                            let render_data = this.file_diff_inline_render_data(row_ix);
+                            let streamed_spec = render_data.as_ref().and_then(|row| {
+                                let line_language = matches!(
+                                    row.kind,
+                                    DiffLineKind::Add | DiffLineKind::Remove | DiffLineKind::Context
+                                )
+                                .then_some(language)
+                                .flatten();
+                                let word_color = diff_line_word_color(row.kind, theme);
+                                let prepared_line = match row.kind {
+                                    DiffLineKind::Remove => {
+                                        rows::prepared_diff_syntax_line_for_one_based_line(
+                                            this.file_diff_split_prepared_syntax_document(
+                                                DiffTextRegion::SplitLeft,
+                                            ),
+                                            row.old_line,
+                                        )
+                                    }
+                                    DiffLineKind::Add | DiffLineKind::Context => {
+                                        rows::prepared_diff_syntax_line_for_one_based_line(
+                                            this.file_diff_split_prepared_syntax_document(
+                                                DiffTextRegion::SplitRight,
+                                            ),
+                                            row.new_line,
+                                        )
+                                    }
+                                    DiffLineKind::Header | DiffLineKind::Hunk => {
+                                        rows::prepared_diff_syntax_line_for_one_based_line(
+                                            None, None,
+                                        )
+                                    }
+                                };
+                                let (document_text, line_starts) = match row.kind {
+                                    DiffLineKind::Remove => (
+                                        Arc::clone(&old_document_text),
+                                        Arc::clone(&old_line_starts),
+                                    ),
+                                    DiffLineKind::Add | DiffLineKind::Context => (
+                                        Arc::clone(&new_document_text),
+                                        Arc::clone(&new_line_starts),
+                                    ),
+                                    DiffLineKind::Header | DiffLineKind::Hunk => (
+                                        Arc::clone(&new_document_text),
+                                        Arc::clone(&new_line_starts),
+                                    ),
+                                };
+                                let syntax_mode =
+                                    syntax_mode_for_prepared_document(prepared_line.document);
+                                prepared_streamed_diff_text_spec(
+                                    row.text.clone(),
+                                    &query,
+                                    row_word_ranges.clone(),
+                                    word_color,
+                                    line_language,
+                                    syntax_mode,
+                                    document_text,
+                                    line_starts,
+                                    prepared_line,
+                                )
+                            });
+
+                            let (line, styled) = if let Some(row) = render_data.as_ref() {
+                                if streamed_spec.is_some() {
+                                    (
+                                        AnnotatedDiffLine {
+                                            kind: row.kind,
+                                            text: "".into(),
+                                            old_line: row.old_line,
+                                            new_line: row.new_line,
+                                        },
+                                        None,
+                                    )
+                                } else {
+                                    let Some(line) = this.file_diff_inline_row(row_ix) else {
+                                        return diff_placeholder_row(
+                                            ("collapsed_diff_oob", visible_ix),
+                                            theme,
+                                            ui_scale_percent,
+                                        );
+                                    };
+                                    let cache_epoch = this.file_diff_inline_style_cache_epoch(&line);
+                                    if this
+                                        .diff_text_segments_cache_get(row_ix, cache_epoch)
+                                        .is_none()
+                                    {
+                                        let word_color = diff_line_word_color(line.kind, theme);
+                                        let is_content_line = matches!(
+                                            line.kind,
+                                            DiffLineKind::Add
+                                                | DiffLineKind::Remove
+                                                | DiffLineKind::Context
+                                        );
+                                        let line_language =
+                                            is_content_line.then_some(language).flatten();
+                                        let projected = this.file_diff_inline_projected_syntax(&line);
+                                        let syntax_mode =
+                                            syntax_mode_for_prepared_document(projected.document);
+                                        let (styled, is_pending) =
+                                            build_cached_diff_styled_text_for_prepared_document_line_nonblocking(
+                                                theme,
+                                                diff_content_text(&line),
+                                                row_word_ranges.as_slice(),
+                                                "",
+                                                DiffSyntaxConfig {
+                                                    language: line_language,
+                                                    mode: syntax_mode,
+                                                },
+                                                word_color,
+                                                projected,
+                                            )
+                                            .into_parts();
+                                        if is_pending {
+                                            this.ensure_prepared_syntax_chunk_poll(cx);
+                                        }
+                                        this.diff_text_segments_cache_set(row_ix, cache_epoch, styled);
+                                    }
+                                    let styled = this.diff_text_segments_cache_get_for_query(
+                                        row_ix,
+                                        query.as_ref(),
+                                        cache_epoch,
+                                    );
+                                    (line, styled)
+                                }
+                            } else {
+                                let Some(line) = this.file_diff_inline_row(row_ix) else {
+                                    return diff_placeholder_row(
+                                        ("collapsed_diff_oob", visible_ix),
+                                        theme,
+                                        ui_scale_percent,
+                                    );
+                                };
+                                let cache_epoch = this.file_diff_inline_style_cache_epoch(&line);
+                                if this
+                                    .diff_text_segments_cache_get(row_ix, cache_epoch)
+                                    .is_none()
+                                {
+                                    let word_color = diff_line_word_color(line.kind, theme);
+                                    let is_content_line = matches!(
+                                        line.kind,
+                                        DiffLineKind::Add | DiffLineKind::Remove | DiffLineKind::Context
+                                    );
+                                    let line_language =
+                                        is_content_line.then_some(language).flatten();
+                                    let projected = this.file_diff_inline_projected_syntax(&line);
+                                    let syntax_mode =
+                                        syntax_mode_for_prepared_document(projected.document);
+                                    let (styled, is_pending) =
+                                        build_cached_diff_styled_text_for_prepared_document_line_nonblocking(
+                                            theme,
+                                            diff_content_text(&line),
+                                            row_word_ranges.as_slice(),
+                                            "",
+                                            DiffSyntaxConfig {
+                                                language: line_language,
+                                                mode: syntax_mode,
+                                            },
+                                            word_color,
+                                            projected,
+                                        )
+                                        .into_parts();
+                                    if is_pending {
+                                        this.ensure_prepared_syntax_chunk_poll(cx);
+                                    }
+                                    this.diff_text_segments_cache_set(row_ix, cache_epoch, styled);
+                                }
+                                let styled = this.diff_text_segments_cache_get_for_query(
+                                    row_ix,
+                                    query.as_ref(),
+                                    cache_epoch,
+                                );
+                                (line, styled)
+                            };
+
+                            diff_row(
+                                theme,
+                                ui_scale_percent,
+                                visible_ix,
+                                DiffClickKind::Line,
+                                selected,
+                                DiffViewMode::Inline,
+                                min_width,
+                                &line,
+                                None,
+                                None,
+                                styled,
+                                streamed_spec,
+                                false,
+                                cx,
+                            )
+                        }
+                    }
+                })
+                .collect();
+        }
 
         if this.is_file_diff_view_active() {
             let theme = this.theme;
@@ -662,6 +978,226 @@ impl MainPaneView {
                 "diff_split_right_hidden_header",
             )
         };
+
+        if this.is_collapsed_diff_projection_active() {
+            let theme = this.theme;
+            let language = this.file_diff_cache_language;
+            let cache_epoch = this.file_diff_split_style_cache_epoch(region);
+            let syntax_document = this.file_diff_split_prepared_syntax_document(region);
+            let syntax_mode = syntax_mode_for_prepared_document(syntax_document);
+            let document_text: Arc<str> = if is_left {
+                this.file_diff_old_text.clone().into()
+            } else {
+                this.file_diff_new_text.clone().into()
+            };
+            let line_starts = if is_left {
+                Arc::clone(&this.file_diff_old_line_starts)
+            } else {
+                Arc::clone(&this.file_diff_new_line_starts)
+            };
+            let header_cache_base = this
+                .file_diff_inline_row_len()
+                .max(this.file_diff_split_row_len().saturating_mul(2))
+                .saturating_add(1);
+
+            return range
+                .map(|visible_ix| {
+                    let selected = this
+                        .diff_selection_range
+                        .is_some_and(|(a, b)| visible_ix >= a.min(b) && visible_ix <= a.max(b));
+                    let Some(visible_row) = this.collapsed_visible_row(visible_ix) else {
+                        return diff_placeholder_row((id_missing, visible_ix), theme, ui_scale_percent);
+                    };
+
+                    match visible_row {
+                        CollapsedDiffVisibleRow::FileHeader { src_ix }
+                        | CollapsedDiffVisibleRow::HunkHeader { src_ix } => {
+                            let click_kind = match visible_row {
+                                CollapsedDiffVisibleRow::FileHeader { .. } => {
+                                    DiffClickKind::FileHeader
+                                }
+                                CollapsedDiffVisibleRow::HunkHeader { .. } => {
+                                    DiffClickKind::HunkHeader
+                                }
+                                CollapsedDiffVisibleRow::FileRow { .. } => unreachable!(),
+                            };
+                            let display = this
+                                .diff_header_display_cache
+                                .get(&src_ix)
+                                .cloned()
+                                .or_else(|| {
+                                    this.patch_diff_row(src_ix)
+                                        .map(|line| SharedString::from(line.text.as_ref().to_owned()))
+                                })
+                                .unwrap_or_default();
+                            let file_stat = this.diff_file_stats.get(src_ix).and_then(|s| *s);
+                            let header_key = header_cache_base.saturating_add(src_ix);
+                            if !query.is_empty()
+                                && this.diff_text_segments_cache_get(header_key, 0).is_none()
+                            {
+                                let computed = build_cached_diff_styled_text(
+                                    theme,
+                                    display.as_ref(),
+                                    &[],
+                                    "",
+                                    None,
+                                    this.patch_diff_syntax_mode(),
+                                    None,
+                                );
+                                this.diff_text_segments_cache_set(header_key, 0, computed);
+                            }
+                            let context_menu_active = click_kind == DiffClickKind::HunkHeader
+                                && this.active_repo_id().is_some_and(|repo_id| {
+                                    let invoker: SharedString =
+                                        format!("diff_hunk_menu_{}_{}", repo_id.0, src_ix).into();
+                                    this.active_context_menu_invoker.as_ref() == Some(&invoker)
+                                });
+                            let hidden_up = if click_kind == DiffClickKind::HunkHeader {
+                                this.collapsed_diff_hidden_up_rows(src_ix)
+                            } else {
+                                0
+                            };
+                            let hidden_down = if click_kind == DiffClickKind::HunkHeader {
+                                this.collapsed_diff_hidden_down_rows(src_ix)
+                            } else {
+                                0
+                            };
+                            let styled = if !query.is_empty() {
+                                this.diff_text_segments_cache_get_for_query(
+                                    header_key,
+                                    query.as_ref(),
+                                    0,
+                                )
+                            } else {
+                                None
+                            };
+
+                            collapsed_split_header_row(
+                                theme,
+                                ui_scale_percent,
+                                column,
+                                visible_ix,
+                                click_kind,
+                                selected,
+                                min_width,
+                                file_stat,
+                                display,
+                                styled,
+                                context_menu_active,
+                                src_ix,
+                                hidden_up,
+                                hidden_down,
+                                cx,
+                            )
+                        }
+                        CollapsedDiffVisibleRow::FileRow { row_ix } => {
+                            let Some(row) = this.file_diff_split_row(row_ix) else {
+                                return diff_placeholder_row((id_oob, visible_ix), theme, ui_scale_percent);
+                            };
+                            let row_word_ranges = this
+                                .file_diff_split_modify_pair_texts(row_ix)
+                                .map(|(old, new)| {
+                                    let (old_ranges, new_ranges) = capped_word_diff_ranges(old, new);
+                                    if is_left {
+                                        old_ranges
+                                    } else {
+                                        new_ranges
+                                    }
+                                })
+                                .unwrap_or_default();
+                            let row_word_color = file_diff_split_word_color(column, row.kind, theme);
+                            let streamed_spec = if is_left {
+                                row.old.clone()
+                            } else {
+                                row.new.clone()
+                            }
+                            .and_then(|raw_text| {
+                                prepared_streamed_diff_text_spec(
+                                    raw_text,
+                                    &query,
+                                    row_word_ranges.clone(),
+                                    row_word_color,
+                                    language,
+                                    syntax_mode,
+                                    Arc::clone(&document_text),
+                                    Arc::clone(&line_starts),
+                                    rows::prepared_diff_syntax_line_for_one_based_line(
+                                        syntax_document,
+                                        if is_left { row.old_line } else { row.new_line },
+                                    ),
+                                )
+                            });
+                            let key = this.file_diff_split_cache_key(row_ix, region);
+                            if let Some(key) = key
+                                && streamed_spec.is_none()
+                                && this.diff_text_segments_cache_get(key, cache_epoch).is_none()
+                            {
+                                let text = if is_left {
+                                    row.old.as_deref()
+                                } else {
+                                    row.new.as_deref()
+                                };
+                                if let Some(text) = text {
+                                    let (styled, is_pending) =
+                                        build_cached_diff_styled_text_for_prepared_document_line_nonblocking(
+                                            theme,
+                                            text,
+                                            row_word_ranges.as_slice(),
+                                            "",
+                                            DiffSyntaxConfig {
+                                                language,
+                                                mode: syntax_mode,
+                                            },
+                                            row_word_color,
+                                            rows::prepared_diff_syntax_line_for_one_based_line(
+                                                syntax_document,
+                                                if is_left { row.old_line } else { row.new_line },
+                                            ),
+                                        )
+                                        .into_parts();
+                                    if is_pending {
+                                        this.ensure_prepared_syntax_chunk_poll(cx);
+                                    }
+                                    this.diff_text_segments_cache_set(key, cache_epoch, styled);
+                                }
+                            }
+
+                            let row_has_content = if is_left {
+                                row.old.is_some()
+                            } else {
+                                row.new.is_some()
+                            };
+                            let styled = if row_has_content && streamed_spec.is_none() {
+                                if let Some(key) = key {
+                                    this.diff_text_segments_cache_get_for_query(
+                                        key,
+                                        query.as_ref(),
+                                        cache_epoch,
+                                    )
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            };
+
+                            patch_split_column_row(
+                                theme,
+                                ui_scale_percent,
+                                column,
+                                visible_ix,
+                                selected,
+                                min_width,
+                                &row,
+                                styled,
+                                streamed_spec,
+                                cx,
+                            )
+                        }
+                    }
+                })
+                .collect();
+        }
 
         if this.is_file_diff_view_active() {
             let theme = this.theme;
@@ -1191,6 +1727,210 @@ fn diff_row(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn collapsed_inline_header_row(
+    theme: AppTheme,
+    ui_scale_percent: u32,
+    visible_ix: usize,
+    click_kind: DiffClickKind,
+    selected: bool,
+    min_width: Pixels,
+    file_stat: Option<(usize, usize)>,
+    display: SharedString,
+    styled: Option<&CachedDiffStyledText>,
+    context_menu_active: bool,
+    src_ix: usize,
+    hidden_up: usize,
+    hidden_down: usize,
+    cx: &mut gpui::Context<MainPaneView>,
+) -> AnyElement {
+    match click_kind {
+        DiffClickKind::FileHeader => {
+            let mut row = div()
+                .id(("collapsed_diff_file_hdr", visible_ix))
+                .h(diff_file_header_height(ui_scale_percent))
+                .w_full()
+                .min_w(min_width)
+                .flex()
+                .items_center()
+                .justify_between()
+                .px_2()
+                .bg(theme.colors.surface_bg_elevated)
+                .border_b_1()
+                .border_color(theme.colors.border)
+                .text_sm()
+                .font_weight(FontWeight::BOLD)
+                .child(selectable_cached_diff_text(
+                    visible_ix,
+                    DiffTextRegion::Inline,
+                    DiffClickKind::FileHeader,
+                    theme.colors.text,
+                    styled,
+                    display,
+                    cx,
+                ))
+                .when(file_stat.is_some_and(|(a, r)| a > 0 || r > 0), |this| {
+                    let (a, r) = file_stat.unwrap_or_default();
+                    this.child(components::diff_stat(theme, a, r))
+                });
+
+            if selected {
+                row = row.bg(with_alpha(
+                    theme.colors.accent,
+                    if theme.is_dark { 0.10 } else { 0.07 },
+                ));
+            }
+
+            row.into_any_element()
+        }
+        DiffClickKind::HunkHeader => {
+            let on_right_click = cx.listener(move |this, e: &MouseDownEvent, window, cx| {
+                cx.stop_propagation();
+                if this.is_inline_submodule_diff_active() {
+                    return;
+                }
+                let Some(repo_id) = this.active_repo_id() else {
+                    return;
+                };
+                let context_menu_invoker: SharedString =
+                    format!("diff_hunk_menu_{}_{}", repo_id.0, src_ix).into();
+                this.activate_context_menu_invoker(context_menu_invoker, cx);
+                this.open_popover_at(
+                    PopoverKind::DiffHunkMenu { repo_id, src_ix },
+                    e.position,
+                    window,
+                    cx,
+                );
+            });
+            let up_color = if hidden_up > 0 {
+                theme.colors.text_muted
+            } else {
+                with_alpha(theme.colors.text_muted, 0.45)
+            };
+            let down_color = if hidden_down > 0 {
+                theme.colors.text_muted
+            } else {
+                with_alpha(theme.colors.text_muted, 0.45)
+            };
+
+            let mut row = div()
+                .id(("collapsed_diff_hunk_hdr", visible_ix))
+                .h(diff_hunk_header_height(ui_scale_percent))
+                .w_full()
+                .min_w(min_width)
+                .flex()
+                .items_center()
+                .gap_1()
+                .px_2()
+                .bg(with_alpha(
+                    theme.colors.accent,
+                    if theme.is_dark { 0.10 } else { 0.07 },
+                ))
+                .border_b_1()
+                .border_color(with_alpha(
+                    theme.colors.accent,
+                    if theme.is_dark { 0.28 } else { 0.22 },
+                ))
+                .text_xs()
+                .text_color(theme.colors.text_muted)
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .child(selectable_cached_diff_text(
+                            visible_ix,
+                            DiffTextRegion::Inline,
+                            DiffClickKind::HunkHeader,
+                            theme.colors.text_muted,
+                            styled,
+                            display,
+                            cx,
+                        )),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_0p5()
+                        .child(
+                            div()
+                                .id(("collapsed_diff_hunk_up", visible_ix))
+                                .w(px(18.0))
+                                .h(px(18.0))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded(px(theme.radii.row))
+                                .when(hidden_up > 0, |this| {
+                                    this.cursor(CursorStyle::PointingHand)
+                                        .hover(move |s| s.bg(with_alpha(theme.colors.hover, 0.55)))
+                                        .active(move |s| s.bg(theme.colors.active))
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(|_this, _e: &MouseDownEvent, _w, cx| {
+                                                cx.stop_propagation();
+                                            }),
+                                        )
+                                        .on_click(cx.listener(
+                                            move |this, _e: &ClickEvent, _w, cx| {
+                                                cx.stop_propagation();
+                                                this.collapsed_diff_reveal_hunk_up(src_ix, cx);
+                                            },
+                                        ))
+                                })
+                                .child(svg_icon("icons/arrow_up.svg", up_color, px(10.0))),
+                        )
+                        .child(
+                            div()
+                                .id(("collapsed_diff_hunk_down", visible_ix))
+                                .w(px(18.0))
+                                .h(px(18.0))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded(px(theme.radii.row))
+                                .when(hidden_down > 0, |this| {
+                                    this.cursor(CursorStyle::PointingHand)
+                                        .hover(move |s| s.bg(with_alpha(theme.colors.hover, 0.55)))
+                                        .active(move |s| s.bg(theme.colors.active))
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(|_this, _e: &MouseDownEvent, _w, cx| {
+                                                cx.stop_propagation();
+                                            }),
+                                        )
+                                        .on_click(cx.listener(
+                                            move |this, _e: &ClickEvent, _w, cx| {
+                                                cx.stop_propagation();
+                                                this.collapsed_diff_reveal_hunk_down(src_ix, cx);
+                                            },
+                                        ))
+                                })
+                                .child(svg_icon("icons/arrow_down.svg", down_color, px(10.0))),
+                        ),
+                )
+                .on_mouse_down(MouseButton::Right, on_right_click);
+
+            if selected {
+                row = row.bg(with_alpha(
+                    theme.colors.accent,
+                    if theme.is_dark { 0.14 } else { 0.10 },
+                ));
+            }
+            if context_menu_active {
+                row = row.bg(theme.colors.active);
+            }
+
+            row.into_any_element()
+        }
+        DiffClickKind::Line => diff_placeholder_row(
+            ("collapsed_diff_invalid", visible_ix),
+            theme,
+            ui_scale_percent,
+        ),
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum PatchSplitColumn {
     Left,
@@ -1409,6 +2149,254 @@ fn patch_split_header_row(
             selected,
             line,
             cx,
+        ),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collapsed_split_header_row(
+    theme: AppTheme,
+    ui_scale_percent: u32,
+    column: PatchSplitColumn,
+    visible_ix: usize,
+    click_kind: DiffClickKind,
+    selected: bool,
+    min_width: Pixels,
+    file_stat: Option<(usize, usize)>,
+    display: SharedString,
+    styled: Option<&CachedDiffStyledText>,
+    context_menu_active: bool,
+    src_ix: usize,
+    hidden_up: usize,
+    hidden_down: usize,
+    cx: &mut gpui::Context<MainPaneView>,
+) -> AnyElement {
+    let region = match column {
+        PatchSplitColumn::Left => DiffTextRegion::SplitLeft,
+        PatchSplitColumn::Right => DiffTextRegion::SplitRight,
+    };
+
+    match click_kind {
+        DiffClickKind::FileHeader => {
+            let mut row = div()
+                .id((
+                    match column {
+                        PatchSplitColumn::Left => "collapsed_diff_split_left_file_hdr",
+                        PatchSplitColumn::Right => "collapsed_diff_split_right_file_hdr",
+                    },
+                    visible_ix,
+                ))
+                .h(diff_file_header_height(ui_scale_percent))
+                .w_full()
+                .min_w(min_width)
+                .flex()
+                .items_center()
+                .justify_between()
+                .px_2()
+                .bg(theme.colors.surface_bg_elevated)
+                .border_b_1()
+                .border_color(theme.colors.border)
+                .text_sm()
+                .font_weight(FontWeight::BOLD)
+                .child(selectable_cached_diff_text(
+                    visible_ix,
+                    region,
+                    DiffClickKind::FileHeader,
+                    theme.colors.text,
+                    styled,
+                    display,
+                    cx,
+                ))
+                .when(file_stat.is_some_and(|(a, r)| a > 0 || r > 0), |this| {
+                    let (a, r) = file_stat.unwrap_or_default();
+                    this.child(components::diff_stat(theme, a, r))
+                });
+
+            if selected {
+                row = row.bg(with_alpha(
+                    theme.colors.accent,
+                    if theme.is_dark { 0.10 } else { 0.07 },
+                ));
+            }
+
+            row.into_any_element()
+        }
+        DiffClickKind::HunkHeader => {
+            let on_right_click = cx.listener(move |this, e: &MouseDownEvent, window, cx| {
+                cx.stop_propagation();
+                if this.is_inline_submodule_diff_active() {
+                    return;
+                }
+                let Some(repo_id) = this.active_repo_id() else {
+                    return;
+                };
+                let context_menu_invoker: SharedString =
+                    format!("diff_hunk_menu_{}_{}", repo_id.0, src_ix).into();
+                this.activate_context_menu_invoker(context_menu_invoker, cx);
+                this.open_popover_at(
+                    PopoverKind::DiffHunkMenu { repo_id, src_ix },
+                    e.position,
+                    window,
+                    cx,
+                );
+            });
+            let up_color = if hidden_up > 0 {
+                theme.colors.text_muted
+            } else {
+                with_alpha(theme.colors.text_muted, 0.45)
+            };
+            let down_color = if hidden_down > 0 {
+                theme.colors.text_muted
+            } else {
+                with_alpha(theme.colors.text_muted, 0.45)
+            };
+
+            let mut row = div()
+                .id((
+                    match column {
+                        PatchSplitColumn::Left => "collapsed_diff_split_left_hunk_hdr",
+                        PatchSplitColumn::Right => "collapsed_diff_split_right_hunk_hdr",
+                    },
+                    visible_ix,
+                ))
+                .h(diff_hunk_header_height(ui_scale_percent))
+                .w_full()
+                .min_w(min_width)
+                .flex()
+                .items_center()
+                .gap_1()
+                .px_2()
+                .bg(with_alpha(
+                    theme.colors.accent,
+                    if theme.is_dark { 0.10 } else { 0.07 },
+                ))
+                .border_b_1()
+                .border_color(with_alpha(
+                    theme.colors.accent,
+                    if theme.is_dark { 0.28 } else { 0.22 },
+                ))
+                .text_xs()
+                .text_color(theme.colors.text_muted)
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .child(selectable_cached_diff_text(
+                            visible_ix,
+                            region,
+                            DiffClickKind::HunkHeader,
+                            theme.colors.text_muted,
+                            styled,
+                            display,
+                            cx,
+                        )),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_0p5()
+                        .child(
+                            div()
+                                .id((
+                                    match column {
+                                        PatchSplitColumn::Left => {
+                                            "collapsed_diff_split_left_hunk_up"
+                                        }
+                                        PatchSplitColumn::Right => {
+                                            "collapsed_diff_split_right_hunk_up"
+                                        }
+                                    },
+                                    visible_ix,
+                                ))
+                                .w(px(18.0))
+                                .h(px(18.0))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded(px(theme.radii.row))
+                                .when(hidden_up > 0, |this| {
+                                    this.cursor(CursorStyle::PointingHand)
+                                        .hover(move |s| s.bg(with_alpha(theme.colors.hover, 0.55)))
+                                        .active(move |s| s.bg(theme.colors.active))
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(|_this, _e: &MouseDownEvent, _w, cx| {
+                                                cx.stop_propagation();
+                                            }),
+                                        )
+                                        .on_click(cx.listener(
+                                            move |this, _e: &ClickEvent, _w, cx| {
+                                                cx.stop_propagation();
+                                                this.collapsed_diff_reveal_hunk_up(src_ix, cx);
+                                            },
+                                        ))
+                                })
+                                .child(svg_icon("icons/arrow_up.svg", up_color, px(10.0))),
+                        )
+                        .child(
+                            div()
+                                .id((
+                                    match column {
+                                        PatchSplitColumn::Left => {
+                                            "collapsed_diff_split_left_hunk_down"
+                                        }
+                                        PatchSplitColumn::Right => {
+                                            "collapsed_diff_split_right_hunk_down"
+                                        }
+                                    },
+                                    visible_ix,
+                                ))
+                                .w(px(18.0))
+                                .h(px(18.0))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded(px(theme.radii.row))
+                                .when(hidden_down > 0, |this| {
+                                    this.cursor(CursorStyle::PointingHand)
+                                        .hover(move |s| s.bg(with_alpha(theme.colors.hover, 0.55)))
+                                        .active(move |s| s.bg(theme.colors.active))
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(|_this, _e: &MouseDownEvent, _w, cx| {
+                                                cx.stop_propagation();
+                                            }),
+                                        )
+                                        .on_click(cx.listener(
+                                            move |this, _e: &ClickEvent, _w, cx| {
+                                                cx.stop_propagation();
+                                                this.collapsed_diff_reveal_hunk_down(src_ix, cx);
+                                            },
+                                        ))
+                                })
+                                .child(svg_icon("icons/arrow_down.svg", down_color, px(10.0))),
+                        ),
+                )
+                .on_mouse_down(MouseButton::Right, on_right_click);
+
+            if selected {
+                row = row.bg(with_alpha(
+                    theme.colors.accent,
+                    if theme.is_dark { 0.14 } else { 0.10 },
+                ));
+            }
+            if context_menu_active {
+                row = row.bg(theme.colors.active);
+            }
+
+            row.into_any_element()
+        }
+        DiffClickKind::Line => diff_placeholder_row(
+            (
+                match column {
+                    PatchSplitColumn::Left => "collapsed_diff_split_left_invalid",
+                    PatchSplitColumn::Right => "collapsed_diff_split_right_invalid",
+                },
+                visible_ix,
+            ),
+            theme,
+            ui_scale_percent,
         ),
     }
 }

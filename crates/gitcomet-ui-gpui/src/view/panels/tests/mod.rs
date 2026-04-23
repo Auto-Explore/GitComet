@@ -601,6 +601,19 @@ pub(super) fn set_diff_scroll_sync_for_test(
     draw_and_drain_test_window(cx);
 }
 
+pub(super) fn set_diff_content_mode_for_test(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    mode: DiffContentMode,
+) {
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.set_diff_content_mode(mode, cx);
+        });
+    });
+    draw_and_drain_test_window(cx);
+}
+
 pub(super) fn conflict_compare_repo_state(
     repo_id: gitcomet_state::model::RepoId,
     workdir: &std::path::Path,
