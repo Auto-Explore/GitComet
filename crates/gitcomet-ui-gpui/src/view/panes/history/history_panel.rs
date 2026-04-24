@@ -497,23 +497,10 @@ impl HistoryView {
                                     .when(scope_repo_id.is_none(), |this| {
                                         this.opacity(0.6).cursor(CursorStyle::Arrow)
                                     })
-                                    .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
-                                        let text: SharedString =
-                                            crate::view::history_mode::HISTORY_MODE_TOOLTIP_TEXT
-                                                .into();
-                                        let mut changed = false;
-                                        if *hovering {
-                                            changed |= this.set_tooltip_text_if_changed(
-                                                Some(text.clone()),
-                                                cx,
-                                            );
-                                        } else {
-                                            changed |= this.clear_tooltip_if_matches(&text, cx);
-                                        }
-                                        if changed {
-                                            cx.notify();
-                                        }
-                                    })),
+                                    .gitcomet_tooltip(
+                                        theme,
+                                        crate::view::history_mode::HISTORY_MODE_TOOLTIP_TEXT.into(),
+                                    ),
                             ),
                     ),
             )

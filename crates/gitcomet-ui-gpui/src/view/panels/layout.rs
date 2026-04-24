@@ -522,18 +522,7 @@ impl DetailsPaneView {
                             }
                             cx.notify();
                         })
-                        .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
-                            let text: SharedString = "Close commit details".into();
-                            let mut changed = false;
-                            if *hovering {
-                                changed |= this.set_tooltip_text_if_changed(Some(text.clone()), cx);
-                            } else {
-                                changed |= this.clear_tooltip_if_matches(&text, cx);
-                            }
-                            if changed {
-                                cx.notify();
-                            }
-                        })),
+                        .gitcomet_tooltip(theme, "Close commit details".into()),
                 );
 
             let body: AnyElement = match self.active_repo().map(|r| &r.history_state.commit_details)
@@ -994,18 +983,7 @@ impl DetailsPaneView {
                 });
                 cx.notify();
             })
-            .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
-                let text: SharedString = "Stage all changes".into();
-                let mut changed = false;
-                if *hovering {
-                    changed |= this.set_tooltip_text_if_changed(Some(text.clone()), cx);
-                } else {
-                    changed |= this.clear_tooltip_if_matches(&text, cx);
-                }
-                if changed {
-                    cx.notify();
-                }
-            }));
+            .gitcomet_tooltip(theme, "Stage all changes".into());
 
         let stage_selected = components::Button::new(
             "stage_selected",
@@ -1219,18 +1197,7 @@ impl DetailsPaneView {
                 });
                 cx.notify();
             })
-            .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
-                let text: SharedString = "Unstage all changes".into();
-                let mut changed = false;
-                if *hovering {
-                    changed |= this.set_tooltip_text_if_changed(Some(text.clone()), cx);
-                } else {
-                    changed |= this.clear_tooltip_if_matches(&text, cx);
-                }
-                if changed {
-                    cx.notify();
-                }
-            }));
+            .gitcomet_tooltip(theme, "Unstage all changes".into());
 
         let unstage_selected =
             components::Button::new("unstage_selected", format!("Unstage ({selected_staged})"))
@@ -1979,18 +1946,7 @@ impl DetailsPaneView {
                         .on_click(cx.listener(|this, _e: &ClickEvent, _w, cx| {
                             let _ = this.submit_commit(cx);
                         }))
-                        .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
-                            let text: SharedString = "Commit staged changes".into();
-                            let mut changed = false;
-                            if *hovering {
-                                changed |= this.set_tooltip_text_if_changed(Some(text.clone()), cx);
-                            } else {
-                                changed |= this.clear_tooltip_if_matches(&text, cx);
-                            }
-                            if changed {
-                                cx.notify();
-                            }
-                        })),
+                        .gitcomet_tooltip(theme, "Commit staged changes".into()),
                 ),
             ),
         )

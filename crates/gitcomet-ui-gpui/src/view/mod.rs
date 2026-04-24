@@ -137,6 +137,9 @@ use panels::{ActionBarView, BottomStatusBarView, PopoverHost, RepoTabsBarView, a
 use panes::{DetailsPaneInit, DetailsPaneView, HistoryView, MainPaneView, SidebarPaneView};
 pub(crate) use settings_window::{SettingsWindowView, open_settings_window};
 use toast_host::ToastHost;
+use tooltip::GitCometTooltipExt;
+#[cfg(test)]
+use tooltip::clear_visible_tooltip_text_for_test;
 use tooltip_host::TooltipHost;
 
 #[cfg(test)]
@@ -698,15 +701,13 @@ impl GitCometView {
             )
         });
         let tooltip_host = cx.new(|_cx| TooltipHost::new(initial_theme));
-        let toast_host = cx
-            .new(|_cx| ToastHost::new(initial_theme, tooltip_host.downgrade(), weak_view.clone()));
+        let toast_host = cx.new(|_cx| ToastHost::new(initial_theme, weak_view.clone()));
         let repo_tabs_bar = cx.new(|cx| {
             RepoTabsBarView::new(
                 Arc::clone(&store),
                 ui_model.clone(),
                 initial_theme,
                 weak_view.clone(),
-                tooltip_host.downgrade(),
                 cx,
             )
         });
@@ -716,13 +717,11 @@ impl GitCometView {
                 ui_model.clone(),
                 initial_theme,
                 weak_view.clone(),
-                tooltip_host.downgrade(),
                 cx,
             )
         });
-        let bottom_status_bar = cx.new(|_cx| {
-            BottomStatusBarView::new(initial_theme, weak_view.clone(), tooltip_host.downgrade())
-        });
+        let bottom_status_bar =
+            cx.new(|_cx| BottomStatusBarView::new(initial_theme, weak_view.clone()));
 
         let sidebar_pane = cx.new(|cx| {
             SidebarPaneView::new(
@@ -1803,7 +1802,10 @@ impl GitCometView {
     #[cfg(test)]
     #[allow(dead_code)]
     pub(crate) fn tooltip_text_for_test(&self, app: &App) -> Option<SharedString> {
-        self.tooltip_host.read(app).tooltip_text_for_test()
+        self.tooltip_host
+            .read(app)
+            .tooltip_text_for_test()
+            .or_else(tooltip::tooltip_text_for_test)
     }
 
     #[cfg(test)]
@@ -1862,6 +1864,9 @@ impl GitCometView {
 
 impl Render for GitCometView {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        #[cfg(test)]
+        clear_visible_tooltip_text_for_test();
+
         let theme = self.theme;
         let font_preferences = crate::font_preferences::current(cx);
         debug_assert!(matches!(

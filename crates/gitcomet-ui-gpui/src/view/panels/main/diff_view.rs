@@ -320,18 +320,7 @@ impl MainPaneView {
                         this.diff_jump_prev();
                         cx.notify();
                     })
-                    .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
-                        let text: SharedString = "Previous change (F2 / Shift+F7 / Alt+Up)".into();
-                        let mut changed = false;
-                        if *hovering {
-                            changed |= this.set_tooltip_text_if_changed(Some(text.clone()), cx);
-                        } else {
-                            changed |= this.clear_tooltip_if_matches(&text, cx);
-                        }
-                        if changed {
-                            cx.notify();
-                        }
-                    }));
+                    .gitcomet_tooltip(theme, "Previous change (F2 / Shift+F7 / Alt+Up)".into());
 
                 let next_hunk_btn = components::Button::new("diff_next_hunk", "Next")
                     .separated_end_slot(Self::diff_nav_hotkey_hint(theme, "F3"))
@@ -341,18 +330,7 @@ impl MainPaneView {
                         this.diff_jump_next();
                         cx.notify();
                     })
-                    .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
-                        let text: SharedString = "Next change (F3 / F7 / Alt+Down)".into();
-                        let mut changed = false;
-                        if *hovering {
-                            changed |= this.set_tooltip_text_if_changed(Some(text.clone()), cx);
-                        } else {
-                            changed |= this.clear_tooltip_if_matches(&text, cx);
-                        }
-                        if changed {
-                            cx.notify();
-                        }
-                    }));
+                    .gitcomet_tooltip(theme, "Next change (F3 / F7 / Alt+Down)".into());
 
                 let view_toggle_selected_bg =
                     with_alpha(theme.colors.accent, if theme.is_dark { 0.26 } else { 0.20 });
@@ -376,18 +354,7 @@ impl MainPaneView {
                         }
                         cx.notify();
                     })
-                    .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
-                        let text: SharedString = "Inline diff view (Alt+I)".into();
-                        let mut changed = false;
-                        if *hovering {
-                            changed |= this.set_tooltip_text_if_changed(Some(text.clone()), cx);
-                        } else {
-                            changed |= this.clear_tooltip_if_matches(&text, cx);
-                        }
-                        if changed {
-                            cx.notify();
-                        }
-                    }));
+                    .gitcomet_tooltip(theme, "Inline diff view (Alt+I)".into());
 
                 let diff_split_btn = components::Button::new("diff_split", "Split")
                     .borderless()
@@ -404,18 +371,7 @@ impl MainPaneView {
                         }
                         cx.notify();
                     })
-                    .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
-                        let text: SharedString = "Split diff view (Alt+S)".into();
-                        let mut changed = false;
-                        if *hovering {
-                            changed |= this.set_tooltip_text_if_changed(Some(text.clone()), cx);
-                        } else {
-                            changed |= this.clear_tooltip_if_matches(&text, cx);
-                        }
-                        if changed {
-                            cx.notify();
-                        }
-                    }));
+                    .gitcomet_tooltip(theme, "Split diff view (Alt+S)".into());
 
                 let view_toggle = div()
                     .id("diff_view_toggle")
@@ -450,19 +406,7 @@ impl MainPaneView {
                                     );
                                     cx.notify();
                                 })
-                                .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
-                                    let text: SharedString = "Jump to hunk (Alt+H)".into();
-                                    let mut changed = false;
-                                    if *hovering {
-                                        changed |= this
-                                            .set_tooltip_text_if_changed(Some(text.clone()), cx);
-                                    } else {
-                                        changed |= this.clear_tooltip_if_matches(&text, cx);
-                                    }
-                                    if changed {
-                                        cx.notify();
-                                    }
-                                })),
+                                .gitcomet_tooltip(theme, "Jump to hunk (Alt+H)".into()),
                         )
                     });
             } else {
@@ -531,18 +475,7 @@ impl MainPaneView {
                         this.clear_diff_selection_or_exit(repo_id, cx);
                         cx.notify();
                     })
-                    .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
-                        let text: SharedString = "Close diff".into();
-                        let mut changed = false;
-                        if *hovering {
-                            changed |= this.set_tooltip_text_if_changed(Some(text.clone()), cx);
-                        } else {
-                            changed |= this.clear_tooltip_if_matches(&text, cx);
-                        }
-                        if changed {
-                            cx.notify();
-                        }
-                    })),
+                    .gitcomet_tooltip(theme, "Close diff".into()),
             );
         }
 
@@ -921,19 +854,7 @@ impl MainPaneView {
                                     this.toggle_show_whitespace();
                                     cx.notify();
                                 }))
-                                .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
-                                    let text: SharedString = "Show whitespace (Alt+W)".into();
-                                    let mut changed = false;
-                                    if *hovering {
-                                        changed |=
-                                            this.set_tooltip_text_if_changed(Some(text.clone()), cx);
-                                    } else {
-                                        changed |= this.clear_tooltip_if_matches(&text, cx);
-                                    }
-                                    if changed {
-                                        cx.notify();
-                                    }
-                                }))
+                                .gitcomet_tooltip(theme, "Show whitespace (Alt+W)".into())
                                 .child(
                                     div()
                                         .flex()

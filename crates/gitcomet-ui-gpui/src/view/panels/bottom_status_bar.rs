@@ -3,20 +3,14 @@ use super::*;
 pub(in super::super) struct BottomStatusBarView {
     theme: AppTheme,
     root_view: WeakEntity<GitCometView>,
-    tooltip_host: WeakEntity<TooltipHost>,
     active_context_menu_invoker: Option<SharedString>,
 }
 
 impl BottomStatusBarView {
-    pub(in super::super) fn new(
-        theme: AppTheme,
-        root_view: WeakEntity<GitCometView>,
-        tooltip_host: WeakEntity<TooltipHost>,
-    ) -> Self {
+    pub(in super::super) fn new(theme: AppTheme, root_view: WeakEntity<GitCometView>) -> Self {
         Self {
             theme,
             root_view,
-            tooltip_host,
             active_context_menu_invoker: None,
         }
     }
@@ -37,23 +31,6 @@ impl BottomStatusBarView {
 
         self.active_context_menu_invoker = next;
         cx.notify();
-    }
-
-    fn set_tooltip_text_if_changed(
-        &mut self,
-        next: Option<SharedString>,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        let _ = self
-            .tooltip_host
-            .update(cx, |host, cx| host.set_tooltip_text_if_changed(next, cx));
-    }
-
-    fn clear_tooltip_if_matches(&mut self, tooltip: &SharedString, cx: &mut gpui::Context<Self>) {
-        let tooltip = tooltip.clone();
-        let _ = self
-            .tooltip_host
-            .update(cx, |host, cx| host.clear_tooltip_if_matches(&tooltip, cx));
     }
 
     fn open_popover_for_bounds(
@@ -121,14 +98,7 @@ impl Render for BottomStatusBarView {
                 this.activate_context_menu_invoker(zoom_picker_invoker.clone(), cx);
                 this.open_popover_for_bounds(PopoverKind::UiScalePicker, bounds, window, cx);
             })
-            .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
-                let tooltip: SharedString = "Adjust zoom".into();
-                if *hovering {
-                    this.set_tooltip_text_if_changed(Some(tooltip), cx);
-                } else {
-                    this.clear_tooltip_if_matches(&tooltip, cx);
-                }
-            }))
+            .gitcomet_tooltip(theme, "Adjust zoom".into())
             .debug_selector(|| "bottom_status_bar_zoom".to_string());
 
         div()
